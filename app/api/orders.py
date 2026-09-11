@@ -691,6 +691,7 @@ class EstimatedCostUpdate(BaseModel):
 class OrderCreate(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+    email_attachment_id: int | None = Field(default=None, ge=1)
     customer_id: int | None = None
     customer_name: str | None = None
     customer_po: str | None = None
@@ -6808,6 +6809,13 @@ def _create_order_impl(
         raise HTTPException(status_code=400, detail=message)
 
     try:
+        from app.services.email_order_link import prepare as prepare_email_source, attach as attach_email_source
+        email_context, email_existing = prepare_email_source(db, payload, user, pdf_safety_claims)
+        if email_existing is not None:
+            existing_order = db.get(Order, email_existing.order_id)
+            if existing_order is None:
+                raise HTTPException(409, "邮件关联订单不存在，请核对来源记录")
+            return _order_response(existing_order, user, db=db)
         _set_order_save_stage(observability, "validate_customer")
         customer = db.get(Customer, payload.customer_id)
         if customer is None:
@@ -7542,6 +7550,7 @@ def _create_order_impl(
                 material_snapshot=material_snapshot,
                 actor_id=user.id,
             )
+        attach_email_source(db, email_context, order, user)
         _set_order_save_stage(observability, "build_response")
         db.flush()
         db.refresh(order)

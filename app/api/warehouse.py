@@ -11120,7 +11120,7 @@ def _formal_area_publish_blockers(
                             feature.get("storage_layout") or ""
                         ),
                     ):
-                        blockers.append(f"{area_code} 区{message}")
+                        blockers.append(f"{area.area_name or area_code}：{message}")
             blockers.extend(
                 _zone_asset_and_production_blockers(
                     db,
@@ -11156,7 +11156,7 @@ def _formal_area_publish_blockers(
             requested_inventory_types=requested_types,
             requested_storage_layout=requested_layout,
         ):
-            blockers.append(f"{area_code} 区{message}")
+            blockers.append(f"{area.area_name or area_code}：{message}")
     for policy in policies:
         area = policy.area
         feature = features.get(policy.map_feature_id)
@@ -14425,6 +14425,26 @@ def _ensure_one_step_pallet_locations(
         "rack" if storage_layout == "rack" else "ground"
     )
     existing = formal_area_location_rows(db, floor=floor, area=area)
+    if storage_layout == "rack":
+        precise_racks = [
+            rack for rack in floor_layout.get("racks", [])
+            if rack.get("id") and rack.get("area_feature_id") == feature_id
+            and isinstance(rack.get("level_cell_counts"), list)
+            and len(rack["level_cell_counts"]) == int(rack.get("levels") or 0)
+        ]
+        if precise_racks:
+            # The form capacity is a rack count. Published rack synchronization
+            # already maintains the actual locations by level/cell; compare
+            # those locations with cells, never with the number of racks.
+            target_count = sum(sum(rack["level_cell_counts"]) for rack in precise_racks)
+            rack_ids = {str(rack["id"]) for rack in precise_racks}
+            active = [row for row in existing if row.is_active]
+            if len(active) != target_count or any(
+                row.map_rack_id not in rack_ids for row in active
+            ):
+                raise WarehouseAreaActivationError(
+                    "实测货架格位与启用货位尚未同步，请先保存货架层数和格数", status_code=409,
+                )
     if any(not str(row.source_version or "").strip() for row in existing):
         raise WarehouseAreaActivationError(
             "该区域存在未标明来源的货位，已停止一次确认；请先核对正式货位台账",
@@ -23817,6 +23837,42 @@ def _redact_inventory_insight_costs(insights: dict) -> dict:
     return result
 
 
+@router.get("/costs")
+def get_inventory_costs(response: Response, location_id: int | None = Query(default=None, ge=1),
+                        db: Session = Depends(get_db), user: User = Depends(can_read)) -> dict:
+    from app.services.inventory_valuation import can_view_inventory_cost, cost_payload
+    from app.services.inventory_cost_rules import is_revaluable
+    if not can_view_inventory_cost(user):
+        raise HTTPException(403, "仅管理员和老板可以查看成本")
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    query = _lot_query(require_formal_location=False).where(
+        InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged > 0)
+    scope = _visible_customer_ids(user, db)
+    if scope is not None:
+        query = query.where(_visible_lot_condition(scope))
+    if location_id is not None:
+        query = query.where(InventoryLot.warehouse_location_id == location_id)
+    rows, total, missing = [], Decimal(0), 0
+    for lot in db.scalars(query.order_by(InventoryLot.id)).unique():
+        value = cost_payload(lot, db)
+        detail = lot.finished_detail or lot.semi_finished_detail
+        value.update(lot_number=lot.lot_number, inventory_type=lot.inventory_type,
+            stock_date=lot.stock_date, location_id=lot.warehouse_location_id,
+            location_name=lot.location.location_name if lot.location else "未归位",
+            product_code=getattr(detail, "inventory_code_snapshot", None),
+            product_id=getattr(detail, "product_id", None),
+            can_revalue=bool(lot.finished_detail and is_revaluable(db, lot)),
+            product_name=getattr(detail, "product_name_snapshot", None) or getattr(detail, "internal_name", None),
+            customer_name=getattr(detail, "owner_customer_name_snapshot", None))
+        rows.append(value)
+        if value["inventory_value"] is None:
+            missing += 1
+        else:
+            total += Decimal(value["inventory_value"])
+    return dict(currency="CNY", inventory_value=str(total), total_lots=len(rows),
+                missing_lots=missing, rows=rows, basis="按批次冻结的人民币成本，含可用、预占及损坏实物；材料成本、外购价与售价参考分别标明")
+
+
 @router.get("/insights")
 def get_inventory_insights(
     as_of: date | None = None,
@@ -23829,7 +23885,8 @@ def get_inventory_insights(
         as_of=as_of,
         customer_ids=visible_customer_ids,
     )
-    if has_permission(user, "cost.view"):
+    from app.services.inventory_valuation import can_view_inventory_cost
+    if can_view_inventory_cost(user):
         return insights
     return _redact_inventory_insight_costs(insights)
 
@@ -23929,6 +23986,9 @@ def get_lot(
     from app.services.shelf_lot_history import shelf_delivery_history, shelf_related_inventory
     result["shelf_deliveries"] = shelf_delivery_history(db, lot_id, visible_customer_ids)
     result["shelf_related_inventory"] = shelf_related_inventory(db, row, visible_customer_ids)
+    from app.services.inventory_valuation import can_view_inventory_cost, cost_payload
+    if can_view_inventory_cost(user):
+        result["cost"] = cost_payload(row, db)
     return result
 
 
@@ -24501,3 +24561,7 @@ def scrap_lot(lot_id: int, payload: QuantityOperationPayload, request: Request =
 @router.post("/lots/{lot_id}/transfer-to-general")
 def transfer_to_general(lot_id: int, payload: VersionPayload, request: Request = None, db: Session = Depends(get_db), user: User = Depends(admin_only)) -> dict:
     return _operate(db, user, lot_id, "transfer_to_general", payload, request=request)
+
+
+from app.api.inventory_cost_rules import router as inventory_cost_rules_router
+router.include_router(inventory_cost_rules_router)

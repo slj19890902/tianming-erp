@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes,viewport-fit=cover">
   <title>手机盘点 - 天明ERP</title>
+  <script type="module" src="/factory-twin-assets/warehouse-costs.js?v=20260911-3"></script>
   <style>
     :root{--blue:#2563eb;--green:#15803d;--red:#b91c1c;--orange:#9a3412;--line:#dbe3ef;--bg:#f3f6fb;--text:#172033;--muted:#64748b}
     *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 "Microsoft YaHei","PingFang SC",Arial,sans-serif}
@@ -70,11 +71,12 @@
       <div class="location-head"><div><div class="muted">当前货位</div><div id="selectedLocationCode" class="location-code"></div><div id="selectedLocationName" class="muted"></div><div id="selectedRackIdentity" class="identity-line"></div></div><div class="actions"><button id="openCurrentMap" class="btn" type="button">看地图</button><button id="backToLocations" class="btn" type="button">换库位</button></div></div>
       <div id="locationNotice" class="notice hidden" style="margin-top:10px"></div>
       <div id="lotSummary" class="summary"></div>
+      <warehouse-costs id="locationCosts" location-id="0"></warehouse-costs>
       <div id="lotList" class="lot-list"></div>
       <section id="initialInbound" class="card hidden" style="margin-top:12px">
         <div class="goods-heading"><h2>添加货物</h2><div id="goodsTypes" class="actions"><button class="btn primary" data-goods-type="finished">成品</button><button class="btn" data-goods-type="semi">半成品</button><button class="btn" data-goods-type="raw">原材料</button></div></div><div id="sheetGoods" class="hidden"></div><div id="finishedGoods">
         <fieldset id="inboundFields" style="border:0;padding:0;margin:0">
-          <div class="field search-pair"><label for="inboundCustomerQuery">客户</label><input id="inboundCustomerQuery" placeholder="客户名称 / 简称"><button id="inboundFindCustomer" class="btn" type="button" aria-label="搜索客户">搜索</button><select id="inboundCustomer"><option value="">请选择客户</option></select></div>
+          <div class="field search-pair"><label for="inboundCustomerQuery">客户</label><input id="inboundCustomerQuery" placeholder="选填：客户名称 / 简称"><button id="inboundFindCustomer" class="btn" type="button" aria-label="搜索客户">搜索</button><select id="inboundCustomer"><option value="all">全部客户（权限范围内）</option></select></div>
           <div class="field search-pair"><label for="inboundProductQuery">存货编码 / 产品名称</label><input id="inboundProductQuery" placeholder="编码、名称、尺寸"><button id="inboundFindProduct" class="btn" type="button" aria-label="搜索产品">搜索</button><select id="inboundProduct"><option value="">请先选客户</option></select></div>
           <div id="inboundCandidates" class="inbound-candidates"></div><button id="inboundNotListed" class="btn" type="button">未在列表 · 查找ERP产品</button><details id="inboundNewProduct" class="hidden"><summary class="btn">新增产品</summary>
             <div class="field"><label for="inboundCode">存货编码</label><input id="inboundCode" maxlength="150"></div>
@@ -122,7 +124,7 @@
     function locationFloorLabel(location){const floor=locationFloor(location),name=pick(location,["floor_name"],"");return name?`${name}（${floor} 楼）`:(floor?`${floor} 楼`:"未登记楼层")}
     function warehouseMapHref(lotId=null){const location=state.selectedLocation||{},params=new URLSearchParams({warehouse_map:"1"});const floorCode=String(pick(location,["floor_code"],"")).trim(),areaCode=String(pick(location,["area_code"],"")).trim(),locationId=pick(location,["id","location_id"],null);if(floorCode)params.set("floor_code",floorCode);if(areaCode)params.set("area_code",areaCode);if(locationId)params.set("location_id",String(locationId));if(lotId)params.set("lot_id",String(lotId));return `/mobile/?${params.toString()}#warehouse`}
     function openWarehouseMap(lotId=null){window.location.assign(warehouseMapHref(lotId))}
-    function renderSelectedLocationIdentity(){const location=state.selectedLocation||{},rack=String(pick(location,["rack_display_name"],"")).trim(),level=Number(pick(location,["level_no"],0)),slot=Number(pick(location,["slot_no"],0));$("selectedRackIdentity").textContent=rack&&level&&slot?`${rack} · 第 ${level} 层 · 第 ${slot} 格`:"地图位置与当前货位使用同一条库存台账"}
+    function renderSelectedLocationIdentity(){const location=state.selectedLocation||{},rack=String(pick(location,["rack_display_name"],"")).trim(),level=Number(pick(location,["level_no"],0)),slot=Number(pick(location,["slot_no"],0));$("selectedRackIdentity").textContent=rack&&level&&slot?`${rack} · 第 ${level} 层 · 第 ${slot} 格`:"地图位置与当前货位使用同一条库存台账";$("locationCosts").setAttribute("location-id",String(pick(location,["id","location_id"],0)));$("locationCosts").setAttribute("revision",String(Date.now()))}
     function listItems(data,keys=["items","locations","results"]){for(const key of keys)if(Array.isArray(data?.[key]))return data[key];return Array.isArray(data)?data:[]}
     function renderFloors(){const rows=new Map();state.locations.forEach(location=>{const floor=locationFloor(location);if(floor)rows.set(floor,locationFloorLabel(location))});const previous=$("floorFilter").value;$("floorFilter").innerHTML='<option value="">请选择楼层</option>'+[...rows].sort((a,b)=>a[0]-b[0]).map(([value,label])=>`<option value="${h(value)}">${h(label)}</option>`).join("");if(rows.has(Number(previous)))$("floorFilter").value=previous;else if(rows.size===1)$("floorFilter").value=String([...rows.keys()][0])}
     function renderAreas(){const floor=Number($("floorFilter").value),values=[...new Set(state.locations.filter(location=>!floor||locationFloor(location)===floor).map(locationArea))].sort((a,b)=>a.localeCompare(b,"zh-CN",{numeric:true})),previous=$("areaFilter").value;$("areaFilter").innerHTML='<option value="">'+(floor?"请选择区域":"请先选择楼层")+'</option>'+values.map(value=>`<option value="${h(value)}">${h(value)}</option>`).join("");if(values.includes(previous))$("areaFilter").value=previous;$("areaFilter").disabled=!floor||!values.length}

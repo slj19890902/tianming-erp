@@ -33,7 +33,7 @@ def candidates(item, product, domain):
     return [("订单规格", frozen), ("常用箱尺寸", [product.length_mm, product.width_mm, product.height_mm] if product else [])]
 
 
-def best_match(item, product, domain, dimensions, tolerance, axis):
+def best_match(item, product, domain, dimensions, tolerance, axis, near_tolerance=5):
     matches = []
     for source, values in candidates(item, product, domain):
         indexes = ([0, 1] if axis == "any" else [1] if axis == "width" else [0]) if domain == "board" and len(dimensions) == 1 else [0]
@@ -47,7 +47,7 @@ def best_match(item, product, domain, dimensions, tolerance, axis):
             distance = sum(abs(v) for v in differences)
             labels = ["长", "宽", "高"][first:first + len(dimensions)]
             matches.append({"source": source, "distance": float(distance),
-                "level": "精确" if distance == 0 else "接近" if max(abs(v) for v in differences) <= 5 else "扩大范围",
+                "level": "精确" if distance == 0 else "接近" if max(abs(v) for v in differences) <= near_tolerance else "扩大范围",
                 "dimensions_mm": [float(v) if v is not None else None for v in values],
                 "differences": [{"dimension": label, "mm": float(v)} for label, v in zip(labels, differences)]})
     return min(matches, key=lambda m: m["distance"], default=None)
@@ -74,7 +74,7 @@ def line_payload(item, order, customer, product):
         "delivery_date": order.delivery_date.isoformat() if order.delivery_date else None, "status": order.status}
 
 
-def find_order_dimensions(db, *, visible_ids, domain, text, customer, tolerance, axis, page, page_size):
+def find_order_dimensions(db, *, visible_ids, domain, text, customer, tolerance, axis, page, page_size, near_tolerance=5):
     dimensions = parse_dimensions(text, 2 if domain == "board" else 3)
     stmt = outstanding_query(visible_ids)
     if customer:
@@ -84,7 +84,7 @@ def find_order_dimensions(db, *, visible_ids, domain, text, customer, tolerance,
     # Stream the scoped active lines; frozen textual specifications cannot be
     # treated as numeric SQL columns. Paginate only after exact dimensional ranking.
     for item, order, client, product in db.execute(stmt.execution_options(yield_per=200)):
-        match = best_match(item, product, domain, dimensions, tolerance, axis)
+        match = best_match(item, product, domain, dimensions, tolerance, axis, near_tolerance)
         if match:
             matches.append({**line_payload(item, order, client, product), "dimension_match": match})
     matches.sort(key=lambda row: (row["dimension_match"]["distance"], -row["remaining_quantity"], -date.fromisoformat(row["order_date"]).toordinal(), row["order_item_id"]))

@@ -69,7 +69,7 @@ def seed_finished_lot(
         location_id=location.id,
         quantity=quantity,
         stock_date=date(2026, 1, 1),
-        source_type="stocktake",
+        source_type="manual",  # Historical fixtures may lack a frozen cost; new stocktake now requires one.
         remarks="只读看板测试",
         operator_id=None,
         idempotency_key="inventory-insights-lot",
@@ -225,7 +225,7 @@ def test_semi_finished_candidate_relationship_is_read_only(db: Session) -> None:
         location_id=semi_location.id,
         quantity=12,
         stock_date=as_of - timedelta(days=10),
-        source_type="stocktake",
+        source_type="manual",  # Historical fixtures may lack a frozen cost; new stocktake now requires one.
         material_code="C3C",
         layer_count=3,
         flute_type="B",
@@ -284,3 +284,14 @@ def test_product_cost_is_only_estimated_and_kept_separate_from_actual_value(db: 
     assert result["data_quality"]["snapshot_estimate_coverage"] == 0.0
     assert result["data_quality"]["current_quote_coverage"] == 0.0
     assert "估算来源" in result["data_quality"]["actual_cost_message"]
+
+
+def test_frozen_only_assistant_does_not_adopt_current_product_reference(db: Session) -> None:
+    _product, _lot = seed_finished_lot(db, quantity=40, cost=Decimal("2.5000"))
+    db.flush()
+    before=(_lot.estimated_unit_cost_snapshot,_lot.version)
+    result=build_inventory_insights(db,as_of=date(2026,7,12),frozen_cost_only=True,action_limit=None)
+    assert result["data_quality"]["cost_ready_lots"]==0
+    assert result["summary"]["estimated_inventory_value"] is None
+    assert result["action_items"][0]["cost_status"]=="pending"
+    assert (_lot.estimated_unit_cost_snapshot,_lot.version)==before

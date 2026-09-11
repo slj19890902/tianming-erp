@@ -305,7 +305,7 @@ def test_insights_api_removes_cost_fields_and_cost_only_actions_without_cost_vie
         assert secret not in response.text
 
 
-def test_insights_api_keeps_full_response_for_cost_view_users(
+def test_insights_api_redacts_finance_even_with_cost_view(
     cost_permission_api,
 ) -> None:
     app, current_user_id, cost_id = cost_permission_api
@@ -315,18 +315,14 @@ def test_insights_api_keeps_full_response_for_cost_view_users(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["summary"]["estimated_inventory_value"] == "234.56"
-    assert payload["summary"]["actual_inventory_value"] == "999.99"
-    assert payload["data_quality"]["actual_cost_message"] == "成本来源：快照估算"
-    assert payload["action_items"][0]["estimated_unit_cost"] == "23.45"
-    assert payload["action_items"][0]["cost_status"] == "pending"
-    assert payload["top_secret"] == "222.22 supplier-secret"
-    assert payload["action_items"][1]["sort_key"] == "estimated_snapshot 444.44"
+    assert "estimated_inventory_value" not in payload["summary"]
+    assert "actual_inventory_value" not in payload["summary"]
+    assert "supplier-secret" not in json.dumps(payload)
 
 
 def test_warehouse_insight_frontend_uses_permission_gate_before_cost_rendering() -> None:
     assert 'id="insightCostNotice" class="notice hidden"' in WAREHOUSE_HTML
-    assert 'const showCosts=hasPermission("cost.view");' in WAREHOUSE_HTML
+    assert 'const showCosts=["admin","boss"].includes(state.user?.role);' in WAREHOUSE_HTML
     assert 'if(showCosts){\n        cards.push(' in WAREHOUSE_HTML
     assert '$("insightCostNotice").classList.toggle("hidden",!showCosts);' in WAREHOUSE_HTML
     assert '...(showCosts?["估算来源"]:[])' in WAREHOUSE_HTML
@@ -379,6 +375,7 @@ state.insights={json.dumps(safe_payload, ensure_ascii=False)};
 renderInsights();
 const withoutCost=snapshot();
 state.permissions=["cost.view"];
+state.user.role="boss";
 state.insights={json.dumps(raw_payload, ensure_ascii=False)};
 renderInsights();
 const withCost=snapshot();

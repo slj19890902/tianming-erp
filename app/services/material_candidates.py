@@ -50,7 +50,7 @@ def candidate_items(db, lot, visible_customer_ids=None):
             customer_name=product.customer.chinese_short_name or product.customer.name,
             inventory_code=product.product_code, product_name=product.product_name,
             length_mm=float(pl), width_mm=float(pw), flute_type=product.flute_type,
-            score=score, selectable=score > 70 and color_compatible, warnings=list(dict.fromkeys(warnings)),
+            score=score, color_compatible=color_compatible, selectable=score > 70 and color_compatible, warnings=list(dict.fromkeys(warnings)),
             exact_dimension_match=pl == length and pw == width,
             requires_production_review=True,
             face_paper=product_face(product)))

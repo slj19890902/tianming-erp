@@ -24,7 +24,7 @@ def migration(filename):
 
 
 def test_sources_exclusive_fk_and_old_paper_rows_survive_roundtrip(tmp_path):
-    old = migration('rx10v8x9z72_graph_delivery_cost.py')
+    old = migration('rx11v8x9z72_graph_delivery_cost.py')
     new = migration('rz12v8x9z74_external_graph_delivery_cost.py')
     engine = create_engine(f"sqlite:///{tmp_path / 'constraints.sqlite3'}")
     with engine.begin() as db:

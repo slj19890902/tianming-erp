@@ -395,6 +395,9 @@ def freeze_delivery_inventory_material_cost(
         return _freeze_graph_cost_checked(db, allocation=allocation, lot=lot, operator_id=operator_id)
     resolved = resolve_lot_actual_material_cost(db, lot)
     if resolved is None:
+        from app.services.material_cost_supplement import freeze_inventory_entry_cost
+        freeze_inventory_entry_cost(db, allocation=allocation, lot=lot, operator_id=operator_id,
+            source_kind="inventory_allocation", quantity=int(allocation.consumed_stock_quantity))
         return None
     delivery_item = db.get(DeliveryItem, allocation.delivery_item_id)
     delivery = db.get(Delivery, delivery_item.delivery_id) if delivery_item else None
@@ -426,6 +429,9 @@ def freeze_unordered_delivery_material_cost(
         return _freeze_graph_cost_checked(db, allocation=allocation, lot=lot, operator_id=operator_id, unordered=True)
     resolved = resolve_lot_actual_material_cost(db, lot)
     if resolved is None:
+        from app.services.material_cost_supplement import freeze_inventory_entry_cost
+        freeze_inventory_entry_cost(db, allocation=allocation, lot=lot, operator_id=operator_id,
+            source_kind="unordered_inventory_allocation", quantity=int(allocation.consumed_quantity))
         return None
     delivery_item = db.get(DeliveryItem, allocation.delivery_item_id)
     delivery = db.get(Delivery, delivery_item.delivery_id) if delivery_item else None

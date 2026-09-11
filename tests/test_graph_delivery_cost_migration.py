@@ -16,7 +16,7 @@ def test_graph_cost_foreign_keys_and_nonempty_downgrade(tmp_path):
     from alembic.operations import Operations
     from sqlalchemy import create_engine, text
     from sqlalchemy.exc import IntegrityError
-    path = Path(__file__).resolve().parents[1] / "alembic/versions/rx10v8x9z72_graph_delivery_cost.py"
+    path = Path(__file__).resolve().parents[1] / "alembic/versions/rx11v8x9z72_graph_delivery_cost.py"
     spec = importlib.util.spec_from_file_location("graph_cost_migration", path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
@@ -56,9 +56,9 @@ def test_graph_cost_real_isolated_copy_roundtrip(monkeypatch, tmp_path):
                   for table in ("sales_orders", "sales_order_items", "inventory_lots", "warehouse_locations")}
     config = _config(monkeypatch, database)
     assert ScriptDirectory.from_config(config).get_heads() == ["se17v8x9z79"]
-    command.upgrade(config, "rx10v8x9z72")
+    command.upgrade(config, "rx11v8x9z72")
     command.downgrade(config, "rw09v8x9z71")
-    command.upgrade(config, "rx10v8x9z72")
+    command.upgrade(config, "rx11v8x9z72")
     with sqlite3.connect(database) as db:
         assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []

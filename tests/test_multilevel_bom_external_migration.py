@@ -57,7 +57,7 @@ def test_isolated_copy_upgrade_downgrade_reupgrade(monkeypatch, tmp_path):
     config = _config(monkeypatch, database)
     assert ScriptDirectory.from_config(config).get_heads() == ['se17v8x9z79']
     command.upgrade(config, 'ry11v8x9z73')
-    command.downgrade(config, 'rx10v8x9z72')
+    command.downgrade(config, 'rx11v8x9z72')
     command.upgrade(config, 'ry11v8x9z73')
     with sqlite3.connect(database) as db:
         assert db.execute('PRAGMA integrity_check').fetchone() == ('ok',)

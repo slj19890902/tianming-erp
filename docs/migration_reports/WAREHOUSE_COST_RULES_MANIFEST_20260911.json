@@ -1,0 +1,3797 @@
+{
+  "authorization": "老板2026-09-11确认成本资料、100cm单位、开票清单含税单价及参考分摊",
+  "source": {
+    "file": "同昌库存开票清单26.08.28.xlsx",
+    "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+    "sheet": "开票清单",
+    "column": "F",
+    "tax": "含税",
+    "currency": "CNY"
+  },
+  "invoice_total": "44902.80",
+  "unmatched": [],
+  "rules": [
+    {
+      "product_id": 3477,
+      "customer_id": 136,
+      "product_code": "Z.001.000115",
+      "product_name": "小纸箱悬置",
+      "product_version": 3,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "1.93",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F2",
+          "invoice_spec": "250*150*110",
+          "tax_inclusive_price": "1.93"
+        }
+      },
+      "lot_ids": [
+        598
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3773,
+      "customer_id": 136,
+      "product_code": "Z.001.000207",
+      "product_name": "30入装护角4根 50*50*557",
+      "product_version": 4,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "1.32",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F3",
+          "invoice_spec": "557*50*50*5",
+          "tax_inclusive_price": "1.32"
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3470,
+      "customer_id": 136,
+      "product_code": "Z.001.000009",
+      "product_name": "5只装D版ECU外箱",
+      "product_version": 3,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "6.51",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F4",
+          "invoice_spec": "360*250*550",
+          "tax_inclusive_price": "6.51"
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3496,
+      "customer_id": 136,
+      "product_code": "Z.001.000120",
+      "product_name": "线束总成纸箱下盖",
+      "product_version": 7,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "11.46270000",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F5",
+          "invoice_spec": "450*450*210-YL",
+          "tax_inclusive_price": "14.58",
+          "set_product_id": 3496,
+          "set_price": "14.58",
+          "allocation": [
+            {
+              "product_id": 3496,
+              "name": "线束总成纸箱下盖",
+              "quantity_per_set": "1",
+              "unit_cost": "11.46270000",
+              "weight": "4.4431"
+            },
+            {
+              "product_id": 3787,
+              "name": "线束总成纸箱上盖",
+              "quantity_per_set": "1.0000",
+              "unit_cost": "3.1173",
+              "weight": "1.2083"
+            }
+          ],
+          "weight_evidence": {
+            "3496": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 610,
+              "material_code": "VSNIV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）换算规则",
+              "base_square_price": 2.95,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "cover",
+                  "length_mm": "890",
+                  "width_mm": "890",
+                  "area_m2": "0.792100"
+                },
+                {
+                  "component": "base",
+                  "length_mm": "845",
+                  "width_mm": "845",
+                  "area_m2": "0.714025"
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3496,
+              "product_version": 7
+            },
+            "3787": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 610,
+              "material_code": "VSNIV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）换算规则",
+              "base_square_price": 2.95,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "640",
+                  "width_mm": "640",
+                  "area_m2": "0.409600",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3787,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [
+        608
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3787,
+      "customer_id": 136,
+      "product_code": "Z.001.000120",
+      "product_name": "线束总成纸箱上盖",
+      "product_version": 2,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "3.1173",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F5",
+          "invoice_spec": "450*450*210-YL",
+          "tax_inclusive_price": "14.58",
+          "set_product_id": 3496,
+          "set_price": "14.58",
+          "allocation": [
+            {
+              "product_id": 3496,
+              "name": "线束总成纸箱下盖",
+              "quantity_per_set": "1",
+              "unit_cost": "11.46270000",
+              "weight": "4.4431"
+            },
+            {
+              "product_id": 3787,
+              "name": "线束总成纸箱上盖",
+              "quantity_per_set": "1.0000",
+              "unit_cost": "3.1173",
+              "weight": "1.2083"
+            }
+          ],
+          "weight_evidence": {
+            "3496": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 610,
+              "material_code": "VSNIV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）换算规则",
+              "base_square_price": 2.95,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "cover",
+                  "length_mm": "890",
+                  "width_mm": "890",
+                  "area_m2": "0.792100"
+                },
+                {
+                  "component": "base",
+                  "length_mm": "845",
+                  "width_mm": "845",
+                  "area_m2": "0.714025"
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3496,
+              "product_version": 7
+            },
+            "3787": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 610,
+              "material_code": "VSNIV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）换算规则",
+              "base_square_price": 2.95,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "640",
+                  "width_mm": "640",
+                  "area_m2": "0.409600",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3787,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3585,
+      "customer_id": 136,
+      "product_code": "Z.001.000096",
+      "product_name": "D版ECU新版纸盒",
+      "product_version": 5,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "0.64340000",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F6",
+          "invoice_spec": "234*210*85",
+          "tax_inclusive_price": "4.07",
+          "set_product_id": 3585,
+          "set_price": "4.07",
+          "allocation": [
+            {
+              "product_id": 3585,
+              "name": "D版ECU新版纸盒",
+              "quantity_per_set": "1",
+              "unit_cost": "0.64340000",
+              "weight": "1.0075"
+            },
+            {
+              "product_id": 3776,
+              "name": "D版ECU新版纸盒内衬",
+              "quantity_per_set": "2.0000",
+              "unit_cost": "1.7133",
+              "weight": "2.6832"
+            }
+          ],
+          "weight_evidence": {
+            "3585": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 631,
+              "material_code": "VIK",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "710",
+                  "width_mm": "660",
+                  "area_m2": "0.468600",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3585,
+              "product_version": 5
+            },
+            "3776": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 631,
+              "material_code": "VIK",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "960",
+                  "width_mm": "1300",
+                  "area_m2": "1.248000",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3776,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [
+        611
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3776,
+      "customer_id": 136,
+      "product_code": "Z.001.000096",
+      "product_name": "D版ECU新版纸盒内衬",
+      "product_version": 2,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "1.7133",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F6",
+          "invoice_spec": "234*210*85",
+          "tax_inclusive_price": "4.07",
+          "set_product_id": 3585,
+          "set_price": "4.07",
+          "allocation": [
+            {
+              "product_id": 3585,
+              "name": "D版ECU新版纸盒",
+              "quantity_per_set": "1",
+              "unit_cost": "0.64340000",
+              "weight": "1.0075"
+            },
+            {
+              "product_id": 3776,
+              "name": "D版ECU新版纸盒内衬",
+              "quantity_per_set": "2.0000",
+              "unit_cost": "1.7133",
+              "weight": "2.6832"
+            }
+          ],
+          "weight_evidence": {
+            "3585": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 631,
+              "material_code": "VIK",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "710",
+                  "width_mm": "660",
+                  "area_m2": "0.468600",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3585,
+              "product_version": 5
+            },
+            "3776": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 631,
+              "material_code": "VIK",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "960",
+                  "width_mm": "1300",
+                  "area_m2": "1.248000",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3776,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [
+        610
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3333,
+      "customer_id": 136,
+      "product_code": "Z.001.000003",
+      "product_name": "A05常规外箱",
+      "product_version": 4,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "21.2",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F7",
+          "invoice_spec": "1050*580*226",
+          "tax_inclusive_price": "21.2"
+        }
+      },
+      "lot_ids": [
+        607
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3469,
+      "customer_id": 136,
+      "product_code": "Z.001.000004",
+      "product_name": "A05加宽外箱",
+      "product_version": 3,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "26.02",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F8",
+          "invoice_spec": "1050*680*226",
+          "tax_inclusive_price": "26.02"
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3471,
+      "customer_id": 136,
+      "product_code": "Z.001.000036",
+      "product_name": "1301A01-010A1",
+      "product_version": 3,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "31.17",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F9",
+          "invoice_spec": "1010*850*210",
+          "tax_inclusive_price": "31.17"
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3807,
+      "customer_id": 136,
+      "product_code": "Z.004.000006",
+      "product_name": "瓦楞垫板800*180*120",
+      "product_version": 4,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "7.71",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F10",
+          "invoice_spec": "800*180*120",
+          "tax_inclusive_price": "7.71"
+        }
+      },
+      "lot_ids": [
+        656,
+        657,
+        658,
+        659,
+        660,
+        661,
+        662
+      ],
+      "excluded_lots": [
+        {
+          "id": 639,
+          "source": "transfer",
+          "ref": "external_packaging_receipt_item"
+        },
+        {
+          "id": 640,
+          "source": "transfer",
+          "ref": "external_packaging_receipt_item"
+        },
+        {
+          "id": 643,
+          "source": "transfer",
+          "ref": "external_packaging_receipt_item"
+        },
+        {
+          "id": 644,
+          "source": "transfer",
+          "ref": "external_packaging_receipt_item"
+        },
+        {
+          "id": 645,
+          "source": "transfer",
+          "ref": "external_packaging_receipt_item"
+        }
+      ]
+    },
+    {
+      "product_id": 3479,
+      "customer_id": 136,
+      "product_code": "Z.001.000130",
+      "product_name": "自制04水泵包装盒",
+      "product_version": 5,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "1.6670",
+        "basis": "箱体保留当前材料参考价，EPE=13元整套价减箱体价；仅参考分摊，非EPE真实采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F11",
+          "invoice_spec": "330*200*220",
+          "tax_inclusive_price": "13",
+          "set_product_id": 3479,
+          "set_price": "13",
+          "allocation": [
+            {
+              "product_id": 3479,
+              "name": "自制04水泵包装盒",
+              "quantity_per_set": "1",
+              "unit_cost": "1.6670",
+              "weight": "1.6670"
+            },
+            {
+              "product_id": 3821,
+              "name": "水泵EPE",
+              "quantity_per_set": "1.0000",
+              "unit_cost": "11.3330",
+              "weight": null
+            }
+          ],
+          "weight_evidence": {
+            "3479": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 415,
+              "material_code": "D+1RC",
+              "supplier_name": "森林阳光",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 3.59,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1090",
+                  "width_mm": "426",
+                  "area_m2": "0.464340",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3479,
+              "product_version": 5
+            }
+          }
+        }
+      },
+      "lot_ids": [
+        597
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3821,
+      "customer_id": 136,
+      "product_code": "Z.001.000130",
+      "product_name": "水泵EPE",
+      "product_version": 1,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "11.3330",
+        "basis": "箱体保留当前材料参考价，EPE=13元整套价减箱体价；仅参考分摊，非EPE真实采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F11",
+          "invoice_spec": "330*200*220",
+          "tax_inclusive_price": "13",
+          "set_product_id": 3479,
+          "set_price": "13",
+          "allocation": [
+            {
+              "product_id": 3479,
+              "name": "自制04水泵包装盒",
+              "quantity_per_set": "1",
+              "unit_cost": "1.6670",
+              "weight": "1.6670"
+            },
+            {
+              "product_id": 3821,
+              "name": "水泵EPE",
+              "quantity_per_set": "1.0000",
+              "unit_cost": "11.3330",
+              "weight": null
+            }
+          ],
+          "weight_evidence": {
+            "3479": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 415,
+              "material_code": "D+1RC",
+              "supplier_name": "森林阳光",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 3.59,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1090",
+                  "width_mm": "426",
+                  "area_m2": "0.464340",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3479,
+              "product_version": 5
+            }
+          }
+        }
+      },
+      "lot_ids": [
+        612
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3480,
+      "customer_id": 136,
+      "product_code": "Z.001.000132",
+      "product_name": "自制水泵6只装内盒",
+      "product_version": 7,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "2.56",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F12",
+          "invoice_spec": "295*160*150",
+          "tax_inclusive_price": "2.56"
+        }
+      },
+      "lot_ids": [
+        606
+      ],
+      "excluded_lots": [
+        {
+          "id": 391,
+          "source": "production_completion",
+          "ref": "production_completion"
+        }
+      ]
+    },
+    {
+      "product_id": 3760,
+      "customer_id": 136,
+      "product_code": "Z.001.000134",
+      "product_name": "自制水泵内盒衬板",
+      "product_version": 3,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "0.84",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F13",
+          "invoice_spec": "305*460",
+          "tax_inclusive_price": "0.84"
+        }
+      },
+      "lot_ids": [
+        605
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3481,
+      "customer_id": 136,
+      "product_code": "Z.001.000135",
+      "product_name": "自制水泵6只装外箱",
+      "product_version": 4,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "5.98",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F14",
+          "invoice_spec": "485*315*350",
+          "tax_inclusive_price": "5.98"
+        }
+      },
+      "lot_ids": [
+        604
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3484,
+      "customer_id": 136,
+      "product_code": "Z.001.000138",
+      "product_name": "纸箱",
+      "product_version": 4,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "7.61560000",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F15",
+          "invoice_spec": "440*440*530",
+          "tax_inclusive_price": "13.75",
+          "set_product_id": 3484,
+          "set_price": "13.75",
+          "allocation": [
+            {
+              "product_id": 3484,
+              "name": "纸箱",
+              "quantity_per_set": "1",
+              "unit_cost": "7.61560000",
+              "weight": "4.5200"
+            },
+            {
+              "product_id": 3779,
+              "name": "隔板",
+              "quantity_per_set": "4.0000",
+              "unit_cost": "1.5336",
+              "weight": "0.9102"
+            }
+          ],
+          "weight_evidence": {
+            "3484": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 412,
+              "material_code": "611+5",
+              "supplier_name": "森林阳光",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.58,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1795",
+                  "width_mm": "976",
+                  "area_m2": "1.751920",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3484,
+              "product_version": 4
+            },
+            "3779": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 412,
+              "material_code": "611+5",
+              "supplier_name": "森林阳光",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.58,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "840",
+                  "width_mm": "420",
+                  "area_m2": "0.352800",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3779,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [
+        595
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3779,
+      "customer_id": 136,
+      "product_code": "Z.001.000138",
+      "product_name": "隔板",
+      "product_version": 2,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "1.5336",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F15",
+          "invoice_spec": "440*440*530",
+          "tax_inclusive_price": "13.75",
+          "set_product_id": 3484,
+          "set_price": "13.75",
+          "allocation": [
+            {
+              "product_id": 3484,
+              "name": "纸箱",
+              "quantity_per_set": "1",
+              "unit_cost": "7.61560000",
+              "weight": "4.5200"
+            },
+            {
+              "product_id": 3779,
+              "name": "隔板",
+              "quantity_per_set": "4.0000",
+              "unit_cost": "1.5336",
+              "weight": "0.9102"
+            }
+          ],
+          "weight_evidence": {
+            "3484": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 412,
+              "material_code": "611+5",
+              "supplier_name": "森林阳光",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.58,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1795",
+                  "width_mm": "976",
+                  "area_m2": "1.751920",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3484,
+              "product_version": 4
+            },
+            "3779": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 412,
+              "material_code": "611+5",
+              "supplier_name": "森林阳光",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.58,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "840",
+                  "width_mm": "420",
+                  "area_m2": "0.352800",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3779,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [
+        596
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3485,
+      "customer_id": 136,
+      "product_code": "Z.001.000139",
+      "product_name": "5只装305风机盒(含隔板4张）",
+      "product_version": 10,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "5.37720000",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F16",
+          "invoice_spec": "370*370*460",
+          "tax_inclusive_price": "9.42",
+          "set_product_id": 3485,
+          "set_price": "9.42",
+          "allocation": [
+            {
+              "product_id": 3485,
+              "name": "5只装305风机盒(含隔板4张）",
+              "quantity_per_set": "1",
+              "unit_cost": "5.37720000",
+              "weight": "3.2677"
+            },
+            {
+              "product_id": 3780,
+              "name": "隔板",
+              "quantity_per_set": "4.0000",
+              "unit_cost": "1.0107",
+              "weight": "0.6142"
+            }
+          ],
+          "weight_evidence": {
+            "3485": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 412,
+              "material_code": "611+5",
+              "supplier_name": "森林阳光",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.58,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1515",
+                  "width_mm": "836",
+                  "area_m2": "1.266540",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3485,
+              "product_version": 10
+            },
+            "3780": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 412,
+              "material_code": "611+5",
+              "supplier_name": "森林阳光",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.58,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "345",
+                  "width_mm": "690",
+                  "area_m2": "0.238050",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3780,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": [
+        {
+          "id": 487,
+          "source": "production_completion",
+          "ref": "production_completion"
+        }
+      ]
+    },
+    {
+      "product_id": 3780,
+      "customer_id": 136,
+      "product_code": "Z.001.000139",
+      "product_name": "隔板",
+      "product_version": 2,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "1.0107",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F16",
+          "invoice_spec": "370*370*460",
+          "tax_inclusive_price": "9.42",
+          "set_product_id": 3485,
+          "set_price": "9.42",
+          "allocation": [
+            {
+              "product_id": 3485,
+              "name": "5只装305风机盒(含隔板4张）",
+              "quantity_per_set": "1",
+              "unit_cost": "5.37720000",
+              "weight": "3.2677"
+            },
+            {
+              "product_id": 3780,
+              "name": "隔板",
+              "quantity_per_set": "4.0000",
+              "unit_cost": "1.0107",
+              "weight": "0.6142"
+            }
+          ],
+          "weight_evidence": {
+            "3485": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 412,
+              "material_code": "611+5",
+              "supplier_name": "森林阳光",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.58,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1515",
+                  "width_mm": "836",
+                  "area_m2": "1.266540",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3485,
+              "product_version": 10
+            },
+            "3780": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 412,
+              "material_code": "611+5",
+              "supplier_name": "森林阳光",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.58,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "345",
+                  "width_mm": "690",
+                  "area_m2": "0.238050",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3780,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3765,
+      "customer_id": 136,
+      "product_code": "Z.001.000148",
+      "product_name": "5入装无刷ECU纸盒（含格板）",
+      "product_version": 7,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "2.53820000",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F17",
+          "invoice_spec": "310*200*130",
+          "tax_inclusive_price": "5.29",
+          "set_product_id": 3765,
+          "set_price": "5.29",
+          "allocation": [
+            {
+              "product_id": 3765,
+              "name": "5入装无刷ECU纸盒（含格板）",
+              "quantity_per_set": "1",
+              "unit_cost": "2.53820000",
+              "weight": "1.3889"
+            },
+            {
+              "product_id": 3789,
+              "name": "隔板短片",
+              "quantity_per_set": "6.0000",
+              "unit_cost": "0.3559",
+              "weight": "0.1947"
+            },
+            {
+              "product_id": 3788,
+              "name": "隔板长片",
+              "quantity_per_set": "2.0000",
+              "unit_cost": "0.3082",
+              "weight": "0.1686"
+            }
+          ],
+          "weight_evidence": {
+            "3765": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 632,
+              "material_code": "KIV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "760",
+                  "width_mm": "850",
+                  "area_m2": "0.646000",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3765,
+              "product_version": 7
+            },
+            "3789": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 631,
+              "material_code": "VIK",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "358",
+                  "width_mm": "253",
+                  "area_m2": "0.090574",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3789,
+              "product_version": 1
+            },
+            "3788": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 631,
+              "material_code": "VIK",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "310",
+                  "width_mm": "253",
+                  "area_m2": "0.078430",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3788,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [
+        600
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3789,
+      "customer_id": 136,
+      "product_code": "Z.001.000148",
+      "product_name": "隔板短片",
+      "product_version": 1,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "0.3559",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F17",
+          "invoice_spec": "310*200*130",
+          "tax_inclusive_price": "5.29",
+          "set_product_id": 3765,
+          "set_price": "5.29",
+          "allocation": [
+            {
+              "product_id": 3765,
+              "name": "5入装无刷ECU纸盒（含格板）",
+              "quantity_per_set": "1",
+              "unit_cost": "2.53820000",
+              "weight": "1.3889"
+            },
+            {
+              "product_id": 3789,
+              "name": "隔板短片",
+              "quantity_per_set": "6.0000",
+              "unit_cost": "0.3559",
+              "weight": "0.1947"
+            },
+            {
+              "product_id": 3788,
+              "name": "隔板长片",
+              "quantity_per_set": "2.0000",
+              "unit_cost": "0.3082",
+              "weight": "0.1686"
+            }
+          ],
+          "weight_evidence": {
+            "3765": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 632,
+              "material_code": "KIV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "760",
+                  "width_mm": "850",
+                  "area_m2": "0.646000",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3765,
+              "product_version": 7
+            },
+            "3789": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 631,
+              "material_code": "VIK",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "358",
+                  "width_mm": "253",
+                  "area_m2": "0.090574",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3789,
+              "product_version": 1
+            },
+            "3788": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 631,
+              "material_code": "VIK",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "310",
+                  "width_mm": "253",
+                  "area_m2": "0.078430",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3788,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3788,
+      "customer_id": 136,
+      "product_code": "Z.001.000148",
+      "product_name": "隔板长片",
+      "product_version": 2,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "0.3082",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F17",
+          "invoice_spec": "310*200*130",
+          "tax_inclusive_price": "5.29",
+          "set_product_id": 3765,
+          "set_price": "5.29",
+          "allocation": [
+            {
+              "product_id": 3765,
+              "name": "5入装无刷ECU纸盒（含格板）",
+              "quantity_per_set": "1",
+              "unit_cost": "2.53820000",
+              "weight": "1.3889"
+            },
+            {
+              "product_id": 3789,
+              "name": "隔板短片",
+              "quantity_per_set": "6.0000",
+              "unit_cost": "0.3559",
+              "weight": "0.1947"
+            },
+            {
+              "product_id": 3788,
+              "name": "隔板长片",
+              "quantity_per_set": "2.0000",
+              "unit_cost": "0.3082",
+              "weight": "0.1686"
+            }
+          ],
+          "weight_evidence": {
+            "3765": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 632,
+              "material_code": "KIV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "760",
+                  "width_mm": "850",
+                  "area_m2": "0.646000",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3765,
+              "product_version": 7
+            },
+            "3789": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 631,
+              "material_code": "VIK",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "358",
+                  "width_mm": "253",
+                  "area_m2": "0.090574",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3789,
+              "product_version": 1
+            },
+            "3788": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 631,
+              "material_code": "VIK",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 2.15,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "B",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "310",
+                  "width_mm": "253",
+                  "area_m2": "0.078430",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 3,
+              "product_id": 3788,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3488,
+      "customer_id": 136,
+      "product_code": "Z.001.000227",
+      "product_name": "加厚48入装风机纸箱",
+      "product_version": 3,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "78.4",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F18",
+          "invoice_spec": "1150*795*906",
+          "tax_inclusive_price": "78.4"
+        }
+      },
+      "lot_ids": [
+        490
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3491,
+      "customer_id": 136,
+      "product_code": "Z.001.000165",
+      "product_name": "大无刷EUC纸盒",
+      "product_version": 4,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "2.55",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F19",
+          "invoice_spec": "208*144*51",
+          "tax_inclusive_price": "2.55"
+        }
+      },
+      "lot_ids": [
+        599
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3767,
+      "customer_id": 136,
+      "product_code": "Z.001.000157",
+      "product_name": "纸箱",
+      "product_version": 4,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "18.13",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F20",
+          "invoice_spec": "700*500*250",
+          "tax_inclusive_price": "18.13"
+        }
+      },
+      "lot_ids": [
+        602,
+        603
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3494,
+      "customer_id": 136,
+      "product_code": "Z.001.000204",
+      "product_name": "30入装风机纸箱",
+      "product_version": 5,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "9.46730000",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F21",
+          "invoice_spec": "1155*795*576",
+          "tax_inclusive_price": "34.77",
+          "set_product_id": 3494,
+          "set_price": "34.77",
+          "allocation": [
+            {
+              "product_id": 3494,
+              "name": "30入装风机纸箱",
+              "quantity_per_set": "1",
+              "unit_cost": "9.46730000",
+              "weight": "23.0491"
+            },
+            {
+              "product_id": 3771,
+              "name": "30入装格挡长片15片",
+              "quantity_per_set": "15.0000",
+              "unit_cost": "0.6521",
+              "weight": "1.5874"
+            },
+            {
+              "product_id": 3783,
+              "name": "30入装格挡短片20片",
+              "quantity_per_set": "20.0000",
+              "unit_cost": "0.4490",
+              "weight": "1.0929"
+            },
+            {
+              "product_id": 3772,
+              "name": "30入装衬板6片",
+              "quantity_per_set": "6.0000",
+              "unit_cost": "1.0902",
+              "weight": "2.6538"
+            }
+          ],
+          "weight_evidence": {
+            "3494": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 612,
+              "material_code": "8INIV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）换算规则",
+              "base_square_price": 4.23,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1980",
+                  "width_mm": "1376",
+                  "area_m2": "2.724480",
+                  "pieces_per_box": 2
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3494,
+              "product_version": 5
+            },
+            "3771": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 635,
+              "material_code": "R616R",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 3.2,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1159",
+                  "width_mm": "428",
+                  "area_m2": "0.496052",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3771,
+              "product_version": 7
+            },
+            "3783": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 635,
+              "material_code": "R616R",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 3.2,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "798",
+                  "width_mm": "428",
+                  "area_m2": "0.341544",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3783,
+              "product_version": 5
+            },
+            "3772": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 399,
+              "material_code": "J616J",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "供应商规则基准价 2.86；当前调价 5.0000%",
+              "base_square_price": 3.0,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "778",
+                  "width_mm": "1137",
+                  "area_m2": "0.884586",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3772,
+              "product_version": 10
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3771,
+      "customer_id": 136,
+      "product_code": "Z.001.000205",
+      "product_name": "30入装格挡长片15片",
+      "product_version": 7,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "0.6521",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F21",
+          "invoice_spec": "1155*795*576",
+          "tax_inclusive_price": "34.77",
+          "set_product_id": 3494,
+          "set_price": "34.77",
+          "allocation": [
+            {
+              "product_id": 3494,
+              "name": "30入装风机纸箱",
+              "quantity_per_set": "1",
+              "unit_cost": "9.46730000",
+              "weight": "23.0491"
+            },
+            {
+              "product_id": 3771,
+              "name": "30入装格挡长片15片",
+              "quantity_per_set": "15.0000",
+              "unit_cost": "0.6521",
+              "weight": "1.5874"
+            },
+            {
+              "product_id": 3783,
+              "name": "30入装格挡短片20片",
+              "quantity_per_set": "20.0000",
+              "unit_cost": "0.4490",
+              "weight": "1.0929"
+            },
+            {
+              "product_id": 3772,
+              "name": "30入装衬板6片",
+              "quantity_per_set": "6.0000",
+              "unit_cost": "1.0902",
+              "weight": "2.6538"
+            }
+          ],
+          "weight_evidence": {
+            "3494": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 612,
+              "material_code": "8INIV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）换算规则",
+              "base_square_price": 4.23,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1980",
+                  "width_mm": "1376",
+                  "area_m2": "2.724480",
+                  "pieces_per_box": 2
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3494,
+              "product_version": 5
+            },
+            "3771": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 635,
+              "material_code": "R616R",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 3.2,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1159",
+                  "width_mm": "428",
+                  "area_m2": "0.496052",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3771,
+              "product_version": 7
+            },
+            "3783": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 635,
+              "material_code": "R616R",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 3.2,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "798",
+                  "width_mm": "428",
+                  "area_m2": "0.341544",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3783,
+              "product_version": 5
+            },
+            "3772": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 399,
+              "material_code": "J616J",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "供应商规则基准价 2.86；当前调价 5.0000%",
+              "base_square_price": 3.0,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "778",
+                  "width_mm": "1137",
+                  "area_m2": "0.884586",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3772,
+              "product_version": 10
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": [
+        {
+          "id": 365,
+          "source": "production_completion",
+          "ref": "production_completion"
+        }
+      ]
+    },
+    {
+      "product_id": 3783,
+      "customer_id": 136,
+      "product_code": "Z.001.000205",
+      "product_name": "30入装格挡短片20片",
+      "product_version": 5,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "0.4490",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F21",
+          "invoice_spec": "1155*795*576",
+          "tax_inclusive_price": "34.77",
+          "set_product_id": 3494,
+          "set_price": "34.77",
+          "allocation": [
+            {
+              "product_id": 3494,
+              "name": "30入装风机纸箱",
+              "quantity_per_set": "1",
+              "unit_cost": "9.46730000",
+              "weight": "23.0491"
+            },
+            {
+              "product_id": 3771,
+              "name": "30入装格挡长片15片",
+              "quantity_per_set": "15.0000",
+              "unit_cost": "0.6521",
+              "weight": "1.5874"
+            },
+            {
+              "product_id": 3783,
+              "name": "30入装格挡短片20片",
+              "quantity_per_set": "20.0000",
+              "unit_cost": "0.4490",
+              "weight": "1.0929"
+            },
+            {
+              "product_id": 3772,
+              "name": "30入装衬板6片",
+              "quantity_per_set": "6.0000",
+              "unit_cost": "1.0902",
+              "weight": "2.6538"
+            }
+          ],
+          "weight_evidence": {
+            "3494": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 612,
+              "material_code": "8INIV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）换算规则",
+              "base_square_price": 4.23,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1980",
+                  "width_mm": "1376",
+                  "area_m2": "2.724480",
+                  "pieces_per_box": 2
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3494,
+              "product_version": 5
+            },
+            "3771": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 635,
+              "material_code": "R616R",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 3.2,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1159",
+                  "width_mm": "428",
+                  "area_m2": "0.496052",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3771,
+              "product_version": 7
+            },
+            "3783": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 635,
+              "material_code": "R616R",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 3.2,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "798",
+                  "width_mm": "428",
+                  "area_m2": "0.341544",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3783,
+              "product_version": 5
+            },
+            "3772": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 399,
+              "material_code": "J616J",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "供应商规则基准价 2.86；当前调价 5.0000%",
+              "base_square_price": 3.0,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "778",
+                  "width_mm": "1137",
+                  "area_m2": "0.884586",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3772,
+              "product_version": 10
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": [
+        {
+          "id": 366,
+          "source": "production_completion",
+          "ref": "production_completion"
+        }
+      ]
+    },
+    {
+      "product_id": 3772,
+      "customer_id": 136,
+      "product_code": "Z.001.000206",
+      "product_name": "30入装衬板6片",
+      "product_version": 10,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "1.0902",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F21",
+          "invoice_spec": "1155*795*576",
+          "tax_inclusive_price": "34.77",
+          "set_product_id": 3494,
+          "set_price": "34.77",
+          "allocation": [
+            {
+              "product_id": 3494,
+              "name": "30入装风机纸箱",
+              "quantity_per_set": "1",
+              "unit_cost": "9.46730000",
+              "weight": "23.0491"
+            },
+            {
+              "product_id": 3771,
+              "name": "30入装格挡长片15片",
+              "quantity_per_set": "15.0000",
+              "unit_cost": "0.6521",
+              "weight": "1.5874"
+            },
+            {
+              "product_id": 3783,
+              "name": "30入装格挡短片20片",
+              "quantity_per_set": "20.0000",
+              "unit_cost": "0.4490",
+              "weight": "1.0929"
+            },
+            {
+              "product_id": 3772,
+              "name": "30入装衬板6片",
+              "quantity_per_set": "6.0000",
+              "unit_cost": "1.0902",
+              "weight": "2.6538"
+            }
+          ],
+          "weight_evidence": {
+            "3494": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 612,
+              "material_code": "8INIV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）换算规则",
+              "base_square_price": 4.23,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1980",
+                  "width_mm": "1376",
+                  "area_m2": "2.724480",
+                  "pieces_per_box": 2
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3494,
+              "product_version": 5
+            },
+            "3771": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 635,
+              "material_code": "R616R",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 3.2,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1159",
+                  "width_mm": "428",
+                  "area_m2": "0.496052",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3771,
+              "product_version": 7
+            },
+            "3783": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 635,
+              "material_code": "R616R",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "人工填写",
+              "base_square_price": 3.2,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "798",
+                  "width_mm": "428",
+                  "area_m2": "0.341544",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3783,
+              "product_version": 5
+            },
+            "3772": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 399,
+              "material_code": "J616J",
+              "supplier_name": "苏州嘉林亿",
+              "price_unit": "元/㎡",
+              "material_quote_date": null,
+              "material_price_source": "供应商规则基准价 2.86；当前调价 5.0000%",
+              "base_square_price": 3.0,
+              "flute_delta": 0.0,
+              "flute_rule_id": 10,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "778",
+                  "width_mm": "1137",
+                  "area_m2": "0.884586",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3772,
+              "product_version": 10
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3810,
+      "customer_id": 136,
+      "product_code": "Z.001.000218",
+      "product_name": "小三角板支撑 65*65*100",
+      "product_version": 2,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "0.28",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F22",
+          "invoice_spec": "65*65*100",
+          "tax_inclusive_price": "0.28"
+        }
+      },
+      "lot_ids": [
+        491
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3811,
+      "customer_id": 136,
+      "product_code": "Z.001.000219",
+      "product_name": "大三角板支撑145*145*100",
+      "product_version": 3,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "0.56",
+        "basis": "老板确认同昌开票清单含税单价，合作厂盘点库存采购参考",
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F23",
+          "invoice_spec": "145*145*100",
+          "tax_inclusive_price": "0.56"
+        }
+      },
+      "lot_ids": [
+        492
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3774,
+      "customer_id": 136,
+      "product_code": "Z.001.000222",
+      "product_name": "纸箱",
+      "product_version": 7,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "36.52410000",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F24",
+          "invoice_spec": "1093*752*560",
+          "tax_inclusive_price": "172.48",
+          "set_product_id": 3774,
+          "set_price": "172.48",
+          "allocation": [
+            {
+              "product_id": 3774,
+              "name": "纸箱",
+              "quantity_per_set": "1",
+              "unit_cost": "36.52410000",
+              "weight": "21.4085"
+            },
+            {
+              "product_id": 3785,
+              "name": "格挡长片",
+              "quantity_per_set": "9.0000",
+              "unit_cost": "6.3435",
+              "weight": "3.7182"
+            },
+            {
+              "product_id": 3786,
+              "name": "格挡短片",
+              "quantity_per_set": "12.0000",
+              "unit_cost": "4.3777",
+              "weight": "2.5660"
+            },
+            {
+              "product_id": 3784,
+              "name": "衬板",
+              "quantity_per_set": "4.0000",
+              "unit_cost": "6.5830",
+              "weight": "3.8586"
+            }
+          ],
+          "weight_evidence": {
+            "3774": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 566,
+              "material_code": "GSNSV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.32,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1880",
+                  "width_mm": "1318",
+                  "area_m2": "2.477840",
+                  "pieces_per_box": 2
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3774,
+              "product_version": 7
+            },
+            "3785": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1094",
+                  "width_mm": "688",
+                  "area_m2": "0.752672",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3785,
+              "product_version": 2
+            },
+            "3786": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "755",
+                  "width_mm": "688",
+                  "area_m2": "0.519440",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3786,
+              "product_version": 2
+            },
+            "3784": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "730",
+                  "width_mm": "1070",
+                  "area_m2": "0.781100",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3784,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3785,
+      "customer_id": 136,
+      "product_code": "Z.001.000222",
+      "product_name": "格挡长片",
+      "product_version": 2,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "6.3435",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F24",
+          "invoice_spec": "1093*752*560",
+          "tax_inclusive_price": "172.48",
+          "set_product_id": 3774,
+          "set_price": "172.48",
+          "allocation": [
+            {
+              "product_id": 3774,
+              "name": "纸箱",
+              "quantity_per_set": "1",
+              "unit_cost": "36.52410000",
+              "weight": "21.4085"
+            },
+            {
+              "product_id": 3785,
+              "name": "格挡长片",
+              "quantity_per_set": "9.0000",
+              "unit_cost": "6.3435",
+              "weight": "3.7182"
+            },
+            {
+              "product_id": 3786,
+              "name": "格挡短片",
+              "quantity_per_set": "12.0000",
+              "unit_cost": "4.3777",
+              "weight": "2.5660"
+            },
+            {
+              "product_id": 3784,
+              "name": "衬板",
+              "quantity_per_set": "4.0000",
+              "unit_cost": "6.5830",
+              "weight": "3.8586"
+            }
+          ],
+          "weight_evidence": {
+            "3774": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 566,
+              "material_code": "GSNSV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.32,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1880",
+                  "width_mm": "1318",
+                  "area_m2": "2.477840",
+                  "pieces_per_box": 2
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3774,
+              "product_version": 7
+            },
+            "3785": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1094",
+                  "width_mm": "688",
+                  "area_m2": "0.752672",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3785,
+              "product_version": 2
+            },
+            "3786": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "755",
+                  "width_mm": "688",
+                  "area_m2": "0.519440",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3786,
+              "product_version": 2
+            },
+            "3784": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "730",
+                  "width_mm": "1070",
+                  "area_m2": "0.781100",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3784,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3786,
+      "customer_id": 136,
+      "product_code": "Z.001.000222",
+      "product_name": "格挡短片",
+      "product_version": 2,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "4.3777",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F24",
+          "invoice_spec": "1093*752*560",
+          "tax_inclusive_price": "172.48",
+          "set_product_id": 3774,
+          "set_price": "172.48",
+          "allocation": [
+            {
+              "product_id": 3774,
+              "name": "纸箱",
+              "quantity_per_set": "1",
+              "unit_cost": "36.52410000",
+              "weight": "21.4085"
+            },
+            {
+              "product_id": 3785,
+              "name": "格挡长片",
+              "quantity_per_set": "9.0000",
+              "unit_cost": "6.3435",
+              "weight": "3.7182"
+            },
+            {
+              "product_id": 3786,
+              "name": "格挡短片",
+              "quantity_per_set": "12.0000",
+              "unit_cost": "4.3777",
+              "weight": "2.5660"
+            },
+            {
+              "product_id": 3784,
+              "name": "衬板",
+              "quantity_per_set": "4.0000",
+              "unit_cost": "6.5830",
+              "weight": "3.8586"
+            }
+          ],
+          "weight_evidence": {
+            "3774": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 566,
+              "material_code": "GSNSV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.32,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1880",
+                  "width_mm": "1318",
+                  "area_m2": "2.477840",
+                  "pieces_per_box": 2
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3774,
+              "product_version": 7
+            },
+            "3785": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1094",
+                  "width_mm": "688",
+                  "area_m2": "0.752672",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3785,
+              "product_version": 2
+            },
+            "3786": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "755",
+                  "width_mm": "688",
+                  "area_m2": "0.519440",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3786,
+              "product_version": 2
+            },
+            "3784": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "730",
+                  "width_mm": "1070",
+                  "area_m2": "0.781100",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3784,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3784,
+      "customer_id": 136,
+      "product_code": "Z.001.000222",
+      "product_name": "衬板",
+      "product_version": 2,
+      "config": {
+        "mode": "fixed",
+        "unit_cost": "6.5830",
+        "basis": "按箱体及部件材料参考成本权重分摊套价；尾差留箱体，非独立部件采购价",
+        "temporary": true,
+        "purchase_channel": "同昌合作厂",
+        "evidence": {
+          "file": "同昌库存开票清单26.08.28.xlsx",
+          "sha256": "7ff438bccfc121660ff0c820d2523616e64c68d0aeb0f6af2103806eaa6e1100",
+          "sheet": "开票清单",
+          "column": "F",
+          "tax": "含税",
+          "currency": "CNY",
+          "cell": "F24",
+          "invoice_spec": "1093*752*560",
+          "tax_inclusive_price": "172.48",
+          "set_product_id": 3774,
+          "set_price": "172.48",
+          "allocation": [
+            {
+              "product_id": 3774,
+              "name": "纸箱",
+              "quantity_per_set": "1",
+              "unit_cost": "36.52410000",
+              "weight": "21.4085"
+            },
+            {
+              "product_id": 3785,
+              "name": "格挡长片",
+              "quantity_per_set": "9.0000",
+              "unit_cost": "6.3435",
+              "weight": "3.7182"
+            },
+            {
+              "product_id": 3786,
+              "name": "格挡短片",
+              "quantity_per_set": "12.0000",
+              "unit_cost": "4.3777",
+              "weight": "2.5660"
+            },
+            {
+              "product_id": 3784,
+              "name": "衬板",
+              "quantity_per_set": "4.0000",
+              "unit_cost": "6.5830",
+              "weight": "3.8586"
+            }
+          ],
+          "weight_evidence": {
+            "3774": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 566,
+              "material_code": "GSNSV",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.32,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1880",
+                  "width_mm": "1318",
+                  "area_m2": "2.477840",
+                  "pieces_per_box": 2
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3774,
+              "product_version": 7
+            },
+            "3785": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "1094",
+                  "width_mm": "688",
+                  "area_m2": "0.752672",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3785,
+              "product_version": 2
+            },
+            "3786": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "755",
+                  "width_mm": "688",
+                  "area_m2": "0.519440",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3786,
+              "product_version": 2
+            },
+            "3784": {
+              "inventory_type": "finished",
+              "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+              "estimate_basis": "stocktake_confirmed_current_material",
+              "material_id": 569,
+              "material_code": "GSNSG",
+              "supplier_name": "欢达",
+              "price_unit": "元/㎡",
+              "material_quote_date": "2023-07-19",
+              "material_price_source": "欢达纸板报价单（2023-07-19）",
+              "base_square_price": 4.94,
+              "flute_delta": 0.0,
+              "flute_rule_id": null,
+              "flute_type": "AB",
+              "components": [
+                {
+                  "component": "whole",
+                  "length_mm": "730",
+                  "width_mm": "1070",
+                  "area_m2": "0.781100",
+                  "pieces_per_box": 1
+                }
+              ],
+              "algorithm_version": "inventory-confirmed-material-cny-v1",
+              "formula_version": "saved-report-mm-v1",
+              "currency": "CNY",
+              "tax_included": true,
+              "source_tax_included": true,
+              "source_tax_rate": "0.130000",
+              "material_version": 2,
+              "product_id": 3784,
+              "product_version": 2
+            }
+          }
+        }
+      },
+      "lot_ids": [],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 1585,
+      "customer_id": 52,
+      "product_code": "8111",
+      "product_name": "双瓦外箱（有字）49*27*29.4",
+      "product_version": 1,
+      "config": {
+        "mode": "material",
+        "material_id": 139,
+        "flute_type": "AB",
+        "length_mm": "1576",
+        "width_mm": "787",
+        "products_per_sheet": 1,
+        "basis": "老板2026-09-11明确指定的成本用材和报料毫米尺寸",
+        "temporary": false,
+        "evidence": {
+          "user_confirmed_mm": true,
+          "actual_box_dimensions_mm": null
+        }
+      },
+      "lot_ids": [
+        18
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 1235,
+      "customer_id": 40,
+      "product_code": "50100098",
+      "product_name": "DA69-01778A 315*340*130",
+      "product_version": 1,
+      "config": {
+        "mode": "material",
+        "material_id": 28,
+        "flute_type": "AB",
+        "length_mm": "1375",
+        "width_mm": "475",
+        "products_per_sheet": 1,
+        "basis": "老板2026-09-11明确指定的成本用材和报料毫米尺寸",
+        "temporary": false,
+        "evidence": {
+          "user_confirmed_mm": true,
+          "actual_box_dimensions_mm": [
+            345,
+            325,
+            145
+          ]
+        }
+      },
+      "lot_ids": [
+        23
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 1981,
+      "customer_id": 5,
+      "product_code": "21311309",
+      "product_name": "Ancltek内盒78*110",
+      "product_version": 1,
+      "config": {
+        "mode": "material",
+        "material_id": 73,
+        "flute_type": "B",
+        "length_mm": "1650",
+        "width_mm": "1300",
+        "products_per_sheet": 1,
+        "basis": "老板2026-09-11明确指定的成本用材和报料毫米尺寸",
+        "temporary": false,
+        "evidence": {
+          "user_confirmed_mm": true,
+          "actual_box_dimensions_mm": null
+        }
+      },
+      "lot_ids": [
+        35
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 99,
+      "customer_id": 5,
+      "product_code": "21301191",
+      "product_name": "中性内箱26*45THH8",
+      "product_version": 1,
+      "config": {
+        "mode": "material",
+        "material_id": 70,
+        "flute_type": "A",
+        "length_mm": "1378",
+        "width_mm": "1268",
+        "products_per_sheet": 1,
+        "basis": "老板2026-09-11明确指定的成本用材和报料毫米尺寸",
+        "temporary": false,
+        "evidence": {
+          "user_confirmed_mm": true,
+          "actual_box_dimensions_mm": null
+        }
+      },
+      "lot_ids": [
+        550
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3326,
+      "customer_id": 5,
+      "product_code": "21301165",
+      "product_name": "中性内盒",
+      "product_version": 1,
+      "config": {
+        "mode": "material",
+        "material_id": 1,
+        "flute_type": "B",
+        "length_mm": "1000",
+        "width_mm": "1000",
+        "products_per_sheet": 1,
+        "basis": "老板2026-09-11明确指定的成本用材和报料毫米尺寸；21301165临时100×100厘米，不代表真实生产尺寸",
+        "temporary": true,
+        "evidence": {
+          "user_confirmed_mm": true,
+          "actual_box_dimensions_mm": null
+        }
+      },
+      "lot_ids": [
+        63
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 2750,
+      "customer_id": 5,
+      "product_code": "22000124",
+      "product_name": "104安全内盒",
+      "product_version": 2,
+      "config": {
+        "mode": "material",
+        "material_id": 397,
+        "flute_type": "E",
+        "length_mm": "1140",
+        "width_mm": "900",
+        "products_per_sheet": 2,
+        "basis": "老板2026-09-11明确指定的成本用材和报料毫米尺寸",
+        "temporary": false,
+        "evidence": {
+          "user_confirmed_mm": true,
+          "actual_box_dimensions_mm": null
+        }
+      },
+      "lot_ids": [
+        173
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 238,
+      "customer_id": 5,
+      "product_code": "22000015",
+      "product_name": "001白卡鞋盒26*10*9.5",
+      "product_version": 1,
+      "config": {
+        "mode": "sale",
+        "basis": "老板确认22000015白卡以售价暂作成本",
+        "temporary": true
+      },
+      "lot_ids": [
+        647
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3466,
+      "customer_id": 138,
+      "product_code": "C80010136",
+      "product_name": "TRD-J/SϵP",
+      "product_version": 6,
+      "config": {
+        "mode": "sale",
+        "basis": "老板确认GY合作厂盘点货物以当前售价作采购参考",
+        "purchase_channel": "合作纸箱厂",
+        "temporary": true
+      },
+      "lot_ids": [
+        652,
+        653
+      ],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3583,
+      "customer_id": 137,
+      "product_code": "82021318",
+      "product_name": "TRD-2Q8192P64-7334",
+      "product_version": 2,
+      "config": {
+        "mode": "sale",
+        "basis": "老板2026-09-11更正YY为研光YG，合作厂盘点货物以当前售价作采购参考",
+        "purchase_channel": "合作纸箱厂",
+        "temporary": true,
+        "evidence": {"confirmed_customer_code": "YG", "current_sale_unit_price": "0.723"}
+      },
+      "lot_ids": [654],
+      "excluded_lots": []
+    },
+    {
+      "product_id": 3383,
+      "customer_id": 137,
+      "product_code": "80012138",
+      "product_name": "D4/U-08B",
+      "product_version": 4,
+      "config": {
+        "mode": "sale",
+        "basis": "老板2026-09-11更正YY为研光YG，合作厂盘点货物以当前售价作采购参考",
+        "purchase_channel": "合作纸箱厂",
+        "temporary": true,
+        "evidence": {"confirmed_customer_code": "YG", "current_sale_unit_price": "8.27"}
+      },
+      "lot_ids": [655],
+      "excluded_lots": []
+    }
+  ]
+}

@@ -542,26 +542,14 @@ def policy_location_transition_blockers(
     )
     blockers: list[str] = []
     occupied = bool(live_lot_types or current_pallet_location_ids)
-    if desired_type is None:
+    # Legacy finished/semi policies are descriptive, not stock-type gates.
+    # Functional and non-inventory destinations still fail closed when occupied.
+    if desired_type is None or desired_storage == "temporary_aisle":
         if occupied:
             blockers.append("区域内仍有库存或实体栈板，请先在地图中移到其他已启用区域，再转换用途")
         return blockers
-    if desired_type == "shared":
-        if desired_storage != current_storage and occupied:
-            blockers.append("区域内仍有库存或实体栈板，请先完成移货，再把栈板区与货架区相互转换")
-        return blockers
-    if desired_type != current_type and occupied:
-        blockers.append("区域内仍有库存或实体栈板，请先在地图中移到其他已启用区域，再转换用途")
     if desired_storage != current_storage and occupied:
         blockers.append("区域内仍有库存或实体栈板，请先完成移货，再把栈板区与货架区相互转换")
-    incompatible_lot_types = live_lot_types - {desired_type}
-    if incompatible_lot_types:
-        blockers.append("仍有与新用途不一致的成品或半成品库存")
-    unverified_pallets = current_pallet_location_ids & {
-        row.id for row in rows if row.warehouse_type != desired_type
-    }
-    if unverified_pallets:
-        blockers.append("仍有无法证明与新用途一致的实体栈板")
     return list(dict.fromkeys(blockers))
 
 
@@ -632,14 +620,8 @@ def unbound_area_location_transition_blockers(
         )
     ]
     blockers: list[str] = []
-    if desired_type is None or (
-        desired_type != "shared" and live_lot_types - {desired_type}
-    ):
-        blockers.append("区域内仍有与新用途不一致的库存，请先在地图中移到其他已启用区域")
-    if desired_type not in (None, "shared") and any(
-        row.warehouse_type != desired_type for row in occupied_rows
-    ):
-        blockers.append("区域内仍有与新用途不一致的实体栈板，请先完成移货")
+    if desired_type is None or desired_storage == "temporary_aisle":
+        blockers.append("区域内仍有库存或实体栈板，请先在地图中移到其他已启用区域，再转换用途")
     if any(row.storage_type != desired_storage for row in occupied_rows):
         blockers.append("区域内仍有库存或实体栈板，请先完成移货，再把栈板区与货架区相互转换")
     return list(dict.fromkeys(blockers))

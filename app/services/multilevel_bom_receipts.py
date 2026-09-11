@@ -84,7 +84,7 @@ def node_completed_quantity(db, context):
 
 
 def node_receipt_plan(db, context, *, snapshots, allocations, current_snapshot,
-                      order_delta, order_cost, currency):
+                      order_delta, order_cost, currency, quantity_limit=None):
     """Return cumulative logical output and cost of ONLY newly used pieces.
 
     Reserved semi pieces are used before new purchased material. One receipt
@@ -132,12 +132,19 @@ def node_receipt_plan(db, context, *, snapshots, allocations, current_snapshot,
         sources[source.component_type].append({"kind": "allocation", "id": allocation.id,
             "quantity": allocation.receipt_order_purpose_sheet_qty * int(purpose.yield_per_sheet_snapshot),
             "total_cost": allocation.order_purpose_cost, "currency": fact.currency, "actual": True})
-    current_source = db.get(RequisitionItemBomSource, current_snapshot.source_bom_requisition_source_id)
-    sources[current_source.component_type].append({"kind": "current_receipt", "id": current_snapshot.id,
-        "quantity": order_delta * int(current_snapshot.yield_per_sheet_snapshot),
-        "total_cost": order_cost, "currency": currency, "actual": True})
+    if current_snapshot is not None:
+        current_source = db.get(RequisitionItemBomSource, current_snapshot.source_bom_requisition_source_id)
+        sources[current_source.component_type].append({"kind": "current_receipt", "id": current_snapshot.id,
+            "quantity": order_delta * int(current_snapshot.yield_per_sheet_snapshot),
+            "total_cost": order_cost, "currency": currency, "actual": True})
+    elif order_delta or order_cost or currency or allocations or snapshots:
+        raise SubkitError("无来料生产不能夹带采购数量、价格或用途分配")
     before = node_completed_quantity(db, context)
     after = min(sum(s["quantity"] for s in sources[r.key]) // r.pieces_per_unit for r in context.node.routes)
+    if quantity_limit is not None:
+        if type(quantity_limit) is not int or quantity_limit < 0:
+            raise SubkitError("半成品生产数量上限无效")
+        after = min(after, quantity_limit)
     if after < before:
         raise SubkitError("该产品物理用料不足以支持已有完工，不能继续收料")
     inputs, currencies, total = [], set(), Decimal("0.0000")
@@ -173,6 +180,32 @@ def node_receipt_plan(db, context, *, snapshots, allocations, current_snapshot,
                 **({"bom_material_source_snapshot_id": context.material_source_id}
                     if context.material_source_id != context.snapshot.id else {}),
                 "currency": next(iter(currencies), ""), "actual": all(i["actual"] for i in inputs)}}
+
+
+def plan_semi_only_production(db, *, order_item_id, product_id):
+    """Read actual reserved input for an explicit production confirmation.
+
+    No incoming allocation or purchase fact is synthesized. This is a plan,
+    not an inventory writer and not a confirmation of completed processing.
+    """
+    from app.services.multilevel_bom_requirements import read_graph_requirements
+    requirements = read_graph_requirements(db, order_item_id)
+    if requirements is None:
+        raise SubkitError("订单缺少冻结多级BOM")
+    compiled = requirements.compiled
+    node = next((node for node in compiled.graph.nodes if node.product_id == product_id), None)
+    snapshot = next((row for row in compiled.snapshots if row.component_product_id == product_id), None)
+    if node is None or snapshot is None or node.source != "manufactured":
+        raise SubkitError("半成品生产必须选择当前冻结的自制产品")
+    if any(row.product_id == product_id and row.purchase_sheets > 0 for row in requirements.plan.materials):
+        raise SubkitError("该产品尚需其他材料，不能按全额半成品确认生产")
+    demand = next(row for row in requirements.plan.products if row.product_id == product_id)
+    context = NodeReceiptContext(compiled, node, snapshot)
+    plan = node_receipt_plan(db, context, snapshots=[], allocations=[], current_snapshot=None,
+        order_delta=0, order_cost=Decimal("0"), currency="", quantity_limit=demand.make_units)
+    if plan["after"] < demand.make_units:
+        raise SubkitError("当前版本半成品预占未完整覆盖生产需求")
+    return context, plan
 
 
 def consume_node_semi_inputs(db, *, completion, inputs, operator_id):

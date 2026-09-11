@@ -21,12 +21,85 @@ from app.services.warehouse_twin_layout import resolve_warehouse_twin_layout_pat
 
 router = APIRouter()
 can_edit = PermissionChecker("orders.edit")
+can_confirm_production = PermissionChecker("orders.status")
+can_execute_inventory = PermissionChecker("warehouse.execute")
 SCOPE = "全预占库存切换：支持子件转组装父件，或保留原子件分存；含采购、本体或未完成采购交接须另行核对"
 
 
 class CutoverPreview(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target_locations: dict[int, int] = Field(default_factory=dict, max_length=99)
+
+
+class SemiProductionPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    product_id: int = Field(gt=0, strict=True)
+
+
+class SemiProductionExecute(SemiProductionPreview):
+    reviewed_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operation_key: str = Field(min_length=1, max_length=64)
+
+
+@router.get("/items/{item_id}/semi-production")
+def list_semi_production(item_id: int, db: Session = Depends(get_db), user: User = Depends(can_confirm_production)):
+    _access(db, user, item_id)
+    from sqlalchemy import select
+    from app.services.multilevel_bom_orders import read_compiled_order_bom
+    from app.models.production import ProductionCompletion
+    from app.models.warehouse_inventory import InventoryLot
+    compiled = read_compiled_order_bom(db, item_id)
+    if compiled is None:
+        raise HTTPException(409, "订单缺少冻结BOM")
+    completions = []
+    for completion, lot in db.execute(select(ProductionCompletion, InventoryLot).join(
+            InventoryLot, InventoryLot.id == ProductionCompletion.inventory_lot_id).where(
+                ProductionCompletion.order_item_id == item_id, ProductionCompletion.origin == "manual")):
+        detail = json.loads(lot.cost_snapshot_detail_json or "{}")
+        if detail.get("bom_semi_confirmation"):
+            completions.append(dict(id=completion.id, product_id=detail["bom_material_product_id"],
+                quantity=completion.quantity, status=completion.status))
+    return dict(products=[dict(id=node.product_id, name=node.name, unit=node.unit)
+        for node in compiled.graph.nodes if node.source == "manufactured"], completions=completions)
+
+
+@router.post("/items/{item_id}/semi-production/preview")
+def preview_semi(item_id: int, payload: SemiProductionPreview, db: Session = Depends(get_db), user: User = Depends(can_confirm_production)):
+    _access(db, user, item_id)
+    from app.services.multilevel_bom_semi_production import preview_semi_production
+    from app.services.production_workflow import ProductionWorkflowError
+    try:
+        return preview_semi_production(db, order_item_id=item_id, product_id=payload.product_id)[2]
+    except (BomPlanError, SubkitError, WarehouseInventoryError, ProductionWorkflowError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/items/{item_id}/semi-production/execute", dependencies=[Depends(can_execute_inventory)])
+def execute_semi(item_id: int, payload: SemiProductionExecute, db: Session = Depends(get_db), user: User = Depends(can_confirm_production)):
+    _access(db, user, item_id)
+    from app.services.multilevel_bom_semi_production import confirm_semi_production
+    from app.services.production_workflow import ProductionWorkflowError
+    try:
+        result = confirm_semi_production(db, order_item_id=item_id, actor=user, **payload.model_dump())
+        db.commit()
+        return result
+    except (BomPlanError, SubkitError, WarehouseInventoryError, ProductionWorkflowError) as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/items/{item_id}/semi-production/{completion_id}/revert", dependencies=[Depends(can_execute_inventory)])
+def revert_semi(item_id: int, completion_id: int, db: Session = Depends(get_db), user: User = Depends(can_confirm_production)):
+    _access(db, user, item_id)
+    from app.services.multilevel_bom_semi_production import reverse_semi_production
+    from app.services.production_workflow import ProductionWorkflowError
+    try:
+        result = reverse_semi_production(db, order_item_id=item_id, completion_id=completion_id, actor=user)
+        db.commit()
+        return result
+    except (BomPlanError, SubkitError, WarehouseInventoryError, ProductionWorkflowError) as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
 
 
 class CutoverExecute(CutoverPreview):

@@ -4867,6 +4867,7 @@ def post_automatic_receipt_completion(
     capitalized_material_cost: Decimal,
     cost_detail: dict[str, object],
     bom_snapshot_id: int | None = None,
+    semi_only: bool = False,
 ) -> ProductionCompletion | None:
     """Post one receipt-derived finished increment through the existing ledger.
 
@@ -4943,6 +4944,21 @@ def post_automatic_receipt_completion(
                     **_new_task_label_snapshot(component_product, total_quantity=required_quantity))
                 db.add(task)
                 db.flush()
+    if semi_only:
+        from app.services.multilevel_bom_receipts import plan_semi_only_production
+        if graph_snapshot is None or is_assembly_body:
+            raise ProductionWorkflowError("半成品确认当前需要独立自制子件，本体装配须走对应生产流程", 409)
+        _, semi_plan = plan_semi_only_production(db, order_item_id=item.id, product_id=graph_snapshot.component_product_id)
+        inputs = semi_plan["detail"]["bom_material_inputs"]
+        if (before != semi_plan["before"] or after != semi_plan["after"]
+                or capitalized_material_cost != semi_plan["total_cost"]
+                or cost_detail.get("bom_material_inputs") != inputs
+                or any(entry["kind"] != "reservation" for entry in inputs)
+                or material_input_delta != sum(entry["stock_after"]-entry["stock_before"] for entry in inputs)
+                or any(key in cost_detail for key in ("incoming_receipt_item_id", "purchase_receipt_fact_id", "purchase_purpose_source_snapshot_id"))):
+            raise ProductionWorkflowError("半成品生产确认与真实预占、数量或成本不一致", 409)
+        cost_detail = {**cost_detail, "bom_semi_confirmation": True}
+    received_before = int(task.material_received_quantity or 0)
     payload = {
         "order_item_id": item.id,
         "task_id": task.id,
@@ -5029,7 +5045,7 @@ def post_automatic_receipt_completion(
         expected_version=max(int(task.version or 1), 1),
         quantity=delta,
         completion_type=completion_type,
-        origin="receipt_auto",
+        origin="manual" if semi_only else "receipt_auto",
         material_input_quantity=int(material_input_delta),
         planned_output_quantity=delta,
         actual_output_quantity=delta,
@@ -5041,7 +5057,7 @@ def post_automatic_receipt_completion(
         initial_disposition="stock" if is_assembly_body else "direct",
         warehouse_location_id=location.id,
         inventory_lot_id=None,
-        remarks="收料后按冻结订单用途自动形成理论成品",
+        remarks="确认半成品预占加工完成" if semi_only else "收料后按冻结订单用途自动形成理论成品",
         completed_by=operator_id,
         completed_at=now,
     )
@@ -5063,7 +5079,7 @@ def post_automatic_receipt_completion(
         material_input_quantity=int(material_input_delta),
         actual_output_quantity=delta,
         direct_delivery_quantity=0 if is_assembly_body else delta,
-        remarks="收料自动成品进入当前真实成品位置",
+        remarks="半成品加工完成进入当前真实成品位置" if semi_only else "收料自动成品进入当前真实成品位置",
     )
     lot = _stock_completion_lot(
         db,
@@ -5077,7 +5093,7 @@ def post_automatic_receipt_completion(
         location_id_override=location.id,
         finished_ground_target=ground_target,
         source_type="production_completion",
-        movement_reason="订单用途来料自动形成成品并进入当前真实成品位置",
+        movement_reason="半成品预占加工完成入库" if semi_only else "订单用途来料自动形成成品并进入当前真实成品位置",
     )
     completion.inventory_lot_id = lot.id
     if is_assembly_body:
@@ -5107,13 +5123,13 @@ def post_automatic_receipt_completion(
     ).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
     lot.estimated_square_price_snapshot = None
     lot.estimated_cost_area_m2_snapshot = None
-    lot.cost_snapshot_source = "purchase_receipt_actual"
+    lot.cost_snapshot_source = "semi_finished_estimate" if semi_only else "purchase_receipt_actual"
     lot.cost_snapshot_detail_json = json.dumps(
         {
             **cost_detail,
             "capitalized_material_cost": str(capitalized),
             "finished_quantity": delta,
-            "formula": "cumulative uncapitalized order-purpose cost / finished increment",
+            "formula": "reserved semi-finished cost / finished increment" if semi_only else "cumulative uncapitalized order-purpose cost / finished increment",
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -5132,9 +5148,9 @@ def post_automatic_receipt_completion(
     task.planned_quantity = max(required_quantity, after, 1)
     task.finished_coverage_snapshot = effective_order_coverage
     task.ordered_quantity_snapshot = required_quantity
-    task.material_received_quantity = int(material_input_cumulative)
+    task.material_received_quantity = received_before if semi_only else int(material_input_cumulative)
     task.material_input_quantity = int(material_input_cumulative)
-    task.readiness_basis = "automatic_receipt"
+    task.readiness_basis = "semi_finished_confirmation" if semi_only else "automatic_receipt"
     task.ready_at = task.ready_at or now
     task.version = max(int(task.version or 1), 1) + 1
     db.flush()

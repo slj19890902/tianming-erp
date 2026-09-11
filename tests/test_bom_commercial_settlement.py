@@ -9,7 +9,7 @@ from sqlalchemy import select
 from tests.test_n029_production_integration import _login, n029_delivery_app
 
 
-def _create_component_priced_order(factory, ids):
+def _create_component_priced_order(factory, ids, client):
     from app.models.customer import Customer
     from app.models.order import Order, OrderItem
     from app.models.product import Product
@@ -68,18 +68,27 @@ def _create_component_priced_order(factory, ids):
                 ),
             ]
         )
-        order = Order(
-            order_number="SETTLE-COMPONENT-100",
-            customer_id=customer.id,
-            order_date=date.today(),
-            delivery_date=date.today(),
-            status="pending_delivery",
-            payment_status="unpaid",
-            total_amount=Decimal("695.00"),
-        )
-        db.add(order)
-        db.flush()
+        db.commit()
+        specifications = [(long_piece, 300, 3, "1.25"), (short_piece, 400, 4, "0.80")]
         group_key = "SETTLE-COMPONENT-100-GROUP"
+        created = client.post("/api/orders", json={
+            "customer_id": customer.id,
+            "order_date": date.today().isoformat(),
+            "items": [dict(
+                product_id=product.id, quantity=quantity, unit_price=price,
+                combination_mode_snapshot="component_priced",
+                combination_role="priced_component",
+                combination_group_key=group_key,
+                combination_parent_product_id=parent.id,
+                combination_parent_name_snapshot=parent.product_name,
+                combination_set_quantity_snapshot=100,
+                combination_quantity_per_set_snapshot=per_set,
+            ) for product, quantity, per_set, price in specifications],
+        })
+        assert created.status_code == 201, created.text
+        assert Decimal(str(created.json()["total_amount"])) == Decimal("695.00")
+        order = db.get(Order, created.json()["id"])
+        saved_items = {row["product_id"]: row["id"] for row in created.json()["items"]}
         items = []
         for sequence, (product, quantity, per_set, price) in enumerate(
             (
@@ -88,35 +97,16 @@ def _create_component_priced_order(factory, ids):
             ),
             start=1,
         ):
-            item = OrderItem(
-                order_id=order.id,
-                product_id=product.id,
-                item_sequence=sequence,
-                item_order_number=f"{order.order_number}-{sequence:03d}",
-                quantity=quantity,
-                delivered_quantity=0,
-                unit_price=price,
-                subtotal=Decimal(quantity) * price,
-                material_status="received",
-                requisition_status="已入库",
-                snapshot_product_code=product.product_code,
-                snapshot_product_name=product.product_name,
-                combination_mode_snapshot="component_priced",
-                combination_role="priced_component",
-                combination_group_key=group_key,
-                combination_parent_product_id=parent.id,
-                combination_parent_name_snapshot=parent.product_name,
-                combination_set_quantity_snapshot=100,
-                combination_quantity_per_set_snapshot=per_set,
-            )
-            db.add(item)
-            db.flush()
+            item = db.get(OrderItem, saved_items[product.id])
+            assert item.quantity == quantity
+            assert item.unit_price == price
+            assert item.combination_quantity_per_set_snapshot == per_set
             lot = InventoryLot(
                 lot_number=f"SETTLE-LOT-{sequence}",
                 inventory_type="finished",
                 warehouse_location_id=ids["temporary_location"],
-                quantity_available=0,
-                quantity_reserved=quantity,
+                quantity_available=quantity,
+                quantity_reserved=0,
                 quantity_consumed=0,
                 quantity_damaged=0,
                 quantity_scrapped=0,
@@ -140,20 +130,12 @@ def _create_component_priced_order(factory, ids):
                     product_name_snapshot=product.product_name,
                 )
             )
-            db.add(
-                InventoryReservation(
-                    reservation_number=f"SETTLE-RS-{sequence}",
-                    inventory_lot_id=lot.id,
-                    reservation_type="finished_order",
-                    order_id=order.id,
-                    order_item_id=item.id,
-                    reserved_stock_quantity=quantity,
-                    credited_requirement_quantity=quantity,
-                    yield_factor=1,
-                    status="active",
-                    idempotency_key=f"SETTLE-RS-{sequence}",
-                )
-            )
+            db.flush()
+            from app.services.warehouse_inventory import reserve_finished_inventory
+            reserve_finished_inventory(db, order_item_id=item.id,
+                inventory_lot_id=lot.id, quantity=quantity, expected_version=lot.version,
+                operator_id=ids["user"], idempotency_key=f"SETTLE-RS-{sequence}",
+                warning_acknowledged_codes=[])
             items.append(item)
         db.commit()
         return order.id, items[0].id, items[1].id
@@ -302,9 +284,9 @@ def test_component_priced_delivery_settles_real_child_quantities_not_pairable_se
     from app.models.order import Order, OrderItem
 
     app, factory, ids = n029_delivery_app
-    order_id, long_item_id, short_item_id = _create_component_priced_order(factory, ids)
     with TestClient(app) as client:
         _login(client)
+        order_id, long_item_id, short_item_id = _create_component_priced_order(factory, ids, client)
         first = _dispatch(
             client,
             ids["customer"],

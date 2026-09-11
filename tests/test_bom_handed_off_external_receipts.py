@@ -59,6 +59,16 @@ def test_old_purchase_new_receipt_keeps_cost_and_execution_separate(factory_http
     quantity = purchase.purchase_quantity - received_before
     blocked = receive(client, purchase.purchase_order_id, purchase.id, "after-switch", quantity)
     assert blocked.status_code == 409, blocked.text
+    from app.services.multilevel_bom_procurement_impact import review_procurement_impact
+    def procurement_mapping():
+        preview = review_procurement_impact(db, order_item_id=item.id,
+            customer_id=frozen.graph.customer_id)
+        assert preview["executable"] is False
+        return next(row for row in preview["external"] if row["line"]["id"] == purchase.id)["mapping"]
+    unmapped = procurement_mapping()
+    assert unmapped["current_source"] is False
+    assert unmapped["handed_to_current_source"] is False
+    assert unmapped["purchase_conversion_compatible"] is False
     for node in frozen.graph.nodes:
         if node.source != "purchased":
             continue
@@ -70,6 +80,10 @@ def test_old_purchase_new_receipt_keeps_cost_and_execution_separate(factory_http
             target_basis_hash=_source_identity(target)["hash"]))
     db.commit()
     from app.services import multilevel_bom_external_costs
+    mapped = procurement_mapping()
+    assert mapped["current_source"] is False
+    assert mapped["handed_to_current_source"] is True
+    assert mapped["purchase_conversion_compatible"] is True
     from app.services.multilevel_bom_external_identity import current_external_links, frozen_purchase_quantities
     from app.services.multilevel_bom_orders import read_compiled_order_bom
     from app.models.order_external_packaging import SalesOrderItemExternalComponent

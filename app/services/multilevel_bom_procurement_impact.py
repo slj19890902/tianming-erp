@@ -18,6 +18,7 @@ def review_procurement_impact(db, *, order_item_id, customer_id):
     rule = review_current_rule_requirements(db, order_item_id=order_item_id, customer_id=customer_id)
     from app.services.multilevel_bom_source_handoffs import current_source_handoffs
     handoffs = [_row(row) for row in current_source_handoffs(db, rule.previous)]
+    handed_sources = {row["source_snapshot_id"] for row in handoffs}
     current = {row.id: row for row in rule.previous.snapshots}
     products = {row["product_id"]: row for row in rule.impact["products"]}
     paper = []
@@ -81,12 +82,22 @@ def review_procurement_impact(db, *, order_item_id, customer_id):
         pending_stock, final_remainder = cumulative_receipt_conversion(
             node, received_before=received, received_now=remaining)
         impact = products.get(link.product_id)
+        # A contract carried into this revision retains its original source ID.
+        # Compare that original contract with the proposed rule, rather than
+        # mistaking an explicitly validated historical source for an orphan.
+        from app.services.multilevel_bom_rule_impact import rule_quantity_impact
+        source_is_current = link.bom_snapshot_id in current
+        source_is_handed = link.bom_snapshot_id in handed_sources
+        contract_impact = next((row for row in rule_quantity_impact(
+            contract, rule.proposed, remaining_quantity=1)["products"]
+            if row["product_id"] == link.product_id), None)
         # These are source capacities, not an allocation or an authorization:
         # old contract prices, supplier and receipt identity stay unchanged.
         mapping = dict(source_snapshot_id=link.bom_snapshot_id,
-            current_source=link.bom_snapshot_id in current,
-            purchase_conversion_compatible=bool(link.bom_snapshot_id in current and impact
-                and impact["purchase_conversion_compatible"]),
+            current_source=source_is_current,
+            handed_to_current_source=source_is_handed,
+            purchase_conversion_compatible=bool((source_is_current or source_is_handed)
+                and contract_impact and contract_impact["purchase_conversion_compatible"]),
             stock_unit=node.unit, stock_basis=node.purchase_units.stock_basis,
             purchase_basis=node.purchase_units.purchase_basis,
             received_stock_capacity=received_stock, pending_stock_capacity=pending_stock,

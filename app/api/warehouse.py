@@ -14431,6 +14431,26 @@ def _ensure_one_step_pallet_locations(
         "rack" if storage_layout == "rack" else "ground"
     )
     existing = formal_area_location_rows(db, floor=floor, area=area)
+    if storage_layout == "rack":
+        precise_racks = [
+            rack for rack in floor_layout.get("racks", [])
+            if rack.get("id") and rack.get("area_feature_id") == feature_id
+            and isinstance(rack.get("level_cell_counts"), list)
+            and len(rack["level_cell_counts"]) == int(rack.get("levels") or 0)
+        ]
+        if precise_racks:
+            # The form capacity is a rack count. Published rack synchronization
+            # already maintains the actual locations by level/cell; compare
+            # those locations with cells, never with the number of racks.
+            target_count = sum(sum(rack["level_cell_counts"]) for rack in precise_racks)
+            rack_ids = {str(rack["id"]) for rack in precise_racks}
+            active = [row for row in existing if row.is_active]
+            if len(active) != target_count or any(
+                row.map_rack_id not in rack_ids for row in active
+            ):
+                raise WarehouseAreaActivationError(
+                    "实测货架格位与启用货位尚未同步，请先保存货架层数和格数", status_code=409,
+                )
     if any(not str(row.source_version or "").strip() for row in existing):
         raise WarehouseAreaActivationError(
             "该区域存在未标明来源的货位，已停止一次确认；请先核对正式货位台账",

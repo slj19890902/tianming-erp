@@ -71,11 +71,11 @@ def test_formal_facts_block_downgrade_before_file_changes(factory_copy, monkeypa
             db.execute("INSERT INTO inventory_cost_rules(product_id,config_json,version,updated_by) "
                        "SELECT p.id,'{}',1,u.id FROM products p CROSS JOIN users u WHERE u.is_active=1 LIMIT 1")
         elif kind == "mail":
-            db.execute("INSERT INTO email_intake_settings(id,encrypted_secret,version) VALUES(1,'isolated-test-placeholder',1)")
+            db.execute("INSERT INTO email_intake_settings(encrypted_secret,version) VALUES('isolated-test-placeholder',1)")
         else:
-            db.execute("INSERT INTO email_intake_messages(id,mailbox_key,uid_validity,uid,message_id,subject,sender,received,body,status,notice,version) VALUES(1,'isolated','1',1,'isolated','test','test','test','test','pending','',1)")
-            db.execute("INSERT INTO email_intake_attachments(id,message_id,part_number,filename,sha256,content) VALUES(1,1,1,'isolated.pdf',?,?)", ('a'*64,b'isolated-test'))
-            db.execute("INSERT INTO email_pdf_working_drafts(id,attachment_id,actor_id,content_json,content_hash,version,saved_at) SELECT 1,1,id,'{}',?,1,'2026-09-11' FROM users WHERE is_active=1 LIMIT 1", ('b'*64,))
+            message = db.execute("INSERT INTO email_intake_messages(mailbox_key,uid_validity,uid,message_id,subject,sender,received,body,status,notice,version) VALUES('isolated','1',1,'isolated-test-message','test','test','test','test','pending','',1)")
+            attachment = db.execute("INSERT INTO email_intake_attachments(message_id,part_number,filename,sha256,content) VALUES(?,1,'isolated.pdf',?,?)", (message.lastrowid, 'a'*64, b'isolated-test'))
+            db.execute("INSERT INTO email_pdf_working_drafts(attachment_id,actor_id,content_json,content_hash,version,saved_at) SELECT ?,id,'{}',?,1,'2026-09-11' FROM users WHERE is_active=1 LIMIT 1", (attachment.lastrowid, 'b'*64))
     before = hashlib.sha256(target.read_bytes()).digest()
     with pytest.raises(RuntimeError, match="已有BOM、库存成本或邮件事实"):
         command.downgrade(_config(monkeypatch, target), "sn26v8x9z88")

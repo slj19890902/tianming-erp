@@ -40,6 +40,10 @@ class StockedExecute(CutoverExecute):
     rule_revision: int = Field(ge=0, strict=True)
 
 
+class PurchaseExecute(StockedExecute):
+    source_lot_versions: dict[int, int] = Field(default_factory=dict, max_length=999)
+
+
 class UnstartedPreview(BaseModel):
     model_config = ConfigDict(extra="forbid")
     target_locations: dict[int, int] = Field(default_factory=dict, max_length=0)
@@ -177,6 +181,27 @@ def procurement_impact(item_id: int, db: Session = Depends(get_db), user: User =
 
 @router.post("/items/{item_id}/stocked-bom-cutover/execute")
 def execute_stocked(item_id: int, payload: StockedExecute, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    return _execute_stocked(item_id, payload, db, user, carry_purchases=False)
+
+
+@router.post("/items/{item_id}/purchase-bom-cutover/preview")
+def preview_purchase(item_id: int, payload: CutoverPreview, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    customer_id = _access(db, user, item_id)
+    from app.services.multilevel_bom_stocked_handoff import review_stocked_handoff
+    try:
+        return review_stocked_handoff(db, order_item_id=item_id, customer_id=customer_id,
+            target_locations=payload.target_locations, carry_purchases=True).preview
+    except (BomPlanError, SubkitError, CompositeBOMError, WarehouseInventoryError, OSError) as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/items/{item_id}/purchase-bom-cutover/execute")
+def execute_purchase(item_id: int, payload: PurchaseExecute, db: Session = Depends(get_db), user: User = Depends(can_edit)):
+    return _execute_stocked(item_id, payload, db, user, carry_purchases=True)
+
+
+def _execute_stocked(item_id, payload, db, user, *, carry_purchases):
     customer_id = _access(db, user, item_id)
     from app.services.multilevel_bom_stocked_handoff import execute_stocked_handoff
     try:
@@ -185,7 +210,7 @@ def execute_stocked(item_id: int, payload: StockedExecute, db: Session = Depends
         result = execute_stocked_handoff(db, order_item_id=item_id, customer_id=customer_id,
             reviewed_hash=payload.reviewed_hash, expected_revision=payload.rule_revision,
             target_locations=payload.target_locations, source_lot_versions=payload.source_lot_versions,
-            operation_key=payload.operation_key, actor=user)
+            operation_key=payload.operation_key, actor=user, carry_purchases=carry_purchases)
         db.commit()
         return result
     except (BomPlanError, SubkitError, CompositeBOMError, WarehouseInventoryError, OSError) as exc:

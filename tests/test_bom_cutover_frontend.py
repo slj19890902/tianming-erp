@@ -6,7 +6,7 @@ import pytest
 
 
 @pytest.mark.parametrize("rule_revision,route", [(None,"reserved-kit-cutover"), (0,"unstarted-bom-cutover"),
-    (2,"unstarted-bom-cutover"), (0,"stocked-bom-cutover"), (2,"stocked-bom-cutover")])
+    (2,"unstarted-bom-cutover"), (0,"stocked-bom-cutover"), (2,"stocked-bom-cutover"), (0,"purchase-bom-cutover"), (2,"purchase-bom-cutover")])
 def test_cutover_preview_and_uncertain_retry_use_same_payload(rule_revision,route):
     html = Path("static/index.html").read_text(encoding="utf-8")
     methods = html.split("          async openReservedKitCutover(", 1)[1].split("          async openOrderDetail(", 1)[0]

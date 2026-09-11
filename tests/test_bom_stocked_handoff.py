@@ -1,5 +1,6 @@
 """Operational stock handoff on a fresh private copy, preserving completed history."""
 import pytest
+from app.core.time_contract import beijing_today
 from sqlalchemy import select
 
 from app.models.user import User
@@ -113,7 +114,7 @@ def test_received_separate_children_handoff_assembles_only_order_stock(factory_h
     assert sum(row.quantity for row in db.scalars(select(BomAssembly).where(BomAssembly.order_item_id==item.id))) == 2
     db.commit()
     delivery = client.post("/api/deliveries",json={"customer_id":original.graph.customer_id,
-        "delivery_date":"2026-09-10","items":[{"order_item_id":item.id,"delivered_quantity":2}]})
+        "delivery_date":beijing_today().isoformat(),"items":[{"order_item_id":item.id,"delivered_quantity":2}]})
     assert delivery.status_code == 201, delivery.text
     did = delivery.json()["id"]
     dispatch = client.put(f"/api/deliveries/{did}/dispatch")
@@ -175,7 +176,7 @@ def test_received_manufactured_and_external_stock_handoff_keeps_history(factory_
     current = read_compiled_order_bom(db, item.id)
     assert len(current.snapshots) == 1 and current.snapshots[0].required_piece_quantity == 1
     delivery = client.post("/api/deliveries", json={"customer_id": current.graph.customer_id,
-        "delivery_date":"2026-09-10", "items":[{"order_item_id":item.id,"delivered_quantity":1}]})
+        "delivery_date":beijing_today().isoformat(), "items":[{"order_item_id":item.id,"delivered_quantity":1}]})
     assert delivery.status_code == 201, delivery.text
     did = delivery.json()["id"]
     dispatch = client.put(f"/api/deliveries/{did}/dispatch")
@@ -224,7 +225,7 @@ def test_stocked_carton_liner_handoff_preserves_two_physical_locations(factory_h
     assert {row.id:_row(row) for row in db.scalars(select(BomAssembly).where(BomAssembly.order_item_id==item.id))} == old_assemblies
     assert item.delivered_quantity == 1
     delivery = client.post("/api/deliveries",json={"customer_id":original.graph.customer_id,
-        "delivery_date":"2026-09-10","items":[{"order_item_id":item.id,"delivered_quantity":1}]})
+        "delivery_date":beijing_today().isoformat(),"items":[{"order_item_id":item.id,"delivered_quantity":1}]})
     assert delivery.status_code == 201, delivery.text
     did = delivery.json()["id"]
     detail = client.get(f"/api/deliveries/{did}")

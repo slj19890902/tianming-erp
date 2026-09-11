@@ -168,8 +168,11 @@ def test_old_purchase_new_receipt_keeps_cost_and_execution_separate(factory_http
     assert new_purchase_quantity() == expected_new_purchase
 
 
-def test_handed_off_receipt_assembles_and_reverses_under_execution_version(purchase_app, monkeypatch):
+@pytest.mark.parametrize("before_quantity", [2, 4])
+def test_handed_off_receipt_assembles_and_reverses_under_execution_version(purchase_app, monkeypatch, before_quantity):
     from fastapi.testclient import TestClient
+    from app.api.bom_cutover import router as cutover_router
+    purchase_app.include_router(cutover_router, prefix="/api/orders")
     from app.models.order import OrderItem
     from app.models.multilevel_bom import BomAssembly
     from app.services.multilevel_bom_orders import read_compiled_order_bom
@@ -184,33 +187,55 @@ def test_handed_off_receipt_assembles_and_reverses_under_execution_version(purch
         _confirm(client, oid)
         with factory() as db:
             purchase = db.scalar(select(ExternalPackagingPurchaseItem).where(ExternalPackagingPurchaseItem.sales_order_item_id == iid))
-            pid, lid, remaining = purchase.purchase_order_id, purchase.id, purchase.purchase_quantity - 2
-        assert receive(client, pid, lid, "assembly-before", 2).status_code == 200
-        with factory() as db:
-            item = db.get(OrderItem, iid)
-            actor = db.scalar(select(User).where(User.username == "purchase-admin"))
-            frozen = read_compiled_order_bom(db, iid)
-            review = review_current_rule_requirements(db, order_item_id=iid, customer_id=frozen.graph.customer_id)
-            revision = persist_reviewed_rule(db, review=review, item=item, previous=None,
-                expected_revision=0, reviewed_hash=review.checksum, request_hash="e" * 64,
-                operation_key="isolated-assembly-handoff", actor=actor)
-            source = next(row for row in frozen.snapshots if row.component_product_id == child_id)
-            target = next(row for row in review.proposed.snapshots if row.component_product_id == child_id)
-            db.add(OrderBomSourceHandoff(revision_id=revision.id, source_snapshot_id=source.id,
-                target_snapshot_id=target.id, order_item_id=iid, product_id=child_id, source_kind="purchased",
-                source_basis_hash=_source_identity(source)["hash"], target_basis_hash=_source_identity(target)["hash"]))
-            db.commit()
+            pid, lid, remaining = purchase.purchase_order_id, purchase.id, purchase.purchase_quantity - before_quantity
+            database_path = Path(db.get_bind().url.database)
+        assert receive(client, pid, lid, "assembly-before", before_quantity).status_code == 200
+        url = f"/api/orders/items/{iid}/purchase-bom-cutover"
+        preview = client.post(url + "/preview", json={})
+        assert preview.status_code == 200, preview.text
+        impact = preview.json()
+        assert impact["ready"] and impact["outputs"] == []
+        assert impact["carried_purchases"][0]["remaining_quantity"] == remaining
+        payload = {key: impact[key] for key in ("reviewed_hash", "preview_hash", "rule_revision",
+            "source_lot_versions", "target_locations")}
+        payload["operation_key"] = "public-assembly-handoff"
+        _login(client, "purchase-sales")
+        assert client.post(url + "/preview", json={}).status_code == 403
+        assert client.post(url + "/execute", json=payload).status_code == 403
+        _login(client, "purchase-admin")
+        from tests.test_multilevel_bom_modes_migration import original_facts
+        def facts():
+            with sqlite3.connect(database_path.as_uri() + "?mode=ro", uri=True) as check:
+                columns = {table: [row[1] for row in check.execute(f'PRAGMA table_info("{table}")')]
+                    for table, in check.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                return original_facts(check, columns)
+        from app.services import audit_log
+        from app.services.multilevel_bom_plan import BomPlanError
+        def fail_audit(*args, **kwargs):
+            raise BomPlanError("isolated handoff late audit failure")
+        before = facts()
+        stale = {**payload, "reviewed_hash": "0" * 64, "preview_hash": "0" * 64}
+        assert client.post(url + "/execute", json=stale).status_code == 409
+        assert facts() == before
+        with monkeypatch.context() as patch:
+            patch.setattr(audit_log, "append_audit_event", fail_audit)
+            failed = client.post(url + "/execute", json=payload)
+            assert failed.status_code == 409 and "late audit failure" in failed.text
+        assert facts() == before
+        switched = client.post(url + "/execute", json=payload)
+        assert switched.status_code == 200, switched.text
+        assert client.post(url + "/execute", json=payload).json() == switched.json()
         response = receive(client, pid, lid, "assembly-after", remaining)
         assert response.status_code == 200, response.text
         rid = response.json()["receipt"]["id"]
         with factory() as db:
-            assembly = db.scalar(select(BomAssembly).where(BomAssembly.order_item_id == iid))
+            assembly = db.scalar(select(BomAssembly).where(BomAssembly.order_item_id == iid, BomAssembly.output_lot_id.is_not(None)))
             assert assembly is not None and assembly.status == "posted"
             assert db.get(InventoryLot, assembly.output_lot_id).quantity_reserved == 2
         result = reverse(client, rid, "reverse-assembly-handoff")
         assert result.status_code == 200, result.text
         with factory() as db:
-            assembly = db.scalar(select(BomAssembly).where(BomAssembly.order_item_id == iid))
+            assembly = db.scalar(select(BomAssembly).where(BomAssembly.order_item_id == iid, BomAssembly.output_lot_id.is_not(None)))
             assert assembly.status == "reversed"
             lot = db.get(InventoryLot, assembly.output_lot_id)
             assert lot.quantity_available == lot.quantity_reserved == 0
@@ -219,6 +244,8 @@ def test_handed_off_receipt_assembles_and_reverses_under_execution_version(purch
 @pytest.mark.parametrize("new_ratio,expected_purchase", [(2, 0), (3, 1)])
 def test_carried_pack_capacity_is_subtracted_before_new_purchase_rounding(purchase_app, new_ratio, expected_purchase, monkeypatch):
     from fastapi.testclient import TestClient
+    from app.api.bom_cutover import router as cutover_router
+    purchase_app.include_router(cutover_router, prefix="/api/orders")
     from app.models.order import OrderItem
     from app.models.order_external_packaging import SalesOrderItemExternalComponent
     from app.services.multilevel_bom_orders import read_compiled_order_bom
@@ -238,16 +265,16 @@ def test_carried_pack_capacity_is_subtracted_before_new_purchase_rounding(purcha
             original_contract = {column.key: getattr(purchase, column.key) for column in purchase.__table__.columns}
             save(db, actor, item.product_id, "assembled", [(child_id, new_ratio, "assembly")])
             db.commit()
-            review = review_current_rule_requirements(db, order_item_id=iid, customer_id=frozen.graph.customer_id)
-            revision = persist_reviewed_rule(db, review=review, item=item, previous=None,
-                expected_revision=0, reviewed_hash=review.checksum, request_hash="f" * 64,
-                operation_key="isolated-pack-handoff", actor=actor)
-            source = next(row for row in frozen.snapshots if row.component_product_id == child_id)
-            target = next(row for row in review.proposed.snapshots if row.component_product_id == child_id)
-            db.add(OrderBomSourceHandoff(revision_id=revision.id, source_snapshot_id=source.id,
-                target_snapshot_id=target.id, order_item_id=iid, product_id=child_id, source_kind="purchased",
-                source_basis_hash=_source_identity(source)["hash"], target_basis_hash=_source_identity(target)["hash"]))
-            db.commit()
+            url = f"/api/orders/items/{iid}/purchase-bom-cutover"
+            review = client.post(url + "/preview", json={})
+            assert review.status_code == 200, review.text
+            impact = review.json()
+            switch_payload = {key: impact[key] for key in ("reviewed_hash", "preview_hash", "rule_revision",
+                "source_lot_versions", "target_locations")}
+            switch_payload["operation_key"] = "public-pack-handoff"
+            switched = client.post(url + "/execute", json=switch_payload)
+            assert switched.status_code == 200, switched.text
+            db.expire_all()
             current = read_compiled_order_bom(db, iid)
             link = current_external_links(db, current)[0]
             component = db.get(SalesOrderItemExternalComponent, link.external_component_id)

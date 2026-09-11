@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 import pytest
+from app.core.time_contract import beijing_today
 
 from app.models.product import Product
 from app.models.user import User
@@ -158,7 +159,7 @@ def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False,
         assert db.get(OrderItem, iid).delivered_quantity == delivered
     balances(0)
     delivery = client.post("/api/deliveries", json={"customer_id": compiled.graph.customer_id,
-        "delivery_date": "2026-09-10", "items": [{"order_item_id": iid, "delivered_quantity": 1}]})
+        "delivery_date": beijing_today().isoformat(), "items": [{"order_item_id": iid, "delivered_quantity": 1}]})
     assert delivery.status_code == 201, delivery.text
     did = delivery.json()["id"]
     dispatch = client.put(f"/api/deliveries/{did}/dispatch")
@@ -176,7 +177,7 @@ def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False,
     if stop_after_first_delivery:
         return did
     second = client.post("/api/deliveries", json={"customer_id": compiled.graph.customer_id,
-        "delivery_date": "2026-09-10", "items": [{"order_item_id": iid, "delivered_quantity": 1}]})
+        "delivery_date": beijing_today().isoformat(), "items": [{"order_item_id": iid, "delivered_quantity": 1}]})
     assert second.status_code == 201, second.text
     second_id = second.json()["id"]
     dispatch = client.put(f"/api/deliveries/{second_id}/dispatch")

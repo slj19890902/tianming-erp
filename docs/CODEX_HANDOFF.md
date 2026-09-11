@@ -5345,3 +5345,8 @@ legacy_ruida_* 原始层
 ## 2026-09-11 v0.22.333 手机盘点与混合货物
 
 最终代码 `07cea2fa`，迁移头仍 `rw10v8x9z71`，已发布。修复F区半成品HTTP500，手机紧凑添加/库存优先查找与半成品原材料共用表单；直接DOM挂载兼容正式DENY安全头。NAS回执 `04_开发记录/任务回执/20260911_1134_手机盘点混合库存_v0.22.333.md`；最终发布报告 `docs/migration_reports/release_runtime_20260911_113249.json`。人工验收待完成。
+
+
+## 2026-09-11 v0.22.334 手机旧缓存兼容
+
+代码 `4badf6fd` 已发布，head仍 `rw10v8x9z71`。旧HTML先自动换新再加载入库runtime，盘点HTML/JS均no-store，修复inboundCandidates空对象。NAS回执 `04_开发记录/任务回执/20260911_1149_手机盘点旧缓存修复_v0.22.334.md`；发布报告 `docs/migration_reports/release_runtime_20260911_114707.json`。真实手机验收待完成。

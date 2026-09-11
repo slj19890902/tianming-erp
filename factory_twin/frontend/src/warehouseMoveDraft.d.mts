@@ -58,7 +58,7 @@ export interface WarehouseMoveDraft {
 }
 
 export function moveLocationBounds(features: LayoutFeature[], location: MoveDashboardLocation): { left: number; right: number; bottom: number; top: number } | null;
-export function intersectMappedMoveTargets<T extends MoveDashboardLocation>(candidates: MoveCandidate[], dashboardLocations: T[], reservedTargetIds?: number[], blockedTargetIds?: number[]): T[];
+export function intersectMappedMoveTargets<T extends MoveDashboardLocation>(candidates: MoveCandidate[], dashboardLocations: T[], reservedTargetIds?: number[], blockedTargetIds?: number[], operation?: "pallet_move" | "lot_transfer"): T[];
 export function mergeLocationInventoryItems<T extends { lot_id?: number | null }>(palletItems?: T[], looseItems?: T[]): T[];
 export function resolveMoveDropTarget<T extends MoveDashboardLocation>(features: LayoutFeature[], locations: T[], floorCode: string, xMm: number, yMm: number): { target: T | null; error: string | null };
 export function upsertMoveDraft<T extends WarehouseMoveDraft>(drafts: T[], draft: T): { items: T[]; error: string | null };

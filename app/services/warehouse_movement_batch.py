@@ -286,7 +286,7 @@ def preflight_warehouse_movement_batch(
 ) -> None:
     client_ids: set[str] = set()
     source_keys: set[tuple[str, int]] = set()
-    target_ids: set[int] = set()
+    target_operations: dict[int, str] = {}
     whole_pallet_ids: set[int] = set()
     linked_pallets_by_lot: dict[int, int | None] = {}
 
@@ -300,9 +300,12 @@ def preflight_warehouse_movement_batch(
         if source_key in source_keys:
             raise WarehouseMovementBatchError("同一货物不能在一个批次中重复移动", 409)
         source_keys.add(source_key)
-        if item.target_location_id in target_ids:
-            raise WarehouseMovementBatchError("一个空货位不能在同批次中接收多项货物", 409)
-        target_ids.add(item.target_location_id)
+        prior_operation = target_operations.get(item.target_location_id)
+        if prior_operation is not None and (
+            prior_operation == "pallet_move" or item.operation == "pallet_move"
+        ):
+            raise WarehouseMovementBatchError("整栈板目标必须独占空货位，不能与其他移货草稿共用", 409)
+        target_operations[item.target_location_id] = item.operation
         source_location_id, linked_pallet_id = _preflight_item_source(db, item)
         if source_location_id == item.target_location_id:
             raise WarehouseMovementBatchError("目标货位不能与来源货位相同", 409)
@@ -322,7 +325,7 @@ def preflight_warehouse_movement_batch(
             require_published=True,
             require_map_geometry=True,
             required_inventory_type="finished",
-            require_empty=True,
+            require_empty=item.operation == "pallet_move",
             capacity_source_location_id=(
                 source_location_id if item.operation == "pallet_move" else None
             ),
@@ -386,7 +389,7 @@ def execute_warehouse_movement_batch(
                     location_id=item.target_location_id,
                     operator_id=operator_id,
                     idempotency_key=subkey,
-                    require_empty_target=True,
+                    require_empty_target=False,
                     expected_target_layout_version=item.expected_target_layout_version,
                 )
                 results.append(

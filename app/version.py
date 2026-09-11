@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.351"
-APP_VERSION_NAME = "PDF收单状态与原邮件追溯"
+APP_VERSION = "v0.22.352"
+APP_VERSION_NAME = "PDF邮箱核对进度暂存恢复"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2624,9 +2624,15 @@ _V022350_CHANGES = APP_CHANGES
 _V022350_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["邮箱列表显示真实关联订单数量，支持已有关联与尚无关联筛选；重复附件按内容归并，保留未导入明细核对入口。", "邮件订单号可直接打开订单详情，订单详情可返回原邮件；PDF收单继续沿用人工核对与保存流程。"]
 APP_VERIFICATION_STEPS = ["管理员打开邮箱收单，筛选关联状态并点击订单号；从订单详情查看原邮件，刷新后仍打开同一邮件。", "相同附件副本显示同一关联订单；原订单删除后不再计为有效关联。Excel收单不属于当前开发范围，真实126收信待授权码配置后验收。"]
+_V022351_CHANGES = APP_CHANGES
+_V022351_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["邮箱PDF核对页增加暂存核对进度，关闭或刷新后可从原邮件继续客户单号、日期和明细修改；暂存不创建订单。", "恢复重新识别原PDF并匹配当前常用箱，已停用产品提示重选；库存和成本重新读取，正式订单仍需确认。"]
+APP_VERIFICATION_STEPS = ["从邮箱打开PDF，修改客户单号或数量，暂存后刷新，确认修改恢复；回邮箱可见继续上次核对。", "同一窗口重试不重复保存；另一窗口不同内容冲突不覆盖。草稿仅当前管理员可见，销售不可读取；真实126收件仍待授权码配置。"]
 APP_CHANGELOG = [
-    *(f"v0.22.351：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.351：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.352：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.352：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.351：本次更新｜{item}" for item in _V022351_CHANGES),
+    *(f"v0.22.351：如何验证｜{item}" for item in _V022351_STEPS),
     *(f"v0.22.350：本次更新｜{item}" for item in _V022350_CHANGES),
     *(f"v0.22.350：如何验证｜{item}" for item in _V022350_STEPS),
     *(f"v0.22.349：本次更新｜{item}" for item in _V022349_CHANGES),

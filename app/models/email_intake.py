@@ -48,3 +48,15 @@ class EmailIntakeOrderLink(Base):
     attachment_id: Mapped[int] = mapped_column(ForeignKey('email_intake_attachments.id'))
     order_id: Mapped[int | None] = mapped_column(ForeignKey('sales_orders.id', ondelete='SET NULL'), nullable=True)
     actor_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+
+
+class EmailPdfWorkingDraft(Base):
+    __tablename__ = 'email_pdf_working_drafts'
+    __table_args__ = (UniqueConstraint('attachment_id', 'actor_id', name='uq_email_pdf_actor_draft'),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attachment_id: Mapped[int] = mapped_column(ForeignKey('email_intake_attachments.id'))
+    actor_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    content_json: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    saved_at: Mapped[str] = mapped_column(String(40))

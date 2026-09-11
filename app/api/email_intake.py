@@ -12,6 +12,8 @@ from app.models.user import User
 from app.models.order import Order
 from app.models.email_intake import EmailIntakeSettings, EmailIntakeMessage, EmailIntakeAttachment, EmailIntakeOrderLink
 from app.services import email_intake as service
+from app.services import email_pdf_draft
+import json
 
 router = APIRouter()
 
@@ -30,6 +32,11 @@ class SettingsChange(BaseModel):
 class StateChange(BaseModel):
     expected_version: int = Field(ge=1)
     status: str = Field(pattern='^(pending|ignored)$')
+
+
+class PdfDraftChange(BaseModel):
+    expected_version: int = Field(ge=0)
+    draft: dict
 
 
 @router.get('/settings')
@@ -133,12 +140,14 @@ def detail(message_id: int, response: Response, db: Session = Depends(get_db), u
     from app.models.order import Order
     results = []
     for attachment in attachments:
+        working = email_pdf_draft.current(db, attachment.id, user)
         links = db.execute(select(EmailIntakeOrderLink.order_id, Order.order_number, Order.customer_po)
             .join(EmailIntakeAttachment, EmailIntakeAttachment.id == EmailIntakeOrderLink.attachment_id)
             .outerjoin(Order, Order.id == EmailIntakeOrderLink.order_id)
             .where(EmailIntakeAttachment.sha256 == attachment.sha256)).all()
         results.append({**{key: getattr(attachment, key) for key in ('id', 'filename', 'sha256', 'duplicate_of')},
-            'orders': [{'id': link.order_id, 'order_number': link.order_number, 'customer_po': link.customer_po} for link in links]})
+            'orders': [{'id': link.order_id, 'order_number': link.order_number, 'customer_po': link.customer_po} for link in links],
+            'working_draft': {'version': working.version, 'saved_at': working.saved_at} if working else None})
     return {**{key: getattr(row, key) for key in ('id', 'subject', 'sender', 'received', 'body', 'notice', 'status', 'version')},
             'attachments': results}
 
@@ -165,7 +174,7 @@ def download(attachment_id: int, db: Session = Depends(get_db), user: User = Dep
 
 
 @router.post('/attachments/{attachment_id}/preview')
-async def preview(attachment_id: int, db: Session = Depends(get_db), user: User = Depends(allowed)):
+async def preview(attachment_id: int, db: Session = Depends(get_db), user: User = Depends(allowed), resume: bool = False):
     row = db.get(EmailIntakeAttachment, attachment_id)
     if not row:
         raise HTTPException(404, '附件不存在')
@@ -174,4 +183,19 @@ async def preview(attachment_id: int, db: Session = Depends(get_db), user: User 
     from app.api.orders import preview_order_pdf
     result = await preview_order_pdf(UploadFile(filename=row.filename, file=BytesIO(row.content),
         headers=Headers({'content-type': 'application/pdf'})), db, user)
-    return {**result, 'email_attachment_id': row.id}
+    working = email_pdf_draft.current(db, row.id, user)
+    if resume and working:
+        result = email_pdf_draft.restore(db, result, json.loads(working.content_json), user)
+    return {**result, 'email_attachment_id': row.id, 'email_draft_version': working.version if working else 0,
+            'email_draft_saved_at': working.saved_at if working else None, 'email_draft_restored': bool(resume and working)}
+
+
+@router.put('/attachments/{attachment_id}/working-draft')
+def save_pdf_draft(attachment_id: int, payload: PdfDraftChange,
+                   db: Session = Depends(get_db), user: User = Depends(allowed)):
+    row = db.get(EmailIntakeAttachment, attachment_id)
+    if not row:
+        raise HTTPException(404, '附件不存在')
+    if not row.filename.lower().endswith('.pdf'):
+        raise HTTPException(422, '仅支持PDF核对草稿')
+    return email_pdf_draft.save(db, attachment_id, user, payload.draft, payload.expected_version)

@@ -198,7 +198,46 @@ def summarize(db: Session, gaps, total_lines: int):
                 supplemental_source_count=len(used), management_uncovered_lines=len(unresolved),
                 management_covered_lines=total_lines - len(unresolved), management_cost_ready=not unresolved,
                 supplemental_details=used, management_missing_details=list(unresolved.values())[:20],
-                supplement_note="补充金额为经批准的事后参考成本，不改实际采购、供应商应付或正式锁月；真实成本补齐后自动避免重复计入。")
+                supplement_note="补充材料成本包括已确认的入库批次成本及已批准的历史参考价；不改变供应商应付，真实采购成本齐全时不重复计入。")
+
+
+def freeze_inventory_entry_cost(db, *, allocation, lot, operator_id, source_kind, quantity):
+    """Atomically carry the entry price into the dispatch source's immutable cost."""
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.services.inventory_valuation import frozen_cost, ALGORITHM as ENTRY_ALGORITHM
+    unit, original = frozen_cost(lot, db)
+    if unit is None or quantity <= 0:
+        return None
+    if operator_id is None:
+        raise ValueError("库存成本结转缺少出库操作人")
+    item = db.get(DeliveryItem, allocation.delivery_item_id)
+    delivery = db.get(Delivery, item.delivery_id) if item else None
+    if item is None or delivery is None or allocation.id is None:
+        raise ValueError("库存成本结转缺少送货来源")
+    if item.product_id and lot.finished_detail and item.product_id != lot.finished_detail.product_id:
+        raise ValueError("出库产品与库存成本批次不一致")
+    order = db.get(OrderItem, item.order_item_id) if item.order_item_id else None
+    gap = dict(item=item, month=delivery.delivery_date.strftime("%Y-%m"),
+        source=dict(kind=source_kind, id=allocation.id, lot=lot),
+        order_product_id=order.product_id if order else None)
+    identity, key = target_identity(gap)
+    existing = db.scalar(select(Supplement).where(Supplement.target_fingerprint == key))
+    if existing:
+        if existing.quantity_limit < quantity or existing.unit_cost != unit:
+            raise ValueError("出库来源数量或成本已变化，不能覆盖冻结成本")
+        return existing
+    evidence = dict(lot_id=lot.id, snapshot_source=lot.cost_snapshot_source,
+        snapshot_at=lot.cost_snapshot_at, original_detail=original, unit_cost=str(unit))
+    row = Supplement(delivery_item_id=item.id, inventory_lot_id=lot.id,
+        month=gap["month"], source_kind=source_kind, source_id=allocation.id,
+        target_fingerprint=key, target_json=canonical(identity), quantity_limit=quantity,
+        unit_cost=unit, currency="CNY", reference_kind="confirmed_inventory_entry_cost",
+        evidence_json=canonical(evidence), evidence_fingerprint=fingerprint(evidence),
+        algorithm_version=ENTRY_ALGORITHM, batch_id=f"dispatch-entry:{source_kind}:{allocation.id}",
+        reason="按已确认入库批次单价自动结转材料成本，不新增采购或应付", created_by=operator_id)
+    db.add(row)
+    db.flush()
+    return row
 
 
 def preview(db: Session, months):

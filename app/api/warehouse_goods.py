@@ -20,6 +20,7 @@ from app.models.warehouse_goods import WarehouseGoodsProfile, WarehouseGoodsMuta
 from app.services.warehouse_goods import goods_profile, lot_face
 from app.services.paper_color import material_face
 from app.services.inventory_cost_snapshot import estimate_semi_finished_cost, apply_cost_snapshot
+from app.services.inventory_valuation import can_view_inventory_cost, freeze_entry_cost
 from app.services.material_pricing import get_effective_material_price
 from app.services.warehouse_inventory import manual_semi_finished_in, WarehouseInventoryError
 from app.services.warehouse_stocktake_batch import (
@@ -167,7 +168,9 @@ def options(q: str = "", db: Session = Depends(get_db), user: User = Depends(can
 
 @router.get("/material-price")
 def material_price(material_id: int, flute_type: str = "", length_mm: int = 0, width_mm: int = 0,
-                   quantity: int = 0, db: Session = Depends(get_db), user: User = Depends(admin_only)):
+                   quantity: int = 0, db: Session = Depends(get_db), user: User = Depends(can_read)):
+    if not can_view_inventory_cost(user):
+        raise HTTPException(403, "仅管理员和老板可以查看成本")
     material = db.get(Material, material_id)
     if material is None or not material.is_active:
         raise HTTPException(422, "材质不存在或已停用")
@@ -195,10 +198,12 @@ def get_goods(lot_id: int, db: Session = Depends(get_db), user: User = Depends(c
             processing="raw" if detail.sheet_type == "raw_board" else "creased" if detail.sheet_type == "creased_sheet" else "cut",
             face_paper=lot_face(db, lot), estimated_material=detail.material_code_snapshot or "").model_dump()
     profile["material_code"] = profile.get("material_code") or detail.material_code_snapshot or ""
-    return dict(lot_id=lot.id, version=lot.version, facts=profile,
-        physical=dict(length=detail.board_length_mm, width=detail.board_width_mm, flute=detail.flute_type,
-            material=detail.material_code_snapshot, name=detail.internal_name,
-            settlement_unit_price=str(lot.estimated_unit_cost_snapshot) if lot.estimated_unit_cost_snapshot is not None else None),
+    physical = dict(length=detail.board_length_mm, width=detail.board_width_mm, flute=detail.flute_type,
+        material=detail.material_code_snapshot, name=detail.internal_name)
+    if can_view_inventory_cost(user):
+        from app.services.inventory_valuation import cost_payload
+        physical["settlement_unit_price"] = cost_payload(lot, db)["unit_cost"]
+    return dict(lot_id=lot.id, version=lot.version, facts=profile, physical=physical,
         editable=lot.status == "active" and lot.quantity_reserved == 0 and lot.quantity_available > 0)
 
 
@@ -291,8 +296,8 @@ def create_sheet(payload: SheetEntry, db: Session = Depends(get_db), user: User 
             crease_middle_mm=payload.crease_middle_mm, crease_right_mm=payload.crease_right_mm,
             movement_reason="人工补录原材料" if facts.processing == "raw" else "人工补录半成品",
             remarks=facts.note, cutting_note=None)
-        if estimate:
-            apply_cost_snapshot(lot, estimate)
+        if payload.source_kind != "existing_stocktake":
+            freeze_entry_cost(db, lot)
         return record(db, user, lot, facts, payload.idempotency_key, digest, None, "CREATE")
     except (WarehouseInventoryError, WarehouseStocktakeBatchError) as error:
         db.rollback()

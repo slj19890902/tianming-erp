@@ -3,7 +3,7 @@ import { MaterialCandidates } from "./MaterialCandidates";
 import { StocktakeObservationPanel } from "./StocktakeObservationPanel";
 // Also render these exact components in the isolated visual acceptance fixture.
 export { MoldRackElevation, WarehouseRackElevation };
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { EditorCanvas, type CanvasFocusTarget } from "./EditorCanvas";
 import { filterOperationalFeatures } from "./operationalView.mjs";
 import {
@@ -1866,7 +1866,7 @@ export function WarehouseTwinApp() {
   const [stocktakeSourceKind, setStocktakeSourceKind] = useState<"existing_stocktake" | "partner_transfer">("existing_stocktake");
   const [stocktakeCustomerQuery, setStocktakeCustomerQuery] = useState("");
   const [stocktakeCustomers, setStocktakeCustomers] = useState<CustomerOption[]>([]);
-  const [stocktakeCustomerId, setStocktakeCustomerId] = useState("");
+  const [stocktakeCustomerId, setStocktakeCustomerId] = useState("all");
   const [stocktakeProductQuery, setStocktakeProductQuery] = useState("");
   const [stocktakeProductCandidates, setStocktakeProductCandidates] = useState<ProductCandidate[]>([]);
   const [stocktakeProductId, setStocktakeProductId] = useState("");
@@ -2910,7 +2910,7 @@ export function WarehouseTwinApp() {
     ));
   const stocktakeExistingLocations = useMemo<StocktakeExistingProductLocation[]>(
     () => stocktakeExistingProductLocations(visualLocations, {
-      customerId: stocktakeCustomerId,
+      customerId: selectedStocktakeProduct?.customer_id || stocktakeCustomerId,
       productId: stocktakeProductId,
       inventoryType: stocktakeInventoryType,
       targetFloorCode: selectedLocation?.floor_code || floorCode,
@@ -2920,6 +2920,7 @@ export function WarehouseTwinApp() {
     [
       visualLocations,
       stocktakeCustomerId,
+      selectedStocktakeProduct?.customer_id,
       stocktakeProductId,
       stocktakeInventoryType,
       selectedLocation?.floor_code,
@@ -3253,7 +3254,7 @@ export function WarehouseTwinApp() {
     setStocktakeInventoryType("finished");
     setStocktakeCustomerQuery("");
     setStocktakeCustomers([]);
-    setStocktakeCustomerId("");
+    setStocktakeCustomerId("all");
     setStocktakeProductQuery("");
     setStocktakeProductCandidates([]);
     setStocktakeProductId("");
@@ -6502,6 +6503,7 @@ export function WarehouseTwinApp() {
           {warehouseOperationMessage && <div className="twin-location-message">{warehouseOperationMessage}</div>}
         </section>}
         {selectedLocation && <section className="twin-location-card twin-stocktake-compact">
+          {createElement("warehouse-costs", {"location-id": String(selectedLocation.location_id), "revision": String(loading)})}
           <div className="twin-location-card-title"><div><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em>
           {!traceReadOnly && canStocktake && !locationEditMode && !(mapMode === "move" && moveAction === "stocktake") && <button type="button" className="warehouse-label-add" disabled={loading || pendingPlacementBusy} onClick={() => { setMapMode("move"); setMoveAction("stocktake"); setSearchPanelOpen(true); }}>＋ 添加货物</button>}</div>
           <button type="button" className="twin-detail-toggle secondary" aria-expanded={locationDetailOpen} onClick={() => setLocationDetailOpen((current) => !current)}>{locationDetailOpen ? "收起位置与栈板详情" : "位置与栈板详情"}</button>
@@ -6595,14 +6597,14 @@ export function WarehouseTwinApp() {
           {canStocktake && mapMode === "move" && moveAction === "stocktake" && viewMode === "2d" && !locationEditMode && selectedLocationBaseReceivable && <section className="twin-formal-operation twin-stocktake-operation">
             <h4>加入盘点</h4>
             <div className="twin-map-inbound-type" role="tablist" aria-label="盘点新增库存类型">
-              <button type="button" className={stocktakeInventoryType === "finished" ? "active" : ""} title={selectedLocationFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>成品</button>
-              <button type="button" className={stocktakeInventoryType === "semi_finished" ? "active" : ""} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("semi_finished"); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>半成品</button>
-              <button type="button" className={stocktakeInventoryType === "raw_material" ? "active" : ""} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("raw_material"); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>原材料</button>
+              <button type="button" className={stocktakeInventoryType === "finished" ? "active" : ""} title={selectedLocationFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("finished"); setStocktakeCustomerId("all"); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>成品</button>
+              <button type="button" className={stocktakeInventoryType === "semi_finished" ? "active" : ""} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("semi_finished"); setStocktakeCustomerId("all"); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>半成品</button>
+              <button type="button" className={stocktakeInventoryType === "raw_material" ? "active" : ""} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("raw_material"); setStocktakeCustomerId("all"); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>原材料</button>
             </div>
             {selectedLocationAddBlockReason && <p className="twin-stocktake-block-reason">{selectedLocationAddBlockReason} 请核对货位是否启用且已发布。</p>}
             {stocktakeInventoryType !== "finished" && <WarehouseGoods key={`${selectedLocation.location_id}-${stocktakeInventoryType}`} locationId={selectedLocation.location_id} layoutVersion={Number(selectedLocation.map_position?.version)} raw={stocktakeInventoryType === "raw_material"} canSave={canEditLocations && canCorrectInventory && !traceReadOnly} onSaved={async () => { await refreshDashboard(); setStocktakeInventoryType("finished"); }} />}
             {["finished"].includes(stocktakeInventoryType) && <>
-            <div className="twin-stocktake-search-row"><label><span>查找客户</span><input value={stocktakeCustomerQuery} onChange={(event) => { setStocktakeCustomerQuery(event.target.value); setStocktakeCustomerId(""); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }} placeholder="客户全称、中文简称、缩写或客户编码" /></label>
+            <div className="twin-stocktake-search-row"><label><span>查找客户</span><input value={stocktakeCustomerQuery} onChange={(event) => { setStocktakeCustomerQuery(event.target.value); setStocktakeCustomerId(event.target.value.trim() ? "" : "all"); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }} placeholder="默认全部客户；知道客户时输入名称或简称" /></label>
             <label><span>确认已有客户</span><select value={stocktakeCustomerId} onChange={(event) => { setStocktakeCustomerId(event.target.value); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}><option value="">请选择客户</option><option value="all">全部客户（权限范围内）</option>{stocktakeCustomers.map((item) => <option key={item.id} value={item.id}>{item.chinese_short_name ? `${item.chinese_short_name} · ` : ""}{item.customer_code ? `${item.customer_code} · ` : ""}{item.name}</option>)}</select></label>
             </div><div className="twin-stocktake-search-row"><label><span>编码 / 名称 / 规格</span><input value={stocktakeProductQuery} disabled={!stocktakeCustomerId} onChange={(event) => { setStocktakeProductQuery(event.target.value); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }} placeholder={stocktakeCustomerId ? "编码、名称或规格，如800×600×200" : "请先确认客户"} /></label>
             <button type="button" aria-expanded={stocktakeMissingOpen} onClick={() => setStocktakeMissingOpen((value) => !value)}>{stocktakeMissingOpen ? "收起未在列表" : "未在列表"}</button></div>

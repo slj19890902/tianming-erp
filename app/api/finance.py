@@ -8,7 +8,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
@@ -2272,6 +2272,39 @@ def _statement_export_context(
     return statement, customer, _customer_statement_export_data(
         db, statement=statement, customer=customer, sort_by=sort_by
     )
+
+
+@router.post("/statements/{statement_id}/customer-check")
+def check_customer_statement(
+    statement_id: int, response: Response, file: UploadFile = File(...),
+    sheet_name: str = Form(default=""), header_row: int = Form(default=0),
+    columns: str = Form(default=""), output_format: str = Form(default="json"),
+    expected_version: int | None = Form(default=None),
+    db: Session = Depends(get_db), user: User = Depends(can_read),
+):
+    from app.services.customer_statement_check import load_customer, compare, export_report, MAX_BYTES
+    statement, customer, data = _statement_export_context(db, statement_id=statement_id, sort_by="business", user=user)
+    if expected_version is not None and statement.version != expected_version:
+        raise HTTPException(409, "ERP对账单已变化，请重新核对后下载")
+    if output_format not in {"json", "xlsx"}:
+        raise HTTPException(422, "报告格式无效")
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(422, "请另存为xlsx后上传")
+    response.headers["Cache-Control"] = "private, no-store"
+    content = file.file.read(MAX_BYTES + 1)
+    try:
+        mapping = json.loads(columns) if columns else None
+        if mapping is not None and not isinstance(mapping, dict): raise ValueError("列对应设置无效")
+        parsed = load_customer(content, sheet_name=sheet_name, header_row=header_row, columns=mapping)
+        if parsed["needs_mapping"]:
+            return {**parsed, "read_only": True, "message": "请选择存货编码或名称、数量、金额对应列"}
+        result = compare(parsed, data["rows"])
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    result.update(customer_name=data["customer_name"], statement_number=statement.statement_number, statement_month=statement.statement_month, statement_version=statement.version, amount_label=data["amount_label"], price_label=data["price_label"], file_sha256=hashlib.sha256(content).hexdigest())
+    if output_format == "xlsx":
+        return StreamingResponse(export_report(result), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=customer-statement-differences.xlsx", "Cache-Control": "private, no-store"})
+    return result
 
 
 @router.get("/statements/{statement_id}/customer-export.xlsx")

@@ -69,6 +69,10 @@ def test_actual_purchase_receipt_cost_freezes_at_delivery_and_reports_coverage(
             quantity=10,
             idempotency_key=f"p1131-a1-receive-{currency.lower()}",
         )
+        if currency != "CNY":
+            assert received.status_code == 422, received.text
+            assert "人民币" in received.text
+            return
         assert received.status_code == 200, received.text
 
     with session_factory() as db:

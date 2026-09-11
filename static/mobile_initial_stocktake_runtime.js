@@ -23,6 +23,8 @@ function resetInitialInbound() {
   inbound.stockLot = null;
   inbound.attempt = null;
   $("initialInbound").classList.add("hidden");
+  $("inboundCustomerQuery").value = "";
+  $("inboundCustomer").innerHTML = '<option value="all">全部客户（权限范围内）</option>';
   $("inboundQuantity").value = "";
   $("inboundProduct").value = "";
   $("inboundExistingAcknowledged").checked = false;
@@ -82,7 +84,8 @@ function invalidateInboundSelection() {
 
 async function findInboundCustomers() {
   invalidateInboundSelection();
-  $("inboundCustomer").innerHTML = '<option value="">请选择客户</option><option value="all">全部客户（权限范围内）</option>';
+  const keyword = $("inboundCustomerQuery").value.trim();
+  $("inboundCustomer").innerHTML = (keyword ? '<option value="">请选择客户</option>' : "") + '<option value="all">全部客户（权限范围内）</option>';
   $("inboundProduct").innerHTML = '<option value="">请先选客户</option>';
   const generation = inbound.generation;
   try {
@@ -222,6 +225,11 @@ async function saveInitialInbound() {
 }
 
 $("inboundDate").value = new Intl.DateTimeFormat("en-CA", {timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date());
+$("inboundCustomerQuery").oninput = () => {
+  invalidateInboundSelection();
+  $("inboundCustomer").innerHTML = $("inboundCustomerQuery").value.trim()
+    ? '<option value="">搜索后选择客户</option>' : '<option value="all">全部客户（权限范围内）</option>';
+};
 $("inboundFindCustomer").onclick = findInboundCustomers;
 $("inboundFindProduct").onclick = findInboundProducts;
 $("inboundCustomer").onchange = () => { invalidateInboundSelection(); $("inboundProduct").innerHTML = '<option value="">请选择产品</option>'; findInboundProducts(); };

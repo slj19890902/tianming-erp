@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>天明 ERP 手机版</title>
+  <script defer src="/factory-twin-assets/warehouse-costs.js?v=20260911-1"></script>
   <style>
     :root {
       color-scheme: light;
@@ -1750,6 +1751,9 @@
         byId("closeWarehouseMap").textContent = "返回原区域";
         const container = byId("warehouseMapGoods");
         container.replaceChildren(node("h2", "", `${readableLocation(location)}｜现场货物`));
+        const costs = document.createElement("warehouse-costs");
+        costs.setAttribute("location-id", String(location.location_id));
+        container.append(costs);
         const goods = Array.isArray(location.goods) ? location.goods : [];
         const discrepantGoods = Array.isArray(location.discrepant_goods) ? location.discrepant_goods : [];
         discrepantGoods.forEach(item => {

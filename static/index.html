@@ -4957,7 +4957,7 @@
                         <tr v-for="statement in row.statements" :key="statement.id">
                           <td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td>
                           <td><span v-if="statement.invoice_status==='invoiced'" class="status green">已开票</span><status-tag v-else :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div></td>
-                          <td class="toolbar-group"><button v-if="canConfirmStatement && statement.confirmation_status!=='confirmed'" class="btn small success" :disabled="!!financeStatementOperationState.action" @click="confirmFinanceStatement(statement)">{{ financeStatementOperationState.action==='confirm' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '确认中…' : '确认' }}</button><button v-else-if="canGenerateInvoiceTask && statement.confirmation_status==='confirmed'" class="btn small" :disabled="!!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button class="btn small" @click="exportStatement(statement,'xlsx')">Excel</button><button class="btn small" @click="exportStatement(statement,'pdf')">PDF</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementDispute(statement)">{{ statement.confirmation_status==='confirmed' ? '客户异议' : '调整' }}</button></td>
+                          <td class="toolbar-group"><button v-if="canConfirmStatement && statement.confirmation_status!=='confirmed'" class="btn small success" :disabled="!!financeStatementOperationState.action" @click="confirmFinanceStatement(statement)">{{ financeStatementOperationState.action==='confirm' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '确认中…' : '确认' }}</button><button v-else-if="canGenerateInvoiceTask && statement.confirmation_status==='confirmed'" class="btn small" :disabled="!!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button class="btn small" @click="exportStatement(statement,'xlsx')">Excel</button><button class="btn small" @click="openCustomerStatementCheck(statement)">核对客户Excel</button><button class="btn small" @click="exportStatement(statement,'pdf')">PDF</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementDispute(statement)">{{ statement.confirmation_status==='confirmed' ? '客户异议' : '调整' }}</button></td>
                         </tr>
                       </tbody></table></div>
                     </td></tr>
@@ -36498,6 +36498,9 @@
                 this.receiptOperationState = {action:"",deliveryId:null,receiptId:null,deliveryNumber:""};
               }
             }
+          },
+          openCustomerStatementCheck(row) {
+            window.open(`/customer-statement-check.html?statement_id=${Number(row.id)}`, "_blank", "noopener");
           },
           exportStatement(row, format="xlsx") {
             const suffix = format === "pdf" ? "pdf" : "xlsx";

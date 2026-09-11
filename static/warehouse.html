@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
   <title>仓库库存管理 - 天明ERP</title>
+  <script defer src="/factory-twin-assets/warehouse-costs.js?v=20260911-1"></script>
   <style>
     :root{--blue:#2563eb;--line:#dbe3ef;--bg:#f3f6fb;--text:#182235;--muted:#64748b;--red:#b91c1c}
     *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Arial,"Microsoft YaHei",sans-serif}
@@ -249,7 +250,8 @@
       <div class="panel">
         <h2>数据可信度</h2>
         <div id="insightQuality" class="summary"></div>
-        <div id="insightCostNotice" class="notice hidden">库龄始终按入库日期计算，最后异动只反映停滞。实际库存金额：成本事实账尚未建立时统一显示“成本待补”，不得按 0 元计算；下列来源覆盖均为估算，绝非实际现金成本覆盖。</div>
+        <warehouse-costs></warehouse-costs>
+        <div id="insightCostNotice" class="notice hidden">上方按入库批次查看固定材料成本；下方保留库龄及当前参考估算，不代表已付款金额。</div>
       </div>
       <div class="panel table-wrap">
         <h2>库龄分布</h2>
@@ -1368,7 +1370,7 @@
     function renderInsights(){
       const data=state.insights;if(!data)return;
       const summary=data.summary,quality=data.data_quality;
-      const showCosts=hasPermission("cost.view");
+      const showCosts=["admin","boss"].includes(state.user?.role);
       $("insightScope").textContent=data.scope_notice;
       $("insightRecommendation").textContent=data.recommendation_notice;
       const cards=[

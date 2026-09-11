@@ -5364,3 +5364,5 @@ legacy_ruida_* 原始层
 - 2026-09-11 v0.22.339：9798b277仓库人民币批次成本、管理员/老板专属查看及出货沿用已发布；承接v338补价，另纠正10批旧单位异常估算，304/312批有效计价、8批待资料，已定价166872.77元。见docs/tasks/WAREHOUSE_COST_RELEASE_20260911.md、WAREHOUSE_COST_ACCEPTANCE_20260911.md及NAS 20260911_1332_仓库批次成本与权限_v0.22.339.md；报告release_runtime_20260911_132624.json completed，rw10v8x9z71不变。
 
 - 2026-09-11 v0.22.340 客户Excel只读对账核对已技术发布，代码e38a613d；保留v339成本项目，head rw10v8x9z71。见NAS 20260911_1335_客户Excel对账差异核对_v0.22.340.md。
+
+- 2026-09-11 v0.22.341：盘点默认全部客户，正式7ef4de35，release_runtime_20260911_133719.json completed，库SHA及head不变。详见docs/stocktake_default_all_delivery.md及NAS 20260911-v022341-盘点默认全部客户.md；人工界面验收待完成。

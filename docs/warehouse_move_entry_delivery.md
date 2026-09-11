@@ -12,4 +12,14 @@
 
 构建文件SHA256：JS 7245FA9FF2A64258554E9D5F44FF60F67749DA82B617DCB8932028E745CE1601；CSS 1A8A12D039DADA754A074C4B63C778610AF733248169887B1D43DF0D46C3AC45。构建中的既有独立成本脚本外链及大chunk提示不影响产物生成；没有把这些警告当做测试通过证明。
 
-Chrome连接超时，未使用IAB，未声称实际点击或视觉验收完成；正式页面与资源校验及发布证据完成后追加。无全量回归，无正式账号密码改动。回退只回退本任务代码/入口资源，保持当前数据库迁移头与正式事实，不允许降级删除成本或邮箱事实。
+Chrome连接超时，未使用IAB，未声称实际点击或视觉验收完成。无全量回归，无正式账号密码改动。回退只回退本任务代码/入口资源，保持当前数据库迁移头与正式事实，不允许降级删除成本或邮箱事实。
+
+## 正式发布
+
+2f8cd1952ce8dd822e2e0630a52bfdb1b378622c/v0.22.348已推送整合；正式报告docs/migration_reports/release_runtime_20260911_151510.json为completed，15:15:49启动完成；head ry10v8x9z73未变，无新迁移。
+
+时点备份data/backups/carton_erp_before_release_20260911_151513.sqlite3与隔离副本data/release_rehearsals/carton_erp_release_rehearsal_20260911_151513.sqlite3，SHA256均为74b1979e19ee64348a845109e242de7769cb42ab29fd2ace87e12152cda58c0b，完整性ok、FK0。正式库发布前后SHA256均为dab795c1298c01ada43936f096ef110e92989606db25e70a541d481d5cb29624，核心计数一致；没有正式业务数据写入。
+
+发布后GET /warehouse.html为200且Cache-Control:no-store，实际引用本次JS/CSS；两项资源和成本页均200且内容与磁盘逐字一致，GET /api/health为200，未登录/api/warehouse/costs为401。Chrome真实点击及工厂人工验收未完成，页面资源到达不等于人工操作通过。
+
+NAS独立回执：04_开发记录/任务回执/20260911_1515_仓库成本入口与单品整板移货_v348.md。

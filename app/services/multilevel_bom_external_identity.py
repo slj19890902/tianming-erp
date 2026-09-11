@@ -183,6 +183,8 @@ def frozen_purchase_quantities(db, components, order_items):
     result = {}
     requirements = {oid: read_graph_requirements(db, oid) for oid in graph_ids}
     compiled_by_id = {oid: requirement.compiled for oid, requirement in requirements.items()}
+    from app.services.multilevel_bom_carried_procurement import carried_purchase_stock
+    carried = {oid: carried_purchase_stock(db, compiled) for oid, compiled in compiled_by_id.items()}
     demands = {oid: {d.product_id: d.make_units for d in requirement.plan.products}
                for oid, requirement in requirements.items()}
     for component in components:
@@ -193,5 +195,6 @@ def frozen_purchase_quantities(db, components, order_items):
         if link is None:
             raise BomPlanError('真实BOM外购节点关联不完整，不能按旧组件数量采购')
         node = next(n for n in compiled_by_id[oid].graph.nodes if n.product_id == link.product_id)
-        result[component.id] = purchase_quantity_for_stock(node, demands[oid][node.product_id])
+        result[component.id] = purchase_quantity_for_stock(node,
+            max(demands[oid][node.product_id] - carried[oid].get(node.product_id, 0), 0))
     return result

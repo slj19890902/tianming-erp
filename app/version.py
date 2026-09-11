@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.339"
-APP_VERSION_NAME = "仓库人民币批次成本与老板权限"
+APP_VERSION = "v0.22.340"
+APP_VERSION_NAME = "盘点默认全部客户"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2548,19 +2548,29 @@ _V022337_VERIFICATION_STEPS = [
 ]
 _V022338_CHANGES = ["历史缺价采用可读取稳定关联订单中一致的报料快照，不套用多行采购单抬头尺寸；新收料仍严格要求逐行有效价格与尺寸。", "提供老板授权的71批库存参考成本与20条收料当前价补录清单、事务校验和审计；不改产品主档、数量或已有历史价格。"]
 _V022338_VERIFICATION_STEPS = ["核对历史缺价收料的当前价采用记录与逐行报料尺寸；已有冻结价格保持。", "查看批次参考成本来源；仍缺关键资料的4款保持待补，不使用1×1占位尺寸或虚构价格。"]
-APP_CHANGES = [
+_V022339_CHANGES = [
     "成品、原材料及半成品盘点新增按当前人民币材质报价和可靠展开规则自动冻结批次材料成本；缺关键资料明确阻止无价入库。",
     "管理员和老板可在仓库、手机货位及库存成本页查看成本单价和已定价金额；员工及财务角色不能取得这些仓库成本接口数据。",
     "出货优先使用真实采购成本，无采购来源的盘点库存沿用已确认入库成本；不新造供应商应付。承接已授权参考成本，旧尺寸单位异常不冒充有效成本。",
 ]
-APP_VERIFICATION_STEPS = [
+_V022339_VERIFICATION_STEPS = [
     "管理员或老板展开货位成本，并按客户、编码查询全部库存成本；员工同接口返回403且页面不显示金额。",
     "隔离副本中新盘点入库后改报价，再移货或出货，核对旧批次单价不变；缺尺寸或报价时不生成无价批次。",
     "核对旧估算尺寸单位纠正的前值和审计；仍需真实资料的产品显示待核价，地图、数量及历史采购与出货事实保持。",
 ]
+APP_CHANGES = [
+    "电脑和手机盘点默认全部客户，直接输入规格即可查找；知道客户时再输入名称并选择客户缩小范围，清空客户恢复全部。",
+    "全部客户选中产品后仍按真实客户检查已有库存，保留原入库、移货、成本核对及权限门禁；不修改正式数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新盘点页面，不选择客户直接输入规格，确认返回全部可见客户的产品。",
+    "输入客户名称并选择客户，再清空客户输入，核对范围恢复全部且规格保留。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.339：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.339：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.340：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.340：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.339：本次更新｜{item}" for item in _V022339_CHANGES),
+    *(f"v0.22.339：如何验证｜{item}" for item in _V022339_VERIFICATION_STEPS),
     *(f"v0.22.338：本次更新｜{item}" for item in _V022338_CHANGES),
     *(f"v0.22.338：如何验证｜{item}" for item in _V022338_VERIFICATION_STEPS),
     *(f"v0.22.337：本次更新｜{item}" for item in _V022337_CHANGES),

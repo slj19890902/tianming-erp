@@ -20,12 +20,15 @@ const assert=require('node:assert/strict');
 const nodes=new Map();
 const $=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',disabled:false,classList:{toggle(k,v){this[k]=v}}});return nodes.get(id)};
 const state={user:{role:'admin'},lots:[],submitting:false,locked:false};
-const inbound={busy:false,attempt:null};
+const inbound={busy:false,attempt:null,type:'finished'};
 const allCounted=()=>true;
 SOURCE
 updateSubmitState();assert.equal($('submitButton').textContent,'确认现场为空');
 $('inboundProduct').value='10';updateSubmitState();assert.equal($('submitArea').classList.hidden,true);
 $('inboundProduct').value='';state.lots=[{id:5}];updateSubmitState();assert.equal($('submitButton').textContent,'确认盘点并更新库存');assert.equal($('submitArea').classList.hidden,false);
+inbound.type='raw';updateSubmitState();assert.equal($('submitArea').classList.hidden,true);assert.equal($('submitButton').disabled,true);
+inbound.type='semi';updateSubmitState();assert.equal($('submitArea').classList.hidden,true);assert.equal($('submitButton').disabled,true);
+inbound.type='finished';updateSubmitState();assert.equal($('submitArea').classList.hidden,false);assert.equal($('submitButton').disabled,false);
 state.lots=[];updateSubmitState();assert.equal($('submitButton').textContent,'确认现场为空');
 inbound.attempt={};updateSubmitState();assert.equal($('submitButton').disabled,true);assert.equal($('submitArea').classList.hidden,true);
 inbound.attempt=null;state.user.role='worker';state.lots=[{id:5}];updateSubmitState();assert.equal($('submitButton').textContent,'提交盘点');

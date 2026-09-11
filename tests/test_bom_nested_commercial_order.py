@@ -1,0 +1,100 @@
+"""A priced physical subassembly retains both commercial parent and its own BOM."""
+from fastapi.testclient import TestClient
+
+from app.models.product import Product
+from app.models.order import OrderItem
+from app.services.multilevel_bom_orders import read_compiled_order_bom
+from app.services.multilevel_bom_plan import plan_bom
+from tests.test_n039_composite_bom_requisition import composite_requisition_app, _login
+from tests.test_p1_81_receipt_purpose_flow import _p181_published_map_identity
+from tests.test_multilevel_bom_receipt_flow import seed_graph
+
+
+def test_assembled_child_keeps_upstream_price_and_internal_recipe(
+    composite_requisition_app, _p181_published_map_identity,
+):
+    app, factory = composite_requisition_app
+    material_id, _ = seed_graph(factory, liner=True)
+    from app.api.deliveries import router as delivery_router
+    from app.api.finance import router as finance_router
+    app.include_router(delivery_router, prefix="/api/deliveries")
+    app.include_router(finance_router, prefix="/api/finance")
+    with factory() as db:
+        parent = db.get(Product, 1)
+        parent.combination_mode = "component_priced"
+        parent_name = parent.product_name
+        db.commit()
+    with TestClient(app) as client:
+        _login(client)
+        payload = {
+            "customer_id": 1, "order_date": "2026-09-11", "items": [{
+                "product_id": 4, "quantity": 100, "unit_price": "8.50",
+                "combination_mode_snapshot": "component_priced",
+                "combination_role": "priced_component",
+                "combination_group_key": "nested-commercial-100",
+                "combination_parent_product_id": 1,
+                "combination_parent_name_snapshot": parent_name,
+                "combination_set_quantity_snapshot": 100,
+                "combination_quantity_per_set_snapshot": 1,
+            }],
+        }
+        # Being a physical composite does not bypass upstream membership/ratio.
+        payload["items"][0]["combination_quantity_per_set_snapshot"] = 2
+        rejected = client.post("/api/orders", json=payload)
+        assert rejected.status_code == 400, rejected.text
+        assert "每套数量" in rejected.json()["detail"]
+        payload["items"][0]["combination_quantity_per_set_snapshot"] = 1
+        created = client.post("/api/orders", json=payload)
+        assert created.status_code == 201, created.text
+        iid = created.json()["items"][0]["id"]
+    with factory() as db:
+        item = db.get(OrderItem, iid)
+        assert item.combination_role == "priced_component"
+        assert item.combination_parent_product_id == 1
+        compiled = read_compiled_order_bom(db, iid)
+        assert compiled.graph.root_id == 4
+        assert dict(plan_bom(compiled.graph, 100).picking) == {4: 100}
+        assert {r.component_product_id: r.required_piece_quantity for r in compiled.snapshots} == {
+            4: 100, 2: 200, 3: 600,
+        }
+        sources = [(row.id, row.component_product_id) for row in compiled.snapshots
+                   if row.component_product_id in {2, 3}]
+        from app.models.product_bom import ProductBomComponent
+        from sqlalchemy import select
+        relation = db.scalar(select(ProductBomComponent).where(
+            ProductBomComponent.parent_product_id == 1,
+            ProductBomComponent.component_product_id == 4))
+        relation.quantity_per_set = 7
+        db.get(Product, 1).product_name = "后改上层名称"
+        db.commit()
+        assert item.combination_quantity_per_set_snapshot == 1
+        assert item.combination_parent_name_snapshot == parent_name
+    from tests.test_multilevel_bom_receipt_flow import purchase_sources
+    from tests.test_p1_81_receipt_purpose_flow import _freeze_receipt_fact, _receive
+    from tests.test_bom_commercial_settlement import _dispatch, _confirm_receipt
+    from datetime import date
+    from decimal import Decimal
+    from app.models.finance import Statement
+    with TestClient(app) as client:
+        _login(client)
+        for index, source in enumerate(purchase_sources(client, factory, material_id, sources, order_item_id=iid)):
+            fact = _freeze_receipt_fact(client, source, idempotency_key=f"nested-price-{index}", unit_price="0.1234")
+            assert fact.status_code == 200, fact.text
+            for batch in range(2):
+                received = _receive(client, source, fact.json(), quantity=source.order_purpose_sheet_qty // 2,
+                                    idempotency_key=f"nested-receipt-{index}-{batch}")
+                assert received.status_code == 200, received.text
+        delivery = _dispatch(client, 1, [(iid, 25)])
+        cancelled = client.put(f"/api/deliveries/{delivery['id']}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+        with factory() as db:
+            assert db.get(OrderItem, iid).delivered_quantity == 0
+        delivery = _dispatch(client, 1, [(iid, 25)])
+        _confirm_receipt(client, delivery)
+        statement = client.post("/api/finance/statements", json={
+            "customer_id": 1, "statement_month": date.today().strftime("%Y-%m"),
+            "delivery_ids": [delivery["id"]],
+        })
+        assert statement.status_code == 201, statement.text
+        with factory() as db:
+            assert db.get(Statement, statement.json()["id"]).total_receivable == Decimal("212.50")

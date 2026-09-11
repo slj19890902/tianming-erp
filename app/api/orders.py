@@ -1905,8 +1905,18 @@ def _validated_combination_provenance(
         item_payload.combination_quantity_per_set_snapshot,
     )
     product_mode = _product_combination_mode(product)
+    # A physical subassembly can be priced as a child of another combination.
+    # Its upstream provenance is validated below; its own graph is frozen by
+    # the normal graph-order writer. Legacy composites lack that graph contract.
+    nested_physical_child = False
+    if item_payload.combination_role == "priced_component" and product_mode == "parent_priced_set":
+        from app.models.multilevel_bom import ProductBomProfile
+        profile = db.get(ProductBomProfile, product.id)
+        nested_physical_child = profile is not None and profile.source in {
+            "assembled", "manufactured", "purchased",
+        }
 
-    if product_mode == "parent_priced_set":
+    if product_mode == "parent_priced_set" and not nested_physical_child:
         if any(value is not None for value in requested_fields):
             raise HTTPException(
                 status_code=400,

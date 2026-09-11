@@ -265,7 +265,8 @@ def test_real_order_api_freezes_graph_and_single_main_task(composite_requisition
             received = _receive(client, source, fact.json(), quantity=source.order_purpose_sheet_qty,
                                 idempotency_key=f"new-order-receipt-{index}")
             assert received.status_code == 200, received.text
-        created = client.post("/api/deliveries", json={"customer_id": 1, "delivery_date": "2026-09-10",
+        from app.core.time_contract import beijing_today
+        created = client.post("/api/deliveries", json={"customer_id": 1, "delivery_date": beijing_today().isoformat(),
             "items": [{"order_item_id": item_id, "delivered_quantity": 4}]})
         assert created.status_code == 201, created.text
         did = created.json()["id"]

@@ -36,7 +36,15 @@ def remaining_semi_allocation(reservation):
     return sheets, pieces
 
 
-def source_semi_reservations(db, order_id, source_ids, *, require_pending=False):
+def semi_source_has_pending_material(db, source_id):
+    return db.scalar(select(RequisitionItem.id).join(RequisitionItemBomSource,
+        RequisitionItemBomSource.requisition_item_id == RequisitionItem.id).where(
+            RequisitionItemBomSource.sales_order_item_bom_component_id == source_id,
+            RequisitionItem.status.in_({"有效", "supplier_requisition_created"}),
+            RequisitionItem.requisition_qty > 0).limit(1)) is not None
+
+
+def source_semi_reservations(db, order_id, source_ids, *, require_pending=False, review_transfer=False):
     """Keep the original reservation identity and its consumed history."""
     from app.models.warehouse_inventory import InventoryReservation, OrderItemSemiRequirement
     from app.models.product_bom import SalesOrderItemBomComponent
@@ -68,16 +76,12 @@ def source_semi_reservations(db, order_id, source_ids, *, require_pending=False)
                 or reservation.reserved_stock_quantity-reservation.consumed_stock_quantity-reservation.released_stock_quantity > lot.quantity_reserved):
             raise BomPlanError(f"半成品预占#{reservation.id}的原来源、单位、成本或批次余额不一致")
         if remaining_pieces:
-            pending = db.scalar(select(RequisitionItem.id).join(RequisitionItemBomSource,
-                RequisitionItemBomSource.requisition_item_id == RequisitionItem.id).where(
-                    RequisitionItemBomSource.sales_order_item_bom_component_id == source_id,
-                    RequisitionItem.status.in_({"有效", "supplier_requisition_created"}),
-                    RequisitionItem.requisition_qty > 0).limit(1))
+            pending = semi_source_has_pending_material(db, source_id)
             cancelled = db.scalar(select(RequisitionItem.id).join(RequisitionItemBomSource,
                 RequisitionItemBomSource.requisition_item_id == RequisitionItem.id).where(
                     RequisitionItemBomSource.sales_order_item_bom_component_id == source_id,
                     RequisitionItem.status.in_({"已取消", "已作废", "已撤回"})).limit(1))
-            if pending is None and (require_pending or cancelled is not None):
+            if not pending and (require_pending or cancelled is not None) and not review_transfer:
                 raise BomPlanError(f"半成品预占#{reservation.id}尚未用完，但原报料无后续收料；须先明确将剩余预占转给新报料，不能重复抵扣")
         reserved_by_lot[lot.id] += remaining_sheets
     for lot_id, quantity in reserved_by_lot.items():

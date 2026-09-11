@@ -37,6 +37,7 @@ class StockedHandoffReview:
     purchase_sources: tuple = ()
     material_sources: tuple = ()
     body_lots: tuple = ()
+    semi_transfers: tuple = ()
 
 
 def _closed_procurement(db, item):
@@ -109,10 +110,12 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
                                   .order_by(InventoryReservation.id)))
     active = [row for row in reservations
               if row.reserved_stock_quantity > row.consumed_stock_quantity + row.released_stock_quantity]
-    semi_rows, semi_lots = [], {}
+    semi_rows, semi_lots, semi_transfers = [], {}, ()
     if carry_materials:
-        from app.services.multilevel_bom_carried_material import source_semi_reservations
-        semi_rows = source_semi_reservations(db, item.id, material_sources, require_pending=True)
+        from app.services.multilevel_bom_carried_material import source_semi_reservations, semi_source_has_pending_material, remaining_semi_allocation
+        semi_rows = source_semi_reservations(db, item.id, material_sources, require_pending=True, review_transfer=True)
+        semi_transfers = tuple(row.id for row, requirement in semi_rows if remaining_semi_allocation(row)[0]
+            and not semi_source_has_pending_material(db, requirement.sales_order_item_bom_component_id))
         allowed_semi = {row.id for row, _ in semi_rows}
         active = [row for row in active if row.id not in allowed_semi]
         semi_lots = {row.inventory_lot_id: db.get(InventoryLot, row.inventory_lot_id) for row, _ in semi_rows}
@@ -229,11 +232,26 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
         pid, _ = stock_product_identity(db, lot)
         costs.append(dict(lot_id=lid, quantity=lot.quantity_available, amount=str(amount),
             lineage=lineage, unit=old_nodes[pid].unit, inventory_type="assembly_body"))
+    transfer_plan = {}
+    transfer_capacity = {(row.product_id, route.key): row.make_units*route.pieces_per_unit
+        for row in plan.products for route in new_nodes[row.product_id].routes}
+    for reservation, requirement in sorted(semi_rows, key=lambda pair: pair[0].id):
+        if reservation.id not in semi_transfers:
+            continue
+        source = db.get(SalesOrderItemBomComponent, requirement.sales_order_item_bom_component_id)
+        key = (source.component_product_id, requirement.component_type)
+        sheets, pieces = remaining_semi_allocation(reservation)
+        credit = min(pieces, transfer_capacity[key])
+        take = (credit+reservation.yield_factor-1)//reservation.yield_factor
+        transfer_capacity[key] -= credit
+        transfer_plan[reservation.id] = dict(reserve_sheets=take, credited_pieces=credit,
+            released_to_available_sheets=sheets-take)
     def facts(model, condition):
         return [_row(row) for row in db.scalars(select(model).where(condition).order_by(model.id))]
     payload = dict(schema=1, rule=rule.document, order=_row(order), item=_row(item), procurement=procurement,
         bodies=[_row(lot) for lot in body_lots.values()],
         semi_requirements=[_row(requirement) for _, requirement in semi_rows],
+        semi_transfers=transfer_plan,
         semi_lots=[dict(lot=_row(lot), detail=_row(lot.semi_finished_detail)) for lot in semi_lots.values()],
         reservations=[_row(row) for row in reservations], lots=[_row(lot) for lot in lots.values()],
         finished=[_row(lot.finished_detail) for lot in lots.values()], costs=costs, retain=retain,
@@ -261,6 +279,8 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
             unit=old_nodes[stock_product_identity(db, lot)[0]].unit)
             for lot in body_lots.values()],
         retained_semi=[dict(reservation_id=row.id, lot_id=row.inventory_lot_id,
+            action="transfer_to_new_source" if row.id in semi_transfers else "keep_original_source",
+            transfer=transfer_plan.get(row.id),
             location_id=semi_lots[row.inventory_lot_id].warehouse_location_id,
             reserved_sheets=row.reserved_stock_quantity, consumed_sheets=row.consumed_stock_quantity,
             released_sheets=row.released_stock_quantity, physical_pieces=row.credited_requirement_quantity,
@@ -293,7 +313,7 @@ def review_stocked_handoff(db, *, order_item_id, customer_id, target_locations, 
         picking_impact="按新冻结交付规则与明确批次拿货；切换前已送不变",
         product_versions={node.product_id:node.version for node in rule.proposed.graph.nodes},
         new_modes=asdict(rule.proposed.graph.modes) if rule.proposed.graph.modes else None)
-    return StockedHandoffReview(rule, active, lots, retain, assembly, document, preview, purchase_sources, material_sources, tuple(body_lots.values()))
+    return StockedHandoffReview(rule, active, lots, retain, assembly, document, preview, purchase_sources, material_sources, tuple(body_lots.values()), semi_transfers)
 
 
 def _result(db, row):
@@ -377,7 +397,7 @@ def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, ex
             from app.services.multilevel_bom_orders import read_compiled_order_bom
             from app.services.multilevel_bom_source_handoffs import current_source_handoffs
             current_source_handoffs(db, read_compiled_order_bom(db, item.id))
-            if review.material_sources:
+            if review.material_sources and not review.semi_transfers:
                 from app.services.multilevel_bom_carried_material import carried_material_pieces, carried_semi_pieces
                 carried_material_pieces(db, read_compiled_order_bom(db, item.id))
                 carried_semi_pieces(db, read_compiled_order_bom(db, item.id))
@@ -430,6 +450,20 @@ def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, ex
             _movement(db, lot=lot, movement_type="reserve", quantity=quantity, before=before,
                 operator_id=actor.id, reason="管理员在制BOM交接绑定原批次", idempotency_key=key,
                 reservation_id=reservation.id, related_order_id=order.id, related_order_item_id=item.id)
+        transferred_semi_ids = []
+        if review.semi_transfers:
+            from app.services.multilevel_bom_semi_transfer import transfer_semi_remainders
+            from app.services.multilevel_bom_orders import read_compiled_order_bom
+            eligible = defaultdict(int)
+            for lid, quantity in review.retain.items():
+                eligible[review.lots[lid].finished_detail.product_id] += quantity
+            transferred_semi_ids = transfer_semi_remainders(db, compiled=read_compiled_order_bom(db, item.id),
+                reservation_ids=review.semi_transfers, eligible_stock=eligible,
+                expected_allocations={entry["reservation_id"]: entry["transfer"] for entry in review.preview["retained_semi"] if entry["transfer"]},
+                actor=actor, operation_key=operation_key)
+            from app.services.multilevel_bom_carried_material import carried_material_pieces, carried_semi_pieces
+            carried_material_pieces(db, read_compiled_order_bom(db, item.id))
+            carried_semi_pieces(db, read_compiled_order_bom(db, item.id))
         assemblies = ()
         if review.assembly.steps:
             from app.services.multilevel_bom_inventory import assemble_order_inventory
@@ -459,6 +493,7 @@ def execute_stocked_handoff(db, *, order_item_id, customer_id, reviewed_hash, ex
             details=dict(rule_revision_id=row.id, review_hash=reviewed_hash, request_hash=request_hash,
                 operation_key=operation_key, preview=review.preview, original_execution=json.loads(review.document),
                 current_source_ids=[source.id for source in review.rule.proposed.snapshots],
+                transferred_semi_reservation_ids=transferred_semi_ids,
                 assembly_ids=[assembly.id for assembly in assemblies]))
         db.flush()
         return _result(db, row)

@@ -187,7 +187,7 @@ class App:
         name = safe_name(entry['package'])
         if '/' in name:
             raise ValueError('发布文件名不合法')
-        if messagebox.askyesno('更新', '将验证NAS发布包，先完整备份再更新；期间ERP会短暂停用。继续？'):
+        if messagebox.askyesno('更新', '将验证NAS发布包，先完整备份再更新；备份和更新期间ERP暂停使用。继续？'):
             self.run('验证、备份并更新', lambda: self.manager.update(settings[1] / 'releases' / name, *settings))
 
     def rollback(self):

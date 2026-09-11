@@ -1,6 +1,7 @@
 """Build on the development PC. Runtime includes installed dependencies; no business data."""
 import argparse
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -22,7 +23,16 @@ def main():
     parser.add_argument('--revision', required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--package-only', action='store_true', help='仅构建签名更新包，不重复生成安装器')
+    parser.add_argument('--upgrade-from-revision')
+    parser.add_argument('--rollback-package-sha256')
     args = parser.parse_args()
+    migration = None
+    if args.upgrade_from_revision or args.rollback_package_sha256:
+        if (not args.upgrade_from_revision or not args.rollback_package_sha256
+                or not re.fullmatch(r'[0-9a-f]{64}', args.rollback_package_sha256)):
+            raise ValueError('跨版本包必须同时指定起始revision及已验证可回退程序包SHA256')
+        migration = {'policy': 'preserve_existing_facts_v1', 'from_revision': args.upgrade_from_revision,
+                     'rollback_package_sha256': args.rollback_package_sha256}
     root, output = args.repo.resolve(), args.output.resolve()
     if output.exists():
         raise ValueError('构建输出必须是新目录')
@@ -62,7 +72,7 @@ def main():
     code_sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
     package = output / 'release.zip'
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
-                            'revision': args.revision, 'git_sha': code_sha}, key)
+                            'revision': args.revision, 'git_sha': code_sha, 'migration': migration}, key)
     if args.package_only:
         write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,
                    'release_sha256': sha(package), 'installer_built': False})

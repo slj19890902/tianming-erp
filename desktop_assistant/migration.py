@@ -52,13 +52,16 @@ def files(root):
     return result
 
 
-def run_migration(release, shared, revision, log):
+def run_migration(release, shared, revision, log, environment=None):
     # No inherited ERP paths, credentials, .env or Python configuration.
     keep={'SYSTEMROOT','WINDIR','PATH','PATHEXT','COMSPEC','TEMP','TMP'}
     env={key:value for key,value in os.environ.items() if key.upper() in keep}
     env.update(ERP_ENVIRONMENT='test', ERP_SECRET_KEY='isolated-desktop-migration-rehearsal-only',
         ERP_DATABASE_PATH=str(shared/'data/carton_erp.sqlite3'),
         ERP_BACKUP_DIR=str(shared/'rehearsal-backups'), PYTHONPATH=str(release), PYTHONUTF8='1')
+    if environment is not None:
+        env.update(environment)
+        env['ERP_DATABASE_PATH'] = str(shared/'data/carton_erp.sqlite3')
     with log.open('wb') as output:
         result=subprocess.run([str(release/'runtime/python.exe'),'-X','utf8','-m','alembic','upgrade',revision],
             cwd=release,env=env,stdout=output,stderr=output,timeout=600,creationflags=subprocess.CREATE_NO_WINDOW)
@@ -97,6 +100,9 @@ def rehearse(manager, package):
             raise ValueError('隔离升级未达到发布包目标版本')
         if after!=before:
             raise ValueError('升级改变既有业务事实，必须专项评审，未修改托管数据库')
+        if any(count for table, count in after_info['counts'].items()
+               if table not in before_info['counts'] and not table.startswith('sqlite_')):
+            raise ValueError('升级新增了数据，必须专项评审')
         if files(shared)!=before_files:
             raise ValueError('升级改变附件或配置，必须专项评审')
         if facts(database)!=before or files(source)!=before_files:

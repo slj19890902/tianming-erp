@@ -71,6 +71,19 @@ def safe_name(name: str) -> str:
     return name
 
 
+def signed_release_manifest(archive: Path, public_key: bytes) -> dict:
+    with zipfile.ZipFile(archive) as zipped:
+        raw = zipped.read('manifest.json')
+        key = serialization.load_pem_public_key(public_key)
+        if not isinstance(key, Ed25519PublicKey):
+            raise ValueError('发布公钥类型错误')
+        key.verify(zipped.read('manifest.sig'), raw)
+        manifest = json.loads(raw)
+        if manifest.get('type') != 'tianming.release.v1':
+            raise ValueError('不是程序发布包')
+        return manifest
+
+
 def extract_verified(archive: Path, target: Path, public_key: bytes | None = None) -> dict:
     """New directory only. For release archives, verify publisher BEFORE extraction."""
     if target.exists():

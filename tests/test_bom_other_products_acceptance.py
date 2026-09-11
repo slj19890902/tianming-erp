@@ -57,7 +57,7 @@ def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_htt
     rows = [{**{key: value for key, value in row.items() if key in ProductBOMComponentPayload.model_fields},
              "inventory_relation": "accompany"} for row in original.json()["components"]]
     response = client.put(f"/api/products/{pid}/bom", json={"expected_version": root.version,
-        "inventory_mode": "manufactured", "material_mode": "expand_children",
+        "inventory_mode": "separate" if pid == 3793 else "manufactured", "material_mode": "expand_children",
         "delivery_mode": "parent" if root.composite_fulfillment_mode == "parent_delivery" else "components",
         "components": rows})
     assert response.status_code == 200, response.text
@@ -72,14 +72,16 @@ def test_actual_supply_preserved_through_admin_save_reopen_and_order(factory_htt
         "quantity": 2, "unit_price": "100"}]})
     if (pid in (3585, 3586) and root.mold_tool_id is None and created.status_code == 400
             and created.json().get("detail") == "第1个模切组件必须选择启用中的模具"):
-        pytest.xfail("只读导出缺少本体模具身份，已请求工厂资料；保存通过但新下单及全链未通过")
+        assert root.is_active
+        pytest.xfail("老板确认保持启用；00096两副刀模待管理员录入，80012500模切产出待首产核实；不伪造正式模具身份")
     assert created.status_code == 201, created.text
     iid = created.json()["items"][0]["id"]
     db.expire_all()
     compiled = read_compiled_order_bom(db, iid)
     assert all(edge.relation == "accompany" for edge in compiled.graph.edges)
+    assert db.get(Product, pid).is_virtual_composite_parent is (pid == 3793)
     assert {n.product_id: n.source for n in compiled.graph.nodes} == {
-        p: "purchased" if source == "external_purchase" else "manufactured" for p, source in before.items()}
+        p: "separate" if p == 3793 else "purchased" if source == "external_purchase" else "manufactured" for p, source in before.items()}
     assert {p: db.get(Product, p).supply_mode for p in identities} == before
     assert db.get(Product, 3494).is_active is other_product_active
     if any(source == "external_purchase" for source in before.values()):
@@ -112,8 +114,8 @@ def paper_receipt_flow(client, db, compiled, iid, pid, *, occupy_released=False,
     grouped = defaultdict(list)
     by_snapshot = {}
     for row in requirements:
-        if pid == 3793 and row["product_id"] == 3793 and not row["material_id"] and not row["report_length_mm"]:
-            pytest.xfail("父件3793缺少自身材质/供应商/开料尺寸，已请求真实资料；新单通过但全链未通过")
+        if pid == 3793:
+            assert row["product_id"] != 3793, "组合名称没有独立本体，不得产生父件报料"
         assert row["supplier_name"] and row["material_id"], row
         assert row["report_length_mm"] and row["report_width_mm"], row
         by_snapshot[row["snapshot_id"]] = row

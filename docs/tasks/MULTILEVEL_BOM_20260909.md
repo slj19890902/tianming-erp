@@ -1,3 +1,5 @@
+> 最新三款业务确认及旧缺口覆盖见 docs/reports/BOM_OWNER_THREE_PRODUCTS_20260911.md；00204保持启用。
+
 # MULTILEVEL-BOM-20260909
 
 当前执行清单以 [家庭候选收口计划](../reports/BOM_HOME_COMPLETION_PLAN_20260911.md) 为准。下方逐时记录保留审计用途，不代表当前阻塞。2026-09-11再次核验7份PDF哈希全部匹配，撤销重复补PDF请求；正式v350整合中，尚不可部署。

@@ -327,8 +327,12 @@ def estimate_from_snapshot(lot: InventoryLot) -> InventoryCostEstimate | None:
     unit_cost = _positive_decimal(lot.estimated_unit_cost_snapshot)
     square_price = _positive_decimal(lot.estimated_square_price_snapshot)
     area = _positive_decimal(lot.estimated_cost_area_m2_snapshot)
-    if unit_cost is None or square_price is None or area is None:
+    if unit_cost is None:
         return None
+    if (square_price is None or area is None) and lot.cost_snapshot_source != "inventory_confirmed_material":
+        return None
+    square_price = square_price or Decimal(0)
+    area = area or Decimal(0)
     try:
         detail = json.loads(lot.cost_snapshot_detail_json or "{}")
     except (TypeError, json.JSONDecodeError):

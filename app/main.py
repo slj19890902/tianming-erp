@@ -425,6 +425,9 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/customer-statement-check.html" for route in application.routes):
+        customer_check_path = Path(__file__).resolve().parents[1] / "static" / "customer-statement-check.html"
+        application.add_api_route("/customer-statement-check.html", lambda: FileResponse(customer_check_path, headers={"Cache-Control": "no-store"}), methods=["GET"], include_in_schema=False)
     if not any(route.path == "/quotation-print.html" for route in application.routes):
         quotation_print_path = (
             Path(__file__).resolve().parents[1]

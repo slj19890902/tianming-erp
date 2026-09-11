@@ -1,0 +1,16 @@
+{
+  "database": "D:\\纸箱厂erp软件搭建\\data\\carton_erp.sqlite3",
+  "applied": true,
+  "backup": {
+    "path": "D:\\纸箱厂erp软件搭建\\data\\backups\\carton_erp_before_cost_unit_fix_20260911_1327.sqlite3",
+    "sha256": "fd7b32003d4f9f00792df91df81a7afb9ccd892085b1d4e8047fc76cba5a87f6",
+    "integrity": "ok",
+    "foreign_keys": 0
+  },
+  "result": {
+    "adopted": 10,
+    "missing": 8,
+    "fingerprint": "5bdb1690f960cc96ccd6e23bacf535a3a9dfe89f9dbb439d2dedf3905293f636",
+    "batch_id": "warehouse-cost-unit-fix-20260911-v339"
+  }
+}

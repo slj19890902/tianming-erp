@@ -1,0 +1,616 @@
+{
+  "database": "D:\\纸箱厂erp软件搭建\\data\\carton_erp.sqlite3",
+  "applied": false,
+  "backup": null,
+  "result": {
+    "algorithm": "inventory-confirmed-material-cny-v1",
+    "already_priced": 294,
+    "proposals": [
+      {
+        "lot_id": 156,
+        "version": 2,
+        "code": "23201125",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 19,
+        "before": {
+          "estimated_unit_cost_snapshot": "0.0407",
+          "estimated_square_price_snapshot": "3.2800",
+          "estimated_cost_area_m2_snapshot": "0.012402",
+          "cost_snapshot_source": "material_quote_area",
+          "cost_snapshot_detail_json": "{\"base_square_price\": 3.28, \"components\": [{\"area_m2\": \"0.012402\", \"component\": \"whole\", \"length_mm\": \"219.50\", \"pieces_per_box\": 1, \"width_mm\": \"56.50\"}], \"estimate_basis\": \"current_material_quote_not_actual_cash_cost\", \"flute_delta\": 0.0, \"flute_rule_id\": 12, \"flute_type\": \"AB\", \"formula\": \"length_mm * width_mm / 1,000,000 * current_effective_material_square_price\", \"inventory_type\": \"finished\", \"material_code\": \"N717N\", \"material_id\": 140, \"material_price_source\": null, \"material_quote_date\": \"2023-09-08\", \"price_unit\": \"元/㎡\", \"supplier_name\": \"昆山鸣朋\"}",
+          "cost_snapshot_at": "2026-07-29 07:18:31.694968"
+        },
+        "unit_cost": "4.0226",
+        "square_price": "3.2800",
+        "area_m2": "1.226400",
+        "source": "inventory_confirmed_material",
+        "evidence": {
+          "inventory_type": "finished",
+          "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+          "estimate_basis": "stocktake_confirmed_current_material",
+          "material_id": 140,
+          "material_code": "N717N",
+          "supplier_name": "昆山鸣朋",
+          "price_unit": "元/㎡",
+          "material_quote_date": "2023-09-08",
+          "material_price_source": null,
+          "base_square_price": 3.28,
+          "flute_delta": 0.0,
+          "flute_rule_id": 12,
+          "flute_type": "AB",
+          "components": [
+            {
+              "component": "whole",
+              "length_mm": "2190",
+              "width_mm": "560",
+              "area_m2": "1.226400",
+              "pieces_per_box": 1
+            }
+          ],
+          "algorithm_version": "inventory-confirmed-material-cny-v1",
+          "formula_version": "tm_a1_20260729_v1",
+          "currency": "CNY",
+          "tax_included": true,
+          "source_tax_included": true,
+          "source_tax_rate": "0.130000",
+          "material_version": 2,
+          "product_id": 1507,
+          "product_version": 1
+        }
+      },
+      {
+        "lot_id": 185,
+        "version": 6,
+        "code": "21302012",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 192,
+        "before": {
+          "estimated_unit_cost_snapshot": "0.0109",
+          "estimated_square_price_snapshot": "1.7600",
+          "estimated_cost_area_m2_snapshot": "0.006206",
+          "cost_snapshot_source": "material_quote_area",
+          "cost_snapshot_detail_json": "{\"base_square_price\": 1.71, \"components\": [{\"area_m2\": \"0.006206\", \"component\": \"whole\", \"length_mm\": \"58.00\", \"pieces_per_box\": 1, \"width_mm\": \"107.00\"}], \"estimate_basis\": \"current_material_quote_not_actual_cash_cost\", \"flute_delta\": 0.05, \"flute_rule_id\": 4, \"flute_type\": \"A\", \"formula\": \"length_mm * width_mm / 1,000,000 * current_effective_material_square_price\", \"inventory_type\": \"finished\", \"material_code\": \"A6A\", \"material_id\": 48, \"material_price_source\": null, \"material_quote_date\": null, \"price_unit\": \"元/㎡\", \"supplier_name\": \"昆山鸣朋\"}",
+          "cost_snapshot_at": "2026-07-29 08:05:47.660308"
+        },
+        "unit_cost": "0.8746",
+        "square_price": "1.3000",
+        "area_m2": "0.672800",
+        "source": "inventory_confirmed_material",
+        "evidence": {
+          "inventory_type": "finished",
+          "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+          "estimate_basis": "stocktake_confirmed_current_material",
+          "material_id": 421,
+          "material_code": "A5A",
+          "supplier_name": "胜源",
+          "price_unit": "元/㎡",
+          "material_quote_date": null,
+          "material_price_source": "人工填写",
+          "base_square_price": 1.3,
+          "flute_delta": 0.0,
+          "flute_rule_id": null,
+          "flute_type": "B",
+          "components": [
+            {
+              "component": "whole",
+              "length_mm": "580",
+              "width_mm": "1160",
+              "area_m2": "0.672800",
+              "pieces_per_box": 1
+            }
+          ],
+          "algorithm_version": "inventory-confirmed-material-cny-v1",
+          "formula_version": "saved-report-mm-v1",
+          "currency": "CNY",
+          "tax_included": true,
+          "source_tax_included": true,
+          "source_tax_rate": "0.130000",
+          "material_version": 2,
+          "product_id": 92,
+          "product_version": 2
+        }
+      },
+      {
+        "lot_id": 538,
+        "version": 1,
+        "code": "21311308",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 40,
+        "before": {
+          "estimated_unit_cost_snapshot": "0.0412",
+          "estimated_square_price_snapshot": "3.6900",
+          "estimated_cost_area_m2_snapshot": "0.011174",
+          "cost_snapshot_source": "material_quote_area",
+          "cost_snapshot_detail_json": "{\"base_square_price\": 3.69, \"components\": [{\"area_m2\": \"0.011174\", \"component\": \"whole\", \"length_mm\": \"158.50\", \"pieces_per_box\": 1, \"width_mm\": \"70.50\"}], \"estimate_basis\": \"current_material_quote_not_actual_cash_cost\", \"flute_delta\": 0.0, \"flute_rule_id\": 12, \"flute_type\": \"AB\", \"formula\": \"length_mm * width_mm / 1,000,000 * current_effective_material_square_price\", \"inventory_type\": \"finished\", \"material_code\": \"G719N\", \"material_id\": 390, \"material_price_source\": \"人工填写\", \"material_quote_date\": null, \"price_unit\": \"元/㎡\", \"supplier_name\": \"昆山鸣朋\"}",
+          "cost_snapshot_at": "2026-07-21 08:23:25.445464"
+        },
+        "unit_cost": "7.5785",
+        "square_price": "3.4700",
+        "area_m2": "2.184000",
+        "source": "inventory_confirmed_material",
+        "evidence": {
+          "inventory_type": "finished",
+          "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+          "estimate_basis": "stocktake_confirmed_current_material",
+          "material_id": 390,
+          "material_code": "G719N",
+          "supplier_name": "昆山鸣朋",
+          "price_unit": "元/㎡",
+          "material_quote_date": null,
+          "material_price_source": "人工填写",
+          "base_square_price": 3.47,
+          "flute_delta": 0.0,
+          "flute_rule_id": 12,
+          "flute_type": "AB",
+          "components": [
+            {
+              "component": "whole",
+              "length_mm": "3120",
+              "width_mm": "700",
+              "area_m2": "2.184000",
+              "pieces_per_box": 1
+            }
+          ],
+          "algorithm_version": "inventory-confirmed-material-cny-v1",
+          "formula_version": "tm_a1_20260729_v1",
+          "currency": "CNY",
+          "tax_included": true,
+          "source_tax_included": true,
+          "source_tax_rate": "0.130000",
+          "material_version": 3,
+          "product_id": 1954,
+          "product_version": 1
+        }
+      },
+      {
+        "lot_id": 579,
+        "version": 2,
+        "code": "22000006",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 79,
+        "before": {
+          "estimated_unit_cost_snapshot": "0.0385",
+          "estimated_square_price_snapshot": "2.3600",
+          "estimated_cost_area_m2_snapshot": "0.016307",
+          "cost_snapshot_source": "material_quote_area",
+          "cost_snapshot_detail_json": "{\"base_square_price\": 2.36, \"components\": [{\"area_m2\": \"0.016307\", \"component\": \"whole\", \"length_mm\": \"214.00\", \"pieces_per_box\": 1, \"width_mm\": \"76.20\"}], \"estimate_basis\": \"current_material_quote_not_actual_cash_cost\", \"flute_delta\": 0.0, \"flute_rule_id\": 12, \"flute_type\": \"AB\", \"formula\": \"length_mm * width_mm / 1,000,000 * current_effective_material_square_price\", \"inventory_type\": \"finished\", \"material_code\": \"K618A\", \"material_id\": 123, \"material_price_source\": null, \"material_quote_date\": \"2023-09-08\", \"price_unit\": \"元/㎡\", \"supplier_name\": \"昆山鸣朋\"}",
+          "cost_snapshot_at": "2026-07-22 05:11:17.290672"
+        },
+        "unit_cost": "3.5293",
+        "square_price": "2.1700",
+        "area_m2": "1.626400",
+        "source": "inventory_confirmed_material",
+        "evidence": {
+          "inventory_type": "finished",
+          "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+          "estimate_basis": "stocktake_confirmed_current_material",
+          "material_id": 123,
+          "material_code": "K618A",
+          "supplier_name": "昆山鸣朋",
+          "price_unit": "元/㎡",
+          "material_quote_date": "2023-09-08",
+          "material_price_source": null,
+          "base_square_price": 2.17,
+          "flute_delta": 0.0,
+          "flute_rule_id": 12,
+          "flute_type": "AB",
+          "components": [
+            {
+              "component": "whole",
+              "length_mm": "2140",
+              "width_mm": "760",
+              "area_m2": "1.626400",
+              "pieces_per_box": 1
+            }
+          ],
+          "algorithm_version": "inventory-confirmed-material-cny-v1",
+          "formula_version": "tm_a1_20260729_v1",
+          "currency": "CNY",
+          "tax_included": true,
+          "source_tax_included": true,
+          "source_tax_rate": "0.130000",
+          "material_version": 3,
+          "product_id": 22,
+          "product_version": 1
+        }
+      },
+      {
+        "lot_id": 581,
+        "version": 1,
+        "code": "22000006",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 2130,
+        "before": {
+          "estimated_unit_cost_snapshot": "0.0385",
+          "estimated_square_price_snapshot": "2.3600",
+          "estimated_cost_area_m2_snapshot": "0.016307",
+          "cost_snapshot_source": "material_quote_area",
+          "cost_snapshot_detail_json": "{\"base_square_price\": 2.36, \"components\": [{\"area_m2\": \"0.016307\", \"component\": \"whole\", \"length_mm\": \"214.00\", \"pieces_per_box\": 1, \"width_mm\": \"76.20\"}], \"estimate_basis\": \"current_material_quote_not_actual_cash_cost\", \"flute_delta\": 0.0, \"flute_rule_id\": 12, \"flute_type\": \"AB\", \"formula\": \"length_mm * width_mm / 1,000,000 * current_effective_material_square_price\", \"inventory_type\": \"finished\", \"material_code\": \"K618A\", \"material_id\": 123, \"material_price_source\": null, \"material_quote_date\": \"2023-09-08\", \"price_unit\": \"元/㎡\", \"supplier_name\": \"昆山鸣朋\"}",
+          "cost_snapshot_at": "2026-07-22 05:11:36.763134"
+        },
+        "unit_cost": "3.5293",
+        "square_price": "2.1700",
+        "area_m2": "1.626400",
+        "source": "inventory_confirmed_material",
+        "evidence": {
+          "inventory_type": "finished",
+          "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+          "estimate_basis": "stocktake_confirmed_current_material",
+          "material_id": 123,
+          "material_code": "K618A",
+          "supplier_name": "昆山鸣朋",
+          "price_unit": "元/㎡",
+          "material_quote_date": "2023-09-08",
+          "material_price_source": null,
+          "base_square_price": 2.17,
+          "flute_delta": 0.0,
+          "flute_rule_id": 12,
+          "flute_type": "AB",
+          "components": [
+            {
+              "component": "whole",
+              "length_mm": "2140",
+              "width_mm": "760",
+              "area_m2": "1.626400",
+              "pieces_per_box": 1
+            }
+          ],
+          "algorithm_version": "inventory-confirmed-material-cny-v1",
+          "formula_version": "tm_a1_20260729_v1",
+          "currency": "CNY",
+          "tax_included": true,
+          "source_tax_included": true,
+          "source_tax_rate": "0.130000",
+          "material_version": 3,
+          "product_id": 22,
+          "product_version": 1
+        }
+      },
+      {
+        "lot_id": 583,
+        "version": 1,
+        "code": "22000005",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 250,
+        "before": {
+          "estimated_unit_cost_snapshot": "0.0372",
+          "estimated_square_price_snapshot": "2.3600",
+          "estimated_cost_area_m2_snapshot": "0.015772",
+          "cost_snapshot_source": "material_quote_area",
+          "cost_snapshot_detail_json": "{\"base_square_price\": 2.36, \"components\": [{\"area_m2\": \"0.015772\", \"component\": \"whole\", \"length_mm\": \"214.00\", \"pieces_per_box\": 1, \"width_mm\": \"73.70\"}], \"estimate_basis\": \"current_material_quote_not_actual_cash_cost\", \"flute_delta\": 0.0, \"flute_rule_id\": 12, \"flute_type\": \"AB\", \"formula\": \"length_mm * width_mm / 1,000,000 * current_effective_material_square_price\", \"inventory_type\": \"finished\", \"material_code\": \"K618A\", \"material_id\": 123, \"material_price_source\": null, \"material_quote_date\": \"2023-09-08\", \"price_unit\": \"元/㎡\", \"supplier_name\": \"昆山鸣朋\"}",
+          "cost_snapshot_at": "2026-07-23 06:08:40.890892"
+        },
+        "unit_cost": "3.4085",
+        "square_price": "2.1700",
+        "area_m2": "1.570760",
+        "source": "inventory_confirmed_material",
+        "evidence": {
+          "inventory_type": "finished",
+          "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+          "estimate_basis": "stocktake_confirmed_current_material",
+          "material_id": 123,
+          "material_code": "K618A",
+          "supplier_name": "昆山鸣朋",
+          "price_unit": "元/㎡",
+          "material_quote_date": "2023-09-08",
+          "material_price_source": null,
+          "base_square_price": 2.17,
+          "flute_delta": 0.0,
+          "flute_rule_id": 12,
+          "flute_type": "AB",
+          "components": [
+            {
+              "component": "whole",
+              "length_mm": "2140",
+              "width_mm": "734",
+              "area_m2": "1.570760",
+              "pieces_per_box": 1
+            }
+          ],
+          "algorithm_version": "inventory-confirmed-material-cny-v1",
+          "formula_version": "tm_a1_20260729_v1",
+          "currency": "CNY",
+          "tax_included": true,
+          "source_tax_included": true,
+          "source_tax_rate": "0.130000",
+          "material_version": 3,
+          "product_id": 21,
+          "product_version": 1
+        }
+      },
+      {
+        "lot_id": 584,
+        "version": 1,
+        "code": "22000005",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 265,
+        "before": {
+          "estimated_unit_cost_snapshot": "0.0372",
+          "estimated_square_price_snapshot": "2.3600",
+          "estimated_cost_area_m2_snapshot": "0.015772",
+          "cost_snapshot_source": "material_quote_area",
+          "cost_snapshot_detail_json": "{\"base_square_price\": 2.36, \"components\": [{\"area_m2\": \"0.015772\", \"component\": \"whole\", \"length_mm\": \"214.00\", \"pieces_per_box\": 1, \"width_mm\": \"73.70\"}], \"estimate_basis\": \"current_material_quote_not_actual_cash_cost\", \"flute_delta\": 0.0, \"flute_rule_id\": 12, \"flute_type\": \"AB\", \"formula\": \"length_mm * width_mm / 1,000,000 * current_effective_material_square_price\", \"inventory_type\": \"finished\", \"material_code\": \"K618A\", \"material_id\": 123, \"material_price_source\": null, \"material_quote_date\": \"2023-09-08\", \"price_unit\": \"元/㎡\", \"supplier_name\": \"昆山鸣朋\"}",
+          "cost_snapshot_at": "2026-07-22 05:10:39.201221"
+        },
+        "unit_cost": "3.4085",
+        "square_price": "2.1700",
+        "area_m2": "1.570760",
+        "source": "inventory_confirmed_material",
+        "evidence": {
+          "inventory_type": "finished",
+          "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+          "estimate_basis": "stocktake_confirmed_current_material",
+          "material_id": 123,
+          "material_code": "K618A",
+          "supplier_name": "昆山鸣朋",
+          "price_unit": "元/㎡",
+          "material_quote_date": "2023-09-08",
+          "material_price_source": null,
+          "base_square_price": 2.17,
+          "flute_delta": 0.0,
+          "flute_rule_id": 12,
+          "flute_type": "AB",
+          "components": [
+            {
+              "component": "whole",
+              "length_mm": "2140",
+              "width_mm": "734",
+              "area_m2": "1.570760",
+              "pieces_per_box": 1
+            }
+          ],
+          "algorithm_version": "inventory-confirmed-material-cny-v1",
+          "formula_version": "tm_a1_20260729_v1",
+          "currency": "CNY",
+          "tax_included": true,
+          "source_tax_included": true,
+          "source_tax_rate": "0.130000",
+          "material_version": 3,
+          "product_id": 21,
+          "product_version": 1
+        }
+      },
+      {
+        "lot_id": 585,
+        "version": 1,
+        "code": "22000005",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 140,
+        "before": {
+          "estimated_unit_cost_snapshot": "0.0372",
+          "estimated_square_price_snapshot": "2.3600",
+          "estimated_cost_area_m2_snapshot": "0.015772",
+          "cost_snapshot_source": "material_quote_area",
+          "cost_snapshot_detail_json": "{\"base_square_price\": 2.36, \"components\": [{\"area_m2\": \"0.015772\", \"component\": \"whole\", \"length_mm\": \"214.00\", \"pieces_per_box\": 1, \"width_mm\": \"73.70\"}], \"estimate_basis\": \"current_material_quote_not_actual_cash_cost\", \"flute_delta\": 0.0, \"flute_rule_id\": 12, \"flute_type\": \"AB\", \"formula\": \"length_mm * width_mm / 1,000,000 * current_effective_material_square_price\", \"inventory_type\": \"finished\", \"material_code\": \"K618A\", \"material_id\": 123, \"material_price_source\": null, \"material_quote_date\": \"2023-09-08\", \"price_unit\": \"元/㎡\", \"supplier_name\": \"昆山鸣朋\"}",
+          "cost_snapshot_at": "2026-07-22 05:10:22.798608"
+        },
+        "unit_cost": "3.4085",
+        "square_price": "2.1700",
+        "area_m2": "1.570760",
+        "source": "inventory_confirmed_material",
+        "evidence": {
+          "inventory_type": "finished",
+          "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+          "estimate_basis": "stocktake_confirmed_current_material",
+          "material_id": 123,
+          "material_code": "K618A",
+          "supplier_name": "昆山鸣朋",
+          "price_unit": "元/㎡",
+          "material_quote_date": "2023-09-08",
+          "material_price_source": null,
+          "base_square_price": 2.17,
+          "flute_delta": 0.0,
+          "flute_rule_id": 12,
+          "flute_type": "AB",
+          "components": [
+            {
+              "component": "whole",
+              "length_mm": "2140",
+              "width_mm": "734",
+              "area_m2": "1.570760",
+              "pieces_per_box": 1
+            }
+          ],
+          "algorithm_version": "inventory-confirmed-material-cny-v1",
+          "formula_version": "tm_a1_20260729_v1",
+          "currency": "CNY",
+          "tax_included": true,
+          "source_tax_included": true,
+          "source_tax_rate": "0.130000",
+          "material_version": 3,
+          "product_id": 21,
+          "product_version": 1
+        }
+      },
+      {
+        "lot_id": 619,
+        "version": 1,
+        "code": "23201123",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 1,
+        "before": {
+          "estimated_unit_cost_snapshot": "0.1160",
+          "estimated_square_price_snapshot": "3.2800",
+          "estimated_cost_area_m2_snapshot": "0.035360",
+          "cost_snapshot_source": "material_quote_area",
+          "cost_snapshot_detail_json": "{\"base_square_price\": 3.28, \"components\": [{\"area_m2\": \"0.035360\", \"component\": \"whole\", \"length_mm\": \"208.00\", \"pieces_per_box\": 1, \"width_mm\": \"170.00\"}], \"estimate_basis\": \"current_material_quote_not_actual_cash_cost\", \"flute_delta\": 0.0, \"flute_rule_id\": 12, \"flute_type\": \"AB\", \"formula\": \"length_mm * width_mm / 1,000,000 * current_effective_material_square_price\", \"inventory_type\": \"finished\", \"material_code\": \"N717N\", \"material_id\": 140, \"material_price_source\": null, \"material_quote_date\": \"2023-09-08\", \"price_unit\": \"元/㎡\", \"supplier_name\": \"昆山鸣朋\"}",
+          "cost_snapshot_at": "2026-07-29 07:22:56.804271"
+        },
+        "unit_cost": "3.7343",
+        "square_price": "3.2800",
+        "area_m2": "1.138500",
+        "source": "inventory_confirmed_material",
+        "evidence": {
+          "inventory_type": "finished",
+          "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+          "estimate_basis": "stocktake_confirmed_current_material",
+          "material_id": 140,
+          "material_code": "N717N",
+          "supplier_name": "昆山鸣朋",
+          "price_unit": "元/㎡",
+          "material_quote_date": "2023-09-08",
+          "material_price_source": null,
+          "base_square_price": 3.28,
+          "flute_delta": 0.0,
+          "flute_rule_id": 12,
+          "flute_type": "AB",
+          "components": [
+            {
+              "component": "whole",
+              "length_mm": "2070",
+              "width_mm": "550",
+              "area_m2": "1.138500",
+              "pieces_per_box": 1
+            }
+          ],
+          "algorithm_version": "inventory-confirmed-material-cny-v1",
+          "formula_version": "tm_a1_20260729_v1",
+          "currency": "CNY",
+          "tax_included": true,
+          "source_tax_included": true,
+          "source_tax_rate": "0.130000",
+          "material_version": 2,
+          "product_id": 1397,
+          "product_version": 1
+        }
+      },
+      {
+        "lot_id": 622,
+        "version": 1,
+        "code": "22901005",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 30,
+        "before": {
+          "estimated_unit_cost_snapshot": "0.0273",
+          "estimated_square_price_snapshot": "2.9900",
+          "estimated_cost_area_m2_snapshot": "0.009135",
+          "cost_snapshot_source": "material_quote_area",
+          "cost_snapshot_detail_json": "{\"base_square_price\": 2.99, \"components\": [{\"area_m2\": \"0.009135\", \"component\": \"whole\", \"length_mm\": \"126.00\", \"pieces_per_box\": 1, \"width_mm\": \"72.50\"}], \"estimate_basis\": \"current_material_quote_not_actual_cash_cost\", \"flute_delta\": 0.0, \"flute_rule_id\": 12, \"flute_type\": \"AB\", \"formula\": \"length_mm * width_mm / 1,000,000 * current_effective_material_square_price\", \"inventory_type\": \"finished\", \"material_code\": \"N817K\", \"material_id\": 144, \"material_price_source\": null, \"material_quote_date\": \"2023-09-08\", \"price_unit\": \"元/㎡\", \"supplier_name\": \"昆山鸣朋\"}",
+          "cost_snapshot_at": "2026-07-29 07:18:47.564776"
+        },
+        "unit_cost": "2.4345",
+        "square_price": "2.6900",
+        "area_m2": "0.905000",
+        "source": "inventory_confirmed_material",
+        "evidence": {
+          "inventory_type": "finished",
+          "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
+          "estimate_basis": "stocktake_confirmed_current_material",
+          "material_id": 144,
+          "material_code": "N817K",
+          "supplier_name": "昆山鸣朋",
+          "price_unit": "元/㎡",
+          "material_quote_date": "2023-09-08",
+          "material_price_source": null,
+          "base_square_price": 2.69,
+          "flute_delta": 0.0,
+          "flute_rule_id": 12,
+          "flute_type": "AB",
+          "components": [
+            {
+              "component": "whole",
+              "length_mm": "1250",
+              "width_mm": "724",
+              "area_m2": "0.905000",
+              "pieces_per_box": 1
+            }
+          ],
+          "algorithm_version": "inventory-confirmed-material-cny-v1",
+          "formula_version": "tm_a1_20260729_v1",
+          "currency": "CNY",
+          "tax_included": true,
+          "source_tax_included": true,
+          "source_tax_rate": "0.130000",
+          "material_version": 3,
+          "product_id": 215,
+          "product_version": 1
+        }
+      }
+    ],
+    "missing": [
+      {
+        "lot_id": 18,
+        "version": 2,
+        "code": "8111",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 110,
+        "reason": [
+          "请补实际展开纸板长宽（毫米）；未识别该箱型，系统不会套用通用公式，请人工填写报料尺寸"
+        ]
+      },
+      {
+        "lot_id": 23,
+        "version": 2,
+        "code": "50100098",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 10,
+        "reason": [
+          "请补实际展开纸板长宽（毫米）；未识别该箱型，系统不会套用通用公式，请人工填写报料尺寸"
+        ]
+      },
+      {
+        "lot_id": 35,
+        "version": 4,
+        "code": "21311309",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 34,
+        "reason": [
+          "请补实际展开纸板长宽（毫米）；未识别该箱型，系统不会套用通用公式，请人工填写报料尺寸"
+        ]
+      },
+      {
+        "lot_id": 63,
+        "version": 2,
+        "code": "21301165",
+        "correction_kind": "missing_cost",
+        "quantity": 50,
+        "reason": [
+          "纸板尺寸1×1为占位资料，请填写实际展开尺寸"
+        ]
+      },
+      {
+        "lot_id": 173,
+        "version": 2,
+        "code": "22000124/104安全内盒",
+        "correction_kind": "missing_cost",
+        "quantity": 60,
+        "reason": [
+          "请在常用箱绑定已报价的供应商材质",
+          "请补实际展开纸板长宽（毫米）；未识别该箱型，系统不会套用通用公式，请人工填写报料尺寸"
+        ]
+      },
+      {
+        "lot_id": 550,
+        "version": 1,
+        "code": "21301191",
+        "correction_kind": "legacy_estimate_unit_error",
+        "quantity": 11,
+        "reason": [
+          "请补实际展开纸板长宽（毫米）；未识别该箱型，系统不会套用通用公式，请人工填写报料尺寸"
+        ]
+      },
+      {
+        "lot_id": 612,
+        "version": 1,
+        "code": "Z.001.000130",
+        "correction_kind": "missing_cost",
+        "quantity": 560,
+        "reason": [
+          "请维护本产品的供应商采购单价及采购片数/成品数量关系"
+        ]
+      },
+      {
+        "lot_id": 647,
+        "version": 1,
+        "code": "22000015",
+        "correction_kind": "missing_cost",
+        "quantity": 1850,
+        "reason": [
+          "请在常用箱绑定已报价的供应商材质",
+          "请补实际展开纸板长宽（毫米）；未识别该箱型，系统不会套用通用公式，请人工填写报料尺寸"
+        ]
+      }
+    ],
+    "fingerprint": "5bdb1690f960cc96ccd6e23bacf535a3a9dfe89f9dbb439d2dedf3905293f636"
+  }
+}

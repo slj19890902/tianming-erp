@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.356"
-APP_VERSION_NAME = "邮箱PDF人工录单兜底"
+APP_VERSION = "v0.22.357"
+APP_VERSION_NAME = "仓库更多菜单完整显示"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2670,9 +2670,23 @@ APP_VERIFICATION_STEPS = [
     "确认未匹配行仍被阻止；补齐整数数量、单价和正式常用箱并确认生产提醒后，保存订单并从原邮件查看关联订单。",
     "尝试更换原文件名、空客户单号、空产品或小数数量，确认后端拒绝；正式页面由管理员人工验收。",
 ]
+_V022356_CHANGES = APP_CHANGES
+_V022356_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "修复嵌入式仓库工具栏把“更多”下拉内容裁掉的问题；区域规划、合并同款栈板、特殊地堆、帮助、图层、视图和复位选项完整显示并可点击。",
+    "下拉内容较多或视口较矮时在菜单内部滚动，不遮断后续操作；现有按钮权限和业务行为保持不变。",
+    "本版不修改地图、区域、货架、货位、库存数量、批次、成本或订单事实，不新增数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员刷新仓库页面，点击顶部“更多”，确认从区域规划到全图复位的现有选项都能看见并点击。",
+    "在较窄窗口再次展开，确认菜单覆盖在地图上方；内容超出时只滚动菜单，不被顶部工具栏裁掉。",
+    "进入系统备份→系统版本确认版本为 v0.22.357；正式页面由管理员人工验收，本次发布不自动点击仓库或执行库存操作。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.356：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.356：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.357：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.357：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.356：本次更新｜{item}" for item in _V022356_CHANGES),
+    *(f"v0.22.356：如何验证｜{item}" for item in _V022356_STEPS),
     *(f"v0.22.355：本次更新｜{item}" for item in _V022355_CHANGES),
     *(f"v0.22.355：如何验证｜{item}" for item in _V022355_STEPS),
     *(f"v0.22.354：本次更新｜{item}" for item in _V022354_CHANGES),

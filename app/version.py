@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.343"
+APP_VERSION = "v0.22.345"
 APP_VERSION_NAME = "库存助手现货与片料工作台"
 APP_BUILD_DATE = "2026-09-11"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -2574,11 +2574,23 @@ APP_CHANGES = ["手机尺寸找订单支持管理员保存接近与扩大范围�
 APP_VERIFICATION_STEPS = ["管理员进入手机查询→纸板或纸箱尺寸→查询范围设置，保存范围；普通员工不可修改。", "展开同单未送产品后刷新，检查条件与展开恢复；范围改变后查询保持精确，按需选择扩大。"]
 _V022342_CHANGES = APP_CHANGES
 _V022342_STEPS = APP_VERIFICATION_STEPS
-APP_CHANGES = ["库存成本区新增库存助手，按现货与订单、片料用途、长期库存、待核价筛选并展开真实依据。", "助手金额只采用冻结批次成本，与库存成本页一致；订单需求按真实产品匹配，不把多个批次重复需求相加，不修改业务事实。"]
-APP_VERIFICATION_STEPS = ["老板或管理员打开库存成本区→库存助手，核对金额、待核价批次及筛选分页。", "查看同款未送订单和片料适用产品；普通账号不可打开。当前为本地规则分析，AI云解读仍待接入。"]
+APP_CHANGES = ["修复货架层数、格数及区域名称保存被其他区域旧成品半成品用途校验阻止；保留操作区与布局保护。", "相关区域库存阻塞提示显示实际名称，不再只显示内部区域编号。"]
+APP_VERIFICATION_STEPS = ["刷新地图，修改北货架G2层数、格数及区域名称，确认不再出现南F货架1旧用途限制；不得删除有货货位。"]
+_V022343_CHANGES = APP_CHANGES
+_V022343_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["修复货架区域改名时将整座货架数量与层格货位数量比较，导致保存失败的问题；实测货架沿用真实层格数量。"]
+APP_VERIFICATION_STEPS = ["刷新地图，修改货架区域名称并保存；确认原层数、格数、货位及库存保留。"]
+_V022344_CHANGES = APP_CHANGES
+_V022344_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["库存成本区新增库存助手，按现货与订单、片料用途、长期库存、待核价筛选并展开真实依据。", "金额只采用冻结批次成本；同款未送订单按产品匹配，片料候选排除面纸颜色不兼容项，不修改业务事实。"]
+APP_VERIFICATION_STEPS = ["老板或管理员打开库存成本区→库存助手，核对金额、待核价批次及筛选分页。", "查看同款未送订单和片料用途候选；普通账号不可打开。当前为本地规则分析，尚未调用云模型。"]
 APP_CHANGELOG = [
-    *(f"v0.22.343：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.343：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.345：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.345：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.344：本次更新｜{item}" for item in _V022344_CHANGES),
+    *(f"v0.22.344：如何验证｜{item}" for item in _V022344_STEPS),
+    *(f"v0.22.343：本次更新｜{item}" for item in _V022343_CHANGES),
+    *(f"v0.22.343：如何验证｜{item}" for item in _V022343_STEPS),
     *(f"v0.22.342：本次更新｜{item}" for item in _V022342_CHANGES),
     *(f"v0.22.342：如何验证｜{item}" for item in _V022342_STEPS),
     *(f"v0.22.341：本次更新｜{item}" for item in _V022341_CHANGES),

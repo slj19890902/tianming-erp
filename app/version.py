@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.361"
-APP_VERSION_NAME = "邮箱自动收单与运行状态"
-APP_BUILD_DATE = "2026-09-11"
+APP_VERSION = "v0.22.362"
+APP_VERSION_NAME = "邮箱自动识别与系统设置"
+APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -2736,9 +2736,24 @@ APP_VERIFICATION_STEPS = [
     "打开附件并核对识别结果；不确认时不得创建订单，确认保存后可从邮件回到对应订单来源。",
     "进入系统备份→系统版本确认v0.22.361、数据库revision为sr30v8x9z92；正式页面由管理员人工验收。",
 ]
+_V022361_CHANGES = APP_CHANGES
+_V022361_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "邮箱授权码、客户发件人白名单、读取间隔和启停统一移至系统管理→系统设置→邮箱收单设置。",
+    "邮箱收单仅作为订单录入入口：名单内PDF后台识别，红标按唯一PDF显示待处理数量，点击直接核对待保存和待改进草稿。",
+    "邮箱草稿沿用PDF导入的客户、库存、数量、提醒和安全校验；修复加入批量保存按钮被无关加载卡住，支持原附件提交改进和重新识别。",
+    "新增发件人配置及PDF识别缓存的线性迁移，不回填订单、库存或成本；修正AI输出格式兼容，API余额不足时仍提示并保留本地库存查询。",
+]
+APP_VERIFICATION_STEPS = [
+    "在系统管理→系统设置→邮箱收单设置保存客户发件人名单和自动读取间隔，确认原邮箱收单页不再显示配置表单。",
+    "收到名单内PDF后检查邮箱收单红标，点击直接核对草稿；选择完整草稿保存，异常PDF从待改进处理。",
+    "刷新确认版本v0.22.362；页面由管理员人工验收，重复附件、打开未保存和订单成功保存时核对红标数量。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.361：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.361：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.362：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.362：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.361：本次更新｜{item}" for item in _V022361_CHANGES),
+    *(f"v0.22.361：如何验证｜{item}" for item in _V022361_STEPS),
     *(f"v0.22.360：本次更新｜{item}" for item in _V022360_CHANGES),
     *(f"v0.22.360：如何验证｜{item}" for item in _V022360_STEPS),
     *(f"v0.22.359：本次更新｜{item}" for item in _V022359_CHANGES),

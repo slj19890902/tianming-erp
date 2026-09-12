@@ -236,6 +236,11 @@ def run_automatic_cycle(session_factory, factory=imaplib.IMAP4_SSL):
         db.commit()
         try:
             result = sync_inbox(db, None, factory)
+            from app.services.email_pdf_queue import recognize_pending, pending_attachments
+            from app.models.email_intake import EmailPdfRecognition
+            recognize_pending(db)
+            cached_hashes = set(db.scalars(select(EmailPdfRecognition.sha256)))
+            result['recognition_remaining'] = sum(a.sha256 not in cached_hashes for a in pending_attachments(db))
         except Exception as error:
             db.rollback()
             settings = db.get(EmailIntakeSettings, 1)
@@ -265,7 +270,7 @@ async def automatic_sync_loop(stop, session_factory, default_interval_seconds=30
             with session_factory() as db:
                 settings = db.get(EmailIntakeSettings, 1)
                 configured_minutes = int(settings.sync_interval_minutes) if settings else 5
-            if result.get('enabled') and int(result.get('remaining') or 0) > 0:
+            if result.get('enabled') and (int(result.get('remaining') or 0) > 0 or int(result.get('recognition_remaining') or 0) > 0):
                 delay = 5
             else:
                 delay = max(60, min(3600, configured_minutes * 60)) if settings else default_interval_seconds

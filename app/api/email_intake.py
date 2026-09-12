@@ -206,6 +206,80 @@ def order_source(order_id: int, response: Response, db: Session = Depends(get_db
     return {'sources': [dict(row._mapping) for row in rows]}
 
 
+@router.get('/queue/summary')
+def queue_summary(response: Response, db: Session = Depends(get_db), user: User = Depends(allowed)):
+    from app.services.email_pdf_queue import pending_attachments
+    from app.models.email_intake import EmailPdfRecognition
+    response.headers['Cache-Control'] = 'private, no-store'
+    statuses = dict(db.execute(select(EmailPdfRecognition.sha256, EmailPdfRecognition.status)).all())
+    counts = {'ready': 0, 'improve': 0, 'recognizing': 0}
+    for attachment in pending_attachments(db):
+        counts[statuses.get(attachment.sha256, 'recognizing')] += 1
+    return {'pending': sum(counts.values()), **counts}
+
+
+def _cached_queue_draft(db, attachment, cached, user):
+    from app.api.orders import _match_pdf_preview_for_user, _finalize_pdf_preview_for_user
+    if cached.draft_json:
+        raw = json.loads(cached.draft_json)
+        raw['source_name'] = attachment.filename
+        raw['file_hash'] = attachment.sha256
+        draft = _finalize_pdf_preview_for_user(_match_pdf_preview_for_user(db, raw, user), user)
+    else:
+        draft = {'source_name': attachment.filename, 'file_hash': attachment.sha256,
+                 'recognition_status': 'failed', 'items': [],
+                 'warnings': ['此PDF未能完成识别，请重新识别或提交改进。']}
+        draft = _finalize_pdf_preview_for_user(_match_pdf_preview_for_user(db, draft, user), user)
+    working = email_pdf_draft.current(db, attachment.id, user)
+    if working and draft.get('preview_safety_token'):
+        draft = email_pdf_draft.restore(db, draft, json.loads(working.content_json), user)
+    draft.update(email_attachment_id=attachment.id,
+                 email_draft_version=working.version if working else 0,
+                 email_draft_saved_at=working.saved_at if working else None,
+                 email_draft_restored=bool(working and draft.get('preview_safety_token')))
+    return draft
+
+
+@router.post('/queue/preview')
+async def queue_preview(response: Response, db: Session = Depends(get_db), user: User = Depends(allowed)):
+    from app.services.email_pdf_queue import pending_attachments, classify
+    from app.models.email_intake import EmailPdfRecognition
+    from app.api.orders import _match_pdf_preview_for_user, _finalize_pdf_preview_for_user
+    response.headers['Cache-Control'] = 'private, no-store'
+    drafts = []
+    per_state = {"ready": 0, "improve": 0}
+    remaining = pending_attachments(db)
+    for attachment in remaining:
+        cached = db.get(EmailPdfRecognition, attachment.sha256)
+        if cached is None:
+            continue
+        draft = _cached_queue_draft(db, attachment, cached, user)
+        draft['email_queue_status'] = classify(draft)
+        state = draft['email_queue_status']
+        if per_state[state] < 20:
+            per_state[state] += 1
+            drafts.append(draft)
+    return {'drafts': drafts, 'pending': len(remaining)}
+
+
+@router.post('/queue/{attachment_id}/retry')
+def retry_queue_pdf(attachment_id: int, db: Session = Depends(get_db), user: User = Depends(allowed)):
+    from app.services.email_pdf_queue import recognize_pending
+    try:
+        count = recognize_pending(db, limit=1, retry_id=attachment_id)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from None
+    if not count:
+        raise HTTPException(409, '后台正在识别，请稍后重试')
+    from app.models.email_intake import EmailPdfRecognition
+    from app.services.email_pdf_queue import classify
+    attachment = db.get(EmailIntakeAttachment, attachment_id)
+    cached = db.get(EmailPdfRecognition, attachment.sha256)
+    draft = _cached_queue_draft(db, attachment, cached, user)
+    draft['email_queue_status'] = classify(draft)
+    return draft
+
+
 @router.get('/{message_id}')
 def detail(message_id: int, response: Response, db: Session = Depends(get_db), user: User = Depends(allowed)):
     response.headers['Cache-Control'] = 'private, no-store'

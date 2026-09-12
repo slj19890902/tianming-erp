@@ -167,7 +167,7 @@ def test_automatic_cycle_keeps_mail_as_pending_draft(mobile_portal_app):
         ))
         db.commit()
     result = service.run_automatic_cycle(factory, FakeIMAP)
-    assert result == {'enabled': True, 'received': 1, 'remaining': 0}
+    assert result == {'enabled': True, 'received': 1, 'remaining': 0, 'recognition_remaining': 0}
     with factory() as db:
         settings = db.get(EmailIntakeSettings, 1)
         assert settings.last_sync_status == 'success'

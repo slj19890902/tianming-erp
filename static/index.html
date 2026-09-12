@@ -3981,7 +3981,7 @@
                       <template v-if="orderWorkspace === 'queue'">
                         <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
                         <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
-                        <a v-if="canCreateOrders && ['admin','boss'].includes(user.role)" class="btn" href="/email-intake.html" target="_blank" rel="noopener">邮箱收单</a>
+                        <button v-if="canCreateOrders && ['admin','boss'].includes(user.role)" class="btn" style="position:relative" @click="openEmailQueue">邮箱收单<span v-if="emailQueueCount" style="position:absolute;right:-8px;top:-9px;min-width:20px;padding:1px 5px;border-radius:12px;background:#dc2626;color:white;font-size:12px" :aria-label="emailQueueCount+'份PDF待处理'">{{ emailQueueCount > 99 ? '99+' : emailQueueCount }}</span></button>
                       </template>
                     </div>
                     <div class="toolbar-group">
@@ -5556,12 +5556,27 @@
                 <button :class="['btn',systemSection==='print'?'primary':'']" @click="selectSystemSection('print')">打印设置</button>
                 <button :class="['btn',systemSection==='backup'?'primary':'']" @click="selectSystemSection('backup')">数据备份</button>
                 <button :class="['btn',systemSection==='pdf'?'primary':'']" @click="selectSystemSection('pdf')">PDF 识别管理</button>
+                <button :class="['btn',systemSection==='email'?'primary':'']" @click="selectSystemSection('email')">邮箱收单设置</button>
               </div>
               <div v-if="systemSectionLoading[systemSection]" class="empty">正在读取{{ systemSectionLabel(systemSection) }}…</div>
               <div v-else-if="systemSectionErrors[systemSection]" class="notice danger">
                 {{ systemSectionErrors[systemSection] }}
                 <button class="btn small" @click="retrySystemSection">重新加载</button>
               </div>
+
+              <section v-if="systemSection === 'email' && systemSectionLoaded.email" class="panel" style="padding:18px;max-width:800px">
+                <div class="section-title">邮箱收单设置</div>
+                <p><strong>{{ emailSettings.account || 'sz_tmbz@126.com' }}</strong> · 收件箱 · {{ emailSettings.configured ? '授权码已保存' : '尚未配置' }}</p>
+                <div class="form-grid">
+                  <div class="field wide"><label>126 客户端授权码</label><div class="toolbar-group"><input class="input" type="password" autocomplete="new-password" v-model="emailAuthorizationCode" placeholder="更换授权码时填写，不回显已保存内容" /><button class="btn" :disabled="emailSettingsSaving || !emailAuthorizationCode.trim()" @click="saveEmailSettingsPart('credential')">保存授权码</button></div><small class="muted">在126邮箱开启IMAP后获取；请通过HTTPS ERP地址保存。</small></div>
+                  <div class="field wide"><label>客户发件人白名单（每行一个邮箱地址）</label><textarea class="textarea" rows="5" v-model="emailSenderText" placeholder="orders@example.com"></textarea><small class="muted">只读取这些发件人的订单PDF。保存空名单会暂停新邮件导入，已收邮件保留。</small><button class="btn" :disabled="emailSettingsSaving || !emailSettings.configured" @click="saveEmailSettingsPart('senders')">保存发件人名单</button></div>
+                  <div class="field"><label>读取间隔</label><select class="select" v-model.number="emailSettings.sync_interval_minutes"><option v-for="minutes in [1,5,10,30,60]" :value="minutes">每 {{ minutes }} 分钟</option></select></div>
+                  <div class="field"><label><input type="checkbox" v-model="emailSettings.automatic_enabled" /> 自动读取并识别订单PDF</label><button class="btn primary" :disabled="emailSettingsSaving || !emailSettings.configured" @click="saveEmailSettingsPart('automation')">保存自动收单设置</button></div>
+                </div>
+                <p v-if="!emailSettings.sender_filter_configured" class="notice">请保存客户发件人名单，启用筛选后的自动识别。</p>
+                <p v-if="emailSettings.last_sync_error" class="notice danger">{{ emailSettings.last_sync_error }}</p>
+                <div class="toolbar-group"><button class="btn" @click="loadSystemSection('email',{force:true})">刷新状态</button><a class="btn" href="/email-intake.html" target="_blank" rel="noopener">邮件历史</a></div>
+              </section>
 
               <template v-if="systemSection === 'basic' && (systemSectionLoaded.basic || (!systemSectionLoading.basic && !systemSectionErrors.basic))">
               <div class="panel" style="margin-bottom:10px">
@@ -6969,17 +6984,24 @@
               <div class="field wide"><label>备注</label><textarea class="textarea" v-model.trim="materialCandidateForm.notes" rows="3" placeholder="可选：维护说明或适用范围"></textarea></div>
             </div>
             <div v-else-if="modal.type === 'orderPdfImport'">
-              <div class="form-grid" style="margin-bottom:12px">
+              <div v-if="emailQueueMode" class="toolbar-group" style="margin-bottom:12px">
+                <button :class="['btn',emailQueueFilter==='ready'?'primary':'']" @click="emailQueueFilter='ready'">待保存（{{ orderImportDrafts.filter(d=>d.email_queue_status==='ready').length }}）</button>
+                <button :class="['btn',emailQueueFilter==='improve'?'primary':'']" @click="emailQueueFilter='improve'">待改进（{{ orderImportDrafts.filter(d=>d.email_queue_status==='improve').length }}）</button>
+                <span class="muted" v-if="emailQueueSummary.recognizing">后台正在识别 {{ emailQueueSummary.recognizing }} 份PDF</span>
+                <a class="btn" href="/email-intake.html" target="_blank" rel="noopener">邮件历史</a>
+                <span v-if="!orderImportDrafts.length" class="muted">暂无已识别的待处理PDF；后台识别完成后红标会自动更新。</span>
+              </div>
+              <div v-if="!emailQueueMode" class="form-grid" style="margin-bottom:12px">
                 <div class="field wide">
                   <label>上传客户采购订单 PDF（可多选）</label>
                   <input class="input" type="file" multiple accept="application/pdf,.pdf" @change="onOrderPdfFileChange" />
                 </div>
               </div>
               <div class="toolbar-group" style="margin-bottom:12px">
-                <button class="btn primary" :disabled="!orderImportBatch.files.length || loading" @click="previewOrderPdfImport">识别预览草稿</button>
+                <button v-if="!emailQueueMode" class="btn primary" :disabled="!orderImportBatch.files.length || loading" @click="previewOrderPdfImport">识别预览草稿</button>
                 <span class="muted" v-if="orderImportBatch.files.length">已选择 {{ orderImportBatch.files.length }} 个文件</span>
               </div>
-              <div v-for="(draft,draftIndex) in orderImportDrafts" :key="draft.file_hash || draft.source_name" class="order-group-detail-card" style="margin-bottom:12px">
+              <div v-for="(draft,draftIndex) in orderImportDrafts" :key="draft.file_hash || draft.source_name" v-show="!emailQueueMode || draft.email_queue_status === emailQueueFilter" class="order-group-detail-card" style="margin-bottom:12px">
                 <fieldset
                   class="pdf-import-draft-fields"
                   :disabled="isImportDraftLocked(draft)"
@@ -6987,7 +7009,7 @@
                 >
                 <div class="toolbar" style="margin-bottom:8px">
                   <div><strong>识别结果：{{ draft.items?.length || 0 }} 行</strong><span class="muted" style="margin-left:8px">请核对行数、存货编码和数量</span></div>
-                  <div v-if="draft.email_attachment_id" class="toolbar-group"><button class="btn small" type="button" :disabled="draft._email_draft_saving || loading" @click="saveEmailPdfWorkingDraft(draft)">{{ draft._email_draft_saving ? '暂存中…' : '暂存核对进度' }}</button><span class="muted">{{ draft.email_draft_restored ? '已恢复上次核对；请重新确认后保存订单' : (draft.email_draft_saved_at ? '已暂存，可关闭后继续；后续修改需再次暂存' : '暂存不会创建订单') }}</span></div>
+                  <div v-if="draft.email_attachment_id" class="toolbar-group"><button class="btn small" type="button" :disabled="draft._email_retrying || isImportDraftLocked(draft)" @click="retryEmailPdf(draft,draftIndex)">{{ draft._email_retrying ? '重新识别中…' : '重新识别' }}</button><button class="btn small" type="button" :disabled="draft._email_draft_saving || loading" @click="saveEmailPdfWorkingDraft(draft)">{{ draft._email_draft_saving ? '暂存中…' : '暂存核对进度' }}</button><span class="muted">{{ draft.email_draft_restored ? '已恢复上次核对；请重新确认后保存订单' : (draft.email_draft_saved_at ? '已暂存，可关闭后继续；后续修改需再次暂存' : '暂存不会创建订单') }}</span></div>
                   <button class="btn small" type="button" @click="draft._show_advanced_details=!draft._show_advanced_details">{{ draft._show_advanced_details ? '隐藏高级详情' : '高级匹配详情' }}</button>
                 </div>
                 <div class="form-grid" style="margin-bottom:12px">
@@ -9281,7 +9303,7 @@
           <div v-if="modal?.type !== 'product'" class="modal-foot">
             <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
-              <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
+              <button class="btn" :disabled="pdfImportSelectionBusy || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
               <button class="btn primary" :disabled="loading || !confirmedImportDraftCount" @click="saveConfirmedImportDrafts()">保存/重试已确认草稿</button>
             </template>
@@ -9966,6 +9988,9 @@
             customerInvoiceState:{profileLoading:false,profileSaving:false,profileLoadedCustomerId:null,ruleLoading:false,ruleSaving:false,ruleLoadedCustomerId:null},
             pendingStatements: [], pendingStatementCharges: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
             systemUsers: [], systemSection:"basic",
+            emailSettings:{configured:false,version:0,sender_addresses:[],sync_interval_minutes:5,automatic_enabled:false},
+            emailAuthorizationCode:"", emailSenderText:"", emailSettingsSaving:false,
+            emailQueueCount:0, emailQueueTimer:null, emailQueueMode:false, emailQueueFilter:"ready", emailQueueSummary:{},
             systemSectionLoaded:{basic:false,layout:false,print:false,backup:false,pdf:false},
             systemSectionLoading:{basic:false,layout:false,print:false,backup:false,pdf:false},
             systemSectionErrors:{basic:"",layout:"",print:"",backup:"",pdf:""},
@@ -10855,9 +10880,13 @@
           },
           confirmableImportDraftCount() {
             return this.orderImportDrafts.filter(
-              draft => this.canConfirmImportDraft(draft)
+              draft => (!this.emailQueueMode || draft.email_queue_status === this.emailQueueFilter) && this.canConfirmImportDraft(draft)
                 && !["saving","success"].includes(draft._save_status)
             ).length;
+          },
+          pdfImportSelectionBusy() {
+            return this.orderImportBatch.status === "recognizing"
+              || this.orderImportDrafts.some(draft => draft._save_status === "saving");
           },
           confirmedImportDraftCount() {
             return this.orderImportDrafts.filter(
@@ -11486,6 +11515,8 @@
           window.erpCheckingSession = true;
           await this.checkSession();
           window.erpCheckingSession = false;
+          this.refreshEmailQueueCount();
+          this.emailQueueTimer = window.setInterval(()=>this.refreshEmailQueueCount(),30000);
           // ESC 关闭弹层（含防呆检查）
           document.addEventListener("keydown", (e) => {
             if (e.key !== "Escape") return;
@@ -11501,6 +11532,7 @@
           window.addEventListener("message", this.handleWarehouseFrameMessage);
         },
         beforeUnmount() {
+          window.clearInterval(this.emailQueueTimer);
           window.removeEventListener("popstate", this.handlePdfWarehousePopState);
           window.removeEventListener("message", this.handleWarehouseFrameMessage);
         },
@@ -14506,6 +14538,7 @@
           initialPageFromLocation() {
             const pages = new Set(["dashboard","customers","contracts","quotations","products","orders","orders_legacy","requisition","incoming","production","warehouse","deliveries","finance","system"]);
             const queryPage = new URLSearchParams(window.location.search).get("page") || "";
+            if (queryPage === "system" && new URLSearchParams(window.location.search).get("section") === "email") this.systemSection="email";
             if (queryPage === "permissions") return "permissions";
             if (pages.has(queryPage)) return queryPage;
             const pathPage = window.location.pathname.replace(/^\/+|\/+$/g, "");
@@ -23953,12 +23986,34 @@
             } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
           async loadSystem({force=false}={}) {
-            if (!["basic","layout","print","backup","pdf"].includes(this.systemSection)) this.systemSection = "basic";
+            if (!["basic","layout","print","backup","pdf","email"].includes(this.systemSection)) this.systemSection = "basic";
             if (this.systemSection === "layout" && this.user?.role !== "admin") this.systemSection = "basic";
             return this.loadSystemSection(this.systemSection, { force });
           },
+          async saveEmailSettingsPart(part) {
+            if (this.emailSettingsSaving) return;
+            this.emailSettingsSaving = true;
+            try {
+              const version = this.emailSettings.version;
+              if (part === "credential") {
+                await axios.put("/api/email-intake/settings", {authorization_code:this.emailAuthorizationCode,expected_version:version});
+                this.emailAuthorizationCode = "";
+              } else if (part === "senders") {
+                const addresses = this.emailSenderText.split(/[\n,;，；]+/).map(value=>value.trim()).filter(Boolean);
+                await axios.put("/api/email-intake/senders", {addresses,expected_version:version});
+              } else if (part === "automation") {
+                await axios.put("/api/email-intake/automation", {automatic_enabled:this.emailSettings.automatic_enabled,sync_interval_minutes:Number(this.emailSettings.sync_interval_minutes),expected_version:version});
+              } else return;
+              await this.loadSystemSection("email", {force:true});
+              this.showToast("邮箱设置已保存");
+            } catch(error) {
+              this.showToast(this.errorMessage(error),true);
+              if (error?.response?.status === 409) this.systemSectionErrors = {...this.systemSectionErrors,email:"邮箱设置已被修改，请重新加载后再保存。"};
+            }
+            finally { this.emailSettingsSaving = false; }
+          },
           async selectSystemSection(section) {
-            if (!["basic","layout","print","backup","pdf"].includes(section)) return;
+            if (!["basic","layout","print","backup","pdf","email"].includes(section)) return;
             if (section === "layout" && this.user?.role !== "admin") {
               this.systemSection = "basic";
               return this.loadSystemSection("basic");
@@ -23967,7 +24022,7 @@
             await this.loadSystemSection(section);
           },
           systemSectionLabel(section) {
-            return { basic:"账号与公司", layout:"界面布局", print:"打印设置", backup:"数据备份", pdf:"PDF 识别管理" }[section] || "系统设置";
+            return { basic:"账号与公司", layout:"界面布局", print:"打印设置", backup:"数据备份", pdf:"PDF 识别管理", email:"邮箱收单设置" }[section] || "系统设置";
           },
           async retrySystemSection() {
             await this.loadSystemSection(this.systemSection, { force:true });
@@ -24005,6 +24060,10 @@
                 await this.loadUiLayoutAdmin({throwOnError:true});
               } else if (section === "backup") {
                 await this.loadBackups({throwOnError:true});
+              } else if (section === "email") {
+                const {data} = await axios.get("/api/email-intake/settings");
+                this.emailSettings = data;
+                this.emailSenderText = (data.sender_addresses || []).join("\n");
               } else if (section === "pdf") {
                 // PDF 样本统计和高级模板均由各自按钮/展开动作读取。
               }
@@ -29999,6 +30058,7 @@
 	            }
 	          },
 	          openOrderPdfImport() {
+            this.emailQueueMode = false;
             this.orderImportBatch = { files:[], status:"idle" };
             this.orderImportDrafts = [];
             this.orderImportReminderCache = {};
@@ -30061,7 +30121,13 @@
               draft._correction_error = "尚未选择确认客户；请选择客户后才能提交改进。";
               return;
             }
-            const file = (this.orderImportBatch.files || []).find(row => row.name === draft.source_name);
+            let file = (this.orderImportBatch.files || []).find(row => row.name === draft.source_name);
+            if (draft.email_attachment_id) {
+              try {
+                const {data} = await axios.get(`/api/email-intake/attachments/${draft.email_attachment_id}/download`, {responseType:"blob"});
+                file = new File([data], draft.source_name || "订单.pdf", {type:"application/pdf"});
+              } catch(error) { draft._correction_error=this.errorMessage(error); return; }
+            }
             if (!file) {
               draft._correction_error = "找不到当前 draft 对应的原 PDF 文件，请重新选择文件后再识别。";
               return;
@@ -30125,6 +30191,44 @@
               this.showToast("核对进度已暂存，可从原邮件继续编辑；尚未创建订单");
             } catch(error) {this.showToast(this.errorMessage(error),true);}
             finally {draft._email_draft_saving=false;}
+          },
+          async retryEmailPdf(draft,index) {
+            if (draft._email_retrying || this.isImportDraftLocked(draft)) return;
+            draft._email_retrying=true;
+            try {
+              const {data}=await axios.post(`/api/email-intake/queue/${draft.email_attachment_id}/retry`);
+              if (this.orderImportDrafts[index] !== draft) return;
+              const next=this.prepareImportDraftReminderState({...data,confirmed:false,_save_status:"idle",_save_message:"",items:(data.items||[]).map(item=>this.preparePdfImportItem(item))});
+              this.orderImportDrafts.splice(index,1,next);
+              this.emailQueueFilter=next.email_queue_status;
+              await this.loadOrderImportReminders();
+              await Promise.all(next.items.filter(item=>item.matched_product_id).map(item=>this.loadOrderLineInventory(item,next.matched_customer_id)));
+              await this.refreshEmailQueueCount();
+            } catch(error) {this.showToast(this.errorMessage(error),true);}
+            finally {draft._email_retrying=false;}
+          },
+          async refreshEmailQueueCount() {
+            if (!this.user || !this.canCreateOrders || !["admin","boss"].includes(this.user.role)) { this.emailQueueCount=0; return; }
+            try { const {data}=await axios.get("/api/email-intake/queue/summary"); this.emailQueueCount=data.pending||0; this.emailQueueSummary=data; }
+            catch(error) { /* Keep last successful count during a temporary connection failure. */ }
+          },
+          async openEmailQueue() {
+            if (!this.canCreateOrders || !["admin","boss"].includes(this.user?.role)) return;
+            this.openOrderPdfImport();
+            this.emailQueueMode=true;
+            this.emailQueueFilter="ready";
+            this.orderImportBatch.status="recognizing";
+            try {
+              const {data}=await axios.post("/api/email-intake/queue/preview");
+              if (this.modal?.type !== "orderPdfImport") return;
+              this.orderImportDrafts=(data.drafts||[]).map(draft=>this.prepareImportDraftReminderState({...draft,confirmed:false,_save_status:"idle",_save_message:"",items:(draft.items||[]).map(item=>this.preparePdfImportItem(item))}));
+              await this.loadOrderImportReminders();
+              if (this.modal?.type !== "orderPdfImport") return;
+              await Promise.all(this.orderImportDrafts.map(draft=>Promise.all((draft.items||[]).filter(item=>item.matched_product_id).map(item=>this.loadOrderLineInventory(item,draft.matched_customer_id)))));
+              this.orderImportBatch.status="recognized";
+              if (!this.orderImportDrafts.some(draft=>draft.email_queue_status==="ready")) this.emailQueueFilter="improve";
+              await this.refreshEmailQueueCount();
+            } catch(error) { this.orderImportBatch.status="failed"; this.showToast(this.errorMessage(error),true); }
           },
           async openEmailAttachmentFromLocation() {
             const linkedOrder = new URLSearchParams(window.location.search).get("email_order");
@@ -30266,8 +30370,9 @@
             return (draft?.items || []).some(item => !Number.isInteger(Number(item.quantity)));
           },
           toggleConfirmableImportDrafts() {
+            if (this.pdfImportSelectionBusy) return;
             const confirmable = this.orderImportDrafts.filter(
-              draft => this.canConfirmImportDraft(draft)
+              draft => (!this.emailQueueMode || draft.email_queue_status === this.emailQueueFilter) && this.canConfirmImportDraft(draft)
                 && !["saving","success"].includes(draft._save_status)
             );
             if (!confirmable.length) {
@@ -30721,6 +30826,7 @@
                   });
                   succeeded.push(draft.source_name || "草稿");
                   draft._save_status = "success";
+                  if (draft.email_attachment_id) this.refreshEmailQueueCount();
                   draft._save_message = "保存成功；本草稿已锁定，不会再次提交。";
                   draft.confirmed = false;
                 } catch (error) {

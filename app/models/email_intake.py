@@ -27,6 +27,17 @@ class EmailIntakeSettings(Base):
     last_sync_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
+class EmailPdfRecognition(Base):
+    __tablename__ = 'email_pdf_recognitions'
+    __table_args__ = (CheckConstraint("status IN ('ready','improve')", name='ck_email_pdf_recognition_status'),)
+    sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attachment_id: Mapped[int] = mapped_column(ForeignKey('email_intake_attachments.id'))
+    status: Mapped[str] = mapped_column(String(20))
+    draft_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    recognized_at: Mapped[datetime] = mapped_column(DateTime)
+
+
 class EmailIntakeMessage(Base):
     __tablename__ = 'email_intake_messages'
     __table_args__ = (UniqueConstraint('mailbox_key', 'uid_validity', 'uid', name='uq_email_intake_uid'),)

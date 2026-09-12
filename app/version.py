@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.380"
-APP_VERSION_NAME = "助手首次接入目录预检"
+APP_VERSION = "v0.22.381"
+APP_VERSION_NAME = "仓库查货分批加载"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -3903,4 +3903,20 @@ APP_CHANGES = [
 APP_VERIFICATION_STEPS = [
     "打开助手380，沿用已保存的备份设置，选择原ERP整个目录首次接入，确认不再出现开发依赖目录链接错误。",
     "接入完成后核对ERP程序380、最近订单和附件，并确认完整备份已写入共享盘；原目录数据保留。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.380：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.380：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "仓库查货不再只搜索前2500个库存批次，后续入库批次也可正常匹配；按稳定批次游标分批加载，默认每页100条。",
+    "结果较多时可继续加载，切换查询取消过期请求；数量与位置明确按已加载结果汇总，保留客户权限和货架层格准确定位。",
+    "保留380助手首次接入预检和379订单往返；无新增数据库迁移，不改地图、草稿、库存数量、成本或订单事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库页面，按客户、料号或规格查货；结果较多时继续加载，确认没有重复批次，切换关键词不混入旧结果。",
+    "点击货架产品，核对实际层格高亮；收起查货结果后定位仍保留，订单来源只读定位与返回原单保持正常。",
+    "在系统版本中核对v0.22.381；本轮为分批加载优化，稀少命中仍可能扫描后续候选，未宣称完成多年容量验收。",
 ]

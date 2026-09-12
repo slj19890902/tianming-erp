@@ -1,5 +1,10 @@
 # Codex 项目交接
 
+## 2026-09-12 DESKTOP014 v0.22.378 首次接入脚本兼容
+
+- 正式18ffb2ca / mq0912；release_runtime_20260912_155232.json completed，正式库SHA前后一致，LAN/public健康200，NAS latest及完整安装器378同步。39项定向和完整EXE真实子进程自检通过。详见docs/tasks/DESKTOP014_FIRST_SETUP_POWERSHELL_20260912.md及同名NAS回执。
+- 用户实际使用过D:/360安全浏览器下载/TianmingERP，已设置备份并停在before_stop；本轮期间该目录和快捷方式消失，已询问新位置。不可继续把未配置D:/TianmingERP当用户唯一安装。首次接入未执行；后续发布核对全局managed marker/实际根，新版本必须同步未接入bootstrap或提供最新完整安装器，378新增旧包接入新版ERP的拒绝保护。
+
 ## 2026-09-12 OPT001 v0.22.377 出库成本口径与批量查询
 
 - 正式代码ac555de8，保留v375统一UI及v376助手NAS修复；mq0912无新迁移，release_runtime_20260912_152617.json completed，正式库SHA前后一致。46项后端、4项前端及Vue编译通过；同口径六个月月报SQL600→39、完整结果不变；健康与新静态资源通过。

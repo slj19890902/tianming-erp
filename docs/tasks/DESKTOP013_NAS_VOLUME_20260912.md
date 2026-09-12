@@ -6,8 +6,16 @@
 
 基线f1f554ba/v374/mq0912；独立分支codex/desktop013-nas-volume-20260912，单代理。沿用已读平台上下文/执行章程与发布边界。允许backup_settings.py、直接测试、version、任务与回执；无新migration。最短验证：已挂载不同卷1005通过，同卷/未知卷/其他错误拒绝，正常路径/内部路径保护，真实NAS探针和完整打包自检。
 
-状态：开发验证通过；发布保留备份、唯一head、完整性/FK、回退、健康门禁，正式网页不自动点击。
+状态：v0.22.376 技术发布完成，本机助手已重新打开；备份设置实际保存和首次接入仍由管理员操作，未冒充已配置完成。
 
 验证：先复现1005失败，修复后同类挂载盘通过，同卷/未知设备/其他错误拒绝。21项目录与GUI定向最终通过；第一次运行出现一次开发Tk库加载失败，原tk.tcl存在，整组复验通过。真实Z盘已通过新目录验证，并成功写入/回读/清理专用临时探针；未创建实际计划或保存任何密码。
 
 并行项目已发布统一界面v375/18b3c70a，无新migration。已完整合入其实现，助手修复最终升v376；先前fa1b030c的v375构建过期，不发布、不安装。最新签名feed仍为374，376以已验证374签名包为更新回退契约，正式源代码回退点保留375。
+
+最终完整合入统一UI收尾91e2168b（含9e971b2e资源缓存键及LF规则），正式代码7df5d1d5afc88a626cbfff194cad7490850377c1。最终21项定向通过；两份EXE自检通过，安装器内嵌助手/release与独立文件SHA一致。release SHA 85c8de6e9fa98807d72a9630326965d42c9aa54fc03f7819dc1c131150bb1e31，Setup SHA bc8f8bce53ef552dfd37146c925213a8c6a1cca6a1e1ceef46c3bacd20ff004a，Assistant SHA aff8f633ad76207309e574bee821f3b146e175f9e167ea2409b0f744306b55ce。
+
+release_runtime_20260912_151441.json completed；mq0912唯一head；备份与演练SHA 799befd98f60f5a48e20308d880825cb9882a9e21fdcc3ded17ccf92fe2a1073，完整性ok/FK0/核心计数一致；正式库前后SHA均09c35b9e6e9ca281c9a9cf4c895866074ff7c0d61faea47f67363eea1f61339e。启动时公网健康短暂失败，随后LAN/public均200。未执行正式页面自动点击。
+
+本机D:/TianmingERP助手及installer-release.zip已锁内替换并逐字节核验，旧助手保留control/assistant-before-v376.exe；实际窗口标题已读取天明ERP助手 · v0.22.376。NAS latest已更新376，完整安装器release-v376-20260912已回读SHA核验。没有代填恢复密码、保存真实preferences、创建备份计划或首次接入；最后检查managed marker/state/preferences均不存在。
+
+NAS独立回执：20260912_DESKTOP013_Z盘1005备份设置修复_v376.md。剩余验收：管理员在新助手输入恢复密码保存，确认自动备份已设置，再按指南首次接入；既有正式数据未改。实际Token用量不可获取。

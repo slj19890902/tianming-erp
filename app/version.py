@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.387"
-APP_VERSION_NAME = "余料追溯与统一完工历史"
+APP_VERSION = "v0.22.388"
+APP_VERSION_NAME = "订单翻页稳定性修复"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4013,3 +4013,11 @@ APP_VERIFICATION_STEPS = [
     "核对记录入口、库存位置及撤销资格提示；205已实物组装，请勿按误报撤回原料。",
     "核对标准及大字模式列表铺满可用高度，换页显示对应记录，无整页上下滚动。",
 ]
+
+APP_CHANGELOG = [
+    *(f"v0.22.387：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.387：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = ["修复订单下一页因内容高度变化跳回第一页、每页行数减少的问题；普通翻页保持已确定容量。", "窗口和字号变化仍重新适配，保留其他页面布局与订单筛选、权限和数据。"]
+APP_VERIFICATION_STEPS = ["刷新订单列表，连续点击下一页和上一页，核对页码与订单内容同步切换。", "切换标准/大字或调整窗口后再翻页，确认适配后不再自行回首页。"]

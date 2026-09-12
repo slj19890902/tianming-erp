@@ -36,6 +36,12 @@
           const records = rows.filter(r => r.cells.length > 1);
           if (!records.length) return;
           const currentKey = key(this);
+          // Order contents can have different heights on each page. Freeze the
+          // measured capacity for this viewport/mode so paging cannot trigger
+          // the resize reload (which intentionally starts at page one).
+          // The resize handler clears capacities; uiMode is part of the key.
+          if (this.activePage === 'orders' && this.orderWorkspace === 'queue'
+              && this.workspaceCapacities[currentKey]) return;
           const top = table.getBoundingClientRect().top;
           const main = panel.closest('.main');
           const mainRect = main.getBoundingClientRect();

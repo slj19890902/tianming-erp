@@ -1,5 +1,10 @@
 # Codex 项目交接
 
+## 2026-09-12 OPT001 v0.22.377 出库成本口径与批量查询
+
+- 正式代码ac555de8，保留v375统一UI及v376助手NAS修复；mq0912无新迁移，release_runtime_20260912_152617.json completed，正式库SHA前后一致。46项后端、4项前端及Vue编译通过；同口径六个月月报SQL600→39、完整结果不变；健康与新静态资源通过。
+- NAS latest及未接入助手bootstrap更新377（包SHA f297ad9e3654344b305a96341585cdc4858bcd9c24197fff81425ad850e86a1c），EXE仍376。技术发布完成，待管理员人工验收；历史缺口未补写。详见docs/tasks/OPT001_COST_CHAIN_20260912.md及NAS独立回执20260912_OPT001整体优化一期_成本口径.md。下轮发布重新核对managed marker/state。
+
 ## 2026-09-12 DESKTOP013 v0.22.376 Z盘备份设置1005
 
 - 正式代码7df5d1d5，完整保留统一UI最终91e2168b；mq0912无新迁移，release_runtime_20260912_151441.json completed，正式库SHA前后一致。21项定向、两EXE入口及内嵌字节、NAS临时读写探针、本机助手和NAS包校验通过；LAN/public健康200。

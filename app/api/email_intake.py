@@ -45,11 +45,18 @@ class AutomationChange(BaseModel):
     sync_interval_minutes: int = Field(default=5, ge=1, le=60)
 
 
+class SenderChange(BaseModel):
+    expected_version: int = Field(ge=1)
+    addresses: list[str] = Field(max_length=100)
+
+
 def _settings_payload(row):
     return {
         'account': service.ACCOUNT,
         'folder': '收件箱',
         'configured': row is not None,
+        'sender_filter_configured': bool(row and row.sender_addresses_json is not None),
+        'sender_addresses': json.loads(row.sender_addresses_json) if row and row.sender_addresses_json is not None else [],
         'version': row.version if row else 0,
         'mode': 'automatic' if row and row.automatic_enabled else 'manual',
         'automatic_enabled': bool(row and row.automatic_enabled),
@@ -123,6 +130,28 @@ def save_automation(payload: AutomationChange, db: Session = Depends(get_db), us
     })
     db.commit()
     return {'saved': True}
+
+
+@router.put('/senders')
+def save_senders(payload: SenderChange, db: Session = Depends(get_db), user: User = Depends(allowed)):
+    from app.services.email_sender_filter import normalize_senders
+    try:
+        addresses = normalize_senders(payload.addresses)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from None
+    if not service.sync_lock.acquire(blocking=False):
+        raise HTTPException(409, '正在收件，请稍后保存发件人筛选')
+    try:
+        changed = db.execute(update(EmailIntakeSettings).where(
+            EmailIntakeSettings.id == 1, EmailIntakeSettings.version == payload.expected_version,
+        ).values(sender_addresses_json=json.dumps(addresses), version=EmailIntakeSettings.version + 1))
+        if changed.rowcount != 1:
+            raise HTTPException(409, '邮箱设置已变化或尚未配置，请刷新')
+        service.audit(db, user, 'configure_senders', {'addresses': addresses})
+        db.commit()
+        return {'saved': True}
+    finally:
+        service.sync_lock.release()
 
 
 @router.post('/sync')

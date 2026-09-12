@@ -16,6 +16,7 @@ class EmailIntakeSettings(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     encrypted_secret: Mapped[str] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    sender_addresses_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     automatic_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     sync_interval_minutes: Mapped[int] = mapped_column(Integer, default=5)
     last_sync_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

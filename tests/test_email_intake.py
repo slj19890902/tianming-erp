@@ -44,12 +44,21 @@ def test_mail_permissions_config_encryption_and_version(mobile_portal_app):
         assert current['automatic_enabled'] is False
         assert current['sync_interval_minutes'] == 10
         assert current['version'] == 2
+        addresses = {'expected_version': 2, 'addresses': ['Customer@Example.com', 'customer@example.com']}
+        assert client.put('/api/email-intake/senders', json=addresses).status_code == 200
+        filtered = client.get('/api/email-intake/settings').json()
+        assert filtered['sender_addresses'] == ['customer@example.com']
+        assert filtered['sender_filter_configured'] is True
+        assert filtered['version'] == 3
+        assert client.put('/api/email-intake/senders', json=addresses).status_code == 409
+        assert client.put('/api/email-intake/senders', json={'expected_version': 3, 'addresses': ['@example.com']}).status_code == 422
         rejected = client.put('http://192.168.3.80/api/email-intake/settings', json=payload)
         assert rejected.status_code in (400, 401)
         with factory() as db:
             assert 'fake-uat' not in db.get(EmailIntakeSettings, 1).encrypted_secret
             assert service.secret(db) == payload['authorization_code']
         _login(client, 'mobile-scoped')
+        assert client.put('/api/email-intake/senders', json={'expected_version': 3, 'addresses': []}).status_code == 403
         for path in ('', '/settings', '/1', '/attachments/1/download'):
             assert client.get('/api/email-intake' + path).status_code == 403
 

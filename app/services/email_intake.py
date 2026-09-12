@@ -9,6 +9,8 @@ import ssl
 import threading
 import asyncio
 import logging
+import json
+from app.services.email_sender_filter import normalize_senders, sender_matches
 from datetime import datetime
 from email import policy
 from email.parser import BytesParser
@@ -132,6 +134,11 @@ def sync_inbox(db, user, factory=imaplib.IMAP4_SSL):
     client = None
     try:
         password = secret(db)
+        settings = db.get(EmailIntakeSettings, 1)
+        addresses = (normalize_senders(json.loads(settings.sender_addresses_json))
+                     if settings.sender_addresses_json is not None else None)
+        if addresses == []:
+            return {'received': 0, 'remaining': 0, 'notice': '发件人名单为空，请先添加需要收单的邮箱地址'}
         client = factory('imap.126.com', 993, ssl_context=ssl.create_default_context(), timeout=20)
         client.login(ACCOUNT, password)
         # NetEase may require the standard client ID before EXAMINE.
@@ -145,12 +152,35 @@ def sync_inbox(db, user, factory=imaplib.IMAP4_SSL):
         validity = (values[0] or b'').decode() if values else ''
         if not validity.isdigit():
             raise ValueError('邮箱未返回稳定标识，本次未导入')
-        status, values = client.uid('search', None, 'ALL')
-        if status != 'OK':
-            raise ValueError('邮件列表读取失败，请重试')
+        candidate_uids = set()
+        for address in addresses or [None]:
+            criteria = ('FROM', '"' + address + '"') if address else ('ALL',)
+            status, values = client.uid('search', None, *criteria)
+            if status != 'OK':
+                raise ValueError('邮件列表读取失败，请重试')
+            candidate_uids.update(int(uid) for uid in (values[0] or b'').split())
         known = set(db.scalars(select(EmailIntakeMessage.uid).where(
             EmailIntakeMessage.mailbox_key == MAILBOX_KEY, EmailIntakeMessage.uid_validity == validity)))
-        remaining = sorted({int(uid) for uid in (values[0] or b'').split()} - known)
+        remaining = sorted(candidate_uids - known)
+        if addresses is not None:
+            # IMAP FROM is a substring search. Fetch headers only to enforce exact
+            # mailbox equality before downloading any body or attachment.
+            exact = []
+            for offset in range(0, len(remaining), 100):
+                uid_set = ','.join(str(uid) for uid in remaining[offset:offset + 100])
+                status, headers = client.uid('fetch', uid_set, '(UID BODY.PEEK[HEADER.FIELDS (FROM)])')
+                if status != 'OK':
+                    raise ValueError('发件人校验失败，本次未下载邮件正文')
+                for entry in headers:
+                    if not isinstance(entry, tuple):
+                        continue
+                    match = re.search(rb'\bUID\s+(\d+)', entry[0])
+                    if not match:
+                        raise ValueError('发件人校验缺少邮件标识，请重试')
+                    header = BytesParser(policy=policy.default).parsebytes(entry[1])
+                    if sender_matches([str(value) for value in header.get_all('From', [])], addresses):
+                        exact.append(int(match[1]))
+            remaining = sorted(set(exact) & set(remaining))
         count = 0
         for uid in remaining[:20]:
             status, metadata = client.uid('fetch', str(uid), '(RFC822.SIZE)')
@@ -164,6 +194,10 @@ def sync_inbox(db, user, factory=imaplib.IMAP4_SSL):
             raw = next((v[1] for v in content if isinstance(v, tuple)), None)
             if status != 'OK' or raw is None:
                 raise ValueError('邮件正文读取失败，已完成项保留，请重试')
+            if addresses is not None:
+                header = BytesParser(policy=policy.default).parsebytes(raw, headersonly=True)
+                if not sender_matches([str(value) for value in header.get_all('From', [])], addresses):
+                    raise ValueError('邮件发件人与筛选结果不一致，本封未导入')
             count += store_message(db, user, validity, uid, raw)
         return {'received': count, 'remaining': max(0, len(remaining) - 20)}
     finally:

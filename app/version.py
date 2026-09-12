@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.364"
-APP_VERSION_NAME = "送货统一选货与整行选择"
+APP_VERSION = "v0.22.365"
+APP_VERSION_NAME = "邮箱PDF独立后台识别"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2766,9 +2766,16 @@ _V022363_CHANGES = APP_CHANGES
 _V022363_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["新增送货单合并订单与无订单库存，统一搜索分页；订单优先，绿色订单号与黄色无订单区分，隐藏车号和空提醒。", "送货选货及新订单导入常用箱支持整行选择，再点取消；点击数量框自动选中，编辑时保持选择。", "保持客户范围、两类来源数量与库存校验，以及订单优先补量、幂等和事务规则。"]
 APP_VERIFICATION_STEPS = ["选择既有订单又有库存的客户，检查列表订单在前；搜索同一编码，核对两类货物及位置、数量。", "点击行两次核对选择和取消，点击数量框直接输入；导入混合明细核对数量，常用箱导入同样检查。"]
+_V022364_CHANGES = APP_CHANGES
+_V022364_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["已收PDF独立后台识别，不再等待下一次读取邮箱；保留用户设置的收件间隔。", "邮箱连接失败不阻塞已收附件；按发件人名单处理，识别完成后进入待保存或待改进，不自动创建订单。", "保持送货统一选货与整行选择；无新数据库迁移。"]
+APP_VERIFICATION_STEPS = ["系统设置保存发件人名单并开启自动收单，已收匹配PDF应陆续完成识别，读取间隔保持原值。", "点击邮箱收单，检查待保存与待改进分类；核对订单后由管理员保存。"]
+
 APP_CHANGELOG = [
     *(f"v0.22.364：本次更新｜{item}" for item in APP_CHANGES),
     *(f"v0.22.364：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.364：本次更新｜{item}" for item in _V022364_CHANGES),
+    *(f"v0.22.364：如何验证｜{item}" for item in _V022364_STEPS),
     *(f"v0.22.363：本次更新｜{item}" for item in _V022363_CHANGES),
     *(f"v0.22.363：如何验证｜{item}" for item in _V022363_STEPS),
     *(f"v0.22.362：本次更新｜{item}" for item in _V022362_CHANGES),

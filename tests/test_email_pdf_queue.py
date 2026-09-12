@@ -61,3 +61,53 @@ def test_classify_requires_complete_matched_integer_quantities():
     for field,value in [('quantity',0),('quantity',1.5),('quantity','bad'),('unit_price',None),('matched_product_id',None)]:
         item={**draft['items'][0],field:value}
         assert classify({**draft,'items':[item]})=='improve'
+
+
+def test_worker_ignores_mail_interval_and_preserves_sales(mobile_portal_app, monkeypatch):
+    from app.services.email_pdf_queue import run_recognition_cycle
+    from app.api import orders
+    app, ids, factory = mobile_portal_app
+    monkeypatch.setattr(orders, '_parse_order_pdf_preview', lambda *a: {'recognition_status':'failed','items':[]})
+    def no_mail(*a, **kw):
+        raise AssertionError('recognition must not connect to mailbox')
+    monkeypatch.setattr(service, 'sync_inbox', no_mail)
+    with factory() as db:
+        db.add(EmailIntakeSettings(id=1,encrypted_secret='fixture',automatic_enabled=False,sync_interval_minutes=60,sender_addresses_json=json.dumps(['sample@example.invalid'])))
+        db.commit()
+        service.store_message(db,None,'worker-test',1,mail_bytes())
+        baseline=db.scalar(select(func.count()).select_from(Order))
+    assert run_recognition_cycle(factory)==0
+    with factory() as db:
+        db.get(EmailIntakeSettings,1).automatic_enabled=True
+        db.commit()
+    assert run_recognition_cycle(factory)==1
+    assert run_recognition_cycle(factory)==0
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(Order))==baseline
+        assert db.get(EmailIntakeSettings,1).sync_interval_minutes==60
+        assert db.get(EmailIntakeSettings,1).last_sync_status=='never'
+
+
+def test_recognition_loop_recovers_and_stops(monkeypatch):
+    import asyncio
+    from app.services import email_pdf_queue as queue
+    async def exercise():
+        stop=asyncio.Event()
+        calls=[]
+        delays=[]
+        def cycle(factory):
+            calls.append(factory)
+            if len(calls)==1:
+                raise RuntimeError('private document text')
+            stop.set()
+        async def wait(awaitable, timeout):
+            awaitable.close()
+            delays.append(timeout)
+            if not stop.is_set():
+                raise asyncio.TimeoutError
+        monkeypatch.setattr(queue,'run_recognition_cycle',cycle)
+        monkeypatch.setattr(asyncio,'wait_for',wait)
+        await queue.recognition_loop(stop,'fixture')
+        assert len(calls)==2
+        assert delays==[60,5]
+    asyncio.run(exercise())

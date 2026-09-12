@@ -5527,3 +5527,7 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 助手385仅改浏览器优先ERP_LAN_HTTP_ORIGIN，已部署D:/TianmingERP且窗口已打开；运行ERP保持384签名包49ffa8c16，无二次停服。NAS latest/完整Setup为385（eb4a33e686）。严禁将https_proxy的ERP_HEALTH_URL/ERP_BROWSER_URL直接改HTTP：017曾导致启动失败，已从验证配置恢复并实际load_settings检查通过；GUI入口独立选择LAN。详情docs/tasks/DESKTOP018_LAN_LAUNCH_20260912.md。
 
 2026-09-12 GROUPFLOW002：ERP386已托管发布（代码c0c62697），助手385保留，head mq0912；包58e5d45f8fb0653281616ca11b3e654e5ec0000c6de3e00fb7a2c0b88ec33064，回退384。地图点击/整组库存投影修复，未改历史业务事实；205实体组装口径待现场答复。见 docs/tasks/20260912-group-lifecycle.md 及NAS同名任务回执，人工验收待完成。
+
+## 2026-09-12 PREPHIST004 v387正式基线
+
+5ff6714d技术发布完成，待人工验收；mq0912无DDL，助手385保留。统一备库完工历史、余料追溯与误报整组撤销；未改写205业务事实。完整证据见NAS任务回执20260912-PREPHIST004-v387-余料追溯与完工历史.md及docs/tasks/20260912-preparation-history.md。

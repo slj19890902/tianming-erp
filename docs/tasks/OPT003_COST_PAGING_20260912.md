@@ -17,3 +17,7 @@
 初次片料新测试夹具误用了成品is_general字段及raw枚举，按真实SemiFinished模型改为合法raw_board后通过，不修改任何正式业务约束。383紧急助手启动根修复优先，本任务顺延384，发布前整合382/383并保持当前助手EXE/设置。
 
 已合并383最终c7651d65并重跑16项后端通过；7项Node与TS/Vite构建通过，仓库382 bundle仍C0xCph7Y（入口仅更新独立成本JS缓存版本），6个电脑/手机入口一致。3份迁移文档与381已完整读取版本相比无变化，无新DDL，不运行旧迁移入口。正式基线核对发现老板于17:11开始首次接入，D:/TianmingERP/state.json为383且onboarding_pending=true，shared已有数据、原源marker暂缺；禁止旧源发布/重启，待助手正常完成接入后才能执行受锁保护的托管更新，不能绕过首次完整备份门禁。
+
+最终状态：2026-09-12 17:39技术发布v384完成，待管理员人工验收。首次接入已完成；签名代码14ec9462da1200f233202d1ec17d15c8bbe97095，包49ffa8c16c9fc8a5daaa6bf03d36d1d755d4d95f9d21fe2f9a11330df621ee16在D:/TianmingERP正常运行，NAS latest及bootstrap一致、源码正式基线已推送。正常Manager锁/完整加密备份20260912-173553-1a70b441.tmbackup验证通过，停服备份前后正式库SHA0f3756a7061a43faeb5ddc06a8453cde90eff16e45f615c61cd8be44fbd51f50一致，完整性ok/FK0/head mq0912，无新DDL；旧源数据库不变。19项线上只读健康/静态字节/未登录接口拒绝核对通过，无正式自动点击。
+
+发布事故已闭环：DESKTOP017此前将HTTP健康/浏览器URL写入https_proxy契约，导致第一次384启动和383回退启动被配置校验阻止。由原任务持锁恢复合法配置并验证实际load_settings、恢复383后交还；本任务增加实际签名384runtime配置预检，预检通过再正常重做备份和更新，未改配置或放宽安全门禁。旧/新环境字节一致。后续助手默认LAN入口由DESKTOP018/385单独处理。完整证据在Temp/tm-v384-cost-paging-20260912的deployment-result.json、managed-backup-evidence.json、smoke384-result.json及NAS独立回执。管理员：库存台账→库存成本，翻页/搜索核对全库存合计不随筛选改变，切换位置无旧数据残留。真实token用量不可获取。

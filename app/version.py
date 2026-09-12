@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.382"
-APP_VERSION_NAME = "整组生产地图选位与内网提交"
+APP_VERSION = "v0.22.383"
+APP_VERSION_NAME = "助手直接启动目录修复"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -3935,4 +3935,18 @@ APP_VERIFICATION_STEPS = [
     "从内网进入生产整组安排，核对默认3楼及区域、货架层格分类。",
     "点击地图选位，分别查看有货和空货位，确定返回后核对位置与套数保持。",
     "安排一次实际需要的整组生产，确认显示成功或明确原因；计划不直接生成完工库存。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.382：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.382：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "直接双击助手程序时使用实际安装目录，与桌面快捷方式保持一致，不再误到C盘默认目录查找安装包。",
+    "缺少离线安装包时，在首次接入前提示修复安装；保留原设置、381仓库查询和382整组生产更新。",
+]
+APP_VERIFICATION_STEPS = [
+    "直接打开安装目录中的助手EXE，核对原备份设置可用，首次接入不再查找C盘另一目录的安装包。",
+    "通过桌面快捷方式打开，确认与直接打开使用同一安装；按需手动完成首次接入。",
 ]

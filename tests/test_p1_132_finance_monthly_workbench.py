@@ -253,7 +253,7 @@ def test_management_report_export_rejects_missing_or_insufficient_permission(
 
 
 def test_finance_monthly_workbench_has_four_actions_and_mobile_two_columns() -> None:
-    start = INDEX.index('<div class="panel finance-month-workbench">')
+    start = INDEX.index('<div class="panel finance-month-workbench"')
     end = INDEX.index('<div class="finance-overview-grid"', start)
     workbench = INDEX[start:end]
     assert workbench.count('class="finance-month-action"') == 4

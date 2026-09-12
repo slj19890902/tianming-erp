@@ -15,3 +15,5 @@
 只读既有正式一致性副本D:/erp-opt002-warehouse-query-20260912/data/audit/warehouse-query-copy.sqlite3，SHA7f9476a84ee734b1061d38070b4cc438e03fc54e0e7f0ab6a5fb9270c6e22d3e，315个正实物批次；金额/缺价/全部页逐字段与旧读取完全一致，筛选Z.001/纸箱/三楼/不存在/空串匹配33/86/0/0/315一致。旧全量221 SQL/420个Lot加载，新首屏5 SQL/50 Lot，摘要1 SQL/0 Lot；完整翻页247 SQL（反复汇总），不声称全量导出SQL减少。单次隔离测量非正式P95；源哈希不变，无DML。证据data/audit/cost-paging-verification.json。
 
 初次片料新测试夹具误用了成品is_general字段及raw枚举，按真实SemiFinished模型改为合法raw_board后通过，不修改任何正式业务约束。383紧急助手启动根修复优先，本任务顺延384，发布前整合382/383并保持当前助手EXE/设置。
+
+已合并383最终c7651d65并重跑16项后端通过；7项Node与TS/Vite构建通过，仓库382 bundle仍C0xCph7Y（入口仅更新独立成本JS缓存版本），6个电脑/手机入口一致。3份迁移文档与381已完整读取版本相比无变化，无新DDL，不运行旧迁移入口。正式基线核对发现老板于17:11开始首次接入，D:/TianmingERP/state.json为383且onboarding_pending=true，shared已有数据、原源marker暂缺；禁止旧源发布/重启，待助手正常完成接入后才能执行受锁保护的托管更新，不能绕过首次完整备份门禁。

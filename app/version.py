@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.383"
-APP_VERSION_NAME = "助手直接启动目录修复"
+APP_VERSION = "v0.22.384"
+APP_VERSION_NAME = "库存成本分页与轻量汇总"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -3949,4 +3949,20 @@ APP_CHANGES = [
 APP_VERIFICATION_STEPS = [
     "直接打开安装目录中的助手EXE，核对原备份设置可用，首次接入不再查找C盘另一目录的安装包。",
     "通过桌面快捷方式打开，确认与直接打开使用同一安装；按需手动完成首次接入。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.383：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.383：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "库存成本按每页50个批次读取，客户、编码、名称或位置由服务端筛选，支持上一页、下一页，不再一次发送所有明细。",
+    "成本汇总用轻量字段分批读取，库存助手只取汇总；金额仍是全部授权实物的逐批冻结成本，不随筛选和翻页改变。",
+    "保留管理员/老板成本权限、历史价格及改价审计；完整保留381查货、382生产选位和383助手启动修复，无新数据库迁移或业务事实改写。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员从库存台账打开库存成本，翻页并搜索后页产品；核对页码、结果和上方全部库存合计。",
+    "快速切换关键词或地图货位，确认不出现旧查询结果；老板可查看，普通员工不能读取成本。",
+    "打开库存助手，核对成本汇总；系统版本应为v0.22.384，正式页面由管理员人工验收。",
 ]

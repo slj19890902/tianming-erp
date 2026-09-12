@@ -5468,3 +5468,7 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 ## 2026-09-12 DESKTOP011 自主维护 v372
 
 正式45e844a6/v0.22.372/mq0912，报告release_runtime_20260912_135038.json completed；本机助手独立在D:/TianmingERP，源码正式库仍为原路径，尚未切换。管理员日后首次接入成功会在原data/runtime/erp_managed_installation.json记录新根，旧启动和发布必须拒绝旧账；任何后续发布先检查此标记。任务docs/tasks/DESKTOP011_SELF_SERVICE_20260912.md及NAS20260912_DESKTOP011工厂电脑自主维护_v372.md。
+
+
+## AUTH012 2026-09-12 员工密码规则 v0.22.373
+正式代码5a619d47，mq0912不变；54项定向验证通过，已技术发布。任务见 `docs/tasks/AUTH012_PASSWORD_POLICY_20260912.md`；发布证据 `docs/migration_reports/release_runtime_20260912_141153.json`。现有账号未改密；助手尚未接入，未来发布先检查managed marker。

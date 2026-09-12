@@ -5521,3 +5521,7 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 
 ## OPT003 2026-09-12 v384 库存成本分页
 技术发布14ec9462/mq0912完成，待人工验收。首次接入现已完成，唯一正式运行根D:/TianmingERP、库shared/data/carton_erp.sqlite3；旧源码根只同步Git，不再启动旧服务。签名包49ffa8c16c9fc8a5daaa6bf03d36d1d755d4d95f9d21fe2f9a11330df621ee16；正常Manager完整备份/更新及19项线上只读核对通过，无业务事实修改。曾因另一任务HTTP URL与https_proxy冲突启动失败，原任务恢复合法配置后，本任务补实际runtime配置预检再成功更新。16后端/7前端定向测试、315批成本一致性通过。详见docs/tasks/OPT003_COST_PAGING_20260912.md及NAS同名回执；后续385助手LAN入口单独交付，保留管理锁串行更新。
+
+
+## DESKTOP018 2026-09-12 助手385 / ERP384
+助手385仅改浏览器优先ERP_LAN_HTTP_ORIGIN，已部署D:/TianmingERP且窗口已打开；运行ERP保持384签名包49ffa8c16，无二次停服。NAS latest/完整Setup为385（eb4a33e686）。严禁将https_proxy的ERP_HEALTH_URL/ERP_BROWSER_URL直接改HTTP：017曾导致启动失败，已从验证配置恢复并实际load_settings检查通过；GUI入口独立选择LAN。详情docs/tasks/DESKTOP018_LAN_LAUNCH_20260912.md。

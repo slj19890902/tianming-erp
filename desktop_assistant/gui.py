@@ -269,6 +269,8 @@ class App:
             saved.update(nas=nas, protected_password=protect(password))
             write_json(self.manager.root / 'preferences.json', saved)
             register_nightly(self.manager.root, Path(sys.executable))
+            if not self.manager.state.get('current'):
+                return '备份设置已保存。请在工厂电脑页点“首次接入并启用”，选择原ERP整个文件夹。'
             return '已设置每天晚上11点自动备份。请到工厂电脑页点“现在备份一次”，确认共享盘可用。'
         self.run('保存备份设置', save)
 

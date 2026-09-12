@@ -13,7 +13,7 @@ import webbrowser
 
 from desktop_assistant.manager import CN, Manager
 from desktop_assistant.storage import read_json, safe_name, write_json
-from desktop_assistant.windows import protect, register_nightly, unprotect
+from desktop_assistant.windows import unprotect
 
 
 def setup_defaults(manager):
@@ -50,13 +50,18 @@ class App:
         self.window, self.manager = window, manager
         self.events = queue.Queue()
         self.busy = False
+        self.on_success = None
+        window.report_callback_exception = self.report_callback_exception
         window.protocol('WM_DELETE_WINDOW', self.close)
-        window.title('天明ERP助手')
+        from app.version import APP_VERSION
+        window.title('天明ERP助手 · ' + APP_VERSION)
         window.geometry('800x740')
         ttk.Style(window).configure('.', font=('Microsoft YaHei UI', 10))
         window.minsize(780, 720)
         box = ttk.Frame(window, padding=20)
         box.pack(fill='both', expand=True)
+        self.content = box
+        self.backup_panel = None
         ttk.Label(box, text='天明 ERP 助手', font=('Microsoft YaHei UI', 20, 'bold')).pack(anchor='w')
         ttk.Label(box, text='先选择这台电脑的用途，再按页面提示操作。').pack(anchor='w', pady=(4, 8))
         self.status = tk.StringVar()
@@ -177,10 +182,11 @@ class App:
                 enabled = enabled and bool(state.get('previous'))
             button.configure(state='normal' if enabled else 'disabled')
 
-    def run(self, description, action):
+    def run(self, description, action, on_success=None):
         if self.busy:
             return
         self.busy = True
+        self.on_success = on_success
         self.log.set(description + '，请等待。')
         for button in self.buttons:
             button.configure(state='disabled')
@@ -196,6 +202,9 @@ class App:
         try:
             ok, message = self.events.get_nowait()
             self.busy = False
+            completed, self.on_success = self.on_success, None
+            if ok and completed:
+                completed()
             self.log.set(('完成：' if ok else '未完成：') + message)
             for button in self.buttons:
                 button.configure(state='normal')
@@ -244,35 +253,92 @@ class App:
             return '已保存本机地址；请打开ERP。其他设备访问可能还需管理员配置Windows防火墙。'
         self.run('设置访问地址', save)
 
+    def report_callback_exception(self, error_type, error, trace):
+        # Windowed executables have no console. Surface callback failures while
+        # keeping passwords, API keys and exception messages out of diagnostics.
+        import traceback
+        kind = error_type.__name__
+        self.log.set(f'界面操作未完成（{kind}），请重试；仍失败请联系维护人员。')
+        try:
+            frames = traceback.extract_tb(trace)
+            write_json(self.manager.root / 'control/last-ui-error.json', {
+                'type': kind, 'at': datetime.now(CN).isoformat(),
+                'frames': [{'file': Path(f.filename).name, 'function': f.name, 'line': f.lineno} for f in frames],
+            })
+        except Exception:
+            pass
+
     def configure(self):
-        nas = filedialog.askdirectory(title='选择NAS备份文件夹（网络地址或已挂载NAS盘符均可）', initialdir=setup_defaults(self.manager).get('backup_dir'))
-        if not nas:
+        if self.busy:
             return
-        if not Path(nas).is_dir() or Path(nas).resolve().is_relative_to(self.manager.root):
-            messagebox.showerror('备份位置不可用', '请选择已连接的独立NAS文件夹，不要保存在助手安装目录内。')
+        if self.backup_panel is not None:
+            self.backup_directory_entry.focus_set()
             return
-        password = simpledialog.askstring('恢复密码', '设置备份恢复密码（至少12个字符），请另存一份。\n这是取回备份用的密码，不是ERP登录密码：', show='*')
-        if not password:
+        from desktop_assistant.backup_settings import load_preferences
+        saved = load_preferences(self.manager.root)
+        self.tabs.pack_forget()
+        self.more.pack_forget()
+        self.more_button.pack_forget()
+        panel = self.backup_panel = ttk.Frame(self.content, padding=12)
+        panel.pack(fill='x', before=self.log_label)
+        ttk.Label(panel, text='设置每天自动备份', font=('Microsoft YaHei UI', 14, 'bold')).pack(anchor='w', pady=(0, 10))
+        ttk.Label(panel, text='每天晚上11点备份；电脑保持开机、账号登录及NAS连接。', wraplength=700).pack(anchor='w')
+        ttk.Label(panel, text='NAS备份文件夹', padding=(0, 12, 0, 4)).pack(anchor='w')
+        self.backup_directory = tk.StringVar(value=saved.get('nas') or setup_defaults(self.manager).get('backup_dir', ''))
+        self.backup_directory_entry = ttk.Entry(panel, textvariable=self.backup_directory)
+        self.backup_directory_entry.pack(fill='x')
+        ttk.Label(panel, text='可直接使用上面的目录，也可粘贴共享文件夹的完整路径。', wraplength=700).pack(anchor='w', pady=(4, 10))
+        self.backup_password = tk.StringVar()
+        self.backup_confirmation = tk.StringVar()
+        self.backup_inputs = [self.backup_directory_entry]
+        for label, variable in [('恢复密码（至少12个字符）', self.backup_password), ('再次输入恢复密码', self.backup_confirmation)]:
+            ttk.Label(panel, text=label).pack(anchor='w')
+            entry = ttk.Entry(panel, textvariable=variable, show='*')
+            entry.pack(fill='x', pady=(4, 10))
+            self.backup_inputs.append(entry)
+        hint = '已设置恢复密码：两栏留空可继续使用原密码。' if saved.get('protected_password') else '恢复密码用于取回备份，请在电脑以外另存；不是员工登录密码。'
+        ttk.Label(panel, text=hint, wraplength=700).pack(anchor='w', pady=(0, 10))
+        actions = ttk.Frame(panel)
+        actions.pack(fill='x')
+        self.backup_save_button = ttk.Button(actions, text='保存并启用自动备份', command=self.save_backup_settings)
+        self.backup_save_button.pack(side='left')
+        self.backup_cancel_button = ttk.Button(actions, text='返回', command=self.close_backup_settings)
+        self.backup_cancel_button.pack(side='left', padx=12)
+        self.buttons.extend([self.backup_save_button, self.backup_cancel_button])
+        self.log.set('请确认备份文件夹，填写恢复密码后点“保存并启用自动备份”。')
+        self.backup_directory_entry.focus_set()
+
+    def close_backup_settings(self):
+        if self.busy or self.backup_panel is None:
             return
-        again = simpledialog.askstring('再次输入恢复密码', '再次输入刚才设置的恢复密码：', show='*')
-        if password != again or len(password) < 12:
-            messagebox.showerror('口令不匹配', '两次口令必须相同且不少于12个字符。')
+        self.backup_password.set('')
+        self.backup_confirmation.set('')
+        for button in (self.backup_save_button, self.backup_cancel_button):
+            self.buttons.remove(button)
+        self.backup_panel.destroy()
+        self.backup_panel = None
+        self.more_button.configure(text='遇到问题／其他设置 ▸')
+        self.more_button.pack(anchor='w', pady=(12, 4), before=self.log_label)
+        self.tabs.pack(fill='x', before=self.more_button)
+        self.log.set('已返回；未保存的设置不会生效。')
+
+    def save_backup_settings(self):
+        if self.busy:
+            return
+        from desktop_assistant.backup_settings import save_backup_settings
+        directory, password, again = self.backup_directory.get(), self.backup_password.get(), self.backup_confirmation.get()
+        if not directory.strip():
+            self.log.set('请填写NAS备份文件夹。')
+            return
+        if (password or again) and (password != again or len(password) < 12):
+            self.log.set('两次恢复密码必须相同，且至少12个字符。')
             return
         if not getattr(sys, 'frozen', False):
-            messagebox.showinfo('开发模式', '开发源码不注册计划任务，请使用安装后的助手。')
+            self.log.set('开发模式不注册计划任务，请使用安装后的助手。')
             return
-        def save():
-            try:
-                saved = preferences(self.manager)
-            except (OSError, ValueError):
-                saved = {}
-            saved.update(nas=nas, protected_password=protect(password))
-            write_json(self.manager.root / 'preferences.json', saved)
-            register_nightly(self.manager.root, Path(sys.executable))
-            if not self.manager.state.get('current'):
-                return '备份设置已保存。请在工厂电脑页点“首次接入并启用”，选择原ERP整个文件夹。'
-            return '已设置每天晚上11点自动备份。请到工厂电脑页点“现在备份一次”，确认共享盘可用。'
-        self.run('保存备份设置', save)
+        self.run('正在检查备份文件夹并保存设置',
+                 lambda: save_backup_settings(self.manager, directory, password, again, Path(sys.executable)),
+                 on_success=self.close_backup_settings)
 
     def configure_ai(self):
         from desktop_assistant.ai_config import save_deepseek_api_key
@@ -388,6 +454,23 @@ def main():
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
     if args.self_test:
+        import tempfile
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory(prefix='tm-assistant-ui-check-') as temp:
+            root = Path(temp)
+            (root / 'control').mkdir()
+            probe = SimpleNamespace(root=root, state={'current': None, 'previous': None})
+            window = tk.Tk()
+            window.withdraw()
+            try:
+                app = App(window, probe)
+                next(b for key, b in app.action_buttons if key == 'configure').invoke()
+                window.update()
+                assert app.backup_panel is not None and app.backup_panel.winfo_manager() == 'pack'
+                assert not (root / 'preferences.json').exists()
+                app.close_backup_settings()
+            finally:
+                window.destroy()
         return
     resources = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
     manager = Manager(args.root, (resources / 'release-public.pem').read_bytes())

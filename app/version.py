@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.363"
-APP_VERSION_NAME = "安装助手连续更新与恢复"
+APP_VERSION = "v0.22.364"
+APP_VERSION_NAME = "送货统一选货与整行选择"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2762,9 +2762,15 @@ APP_VERIFICATION_STEPS = [
     "在助手点击检查更新，确认漏装中间版本时能逐步完成；缺少必要签名包时应保留原服务并给出提示。",
     "系统版本应为v0.22.363；备用电脑恢复、网络访问和实体打印由管理员现场验收，不以安装器启动自检替代。",
 ]
+_V022363_CHANGES = APP_CHANGES
+_V022363_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["新增送货单合并订单与无订单库存，统一搜索分页；订单优先，绿色订单号与黄色无订单区分，隐藏车号和空提醒。", "送货选货及新订单导入常用箱支持整行选择，再点取消；点击数量框自动选中，编辑时保持选择。", "保持客户范围、两类来源数量与库存校验，以及订单优先补量、幂等和事务规则。"]
+APP_VERIFICATION_STEPS = ["选择既有订单又有库存的客户，检查列表订单在前；搜索同一编码，核对两类货物及位置、数量。", "点击行两次核对选择和取消，点击数量框直接输入；导入混合明细核对数量，常用箱导入同样检查。"]
 APP_CHANGELOG = [
-    *(f"v0.22.363：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.363：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.364：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.364：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.363：本次更新｜{item}" for item in _V022363_CHANGES),
+    *(f"v0.22.363：如何验证｜{item}" for item in _V022363_STEPS),
     *(f"v0.22.362：本次更新｜{item}" for item in _V022362_CHANGES),
     *(f"v0.22.362：如何验证｜{item}" for item in _V022362_STEPS),
     *(f"v0.22.361：本次更新｜{item}" for item in _V022361_CHANGES),

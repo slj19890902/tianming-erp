@@ -1715,3 +1715,40 @@ def test_mixed_draft_dispatch_and_cancel_are_atomic_and_traceable(
             .select_from(InventoryMovement)
             .where(InventoryMovement.related_delivery_id == delivery.id)
         ) >= 4
+
+
+def test_unified_delivery_selection_orders_first_across_pages(unordered_finished_delivery_app):
+    app, factory = unordered_finished_delivery_app
+    seed = _seed(app, factory)
+    with TestClient(app) as client:
+        assert client.get('/api/deliveries/selection-items', params={'customer_id':seed.customer_a_id}).status_code == 401
+        _login(client)
+        _order_id, order_item_id, _lot = _mixed_delivery_fixture(client, factory, seed)
+        params = {'customer_id':seed.customer_a_id, 'page_size':1}
+        first = client.get('/api/deliveries/selection-items', params=params)
+        assert first.status_code == 200, first.text
+        first = first.json()
+        assert first['order_total'] > 0
+        seen = []
+        for page in range(1, first['total_pages'] + 1):
+            data = client.get('/api/deliveries/selection-items', params={**params,'page':page}).json()
+            seen.extend(data['items'])
+        for size in (2, 3):
+            collected = []
+            for page in range(1, (first['total'] + size - 1) // size + 1):
+                data = client.get('/api/deliveries/selection-items', params={**params,'page_size':size,'page':page}).json()
+                collected.extend(data['items'])
+            assert [(r['source_type'],r.get('order_item_id'),r.get('inventory_lot_id')) for r in collected] == [(r['source_type'],r.get('order_item_id'),r.get('inventory_lot_id')) for r in seen]
+        types = [row['source_type'] for row in seen]
+        assert types == sorted(types, key=lambda x: x != 'order')
+        ids = [row['inventory_lot_id'] for row in seen if row['source_type']=='unordered_finished']
+        assert len(ids)==len(set(ids))
+        assert seed.free_first_lot_id in ids
+        assert not {seed.other_customer_lot_id,seed.general_lot_id,seed.frozen_lot_id,seed.reserved_lot_id}.intersection(ids)
+        product_code = next(row['product_code'] for row in seen if row.get('order_item_id')==order_item_id)
+        search = client.get('/api/deliveries/selection-items',params={**params,'q':product_code,'page_size':50}).json()
+        assert search['items'][0]['source_type']=='order'
+        assert any(row['source_type']=='unordered_finished' for row in search['items'])
+        historical = client.get('/api/deliveries/selection-items',params={**params,'include_inventory':False,'page_size':50}).json()
+        assert historical['inventory_total']==0
+        assert all(row['source_type']=='order' for row in historical['items'])

@@ -20,6 +20,8 @@ def example():
     source = case.root / 'original'
     shutil.copytree(case.manager.root / 'shared', source)
     (source / '.env').write_text('ERP_PORT=18080\nERP_BIND_HOST=127.0.0.1\n', encoding='utf8')
+    (source / 'app').mkdir()
+    (source / 'app/version.py').write_text("APP_VERSION = 'one'\n")
     target = TestManager(case.root / 'new-install', case.public)
     yield case, source, target
     case.tearDown()

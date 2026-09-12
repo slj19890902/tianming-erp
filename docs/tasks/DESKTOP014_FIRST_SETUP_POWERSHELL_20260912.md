@@ -1,0 +1,25 @@
+# DESKTOP014 首次接入停服脚本与版本说明
+
+老板首次接入报原ERP未通过停服检查，并询问377已发布但助手显示376。实际用户助手根为D:/360安全浏览器下载/TianmingERP，已保存备份设置并生成first-setup before_stop备份；尚无state/managed marker。原D:/TianmingERP是另一份未配置安装，不能再将它当用户实际根。
+
+已只读复现同一Python子进程调用Windows PowerShell：系统禁止执行release_erp.ps1，在任何停服/写日志之前返回1。父进程PowerShell 7模块路径还会污染Windows PowerShell 5模块加载。当前直接在工具PowerShell中运行检查通过不能证明打包助手子进程通过。
+
+最小闭环：只对与签名包逐字核验一致的原维护脚本，使用Windows自带PowerShell、独立系统模块路径及进程级RemoteSigned；不修改机器/用户执行策略，不移除进程身份、路径、单worker、数据库、备份、版本和签名检查。子进程失败按受控代码给出明确提示，不记录stderr中的任意秘密。增加真实子进程隔离回归及完整EXE自检。版本文案区分助手自身版本与已接入ERP版本，完整包保留377成本/376修复。
+
+单代理，独立分支codex/desktop014-first-setup-powershell-20260912，基线9933bcbf/mq0912；允许onboarding.py、Windows子进程封装、gui.py及直接测试、version/任务/指南/回执。无业务DDL。普通修复发布沿用授权，v378优先，统一UI任务顺延379并串行。不得代填密码、绕过缺失资料、直接切换首次接入或覆盖用户设置/业务数据。
+
+发布前读取三份迁移文档及最新正式报告；保留实时基线/已验证备份/隔离演练/唯一head/完整性FK/健康/回退。正式ERP网页不自动点击；本机只更新实际助手EXE与bootstrap并重开，管理员点击接入。状态：修复中。
+
+技术发布完成：18ffb2ca6caa4aa5bf6f79c44c6bd96379e598f0 / v378，report release_runtime_20260912_155232.json completed。唯一mq0912；source/applied SHA均2d6de0b7fa94af4c5ae54152544c00f5eea34317f44f155499068cf1d8537b43，备份/演练SHA b26ba3870962c29fa3eb30af4844ab3891b1c52c8fdfa447419b488fbac61539，完整性ok/FK0/核心计数一致。LAN/public健康200，无业务事实修改或新DDL。
+
+完整安装器与助手EXE自检通过（含隔离真实Windows子进程）；Setup内嵌助手与release逐字节一致。签名release c11c0844bf7931c98f3787d189deeb8225e55c72b9c10670fac0fbb472edfb4a，Setup 6a6b50e4c808ce70aaf180f00616c96666a2101445ddd10e7c42a5039c3de9d1，Assistant ed10aaf5dbf07d22894b77a15007363eed8907056e37f075663378e16c498376。NAS latest及release-v378-20260912完整安装器已同步并回读哈希验证。
+
+本机状态必须另核对：排查途中原实际用户根D:/360安全浏览器下载/TianmingERP及其桌面快捷方式消失，原因未获确认；D:/TianmingERP仍是未配置的另一份安装。已异步询问新位置或是否重装，不擅自选另一目录覆盖，不宣称保留了已消失目录中的设置或首次接入已完成。本轮没有删除/移动助手目录、没有代填恢复密码或执行接入。用户回复后更新实际安装并重开；管理员手动接入验收待完成。
+
+NAS独立回执：20260912_DESKTOP014首次接入停服脚本与版本核对_v378.md。后续订单任务可串行379，但发布前实时核对managed marker和真实安装根；新包比原ERP旧会在停服前拒绝，因此必须同时更新未接入bootstrap或提供当前完整安装器，不能只更新NAS latest后让新用户使用旧离线包。实际单轮Token用量不可获取。
+
+老板随后明确当前安装根为D:/TianmingERP。已在确认助手未运行、无managed marker及state后，通过操作锁替换该根的助手EXE和installer-release.zip并验证哈希，保留已有配置字节及control/assistant-before-v378.exe；桌面快捷方式指向该根，实际窗口标题已读取“天明ERP助手 · 助手 v0.22.378”。该根preferences.json原本不存在，不伪造恢复密码或声称旧目录的设置已搬来。已告知老板在此根重新保存备份设置，再手动首次接入。正式/NAS/本机版本修复技术交付已闭环，首次接入业务验收待管理员操作。一次Git远端临时pack写入失败后正常重试成功，不覆盖历史或强推。
+
+补充版本保护：首次接入读取原ERP APP_VERSION并与签名manifest比较，旧包/无法核对版本在备份/停服前拒绝；同版及新版允许。窗口标题明确助手版本，状态单独显示ERP程序版本；未接入不再误写ERP已停止。
+
+验证：Windows真实子进程用例在旧实现2失败，修复后正常调用、身份拒绝不进入停服、只读检查不停止、模块路径不污染父环境及受控错误提示通过。39项首次接入/备份/GUI定向最终通过；初次37通过1个开发Tk瞬时文件读取失败，实际文件存在，整组复验39通过。新调用方式对正式原ERP执行只读配置/进程检查已通过，未停服。完整EXE自检增加独立本地脚本调用以覆盖打包子进程，不执行正式接入。

@@ -54,7 +54,7 @@ class App:
         window.report_callback_exception = self.report_callback_exception
         window.protocol('WM_DELETE_WINDOW', self.close)
         from app.version import APP_VERSION
-        window.title('天明ERP助手 · ' + APP_VERSION)
+        window.title('天明ERP助手 · 助手 ' + APP_VERSION)
         window.geometry('800x740')
         ttk.Style(window).configure('.', font=('Microsoft YaHei UI', 10))
         window.minsize(780, 720)
@@ -155,8 +155,8 @@ class App:
         except ValueError:
             last = str(last)
         running = bool(self.manager._process()) if current and hasattr(self.manager, '_process') else False
-        service = '运行中' if running else '已停止'
-        text = f"本机：{version}    ERP：{service}\n最近成功备份：{last}"
+        service = ('运行中' if running else '已停止') if current else '尚未接入'
+        text = f"ERP程序：{version}    状态：{service}\n最近成功备份：{last}"
         if state.get('backup_error'):
             text += '\n上次备份未成功，请检查共享盘连接后再点“现在备份一次”。'
         if state.get('operation') in ('migration_running', 'migration_failed'):
@@ -456,6 +456,8 @@ def main():
     if args.self_test:
         import tempfile
         from types import SimpleNamespace
+        from desktop_assistant.onboarding import self_test_powershell
+        self_test_powershell()
         with tempfile.TemporaryDirectory(prefix='tm-assistant-ui-check-') as temp:
             root = Path(temp)
             (root / 'control').mkdir()

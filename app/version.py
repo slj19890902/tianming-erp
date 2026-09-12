@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.377"
-APP_VERSION_NAME = "整体优化一期：出库成本口径统一"
+APP_VERSION = "v0.22.378"
+APP_VERSION_NAME = "助手首次接入脚本兼容与版本核对"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -3872,3 +3872,6 @@ APP_CHANGELOG = [
     "v0.20.5：已结清和未结清的对账单都能编辑或取消，遇到开票或收款记录会明确提示原因",
     "v0.20.5：收款核销不再要求填写收款账户，直接输入金额即可",
 ]
+
+APP_CHANGES = ["修复首次接入时Windows阻止助手调用已核验停服脚本的问题，保留原进程身份和备份检查。", "助手与ERP程序版本分开显示，首次接入拒绝使用比原ERP更旧的离线包；完整保留377成本与前序界面修复。"]
+APP_VERIFICATION_STEPS = ["打开助手378，沿用已保存的备份设置，选择原ERP整个目录后首次接入，确认不再报脚本运行策略错误。", "核对接入后显示的ERP程序版本与正式版一致；旧安装包接入新版ERP会在停服前提示更新。"]

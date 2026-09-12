@@ -1,6 +1,8 @@
 """Explicit first factory cutover, using the existing production process guard."""
 from pathlib import Path
 from contextlib import closing
+import ast
+import re
 import sqlite3
 import subprocess
 import uuid
@@ -8,6 +10,7 @@ import uuid
 from desktop_assistant.storage import database_info, sha, write_json
 from desktop_assistant.import_existing import _import_locked
 from desktop_assistant.preflight import inspect
+from desktop_assistant.windows import run_maintenance_powershell
 
 
 def _same_script(actual, reference):
@@ -17,7 +20,7 @@ def _same_script(actual, reference):
         raise ValueError('原ERP维护程序与签名安装包不同，请先由维护人员核对版本；尚未停服')
 
 
-def stop_original(source, release):
+def check_original_runtime(source, release, *, stop=False):
     relative = 'scripts/admin/release_erp.ps1'
     _same_script(source / relative, release / relative)
     quoted = str(source / relative).replace("'", "''")
@@ -26,12 +29,43 @@ def stop_original(source, release):
     command = (f"$ErrorActionPreference='Stop'; . '{quoted}' -LibraryOnly; "
                "Initialize-ReleaseRuntime; "
                "$listeners=Get-NetTCPConnection -LocalPort $ErpPort -State Listen -ErrorAction SilentlyContinue; "
-               "foreach($item in $listeners){Get-ValidatedErpProcess -ProcessId $item.OwningProcess | Out-Null}; "
-               "Set-ErpMaintenanceLock 'ERP assistant first setup'; Stop-ErpService; Assert-ErpStopped")
-    result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
-                            cwd=source, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+               "foreach($item in $listeners){Get-ValidatedErpProcess -ProcessId $item.OwningProcess | Out-Null}; ")
+    if stop:
+        command += "Set-ErpMaintenanceLock 'ERP assistant first setup'; Stop-ErpService; Assert-ErpStopped"
+    result = run_maintenance_powershell(command, source)
     if result.returncode:
+        detail = (result.stderr or b'')
+        if b'UnauthorizedAccess' in detail or b'PSSecurityException' in detail:
+            raise ValueError('Windows阻止了原ERP维护脚本，尚未继续接入。请管理员检查电脑的脚本运行策略；原数据保留。')
         raise ValueError('原ERP未通过停服检查，未继续接入。请查看原ERP的logs/erp_release.log；不要强制结束进程')
+
+
+def stop_original(source, release):
+    check_original_runtime(source, release, stop=True)
+
+
+def self_test_powershell():
+    """Exercise the packaged child process using only an isolated local fixture."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='tm-powershell-check-') as temp:
+        root = Path(temp)
+        source, release = root / 'original', root / 'signed'
+        trace = str(root / 'checked.txt').replace("'", "''")
+        script = (
+            'param([switch]$LibraryOnly)\n'
+            'function Initialize-ReleaseRuntime { $script:ErpPort=1 }\n'
+            'function Get-NetTCPConnection { }\n'
+            'function Get-ValidatedErpProcess { throw "unexpected listener" }\n'
+            'function Set-ErpMaintenanceLock { }\n'
+            'function Stop-ErpService { }\n'
+            f"function Assert-ErpStopped {{ Set-Content -LiteralPath '{trace}' -Value 'passed' }}\n"
+        )
+        for directory in (source, release):
+            path = directory / 'scripts/admin/release_erp.ps1'
+            path.parent.mkdir(parents=True)
+            path.write_text(script, encoding='utf-8-sig')
+        stop_original(source, release)
+        assert (root / 'checked.txt').read_text().strip() == 'passed'
 
 
 def _check_nas(password, nas):
@@ -72,6 +106,25 @@ def check_source_environment(source):
                 raise ValueError('原配置路径尚不支持完整恢复：' + key + '；尚未停服')
 
 
+def check_source_version(source, release):
+    try:
+        tree = ast.parse((source / 'app/version.py').read_text(encoding='utf-8-sig'))
+        value = next(ast.literal_eval(node.value) for node in tree.body
+                     if isinstance(node, ast.Assign)
+                     and any(isinstance(t, ast.Name) and t.id == 'APP_VERSION' for t in node.targets))
+        incoming = release['version']
+        if value == incoming:
+            return
+        original = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)', value)
+        candidate = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)', incoming)
+        if not original or not candidate:
+            raise ValueError('invalid version')
+    except (OSError, ValueError, TypeError, KeyError, StopIteration, SyntaxError):
+        raise ValueError('无法核对原ERP与安装包的程序版本，请检查完整安装包；尚未停服') from None
+    if tuple(map(int, original.groups())) > tuple(map(int, candidate.groups())):
+        raise ValueError(f'安装包ERP {incoming} 比原ERP {value} 旧，请先运行最新版助手安装器更新此安装；尚未停服')
+
+
 def onboard(manager, source, package, password, nas):
     source = source.resolve()
     if source == manager.root or source in manager.root.parents or manager.root in source.parents:
@@ -86,6 +139,7 @@ def onboard(manager, source, package, password, nas):
             raise ValueError('原ERP已经接入另一助手，请打开已接入的助手，不要重复复制')
         check_source_environment(source)
         release = manager.stage_release(package)
+        check_source_version(source, release)
         release_root = manager.root / 'releases' / release['id']
         database = source / 'data/carton_erp.sqlite3'
         before = database_info(database)

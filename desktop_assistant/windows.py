@@ -1,11 +1,30 @@
 """Windows host integration, called only by explicit setup/operation actions."""
 import base64
 import ctypes
+import os
 from ctypes import wintypes
 from pathlib import Path
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+
+
+def run_maintenance_powershell(command: str, cwd: Path):
+    """Run trusted maintenance commands without inheriting a PS7 module tree.
+
+    RemoteSigned applies to this child only. Machine/user/group policies remain
+    unchanged; onboarding must verify the maintenance script against its signed
+    release before calling this helper.
+    """
+    system = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0'
+    environment = os.environ.copy()
+    environment['PSModulePath'] = str(system / 'Modules')
+    return subprocess.run(
+        [str(system / 'powershell.exe'), '-NoProfile', '-NonInteractive',
+         '-ExecutionPolicy', 'RemoteSigned', '-Command', command],
+        cwd=cwd, env=environment, capture_output=True,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
 
 
 class Blob(ctypes.Structure):

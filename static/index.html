@@ -7016,7 +7016,10 @@
                 <button :class="['btn',emailQueueFilter==='improve'?'primary':'']" @click="emailQueueFilter='improve'">待改进（{{ orderImportDrafts.filter(d=>d.email_queue_status==='improve').length }}）</button>
                 <span class="muted" v-if="emailQueueSummary.recognizing">后台正在识别 {{ emailQueueSummary.recognizing }} 份PDF</span>
                 <a class="btn" href="/email-intake.html" target="_blank" rel="noopener">邮件历史</a>
-                <span v-if="!orderImportDrafts.length" class="muted">暂无已识别的待处理PDF；后台识别完成后红标会自动更新。</span>
+                <span v-if="orderImportBatch.status==='recognizing'" role="status">正在加载 {{ emailQueueCount }} 份待处理PDF并核对订单，请稍候…</span>
+                <span v-else-if="emailQueueError" role="alert" class="status red">{{ emailQueueError }}</span>
+                <span v-else-if="!orderImportDrafts.length" class="muted">{{ emailQueueSummary.recognizing ? '后台正在识别，完成后点击重新读取。' : '当前没有待处理PDF。' }}</span>
+                <button class="btn" :disabled="orderImportBatch.status==='recognizing'" @click="openEmailQueue">重新读取</button>
               </div>
               <div v-if="!emailQueueMode" class="form-grid" style="margin-bottom:12px">
                 <div class="field wide">
@@ -10014,7 +10017,7 @@
             systemUsers: [], systemSection:"basic",
             emailSettings:{configured:false,version:0,sender_addresses:[],sync_interval_minutes:5,automatic_enabled:false},
             emailAuthorizationCode:"", emailSenderText:"", emailSettingsSaving:false,
-            emailQueueCount:0, emailQueueTimer:null, emailQueueMode:false, emailQueueFilter:"ready", emailQueueSummary:{},
+            emailQueueCount:0, emailQueueTimer:null, emailQueueMode:false, emailQueueError:"", emailQueueFilter:"ready", emailQueueSummary:{},
             systemSectionLoaded:{basic:false,layout:false,print:false,backup:false,pdf:false},
             systemSectionLoading:{basic:false,layout:false,print:false,backup:false,pdf:false},
             systemSectionErrors:{basic:"",layout:"",print:"",backup:"",pdf:""},
@@ -30267,9 +30270,11 @@
             this.openOrderPdfImport();
             this.emailQueueMode=true;
             this.emailQueueFilter="ready";
+            this.emailQueueError="";
             this.orderImportBatch.status="recognizing";
             try {
-              const {data}=await axios.post("/api/email-intake/queue/preview");
+              const {data}=await axios.post("/api/email-intake/queue/preview", null, {responseType:"json"});
+              if (!data || !Array.isArray(data.drafts)) throw new Error("订单列表返回异常，请重新读取。");
               if (this.modal?.type !== "orderPdfImport") return;
               this.orderImportDrafts=(data.drafts||[]).map(draft=>this.prepareImportDraftReminderState({...draft,confirmed:false,_save_status:"idle",_save_message:"",items:(draft.items||[]).map(item=>this.preparePdfImportItem(item))}));
               await this.loadOrderImportReminders();
@@ -30278,7 +30283,7 @@
               this.orderImportBatch.status="recognized";
               if (!this.orderImportDrafts.some(draft=>draft.email_queue_status==="ready")) this.emailQueueFilter="improve";
               await this.refreshEmailQueueCount();
-            } catch(error) { this.orderImportBatch.status="failed"; this.showToast(this.errorMessage(error),true); }
+            } catch(error) { this.orderImportBatch.status="failed"; this.emailQueueError=this.errorMessage(error); this.showToast(this.emailQueueError,true); }
           },
           async openEmailAttachmentFromLocation() {
             const linkedOrder = new URLSearchParams(window.location.search).get("email_order");

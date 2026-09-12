@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.367"
-APP_VERSION_NAME = "DeepSeek库存解读接入"
+APP_VERSION = "v0.22.368"
+APP_VERSION_NAME = "邮箱待处理加载状态修复"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2786,7 +2786,14 @@ _V022366_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["库存经营解读支持DeepSeek，使用独立专用密钥，仅发送已脱敏且受权限限制的库存快照。", "安装助手增加DeepSeek密钥加密保存入口，保留原数据及OpenAI配置；无密钥时保留规则库存助手。", "保持原证据校验、权限、幂等、审计及只读边界；无新增迁移，保留收料入位和邮箱更新。"]
 APP_VERIFICATION_STEPS = ["在新版安装助手设置DeepSeek专用密钥，然后进入库存助手检查服务状态并生成解读。", "核对解读依据和失败提示，确认没有自动建单或改写库存。"]
 
+_V022367_CHANGES = APP_CHANGES
+_V022367_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["邮箱收单加载期间明确显示正在核对待处理PDF，不再误报暂无订单。", "读取失败或返回异常保留明确错误及重新读取入口，避免静默显示空列表。", "保留待保存/待改进分类、客户权限和人工保存流程；无新增数据库迁移。"]
+APP_VERIFICATION_STEPS = ["点击带红标的邮箱收单，先显示加载提示，完成后显示订单草稿。", "如果读取失败，弹窗内应显示原因，可点击重新读取；管理员核对后再保存订单。"]
+
 APP_CHANGELOG = [
+    *(f"v0.22.367：本次更新｜{item}" for item in _V022367_CHANGES),
+    *(f"v0.22.367：如何验证｜{item}" for item in _V022367_STEPS),
     *(f"v0.22.366：本次更新｜{item}" for item in _V022366_CHANGES),
     *(f"v0.22.366：如何验证｜{item}" for item in _V022366_STEPS),
     *(f"v0.22.365：本次更新｜{item}" for item in _V022365_CHANGES),

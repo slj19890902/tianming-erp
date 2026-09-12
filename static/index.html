@@ -10,7 +10,7 @@
     <script src="/static/ui/workspace.js?v=1e9b28d1dfa9"></script>
     <script src="/static/ui/pdf-workspace.js?v=fcba033a4d82"></script>
     <script src="/static/ui/purchase-workspace.js?v=66709867c608"></script>
-    <script src="/static/ui/production-workspace.js?v=e887b26d7692"></script>
+    <script src="/static/ui/production-workspace.js?v=2bed4fdebec1"></script>
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
@@ -3055,7 +3055,7 @@
 </style>
     <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260911-1">
     <link rel="stylesheet" href="/static/product-editor-compact.css?v=e210145a0c7d" />
-    <link rel="stylesheet" href="/static/ui/workspace.css?v=c840a5c202b5" />
+    <link rel="stylesheet" href="/static/ui/workspace.css?v=1eb14ed58321" />
   </head>
   <body>
     <div id="app" v-cloak>
@@ -4747,6 +4747,10 @@
                   </tr></tbody></table>
                 </data-panel>
               </section>
+              <div v-if="stockLocationMap" class="stock-map-mask" @keydown.esc.stop="closeStockLocationMap">
+                <div class="stock-map-toolbar"><strong>地图选位 · 点击货位后确定</strong><button class="btn" @click="closeStockLocationMap">返回生产安排</button></div>
+                <iframe ref="stockLocationFrame" :src="stockLocationMap.url" title="生产成品地图选位"></iframe>
+              </div>
               <div v-if="stockPrepDialog" class="workspace-dialog-mask" @keydown.esc.stop="stockPrepDialog.loading?null:(stockPrepDialog=null)">
                 <section class="workspace-dialog stock-production-dialog" role="dialog" aria-modal="true" aria-label="备库生产安排">
                   <div class="toolbar"><strong>{{stockEntryName(stockPrepDialog.row).code}} · {{stockEntryName(stockPrepDialog.row).name}}</strong><button class="btn small" :disabled="stockPrepDialog.loading" @click="stockPrepDialog=null">关闭</button></div>
@@ -4770,7 +4774,7 @@
                     <template v-else-if="stockPrepDialog.row.entry_type==='single_job'"><div class="stock-recipe-line">投入 {{stockPrepDialog.job.input_quantity}} 张 · 理论 {{stockPrepDialog.job.expected_output}} 个</div><label>实际产出 <input class="input" type="number" min="1" v-model.number="stockPrepDialog.job._actual" :disabled="!canAdmin" /></label></template>
                     <template v-else><div v-if="stockPrepDialog.row.kit_options?.length" class="toolbar-group"><button v-for="plan in stockPrepDialog.row.kit_options" :key="plan.recipe.parent_id" class="btn small" @click="openStockDialog({entry_type:'kit',plan,children:[stockPrepDialog.row]})">整组生产：{{plan.recipe.name}}</button></div><div class="stock-recipe-line">{{stockPrepDialog.row.specification}} · {{stockPrepDialog.row.material}} · {{stockPrepDialog.row.location}}</div><div>{{stockPrepDialog.row.status==='waiting'?'待收':'本批实收'}} {{stockPrepDialog.row.quantity}} {{stockPrepDialog.row.unit}} · 可用 {{stockPrepDialog.row.available}} · 已预占 {{stockPrepDialog.row.reserved}}</div><info-note>{{stockPrepDialog.row.order_number}} · {{stockPrepDialog.row.lot_number}}</info-note><label v-if="stockPrepDialog.row.can_plan && stockPrepDialog.row.available>0">投入生产 <input class="input" type="number" min="1" :max="stockPrepDialog.row.available" v-model.number="stockPrepDialog.quantity" :disabled="!canAdmin" /> 张</label></template>
                     <pager v-if="stockPrepDialog.row.entry_type==='group_job'" :page="stockPrepDialog.page" :total="stockPrepDialog.jobs?.length||0" :page-size="4" @change="stockPrepDialog.page=$event"></pager>
-                    <div v-if="stockPrepDialog.row.entry_type!=='receipt' || (stockPrepDialog.row.can_plan&&stockPrepDialog.row.available>0)" class="stock-location-field"><label>{{['group_job','single_job'].includes(stockPrepDialog.row.entry_type)?'实际成品位置':'计划成品位置'}}</label><location-picker v-model="stockPrepDialog.location" :locations="productionLocations" :disabled="!canAdmin||stockPrepDialog.loading"></location-picker></div>
+                    <div v-if="stockPrepDialog.row.entry_type!=='receipt' || (stockPrepDialog.row.can_plan&&stockPrepDialog.row.available>0)" class="stock-location-field"><label>{{['group_job','single_job'].includes(stockPrepDialog.row.entry_type)?'实际成品位置':'计划成品位置'}}</label><location-picker v-model="stockPrepDialog.location" :locations="productionLocations" :disabled="!canAdmin||stockPrepDialog.loading"></location-picker><button v-if="canAdmin&&hasPermission('warehouse.view')" class="btn small" :disabled="stockPrepDialog.loading" @click="openStockLocationMap">地图选位</button></div>
                     <div v-if="canAdmin" class="toolbar-group stock-dialog-actions">
                       <template v-if="['group_job','single_job'].includes(stockPrepDialog.row.entry_type)"><button class="btn success" :disabled="stockPrepDialog.loading" @click="saveStockDialog('complete')">确认产出入库</button><button class="btn" :disabled="stockPrepDialog.loading" @click="saveStockDialog('cancel')">取消安排</button></template>
                       <template v-else-if="stockPrepDialog.row.entry_type==='kit'"><button class="btn primary" :disabled="stockPrepDialog.loading||!stockPrepDialog.preview||stockPrepDialog.preview.shortages.length>0" @click="saveStockDialog('plan')">整组转待生产</button><info-note>暂不生产时可关闭，材料继续在原库位保留；不会自动消失或转成品。</info-note></template>

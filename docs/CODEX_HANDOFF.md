@@ -5476,3 +5476,8 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 
 ## DESKTOP012 2026-09-12 自动备份设置入口 v0.22.374
 正式代码36f1e10e/mq0912，技术发布完成。新版助手主窗展开备份设置并显示失败，29项定向及打包入口自检通过，本机新版窗口已打开。见 `docs/tasks/DESKTOP012_BACKUP_SETTINGS_20260912.md` 与 `docs/migration_reports/release_runtime_20260912_144641.json`；未来发布继续先检查managed marker。
+
+## 2026-09-12 v0.22.375 ERP 统一核单与整组备库生产
+
+- 正式服务发布 18b3c70a，静态 LF/缓存键收尾 9e971b2e；唯一 mq0912，无新 migration。release_runtime_20260912_145612.json completed，正式库前后 SHA 相同，健康及 6 份资源逐字节核对通过。55 项定向业务、9 项前端与隔离 Chrome 通过；正式页面交管理员人工验收。
+- 205 每套网格长片 3 只、短片 4 只，一箱 5 套；按网格套数整组安排，未改正式库存或主档。详情 docs/unified_erp_ui_delivery_20260912.md 与同名 NAS 独立回执。DESKTOP013 接续 v376 完整包/latest，OPT001 顺延 v377；本任务不竞争写 NAS latest，不执行助手首次接入。

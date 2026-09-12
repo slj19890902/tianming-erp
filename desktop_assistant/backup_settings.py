@@ -1,5 +1,6 @@
 """Persist local backup settings without opening a Windows shell folder dialog."""
 from pathlib import Path
+import os
 import uuid
 
 from desktop_assistant.storage import read_json, write_json
@@ -14,6 +15,32 @@ def load_preferences(root):
     if not isinstance(settings, dict):
         raise ValueError('原备份设置无法读取，未覆盖，请联系维护人员检查')
     return settings
+
+
+def validate_backup_directory(directory, installation_root):
+    nas = Path(directory.strip())
+    if not nas.is_absolute() or not nas.is_dir():
+        raise ValueError('备份文件夹不可用，请检查NAS连接及完整路径')
+    nas = Path(os.path.abspath(nas))
+    root = installation_root.resolve()
+    if nas.is_relative_to(root):
+        raise ValueError('备份不能放在助手安装目录内，请选择独立NAS文件夹')
+    try:
+        resolved = nas.resolve(strict=True)
+    except OSError as error:
+        # Some mounted NAS volumes support file IO/stat but not Windows final
+        # volume-name resolution (1005). A distinct, known device proves the
+        # destination cannot alias the local installation. Never blanket-ignore
+        # resolution errors or allow an unknown/same-volume destination.
+        if getattr(error, 'winerror', None) != 1005:
+            raise
+        destination_device, root_device = nas.stat().st_dev, root.stat().st_dev
+        if not destination_device or not root_device or destination_device == root_device:
+            raise ValueError('无法核实备份目录与助手目录的隔离，请选择独立NAS文件夹') from None
+    else:
+        if resolved.is_relative_to(root):
+            raise ValueError('备份不能放在助手安装目录内，请选择独立NAS文件夹')
+    return nas
 
 
 def save_backup_settings(manager, directory, password, confirmation, executable):
@@ -34,11 +61,7 @@ def save_backup_settings(manager, directory, password, confirmation, executable)
             raise ValueError('请填写恢复密码并再次输入确认，至少12个字符')
         if not directory.strip():
             raise ValueError('请填写NAS备份文件夹')
-        nas = Path(directory.strip())
-        if not nas.is_absolute() or not nas.is_dir():
-            raise ValueError('备份文件夹不可用，请检查NAS连接及完整路径')
-        if nas.resolve().is_relative_to(manager.root.resolve()):
-            raise ValueError('备份不能放在助手安装目录内，请选择独立NAS文件夹')
+        nas = validate_backup_directory(directory, manager.root)
         probe = nas / ('assistant-write-check-' + uuid.uuid4().hex + '.tmp')
         try:
             with probe.open('xb') as stream:

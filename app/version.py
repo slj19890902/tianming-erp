@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.366"
-APP_VERSION_NAME = "收料自动入位与待入库归位"
+APP_VERSION = "v0.22.367"
+APP_VERSION_NAME = "DeepSeek库存解读接入"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2781,9 +2781,14 @@ APP_VERIFICATION_STEPS = [
     "确认一笔来料：有默认位进入该格，无默认位进入一楼待入库区；核对成品数量与采购备料张数。",
     "生产待归位选择实际货位并归位，核对原位减少、目标增加和颜色；正式页面由管理员人工验收。",
 ]
+_V022366_CHANGES = APP_CHANGES
+_V022366_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["库存经营解读支持DeepSeek，使用独立专用密钥，仅发送已脱敏且受权限限制的库存快照。", "安装助手增加DeepSeek密钥加密保存入口，保留原数据及OpenAI配置；无密钥时保留规则库存助手。", "保持原证据校验、权限、幂等、审计及只读边界；无新增迁移，保留收料入位和邮箱更新。"]
+APP_VERIFICATION_STEPS = ["在新版安装助手设置DeepSeek专用密钥，然后进入库存助手检查服务状态并生成解读。", "核对解读依据和失败提示，确认没有自动建单或改写库存。"]
+
 APP_CHANGELOG = [
-    *(f"v0.22.366：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.366：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.366：本次更新｜{item}" for item in _V022366_CHANGES),
+    *(f"v0.22.366：如何验证｜{item}" for item in _V022366_STEPS),
     *(f"v0.22.365：本次更新｜{item}" for item in _V022365_CHANGES),
     *(f"v0.22.365：如何验证｜{item}" for item in _V022365_STEPS),
     *(f"v0.22.364：本次更新｜{item}" for item in _V022364_CHANGES),

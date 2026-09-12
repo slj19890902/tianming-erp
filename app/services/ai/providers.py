@@ -210,7 +210,11 @@ class OpenAIInventoryInsightProvider:
         prompt_version: str,
         limits: ProviderLimits,
     ) -> ProviderResult:
-        request_payload = {
+        request_payload = self._request_payload(snapshot, prompt_version)
+        return self._send(request_payload)
+
+    def _request_payload(self, snapshot, prompt_version):
+        return {
             "model": self.model_code,
             "store": False,
             "max_output_tokens": 2500,
@@ -233,8 +237,14 @@ class OpenAIInventoryInsightProvider:
                 }
             },
         }
+    endpoint = OPENAI_RESPONSES_URL
+
+    def _decode_output(self, payload):
+        return json.loads(_response_output_text(payload))
+
+    def _send(self, request_payload):
         request = Request(
-            OPENAI_RESPONSES_URL,
+            self.endpoint,
             data=json.dumps(request_payload, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {self._api_key}",
@@ -284,8 +294,8 @@ class OpenAIInventoryInsightProvider:
             )
         try:
             response_payload = json.loads(raw.decode("utf-8"))
-            output = json.loads(_response_output_text(response_payload))
-        except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as error:
+            output = self._decode_output(response_payload)
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError, KeyError, IndexError) as error:
             raise ProviderUnavailable(
                 "ai_response_invalid",
                 "AI 返回格式无效，原库存经营看板仍可正常使用。",
@@ -299,6 +309,42 @@ class OpenAIInventoryInsightProvider:
             input_tokens=max(0, int(usage.get("input_tokens") or 0)),
             output_tokens=max(0, int(usage.get("output_tokens") or 0)),
         )
+
+
+DEFAULT_DEEPSEEK_MODEL = "deepseek-flash"
+
+
+class DeepSeekInventoryInsightProvider(OpenAIInventoryInsightProvider):
+    provider_code = "deepseek"
+    endpoint = "https://api.deepseek.com/chat/completions"
+
+    def _request_payload(self, snapshot, prompt_version):
+        original = super()._request_payload(snapshot, prompt_version)
+        return {
+            "model": self.model_code,
+            "stream": False,
+            "thinking": {"type": "disabled"},
+            "max_tokens": 2500,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": original["instructions"] +
+                 " JSON输出结构必须满足：" + json.dumps(_openai_output_schema(), ensure_ascii=False) +
+                 ' 示例：{"summary":"未发现可解读证据","risk_groups":[],"next_checks":[],"limitations":["需人工核对"]}'},
+                {"role": "user", "content": original["input"]},
+            ],
+        }
+
+    def _decode_output(self, payload):
+        choice = payload["choices"][0]
+        if choice.get("finish_reason") != "stop":
+            raise ValueError("incomplete response")
+        output = json.loads(choice["message"]["content"])
+        if not isinstance(output, dict):
+            raise ValueError("invalid output")
+        usage = payload.get("usage") or {}
+        payload["usage"] = {"input_tokens": usage.get("prompt_tokens", 0),
+                            "output_tokens": usage.get("completion_tokens", 0)}
+        return output
 
 
 _CATEGORY_DEFINITIONS = (
@@ -434,6 +480,11 @@ def inventory_provider_status() -> dict[str, object]:
         os.getenv("ERP_AI_INVENTORY_PROVIDER", "disabled").strip().lower()
         or "disabled"
     )
+    if configured == "deepseek":
+        enabled = _valid_openai_key(os.getenv("DEEPSEEK_API_KEY", "").strip())
+        return {"enabled": enabled, "provider_code": "deepseek", "model_code": os.getenv("ERP_AI_INVENTORY_MODEL", "").strip() or DEFAULT_DEEPSEEK_MODEL,
+                "mode": "deepseek_chat" if enabled else "credentials_missing",
+                "message": "DeepSeek 库存解读已启用。" if enabled else "请在安装助手设置 DeepSeek 专用密钥。"}
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     model_code = (
         os.getenv("ERP_AI_INVENTORY_MODEL", DEFAULT_OPENAI_MODEL).strip()
@@ -475,6 +526,8 @@ def inventory_provider_status() -> dict[str, object]:
 
 def resolve_inventory_provider() -> InventoryInsightProvider:
     status = inventory_provider_status()
+    if status["enabled"] and status["provider_code"] == "deepseek":
+        return DeepSeekInventoryInsightProvider(os.getenv("DEEPSEEK_API_KEY", "").strip(), model_code=str(status["model_code"]), timeout_seconds=_openai_timeout_seconds())
     if status["enabled"] and status["provider_code"] == "openai":
         return OpenAIInventoryInsightProvider(
             os.getenv("OPENAI_API_KEY", "").strip(),

@@ -118,7 +118,7 @@ class Manager:
                 raise ValueError('服务未能正常停止，未强杀，请检查日志') from None
 
     def _environment(self, release: Path):
-        from desktop_assistant.ai_config import load_openai_api_key
+        from desktop_assistant.ai_config import load_openai_api_key, load_deepseek_api_key
 
         shared = self.root / 'shared'
         saved = read_json(shared / 'environment.json')
@@ -126,7 +126,7 @@ class Manager:
             key: value
             for key, value in os.environ.items()
             if not key.startswith(('ERP_', 'TM_ERP_', 'PYTHON'))
-            and key != 'OPENAI_API_KEY'
+            and key not in {'OPENAI_API_KEY', 'DEEPSEEK_API_KEY'}
         }
         for key, value in saved.items():
             env[key] = value.replace('${SHARED}', str(shared))
@@ -139,6 +139,12 @@ class Manager:
             env['OPENAI_API_KEY'] = ai_key
             env['ERP_AI_INVENTORY_PROVIDER'] = 'openai'
             env.setdefault('ERP_AI_INVENTORY_MODEL', 'gpt-5-mini')
+        deepseek_key = load_deepseek_api_key(self.root)
+        if deepseek_key:
+            env.pop('OPENAI_API_KEY', None)
+            env['DEEPSEEK_API_KEY'] = deepseek_key
+            env['ERP_AI_INVENTORY_PROVIDER'] = 'deepseek'
+            env['ERP_AI_INVENTORY_MODEL'] = 'deepseek-flash'
         models = release / 'runtime/ocr/model'
         if models.is_dir():
             env['EASYOCR_MODULE_PATH'] = str(models.parent)

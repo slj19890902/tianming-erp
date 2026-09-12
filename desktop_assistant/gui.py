@@ -57,7 +57,7 @@ class App:
                              ('回退到上一个版本', self.rollback), ('立即完整备份到NAS', self.backup),
                              ('从NAS恢复到本机空安装', self.restore), ('首次接入原ERP（只读复制）', self.import_old),
                              ('设置本机局域网访问地址', self.network),
-                             ('设置AI密钥', self.configure_ai),
+                             ('设置DeepSeek密钥', self.configure_ai),
                              ('设置NAS与每天23点备份', self.configure)]:
             button = ttk.Button(box, text=text, command=action)
             button.pack(fill='x', pady=4)
@@ -166,11 +166,11 @@ class App:
         self.run('保存备份设置', save)
 
     def configure_ai(self):
-        from desktop_assistant.ai_config import save_openai_api_key
+        from desktop_assistant.ai_config import save_deepseek_api_key
 
         key = simpledialog.askstring(
             '设置AI密钥',
-            '粘贴从 OpenAI 安全创建入口取得的密钥。\n密钥仅加密保存在本机，不进入ERP数据库、日志、发布包或NAS备份。',
+            '粘贴从 DeepSeek 平台取得的专用密钥（不能使用 OpenAI 密钥）。\n密钥仅加密保存在本机，不进入ERP数据库、日志、发布包或NAS备份。',
             show='*',
         )
         if not key:
@@ -185,7 +185,7 @@ class App:
                 running = bool(self.manager._process())
                 self.manager.stop()
                 try:
-                    save_openai_api_key(self.manager.root, key)
+                    save_deepseek_api_key(self.manager.root, key)
                 finally:
                     if running:
                         self.manager.start()

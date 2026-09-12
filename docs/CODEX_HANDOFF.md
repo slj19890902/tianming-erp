@@ -5518,3 +5518,6 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 
 ## DESKTOP016 2026-09-12 v383 助手启动目录
 正式31632f61/mq0912，release_runtime_20260912_170516.json completed；D:/TianmingERP助手与离线包383已更新，直接双击使用EXE所在目录，真实383窗口已打开，设置保留。无managed marker时仍走原源发布，后续384实时核对并持Manager锁。详情docs/tasks/DESKTOP016_START_ROOT_20260912.md；首次接入待管理员验收。
+
+## OPT003 2026-09-12 v384 库存成本分页
+技术发布14ec9462/mq0912完成，待人工验收。首次接入现已完成，唯一正式运行根D:/TianmingERP、库shared/data/carton_erp.sqlite3；旧源码根只同步Git，不再启动旧服务。签名包49ffa8c16c9fc8a5daaa6bf03d36d1d755d4d95f9d21fe2f9a11330df621ee16；正常Manager完整备份/更新及19项线上只读核对通过，无业务事实修改。曾因另一任务HTTP URL与https_proxy冲突启动失败，原任务恢复合法配置后，本任务补实际runtime配置预检再成功更新。16后端/7前端定向测试、315批成本一致性通过。详见docs/tasks/OPT003_COST_PAGING_20260912.md及NAS同名回执；后续385助手LAN入口单独交付，保留管理锁串行更新。

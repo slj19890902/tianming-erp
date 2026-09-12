@@ -9281,7 +9281,7 @@
           <div v-if="modal?.type !== 'product'" class="modal-foot">
             <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
-              <button class="btn" :disabled="loading || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
+              <button class="btn" :disabled="pdfImportSelectionBusy || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
               <span class="muted">待保存：{{ confirmedImportDraftCount }} 条；已成功：{{ successfulImportDraftCount }} 条；失败：{{ failedImportDraftCount }} 条</span>
               <button class="btn primary" :disabled="loading || !confirmedImportDraftCount" @click="saveConfirmedImportDrafts()">保存/重试已确认草稿</button>
             </template>
@@ -10858,6 +10858,10 @@
               draft => this.canConfirmImportDraft(draft)
                 && !["saving","success"].includes(draft._save_status)
             ).length;
+          },
+          pdfImportSelectionBusy() {
+            return this.orderImportBatch.status === "recognizing"
+              || this.orderImportDrafts.some(draft => draft._save_status === "saving");
           },
           confirmedImportDraftCount() {
             return this.orderImportDrafts.filter(
@@ -30266,6 +30270,7 @@
             return (draft?.items || []).some(item => !Number.isInteger(Number(item.quantity)));
           },
           toggleConfirmableImportDrafts() {
+            if (this.pdfImportSelectionBusy) return;
             const confirmable = this.orderImportDrafts.filter(
               draft => this.canConfirmImportDraft(draft)
                 && !["saving","success"].includes(draft._save_status)

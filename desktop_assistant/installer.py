@@ -35,20 +35,24 @@ def install(payload: Path, destination: Path):
 
 
 def update_launcher(payload: Path, destination: Path):
-    """Replace only the helper binary; never touch shared data or the running ERP."""
+    """Refresh bootstrap programs only; never touch shared data or the running ERP."""
     destination = destination.resolve()
     assistant = destination / 'TianmingERP-Assistant.exe'
     if (not assistant.is_file() or not (destination / 'installer-release.zip').is_file()
             or assistant.is_symlink() or destination.is_junction()):
         raise ValueError('请选择已有天明ERP助手安装目录，不能覆盖其他程序目录')
     temporary = destination / ('assistant-update-' + uuid.uuid4().hex + '.tmp')
+    next_package = destination / ('package-update-' + uuid.uuid4().hex + '.tmp')
     try:
         shutil.copyfile(payload / 'TianmingERP-Assistant.exe', temporary)
+        shutil.copyfile(payload / 'release.zip', next_package)
         os.replace(temporary, assistant)
+        os.replace(next_package, destination / 'installer-release.zip')
     except PermissionError:
         raise ValueError('请先关闭旧版天明ERP助手窗口，再更新助手；ERP服务无需停止') from None
     finally:
         temporary.unlink(missing_ok=True)
+        next_package.unlink(missing_ok=True)
     return destination
 
 
@@ -69,7 +73,7 @@ def main():
     try:
         destination = Path(parent) / 'TianmingERP'
         if destination.exists() and any(destination.iterdir()):
-            if not messagebox.askyesno('更新已有助手', '此处已有安装。是否只更新助手程序？\n业务数据、原配置和正在运行的ERP保持不变。请先关闭旧助手窗口。'):
+            if not messagebox.askyesno('更新已有助手', '此处已有安装。是否更新助手和离线程序包？\n业务数据、原配置和正在运行的ERP保持不变。请先关闭旧助手窗口。'):
                 return
             update_launcher(Path(sys._MEIPASS), destination)
         else:

@@ -6,6 +6,7 @@ from desktop_assistant.installer import update_launcher
 
 def fixture(tmp_path):
     payload=tmp_path/'payload';payload.mkdir();(payload/'TianmingERP-Assistant.exe').write_bytes(b'new helper')
+    (payload/'release.zip').write_bytes(b'new installer package')
     destination=tmp_path/'TianmingERP';destination.mkdir()
     (destination/'TianmingERP-Assistant.exe').write_bytes(b'old helper')
     (destination/'installer-release.zip').write_bytes(b'original installer package')
@@ -20,7 +21,8 @@ def test_launcher_update_preserves_all_business_files(tmp_path):
     update_launcher(payload,destination)
     assert (destination/'TianmingERP-Assistant.exe').read_bytes()==b'new helper'
     for path,contents in before.items():
-        if path.name!='TianmingERP-Assistant.exe':assert (destination/path).read_bytes()==contents
+        if path.name not in ('TianmingERP-Assistant.exe','installer-release.zip'):assert (destination/path).read_bytes()==contents
+    assert (destination/'installer-release.zip').read_bytes()==b'new installer package'
     assert not list(destination.glob('*.tmp'))
 
 

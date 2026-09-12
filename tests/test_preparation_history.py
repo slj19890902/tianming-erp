@@ -97,3 +97,25 @@ def test_combined_history_interleaves_order_rows_without_changing_legacy(product
         assert merged['total']==second['total']==4
         assert [r['id'] for r in merged['items']+second['items']]==[ids['b'],'prep:test',ids['a_new'],ids['a_old']]
         assert client.get(url+'?page=1&page_size=50').json()==legacy
+
+
+
+def test_pallet_reuse_and_initial_placement_do_not_block_but_later_move_does(stock_replenishment_app):
+    from datetime import timedelta
+    from app.models.warehouse_inventory import InventoryPallet, InventoryPalletItem, InventoryReservation, InventoryLocationMovement
+    from app.core.time_contract import BEIJING_UTC_OFFSET
+    app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    with TestClient(app) as client:
+        row,payload=completed(app,factory,client)
+        with factory() as db:
+            job=db.scalars(select(Job)).first();output=db.get(InventoryLot,job.output_lot_id)
+            pallet=output.pallet_item.pallet
+            boundary=db.get(InventoryReservation,job.reservation_id).consumed_at+BEIJING_UTC_OFFSET
+            db.add(InventoryLocationMovement(pallet_id=pallet.id,movement_type='move',moved_at=boundary-timedelta(microseconds=1)))
+            db.commit()
+            assert rows(db)[0]['can_revert']
+            db.add(InventoryLocationMovement(pallet_id=pallet.id,movement_type='move',moved_at=boundary+timedelta(seconds=1)))
+            db.commit()
+            assert '移库' in rows(db)[0]['reversal_block']
+        url='/api/production/stock-preparation/completions/'+row['preparation_key']+'/revert'
+        assert client.post(url,json=payload).status_code==409

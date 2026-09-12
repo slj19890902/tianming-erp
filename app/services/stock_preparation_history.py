@@ -7,7 +7,7 @@ from app.models.stock_preparation import StockPreparationJob as Job, StockPrepar
 from app.models.warehouse_inventory import InventoryLot, InventoryReservation, InventoryMovement, InventoryLocationMovement, InventoryPalletItem
 from app.services import stock_preparation as prep
 from app.services.stock_preparation_groups import encode
-from app.core.time_contract import utc_naive_to_api, utc_now_naive, utc_naive_to_beijing_date
+from app.core.time_contract import utc_naive_to_api, utc_now_naive, utc_naive_to_beijing_date, BEIJING_UTC_OFFSET
 from app.services.audit_log import append_audit_event
 
 
@@ -33,7 +33,7 @@ def reverse_block(db, jobs):
         if receipt.status != 'posted' or item.order.status == 'voided' or not source or source.status != 'active':
             return '原收料或原材料库存不可用'
         if (not reservation or reservation.inventory_lot_id != source.id or reservation.status != 'consumed'
-                or reservation.consumed_stock_quantity != job.input_quantity or source.quantity_consumed < job.input_quantity
+                or not reservation.consumed_at or reservation.consumed_stock_quantity != job.input_quantity or source.quantity_consumed < job.input_quantity
                 or source.inventory_type != 'semi_finished'):
             return '原生产消耗记录已变化'
         if (not output or output.source_ref_type != 'stock_preparation' or output.source_ref_id != job.id
@@ -47,7 +47,12 @@ def reverse_block(db, jobs):
         if db.scalar(select(InventoryReservation.id).where(InventoryReservation.inventory_lot_id == output.id).limit(1)):
             return '产出已有预占记录，不能直接撤销'
         pallet = output.pallet_item.pallet if output.pallet_item else None
-        if pallet and db.scalar(select(InventoryLocationMovement.id).where(InventoryLocationMovement.pallet_id == pallet.id, InventoryLocationMovement.movement_type == 'move').limit(1)):
+        # The consume timestamp is recorded after initial output placement. Pallet
+        # movement times are Beijing-naive, while reservation times are UTC-naive.
+        if pallet and db.scalar(select(InventoryLocationMovement.id).where(
+                InventoryLocationMovement.pallet_id == pallet.id,
+                InventoryLocationMovement.movement_type == 'move',
+                InventoryLocationMovement.moved_at > reservation.consumed_at + BEIJING_UTC_OFFSET).limit(1)):
             return '产出栈板已经移库，不能直接撤销'
     return None
 

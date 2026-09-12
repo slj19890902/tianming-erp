@@ -16,11 +16,20 @@ from desktop_assistant.storage import read_json, safe_name, write_json
 from desktop_assistant.windows import protect, register_nightly, unprotect
 
 
+def setup_defaults(manager):
+    try:
+        return read_json(manager.root / 'control/setup-defaults.json')
+    except (OSError, ValueError):
+        return {}
+
+
 def preferences(manager):
     return read_json(manager.root / 'preferences.json')
 
 
 def nightly(manager):
+    if not manager.state.get('current') or manager.state.get('manual_stop') or manager.state.get('onboarding_pending'):
+        return
     settings = preferences(manager)
     now = datetime.now(CN)
     due = now.replace(hour=23, minute=0, second=0, microsecond=0)
@@ -60,13 +69,15 @@ class App:
         standby = ttk.Frame(self.tabs, padding=12)
         self.tabs.add(factory, text='  工厂电脑 · 日常使用  ')
         self.tabs.add(standby, text='  备用新电脑 · 故障接替  ')
-        ttk.Label(factory, text='每天使用：点“打开ERP”。第一次使用：先设置每天备份，再做一次备份。',
+        ttk.Label(factory, text='第一次：设置备份 → 首次接入。以后：直接启动、备份或更新ERP。',
                   wraplength=700).pack(anchor='w', pady=(0, 8))
-        self.action_row(factory, 'open', '打开ERP', '开始处理订单、仓库和送货。', self.open_erp)
+        self.action_row(factory, 'open', '启动并打开ERP', 'ERP停止时自动启动；关闭助手窗口不会停止ERP。', self.open_erp)
+        self.action_row(factory, 'pause', '备份后停止ERP', '准备维护或关机时使用；暂停期间所有员工不能录单。', self.pause_erp)
         self.action_row(factory, 'backup', '现在备份一次', '把当前数据和附件保存到共享盘，电脑坏了可用它恢复。', self.backup)
-        self.action_row(factory, 'update', '更新ERP', '安装已发布的新版；助手会先备份，期间ERP会短暂停用。', self.update)
+        self.action_row(factory, 'update', '更新ERP', '从共享盘同步已发布新版，自动备份、停服、更新和启动。', self.update)
         self.action_row(factory, 'configure', '设置每天自动备份', '首次设置共享盘和恢复密码，以后每天晚上11点备份。', self.configure)
-        ttk.Label(factory, text='自动备份时电脑须开机并保持账号登录，锁屏可以；恢复密码请另存一份。',
+        self.action_row(factory, 'import', '首次接入并启用', '仅第一次：选择原ERP整个文件夹，自动检查、停服、复制和备份。', self.import_old, compact=True)
+        ttk.Label(factory, text='自动备份时保持账号登录和NAS连接，锁屏可以；恢复密码请另存一份。',
                   wraplength=700).pack(anchor='w', pady=(8, 0))
         ttk.Label(standby, text='工厂电脑损坏、不能继续使用时，按下面4步接替。\n先连接存放备份的共享盘，并准备好原来的恢复密码。',
                   wraplength=700).pack(anchor='w', pady=(0, 8))
@@ -83,7 +94,7 @@ class App:
         for key, title, hint, action in (
             ('recover', '继续上次未完成的更新', '更新断电或中断时使用，先检查再恢复。', self.recover_update),
             ('rollback', '退回上一个程序版本', '新版无法使用时使用；不会把业务数据退回旧日期。', self.rollback),
-            ('import', '首次接入原ERP数据', '只在工厂原电脑第一次接入助手时使用。', self.import_old),
+            ('finish', '完成首次接入', '接入已复制但备份中断时，修复共享盘后继续。', self.finish_import),
             ('network', '修改本机访问地址', '工厂电脑地址变化、手机无法访问时检查。', self.network),
             ('ai', '设置AI密钥（DeepSeek）', '启用AI库存解读，与备份恢复无关。', self.configure_ai),
         ):
@@ -138,18 +149,26 @@ class App:
             last = datetime.fromisoformat(last).astimezone(CN).strftime('%Y-%m-%d %H:%M') if last else '还没有成功备份，请先设置备份'
         except ValueError:
             last = str(last)
-        text = f"本机：{version}    最近成功备份：{last}"
+        running = bool(self.manager._process()) if current and hasattr(self.manager, '_process') else False
+        service = '运行中' if running else '已停止'
+        text = f"本机：{version}    ERP：{service}\n最近成功备份：{last}"
         if state.get('backup_error'):
             text += '\n上次备份未成功，请检查共享盘连接后再点“现在备份一次”。'
         if state.get('operation') in ('migration_running', 'migration_failed'):
             text += '\n上次更新未完成：展开“遇到问题／其他设置”，点“继续上次未完成的更新”。'
         if not current:
-            text += '\n新电脑请选择备用新电脑页；原工厂电脑首次接入请展开其他设置。'
+            text += '\n原工厂电脑：先设置备份，再点“首次接入并启用”；备用机请选择另一页。'
+        if state.get('onboarding_pending'):
+            text += '\n首次接入尚未完成完整备份，请展开其他设置继续完成。'
         self.status.set(text)
         for key, button in self.action_buttons:
             enabled = not self.busy
-            if key in ('open', 'backup', 'update', 'configure', 'network', 'ai'):
-                enabled = enabled and current
+            if key in ('open', 'backup', 'update', 'network', 'ai', 'pause'):
+                enabled = enabled and current and not state.get('onboarding_pending')
+                if key == 'pause':
+                    enabled = enabled and running
+            elif key == 'finish':
+                enabled = enabled and bool(state.get('onboarding_pending'))
             elif key in ('restore', 'import'):
                 enabled = enabled and not current
             elif key == 'recover':
@@ -226,11 +245,11 @@ class App:
         self.run('设置访问地址', save)
 
     def configure(self):
-        nas = filedialog.askdirectory(title='选择用于保存ERP备份的共享文件夹（NAS）')
+        nas = filedialog.askdirectory(title='选择NAS备份文件夹（网络地址或已挂载NAS盘符均可）', initialdir=setup_defaults(self.manager).get('backup_dir'))
         if not nas:
             return
-        if not nas.startswith(('\\\\', '//')):
-            messagebox.showerror('使用网络路径', '请填写共享盘的网络地址，例如\\\\服务器\\共享\\ERP恢复；不要选择Z:这类盘符，可在文件选择窗口输入网络地址。')
+        if not Path(nas).is_dir() or Path(nas).resolve().is_relative_to(self.manager.root):
+            messagebox.showerror('备份位置不可用', '请选择已连接的独立NAS文件夹，不要保存在助手安装目录内。')
             return
         password = simpledialog.askstring('恢复密码', '设置备份恢复密码（至少12个字符），请另存一份。\n这是取回备份用的密码，不是ERP登录密码：', show='*')
         if not password:
@@ -243,7 +262,12 @@ class App:
             messagebox.showinfo('开发模式', '开发源码不注册计划任务，请使用安装后的助手。')
             return
         def save():
-            write_json(self.manager.root / 'preferences.json', {'nas': nas, 'protected_password': protect(password)})
+            try:
+                saved = preferences(self.manager)
+            except (OSError, ValueError):
+                saved = {}
+            saved.update(nas=nas, protected_password=protect(password))
+            write_json(self.manager.root / 'preferences.json', saved)
             register_nightly(self.manager.root, Path(sys.executable))
             return '已设置每天晚上11点自动备份。请到工厂电脑页点“现在备份一次”，确认共享盘可用。'
         self.run('保存备份设置', save)
@@ -276,10 +300,20 @@ class App:
 
         self.run('安全保存AI密钥', save)
 
+    def pause_erp(self):
+        settings = self.settings()
+        if settings and messagebox.askyesno('备份后停服', '请先让员工保存正在编辑的单据。助手将完整备份后停止ERP；夜间任务不会自动重新启动。继续？'):
+            self.run('备份并停止ERP', lambda: self.manager.pause_after_backup(*settings))
+
+    def finish_import(self):
+        from desktop_assistant.onboarding import finish_onboarding
+        settings = self.settings()
+        if settings:
+            self.run('完成首次备份并启动', lambda: finish_onboarding(self.manager, *settings))
+
     def open_erp(self):
         def start():
-            with self.manager.lock():
-                self.manager.start()
+            self.manager.resume()
             config = read_json(self.manager.root / 'shared/environment.json')
             webbrowser.open(config.get('ERP_BROWSER_URL', 'http://127.0.0.1:' + config['ERP_PORT'] + '/'))
         self.run('启动ERP', start)
@@ -294,16 +328,26 @@ class App:
         if not settings:
             return
         # Git build publishes a signed release to the NAS releases directory.
-        feed = settings[1] / 'releases/latest.json'
+        config = preferences(self.manager)
+        release_dir = Path(config.get('release_feed') or setup_defaults(self.manager).get('release_feed') or settings[1] / 'releases')
+        feed = release_dir / 'latest.json'
         if not feed.exists():
-            messagebox.showinfo('没有发布包', '共享盘中还没有可用的更新包，请联系系统维护人员发布后再试。')
-            return
+            selected = filedialog.askdirectory(title='选择ERP发布更新文件夹（里面有latest.json；与备份文件夹可以不同）')
+            if not selected:
+                return
+            release_dir = Path(selected)
+            feed = release_dir / 'latest.json'
+            if not feed.is_file():
+                messagebox.showinfo('没有发布包', '该文件夹没有latest.json，请选择维护人员提供的ERP更新目录。')
+                return
+            config['release_feed'] = str(release_dir)
+            write_json(self.manager.root / 'preferences.json', config)
         entry = read_json(feed)
         name = safe_name(entry['package'])
         if '/' in name:
             raise ValueError('发布文件名不合法')
         if messagebox.askyesno('更新', '将验证NAS发布包，先完整备份再更新；备份和更新期间ERP暂停使用。继续？'):
-            self.run('验证、备份并更新', lambda: self.manager.update_from_feed(settings[1] / 'releases' / name, *settings))
+            self.run('验证、备份并更新', lambda: self.manager.update_from_feed(release_dir / name, *settings))
 
     def rollback(self):
         settings = self.settings()
@@ -325,11 +369,14 @@ class App:
         self.run('核对升级现场、备份和程序并恢复运行', self.manager.recover_interrupted_update)
 
     def import_old(self):
-        from desktop_assistant.import_existing import import_existing
-        source = filedialog.askdirectory(title='选择已正常停服的原ERP目录')
+        from desktop_assistant.onboarding import onboard
+        settings = self.settings()
+        if not settings:
+            return
+        source = filedialog.askdirectory(title='选择原ERP整个文件夹（里面有data文件夹，不要选择data本身）', initialdir=setup_defaults(self.manager).get('source_root'))
         package = self.manager.root / 'installer-release.zip'
-        if source and messagebox.askyesno('首次接入', '请确认原ERP已正常停止。只复制数据到助手目录，原目录保留。继续？'):
-            self.run('核对并复制原ERP', lambda: import_existing(self.manager, Path(source), package))
+        if source and messagebox.askyesno('首次接入', '请先让员工保存单据。助手会核对原ERP、暂停服务、复制数据、保存完整备份并启动新入口。以后通过本助手维护，原目录保留。继续？'):
+            self.run('核对并复制原ERP', lambda: onboard(self.manager, Path(source), package, *settings))
 
 
 def main():

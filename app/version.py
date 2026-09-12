@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.371"
-APP_VERSION_NAME = "恢复助手分电脑操作引导"
+APP_VERSION = "v0.22.372"
+APP_VERSION_NAME = "工厂电脑自主备份停服与首次接入"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2807,7 +2807,14 @@ _V022370_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["恢复助手分为工厂电脑和备用新电脑两页，每个按钮用简单说明告知用途。", "备用新电脑按取回备份、设置地址、打开核对、重新设置备份四步接替；其他设置可以展开收回。", "新版安装包更新助手界面；保留原备份、恢复校验、数据隔离和AI密钥保护，无新增迁移。"]
 APP_VERIFICATION_STEPS = ["关闭旧助手，运行新版安装包并选择原安装位置；核对工厂电脑及备用新电脑两页。", "切换页签并展开、收起其他设置，核对未恢复数据时的按钮提示；不必重复执行真实数据恢复。"]
 
+_V022371_CHANGES = APP_CHANGES
+_V022371_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["工厂助手可启动ERP、完整备份后停服，夜间任务不会重新启动人工停止的ERP。", "首次设置备份后可检查并接入原ERP；接入需独立目录、匹配签名程序、受原发布门禁保护的停服、完整备份，旧目录不再重复启动或发布。", "更新目录与备份目录可分别选择并记住；更新沿用签名校验、备份和迁移演练。无新增数据库迁移。"]
+APP_VERIFICATION_STEPS = ["在工厂电脑页先设置备份，再选择原ERP整个文件夹首次接入；接入完成核对订单、库存和附件。", "使用备份后停止ERP，确认保持停止；点启动并打开ERP恢复；更新时选择含latest.json的已发布更新目录。"]
+
 APP_CHANGELOG = [
+    *(f"v0.22.371：本次更新｜{item}" for item in _V022371_CHANGES),
+    *(f"v0.22.371：如何验证｜{item}" for item in _V022371_STEPS),
     *(f"v0.22.370：本次更新｜{item}" for item in _V022370_CHANGES),
     *(f"v0.22.370：如何验证｜{item}" for item in _V022370_STEPS),
     *(f"v0.22.369：本次更新｜{item}" for item in _V022369_CHANGES),

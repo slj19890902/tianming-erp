@@ -117,6 +117,28 @@ class Manager:
             except psutil.TimeoutExpired:
                 raise ValueError('服务未能正常停止，未强杀，请检查日志') from None
 
+    def pause_after_backup(self, password: str, nas: Path):
+        with self.lock():
+            running = bool(self._process())
+            self.stop()
+            try:
+                backup = self._backup_stopped(password, nas)
+                state = self.state
+                state['manual_stop'] = True
+                write_json(self.root / 'state.json', state)
+                return f'完整备份已保存：{backup}。ERP已停止；下次点“启动并打开ERP”恢复使用。'
+            except Exception:
+                if running:
+                    self.start()
+                raise
+
+    def resume(self):
+        with self.lock():
+            self.start()
+            state = self.state
+            state['manual_stop'] = False
+            write_json(self.root / 'state.json', state)
+
     def _environment(self, release: Path):
         from desktop_assistant.ai_config import load_openai_api_key, load_deepseek_api_key
 
@@ -171,6 +193,8 @@ class Manager:
         if self._process():
             return
         state = self.state
+        if state.get('onboarding_pending'):
+            raise ValueError('首次接入尚未完成完整备份，请点击“完成首次接入”后再启动')
         if state.get('operation') in ('migration_running', 'migration_failed'):
             raise ValueError('上次数据库升级未完成，先核对现场或从已验证备份恢复到空安装，不能直接启动')
         release = self.root / 'releases' / state['current']

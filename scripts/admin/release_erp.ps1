@@ -221,6 +221,9 @@ function Assert-ErpStopped {
 }
 
 function Initialize-ReleaseRuntime {
+    if (Test-Path -LiteralPath (Join-Path $projectRoot 'data/runtime/erp_managed_installation.json')) {
+        throw 'This ERP has moved to the desktop assistant. Use the assistant to update; do not release into the archived source.'
+    }
     if (-not (Test-Path -LiteralPath $expectedErpPython -PathType Leaf)) {
         throw "当前 ProjectRoot 的 .venv Python 不存在，禁止回退到全局 Python。"
     }

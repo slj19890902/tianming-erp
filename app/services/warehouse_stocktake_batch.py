@@ -1008,6 +1008,7 @@ def _execute_add(
             pallet_id=current_pallet.id if current_pallet is not None else None,
             movement_reason=f"盘点新增（{source_label}）",
             expected_layout_version=item.expected_layout_version,
+            remember_storage=False,
         )
     else:
         product = db.get(Product, item.product_id)
@@ -1173,6 +1174,10 @@ def execute_warehouse_stocktake_batch(
         except WarehouseInventoryError as error:
             raise WarehouseStocktakeBatchError(str(error), error.status_code) from error
         results.append(result)
+    from app.services.receipt_putaway import remember_stocktake
+    for result in results:
+        if result["operation"] == "add" and result["inventory_type"] == "finished":
+            remember_stocktake(db, db.get(InventoryLot, result["lot_id"]), operator_id)
     return {
         "message": "盘点批次已确认，正式库存与流水已原子提交",
         "batch_id": batch_id,

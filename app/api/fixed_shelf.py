@@ -21,6 +21,47 @@ can_read = PermissionChecker("warehouse.view")
 can_write = PermissionChecker("warehouse.execute")
 
 
+class StoragePayload(BaseModel):
+    expected_version: int = Field(ge=0)
+    area_id: int | None = Field(default=None, gt=0)
+    location_id: int | None = Field(default=None, gt=0)
+    address_version: int | None = Field(default=None, gt=0)
+    layout_version: int | None = Field(default=None, gt=0)
+    idempotency_key: str = Field(min_length=1, max_length=100, pattern=r"\S")
+
+
+@router.get("/receipt-storage/{product_id}")
+def receipt_storage(product_id: int, db: Session = Depends(get_db), user: User = Depends(can_read)):
+    product_for_user(db, user, product_id)
+    from app.services import receipt_putaway
+    from app.models.warehouse_inventory import WarehouseArea, WarehouseFloor
+    rows = db.scalars(select(WarehouseLocation).where(WarehouseLocation.is_active.is_(True),
+        WarehouseLocation.placement_status == "placed").order_by(WarehouseLocation.sort_order, WarehouseLocation.id)).all()
+    contexts = load_warehouse_location_projection_contexts(db, rows)
+    locations = []
+    for row in rows:
+        from app.services.location_candidates import operational_location_issue
+        if operational_location_issue(db, row, warehouse_types={"finished", "shared"}, require_published=True,
+                require_map_geometry=True, required_inventory_type="finished", projection_context=contexts.get(row.id)) is None:
+            item = service.location_info(db, row, contexts.get(row.id))
+            item["area_id"] = contexts[row.id]["area"].id
+            item["area_name"] = contexts[row.id]["area"].area_name
+            item["issue"] = None
+            locations.append(item)
+    return {**receipt_putaway.info(db, product_id), "locations": locations}
+
+
+@router.put("/receipt-storage/{product_id}")
+def save_receipt_storage(product_id: int, payload: StoragePayload, request: Request,
+                         db: Session = Depends(get_db), user: User = Depends(can_write)):
+    if user.role not in {"admin", "boss"}:
+        raise HTTPException(403, "仅管理员或老板可设置默认货位")
+    product_for_user(db, user, product_id)
+    from app.services import receipt_putaway
+    return mutate(db, user, request, "warehouse.receipt_storage.configure", product_id, payload,
+        lambda: receipt_putaway.save(db, product_id, **payload.model_dump(exclude={"idempotency_key"})))
+
+
 class BindingPayload(BaseModel):
     location_id: int = Field(gt=0)
     priority: int = Field(ge=0)

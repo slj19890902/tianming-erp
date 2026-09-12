@@ -707,7 +707,8 @@ def operational_location_issue(
                 and str(source_location.area_code or "").strip().upper()
                 == str(area.area_code).strip().upper()
             )
-        if occupied_count >= int(area.confirmed_pallet_capacity) and not source_in_same_area:
+        from app.services.receipt_putaway import is_staging_area
+        if occupied_count >= int(area.confirmed_pallet_capacity) and not source_in_same_area and not is_staging_area(db, area):
             return "该区域已达到现场确认的栈板容量"
     return None
 

@@ -521,8 +521,8 @@ export function buildMappedLocationPallets(
         depth_mm: renderedDepthMm,
         height_mm: isLogicalAnchor ? 0 : standard.height_mm,
         rotation_deg: rotation,
-        color: hasRedInventoryIssue ? "#b91c1c" : occupied ? "#16a34a" : "#fff8e7",
-        candidate_status_color: hasRedInventoryIssue ? "#b91c1c" : occupied ? "#16a34a" : "#fff8e7",
+        color: hasRedInventoryIssue ? "#b91c1c" : occupied ? ({orange:"#eab308",blue:"#2563eb",green:"#16a34a",mixed:"#0f766e",neutral:"#64748b"}[location.receipt_placement?.color] || "#16a34a") : "#fff8e7",
+        candidate_status_color: hasRedInventoryIssue ? "#b91c1c" : occupied ? ({orange:"#eab308",blue:"#2563eb",green:"#16a34a",mixed:"#0f766e",neutral:"#64748b"}[location.receipt_placement?.color] || "#16a34a") : "#fff8e7",
         visual_status: occupied ? "waiting" : "empty",
         status_note: `${hasRedInventoryIssue ? `现场库存待核对 · ${unmatchedObservationCount || 1} 条红色异常 · ` : ""}${actualPalletCode
           ? `ERP正式库位 · ${actualPalletCode}`

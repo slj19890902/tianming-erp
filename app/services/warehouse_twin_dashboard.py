@@ -938,7 +938,15 @@ def _location_payload(
         or int(current_same_location_pallet(lot).id) not in current_pallet_ids
     ]
     occupied = bool(pallet_payloads) or any(_physical_quantity(lot) > 0 for lot in lots)
+    from sqlalchemy.orm import object_session
+    from app.services.receipt_putaway import placement_state
+    session = object_session(row)
+    states = [placement_state(session, lot) for lot in lots] if session else []
+    labels = sorted({state["label"] for state in states if state["label"]})
+    colors = {state["color"] for state in states if state["color"]}
+    receipt_placement = {"label": " / ".join(labels), "color": next(iter(colors)) if len(colors) == 1 else "mixed"}
     return {
+        "receipt_placement": receipt_placement,
         "location_id": row.id,
         "location_code": row.location_code,
         "location_name": address_payload["employee_location_name"],

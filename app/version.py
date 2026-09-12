@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.363"
-APP_VERSION_NAME = "安装助手连续更新与恢复"
+APP_VERSION = "v0.22.364"
+APP_VERSION_NAME = "收料自动入位与待入库归位"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2762,9 +2762,24 @@ APP_VERIFICATION_STEPS = [
     "在助手点击检查更新，确认漏装中间版本时能逐步完成；缺少必要签名包时应保留原服务并给出提示。",
     "系统版本应为v0.22.363；备用电脑恢复、网络访问和实体打印由管理员现场验收，不以安装器启动自检替代。",
 ]
+_V022363_CHANGES = APP_CHANGES
+_V022363_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "收料优先进入产品默认货位；未设置或默认位置失效时进入一楼待入库区，不再强制寻找旧三楼左区。",
+    "常用箱新增收料默认位置，支持区域或具体货架层格；管理员可修改或取消，只影响后续收料。",
+    "一楼待入库区支持多批共存，数量、预占和冻结成本仍分批记账；管理员可从生产页一次归位到已有货物的货架格。",
+    "生产与地图区分黄色待归位、绿色自动入位、蓝色人工入位；现有盘点产品仅在唯一货架位置明确时记住默认位。",
+]
+APP_VERIFICATION_STEPS = [
+    "常用箱展开收料默认位置，保存或取消一个产品的货架层格；刷新核对。",
+    "确认一笔来料：有默认位进入该格，无默认位进入一楼待入库区；核对成品数量与采购备料张数。",
+    "生产待归位选择实际货位并归位，核对原位减少、目标增加和颜色；正式页面由管理员人工验收。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.363：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.363：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.364：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.364：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.363：本次更新｜{item}" for item in _V022363_CHANGES),
+    *(f"v0.22.363：如何验证｜{item}" for item in _V022363_STEPS),
     *(f"v0.22.362：本次更新｜{item}" for item in _V022362_CHANGES),
     *(f"v0.22.362：如何验证｜{item}" for item in _V022362_STEPS),
     *(f"v0.22.361：本次更新｜{item}" for item in _V022361_CHANGES),

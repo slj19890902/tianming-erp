@@ -2017,6 +2017,17 @@ def _receipt_auto_finished_ground_target(
     product_id: int | None = None,
 ) -> ReceiptAutoFinishedGroundTarget:
     excluded = excluded_location_ids or set()
+    from app.services.receipt_putaway import resolve
+    from app.services.fixed_shelf import ShelfError
+    try:
+        resolved = resolve(db, product_id=product_id, customer_id=customer_id, claim=claim)
+    except ShelfError as exc:
+        raise ProductionWorkflowError(str(exc), 409) from exc
+    if resolved is not None:
+        location, kind, warning = resolved
+        return ReceiptAutoFinishedGroundTarget(plan=None, slot=None, location=location,
+            layout_version=location.floor3_layout.version if location.floor3_layout else 0,
+            target_kind=kind, capacity_warning=warning)
     has_customer_preferences = bool(
         customer_id is not None
         and ordered_preferred_area_ids(db, int(customer_id))
@@ -2227,6 +2238,7 @@ def _production_direct_finished_target(
     *,
     excluded_location_ids: set[int] | None = None,
     customer_id: int | None = None,
+    product_id: int | None = None,
 ) -> tuple[WarehouseLocation, ReceiptAutoFinishedGroundTarget | None]:
     """Choose the only legal destination for a new direct-delivery completion.
 
@@ -2242,6 +2254,7 @@ def _production_direct_finished_target(
             claim=True,
             excluded_location_ids=excluded_location_ids,
             customer_id=customer_id,
+            product_id=product_id,
         )
         return target.location, target
     return _production_direct_staging_location(db), None
@@ -3074,6 +3087,18 @@ def _stock_completion_lot(
         if finished_ground_target is not None:
             target_location = finished_ground_target.location
             fixed_is_valid = False
+            if finished_ground_target.target_kind in {"product_storage", "receipt_staging"}:
+                from app.services.receipt_putaway import resolve
+                from app.services.fixed_shelf import ShelfError
+                try:
+                    checked = resolve(db,
+                        product_id=snapshot.component_product_id if snapshot is not None else item.product_id,
+                        customer_id=order.customer_id, claim=True)
+                except ShelfError as exc:
+                    raise ProductionWorkflowError(str(exc), 409) from exc
+                fixed_is_valid = bool(checked and checked[0].id == target_location.id
+                    and checked[1] == finished_ground_target.target_kind)
+                require_empty_pallet = False
             if finished_ground_target.target_kind == "fixed_shelf":
                 from app.services.fixed_shelf import incoming_primary_location, ShelfError
                 try:
@@ -3085,7 +3110,7 @@ def _stock_completion_lot(
                 except ShelfError as exc:
                     raise ProductionWorkflowError(str(exc), 409) from exc
                 fixed_is_valid = (fixed is not None and fixed.id == target_location.id
-                    and not ordered_preferred_area_ids(db, int(order.customer_id)))
+                    )
                 require_empty_pallet = False
             target_kind_is_valid = (
                 finished_ground_target.target_kind == "fin_ground_plan"
@@ -3173,7 +3198,8 @@ def _stock_completion_lot(
         source_type=source_type,
         source_ref_type="production_completion",
         source_ref_id=completion.id,
-        remarks=_normalized_text(command.remarks),
+        remarks="；".join(part for part in [_normalized_text(command.remarks),
+            finished_ground_target.capacity_warning if finished_ground_target else None] if part) or None,
         operator_id=operator_id,
         idempotency_key=_stable_key(idempotency_prefix, "finished-in"),
         pallet_id=None if location_id_override is not None else pallet_id,
@@ -3183,7 +3209,9 @@ def _stock_completion_lot(
             else _normalized_text(command.pallet_code)
         ),
         require_empty_pallet=require_empty_pallet,
-        movement_reason=movement_reason,
+        movement_reason=("待归位" if finished_ground_target and finished_ground_target.target_kind == "receipt_staging"
+            else "自动入位" if finished_ground_target and finished_ground_target.target_kind in {"product_storage", "fixed_shelf"}
+            else movement_reason),
         expected_layout_version=(
             int(location.floor3_layout.version)
             if location_id_override is not None
@@ -3647,6 +3675,7 @@ def complete_production_batch(
                 db,
                 excluded_location_ids=claimed_direct_location_ids,
                 customer_id=order.customer_id,
+                product_id=component_snapshot.component_product_id if is_component_task else item.product_id,
             )
             if direct_ground_target is not None:
                 claimed_direct_location_ids.add(int(location.id))
@@ -3762,7 +3791,7 @@ def complete_production_batch(
                         lot=lot,
                         location=facts["location"],
                     )
-                else:
+                elif direct_ground_target is None or direct_ground_target.target_kind not in {"product_storage", "receipt_staging", "fixed_shelf"}:
                     _bind_direct_completion_lots_to_system_pallet(
                         db,
                         completion=completion,
@@ -3943,6 +3972,31 @@ def transfer_direct_completion_to_stock(
             or int(lot.source_ref_id or 0) != completion.id
         ):
             raise ProductionWorkflowError("当前直接待送成品批次已失效，不能转库存", 409)
+    from app.services.receipt_putaway import is_staging_location, location_issue as receipt_location_issue
+    source_location = db.get(WarehouseLocation, lot.warehouse_location_id) if lot else None
+    if lot is not None and is_staging_location(db, source_location):
+        from app.services.warehouse_inventory import transfer_finished_lot_between_locations
+        target_location = db.get(WarehouseLocation, command.location_id) if command.location_id else None
+        issue = receipt_location_issue(db, target_location)
+        if issue or is_staging_location(db, target_location):
+            raise ProductionWorkflowError(issue or "归位请选择正式存放区，不要再次选择待入库区", 409)
+        _ensure_customer_finished_storage_location(db, customer_id=int(order.customer_id), location=target_location)
+        try:
+            moved = transfer_finished_lot_between_locations(db, lot_id=lot.id,
+                expected_version=lot.version, quantity=int(lot.quantity_available or 0)+int(lot.quantity_reserved or 0),
+                location_id=target_location.id, operator_id=operator_id, idempotency_key=_stable_key(key,"putaway"),
+                expected_source_location_id=source_location.id, expected_source_address_version=source_location.address_version,
+                expected_source_layout_version=source_location.floor3_layout.version,
+                expected_target_address_version=target_location.address_version,
+                expected_target_layout_version=command.expected_layout_version)
+        except WarehouseInventoryError as exc:
+            raise ProductionWorkflowError(str(exc), exc.status_code) from exc
+        transfer = ProductionStockTransfer(completion_id=completion.id, warehouse_location_id=target_location.id,
+            inventory_lot_id=moved.target_lot.id, idempotency_key=key, request_hash=request_hash,
+            status="posted", transferred_by=operator_id, transferred_at=utc_now_naive())
+        db.add(transfer)
+        db.flush()
+        return StockTransferResult(transfer, False)
     target_location = _production_stock_location(
         db,
         command.location_id,
@@ -5106,7 +5160,7 @@ def post_automatic_receipt_completion(
             raise ProductionWorkflowError("待装配本体库存阶段不一致", 409)
     elif ground_target.target_kind == "floor3_v11":
         _validate_floor3_v11_direct_pallet(lot=lot, location=location)
-    elif ground_target.target_kind != "fixed_shelf":
+    elif ground_target.target_kind not in {"fixed_shelf", "product_storage", "receipt_staging"}:
         _bind_direct_completion_lots_to_system_pallet(
             db,
             completion=completion,
@@ -6688,6 +6742,8 @@ def _completion_rows(
     if status is not None:
         query = query.where(ProductionCompletion.status == status)
     if placement_pending:
+        from app.services.receipt_putaway import pending_completion_filter
+        query = pending_completion_filter(db, query)
         query = query.where(
             ProductionCompletion.status == "posted",
             ProductionCompletion.initial_disposition == "direct",
@@ -6780,6 +6836,8 @@ def _production_completion_total(
     if status is not None:
         query = query.where(ProductionCompletion.status == status)
     if placement_pending:
+        from app.services.receipt_putaway import pending_completion_filter
+        query = pending_completion_filter(db, query)
         query = query.where(
             ProductionCompletion.status == "posted",
             ProductionCompletion.initial_disposition == "direct",
@@ -7016,8 +7074,11 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
             if current_location is not None
             else None
         )
+        from app.services.receipt_putaway import placement_state
+        receipt_placement = placement_state(db, effective_lot)
         result.append(
             {
+                "receipt_placement": receipt_placement,
                 "id": completion.id,
                 "batch_id": completion.batch_id,
                 "task_id": task.id,

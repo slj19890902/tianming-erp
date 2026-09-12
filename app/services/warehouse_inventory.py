@@ -484,6 +484,13 @@ def _ensure_finished_projection_postcondition(
         # therefore cannot use this compatibility branch.
         return current_pallet
 
+    from app.services.receipt_putaway import is_staging_location
+    if is_staging_location(db, location):
+        # Shared pending anchor: quantities remain on individual inventory lots.
+        current_pallet.needs_relocation = True
+        db.flush()
+        return current_pallet
+
     ground_layout = context.get("ground_layout")
     published_identity = context.get("published_floor_identity")
     area_code = str(location.area_code or "").strip().upper()
@@ -1324,6 +1331,15 @@ def automatic_raw_material_staging_location(
     require_floor3_left: bool = False,
 ) -> WarehouseLocation:
     """Resolve the legal staging point for actual replenishment receipts."""
+
+    from app.services.receipt_putaway import resolve
+    from app.services.fixed_shelf import ShelfError
+    try:
+        receipt_target = resolve(db, inventory_type="semi_finished", claim=repair_operator_id is not None)
+    except ShelfError as exc:
+        raise WarehouseInventoryError(str(exc), 409) from exc
+    if receipt_target is not None:
+        return receipt_target[0]
 
     rows = db.scalars(
         select(WarehouseLocation).where(
@@ -2608,6 +2624,7 @@ def manual_finished_in(
     ground_secondary_location_id: int | None = None,
     ground_capacity_quantity: int | None = None,
     physical_basis_json: str | None = None,
+    remember_storage: bool = True,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -2745,6 +2762,9 @@ def manual_finished_in(
     )
     from app.services.fixed_shelf import on_finished_in
     on_finished_in(db, lot)
+    if source_type == "stocktake" and not is_general and remember_storage:
+        from app.services.receipt_putaway import remember_stocktake
+        remember_stocktake(db, lot, operator_id)
     db.flush()
     return lot
 

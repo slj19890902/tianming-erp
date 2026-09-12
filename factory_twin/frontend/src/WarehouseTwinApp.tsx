@@ -6332,7 +6332,7 @@ export function WarehouseTwinApp() {
           <div className="twin-effective-map-status" role="status">
             <b>{activeObjectPreview ? "当前对象编辑预览" : "已应用位置 · 三种模式统一"}</b>
             {layoutDraftControl?.has_draft && <span>有已保存但尚未应用的调整</span>}
-            {moveLocationStates ? <span className="twin-move-legend"><i className="move-state-empty"/>空位 <i className="move-state-occupied"/>有货 <i className="move-state-target"/>目标 <i className="move-state-source"/>来源 <i className="move-state-blocked"/>不可选</span> : <span className="twin-location-legend"><i className="occupied" />有货 <i className="empty" />空位 <i className="located" />定位 <i className="selected" />选中 <i className="conflict" />冲突</span>}
+            {moveLocationStates ? <span className="twin-move-legend"><i className="move-state-empty"/>空位 <i className="move-state-occupied"/>有货 <i className="move-state-target"/>目标 <i className="move-state-source"/>来源 <i className="move-state-blocked"/>不可选</span> : <span className="twin-location-legend"><i style={{background:"#eab308"}} />待归位 <i style={{background:"#2563eb"}} />人工入位 <i className="occupied" />自动入位 <i style={{background:"#0f766e"}} />混合状态 <i className="empty" />空位 <i className="located" />定位 <i className="selected" />选中 <i className="conflict" />冲突</span>}
           </div>
           {loading && <div className="twin-loading">正在加载实测布局…</div>}
           {error && <div className="twin-error"><b>地图加载失败</b><span>{error}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}

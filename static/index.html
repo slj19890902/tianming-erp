@@ -4759,7 +4759,7 @@
                   <data-panel :empty="!productionPlacement.length">
                     <table class="production-placement-table" style="table-layout:fixed;width:100%">
                       <thead><tr><th style="width:12%">客户订单号 / 中文简称</th><th style="width:18%">存货编码 / 产品</th><th style="width:8%">实际完工</th><th style="width:18%">当前待送位置</th><th>现场实际位置</th></tr></thead>
-                      <tbody><tr v-for="row in productionPlacement" :key="`placement-${row.id}`"><td><div class="placement-two-lines"><strong class="placement-line" :title="row.customer_order_number || ''">{{ row.customer_order_number || '客户订单号未填写' }}</strong><span class="placement-line muted" :title="row.customer_short_name || ''">{{ row.customer_short_name || '中文简称未填写' }}</span></div></td><td><div class="placement-two-lines" :title="productionProductTitle(row)"><strong class="placement-line">{{ row.product_code || '-' }}</strong><span class="placement-line">{{ row.product_name || '-' }}</span></div></td><td><strong>{{ row.actual_output_quantity || row.quantity || 0 }}</strong></td><td><div class="placement-current-location" :title="row.warehouse_location_name || row.warehouse_location_code || '真实成品位置'">{{ row.warehouse_location_name || row.warehouse_location_code || '真实成品位置' }}</div></td><td><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个空位）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个空位）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选实际位置' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}</option></select><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">归位</button></div></td></tr></tbody>
+                      <tbody><tr v-for="row in productionPlacement" :key="`placement-${row.id}`"><td><div class="placement-two-lines"><strong class="placement-line" :title="row.customer_order_number || ''">{{ row.customer_order_number || '客户订单号未填写' }}</strong><span class="placement-line muted" :title="row.customer_short_name || ''">{{ row.customer_short_name || '中文简称未填写' }}</span></div></td><td><div class="placement-two-lines" :title="productionProductTitle(row)"><strong class="placement-line">{{ row.product_code || '-' }}</strong><span class="placement-line">{{ row.product_name || '-' }}</span></div></td><td><strong>{{ row.actual_output_quantity || row.quantity || 0 }}</strong></td><td><div v-if="row.receipt_placement?.label" :class="['status',row.receipt_placement.color]">{{ row.receipt_placement.label }}</div><div class="placement-current-location" :title="row.warehouse_location_name || row.warehouse_location_code || '真实成品位置'">{{ row.warehouse_location_name || row.warehouse_location_code || '真实成品位置' }}</div></td><td><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个位置）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个位置）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选实际位置' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}</option></select><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">归位</button></div></td></tr></tbody>
                     </table>
                   </data-panel>
                 </div>
@@ -6803,6 +6803,23 @@
                 </div>
               </div>
               </fieldset>
+              <details v-if="productForm.id" :key="`storage-${productForm.id}`" class="product-secondary-disclosure" @toggle="$event.target.open && loadReceiptStorage()">
+                <summary>收料默认位置</summary>
+                <div style="padding:10px;background:#edf8f3">
+                  <div v-if="receiptStorage.loading">正在读取…</div>
+                  <template v-else-if="receiptStorage.product_id===productForm.id">
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                      <select class="select" style="flex:1;min-width:100px" v-model.number="receiptStorage.floor" @change="receiptStorage.area_id=null;receiptStorage.location_id=null" aria-label="默认楼层"><option :value="null">待入库区</option><option v-for="floor in [...new Set(receiptStorage.locations.map(x=>x.floor))].sort((a,b)=>a-b)" :value="floor">{{ floor }}F</option></select>
+                      <select class="select" style="flex:2;min-width:140px" v-model.number="receiptStorage.area_id" @change="receiptStorage.location_id=null" aria-label="默认区域"><option :value="null">选择区域</option><option v-for="area in receiptStorageAreas()" :value="area.area_id">{{ area.area_name }}</option></select>
+                      <select class="select" style="flex:3;min-width:200px" v-model.number="receiptStorage.location_id" aria-label="默认货架层格"><option :value="null">区域内自动分配</option><option v-for="loc in receiptStorage.locations.filter(x=>x.area_id===receiptStorage.area_id)" :value="loc.location_id">{{ loc.name }}</option></select>
+                      <button v-if="['admin','boss'].includes(user?.role)" class="btn small primary" :disabled="receiptStorage.saving || (!!receiptStorage.floor && !receiptStorage.area_id)" @click.prevent="saveReceiptStorage(false)">保存默认位置</button>
+                      <button v-if="['admin','boss'].includes(user?.role)" class="btn small" :disabled="receiptStorage.saving" @click.prevent="saveReceiptStorage(true)">取消固定位置</button>
+                    </div>
+                    <div class="muted">仅影响后续收料，不移动现有库存。</div>
+                  </template>
+                  <div v-if="receiptStorage.message" role="status">{{ receiptStorage.message }}</div>
+                </div>
+              </details>
               <details class="product-secondary-disclosure">
               <summary>组合 BOM</summary>
               <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
@@ -10077,6 +10094,7 @@
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
             productionPlacementFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionActualAdjustmentAttempts: {}, productionLabelRefreshAttempts: {},
+            receiptStorage: {product_id:null,locations:[],loading:false,saving:false,message:'',floor:null,area_id:null,location_id:null,version:0},
             productFormSnapshot: null, productBomSnapshot: null,
             productEditReturnContext: null,
             productMaterialContext: { product_id:null, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" },
@@ -11406,7 +11424,7 @@
             return rows.length > 0 && rows.every(row => this.incomingProductionCardSelected(row));
           },
           productionAvailableLocations() {
-            return (this.productionLocations || []).filter(location => location.is_empty);
+            return (this.productionLocations || []).filter(location => location.is_empty || location.storage_type === "rack");
           },
           productionLocationFloors() {
             const counts = new Map();
@@ -11537,6 +11555,33 @@
           window.removeEventListener("message", this.handleWarehouseFrameMessage);
         },
         methods: {
+          async loadReceiptStorage() {
+            const id=this.productForm.id;
+            this.receiptStorage={product_id:id,locations:[],loading:true,saving:false,message:'',floor:null,area_id:null,location_id:null,version:0};
+            try {
+              const {data}=await axios.get(`/api/warehouse/fixed-shelf/receipt-storage/${id}`);
+              if(this.productForm.id!==id)return;
+              const loc=data.locations.find(x=>x.area_id===data.area_id);
+              this.receiptStorage={...data,loading:false,saving:false,floor:loc?.floor||null,message:data.issue||''};
+            } catch(e) {if(this.productForm.id===id){this.receiptStorage.loading=false;this.receiptStorage.message=e.response?.data?.detail||'读取失败，请重新展开';}}
+          },
+          receiptStorageAreas() {
+            return [...new Map(this.receiptStorage.locations.filter(x=>x.floor===this.receiptStorage.floor).map(x=>[x.area_id,x])).values()];
+          },
+          async saveReceiptStorage(clear) {
+            const state=this.receiptStorage,id=this.productForm.id;
+            if(state.product_id!==id || state.saving)return;
+            const loc=clear?null:state.locations.find(x=>x.location_id===state.location_id);
+            state.saving=true;state.message='';
+            try {
+              const {data}=await axios.put(`/api/warehouse/fixed-shelf/receipt-storage/${id}`,{
+                expected_version:state.version,area_id:clear?null:state.area_id,location_id:clear?null:state.location_id,
+                address_version:loc?.address_version||null,layout_version:loc?.layout_version||null,
+                idempotency_key:`receipt-storage:${id}:${createIdempotencyKey()}`});
+              if(this.productForm.id!==id)return;
+              Object.assign(state,data,{floor:clear?null:state.floor,message:clear?'已取消，后续收料进入待入库区':'默认位置已保存'});
+            } catch(e){state.message=e.response?.data?.detail||'保存失败，请重试';} finally {state.saving=false;}
+          },
           customerPhoneAnalysis(value) {
             return TmPhone.analyze(value);
           },

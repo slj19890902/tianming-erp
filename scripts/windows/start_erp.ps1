@@ -4,6 +4,9 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location -LiteralPath $ProjectRoot
+if (Test-Path -LiteralPath (Join-Path $ProjectRoot 'data/runtime/erp_managed_installation.json')) {
+    throw 'This ERP has moved to the desktop assistant. Start ERP from the assistant; the old data directory must remain stopped.'
+}
 $ExternalHealthUrl = $null
 $LocalHealthUrl = $null
 $BrowserUrl = $null

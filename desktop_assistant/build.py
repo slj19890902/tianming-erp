@@ -99,7 +99,7 @@ def main():
     tree = output / 'payload'
     tree.mkdir()
     allowed = {'app', 'alembic', 'static', 'templates', 'desktop_assistant'}
-    singles = {'main.py', 'alembic.ini', 'requirements.txt'}
+    singles = {'main.py', 'alembic.ini', 'requirements.txt', 'scripts/admin/release_erp.ps1'}
     for relative, content in sources.items():
         if not relative:
             continue

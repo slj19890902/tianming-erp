@@ -10,8 +10,16 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 
-def install(payload: Path, destination: Path):
+def validate_install_directory(destination: Path):
     destination = destination.resolve()
+    for parent in (destination, *destination.parents):
+        if (parent / '.env').is_file() and (parent / 'data/carton_erp.sqlite3').is_file():
+            raise ValueError('助手必须与原ERP分开安装，请选择独立位置，例如D:\\，不要选择原ERP文件夹')
+    return destination
+
+
+def install(payload: Path, destination: Path):
+    destination = validate_install_directory(destination)
     if destination.exists() and any(destination.iterdir()):
         raise ValueError('安装目录必须为空；更新请使用现有助手，不能覆盖旧安装')
     destination.mkdir(parents=True, exist_ok=True)
@@ -66,12 +74,12 @@ def main():
     root.withdraw()
     if not messagebox.askokcancel('安装天明ERP助手', '安装天明ERP助手。\n工厂电脑用于日常打开、备份和更新；备用新电脑用于从备份取回数据。'):
         return
-    parent = filedialog.askdirectory(title='选择安装位置（将在其中新建TianmingERP目录）',
+    parent = filedialog.askdirectory(title='选择独立安装位置，例如D:\\（将在里面新建TianmingERP，不要选择原ERP文件夹）',
                                     initialdir=os.environ['LOCALAPPDATA'])
     if not parent:
         return
     try:
-        destination = Path(parent) / 'TianmingERP'
+        destination = validate_install_directory(Path(parent) / 'TianmingERP')
         if destination.exists() and any(destination.iterdir()):
             if not messagebox.askyesno('更新已有助手', '此处已有安装。是否更新助手和离线程序包？\n业务数据、原配置和正在运行的ERP保持不变。请先关闭旧助手窗口。'):
                 return

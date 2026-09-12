@@ -15,7 +15,7 @@ import json
 from typing import Any
 
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
@@ -524,7 +524,8 @@ def _latest_facts_by_source(
     return result
 
 
-def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=None, _apply_supplements=True) -> dict[str, Any]:
+def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=None, _apply_supplements=True,
+                                  visible_customer_ids: set[int] | None = None) -> dict[str, Any]:
     """Return a small, actionable month-close quality report.
 
     Delivery date is the physical material-cost period.  Revenue remains on
@@ -548,16 +549,22 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
                 DeliveryItem.is_current.is_(True),
                 Delivery.delivery_date >= month_start,
                 Delivery.delivery_date < next_month_start,
+                True if visible_customer_ids is None else Delivery.customer_id.in_(visible_customer_ids),
             )
             .order_by(Delivery.delivery_date, Delivery.id, DeliveryItem.id)
         ).all()
     )
     delivery_item_ids = [int(row[0].id) for row in delivery_rows]
     items_by_id = {int(row[0].id): row[0] for row in delivery_rows}
+    order_item_ids = {item.order_item_id for item in items_by_id.values() if item.order_item_id}
+    order_items_by_id = {item.id: item for item in db.execute(
+        select(OrderItem.id, OrderItem.product_id, OrderItem.snapshot_product_name)
+        .where(OrderItem.id.in_(order_item_ids))
+    )} if order_item_ids else {}
     gap_records = []
 
     def collect_gap(item_id, source, reason):
-        order_item = db.get(OrderItem, items_by_id[item_id].order_item_id) if items_by_id[item_id].order_item_id else None
+        order_item = order_items_by_id.get(items_by_id[item_id].order_item_id)
         gap_records.append({"item": items_by_id[item_id], "source": source, "reason": reason,
                             "order_product_id": order_item.product_id if order_item else None,
                             "product_name": items_by_id[item_id].product_name_snapshot or (order_item.snapshot_product_name if order_item else ""),
@@ -585,6 +592,7 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
                     DeliveryInventoryAllocation,
                     InventoryLot,
                 )
+                .options(selectinload(InventoryLot.finished_detail))
                 .join(
                     InventoryReservation,
                     InventoryReservation.id
@@ -621,6 +629,7 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
         unordered_rows = list(
             db.execute(
                 select(UnorderedFinishedDeliveryAllocation, InventoryLot)
+                .options(selectinload(InventoryLot.finished_detail))
                 .join(
                     InventoryLot,
                     InventoryLot.id
@@ -653,6 +662,7 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
         direct_rows = list(
             db.execute(
                 select(BomComponentDirectDeliveryAllocation, ProductionCompletion)
+                .options(joinedload(BomComponentDirectDeliveryAllocation.sales_order_item_bom_component))
                 .join(
                     ProductionCompletion,
                     ProductionCompletion.id
@@ -865,4 +875,33 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
         "lineage_ready": uncovered_lines == 0,
         "missing_details": missing_details,
         **supplemental,
+    }
+
+
+def material_cost_overview(db: Session, *, months: list[str], can_view_costs: bool,
+                           visible_customer_ids: set[int] | None = None) -> dict:
+    """Same read-only source and physical delivery period as the month report.
+
+    Statement snapshots are historical receivable facts, not a substitute for
+    the cost of dispatched lots. Do not subtract delivery-period cost from
+    statement-period revenue or silently rewrite either set of facts.
+    """
+    reports = [material_cost_coverage_report(db, month=month,
+                visible_customer_ids=visible_customer_ids) for month in dict.fromkeys(months)]
+    total = sum(row["total_delivery_lines"] for row in reports)
+    covered = sum(row["management_covered_lines"] for row in reports)
+    def amount(key):
+        return (sum((Decimal(row[key]) for row in reports), Decimal(0))
+                .quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)) if can_view_costs else None
+    return {
+        "covered_lines": covered, "total_lines": total, "missing_lines": total-covered,
+        "coverage_rate": round(covered/total,4) if total else 0,
+        "material_cost_amount": amount("management_material_cost"),
+        "actual_material_cost": amount("actual_material_cost"),
+        "supplemental_material_cost": amount("supplemental_material_cost"),
+        "accounting_basis": "delivery_date", "months": list(dict.fromkeys(months)),
+        "label": "已归集出库材料成本" if can_view_costs else "出库材料成本（无成本查看权限）",
+        "scope_note": "按送货日期，与月报检查同口径；含已批准参考成本，缺口不按零成本计算。",
+        # Retain response keys without presenting a cross-period gross profit.
+        "covered_revenue": None, "material_gross_profit_reference": None,
     }

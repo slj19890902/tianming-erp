@@ -157,3 +157,49 @@ def test_form_save_finishes_on_ui_thread_and_reports_result(tmp_path, monkeypatc
             assert '未完成：备份文件夹不可用' in app.log.get()
     finally:
         window.destroy()
+
+
+def test_mounted_nas_volume_can_save_when_windows_cannot_resolve_volume(settings_case, monkeypatch):
+    import stat
+    from desktop_assistant import backup_settings as settings
+    manager, nas, calls = settings_case
+    original_resolve, original_stat = Path.resolve, Path.stat
+    def resolve(path, *args, **kwargs):
+        if path == nas:
+            error = OSError('volume name resolution not supported')
+            error.winerror = 1005
+            raise error
+        return original_resolve(path, *args, **kwargs)
+    def file_stat(path, *args, **kwargs):
+        if path == nas:
+            return SimpleNamespace(st_mode=stat.S_IFDIR, st_dev=123456789)
+        return original_stat(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'resolve', resolve)
+    monkeypatch.setattr(Path, 'stat', file_stat)
+    settings.save_backup_settings(manager, str(nas), 'fixture-passphrase', 'fixture-passphrase', Path('fixture.exe'))
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(('code', 'device'), [(1005, 'same'), (1005, 0), (5, 123456789)])
+def test_volume_resolution_fallback_never_bypasses_unknown_same_or_other_error(settings_case, monkeypatch, code, device):
+    import stat
+    from desktop_assistant import backup_settings as settings
+    manager, nas, calls = settings_case
+    original_resolve, original_stat = Path.resolve, Path.stat
+    if device == 'same':
+        device = manager.root.stat().st_dev
+    def resolve(path, *args, **kwargs):
+        if path == nas:
+            error = OSError('fixture')
+            error.winerror = code
+            raise error
+        return original_resolve(path, *args, **kwargs)
+    def file_stat(path, *args, **kwargs):
+        if path == nas:
+            return SimpleNamespace(st_mode=stat.S_IFDIR, st_dev=device)
+        return original_stat(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'resolve', resolve)
+    monkeypatch.setattr(Path, 'stat', file_stat)
+    with pytest.raises((ValueError, OSError)):
+        settings.save_backup_settings(manager, str(nas), 'fixture-passphrase', 'fixture-passphrase', Path('fixture.exe'))
+    assert calls == [] and not (manager.root / 'preferences.json').exists()

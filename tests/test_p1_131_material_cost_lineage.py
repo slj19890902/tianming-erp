@@ -149,6 +149,22 @@ def test_actual_purchase_receipt_cost_freezes_at_delivery_and_reports_coverage(
         ) == 1
 
         report = material_cost_coverage_report(db, month="2026-09")
+        # OPT001: the overview uses exactly the monthly dispatch-cost read model,
+        # not the product/statement cost fields, and an empty customer scope is empty.
+        from app.services.material_cost_lineage import material_cost_overview
+        overview = material_cost_overview(
+            db, months=["2026-08", "2026-09", "2026-09"], can_view_costs=True,
+            visible_customer_ids={order.customer_id},
+        )
+        assert overview["total_lines"] == report["total_delivery_lines"]
+        assert overview["covered_lines"] == report["management_covered_lines"]
+        assert overview["material_cost_amount"] == report["management_material_cost"]
+        assert overview["months"] == ["2026-08", "2026-09"]
+        empty_scope = material_cost_overview(
+            db, months=["2026-09"], can_view_costs=True, visible_customer_ids=set(),
+        )
+        assert empty_scope["total_lines"] == 0
+        assert empty_scope["material_cost_amount"] == Decimal("0.00")
         assert report["lineage_ready"] is expected_ready
         assert report["total_delivery_lines"] == 1
         assert report["frozen_source_count"] == 1

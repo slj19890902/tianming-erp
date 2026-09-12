@@ -105,28 +105,13 @@ def _reference(db, gap):
             return None, "非成品来源，不能套用整件材料成本"
         if item.product_id and detail.product_id != item.product_id:
             return None, "送货与批次产品身份不一致"
-        unit = positive(lot.estimated_unit_cost_snapshot)
-        if unit and lot.cost_snapshot_source in {"material_quote_area", "purchase_receipt_actual"}:
-            try:
-                evidence = json.loads(lot.cost_snapshot_detail_json or "{}")
-            except ValueError:
-                return None, "批次成本证据无法读取"
-            if not evidence:
-                return None, "批次单价缺少计算依据"
-            currency = str(evidence.get("currency") or "").upper()
-            if not currency and evidence.get("price_unit") in {"元/㎡", "元/平方米"}:
-                currency = "CNY"
-            if not currency and evidence.get("source_semi_inventory_lot_id"):
-                origin = db.get(InventoryLot, evidence["source_semi_inventory_lot_id"])
-                try:
-                    origin_detail = json.loads(origin.cost_snapshot_detail_json or "{}") if origin else {}
-                except ValueError:
-                    origin_detail = {}
-                if origin_detail.get("price_unit") in {"元/㎡", "元/平方米"}:
-                    currency = "CNY"
-                    evidence = {**evidence, "currency_source_semi_detail": origin_detail}
-            if currency != "CNY":
-                return None, "参考币种不明或非人民币，不能自动换算"
+        if positive(lot.estimated_unit_cost_snapshot):
+            # One validator for warehouse display, dispatch and historical preview.
+            # Never bypass a rejected snapshot by falling through to today's price.
+            from app.services.inventory_valuation import frozen_cost
+            unit, evidence = frozen_cost(lot, db)
+            if unit is None:
+                return None, evidence.get("validation_issue") or "批次成本缺少有效人民币依据或授权，须核对原快照"
             return dict(reference_kind="lot_cost_snapshot", unit_cost=unit,
                         evidence=dict(lot_id=lot.id, product_id=detail.product_id,
                                       snapshot_source=lot.cost_snapshot_source, snapshot_at=lot.cost_snapshot_at,

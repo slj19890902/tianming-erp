@@ -107,7 +107,7 @@ def _seed_monthly_report_facts(factory) -> None:
         db.commit()
 
 
-def test_management_report_has_four_sheets_and_keeps_ledgers_separate(
+def test_management_report_has_five_sheets_and_keeps_ledgers_separate(
     p1_131_cost_app,
 ) -> None:
     app, factory = p1_131_cost_app
@@ -176,7 +176,7 @@ def test_management_report_has_four_sheets_and_keeps_ledgers_separate(
         with factory() as db:
             assert db.query(OperationLog).count() == operation_log_count_before_export
 
-    assert workbook.sheetnames == ["老板月报", "客户应收", "应付支出", "成本费用"]
+    assert workbook.sheetnames == ["老板月报", "客户应收", "应付支出", "成本费用", "补充材料成本依据"]
     summary = _summary_rows(workbook)
     assert Decimal(str(summary["已确认对账收入"][0])) == Decimal("100.00")
     assert Decimal(str(summary["已登记开票"][0])) == Decimal("40.00")
@@ -253,8 +253,8 @@ def test_management_report_export_rejects_missing_or_insufficient_permission(
 
 
 def test_finance_monthly_workbench_has_four_actions_and_mobile_two_columns() -> None:
-    start = INDEX.index('<div class="panel finance-month-workbench">')
-    end = INDEX.index('<div class="finance-overview-grid">', start)
+    start = INDEX.index('<div class="panel finance-month-workbench"')
+    end = INDEX.index('<div class="finance-overview-grid"', start)
     workbench = INDEX[start:end]
     assert workbench.count('class="finance-month-action"') == 4
     for action, label in (
@@ -276,7 +276,7 @@ def test_finance_monthly_workbench_has_four_actions_and_mobile_two_columns() -> 
     assert 'this.financeFilters.balance_type = action' in action_body
     assert 'return this.setFinanceView("current")' in action_body
     assert 'action === "cost_drafts" ? "draft" : ""' in action_body
-    assert 'return this.setFinanceView("payables")' in action_body
+    assert 'return this.setFinanceView("expenses")' in action_body
 
     export_start = action_end
     export_end = INDEX.index("financeCostStatusAmount(status)", export_start)

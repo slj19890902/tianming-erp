@@ -3,3 +3,12 @@
 截图报C:/Users/Administrator/AppData/Local/TianmingERP/installer-release.zip不存在。实际进程为D:/TianmingERP/TianmingERP-Assistant.exe，无--root；桌面快捷方式有正确--root，说明直接打开EXE触发gui默认LOCALAPPDATA。D根已有完整包和备份设置，C根仅设置无业务state，均保留。
 
 最小闭环：打包助手默认取EXE所在安装目录；显式--root继续优先，源码开发默认行为不变；缺离线包在目录选择/停服前给出明确恢复方法。单代理，独立codex/desktop016-start-root-20260912，基线ec3f0d60。允许gui.py、直接测试及task/version/docs；无DDL，不写业务数据或合并两个安装设置。回归覆盖直接启动/快捷方式/计划任务/开发路径、缺包不触发接入、现有首次接入。与GROUPLOC001协调版本和完整EXE/Setup发布窗口，保留381更新。正常发布已有授权，保留签名/备份/完整性/唯一head/健康门禁。管理员手动首次接入验收。
+
+
+技术发布完成，待管理员首次接入验收。构建97467eaa7e554e5d6207d02cc77d809150051adc，正式整合31632f616dcaf33a273befe83b31d216c4ac6827（增加382回执docs，业务程序一致）。report release_runtime_20260912_170516.json completed，v383/mq0912，无新DDL。source/applied SHA f688f9f4bf7598a09e4327b7aa4cb6f4bb6bee93020671377169898fb6412b1d；备份/演练SHA b58a0492a956d245b02acfe5e38610b3b7d6b3c52e5a4b500744505961133550，完整性ok/FK0/核心数量一致。没有修改正式业务事实。局域网健康200；外网zrok本轮URLError（382已超时），不宣称外网通过，不作为本次助手目录修复验收。
+
+20项启动目录/首次接入/GUI定向通过，新增4项旧实现失败。完整助手与Setup自检exit0，含实际打包程序默认目录断言；29586个发布文件逐一哈希通过，Setup内嵌EXE/zip与独立文件一致。未运行全量或正式页面自动点击。
+
+release194c3d7a1a6cde5e23788db3aa14ad9a2a47bb80995d123d6ea91e84a2cf3417；Assistant6f17427a85914a92b388861b165495a1802ecc01c9dbbc884d57383a7e2aaaa2；Setup e740733bf00f9c6768180854fb373a0d95d17196285a38a77b34f0c780a62587。NAS latest383和release-v383-20260912完整Setup均回读核验。本机D:/TianmingERP的EXE/bootstrap在操作锁中替换，旧文件control/before-v383-*保留；D根preferences/setup-defaults/ui-preferences/first-setup及C误根preferences均字节保留。C误根无state，保存重复任务XML到D:/TianmingERP/control/before-v383-wrong-root-nightly.xml后，仅停用TianmingERP-Nightly-c873881d08；正确D根1f4ce75517仍Ready，旧D360任务未改。
+
+已通过原生电脑操作直接打开EXE，不带--root，真实窗口标题天明ERP助手 · 助手 v0.22.383。此前报错窗口正常关闭，未代点首次接入或代填密码。最终检查D根无state/global marker、shared未接入，正式仍为原D:/纸箱厂erp软件搭建；后续384须重新核对，不能据此假定用户未操作。NAS回执20260912_DESKTOP016助手直接启动目录修复_v383.md。实际Token总量不可获取。

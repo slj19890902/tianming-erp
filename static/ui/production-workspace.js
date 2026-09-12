@@ -67,7 +67,27 @@
     },
     stockOutputQuantity(row){return (row.jobs||[]).filter(j=>!row.grouped_output_hidden||!j.product.preparation_group).reduce((sum,j)=>sum+Number(j.output_remaining||0),0);},
     stockOutputLocations(row){return [...new Set((row.jobs||[]).filter(j=>j.output_remaining>0&&(!row.grouped_output_hidden||!j.product.preparation_group)).map(j=>j.output_location).filter(Boolean))].join(' / ');},
-    async openStockDialog(row){this.stockPrepError='';this.stockPrepDialog={row,loading:true,error:'',sets:row.plan?.available_sets||1,location:null,preview:null,job:row.job?{...row.job,_actual:row.job.expected_output}:null,quantity:row.available||0,view:'action',page:1};
+    async openPreparationHistory(row){
+     if(this.productionBusy)return;const auth=this.authGeneration;this.productionBusy=true;
+     try{const {data}=await axios.get('/api/production/stock-preparation/history/'+encodeURIComponent(row.preparation_key));
+      if(auth!==this.authGeneration)return;
+      const sources=data.items||[];if(!sources.length)throw new Error('来源记录不存在');
+      const trace={...sources[0],entry_type:'receipt',jobs:sources.flatMap(r=>r.jobs||[]),movements:sources.flatMap(r=>r.movements||[]),history:sources.flatMap(r=>r.history||[])};
+      const opening=this.openStockDialog(trace),dialog=this.stockPrepDialog;await opening;
+      if(auth!==this.authGeneration||this.stockPrepDialog!==dialog)return;
+      dialog.view='history';dialog.sources=sources;
+     }catch(e){if(auth===this.authGeneration)this.showToast('来源读取失败：'+this.errorMessage(e),true);}finally{if(auth===this.authGeneration)this.productionBusy=false;}
+    },
+    async reversePreparationHistory(row){
+     if(this.productionBusy||this.user?.role!=='admin')return;
+     if(!window.confirm('仅用于纠正误报：确认这批产出尚未组装、送货或使用？撤销将整组撤回产出，恢复原投入材料到待安排，并保留全部记录。'))return;
+     const payload={confirm_unused:true,jobs:row.reverse_versions};const signature=JSON.stringify(payload);
+     if(row._reverseAttempt?.signature!==signature)row._reverseAttempt={signature,key:this.stockOperationKey()};
+     payload.operation_key=row._reverseAttempt.key;const auth=this.authGeneration;this.productionBusy=true;
+     try{await axios.post('/api/production/stock-preparation/completions/'+encodeURIComponent(row.preparation_key)+'/revert',payload);if(auth!==this.authGeneration)return;await this.loadProductionHistory();this.showToast('备库误报已撤销，投入材料恢复待安排');}
+     catch(e){if(auth===this.authGeneration)this.showToast('撤销失败：'+this.errorMessage(e),true);}finally{if(auth===this.authGeneration)this.productionBusy=false;}
+    },
+    async openStockDialog(row){this.stockPrepError='';this.stockPrepDialog={row,loading:true,error:'',sets:row.plan?.available_sets||1,location:null,preview:null,job:row.job?{...row.job,_actual:row.job.expected_output}:null,quantity:row.available||0,view:'action',page:1,sources:[row]};
      const dialog=this.stockPrepDialog;
      try {await this.ensureProductionLocations();if(this.stockPrepDialog!==dialog)return;
       if(row.entry_type==='kit')await this.previewStockGroup();

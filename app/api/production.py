@@ -446,6 +446,7 @@ def post_production_task_label_plan_refresh(
 
 @router.get("/completions")
 def get_production_completions(
+    include_stock: bool = Query(default=False),
     customer_id: int | None = Query(default=None, gt=0),
     order_keyword: str | None = Query(default=None, max_length=150),
     product_code: str | None = Query(default=None, max_length=150),
@@ -465,7 +466,7 @@ def get_production_completions(
     allowed_customer_ids = _allowed_customer_ids(user, db)
     # Keep the existing unpaged request compatible with the production page
     # until its UI is switched to the paged contract.
-    if page is None and page_size is None and not any(
+    if not include_stock and page is None and page_size is None and not any(
         (
             customer_id,
             order_keyword,
@@ -486,7 +487,12 @@ def get_production_completions(
 
     resolved_page = page or 1
     resolved_page_size = page_size or 50
-    items, total = list_production_completions_page(
+    if include_stock:
+        from app.services.stock_preparation_history import combined_page
+        history_loader = combined_page
+    else:
+        history_loader = list_production_completions_page
+    items, total = history_loader(
         db,
         allowed_customer_ids=allowed_customer_ids,
         customer_id=customer_id,

@@ -13,6 +13,55 @@ from app.services import stock_preparation_groups as group_service
 router=APIRouter()
 
 
+class ReversalJob(BaseModel):
+    job_id: int = Field(gt=0,strict=True)
+    job_version: int = Field(gt=0,strict=True)
+    source_version: int = Field(gt=0,strict=True)
+    output_version: int = Field(gt=0,strict=True)
+
+
+class Reversal(BaseModel):
+    operation_key: str = Field(min_length=8,max_length=60)
+    confirm_unused: bool = False
+    jobs: list[ReversalJob] = Field(min_length=1,max_length=1000)
+
+
+@router.get('/stock-preparation/history/{key}')
+def get_preparation_trace(key:str,db:Session=Depends(get_db),user:User=Depends(PermissionChecker('orders.view'))):
+    from app.services.stock_preparation_history import completed_groups
+    jobs=completed_groups(db).get(key)
+    if not jobs:
+        raise HTTPException(404,'备库完工不存在')
+    for job in jobs:
+        _,item,_=service.source(db,job.receipt_item_id)
+        require_customer_access(item.customer_id,user,db)
+    ids={j.receipt_item_id for j in jobs}
+    scope=None if has_unrestricted_customer_access(user,db) else customer_scope_ids(user,db)
+    return {'items':[r for r in service.list_rows(db,scope=scope) if r['receipt_item_id'] in ids]}
+
+
+@router.post('/stock-preparation/completions/{key}/revert')
+def reverse_preparation(key:str,body:Reversal,db:Session=Depends(get_db),user:User=Depends(RoleChecker(['admin']))):
+    from app.services.stock_preparation_history import completed_groups,reverse
+    try:
+        jobs=completed_groups(db).get(key)
+        if not jobs:
+            raise HTTPException(404,'备库完工不存在')
+        for job in jobs:
+            _,item,_=service.source(db,job.receipt_item_id)
+            require_customer_access(item.customer_id,user,db)
+        with atomic_bom(db):
+            result=reverse(db,key=key,payload=body.model_dump(),actor=user)
+        db.commit()
+        return result
+    except WarehouseInventoryError as exc:
+        db.rollback()
+        raise HTTPException(exc.status_code,str(exc)) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
 class Action(BaseModel):
     action: Literal['keep_raw','keep_semi','plan','complete','cancel']
     operation_key: str = Field(min_length=8,max_length=70)

@@ -14,7 +14,7 @@ from app.models.product import Product
 from app.models.warehouse_inventory import InventoryLot, InventoryReservation, InventoryMovement, WarehouseLocation
 from app.services.warehouse_inventory import WarehouseInventoryError, _balances, _movement, manual_finished_in
 from app.services.audit_log import append_audit_event
-from app.core.time_contract import beijing_today, utc_now_naive
+from app.core.time_contract import beijing_today, utc_now_naive, utc_naive_to_api
 
 
 def fail(message):
@@ -83,11 +83,17 @@ def list_rows(db, *, scope=None, query=""):
                 reserved=sum(l.quantity_reserved for l in lot_family), physical=physical, lot_version=lot.version if lot else 0,
                 lot_number=" / ".join(l.lot_number for l in lot_family if l.quantity_available+l.quantity_reserved+l.quantity_damaged) or (lot.lot_number if lot else None), location=" / ".join(dict.fromkeys(location_name(db,l) for l in lot_family if l.quantity_available+l.quantity_reserved+l.quantity_damaged)) or location_name(db,lot), status=status, keep=keep,
                 source_kind="legacy_stock" if legacy_lot else "receipt" if receipt else "purchase",
+                source_trace=dict(order_number=item.order.order_number,supplier=item.order.supplier_name,
+                    ordered_at=utc_naive_to_api(item.order.confirmed_at or item.order.created_at),
+                    received_at=utc_naive_to_api(receipt.created_at) if receipt else None,
+                    received_quantity=receipt.received_quantity if receipt else item.stocked_quantity,
+                    production_consumed=sum(j.input_quantity for j in jobs if j.status=='completed'),
+                    remaining=sum(l.quantity_available for l in lot_family)),
                 can_plan=bool(receipt and lot and lot.inventory_type == "semi_finished" and lot.status == "active" and receipt.status == "posted"),
                 product_id=item.reference_product_id or item.product_id, factor=item.stock_yield_per_sheet, pieces_per_box=item.pieces_per_box,
                 jobs=[job_dict(db,j) for j in jobs],
-                history=[dict(at=str(c.created_at), action=json.loads(c.request_json)["action"], actor_id=c.actor_id) for c in commands],
-                movements=[dict(at=str(m.created_at),reason=m.reason,quantity=m.quantity,unit=m.unit,order_item_id=m.related_order_item_id) for m in db.scalars(select(InventoryMovement).where(InventoryMovement.inventory_lot_id.in_([l.id for l in lot_family]+[j.output_lot_id for j in jobs if j.output_lot_id])).order_by(InventoryMovement.id))] if lot else [])
+                history=[dict(at=utc_naive_to_api(c.created_at), action=json.loads(c.request_json)["action"], actor_id=c.actor_id) for c in commands],
+                movements=[dict(at=utc_naive_to_api(m.created_at),reason=m.reason,quantity=m.quantity,unit='张' if m.unit=='sheets' else '只',order_item_id=m.related_order_item_id,lot_id=m.inventory_lot_id,available_before=m.before_available,available_after=m.after_available) for m in db.scalars(select(InventoryMovement).where(InventoryMovement.inventory_lot_id.in_([l.id for l in lot_family]+[j.output_lot_id for j in jobs if j.output_lot_id])).order_by(InventoryMovement.id))] if lot else [])
             if query.casefold() in " ".join(str(row[k] or "") for k in ("code","name","customer_name","order_number","lot_number")).casefold():
                 rows.append(row)
     priority = {"arrange":0,"pending":1,"waiting":2,"keep":3,"stock":4,"history":5}

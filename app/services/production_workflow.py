@@ -6683,6 +6683,7 @@ def _completion_rows(
     placement_pending: bool = False,
     page: int | None = None,
     page_size: int | None = None,
+    keys_only: bool = False,
 ):
     query = (
         select(
@@ -6773,6 +6774,8 @@ def _completion_rows(
     )
     if page is not None and page_size is not None:
         query = query.offset((page - 1) * page_size).limit(page_size)
+    if keys_only:
+        query = query.with_only_columns(ProductionCompletion.id, ProductionCompletion.completed_at, maintain_column_froms=True)
     return db.execute(query).all()
 
 

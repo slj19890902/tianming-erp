@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.386"
-APP_VERSION_NAME = "生产选位与组合库存去向"
+APP_VERSION = "v0.22.387"
+APP_VERSION_NAME = "余料追溯与统一完工历史"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -3995,4 +3995,21 @@ APP_VERIFICATION_STEPS = [
     "整组安排打开地图，点击地面货位或货架具体层格，核对标签和确定此货位按钮。",
     "库存去向核对205子件折合套数、长短片数量位置及独立生产余料；套数不代表已完成组装。",
     "搜索Z.004.000006，核对已有备库库存及位置，不再误报待收料。",
+]
+
+
+APP_CHANGELOG = [
+    *(f"v0.22.386：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.386：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "完工历史统一显示订单生产与备库生产，整组按冻结配比显示套数，并支持记录追溯。",
+    "余料记录直接展示原收料时间、投入与结余；管理员可整组撤销未使用的误报，保留原收料及完工历史。",
+    "完工历史按桌面可用高度增加行数，标准和大字模式均采用分页展示。本版不修改205历史数量或组装事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新4生产→完工历史，搜索205，打开记录，核对长片实收1400张、投入1395张和余5张。",
+    "核对记录入口、库存位置及撤销资格提示；205已实物组装，请勿按误报撤回原料。",
+    "核对标准及大字模式列表铺满可用高度，换页显示对应记录，无整页上下滚动。",
 ]

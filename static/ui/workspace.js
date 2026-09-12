@@ -54,7 +54,7 @@
             footer:after+24, headHeight:table.tHead?.getBoundingClientRect().height || 36});
           const previous = this.workspaceCapacities[currentKey];
           // Underfilled last pages must not inflate capacity or repeatedly request themselves.
-          if (next === previous || (previous && next > previous) || this._workspaceSizing) return;
+          if (next === previous || (previous && next > previous && !(this.activePage==='production' && this.productionTab==='history')) || this._workspaceSizing) return;
           this.workspaceCapacities[currentKey] = next;
           this.pageSize = next;
           this._workspaceSizing = true;

@@ -81,6 +81,20 @@ def test_empty_overview_does_not_claim_zero_cost_profit(monkeypatch):
     assert result['material_gross_profit_reference'] is None
 
 
+def test_rounded_full_percentage_never_hides_a_remaining_gap(monkeypatch):
+    from pathlib import Path
+    from app.services import material_cost_lineage as service
+    monkeypatch.setattr(service, 'material_cost_coverage_report', lambda *args, **kwargs: dict(
+        total_delivery_lines=20001, management_covered_lines=20000,
+        actual_material_cost=Decimal('10'), supplemental_material_cost=Decimal('0'),
+        management_material_cost=Decimal('10')))
+    result = service.material_cost_overview(None, months=['2026-09'], can_view_costs=True)
+    assert result['coverage_rate'] == 1
+    assert result['missing_lines'] == 1
+    html = (Path(__file__).resolve().parents[1] / 'static/index.html').read_text(encoding='utf-8')
+    assert 'v-if="Number(financeOverview.cost_coverage.missing_lines)>0"' in html
+
+
 def test_month_report_batches_order_reads_and_api_uses_same_contract(requisition_app):
     from datetime import date
     from fastapi.testclient import TestClient

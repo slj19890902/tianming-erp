@@ -438,18 +438,30 @@ class App:
 
     def import_old(self):
         from desktop_assistant.onboarding import onboard
+        package = self.manager.root / 'installer-release.zip'
+        if not package.is_file():
+            messagebox.showerror('安装包不完整',
+                                 f'当前助手目录：{self.manager.root}\n缺少ERP程序安装包。请运行最新版完整安装器，选择此目录修复安装，再进行首次接入。')
+            return
         settings = self.settings()
         if not settings:
             return
         source = filedialog.askdirectory(title='选择原ERP整个文件夹（里面有data文件夹，不要选择data本身）', initialdir=setup_defaults(self.manager).get('source_root'))
-        package = self.manager.root / 'installer-release.zip'
         if source and messagebox.askyesno('首次接入', '请先让员工保存单据。助手会核对原ERP、暂停服务、复制数据、保存完整备份并启动新入口。以后通过本助手维护，原目录保留。继续？'):
             self.run('核对并复制原ERP', lambda: onboard(self.manager, Path(source), package, *settings))
 
 
+def startup_root(explicit=None):
+    if explicit is not None:
+        return Path(explicit)
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).resolve().parent
+    return Path(os.environ['LOCALAPPDATA']) / 'TianmingERP'
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--root', type=Path, default=Path(os.environ['LOCALAPPDATA']) / 'TianmingERP')
+    parser.add_argument('--root', type=Path)
     parser.add_argument('--nightly', action='store_true')
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
@@ -457,6 +469,8 @@ def main():
         import tempfile
         from types import SimpleNamespace
         from desktop_assistant.onboarding import self_test_powershell
+        if getattr(sys, 'frozen', False):
+            assert startup_root() == Path(sys.executable).resolve().parent
         self_test_powershell()
         with tempfile.TemporaryDirectory(prefix='tm-assistant-ui-check-') as temp:
             root = Path(temp)
@@ -475,7 +489,7 @@ def main():
                 window.destroy()
         return
     resources = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
-    manager = Manager(args.root, (resources / 'release-public.pem').read_bytes())
+    manager = Manager(startup_root(args.root), (resources / 'release-public.pem').read_bytes())
     if args.nightly:
         try:
             nightly(manager)

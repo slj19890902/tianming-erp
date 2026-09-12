@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.381"
-APP_VERSION_NAME = "仓库查货分批加载"
+APP_VERSION = "v0.22.383"
+APP_VERSION_NAME = "助手直接启动目录修复"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -3919,4 +3919,34 @@ APP_VERIFICATION_STEPS = [
     "刷新仓库页面，按客户、料号或规格查货；结果较多时继续加载，确认没有重复批次，切换关键词不混入旧结果。",
     "点击货架产品，核对实际层格高亮；收起查货结果后定位仍保留，订单来源只读定位与返回原单保持正常。",
     "在系统版本中核对v0.22.381；本轮为分批加载优化，稀少命中仍可能扫描后续候选，未宣称完成多年容量验收。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.381：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.381：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "整组生产选位默认三楼，按现场区域、子区、货架、层、格选择；不再将EDIT或L内部编码当区域分类。",
+    "计划成品位置可从地图选择有货或空货位，确认后带回原安排，套数保持。",
+    "修复厂内HTTP网址整组转待生产无响应；失败明确提示，网络重试不重复安排。",
+]
+APP_VERIFICATION_STEPS = [
+    "从内网进入生产整组安排，核对默认3楼及区域、货架层格分类。",
+    "点击地图选位，分别查看有货和空货位，确定返回后核对位置与套数保持。",
+    "安排一次实际需要的整组生产，确认显示成功或明确原因；计划不直接生成完工库存。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.382：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.382：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "直接双击助手程序时使用实际安装目录，与桌面快捷方式保持一致，不再误到C盘默认目录查找安装包。",
+    "缺少离线安装包时，在首次接入前提示修复安装；保留原设置、381仓库查询和382整组生产更新。",
+]
+APP_VERIFICATION_STEPS = [
+    "直接打开安装目录中的助手EXE，核对原备份设置可用，首次接入不再查找C盘另一目录的安装包。",
+    "通过桌面快捷方式打开，确认与直接打开使用同一安装；按需手动完成首次接入。",
 ]

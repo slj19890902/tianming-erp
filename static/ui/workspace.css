@@ -103,3 +103,9 @@
 .order-location-link { background:none; border:0; padding:0; color:#006bc6; font:inherit; cursor:pointer; text-decoration:underline; text-underline-offset:3px; text-align:left; white-space:normal; }
 .order-location-link:hover { color:#004486; }
 .order-location-link:focus-visible,.order-readiness-link:focus-visible { outline:2px solid #006bc6; outline-offset:3px; }
+
+.stock-map-mask{position:fixed;inset:0;z-index:180;background:#fff;display:flex;flex-direction:column}.stock-map-toolbar{display:flex;justify-content:space-between;align-items:center;padding:8px 16px;border-bottom:1px solid #dce3ed}.stock-map-mask iframe{border:0;flex:1;width:100%;min-height:0}.stock-location-field .location-picker{display:flex;flex-wrap:wrap;gap:6px}.stock-location-field .location-picker .select{width:auto;max-width:240px}
+
+.stock-location-field{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 12px}.stock-location-field>label{grid-column:1/-1;margin:0}.stock-location-field>.btn{align-self:start}@media(max-width:700px){.stock-location-field{grid-template-columns:1fr}.stock-location-field>.btn{justify-self:start}}
+
+.stock-location-field{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px 12px}.stock-location-field>label{grid-column:1/-1;margin:0}.stock-location-field>.btn{align-self:start}@media(max-width:700px){.stock-location-field{grid-template-columns:1fr}.stock-location-field>.btn{justify-self:start}}

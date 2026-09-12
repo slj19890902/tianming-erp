@@ -118,3 +118,7 @@
  .ui-large .production-history-table .history-line,.ui-large .production-history-table .history-link {line-height:27px;}
 }
 .stock-source-summary{padding:8px 10px;background:#f2f7fb;border-radius:8px;margin:8px 0;}
+
+.stock-production-dialog .compact-input{display:inline-block;width:110px;max-width:110px;margin:0 6px;}
+.stock-production-dialog>label{display:flex;align-items:center;gap:8px;margin:10px 0;}
+.stock-production-dialog>label>.select{max-width:260px;}

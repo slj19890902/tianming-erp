@@ -1,7 +1,7 @@
 """Plan a stock kit atomically while retaining every physical child lot.
 
-The group is an immutable snapshot on its child jobs, not a new parent stock
-identity. Existing job and command ledgers provide versioning and replay.
+Planning freezes the recipe on child jobs. Explicit disposition may later
+consume those children into parent stock; existing ledgers retain the trace.
 """
 import hashlib
 import json
@@ -53,11 +53,11 @@ def recipe(db, parent_id):
         inventory_mode='children',unit='套')
 
 
-def destination(db, location_id, layout_version):
+def destination(db, location_id, layout_version, inventory_type="finished"):
     if not location_id or layout_version is None:
-        prep.fail('请选择计划成品位置并刷新地图版本')
-    place = _location(db, location_id, 'finished')
-    _validate_transfer_location_snapshot(db,location=place,role='计划成品',expected_address_version=None,
+        prep.fail('请选择存放位置并刷新地图版本')
+    place = _location(db, location_id, inventory_type)
+    _validate_transfer_location_snapshot(db,location=place,role='存放位置',expected_address_version=None,
         expected_layout_version=layout_version,expected_map_revision=None)
     return dict(id=place.id,layout_version=layout_version,name=f'{place.warehouse_floor}楼 · {place.location_name}')
 
@@ -115,7 +115,7 @@ def groups(db, rows):
             if not group:
                 continue
             target = pending.setdefault(group['key'],dict(group=group,jobs=[],statuses=set()))
-            target['jobs'].append(dict(job,receipt_id=row['receipt_item_id'],lot_version=row['lot_version']))
+            target['jobs'].append(dict(job,receipt_id=row['receipt_item_id'],lot_version=row['lot_version'],source_location=row['location']))
             target['statuses'].add(job['status'])
     for target in pending.values():
         target['status'] = 'pending' if 'pending' in target['statuses'] else 'completed' if 'completed' in target['statuses'] else 'cancelled'
@@ -147,7 +147,10 @@ def workspace_rows(db, rows, state):
     if state == 'stock':
         stocked_groups = [dict(key='stock-group:'+g['group']['key'],entry_type='group_stock',task=g)
                           for g in grouped['groups'] if any(j['output_remaining'] for j in g['jobs'])]
-        return stocked_groups + [dict(row,entry_type='receipt',grouped_output_hidden=True) for row in rows
+        from app.services.stock_preparation_disposition import assembly_rows
+        customer_ids={r['customer_id'] for r in rows} if rows and 'customer_id' in rows[0] else {prep.source(db,r['receipt_item_id'])[1].customer_id for r in rows if r.get('receipt_item_id')}
+        assembled=[dict(key='assembled:'+a['key'],entry_type='assembled_stock',assembly=a) for a in assembly_rows(db,customer_ids) if not a['reversed'] and a['physical']>0]
+        return assembled + stocked_groups + [dict(row,entry_type='receipt',grouped_output_hidden=True) for row in rows
             if row['physical'] or any(j['output_remaining'] and not j['product'].get('preparation_group') for j in row['jobs'])]
     if state == 'history':
         return [dict(row,entry_type='receipt') for row in rows if row['jobs'] or row['history'] or row['status']=='history']
@@ -174,6 +177,9 @@ def workspace_rows(db, rows, state):
 
 
 def mutate_group(db,payload,actor):
+    if payload['action'] in {'dispose','assemble','unassemble','store_outputs'}:
+        from app.services.stock_preparation_disposition import dispose,assemble,unassemble,store_outputs
+        return {'dispose':dispose,'assemble':assemble,'unassemble':unassemble,'store_outputs':store_outputs}[payload['action']](db,payload,actor)
     key = payload['operation_key']
     request = encode(payload)
     old = db.get(Command,key)
@@ -188,8 +194,12 @@ def mutate_group(db,payload,actor):
             prep.fail('组合用量或库存已变化，请重新预览')
         if plan['shortages'] or not plan['inputs']:
             prep.fail('子件不足，不能安排本次套数')
-        place = destination(db,payload['location_id'],payload['layout_version'])
+        # Planning only reserves existing materials; their current locations remain
+        # authoritative until the operator confirms the physical output.
+        place = destination(db,payload['location_id'],payload['layout_version']) if payload.get('location_id') else None
         group = dict(key=key,recipe=plan['recipe'],sets=payload['sets'],planned_location=place)
+        from app.services.finished_stock_identity import product_basis
+        group['parent_basis']=product_basis(db.get(Product,plan['recipe']['parent_id']))
         for index,source in enumerate(plan['inputs']):
             result = prep.mutate(db,receipt_id=source['receipt_id'],payload=dict(action='plan',operation_key=digest([key,index])[:60],
                 lot_version=source['lot_version'],quantity=source['quantity']),actor=actor,group_snapshot=group)

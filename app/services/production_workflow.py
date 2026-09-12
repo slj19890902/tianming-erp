@@ -2647,10 +2647,10 @@ def _bind_direct_completion_lots_to_system_pallet(
     return pallet
 
 
-def list_temporary_locations(db: Session) -> list[dict]:
+def list_temporary_locations(db: Session, *, stock_materials: bool = False) -> list[dict]:
     locations = list_operational_locations(
         db,
-        warehouse_types={"finished", "shared"},
+        warehouse_types={"finished", "shared", "semi_finished"} if stock_materials else {"finished", "shared"},
     )
     locations = [
         candidate
@@ -2665,10 +2665,10 @@ def list_temporary_locations(db: Session) -> list[dict]:
             if operational_location_issue(
                 db,
                 candidate.location,
-                warehouse_types={"finished", "shared"},
+                warehouse_types={"finished", "shared", "semi_finished"} if stock_materials else {"finished", "shared"},
                 require_published=True,
                 require_map_geometry=True,
-                required_inventory_type="finished",
+                required_inventory_type=None if stock_materials else "finished",
                 projection_context=candidate.projection_context,
             )
             is None

@@ -2625,6 +2625,7 @@ def manual_finished_in(
     ground_capacity_quantity: int | None = None,
     physical_basis_json: str | None = None,
     remember_storage: bool = True,
+    assembly_command_key: str | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -2646,6 +2647,11 @@ def manual_finished_in(
     if completion is not None:
         if not _frozen_product_has_stock(db, completion.order_item_id, product_id):
             raise WarehouseInventoryError("冻结规则为子件分存，不能生成父件库存", 409)
+    elif assembly_command_key is not None:
+        if source_ref_type != 'preparation_assembly':
+            raise WarehouseInventoryError('组装来源类型不一致',409)
+        from app.services.stock_preparation_disposition import assert_assembly_evidence
+        assert_assembly_evidence(db,assembly_command_key,product_id,customer_id,quantity)
     elif profile is not None and profile.source == "separate":
         raise WarehouseInventoryError("组合父件只表示需求，请分别选择真实子件入库", 409)
     _claim_inventory_destination(

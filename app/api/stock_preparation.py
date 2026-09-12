@@ -63,7 +63,7 @@ def reverse_preparation(key:str,body:Reversal,db:Session=Depends(get_db),user:Us
 
 
 class Action(BaseModel):
-    action: Literal['keep_raw','keep_semi','plan','complete','cancel']
+    action: Literal['keep_raw','keep_semi','plan','complete','cancel','store_output']
     operation_key: str = Field(min_length=8,max_length=70)
     lot_version: int = Field(gt=0,strict=True)
     quantity: int = Field(default=0,ge=0,strict=True)
@@ -73,6 +73,8 @@ class Action(BaseModel):
     location_id: int | None = None
     layout_version: int | None = None
     confirm_overproduction: bool = False
+    output_kind: Literal['finished','semi'] = 'finished'
+    output_version: int = Field(default=0,ge=0,strict=True)
 
 
 class GroupJobAction(BaseModel):
@@ -80,10 +82,19 @@ class GroupJobAction(BaseModel):
     job_version: int = Field(gt=0,strict=True)
     lot_version: int = Field(gt=0,strict=True)
     actual_output: int = Field(default=0,ge=0,strict=True)
+    output_version: int = Field(default=0,ge=0,strict=True)
+    location_id: int | None = None
+    layout_version: int | None = None
+
+
+class AssemblySource(BaseModel):
+    lot_id: int = Field(gt=0,strict=True)
+    version: int = Field(gt=0,strict=True)
 
 
 class GroupAction(BaseModel):
-    action: Literal['plan','complete','cancel']
+    action: Literal['plan','complete','cancel','dispose','assemble','unassemble','store_outputs']
+    disposition: Literal['finished','semi'] = 'finished'
     operation_key: str = Field(min_length=8,max_length=70)
     parent_id: int = Field(gt=0,strict=True)
     sets: int = Field(default=1,gt=0,le=10000000,strict=True)
@@ -93,6 +104,16 @@ class GroupAction(BaseModel):
     location_id: int | None = None
     layout_version: int | None = None
     confirm_overproduction: bool = False
+    assembly_key: str = ''
+    output_version: int = Field(default=0,ge=0,strict=True)
+    sources: list[AssemblySource] = Field(default_factory=list,max_length=1000)
+    confirm_unused: bool = False
+
+
+@router.get('/stock-preparation/locations')
+def get_stock_locations(db:Session=Depends(get_db),user:User=Depends(PermissionChecker('orders.view'))):
+    from app.services.production_workflow import list_temporary_locations
+    return {'items':list_temporary_locations(db,stock_materials=True)}
 
 
 @router.get('/stock-preparation/groups')
@@ -114,6 +135,8 @@ def preview_group(parent_id:int,sets:int=Query(1,gt=0,le=10000000),db:Session=De
 @router.post('/stock-preparation/group-actions')
 def post_group_action(body:GroupAction,db:Session=Depends(get_db),user:User=Depends(RoleChecker(['admin','boss']))):
     try:
+        if body.action=='unassemble' and user.role!='admin':
+            raise HTTPException(403,'仅管理员可撤销组装')
         # Completion uses frozen product/customer identity even after later BOM edits.
         from app.models.product import Product
         parent=db.get(Product,body.parent_id)
@@ -166,7 +189,7 @@ def post_action(receipt_id:int,body:Action,db:Session=Depends(get_db),user:User=
         _,item,_=service.source(db,receipt_id)
         require_customer_access(item.customer_id,user,db)
         with atomic_bom(db):
-            result=service.mutate(db,receipt_id=receipt_id,payload=body.model_dump(),actor=user)
+            result=service.mutate(db,receipt_id=receipt_id,payload=body.model_dump(),actor=user,output_kind=body.output_kind)
         db.commit()
         return result
     except WarehouseInventoryError as exc:

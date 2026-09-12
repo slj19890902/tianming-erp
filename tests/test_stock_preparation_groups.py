@@ -140,3 +140,23 @@ def test_group_preview_permission_and_stale_inventory(stock_replenishment_app):
             user=db.scalar(select(User));user.role='sales';user.customer_access_mode='selected';db.commit()
         assert client.post('/api/production/stock-preparation/group-actions',json=body).status_code==403
         assert client.get(f'/api/production/stock-preparation/groups/{pid}/preview').status_code==403
+
+
+
+def test_group_plan_needs_no_output_location_and_keeps_material_positions(stock_replenishment_app):
+    app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    with TestClient(app) as client:
+        pid=prepare(app,factory,client)
+        preview=client.get(f'/api/production/stock-preparation/groups/{pid}/preview?sets=5').json()
+        with factory() as db:
+            before={l.id:(l.warehouse_location_id,l.quantity_available) for l in db.scalars(select(InventoryLot))}
+        body=dict(action='plan',parent_id=pid,sets=5,operation_key='no-position-plan',basis_hash=preview['basis_hash'])
+        response=client.post('/api/production/stock-preparation/group-actions',json=body)
+        assert response.status_code==200,response.text
+        assert client.post('/api/production/stock-preparation/group-actions',json=body).json()==response.json()
+        with factory() as db:
+            assert all(l.warehouse_location_id==before[l.id][0] and l.quantity_available+l.quantity_reserved==before[l.id][1] for l in db.scalars(select(InventoryLot)))
+            assert all(j.output_lot_id is None and json.loads(j.product_snapshot)['preparation_group']['planned_location'] is None for j in db.scalars(select(StockPreparationJob)))
+        rows=client.get('/api/production/stock-preparation?workspace=true&state=pending').json()['items']
+        assert len(rows)==1 and rows[0]['task']['group']['sets']==5
+        assert all(j['source_location'] for j in rows[0]['task']['jobs'])

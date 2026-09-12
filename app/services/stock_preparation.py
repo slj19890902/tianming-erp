@@ -37,11 +37,13 @@ def location_name(db, lot):
 def job_dict(db, job):
     output = db.get(InventoryLot, job.output_lot_id) if job.output_lot_id else None
     outputs = list(db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type == "stock_preparation", InventoryLot.source_ref_id == job.id))) if output else []
-    return dict(id=job.id, version=job.version, status=job.status, input_quantity=job.input_quantity,
+    return dict(id=job.id, receipt_item_id=job.receipt_item_id, version=job.version, status=job.status, input_quantity=job.input_quantity,
         expected_output=job.expected_output, actual_output=job.actual_output,
         product=json.loads(job.product_snapshot), output_lot_number=" / ".join(lot.lot_number for lot in outputs) if output else None,
         output_location=" / ".join(dict.fromkeys(location_name(db,lot) for lot in outputs if lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged)) if output else None,
-        output_remaining=sum(lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged for lot in outputs))
+        output_remaining=sum(lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged for lot in outputs),
+        output_available=output.quantity_available if output else 0,output_version=output.version if output else 0,
+        output_kind='semi' if output and output.inventory_type=='semi_finished' else 'finished',output_location_id=output.warehouse_location_id if output else None)
 
 
 def list_rows(db, *, scope=None, query=""):
@@ -120,7 +122,10 @@ def plan_product(db, item, lot):
         fail("材料不能用于该产品："+"；".join(issues))
     return product
 
-def mutate(db, *, receipt_id, payload, actor, group_snapshot=None):
+def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='finished'):
+    if payload['action']=='store_output':
+        from app.services.stock_preparation_disposition import store_output
+        return store_output(db,receipt_id,payload,actor)
     receipt, item, lot = source(db, receipt_id)
     request = json.dumps(dict(payload, receipt_id=receipt_id), sort_keys=True, ensure_ascii=False)
     previous = db.get(Command, payload["operation_key"])
@@ -143,6 +148,9 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None):
         if lot.inventory_type != "semi_finished" or lot.quantity_available <= 0:
             fail("没有可保留的未分配材料")
         # This is a usage decision, not a rewrite of receipt material/shape facts.
+        if payload.get('location_id'):
+            from app.services.stock_preparation_disposition import relocate_material
+            relocate_material(db,lot,payload['location_id'],payload.get('layout_version'),actor,payload['operation_key'])
     elif action == "plan":
         quantity = payload["quantity"]
         if lot.inventory_type != "semi_finished" or quantity <= 0 or quantity > lot.quantity_available:
@@ -195,15 +203,20 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None):
             destination = db.get(WarehouseLocation,payload["location_id"])
             if not destination:
                 fail("请选择实际成品入库位置")
-            output = manual_finished_in(db, customer_id=item.customer_id, product_id=job.product_id,
+            if output_kind == 'semi':
+                from app.services.stock_preparation_disposition import semi_output
+                output = semi_output(db,job,lot,item,actual,destination,payload,actor)
+            else:
+                output = manual_finished_in(db, customer_id=item.customer_id, product_id=job.product_id,
                 location_id=destination.id, quantity=actual, stock_date=beijing_today(), source_type="transfer",
                 remarks=f"备库生产；来源 {lot.lot_number}",operator_id=actor.id,
                 idempotency_key=f"prep-out:{job.id}",source_ref_type="stock_preparation",source_ref_id=job.id,
                 expected_layout_version=payload["layout_version"], movement_reason="备库生产确认入库",
                 physical_basis_json=json.loads(job.product_snapshot)["physical_basis"])
             snapshot=json.loads(job.product_snapshot)
-            output.finished_detail.inventory_code_snapshot=snapshot["code"]
-            output.finished_detail.product_name_snapshot=snapshot["name"]
+            if output.finished_detail:
+                output.finished_detail.inventory_code_snapshot=snapshot["code"]
+                output.finished_detail.product_name_snapshot=snapshot["name"]
             output.estimated_unit_cost_snapshot=None
             if lot.estimated_unit_cost_snapshot is not None:
                 total=Decimal(str(lot.estimated_unit_cost_snapshot))*quantity

@@ -37,7 +37,7 @@ def reverse_block(db, jobs):
                 or source.inventory_type != 'semi_finished'):
             return '原生产消耗记录已变化'
         if (not output or output.source_ref_type != 'stock_preparation' or output.source_ref_id != job.id
-                or output.status != 'active' or output.inventory_type != 'finished'
+                or output.status != 'active' or output.inventory_type not in {'finished','semi_finished'}
                 or output.quantity_available != job.actual_output
                 or any((output.quantity_reserved, output.quantity_consumed, output.quantity_damaged, output.quantity_scrapped))):
             return '产出已被使用、占用或调整，请先处理后续业务'
@@ -98,12 +98,27 @@ def rows(db, scope=None, **filters):
             reverse_versions=versions, can_revert=not block, reversal_block=block, status=state,
             customer_id=item.customer_id, customer_name=item.customer.name if item.customer else '通用备料',
             customer_short_name=(item.customer.chinese_short_name or item.customer.name) if item.customer else '通用备料',
-            customer_order_number='备库生产', order_number=item.order.order_number,
+            customer_order_number='半成品加工' if all(d['output_kind']=='semi' for d in details) else '备库生产', order_number=item.order.order_number,
             product_code=recipe['code'], product_name=recipe['name'], completed_at=utc_naive_to_api(completed_at),
             actual_output_quantity=quantity, planned_output_quantity=group['sets'] if group else jobs[0].expected_output,
             output_unit='套' if group else '只', current_warehouse_location_name=' / '.join(locations),
             current_inventory_status='located' if locations else 'empty', can_adjust_actual_quantity=False,
             is_fully_delivered=False, can_transfer_to_stock=False))
+    from app.services.stock_preparation_disposition import assembly_rows,unassemble_block
+    for a in assembly_rows(db,scope):
+        recipe=a['recipe'];state='reversed' if a['reversed'] else 'posted'
+        if filters.get('customer_id') and filters['customer_id']!=recipe['customer_id']:continue
+        if filters.get('status') and filters['status']!=state:continue
+        day=utc_naive_to_beijing_date(datetime.fromisoformat(a['completed_at'].replace('Z','+00:00')).replace(tzinfo=None))
+        if filters.get('completed_date_from') and day<filters['completed_date_from'] or filters.get('completed_date_to') and day>filters['completed_date_to']:continue
+        if filters.get('order_keyword'):continue
+        if any(str(filters.get(k) or '').strip().casefold() not in recipe[field].casefold() for k,field in [('product_code','code'),('product_name','name')]):continue
+        block=unassemble_block(db,a)
+        result.append(dict(id='assembly:'+a['key'],origin='stock_assembly',assembly=a,preparation_key=a['group_key'],status=state,
+            customer_name=recipe['customer_name'],customer_short_name=recipe['customer_name'],customer_order_number='成套入库',
+            product_code=recipe['code'],product_name=recipe['name'],completed_at=a['completed_at'],actual_output_quantity=a['sets'],planned_output_quantity=a['sets'],
+            output_unit='套',current_warehouse_location_name=a['location'],current_inventory_status='located',can_revert=not block,reversal_block=block,
+            can_adjust_actual_quantity=False,is_fully_delivered=False,can_transfer_to_stock=False))
     return result
 
 

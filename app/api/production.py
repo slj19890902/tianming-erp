@@ -911,3 +911,6 @@ def revert_production_completion(
     except Exception:
         db.rollback()
         raise
+
+from app.api.stock_preparation import router as stock_preparation_router
+router.include_router(stock_preparation_router)

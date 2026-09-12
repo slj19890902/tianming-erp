@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.368"
-APP_VERSION_NAME = "邮箱待处理加载状态修复"
+APP_VERSION = "v0.22.369"
+APP_VERSION_NAME = "备库收料生产留痕与管理员安排"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2791,7 +2791,14 @@ _V022367_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["邮箱收单加载期间明确显示正在核对待处理PDF，不再误报暂无订单。", "读取失败或返回异常保留明确错误及重新读取入口，避免静默显示空列表。", "保留待保存/待改进分类、客户权限和人工保存流程；无新增数据库迁移。"]
 APP_VERIFICATION_STEPS = ["点击带红标的邮箱收单，先显示加载提示，完成后显示订单草稿。", "如果读取失败，弹窗内应显示原因，可点击重新读取；管理员核对后再保存订单。"]
 
+_V022368_CHANGES = APP_CHANGES
+_V022368_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["备库采购与分批收料在4生产持续留痕，已有库存直接关联，不重复入库。", "管理员可保留备料或部分安排待生产；预占、取消、实际产出入库保持数量守恒与位置追溯。", "新增备库生产安排与不可变操作流水，保留普通订单自动生产及原收料、库存事实。"]
+APP_VERIFICATION_STEPS = ["进入4生产的备库安排，搜索000205，核对两批实收和原库存位置。", "按真实用途保留备料或安排生产；实际完成时填写成品数量和实际位置，核对材料余量与成品。"]
+
 APP_CHANGELOG = [
+    *(f"v0.22.368：本次更新｜{item}" for item in _V022368_CHANGES),
+    *(f"v0.22.368：如何验证｜{item}" for item in _V022368_STEPS),
     *(f"v0.22.367：本次更新｜{item}" for item in _V022367_CHANGES),
     *(f"v0.22.367：如何验证｜{item}" for item in _V022367_STEPS),
     *(f"v0.22.366：本次更新｜{item}" for item in _V022366_CHANGES),

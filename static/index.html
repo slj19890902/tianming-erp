@@ -4691,6 +4691,7 @@
               <div class="production-compact-command-bar">
                 <div class="toolbar-group production-tab-strip">
                   <h2>生产与成品</h2>
+                  <button :class="['btn',{primary:productionTab==='preparation'}]" @click="productionTab='preparation'; loadStockPreparation(1)">备库安排 <span v-if="stockPrepCounts.arrange">{{ stockPrepCounts.arrange }} 待安排</span></button>
                   <button :class="['btn',{primary:productionTab==='pending'}]" :disabled="productionBusy" @click="productionTab='pending'; loadProductionPage(1)">待生产 {{ productionPendingTotal }}</button>
                   <button :class="['btn',{primary:productionTab==='history'}]" :disabled="productionBusy" @click="productionTab='history'; loadProductionHistory()">完工历史 {{ productionHistoryTotal }}</button>
                   <button :class="['btn',{primary:productionTab==='placement'}]" :disabled="productionBusy" @click="productionTab='placement'; loadProductionPlacement()">待送成品归位 {{ productionPlacementTotal }}</button>
@@ -4712,6 +4713,48 @@
                   <button class="btn" :disabled="productionBusy || productionPlacementLoading" @click="loadProductionPlacement()">{{ productionPlacementLoading ? '读取中…' : '刷新' }}</button>
                 </div>
               </div>
+              <section v-if="productionTab==='preparation'" class="card stock-preparation-panel">
+                <div class="toolbar-group" style="flex-wrap:wrap">
+                  <input v-model="stockPrepQuery" placeholder="客户 / 存货编码 / 产品 / 批次" @keyup.enter="loadStockPreparation(1)">
+                  <select v-model="stockPrepState" @change="loadStockPreparation(1)"><option value="">当前全部</option><option v-for="(label,key) in stockPrepLabels()" :value="key">{{ label }}（{{ stockPrepCounts[key] || 0 }}）</option></select>
+                  <button class="btn" :disabled="stockPrepBusy" @click="loadStockPreparation(1)">查询 / 刷新</button>
+                  <pager :page="stockPrepPage" :total="stockPrepTotal" :page-size="20" @change="loadStockPreparation($event)"></pager>
+                </div>
+                <p class="muted">采购后持续跟踪；实收才入库存。安排生产先预占材料，确认产出才转为成品。保留备料可等待订单使用。</p>
+                <p v-if="stockPrepError" class="status orange">{{ stockPrepError }}</p>
+                <p v-if="stockPrepBusy">正在处理…</p>
+                <p v-else-if="!stockPrepRows.length" class="muted">当前筛选没有备库记录</p>
+                <div style="overflow-x:auto"><table style="min-width:960px"><thead><tr><th>客户 / 产品</th><th>采购 / 实收</th><th>实物与位置</th><th>状态 / 管理员安排</th></tr></thead><tbody>
+                  <tr v-for="row in stockPrepRows" :key="row.key">
+                    <td><strong>{{ row.code }}</strong><div>{{ row.name }}</div><div>{{ row.customer_name }}</div><small class="muted">{{ row.specification }} · {{ row.material }}</small></td>
+                    <td>{{ row.quantity }} {{ row.unit }}<div class="muted">{{ row.status==='waiting' ? '尚待收料' : '本批实收' }}</div><small>{{ row.order_number }}</small></td>
+                    <td>{{ row.location }}<div>可用 {{ row.available }} · 已预占 {{ row.reserved }}</div><small>{{ row.lot_number }}</small></td>
+                    <td><span class="status green">{{ stockPrepLabels()[row.status] }}</span><span v-if="row.keep" class="muted"> · {{ row.keep==='keep_raw'?'按原料备货':'按半成品备货' }}</span>
+                      <div v-if="canAdmin && row.can_plan && row.available>0" class="toolbar-group" style="margin-top:8px;flex-wrap:wrap">
+                        <button class="btn small" :disabled="stockPrepBusy" @click="stockPrepAction(row,'keep_raw')">保留原料</button>
+                        <button class="btn small" :disabled="stockPrepBusy" @click="stockPrepAction(row,'keep_semi')">保留半成品</button>
+                        <label>投入 <input type="number" min="1" :max="row.available" v-model.number="row._quantity" style="width:85px"> 张</label>
+                        <button class="btn small primary" :disabled="stockPrepBusy || !row.product_id" @click="stockPrepAction(row,'plan')">转待生产</button>
+                        <small v-if="!row.product_id" class="status orange">请先完善备料的目标产品资料</small>
+                      </div>
+                      <details v-if="row.jobs.length || row.history.length || row.movements.length" :open="row.status==='pending'" style="margin-top:8px"><summary>生产与安排记录（{{ row.jobs.length }} 次生产）</summary>
+                        <div v-for="job in row.jobs" :key="job.id" style="border-top:1px solid #e5e7eb;padding:8px 0">
+                          <strong>{{ job.product.name }}</strong> · 投入 {{ job.input_quantity }} 张 · 理论 {{ job.expected_output }} 个
+                          <div v-if="job.status==='pending' && canAdmin" class="toolbar-group" style="flex-wrap:wrap">
+                            <label>实际成品 <input type="number" min="1" v-model.number="job._actual" style="width:85px"> 个</label>
+                            <select v-model.number="job._location" style="max-width:220px"><option :value="null">选择实际成品位置</option><option v-for="loc in productionLocations" :value="loc.id">{{ loc.location_name }}</option></select>
+                            <button class="btn small success" :disabled="stockPrepBusy" @click="stockPrepAction(row,'complete',job)">确认产出入库</button>
+                            <button class="btn small" :disabled="stockPrepBusy" @click="stockPrepAction(row,'cancel',job)">取消安排</button>
+                          </div>
+                          <div v-else>{{ job.status==='cancelled'?'已取消安排':job.status==='pending'?'待生产':'已产出 '+job.actual_output+' 个；余货 '+job.output_remaining+' 个' }} <span v-if="job.output_location"> · {{ job.output_location }} · {{ job.output_lot_number }}</span></div>
+                        </div>
+                        <div v-for="(movement,index) in row.movements" :key="'move'+index" class="muted">{{ movement.at }} · {{ movement.reason }} · {{ movement.quantity }} {{ movement.unit==='sheets'?'张':'个' }}</div>
+                        <div v-for="(event,index) in row.history" :key="index" class="muted">{{ event.at }} · {{ stockPrepActionLabel(event.action) }}</div>
+                      </details>
+                    </td>
+                  </tr>
+                </tbody></table></div>
+              </section>
               <div v-if="productionTab==='history' && productionHistoryFilterVisible" class="production-filter-panel">
                 <search-select v-model="productionHistoryFilters.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="客户" :allow-empty="true"></search-select>
                 <input class="input" v-model.trim="productionHistoryFilters.order_keyword" placeholder="订单/客户单号" @keyup.enter="pages.productionHistory=1; loadProductionHistory()" />
@@ -10100,6 +10143,7 @@
             externalIncomingPending: [], externalIncomingLoading: false, externalIncomingError: "", externalIncomingFilter: "", externalIncomingLoaded: false, externalIncomingDrafts: {}, externalIncomingSavingId: null, externalIncomingSavingAttemptId: "",
             externalReceiptHistoryOpen:false, externalReceiptHistory:[], externalReceiptHistoryPage:1, externalReceiptHistoryTotal:0, externalReceiptHistoryQuery:"", externalReceiptHistoryLoading:false, externalReceiptHistoryError:"", externalReceiptReverseBusy:null, externalReceiptReverseAttempts:{},
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
+            stockPrepRows: [], stockPrepTotal: 0, stockPrepCounts: {}, stockPrepState: "", stockPrepQuery: "", stockPrepPage: 1, stockPrepBusy: false, stockPrepError: "", stockPrepSequence: 0,
             productionTab: "history", productionPending: [], productionPendingTotal: 0, productionPendingLoading: false, productionPendingError: "", productionWaitingLabels: [], productionWaitingLabelTotal: 0, productionWaitingLabelLoading: false, productionWaitingLabelError: "", productionLabelMaintenanceScrollY: 0, productionHistory: [], productionHistoryTotal: 0, productionHistoryFilterVisible: false, productionPlacement: [], productionPlacementTotal: 0, productionPlacementLoading: false, productionPlacementError: "", productionPlacementFilterVisible: false, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
             productionPlacementFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"" },
@@ -18969,7 +19013,39 @@
               this.showToast("库存预警模板已保存");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
+          stockPrepLabels() { return {arrange:'已到料·待安排',pending:'待生产',waiting:'待来料',keep:'备料中',stock:'成品待送',history:'历史'}; },
+          stockPrepActionLabel(action) { return {keep_raw:'保留原料备货',keep_semi:'保留半成品备货',plan:'安排生产',complete:'确认产出入库',cancel:'取消生产安排'}[action] || action; },
+          async loadStockPreparation(page=1) {
+            const sequence=++this.stockPrepSequence;
+            this.stockPrepBusy=true; this.stockPrepError='';
+            try {
+              const {data}=await axios.get('/api/production/stock-preparation',{params:{q:this.stockPrepQuery,state:this.stockPrepState,page,page_size:20}});
+              if(sequence!==this.stockPrepSequence) return;
+              this.stockPrepRows=data.items.map(row=>({...row,_quantity:row.available,jobs:row.jobs.map(job=>({...job,_actual:job.expected_output,_location:null}))}));
+              this.stockPrepTotal=data.total; this.stockPrepCounts=data.counts; this.stockPrepPage=page;
+              const locations=await axios.get('/api/production/temporary-locations');
+              if(sequence===this.stockPrepSequence) this.productionLocations=Array.isArray(locations.data)?locations.data:(locations.data.items || []);
+            } catch(error) { if(sequence===this.stockPrepSequence) this.stockPrepError=error.response?.data?.detail || '备库安排读取失败，请重试'; }
+            finally { if(sequence===this.stockPrepSequence) this.stockPrepBusy=false; }
+          },
+          async stockPrepAction(row,action,job=null) {
+            if(this.stockPrepBusy) return;
+            const payload={action,lot_version:row.lot_version,quantity:action==='plan'?Number(row._quantity):0,job_id:job?.id || null,job_version:job?.version || null,actual_output:action==='complete'?Number(job?._actual):0,location_id:job?._location || null,layout_version:this.productionLocations.find(loc=>loc.id===job?._location)?.layout_version ?? null,confirm_overproduction:false};
+            if(action==='plan' && (!Number.isInteger(payload.quantity) || payload.quantity<=0 || payload.quantity>row.available)) { this.stockPrepError='请输入不超过可用量的正整数投入张数'; return; }
+            if(action==='complete' && (!Number.isInteger(payload.actual_output) || payload.actual_output<=0 || !payload.location_id)) { this.stockPrepError='请填写实际成品数量并选择实际入库位置'; return; }
+            if(action==='cancel' && !window.confirm('取消这次生产安排，将材料恢复为可用备料？')) return;
+            if(action==='complete' && payload.actual_output>job.expected_output) { if(!window.confirm('实际成品超过理论产出，确认数量正确？')) return; payload.confirm_overproduction=true; }
+            const signature=JSON.stringify(payload);
+            if(row._requestSignature!==signature) { row._requestSignature=signature; row._requestKey='prep-'+Date.now()+'-'+Math.random().toString(36).slice(2); }
+            payload.operation_key=row._requestKey;
+            this.stockPrepBusy=true; this.stockPrepError='';
+            try { await axios.post('/api/production/stock-preparation/'+row.receipt_item_id+'/actions',payload); await this.loadStockPreparation(this.stockPrepPage); }
+            catch(error) { this.stockPrepError=error.response?.data?.detail || '操作结果暂未确认，请保持内容重试或刷新核对'; }
+            finally { this.stockPrepBusy=false; }
+          },
           async loadProduction() {
+            if (this.productionTab === "preparation") return this.loadStockPreparation();
+            axios.get("/api/production/stock-preparation",{params:{page_size:1}}).then(({data})=>{this.stockPrepCounts=data.counts;}).catch(()=>{});
             if (this.productionTab === "pending") {
               const [, pendingResult] = await Promise.all([
                 this.loadCustomerOptions(),

@@ -1,6 +1,6 @@
 # 常用箱补全资料与库存定位返回
 
-状态：开发验证通过，尚未正式发布。发布与 DESKTOP014 串行，接入程序处理正式服务期间不操作正式目录或数据库。
+状态：v0.22.379 技术发布完成，待管理员人工验收。已串行保留 DESKTOP014 v378 与 OPT001 v377 的正式改动。
 
 ## 现场结果
 
@@ -36,4 +36,16 @@
 
 ## 发布记录
 
-待串行发布窗口放行后补充精确 SHA、版本、时点备份、运行目录、数据库检查与 NAS 回执。
+发布代码 `6fccf67669809698dc0ab62d47b018411bf03ab2`，版本 v0.22.379，唯一 head mq0912。正式报告 `D:/纸箱厂erp软件搭建/docs/migration_reports/release_runtime_20260912_160939.json` completed；2026-09-12 16:11:19 服务启动与版本复检通过。正式源仍为 `D:/纸箱厂erp软件搭建/data/carton_erp.sqlite3`，本次技术发布未执行助手首次接入。
+
+- 发布源/应用后 SHA256 均为 `b10a13675324f07fb0c0bb59829b27f28dacb7a108a8922108b0f10f3faf42aa`；完整性 ok、外键 0、核心业务表计数一致。无新 DDL 或业务事实写入。
+- 时点备份 `data/backups/carton_erp_before_release_20260912_160943.sqlite3`，隔离演练 `data/release_rehearsals/carton_erp_release_rehearsal_20260912_160943.sqlite3`；二者 SHA256 均为 `bc17153be9e3cdf27472a74deff0dd5b7ed895a08dce9628c1f62a0d1c9a7234`，mq0912、完整性/FK/计数通过。同 head 的正式发布门禁未执行无关历史迁移。
+- 内网 192.168.3.80:8000、loopback 18000 与原公网入口健康 200；24 项只读烟测通过，包括内外网根入口、新模块、内网七个 UI 资源和地图入口全部依赖字节哈希、未登录产品/仓库接口 401/403。没有自动点击正式页面。证据 `C:/erp-ui-plans/20260912-context/production-smoke.json`。
+- 资源：`order-context.js` SHA 前12位 `217850427bf4`；`workspace.css` `c840a5c202b5`；地图入口引用 `warehouseTwin-DRuVYMtc.js` 与 `warehouseTwin-BZPqLXfl.css`，源码/构建/正式响应一致。Vue 合并 v377/v378 后编译通过。
+- 整段 Prepare → 内部证据核对 → Apply → bootstrap 同步持续持有 `D:/TianmingERP` 的 Manager.lock；每阶段确认无正式 managed marker、无已接入 state。原 preferences 字节保持，未代填密码或执行接入。旧 bootstrap 保存至 `D:/TianmingERP/control/installer-before-v379.zip`，其 SHA 为 v378 的 `c11c0844bf7931c98f3787d189deeb8225e55c72b9c10670fac0fbb472edfb4a`。
+- 签名更新包 SHA256 `1177b3cd60c051cac175c5e3943b21fd37f84dbe5302c419a5df7971c1620b7a`；签名和逐文件校验通过，已同步本机 bootstrap 及 `Z:/sata1-18015598002/BoxERP/desktop-assistant/releases/latest.json`（379/6fccf676）。旧签名包保留。
+- 完整安装器 `release-v379-20260912/TianmingERP-Setup.exe` SHA256 `699334ad76d32e5ee4ba8d1fc12efb98aac61ea3604df213b8817b91dd6120f1`；内嵌上述379业务包与已验证的378助手 EXE（SHA `ed10aaf5dbf07d22894b77a15007363eed8907056e37f075663378e16c498376`），Setup 自检和内嵌逐字节核验通过。助手自身版本与 ERP 版本分别标识。
+
+发布排障如实记录：最初外部编排进程没有显式设置控制台 UTF-8，两次版本元数据读取被乱码阻止，均在新的备份/正式应用之前失败；未修改产品或数据库规避门禁。改为外部 UTF-8 包装后正常 Prepare/Apply，失败日志保留 `prepare-v379-encoding-failed*.log`。现场服务此前由助手首次接入于16:02停下，接入因开发依赖目录链接失败；本次完整门禁恢复了 ERP。该目录链接问题及复制容量由独立 DESKTOP015 v380 处理，已交接不要在旧378助手重复接入；不删除任何链接/旧文件或宣称首次接入完成。
+
+NAS 独立回执：`Z:/sata1-18015598002/天明ERP知识库/04_开发记录/任务回执/20260912-v379-订单补全资料与货位往返.md`。正式页面人工结果未记录。

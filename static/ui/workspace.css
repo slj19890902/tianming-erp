@@ -98,3 +98,8 @@
  .finance-report-months { grid-template-columns:repeat(6,minmax(0,1fr)); }
  .finance-report-month { padding:8px; }
 }
+/* Order context links remain distinguishable without adding another action column. */
+.order-readiness-link { cursor:pointer; border:1px solid currentColor; font:inherit; text-align:left; }
+.order-location-link { background:none; border:0; padding:0; color:#006bc6; font:inherit; cursor:pointer; text-decoration:underline; text-underline-offset:3px; text-align:left; white-space:normal; }
+.order-location-link:hover { color:#004486; }
+.order-location-link:focus-visible,.order-readiness-link:focus-visible { outline:2px solid #006bc6; outline-offset:3px; }

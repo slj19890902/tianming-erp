@@ -102,3 +102,16 @@ test('rack focus retains the search panel and highlights current location with t
   assert.ok(source.includes('highlightedLotIds={rackSearchLotIds}'));
   assert.ok(source.includes('searchLocationId={focusedSearchItem?.location_id}'));
 });
+
+test('order location opens the exact physical batch label and rack, with a persistent yellow location highlight',()=>{
+  const body=source.indexOf('    if (pendingLocationId === null) return;');
+  const begin=source.lastIndexOf('  useEffect(() => {',body),end=source.indexOf('  useEffect(() => {',body);
+  const state={},lot={lot_id:15,product_id:7,quantity:20,unit:'个',inventory_code:'P7'};
+  const names=['Selected','CameraFocusTarget','PendingLocationId','PendingLotId','RackFocusId','PendingRackSearchLocationId','TraceDeepLinkMessage','TraceFocusedLotId','LocationItemsExpanded','SearchError','SidebarLabelLotId','FocusedSearchItem','FocusedSearchProductKey'];
+  const context={pendingLocationId:91,pendingLotId:15,pendingRackSearchLocationId:null,floorCode:'3F',dashboard:{},layout:{floor_code:'3F',racks:[rack]},loading:false,visualLocations:[location],selected:{kind:'pallet',id:'erp-location-91'},selectedLocationItems:[lot],traceReadOnly:true,focusedSearchItem:null,cameraFocusSequenceRef:{current:0},
+    useEffect:fn=>fn(),searchRackForLocation:resolver(),rackLocationInventoryItems:r=>r.items,inventoryHasPhysicalQuantity:r=>r.quantity>0,employeeLocationName:()=> '三楼 A1 2层3格',inventoryLabelQuantity:r=>r.quantity,inventoryUnitLabel:s=>s,formatNumber:n=>String(n),searchProductKey:r=>`p-${r.product_id}`,
+    ...Object.fromEntries(names.map(name=>['set'+name,value=>{state[name]=value;}]))};
+  const code=compile(source.slice(begin,end));vm.runInNewContext(code,context);
+  assert.equal(state.RackFocusId,'rack-A');assert.equal(state.SidebarLabelLotId,15);assert.equal(state.TraceFocusedLotId,15);assert.equal(state.FocusedSearchItem.location_id,91);assert.equal(state.FocusedSearchProductKey,'p-7');assert.match(state.TraceDeepLinkMessage,/黄色标记/);assert.equal(state.PendingLotId,null);
+  for(const invalid of [[],[{...lot,quantity:0}]]){Object.keys(state).forEach(k=>delete state[k]);context.selectedLocationItems=invalid;vm.runInNewContext(code,context);assert.equal(state.SidebarLabelLotId,undefined);assert.equal(state.RackFocusId,undefined);assert.match(state.TraceDeepLinkMessage,/已移位、清零/);}
+});

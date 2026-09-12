@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.378"
-APP_VERSION_NAME = "助手首次接入脚本兼容与版本核对"
+APP_VERSION = "v0.22.379"
+APP_VERSION_NAME = "订单补全资料与货位往返"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -3875,3 +3875,18 @@ APP_CHANGELOG = [
 
 APP_CHANGES = ["修复首次接入时Windows阻止助手调用已核验停服脚本的问题，保留原进程身份和备份检查。", "助手与ERP程序版本分开显示，首次接入拒绝使用比原ERP更旧的离线包；完整保留377成本与前序界面修复。"]
 APP_VERIFICATION_STEPS = ["打开助手378，沿用已保存的备份设置，选择原ERP整个目录后首次接入，确认不再报脚本运行策略错误。", "核对接入后显示的ERP程序版本与正式版一致；旧安装包接入新版ERP会在停服前提示更新。"]
+
+APP_CHANGELOG = [
+    *(f"v0.22.378：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.378：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "PDF、邮箱PDF和新建订单选常用箱时，可点击资料待完善直接编辑；保存返回原单，保留数量、手填单价、勾选与筛选，按实际资料更新完善状态。",
+    "订单库存位置可直接打开实际楼层、货位与产品标签，黄色突出当前格位；返回后原订单和库存选择保持。",
+    "保留产品编辑权限、版本和历史冻结事实；定位只读，移位或清零库存明确提示。无新增数据库迁移，不修改现有业务数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "先在PDF/邮箱PDF或导入常用箱页面填写数量、单价或勾选数量，再点击待完善编辑保存返回，核对资料状态及原输入保持。",
+    "点击订单库存位置，核对楼层、具体格位、黄色标记和产品标签；返回订单，核对原数量、单价和勾选保持。",
+]

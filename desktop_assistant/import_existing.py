@@ -10,6 +10,45 @@ from desktop_assistant.storage import database_info, read_json, sha, write_json
 from desktop_assistant.attachments import rebind_pdf_sources
 
 
+COPY_TREES = (('data', 'data'), ('static/uploads', 'legacy_uploads'),
+              ('factory_twin/data', 'factory_twin_data'))
+
+
+def _copy_ignore(source, directory, names):
+    """One policy for preflight and copy; do not follow ignored tool dependencies."""
+    relative = Path(directory).relative_to(source)
+    ignored = {name for name in names if name in {'backups', '__pycache__'}}
+    if relative.is_relative_to('data/work'):
+        ignored.update(name for name in names if name.casefold() == 'node_modules')
+    for name in set(names) - ignored:
+        _reject_link(source, Path(directory) / name)
+    return ignored
+
+
+def _reject_link(source, path):
+    if path.is_symlink() or path.is_junction():
+        raise ValueError('原数据含目录或文件链接：' + path.relative_to(source).as_posix()
+                         + '；需核对真实位置后接入')
+
+
+def check_source_data(source):
+    """Inspect only the copied trees, before cutover; never traverse a link."""
+    for old, _ in COPY_TREES:
+        root = source / old
+        path = root
+        while path != source:
+            _reject_link(source, path)  # Includes dangling roots and linked ancestors.
+            path = path.parent
+        if not root.exists():
+            continue
+        pending = [root]
+        while pending:
+            directory = pending.pop()
+            entries = list(directory.iterdir())
+            ignored = _copy_ignore(source, directory, [p.name for p in entries])
+            pending.extend(p for p in entries if p.name not in ignored and p.is_dir())
+
+
 def import_existing(manager, source: Path, package: Path):
     source = source.resolve()
     if source == manager.root or source in manager.root.parents or manager.root in source.parents:
@@ -21,6 +60,7 @@ def import_existing(manager, source: Path, package: Path):
 def _import_locked(manager, source, package):
     if manager.state['current'] or any((manager.root / 'shared').iterdir()):
         raise ValueError('仅允许导入到空安装目录')
+    check_source_data(source)
     # Read .env locally; do not print secrets or accept unrelated machine paths.
     env = {}
     envfile = source / '.env'
@@ -81,12 +121,12 @@ def _import_locked(manager, source, package):
                 env[key] = '${SHARED}/factory_twin_data/' + rel[len('factory_twin/data/'):]
             else:
                 raise ValueError('尚未纳入恢复范围的路径：' + key)
-    for old, new in [('data', 'data'), ('static/uploads', 'legacy_uploads'), ('factory_twin/data', 'factory_twin_data')]:
+    for old, new in COPY_TREES:
         src = source / old
+        _reject_link(source, src)
         if src.exists():
-            if any(p.is_symlink() or p.is_junction() for p in [src, *src.rglob('*')]):
-                raise ValueError('原数据含目录链接，需先核对真实位置')
-            shutil.copytree(src, shared / new, ignore=shutil.ignore_patterns('backups', '__pycache__'))
+            shutil.copytree(src, shared / new,
+                            ignore=lambda directory, names: _copy_ignore(source, directory, names))
     if sha(db) != before or sha(shared / 'data/carton_erp.sqlite3') != before:
         raise ValueError('导入期间原数据库发生变化，未启用新系统')
     rebind_pdf_sources(shared / 'data/carton_erp.sqlite3', source, shared, final_shared, importing=True)

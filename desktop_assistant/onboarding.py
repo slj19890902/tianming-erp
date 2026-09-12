@@ -8,7 +8,7 @@ import subprocess
 import uuid
 
 from desktop_assistant.storage import database_info, sha, write_json
-from desktop_assistant.import_existing import _import_locked
+from desktop_assistant.import_existing import _import_locked, check_source_data
 from desktop_assistant.preflight import inspect
 from desktop_assistant.windows import run_maintenance_powershell
 
@@ -138,6 +138,10 @@ def onboard(manager, source, package, password, nas):
         if (source / 'data/runtime/erp_managed_installation.json').exists():
             raise ValueError('原ERP已经接入另一助手，请打开已接入的助手，不要重复复制')
         check_source_environment(source)
+        try:
+            check_source_data(source)
+        except (ValueError, OSError) as error:
+            raise ValueError(str(error) + '；尚未停服') from None
         release = manager.stage_release(package)
         check_source_version(source, release)
         release_root = manager.root / 'releases' / release['id']

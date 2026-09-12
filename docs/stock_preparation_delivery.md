@@ -13,3 +13,5 @@
 最新正式库只读备份在C盘隔离副本完成升→降→升，原收料、采购、订单、库存、预占和生产各表内容哈希不变，integrity=ok/FK=0。旧000205两批正确显示1860/1400张与一楼001/002号位。不可变流水与非空降级拒绝（拒绝前后文件SHA一致）通过，报告C:/Users/ADMINI~1/AppData/Local/Temp/stock-preparation-rehearsal-x3plunuo/report.json。
 
 人工验收：4生产→备库安排，搜000205核对原数量/位置；按真实需要保留备料或部分转待生产；只有实物完成才确认实际产出并选择真实位置。管理员未确认前不标记页面已验收。
+
+正式发布：v0.22.369，代码 b7d5f6343fe03247e79df1cac9b0a8a52bc5ed3a，factory-current-baseline 已推送。release_runtime_20260912_112404.json completed，正式备份 carton_erp_before_release_20260912_112405.sqlite3 已验证，rp0912→sprep0912，integrity/FK通过，原核心事实计数一致。新生产任务/操作流水均0，旧批次直接投影，无补建业务事实。LAN健康及首页200，新接口未登录401；新页面资源存在。正式只读000205投影约460毫秒，两批状态arrange、数量1860/1400与原位置正确。技术发布完成，待管理员人工验收。

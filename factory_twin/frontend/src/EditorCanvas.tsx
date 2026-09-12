@@ -67,6 +67,7 @@ interface Props {
   aisleEditingEnabled?: boolean;
   mapPanLocked?: boolean;
   allowPalletSelection?: boolean;
+  preferStorageSelection?: boolean;
   palletSnapEnabled: boolean;
   palletSnapThresholdMm: number;
   drawMode: "zone" | "aisle" | "no_go" | "structure" | null;
@@ -441,6 +442,7 @@ export function EditorCanvas({
   aisleEditingEnabled = true,
   mapPanLocked = false,
   allowPalletSelection = false,
+  preferStorageSelection = false,
   palletSnapEnabled,
   palletSnapThresholdMm,
   drawMode,
@@ -1340,7 +1342,10 @@ export function EditorCanvas({
       const preferredPlanningFeature = featureEditingEnabled && !rackEditingEnabled
         ? roots.find((candidate) => candidate.userData.entityKind === "feature" && candidate.userData.draggable)
         : null;
-      const root = preferredPlanningPallet || preferredPlanningFeature || roots[0] || null;
+      const preferredStorage = preferStorageSelection
+        ? roots.find(candidate => candidate.userData.entityKind === "rack") || roots.find(candidate => candidate.userData.entityKind === "pallet")
+        : null;
+      const root = preferredPlanningPallet || preferredPlanningFeature || preferredStorage || roots[0] || null;
       if (!root) {
         pendingCanvasAction = {
           kind: "clear-selection",
@@ -1666,7 +1671,7 @@ export function EditorCanvas({
       });
       renderer.dispose();
     };
-  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, aisleEditingEnabled, mapPanLocked, allowPalletSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, effectiveDrawMode, drawPoints, drawPointLabels, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
+  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, aisleEditingEnabled, mapPanLocked, allowPalletSelection, preferStorageSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, effectiveDrawMode, drawPoints, drawPointLabels, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.385"
-APP_VERSION_NAME = "助手优先打开工厂内网"
+APP_VERSION = "v0.22.386"
+APP_VERSION_NAME = "生产选位与组合库存去向"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -3979,4 +3979,20 @@ APP_CHANGES = [
 APP_VERIFICATION_STEPS = [
     "在已配置内网入口的助手点击启动并打开ERP，确认打开192.168.3.80:8000；核对重启仍正常。",
     "手机连接蒲公英后访问配置的VPN地址核对订单；电脑和手机共用原正式数据。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.385：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.385：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "生产地图选位支持直接点击地面货位及货架层格，并保留只读选位边界。",
+    "库存去向将整组子件按冻结配比折合套数展示，生产余料单独标记，零套数分组不再占据待安排列表。",
+    "旧补货已入库且移位分批的库存按原始来源追溯，不再因缺少新版收料记录显示待收料。未改历史库存或组装事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "整组安排打开地图，点击地面货位或货架具体层格，核对标签和确定此货位按钮。",
+    "库存去向核对205子件折合套数、长短片数量位置及独立生产余料；套数不代表已完成组装。",
+    "搜索Z.004.000006，核对已有备库库存及位置，不再误报待收料。",
 ]

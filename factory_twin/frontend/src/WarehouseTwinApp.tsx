@@ -6427,7 +6427,8 @@ export function WarehouseTwinApp() {
           rackEditingEnabled={locationEditMode && Boolean(selectedRackEditDraft) && !spatialEditBusy}
           featureEditingEnabled={!spatialEditBusy && locationEditMode && layoutMapToolsOpen && !locationPointEditAreaCode && layoutMapTool === "adjust"}
           mapPanLocked={floor4CalibrationMode || (locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust")}
-          allowPalletSelection={viewMode === "25d" || locationEditMode || canEditLocations || canExecuteWarehouse || canStocktake}
+          preferStorageSelection={productionLocationPicker}
+          allowPalletSelection={productionLocationPicker || viewMode === "25d" || locationEditMode || canEditLocations || canExecuteWarehouse || canStocktake}
           draggablePalletIds={warehouseMoveModeActive ? movablePalletIds : layoutMapToolsOpen ? EMPTY_CANVAS_IDS : locationPointEditPalletIds}
           readOnly={!locationEditMode && !warehouseMoveModeActive}
           visualTheme="warehouse"

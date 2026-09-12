@@ -56,15 +56,15 @@
       this.stockPrepRows=data.items;this.stockPrepTotal=data.total;this.stockPrepCounts=data.counts;this.stockPrepPendingCount=data.workspace_pending_count||0;
      }catch(e){if(sequence===this.stockPrepSequence&&auth===this.authGeneration)this.stockPrepError=this.errorMessage(e);}finally{if(sequence===this.stockPrepSequence)this.stockPrepBusy=false;}
     },
-    stockEntryName(row){return row.entry_type==='kit'?row.plan.recipe:row.entry_type==='group_job'?row.task.group.recipe:row;},
-    stockEntryStatus(row){return row.entry_type==='kit'?'整组待安排':row.entry_type==='group_job'||row.entry_type==='single_job'?'待生产':this.stockPrepLabels()[row.status];},
-    stockOutputQuantity(row){return (row.jobs||[]).reduce((sum,j)=>sum+Number(j.output_remaining||0),0);},
-    stockOutputLocations(row){return [...new Set((row.jobs||[]).filter(j=>j.output_remaining>0).map(j=>j.output_location).filter(Boolean))].join(' / ');},
+    stockEntryName(row){return row.entry_type==='kit'?row.plan.recipe:['group_job','group_stock'].includes(row.entry_type)?row.task.group.recipe:row;},
+    stockEntryStatus(row){if(row.entry_type==='group_stock')return '子件配套库存';if(row.physical>0&&row.jobs?.some(j=>j.status==='completed'))return '生产余料';if(row.source_kind==='legacy_stock')return '已入库·备库库存';return row.entry_type==='kit'?'整组待安排':row.entry_type==='group_job'||row.entry_type==='single_job'?'待生产':this.stockPrepLabels()[row.status];},
+    stockOutputQuantity(row){return (row.jobs||[]).filter(j=>!row.grouped_output_hidden||!j.product.preparation_group).reduce((sum,j)=>sum+Number(j.output_remaining||0),0);},
+    stockOutputLocations(row){return [...new Set((row.jobs||[]).filter(j=>j.output_remaining>0&&(!row.grouped_output_hidden||!j.product.preparation_group)).map(j=>j.output_location).filter(Boolean))].join(' / ');},
     async openStockDialog(row){this.stockPrepError='';this.stockPrepDialog={row,loading:true,error:'',sets:row.plan?.available_sets||1,location:null,preview:null,job:row.job?{...row.job,_actual:row.job.expected_output}:null,quantity:row.available||0,view:'action',page:1};
      const dialog=this.stockPrepDialog;
      try {await this.ensureProductionLocations();if(this.stockPrepDialog!==dialog)return;
       if(row.entry_type==='kit')await this.previewStockGroup();
-      if(row.entry_type==='group_job'){dialog.location=row.task.group.planned_location.id;dialog.jobs=row.task.jobs.map(j=>({...j,_actual:j.expected_output}));}
+      if(['group_job','group_stock'].includes(row.entry_type)){dialog.location=row.task.group.planned_location.id;dialog.jobs=row.task.jobs.map(j=>({...j,_actual:j.expected_output}));}
       if(row.entry_type==='single_job')dialog.location=row.job.product.planned_location?.id||null;
      }catch(e){dialog.error=this.errorMessage(e);}finally{dialog.loading=false;this.$nextTick(()=>document.querySelector('.stock-production-dialog .toolbar button')?.focus());}
     },

@@ -123,6 +123,10 @@ def groups(db, rows):
         totals = defaultdict(int)
         for job in target['jobs']:
             totals[job['product']['product_id']] += job['actual_output']
+        remaining = defaultdict(int)
+        for job in target['jobs']:
+            remaining[job['product']['product_id']] += job['output_remaining']
+        target['remaining_sets'] = min((remaining[c['product_id']]//c['per_set'] for c in target['group']['recipe']['children']),default=0)
         target['completed_sets'] = min((totals[c['product_id']]//c['per_set'] for c in target['group']['recipe']['children']),default=0)
     return dict(candidates=candidates,groups=list(pending.values()))
 
@@ -141,7 +145,10 @@ def workspace_rows(db, rows, state):
                     result.append(dict(row,key='job:'+str(job['id']),entry_type='single_job',job=job))
         return result
     if state == 'stock':
-        return [dict(row,entry_type='receipt') for row in rows if row['physical'] or any(j['output_remaining'] for j in row['jobs'])]
+        stocked_groups = [dict(key='stock-group:'+g['group']['key'],entry_type='group_stock',task=g)
+                          for g in grouped['groups'] if any(j['output_remaining'] for j in g['jobs'])]
+        return stocked_groups + [dict(row,entry_type='receipt',grouped_output_hidden=True) for row in rows
+            if row['physical'] or any(j['output_remaining'] and not j['product'].get('preparation_group') for j in row['jobs'])]
     if state == 'history':
         return [dict(row,entry_type='receipt') for row in rows if row['jobs'] or row['history'] or row['status']=='history']
     candidates=grouped['candidates']
@@ -151,6 +158,8 @@ def workspace_rows(db, rows, state):
             memberships[child['product_id']].append(group['recipe']['parent_id'])
     hidden=set()
     for group in candidates:
+        if group['available_sets'] <= 0:
+            continue
         ids={c['product_id'] for c in group['recipe']['children']}
         # Ambiguous components remain individual and allow explicit kit selection.
         if not all(len(memberships[pid])==1 for pid in ids):

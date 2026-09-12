@@ -54,26 +54,40 @@ def list_rows(db, *, scope=None, query=""):
         pending = max(0, item.quantity - item.stocked_quantity)
         sources = receipts + ([None] if pending or not receipts else [])
         for receipt in sources:
-            lot = db.get(InventoryLot, receipt.received_inventory_lot_id) if receipt and receipt.received_inventory_lot_id else None
+            # Pre-receipt-ledger replenishments already have a real stock lot.
+            # Preserve that source; absence of a newer receipt is not waiting for goods.
+            legacy_lot = db.get(InventoryLot, item.inventory_lot_id) if not receipts and item.inventory_lot_id else None
+            lot = db.get(InventoryLot, receipt.received_inventory_lot_id) if receipt and receipt.received_inventory_lot_id else legacy_lot
             jobs = list(db.scalars(select(Job).where(Job.receipt_item_id == receipt.id).order_by(Job.id))) if receipt else []
             commands = list(db.scalars(select(Command).where(Command.receipt_item_id == receipt.id).order_by(Command.created_at, Command.operation_key))) if receipt else []
             keep = next((json.loads(c.request_json)["action"] for c in reversed(commands) if json.loads(c.request_json)["action"].startswith("keep_")), None)
-            physical = lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged if lot else 0
-            status = "waiting" if not receipt else "history" if receipt.status != "posted" else "pending" if any(j.status == "pending" for j in jobs) else "stock" if lot and lot.inventory_type == "finished" and physical else "keep" if physical and keep else "arrange" if physical else "stock" if any(job_dict(db,j)["output_remaining"] for j in jobs) else "history"
+            lot_family = [lot] if lot else []
+            if legacy_lot and legacy_lot.source_ref_type and legacy_lot.source_ref_id:
+                lot_family = list(db.scalars(select(InventoryLot).where(
+                    InventoryLot.source_ref_type == legacy_lot.source_ref_type,
+                    InventoryLot.source_ref_id == legacy_lot.source_ref_id,
+                    InventoryLot.inventory_type == legacy_lot.inventory_type)))
+                owner = (legacy_lot.finished_detail or legacy_lot.semi_finished_detail)
+                lot_family = [l for l in lot_family if (l.finished_detail or l.semi_finished_detail) and owner
+                    and (l.finished_detail or l.semi_finished_detail).owner_customer_id == owner.owner_customer_id
+                    and (not legacy_lot.finished_detail or l.finished_detail.product_id == owner.product_id)]
+            physical = sum(l.quantity_available + l.quantity_reserved + l.quantity_damaged for l in lot_family)
+            status = ("stock" if lot.inventory_type == "finished" else "keep") if not receipt and lot and physical else "history" if not receipt and not pending else "waiting" if not receipt else "history" if receipt.status != "posted" else "pending" if any(j.status == "pending" for j in jobs) else "stock" if lot and lot.inventory_type == "finished" and physical else "keep" if physical and keep else "arrange" if physical else "stock" if any(job_dict(db,j)["output_remaining"] for j in jobs) else "history"
             if item.order.status == "voided":
                 status = "history"
             row = dict(key=f"receipt:{receipt.id}" if receipt else f"waiting:{item.id}", receipt_item_id=receipt.id if receipt else None,
                 customer_name=((item.customer.chinese_short_name or item.customer.name) if item.customer else "通用备料"), code=item.product_code_snapshot,
                 name=item.product_name_snapshot, specification=f"{item.report_length_mm or '-'} × {item.report_width_mm or '-'} mm",
                 material=item.material_code_snapshot, order_number=item.order.order_number,
-                quantity=receipt.received_quantity if receipt else pending, unit="个" if (lot and lot.inventory_type == "finished") or (not lot and item.target_inventory_type == "finished") else "张", available=lot.quantity_available if lot else 0,
-                reserved=lot.quantity_reserved if lot else 0, physical=physical, lot_version=lot.version if lot else 0,
-                lot_number=lot.lot_number if lot else None, location=location_name(db,lot), status=status, keep=keep,
-                can_plan=bool(lot and lot.inventory_type == "semi_finished" and lot.status == "active" and receipt.status == "posted"),
+                quantity=receipt.received_quantity if receipt else item.stocked_quantity if legacy_lot else pending, unit="个" if (lot and lot.inventory_type == "finished") or (not lot and item.target_inventory_type == "finished") else "张", available=sum(l.quantity_available for l in lot_family),
+                reserved=sum(l.quantity_reserved for l in lot_family), physical=physical, lot_version=lot.version if lot else 0,
+                lot_number=" / ".join(l.lot_number for l in lot_family if l.quantity_available+l.quantity_reserved+l.quantity_damaged) or (lot.lot_number if lot else None), location=" / ".join(dict.fromkeys(location_name(db,l) for l in lot_family if l.quantity_available+l.quantity_reserved+l.quantity_damaged)) or location_name(db,lot), status=status, keep=keep,
+                source_kind="legacy_stock" if legacy_lot else "receipt" if receipt else "purchase",
+                can_plan=bool(receipt and lot and lot.inventory_type == "semi_finished" and lot.status == "active" and receipt.status == "posted"),
                 product_id=item.reference_product_id or item.product_id, factor=item.stock_yield_per_sheet, pieces_per_box=item.pieces_per_box,
                 jobs=[job_dict(db,j) for j in jobs],
                 history=[dict(at=str(c.created_at), action=json.loads(c.request_json)["action"], actor_id=c.actor_id) for c in commands],
-                movements=[dict(at=str(m.created_at),reason=m.reason,quantity=m.quantity,unit=m.unit,order_item_id=m.related_order_item_id) for m in db.scalars(select(InventoryMovement).where(InventoryMovement.inventory_lot_id.in_(([lot.id] if lot else [])+[j.output_lot_id for j in jobs if j.output_lot_id])).order_by(InventoryMovement.id))] if lot else [])
+                movements=[dict(at=str(m.created_at),reason=m.reason,quantity=m.quantity,unit=m.unit,order_item_id=m.related_order_item_id) for m in db.scalars(select(InventoryMovement).where(InventoryMovement.inventory_lot_id.in_([l.id for l in lot_family]+[j.output_lot_id for j in jobs if j.output_lot_id])).order_by(InventoryMovement.id))] if lot else [])
             if query.casefold() in " ".join(str(row[k] or "") for k in ("code","name","customer_name","order_number","lot_number")).casefold():
                 rows.append(row)
     priority = {"arrange":0,"pending":1,"waiting":2,"keep":3,"stock":4,"history":5}

@@ -95,7 +95,6 @@ def _openai_output_schema() -> dict:
         "type": "array",
         "minItems": 1,
         "maxItems": 10,
-        "uniqueItems": True,
         "items": {"type": "string", "pattern": r"^lot:[1-9][0-9]*$"},
     }
     return {

@@ -20,6 +20,21 @@ from app.services.ai.providers import (
 API_KEY = "sk-test-openai-provider-secret-value"
 
 
+def test_openai_schema_avoids_unsupported_unique_items():
+    from app.services.ai.providers import _openai_output_schema
+
+    def check(node):
+        if isinstance(node, dict):
+            assert "uniqueItems" not in node
+            for value in node.values():
+                check(value)
+        elif isinstance(node, list):
+            for value in node:
+                check(value)
+
+    check(_openai_output_schema())
+
+
 def _snapshot() -> dict:
     return {
         "schema_version": "ai.inventory.insight.snapshot.v1",

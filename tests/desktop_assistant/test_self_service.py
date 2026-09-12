@@ -162,3 +162,12 @@ def test_external_config_is_rejected_before_stop(example):
         with pytest.raises(ValueError, match='尚未停服'):
             onboard(target, source, case.package, PASSWORD, case.nas)
         stop.assert_not_called()
+
+
+def test_explicit_update_resumes_automatic_backup_after_manual_pause(example):
+    case, source, target = example
+    state = case.manager.state
+    state['manual_stop'] = True
+    write_json(case.manager.root / 'state.json', state)
+    case.manager.update(case.release('two'), PASSWORD, case.nas)
+    assert case.manager.state['manual_stop'] is False

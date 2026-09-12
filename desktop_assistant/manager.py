@@ -370,6 +370,8 @@ class Manager:
     def _update_locked(self, package: Path, password: str, nas: Path, *, rollback=False):
         candidate = self.stage_release(package)
         old = self.state
+        if old.get('onboarding_pending'):
+            raise ValueError('请先完成首次接入的完整备份，不能叠加更新')
         if old.get('operation') in ('migration_running', 'migration_failed'):
             raise ValueError('上次迁移尚未完成，禁止叠加更新；请先处理恢复')
         if candidate['id'] == old['current']:
@@ -425,7 +427,7 @@ class Manager:
                 write_json(self.root / 'state.json', new)
                 raise ValueError('数据库升级未完整通过，服务保持停止；已保留现场及NAS备份，请专项恢复，未回写旧数据') from None
         new.update(current=candidate['id'], previous=old['current'], update_backup=str(backup),
-                   operation='rollback' if rollback else 'update', updated_at=datetime.now(CN).isoformat())
+                   operation='rollback' if rollback else 'update', manual_stop=False, updated_at=datetime.now(CN).isoformat())
         write_json(self.root / 'state.json', new)
         try:
             self.start()

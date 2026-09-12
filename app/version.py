@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.374"
-APP_VERSION_NAME = "助手自动备份设置入口修复"
+APP_VERSION = "v0.22.375"
+APP_VERSION_NAME = "NAS挂载盘备份设置兼容"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2817,6 +2817,9 @@ APP_VERIFICATION_STEPS = ["刷新后打开修改密码，确认显示至少8位�
 
 APP_CHANGES = ["助手自动备份设置直接在主窗口展开，NAS路径与恢复密码同页填写，不再先调用Windows文件夹选择器。", "保存时显示检查进度和失败原因；保留旧配置与更新目录，回调错误可见且不记录凭据，无新增迁移或业务数据修改。"]
 APP_VERIFICATION_STEPS = ["打开标题含v0.22.374的新版助手，点击设置每天自动备份，确认直接显示目录和密码输入框。", "核对预填目录，输入并确认恢复密码后保存；成功后按提示首次接入或现在备份。返回不会保存输入。"]
+
+APP_CHANGES = ["修复Z盘可正常读写但Windows真实路径解析报1005，导致自动备份设置无法保存的问题。", "挂载卷仅在目录存在且设备身份能证明与助手分离时兼容；保留目录隔离、NAS写入检查、加密密码和自动任务保护，无新增迁移。"]
+APP_VERIFICATION_STEPS = ["在标题含v0.22.375的新版助手保存Z盘备份设置，确认不再出现此卷不包含可识别文件系统。", "看到自动备份已设置后再首次接入；按实际提示完成完整备份。"]
 
 APP_CHANGELOG = [
     *(f"v0.22.371：本次更新｜{item}" for item in _V022371_CHANGES),

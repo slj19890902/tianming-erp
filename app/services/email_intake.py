@@ -171,15 +171,19 @@ def sync_inbox(db, user, factory=imaplib.IMAP4_SSL):
                 status, headers = client.uid('fetch', uid_set, '(UID BODY.PEEK[HEADER.FIELDS (FROM)])')
                 if status != 'OK':
                     raise ValueError('发件人校验失败，本次未下载邮件正文')
+                checked = set()
                 for entry in headers:
                     if not isinstance(entry, tuple):
                         continue
                     match = re.search(rb'\bUID\s+(\d+)', entry[0])
                     if not match:
                         raise ValueError('发件人校验缺少邮件标识，请重试')
+                    checked.add(int(match[1]))
                     header = BytesParser(policy=policy.default).parsebytes(entry[1])
                     if sender_matches([str(value) for value in header.get_all('From', [])], addresses):
                         exact.append(int(match[1]))
+                if checked != set(remaining[offset:offset + 100]):
+                    raise ValueError('发件人校验返回不完整，请重试')
             remaining = sorted(set(exact) & set(remaining))
         count = 0
         for uid in remaining[:20]:

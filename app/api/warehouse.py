@@ -23838,38 +23838,23 @@ def _redact_inventory_insight_costs(insights: dict) -> dict:
 
 @router.get("/costs")
 def get_inventory_costs(response: Response, location_id: int | None = Query(default=None, ge=1),
+                        page: int = Query(default=1, ge=1), page_size: int = Query(default=50, ge=1, le=200),
+                        keyword: str = Query(default="", max_length=150), summary_only: bool = Query(default=False),
                         db: Session = Depends(get_db), user: User = Depends(can_read)) -> dict:
-    from app.services.inventory_valuation import can_view_inventory_cost, cost_payload
-    from app.services.inventory_cost_rules import is_revaluable
+    from app.services.inventory_valuation import can_view_inventory_cost
+    from app.services.inventory_cost_listing import read_inventory_cost_page
     if not can_view_inventory_cost(user):
         raise HTTPException(403, "仅管理员和老板可以查看成本")
     response.headers["Cache-Control"] = "private, no-store, max-age=0"
-    query = _lot_query(require_formal_location=False).where(
+    query = select(InventoryLot.id).where(
         InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged > 0)
     scope = _visible_customer_ids(user, db)
     if scope is not None:
         query = query.where(_visible_lot_condition(scope))
     if location_id is not None:
         query = query.where(InventoryLot.warehouse_location_id == location_id)
-    rows, total, missing = [], Decimal(0), 0
-    for lot in db.scalars(query.order_by(InventoryLot.id)).unique():
-        value = cost_payload(lot, db)
-        detail = lot.finished_detail or lot.semi_finished_detail
-        value.update(lot_number=lot.lot_number, inventory_type=lot.inventory_type,
-            stock_date=lot.stock_date, location_id=lot.warehouse_location_id,
-            location_name=lot.location.location_name if lot.location else "未归位",
-            product_code=getattr(detail, "inventory_code_snapshot", None),
-            product_id=getattr(detail, "product_id", None),
-            can_revalue=bool(lot.finished_detail and is_revaluable(db, lot)),
-            product_name=getattr(detail, "product_name_snapshot", None) or getattr(detail, "internal_name", None),
-            customer_name=getattr(detail, "owner_customer_name_snapshot", None))
-        rows.append(value)
-        if value["inventory_value"] is None:
-            missing += 1
-        else:
-            total += Decimal(value["inventory_value"])
-    return dict(currency="CNY", inventory_value=str(total), total_lots=len(rows),
-                missing_lots=missing, rows=rows, basis="按批次冻结的人民币成本，含可用、预占及损坏实物；材料成本、外购价与售价参考分别标明")
+    return read_inventory_cost_page(db, query, page=page, page_size=page_size,
+                                    keyword=keyword, summary_only=summary_only)
 
 
 @router.get("/insights")

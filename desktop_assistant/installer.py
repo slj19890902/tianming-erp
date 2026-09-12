@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import uuid
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -33,6 +34,24 @@ def install(payload: Path, destination: Path):
     return destination
 
 
+def update_launcher(payload: Path, destination: Path):
+    """Replace only the helper binary; never touch shared data or the running ERP."""
+    destination = destination.resolve()
+    assistant = destination / 'TianmingERP-Assistant.exe'
+    if (not assistant.is_file() or not (destination / 'installer-release.zip').is_file()
+            or assistant.is_symlink() or destination.is_junction()):
+        raise ValueError('请选择已有天明ERP助手安装目录，不能覆盖其他程序目录')
+    temporary = destination / ('assistant-update-' + uuid.uuid4().hex + '.tmp')
+    try:
+        shutil.copyfile(payload / 'TianmingERP-Assistant.exe', temporary)
+        os.replace(temporary, assistant)
+    except PermissionError:
+        raise ValueError('请先关闭旧版天明ERP助手窗口，再更新助手；ERP服务无需停止') from None
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--self-test', action='store_true')
@@ -48,8 +67,14 @@ def main():
     if not parent:
         return
     try:
-        destination = install(Path(sys._MEIPASS), Path(parent) / 'TianmingERP')
-        messagebox.showinfo('安装完成', '已建立桌面快捷方式。首次打开请选择接入原ERP或从NAS恢复。')
+        destination = Path(parent) / 'TianmingERP'
+        if destination.exists() and any(destination.iterdir()):
+            if not messagebox.askyesno('更新已有助手', '此处已有安装。是否只更新助手程序？\n业务数据、原配置和正在运行的ERP保持不变。请先关闭旧助手窗口。'):
+                return
+            update_launcher(Path(sys._MEIPASS), destination)
+        else:
+            destination = install(Path(sys._MEIPASS), destination)
+        messagebox.showinfo('安装完成', '助手已就绪。已有系统请点击检查更新；首次使用请选择接入原ERP或从NAS恢复。')
         subprocess.Popen([str(destination / 'TianmingERP-Assistant.exe'), '--root', str(destination)],
                          creationflags=subprocess.CREATE_NO_WINDOW)
     except Exception as error:

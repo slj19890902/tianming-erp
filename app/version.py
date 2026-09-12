@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.362"
-APP_VERSION_NAME = "邮箱自动识别与系统设置"
+APP_VERSION = "v0.22.363"
+APP_VERSION_NAME = "安装助手连续更新与恢复"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2749,9 +2749,24 @@ APP_VERIFICATION_STEPS = [
     "收到名单内PDF后检查邮箱收单红标，点击直接核对草稿；选择完整草稿保存，异常PDF从待改进处理。",
     "刷新确认版本v0.22.362；页面由管理员人工验收，重复附件、打开未保存和订单成功保存时核对红标数量。",
 ]
+_V022362_CHANGES = APP_CHANGES
+_V022362_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "安装助手检查更新时可按已签名的版本关系自动补齐中间版本；缺包、校验异常或迁移起点不一致会在停服前拒绝。",
+    "连续更新的每一步继续完整备份、隔离迁移及事实校验；中途失败停止后续步骤，不回写旧业务数据库。",
+    "新版安装器支持只更新已有助手程序，原配置、业务数据和运行中的ERP不变；修复无关NAS程序路径失效阻止中断恢复的问题。",
+    "本版无新增数据库迁移；邮箱收单设置和PDF待处理队列保持v362功能。",
+]
+APP_VERIFICATION_STEPS = [
+    "关闭旧助手后运行新版安装器，选择原安装位置，确认只更新助手程序；原数据和配置应保持。",
+    "在助手点击检查更新，确认漏装中间版本时能逐步完成；缺少必要签名包时应保留原服务并给出提示。",
+    "系统版本应为v0.22.363；备用电脑恢复、网络访问和实体打印由管理员现场验收，不以安装器启动自检替代。",
+]
 APP_CHANGELOG = [
-    *(f"v0.22.362：本次更新｜{item}" for item in APP_CHANGES),
-    *(f"v0.22.362：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.363：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.363：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *(f"v0.22.362：本次更新｜{item}" for item in _V022362_CHANGES),
+    *(f"v0.22.362：如何验证｜{item}" for item in _V022362_STEPS),
     *(f"v0.22.361：本次更新｜{item}" for item in _V022361_CHANGES),
     *(f"v0.22.361：如何验证｜{item}" for item in _V022361_STEPS),
     *(f"v0.22.360：本次更新｜{item}" for item in _V022360_CHANGES),

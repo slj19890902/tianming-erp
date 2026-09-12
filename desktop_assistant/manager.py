@@ -280,78 +280,134 @@ class Manager:
         with self.lock():
             return rehearse(self, package)
 
+    def _plan_update_chain(self, package: Path, releases: Path):
+        """Cache a fully verified chain before stopping any running service."""
+        import re
+        current = self.state['current']
+        revision = database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']
+        chain, seen = [], set()
+        expected = None
+        for _ in range(64):
+            if not package.is_file():
+                raise ValueError('NAS缺少必要的中间版本包，未停止服务；请补齐已签名发布包')
+            identity = sha(package)
+            if expected is not None and identity != expected:
+                raise ValueError('中间版本包哈希不匹配，未停止服务')
+            if identity in seen:
+                raise ValueError('版本升级链存在循环，未停止服务')
+            seen.add(identity)
+            signed = signed_release_manifest(package, self.public_key)
+            candidate = self.stage_release(package)
+            if any(candidate.get(key) != value for key,value in signed.items()):
+                raise ValueError('已暂存程序与签名版本信息不一致，未停止服务')
+            if chain and chain[-1]['from_revision'] != candidate['revision']:
+                raise ValueError('中间版本与签名迁移起点不一致，未停止服务')
+            if identity == current:
+                return list(reversed(chain))
+            contract = candidate.get('migration') or {}
+            chain.append({'id':identity, 'version':candidate['version'],
+                          'from_revision':contract.get('from_revision')})
+            if self.compatible(identity, revision):
+                return list(reversed(chain))
+            previous = contract.get('rollback_package_sha256')
+            if (contract.get('policy') != 'preserve_existing_facts_v1'
+                    or not isinstance(previous,str) or not re.fullmatch(r'[0-9a-f]{64}',previous)):
+                raise ValueError('升级缺少已签名的上一版本兼容契约，未停止服务')
+            if previous == current:
+                if contract.get('from_revision') != revision:
+                    raise ValueError('当前数据库与迁移起点不一致，未停止服务')
+                return list(reversed(chain))
+            expected = previous
+            cached = self.root / 'packages' / (previous + '.zip')
+            package = cached if cached.is_file() else releases / (previous + '.zip')
+        raise ValueError('版本升级链过长，未停止服务；请联系管理员核对')
+
+    def update_from_feed(self, package: Path, password: str, nas: Path):
+        with self.lock():
+            if self.state.get('operation') in ('migration_running','migration_failed'):
+                raise ValueError('上次迁移尚未完成，请先处理恢复')
+            chain = self._plan_update_chain(package, nas / 'releases')
+            if not chain:
+                return '已经是该版本'
+            for candidate in chain:
+                self._update_locked(self.root / 'packages' / (candidate['id'] + '.zip'), password, nas)
+            return chain[-1]['version']
+
     def update(self, package: Path, password: str, nas: Path, *, rollback=False):
         with self.lock():
-            candidate = self.stage_release(package)
-            old = self.state
-            if old.get('operation') in ('migration_running', 'migration_failed'):
-                raise ValueError('上次迁移尚未完成，禁止叠加更新；请先处理恢复')
-            if candidate['id'] == old['current']:
-                return '已经是该版本'
-            revision = database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']
-            migrate = not self.compatible(candidate['id'], revision)
-            if migrate:
-                contract = (candidate.get('migration') or {})
-                if (rollback or contract.get('policy') != 'preserve_existing_facts_v1'
-                        or contract.get('from_revision') != revision
-                        or contract.get('rollback_package_sha256') != old['current']):
-                    raise ValueError('此版本需要专项迁移或缺少上版程序兼容契约，未停止服务')
-            self.stop()
+            return self._update_locked(package, password, nas, rollback=rollback)
+
+    def _update_locked(self, package: Path, password: str, nas: Path, *, rollback=False):
+        candidate = self.stage_release(package)
+        old = self.state
+        if old.get('operation') in ('migration_running', 'migration_failed'):
+            raise ValueError('上次迁移尚未完成，禁止叠加更新；请先处理恢复')
+        if candidate['id'] == old['current']:
+            return '已经是该版本'
+        revision = database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']
+        migrate = not self.compatible(candidate['id'], revision)
+        if migrate:
+            contract = (candidate.get('migration') or {})
+            if (rollback or contract.get('policy') != 'preserve_existing_facts_v1'
+                    or contract.get('from_revision') != revision
+                    or contract.get('rollback_package_sha256') != old['current']):
+                raise ValueError('此版本需要专项迁移或缺少上版程序兼容契约，未停止服务')
+        self.stop()
+        try:
+            backup = self._backup_stopped(password, nas)
+        except Exception:
+            self.start()
+            raise
+        new = self.state
+        if migrate:
+            from desktop_assistant.migration import rehearse, run_migration, facts, files, schema
+            # The checked NAS backup exists before both rehearsal and real migration.
             try:
-                backup = self._backup_stopped(password, nas)
+                report = rehearse(self, package)
             except Exception:
                 self.start()
                 raise
-            new = self.state
-            if migrate:
-                from desktop_assistant.migration import rehearse, run_migration, facts, files, schema
-                # The checked NAS backup exists before both rehearsal and real migration.
-                try:
-                    report = rehearse(self, package)
-                except Exception:
-                    self.start()
-                    raise
-                shared = self.root / 'shared'
-                dbpath = shared / 'data/carton_erp.sqlite3'
-                before_files = files(shared)
-                release = self.root / 'releases' / candidate['id']
-                new.update(operation='migration_running', update_backup=str(backup),
-                           migration_report=report['report_path'], migration_target=candidate['id'],
-                           migration_files=before_files, migration_report_sha256=sha(Path(report['report_path'])),
-                           migration_backup_sha256=sha(backup))
-                write_json(self.root / 'state.json', new)
-                try:
-                    run_migration(release, shared, candidate['revision'],
-                        self.root / 'control' / ('migration-' + uuid.uuid4().hex + '.log'),
-                        environment=self._environment(release))
-                    actual = database_info(dbpath)
-                    if (actual['revision'] != candidate['revision']
-                            or schema(dbpath) != report['result_schema']
-                            or facts(dbpath, report['source_facts']['columns']) != report['source_facts']
-                            or files(shared) != before_files
-                            or actual['counts'] != report['result']['counts']):
-                        raise ValueError('实际迁移与演练不一致')
-                    new['schema_authority'] = candidate['id']
-                except Exception:
-                    # Never replace the database with an old backup as an update fallback.
-                    new.update(operation='migration_failed', update_backup=str(backup),
-                               migration_report=report['report_path'])
-                    write_json(self.root / 'state.json', new)
-                    raise ValueError('数据库升级未完整通过，服务保持停止；已保留现场及NAS备份，请专项恢复，未回写旧数据') from None
-            new.update(current=candidate['id'], previous=old['current'], update_backup=str(backup),
-                       operation='rollback' if rollback else 'update', updated_at=datetime.now(CN).isoformat())
+            shared = self.root / 'shared'
+            dbpath = shared / 'data/carton_erp.sqlite3'
+            before_files = files(shared)
+            release = self.root / 'releases' / candidate['id']
+            new.update(operation='migration_running', update_backup=str(backup),
+                       migration_report=report['report_path'], migration_target=candidate['id'],
+                       migration_files=before_files, migration_report_sha256=sha(Path(report['report_path'])),
+                       migration_backup_sha256=sha(backup))
             write_json(self.root / 'state.json', new)
             try:
-                self.start()
+                run_migration(release, shared, candidate['revision'],
+                    self.root / 'control' / ('migration-' + uuid.uuid4().hex + '.log'),
+                    environment=self._environment(release))
+                actual = database_info(dbpath)
+                if (actual['revision'] != candidate['revision']
+                        or schema(dbpath) != report['result_schema']
+                        or facts(dbpath, report['source_facts']['columns']) != report['source_facts']
+                        or files(shared) != before_files
+                        or actual['counts'] != report['result']['counts']):
+                    raise ValueError('实际迁移与演练不一致')
+                new['schema_authority'] = candidate['id']
             except Exception:
-                self.stop()
-                new.update(current=old['current'], previous=old.get('previous'), operation='update_failed')
+                # Never replace the database with an old backup as an update fallback.
+                new.update(operation='migration_failed', update_backup=str(backup),
+                           migration_report=report['report_path'])
                 write_json(self.root / 'state.json', new)
-                if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
-                    raise ValueError('新程序未启动且旧程序兼容检查失败，服务保持停止；数据未回退') from None
-                self.start()
-                raise ValueError('新版本启动失败，已切回原程序，业务数据库未回退') from None
-            return candidate['version']
+                raise ValueError('数据库升级未完整通过，服务保持停止；已保留现场及NAS备份，请专项恢复，未回写旧数据') from None
+        new.update(current=candidate['id'], previous=old['current'], update_backup=str(backup),
+                   operation='rollback' if rollback else 'update', updated_at=datetime.now(CN).isoformat())
+        write_json(self.root / 'state.json', new)
+        try:
+            self.start()
+        except Exception:
+            self.stop()
+            new.update(current=old['current'], previous=old.get('previous'), operation='update_failed')
+            write_json(self.root / 'state.json', new)
+            if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
+                raise ValueError('新程序未启动且旧程序兼容检查失败，服务保持停止；数据未回退') from None
+            self.start()
+            raise ValueError('新版本启动失败，已切回原程序，业务数据库未回退') from None
+        return candidate['version']
 
     def rollback(self, password: str, nas: Path):
         previous = self.state.get('previous')
@@ -380,7 +436,8 @@ class Manager:
             python = (self.root / 'releases' / target / 'runtime/python.exe').resolve()
             for proc in psutil.process_iter(['exe']):
                 try:
-                    if proc.info['exe'] and Path(proc.info['exe']).resolve() == python:
+                    executable = proc.info['exe']
+                    if executable and Path(executable).name.casefold() == python.name.casefold() and Path(executable).resolve() == python:
                         raise ValueError('升级运行环境仍有进程，请等待结束后重试')
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue

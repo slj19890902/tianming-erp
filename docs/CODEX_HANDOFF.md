@@ -1,5 +1,10 @@
 # Codex 项目交接
 
+## 2026-09-12 OPT002 v0.22.381 仓库查货分页
+
+- 正式/签名代码8c8ea500，保留379订单往返与380助手预检；mq0912无新DDL，release_runtime_20260912_164235.json completed，源/应用SHA一致、完整性ok/FK0/核心计数相同。查货不再截前2500批，默认100条、继续加载，34项定向测试通过。不是全文索引或多年容量验收，正式操作待管理员验收；详见docs/tasks/OPT002_WAREHOUSE_QUERY_20260912.md及NAS回执20260912_OPT002仓库查询分页.md。
+- NAS latest/完整Setup及D:/TianmingERP bootstrap同步381（包61646a5876b0968abd0dfaac150eae8814b98dd6e22d40e131142ffde073469e），助手EXE沿用已验证380。全程Manager锁保护，设置字节不变；发布时仍无state/managed marker、原目录服务运行。下一任务必须实时重新核对首次接入状态，禁止更新已退役旧根。后续GROUPLOC001排382。
+
 ## 2026-09-12 v0.22.379 订单补全资料与货位返回
 
 - 正式代码6fccf676 / mq0912，20260912_160939发布计划completed；15项Python、14项Node、隔离Chrome与构建通过，24项正式只读入口/资源/RBAC检查通过，无正式业务事实写入。常用箱编辑返回保留原单数量/价格/选择，库存位置打开精确格位和标签。详见docs/order_context_links_delivery_20260912.md及NAS回执20260912-v379-订单补全资料与货位往返.md；正式页面待管理员人工验收。
@@ -5502,3 +5507,7 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 
 - 正式服务发布 18b3c70a，静态 LF/缓存键收尾 9e971b2e；唯一 mq0912，无新 migration。release_runtime_20260912_145612.json completed，正式库前后 SHA 相同，健康及 6 份资源逐字节核对通过。55 项定向业务、9 项前端与隔离 Chrome 通过；正式页面交管理员人工验收。
 - 205 每套网格长片 3 只、短片 4 只，一箱 5 套；按网格套数整组安排，未改正式库存或主档。详情 docs/unified_erp_ui_delivery_20260912.md 与同名 NAS 独立回执。DESKTOP013 接续 v376 完整包/latest，OPT001 顺延 v377；本任务不竞争写 NAS latest，不执行助手首次接入。
+
+
+## DESKTOP015 2026-09-12 v380 首次接入目录预检
+正式92a94609/mq0912，release_runtime_20260912_162350.json completed。链接预检前移，忽略开发依赖和演练副本，30项定向与885附件核对通过。NAS完整包及D:/TianmingERP助手/bootstrap已380，备份设置保留；尚无managed marker，原服务仍在D:/纸箱厂erp软件搭建。管理员手动接入待验收，后续381必须实时复核marker并串行Manager锁。详见docs/tasks/DESKTOP015_IMPORT_LINKS_20260912.md。

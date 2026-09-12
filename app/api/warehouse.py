@@ -16057,6 +16057,8 @@ def cancel_warehouse_capacity_forecast_plan(
 def search_warehouse_twin_inventory(
     keyword: str | None = Query(default=None, max_length=150),
     inventory_code: str | None = Query(default=None, max_length=150),
+    page_size: int = Query(default=100, ge=1, le=500),
+    after_lot_id: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
@@ -16078,12 +16080,10 @@ def search_warehouse_twin_inventory(
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:
         query = query.where(_visible_lot_condition(visible_customer_ids))
-    candidates = list(db.scalars(query.order_by(InventoryLot.id).limit(2500)).unique().all())
+    from app.services.warehouse_search_paging import search_lot_page
     today = beijing_today()
-    lots = [
-        row for row in candidates
-        if inventory_search_matches(row, effective_keyword, today)
-    ][:500]
+    lots, pagination = search_lot_page(db, query, keyword=effective_keyword,
+        as_of=today, page_size=page_size, after_lot_id=after_lot_id)
     result = build_inventory_code_search_results(
         lots=lots,
         keyword=effective_keyword,
@@ -16093,6 +16093,7 @@ def search_warehouse_twin_inventory(
             [row.location for row in lots if row.location is not None],
         ),
     )
+    result["pagination"] = pagination
     try:
         location_match = resolve_location_address(db, effective_keyword)
         matched_location = db.get(
@@ -16553,6 +16554,8 @@ def locate_warehouse_twin_objects(
     keyword: str = Query(default="", max_length=150),
     search_type: Literal["all", "finished", "mold", "printing_plate"] = Query(default="all"),
     customer_id: int | None = Query(default=None, gt=0),
+    page_size: int = Query(default=100, ge=1, le=500),
+    after_lot_id: int | None = Query(default=None, gt=0),
     db: Session = Depends(get_db),
     user: User = Depends(_can_locate_twin),
 ) -> dict:
@@ -16582,23 +16585,18 @@ def locate_warehouse_twin_objects(
         query = query.where(_visible_lot_condition(visible_customer_ids))
     if search_type == "finished":
         query = query.where(InventoryLot.inventory_type == "finished")
+    if customer_id is not None:
+        query = query.where(InventoryLot.id.in_(select(
+            FinishedGoodsInventoryDetail.inventory_lot_id).where(
+                FinishedGoodsInventoryDetail.owner_customer_id == customer_id)))
     today = beijing_today()
-    lots = [
-        row
-        for row in db.scalars(query.order_by(InventoryLot.id).limit(2500)).unique().all()
-        if (
-            (customer_id is None or (
-                row.finished_detail is not None
-                and row.finished_detail.owner_customer_id == customer_id
-            ))
-            and (
-                not effective_keyword
-                or inventory_search_matches(row, effective_keyword, today)
-            )
-        )
-    ][:500]
-    if search_type in {"mold", "printing_plate"}:
-        lots = []
+    lots = []
+    pagination = {"page_size": page_size, "has_more": False,
+                  "next_after_lot_id": None, "counts_scope": "page"}
+    if search_type in {"all", "finished"}:
+        from app.services.warehouse_search_paging import search_lot_page
+        lots, pagination = search_lot_page(db, query, keyword=effective_keyword,
+            as_of=today, page_size=page_size, after_lot_id=after_lot_id)
     inventory = build_inventory_code_search_results(
         lots=lots,
         keyword=effective_keyword,
@@ -16640,6 +16638,7 @@ def locate_warehouse_twin_objects(
         "customer_id": customer_id,
         "result_count": len(inventory["items"]) + len(resources),
         "inventory_result_count": len(inventory["items"]),
+        "pagination": pagination,
         "resource_result_count": len(resources),
         "resources": resources,
         "pick_tasks": pick_tasks,

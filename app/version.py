@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.380"
-APP_VERSION_NAME = "助手首次接入目录预检"
+APP_VERSION = "v0.22.382"
+APP_VERSION_NAME = "整组生产地图选位与内网提交"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -3903,4 +3903,36 @@ APP_CHANGES = [
 APP_VERIFICATION_STEPS = [
     "打开助手380，沿用已保存的备份设置，选择原ERP整个目录首次接入，确认不再出现开发依赖目录链接错误。",
     "接入完成后核对ERP程序380、最近订单和附件，并确认完整备份已写入共享盘；原目录数据保留。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.380：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.380：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "仓库查货不再只搜索前2500个库存批次，后续入库批次也可正常匹配；按稳定批次游标分批加载，默认每页100条。",
+    "结果较多时可继续加载，切换查询取消过期请求；数量与位置明确按已加载结果汇总，保留客户权限和货架层格准确定位。",
+    "保留380助手首次接入预检和379订单往返；无新增数据库迁移，不改地图、草稿、库存数量、成本或订单事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库页面，按客户、料号或规格查货；结果较多时继续加载，确认没有重复批次，切换关键词不混入旧结果。",
+    "点击货架产品，核对实际层格高亮；收起查货结果后定位仍保留，订单来源只读定位与返回原单保持正常。",
+    "在系统版本中核对v0.22.381；本轮为分批加载优化，稀少命中仍可能扫描后续候选，未宣称完成多年容量验收。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.381：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.381：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "整组生产选位默认三楼，按现场区域、子区、货架、层、格选择；不再将EDIT或L内部编码当区域分类。",
+    "计划成品位置可从地图选择有货或空货位，确认后带回原安排，套数保持。",
+    "修复厂内HTTP网址整组转待生产无响应；失败明确提示，网络重试不重复安排。",
+]
+APP_VERIFICATION_STEPS = [
+    "从内网进入生产整组安排，核对默认3楼及区域、货架层格分类。",
+    "点击地图选位，分别查看有货和空货位，确定返回后核对位置与套数保持。",
+    "安排一次实际需要的整组生产，确认显示成功或明确原因；计划不直接生成完工库存。",
 ]

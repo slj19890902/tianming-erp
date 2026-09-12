@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.384"
-APP_VERSION_NAME = "库存成本分页与轻量汇总"
+APP_VERSION = "v0.22.385"
+APP_VERSION_NAME = "助手优先打开工厂内网"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -3965,4 +3965,18 @@ APP_VERIFICATION_STEPS = [
     "管理员从库存台账打开库存成本，翻页并搜索后页产品；核对页码、结果和上方全部库存合计。",
     "快速切换关键词或地图货位，确认不出现旧查询结果；老板可查看，普通员工不能读取成本。",
     "打开库存助手，核对成本汇总；系统版本应为v0.22.384，正式页面由管理员人工验收。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.384：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.384：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "助手启动并打开ERP时优先使用已配置的工厂内网入口；未配置内网入口时保留原打开地址。",
+    "浏览器入口与服务启动配置分开处理，保留HTTPS代理、会话和内网安全检查，不再因入口切换导致重启失败。",
+]
+APP_VERIFICATION_STEPS = [
+    "在已配置内网入口的助手点击启动并打开ERP，确认打开192.168.3.80:8000；核对重启仍正常。",
+    "手机连接蒲公英后访问配置的VPN地址核对订单；电脑和手机共用原正式数据。",
 ]

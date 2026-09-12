@@ -7251,27 +7251,10 @@ def finance_overview(
         else:
             aging["overdue_61_plus"] += amount
 
-    cost_query = (
-        select(
-            StatementItem.receivable_amount,
-            StatementItem.gross_profit_amount,
-            StatementItem.unit_cost_snapshot,
-        )
-        .join(Statement, Statement.id == StatementItem.statement_id)
-        .where(
-            Statement.confirmation_status == "confirmed",
-            Statement.statement_month.in_(months),
-            StatementItem.return_receipt_item_id.is_not(None),
-        )
-    )
-    if visible_customer_ids is not None:
-        cost_query = cost_query.where(
-            Statement.customer_id.in_(visible_customer_ids),
-            ~unauthorized_statement_source,
-        )
-    cost_rows = db.execute(cost_query).all()
-    covered = [row for row in cost_rows if Decimal(str(row.unit_cost_snapshot)) > 0]
     can_view_costs = has_permission(user, "cost.view")
+    from app.services.material_cost_lineage import material_cost_overview
+    cost_coverage = material_cost_overview(db, months=months,
+        can_view_costs=can_view_costs, visible_customer_ids=visible_customer_ids)
     return {
         "through_month": through,
         "trend": [
@@ -7283,22 +7266,6 @@ def finance_overview(
             {"category": key, "amount": value.quantize(MONEY)}
             for key, value in sorted(category_totals.items(), key=lambda item: item[1], reverse=True)
         ],
-        "cost_coverage": {
-            "covered_lines": len(covered),
-            "total_lines": len(cost_rows),
-            "coverage_rate": round(len(covered) / len(cost_rows), 4) if cost_rows else 0,
-            "covered_revenue": (
-                sum((Decimal(str(row.receivable_amount)) for row in covered), Decimal("0")).quantize(MONEY)
-                if can_view_costs else None
-            ),
-            "material_gross_profit_reference": (
-                sum((Decimal(str(row.gross_profit_amount)) for row in covered), Decimal("0")).quantize(MONEY)
-                if can_view_costs else None
-            ),
-            "label": (
-                "材料毛利参考（不含人工、能耗等）"
-                if can_view_costs else "材料毛利参考（无成本查看权限）"
-            ),
-        },
+        "cost_coverage": cost_coverage,
         "collection_note": "客户收款不在 ERP 内核销；已开票金额仅代表开票事实。",
     }

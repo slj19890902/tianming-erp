@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event, insert, select
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.models.warehouse_inventory import InventoryLot, FinishedGoodsInventoryDetail
@@ -105,6 +106,26 @@ def test_more_than_500_matches_can_all_be_reached(large_search_app):
             assert len(seen) <= 2600
         assert len(seen) == 2600
         assert set(seen) == set(range(10000, 12600))
+
+
+def test_first_page_does_not_materialize_all_candidate_lots(large_search_app):
+    app, _, _ = large_search_app
+    loaded = []
+    def capture(_session, row):
+        if isinstance(row, InventoryLot):
+            loaded.append(row.id)
+    with TestClient(app) as client:
+        _login(client, "twin-scoped")
+        event.listen(Session, "loaded_as_persistent", capture)
+        try:
+            response = client.get("/api/warehouse/twin-operations/locate",
+                params=dict(search_type="finished", keyword="EARLY-ONLY"))
+            assert response.status_code == 200, response.text
+            assert len(response.json()["items"]) == 100
+            assert response.json()["pagination"]["has_more"]
+        finally:
+            event.remove(Session, "loaded_as_persistent", capture)
+    assert len(loaded) <= 200
 
 
 def test_customer_only_search_stays_scoped_and_empty_last_page(twin_dashboard_app):

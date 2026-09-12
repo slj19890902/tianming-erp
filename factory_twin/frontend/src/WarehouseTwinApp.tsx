@@ -2125,8 +2125,8 @@ export function WarehouseTwinApp() {
     searchAbortRef.current = controller;
     searchMoreBusyRef.current = false;
     setSearchMoreLoading(false);
-    setSearchResponse(null);
     if (!searchPanelOpen) return;
+    setSearchResponse(null);
     if (keyword.length < 2) {
       setSearchResponse(null);
       setSearchLoading(false);

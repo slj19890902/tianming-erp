@@ -1,5 +1,10 @@
 # Codex 项目交接
 
+## 2026-09-12 OPT002 v0.22.381 仓库查货分页
+
+- 正式/签名代码8c8ea500，保留379订单往返与380助手预检；mq0912无新DDL，release_runtime_20260912_164235.json completed，源/应用SHA一致、完整性ok/FK0/核心计数相同。查货不再截前2500批，默认100条、继续加载，34项定向测试通过。不是全文索引或多年容量验收，正式操作待管理员验收；详见docs/tasks/OPT002_WAREHOUSE_QUERY_20260912.md及NAS回执20260912_OPT002仓库查询分页.md。
+- NAS latest/完整Setup及D:/TianmingERP bootstrap同步381（包61646a5876b0968abd0dfaac150eae8814b98dd6e22d40e131142ffde073469e），助手EXE沿用已验证380。全程Manager锁保护，设置字节不变；发布时仍无state/managed marker、原目录服务运行。下一任务必须实时重新核对首次接入状态，禁止更新已退役旧根。后续GROUPLOC001排382。
+
 ## 2026-09-12 v0.22.379 订单补全资料与货位返回
 
 - 正式代码6fccf676 / mq0912，20260912_160939发布计划completed；15项Python、14项Node、隔离Chrome与构建通过，24项正式只读入口/资源/RBAC检查通过，无正式业务事实写入。常用箱编辑返回保留原单数量/价格/选择，库存位置打开精确格位和标签。详见docs/order_context_links_delivery_20260912.md及NAS回执20260912-v379-订单补全资料与货位往返.md；正式页面待管理员人工验收。

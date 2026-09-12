@@ -1,0 +1,5 @@
+# DESKTOP018 助手内网入口与服务配置分离
+
+老板弃用zrok主入口，使用192.168.3.80:8000及蒲公英VPN。DESKTOP017错误将https_proxy的ERP_HEALTH_URL/ERP_BROWSER_URL改HTTP，384更新重启被load_settings拒绝。已持Manager锁恢复两个字段的原已验证HTTPS值，实际383 runtime load_settings通过并Manager.start恢复；LAN及VPN健康200，正式数据未改。HTTPS内部字段不能直接改成HTTP。
+
+本轮最小闭环：助手打开ERP时优先已有ERP_LAN_HTTP_ORIGIN；仅改变浏览器导航，服务环境不写入。无LAN配置时保持原ERP_BROWSER_URL或loopback默认行为，启动失败不打开浏览器。测试实际App.open_erp及配置字节不变，保留原启动、安全会话、代理、权限和业务事实门禁。单代理独立codex/desktop018-lan-launch-20260912；允许gui.py、直接测试、version/任务/说明。无DDL，不动既有代理/防火墙/隧道。384由原任务串行托管更新，385优先完整助手修复，不能再走旧源发布。NAS回执明确纠正017，管理员实际手机访问仍人工验收。

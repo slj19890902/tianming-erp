@@ -383,7 +383,7 @@ class App:
         def start():
             self.manager.resume()
             config = read_json(self.manager.root / 'shared/environment.json')
-            webbrowser.open(config.get('ERP_BROWSER_URL', 'http://127.0.0.1:' + config['ERP_PORT'] + '/'))
+            webbrowser.open(browser_url(config))
         self.run('启动ERP', start)
 
     def backup(self):
@@ -451,6 +451,13 @@ class App:
             self.run('核对并复制原ERP', lambda: onboard(self.manager, Path(source), package, *settings))
 
 
+def browser_url(config):
+    # The server validates this explicit private origin independently of its
+    # HTTPS service URLs. Browser navigation must not rewrite that contract.
+    lan = (config.get('ERP_LAN_HTTP_ORIGIN') or '').strip().rstrip('/')
+    return lan + '/' if lan else config.get('ERP_BROWSER_URL', 'http://127.0.0.1:' + config['ERP_PORT'] + '/')
+
+
 def startup_root(explicit=None):
     if explicit is not None:
         return Path(explicit)
@@ -469,6 +476,8 @@ def main():
         import tempfile
         from types import SimpleNamespace
         from desktop_assistant.onboarding import self_test_powershell
+        assert browser_url({'ERP_PORT': '18000', 'ERP_BROWSER_URL': 'https://example.com/',
+                            'ERP_LAN_HTTP_ORIGIN': 'http://192.168.3.80:8000'}) == 'http://192.168.3.80:8000/'
         if getattr(sys, 'frozen', False):
             assert startup_root() == Path(sys.executable).resolve().parent
         self_test_powershell()

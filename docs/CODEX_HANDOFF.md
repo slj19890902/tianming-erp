@@ -5440,3 +5440,5 @@ legacy_ruida_* 原始层
 ## 2026-09-12 v0.22.364 送货统一选货与整行选择
 
 - 正式代码 2d76ca9d；发布报告 release_runtime_20260912_095504.json completed，head st32v8x9z94，无业务数据变化。详情 docs/unified_delivery_picker_delivery.md 与 NAS 同名任务回执；待管理员人工验收。
+
+- 2026-09-12 DESKTOP008：v363/39281944/st32技术发布；签名安装包及助手连续升级已交付NAS，完整证据见任务卡和20260912_DESKTOP008连续更新与恢复_v363正式发布.md。实体备用电脑待验收；后续并行项目已推进v364，当前基线须实时核对。

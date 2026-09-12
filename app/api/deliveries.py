@@ -7495,6 +7495,7 @@ def unordered_finished_candidates(
                 "product_name": detail.product_name_snapshot
                 or product.product_name,
                 "specification": _product_specification(product),
+                "material_display": " / ".join(filter(None, [product.default_material_code or (product.material.code if product.material else ""), product.flute_type])),
                 "unit": product.unit,
                 "owner_customer_id": customer_id,
                 "customer_id": customer_id,
@@ -8406,6 +8407,49 @@ def search_pending_delivery_items(
             else max((int(total) + effective_limit - 1) // effective_limit, 1)
         ),
     }
+
+
+@router.get("/selection-items")
+def unified_delivery_selection_items(
+    customer_id: int = Query(gt=0),
+    q: str = Query(default="", max_length=150),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=50),
+    include_inventory: bool = True,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """One ordered page, preserving the two sources' existing eligibility gates."""
+    orders = search_pending_delivery_items(
+        customer_id=customer_id, order_item_id=None, inventory_code="", q=q,
+        customer_po="", product_name="", search_type="", list_all=True,
+        limit=None, page=1, page_size=None, db=db, _user=user,
+    )["items"]
+    start = (page - 1) * page_size
+    items = [{**item, "source_type": "order"} for item in orders[start:start + page_size]]
+    stock_total = 0
+    if include_inventory:
+        stock_start = max(0, start - len(orders))
+        stock_page, skip = divmod(stock_start, page_size)
+        stock = unordered_finished_candidates(
+            customer_id=customer_id, q=q, page=stock_page + 1,
+            page_size=page_size, db=db, user=user,
+        )
+        stock_total = stock["total"]
+        if len(items) < page_size:
+            needed = page_size - len(items)
+            stock_items = stock["items"][skip:skip + needed]
+            if len(stock_items) < needed and stock_start + len(stock_items) < stock_total:
+                following = unordered_finished_candidates(
+                    customer_id=customer_id, q=q, page=stock_page + 2,
+                    page_size=page_size, db=db, user=user,
+                )
+                stock_items += following["items"][:needed - len(stock_items)]
+            items += [{**item, "source_type": "unordered_finished"} for item in stock_items]
+    total = len(orders) + stock_total
+    return {"items": items, "total": total, "order_total": len(orders),
+            "inventory_total": stock_total, "page": page, "page_size": page_size,
+            "total_pages": max(1, (total + page_size - 1) // page_size)}
 
 
 @router.get("")

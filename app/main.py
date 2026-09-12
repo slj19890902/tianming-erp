@@ -127,11 +127,13 @@ async def phase2_lifespan(_: FastAPI):
     from app.core.database import SessionLocal
     from app.services.supplier_settlement_automation import settlement_loop
     from app.services.email_intake import automatic_sync_loop
+    from app.services.email_pdf_queue import recognition_loop
     stop = asyncio.Event()
     jobs = []
     if current.is_production and not os.getenv("ERP_UAT_ROOT"):
         jobs.append(asyncio.create_task(settlement_loop(stop, SessionLocal)))
         jobs.append(asyncio.create_task(automatic_sync_loop(stop, SessionLocal)))
+        jobs.append(asyncio.create_task(recognition_loop(stop, SessionLocal)))
     try:
         yield
     finally:

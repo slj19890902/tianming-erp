@@ -59,7 +59,7 @@ def test_editing_keeps_saved_customer_visible_even_if_no_longer_candidate() -> N
 def test_batch_picker_uses_fast_server_paging_with_clear_loading_state() -> None:
     loader = _method_body("loadDeliveryBatchItems")
 
-    assert 'axios.get("/api/deliveries/pending-items/search"' in loader
+    assert 'axios.get("/api/deliveries/selection-items"' in loader
     assert "list_all: true" in loader
     assert "page_size:10" in INDEX
     assert "page: Math.max(1, Number(page || 1))" in loader
@@ -84,6 +84,8 @@ def test_delivery_picker_uses_plain_language_and_shows_known_item_count() -> Non
     modal_end = INDEX.index("modal.type === 'tianhuaPreimport'", modal_start)
     modal = INDEX[modal_start:modal_end]
 
-    assert "选择待送订单" in modal
-    assert "deliveryPendingCountForSelectedCustomer()" in modal
+    assert "待送货物" in modal
+    assert "选择待送订单" not in modal
+    assert "无订单成品库存</button>" not in modal
+    assert "deliveryBatchPicker.total" in modal
     assert "选择待送货物" not in modal

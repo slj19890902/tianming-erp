@@ -96,3 +96,29 @@ def recognize_pending(db, limit=5, retry_id=None):
         return len(rows)
     finally:
         recognition_lock.release()
+
+
+def run_recognition_cycle(session_factory):
+    """Process already received PDFs without any mailbox connection."""
+    with session_factory() as db:
+        settings = db.get(EmailIntakeSettings, 1)
+        if settings is None or not settings.automatic_enabled:
+            return 0
+        return recognize_pending(db)
+
+
+async def recognition_loop(stop, session_factory, interval_seconds=5):
+    import asyncio
+    import logging
+    while not stop.is_set():
+        delay = interval_seconds
+        try:
+            await asyncio.to_thread(run_recognition_cycle, session_factory)
+        except Exception:
+            # Do not log exception bodies containing document data or paths.
+            logging.getLogger(__name__).warning('邮箱PDF后台识别暂时失败，将自动重试')
+            delay = max(60, interval_seconds)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass

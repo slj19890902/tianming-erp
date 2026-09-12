@@ -5472,3 +5472,7 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 
 ## AUTH012 2026-09-12 员工密码规则 v0.22.373
 正式代码5a619d47，mq0912不变；54项定向验证通过，已技术发布。任务见 `docs/tasks/AUTH012_PASSWORD_POLICY_20260912.md`；发布证据 `docs/migration_reports/release_runtime_20260912_141153.json`。现有账号未改密；助手尚未接入，未来发布先检查managed marker。
+
+
+## DESKTOP012 2026-09-12 自动备份设置入口 v0.22.374
+正式代码36f1e10e/mq0912，技术发布完成。新版助手主窗展开备份设置并显示失败，29项定向及打包入口自检通过，本机新版窗口已打开。见 `docs/tasks/DESKTOP012_BACKUP_SETTINGS_20260912.md` 与 `docs/migration_reports/release_runtime_20260912_144641.json`；未来发布继续先检查managed marker。

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.379"
-APP_VERSION_NAME = "订单补全资料与货位往返"
+APP_VERSION = "v0.22.380"
+APP_VERSION_NAME = "助手首次接入目录预检"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -3889,4 +3889,18 @@ APP_CHANGES = [
 APP_VERIFICATION_STEPS = [
     "先在PDF/邮箱PDF或导入常用箱页面填写数量、单价或勾选数量，再点击待完善编辑保存返回，核对资料状态及原输入保持。",
     "点击订单库存位置，核对楼层、具体格位、黄色标记和产品标签；返回订单，核对原数量、单价和勾选保持。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.379：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.379：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "助手首次接入提前检查目录链接，开发工作目录中的依赖不再阻塞；业务链接会在停服前提示具体位置。",
+    "历史发布演练副本不重复搬进正式安装，原目录文件保留；已登记附件和运行配置仍须完整核对，保留379订单页面更新。",
+]
+APP_VERIFICATION_STEPS = [
+    "打开助手380，沿用已保存的备份设置，选择原ERP整个目录首次接入，确认不再出现开发依赖目录链接错误。",
+    "接入完成后核对ERP程序380、最近订单和附件，并确认完整备份已写入共享盘；原目录数据保留。",
 ]

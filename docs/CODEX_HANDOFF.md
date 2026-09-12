@@ -5502,3 +5502,7 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 
 - 正式服务发布 18b3c70a，静态 LF/缓存键收尾 9e971b2e；唯一 mq0912，无新 migration。release_runtime_20260912_145612.json completed，正式库前后 SHA 相同，健康及 6 份资源逐字节核对通过。55 项定向业务、9 项前端与隔离 Chrome 通过；正式页面交管理员人工验收。
 - 205 每套网格长片 3 只、短片 4 只，一箱 5 套；按网格套数整组安排，未改正式库存或主档。详情 docs/unified_erp_ui_delivery_20260912.md 与同名 NAS 独立回执。DESKTOP013 接续 v376 完整包/latest，OPT001 顺延 v377；本任务不竞争写 NAS latest，不执行助手首次接入。
+
+
+## DESKTOP015 2026-09-12 v380 首次接入目录预检
+正式92a94609/mq0912，release_runtime_20260912_162350.json completed。链接预检前移，忽略开发依赖和演练副本，30项定向与885附件核对通过。NAS完整包及D:/TianmingERP助手/bootstrap已380，备份设置保留；尚无managed marker，原服务仍在D:/纸箱厂erp软件搭建。管理员手动接入待验收，后续381必须实时复核marker并串行Manager锁。详见docs/tasks/DESKTOP015_IMPORT_LINKS_20260912.md。

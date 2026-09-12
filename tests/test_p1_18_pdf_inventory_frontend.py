@@ -13,7 +13,7 @@ INDEX = Path("static/index.html").read_text(encoding="utf-8")
 
 def _pdf_block() -> str:
     start = INDEX.index("<!-- PDF 草稿默认只保留现场核对必需信息")
-    end = INDEX.index("识别结果只进入独立草稿层", start)
+    end = INDEX.index('<div v-else-if="modal.type === \'', start)
     return INDEX[start:end]
 
 
@@ -54,27 +54,29 @@ def _inline_app_script() -> str:
     )
 
 
-def test_pdf_default_table_is_fixed_to_seven_business_columns() -> None:
+def test_pdf_default_table_prioritizes_products_quantity_and_permissioned_prices() -> None:
     block = _pdf_block()
     table_start = block.index('<table class="line-items pdf-inventory-table"')
     table_end = block.index("</table>", table_start)
     table = block[table_start:table_end]
     header = table[table.index("<thead>") : table.index("</thead>")]
 
-    assert len(re.findall(r"<th(?:\s|>)", header)) == 7
+    assert len(re.findall(r"<th(?:\s|>)", header)) == 9
     for label in (
         "序号",
         "存货编码",
         "产品名称",
-        "订单数量",
-        "需报数量",
+        "数量",
+        "单价",
+        "金额",
+        "库存 / 需报",
         "异常",
         "操作",
     ):
         assert label in header
 
     column_count = _method_source("pdfDraftColumnCount")
-    assert "return 7;" in column_count
+    assert "this.canViewSalesAmounts ? 9 : 7" in column_count
     assert "draft?._show_advanced_details ? 10 : 5" not in column_count
 
 

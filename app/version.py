@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.374"
-APP_VERSION_NAME = "助手自动备份设置入口修复"
+APP_VERSION = "v0.22.375"
+APP_VERSION_NAME = "整体优化一期：出库成本口径统一"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2818,7 +2818,22 @@ APP_VERIFICATION_STEPS = ["刷新后打开修改密码，确认显示至少8位�
 APP_CHANGES = ["助手自动备份设置直接在主窗口展开，NAS路径与恢复密码同页填写，不再先调用Windows文件夹选择器。", "保存时显示检查进度和失败原因；保留旧配置与更新目录，回调错误可见且不记录凭据，无新增迁移或业务数据修改。"]
 APP_VERIFICATION_STEPS = ["打开标题含v0.22.374的新版助手，点击设置每天自动备份，确认直接显示目录和密码输入框。", "核对预填目录，输入并确认恢复密码后保存；成功后按提示首次接入或现在备份。返回不会保存输入。"]
 
+_V022374_CHANGES = APP_CHANGES
+_V022374_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = [
+    "财务总览的出库成本按送货日期统计，与月报检查共用实际成本和已批准补充成本；不再把旧对账单空成本显示成已核清成本。",
+    "历史成本参考入口识别已确认入库批次成本，拒绝缺授权或疑似厘米误当毫米的旧快照；不自动修改历史对账、应付或库存。",
+    "成本月报批量读取订单和库存资料，减少逐条查询；保留成本查看权限、缺口提示及来源审计，无新增数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员刷新6回单/对账→财务总览，核对出库成本覆盖卡片注明按送货日期；与月报检查同月份的已归集成本核对。",
+    "未补齐成本明确显示待补条数，不显示跨月份毛利；没有成本查看权限的账号不可看到金额。",
+    "历史成本补齐先预览，已确认批次成本可识别，异常旧尺寸仍需核实；本次发布不执行历史补账。正式页面交管理员人工验收。",
+]
+
 APP_CHANGELOG = [
+    *(f"v0.22.374：本次更新｜{item}" for item in _V022374_CHANGES),
+    *(f"v0.22.374：如何验证｜{item}" for item in _V022374_STEPS),
     *(f"v0.22.371：本次更新｜{item}" for item in _V022371_CHANGES),
     *(f"v0.22.371：如何验证｜{item}" for item in _V022371_STEPS),
     *(f"v0.22.370：本次更新｜{item}" for item in _V022370_CHANGES),

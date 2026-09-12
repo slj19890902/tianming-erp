@@ -122,7 +122,7 @@
      try{await axios.post('/api/production/stock-preparation/completions/'+encodeURIComponent(row.preparation_key)+'/revert',payload);if(auth!==this.authGeneration)return;await this.loadProductionHistory();this.showToast('备库误报已撤销，投入材料恢复待安排');}
      catch(e){if(auth===this.authGeneration)this.showToast('撤销失败：'+this.errorMessage(e),true);}finally{if(auth===this.authGeneration)this.productionBusy=false;}
     },
-    async openStockDialog(row){this.stockPrepError='';this.stockPrepDialog={row,loading:true,error:'',sets:row.task?.remaining_sets||row.task?.group?.sets||row.plan?.available_sets||1,disposition:'finished',keepKind:row.keep||'keep_raw',location:null,preview:null,job:row.job?{...row.job,_actual:row.job.expected_output}:null,quantity:row.available||0,view:'action',page:1,sources:[row]};
+    async openStockDialog(row){this.stockPrepError='';this.stockPrepDialog={row,loading:true,error:'',sets:row.task?.remaining_sets||row.task?.group?.sets||row.plan?.available_sets||1,disposition:'finished',keepKind:row.keep||'keep_raw',location:null,preview:null,jobs:[],job:row.job?{...row.job,_actual:row.job.expected_output}:null,quantity:row.available||0,view:'action',page:1,sources:[row]};
      const dialog=this.stockPrepDialog;
      try {await this.ensureStockLocations();if(this.stockPrepDialog!==dialog)return;dialog.location=this.stockLastLocation();
       if(row.entry_type==='kit')await this.previewStockGroup();

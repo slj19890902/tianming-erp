@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.388"
-APP_VERSION_NAME = "订单翻页稳定性修复"
+APP_VERSION = "v0.22.389"
+APP_VERSION_NAME = "备库一键生产与用途入库"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4021,3 +4021,20 @@ APP_CHANGELOG = [
 ]
 APP_CHANGES = ["修复订单下一页因内容高度变化跳回第一页、每页行数减少的问题；普通翻页保持已确定容量。", "窗口和字号变化仍重新适配，保留其他页面布局与订单筛选、权限和数据。"]
 APP_VERIFICATION_STEPS = ["刷新订单列表，连续点击下一页和上一页，核对页码与订单内容同步切换。", "切换标准/大字或调整窗口后再翻页，确认适配后不再自行回首页。"]
+
+APP_CHANGELOG = [
+    *(f"v0.22.388：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.388：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "备库待安排一键转待生产，不再先选位置；原材料保持来源货位，转入只做预占。",
+    "安排用途支持成套成品和半成品分存，按冻结子件配比实际扣减、组装成套；未组装余料保留。",
+    "原料及半成品可选择正式货位存放，支持地图和上次位置；保留加工、组装、撤销的完整追溯。",
+    "仅调整备库补货，普通订单自动流转及订单翻页修复保留；不自动修改205或其他历史库存数量。",
+]
+APP_VERIFICATION_STEPS = [
+    "4生产→待安排，点击转待生产，确认无需选位且待生产按套展示。",
+    "待生产→安排用途，核对实际成套数量或选择半成品分存，地图选具体货位后保存。",
+    "在库存去向和完工历史查看数量、位置及记录；撤销只用于已核对的误操作，已使用库存会阻止撤销。",
+]

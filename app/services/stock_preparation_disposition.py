@@ -12,7 +12,7 @@ from app.core.time_contract import utc_now_naive, utc_naive_to_api, beijing_toda
 from app.services import stock_preparation as prep
 from app.services.stock_preparation_groups import encode, digest, destination
 from app.services.warehouse_inventory import (_location, _claim_inventory_transfer_locations,
-    manual_semi_finished_in, manual_finished_in)
+    manual_semi_finished_in, manual_finished_in, _claim_inventory_restore_destination)
 from app.services.audit_log import append_audit_event
 
 
@@ -199,7 +199,7 @@ def unassemble(db,payload,actor):
     db.refresh(lot);prep._movement(db,lot=lot,movement_type='adjust',quantity=row['sets'],before=before,operator_id=actor.id,reason='撤销组装产出',idempotency_key='unassemble-out:'+key)
     for source in row['inputs']:
         child=db.get(InventoryLot,source['lot_id']);before=prep._balances(child)
-        _claim_inventory_transfer_locations(db,source_location_id=lot.warehouse_location_id,target_location_id=child.warehouse_location_id,expected_source_layout_version=None,expected_target_layout_version=None)
+        _claim_inventory_restore_destination(db,child.warehouse_location_id)
         _location(db,child.warehouse_location_id,child.inventory_type)
         changed=db.execute(update(InventoryLot).where(InventoryLot.id==child.id,InventoryLot.version==versions[child.id],InventoryLot.quantity_consumed>=source['quantity'],InventoryLot.status=='active').values(quantity_available=InventoryLot.quantity_available+source['quantity'],quantity_consumed=InventoryLot.quantity_consumed-source['quantity'],version=InventoryLot.version+1,last_movement_at=utc_now_naive()))
         if changed.rowcount!=1:prep.fail('子件来源已变化，不能撤销')

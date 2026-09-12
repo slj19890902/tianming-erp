@@ -140,3 +140,31 @@ def test_semi_storage_replay_versions_and_overassembly(stock_replenishment_app):
         with factory() as db:
             assert sorted(db.get(InventoryLot,j.output_lot_id).quantity_available for j in db.scalars(select(Job)))==[15,20]
             assert db.get(Command,'assemble-too-many') is None
+
+def test_frozen_identity_and_separate_stock_guard(stock_replenishment_app):
+    from app.models.product import Product
+    from app.models.user import User
+    from app.models.multilevel_bom import ProductBomProfile
+    from app.services.warehouse_inventory import manual_finished_in,WarehouseInventoryError
+    from datetime import date
+    app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    with TestClient(app) as client:
+        pid,body=arranged(app,factory,client)
+        with factory() as db:
+            parent=db.get(Product,pid);old_name=parent.product_name
+            parent.product_name='Changed after planning';parent.version+=1
+            db.add(ProductBomProfile(product_id=pid,source='separate',material_mode='expand_children',delivery_mode='parent'))
+            db.commit()
+            actor=db.scalar(select(User))
+            with pytest.raises(WarehouseInventoryError):
+                manual_finished_in(db,customer_id=parent.customer_id,product_id=pid,location_id=7,quantity=5,stock_date=date.today(),remarks='guard test',source_type='manual',operator_id=actor.id,idempotency_key='no-assembly-proof')
+            with pytest.raises(WarehouseInventoryError):
+                manual_finished_in(db,customer_id=parent.customer_id,product_id=pid,location_id=7,quantity=5,stock_date=date.today(),remarks='guard test',source_type='transfer',source_ref_type='preparation_assembly',operator_id=actor.id,idempotency_key='fake-assembly-proof',assembly_command_key='fake-assembly-key')
+        result=client.post('/api/production/stock-preparation/group-actions',json=body)
+        assert result.status_code==200,result.text
+        with factory() as db:
+            lot=db.get(InventoryLot,result.json()['assembly']['output_lot_id'])
+            assert lot.finished_detail.product_name_snapshot==old_name+'（成套）'
+            actor=db.scalar(select(User));actor.role='sales';actor.customer_access_mode='selected';db.commit()
+        assert client.post('/api/production/stock-preparation/group-actions',json=body).status_code==403
+        assert not client.get('/api/production/stock-preparation',params={'workspace':True,'state':'stock'}).json()['items']

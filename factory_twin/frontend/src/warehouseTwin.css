@@ -2615,3 +2615,4 @@ body.warehouse-twin-page {
   .twin-workspace.rack-focused.context-open .twin-map-pane { display: none; }
   .twin-workspace.rack-focused.context-open .twin-rack-stage { flex: 1; }
 }
+.twin-location-item.order-location-current { border:2px solid #e4a11b; background:#fff4ce; }

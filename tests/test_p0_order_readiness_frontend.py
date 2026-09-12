@@ -6,7 +6,7 @@ INDEX = Path("static/index.html").read_text(encoding="utf-8")
 
 def _pdf_block() -> str:
     start = INDEX.index("<!-- PDF 草稿默认只保留现场核对必需信息")
-    end = INDEX.index("识别结果只进入独立草稿层", start)
+    end = INDEX.index('<div class="pdf-savebar">', start)
     return INDEX[start:end]
 
 
@@ -24,9 +24,10 @@ def test_pdf_default_is_compact_and_technical_match_details_stay_advanced() -> N
     assert '<th class="pdf-sequence-col">序号</th>' in block
     assert '<th class="pdf-code-col">存货编码</th>' in block
     assert "存货编码" in block
-    assert "订单数量 / 库存" in block
+    assert '<th class="pdf-quantity-col">数量</th>' in block
+    assert "库存 / 需报" in block
     assert "异常" in block
-    assert 'v-if="draft._show_advanced_details"' in block
+    assert 'v-if="draft._show_advanced_details &&' in block
     candidate_start = block.index('class="order-item-sub-row import-product-candidate-row"')
     candidate = block[candidate_start : block.index("</tr>", candidate_start)]
     assert 'v-if="draft._show_advanced_details' in block[block.rfind("<tr", 0, candidate_start) : candidate_start]
@@ -37,7 +38,7 @@ def test_pdf_default_is_compact_and_technical_match_details_stay_advanced() -> N
     row_start = block.index("<!-- 主行 -->")
     row = block[row_start : block.index("</tr>", row_start)]
     advanced_start = block.index(
-        '<tr v-if="draft._show_advanced_details" class="order-item-sub-row">'
+        '<tr v-if="draft._show_advanced_details && draft._detail_line===(item.client_line_id||item.line_no)" class="order-item-sub-row">'
     )
     advanced = block[advanced_start : block.index("</tr>", advanced_start)]
     assert "客户单价" not in header

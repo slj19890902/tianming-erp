@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +41,8 @@ def test_trace_map_deep_link_is_refresh_stable_and_forces_lookup_mode() -> None:
 def test_trace_map_reports_stale_or_inaccessible_location_without_write_controls() -> None:
     assert "指定库位不存在、已停用，或当前账号无权查看" in TWIN_APP
     assert "指定成品批次已移位、清零，或当前账号无权查看" in TWIN_APP
-    assert "!traceReadOnly && (canExecuteWarehouse || canStocktake)" in TWIN_APP
+    assert "!traceReadOnly && canExecuteWarehouse &&" in TWIN_APP
+    assert "!traceReadOnly && canStocktake &&" in TWIN_APP
     assert "!traceReadOnly && canEditLocations" in TWIN_APP
     assert 'setCanEditLocations(!traceReadOnly && value.user.role === "admin")' in TWIN_APP
     assert 'setCanExecuteWarehouse(!traceReadOnly && value.permissions.includes("warehouse.execute"))' in TWIN_APP
@@ -56,19 +58,18 @@ def test_trace_map_reports_stale_or_inaccessible_location_without_write_controls
 def test_trace_read_only_query_cannot_reopen_move_or_planning_modes() -> None:
     assert '!traceReadOnly && query.get("edit") === "area_policy"' in TWIN_APP
     assert '!traceReadOnly && query.get("edit") === "rack"' in TWIN_APP
-    assert "if (traceReadOnly) return;\n    if (mapMode !== \"move\")" in TWIN_APP
+    assert 'if (traceReadOnly) return;\n    if (mapMode !== "move" && !await enterWarehouseMoveMode()) return;' in TWIN_APP
     assert "traceReadOnly\n      || (!pendingAreaPolicyEdit && !pendingRackEdit)" in TWIN_APP
     assert "if (traceReadOnly || !pendingRackEdit || !locationEditMode || !selectedRack) return" in TWIN_APP
 
 
 def test_built_warehouse_map_contains_trace_read_only_contract() -> None:
-    built_assets = list(
-        (ROOT / "static" / "factory-twin-assets" / "assets").glob(
-            "warehouseTwin-*.js"
-        )
-    )
-    assert len(built_assets) == 1
-    built = built_assets[0].read_text(encoding="utf-8")
+    asset_root = ROOT / "static" / "factory-twin-assets"
+    entry = (asset_root / "warehouse-twin.html").read_text(encoding="utf-8")
+    # Older hashed bundles intentionally remain available to already-open pages.
+    active = re.findall(r'src="/factory-twin-assets/(assets/warehouseTwin-[^\"]+\.js)"', entry)
+    assert len(active) == 1
+    built = (asset_root / active[0]).read_text(encoding="utf-8")
     assert "order_trace" in built
     assert "订单追溯 · 只读定位" in built
     assert "指定成品批次已移位、清零" in built

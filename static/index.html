@@ -6,6 +6,7 @@
     <title>天明包装ERP</title>
     <link rel="icon" type="image/x-icon" href="/static/assets/logo.ico" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
+    <script src="/static/ui/order-context.js?v=217850427bf4"></script>
     <script src="/static/ui/workspace.js?v=1e9b28d1dfa9"></script>
     <script src="/static/ui/pdf-workspace.js?v=fcba033a4d82"></script>
     <script src="/static/ui/purchase-workspace.js?v=66709867c608"></script>
@@ -950,7 +951,7 @@
         margin-top:5px; padding:5px 7px; border-radius:7px; background:#fff;
       }
       .pdf-warehouse-locator {
-        position:fixed; inset:0; z-index:120; display:grid;
+        position:fixed; inset:0; z-index:160; display:grid;
         grid-template-rows:auto minmax(0,1fr); background:#f5f7fb;
       }
       .pdf-warehouse-locator-head {
@@ -3054,7 +3055,7 @@
 </style>
     <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260911-1">
     <link rel="stylesheet" href="/static/product-editor-compact.css?v=e210145a0c7d" />
-    <link rel="stylesheet" href="/static/ui/workspace.css?v=717294a31cb3" />
+    <link rel="stylesheet" href="/static/ui/workspace.css?v=c840a5c202b5" />
   </head>
   <body>
     <div id="app" v-cloak>
@@ -6161,7 +6162,7 @@
 
       <div v-if="modal" class="modal-mask" @click.self="onModalMaskClick">
         <div ref="businessModal" class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product', 'product-editor-large': modal.type === 'product' && isLargeUi}" :role="isAccessibleBusinessDialog ? 'dialog' : null" :aria-modal="isAccessibleBusinessDialog ? 'true' : null" :aria-labelledby="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null" :aria-describedby="isAccessibleReadOnlyOrderDialog ? 'erp-order-detail-description' : null" :tabindex="isAccessibleBusinessDialog ? -1 : null" @keydown="onModalKeydown">
-          <div class="modal-head"><strong :id="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null">{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small high-frequency-action" @click="closeModal">关闭</button></div>
+          <div class="modal-head"><strong :id="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null">{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small high-frequency-action" @click="closeModal">{{ modal.type==='product' && productEditReturnContext && productEditReturnContext.source!=='bom' ? '返回订单' : '关闭' }}</button></div>
           <div class="modal-body">
             <div v-if="masterVersionConflict && masterVersionConflict.entity === modal.type" class="notice danger" style="margin-bottom:12px">
               <strong>他人已修改，打开版本{{ masterVersionConflict.expectedVersion }} / 当前版本{{ masterVersionConflict.currentVersion }}</strong>
@@ -7297,7 +7298,7 @@
                         <span v-else-if="item.merge_status==='conflict'" class="status orange pdf-match-status-line" style="font-size:11px" :title="(item.merge_conflict_reasons||[]).join('；')">同编码差异</span>
                         <template v-else-if="item.matched_product_id && !item.is_new_product">
 
-                          <span v-if="!commonBoxReadiness(item).ready" :class="['status','pdf-match-status-line',commonBoxReadiness(item).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(item)" style="font-size:11px">{{ commonBoxReadiness(item).ready ? '资料已完善' : '待完善' }}</span>
+                          <button v-if="!commonBoxReadiness(item).ready && canEditProducts && !isImportDraftLocked(draft)" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" :title="commonBoxReadinessTitle(item)" @click.stop="openCommonBoxEditorFromPdf(draftIndex,item)">待完善</button><span v-else-if="!commonBoxReadiness(item).ready || item._product_context_refreshed" :class="['status','pdf-match-status-line',commonBoxReadiness(item).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(item)">{{ commonBoxReadiness(item).ready ? '资料已完善' : '待完善' }}</span>
                         </template>
                         <span v-else-if="item.product_candidates&&item.product_candidates.length>1" class="status orange pdf-match-status-line" style="font-size:11px">多候选</span>
                         <span v-else-if="item.is_new_product" class="status blue pdf-match-status-line" style="font-size:11px">新产品</span>
@@ -7358,7 +7359,7 @@
                         </div>
                       </td>
                       <td style="font-size:11px;white-space:normal" :title="pdfInventoryIssueText(item)">
-                        <span v-if="pdfInventoryIssueText(item)" :class="['status',pdfInventoryDisplayState(item)==='exception'?'red':'orange']">{{ pdfInventoryIssueText(item) }}</span>
+                        <button v-if="item.matched_product_id && !item.is_new_product && !commonBoxReadiness(item).ready && canEditProducts && !isImportDraftLocked(draft)" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" @click.stop="openCommonBoxEditorFromPdf(draftIndex,item)">常用箱资料待完善</button><span v-else-if="pdfInventoryIssueText(item)" :class="['status',pdfInventoryDisplayState(item)==='exception'?'red':'orange']">{{ pdfInventoryIssueText(item) }}</span>
                         <span v-else class="muted">-</span>
                       </td>
                       <td>
@@ -7520,9 +7521,9 @@
                             <div v-if="item._inventory.loading || item._inventory.authoritative_loading" class="workspace-state" role="status"><span class="workspace-spinner"></span>正在查询库存…</div>
                             <div v-else-if="item._inventory.error || item._inventory.authoritative_error || item._inventory.stale" class="status orange">{{item._inventory.error||item._inventory.authoritative_error||'库存已变化，请刷新'}}</div>
                             <template v-else-if="item._inventory_tab==='summary'">
-                              <table class="line-items"><thead><tr><th>成品拟用 / 可用</th><th>位置</th><th></th></tr></thead><tbody><tr v-for="candidate in item._inventory.finished.candidates.slice(((item._inventory_page||1)-1)*5,(item._inventory_page||1)*5)" :key="candidate.lot_id"><td><strong>{{pdfFinishedUse(item,candidate)}}</strong> / {{candidate.quantity_available}} 个</td><td>{{inventoryLocation(candidate)}}<info-note label="库存批次">{{candidate.lot_number}}</info-note></td><td><button v-if="pdfWarehouseLocatorCanOpen(candidate)" class="btn small" @click="openPdfWarehouseLocator(draft,item,candidate)">定位</button></td></tr><tr v-if="!item._inventory.finished.candidates.length"><td colspan="3">暂无可用成品</td></tr></tbody></table>
+                              <table class="line-items"><thead><tr><th>成品拟用 / 可用</th><th>位置</th></tr></thead><tbody><tr v-for="candidate in item._inventory.finished.candidates.slice(((item._inventory_page||1)-1)*5,(item._inventory_page||1)*5)" :key="candidate.lot_id"><td><strong>{{pdfFinishedUse(item,candidate)}}</strong> / {{candidate.quantity_available}} 个</td><td><order-stock-location :candidate="candidate" :item="item"></order-stock-location><info-note label="库存批次">{{candidate.lot_number}}</info-note></td></tr><tr v-if="!item._inventory.finished.candidates.length"><td colspan="2">暂无可用成品</td></tr></tbody></table>
                               <div class="toolbar-group"><button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn success small" @click="confirmOrderLineInventory(item,'finished')">采用成品推荐</button><button v-if="item._inventory.finished.candidates.length" class="btn small" @click="skipOrderLineInventory(item,'finished')">不使用成品</button><pager :page="item._inventory_page||1" :total="item._inventory.finished.candidates.length" :page-size="5" @change="item._inventory_page=$event"></pager></div>
-                              <div v-for="component in inventoryComponents(item)" :key="component"><div v-for="allocation in item._inventory.semi[component].allocations" :key="allocation.candidate.lot_id" class="pdf-stock-allocation"><strong>{{pdfMaterialKind(allocation.candidate)==='raw'?'原材料':'半成品'}}拟用 {{allocation.stock_quantity}} 张 · 覆盖 {{allocation.requested_qty}} 片</strong><span>{{inventoryLocation(allocation.candidate)}}</span></div></div>
+                              <div v-for="component in inventoryComponents(item)" :key="component"><div v-for="allocation in item._inventory.semi[component].allocations" :key="allocation.candidate.lot_id" class="pdf-stock-allocation"><strong>{{pdfMaterialKind(allocation.candidate)==='raw'?'原材料':'半成品'}}拟用 {{allocation.stock_quantity}} 张 · 覆盖 {{allocation.requested_qty}} 片</strong><span><order-stock-location :candidate="allocation.candidate" :item="item"></order-stock-location></span></div></div>
                               <div v-if="inventoryDecisionRequired(item)" class="status orange">{{inventoryDecisionRequired(item)}}</div>
                             </template>
                             <template v-else>
@@ -7531,7 +7532,7 @@
                                 <table class="line-items pdf-material-table"><thead><tr><th>规格 / 压线</th><th>材质 / 楞型</th><th>可用 / 可覆盖</th><th>位置</th><th>本次拟用</th></tr></thead><tbody>
                                   <tr v-for="candidate in pdfMaterialCandidates(item,component,item._inventory_tab).slice(((item._inventory_page||1)-1)*4,(item._inventory_page||1)*4)" :key="candidate.lot_id">
                                     <td><strong>{{candidate.board_length_mm}} × {{candidate.board_width_mm}} mm</strong><div>{{pdfCandidateCrease(candidate)}}</div></td><td>{{candidate.material_code}} / {{candidate.flute_type}}<div><span :class="['status',pdfCandidateExact(candidate)?'green':'orange']">{{pdfCandidateExact(candidate)?'完全符合':'需核对适配'}}</span><info-note v-if="candidate.signature_differences?.length || candidate.warning_messages?.length">{{[...(candidate.signature_differences||[]),...(candidate.warning_messages||[])].join('；')}}</info-note></div></td>
-                                    <td>{{candidate.available_stock_quantity}} 张<div>可覆盖 {{candidate.deductible_requirement_quantity}} 片</div></td><td>{{inventoryLocation(candidate)}}<info-note>{{candidate.lot_number}}</info-note><button v-if="pdfWarehouseLocatorCanOpen(candidate)" class="btn small" @click="openPdfWarehouseLocator(draft,item,candidate)">定位</button></td>
+                                    <td>{{candidate.available_stock_quantity}} 张<div>可覆盖 {{candidate.deductible_requirement_quantity}} 片</div></td><td><order-stock-location :candidate="candidate" :item="item"></order-stock-location><info-note>{{candidate.lot_number}}</info-note></td>
                                     <td><strong v-if="item._inventory.semi[component].allocations.some(a=>a.candidate.lot_id===candidate.lot_id)">{{item._inventory.semi[component].allocations.filter(a=>a.candidate.lot_id===candidate.lot_id).reduce((n,a)=>n+Number(a.stock_quantity||0),0)}} 张</strong>
                                       <template v-else><label v-if="isGeneralSemiFinishedCandidate(candidate)"><input type="checkbox" v-model="item._inventory.semi[component].general_confirmation" />确认跨客户</label><label v-if="semiCandidateNeedsOverride(candidate)"><input type="checkbox" v-model="item._inventory.semi[component].manual_override" />已核对差异</label><button class="btn primary small" :disabled="(isGeneralSemiFinishedCandidate(candidate)&&!item._inventory.semi[component].general_confirmation)||(semiCandidateNeedsOverride(candidate)&&!item._inventory.semi[component].manual_override)" @click="isDirectSemiDeductionCandidate(candidate)?confirmDirectSemiDeduction(item,component,candidate):confirmOrderLineInventory(item,component,candidate,semiCandidateNeedsOverride(candidate))">采用</button></template>
                                     </td>
@@ -7642,7 +7643,7 @@
 	                      <div v-if="item._from_product" class="order-entry-material-stack">
 	                        <span class="order-entry-material-text" :title="orderItemCompressedMaterial(item)">{{ orderItemCompressedMaterial(item) }}</span>
 	                        <div class="order-entry-material-meta">
-	                          <span :class="['status',commonBoxReadiness(item).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(item)">{{ commonBoxReadiness(item).ready ? '资料已完善' : '待完善' }}</span>
+	                          <button v-if="!commonBoxReadiness(item).ready && canEditProducts" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" :title="commonBoxReadinessTitle(item)" @click.stop="openCommonBoxEditorFromOrder(index)">待完善</button><span v-else :class="['status',commonBoxReadiness(item).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(item)">{{ commonBoxReadiness(item).ready ? '资料已完善' : '待完善' }}</span>
 	                          <span class="muted order-entry-material-source" title="来自常用箱">常用箱</span>
 	                          <button v-if="canEditProducts" class="btn small" type="button" title="编辑这款常用箱" @click="openCommonBoxEditorFromOrder(index)">编辑</button>
 	                        </div>
@@ -7780,8 +7781,8 @@
                            <div class="toolbar-group"><strong>通用半成品，可跨客户，需人工确认</strong><span>{{ generalSemiFinishedCandidates(item._inventory.semi[component]).map(candidate => candidate.lot_number).join('、') }}</span><label><input type="checkbox" v-model="item._inventory.semi[component].general_confirmation" /> 我已明确确认可跨客户抵扣</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].general_confirmation" @click="confirmOrderLineInventory(item,component,generalSemiFinishedCandidates(item._inventory.semi[component])[0],true)">明确确认并抵扣</button></div>
                            </div>
                          </template>
-                         <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品库存：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，{{ inventoryLocation(candidate) }}</span><button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">采用安全推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 个，{{ inventoryLocation(allocation.candidate) }}</div></div>
-                        <div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:5px"><strong>半成品{{ componentLabel(component) }}库存：</strong><span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><template v-if="item._inventory.semi[component].candidates.length"><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id" style="margin-left:8px">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }} <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span> <button v-if="isDirectSemiDeductionCandidate(candidate) && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmDirectSemiDeduction(item,component,candidate)">抵扣</button></span><button v-if="safeSystemInventoryCandidates(item,component).length && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">采用安全推荐</button></template><span v-else-if="!item._inventory.semi[component].unavailable_reason" class="muted">暂无可用库存</span><button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,component,orderForm.customer_id)">重新选择</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,orderForm.customer_id)">查看其他候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`manual-${candidate.lot_id}`" style="margin:4px 0 0 12px">人工匹配 {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，{{ inventoryLocation(candidate) }}；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 已核对差异</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认使用</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 片 / {{ allocation.stock_quantity }} 张，{{ inventoryLocation(allocation.candidate) }}</div></div>
+                         <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品库存：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，<order-stock-location :candidate="candidate" :item="item"></order-stock-location></span><button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">采用安全推荐</button><button class="btn small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 个，<order-stock-location :candidate="allocation.candidate" :item="item"></order-stock-location></div></div>
+                        <div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:5px"><strong>半成品{{ componentLabel(component) }}库存：</strong><span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><template v-if="item._inventory.semi[component].candidates.length"><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id" style="margin-left:8px">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，<order-stock-location :candidate="candidate" :item="item"></order-stock-location> <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span> <button v-if="isDirectSemiDeductionCandidate(candidate) && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmDirectSemiDeduction(item,component,candidate)">抵扣</button></span><button v-if="safeSystemInventoryCandidates(item,component).length && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">采用安全推荐</button></template><span v-else-if="!item._inventory.semi[component].unavailable_reason" class="muted">暂无可用库存</span><button class="btn small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,component,orderForm.customer_id)">重新选择</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,orderForm.customer_id)">查看其他候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`manual-${candidate.lot_id}`" style="margin:4px 0 0 12px">人工匹配 {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，<order-stock-location :candidate="candidate" :item="item"></order-stock-location>；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <label><input type="checkbox" v-model="item._inventory.semi[component].manual_override" /> 已核对差异</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].manual_override" @click="confirmOrderLineInventory(item,component,candidate,true)">确认使用</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 片 / {{ allocation.stock_quantity }} 张，<order-stock-location :candidate="allocation.candidate" :item="item"></order-stock-location></div></div>
                       </div>
                     </td>
                   </tr>
@@ -9385,7 +9386,7 @@
             </div>
           </div>
           <div v-if="modal?.type === 'product'" class="modal-foot product-editor-actions">
-            <button type="button" class="btn primary product-inline-save" :disabled="(!!productForm.id && !canEditProducts) || loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : '保存' }}</button>
+            <button type="button" class="btn primary product-inline-save" :disabled="(!!productForm.id && !canEditProducts) || loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : (productEditReturnContext && productEditReturnContext.source!=='bom' ? '保存并返回订单' : '保存') }}</button>
           </div>
           <div v-if="!['product','orderPdfImport'].includes(modal?.type)" class="modal-foot">
             <button v-if="!isForcedPassword" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
@@ -9425,7 +9426,7 @@
             <strong>库存位置（只读）</strong>
             <span class="muted" style="margin-left:8px">{{ pdfWarehouseLocator.title }}</span>
           </div>
-          <button class="btn primary" type="button" @click="closePdfWarehouseLocator">返回 PDF 订单</button>
+          <button class="btn primary" type="button" @click="closePdfWarehouseLocator">{{ pdfWarehouseLocator.returnLabel || "返回订单" }}</button>
         </div>
         <iframe ref="pdfWarehouseLocatorFrame" src="about:blank" title="库存位置只读查看"></iframe>
       </div>
@@ -9464,7 +9465,7 @@
                     <td>{{ orderSpecificationText(spec(row)) }}</td>
                     <td>{{ orderCommonBoxMaterialText(row) }}</td>
                     <td class="sensitive-price">{{ money(row.sale_unit_price) }}</td>
-                    <td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']">{{ commonBoxReadiness(row).ready ? "已完善" : "待完善" }}</span></td>
+                    <td><button v-if="!commonBoxReadiness(row).ready && canEditProducts" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" :title="commonBoxReadinessTitle(row)" @click.stop="openCommonBoxEditorFromPicker(row)">待完善</button><span v-else :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']">{{ commonBoxReadiness(row).ready ? "已完善" : "待完善" }}</span></td>
                     <td><input class="input" type="number" min="1" :value="orderCommonBoxSelectedQuantity(row.id)" @click.stop="toggleOrderCommonBoxSelection(row,true)" @focus="toggleOrderCommonBoxSelection(row,true)" @input="setOrderCommonBoxQuantity(row,$event.target.value)" placeholder="可稍后填" /></td>
                   </tr>
                   <tr v-if="!orderCommonBoxPicker.loading && !orderCommonBoxPicker.items.length"><td colspan="8" class="empty">当前筛选没有可用常用箱</td></tr>
@@ -13864,26 +13865,31 @@
           },
           openPdfWarehouseLocator(draft, line, candidate) {
             if (!this.pdfWarehouseLocatorCanOpen(candidate)) return;
+            draft = draft || this.orderImportDrafts.find(row => (row.items || []).includes(line));
             const location = candidate?.warehouse_location || candidate?.location || {};
             const mapped = location.position_status === "mapped";
             const inventoryType = candidate?.available_stock_quantity !== undefined ? "semi_finished" : "finished";
             const params = new URLSearchParams({
               embedded:"1",
               readonly:"1",
-              source:"pdf-order",
-              tab:mapped ? "locations" : inventoryType,
+              source:mapped ? "order-context" : "pdf-order",
+              tab:mapped ? "map" : inventoryType,
+              floor:String(location.warehouse_floor || location.floor_code || "").toUpperCase().replace(/F$/, "") + "F",
+              mode:"lookup", view:"2d",
               inventory_type:inventoryType,
               location_id:String(location.id),
               lot_id:String(candidate.lot_id),
             });
+            if (this.pdfWarehouseLocator.visible) return;
+            const returnLabel = this.modal?.type === "orderPdfImport" ? "返回 PDF 订单" : "返回订单";
             const draftKey = String(draft?.file_hash || draft?.source_name || "");
             const table = [...document.querySelectorAll("[data-pdf-draft-key]")]
               .find(element => element.dataset.pdfDraftKey === draftKey);
             const modalMask = document.querySelector(".modal-mask");
             const focusId = document.activeElement?.id || "";
             this.pdfWarehouseLocator = {
-              visible:true,
-              url:`/warehouse.html?${params.toString()}`,
+              visible:true, returnLabel, focusElement:document.activeElement,
+              url:`${mapped ? "/warehouse.html" : "/warehouse-ledger.html"}?${params.toString()}`,
               title:`${this.inventoryLocation(candidate)}｜${candidate.lot_number || "库存批次"}`,
               draftKey,
               focusId,
@@ -13916,7 +13922,8 @@
                   .find(element => element.dataset.pdfDraftKey === restore.draftKey)
                 : null;
               if (table) table.scrollTop = restore.tableScrollTop || 0;
-              if (restore.focusId) document.getElementById(restore.focusId)?.focus();
+              if (restore.focusElement?.isConnected) restore.focusElement.focus({preventScroll:true});
+              else if (restore.focusId) document.getElementById(restore.focusId)?.focus();
             });
           },
           handlePdfWarehousePopState() {
@@ -26085,28 +26092,10 @@
             return data;
           },
           async openCommonBoxEditorFromPdf(draftIndex, item) {
-            if (this.isImportDraftLocked(this.orderImportDrafts[draftIndex])) return;
-            if (!item?.matched_product_id || !this.canEditProducts) return;
-            this.productEditReturnContext = {
-              source: "pdf",
-              productId: Number(item.matched_product_id),
-              draftIndex: Number(draftIndex),
-              returnModal: { ...this.modal },
-            };
-            await this.openProduct({ id:Number(item.matched_product_id) });
-            this.modal.title = `编辑常用箱后返回 PDF 订单｜${item.normalized_product_code || item.product_code || ""}`;
+            return this.openOrderContextProduct(item, 'pdf', this.orderImportDrafts[draftIndex]);
           },
           async openCommonBoxEditorFromOrder(index) {
-            const item = this.orderForm.items[index];
-            if (!item?.product_id || !this.canEditProducts) return;
-            this.productEditReturnContext = {
-              source: "order",
-              productId: Number(item.product_id),
-              orderIndex: Number(index),
-              returnModal: { ...this.modal },
-            };
-            await this.openProduct({ id:Number(item.product_id) });
-            this.modal.title = `编辑常用箱后返回当前订单｜${item.product_code || ""}`;
+            return this.openOrderContextProduct(this.orderForm.items[index], 'order');
           },
           async openBomChildEditor(component) {
             const childId = Number(component?.component_product_id || 0);
@@ -26141,6 +26130,7 @@
           async returnFromCommonBoxEditor(savedProductId, { saved=false }={}) {
             const context = this.productEditReturnContext;
             if (!context) return false;
+            if (context.source !== "bom") return this.restoreOrderContextProduct(savedProductId, {saved});
             const productId = Number(savedProductId || context.productId);
             const returnModal = context.returnModal;
             if (context.source === "bom") {
@@ -26167,21 +26157,7 @@
               if (this.productMaterialContext?.loading && this.productForm.id) this.loadProductMaterialContext(this.productForm.id);
               return true;
             }
-            this.productEditReturnContext = null;
-            this.resetProductEditorState();
-            this.modal = returnModal;
-            if (!saved) return true;
-            if (context.source === "pdf") {
-              await this.rematchImportDraft(context.draftIndex);
-              this.showToast("常用箱已更新，PDF 订单内容已保留并重新校验");
-              return true;
-            }
-            const indexes = this.orderForm.items
-              .map((item,index) => Number(item.product_id) === productId ? index : -1)
-              .filter(index => index >= 0);
-            for (const index of indexes) await this.selectOrderProduct(index, productId);
-            this.showToast("常用箱已更新，当前订单已刷新，可继续录入");
-            return true;
+            return false;
           },
           async openProductStockPolicy(row) {
             const productId = Number(row?.product_id || row?.id || 0);
@@ -35836,6 +35812,10 @@
           },
 	          closeModal() {
 	            if (this.isForcedPassword) return;
+              if (this.modal?.type === "product" && this.productEditReturnContext && this.masterSavePending) {
+                this.showToast("常用箱正在保存，请稍候", true);
+                return;
+              }
               const invoiceSellerReturnCustomerId = this.modal?.type === "invoiceSellers"
                 ? Number(this.invoiceSellerReturnCustomerId || 0)
                 : 0;
@@ -36487,9 +36467,18 @@
                   }
                 }
                 else saved=(await axios.post("/api/master/products", payload)).data;
+                if (this.productEditReturnContext && this.productEditReturnContext.source !== "bom") {
+                  this.productEditReturnContext.saved = true;
+                }
                 if (this.drawingFile) {
                   const form=new FormData(); form.append("file",this.drawingFile);
                   await axios.post(`/api/master/products/${saved.id}/drawings`,form);
+                }
+                if (this.productEditReturnContext && this.productEditReturnContext.source !== "bom") {
+                  this.invalidatePageCache(this.pageSearchCacheKey("products"));
+                  this.productFormSnapshot = null;
+                  await this.returnFromCommonBoxEditor(saved.id, {saved:true});
+                  return true;
                 }
                 try {
                   const refreshed = await this.loadProducts();
@@ -38662,6 +38651,7 @@
           </div>
         </div>`
       });
+      window.ERPOrderContext?.install(app);
       window.ERPWorkspace?.install(app);
       window.ERPPdfWorkspace?.install(app);
       window.ERPPurchaseWorkspace?.install(app);

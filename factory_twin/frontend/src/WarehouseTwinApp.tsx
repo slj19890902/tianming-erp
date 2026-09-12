@@ -1725,7 +1725,7 @@ function StocktakeProductChoices({ items, selectedId, onSelect }: { items: Produ
 export function WarehouseTwinApp() {
   const query = useMemo(() => new URLSearchParams(window.location.search), []);
   const embedded = query.get("embedded") === "1";
-  const traceReadOnly = query.get("readonly") === "1" && query.get("source") === "order_trace";
+  const traceReadOnly = query.get("readonly") === "1" && (query.get("source") === "order_trace" || ["order-context", "pdf-order"].includes(query.get("source") || ""));
   const [floorCode, setFloorCode] = useState<WarehouseOperationalFloorCode>(() => {
     const requested = query.get("floor")?.toUpperCase();
     return isWarehouseOperationalFloorCode(requested) ? requested : "3F";
@@ -1776,7 +1776,7 @@ export function WarehouseTwinApp() {
   });
   const [traceFocusedLotId, setTraceFocusedLotId] = useState<number | null>(null);
   const [traceDeepLinkMessage, setTraceDeepLinkMessage] = useState(
-    traceReadOnly ? "订单追溯只读定位：正在核对实际位置和成品批次…" : ""
+    traceReadOnly ? "订单库存定位：正在核对实际货位和产品…" : ""
   );
   const [areaInventorySearch, setAreaInventorySearch] = useState("");
   const [areaInventoryDetailsOpen, setAreaInventoryDetailsOpen] = useState(false);
@@ -2052,7 +2052,7 @@ export function WarehouseTwinApp() {
     setMapMode((current) => traceReadOnly
       ? "lookup"
       : current === "move" || (current === "planning" && (pendingAreaPolicyEdit || pendingRackEdit)) ? current : "lookup");
-    setSearchPanelOpen(true);
+    setSearchPanelOpen(!traceReadOnly);
     setLocationEditMode(false);
     setAreaPolicyEditMode(false);
     setFloor1CandidatePlan(null);
@@ -2689,7 +2689,7 @@ export function WarehouseTwinApp() {
   const rackSearchLotIds = useMemo(() => focusedSearchProductKey
     ? (focusedSearchProduct?.items || (focusedSearchItem ? [focusedSearchItem] : [])).map((item) => item.lot_id)
     : [], [focusedSearchProductKey, focusedSearchProduct, focusedSearchItem]);
-  const searchHighlightItems = (focusedSearchProduct?.items || searchResponse?.items || [])
+  const searchHighlightItems = (focusedSearchProduct?.items || (focusedSearchProductKey && focusedSearchItem ? [focusedSearchItem] : searchResponse?.items) || [])
     .filter((item) => inventoryHasPhysicalQuantity(item));
   const highlightedAreaCodes = useMemo(
     () => searchHighlightAreaCodes(searchHighlightItems, floorCode),
@@ -3482,11 +3482,18 @@ export function WarehouseTwinApp() {
     }
     if (pendingLotId !== null) {
       const targetLot = selectedLocationItems.find((item) => item.lot_id === pendingLotId);
-      if (targetLot) {
+      if (targetLot && inventoryHasPhysicalQuantity(targetLot)) {
         setTraceFocusedLotId(pendingLotId);
         setLocationItemsExpanded(true);
+        setSidebarLabelLotId(pendingLotId);
+        const hit = { ...targetLot, floor_code:floorCode, location_id:location.location_id,
+          location_name:employeeLocationName(location), area_code:location.area_code,
+          position_status:location.position_status } as SearchItem;
+        setFocusedSearchItem(hit);
+        setFocusedSearchProductKey(searchProductKey(hit));
+        setRackFocusId(searchRackForLocation(location, visualLocations, layout.racks)?.id || null);
         setTraceDeepLinkMessage(
-          `已定位 ${employeeLocationName(location)} · 批次 ${targetLot.lot_number || pendingLotId} · ${formatNumber(inventoryLabelQuantity(targetLot))} ${inventoryUnitLabel(targetLot.unit)}`
+          `黄色标记为当前货位 · ${employeeLocationName(location)} · ${targetLot.inventory_code || targetLot.product_name || "当前产品"} · ${formatNumber(inventoryLabelQuantity(targetLot))} ${inventoryUnitLabel(targetLot.unit)}`
         );
       } else if (traceReadOnly) {
         setTraceDeepLinkMessage("已定位原库位，但指定成品批次已移位、清零，或当前账号无权查看。请返回订单追溯刷新后重试。");
@@ -6218,9 +6225,9 @@ export function WarehouseTwinApp() {
         <button type="button" className={floorCode === "3F" ? "active" : ""} onClick={() => switchWarehouseFloor("3F")}><b>3F</b><span>成品仓库</span></button>
         <button type="button" className={floorCode === "4F" ? "active" : ""} onClick={() => switchWarehouseFloor("4F")}><b>4F</b><span>成品仓库</span></button>
       </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><span>{selectedAreaVisibleAreaMm2 ? `${(selectedAreaVisibleAreaMm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorCode === "4F" ? floor4CalibrationMode ? `${floorTitle} · 正在重新校正货梯位置与朝向` : floor4CalibrationApplied ? `${floorTitle} · 已与 3F 货梯对齐` : `${floorTitle} · 扫描规划 / 待现场标定，尚未启用正式作业` : `${floorTitle} · 正式仓库作业层`}</p></div>
-      <div className="twin-command-status"><span className="live">{traceReadOnly ? "订单追溯 · 只读定位" : mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : layoutMapToolsOpen ? "区域规划 · 调整地图" : advancedAreaMaintenanceOpen ? "区域规划 · 整理货位/货架" : "区域规划 · 核对区域" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
+      <div className="twin-command-status"><span className="live">{traceReadOnly ? (query.get("source") === "order_trace" ? "订单追溯 · 只读定位" : "订单库存 · 只读定位") : mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : layoutMapToolsOpen ? "区域规划 · 调整地图" : advancedAreaMaintenanceOpen ? "区域规划 · 整理货位/货架" : "区域规划 · 核对区域" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
       <nav className="twin-command-links" aria-label="仓库账目">
-        <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>
+        {!traceReadOnly && <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>}
       </nav>
     </header>
 
@@ -6233,7 +6240,7 @@ export function WarehouseTwinApp() {
         <input aria-label="全仓查货" placeholder="全仓查货：客户 / 编码 / 名称 / 规格" value={search} onFocus={() => setSearchPanelOpen(true)} onChange={event => {setSearch(event.target.value);setSearchPanelOpen(true);setFocusedSearchItem(null);setFocusedSearchProductKey(null);setPendingRackSearchLocationId(null);setPendingLocationId(null);setPendingAreaCode(null);}} />
         <button type="button" aria-expanded={searchPanelOpen} onClick={() => setSearchPanelOpen(value => !value)}>{searchPanelOpen ? "收起结果" : "查找"}</button>
       </div>
-      <nav className="twin-top-ledger" aria-label="库存账目"><a href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a></nav>
+      {!traceReadOnly && <nav className="twin-top-ledger" aria-label="库存账目"><a href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a></nav>}
       <div className="twin-operation-modes" role="tablist" aria-label="仓库地图操作模式">
         {mapMode === "planning" && keyboardLocationEditActive && <button type="button" disabled={locationEditBusy || activeLocationDraftCount > 0} onClick={() => { setKeyboardLocationEditActive(false); locationNudgeRef.current = null; setLocationEditMessage("货位调整已完成；当前显示已应用位置。"); }}>完成货位调整</button>}
         {mapMode !== "lookup" && <button type="button" onClick={returnToLookupMode}>结束操作</button>}
@@ -6732,7 +6739,7 @@ export function WarehouseTwinApp() {
             const stocktakeBlockReason = mapMode === "move" && moveAction === "stocktake"
               ? selectedLocationStocktakeBlockReason || stocktakeDecreaseBlockReason(item)
               : null;
-            return <article className={`twin-location-item ${stocktakeLotId === item.lot_id ? "correction-selected" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`}>
+            return <article className={`twin-location-item ${traceFocusedLotId === item.lot_id ? "order-location-current" : ""} ${stocktakeLotId === item.lot_id ? "correction-selected" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`}>
               <InventoryLabelSummary item={item} onLabel={() => setSidebarLabelLotId((current) => current === item.lot_id ? null : item.lot_id)} expanded={Boolean(sidebarExpandedLots[item.lot_id])} onDetails={() => setSidebarExpandedLots((current) => ({ ...current, [item.lot_id]: !current[item.lot_id] }))} />
               {sidebarLabelLotId === item.lot_id && <div className="twin-sidebar-product-label"><b>产品标签</b><div>{employeeCustomerName(item)} · {item.product_name}</div><strong>{item.inventory_code}</strong><div>{item.specification} · {formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</div></div>}
               {sidebarExpandedLots[item.lot_id] && <ShelfLotHistory lotId={item.lot_id} load={requestJson} />}

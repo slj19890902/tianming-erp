@@ -1,5 +1,10 @@
 # Codex 项目交接
 
+## 2026-09-12 v0.22.379 订单补全资料与货位返回
+
+- 正式代码6fccf676 / mq0912，20260912_160939发布计划completed；15项Python、14项Node、隔离Chrome与构建通过，24项正式只读入口/资源/RBAC检查通过，无正式业务事实写入。常用箱编辑返回保留原单数量/价格/选择，库存位置打开精确格位和标签。详见docs/order_context_links_delivery_20260912.md及NAS回执20260912-v379-订单补全资料与货位往返.md；正式页面待管理员人工验收。
+- NAS latest、完整Setup及D:/TianmingERP bootstrap为379，签名包SHA1177b3cd60c051cac175c5e3943b21fd37f84dbe5302c419a5df7971c1620b7a；助手EXE沿用378。本次全程Manager锁，未接入state/marker，preferences不变；下一任务必须实时复核。现场首次接入因开发依赖目录链接失败，原服务经本次门禁已恢复；该链接与容量问题由DESKTOP015 v380处理，不让用户在378助手重复接入，不删除链接或旧演练文件。
+
 ## 2026-09-12 DESKTOP014 v0.22.378 首次接入脚本兼容
 
 - 正式18ffb2ca / mq0912；release_runtime_20260912_155232.json completed，正式库SHA前后一致，LAN/public健康200，NAS latest及完整安装器378同步。39项定向和完整EXE真实子进程自检通过。详见docs/tasks/DESKTOP014_FIRST_SETUP_POWERSHELL_20260912.md及同名NAS回执。

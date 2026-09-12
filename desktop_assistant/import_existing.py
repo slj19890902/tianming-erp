@@ -14,12 +14,23 @@ COPY_TREES = (('data', 'data'), ('static/uploads', 'legacy_uploads'),
               ('factory_twin/data', 'factory_twin_data'))
 
 
+def excluded_source_path(source, path):
+    try:
+        relative = Path(path).relative_to(source)
+    except ValueError:
+        return False
+    if any(p in {'backups', '__pycache__'} for p in relative.parts):
+        return True
+    if any(relative.is_relative_to('data/' + name)
+           for name in ('release_rehearsals', 'release_rehearsal')):
+        return True
+    return (relative.is_relative_to('data/work')
+            and any(p.casefold() == 'node_modules' for p in relative.parts[2:]))
+
+
 def _copy_ignore(source, directory, names):
     """One policy for preflight and copy; do not follow ignored tool dependencies."""
-    relative = Path(directory).relative_to(source)
-    ignored = {name for name in names if name in {'backups', '__pycache__'}}
-    if relative.is_relative_to('data/work'):
-        ignored.update(name for name in names if name.casefold() == 'node_modules')
+    ignored = {name for name in names if excluded_source_path(source, Path(directory) / name)}
     for name in set(names) - ignored:
         _reject_link(source, Path(directory) / name)
     return ignored
@@ -109,6 +120,8 @@ def _import_locked(manager, source, package):
             path = Path(value)
             if not path.is_absolute():
                 path = source / path
+            if excluded_source_path(source, path):
+                raise ValueError('配置引用了不随程序接入的开发或备份目录：' + key)
             try:
                 rel = path.resolve().relative_to(source).as_posix()
             except ValueError:

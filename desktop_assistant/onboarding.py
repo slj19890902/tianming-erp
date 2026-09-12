@@ -8,7 +8,7 @@ import subprocess
 import uuid
 
 from desktop_assistant.storage import database_info, sha, write_json
-from desktop_assistant.import_existing import _import_locked, check_source_data
+from desktop_assistant.import_existing import _import_locked, check_source_data, excluded_source_path
 from desktop_assistant.preflight import inspect
 from desktop_assistant.windows import run_maintenance_powershell
 
@@ -98,6 +98,8 @@ def check_source_environment(source):
         if key.startswith('ERP_') and key.endswith(('_PATH', '_DIR', '_FILE')) and key != 'ERP_BACKUP_DIR':
             path = Path(value)
             path = path if path.is_absolute() else source / path
+            if excluded_source_path(source, path):
+                raise ValueError('原配置引用开发或备份目录：' + key + '；尚未停服')
             try:
                 rel = path.resolve().relative_to(source).as_posix()
             except ValueError:
@@ -149,7 +151,7 @@ def onboard(manager, source, package, password, nas):
         before = database_info(database)
         if before['revision'] != release['revision']:
             raise ValueError('原ERP数据版本与安装包不同，请更新安装包后再接入；尚未停服')
-        checks = inspect(database, source)
+        checks = inspect(database, source, excluded_path=lambda path: excluded_source_path(source, path))
         if any(checks['counts'][key] for key in ('missing', 'external', 'hash_mismatch')):
             raise ValueError('原ERP附件尚不满足完整备份条件，尚未停服')
         # A verified, consistent local point-in-time copy exists BEFORE stopping.

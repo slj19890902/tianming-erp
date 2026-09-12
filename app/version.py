@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.372"
-APP_VERSION_NAME = "工厂电脑自主备份停服与首次接入"
+APP_VERSION = "v0.22.373"
+APP_VERSION_NAME = "员工密码规则简化"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2811,6 +2811,9 @@ _V022371_CHANGES = APP_CHANGES
 _V022371_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["工厂助手可启动ERP、完整备份后停服，夜间任务不会重新启动人工停止的ERP。", "首次设置备份后可检查并接入原ERP；接入需独立目录、匹配签名程序、受原发布门禁保护的停服、完整备份，旧目录不再重复启动或发布。", "更新目录与备份目录可分别选择并记住；更新沿用签名校验、备份和迁移演练。无新增数据库迁移。"]
 APP_VERIFICATION_STEPS = ["在工厂电脑页先设置备份，再选择原ERP整个文件夹首次接入；接入完成核对订单、库存和附件。", "使用备份后停止ERP，确认保持停止；点启动并打开ERP恢复；更新时选择含latest.json的已发布更新目录。"]
+
+APP_CHANGES = ["员工密码至少8位，包含英文字母和数字，不强制特殊符号或大小写混合；创建、本人改密和管理员重置共用规则。", "同步修改密码与重置密码页面提示；保留原账号密码、权限、审计及会话失效保护，无数据库迁移。"]
+APP_VERIFICATION_STEPS = ["刷新后打开修改密码，确认显示至少8位字母加数字；可使用全小写或全大写字母配数字。", "管理员重置员工密码时核对相同提示；重置后员工仍按原流程首次登录修改密码。"]
 
 APP_CHANGELOG = [
     *(f"v0.22.371：本次更新｜{item}" for item in _V022371_CHANGES),

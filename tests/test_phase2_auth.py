@@ -159,14 +159,14 @@ def test_user_can_change_own_password_and_must_supply_current_password(
             "/api/auth/password",
             json={
                 "current_password": "wrong-password",
-                "new_password": "NewSecurePass456!",
+                "new_password": "tmAb1234",
             },
         )
         changed = client.put(
             "/api/auth/password",
             json={
                 "current_password": "AdminPass123!",
-                "new_password": "NewSecurePass456!",
+                "new_password": "tmAb1234",
             },
         )
         client.post("/api/auth/logout")
@@ -176,7 +176,7 @@ def test_user_can_change_own_password_and_must_supply_current_password(
         )
         new_login = client.post(
             "/api/auth/login",
-            json={"username": "admin", "password": "NewSecurePass456!"},
+            json={"username": "admin", "password": "tmAb1234"},
         )
 
     assert denied.status_code == 400
@@ -197,7 +197,7 @@ def test_admin_can_reset_account_password_and_non_admin_cannot(auth_context) -> 
         )
         denied = client.put(
             "/api/auth/users/admin/reset-password",
-            json={"new_password": "TemporaryPass789!"},
+            json={"new_password": "TMCD5678"},
         )
         client.post("/api/auth/logout")
         client.post(
@@ -206,12 +206,12 @@ def test_admin_can_reset_account_password_and_non_admin_cannot(auth_context) -> 
         )
         reset = client.put(
             "/api/auth/users/workshop/reset-password",
-            json={"new_password": "TemporaryPass789!"},
+            json={"new_password": "TMCD5678"},
         )
         client.post("/api/auth/logout")
         login = client.post(
             "/api/auth/login",
-            json={"username": "workshop", "password": "TemporaryPass789!"},
+            json={"username": "workshop", "password": "TMCD5678"},
         )
 
     assert denied.status_code == 403
@@ -244,7 +244,7 @@ def test_username_normalization_is_shared_by_create_update_reset_and_login(
             "/api/auth/users",
             json={
                 "username": "　ｎｅｗ－ｕｓｅｒ　",
-                "password": "StrongCreate123!",
+                "password": "tmef1234",
                 "role": "sales",
                 "real_name": "兼容字符用户",
             },

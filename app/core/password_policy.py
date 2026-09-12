@@ -3,7 +3,7 @@ from __future__ import annotations
 import unicodedata
 
 
-MIN_PASSWORD_LENGTH = 12
+MIN_PASSWORD_LENGTH = 8
 MAX_USERNAME_LENGTH = 50
 WEAK_PASSWORDS = frozenset(
     {
@@ -37,14 +37,10 @@ def password_policy_issues(password: str, *, username: str | None = None) -> lis
         issues.append("不能使用弱密码")
     if username and username.strip().lower() in lowered:
         issues.append("不能包含用户名")
-    if not any(character.islower() for character in password):
-        issues.append("至少包含 1 个小写字母")
-    if not any(character.isupper() for character in password):
-        issues.append("至少包含 1 个大写字母")
+    if not any("a" <= character <= "z" or "A" <= character <= "Z" for character in password):
+        issues.append("至少包含 1 个英文字母")
     if not any(character.isdigit() for character in password):
         issues.append("至少包含 1 个数字")
-    if not any(not character.isalnum() for character in password):
-        issues.append("至少包含 1 个符号")
     if len(password.encode("utf-8")) > 72:
         issues.append("UTF-8 编码后不能超过 72 字节")
     return issues

@@ -9055,13 +9055,13 @@
               <div class="field wide"><label>当前密码</label><input class="input" type="password" autocomplete="current-password" v-model="passwordForm.current_password" /></div>
               <div class="field"><label>新密码</label><input class="input" type="password" autocomplete="new-password" v-model="passwordForm.new_password" /></div>
               <div class="field"><label>确认新密码</label><input class="input" type="password" autocomplete="new-password" v-model="passwordForm.confirm_password" /></div>
-              <div class="field wide muted">至少 10 位，并同时包含字母和数字。</div>
+              <div class="field wide muted">至少 8 位，包含字母和数字；无需特殊符号或大小写混合。</div>
             </div>
             <div v-else-if="modal.type === 'resetPassword'" class="form-grid">
               <div class="field wide">正在重置账号：<strong>{{ resetPasswordForm.username }}</strong></div>
               <div class="field"><label>临时密码</label><input class="input" type="password" autocomplete="new-password" v-model="resetPasswordForm.new_password" /></div>
               <div class="field"><label>确认临时密码</label><input class="input" type="password" autocomplete="new-password" v-model="resetPasswordForm.confirm_password" /></div>
-              <div class="field wide muted">重置后，该账号下次登录必须修改密码。</div>
+              <div class="field wide muted">至少 8 位，包含字母和数字；无需特殊符号或大小写混合。重置后，下次登录须修改密码。</div>
             </div>
 
             <!-- PDF 训练样本上传 -->

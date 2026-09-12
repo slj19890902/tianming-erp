@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.373"
-APP_VERSION_NAME = "员工密码规则简化"
+APP_VERSION = "v0.22.374"
+APP_VERSION_NAME = "助手自动备份设置入口修复"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2814,6 +2814,9 @@ APP_VERIFICATION_STEPS = ["在工厂电脑页先设置备份，再选择原ERP�
 
 APP_CHANGES = ["员工密码至少8位，包含英文字母和数字，不强制特殊符号或大小写混合；创建、本人改密和管理员重置共用规则。", "同步修改密码与重置密码页面提示；保留原账号密码、权限、审计及会话失效保护，无数据库迁移。"]
 APP_VERIFICATION_STEPS = ["刷新后打开修改密码，确认显示至少8位字母加数字；可使用全小写或全大写字母配数字。", "管理员重置员工密码时核对相同提示；重置后员工仍按原流程首次登录修改密码。"]
+
+APP_CHANGES = ["助手自动备份设置直接在主窗口展开，NAS路径与恢复密码同页填写，不再先调用Windows文件夹选择器。", "保存时显示检查进度和失败原因；保留旧配置与更新目录，回调错误可见且不记录凭据，无新增迁移或业务数据修改。"]
+APP_VERIFICATION_STEPS = ["打开标题含v0.22.374的新版助手，点击设置每天自动备份，确认直接显示目录和密码输入框。", "核对预填目录，输入并确认恢复密码后保存；成功后按提示首次接入或现在备份。返回不会保存输入。"]
 
 APP_CHANGELOG = [
     *(f"v0.22.371：本次更新｜{item}" for item in _V022371_CHANGES),

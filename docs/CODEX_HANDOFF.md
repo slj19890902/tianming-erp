@@ -5514,3 +5514,7 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 
 ### 2026-09-12 GROUPLOC001 v382
 正式运行009793a0/v0.22.382/mq0912，整组HTTP提交和层级/地图选位；无新DDL/历史回填，保留381分页。独立回执见 docs/group_production_location_delivery_20260912.md。待管理员人工验收；助手默认根目录修复由DESKTOP016接383。
+
+
+## DESKTOP016 2026-09-12 v383 助手启动目录
+正式31632f61/mq0912，release_runtime_20260912_170516.json completed；D:/TianmingERP助手与离线包383已更新，直接双击使用EXE所在目录，真实383窗口已打开，设置保留。无managed marker时仍走原源发布，后续384实时核对并持Manager锁。详情docs/tasks/DESKTOP016_START_ROOT_20260912.md；首次接入待管理员验收。

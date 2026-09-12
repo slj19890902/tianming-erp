@@ -2734,6 +2734,11 @@ def list_temporary_locations(db: Session) -> list[dict]:
                 "is_empty": not occupied,
                 "is_temporary": bool(location.is_temporary),
                 "storage_type": location.storage_type,
+                "map_rack_id": location.map_rack_id,
+                "rack_code": location.rack_code,
+                "rack_display_name": location.rack_display_name,
+                "level_no": location.level_no,
+                "slot_no": location.slot_no,
                 "location_kind": (
                     "temporary" if location.is_temporary else "fixed"
                 ),

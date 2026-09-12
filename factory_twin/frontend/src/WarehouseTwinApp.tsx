@@ -1723,7 +1723,8 @@ function StocktakeProductChoices({ items, selectedId, onSelect }: { items: Produ
 export function WarehouseTwinApp() {
   const query = useMemo(() => new URLSearchParams(window.location.search), []);
   const embedded = query.get("embedded") === "1";
-  const traceReadOnly = query.get("readonly") === "1" && (query.get("source") === "order_trace" || ["order-context", "pdf-order"].includes(query.get("source") || ""));
+  const productionLocationPicker = query.get("source") === "production-location-picker" && query.get("readonly") === "1";
+  const traceReadOnly = query.get("readonly") === "1" && (query.get("source") === "order_trace" || ["order-context", "pdf-order", "production-location-picker"].includes(query.get("source") || ""));
   const [floorCode, setFloorCode] = useState<WarehouseOperationalFloorCode>(() => {
     const requested = query.get("floor")?.toUpperCase();
     return isWarehouseOperationalFloorCode(requested) ? requested : "3F";
@@ -1770,7 +1771,7 @@ export function WarehouseTwinApp() {
   });
   const [traceFocusedLotId, setTraceFocusedLotId] = useState<number | null>(null);
   const [traceDeepLinkMessage, setTraceDeepLinkMessage] = useState(
-    traceReadOnly ? "订单库存定位：正在核对实际货位和产品…" : ""
+    productionLocationPicker ? "选择成品位置：点击地面货位或货架层格，然后确定" : traceReadOnly ? "订单库存定位：正在核对实际货位和产品…" : ""
   );
   const [areaInventorySearch, setAreaInventorySearch] = useState("");
   const [areaInventoryDetailsOpen, setAreaInventoryDetailsOpen] = useState(false);
@@ -6251,7 +6252,7 @@ export function WarehouseTwinApp() {
         </>}
         {!traceReadOnly && canEditLocations && staleLayoutDraft && <button type="button" className="warning" disabled={spatialEditBusy} onClick={rebuildStaleLayoutDraft}>放弃旧草稿并重新规划</button>}
       </div>
-      {traceReadOnly && <div className={`twin-deeplink-message ${traceDeepLinkMessage.includes("无法") || traceDeepLinkMessage.includes("已移位") ? "error" : ""}`} role="status" aria-live="polite">{traceDeepLinkMessage}</div>}
+      {traceReadOnly && <div className={`twin-deeplink-message ${traceDeepLinkMessage.includes("无法") || traceDeepLinkMessage.includes("已移位") ? "error" : ""}`} role="status" aria-live="polite">{productionLocationPicker ? (selectedLocation ? `已选：${employeeLocationName(selectedLocation)} · 点击确定带回生产安排` : "点击地面货位或货架层格，再确定位置") : traceDeepLinkMessage}</div>}
       {(canExecuteWarehouse || canStocktake) && mapMode === "move" && <div className="twin-toolbar-move-actions" role="tablist" aria-label="仓库地图操作类型">
         {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "relocate"} className={moveAction === "relocate" ? "active" : ""} onClick={() => { setMoveAction("relocate"); setWarehouseOperationMessage(moveDrafts.length ? `已切回移动位置；保留 ${moveDrafts.length} 条移货草稿。` : "已切回移动位置。"); }}>移动位置</button>}
         {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "ground"} className={moveAction === "ground" ? "active" : ""} onClick={() => { setMoveAction("ground"); setMoveSource(null); setGroundStorageMessage("先选择楼层和地堆区域，再选择入库产品或转位批次。"); }}>地图存放</button>}
@@ -6671,7 +6672,10 @@ export function WarehouseTwinApp() {
           {warehouseOperationMessage && <div className="twin-location-message">{warehouseOperationMessage}</div>}
         </section>}
         {selectedLocation && <section className="twin-location-card twin-stocktake-compact">
-          {createElement("warehouse-costs", {"location-id": String(selectedLocation.location_id), "revision": String(loading)})}
+          {productionLocationPicker && <button type="button" className="warehouse-label-add" disabled={loading || Boolean(locationDrafts[selectedLocation.location_id]) || selectedLocation.position_status !== "mapped"} onClick={() => {
+            window.parent.postMessage({type:"erp-production-location",token:query.get("picker_token"),location_id:selectedLocation.location_id},window.location.origin);
+          }}>确定此货位</button>}
+          {!productionLocationPicker && createElement("warehouse-costs", {"location-id": String(selectedLocation.location_id), "revision": String(loading)})}
           <div className="twin-location-card-title"><div><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em>
           {!traceReadOnly && canStocktake && !locationEditMode && !(mapMode === "move" && moveAction === "stocktake") && <button type="button" className="warehouse-label-add" disabled={loading || pendingPlacementBusy} onClick={async () => { if(await enterWarehouseMoveMode()) {setMoveAction("stocktake");setMoveSource(null);setMoveDraftTargetLocationId("");} }}>＋ 添加货物</button>}</div>
           <button type="button" className="twin-detail-toggle secondary" aria-expanded={locationDetailOpen} onClick={() => setLocationDetailOpen((current) => !current)}>{locationDetailOpen ? "收起位置与栈板详情" : "位置与栈板详情"}</button>

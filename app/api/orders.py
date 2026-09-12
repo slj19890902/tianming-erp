@@ -7227,6 +7227,8 @@ def _create_order_impl(
                     Order.customer_po == customer_po,
                 )
             ).all()
+            if existing_orders and payload.pdf_import_confirmation is not None:
+                raise HTTPException(409, f"该客户的客户单号 {customer_po} 已录入（ERP订单 {existing_orders[0].order_number}），请查看原订单；未重复生成。")
             incoming_signature = sorted(
                 (
                     resolved_products[index].id,
@@ -7553,6 +7555,7 @@ def _create_order_impl(
                 "item_count": len(payload.items),
                 "total_amount": str(order.total_amount),
                 "source_contract_id": source_contract_id,
+                "source_hash": pdf_safety_claims.get("source_hash") if pdf_safety_claims else None,
             },
         )
         if pdf_safety_override_reasons:

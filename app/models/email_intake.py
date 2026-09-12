@@ -38,6 +38,18 @@ class EmailPdfRecognition(Base):
     recognized_at: Mapped[datetime] = mapped_column(DateTime)
 
 
+class EmailPdfDisposition(Base):
+    __tablename__ = 'email_pdf_dispositions'
+    __table_args__ = (CheckConstraint("action IN ('processed','deleted','duplicate')", name='ck_email_pdf_disposition_action'),)
+    sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attachment_id: Mapped[int] = mapped_column(ForeignKey('email_intake_attachments.id'))
+    action: Mapped[str] = mapped_column(String(20))
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True)
+    handled_at: Mapped[datetime] = mapped_column(DateTime)
+    customer_po: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    order_number: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
 class EmailIntakeMessage(Base):
     __tablename__ = 'email_intake_messages'
     __table_args__ = (UniqueConstraint('mailbox_key', 'uid_validity', 'uid', name='uq_email_intake_uid'),)

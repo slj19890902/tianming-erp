@@ -42,7 +42,7 @@ def test_filtered_sync_downloads_only_exact_sender_and_uses_readonly_protocol(mo
         def uid(self, command, *args):
             calls.append((command, args))
             if command == 'search':
-                assert args == (None, 'FROM', '"customer@example.com"')
+                assert args == (None, 'FROM', '"customer@example.com"', 'SINCE', '01-Sep-2026')
                 return 'OK', [b'1 2']
             if 'HEADER.FIELDS' in args[1]:
                 return 'OK', [(b'1 (UID 1)', b'From: customer@example.com\r\n\r\n'),

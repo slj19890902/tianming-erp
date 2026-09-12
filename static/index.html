@@ -7064,6 +7064,10 @@
                 <span v-else-if="!orderImportDrafts.length" class="muted">{{ emailQueueSummary.recognizing ? '后台正在识别，完成后点击重新读取。' : '当前没有待处理PDF。' }}</span>
                 <button class="btn" :disabled="orderImportBatch.status==='recognizing'" @click="openEmailQueue">重新读取</button>
               </div>
+              <details v-if="emailQueueMode && emailQueueExcluded.length" style="margin-bottom:12px">
+                <summary>已排除 {{ emailQueueExcluded.length }} 份（已录入、已处理或早于2026-09-01，不计入红标）</summary>
+                <div v-for="entry in emailQueueExcluded" style="padding:4px 0">{{ entry.filename }} · {{ ({duplicate:'同一客户单号已录入',processed:'已人工处理或已保存',deleted:'已删除',before_start:'早于2026-09-01'})[entry.reason] }}<span v-if="entry.customer_po"> · {{ entry.customer_po }}</span><span v-if="entry.order_number"> · ERP订单 {{ entry.order_number }}</span></div>
+              </details>
               <div v-if="!emailQueueMode" class="form-grid" style="margin-bottom:12px">
                 <div class="field wide">
                   <label>上传客户采购订单 PDF（可多选）</label>
@@ -7075,6 +7079,11 @@
                 <span class="muted" v-if="orderImportBatch.files.length">已选择 {{ orderImportBatch.files.length }} 个文件</span>
               </div>
               <div v-for="(draft,draftIndex) in orderImportDrafts" :key="draft.file_hash || draft.source_name" v-show="!emailQueueMode || draft.email_queue_status === emailQueueFilter" class="order-group-detail-card" style="margin-bottom:12px">
+                <div v-if="emailQueueMode && draft.email_attachment_id" class="toolbar-group" style="margin-bottom:8px">
+                  <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'processed')">已人工处理</button>
+                  <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'duplicate')">重复，不再提醒</button>
+                  <button class="btn small danger" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'deleted')">删除</button>
+                </div>
                 <fieldset
                   class="pdf-import-draft-fields"
                   :disabled="isImportDraftLocked(draft)"
@@ -10060,7 +10069,7 @@
             systemUsers: [], systemSection:"basic",
             emailSettings:{configured:false,version:0,sender_addresses:[],sync_interval_minutes:5,automatic_enabled:false},
             emailAuthorizationCode:"", emailSenderText:"", emailSettingsSaving:false,
-            emailQueueCount:0, emailQueueTimer:null, emailQueueMode:false, emailQueueError:"", emailQueueFilter:"ready", emailQueueSummary:{},
+            emailQueueCount:0, emailQueueTimer:null, emailQueueMode:false, emailQueueError:"", emailQueueExcluded:[], emailQueueFilter:"ready", emailQueueSummary:{},
             systemSectionLoaded:{basic:false,layout:false,print:false,backup:false,pdf:false},
             systemSectionLoading:{basic:false,layout:false,print:false,backup:false,pdf:false},
             systemSectionErrors:{basic:"",layout:"",print:"",backup:"",pdf:""},
@@ -30341,17 +30350,32 @@
             try { const {data}=await axios.get("/api/email-intake/queue/summary"); this.emailQueueCount=data.pending||0; this.emailQueueSummary=data; }
             catch(error) { /* Keep last successful count during a temporary connection failure. */ }
           },
+          async handleEmailPdf(draft,action) {
+            if (this.loading || draft._email_handling) return;
+            if (action === 'deleted' && !window.confirm('从待处理列表删除此PDF？以后收到相同附件也不会再次提醒，原邮件仍保留。')) return;
+            draft._email_handling=true;
+            try {
+              await axios.post(`/api/email-intake/queue/${draft.email_attachment_id}/disposition`,{sha256:draft.file_hash,action});
+              this.orderImportDrafts=this.orderImportDrafts.filter(d=>d.file_hash!==draft.file_hash);
+              this.emailQueueExcluded.push({filename:draft.source_name,reason:action,customer_po:draft.customer_po});
+              await this.refreshEmailQueueCount();
+              this.showToast('已处理，相同附件不会再次进入待处理列表');
+            } catch(e) {this.showToast(this.errorMessage(e));}
+            finally {draft._email_handling=false;}
+          },
           async openEmailQueue() {
             if (!this.canCreateOrders || !["admin","boss"].includes(this.user?.role)) return;
             this.openOrderPdfImport();
             this.emailQueueMode=true;
             this.emailQueueFilter="ready";
             this.emailQueueError="";
+            this.emailQueueExcluded=[];
             this.orderImportBatch.status="recognizing";
             try {
               const {data}=await axios.post("/api/email-intake/queue/preview", null, {responseType:"json"});
               if (!data || !Array.isArray(data.drafts)) throw new Error("订单列表返回异常，请重新读取。");
               if (this.modal?.type !== "orderPdfImport") return;
+              this.emailQueueExcluded=Array.isArray(data.excluded)?data.excluded:[];
               this.orderImportDrafts=(data.drafts||[]).map(draft=>this.prepareImportDraftReminderState({...draft,confirmed:false,_save_status:"idle",_save_message:"",items:(draft.items||[]).map(item=>this.preparePdfImportItem(item))}));
               await this.loadOrderImportReminders();
               if (this.modal?.type !== "orderPdfImport") return;

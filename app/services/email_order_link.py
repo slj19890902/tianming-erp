@@ -30,6 +30,10 @@ def prepare(db, payload, user, claims):
             raise HTTPException(409, '此邮件附件的该客户单号已导入，内容有变化，请查看原订单处理改单')
         if link.order_id is None:
             raise HTTPException(409, '此附件关联订单已删除，请先人工核对来源记录')
+    if link is None:
+        from app.models.email_intake import EmailPdfDisposition
+        if db.get(EmailPdfDisposition, attachment.sha256):
+            raise HTTPException(409, '此PDF已处理或删除，请重新读取待处理列表')
     return {'import_key': key, 'payload_hash': digest, 'attachment_id': attachment.id, 'actor_id': user.id}, link
 
 

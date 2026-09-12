@@ -34,6 +34,11 @@ class StateChange(BaseModel):
     status: str = Field(pattern='^(pending|ignored)$')
 
 
+class PdfDispositionChange(BaseModel):
+    sha256: str = Field(pattern="^[a-f0-9]{64}$")
+    action: str = Field(pattern="^(processed|deleted|duplicate)$")
+
+
 class PdfDraftChange(BaseModel):
     expected_version: int = Field(ge=0)
     draft: dict
@@ -54,6 +59,7 @@ def _settings_payload(row):
     return {
         'account': service.ACCOUNT,
         'folder': '收件箱',
+        'order_start_date': '2026-09-01',
         'configured': row is not None,
         'sender_filter_configured': bool(row and row.sender_addresses_json is not None),
         'sender_addresses': json.loads(row.sender_addresses_json) if row and row.sender_addresses_json is not None else [],
@@ -242,13 +248,17 @@ def _cached_queue_draft(db, attachment, cached, user):
 
 @router.post('/queue/preview')
 async def queue_preview(response: Response, db: Session = Depends(get_db), user: User = Depends(allowed)):
-    from app.services.email_pdf_queue import pending_attachments, classify
+    from app.services.email_pdf_queue import queue_entries, classify
     from app.models.email_intake import EmailPdfRecognition
     from app.api.orders import _match_pdf_preview_for_user, _finalize_pdf_preview_for_user
     response.headers['Cache-Control'] = 'private, no-store'
     drafts = []
     per_state = {"ready": 0, "improve": 0}
-    remaining = pending_attachments(db)
+    entries = queue_entries(db)
+    remaining = [e['attachment'] for e in entries if e['state'] == 'pending']
+    excluded = [{'filename': e['attachment'].filename, 'reason': e['state'],
+                 'customer_po': e['customer_po'], 'order_number': e['order_number']}
+                for e in entries if e['state'] != 'pending']
     for attachment in remaining:
         cached = db.get(EmailPdfRecognition, attachment.sha256)
         if cached is None:
@@ -259,7 +269,7 @@ async def queue_preview(response: Response, db: Session = Depends(get_db), user:
         if per_state[state] < 20:
             per_state[state] += 1
             drafts.append(draft)
-    return {'drafts': drafts, 'pending': len(remaining)}
+    return {'drafts': drafts, 'pending': len(remaining), 'excluded': excluded, 'order_start_date': '2026-09-01'}
 
 
 @router.post('/queue/{attachment_id}/retry')
@@ -278,6 +288,28 @@ def retry_queue_pdf(attachment_id: int, db: Session = Depends(get_db), user: Use
     draft = _cached_queue_draft(db, attachment, cached, user)
     draft['email_queue_status'] = classify(draft)
     return draft
+
+
+@router.post('/queue/{attachment_id}/disposition')
+def handle_queue_pdf(attachment_id: int, payload: PdfDispositionChange,
+                     db: Session = Depends(get_db), user: User = Depends(allowed)):
+    from app.models.email_intake import EmailPdfDisposition
+    from app.services.email_pdf_queue import record_disposition
+    attachment = db.get(EmailIntakeAttachment, attachment_id)
+    if not attachment:
+        raise HTTPException(404, '附件不存在')
+    if not attachment.filename.lower().endswith('.pdf'):
+        raise HTTPException(422, '此入口只处理PDF附件')
+    if attachment.sha256 != payload.sha256:
+        raise HTTPException(409, '附件已变化，请刷新')
+    record = db.get(EmailPdfDisposition, attachment.sha256)
+    if record is None:
+        record = record_disposition(db, attachment, payload.action, user)
+    if record.action != payload.action:
+        db.rollback()
+        raise HTTPException(409, '此附件已处理，请重新读取列表')
+    db.commit()
+    return {'saved': True, 'action': record.action}
 
 
 @router.get('/{message_id}')

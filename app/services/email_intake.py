@@ -155,7 +155,8 @@ def sync_inbox(db, user, factory=imaplib.IMAP4_SSL):
         candidate_uids = set()
         for address in addresses or [None]:
             criteria = ('FROM', '"' + address + '"') if address else ('ALL',)
-            status, values = client.uid('search', None, *criteria)
+            from app.services.email_pdf_queue import INBOX_SINCE
+            status, values = client.uid('search', None, *criteria, 'SINCE', INBOX_SINCE)
             if status != 'OK':
                 raise ValueError('邮件列表读取失败，请重试')
             candidate_uids.update(int(uid) for uid in (values[0] or b'').split())

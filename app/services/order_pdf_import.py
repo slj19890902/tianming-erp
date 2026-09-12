@@ -2999,6 +2999,8 @@ def mark_order_duplicate(db: Session, draft: dict) -> dict:
     customer_po = (draft.get("customer_po") or "").strip()
     signature = _lines_signature(draft.get("items", []))
     result = {**draft, "lines_signature": signature}
+    for key in ("duplicate_status", "duplicate_reason", "duplicate_order_id", "duplicate_order_number"):
+        result.pop(key, None)
     if not customer_id or not customer_po:
         return result
     orders = db.scalars(
@@ -3006,30 +3008,21 @@ def mark_order_duplicate(db: Session, draft: dict) -> dict:
         .where(Order.customer_id == customer_id, Order.customer_po == customer_po)
         .options(joinedload(Order.items))
     ).unique().all()
-    for order in orders:
-        existing = [
-            {
-                "product_code": item.snapshot_product_code,
-                "specification": item.snapshot_spec,
-                "quantity": item.quantity,
-                "unit_price": str(item.unit_price),
-            }
-            for item in order.items
-        ]
-        if _lines_signature(existing) == signature:
-            return {
-                **result,
-                "duplicate_status": "duplicate_skipped",
-                "duplicate_reason": "系统中已存在相同客户、客户单号和明细的订单",
-                "duplicate_order_id": order.id,
-            }
     if orders:
-        result["duplicate_status"] = "duplicate_candidate"
-        result["duplicate_reason"] = "系统中存在相同客户单号，但订单明细不同，请人工确认"
+        order = orders[0]
+        result.update(
+            duplicate_status="duplicate_skipped",
+            duplicate_reason=f"该客户的客户单号 {customer_po} 已录入（ERP订单 {order.order_number}），已跳过重复录入；如需修订，请编辑原订单。",
+            duplicate_order_id=order.id,
+            duplicate_order_number=order.order_number,
+        )
+    else:
+        for key in ("duplicate_status", "duplicate_reason", "duplicate_order_id", "duplicate_order_number"):
+            result.pop(key, None)
     return result
 
 
-def match_import_draft(db: Session, draft: dict, customer_id: int | None = None) -> dict:
+def resolve_import_customer(db: Session, draft: dict, customer_id: int | None = None) -> dict:
     route = draft.get("customer_route") if isinstance(draft.get("customer_route"), dict) else {}
     if customer_id is not None:
         match_status, matched_customer_id, candidates = "matched", customer_id, []
@@ -3058,6 +3051,11 @@ def match_import_draft(db: Session, draft: dict, customer_id: int | None = None)
         match_status, matched_customer_id, candidates = _customer_match(
             db, draft.get("customer_name_raw") or draft.get("customer_name")
         )
+    return match_status, matched_customer_id, candidates
+
+
+def match_import_draft(db: Session, draft: dict, customer_id: int | None = None) -> dict:
+    match_status, matched_customer_id, candidates = resolve_import_customer(db, draft, customer_id)
     result = rematch_draft_items(db, draft, matched_customer_id)
     result.update(
         customer_match_status=match_status,

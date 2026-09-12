@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.369"
-APP_VERSION_NAME = "备库收料生产留痕与管理员安排"
+APP_VERSION = "v0.22.370"
+APP_VERSION_NAME = "邮箱待处理去重与已处理归档"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2796,7 +2796,15 @@ _V022368_STEPS = APP_VERIFICATION_STEPS
 APP_CHANGES = ["备库采购与分批收料在4生产持续留痕，已有库存直接关联，不重复入库。", "管理员可保留备料或部分安排待生产；预占、取消、实际产出入库保持数量守恒与位置追溯。", "新增备库生产安排与不可变操作流水，保留普通订单自动生产及原收料、库存事实。"]
 APP_VERIFICATION_STEPS = ["进入4生产的备库安排，搜索000205，核对两批实收和原库存位置。", "按真实用途保留备料或安排生产；实际完成时填写成品数量和实际位置，核对材料余量与成品。"]
 
+_V022369_CHANGES = APP_CHANGES
+_V022369_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["邮箱只读取2026-09-01起邮件，旧订单退出待处理和红标。", "同客户同客户单号已录入即跳过，显示原ERP订单号，不再误报规格原文与生产规格为订单明细不同。", "邮箱PDF可标记已人工处理、重复或删除；相同附件再次收取不再提醒，保留原邮件和业务事实。"]
+APP_VERIFICATION_STEPS = ["刷新后进入邮箱收单，核对待处理及已排除记录，已录入客户单号不应重复出现。", "对已处理PDF点击已人工处理，重新读取确认不再进入待保存和待改进；删除时只确认一次。"]
+
+
 APP_CHANGELOG = [
+    *(f"v0.22.369：本次更新｜{item}" for item in _V022369_CHANGES),
+    *(f"v0.22.369：如何验证｜{item}" for item in _V022369_STEPS),
     *(f"v0.22.368：本次更新｜{item}" for item in _V022368_CHANGES),
     *(f"v0.22.368：如何验证｜{item}" for item in _V022368_STEPS),
     *(f"v0.22.367：本次更新｜{item}" for item in _V022367_CHANGES),

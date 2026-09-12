@@ -5511,3 +5511,6 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 
 ## DESKTOP015 2026-09-12 v380 首次接入目录预检
 正式92a94609/mq0912，release_runtime_20260912_162350.json completed。链接预检前移，忽略开发依赖和演练副本，30项定向与885附件核对通过。NAS完整包及D:/TianmingERP助手/bootstrap已380，备份设置保留；尚无managed marker，原服务仍在D:/纸箱厂erp软件搭建。管理员手动接入待验收，后续381必须实时复核marker并串行Manager锁。详见docs/tasks/DESKTOP015_IMPORT_LINKS_20260912.md。
+
+### 2026-09-12 GROUPLOC001 v382
+正式运行009793a0/v0.22.382/mq0912，整组HTTP提交和层级/地图选位；无新DDL/历史回填，保留381分页。独立回执见 docs/group_production_location_delivery_20260912.md。待管理员人工验收；助手默认根目录修复由DESKTOP016接383。

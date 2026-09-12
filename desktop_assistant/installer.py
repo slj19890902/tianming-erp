@@ -64,7 +64,7 @@ def main():
         return
     root = tk.Tk()
     root.withdraw()
-    if not messagebox.askokcancel('安装天明ERP助手', '安装离线ERP运行环境及独立更新恢复助手。\n已有ERP请保留原目录，安装完成后选择接入或NAS恢复。'):
+    if not messagebox.askokcancel('安装天明ERP助手', '安装天明ERP助手。\n工厂电脑用于日常打开、备份和更新；备用新电脑用于从备份取回数据。'):
         return
     parent = filedialog.askdirectory(title='选择安装位置（将在其中新建TianmingERP目录）',
                                     initialdir=os.environ['LOCALAPPDATA'])
@@ -78,7 +78,7 @@ def main():
             update_launcher(Path(sys._MEIPASS), destination)
         else:
             destination = install(Path(sys._MEIPASS), destination)
-        messagebox.showinfo('安装完成', '助手已就绪。已有系统请点击检查更新；首次使用请选择接入原ERP或从NAS恢复。')
+        messagebox.showinfo('安装完成', '助手已就绪。\n工厂正在使用的电脑：选择“工厂电脑”。\n工厂损坏时接替的新电脑：选择“备用新电脑”，按4步操作。')
         subprocess.Popen([str(destination / 'TianmingERP-Assistant.exe'), '--root', str(destination)],
                          creationflags=subprocess.CREATE_NO_WINDOW)
     except Exception as error:

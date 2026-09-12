@@ -42,50 +42,133 @@ class App:
         self.events = queue.Queue()
         self.busy = False
         window.protocol('WM_DELETE_WINDOW', self.close)
-        window.title('天明ERP助手 · 更新、备份与恢复')
-        window.geometry('760x680')
-        window.minsize(700, 640)
-        box = ttk.Frame(window, padding=24)
+        window.title('天明ERP助手')
+        window.geometry('800x740')
+        ttk.Style(window).configure('.', font=('Microsoft YaHei UI', 10))
+        window.minsize(780, 720)
+        box = ttk.Frame(window, padding=20)
         box.pack(fill='both', expand=True)
-        ttk.Label(box, text='天明 ERP 助手', font=('Microsoft YaHei UI', 21, 'bold')).pack(anchor='w')
-        ttk.Label(box, text='程序打不开时，也可以在这里备份、回退和恢复。').pack(anchor='w', pady=(8, 18))
+        ttk.Label(box, text='天明 ERP 助手', font=('Microsoft YaHei UI', 20, 'bold')).pack(anchor='w')
+        ttk.Label(box, text='先选择这台电脑的用途，再按页面提示操作。').pack(anchor='w', pady=(4, 8))
         self.status = tk.StringVar()
-        ttk.Label(box, textvariable=self.status, wraplength=690).pack(anchor='w', pady=8)
+        ttk.Label(box, textvariable=self.status, wraplength=740).pack(anchor='w', pady=(0, 8))
         self.buttons = []
-        for text, action in [('打开ERP', self.open_erp), ('检查并更新', self.update),
-                             ('检查并恢复中断升级', self.recover_update),
-                             ('回退到上一个版本', self.rollback), ('立即完整备份到NAS', self.backup),
-                             ('从NAS恢复到本机空安装', self.restore), ('首次接入原ERP（只读复制）', self.import_old),
-                             ('设置本机局域网访问地址', self.network),
-                             ('设置DeepSeek密钥', self.configure_ai),
-                             ('设置NAS与每天23点备份', self.configure)]:
-            button = ttk.Button(box, text=text, command=action)
-            button.pack(fill='x', pady=4)
-            self.buttons.append(button)
-        self.log = tk.StringVar(value='等待操作。首次安装请选择“恢复”或“接入原ERP”。')
-        ttk.Label(box, textvariable=self.log, wraplength=690).pack(anchor='w', pady=12)
-        ttk.Label(box, text='备份任务要求电脑开机且备份账号保持登录；锁屏可以，关机/注销不能执行。\n'
-                  '缺失备份将在下次登录补做；失败每小时重试。换机后需重新设置备份口令和NAS访问。',
-                  wraplength=690).pack(anchor='w', pady=8)
+        self.action_buttons = []
+        self.tabs = ttk.Notebook(box)
+        self.tabs.pack(fill='x')
+        factory = ttk.Frame(self.tabs, padding=12)
+        standby = ttk.Frame(self.tabs, padding=12)
+        self.tabs.add(factory, text='  工厂电脑 · 日常使用  ')
+        self.tabs.add(standby, text='  备用新电脑 · 故障接替  ')
+        ttk.Label(factory, text='每天使用：点“打开ERP”。第一次使用：先设置每天备份，再做一次备份。',
+                  wraplength=700).pack(anchor='w', pady=(0, 8))
+        self.action_row(factory, 'open', '打开ERP', '开始处理订单、仓库和送货。', self.open_erp)
+        self.action_row(factory, 'backup', '现在备份一次', '把当前数据和附件保存到共享盘，电脑坏了可用它恢复。', self.backup)
+        self.action_row(factory, 'update', '更新ERP', '安装已发布的新版；助手会先备份，期间ERP会短暂停用。', self.update)
+        self.action_row(factory, 'configure', '设置每天自动备份', '首次设置共享盘和恢复密码，以后每天晚上11点备份。', self.configure)
+        ttk.Label(factory, text='自动备份时电脑须开机并保持账号登录，锁屏可以；恢复密码请另存一份。',
+                  wraplength=700).pack(anchor='w', pady=(8, 0))
+        ttk.Label(standby, text='工厂电脑损坏、不能继续使用时，按下面4步接替。\n先连接存放备份的共享盘，并准备好原来的恢复密码。',
+                  wraplength=700).pack(anchor='w', pady=(0, 8))
+        self.action_row(standby, 'restore', '1  从备份取回数据', '选择最新的完整备份文件，输入原恢复密码；仅用于空安装。', self.restore)
+        self.action_row(standby, 'network', '2  设置本机访问地址', '填写新电脑的局域网地址，让其他电脑和手机能访问。', self.network)
+        self.action_row(standby, 'open', '3  打开ERP并核对', '登录后先核对最近的订单、库存和附件，再开始录单。', self.open_erp)
+        self.action_row(standby, 'configure', '4  设置每天自动备份', '新电脑需要重新设置；完成后到工厂电脑页做一次备份。', self.configure)
+        ttk.Label(standby, text='仅准备备用机时，恢复后核对即可，不要与原电脑同时正式录单。\n数据截至所选备份的时间；接替后请另外检查打印机。',
+                  wraplength=700).pack(anchor='w', pady=(8, 0))
+        self.more_button = ttk.Button(box, text='遇到问题／其他设置 ▸', command=self.toggle_more)
+        self.more_button.pack(anchor='w', pady=(12, 4))
+        self.buttons.append(self.more_button)
+        self.more = ttk.Frame(box)
+        for key, title, hint, action in (
+            ('recover', '继续上次未完成的更新', '更新断电或中断时使用，先检查再恢复。', self.recover_update),
+            ('rollback', '退回上一个程序版本', '新版无法使用时使用；不会把业务数据退回旧日期。', self.rollback),
+            ('import', '首次接入原ERP数据', '只在工厂原电脑第一次接入助手时使用。', self.import_old),
+            ('network', '修改本机访问地址', '工厂电脑地址变化、手机无法访问时检查。', self.network),
+            ('ai', '设置AI密钥（DeepSeek）', '启用AI库存解读，与备份恢复无关。', self.configure_ai),
+        ):
+            self.action_row(self.more, key, title, hint, action, compact=True)
+        self.log = tk.StringVar(value='请选择上面的用途页签。这里会显示操作进度。')
+        self.log_label = ttk.Label(box, textvariable=self.log, wraplength=740)
+        self.log_label.pack(anchor='w', pady=(10, 0))
+        try:
+            saved = read_json(manager.root / 'control' / 'ui-preferences.json').get('computer_role')
+        except (OSError, ValueError, AttributeError):
+            saved = None
+        self.tabs.select(1 if saved == 'standby' or (saved is None and not manager.state.get('current')) else 0)
+        self.tabs.bind('<<NotebookTabChanged>>', self.role_changed)
         self.refresh()
         window.after(200, self.poll)
 
+    def action_row(self, parent, key, title, hint, action, compact=False):
+        row = ttk.Frame(parent)
+        row.pack(fill='x', pady=2 if compact else 5)
+        button = ttk.Button(row, text=title, width=26, command=action)
+        button.pack(side='left', anchor='n')
+        ttk.Label(row, text=hint, wraplength=475).pack(side='left', padx=(12, 0), anchor='w')
+        self.buttons.append(button)
+        self.action_buttons.append((key, button))
+
+    def role_changed(self, event=None):
+        role = 'standby' if self.tabs.index(self.tabs.select()) == 1 else 'factory'
+        try:
+            write_json(self.manager.root / 'control' / 'ui-preferences.json', {'computer_role': role})
+        except OSError:
+            self.log.set('本次用途已切换；暂时无法记住选择，下次打开时请重新选择。')
+        if self.more.winfo_manager():
+            self.toggle_more()
+
+    def toggle_more(self):
+        if self.more.winfo_manager():
+            self.more.pack_forget()
+            self.more_button.configure(text='遇到问题／其他设置 ▸')
+            self.tabs.pack(fill='x', before=self.more_button)
+        else:
+            self.tabs.pack_forget()
+            self.more.pack(fill='x', before=self.log_label)
+            self.more_button.configure(text='收起其他设置，返回操作步骤 ◂')
+
+
     def refresh(self):
         state = self.manager.state
-        version = self.manager.manifest()['version'] if state['current'] else '尚未恢复数据'
-        self.status.set(f"当前版本：{version}\n最近成功备份：{state.get('last_backup_at', '尚无成功备份')}\n"
-                        f"备份状态：{state.get('backup_error') or '无已记录错误'}"
-                        + ('\n升级中断：请点击“检查并恢复中断升级”。' if state.get('operation') in
-                           ('migration_running', 'migration_failed') else ''))
+        current = bool(state.get('current'))
+        version = self.manager.manifest()['version'] if current else '这台电脑尚未接入数据'
+        last = state.get('last_backup_at')
+        try:
+            last = datetime.fromisoformat(last).astimezone(CN).strftime('%Y-%m-%d %H:%M') if last else '还没有成功备份，请先设置备份'
+        except ValueError:
+            last = str(last)
+        text = f"本机：{version}    最近成功备份：{last}"
+        if state.get('backup_error'):
+            text += '\n上次备份未成功，请检查共享盘连接后再点“现在备份一次”。'
+        if state.get('operation') in ('migration_running', 'migration_failed'):
+            text += '\n上次更新未完成：展开“遇到问题／其他设置”，点“继续上次未完成的更新”。'
+        if not current:
+            text += '\n新电脑请选择备用新电脑页；原工厂电脑首次接入请展开其他设置。'
+        self.status.set(text)
+        for key, button in self.action_buttons:
+            enabled = not self.busy
+            if key in ('open', 'backup', 'update', 'configure', 'network', 'ai'):
+                enabled = enabled and current
+            elif key in ('restore', 'import'):
+                enabled = enabled and not current
+            elif key == 'recover':
+                enabled = enabled and state.get('operation') in ('migration_running', 'migration_failed')
+            elif key == 'rollback':
+                enabled = enabled and bool(state.get('previous'))
+            button.configure(state='normal' if enabled else 'disabled')
 
     def run(self, description, action):
+        if self.busy:
+            return
         self.busy = True
         self.log.set(description + '，请等待。')
         for button in self.buttons:
             button.configure(state='disabled')
         def work():
             try:
-                self.events.put((True, str(action() or '已完成')))
+                result = action()
+                self.events.put((True, result if isinstance(result, str) else '操作已完成。'))
             except Exception as error:
                 self.events.put((False, str(error)))
         threading.Thread(target=work, daemon=True).start()
@@ -113,12 +196,12 @@ class App:
             config = preferences(self.manager)
             return unprotect(config['protected_password']), Path(config['nas'])
         except Exception:
-            messagebox.showinfo('先设置备份', '请先设置NAS路径和恢复口令。')
+            messagebox.showinfo('先设置备份', '请在工厂电脑页点击“设置每天自动备份”，选择共享盘并设置恢复密码。')
             return None
 
     def network(self):
         import ipaddress
-        host = simpledialog.askstring('本机地址', '输入本机局域网IPv4地址；仅本机使用可填127.0.0.1。\n此设置启用现有局域网HTTP模式，不配置公网访问。')
+        host = simpledialog.askstring('本机地址', '输入这台电脑的IPv4地址（Windows设置 → 网络和Internet → 网络属性中查看）。\n只有这台电脑使用ERP时，可填127.0.0.1。\n手机和其他电脑需要与这台电脑连接同一局域网。')
         if not host:
             return
         try:
@@ -143,16 +226,16 @@ class App:
         self.run('设置访问地址', save)
 
     def configure(self):
-        nas = filedialog.askdirectory(title='选择已有NAS完整恢复目录')
+        nas = filedialog.askdirectory(title='选择用于保存ERP备份的共享文件夹（NAS）')
         if not nas:
             return
         if not nas.startswith(('\\\\', '//')):
-            messagebox.showerror('使用网络路径', '请填写NAS的UNC共享路径，例如\\\\服务器\\共享\\ERP恢复；不使用依赖登录映射的Z盘。')
+            messagebox.showerror('使用网络路径', '请填写共享盘的网络地址，例如\\\\服务器\\共享\\ERP恢复；不要选择Z:这类盘符，可在文件选择窗口输入网络地址。')
             return
-        password = simpledialog.askstring('恢复口令', '设置至少12个字符的恢复口令，另存于电脑之外：', show='*')
+        password = simpledialog.askstring('恢复密码', '设置备份恢复密码（至少12个字符），请另存一份。\n这是取回备份用的密码，不是ERP登录密码：', show='*')
         if not password:
             return
-        again = simpledialog.askstring('确认口令', '再次输入恢复口令：', show='*')
+        again = simpledialog.askstring('再次输入恢复密码', '再次输入刚才设置的恢复密码：', show='*')
         if password != again or len(password) < 12:
             messagebox.showerror('口令不匹配', '两次口令必须相同且不少于12个字符。')
             return
@@ -162,7 +245,7 @@ class App:
         def save():
             write_json(self.manager.root / 'preferences.json', {'nas': nas, 'protected_password': protect(password)})
             register_nightly(self.manager.root, Path(sys.executable))
-            return '23点任务已注册；请立即做一次完整备份验证NAS连接，并妥善保管恢复口令'
+            return '已设置每天晚上11点自动备份。请到工厂电脑页点“现在备份一次”，确认共享盘可用。'
         self.run('保存备份设置', save)
 
     def configure_ai(self):
@@ -213,7 +296,7 @@ class App:
         # Git build publishes a signed release to the NAS releases directory.
         feed = settings[1] / 'releases/latest.json'
         if not feed.exists():
-            messagebox.showinfo('没有发布包', 'NAS尚无已验证的新发布包；Git代码需要先构建为签名发布包。')
+            messagebox.showinfo('没有发布包', '共享盘中还没有可用的更新包，请联系系统维护人员发布后再试。')
             return
         entry = read_json(feed)
         name = safe_name(entry['package'])
@@ -228,12 +311,15 @@ class App:
             self.run('备份并回退程序', lambda: self.manager.rollback(*settings))
 
     def restore(self):
-        path = filedialog.askopenfilename(title='选择NAS完整恢复包', filetypes=[('ERP完整恢复包', '*.tmbackup')])
+        path = filedialog.askopenfilename(title='选择共享盘中最新的完整备份（.tmbackup）', filetypes=[('ERP完整恢复包', '*.tmbackup')])
         if not path:
             return
-        password = simpledialog.askstring('恢复口令', '输入备份时设置的恢复口令：', show='*')
+        password = simpledialog.askstring('恢复密码', '输入工厂电脑备份时设置的恢复密码（不是ERP登录密码）：', show='*')
         if password:
-            self.run('校验并恢复到空安装', lambda: self.manager.restore(Path(path), password))
+            def recover():
+                result = self.manager.restore(Path(path), password)
+                return f"数据已取回，备份时间：{result['data_time']}。请继续第2步设置本机访问地址，再打开ERP核对。"
+            self.run('正在取回备份数据', recover)
 
     def recover_update(self):
         self.run('核对升级现场、备份和程序并恢复运行', self.manager.recover_interrupted_update)

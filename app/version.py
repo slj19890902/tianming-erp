@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.370"
-APP_VERSION_NAME = "邮箱待处理去重与已处理归档"
+APP_VERSION = "v0.22.371"
+APP_VERSION_NAME = "恢复助手分电脑操作引导"
 APP_BUILD_DATE = "2026-09-12"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -2802,7 +2802,14 @@ APP_CHANGES = ["邮箱只读取2026-09-01起邮件，旧订单退出待处理和
 APP_VERIFICATION_STEPS = ["刷新后进入邮箱收单，核对待处理及已排除记录，已录入客户单号不应重复出现。", "对已处理PDF点击已人工处理，重新读取确认不再进入待保存和待改进；删除时只确认一次。"]
 
 
+_V022370_CHANGES = APP_CHANGES
+_V022370_STEPS = APP_VERIFICATION_STEPS
+APP_CHANGES = ["恢复助手分为工厂电脑和备用新电脑两页，每个按钮用简单说明告知用途。", "备用新电脑按取回备份、设置地址、打开核对、重新设置备份四步接替；其他设置可以展开收回。", "新版安装包更新助手界面；保留原备份、恢复校验、数据隔离和AI密钥保护，无新增迁移。"]
+APP_VERIFICATION_STEPS = ["关闭旧助手，运行新版安装包并选择原安装位置；核对工厂电脑及备用新电脑两页。", "切换页签并展开、收起其他设置，核对未恢复数据时的按钮提示；不必重复执行真实数据恢复。"]
+
 APP_CHANGELOG = [
+    *(f"v0.22.370：本次更新｜{item}" for item in _V022370_CHANGES),
+    *(f"v0.22.370：如何验证｜{item}" for item in _V022370_STEPS),
     *(f"v0.22.369：本次更新｜{item}" for item in _V022369_CHANGES),
     *(f"v0.22.369：如何验证｜{item}" for item in _V022369_STEPS),
     *(f"v0.22.368：本次更新｜{item}" for item in _V022368_CHANGES),

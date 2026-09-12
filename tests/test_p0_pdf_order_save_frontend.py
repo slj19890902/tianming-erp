@@ -25,14 +25,14 @@ def test_pdf_order_save_template_exposes_persistent_per_file_status_and_retry() 
         "保存失败，可重试",
         'class="pdf-import-draft-fields"',
         ':disabled="isImportDraftLocked(draft)"',
-        'placeholder="手动选择客户" :disabled="isImportDraftLocked(draft)"',
+        'placeholder="确认客户" :disabled="isImportDraftLocked(draft)"',
         "pdfItemMaterialText(item)",
     ):
         assert expected in INDEX
 
     save_block = INDEX[
-        INDEX.index("async saveConfirmedImportDrafts()") :
-        INDEX.index("openOrderEditor(group)", INDEX.index("async saveConfirmedImportDrafts()"))
+        INDEX.index("async saveConfirmedImportDrafts(") :
+        INDEX.index("openOrderEditor(group)", INDEX.index("async saveConfirmedImportDrafts("))
     ]
     assert '!["saving","success"].includes(draft._save_status)' in save_block
     assert 'draft._save_status = "saving"' in save_block

@@ -20597,6 +20597,7 @@ def list_reported_documents(
 @router.get("/reported-items")
 def list_reported_items(
     customer_id: int | None = None,
+    document_id: int | None = Query(default=None, ge=1),
     keyword: str | None = None,
     document_number: str | None = None,
     order_number: str | None = None,
@@ -20654,6 +20655,8 @@ def list_reported_items(
     }
 
     candidates = _build_reported_document_candidates(db, user)
+    if document_id is not None:
+        candidates = [row for row in candidates if int(row["id"]) == document_id]
     customer_ids = {
         int(line["customer_id"])
         for candidate in candidates

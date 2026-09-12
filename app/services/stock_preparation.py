@@ -63,7 +63,7 @@ def list_rows(db, *, scope=None, query=""):
             if item.order.status == "voided":
                 status = "history"
             row = dict(key=f"receipt:{receipt.id}" if receipt else f"waiting:{item.id}", receipt_item_id=receipt.id if receipt else None,
-                customer_name=(item.customer.name if item.customer else "通用备料"), code=item.product_code_snapshot,
+                customer_name=((item.customer.chinese_short_name or item.customer.name) if item.customer else "通用备料"), code=item.product_code_snapshot,
                 name=item.product_name_snapshot, specification=f"{item.report_length_mm or '-'} × {item.report_width_mm or '-'} mm",
                 material=item.material_code_snapshot, order_number=item.order.order_number,
                 quantity=receipt.received_quantity if receipt else pending, unit="个" if (lot and lot.inventory_type == "finished") or (not lot and item.target_inventory_type == "finished") else "张", available=lot.quantity_available if lot else 0,
@@ -80,7 +80,27 @@ def list_rows(db, *, scope=None, query=""):
     return sorted(rows,key=lambda row:priority[row["status"]])
 
 
-def mutate(db, *, receipt_id, payload, actor):
+
+def plan_product(db, item, lot):
+    product = db.get(Product, item.reference_product_id or item.product_id)
+    if not product or not product.is_active or product.deleted_at or product.customer_id != item.customer_id:
+        fail("备料缺少有效的同客户目标产品，请先完善补货产品资料")
+    if product.is_virtual_composite_parent:
+        fail("虚拟组合母件不能直接入库，请使用实际子件")
+    detail = lot.semi_finished_detail
+    if (not detail or detail.flute_type != product.flute_type
+            or (product.report_length_mm and product.report_length_mm > detail.board_length_mm)
+            or (product.report_width_mm and product.report_width_mm > detail.board_width_mm)):
+        fail("现有产品规格或楞型与实收材料不匹配，请核对资料")
+    if lot.allowed_products and product.id not in {binding.product_id for binding in lot.allowed_products}:
+        fail("该批材料的已确认适用产品范围不包含目标产品")
+    from app.services.warehouse_goods import qualification_issues
+    issues = qualification_issues(db,lot,product)
+    if issues:
+        fail("材料不能用于该产品："+"；".join(issues))
+    return product
+
+def mutate(db, *, receipt_id, payload, actor, group_snapshot=None):
     receipt, item, lot = source(db, receipt_id)
     request = json.dumps(dict(payload, receipt_id=receipt_id), sort_keys=True, ensure_ascii=False)
     previous = db.get(Command, payload["operation_key"])
@@ -107,34 +127,24 @@ def mutate(db, *, receipt_id, payload, actor):
         quantity = payload["quantity"]
         if lot.inventory_type != "semi_finished" or quantity <= 0 or quantity > lot.quantity_available:
             fail("生产投入必须大于0且不能超过可用材料")
-        product = db.get(Product, item.reference_product_id or item.product_id)
-        if not product or not product.is_active or product.deleted_at or product.customer_id != item.customer_id:
-            fail("备料缺少有效的同客户目标产品，请先完善补货产品资料")
-        if product.is_virtual_composite_parent:
-            fail("虚拟组合母件不能直接入库，请使用实际子件")
-        detail = lot.semi_finished_detail
-        if (not detail or detail.flute_type != product.flute_type
-                or (product.report_length_mm and product.report_length_mm > detail.board_length_mm)
-                or (product.report_width_mm and product.report_width_mm > detail.board_width_mm)):
-            fail("现有产品规格或楞型与实收材料不匹配，请核对资料")
-        if lot.allowed_products and product.id not in {binding.product_id for binding in lot.allowed_products}:
-            fail("该批材料的已确认适用产品范围不包含目标产品")
-        from app.services.warehouse_goods import qualification_issues
-        issues = qualification_issues(db,lot,product)
-        if issues:
-            fail("材料不能用于该产品："+"；".join(issues))
+        product = plan_product(db,item,lot)
         from app.services.finished_stock_identity import product_basis
         expected = quantity * item.stock_yield_per_sheet // item.pieces_per_box
         if expected <= 0:
             fail("投入材料不足以产出一个成品")
+        planned_location = None
+        if payload.get("location_id"):
+            from app.services.stock_preparation_groups import destination
+            planned_location = destination(db,payload["location_id"],payload.get("layout_version"))
         reservation = InventoryReservation(reservation_number=f"SP-{uuid4().hex[:20]}", inventory_lot_id=lot.id,
             reservation_type="semi_order", reserved_stock_quantity=quantity, status="active",
             reserved_by=actor.id, reserved_at=utc_now_naive(), idempotency_key=f"prep:{payload['operation_key']}",
             warning_codes="stock_preparation", reservation_group_key=f"prep:{payload['operation_key']}")
         db.add(reservation); db.flush()
         job = Job(receipt_item_id=receipt.id, reservation_id=reservation.id, product_id=product.id,
-            product_snapshot=json.dumps(dict(code=product.product_code,name=product.product_name,
-                factor=item.stock_yield_per_sheet,pieces_per_box=item.pieces_per_box,physical_basis=product_basis(product)),ensure_ascii=False),
+            product_snapshot=json.dumps(dict(product_id=product.id,code=product.product_code,name=product.product_name,
+                factor=item.stock_yield_per_sheet,pieces_per_box=item.pieces_per_box,physical_basis=product_basis(product),
+                planned_location=planned_location,preparation_group=group_snapshot),ensure_ascii=False),
             input_quantity=quantity, expected_output=expected)
         db.add(job); db.flush()
         result["job_id"] = job.id
@@ -144,6 +154,9 @@ def mutate(db, *, receipt_id, payload, actor):
         job = db.get(Job,payload["job_id"])
         if not job or job.receipt_item_id != receipt.id or job.status != "pending" or job.version != payload["job_version"]:
             fail("待生产任务已变化，请刷新")
+        frozen_group = json.loads(job.product_snapshot).get("preparation_group")
+        if frozen_group and (not group_snapshot or group_snapshot.get("key") != frozen_group["key"]):
+            fail("该子件属于整组生产，请从整组入口操作")
         reservation = db.get(InventoryReservation,job.reservation_id)
         quantity = job.input_quantity
         if not reservation or reservation.status != "active" or reservation.inventory_lot_id != lot.id or lot.quantity_reserved < quantity:

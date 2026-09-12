@@ -43,7 +43,7 @@ def _run_node(source: str, tmp_path: Path, name: str) -> None:
 
 def test_compact_reported_item_table_drawer_and_fixed_columns_are_present() -> None:
     block = INDEX.split('aria-label="已报料逐明细紧凑表格"', 1)[1].split(
-        'aria-label="已报料明细详情"', 1
+        'v-if="purchaseReview"', 1
     )[0]
     for heading in (
         "序号",

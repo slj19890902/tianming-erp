@@ -39,9 +39,12 @@ def test_mobile_shell_retries_without_parallel_initialization_or_home_requests()
     assert 'method: "POST"' in MOBILE_HTML and '"/api/auth/logout"' in MOBILE_HTML
 
 
-def test_mobile_shell_only_posts_for_explicit_logout() -> None:
-    assert MOBILE_HTML.count('method: "POST"') == 2
+def test_mobile_shell_uses_explicit_logout_post_and_allows_dimension_put() -> None:
+    assert MOBILE_HTML.count('method: "POST"') == 1
     assert 'fetch("/api/auth/logout"' in MOBILE_HTML
-    assert 'method: "PUT"' not in MOBILE_HTML
+    assert 'async function apiPost(url, body, options = {})' in MOBILE_HTML
+    assert 'method: options.method || "POST"' in MOBILE_HTML
+    assert 'apiPost("/api/mobile/erp/dimension-settings"' in MOBILE_HTML
+    assert '}, { method: "PUT" });' in MOBILE_HTML
     assert 'method: "PATCH"' not in MOBILE_HTML
     assert 'method: "DELETE"' not in MOBILE_HTML

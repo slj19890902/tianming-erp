@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.389"
-APP_VERSION_NAME = "备库一键生产与用途入库"
-APP_BUILD_DATE = "2026-09-12"
+APP_VERSION = "v0.22.390"
+APP_VERSION_NAME = "开票客户下拉显示修复"
+APP_BUILD_DATE = "2026-09-13"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -4038,3 +4038,11 @@ APP_VERIFICATION_STEPS = [
     "待生产→安排用途，核对实际成套数量或选择半成品分存，地图选具体货位后保存。",
     "在库存去向和完工历史查看数量、位置及记录；撤销只用于已核对的误操作，已使用库存会阻止撤销。",
 ]
+
+APP_CHANGELOG = [
+    *(f"v0.22.389：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.389：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = ["修复开票办理客户下拉被筛选区裁剪，保留原有客户筛选、权限与财务数据。"]
+APP_VERIFICATION_STEPS = ["刷新财务→开票办理，展开客户下拉，选择客户查询，再清空筛选查询。"]

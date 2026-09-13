@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>天明 ERP 手机版</title>
+  <link rel="stylesheet" href="/static/ui/mobile-delivery-margin.css?v=20260913-mobilemargin001">
   <script defer src="/factory-twin-assets/warehouse-costs.js?v=20260912-opt003"></script>
   <style>
     :root {
@@ -265,6 +266,40 @@
           <div id="managementState" class="status empty" hidden></div>
           <div id="homeCards" class="metric-grid" hidden></div>
         </section>
+        <section id="deliveryMarginSection" class="card delivery-margin-section" hidden>
+          <div class="result-head">
+            <div>
+              <h2>送货材料毛利</h2>
+              <p class="delivery-margin-kicker">按真实送货日期和有效送货明细汇总；这是材料毛利，不是净利。</p>
+            </div>
+            <button id="loadDeliveryMargin" class="small-btn" type="button">重新读取</button>
+          </div>
+          <div id="deliveryMarginPanel" class="delivery-margin-panel">
+            <div class="delivery-margin-filters" aria-label="送货材料毛利筛选">
+              <label>客户<select id="deliveryMarginCustomer" aria-label="客户"><option value="">全部可见客户</option></select></label>
+              <label>开始日期<input id="deliveryMarginDateFrom" type="date" aria-label="开始日期"></label>
+              <label>结束日期<input id="deliveryMarginDateTo" type="date" aria-label="结束日期"></label>
+            </div>
+            <p id="deliveryMarginCustomerNote" class="muted" hidden></p>
+            <div id="deliveryMarginFilterActions" class="delivery-margin-filter-actions">
+              <button id="applyDeliveryMargin" class="search-btn" type="button">应用筛选</button>
+            </div>
+            <div id="deliveryMarginState" class="card status empty">正在读取送货材料毛利…</div>
+            <div id="deliveryMarginSummary" class="metric-grid delivery-margin-summary" hidden></div>
+            <h3>销售额 vs 材料成本</h3>
+            <div id="deliveryMarginBarChart" class="delivery-margin-chart" aria-label="销售额与材料成本柱图"></div>
+            <h3>每日材料毛利率趋势</h3>
+            <div id="deliveryMarginTrend" class="delivery-margin-trend" aria-label="每日材料毛利率趋势"></div>
+            <h3>客户明细</h3>
+            <div id="deliveryMarginCustomers" class="delivery-margin-customer-list" role="table" aria-label="客户材料毛利表"></div>
+            <div id="deliveryMarginPager" class="pager">
+              <button id="deliveryMarginPrev" class="small-btn" type="button">上一页</button>
+              <span id="deliveryMarginPageText">第 1 页</span>
+              <button id="deliveryMarginNext" class="small-btn" type="button">下一页</button>
+            </div>
+            <div id="deliveryMarginGaps"></div>
+          </div>
+        </section>
       </section>
 
       <section id="incomingPage" hidden>
@@ -463,6 +498,7 @@
     </div>
   </section>
 
+  <script src="/static/ui/mobile-delivery-margin.js?v=20260913-mobilemargin001"></script>
   <script>
     (() => {
       "use strict";
@@ -698,6 +734,7 @@
           throw new Error("无法连接 ERP 服务，请检查网络后重试");
         }
         if (response.status === 401) {
+          window.TmMobileDeliveryMargin?.destroy?.();
           clearMobilePortalState();
           const loginParams = new URLSearchParams({
             redirect: "/mobile/",
@@ -716,7 +753,9 @@
           const message = typeof detail === "string"
             ? detail
             : (detail && typeof detail.message === "string" ? detail.message : "");
-          throw new Error(message || `读取失败（HTTP ${response.status}）`);
+          const error = new Error(message || `读取失败（HTTP ${response.status}）`);
+          error.status = response.status;
+          throw error;
         }
         return payload;
       }
@@ -753,6 +792,7 @@
       }
 
       async function logout() {
+        window.TmMobileDeliveryMargin?.destroy?.();
         state.searchController?.abort();
         state.detailController?.abort();
         state.productionController?.abort();
@@ -788,6 +828,7 @@
         const previousPage = state.activePage;
         if (state.activePage && state.activePage !== "incoming") state.scrollByPage.set(state.activePage, window.scrollY);
         state.activePage = page;
+        window.TmMobileDeliveryMargin?.onPageChange?.(page);
         const isHome = page === "home";
         const isLookup = page === "lookup";
         const isIncoming = page === "incoming";
@@ -894,6 +935,13 @@
           byId("homeState").hidden = true;
         } else {
           showStatus("homeState", "当前账号没有可用的手机现场入口，请联系管理员。", "error", initialize);
+        }
+        if (state.shell?.delivery_margin_allowed === true) {
+          window.TmMobileDeliveryMargin?.mount({shell: state.shell, apiGet});
+        } else {
+          // The section remains hidden; no cost endpoint is requested for employees.
+          window.TmMobileDeliveryMargin?.destroy?.();
+          byId("deliveryMarginSection").hidden = true;
         }
       }
 

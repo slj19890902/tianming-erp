@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.394"
-APP_VERSION_NAME = "BOM来料资格统一"
+APP_VERSION = "v0.22.395"
+APP_VERSION_NAME = "来料确认与稳定分页"
 APP_BUILD_DATE = "2026-09-13"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4103,7 +4103,9 @@ APP_CHANGELOG = [
 APP_CHANGES = [
     "BOM来料按实际报料来源判断收料资格，不再被父订单汇总的未报料状态误拦截。",
     "保留价格冻结、正式货位、数量和重复提交保护，已关闭来源不可再次收料。",
+    "来料分页不随展开操作或输入数量重新计算，避免列表缩成两页并清掉收料草稿。",
 ]
 APP_VERIFICATION_STEPS = [
     "刷新来料待入库，核对已报料BOM子件可操作；按实际到货数量确认，不重复收料。",
+    "展开多收处理选择片料备库，核对输入及选择保留、四条来料同页显示；确认实际数量和库存去向。",
 ]

@@ -1,4 +1,5 @@
 import subprocess
+import pytest
 from fastapi.testclient import TestClient
 from tests.test_multilevel_bom_receipt_flow import (
     composite_requisition_app, _p181_published_map_identity, seed_graph, purchase_sources,
@@ -6,7 +7,8 @@ from tests.test_multilevel_bom_receipt_flow import (
 )
 
 
-def test_bom_source_eligible_despite_parent_summary(composite_requisition_app, _p181_published_map_identity):
+@pytest.mark.parametrize('extra', [0, 1])
+def test_bom_source_eligible_despite_parent_summary(composite_requisition_app, _p181_published_map_identity, extra):
     from app.models.order import OrderItem
     from app.models.requisition import RequisitionItem
     from app.services.incoming_receipts import _target, IncomingReceiptError
@@ -27,9 +29,9 @@ def test_bom_source_eligible_despite_parent_summary(composite_requisition_app, _
         for i, source in enumerate(sources):
             fact = _freeze_receipt_fact(client, source, idempotency_key=f'394-price-{i}',unit_price='0.1234')
             assert fact.status_code == 200, fact.text
-            result = _receive(client,source,fact.json(),quantity=source.order_purpose_sheet_qty,idempotency_key=f'394-in-{i}')
+            result = _receive(client,source,fact.json(),quantity=source.order_purpose_sheet_qty+extra,idempotency_key=f'394-in-{i}', overrides=({'surplus_disposition':'semi_finished_reserve'} if extra else {}))
             assert result.status_code == 200, result.text
-            replay = _receive(client,source,fact.json(),quantity=source.order_purpose_sheet_qty,idempotency_key=f'394-in-{i}')
+            replay = _receive(client,source,fact.json(),quantity=source.order_purpose_sheet_qty+extra,idempotency_key=f'394-in-{i}', overrides=({'surplus_disposition':'semi_finished_reserve'} if extra else {}))
             assert replay.status_code == 200, replay.text
         assert not client.get('/api/incoming/pending?page=1&page_size=25').json()['items']
         with factory() as db:

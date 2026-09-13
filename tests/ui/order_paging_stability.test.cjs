@@ -50,7 +50,15 @@ test('empty initial page does not lock future measurement',async()=>{
   const f=fixture();f.dimensions.count=0;await f.measure();assert.equal(Object.keys(f.ctx.workspaceCapacities).length,0);
   f.dimensions.count=6;await f.measure();assert.equal(Object.keys(f.ctx.workspaceCapacities).length,1);
 });
-test('other workspaces retain previous capacity reduction behavior',async()=>{
+test('incoming drafts and expanded rows never trigger a pagination reload',async()=>{
   const f=fixture();f.ctx.activePage='incoming';f.ctx.incomingWorkspace='board';f.ctx.incomingTab='pending';f.ctx.loadIncomingPendingPage=async()=>{};
-  await f.measure();f.dimensions.row=100;await f.measure();assert.equal(f.ctx.screenPageSize(11),4);
+  let reloads=0;f.ctx.loadIncomingPendingPage=async()=>{reloads++;};
+  const draft={incoming_quantity:21,surplus_disposition:'semi_finished_reserve'};
+  f.ctx.incomingPending=[draft];
+  await f.measure();f.dimensions.row=260;await f.measure();
+  assert.equal(f.ctx.screenPageSize(12),12);assert.equal(reloads,0);
+  assert.equal(f.ctx.incomingPending[0],draft);assert.equal(draft.incoming_quantity,21);
+  f.ctx.pages.incomingPending=2;f.resize();await f.measure();
+  assert.equal(f.ctx.pages.incomingPending,2);assert.equal(f.ctx.screenPageSize(12),12);
+  f.ctx.uiMode='large';assert.equal(f.ctx.screenPageSize(8),8);
 });

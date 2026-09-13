@@ -24,12 +24,17 @@
         },
         screenPageSize(fallback) {
           const large = this.uiMode === 'large';
+          // Incoming rows grow while editing receipt drafts. Keep a fixed
+          // mode capacity, never derive pagination from changing row heights.
+          if(this.activePage==='incoming')
+            return Math.max(4, Math.min(50, fallback));
           if(this.activePage==='products' && this.productTab==='products' && this.selectedProductCustomer)
             return this.workspaceCapacities?.[key(this)] || capacity({height:this.workspaceHeight || 768,top:230,rowHeight:large?64:44,footer:24});
           return this.workspaceCapacities?.[key(this)] || Math.max(1, Math.min(fallback,
             capacity({height:this.workspaceHeight || 768, top:large ? 290 : 250, rowHeight:large ? 92 : 64, footer:48})));
         },
         async measureWorkspace(panel) {
+          if (this.activePage === 'incoming') return;
           if (this.$parent || this.modal || document.querySelector('.workspace-dialog') || window.innerWidth < 1000 || !panel?.closest?.('.main')) return;
           const tables = [...document.querySelectorAll('.main .panel table')].filter(t => t.getBoundingClientRect().height > 0 && !t.closest('.modal') && !t.dataset.workspaceList);
           const table = panel.querySelector('table');

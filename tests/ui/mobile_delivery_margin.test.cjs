@@ -42,7 +42,9 @@ test("requests are abortable and stale pages cannot paint", () => {
   assert.match(source, /generation !== localState\.generation/);
   assert.match(source, /onPageChange\(page\)/);
   assert.match(html, /TmMobileDeliveryMargin\?\.onPageChange\?\.\(page\)/);
-  assert.match(source, /api\/master\/customers\?page=1&page_size=200&include_inactive=true/);
+  assert.match(source, /api\/master\/customers/);
+  assert.match(source, /page_size: "50"/);
+  assert.match(source, /keyword/);
   assert.match(source, /材料成本毛利/);
   assert.match(source, /送货数量/);
   assert.match(source, /rate\(metrics\.coverage_rate\)/);
@@ -72,12 +74,13 @@ test("permission and lifecycle guards work with an anonymous DOM/fetch fixture",
     replaceChildren(...items) { this.children = items; }
     setAttribute(name, value) { this[name] = String(value); }
     addEventListener(name, handler) { (this.listeners[name] ||= []).push(handler); }
+    removeEventListener(name, handler) { this.listeners[name] = (this.listeners[name] || []).filter(item => item !== handler); }
     get firstChild() { return this.children[0] || null; }
   }
   const ids = [
     "deliveryMarginSection", "deliveryMarginPanel", "deliveryMarginState", "deliveryMarginSummary",
     "deliveryMarginBarChart", "deliveryMarginTrend", "deliveryMarginCustomers", "deliveryMarginGaps",
-    "deliveryMarginCustomer", "deliveryMarginDateFrom", "deliveryMarginDateTo", "loadDeliveryMargin",
+    "deliveryMarginCustomer", "deliveryMarginCustomerSearch", "deliveryMarginDateFrom", "deliveryMarginDateTo", "loadDeliveryMargin",
     "applyDeliveryMargin", "deliveryMarginPrev", "deliveryMarginNext", "deliveryMarginPageText",
   ];
   const elements = Object.fromEntries(ids.map(id => [id, new FakeElement()]));
@@ -128,5 +131,55 @@ test("permission and lifecycle guards work with an anonymous DOM/fetch fixture",
   assert.equal(elements.deliveryMarginSection.hidden, true, "revoked capability hides the module");
   assert.equal(elements.deliveryMarginSummary.children.length, 0, "revoked capability clears old amounts");
   assert.doesNotMatch(source, /panel\.hidden = true/);
+  delete global.document;
+});
+
+test("destroy removes handlers and a disposed instance cannot paint or request", async () => {
+  class FakeElement {
+    constructor() { this.children = []; this.listeners = {}; this.hidden = false; this.value = ""; this.disabled = false; this.textContent = ""; }
+    append(...items) { this.children.push(...items); }
+    replaceChildren(...items) { this.children = items; }
+    setAttribute(name, value) { this[name] = String(value); }
+    addEventListener(name, handler) { (this.listeners[name] ||= []).push(handler); }
+    removeEventListener(name, handler) { this.listeners[name] = (this.listeners[name] || []).filter(item => item !== handler); }
+    get firstChild() { return this.children[0] || null; }
+  }
+  const ids = ["deliveryMarginSection", "deliveryMarginPanel", "deliveryMarginState", "deliveryMarginSummary", "deliveryMarginBarChart", "deliveryMarginTrend", "deliveryMarginCustomers", "deliveryMarginGaps", "deliveryMarginCustomer", "deliveryMarginCustomerSearch", "deliveryMarginDateFrom", "deliveryMarginDateTo", "loadDeliveryMargin", "applyDeliveryMargin", "deliveryMarginPrev", "deliveryMarginNext", "deliveryMarginPageText"];
+  const elements = Object.fromEntries(ids.map(id => [id, new FakeElement()]));
+  global.document = {getElementById(id) { return elements[id] || (elements[id] = new FakeElement()); }, createElement() { return new FakeElement(); }};
+  const pending = [];
+  let marginCalls = 0;
+  const optionUrls = [];
+  const apiGet = (url, options) => {
+    if (url.startsWith("/api/master/customers")) { optionUrls.push(url); return Promise.resolve({items: []}); }
+    marginCalls += 1;
+    return new Promise(resolve => pending.push({resolve, options}));
+  };
+  const old = margin.mount({shell: {delivery_margin_allowed: true}, apiGet});
+  await new Promise(resolve => setImmediate(resolve));
+  const oldRequest = pending[0];
+  const oldApply = elements.applyDeliveryMargin.listeners.click[0];
+  assert.equal(elements.applyDeliveryMargin.listeners.click.length, 1);
+  margin.mount({shell: {delivery_margin_allowed: false}, apiGet});
+  assert.equal(elements.applyDeliveryMargin.listeners.click.length, 0);
+  oldRequest.resolve({summary: {sales_amount: "999.00"}, customers: {items: [], page: 1, page_size: 20, total: 0}, daily: [], gaps: {}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(elements.deliveryMarginSummary.children.length, 0, "late response from disposed instance cannot paint");
+  const before = marginCalls;
+  oldApply();
+  assert.equal(marginCalls, before, "disposed handler cannot start a request");
+  const fresh = margin.mount({shell: {delivery_margin_allowed: true}, apiGet});
+  assert.notEqual(fresh, old);
+  assert.equal(elements.applyDeliveryMargin.listeners.click.length, 1);
+  elements.deliveryMarginCustomerSearch.value = "Acme";
+  elements.deliveryMarginCustomerSearch.listeners.input[0]();
+  await new Promise(resolve => setTimeout(resolve, 220));
+  assert.match(optionUrls.at(-1), /page_size=50/);
+  assert.match(optionUrls.at(-1), /keyword=Acme/);
+  elements.applyDeliveryMargin.listeners.click[0]();
+  assert.equal(marginCalls, before + 2, "new instance has one active handler and one initial request");
+  pending.forEach(item => item.resolve({summary: {}, customers: {items: [], page: 1, page_size: 20, total: 0}, daily: [], gaps: {}}));
+  await new Promise(resolve => setImmediate(resolve));
+  margin.destroy();
   delete global.document;
 });

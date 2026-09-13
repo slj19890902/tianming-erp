@@ -32,10 +32,10 @@ def test_common_box_bom_keeps_identity_and_three_independent_modes_clear() -> No
     assert "编码：" in editor
     assert "名称：" in editor
     assert "规格：" in editor
-    assert "库存来源" in editor
+    assert "产品形成方式" in editor
     assert "计价方式" in editor
     assert "交付方式" in editor
-    assert "每套用量" not in editor
+    assert "每父件子件用量" in editor
 
     # Existing persistence/permission flow remains the owner of BOM writes.
     assert "_productBomSaveFields" in html

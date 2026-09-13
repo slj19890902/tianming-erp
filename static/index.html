@@ -3068,7 +3068,7 @@
       .delivery-unified-table td { vertical-align:middle; }
 </style>
     <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260911-1">
-    <link rel="stylesheet" href="/static/product-editor-compact.css?v=e210145a0c7d" />
+    <link rel="stylesheet" href="/static/product-editor-compact.css?v=20260913-bomui002" />
     <link rel="stylesheet" href="/static/ui/workspace.css?v=20260912-745268c4e899" />
   </head>
   <body>
@@ -6974,13 +6974,13 @@
                 <div class="bom-editor-heading">
                   <div class="bom-editor-heading-controls">
                     <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="!productForm.id" /> 启用</label>
-                    <label class="remember-line">库存来源
+                    <label class="remember-line">产品形成方式
                       <select class="select" aria-label="BOM库存来源" v-model="bomEditor.inventory_mode" @change="onBomInventoryModeChange" :disabled="!!bomEditor.subkit?.enabled">
-                        <option value="legacy" :disabled="bomEditor.persisted_inventory_mode !== 'legacy'">旧规则</option>
-                        <option value="manufactured">自制＋配套</option>
-                        <option value="assembled">组装成套</option>
-                        <option value="separate">子件分存（父件无库存）</option>
-                        <option value="purchased">外购＋配套</option>
+                        <option v-if="bomEditor.persisted_inventory_mode === 'legacy'" value="legacy">保留旧规则</option>
+                        <option value="manufactured">自己生产</option>
+                        <option value="assembled">零件组装</option>
+                        <option value="separate">只列配套清单</option>
+                        <option value="purchased">直接买成品</option>
                       </select>
                     </label>
                     <label class="remember-line">父件单位
@@ -6989,6 +6989,7 @@
                         <option v-for="unit in ['只','套','片']" :key="unit" :value="unit">{{ unit }}</option>
                       </select>
                     </label>
+                    <details class="bom-more-settings"><summary>更多设置</summary><div class="bom-more-settings-body">
                     <label class="remember-line">计价方式
                       <select class="select" v-model="productForm.combination_mode" @change="productForm.is_virtual_composite_parent = productForm.combination_mode === 'parent_priced_set' ? productForm.is_virtual_composite_parent : false; productForm.composite_fulfillment_mode = productForm.combination_mode === 'component_priced' ? 'component_delivery' : productForm.composite_fulfillment_mode">
                         <option value="parent_priced_set">整套计价</option>
@@ -7007,13 +7008,15 @@
                         <option value="parent_delivery">父件交付</option>
                       </select>
                     </label>
+                    </div></details>
                     <button v-show="bomEditor.enabled" type="button" class="btn small" :disabled="!productForm.id || !!bomEditor.error" @click="addBomComponent">添加子件</button>
                   </div>
                 </div>
                 <div v-if="bomEditor.enabled" class="bom-relationship-summary">
                   <div class="bom-relationship-title">组合关系</div>
                   <div class="bom-relationship-line">{{ bomRelationshipSummary() }}</div>
-                  <div class="muted">父件单位、子件数量单位和比例按当前产品资料显示；库存来源、交付方式、计价方式分别独立生效。</div>
+                  <div class="muted">{{ bomInventoryModeHint() }}</div>
+                  <details class="bom-mode-help"><summary>怎么选？</summary><div>自己生产：本体按材料生产，可另配附件。<br>零件组装：扣减零件，增加组装品库存。<br>直接买成品：采购本体入库，可另配附件。<br>只列配套清单：父件不入库，子件分别存放。<br>组装消耗：零件变成组装品；随货配套：各自保留库存，出货时配齐。<br>用量只填每1个父件需要多少，不填上一级合计。</div></details>
                 </div>
                 <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存父产品，再维护内部组件 BOM。</div>
                 <div v-else-if="bomEditor.error" class="status orange" style="display:block;white-space:normal">{{ bomEditor.error }}</div>
@@ -7026,15 +7029,15 @@
                         <div class="bom-component-product field">
                           <label>子件 {{ index + 1 }}</label>
                           <search-select v-model="component.component_product_id" :options="bomEditor.componentOptions" label-key="_label" value-key="id" placeholder="搜索产品编码、名称或规格" :disabled="!productForm.customer_id" @search="searchBomProducts" @change="selectBomComponent(component,$event)"></search-select>
-                          <div v-if="component.component_product_id || component.product_code || component.product_name" class="bom-component-identity"><span>编码：{{ component.product_code || component.component?.product_code || '-' }}</span><span>名称：{{ component.product_name || component.component?.product_name || '未命名产品' }}</span><span>规格：{{ bomComponentSpecification(component) }}</span></div>
+                          <details v-if="component.component_product_id || component.product_code || component.product_name" class="bom-component-info"><summary>编码 / 规格</summary><div class="bom-component-identity"><span>编码：{{ component.product_code || component.component?.product_code || '-' }}</span><span>名称：{{ component.product_name || component.component?.product_name || '未命名产品' }}</span><span>规格：{{ bomComponentSpecification(component) }}</span></div></details>
                         </div>
-                        <div class="field"><label>父件单位用量（{{ component.unit || component.component?.unit || '子件单位待选' }}）</label><input class="input" type="number" min="1" step="1" v-model.number="component.quantity_per_set" /></div>
+                        <div class="field bom-quantity-field"><label>每1{{ productForm.unit || '父件' }}用量</label><input class="input" aria-label="每父件子件用量" type="number" min="1" step="1" v-model.number="component.quantity_per_set" /><span>{{ bomComponentUnit(component) || '单位缺失' }}</span></div>
                         <label v-if="bomEditor.inventory_mode === 'legacy'" class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> {{ component.is_required === false ? '可选' : '必需' }}</label>
                         <select v-else class="select bom-component-relation" aria-label="子件库存关系" v-model="component.inventory_relation">
                           <option value="assembly" :disabled="!['assembled', 'manufactured'].includes(bomEditor.inventory_mode)">组装消耗</option>
-                          <option value="accompany">独立配套</option>
+                          <option value="accompany">随货配套</option>
                         </select>
-                        <span class="bom-component-actions"><button type="button" class="btn small" :aria-expanded="!!component._planningOpen" @click="component._planningOpen = !component._planningOpen">备料</button><button type="button" class="btn small" :disabled="!component.component_product_id || bomEditor.loading || masterSavePending || !canEditProducts" @click="openBomChildEditor(component)">编辑</button><button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button></span>
+                        <span class="bom-component-actions"><button type="button" class="btn small" :aria-expanded="!!component._planningOpen" @click="component._planningOpen = !component._planningOpen">备料</button><button type="button" class="btn small" :disabled="!component.component_product_id || bomEditor.loading || masterSavePending || !canEditProducts" @click="openBomChildEditor(component)">子件资料</button><button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button></span>
                       </div>
                       <div v-show="component._planningOpen" class="bom-component-planning">
                         <label>备用纸张<input class="input" aria-label="子件备用纸张" type="number" min="0" step="1" v-model.number="component.spare_sheet_quantity" />张</label>
@@ -25546,7 +25549,7 @@
             const productCode = product?.product_code || "-";
             return {
               ...product,
-              _label: `${code} · ${product?.product_name || "未命名产品"} · ${this.spec(product) || "无规格"}`,
+              _label: `${product?.product_name || "未命名产品"} · ${code} · ${this.spec(product) || "无规格"}`,
               internal_code: product?.internal_code || "",
               product_code: productCode,
             };
@@ -25568,6 +25571,12 @@
             if (!Number.isFinite(number) || number <= 0) return "数量待完善";
             return Number.isInteger(number) ? String(number) : number.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
           },
+          bomComponentUnit(component) {
+            return String(component?.component?.unit ?? component?.unit ?? "").trim();
+          },
+          bomInventoryModeHint() {
+            return {manufactured:"本体自己生产入库；附件按下方关系处理。", assembled:"组装时扣减子件，增加组装品库存；用量按每套填写。", purchased:"本体直接采购入库；附件独立配套。", separate:"只管理配套清单，不产生父件库存。", legacy:"当前保留旧配方；切换形成方式后须核对组装或配套关系。"}[this.bomEditor.inventory_mode] || "请选择产品形成方式。";
+          },
           bomRelationshipSummary() {
             const parentUnit = String(this.productForm?.unit || "").trim() || "父件单位待选";
             const drafts = this.bomEditor?.components || [];
@@ -25575,13 +25584,18 @@
             if (!drafts.length || !components.length) return `1${parentUnit} = 子件及数量待完善`;
             const parts = components.map(component => {
               const quantity = this.bomRelationshipQuantity(component.quantity_per_set);
-              const unit = String(component.unit || component.component?.unit || "").trim() || "子件单位待完善";
+              const unit = this.bomComponentUnit(component) || "单位待完善";
               const code = component.product_code || component.component?.product_code || "编码待完善";
               const name = component.product_name || component.component?.product_name || "名称待完善";
-              return `${quantity}${unit} ${code}｜${name}${component.is_required === false ? "（可选）" : ""}`;
+              return {text:`${quantity}${unit} ${name}${component.is_required === false ? "（可选）" : ""}`, relation:component.inventory_relation};
             });
             const unfinished = drafts.length - components.length;
-            return `1${parentUnit} = ${parts.join(" + ")}${unfinished ? `；另有 ${unfinished} 个子件待完善` : ""}`;
+            const suffix = unfinished ? `；另有 ${unfinished} 个子件待完善` : "";
+            if (!this.bomEditor.inventory_mode || this.bomEditor.inventory_mode === "legacy") return `每1${parentUnit}用量：${parts.map(p=>p.text).join(" + ")}${suffix}`;
+            const assembly = parts.filter(p=>p.relation === "assembly").map(p=>p.text);
+            const accompany = parts.filter(p=>p.relation === "accompany").map(p=>p.text);
+            const pending = parts.filter(p=>!["assembly","accompany"].includes(p.relation));
+            return [assembly.length ? `消耗 ${assembly.join(" + ")} → 组装1${parentUnit}` : "", accompany.length ? `每1${parentUnit}随货配 ${accompany.join(" + ")}` : "", pending.length ? `${pending.length}个子件关系待选` : ""].filter(Boolean).join("；") + suffix;
           },
           normalizeBomComponent(raw) {
             const source = JSON.parse(JSON.stringify(raw || {}));
@@ -25634,7 +25648,7 @@
               if (!row?.component_product_id || options.some(option => String(option.id) === String(row.component_product_id))) return;
               options.push(this.bomComponentOption({
                 id: row.component_product_id, product_code: row.product_code, product_name: row.product_name,
-                internal_code: row.internal_code || row.component_internal_code || "", specification: row.specification,
+                ...row.component, unit:this.bomComponentUnit(row), internal_code: row.internal_code || row.component_internal_code || "", specification: row.specification || row.component?.specification,
               }));
             });
             this.bomEditor.componentOptions = options.filter(option => String(option.id) !== String(this.productForm.id));
@@ -25749,6 +25763,9 @@
           },
           onBomInventoryModeChange() {
             const mode = this.bomEditor.inventory_mode;
+            if (mode === "assembled") {
+              this.productForm.unit = "套";
+            }
             for (const component of this.bomEditor.components) {
               if (mode !== "legacy") {
                 component.is_required = true;
@@ -25787,7 +25804,7 @@
               subkit: (editor.inventory_mode || "legacy") === "legacy" && editor.subkit ? {...editor.subkit} : null,
               components: (editor.components || []).map(component => ({
                 component_product_id: component.component_product_id || null,
-                unit: component.unit || component.component?.unit || null,
+                unit: this.bomComponentUnit(component) || null,
                 inventory_relation: editor.inventory_mode === "legacy" ? null : component.inventory_relation,
                 quantity_per_set: component.quantity_per_set,
                 is_die_cut: component.is_die_cut === true,
@@ -26298,7 +26315,7 @@
                   this.bomEditor.components.forEach(row => {
                     if (Number(row.component_product_id) === productId) {
                       row.product_code=data.product_code; row.product_name=data.product_name;
-                      row.component=data;
+                      row.component=data; row.unit=data.unit || "";
                     }
                   });
                   this.bomEditor.componentOptions = this.bomEditor.componentOptions.filter(row => Number(row.id)!==productId);

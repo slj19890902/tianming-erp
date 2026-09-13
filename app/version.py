@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.391"
-APP_VERSION_NAME = "客户材料毛利与BOM界面优化"
+APP_VERSION = "v0.22.392"
+APP_VERSION_NAME = "BOM用量与两层配套优化"
 APP_BUILD_DATE = "2026-09-13"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4061,4 +4061,20 @@ APP_VERIFICATION_STEPS = [
     "管理员刷新电脑和手机首页，按本月及指定客户查询，核对送货材料毛利、参考成本与缺口；离开后返回核对筛选。",
     "常用箱打开组合设置，核对父件与子件数量单位、规格及可选标记。",
     "库存台账打开库存成本并翻页；员工账号确认没有新增成本看板。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.391：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.391：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "组合BOM缩短子件选择区，用量独立显示；修复重选及编辑返回时单位丢失。",
+    "组装消耗与随货配套分开说明，产品形成方式按场景解释，计价交付收进更多设置。",
+    "204/205采用每箱5套格挡、每套3长4短的分层主档关系；历史订单和实物库存不重算。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新常用箱，打开205格挡，核对每套3长4短；修改用量在数字框内操作，子件资料用于编辑名称规格。",
+    "打开204，核对5套格挡、6个衬板、4根护角；展开更多设置及怎么选，核对说明和选择控件。",
+    "编辑子件后返回上级，核对单位、用量及未保存草稿仍正确。",
 ]

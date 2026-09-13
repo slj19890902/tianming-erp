@@ -62,10 +62,22 @@
 .product-editor-modal .bom-editor-heading-controls .select { min-width: 105px; min-height: 32px; }
 .product-editor-modal .bom-component-list { gap: 4px; }
 .product-editor-modal .bom-component-card { padding: 6px 8px; gap: 4px; box-shadow: none; }
-.product-editor-modal .bom-component-compact-row { grid-template-columns: minmax(220px, 1fr) 160px auto auto; gap: 8px; align-items: center; }
+.product-editor-modal .bom-component-compact-row { grid-template-columns: minmax(180px, 300px) minmax(180px, 1fr) 112px auto; gap: 10px; align-items: center; }
 .product-editor-modal .bom-component-compact-row .field { display: flex; gap: 6px; align-items: center; }
 .product-editor-modal .bom-component-compact-row .field > label { margin: 0; flex-shrink: 0; }
 .product-editor-modal .bom-component-compact-row .input { min-width: 0; width: 100%; }
+.product-editor-modal .bom-component-compact-row .bom-component-product { display: block; }
+.product-editor-modal .bom-component-product .search-select { width: 100%; min-width: 0; }
+.product-editor-modal .bom-component-product .search-select-list { min-width: 300px; max-width: min(520px, 80vw); z-index: 500; }
+.product-editor-modal .bom-component-product .search-select-option { white-space: normal; overflow-wrap: anywhere; }
+.product-editor-modal .bom-quantity-field { flex-wrap: wrap; }
+.product-editor-modal .bom-quantity-field .input { width: 76px; min-width: 76px; flex: 0 0 76px; }
+.product-editor-modal .bom-more-settings-body { display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 8px; }
+.product-editor-modal .bom-more-settings summary,
+.product-editor-modal .bom-mode-help summary,
+.product-editor-modal .bom-component-info summary { cursor: pointer; color: #0369a1; padding: 4px 0; }
+.product-editor-modal .bom-mode-help > div { padding: 4px 0; font-size: 12px; }
+.product-editor-modal .bom-component-identity { grid-template-columns: minmax(0, 1fr); }
 .product-editor-modal .bom-component-relation { width: 112px; min-width: 112px; }
 .product-editor-modal .bom-component-actions { display: inline-flex; gap: 4px; white-space: nowrap; }
 .product-editor-modal .bom-component-planning { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding-top: 4px; }

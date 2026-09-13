@@ -186,6 +186,10 @@ def mobile_shell(
         layout_version = 0
     printing_allowed = "production.printing.view" in permissions
     die_cut_allowed = "production.die_cut.view" in permissions
+    delivery_margin_allowed = user.role in {"admin", "boss"} and all(
+        permission in permissions
+        for permission in ("dashboard.view", "finance.view", "cost.view")
+    )
     entries: list[dict] = []
     search_categories = _mobile_search_categories(user)
 
@@ -267,6 +271,7 @@ def mobile_shell(
         "entries": entries,
         "search_categories": search_categories,
         "management_summary_allowed": "dashboard.view" in permissions,
+        "delivery_margin_allowed": delivery_margin_allowed,
         "layout_version": layout_version,
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
         "read_only": True,

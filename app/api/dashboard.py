@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import and_, case, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased, load_only, selectinload, with_loader_criteria
 
@@ -13,6 +13,7 @@ from app.api.deps import (
     PermissionChecker,
     customer_scope_ids,
     get_db,
+    get_current_user,
     has_permission,
     has_unrestricted_customer_access,
 )
@@ -49,11 +50,25 @@ from app.services.external_packaging_stock_replenishment import external_stock_d
 from app.services.location_candidates import (
     load_warehouse_location_projection_contexts,
 )
+from app.services.customer_delivery_margin import build_customer_delivery_margin
 
 
 router = APIRouter()
 can_read = PermissionChecker("dashboard.view")
 RECONCILIATION_REMINDER_START_DAY = 18
+
+
+def _customer_delivery_margin_access(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> User:
+    required = ("dashboard.view", "finance.view", "cost.view")
+    if current_user.role not in {"admin", "boss"} or not all(
+        has_permission(current_user, permission) for permission in required
+    ):
+        raise HTTPException(status_code=403, detail="权限不足")
+    return current_user
 
 
 def _money(value) -> Decimal:
@@ -678,6 +693,47 @@ def dashboard_kpi(
         visible_customer_ids=visible_customer_ids,
         today=today,
     )
+
+
+@router.get("/customer-delivery-margin")
+def customer_delivery_margin(
+    customer_id: int | None = Query(default=None, gt=0),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(_customer_delivery_margin_access),
+) -> dict:
+    """Read-only dispatched-line sales/material margin projection."""
+    if (date_from is None) != (date_to is None):
+        raise HTTPException(status_code=422, detail="date_from 和 date_to 必须同时填写")
+    if date_from is None:
+        today = beijing_today()
+        date_from = today.replace(day=1)
+        date_to = today
+    if date_from > date_to:
+        raise HTTPException(status_code=422, detail="date_from 不能晚于 date_to")
+    if date_to == date.max:
+        raise HTTPException(status_code=422, detail="date_to 超出可查询范围")
+    visible_customer_ids = (
+        None
+        if has_unrestricted_customer_access(user, db)
+        else customer_scope_ids(user, db)
+    )
+    if customer_id is not None and visible_customer_ids is not None and customer_id not in visible_customer_ids:
+        raise HTTPException(status_code=403, detail="无权查看该客户")
+    payload = build_customer_delivery_margin(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        customer_id=customer_id,
+        visible_customer_ids=visible_customer_ids,
+        page=page,
+        page_size=page_size,
+    )
+    payload["as_of"] = datetime.now(_BEIJING).replace(microsecond=0).isoformat()
+    return payload
 
 
 _BEIJING = ZoneInfo("Asia/Shanghai")

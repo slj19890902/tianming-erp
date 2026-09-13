@@ -80,6 +80,7 @@ from app.services.location_candidates import (
 )
 from app.services.incoming_receipts import (
     IncomingReceiptError,
+    _requisition_can_receive,
     accept_short,
     current_supplier_order_items,
     receipt_history,
@@ -2433,6 +2434,9 @@ def _rows(
                 component_data = dict(data)
                 component_data["order_item_id"] = data["item_id"]
                 component_data["requisition_item_id"] = req.id
+                # The concrete purchase source is authoritative. A BOM parent's
+                # aggregate status can remain unreported while its children are ordered.
+                component_data["source_receivable"] = _requisition_can_receive(db, req, db.get(OrderItem, data["item_id"]))
                 # Any row backed by a concrete requisition item must use its
                 # own route key.  Otherwise a normal single-piece row falls
                 # through to the order-item receive/revert path and leaves the

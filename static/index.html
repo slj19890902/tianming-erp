@@ -7002,7 +7002,7 @@
                           <div v-if="component.component_product_id || component.product_code || component.product_name" class="bom-component-identity"><span>编码：{{ component.product_code || component.component?.product_code || '-' }}</span><span>名称：{{ component.product_name || component.component?.product_name || '未命名产品' }}</span><span>规格：{{ bomComponentSpecification(component) }}</span></div>
                         </div>
                         <div class="field"><label>父件单位用量（{{ component.unit || component.component?.unit || '子件单位待选' }}）</label><input class="input" type="number" min="1" step="1" v-model.number="component.quantity_per_set" /></div>
-                        <label v-if="bomEditor.inventory_mode === 'legacy'" class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> 必需</label>
+                        <label v-if="bomEditor.inventory_mode === 'legacy'" class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> {{ component.is_required === false ? '可选' : '必需' }}</label>
                         <select v-else class="select bom-component-relation" aria-label="子件库存关系" v-model="component.inventory_relation">
                           <option value="assembly" :disabled="!['assembled', 'manufactured'].includes(bomEditor.inventory_mode)">组装消耗</option>
                           <option value="accompany">独立配套</option>
@@ -25478,8 +25478,13 @@
             };
           },
           bomComponentSpecification(component) {
-            const source = component?.component || component || {};
-            const explicit = component?.specification || source.specification || source.specification_summary;
+            const loaded = component?.component && typeof component.component === "object";
+            const source = loaded ? component.component : (component || {});
+            // A selected/current component is authoritative; legacy snapshot fields
+            // are only a fallback while the child product has not been loaded.
+            const explicit = loaded
+              ? source.specification || source.specification_summary
+              : component?.specification || source.specification || source.specification_summary;
             if (String(explicit || "").trim()) return String(explicit).trim();
             const formatted = this.spec(source);
             return formatted && formatted !== "-" ? formatted : "规格待完善";
@@ -25491,8 +25496,9 @@
           },
           bomRelationshipSummary() {
             const parentUnit = String(this.productForm?.unit || "").trim() || "父件单位待选";
-            const components = (this.bomEditor?.components || []).filter(component => component?.component_product_id);
-            if (!components.length) return `1${parentUnit} = 请先选择子件及数量`;
+            const drafts = this.bomEditor?.components || [];
+            const components = drafts.filter(component => component?.component_product_id);
+            if (!drafts.length || !components.length) return `1${parentUnit} = 子件及数量待完善`;
             const parts = components.map(component => {
               const quantity = this.bomRelationshipQuantity(component.quantity_per_set);
               const unit = String(component.unit || component.component?.unit || "").trim() || "子件单位待完善";
@@ -25500,7 +25506,8 @@
               const name = component.product_name || component.component?.product_name || "名称待完善";
               return `${quantity}${unit} ${code}｜${name}`;
             });
-            return `1${parentUnit} = ${parts.join(" + ")}`;
+            const unfinished = drafts.length - components.length;
+            return `1${parentUnit} = ${parts.join(" + ")}${unfinished ? `；另有 ${unfinished} 个子件待完善` : ""}`;
           },
           normalizeBomComponent(raw) {
             const source = JSON.parse(JSON.stringify(raw || {}));

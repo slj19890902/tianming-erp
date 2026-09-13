@@ -340,6 +340,7 @@ def _approved_supplement_for_gap(gap, *, quantity_limit=None, unit_cost="2.50", 
 
 
 def test_real_gap_collector_and_approved_reference_complete_margin_without_writes(requisition_app):
+    from sqlalchemy import event
     from app.models.delivery import Delivery, DeliveryItem
     from app.models.order import OrderItem
     from app.services.customer_delivery_margin import build_customer_delivery_margin
@@ -377,9 +378,22 @@ def test_real_gap_collector_and_approved_reference_complete_margin_without_write
         gap = next(row for row in gaps if row["item"].id == item.id)
         db.add(_approved_supplement_for_gap(gap))
         db.flush()
-        result = build_customer_delivery_margin(
-            db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 30), customer_id=1
-        )
+        write_operations = []
+        engine = factory.kw["bind"]
+
+        def observe_write(_conn, _cursor, statement, _parameters, _context, _executemany):
+            operation = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else ""
+            if operation in {"INSERT", "UPDATE", "DELETE"}:
+                write_operations.append(operation)
+
+        event.listen(engine, "before_cursor_execute", observe_write)
+        try:
+            result = build_customer_delivery_margin(
+                db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 30), customer_id=1
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", observe_write)
+        assert write_operations == []
         assert result["summary"]["status"] == "complete_with_reference"
         assert result["summary"]["sales_amount"] == "3.60"
         assert result["summary"]["material_cost"] == "2.50"
@@ -390,7 +404,13 @@ def test_real_gap_collector_and_approved_reference_complete_margin_without_write
         assert "no_delivery_cost_source" in result["gaps"]["reason_counts"]
 
 
-def test_real_gap_reference_fingerprint_or_quantity_mismatch_stays_partial(requisition_app):
+@pytest.mark.parametrize(
+    ("quantity_limit", "target_suffix"),
+    [(1, ""), (2, "quantity-mismatch")],
+)
+def test_real_gap_reference_fingerprint_or_quantity_mismatch_stays_partial(
+    requisition_app, quantity_limit, target_suffix
+):
     from app.models.delivery import Delivery, DeliveryItem
     from app.models.order import OrderItem
     from app.services.customer_delivery_margin import build_customer_delivery_margin
@@ -426,7 +446,7 @@ def test_real_gap_reference_fingerprint_or_quantity_mismatch_stays_partial(requi
             _apply_supplements=False,
         )
         gap = next(row for row in gaps if row["item"].id == item.id)
-        db.add(_approved_supplement_for_gap(gap, quantity_limit=1, target_suffix="quantity-mismatch"))
+        db.add(_approved_supplement_for_gap(gap, quantity_limit=quantity_limit, target_suffix=target_suffix))
         db.flush()
         result = build_customer_delivery_margin(
             db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 30), customer_id=1
@@ -524,6 +544,8 @@ def test_two_customer_cross_date_pages_and_scope_are_additive(requisition_app):
         customer_rows = all_rows["customers"]["items"] + second_page["customers"]["items"]
         assert all_rows["customers"]["total"] == 2
         assert {row["customer_id"] for row in customer_rows} == {1, customer.id}
+        assert all_rows["summary"] == second_page["summary"]
+        assert all_rows["daily"] == second_page["daily"]
         assert sum(Decimal(row["metrics"]["sales_amount"]) for row in customer_rows) == Decimal(all_rows["summary"]["sales_amount"])
         assert sum(Decimal(row["metrics"]["sales_amount"]) for row in all_rows["daily"] if row["metrics"]["sales_amount"]) == Decimal(all_rows["summary"]["sales_amount"])
         selected = build_customer_delivery_margin(

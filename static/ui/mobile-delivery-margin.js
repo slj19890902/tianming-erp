@@ -253,6 +253,7 @@
     const customers = document.getElementById("deliveryMarginCustomers");
     const gaps = document.getElementById("deliveryMarginGaps");
     const customerSelect = document.getElementById("deliveryMarginCustomer");
+    const customerSearch = document.getElementById("deliveryMarginCustomerSearch");
     const customerNote = document.getElementById("deliveryMarginCustomerNote");
     const fromInput = document.getElementById("deliveryMarginDateFrom");
     const toInput = document.getElementById("deliveryMarginDateTo");
@@ -264,7 +265,7 @@
     const defaults = defaultDates();
     fromInput.value = defaults.from;
     toInput.value = defaults.to;
-    const localState = {shell, filters: {customerId: "", dateFrom: defaults.from, dateTo: defaults.to}, page: 1, total: 0, pageSize: 20, controller: null, optionsController: null, generation: 0, loaded: false, loading: false, customerOptions: []};
+    const localState = {shell, filters: {customerId: "", dateFrom: defaults.from, dateTo: defaults.to}, page: 1, total: 0, pageSize: 20, controller: null, optionsController: null, optionsTimer: null, generation: 0, disposed: false, loaded: false, loading: false, customerOptions: [], customerSearch: ""};
 
     function setState(message, kind) {
       stateBox.hidden = false;
@@ -277,12 +278,15 @@
       renderCustomerOptions(customerSelect, localState.customerOptions, localState.filters.customerId);
     }
 
-    async function loadCustomerOptions() {
+    async function loadCustomerOptions(keyword = "") {
+      if (localState.disposed) return;
       localState.optionsController?.abort();
       const controller = new AbortController();
       localState.optionsController = controller;
       try {
-        const payload = await apiGet("/api/master/customers?page=1&page_size=200&include_inactive=true", {signal: controller.signal});
+        const params = new URLSearchParams({page: "1", page_size: "50", include_inactive: "true"});
+        if (String(keyword || "").trim()) params.set("keyword", String(keyword).trim());
+        const payload = await apiGet(`/api/master/customers?${params.toString()}`, {signal: controller.signal});
         if (!controller.signal.aborted && localState.optionsController === controller) {
           customerNote.hidden = true;
           refreshCustomerOptions(payload?.items || []);
@@ -299,6 +303,7 @@
     }
 
     async function load(page = localState.page) {
+      if (localState.disposed) return;
       localState.controller?.abort();
       const controller = new AbortController();
       localState.controller = controller;
@@ -331,7 +336,8 @@
         pageText.textContent = `第 ${localState.page} / ${totalPages} 页`;
         prev.disabled = localState.page <= 1;
         next.disabled = localState.page >= totalPages || !localState.total;
-        refreshCustomerOptions(payload?.customer_options || payload?.customers?.items || []);
+        // The report page is not a customer directory; only merge an explicit authorized option payload.
+        refreshCustomerOptions(payload?.customer_options || []);
       } catch (error) {
         if (error?.name === "AbortError" || generation !== localState.generation) return;
         setState(error?.message || "送货材料毛利读取失败", "error");
@@ -345,8 +351,17 @@
       }
     }
 
-    customerSelect.addEventListener("change", () => { localState.filters.customerId = customerSelect.value; });
+    const onCustomerChange = () => { localState.filters.customerId = customerSelect.value; };
+    const onCustomerSearch = () => {
+      if (localState.disposed) return;
+      localState.customerSearch = customerSearch?.value || "";
+      clearTimeout(localState.optionsTimer);
+      localState.optionsTimer = setTimeout(() => loadCustomerOptions(localState.customerSearch), 180);
+    };
+    customerSelect.addEventListener("change", onCustomerChange);
+    customerSearch?.addEventListener("input", onCustomerSearch);
     const applyFilters = () => {
+      if (localState.disposed) return;
       const dateFrom = fromInput.value;
       const dateTo = toInput.value;
       if (!dateFrom || !dateTo || dateFrom > dateTo) {
@@ -358,13 +373,17 @@
       localState.filters.customerId = customerSelect.value;
       load(1);
     };
-    applyButton.addEventListener("click", applyFilters);
-    reloadButton.addEventListener("click", applyFilters);
-    prev.addEventListener("click", () => { if (localState.page > 1) load(localState.page - 1); });
-    next.addEventListener("click", () => {
+    const onApply = applyFilters;
+    const onReload = applyFilters;
+    const onPrev = () => { if (localState.page > 1) load(localState.page - 1); };
+    const onNext = () => {
       const totalPages = Math.max(1, Math.ceil(localState.total / localState.pageSize));
       if (localState.page < totalPages) load(localState.page + 1);
-    });
+    };
+    applyButton.addEventListener("click", onApply);
+    reloadButton.addEventListener("click", onReload);
+    prev.addEventListener("click", onPrev);
+    next.addEventListener("click", onNext);
     refreshCustomerOptions(shell?.customer_options || []);
     function onPageChange(page) {
       if (page !== "home") {
@@ -381,8 +400,16 @@
       if (!localState.loaded && !localState.loading && !localState.controller) load(localState.page);
     }
     function destroy() {
+      localState.disposed = true;
       localState.controller?.abort();
       localState.optionsController?.abort();
+      clearTimeout(localState.optionsTimer);
+      customerSelect.removeEventListener("change", onCustomerChange);
+      customerSearch?.removeEventListener("input", onCustomerSearch);
+      applyButton.removeEventListener("click", onApply);
+      reloadButton.removeEventListener("click", onReload);
+      prev.removeEventListener("click", onPrev);
+      next.removeEventListener("click", onNext);
       localState.controller = null;
       localState.optionsController = null;
       localState.generation += 1;

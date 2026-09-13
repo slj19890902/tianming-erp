@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>天明包装ERP</title>
     <link rel="icon" type="image/x-icon" href="/static/assets/logo.ico" />
+    <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260913-desktopmargin001" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <script src="/static/ui/order-context.js?v=217850427bf4"></script>
     <script src="/static/ui/workspace.js?v=20260912-orderpaging001"></script>
@@ -12,6 +13,7 @@
     <script src="/static/ui/purchase-workspace.js?v=66709867c608"></script>
     <script src="/static/ui/production-workspace.js?v=20260912-798ffca5c4df"></script>
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
+    <script src="/static/ui/desktop-delivery-margin.js?v=20260913-desktopmargin001"></script>
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
     <script src="/static/assets/phone-display.js?v=b9c44d142168"></script>
@@ -3246,6 +3248,31 @@
                 </div>
               </div>
               <div v-else class="empty" style="margin-top: 8px;">当前没有可显示的总览数据。</div>
+              <section v-if="canViewDeliveryMargin" id="desktopDeliveryMarginSection" class="dashboard-delivery-margin-shell">
+                <div id="desktopDeliveryMarginRoot" class="panel">
+                  <div class="dashboard-delivery-margin-head">
+                    <div><h3>客户送货材料毛利</h3><p class="muted">按真实送货明细统计；这是送货材料毛利，不是净利。</p></div>
+                    <span class="dashboard-delivery-margin-basis">日期：送货日期 · 含税人民币 · 已覆盖明细与参考补充分开</span>
+                  </div>
+                  <div class="dashboard-delivery-margin-filters" aria-label="客户送货材料毛利筛选">
+                    <label>客户搜索<input id="desktopDeliveryMarginCustomerSearch" type="search" placeholder="搜索授权客户" aria-label="搜索授权客户" /></label>
+                    <label>客户<select id="desktopDeliveryMarginCustomer" aria-label="客户"><option value="">全部授权客户</option></select></label>
+                    <label>开始日期<input id="desktopDeliveryMarginDateFrom" type="date" aria-label="开始日期" /></label>
+                    <label>结束日期<input id="desktopDeliveryMarginDateTo" type="date" aria-label="结束日期" /></label>
+                    <button id="desktopDeliveryMarginApply" class="btn small primary" type="button">查询</button>
+                    <button id="desktopDeliveryMarginRetry" class="btn small" type="button" hidden>重试</button>
+                    <span id="desktopDeliveryMarginCustomerNote" class="muted" hidden></span>
+                  </div>
+                  <div id="desktopDeliveryMarginState" class="status blue" hidden></div>
+                  <div id="desktopDeliveryMarginSummary" class="dashboard-delivery-margin-summary" hidden></div>
+                  <div class="dashboard-delivery-margin-charts">
+                    <div class="panel"><div class="section-title">销售额 vs 材料成本</div><div id="desktopDeliveryMarginBarChart" aria-label="销售额与材料成本柱图"></div></div>
+                    <div class="panel"><div class="section-title">每日材料毛利率趋势</div><div id="desktopDeliveryMarginTrend" aria-label="每日材料毛利率趋势"></div></div>
+                  </div>
+                  <div class="panel dashboard-delivery-margin-customers"><div class="section-title">客户明细</div><div id="desktopDeliveryMarginCustomers" aria-label="客户材料毛利表"></div><div class="dashboard-delivery-margin-pager"><span id="desktopDeliveryMarginPage">第 1 / 1 页</span><button id="desktopDeliveryMarginPrev" class="btn small" type="button">上一页</button><button id="desktopDeliveryMarginNext" class="btn small" type="button">下一页</button></div></div>
+                  <div id="desktopDeliveryMarginGaps" class="dashboard-delivery-margin-gaps"></div>
+                </div>
+              </section>
               <div class="dashboard-detail-summary">
                 <span>详细待办：低库存 {{ overview.low_stock_warnings?.length || 0 }} 款 · 今日日常待办 {{ overview.todos?.length || 0 }} 项</span>
                 <button class="btn small" type="button" :aria-expanded="dashboardDetailsVisible" @click="dashboardDetailsVisible=!dashboardDetailsVisible">{{ dashboardDetailsVisible ? '收起首页明细' : '展开首页明细' }}</button>
@@ -3331,8 +3358,8 @@
                   <div>今天新增订单：{{ kpi.today_orders || 0 }}</div>
                   <div>今天发货单：{{ kpi.today_deliveries || 0 }}</div>
                   <div>今天回单：{{ kpi.today_receipts || 0 }}</div>
-                  <div v-if="hasPermission('finance.view')">本月累计营收：¥ {{ money(kpi.monthly_revenue) }}</div>
-                  <div v-if="canViewCosts">本月毛利：¥ {{ money(kpi.monthly_gross_profit) }}</div>
+                  <div v-if="hasPermission('finance.view')">回单确认销售额（原口径）：¥ {{ money(kpi.monthly_revenue) }}</div>
+                  <div v-if="canViewCosts">对账毛利（原口径）：¥ {{ money(kpi.monthly_gross_profit) }}</div>
                   <div v-if="hasPermission('finance.view')">待收账款：¥ {{ money(kpi.outstanding_receivables) }}</div>
                 </div></div>
               </div>
@@ -10935,6 +10962,12 @@
               && this.hasPermission("orders.view");
           },
           canViewCosts() { return this.hasPermission("cost.view"); },
+          canViewDeliveryMargin() {
+            return ["admin", "boss"].includes(this.user?.role)
+              && this.hasPermission("dashboard.view")
+              && this.hasPermission("finance.view")
+              && this.hasPermission("cost.view");
+          },
           externalPurchaseConfirmBlocked() {
             if (this.externalPurchase.loading || this.externalPurchase.saving || this.externalPurchase.refreshingCandidates || !this.externalPurchase.items.length) return true;
             return this.externalPurchase.items.some(row => {
@@ -11599,6 +11632,9 @@
           }
         },
         watch: {
+          activePage() { this.$nextTick(() => this.syncDesktopDeliveryMargin()); },
+          user: { deep:true, handler() { this.$nextTick(() => this.syncDesktopDeliveryMargin()); } },
+          customerOptions: { deep:true, handler(options) { window.TmDesktopDeliveryMargin?.updateCustomerOptions?.(options || []); } },
           // 常用箱纸板成本参考：尺寸/箱型/材质变化时实时重算（不保存）
           "productForm.material_id"() { this.queueProductBoardCost(); this.autoApplyProductRecommendations(); },
           "productForm.box_category"() { this.queueProductBoardCost(); },
@@ -11633,6 +11669,7 @@
         },
         async mounted() {
           window.erpAuthRequired = () => {
+            window.TmDesktopDeliveryMargin?.destroy?.();
             this.authGeneration += 1;
             this.clearFinanceManualMutationSessionState();
             this.resetPagePerformanceState();
@@ -11665,6 +11702,7 @@
           window.addEventListener("message", this.handleWarehouseFrameMessage);
         },
         beforeUnmount() {
+          window.TmDesktopDeliveryMargin?.destroy?.();
           window.clearInterval(this.emailQueueTimer);
           window.removeEventListener("popstate", this.handlePdfWarehousePopState);
           window.removeEventListener("message", this.handleWarehouseFrameMessage);
@@ -14870,6 +14908,7 @@
             }
           },
           async logout() {
+            window.TmDesktopDeliveryMargin?.destroy?.();
             this.authGeneration += 1;
             this.clearFinanceManualMutationSessionState();
             this.resetPagePerformanceState();
@@ -15659,6 +15698,40 @@
               }, window.location.origin);
             });
           },
+          syncDesktopDeliveryMargin() {
+            const module = window.TmDesktopDeliveryMargin;
+            const identityKey = `${this.user?.id || "anonymous"}:${this.authGeneration}`;
+            if (!module || !this.canViewDeliveryMargin) {
+              module?.destroy?.();
+              return;
+            }
+            const sameIdentity = module._identityKey === identityKey || module._savedIdentityKey === identityKey;
+            if (this.activePage !== "dashboard") {
+              if (sameIdentity) module.leave?.();
+              else module.destroy?.();
+              return;
+            }
+            const root = document.getElementById("desktopDeliveryMarginRoot");
+            if (!root) {
+              if (sameIdentity) module.leave?.();
+              else module.destroy?.();
+              return;
+            }
+            if (module._mountedRoot === root && module._identityKey === identityKey) {
+              module.updateCustomerOptions?.(this.customerOptions || []);
+              return;
+            }
+            if (module._identityKey && module._identityKey !== identityKey) module.destroy?.();
+            if (!module._identityKey && module._savedIdentityKey && module._savedIdentityKey !== identityKey) module.destroy?.();
+            module.mount({
+              root,
+              identityKey,
+              customerOptions: this.customerOptions || [],
+              isAllowed: () => this.activePage === "dashboard" && this.canViewDeliveryMargin,
+              apiGet: (path, request = {}) => axios.get(path, request).then(response => response.data),
+            });
+            module._mountedRoot = root;
+          },
           async loadOverview() {
             this.overviewLoading = true;
             this.overviewError = "";
@@ -15678,6 +15751,7 @@
               return false;
             } finally {
               this.overviewLoading = false;
+              this.$nextTick(() => this.syncDesktopDeliveryMargin());
             }
           },
           async loadWarehouseCapacitySummary() {

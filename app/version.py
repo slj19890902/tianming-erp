@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.390"
-APP_VERSION_NAME = "开票客户下拉显示修复"
+APP_VERSION = "v0.22.391"
+APP_VERSION_NAME = "客户材料毛利与BOM界面优化"
 APP_BUILD_DATE = "2026-09-13"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4046,3 +4046,19 @@ APP_CHANGELOG = [
 ]
 APP_CHANGES = ["修复开票办理客户下拉被筛选区裁剪，保留原有客户筛选、权限与财务数据。"]
 APP_VERIFICATION_STEPS = ["刷新财务→开票办理，展开客户下拉，选择客户查询，再清空筛选查询。"]
+
+APP_CHANGELOG = [
+    *(f"v0.22.390：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.390：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "常用箱BOM显示父件与子件的数量、单位和可选关系，保留原组合与计价规则。",
+    "电脑和手机首页新增客户送货材料毛利看板，支持日期和客户筛选；明确实际成本、参考补充及资料缺口，不作为净利润。",
+    "成本看板仅对具备相关权限的管理员和老板开放；库存成本分页批量读取来源资格，减少重复查询。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员刷新电脑和手机首页，按本月及指定客户查询，核对送货材料毛利、参考成本与缺口；离开后返回核对筛选。",
+    "常用箱打开组合设置，核对父件与子件数量单位、规格及可选标记。",
+    "库存台账打开库存成本并翻页；员工账号确认没有新增成本看板。",
+]

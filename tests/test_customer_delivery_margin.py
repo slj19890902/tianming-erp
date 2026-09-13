@@ -309,3 +309,230 @@ def test_margin_endpoint_reads_only_dispatched_current_lines(requisition_app):
     assert body["summary"]["delivery_line_count"] == 1
     assert body["summary"]["sales_amount"] == "10.00"
     assert body["summary"]["unknown_unit_quantity"] == 2
+
+
+def _approved_supplement_for_gap(gap, *, quantity_limit=None, unit_cost="2.50", target_suffix=""):
+    from app.models.material_cost_supplement import FinanceMaterialCostSupplement as Supplement
+    from app.services.material_cost_supplement import canonical, fingerprint, target_identity
+
+    identity, target_fingerprint = target_identity(gap)
+    if target_suffix:
+        target_fingerprint = fingerprint({**identity, "test_suffix": target_suffix})
+    return Supplement(
+        delivery_item_id=gap["item"].id,
+        inventory_lot_id=None,
+        month=gap["month"],
+        source_kind="untraced_delivery",
+        source_id=gap["item"].id,
+        target_fingerprint=target_fingerprint,
+        target_json=canonical(identity),
+        quantity_limit=quantity_limit or gap["quantity"],
+        unit_cost=Decimal(unit_cost),
+        currency="CNY",
+        reference_kind="approved_test_reference",
+        evidence_json=canonical({"test": True}),
+        evidence_fingerprint=fingerprint({"test": True}),
+        algorithm_version="test-reference-v1",
+        batch_id=f"margin-test-{gap['item'].id}-{target_suffix or 'match'}",
+        reason="测试已批准历史参考成本",
+        created_by=1,
+    )
+
+
+def test_real_gap_collector_and_approved_reference_complete_margin_without_writes(requisition_app):
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import OrderItem
+    from app.services.customer_delivery_margin import build_customer_delivery_margin
+    from app.services.material_cost_lineage import material_cost_coverage_report
+
+    _app, factory = requisition_app
+    with factory() as db:
+        delivery = Delivery(
+            delivery_number="MARGIN-REAL-SUPPLEMENT",
+            customer_id=1,
+            delivery_date=date(2026, 9, 6),
+            status="dispatched",
+            total_quantity=1,
+        )
+        db.add(delivery)
+        db.flush()
+        item = DeliveryItem(
+            delivery_id=delivery.id,
+            source_type="order",
+            order_item_id=1,
+            delivered_quantity=1,
+        )
+        db.add(item)
+        db.flush()
+        db.get(OrderItem, 1).price_tax_mode_snapshot = "tax_inclusive"
+        gaps = []
+        material_cost_coverage_report(
+            db,
+            month="2026-09",
+            date_from=date(2026, 9, 1),
+            date_to_exclusive=date(2026, 9, 30),
+            _gap_collector=gaps,
+            _apply_supplements=False,
+        )
+        gap = next(row for row in gaps if row["item"].id == item.id)
+        db.add(_approved_supplement_for_gap(gap))
+        db.flush()
+        result = build_customer_delivery_margin(
+            db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 30), customer_id=1
+        )
+        assert result["summary"]["status"] == "complete_with_reference"
+        assert result["summary"]["sales_amount"] == "3.60"
+        assert result["summary"]["material_cost"] == "2.50"
+        assert result["summary"]["material_margin"] == "1.10"
+        assert result["summary"]["supplemental_material_cost"] == "2.50"
+        assert result["summary"]["management_cost_gap_lines"] == 0
+        assert result["gaps"]["total_lines"] == 1
+        assert "no_delivery_cost_source" in result["gaps"]["reason_counts"]
+
+
+def test_real_gap_reference_fingerprint_or_quantity_mismatch_stays_partial(requisition_app):
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import OrderItem
+    from app.services.customer_delivery_margin import build_customer_delivery_margin
+    from app.services.material_cost_lineage import material_cost_coverage_report
+
+    _app, factory = requisition_app
+    with factory() as db:
+        delivery = Delivery(
+            delivery_number="MARGIN-REAL-SUPPLEMENT-MISMATCH",
+            customer_id=1,
+            delivery_date=date(2026, 9, 7),
+            status="dispatched",
+            total_quantity=2,
+        )
+        db.add(delivery)
+        db.flush()
+        item = DeliveryItem(
+            delivery_id=delivery.id,
+            source_type="order",
+            order_item_id=1,
+            delivered_quantity=2,
+        )
+        db.add(item)
+        db.flush()
+        db.get(OrderItem, 1).price_tax_mode_snapshot = "tax_inclusive"
+        gaps = []
+        material_cost_coverage_report(
+            db,
+            month="2026-09",
+            date_from=date(2026, 9, 1),
+            date_to_exclusive=date(2026, 9, 30),
+            _gap_collector=gaps,
+            _apply_supplements=False,
+        )
+        gap = next(row for row in gaps if row["item"].id == item.id)
+        db.add(_approved_supplement_for_gap(gap, quantity_limit=1, target_suffix="quantity-mismatch"))
+        db.flush()
+        result = build_customer_delivery_margin(
+            db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 30), customer_id=1
+        )
+        assert result["summary"]["status"] == "partial"
+        assert result["summary"]["sales_amount"] == "7.20"
+        assert result["summary"]["material_cost"] is None
+        assert result["summary"]["material_margin"] is None
+        assert result["summary"]["management_cost_gap_lines"] == 1
+        assert result["gaps"]["total_lines"] == 1
+
+
+def test_two_customer_cross_date_pages_and_scope_are_additive(requisition_app):
+    from app.models.customer import Customer
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.services.customer_delivery_margin import build_customer_delivery_margin
+
+    _app, factory = requisition_app
+    with factory() as db:
+        customer = Customer(
+            customer_number=2,
+            customer_code="SECOND",
+            name="第二客户",
+            payment_term_days=30,
+            credit_limit=Decimal("100000"),
+        )
+        product = Product(
+            customer_id=customer.id if customer.id else 2,
+            product_code="SECOND-PRODUCT",
+            customer_material_code="SECOND-PRODUCT",
+            product_name="第二客户产品",
+            box_category="normal",
+            box_style="A1",
+        )
+        db.add(customer)
+        db.flush()
+        product.customer_id = customer.id
+        db.add(product)
+        db.flush()
+        order = db.get(Order, 1)
+        second_order = Order(
+            order_number="MARGIN-SECOND-ORDER",
+            customer_id=customer.id,
+            order_date=date(2026, 8, 20),
+            delivery_date=date(2026, 9, 3),
+            status="pending_production",
+            payment_status="unpaid",
+            total_amount=Decimal("3.60"),
+        )
+        db.add(second_order)
+        db.flush()
+        second_item = OrderItem(
+            order_id=second_order.id,
+            product_id=product.id,
+            quantity=10,
+            unit_price=Decimal("3.60"),
+            subtotal=Decimal("36.00"),
+            material_status="pending",
+            snapshot_product_name="第二客户产品",
+            price_tax_mode_snapshot="tax_inclusive",
+        )
+        db.add(second_item)
+        db.flush()
+        order.items[0].price_tax_mode_snapshot = "tax_inclusive"
+        for index, (customer_id, order_item_id, delivery_date) in enumerate(
+            ((1, order.items[0].id, date(2026, 9, 1)),
+             (1, order.items[0].id, date(2026, 9, 2)),
+             (customer.id, second_item.id, date(2026, 9, 3))),
+            start=1,
+        ):
+            delivery = Delivery(
+                delivery_number=f"MARGIN-PAGE-{index}",
+                customer_id=customer_id,
+                delivery_date=delivery_date,
+                status="dispatched",
+                total_quantity=1,
+            )
+            db.add(delivery)
+            db.flush()
+            db.add(DeliveryItem(
+                delivery_id=delivery.id,
+                source_type="order",
+                order_item_id=order_item_id,
+                delivered_quantity=1,
+            ))
+        db.commit()
+        all_rows = build_customer_delivery_margin(
+            db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 3), page=1, page_size=1
+        )
+        second_page = build_customer_delivery_margin(
+            db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 3), page=2, page_size=1
+        )
+        customer_rows = all_rows["customers"]["items"] + second_page["customers"]["items"]
+        assert all_rows["customers"]["total"] == 2
+        assert {row["customer_id"] for row in customer_rows} == {1, customer.id}
+        assert sum(Decimal(row["metrics"]["sales_amount"]) for row in customer_rows) == Decimal(all_rows["summary"]["sales_amount"])
+        assert sum(Decimal(row["metrics"]["sales_amount"]) for row in all_rows["daily"] if row["metrics"]["sales_amount"]) == Decimal(all_rows["summary"]["sales_amount"])
+        selected = build_customer_delivery_margin(
+            db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 3), customer_id=1, visible_customer_ids={1}
+        )
+        assert selected["summary"]["delivery_line_count"] == 2
+        assert selected["customers"]["total"] == 1
+        excluded = build_customer_delivery_margin(
+            db, date_from=date(2026, 9, 1), date_to=date(2026, 9, 3), customer_id=customer.id, visible_customer_ids={1}
+        )
+        assert excluded["summary"]["delivery_line_count"] == 0
+        assert excluded["customers"]["total"] == 0

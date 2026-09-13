@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.393"
-APP_VERSION_NAME = "对账来料与常用箱操作闭环"
+APP_VERSION = "v0.22.394"
+APP_VERSION_NAME = "BOM来料资格统一"
 APP_BUILD_DATE = "2026-09-13"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4093,4 +4093,17 @@ APP_VERIFICATION_STEPS = [
     "刷新客户对账，找到昌兴ST-202609-002，打开并导出PDF/Excel；客户核对后再确认和生成开票任务。",
     "来料待入库核对YL222的纸箱、衬板、长片、短片；生产待安排不再显示已存放的205余料，库存去向仍可查。",
     "常用箱选择客户，核对顶部分页、翻页和窗口适配；组合BOM展开旧版外购组件可继续查看历史设置。",
+]
+
+APP_CHANGELOG = [
+    *(f"v0.22.393：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.393：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "BOM来料按实际报料来源判断收料资格，不再被父订单汇总的未报料状态误拦截。",
+    "保留价格冻结、正式货位、数量和重复提交保护，已关闭来源不可再次收料。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新来料待入库，核对已报料BOM子件可操作；按实际到货数量确认，不重复收料。",
 ]

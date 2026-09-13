@@ -20984,7 +20984,10 @@
             return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_disposition:surplusDisposition,surplus_location_id:Number(row.surplus_location_id)||null,expected_surplus_layout_version:surplusLocation?.layout_version||null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
           },
           canReceiveIncoming(row) {
-            return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status) && (row.purpose_status==='legacy_unset' || row.purpose_status==='frozen') && !this.incomingReceiptExecutionIssue(row);
+            const sourceReady = typeof row?.source_receivable === "boolean"
+              ? row.source_receivable
+              : ["已报料", "供应商已排单"].includes(row?.requisition_status);
+            return row?.material_status === "pending" && sourceReady && (row.purpose_status==='legacy_unset' || row.purpose_status==='frozen') && !this.incomingReceiptExecutionIssue(row);
           },
           incomingSelectedCount() {
             return this.incomingPending.filter(row => this.canReceiveIncoming(row) && this.incomingSelected[row.item_id]).length;

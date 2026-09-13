@@ -11,6 +11,7 @@ from app.models.delivery import Delivery
 from app.models.warehouse_inventory import InventoryLot, InventoryMovement, DeliveryInventoryAllocation
 from app.services.material_cost_lineage import material_cost_coverage_report
 from app.services.bom_subkits import SubkitError
+from app.core.time_contract import beijing_today
 from test_p1_33c3_external_packaging_purchase_confirmation import purchase_app
 from tests.test_multilevel_bom_external_receipts import prepare, receive, _login, _confirm
 from tests.test_p1_81_receipt_purpose_flow import _seed_material_and_staging, _p181_published_map_identity
@@ -50,7 +51,8 @@ def test_external_real_receipts_dispatch_cost_and_cancel(purchase_app, _p181_pub
             with pytest.raises(SubkitError, match='成本身份不一致'):
                 graph_material_sources(db, lot)
             db.rollback()
-        created = client.post('/api/deliveries', json={'customer_id':customer_id, 'delivery_date':'2026-09-10',
+        delivery_date = beijing_today()
+        created = client.post('/api/deliveries', json={'customer_id':customer_id, 'delivery_date':delivery_date.isoformat(),
             'items':[{'order_item_id':item_id, 'delivered_quantity':1}]})
         assert created.status_code == 201, created.text
         did = created.json()['id']
@@ -71,7 +73,7 @@ def test_external_real_receipts_dispatch_cost_and_cancel(purchase_app, _p181_pub
         blocked = reverse(client, last.json()['receipt']['id'])
         assert blocked.status_code == 409, blocked.text
         with factory() as db:
-            report = material_cost_coverage_report(db, month='2026-09')
+            report = material_cost_coverage_report(db, month=delivery_date.strftime('%Y-%m'))
             assert report['covered_delivery_lines'] == 1, report
             assert report['actual_material_cost'] == Decimal('29.70' if direct else '59.40')
             portions = list(db.scalars(select(Portion)))
@@ -88,7 +90,7 @@ def test_external_real_receipts_dispatch_cost_and_cancel(purchase_app, _p181_pub
         assert cancelled.status_code == 200, cancelled.text
         with factory() as db:
             assert db.get(OrderItem, item_id).delivered_quantity == 0
-            assert material_cost_coverage_report(db, month='2026-09')['actual_material_cost'] == 0
+            assert material_cost_coverage_report(db, month=delivery_date.strftime('%Y-%m'))['actual_material_cost'] == 0
             assert [f.id for f in db.scalars(select(Fact))] == fact_ids
             assert sum(l.quantity_reserved for l in db.scalars(select(InventoryLot))) == 2
         # Once dispatch is actually reversed, the receipt can unwind too.

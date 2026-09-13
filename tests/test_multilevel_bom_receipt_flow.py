@@ -98,6 +98,13 @@ def test_graph_receipt_delivery_api_dispatch_and_cancel(composite_requisition_ap
             report = material_cost_coverage_report(db, month=beijing_today().strftime("%Y-%m"))
             assert report["covered_delivery_lines"] == 1, report
             assert report["actual_material_cost"] == Decimal("4.44" if liner else "3.46")
+            from app.services.customer_delivery_margin import build_customer_delivery_margin
+            margin = build_customer_delivery_margin(
+                db, date_from=beijing_today(), date_to=beijing_today(),
+                customer_id=1, visible_customer_ids=None,
+            )
+            assert margin["summary"]["delivery_line_count"] == 1
+            assert margin["summary"]["unknown_unit_quantity"] == 0
             cost_facts = list(db.scalars(select(FinanceDeliveryGraphCostFact)))
             assert len(cost_facts) == len(expected_products)
             frozen_ids = [f.id for f in cost_facts]

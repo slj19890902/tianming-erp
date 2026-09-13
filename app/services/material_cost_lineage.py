@@ -525,7 +525,10 @@ def _latest_facts_by_source(
 
 
 def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=None, _apply_supplements=True,
-                                  visible_customer_ids: set[int] | None = None) -> dict[str, Any]:
+                                  visible_customer_ids: set[int] | None = None,
+                                  date_from: date | None = None,
+                                  date_to_exclusive: date | None = None,
+                                  _line_collector=None) -> dict[str, Any]:
     """Return a small, actionable month-close quality report.
 
     Delivery date is the physical material-cost period.  Revenue remains on
@@ -534,12 +537,18 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
     """
 
     month_start, next_month_start = _month_bounds(month)
+    # The month remains the immutable supplement/fingerprint identity.  A
+    # caller may narrow the physical delivery window inside that month, but
+    # never replace ``month`` with an arbitrary period string.
+    period_start = max(month_start, date_from) if date_from is not None else month_start
+    period_end = min(next_month_start, date_to_exclusive) if date_to_exclusive is not None else next_month_start
     delivery_rows = list(
         db.execute(
             select(
                 DeliveryItem,
                 Delivery.delivery_number,
                 Delivery.delivery_date,
+                Delivery.customer_id,
                 Customer.name,
             )
             .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
@@ -547,8 +556,8 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
             .where(
                 Delivery.status == "dispatched",
                 DeliveryItem.is_current.is_(True),
-                Delivery.delivery_date >= month_start,
-                Delivery.delivery_date < next_month_start,
+                Delivery.delivery_date >= period_start,
+                Delivery.delivery_date < period_end,
                 True if visible_customer_ids is None else Delivery.customer_id.in_(visible_customer_ids),
             )
             .order_by(Delivery.delivery_date, Delivery.id, DeliveryItem.id)
@@ -573,13 +582,14 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
     row_meta = {
         int(item.id): {
             "delivery_item_id": int(item.id),
+            "customer_id": int(customer_id),
             "delivery_number": delivery_number,
             "delivery_date": delivery_date,
             "customer_name": customer_name,
             "delivered_quantity": int(item.delivered_quantity or 0),
             "source_type": item.source_type,
         }
-        for item, delivery_number, delivery_date, customer_name in delivery_rows
+        for item, delivery_number, delivery_date, customer_id, customer_name in delivery_rows
     }
     sources_by_item: dict[int, list[dict[str, Any]]] = {
         item_id: [] for item_id in delivery_item_ids
@@ -710,6 +720,7 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
     foreign_currency_sources = 0
     actual_material_cost = Decimal("0")
     currency_totals: dict[str, Decimal] = {}
+    line_costs: dict[int, Decimal] = {}
     covered_lines = 0
     partial_lines = 0
     missing_details: list[dict[str, Any]] = []
@@ -757,6 +768,7 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
                 else:
                     foreign_currency_sources += 1
                     line_reasons.add("foreign_currency_rate_missing")
+                    collect_gap(item_id, source, "foreign_currency_rate_missing")
                 continue
             fact = facts.get(key)
             if fact is not None:
@@ -805,6 +817,7 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
         elif line_frozen:
             partial_lines += 1
         actual_material_cost += line_cost
+        line_costs[item_id] = line_cost
         if line_reasons and len(missing_details) < 20:
             meta = row_meta[item_id]
             missing_details.append(
@@ -840,6 +853,52 @@ def material_cost_coverage_report(db: Session, *, month: str, _gap_collector=Non
         supplemental["management_material_cost"] = (
             actual_material_cost + supplemental["supplemental_material_cost"]
         ).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+    if _line_collector is not None:
+        # Emit complete line projections before any display-oriented gap list
+        # is truncated.  ``summarize`` keeps every adopted supplement in
+        # supplemental_details, so a line can be complete with reference even
+        # when its actual source was not frozen.
+        supplement_amounts: dict[tuple[int, str, int], Decimal] = {}
+        for row in supplemental.get("supplemental_details", []):
+            key = (int(row["delivery_item_id"]), str(row.get("source_kind") or ""), int(row.get("source_id") or 0))
+            supplement_amounts[key] = supplement_amounts.get(key, Decimal("0")) + Decimal(str(row["amount"]))
+        supplemented_keys = set(supplement_amounts)
+        gaps_by_item: dict[int, list[dict[str, Any]]] = {}
+        for gap in gap_records:
+            source = gap.get("source") or {}
+            gaps_by_item.setdefault(int(gap["item"].id), []).append(gap)
+        for item_id in delivery_item_ids:
+            sources = sources_by_item[item_id]
+            line_reasons = set()
+            for gap in gaps_by_item.get(item_id, []):
+                line_reasons.add(str(gap["reason"]))
+            actual_complete = bool(sources) and not line_reasons
+            line_supplement = Decimal("0")
+            management_complete = actual_complete
+            if not actual_complete and gaps_by_item.get(item_id):
+                unresolved = False
+                for gap in gaps_by_item[item_id]:
+                    source = gap.get("source") or {}
+                    key = (item_id, str(source.get("kind") or "untraced_delivery"), int(source.get("id") or item_id))
+                    if key not in supplemented_keys:
+                        unresolved = True
+                        continue
+                    line_supplement += supplement_amounts[key]
+                management_complete = not unresolved
+            elif not sources:
+                management_complete = False
+            line_meta = row_meta[item_id]
+            _line_collector.append({
+                "delivery_item_id": item_id,
+                "customer_id": int(line_meta["customer_id"]),
+                "delivery_date": line_meta["delivery_date"],
+                "actual_material_cost": line_costs.get(item_id, Decimal("0.00")).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP),
+                "supplemental_material_cost": line_supplement.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP),
+                "management_material_cost": (line_costs.get(item_id, Decimal("0.00")) + line_supplement).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP),
+                "actual_cost_complete": actual_complete,
+                "management_cost_complete": management_complete,
+                "reason_codes": sorted(line_reasons),
+            })
     return {
         "month": month,
         "accounting_basis": "按送货日期统计物理出库；人民币金额按收料时冻结的含税采购成本",

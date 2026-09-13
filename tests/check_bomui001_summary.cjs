@@ -70,5 +70,6 @@ assert.equal(
 context.bomEditor.components = [{component_product_id: null, quantity_per_set: 1}];
 assert.match(context.bomRelationshipSummary(), /待完善/);
 context.bomEditor.components = [{component_product_id: 11, quantity_per_set: 2, unit: "只", product_code: "A-01", product_name: "长边", is_required: false}];
+assert.equal(context.bomRelationshipSummary(), "1只 = 2只 A-01｜长边（可选）");
 assert.match(html, /component\.is_required === false \? '可选' : '必需'/);
 console.log("BOMUI001 dynamic relationship summary passed");

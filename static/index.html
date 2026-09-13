@@ -25504,7 +25504,7 @@
               const unit = String(component.unit || component.component?.unit || "").trim() || "子件单位待完善";
               const code = component.product_code || component.component?.product_code || "编码待完善";
               const name = component.product_name || component.component?.product_name || "名称待完善";
-              return `${quantity}${unit} ${code}｜${name}`;
+              return `${quantity}${unit} ${code}｜${name}${component.is_required === false ? "（可选）" : ""}`;
             });
             const unfinished = drafts.length - components.length;
             return `1${parentUnit} = ${parts.join(" + ")}${unfinished ? `；另有 ${unfinished} 个子件待完善` : ""}`;

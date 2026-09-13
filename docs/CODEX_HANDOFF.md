@@ -1,5 +1,9 @@
 # Codex 项目交接
 
+## 2026-09-13 ERP_NEXT v0.22.391 客户材料毛利与BOM
+
+- 签名代码5431cb8b，托管D:/TianmingERP及NAS/完整Setup/bootstrap同步391（包5aefaffdd605f4f8bff33660cc825bfbd838c4d2b3fa6cdc8e08c9ba8ff681e4）。BOM关系、桌面/手机客户送货材料毛利、库存来源资格批量查询已完成Astra复核；mq0912无DDL/业务事实回填，助手385及配置不变。备份20260913-155456-e0086be7已验证，完整性ok/FK0，19项正式只读核对通过。成本参考与缺口保留，不是净利润；待管理员人工验收。见docs/tasks/ERP_NEXT_20260913.md和NAS 20260913_ERP_NEXT_v391统一发布.md。
+
 ## 2026-09-13 FINUI001 v0.22.390 开票客户下拉
 
 - 代码ff1a42f0，正式托管D:/TianmingERP及NAS更新源/完整Setup同步390（包1a97e54e8bf6cde8de76a8ef3ba3aa238c9778972b7647b794d3684862213ed4）。仅开票筛选区复用防裁剪样式，mq0912无新迁移或业务回填；助手385和HTTPS配置保留。备份20260913-141346-424bfdde已验证，完整性ok/FK0，7项只读核对通过；管理员人工页面验收待完成。见docs/tasks/FINUI001_20260913.md和NAS独立同名回执；ERP_NEXT余下五项未计完成。

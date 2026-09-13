@@ -10,7 +10,7 @@ from app.models.warehouse_inventory import (
     SemiFinishedInventoryDetail as Semi, WarehouseLocation as Location,
 )
 from app.services.inventory_valuation import cost_payload
-from app.services.inventory_cost_rules import is_revaluable
+from app.services.inventory_revaluation_readiness import batch_revaluation_readiness
 
 BASIS = "按批次冻结的人民币成本，含可用、预占及损坏实物；材料成本、外购价与售价参考分别标明"
 SUMMARY_BATCH_SIZE = 200
@@ -62,7 +62,9 @@ def read_inventory_cost_page(db, scoped_ids, *, page=1, page_size=50, keyword=""
     if page_ids:
         details = select(Lot).where(Lot.id.in_(page_ids)).order_by(Lot.id).limit(page_size).options(
             selectinload(Lot.location), selectinload(Lot.finished_detail), selectinload(Lot.semi_finished_detail))
-        for lot in db.scalars(details):
+        page_lots = list(db.scalars(details))
+        revaluation_readiness = batch_revaluation_readiness(db, page_lots)
+        for lot in page_lots:
             value = cost_payload(lot, db)
             detail = lot.finished_detail or lot.semi_finished_detail
             value.update(lot_number=lot.lot_number, inventory_type=lot.inventory_type,
@@ -70,7 +72,7 @@ def read_inventory_cost_page(db, scoped_ids, *, page=1, page_size=50, keyword=""
                 location_name=lot.location.location_name if lot.location else "未归位",
                 product_code=getattr(detail, "inventory_code_snapshot", None),
                 product_id=getattr(detail, "product_id", None),
-                can_revalue=bool(lot.finished_detail and is_revaluable(db, lot)),
+                can_revalue=bool(lot.finished_detail and revaluation_readiness.get(int(lot.id), False)),
                 product_name=getattr(detail, "product_name_snapshot", None) or getattr(detail, "internal_name", None),
                 customer_name=getattr(detail, "owner_customer_name_snapshot", None))
             rows.append(value)

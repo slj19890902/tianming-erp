@@ -64,6 +64,7 @@ def test_unknown_unit_does_not_hide_a_complete_tax_and_cost_amount():
 
 def test_bom_root_unit_comes_from_exact_historical_source_contract(monkeypatch):
     from app.services import customer_delivery_margin as service
+    from app.services.multilevel_bom_plan import FrozenBom, ProductNode
 
     monkeypatch.setattr(
         "app.services.multilevel_bom_delivery_history.historical_delivery_component_demands",
@@ -71,7 +72,17 @@ def test_bom_root_unit_comes_from_exact_historical_source_contract(monkeypatch):
     )
     monkeypatch.setattr(
         "app.services.multilevel_bom_orders.read_order_bom_source_contract",
-        lambda *args, **kwargs: NS(graph=NS(root_id=7, nodes={7: NS(unit="套")})),
+        lambda *args, **kwargs: NS(
+            graph=FrozenBom(
+                root_id=7,
+                customer_id=1,
+                nodes=(
+                    ProductNode(7, 1, 1, "父件", "套", "assembled"),
+                    ProductNode(8, 1, 1, "子件", "只", "purchased"),
+                ),
+                edges=(),
+            )
+        ),
     )
     result = service._frozen_bom_root_unit(
         None, delivery_item_id=3, order_item=NS(id=11)

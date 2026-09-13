@@ -1,0 +1,56 @@
+/* Phase 5 mobile delivery-material margin: compact, read-only owner dashboard. */
+.delivery-margin-section { margin-top: 12px; }
+.delivery-margin-kicker { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.delivery-margin-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-top: 10px; }
+.delivery-margin-filters label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 800; }
+.delivery-margin-filters label:first-child { grid-column: 1 / -1; }
+.delivery-margin-filters select, .delivery-margin-filters input { width: 100%; min-height: 42px; padding: 7px 9px; border: 1px solid #aabbb2; border-radius: 9px; background: #fff; color: var(--ink); }
+.delivery-margin-filter-actions { display: flex; grid-column: 1 / -1; justify-content: flex-end; gap: 7px; }
+.delivery-margin-summary { margin-top: 10px; }
+.delivery-margin-summary .metric { background: #f3f7f5; }
+.delivery-margin-summary .metric strong { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.delivery-margin-summary .metric.partial strong { color: var(--orange); }
+.delivery-margin-summary .metric.gap strong { color: var(--muted); font-size: 17px; }
+.delivery-margin-panel h3 { margin: 13px 0 7px; font-size: 15px; }
+.delivery-margin-chart { padding: 10px; border: 1px solid var(--line); border-radius: 11px; background: #fbfdfc; }
+.delivery-margin-chart-legend { display: flex; flex-wrap: wrap; gap: 8px 13px; margin-bottom: 8px; color: var(--muted); font-size: 11px; }
+.delivery-margin-chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.delivery-margin-chart-legend i { width: 9px; height: 9px; border-radius: 2px; }
+.delivery-margin-chart-legend .sales i { background: #2c7ab8; }
+.delivery-margin-chart-legend .cost i { background: #d97706; }
+.delivery-margin-bar-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 7px; align-items: center; min-height: 31px; }
+.delivery-margin-bar-label { color: var(--muted); font-size: 11px; }
+.delivery-margin-bar-track { display: grid; gap: 4px; }
+.delivery-margin-bar { min-width: 3px; height: 9px; border-radius: 99px; }
+.delivery-margin-bar.sales { background: #2c7ab8; }
+.delivery-margin-bar.cost { background: #d97706; }
+.delivery-margin-bar.unknown { width: 3px !important; background: repeating-linear-gradient(135deg, #cbd5d1 0 3px, transparent 3px 6px); }
+.delivery-margin-bar-value { margin-left: 5px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.delivery-margin-chart-note { margin: 8px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.delivery-margin-trend { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 11px; background: #fbfdfc; }
+.delivery-margin-trend-row { display: grid; grid-template-columns: 68px minmax(0, 1fr) 52px; gap: 6px; align-items: center; min-height: 25px; }
+.delivery-margin-trend-date, .delivery-margin-trend-value { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.delivery-margin-trend-value { text-align: right; white-space: nowrap; }
+.delivery-margin-trend-track { height: 9px; overflow: hidden; border-radius: 99px; background: #edf2ef; }
+.delivery-margin-trend-bar { height: 100%; border-radius: 99px; background: var(--green); }
+.delivery-margin-trend-bar.negative { background: var(--red); }
+.delivery-margin-trend-bar.unknown { width: 3px !important; background: repeating-linear-gradient(135deg, #cbd5d1 0 3px, transparent 3px 6px); }
+.delivery-margin-customer-list { display: grid; gap: 7px; }
+.delivery-margin-customer-row { padding: 9px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.delivery-margin-customer-toggle { display: flex; width: 100%; min-height: 35px; align-items: center; justify-content: space-between; gap: 8px; padding: 0; border: 0; background: transparent; color: var(--ink); text-align: left; }
+.delivery-margin-customer-toggle strong { overflow-wrap: anywhere; }
+.delivery-margin-customer-toggle span { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.delivery-margin-customer-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 7px; }
+.delivery-margin-customer-fact { padding: 6px; border-radius: 7px; background: #f3f6f4; }
+.delivery-margin-customer-fact strong { display: block; font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.delivery-margin-customer-fact span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+.delivery-margin-gap-summary { margin-top: 10px; }
+.delivery-margin-gap-summary summary { min-height: 44px; padding: 11px 0; color: var(--orange); font-size: 13px; font-weight: 900; cursor: pointer; }
+.delivery-margin-gap-list { display: grid; gap: 6px; padding-bottom: 2px; }
+.delivery-margin-gap-item { padding: 8px; border-radius: 8px; background: #fff8eb; color: #87500c; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.delivery-margin-gap-reasons { margin-top: 3px; color: var(--muted); }
+.delivery-margin-section .pager { margin-bottom: 0; }
+@media(max-width: 350px) {
+  .delivery-margin-trend-row { grid-template-columns: 60px minmax(0, 1fr) 48px; }
+  .delivery-margin-filters { gap: 6px; }
+}

@@ -152,29 +152,45 @@ def _frozen_bom_root_unit(db: Session, *, delivery_item_id: int, order_item: Ord
     that projection.  Read the historical source contract and then the root
     node itself; never consult the mutable Product master.
     """
-    try:
-        from app.services.multilevel_bom_delivery_history import historical_delivery_component_demands
-        from app.services.multilevel_bom_orders import read_compiled_order_bom, read_order_bom_source_contract
+    from app.services.multilevel_bom_delivery_history import historical_delivery_component_demands
+    from app.services.multilevel_bom_orders import read_compiled_order_bom, read_order_bom_source_contract
+    from app.services.multilevel_bom_plan import BomPlanError
 
+    try:
         demands = historical_delivery_component_demands(
             db, delivery_item_id=delivery_item_id, order_item_id=order_item.id
         )
-        root = next((d for d in demands if getattr(d, "is_graph_root", False) and getattr(d, "unit", None)), None)
-        if root is not None:
-            return str(root.unit).strip() or None
-        # A child-only delivery still carries a frozen snapshot ID. Re-read
-        # that exact source contract to obtain its graph root unit.
+    except BomPlanError:
+        # A broken/missing historical source is a data gap, while programming
+        # errors (AttributeError, TypeError, etc.) must remain visible.
+        return None
+    root = next((d for d in demands if getattr(d, "is_graph_root", False) and getattr(d, "unit", None)), None)
+    if root is not None:
+        return str(root.unit).strip() or None
+    # A child-only delivery still carries a frozen snapshot ID. Re-read
+    # that exact source contract to obtain its graph root unit.  FrozenBom
+    # stores nodes as a tuple, so never treat this as a product-id mapping.
+    try:
         if demands:
             compiled = read_order_bom_source_contract(db, order_item.id, demands[0].snapshot_id)
         else:
             compiled = read_compiled_order_bom(db, order_item.id)
-        if compiled is None:
-            return None
-        root_node = compiled.graph.nodes.get(compiled.graph.root_id)
-        unit = getattr(root_node, "unit", None)
-        return str(unit).strip() if unit else None
-    except Exception:
+    except BomPlanError:
         return None
+    if compiled is None:
+        return None
+    graph = getattr(compiled, "graph", None)
+    if graph is None:
+        return None
+    root_id = getattr(graph, "root_id", None)
+    root_node = next(
+        (node for node in graph.nodes if getattr(node, "product_id", None) == root_id),
+        None,
+    )
+    if root_node is None:
+        return None
+    unit = getattr(root_node, "unit", None)
+    return str(unit).strip() if unit else None
 
 
 def _metrics(lines: list[dict[str, Any]]) -> dict[str, Any]:

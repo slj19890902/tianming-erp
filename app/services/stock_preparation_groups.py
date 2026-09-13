@@ -167,12 +167,12 @@ def workspace_rows(db, rows, state):
         # Ambiguous components remain individual and allow explicit kit selection.
         if not all(len(memberships[pid])==1 for pid in ids):
             continue
-        children=[r for r in rows if r['product_id'] in ids and r['available']>0 and r['can_plan']]
+        children=[r for r in rows if r['product_id'] in ids and r['available']>0 and r['can_plan'] and r['status']=='arrange']
         if not children:
             continue
         result.append(dict(key='kit:'+str(group['recipe']['parent_id']),entry_type='kit',plan=group,children=children))
         hidden.update(r['key'] for r in children)
-    result.extend(dict(row,entry_type='receipt',kit_options=[g for g in candidates if any(c['product_id']==row['product_id'] for c in g['recipe']['children'])]) for row in rows if row['key'] not in hidden and row['status'] in {'arrange','waiting','keep'} and (row['available']>0 or row['status']=='waiting'))
+    result.extend(dict(row,entry_type='receipt',kit_options=[g for g in candidates if any(c['product_id']==row['product_id'] for c in g['recipe']['children'])]) for row in rows if row['key'] not in hidden and row['status'] in {'arrange','waiting'} and (row['available']>0 or row['status']=='waiting'))
     return result
 
 

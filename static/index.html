@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260913-desktopmargin001" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <script src="/static/ui/order-context.js?v=217850427bf4"></script>
-    <script src="/static/ui/workspace.js?v=20260912-orderpaging001"></script>
+    <script src="/static/ui/workspace.js?v=20260913-flowui393"></script>
     <script src="/static/ui/pdf-workspace.js?v=fcba033a4d82"></script>
     <script src="/static/ui/purchase-workspace.js?v=66709867c608"></script>
     <script src="/static/ui/production-workspace.js?v=20260912-798ffca5c4df"></script>
@@ -3497,7 +3497,6 @@
             </template>
 
             <template v-else-if="activePage === 'products'">
-              <page-head title="常用箱、纸板材质与供应商" desc="常用箱按客户维护；纸板材质与包材产品使用各自入口。"></page-head>
               <div class="toolbar">
                 <div class="toolbar-group">
                   <button :class="['btn', {primary: productTab === 'products'}]" @click="selectProductTab('products')">产品资料</button>
@@ -3597,7 +3596,7 @@
                 <template v-else>
                   <div class="toolbar">
                     <div class="product-breadcrumb"><button class="btn" @click="backToProductCustomers()">返回客户列表</button><span>常用箱与材质 › {{ selectedProductCustomer.name }}</span></div>
-                    <div class="muted">共 {{ productsTotal }} 条，当前第 {{ pages.products }} / {{ productTotalPages }} 页</div>
+                    <pager :page="pages.products" :total="productsTotal" :page-size="productListPageSize()" :always="true" :compact="true" @change="pages.products=$event; runExplicitPageListLoad('products')"></pager>
                   </div>
                   <div v-if="productWorkbookImport.visible" class="panel" style="margin-bottom:10px;border-color:#60a5fa">
                     <div class="toolbar">
@@ -3648,7 +3647,6 @@
                   <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
                 </template>
               </div>
-              <pager v-if="productTab === 'products' && selectedProductCustomer" :page="pages.products" :total="productsTotal" :page-size="pageSize" @change="pages.products=$event; runExplicitPageListLoad('products')"></pager>
               <data-panel v-else-if="productTab === 'suppliers'" :empty="false">
                 <div class="toolbar" style="margin-bottom:8px">
                   <div class="toolbar-group">
@@ -4730,7 +4728,7 @@
                           <button v-if="row.purpose_status==='frozen' && row.receipt_fact_ready && canViewCosts && hasPermission('requisition.purchase_price.correct')" class="btn small" @click="openPurchaseReceiptFact(row)">更正采购价</button>
                           <button v-if="hasPermission('incoming.execute')" class="btn small success" :disabled="incomingReceiveAttempts[row.item_id]?.saving || !canReceiveIncoming(row)" @click="receiveIncoming(row)">{{ incomingReceiveAttempts[row.item_id]?.saving ? '实收中…' : '确认实收' }}</button>
                           <button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button>
-<pager v-if="stockPrepDialog.jobs?.length>3" :page="stockPrepDialog.page" :total="stockPrepDialog.jobs.length" :page-size="3" @change="stockPrepDialog.page=$event"></pager></details>
+                        </details>
                       </template>
                       <template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></div><info-note v-if="!canPrintIncomingProductLabel(row)" label="标签说明">{{ incomingProductLabelBlockMessage(row) }}</info-note></template>
                     </td>
@@ -4829,6 +4827,7 @@
                             <template v-if="stockPrepDialog.row.entry_type==='group_job'"> · 实际产出 <input class="input compact-input" type="number" min="1" v-model.number="job._actual" /> 个</template><span v-else> · 可用 {{job.output_available}} 个</span>
                             <div v-if="stockPrepDialog.disposition==='semi'" class="toolbar-group"><span>{{stockLocations.find(l=>l.id===job._location)?.location_name||'使用默认位置'}}</span><button class="btn small" @click="openStockLocationMap(job)">地图选位</button></div>
                           </div>
+                          <pager v-if="stockPrepDialog.jobs?.length>3" :page="stockPrepDialog.page" :total="stockPrepDialog.jobs.length" :page-size="3" @change="stockPrepDialog.page=$event"></pager>
                         </details>
                       </template>
                       <template v-else><div>{{stockPrepDialog.row.specification}} · {{stockPrepDialog.row.material}} · 可用 {{stockPrepDialog.row.available}} {{stockPrepDialog.row.unit}}</div>
@@ -5117,6 +5116,7 @@
                       <td class="sensitive-price"><strong>¥ {{ money(row.pending_reconciliation_amount) }}</strong><div class="muted">已对账 ¥ {{ money(row.reconciled_receivable_amount) }}</div></td>
                       <td class="sensitive-price"><strong>¥ {{ money(row.pending_invoice_amount) }}</strong><div class="muted">已开票 ¥ {{ money(row.invoiced_amount) }}</div></td>
                       <td>
+                        <span v-if="row.pending_confirmation_count" class="status orange">待确认 {{ row.pending_confirmation_count }} 张 · ¥{{ money(row.pending_confirmation_amount) }}</span>
                         <span v-if="row.pending_reconciliation_count || row.blocked_reconciliation_count" class="status orange">待对账</span>
                         <span v-if="Number(row.pending_invoice_amount)>0" class="status blue">待开票</span>
                         <span v-if="row.status_anomaly_count" class="status red">状态需核对</span>
@@ -7048,10 +7048,13 @@
                   </div>
                 </template>
               </fieldset>
-              <fieldset v-if="canAdmin" class="bom-editor-panel" :disabled="externalComponentEditor.loading || externalComponentEditor.saving">
+              <details v-if="canAdmin" class="bom-editor-panel">
+                <summary>旧版外购组件（兼容）{{ externalComponentEditor.components.length ? ' · '+externalComponentEditor.components.length+'项' : '' }}</summary>
+                <p class="muted">新配套请在上方选择外购常用箱作为子件；此处保留旧采购换算与供应商候选。</p>
+              <fieldset :disabled="externalComponentEditor.loading || externalComponentEditor.saving">
                 <div class="bom-editor-heading">
                   <div class="bom-editor-heading-controls">
-                    <h4>外购包装组件</h4>
+                    <strong>旧版组件</strong>
                     <button type="button" class="btn small" :disabled="!productForm.id" @click="addExternalComponent">添加外购组件</button>
                     <button type="button" class="btn small primary" :disabled="!productForm.id || externalComponentEditor.saving" @click="saveExternalComponents">{{ externalComponentEditor.saving ? '保存中…' : '保存外购组件' }}</button>
                     <span class="muted">v{{ externalComponentEditor.version || 0 }}</span>
@@ -7094,6 +7097,7 @@
                   </div>
                 </template>
               </fieldset>
+              </details>
               </details>
             </div>
             <div v-else-if="modal.type === 'finishedStockPolicy'" class="form-grid">
@@ -11454,7 +11458,7 @@
             return this.filteredProductCustomers.slice((page - 1) * pageSize, page * pageSize);
           },
           productTotalPages() {
-            return Math.max(1, Math.ceil(Number(this.productsTotal || 0) / Number(this.pageSize || 25)));
+            return Math.max(1, Math.ceil(Number(this.productsTotal || 0) / this.productListPageSize()));
           },
           groupedOrderRows() {
             this.filters.orderView = "customer_po";
@@ -11845,6 +11849,9 @@
           },
           desktopListPageSize(mode=this.uiMode) {
             return this.screenPageSize(mode === "large" ? DESKTOP_LIST_PAGE_SIZE_LARGE : DESKTOP_LIST_PAGE_SIZE_STANDARD);
+          },
+          productListPageSize() {
+            return this.screenPageSize(25);
           },
           syncDesktopListPageSize(mode=this.uiMode) {
             const pageSize = this.desktopListPageSize(mode);
@@ -15902,7 +15909,7 @@
               material: this.filters.productMaterial,
               include_inactive:this.filters.showInactiveProducts,
               page: this.pages.products,
-              page_size: this.pageSize,
+              page_size: this.productListPageSize(),
               response_mode: "summary"
             };
             if (this.selectedProductCustomer) params.customer_id = this.selectedProductCustomer.id;
@@ -23211,6 +23218,7 @@
             this.financeCurrentExpanded = { ...this.financeCurrentExpanded, [key]:!this.financeCurrentExpanded[key] };
           },
           financePrimaryActionLabel(row) {
+            if (row.primary_action === "review") return "查看 / 导出对账单";
             if (row.primary_action_blocked) return "待对账异常";
             if (row.primary_action === "reconcile") return "去对账";
             if (row.primary_action === "invoice") return "查看待开票";
@@ -36950,9 +36958,13 @@
                 const chargeIds = this.pendingStatementCharges.filter(row => this.statementForm.selectedCharges[row.id]).map(row => row.id);
                 if (!deliveryIds.length && !chargeIds.length) throw new Error("至少选择一张待对账送货单或一条已确认附加收费");
                 if (!this.statementForm.idempotency_key) this.statementForm.idempotency_key = createIdempotencyKey();
-                await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, delivery_ids:deliveryIds, customer_charge_ids:chargeIds, idempotency_key:this.statementForm.idempotency_key });
+                const { data:createdStatement } = await axios.post("/api/finance/statements", { customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month, delivery_ids:deliveryIds, customer_charge_ids:chargeIds, idempotency_key:this.statementForm.idempotency_key });
                 this.statementForm.idempotency_key = null;
                 await this.loadFinance();
+                this.closeModal();
+                this.showToast("对账单已生成，可导出后发给客户核对");
+                await this.openStatementDetail({id:createdStatement.id || createdStatement.statement_id});
+                return true;
               }
               if (this.modal.type === "statementEdit") {
                 if (!this.statementEditForm.statement_month) throw new Error("请填写对账月份");

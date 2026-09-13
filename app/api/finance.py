@@ -4861,6 +4861,11 @@ def current_customer_months(
         )
         is_confirmed = statement["confirmation_status"] == "confirmed"
         receivable = _money_value(statement["total_receivable"])
+        if not is_confirmed:
+            group["pending_confirmation_count"] = group.get("pending_confirmation_count", 0) + 1
+            group["pending_confirmation_amount"] = _money_value(
+                group.get("pending_confirmation_amount", Decimal("0.00")) + receivable
+            )
         invoiced = _money_value(statement["invoiced_amount"]) if is_confirmed else Decimal("0.00")
         settled = _money_value(statement["settled_amount"]) if is_confirmed else Decimal("0.00")
         confirmed_receivable = receivable if is_confirmed else Decimal("0.00")
@@ -4921,6 +4926,9 @@ def current_customer_months(
 
     eligible_items: list[dict] = []
     for group in grouped.values():
+        group.setdefault("pending_confirmation_count", 0)
+        group.setdefault("pending_confirmation_amount", Decimal("0.00"))
+        has_confirmation = group["pending_confirmation_count"] > 0
         has_reconciliation = (
             group["pending_reconciliation_count"]
             + group["blocked_reconciliation_count"]
@@ -4928,9 +4936,11 @@ def current_customer_months(
         )
         has_invoice = group["pending_invoice_amount"] > 0
         has_payment = group["pending_payment_amount"] > 0
-        if not (has_reconciliation or has_invoice or has_payment):
+        if not (has_confirmation or has_reconciliation or has_invoice or has_payment):
             continue
-        if has_reconciliation:
+        if has_confirmation:
+            primary_action = "review"
+        elif has_reconciliation:
             primary_action = "reconcile"
         elif has_invoice:
             primary_action = "invoice"
@@ -4962,6 +4972,7 @@ def current_customer_months(
                 and (
                     row["pending_reconciliation_count"]
                     + row["blocked_reconciliation_count"]
+                    + row["pending_confirmation_count"]
                     > 0
                 )
             )
@@ -4976,7 +4987,7 @@ def current_customer_months(
         )
     ]
 
-    action_rank = {"reconcile": 0, "invoice": 1, "payment": 2}
+    action_rank = {"review": 0, "reconcile": 1, "invoice": 2, "payment": 3}
     items.sort(
         key=lambda row: (
             action_rank[row["primary_action"]],

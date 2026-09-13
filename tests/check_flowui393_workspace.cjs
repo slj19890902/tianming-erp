@@ -1,0 +1,13 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
+global.window=global;global.innerHeight=900;global.innerWidth=1440;
+vm.runInThisContext(fs.readFileSync('static/ui/workspace.js','utf8'));
+const mixins=[];ERPWorkspace.install({mixin:m=>mixins.push(m),component:()=>{}});
+const ctx={...mixins[0].methods,workspaceCapacities:{},workspaceHeight:900,activePage:'products',productTab:'products',selectedProductCustomer:{id:1},uiMode:'standard'};
+assert.equal(ctx.screenPageSize(25),13);
+ctx.uiMode='large';assert.equal(ctx.screenPageSize(25),9);
+ctx.activePage='orders';ctx.uiMode='standard';assert.equal(ctx.screenPageSize(6),6);
+const html=fs.readFileSync('static/index.html','utf8');
+const products=html.slice(html.indexOf('<template v-else>',html.indexOf('pagedProductCustomers')),html.indexOf("<div v-if=\"productWorkbookImport.visible\""));
+assert.ok(products.includes('<pager :page="pages.products"'));
+assert.ok(!html.includes('<page-head title="常用箱、纸板材质与供应商"'));
+console.log('Product capacity, top pager and adjacent order sizing passed');

@@ -5,7 +5,7 @@
     return Math.max(1, Math.min(50, Math.floor((height - top - footer - headHeight) / Math.max(24, rowHeight))));
   }
   function key(root) {
-    return [root.activePage, root.uiMode, root.requisitionTab, root.incomingTab, root.productionTab, root.productionPendingSource, root.financeView, root.financeExpensePane, root.orderWorkspace].join(':');
+    return [root.activePage, root.uiMode, root.requisitionTab, root.incomingTab, root.productionTab, root.productionPendingSource, root.financeView, root.financeExpensePane, root.orderWorkspace, root.productTab].join(':');
   }
   function install(app) {
     app.mixin({
@@ -24,6 +24,8 @@
         },
         screenPageSize(fallback) {
           const large = this.uiMode === 'large';
+          if(this.activePage==='products' && this.productTab==='products' && this.selectedProductCustomer)
+            return this.workspaceCapacities?.[key(this)] || capacity({height:this.workspaceHeight || 768,top:230,rowHeight:large?64:44,footer:24});
           return this.workspaceCapacities?.[key(this)] || Math.max(1, Math.min(fallback,
             capacity({height:this.workspaceHeight || 768, top:large ? 290 : 250, rowHeight:large ? 92 : 64, footer:48})));
         },
@@ -31,7 +33,8 @@
           if (this.$parent || this.modal || document.querySelector('.workspace-dialog') || window.innerWidth < 1000 || !panel?.closest?.('.main')) return;
           const tables = [...document.querySelectorAll('.main .panel table')].filter(t => t.getBoundingClientRect().height > 0 && !t.closest('.modal') && !t.dataset.workspaceList);
           const table = panel.querySelector('table');
-          if (!table || table !== tables[0] || !['orders','requisition','incoming','production','finance'].includes(this.activePage)) return;
+          if (!table || table !== tables[0] || !['orders','requisition','incoming','production','finance','products'].includes(this.activePage)) return;
+          if(this.activePage==='products' && (this.productTab!=='products' || !this.selectedProductCustomer)) return;
           const rows = [...table.querySelectorAll(':scope > tbody > tr')];
           const records = rows.filter(r => r.cells.length > 1);
           if (!records.length) return;
@@ -42,6 +45,7 @@
           // The resize handler clears capacities; uiMode is part of the key.
           if (this.activePage === 'orders' && this.orderWorkspace === 'queue'
               && this.workspaceCapacities[currentKey]) return;
+          if (this.activePage === 'products' && this.workspaceCapacities[currentKey]) return;
           const top = table.getBoundingClientRect().top;
           const main = panel.closest('.main');
           const mainRect = main.getBoundingClientRect();

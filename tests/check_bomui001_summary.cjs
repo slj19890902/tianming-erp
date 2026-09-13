@@ -56,4 +56,19 @@ Object.assign(context, methodObject);
 assert.equal(context.bomRelationshipSummary(), "1只 = 2只 A-01｜长边 + 3片 B-02｜短边");
 assert.equal(context.bomRelationshipQuantity(2.5), "2.5");
 assert.equal(context.bomRelationshipQuantity(0), "数量待完善");
+
+assert.equal(
+  context.bomComponentSpecification({specification: "旧快照", component: {specification: "当前组件规格"}}),
+  "当前组件规格",
+  "loaded component identity must win over stale top-level snapshot",
+);
+assert.equal(
+  context.bomComponentSpecification({specification: "仅旧快照"}),
+  "仅旧快照",
+  "unloaded component may use its snapshot fallback",
+);
+context.bomEditor.components = [{component_product_id: null, quantity_per_set: 1}];
+assert.match(context.bomRelationshipSummary(), /待完善/);
+context.bomEditor.components = [{component_product_id: 11, quantity_per_set: 2, unit: "只", product_code: "A-01", product_name: "长边", is_required: false}];
+assert.match(html, /component\.is_required === false \? '可选' : '必需'/);
 console.log("BOMUI001 dynamic relationship summary passed");

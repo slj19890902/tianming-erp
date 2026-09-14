@@ -249,7 +249,8 @@ class Manager:
                         + sum((self.root / 'packages' / (p + '.zip')).stat().st_size for p in package_ids)) + 2 * 1024**3
         if shutil.disk_usage(nas).free < required:
             raise ValueError('NAS空间不足，未创建备份；请保留旧备份')
-        work_root = nas / '.tianming-backup-work'
+        # ZSpace virtual volumes may discard dot-prefixed directories on sync.
+        work_root = nas / 'tianming-backup-work'
         work_root.mkdir(exist_ok=True)
         if work_root.is_symlink() or work_root.is_junction():
             raise ValueError('NAS备份临时目录不能是链接')

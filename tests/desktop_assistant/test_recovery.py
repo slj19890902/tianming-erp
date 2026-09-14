@@ -92,7 +92,7 @@ class RecoveryTests(unittest.TestCase):
         original = sha(database)
         backup = self.manager.backup(PASSWORD, self.nas)
         self.assertFalse(list((self.manager.root / 'backups').glob('*.tmbackup')))
-        self.assertFalse(list((self.nas / '.tianming-backup-work').iterdir()))
+        self.assertFalse(list((self.nas / 'tianming-backup-work').iterdir()))
         receipt = read_json(self.manager.root / 'control' / 'backup-receipts' / (backup.stem + '.json'))
         self.assertEqual(receipt['sha256'], sha(backup))
         self.assertEqual(receipt['storage'], 'nas')

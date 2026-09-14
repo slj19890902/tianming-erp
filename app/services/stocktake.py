@@ -355,6 +355,7 @@ def _lot_identity(lot: InventoryLot) -> dict[str, object]:
 def lot_payload(lot: InventoryLot) -> dict[str, object]:
     available = int(lot.quantity_available)
     reserved = int(lot.quantity_reserved)
+    detail = lot.finished_detail or lot.semi_finished_detail
     return {
         "id": lot.id,
         "inventory_lot_id": lot.id,
@@ -371,6 +372,7 @@ def lot_payload(lot: InventoryLot) -> dict[str, object]:
         "expected_available": available,
         "expected_reserved": reserved,
         **_lot_identity(lot),
+        "flute_type": getattr(detail, "flute_type_snapshot", None) or getattr(detail, "flute_type", None),
     }
 
 

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.400"
-APP_VERSION_NAME = "货架扫码内网直达"
+APP_VERSION = "v0.22.401"
+APP_VERSION_NAME = "手机仓库片料识别与匹配"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 

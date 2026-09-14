@@ -2,7 +2,7 @@ import { WarehouseGoods } from "./WarehouseGoods";
 import { useEffect, useRef, useState } from "react";
 import "./materialCandidates.css";
 
-interface Candidate { product_id:number; customer_name:string; inventory_code:string; product_name:string;
+interface Candidate { product_id:number; customer_name:string; inventory_code:string; product_name:string; box_style:string;
   exact_dimension_match:boolean; score:number; selectable:boolean; length_mm:number; width_mm:number; flute_type:string; warnings:string[] }
 interface Result { version:number; source:string; items:Candidate[]; saved:Candidate[]; editable:boolean; saved_at:string|null }
 async function request(lotId:number, init?:RequestInit):Promise<Result> {
@@ -13,6 +13,7 @@ async function request(lotId:number, init?:RequestInit):Promise<Result> {
 }
 export function MaterialCandidates({lotId, canSave, onSaved}:{lotId:number;canSave:boolean;onSaved:()=>Promise<unknown>}) {
   const [search,setSearch] = useState("");
+  const [boxStyle,setBoxStyle] = useState("");
   const [open,setOpen] = useState(false), [more,setMore] = useState(false);
   const [data,setData] = useState<Result|null>(null), [selected,setSelected] = useState<number[]>([]);
   const [busy,setBusy] = useState(false), [message,setMessage] = useState("");
@@ -41,7 +42,7 @@ export function MaterialCandidates({lotId, canSave, onSaved}:{lotId:number;canSa
     finally{if(alive.current)setBusy(false);}
   };
   const stale=data?.saved.filter(item=>!data.items.some(current=>current.product_id===item.product_id && current.selectable)) || [];
-  const filtered=data?.items.filter(item=>`${item.customer_name} ${item.inventory_code} ${item.product_name}`.toLowerCase().includes(search.toLowerCase()))||[];
+  const filtered=data?.items.filter(item=>(!boxStyle||item.box_style===boxStyle)&&`${item.customer_name} ${item.inventory_code} ${item.product_name}`.toLowerCase().includes(search.toLowerCase()))||[];
   return <section className="twin-material-candidates" aria-label="材料候选用途">
     <button type="button" className="twin-detail-toggle" aria-expanded={open} onClick={()=>{setOpen(!open);if(!open&&!data)void load();}}>
       {open?"收起匹配":"匹配产品 / 查看候选用途"}</button>
@@ -49,6 +50,7 @@ export function MaterialCandidates({lotId, canSave, onSaved}:{lotId:number;canSa
       {data&&<><b>匹配产品</b><small>{data.source}</small>
         <p className="material-match-note">同楞型、同层数，优先显示报料长宽完全一致的常用箱，再按裁切利用率排序，楞向不旋转。白面纸与瓦楞色不能互用。保存候选不等于预占库存。</p>
         <b>尺寸完全一致 {data.items.filter(item=>item.exact_dimension_match).length} 款 · 共 {data.items.length} 款</b>
+        <select aria-label="匹配箱型" value={boxStyle} onChange={e=>{setBoxStyle(e.target.value);setMore(false);}}><option value="">全部箱型</option>{[...new Set(data.items.map(item=>item.box_style))].sort().map(style=><option key={style} value={style}>{style}</option>)}</select>
         <input aria-label="筛选客户或常用箱" value={search} onChange={e=>{setSearch(e.target.value);setMore(false);}} placeholder="查找客户、存货编码、产品名称"/>
         {(more?filtered:filtered.slice(0,5)).map(item=><label className="material-match-row" key={item.product_id}>
           <input type="checkbox" aria-label={`候选用途 ${item.inventory_code}`} checked={selected.includes(item.product_id)}

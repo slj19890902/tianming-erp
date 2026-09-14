@@ -1,0 +1,18 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const mobile=fs.readFileSync('static/mobile_erp.html','utf8');
+const stock=fs.readFileSync('static/mobile_stocktake.html','utf8');
+for(const html of [mobile,stock]) for(const match of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) if(match[1].trim()) new vm.Script(match[1]);
+const display=mobile.slice(mobile.indexOf('function warehouseGoodsDisplay('),mobile.indexOf('function warehouseGoodsIdentity('));
+const context={};vm.createContext(context);vm.runInContext(display,context);
+let result=context.warehouseGoodsDisplay({inventory_type:'semi_finished',product_code:null,customer_name:'名称里写了客户',specification:'910×885mm',flute_type:'B',material_code:'A6A'});
+assert.equal(result.customer,'通用');assert.equal(result.primary,'910×885mm · B楞');assert(!result.primary.includes('A6A'));
+result=context.warehouseGoodsDisplay({customer_id:3,customer_short_name:'格莱锐',product_code:'HC00201',specification:'200×200×150mm',flute_type:'B'});
+assert.equal(result.customer,'格莱锐');assert.equal(result.primary,'HC00201');
+const href=stock.slice(stock.indexOf('function warehouseMapHref('),stock.indexOf('function openWarehouseMap('));
+const nav={URLSearchParams,state:{selectedLocation:{id:12,floor_code:'3F',area_code:'F1'}},window:{location:{search:'?location_id=12&return_floor=3F&return_area=F1'}},pick:(obj,keys,fallback)=>{for(const key of keys) if(obj[key]!=null&&obj[key]!=='') return obj[key];return fallback;}};
+vm.createContext(nav);vm.runInContext(href,nav);
+assert(!nav.warehouseMapHref().includes('location_id='));assert(nav.warehouseMapHref().includes('area_code=F1'));
+assert(nav.warehouseMapHref(7).includes('lot_id=7'));assert(nav.warehouseMapHref(7).includes('location_id=12'));
+assert(stock.includes('#inboundProduct{grid-column:auto}'));
+assert(mobile.includes('匹配常用箱'));assert(mobile.indexOf('const filtered = result.items.filter')<mobile.indexOf('filtered.slice(0, limit)'));
+console.log('mobile400 navigation, identity, filters and inline script compilation passed');

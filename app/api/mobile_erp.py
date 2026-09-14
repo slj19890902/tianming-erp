@@ -3147,7 +3147,7 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
             else ""
         )
         customer_name = detail.owner_customer_name_snapshot if detail else None
-        product_code = detail.material_code_snapshot if detail else None
+        product_code = None  # Material identity is not a customer product code.
         product_name = (detail.internal_name or ("原材料纸板" if detail.sheet_type == "raw_board" else "半成品纸板")) if detail else "半成品纸板"
     movable_quantity = int(lot.quantity_available or 0) + int(
         lot.quantity_reserved or 0
@@ -3163,6 +3163,8 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
         "product_code": product_code,
         "product_name": product_name,
         "specification": specification,
+        "flute_type": (getattr(detail, "flute_type_snapshot", None) or getattr(detail, "flute_type", None)) if detail else None,
+        "material_code": getattr(detail, "material_code_snapshot", None) if detail else None,
         "quantity_available": int(lot.quantity_available or 0),
         "quantity_reserved": int(lot.quantity_reserved or 0),
         "quantity_damaged": damaged_quantity,

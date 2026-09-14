@@ -1748,9 +1748,9 @@
             const productGroups = groupWarehouseRackGoods(visibleGoods);
             productGroups.slice(0, 2).forEach(good => {
               const preview = node("span", "warehouse-rack-product-preview");
-              if (productGroups.length > 1) preview.append(node("small", "", `${customerLabel(good)} · ${good.quantity_total ?? "待核对"}${good.unit || ""}`));
-              preview.append(node("strong", "", good.product_code || "编码待补充"));
-              if (productGroups.length === 1) preview.append(node("span", "", good.product_name || "名称待补充"), node("small", "", good.specification || "规格待补充"));
+              const identity = warehouseGoodsDisplay(good);
+              preview.append(node("small", "", `${identity.customer} · ${good.quantity_total ?? "待核对"}${good.unit || ""}`));
+              preview.append(node("strong", "", identity.primary), node("small", "", identity.secondary));
               button.append(preview);
             });
             if (productGroups.length > 2) button.append(node("small", "", `还有 ${productGroups.length - 2} 款，点击查看全部`));
@@ -1798,9 +1798,17 @@
         return [...groups.values()];
       }
 
+      function warehouseGoodsDisplay(good) {
+        const customer = good.customer_id ? (good.customer_short_name || good.customer_name || "客户简称待补充") : "通用";
+        const physical = [good.specification, good.flute_type ? `${good.flute_type}楞` : "楞型待补充"].filter(Boolean).join(" · ");
+        const bound = Boolean(good.customer_id && good.product_code);
+        return {customer, primary: bound ? good.product_code : (physical || "尺寸待补充"), secondary: bound ? [good.product_name, physical].filter(Boolean).join(" · ") : good.product_name || "片料"};
+      }
+
       function warehouseGoodsIdentity(good) {
         const row = node("div", "warehouse-goods-identity");
-        row.append(node("span", "", good.customer_short_name || good.customer_name || "客户待补充"), node("strong", "", good.product_code || "存货编码待补充"));
+        const identity = warehouseGoodsDisplay(good);
+        row.append(node("span", "", identity.customer), node("strong", "", identity.primary));
         return row;
       }
 
@@ -1859,9 +1867,10 @@
         goods.forEach(good => {
           const card = node("section", "candidate warehouse-label-card");
           const summary = node("div", "warehouse-label-summary");
-          summary.append(node("span", "", good.customer_short_name || good.customer_name || "客户待补充"), node("span", "", good.product_name || "名称待补充"), node("span", "", good.specification || "规格待补充"));
+          const identity = warehouseGoodsDisplay(good);
+          summary.append(node("span", "", identity.customer), node("span", "", identity.secondary));
           const codeRow = node("div", "warehouse-label-code-row");
-          const code = node("button", "warehouse-label-code", good.product_code || "存货编码待补充");
+          const code = node("button", "warehouse-label-code", identity.primary);
           code.type = "button";
           code.title = "查看产品标签";
           const label = node("div", "warehouse-label-preview");
@@ -1886,11 +1895,44 @@
             window.location.assign(`/mobile/stocktake.html?${params}`);
           });
           actions.append(move, stocktake);
+          if (good.inventory_type === "semi_finished") {
+            const match = node("details", "warehouse-material-match");
+            match.append(node("summary", "small-btn", "匹配常用箱"));
+            const body = node("div"); match.append(body);
+            let loading = false, loaded = false;
+            match.addEventListener("toggle", async () => {
+              if (!match.open || loading || loaded) return;
+              loading = true; body.replaceChildren(node("p", "muted", "正在匹配…"));
+              try {
+                const result = await apiGet(`/api/warehouse/lots/${good.lot_id}/material-candidates`);
+                const type = node("select"); type.setAttribute("aria-label", "匹配箱型");
+                const all = node("option", "", "全部箱型"); all.value = ""; type.append(all);
+                [...new Set(result.items.map(item => item.box_style || "未设置箱型"))].sort().forEach(style => { const option = node("option", "", style); option.value = style; type.append(option); });
+                const query = node("input"); query.placeholder = "客户、编码、名称"; query.setAttribute("aria-label", "筛选匹配产品");
+                const rows = node("div"), more = node("button", "small-btn", "显示更多"); more.type = "button";
+                let limit = 5;
+                const render = () => {
+                  const filtered = result.items.filter(item => (!type.value || (item.box_style || "未设置箱型") === type.value) && `${item.customer_name} ${item.inventory_code} ${item.product_name}`.toLowerCase().includes(query.value.trim().toLowerCase()));
+                  rows.replaceChildren();
+                  filtered.slice(0, limit).forEach(item => { const row = node("section", "card"); row.append(node("strong", "", `${item.customer_name} · ${item.inventory_code}`), node("div", "", item.product_name), node("div", "", `${item.length_mm}×${item.width_mm}mm · ${item.flute_type}楞 · ${item.exact_dimension_match ? "尺寸一致" : `利用率${item.score}%`}`)); if (item.warnings?.length) row.append(node("small", "muted", item.warnings.join(" · "))); rows.append(row); });
+                  if (!filtered.length) rows.append(node("p", "muted", "没有符合该箱型及筛选条件的常用箱"));
+                  more.hidden = filtered.length <= limit;
+                };
+                type.onchange = query.oninput = () => { limit = 5; render(); };
+                more.onclick = () => { limit += 10; render(); };
+                body.replaceChildren(type, query, node("p", "muted", "同楞型、同层数，尺寸一致优先；仅供匹配，不改归属或库存。"), rows, more);
+                loaded = true; render();
+              } catch (error) { body.replaceChildren(node("p", "status error", `${error.message}；收起后重开可重试`)); }
+              finally { loading = false; }
+            });
+            card.append(match);
+          }
           card.append(actions);
           const history = node("details", "warehouse-lot-history");
           history.append(node("summary", "", "入库时间、订单与同款位置"));
           detailsToggle.addEventListener("click", () => { history.open = !history.open; });
           const historyBody = node("div");
+          if (good.material_code) history.append(node("div", "muted", `材质：${good.material_code}`));
           history.append(historyBody);
           let historyLoading = false;
           let historyLoaded = false;

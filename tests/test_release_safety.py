@@ -73,6 +73,22 @@ def test_startup_check_is_read_only_and_rejects_revision_mismatch(
     assert database.read_bytes() == mismatched
 
 
+def test_generated_rehearsal_cleanup_keeps_latest_five(tmp_path: Path) -> None:
+    rehearsal_dir = tmp_path / "rehearsals"
+    rehearsal_dir.mkdir()
+    for index in range(7):
+        path = rehearsal_dir / f"carton_erp_release_rehearsal_20260914_1200{index:02d}.sqlite3"
+        path.write_bytes(b"SQLite format 3\x00" + bytes([index]))
+    special = rehearsal_dir / "manual_release_roundtrip.sqlite3"
+    special.write_bytes(b"keep")
+
+    result = release_erp.cleanup_generated_rehearsals(rehearsal_dir, keep=5)
+
+    assert result["deleted_count"] == 2
+    assert len(list(rehearsal_dir.glob("carton_erp_release_rehearsal_*.sqlite3"))) == 5
+    assert special.read_bytes() == b"keep"
+
+
 def test_two_phase_release_requires_bound_token_and_unchanged_source(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

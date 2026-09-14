@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from desktop_assistant.build import source_snapshot
+from desktop_assistant.build import remove_transient_build_trees, source_snapshot
 
 
 class BuildSourceTests(unittest.TestCase):
@@ -55,6 +55,17 @@ class BuildSourceTests(unittest.TestCase):
         self.commit()
         with self.assertRaises(ValueError):
             source_snapshot(self.root, 'v2', 'b')
+
+    def test_transient_build_trees_are_removed_but_artifacts_remain(self):
+        output = self.root / 'output'
+        (output / 'payload').mkdir(parents=True)
+        (output / 'pyi-work').mkdir()
+        (output / 'payload/source.py').write_text('x = 1', encoding='utf-8')
+        (output / 'release.zip').write_bytes(b'release')
+        remove_transient_build_trees(output)
+        self.assertFalse((output / 'payload').exists())
+        self.assertFalse((output / 'pyi-work').exists())
+        self.assertEqual((output / 'release.zip').read_bytes(), b'release')
         self.write('alembic/versions/c.py', 'revision = "b"\ndown_revision = "a"\n')
         self.commit()
         with self.assertRaises(ValueError):

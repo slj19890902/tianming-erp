@@ -2171,6 +2171,9 @@ def inventory_search_matches(row: InventoryLot, keyword: str, as_of: date) -> bo
             payload.get("inventory_code"),
             payload.get("product_name"),
             payload.get("customer_name"),
+            payload.get("customer_short_name"),
+            *(f"{binding.product.product_code} {binding.product.product_name} {binding.product.customer_material_code or ''}"
+              for binding in row.allowed_products if binding.product is not None),
             finished_customer_code,
             semi_finished_customer_code,
             payload.get("specification"),

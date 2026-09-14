@@ -11,6 +11,10 @@
    const table=card.querySelector('.pdf-inventory-table'),footer=card.querySelector('.pdf-savebar');if(!table||!footer)return;
    const rows=[...table.querySelectorAll(':scope > tbody > tr')].filter(r=>r.cells.length>1);if(!rows.length)return;
    const geometry=[innerWidth,innerHeight,this.uiMode,this.pdfActiveDraftKey].join(':');
+   // Expanded rows and overlays can move the table while Vue updates. Keep the
+   // current page stable; only a real window/draft geometry change may repage.
+   const detailOpen=card.querySelector('.order-item-sub-row, .pdf-stock-dialog');
+   if(detailOpen && this.pdfFitCapacity && this._pdfFitGeometry===geometry)return;
    if(this._pdfFitGeometry!==geometry){this._pdfFitGeometry=geometry;this._pdfFitRowHeight=0;}
    // Keep the tallest measured row for this geometry so paging cannot oscillate.
    const height=Math.max(this._pdfFitRowHeight||0,...rows.map(r=>r.getBoundingClientRect().height));
@@ -36,7 +40,7 @@
    pdfItemAmount(item){const value=amount(item);return value===null?'待核对':this.money(value);},
    pdfDraftAmount(draft){const items=draft.items||[];if(!items.length||items.some(i=>amount(i)===null))return '金额待核对';return this.money(items.reduce((sum,i)=>sum+amount(i),0));},
    pdfDraftIssueCount(draft){return (draft.items||[]).filter(i=>!i.matched_product_id || i.is_new_product || i.price_conflict || !presentNumber(i.unit_price) || this.pdfInventoryIssueText(i)).length;},
-   pdfOpenInventory(item){item._show_inventory_details=true;item._inventory_tab='summary';item._inventory_page=1;this.$nextTick(()=>document.querySelector('.pdf-stock-dialog .workspace-dialog-close')?.focus());},
+   pdfOpenInventory(item){item._show_inventory_details=true;item._inventory_tab='summary';if(!(item._inventory?.finished?.candidates||[]).length){for(const kind of ['semi','raw']){if(Object.values(item._inventory?.semi||{}).some(part=>[...(part.candidates||[]),...(part.manual_candidates||[])].some(c=>this.pdfMaterialKind(c)===kind))){item._inventory_tab=kind;break;}}}item._inventory_page=1;this.$nextTick(()=>document.querySelector('.pdf-stock-dialog .workspace-dialog-close')?.focus());},
    pdfMaterialKind(candidate){return candidate.material_kind || (candidate.sheet_type==='raw_board'?'raw':'semi');},
    pdfMaterialCandidates(item,component,kind){const part=item._inventory?.semi?.[component]||{};const rows=[...part.candidates||[],...part.manual_candidates||[]];return [...new Map(rows.map(r=>[r.lot_id,r])).values()].filter(r=>this.pdfMaterialKind(r)===kind).sort((a,b)=>this.pdfCandidateExact(b)-this.pdfCandidateExact(a) || Number(b.deductible_requirement_quantity||0)-Number(a.deductible_requirement_quantity||0));},
    pdfCandidateExact(candidate){return !(candidate.signature_differences||[]).length && !(candidate.warning_codes||[]).length && candidate.source!=='manual' && !this.inventoryCandidateNeedsManualConfirmation(candidate);},

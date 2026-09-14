@@ -446,8 +446,9 @@ interface SearchItem extends InventoryItem {
 }
 
 interface SearchResponse {
+  pending_receipts?: Array<{delivery_item_id:number; delivery_number:string; customer_name:string; inventory_code:string; product_name:string; specification:string; quantity:number; unit:string; location_name:string}>;
   pagination?: {has_more: boolean; next_after_lot_id: number | null; counts_scope: "page"};
-  search_type?: WarehouseSearchType | "all";
+  search_type?: WarehouseSearchType | "all" | "inventory";
   result_count: number;
   inventory_result_count: number;
   resource_result_count: number;
@@ -1761,6 +1762,7 @@ export function WarehouseTwinApp() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [searchType, setSearchType] = useState<WarehouseSearchType>("finished");
+  const [searchFloor, setSearchFloor] = useState("3F");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [searchRetryToken, setSearchRetryToken] = useState(0);
@@ -2149,7 +2151,7 @@ export function WarehouseTwinApp() {
     }
     let active = true;
     const timer = window.setTimeout(() => {
-      const params = new URLSearchParams({ search_type: searchType, keyword, page_size: "100" });
+      const params = new URLSearchParams({ search_type: searchType === "finished" ? "inventory" : searchType, search_floor: searchFloor, keyword, page_size: "100" });
       setSearchLoading(true);
       setSearchError("");
       requestJson<SearchResponse>(`/api/warehouse/twin-operations/locate?${params.toString()}`, controller.signal)
@@ -2165,7 +2167,7 @@ export function WarehouseTwinApp() {
         .finally(() => active && setSearchLoading(false));
     }, 300);
     return () => { active = false; ++searchRequestRef.current; controller.abort(); window.clearTimeout(timer); };
-  }, [searchPanelOpen, searchType, search, searchRetryToken]);
+  }, [searchPanelOpen, searchType, searchFloor, search, searchRetryToken]);
 
   async function loadMoreSearchResults() {
     const cursor = searchResponse?.pagination?.next_after_lot_id;
@@ -2174,7 +2176,7 @@ export function WarehouseTwinApp() {
     searchMoreBusyRef.current = true;
     setSearchMoreLoading(true);
     setSearchError("");
-    const params = new URLSearchParams({search_type: searchType, keyword: search.trim(),
+    const params = new URLSearchParams({search_type: searchType === "finished" ? "inventory" : searchType, search_floor: searchFloor, keyword: search.trim(),
       page_size: "100", after_lot_id: String(cursor)});
     try {
       const page = await requestJson<SearchResponse>(`/api/warehouse/twin-operations/locate?${params.toString()}`, searchAbortRef.current?.signal);
@@ -6356,11 +6358,13 @@ export function WarehouseTwinApp() {
             </div>
           </div>}
           <div className="twin-search-type-grid" role="tablist" aria-label="查货类型">
-            <button type="button" className={searchType === "finished" ? "active" : ""} onClick={() => { setSearchType("finished"); setSearch(""); setSearchResponse(null); setFocusedResource(null); setFocusedSearchProductKey(null); }}>纸箱成品</button>
+            <button type="button" className={searchType === "finished" ? "active" : ""} onClick={() => { setSearchType("finished"); setSearch(""); setSearchResponse(null); setFocusedResource(null); setFocusedSearchProductKey(null); }}>成品 / 材料</button>
             <button type="button" className={searchType === "mold" ? "active" : ""} onClick={() => { setSearchType("mold"); setSearchResponse(null); setFocusedSearchItem(null); setFocusedSearchProductKey(null); }}>模具</button>
             <button type="button" className={searchType === "printing_plate" ? "active" : ""} onClick={() => { setSearchType("printing_plate"); setSearchResponse(null); setFocusedSearchItem(null); setFocusedSearchProductKey(null); }}>印刷版</button>
           </div>
           {searchType === "finished" ? <>
+            <label className="twin-search-step"><span>搜索楼层</span><select value={searchFloor} onChange={event => { setSearchFloor(event.target.value); setFocusedSearchProductKey(null); }}><option value="ALL">全部楼层（含待归位）</option><option value="3F">三楼</option><option value="1F">一楼</option><option value="4F">四楼</option><option value="UNLOCATED">待归位 / 未定位</option></select></label>
+            <small>实存含预占；成品与材料按各自单位分别汇总。待归位可选全部楼层。</small>
             <label className="twin-search-step"><span>客户、简写、存货编码、产品名称或规格</span><input value={search} onChange={(event) => { setSearch(event.target.value); setFocusedSearchProductKey(null); setFocusedSearchItem(null); setRackFocusId(null); setPendingRackSearchLocationId(null); setPendingLocationId(null); setPendingAreaCode(null); }} placeholder="例如：天华、TH、TM-FG、加强纸箱、520×350×300" autoFocus /></label>
             <small>{search.trim().length < 2 ? "输入任意 2 个字符即可查找，不必先记住存货编码。" : searchLoading ? "正在读取有权限的真实库存…" : searchResponse ? `${searchResponse.pagination?.has_more ? "已加载" : "匹配"} ${searchProductGroups.length} 个产品 · ${searchResponse.inventory_result_count} 个真实位置批次${searchResponse.pagination?.has_more ? " · 数量与位置仅汇总已加载结果" : ""}` : "等待查找结果"}</small>
           </> : <>
@@ -6375,6 +6379,7 @@ export function WarehouseTwinApp() {
             {searchType !== "finished" && !searchResponse.resources.length && <div className="twin-area-empty"><b>没有匹配结果</b><span>请更换编码、名称或区域关键词。</span></div>}
           </div>}
           {searchResponse?.pagination?.has_more && <button type="button" disabled={searchMoreLoading || searchLoading} onClick={loadMoreSearchResults}>{searchMoreLoading ? "正在加载…" : "继续加载库存结果"}</button>}
+          {searchType === "finished" && !!searchResponse?.pending_receipts?.length && <section className="twin-search-result-list"><b>已发出 · 待回单（不计入在厂实存）</b>{searchResponse.pending_receipts.map(row => <article key={row.delivery_item_id}><b>{row.inventory_code} · {row.customer_name}</b><div>{row.product_name} {row.specification}</div><strong>{formatNumber(row.quantity)} {inventoryUnitLabel(row.unit)}</strong><div>{row.location_name} · {row.delivery_number}</div></article>)}</section>}
           {focusedSearchProduct && <div className="twin-search-focus-note product-focus"><b>{searchResponse?.pagination?.has_more ? "已加载的真实位置已选中" : "全部真实位置已选中"}</b><span>{focusedSearchProduct.customer_name} · {focusedSearchProduct.inventory_code} · {searchResponse?.pagination?.has_more ? "已加载" : "共"} {formatNumber(focusedSearchProduct.total_quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {focusedSearchProduct.location_count} 个位置</span><div className="twin-search-floor-actions">{focusedSearchProduct.floor_summaries.map((floor) => <button type="button" key={floor.floor_code} disabled={!isWarehouseOperationalFloorCode(floor.floor_code)} className={floorCode === floor.floor_code ? "active" : ""} onClick={() => focusSearchFloor(focusedSearchProduct, floor.floor_code)}>{floor.floor_code === "UNLOCATED" ? "待定位" : floor.floor_code} · {formatNumber(floor.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {floor.location_count}处</button>)}</div><div className="twin-search-location-list">{focusedSearchProduct.location_summaries.map((location) => <button type="button" key={location.key} disabled={!isWarehouseOperationalFloorCode(location.floor_code)} onClick={() => focusSearchLocation(focusedSearchProduct, location)}><b>{location.floor_code === "UNLOCATED" ? "待定位" : location.floor_code}</b><span>{location.location_name || "位置名称待完善"}</span><em>{formatNumber(location.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {location.position_status === "mapped" ? "地图可定位" : "真实文字位置"}</em></button>)}</div></div>}
           {focusedResource && <div className="twin-search-focus-note"><b>{focusedResource.map_status === "mapped" ? "地图定位指引" : "文字定位指引"}</b><span>{focusedResource.prompt}</span></div>}
         </section>

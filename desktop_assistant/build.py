@@ -16,6 +16,17 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from desktop_assistant.storage import archive_path, pack_tree, sha, write_json
 
 
+def remove_transient_build_trees(output: Path) -> None:
+    """Remove reproducible build trees after durable artifacts are complete."""
+    output = output.resolve()
+    for name in ("payload", "pyi-work"):
+        path = output / name
+        if path.is_symlink():
+            raise ValueError(f"构建临时目录不得为链接: {path}")
+        if path.exists():
+            shutil.rmtree(path)
+
+
 def runtime_copy_ignore(_directory, names):
     """Drop content that is rebuilt explicitly for every signed package."""
     rebuilt = {'site-packages', '__pycache__', 'Scripts', 'ocr'}
@@ -126,6 +137,7 @@ def main():
     if args.package_only:
         write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,
                    'release_sha256': sha(package), 'installer_built': False})
+        remove_transient_build_trees(output)
         return
     common = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--onefile', '--windowed',
               '--paths', str(tree), '--specpath', str(output), '--workpath', str(output / 'pyi-work'),
@@ -137,6 +149,7 @@ def main():
                     '--add-data', str(package) + ';.', str(tree / 'desktop_assistant/installer.py')], check=True, cwd=tree)
     write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,
                'release_sha256': sha(package), 'installer_sha256': sha(output / 'TianmingERP-Setup.exe')})
+    remove_transient_build_trees(output)
 
 
 if __name__ == '__main__':

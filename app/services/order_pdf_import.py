@@ -2528,6 +2528,11 @@ def _product_match_evidence(product: Product, item: dict) -> dict:
     material = _normalized_text(item.get("raw_material"))
     reference_score = _code_match_score(product, reference_code, strong=180)
     primary_score = _code_match_score(product, primary_code, strong=100)
+    if item.get("preserve_pdf_price") and not primary_score:
+        from app.services.pdf_sat_contract import code_candidate_key
+        key = code_candidate_key(primary_code)
+        if key and key in {code_candidate_key(product.product_code), code_candidate_key(product.customer_material_code)}:
+            primary_score = 60  # OCR-equivalent suggestion, never an exact match.
     name_score = 0
     spec_score = 0
     material_score = 0
@@ -2868,6 +2873,12 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
                 item, duplicate_cpn_scored
             )
             item["match_evidence"] = decision_evidence
+        if draft.get("customer_type") == "sat_contract":
+            exact = [p for p,e in scored_with_evidence if e['signals']['primary_code'] >= 100]
+            selected = exact[0] if len(exact) == 1 else None
+            item['match_evidence'].update(policy='contract_exact_customer_code',
+                decision='matched' if selected else 'needs_confirmation',
+                reasons=[] if selected else ['编码需人工确认；候选不代表已匹配'])
         item["matched_product_id"] = selected.id if selected is not None else None
         item["match_status"] = "matched" if selected is not None else "unmatched"
         item["matched_material_id"] = selected.material_id if selected else None
@@ -2882,7 +2893,7 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
             item["readiness"] = None
         # 客户单价仍以 PDF 为准；仅当 PDF 未识别到单价时回退常用箱默认价
         has_pdf_price = item.get("unit_price") not in (None, "")
-        if selected and not has_pdf_price and selected.sale_unit_price is not None:
+        if selected and not has_pdf_price and selected.sale_unit_price is not None and not item.get("preserve_pdf_price"):
             item["unit_price"] = str(selected.sale_unit_price)
             has_pdf_price = True
         # 默认单价对比（草稿页显示提醒，不自动修改常用箱）
@@ -2903,7 +2914,7 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
             item["product_drawing_file"] = selected.drawings[0].image_path
         matched_items.append(item)
     # 合并相同存货编码（同单价/同交期/同常用箱）
-    merged_items = matched_items if draft.get("customer_type") == "simair" else _merge_same_product_code(matched_items)
+    merged_items = matched_items if draft.get("customer_type") in {"simair", "sat_contract"} else _merge_same_product_code(matched_items)
     return {**draft, "matched_customer_id": customer_id, "items": merged_items}
 
 

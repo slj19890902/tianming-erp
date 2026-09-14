@@ -115,6 +115,15 @@ def ocr_engine_name() -> str:
 _easyocr_reader = None
 
 
+class OCRText(str):
+    """Plain-text compatible OCR evidence; layout stays request-local."""
+
+    def __new__(cls, text, pages):
+        value = super().__new__(cls, text)
+        value.pages = pages
+        return value
+
+
 def _get_easyocr_reader():
     """懒加载 EasyOCR 中文识别器（首次加载约需 2-10 秒）。"""
     global _easyocr_reader
@@ -150,6 +159,7 @@ def _ocr_with_easyocr(image_bytes_list: list[bytes]) -> str:
     """用 EasyOCR 对图片列表做 OCR，拼接结果文本。"""
     reader = _get_easyocr_reader()
     page_texts: list[str] = []
+    pages = []
     for img_bytes in image_bytes_list:
         import numpy as np  # type: ignore
         from PIL import Image
@@ -158,12 +168,17 @@ def _ocr_with_easyocr(image_bytes_list: list[bytes]) -> str:
         pil_img = Image.open(BytesIO(img_bytes))
         img_array = np.array(pil_img)
         results = reader.readtext(img_array, detail=1, paragraph=False)
+        pages.append([
+            {"box": [[float(x), float(y)] for x, y in box],
+             "text": str(text), "confidence": float(confidence)}
+            for box, text, confidence in results
+        ])
         # results: list of ([bbox], text, confidence)
         # 按 Y 坐标（上方框中心）排序，然后按 X 坐标，模拟阅读顺序
         results.sort(key=lambda r: (int(r[0][0][1] / 20), int(r[0][0][0])))
         lines = [r[1] for r in results if r[2] > 0.2]  # confidence > 0.2
         page_texts.append(" ".join(lines))
-    return "\n".join(page_texts)
+    return OCRText("\n".join(page_texts), pages)
 
 
 def _ocr_with_tesseract(image_bytes_list: list[bytes]) -> str:
@@ -180,6 +195,57 @@ def _ocr_with_tesseract(image_bytes_list: list[bytes]) -> str:
         text = pytesseract.image_to_string(img, lang="chi_sim+eng")
         page_texts.append(text)
     return "\n".join(page_texts)
+
+
+def refine_contract_columns(content: bytes, text: str) -> str:
+    """Re-read only contract code/name/spec columns at 300dpi, retaining evidence.
+
+    Numeric columns remain the original independent evidence. Failures retain
+    the original OCR rather than losing a usable draft. No files or downloads.
+    """
+    if not isinstance(text, OCRText):
+        return text
+    from app.services.pdf_sat_contract import text_column_regions
+    import numpy as np
+    import cv2
+    fitz = _try_import_fitz()
+    if fitz is None:
+        return text
+    refined = []
+    try:
+        with fitz.open(stream=content, filetype='pdf') as doc:
+            for page, evidence in zip(doc, text.pages):
+                regions = text_column_regions(evidence)
+                if not regions:
+                    refined.append(evidence)
+                    continue
+                # Initial OCR uses 200dpi; map refined boxes back to that space.
+                scale = 1.5
+                pix = page.get_pixmap(matrix=fitz.Matrix(300/72,300/72), colorspace=fitz.csGRAY)
+                img = np.frombuffer(pix.samples,dtype=np.uint8).reshape(pix.height,pix.width)
+                kept = [b for b in evidence if not any(
+                    x0 <= sum(p[0] for p in b['box'])/4 < x1 and y0 <= sum(p[1] for p in b['box'])/4 < y1
+                    for x0,y0,x1,y1 in regions)]
+                for x0,y0,x1,y1 in regions:
+                    left,top,right,bottom = int(x0*scale),int(y0*scale),int(x1*scale),int(y1*scale)
+                    crop = img[max(0,top):bottom,max(0,left):right].copy()
+                    if crop.size == 0:
+                        raise ValueError('empty contract crop')
+                    # Remove long ruling lines; do not alter short digit strokes.
+                    mask = cv2.threshold(crop,0,255,cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)[1]
+                    lines = cv2.morphologyEx(mask,cv2.MORPH_OPEN,np.ones((max(80,crop.shape[0]//3),1),np.uint8))
+                    crop[cv2.dilate(lines,np.ones((1,3),np.uint8))>0]=255
+                    result = _get_easyocr_reader().readtext(crop,detail=1,paragraph=False,mag_ratio=1.5)
+                    if not result:
+                        raise ValueError('empty refined contract column')
+                    for box,value,confidence in result:
+                        kept.append({'box':[[(float(x)+left)/scale,(float(y)+top)/scale] for x,y in box],
+                                     'text':str(value),'confidence':float(confidence)})
+                refined.append(kept)
+        return OCRText(str(text), refined)
+    except Exception:
+        logger.warning('Contract column refinement unavailable; retaining original evidence',exc_info=True)
+        return text
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +292,7 @@ def ocr_pdf_bytes(
         if not text or not text.strip():
             return None, "ocr_failed"
 
-        return text.strip(), method
+        return text if isinstance(text, OCRText) else text.strip(), method
 
     except Exception as exc:
         logger.exception("OCR 执行失败: %s", exc)

@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.397"
+APP_VERSION = "v0.22.398"
 APP_VERSION_NAME = "长短片待组套与成套库存"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -4121,6 +4121,13 @@ APP_VERIFICATION_STEPS = ["刷新ERP，打开邮箱PDF核对，缩小窗口再�
 APP_CHANGELOG = [
     *(f"v0.22.396：本次更新｜{item}" for item in APP_CHANGES),
     *(f"v0.22.396：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = ["原PDF识别支持驶安特、并作采购单：需方、单号、表格分列、含税价和逐行交期；模糊编码保留候选核对。"]
+APP_VERIFICATION_STEPS = ["刷新ERP，在原PDF识别窗口重新识别两份单据；核对驶安特8行、并作1行，选择未匹配常用箱后再保存。"]
+APP_CHANGELOG = [
+    *(f"v0.22.397：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.397：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
     *APP_CHANGELOG,
 ]
 APP_CHANGES = [

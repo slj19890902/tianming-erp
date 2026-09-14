@@ -12,12 +12,14 @@ from dataclasses import dataclass
 
 from app.services.order_pdf_import import (
     PdfParseError,
+    _apply_quantity_review_flags,
     extract_text_from_pdf_bytes,
     merge_simair_text_and_ocr_drafts,
     parse_purchase_order_text,
     resolve_pdf_customer_route,
 )
 from app.services.pdf_ocr import analyze_pdf_text_quality, ocr_pdf_bytes, should_use_ocr
+from app.services.pdf_sat_contract import parse_sat_contract
 
 
 @dataclass
@@ -103,6 +105,15 @@ def parse_pdf_bytes(
                 try:
                     if customer_route.get("status") == "unmatched":
                         customer_route = resolve_pdf_customer_route(ocr_text, template_rules)
+                    contract = parse_sat_contract(ocr_text, source_name, customer_route)
+                    if contract is not None:
+                        from app.services.pdf_ocr import refine_contract_columns
+                        refined_text = refine_contract_columns(content, ocr_text)
+                        contract = parse_sat_contract(refined_text, source_name, customer_route)
+                        contract = _apply_quantity_review_flags(contract)
+                        contract['source_text_quality'] = text_quality
+                        contract['parse_method'] = ocr_method
+                        return PdfParsePipelineResult(contract, text, str(ocr_text), ocr_method, text_quality, True, ocr_method)
                     ocr_parse_text = ocr_text
                     exact_po = str((text_draft or {}).get("customer_po") or "").strip()
                     if exact_po and exact_po.casefold() not in ocr_text.casefold():

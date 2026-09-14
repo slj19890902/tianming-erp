@@ -49,6 +49,7 @@ from app.models.warehouse_inventory import (
 )
 from app.services.flute_mapping import seven_layer_code_error
 from app.services.inventory_cost_snapshot import (
+    InventoryCostEstimate,
     apply_cost_snapshot,
     estimate_finished_product_cost,
     estimate_semi_finished_cost,
@@ -956,6 +957,7 @@ STOCK_DATE_ACCURACIES = frozenset({"exact", "estimated", "unknown"})
 
 
 SEMI_FINISHED_FLUTES_BY_LAYER: dict[int, frozenset[str]] = {
+    1: frozenset({"NONE"}),
     3: frozenset({"A", "B", "E"}),
     5: frozenset({"AB", "BE"}),
     7: frozenset({"AAA", "ABC"}),
@@ -4539,6 +4541,7 @@ def manual_semi_finished_in(
     capacity_source_location_id: int | None = None,
     material_is_unknown: bool = False,
     capture_material_cost: bool = True,
+    entry_cost_estimate: InventoryCostEstimate | None = None,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -4573,7 +4576,7 @@ def manual_semi_finished_in(
         or flute not in SEMI_FINISHED_FLUTES_BY_LAYER[layer_count]
     ):
         raise WarehouseInventoryError(
-            "三层仅支持A/B/E楞，五层仅支持AB/BE楞，七层仅支持AAA/ABC楞"
+            "单层仅支持无楞，三层仅支持A/B/E楞，五层仅支持AB/BE楞，七层仅支持AAA/ABC楞"
         )
     if sheet_type not in {"raw_board", "net_sheet", "creased_sheet"}:
         raise WarehouseInventoryError("片料类型无效")
@@ -4657,7 +4660,9 @@ def manual_semi_finished_in(
         crease_right_mm=crease_right_mm,
         cutting_note=cutting_note,
     )
-    if source_type == "stocktake":
+    if entry_cost_estimate is not None:
+        apply_cost_snapshot(lot, entry_cost_estimate, captured_at=now)
+    elif source_type == "stocktake":
         from app.services.inventory_valuation import freeze_entry_cost
         freeze_entry_cost(db, lot)
     _movement(

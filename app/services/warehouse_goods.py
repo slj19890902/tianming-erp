@@ -24,6 +24,9 @@ def product_face(product):
 
 def lot_face(db, lot, profile=None):
     detail = lot.semi_finished_detail
+    if detail and detail.layer_count == 1:
+        profile = profile if profile is not None else goods_profile(db, lot)
+        return (profile or {}).get("face_paper", "unknown")
     material_id = (profile or {}).get("verified_material_id") or (detail.material_id if detail else None)
     material = db.get(Material, material_id) if material_id else None
     return material_face(db, material, material_code=detail.material_code_snapshot if detail else None,

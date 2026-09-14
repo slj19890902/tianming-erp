@@ -1715,7 +1715,7 @@ function WarehouseRackElevation({
 
 function warehouseCardCustomer(item: InventoryItem) { return item.customer_id ? employeeCustomerName(item) : "通用"; }
 function warehouseCardPrimary(item: InventoryItem) {
-  return item.inventory_type === "semi_finished" ? [item.specification || "尺寸待补充", item.flute_type ? `${item.flute_type}楞` : "楞型待补充"].join(" · ") : item.inventory_code || "存货编码待补充";
+  return item.inventory_type === "semi_finished" ? [item.specification || "尺寸待补充", item.flute_type ? (item.flute_type==="NONE"?"无楞":`${item.flute_type}楞`) : "楞型待补充"].join(" · ") : item.inventory_code || "存货编码待补充";
 }
 function InventoryLabelSummary({ item, quantity, onLabel, onDetails, expanded = false }: { item: InventoryItem; quantity?: number; onLabel: () => void; onDetails: () => void; expanded?: boolean }) {
   return <><div className="warehouse-label-summary" title={`${warehouseCardCustomer(item)} · ${item.product_name || ""} · ${item.specification || ""}`}><span>{warehouseCardCustomer(item)}</span><span>{item.product_name || "产品名称待补充"}</span><span>{item.inventory_type === "semi_finished" ? "" : item.specification || ""}</span><button type="button" className="warehouse-label-details" aria-expanded={expanded} onClick={onDetails}>{expanded ? "收起" : "明细"}</button></div>

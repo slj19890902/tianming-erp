@@ -303,7 +303,7 @@ def frozen_cost(lot, db=None, visited=None):
             currency = "CNY"
             detail = {**detail, "origin_currency_evidence": origin_detail}
     if currency != "CNY" or lot.cost_snapshot_source not in {
-        CONFIRMED_SOURCE, "material_quote_area", "purchase_receipt_actual", *OWNER_SOURCES
+        CONFIRMED_SOURCE, "material_quote_area", "purchase_receipt_actual", "manual_sheet_unit_cost", *OWNER_SOURCES
     }:
         return None, detail
     if lot.cost_snapshot_source in OWNER_SOURCES and (

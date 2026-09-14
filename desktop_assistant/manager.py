@@ -463,7 +463,7 @@ class Manager:
 
     def recover_interrupted_update(self):
         """Finish activation only when the complete migration result is proven intact."""
-        from desktop_assistant.migration import facts, files, schema
+        from desktop_assistant.migration import facts, files, schema, recovery_schema
         with self.lock():
             state = self.state
             if state.get('operation') not in ('migration_running', 'migration_failed'):
@@ -493,12 +493,14 @@ class Manager:
                     or not backup.is_file() or sha(backup) != state.get('migration_backup_sha256')):
                 raise ValueError('缺少完整演练或备份校验证据，保留现场，请专项恢复')
             report = read_json(report_path)
+            expected_schema = recovery_schema(report, report_path)
             shared = self.root / 'shared'
             database = shared / 'data/carton_erp.sqlite3'
             actual = database_info(database)
             if (report.get('status') != 'passed' or report.get('target_revision') != manifest['revision']
+                    or report.get('package_sha256') != target
                     or actual != report['result']
-                    or schema(database) != report.get('result_schema')
+                    or schema(database) != expected_schema
                     or facts(database, report['source_facts']['columns']) != report['source_facts']
                     or files(shared) != state.get('migration_files')):
                 raise ValueError('现场未达到完整升级结果，保持停服；未覆盖数据，请专项恢复')

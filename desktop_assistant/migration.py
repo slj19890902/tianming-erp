@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sqlite3
@@ -20,10 +21,62 @@ def quote(name):
     return '"' + name.replace('"', '""') + '"'
 
 
-def schema(database):
+def canonical_table_sql(sql):
+    """Only unordered table constraints are sorted; columns/expressions stay exact.
+
+    SQLAlchemy reflects constraints into sets, so process hash seeds can reorder
+    identical CHECK/FK definitions. Do not ignore names, expressions or columns.
+    """
+    if not sql or not re.match(r'^CREATE\s+TABLE\b', sql, re.I):
+        return sql
+    quote_char=None; depth=0; start=None; part=None; definitions=[]; index=0
+    while index < len(sql):
+        char=sql[index]
+        if quote_char:
+            if char == quote_char:
+                if quote_char != ']' and index+1 < len(sql) and sql[index+1] == quote_char:
+                    index+=2
+                    continue
+                quote_char=None
+        elif char in ('"', "'", '`', '['):
+            quote_char=']' if char == '[' else char
+        elif char == '(':
+            if depth == 0:
+                start=index; part=index+1
+            depth+=1
+        elif char == ')':
+            depth-=1
+            if depth == 0 and start is not None:
+                definitions.append(sql[part:index].strip())
+                columns=[]; constraints=[]
+                for definition in definitions:
+                    target=constraints if re.match(r'^(?:CONSTRAINT\b|PRIMARY\s+KEY\b|FOREIGN\s+KEY\b|UNIQUE\b|CHECK\b)',definition,re.I) else columns
+                    target.append(definition)
+                return (sql[:start], columns, sorted(constraints), sql[index+1:])
+        elif char == ',' and depth == 1:
+            definitions.append(sql[part:index].strip()); part=index+1
+        index+=1
+    raise ValueError('无法完整解析表结构，保留原数据库并停止升级')
+
+
+def schema(database, *, legacy=False):
     with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro', uri=True)) as db:
-        rows = db.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').fetchall()
+        rows = [(kind,name,table,canonical_table_sql(sql) if kind=='table' and not legacy else sql)
+                for kind,name,table,sql in db.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
     return hashlib.sha256(json.dumps(rows,ensure_ascii=False).encode('utf-8')).hexdigest()
+
+
+def recovery_schema(report, report_path):
+    if report.get('schema_fingerprint_version') == 2:
+        return report['result_schema']
+    if report.get('schema_fingerprint_version') not in (None, 1):
+        raise ValueError('未知结构校验版本，保持停服')
+    # Preserve the original report bytes and SHA. Its original raw SQL hash must
+    # still authenticate the retained isolated DB before deriving an order-neutral hash.
+    isolated=report_path.parent/'shared/data/carton_erp.sqlite3'
+    if not isolated.is_file() or schema(isolated,legacy=True) != report['result_schema']:
+        raise ValueError('旧演练结构证据缺失或变化，保持停服')
+    return schema(isolated)
 
 
 def facts(database, columns=None):
@@ -114,6 +167,7 @@ def rehearse(manager, package):
         if facts(database)!=before or files(source)!=before_files:
             raise ValueError('原系统数据已变化，本次演练结果不能用于更新')
         report.update(status='passed',target_revision=after_info['revision'],result=after_info,
+            schema_fingerprint_version=2,
             result_schema=schema(shared/'data/carton_erp.sqlite3'),
             attachments_verified=len(before_files),source_unchanged=True)
     except Exception as error:

@@ -116,6 +116,48 @@ class CrossRevisionTests(unittest.TestCase):
         self.assertEqual(sha(self.database),before)
         self.assertEqual(self.manager.state['operation'],'migration_failed')
 
+    def test_legacy_schema_report_recovers_without_rewriting_evidence(self):
+        self.interrupted()
+        from pathlib import Path
+        from desktop_assistant.storage import read_json,write_json
+        from desktop_assistant.migration import schema
+        state=self.manager.state;path=Path(state['migration_report']);report=read_json(path)
+        report.pop('schema_fingerprint_version')
+        report['result_schema']=schema(path.parent/'shared/data/carton_erp.sqlite3',legacy=True)
+        write_json(path,report);state['migration_report_sha256']=sha(path)
+        write_json(self.manager.root/'state.json',state)
+        original=path.read_bytes();before=sha(self.database)
+        self.manager.recover_interrupted_update()
+        self.assertEqual(path.read_bytes(),original)
+        self.assertEqual(sha(self.database),before)
+
+    def test_legacy_report_rejects_changed_isolated_schema(self):
+        self.interrupted()
+        from pathlib import Path
+        from desktop_assistant.storage import read_json,write_json
+        from desktop_assistant.migration import schema
+        state=self.manager.state;path=Path(state['migration_report']);report=read_json(path)
+        isolated=path.parent/'shared/data/carton_erp.sqlite3'
+        report.pop('schema_fingerprint_version');report['result_schema']=schema(isolated,legacy=True)
+        write_json(path,report);state['migration_report_sha256']=sha(path)
+        write_json(self.manager.root/'state.json',state)
+        with closing(sqlite3.connect(isolated)) as db:
+            db.execute('ALTER TABLE new_feature ADD COLUMN changed TEXT');db.commit()
+        with self.assertRaisesRegex(ValueError,'旧演练结构证据'):
+            self.manager.recover_interrupted_update()
+
+    def test_different_constraint_order_does_not_block_valid_upgrade(self):
+        def migrate(release,shared,revision,log,environment=None):
+            constraints=['CHECK(n > 0)','UNIQUE(n)']
+            if environment is not None:constraints.reverse()
+            with closing(sqlite3.connect(shared/'data/carton_erp.sqlite3')) as db:
+                db.execute('CREATE TABLE new_feature(id INTEGER,n INTEGER,'+','.join(constraints)+')')
+                db.execute('UPDATE alembic_version SET version_num=?',(revision,));db.commit()
+            log.write_text('fixture migration')
+        with patch('desktop_assistant.migration.run_migration',side_effect=migrate):
+            self.manager.update(self.package(),recovery.PASSWORD,self.fixture.nas)
+        self.assertEqual(self.manager.state['operation'],'update')
+
     def test_recovery_rejects_changed_report(self):
         self.interrupted()
         from pathlib import Path

@@ -259,6 +259,9 @@ def _stock_target(
             )
         if int(item.stocked_quantity or 0) >= int(item.quantity or 0):
             raise IncomingReceiptError("该补库明细已经全部入库", 409)
+    from app.services.replenishment_receipt_progress import receipt_progress
+    if not allow_closed and receipt_progress(db, item)['short_closed']:
+        raise IncomingReceiptError("该补库明细已按实收结单，不再等待补料", 409)
     return order, item
 
 
@@ -297,7 +300,7 @@ def stock_source_summary(
     return {
         "planned_quantity": planned,
         "cumulative_received_quantity": received,
-        "remaining_quantity": max(planned - received, 0),
+        "remaining_quantity": 0 if latest and latest.resolution_action == "accept_short" else max(planned - received, 0),
         "variance_quantity": variance,
         "variance_type": (
             "matched" if variance == 0 else "short" if variance < 0 else "over"
@@ -1629,20 +1632,20 @@ def _receive_stock_replenishment_one(
     if quantity <= 0:
         raise IncomingReceiptError("入库数量必须大于0")
     cumulative = before + quantity
-    if cumulative > planned:
-        raise IncomingReceiptError(
-            "补库来料实收不能超过原报料数量；请核对后另建补库单处理超收。",
-            409,
-        )
     action = (resolution_action or "").strip() or None
     reason = (resolution_reason or "").strip() or None
     if cumulative < planned:
-        if action != "await_supplier":
+        if action not in {"await_supplier", "accept_short"}:
             raise IncomingReceiptError(
-                "补库来料短收时请选择“继续等待供应商补货”。"
+                "短收时请选择继续等补货或按已收数结单"
             )
-        resolution_status = "pending"
+        resolution_status = "pending" if action == "await_supplier" else "resolved"
         variance_type = "short"
+    elif cumulative > planned:
+        if action:
+            raise IncomingReceiptError("补库多收片料按实收统一入库，无需选择生产或另存余量")
+        resolution_status = "resolved"
+        variance_type = "over"
     else:
         if action:
             raise IncomingReceiptError("补库来料等量收货不需要选择差异处理方式")
@@ -1675,6 +1678,8 @@ def _receive_stock_replenishment_one(
         resolution_status=resolution_status,
         resolution_action=action,
         resolution_reason=reason,
+        resolved_by=user.id if resolution_status == 'resolved' else None,
+        resolved_at=now if resolution_status == 'resolved' else None,
         status="posted",
     )
     receipt.items.append(receipt_item)
@@ -1696,13 +1701,24 @@ def _receive_stock_replenishment_one(
             db,
             order=order,
             item=item,
-            quantity=quantity,
+            quantity=min(quantity, max(0, planned - int(item.stocked_quantity or 0))),
+            actual_inventory_quantity=quantity,
             operator_id=user.id,
             receipt_item_id=receipt_item.id,
         )
     except StockReplenishmentError as error:
         raise IncomingReceiptError(str(error), error.status_code) from error
     receipt_item.received_inventory_lot_id = lot.id
+    from app.services.replenishment_receipt_progress import refresh_order_progress
+    if resolution_status == "resolved" or cumulative >= planned:
+        for pending in db.scalars(select(IncomingReceiptItem).where(
+            _stock_source_filter(item.id), IncomingReceiptItem.status == "posted",
+            IncomingReceiptItem.resolution_status == "pending",
+        )):
+            pending.resolution_status = "resolved"
+            pending.resolved_by = user.id
+            pending.resolved_at = utc_now_naive()
+    refresh_order_progress(db, order, user.id)
     context = audit_context or {}
     customer = db.get(Customer, item.customer_id) if item.customer_id is not None else None
     append_audit_event(
@@ -1733,6 +1749,9 @@ def _receive_stock_replenishment_one(
             "stock_replenishment_order_id": order.id,
             "stock_replenishment_item_id": item.id,
             "planned_quantity": planned,
+            "variance_quantity": cumulative - planned,
+            "resolution_action": action,
+            "resolution_status": resolution_status,
             "received_quantity": quantity,
             "cumulative_received_quantity": cumulative,
             "received_inventory_lot_id": lot.id,
@@ -2108,10 +2127,43 @@ def accept_short(
     if row is None or row.status != "posted":
         raise IncomingReceiptError("来料实收记录不存在或已撤销", 404)
     if row.stock_replenishment_item_id is not None:
-        raise IncomingReceiptError(
-            "补库来料短收请继续等待供应商补货，暂不支持按短收数量直接结单。",
-            409,
-        )
+        order, item = _stock_target(db, f"sr{row.stock_replenishment_item_id}", claim_for_receipt=True)
+        latest = db.scalar(select(IncomingReceiptItem).where(
+            _stock_source_filter(item.id), IncomingReceiptItem.status == "posted",
+        ).order_by(IncomingReceiptItem.id.desc()))
+        if latest is None or latest.id != row.id or latest.resolution_action != "await_supplier":
+            raise IncomingReceiptError("请在最新一笔待补料记录上结单", 409)
+        from app.services.replenishment_receipt_progress import receipt_progress, refresh_order_progress
+        progress = receipt_progress(db, item)
+        if not 0 < progress['received_quantity'] < item.quantity:
+            raise IncomingReceiptError("当前记录不是可结单的短收状态", 409)
+        row.resolution_action = "accept_short"
+        row.resolution_status = "resolved"
+        row.resolution_reason = clean_reason
+        row.resolved_by = user.id
+        row.resolved_at = utc_now_naive()
+        for pending in db.scalars(select(IncomingReceiptItem).where(
+            _stock_source_filter(item.id), IncomingReceiptItem.status == 'posted',
+            IncomingReceiptItem.resolution_status == 'pending',
+        )):
+            pending.resolution_status = 'resolved'
+            pending.resolved_by = user.id
+            pending.resolved_at = row.resolved_at
+        refresh_order_progress(db, order, user.id)
+        context = audit_context or {}
+        append_audit_event(db, request=context.get("request"), actor=user,
+            event_category="business", result="success", source=str(context.get("source") or "web"),
+            module_code="incoming", action_code="incoming.accept_short",
+            legacy_action="RESOLVE_INCOMING_VARIANCE", resource="IncomingReceiptItem",
+            entity_type="stock_replenishment_item", entity_id=item.id,
+            object_ref=f"stock_replenishment_item:{item.id}", customer_id=item.customer_id,
+            description="补库按实收结单，不再补料", details={
+                "incoming_receipt_item_id": row.id, "planned_quantity": item.quantity,
+                "cumulative_received_quantity": progress['received_quantity'],
+                "resolution_action": "accept_short", "resolution_reason": clean_reason,
+            })
+        db.flush()
+        return row
     target = _target(
         db,
         supplier_order_item_key(row.supplier_order_item_id)

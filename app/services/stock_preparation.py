@@ -53,7 +53,8 @@ def list_rows(db, *, scope=None, query=""):
     rows = []
     for item in db.scalars(stmt.order_by(StockReplenishmentOrderItem.id.desc())):
         receipts = list(db.scalars(select(IncomingReceiptItem).where(IncomingReceiptItem.stock_replenishment_item_id == item.id).order_by(IncomingReceiptItem.id)))
-        pending = max(0, item.quantity - item.stocked_quantity)
+        from app.services.replenishment_receipt_progress import receipt_progress
+        pending = receipt_progress(db, item)['remaining_quantity']
         sources = receipts + ([None] if pending or not receipts else [])
         for receipt in sources:
             # Pre-receipt-ledger replenishments already have a real stock lot.

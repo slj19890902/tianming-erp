@@ -562,14 +562,14 @@
       const decisionBlock = !isPending ? "" : frozenPurpose
         ? `<div class="mt-2 rounded-lg ${item.receipt_fact_ready ? "bg-green-50 text-green-900" : "bg-amber-50 text-amber-900"} p-2 text-sm"><p class="font-bold">${escapeHtml(item.receipt_fact_ready ? "用途与采购价格已冻结" : "默认按报料材质和已维护价格实收")}</p><p>预计订单用途 ${escapeHtml(item.expected_order_purpose_sheet_qty || 0)} 张</p><p>预计片料备库 ${escapeHtml(item.expected_reserve_purpose_sheet_qty || 0)} 张</p><p>预计形成成品 ${escapeHtml(item.expected_finished_output_qty || 0)} 只</p>${item.finished_location_name ? `<p>成品：${escapeHtml(item.finished_location_name)}</p>` : ""}${item.finished_capacity_warning ? `<p class="mt-1 font-bold text-amber-800">容量提醒：${escapeHtml(item.finished_capacity_warning)}</p>` : ""}${item.reserve_location_name ? `<p>片料：${escapeHtml(item.reserve_location_name)}</p>` : ""}${item.receipt_quantity_notice ? `<p class="mt-1 font-bold text-amber-800">${escapeHtml(item.receipt_quantity_notice)}</p>` : ""}</div>`
         : projected < 0
-          ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">还差 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">少收怎么处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等补货</option>${isStockReplenishment ? "" : `<option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按已收数结单</option>`}</select></div>`
+          ? `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">还差 ${Math.abs(projected)} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">少收怎么处理</option><option value="await_supplier" ${item.resolution_action === "await_supplier" ? "selected" : ""}>继续等补货</option><option value="accept_short" ${item.resolution_action === "accept_short" ? "selected" : ""}>按已收数结单</option></select></div>`
           : projected > 0
             ? isStockReplenishment
-              ? `<div class="mt-2 rounded-lg bg-red-50 p-2 text-sm font-bold text-red-800">补库来料不能超过原报料数量，请核对后另建补库单处理超收</div>`
+              ? `<div class="mt-2 rounded-lg bg-red-50 p-2 text-sm font-bold text-red-800">多收 ${projected} 张，按实收统一入库</div>`
               : `<div class="mt-2 rounded-lg bg-amber-50 p-2"><p class="text-sm font-bold text-amber-900">多收 ${projected} 张</p><select data-resolution="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">多收怎么处理</option><option value="all_to_production" ${item.resolution_action === "all_to_production" ? "selected" : ""}>全部用于本单</option><option value="transfer_to_semi_inventory" ${item.resolution_action === "transfer_to_semi_inventory" ? "selected" : ""}>余量存半成品仓</option></select>${item.resolution_action === "transfer_to_semi_inventory" ? `<select data-surplus-location="${key}" class="mt-1 w-full rounded-lg border p-2" ${canOperate() && !disabled ? "" : "disabled"}><option value="">余量放哪个库位</option>${locations}</select>` : ""}</div>`
             : `<div class="mt-2 rounded-lg bg-green-50 p-2 text-sm font-bold text-green-800">数量刚好</div>`;
       const receiptLocationBlock = isPending && isStockReplenishment
-        ? `<div class="mt-2 rounded-lg bg-blue-50 p-2 text-sm font-bold text-blue-900">片料到厂后由系统自动进入一楼当前已发布原料区的真实排位，无需手工猜选库位</div>`
+        ? `<div class="mt-2 rounded-lg bg-blue-50 p-2 text-sm font-bold text-blue-900">实际片料统一进入当前已发布原料暂存位，可再移至半成品货位</div>`
         : "";
       const receiptExecutionBlock = executionIssue
         ? `<div class="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-900"><p class="font-bold">暂不能实收</p><p>${escapeHtml(executionIssue)}</p></div>`
@@ -581,7 +581,7 @@
       const primaryAction = !canOperate()
         ? `<div class="rounded-lg bg-slate-100 px-4 py-2 text-center text-sm font-semibold text-slate-500">只读查看</div>`
         : isPending
-          ? `<button data-receive="${key}" ${receiveDisabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认实收</button>${item.purpose_status === "legacy_unset" && item.pending_receipt_item_id && !isStockReplenishment ? `<button data-accept-short="${key}" ${disabled ? "disabled" : ""} class="mt-2 min-h-12 w-full rounded-xl bg-amber-700 px-4 text-base font-bold text-white disabled:bg-slate-400">不再补货，短收结单</button>` : ""}`
+          ? `<button data-receive="${key}" ${receiveDisabled ? "disabled" : ""} class="min-h-12 w-full rounded-xl bg-green-700 px-4 text-base font-bold text-white disabled:bg-slate-400">确认实收</button>${item.purpose_status === "legacy_unset" && item.pending_receipt_item_id ? `<button data-accept-short="${key}" ${disabled ? "disabled" : ""} class="mt-2 min-h-12 w-full rounded-xl bg-amber-700 px-4 text-base font-bold text-white disabled:bg-slate-400">不再补货，短收结单</button>` : ""}`
           : "";
 
       const expandedSection = expanded ? `
@@ -1021,12 +1021,12 @@
       const projectedVariance = Number(item.cumulative_received_quantity || 0) + quantity - planned;
       let action = null;
       if (item.purpose_status === "legacy_unset") {
-        action = projectedVariance === 0 ? null : (item.resolution_action || null);
+        action = projectedVariance === 0 || (projectedVariance > 0 && item.source_type === "stock_replenishment") ? null : (item.resolution_action || null);
         if (projectedVariance < 0 && !["await_supplier", "accept_short"].includes(action)) {
           showToast("短收时请选择继续等待补货或按当前数量结单", true);
           return;
         }
-        if (projectedVariance > 0 && !["all_to_production", "transfer_to_semi_inventory"].includes(action)) {
+        if (projectedVariance > 0 && item.source_type !== "stock_replenishment" && !["all_to_production", "transfer_to_semi_inventory"].includes(action)) {
           showToast("超收时请选择全部投入生产或余量转半成品库存", true);
           return;
         }
@@ -1052,7 +1052,7 @@
             received_quantity: quantity,
             resolution_action: action,
             resolution_reason: String(item.resolution_reason || "").trim() || null,
-            surplus_location_id: Number(item.surplus_location_id) || null,
+            surplus_location_id: item.source_type === 'stock_replenishment' ? null : (Number(item.surplus_location_id) || null),
             expected_surplus_layout_version: surplusLocation?.layout_version || null,
             purchase_purpose_source_snapshot_id: item.purchase_purpose_source_snapshot_id ?? null,
             expected_receipt_fact_version: item.expected_receipt_fact_version ?? null,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.replenishment_receipt_progress import receipt_progress, receipt_progress_map
+
 import hashlib
 import json
 import re
@@ -19011,7 +19013,12 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
             ):
                 continue
         lines = []
+        from types import SimpleNamespace
+        progresses = receipt_progress_map(db, [SimpleNamespace(
+            id=item['item_id'], quantity=item['quantity'], stocked_quantity=item['stocked_quantity']
+        ) for item in projected_items])
         for item in projected_items:
+            actual_progress = progresses[item['item_id']]
             item_customer_name = (
                 item["item_customer_name"]
                 if item["resolved_item_customer_id"] is not None
@@ -19027,7 +19034,8 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     "_item_id": item["item_id"],
                     "_target_inventory_type": item["target_inventory_type"],
                     "_quantity": item["quantity"],
-                    "_stocked_quantity": item["stocked_quantity"],
+                    "_stocked_quantity": actual_progress['received_quantity'],
+                    "_remaining_quantity": actual_progress['remaining_quantity'],
                     "_crease_type": item["crease_type"],
                     "_crease_left_mm": item["crease_left_mm"],
                     "_crease_middle_mm": item["crease_middle_mm"],
@@ -19476,7 +19484,7 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                             "flute_type": line.get("flute_type"),
                             "requisition_qty": quantity,
                             "received_qty": stocked_quantity,
-                            "remaining_qty": max(quantity - stocked_quantity, 0),
+                            "remaining_qty": line['_remaining_quantity'],
                             "unit": (
                                 "只"
                                 if line.get("_target_inventory_type") == "finished"
@@ -19928,10 +19936,8 @@ def _build_reported_documents(
                     "material_code": item.material_code_snapshot,
                     "flute_type": item.flute_type,
                     "requisition_qty": int(item.quantity or 0),
-                    "received_qty": int(item.stocked_quantity or 0),
-                    "remaining_qty": max(
-                        int(item.quantity or 0) - int(item.stocked_quantity or 0), 0
-                    ),
+                    "received_qty": receipt_progress(db, item)['received_quantity'],
+                    "remaining_qty": receipt_progress(db, item)['remaining_quantity'],
                     "unit": (
                         "只" if item.target_inventory_type == "finished" else "张"
                     ),

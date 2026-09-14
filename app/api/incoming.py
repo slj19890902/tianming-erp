@@ -1449,6 +1449,7 @@ def _pending_order_item_query(query):
 
 def _stock_replenishment_pending_query(query, *, db: Session, user: User):
     """Apply the authoritative stock-replenishment incoming eligibility."""
+    from app.services.replenishment_receipt_progress import short_closed_clause
     external_purchase_source = (
         select(ExternalPackagingPurchaseItem.id)
         .where(
@@ -1467,6 +1468,7 @@ def _stock_replenishment_pending_query(query, *, db: Session, user: User):
             != "external_packaging",
         ),
         ~external_purchase_source,
+        ~short_closed_clause(StockReplenishmentOrderItem.id),
     )
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:
@@ -3101,7 +3103,7 @@ def _stock_replenishment_receipt_row(
         "planned_quantity": fact.planned_quantity,
         "received_quantity_this_time": fact.received_quantity,
         "cumulative_received_quantity": fact.cumulative_received_quantity,
-        "remaining_quantity": max(
+        "remaining_quantity": 0 if fact.resolution_action == 'accept_short' else max(
             fact.planned_quantity - fact.cumulative_received_quantity, 0
         ),
         "variance_quantity": fact.variance_quantity,

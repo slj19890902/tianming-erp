@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.412"
-APP_VERSION_NAME = "预警补库双拼与开料数量换算"
+APP_VERSION = "v0.22.413"
+APP_VERSION_NAME = "补库按实收多收与短收结单"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4204,3 +4204,6 @@ APP_CHANGELOG = [*(f"v0.22.411：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["预警补库按成品数量乘每套片数、扣除实际可用片料后，再按开料产出向上取整；双拼141箱一开一正确报282片。", "统一预警和报料草稿的数量口径，修正双拼片料及在途覆盖量；保留BOM实际组装消耗、成套库存和历史冻结资料。"]
 APP_VERIFICATION_STEPS = ["刷新YL00151预警并重新打开报料草稿：无抵扣时141箱、双拼、一开一应为282片；已保存单据不自动改写。", "组装型BOM实际完成组套后，核对成套数量与存放位置，找货不重复领取已消耗长短片；本批旧00205不转换。"]
 APP_CHANGELOG = [*(f"v0.22.412：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["补库供应商多送片料按实际数量入库，保留原报料数、差额及实际收料价格快照，不再要求另开补库单。", "短收可继续等补货或按已收数结单；结清余量不再占用在途、不生成虚假库存，生产与报料列表统一实收口径。"]
+APP_VERIFICATION_STEPS = ["刷新补库来料页，按现场真实数量确认实收；多收按实收统一入原料暂存位，之后可移至实际半成品货位。", "少收不再补料时选择按已收数结单；核对原报料数、实收数、差额和待来料列表，不为验收重复收货。"]
+APP_CHANGELOG = [*(f"v0.22.413：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -1313,8 +1313,10 @@ def build_stock_replenishment_production_package(
             product.box_category if product is not None else None,
         )
         planned_quantity = int(item.quantity or 0)
-        stocked_quantity = int(item.stocked_quantity or 0)
-        remaining_quantity = max(planned_quantity - stocked_quantity, 0)
+        from app.services.replenishment_receipt_progress import receipt_progress
+        progress = receipt_progress(db, item)
+        stocked_quantity = progress['received_quantity']
+        remaining_quantity = progress['remaining_quantity']
         output_factor = max(int(item.stock_yield_per_sheet or 0), 1)
         is_semi_finished = item.target_inventory_type == "semi_finished"
         output_unit = "张" if is_semi_finished else "只"

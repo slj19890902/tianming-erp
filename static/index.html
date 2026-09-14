@@ -4697,14 +4697,15 @@
                             <select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action">
                               <option value="">少收怎么处理</option>
                               <option value="await_supplier">继续等补货</option>
-                              <option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option>
+                              <option value="accept_short">按已收数结单</option>
                             </select>
+                            <span v-else-if="incomingProjectedVariance(row)>0 && row.source_type==='stock_replenishment'" class="muted">多收片料按实收统一入库</span>
                             <select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" @change="onIncomingResolutionAction(row)">
                               <option value="">多收怎么处理</option>
                               <option value="all_to_production">全部用于本单</option>
                               <option value="transfer_to_semi_inventory">余量存半成品仓</option>
                             </select>
-                            <select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id">
+                            <select v-if="row.source_type!=='stock_replenishment' && row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id">
                               <option :value="null">选择余量库位</option>
                               <option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_name || '位置名称待完善' }}</option>
                             </select>
@@ -21069,9 +21070,9 @@
             let surplusDisposition=null;
             if (row.purpose_status==='legacy_unset') {
               const variance=this.incomingProjectedVariance(row);
-              action=variance===0 ? null : (row.resolution_action || null);
+              action=variance===0 || (variance>0 && row.source_type==='stock_replenishment') ? null : (row.resolution_action || null);
               if (variance<0 && !["await_supplier","accept_short"].includes(action)) throw new Error("短收时请选择继续等待补货或按当前数量结单");
-              if (variance>0 && !["all_to_production","transfer_to_semi_inventory"].includes(action)) throw new Error("超收时请选择全部投入生产或余量转半成品库存");
+              if (variance>0 && row.source_type!=='stock_replenishment' && !["all_to_production","transfer_to_semi_inventory"].includes(action)) throw new Error("超收时请选择全部投入生产或余量转半成品库存");
               if (action==="transfer_to_semi_inventory" && this.incomingLocationsLoading) throw new Error("正在读取半成品库位，请稍候再确认");
               if (action==="transfer_to_semi_inventory" && this.incomingLocationsError) throw new Error(this.incomingLocationsError);
               if (action==="transfer_to_semi_inventory" && !Number(row.surplus_location_id)) throw new Error("余量转半成品库存时必须选择库位");
@@ -21083,7 +21084,7 @@
               if (executionIssue) throw new Error(executionIssue);
             }
             const surplusLocation=this.incomingLocations.find(location=>Number(location.id)===Number(row.surplus_location_id));
-            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_disposition:surplusDisposition,surplus_location_id:Number(row.surplus_location_id)||null,expected_surplus_layout_version:surplusLocation?.layout_version||null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
+            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_disposition:surplusDisposition,surplus_location_id:row.source_type==="stock_replenishment"?null:(Number(row.surplus_location_id)||null),expected_surplus_layout_version:surplusLocation?.layout_version||null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
           },
           canReceiveIncoming(row) {
             const sourceReady = typeof row?.source_receivable === "boolean"

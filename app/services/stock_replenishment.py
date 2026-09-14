@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.replenishment_receipt_progress import receipt_progress
+
 from math import ceil
 from uuid import uuid4
 
@@ -864,6 +866,7 @@ def customer_board_preparation_coverage(
     incoming_sheets = 0
     incoming_finished_capacity = 0
     incoming_auto_cover_capacity = 0
+    from app.services.replenishment_receipt_progress import short_closed_clause
     if signature is not None:
         incoming_items = db.scalars(
             select(StockReplenishmentOrderItem)
@@ -883,6 +886,7 @@ def customer_board_preparation_coverage(
                 > StockReplenishmentOrderItem.stocked_quantity,
                 StockReplenishmentOrderItem.customer_id
                 == product.customer_id,
+                ~short_closed_clause(StockReplenishmentOrderItem.id),
             )
             .order_by(
                 StockReplenishmentOrder.created_at,
@@ -1328,6 +1332,7 @@ def replenishment_item_dict(
     item: StockReplenishmentOrderItem,
     *,
     projection_context: dict | None = None,
+    db: Session | None = None,
 ) -> dict:
     location = item.location
     lot = item.inventory_lot
@@ -1370,7 +1375,8 @@ def replenishment_item_dict(
         "pieces_per_box": item.pieces_per_box,
         "stock_yield_per_sheet": item.stock_yield_per_sheet,
         "quantity": item.quantity,
-        "stocked_quantity": item.stocked_quantity,
+        "stocked_quantity": receipt_progress(db, item)['received_quantity'] if db is not None else item.stocked_quantity,
+        "receipt_progress": receipt_progress(db, item) if db is not None else None,
         "location": (
             {
                 "id": location.id,
@@ -1460,10 +1466,11 @@ def replenishment_order_dict(
         ),
         "stocked_at": utc_naive_to_api(order.stocked_at) if order.stocked_at else None,
         "total_quantity": sum(item.quantity for item in order.items),
-        "stocked_quantity": sum(item.stocked_quantity for item in order.items),
+        "stocked_quantity": sum(receipt_progress(db, item)['received_quantity'] if db is not None else item.stocked_quantity for item in order.items),
         "items": [
             replenishment_item_dict(
                 item,
+                db=db,
                 projection_context=(
                     contexts.get(int(item.location.id))
                     if item.location is not None
@@ -1790,7 +1797,7 @@ def stock_replenishment_order(
         return order
 
     for item in order.items:
-        if item.stocked_quantity >= item.quantity:
+        if item.stocked_quantity >= item.quantity or receipt_progress(db, item)['short_closed']:
             continue
         quantity = item.quantity - item.stocked_quantity
         receive_replenishment_item(

@@ -811,7 +811,7 @@ def test_new_finished_in_reuses_released_empty_pallet(
         ) == len(movements)
 
 
-@pytest.mark.parametrize('pending_location', [False, True, 'disabled', 'ordinary_unplaced'])
+@pytest.mark.parametrize('pending_location', [False, True, 'cycles', 'revision', 'disabled', 'ordinary_unplaced'])
 def test_cancel_full_delivery_restores_auto_released_pallet(
     n029_delivery_app, pending_location,
 ) -> None:
@@ -862,7 +862,27 @@ def test_cancel_full_delivery_restores_auto_released_pallet(
         )
         assert created.status_code == 201, created.text
         delivery_id = int(created.json()["id"])
-        assert client.put(f"/api/deliveries/{delivery_id}/dispatch").status_code == 200
+        dispatched = client.put(f"/api/deliveries/{delivery_id}/dispatch")
+        assert dispatched.status_code == 200
+        if pending_location == 'revision':
+            version = dispatched.json()['version']
+            for sequence, quantity in enumerate((100, 103, 103)):
+                payload = {
+                    'source_mode': 'order', 'expected_version': version,
+                    'idempotency_key': f'staging403-revision-{sequence}',
+                    'items': [{'order_item_id': ids['task_completed'],
+                               'delivered_quantity': quantity,
+                               'over_delivery_confirmed': True,
+                               'over_delivery_reason': '现场确认'}],
+                }
+                revised = client.put(f'/api/deliveries/{delivery_id}/revision', json=payload)
+                assert revised.status_code == 200, revised.text
+                assert revised.json()['total_quantity'] == quantity
+                replay = client.put(f'/api/deliveries/{delivery_id}/revision', json=payload)
+                assert replay.status_code == 200 and replay.json() == revised.json()
+                payload['items'][0]['delivered_quantity'] = 99
+                assert client.put(f'/api/deliveries/{delivery_id}/revision', json=payload).status_code == 409
+                version = revised.json()['version']
         cancelled = client.put(f"/api/deliveries/{delivery_id}/cancel")
         if pending_location in ('disabled', 'ordinary_unplaced'):
             assert cancelled.status_code == 409, cancelled.text
@@ -873,6 +893,12 @@ def test_cancel_full_delivery_restores_auto_released_pallet(
                 assert db.get(InventoryPallet,pallet_id).is_current is False
             return
         assert cancelled.status_code == 200, cancelled.text
+        if pending_location == 'cycles':
+            for _ in range(2):
+                dispatched = client.put(f"/api/deliveries/{delivery_id}/dispatch")
+                assert dispatched.status_code == 200, dispatched.text
+                cancelled = client.put(f"/api/deliveries/{delivery_id}/cancel")
+                assert cancelled.status_code == 200, cancelled.text
 
     with factory() as db:
         delivery = db.get(Delivery, delivery_id)

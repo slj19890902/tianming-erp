@@ -3,6 +3,7 @@ from app.services.external_receipt_state import active_receipt_item
 
 import hashlib
 import json
+import logging
 import re
 from datetime import date, datetime
 from decimal import Decimal
@@ -9519,23 +9520,30 @@ def _update_delivery(
                 order_lines=built,
                 unordered_lines=built_unordered,
             )
-        if delivery.source_mode in {"unordered_finished", "mixed"}:
-            delivery_item_ids = select(DeliveryItem.id).where(
-                DeliveryItem.delivery_id == delivery_id,
-                DeliveryItem.is_current.is_(True),
-            )
-            db.execute(
-                delete(UnorderedFinishedDeliveryAllocation).where(
-                    UnorderedFinishedDeliveryAllocation.delivery_item_id.in_(
-                        delivery_item_ids
-                    )
-                )
-            )
+        # Cancelled dispatches retain immutable consumption/reversal/cost references.
+        # Retire the old revision, as controlled dispatched editing already does;
+        # never delete those lines or their allocations to rebuild a pending draft.
+        current_ids = select(DeliveryItem.id).where(
+            DeliveryItem.delivery_id == delivery_id, DeliveryItem.is_current.is_(True),
+        )
+        outstanding_order = db.scalar(select(DeliveryInventoryAllocation.id).where(
+            DeliveryInventoryAllocation.delivery_item_id.in_(current_ids),
+            DeliveryInventoryAllocation.consumed_stock_quantity > DeliveryInventoryAllocation.reversed_stock_quantity,
+        ).limit(1))
+        outstanding_stock = db.scalar(select(UnorderedFinishedDeliveryAllocation.id).where(
+            UnorderedFinishedDeliveryAllocation.delivery_item_id.in_(current_ids),
+            UnorderedFinishedDeliveryAllocation.consumed_quantity > UnorderedFinishedDeliveryAllocation.restored_quantity,
+        ).limit(1))
+        if outstanding_order is not None or outstanding_stock is not None:
+            raise HTTPException(status_code=409, detail="本单仍有未撤销的出库数量，不能替换明细；请先完成取消发货后再编辑。")
+        next_revision = 1 + int(db.scalar(select(func.max(DeliveryItem.revision_number)).where(
+            DeliveryItem.delivery_id == delivery_id,
+        )) or 0)
         db.execute(
-            delete(DeliveryItem).where(
+            update(DeliveryItem).where(
                 DeliveryItem.delivery_id == delivery_id,
                 DeliveryItem.is_current.is_(True),
-            )
+            ).values(is_current=False)
         )
         db.flush()
         delivery.source_mode = payload.source_mode
@@ -9574,6 +9582,11 @@ def _update_delivery(
                 )
             )
         total_quantity = order_quantity + unordered_quantity
+        db.flush()
+        db.execute(update(DeliveryItem).where(
+            DeliveryItem.delivery_id == delivery_id,
+            DeliveryItem.is_current.is_(True),
+        ).values(revision_number=next_revision))
         delivery.delivery_date = target_delivery_date
         if payload.vehicle_number is not None:
             delivery.vehicle_number = payload.vehicle_number.strip() or None
@@ -9629,7 +9642,18 @@ def _update_delivery(
                 assert replay_record is not None
                 _delivery_for_user(db, replay_record.resource_id, user)
                 return replay
-        raise HTTPException(status_code=409, detail="送货单数据冲突") from error
+        logging.getLogger(__name__).error(
+            "delivery_update_integrity_conflict delivery_id=%s constraint=%s",
+            delivery_id, str(error.orig),
+        )
+        reason = str(error.orig).lower()
+        if "foreign key" in reason:
+            message = "保存失败：送货明细关联的订单、库存或历史记录发生冲突，本次修改未保存。请刷新核对；若仍失败请提供送货单号。"
+        elif "unique" in reason:
+            message = "保存失败：存在重复的送货明细或重复提交记录，本次修改未保存。请核对同一产品是否重复添加。"
+        else:
+            message = "保存失败：送货明细未满足数量或状态校验，本次修改未保存。请核对明细；若仍失败请提供送货单号。"
+        raise HTTPException(status_code=409, detail=message) from error
     except Exception:
         db.rollback()
         raise

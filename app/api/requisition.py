@@ -14729,10 +14729,11 @@ def stock_policy_replenishment_draft(
             if crease_type == "净料"
             else "raw_board"
         )
-        theoretical_quantity = theoretical_requisition_quantity(
+        theoretical_quantity = draft_summary.get("suggested_new_requisition_sheet_quantity", theoretical_requisition_quantity(
             finished_quantity,
             product_defaults["cutting_mode"],
-        )
+            product_defaults["pieces_per_box"],
+        ))
         return {
             "stock_policy_id": draft_policy.id,
             "target_inventory_type": "finished" if is_liner else "semi_finished",

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.411"
-APP_VERSION_NAME = "仓库统一定位颜色与40×30出货标签"
+APP_VERSION = "v0.22.412"
+APP_VERSION_NAME = "预警补库双拼与开料数量换算"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4201,3 +4201,6 @@ APP_CHANGELOG = [*(f"v0.22.410：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["电脑与手机仓库统一有货蓝、空位白；搜索货位亮黄、区域淡绿；普通选中货位橙、区域淡紫，搜索优先且保留冲突提示。", "出货产品标签、历史重打及生产共用入口明确纸张尺寸、无边距和逐张分页；保留已保存标签布局、长字段完整换行及打印审计。"]
 APP_VERIFICATION_STEPS = ["管理员搜索货物，核对地图和货架层格亮黄；切换普通货位核对橙色选择，有货蓝、空位白。", "出货标签选择40×30mm纸张、100%实际大小、无边距，先试打连续三张；驱动纸宽必须为40mm，勿选40×80队列。"]
 APP_CHANGELOG = [*(f"v0.22.411：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["预警补库按成品数量乘每套片数、扣除实际可用片料后，再按开料产出向上取整；双拼141箱一开一正确报282片。", "统一预警和报料草稿的数量口径，修正双拼片料及在途覆盖量；保留BOM实际组装消耗、成套库存和历史冻结资料。"]
+APP_VERIFICATION_STEPS = ["刷新YL00151预警并重新打开报料草稿：无抵扣时141箱、双拼、一开一应为282片；已保存单据不自动改写。", "组装型BOM实际完成组套后，核对成套数量与存放位置，找货不重复领取已消耗长短片；本批旧00205不转换。"]
+APP_CHANGELOG = [*(f"v0.22.412：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

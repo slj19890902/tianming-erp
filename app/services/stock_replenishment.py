@@ -240,8 +240,6 @@ def virtual_composite_replenishment_components(
             mold_yield = int(relation.mold_max_yield_per_sheet)
             if output_per_sheet > mold_yield:
                 missing.append(f"{label}：默认开料出数超过模具最大出数")
-            elif output_per_sheet == 1:
-                output_per_sheet = mold_yield
         components.append(
             {
                 "relation": relation,
@@ -301,9 +299,10 @@ def product_replenishment_signature(
 def theoretical_requisition_quantity(
     finished_quantity: int,
     cutting_mode: str | None,
+    pieces_per_box: int = 1,
 ) -> int:
-    factor = cutting_factor(cutting_mode)
-    return ceil(max(int(finished_quantity or 0), 0) / factor)
+    from app.services.requisition_quantities import required_piece_quantity, purchase_sheet_quantity
+    return purchase_sheet_quantity(required_piece_quantity(finished_quantity, pieces_per_box), 0, cutting_mode)
 
 
 def compatible_customer_product_ids(
@@ -908,18 +907,20 @@ def customer_board_preparation_coverage(
     return {
         "customer_board_preparation_available_sheet_quantity": available_sheets,
         "customer_board_preparation_finished_capacity": (
-            available_finished_capacity
+            available_finished_capacity // max(int(defaults["pieces_per_box"]), 1)
         ),
         "customer_board_preparation_auto_cover_capacity": (
-            available_auto_cover_capacity
+            available_auto_cover_capacity // max(int(defaults["pieces_per_box"]), 1)
         ),
         "incoming_board_preparation_sheet_quantity": incoming_sheets,
         "incoming_board_preparation_finished_capacity": (
-            incoming_finished_capacity
+            incoming_finished_capacity // max(int(defaults["pieces_per_box"]), 1)
         ),
         "incoming_board_preparation_auto_cover_capacity": (
-            incoming_auto_cover_capacity
+            incoming_auto_cover_capacity // max(int(defaults["pieces_per_box"]), 1)
         ),
+        "available_auto_cover_piece_quantity": available_auto_cover_capacity,
+        "incoming_auto_cover_piece_quantity": incoming_auto_cover_capacity,
     }
 
 
@@ -1001,7 +1002,13 @@ def virtual_composite_replenishment_demand_plan(
         )
         outstanding_pieces = max(required_pieces - covered_pieces, 0)
         output_per_sheet = int(row["output_per_sheet"])
-        net_sheets = ceil(outstanding_pieces / output_per_sheet)
+        pieces_per_unit = max(int(defaults["pieces_per_box"]), 1)
+        free_surplus = max(free_coverage["pieces"].get(component.id, 0)
+                           - free_coverage["sets"] * quantity_per_set, 0)
+        required_board_pieces = max((required_pieces - free_surplus) * pieces_per_unit
+            - int(coverage.get("available_auto_cover_piece_quantity", 0))
+            - int(coverage.get("incoming_auto_cover_piece_quantity", 0)), 0)
+        net_sheets = (required_board_pieces + output_per_sheet - 1) // output_per_sheet
         spare_sheets = (
             int(relation.spare_sheet_quantity or 0) if net_sheets > 0 else 0
         )
@@ -1144,10 +1151,15 @@ def stock_policy_dict(
             if policy.product is not None
             else 1
         )
-        suggested_new_requisition_sheet_quantity = ceil(
-            suggested_new_requisition_finished_quantity
-            / max(output_per_sheet, 1)
-        )
+        pieces_per_box = max(int(product_replenishment_defaults(policy.product)["pieces_per_box"]), 1) if policy.product is not None else 1
+        if policy.target_inventory_type != "finished":
+            # Material warning quantities are already physical sheets.
+            pieces_per_box = output_per_sheet = 1
+        required_pieces = max((suggested_finished_quantity - external_purchase_incoming_quantity) * pieces_per_box
+            - int(board_coverage.get("available_auto_cover_piece_quantity", 0))
+            - int(board_coverage.get("incoming_auto_cover_piece_quantity", 0)), 0)
+        suggested_new_requisition_sheet_quantity = (required_pieces + output_per_sheet - 1) // output_per_sheet
+        suggested_new_requisition_finished_quantity = (required_pieces + pieces_per_box - 1) // pieces_per_box
     replenishment_state = (
         "purchase_needed"
         if suggested_new_requisition_sheet_quantity > 0

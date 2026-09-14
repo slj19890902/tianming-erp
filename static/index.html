@@ -19006,7 +19006,7 @@
           },
           stockWarningTheoreticalSheets(line) {
             const factor = Number(line.output_per_sheet || this.cuttingModeFactor(line.cutting_mode) || line.stock_yield_per_sheet || 1);
-            return Number(line.theoretical_requisition_quantity || Math.ceil(Math.max(Number(line.suggested_finished_quantity || 0),0) / Math.max(factor,1)));
+            return Number(line.theoretical_requisition_quantity ?? Math.ceil(Math.max(Number(line.suggested_finished_quantity || 0),0) * Math.max(Number(line.pieces_per_box || 1),1) / Math.max(factor,1)));
           },
           stockWarningExtraSheets(line) {
             return Math.max(Number(line.quantity || 0) - this.stockWarningTheoreticalSheets(line), 0);

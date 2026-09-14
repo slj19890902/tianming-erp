@@ -323,6 +323,80 @@ def _factory(tmp_path: Path):
     return engine, factory, _seed(factory)
 
 
+@pytest.mark.parametrize("pieces,cutting,expected", [(2,"一开一",282),(2,"一开二",141),(2,"一开四",71),(1,"一开二",71),(3,"一开四",106)])
+def test_warning_draft_converts_finished_units_to_sheet_units(tmp_path, pieces, cutting, expected):
+    from app.models.product import Product
+    from app.models.stock_replenishment import InventoryStockPolicy
+    from app.services.stock_replenishment import stock_policy_dict
+    from app.api.auth import router as auth_router
+    from app.api.requisition import router as requisition_router
+    from app.api.deps import get_db
+    _engine, factory, ids = _factory(tmp_path)
+    with factory() as db:
+        product = db.get(Product, ids["product_a"])
+        product.pieces_per_box = pieces
+        product.splice_mode = "double" if pieces == 2 else "single"
+        product.default_cutting_mode = cutting
+        policy = db.get(InventoryStockPolicy, ids["policy_a"])
+        policy.target_quantity = 221
+        db.commit()
+        summary = stock_policy_dict(db, policy)
+        assert summary["suggested_replenishment_quantity"] == 141
+        assert summary["suggested_new_requisition_sheet_quantity"] == expected
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/auth")
+    app.include_router(requisition_router, prefix="/api/requisition")
+    def override_db():
+        with factory() as db:
+            yield db
+    app.dependency_overrides[get_db] = override_db
+    with TestClient(app) as client:
+        assert client.post("/api/auth/login", json={"username":"admin","password":"123456"}).status_code == 200
+        response = client.get(f"/api/requisition/stock-policies/{ids['policy_a']}/replenishment-draft")
+        assert response.status_code == 200, response.text
+        line = response.json()["items"][0]
+        assert line["quantity"] == expected
+        assert line["theoretical_requisition_quantity"] == expected
+        assert line["pieces_per_box"] == pieces
+
+
+def test_double_splice_deducts_odd_remaining_piece_before_rounding(tmp_path, monkeypatch):
+    from app.models.product import Product
+    from app.models.stock_replenishment import InventoryStockPolicy
+    from app.services import stock_replenishment as service
+    _engine, factory, ids = _factory(tmp_path)
+    with factory() as db:
+        product = db.get(Product, ids["product_a"])
+        product.pieces_per_box = 2
+        product.splice_mode = "double"
+        product.default_cutting_mode = "一开一"
+        policy = db.get(InventoryStockPolicy, ids["policy_a"])
+        policy.target_quantity = 221
+        original = service.customer_board_preparation_coverage
+        def coverage(*args, **kwargs):
+            return {**original(*args, **kwargs), "available_auto_cover_piece_quantity": 1}
+        monkeypatch.setattr(service, "customer_board_preparation_coverage", coverage)
+        assert service.stock_policy_dict(db, policy)["suggested_new_requisition_sheet_quantity"] == 281
+
+
+@pytest.mark.parametrize("pieces,yield_count,covered,expected", [(2,1,0,846),(2,4,1,212),(1,4,0,106)])
+def test_bom_child_demand_uses_child_pieces_and_actual_sheet_yield(monkeypatch, pieces, yield_count, covered, expected):
+    from types import SimpleNamespace as N
+    from app.services import stock_replenishment as service
+    row = dict(relation=N(spare_sheet_quantity=0), product=N(id=2), quantity_per_set=3,
+               defaults={"pieces_per_box":pieces}, output_per_sheet=yield_count)
+    monkeypatch.setattr(service, "virtual_composite_replenishment_components", lambda *a, **k: {"components":[row]})
+    monkeypatch.setattr(service, "free_bom_component_coverage", lambda *a: {"sets":0,"pieces":{}})
+    monkeypatch.setattr(service, "customer_board_preparation_coverage", lambda *a, **k: {
+        "customer_board_preparation_auto_cover_capacity": covered // pieces,
+        "incoming_board_preparation_auto_cover_capacity": 0,
+        "available_auto_cover_piece_quantity": covered,
+        "incoming_auto_cover_piece_quantity": 0,
+    })
+    result = service.virtual_composite_replenishment_demand_plan(None, product=N(id=1), finished_quantity=141)
+    assert result["suggested_sheet_quantity"] == expected
+
+
 def test_finished_stock_warning_uses_current_warehouse_total_and_valid_floor3(
     tmp_path: Path,
 ) -> None:

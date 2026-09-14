@@ -24,8 +24,9 @@ from app.services.multilevel_bom_receipts import graph_material_receipts_closed,
 from app.services.warehouse_inventory import _balances, _movement, release_finished_reservation
 
 
-def _reverse_output(db, row, *, order_item_id, user):
-    lots = list(db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type == 'bom_external_receipt',
+def _reverse_output(db, row, *, order_item_id, user, direct=False):
+    source = 'direct_external_receipt' if direct else 'bom_external_receipt'
+    lots = list(db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type == source,
         InventoryLot.source_ref_id == row.id)))
     if not row.converted_finished_quantity:
         if lots:
@@ -34,9 +35,20 @@ def _reverse_output(db, row, *, order_item_id, user):
     if len(lots) != 1:
         raise SubkitError('实收库存已拆分或身份不完整，请先还原后续操作')
     lot = lots[0]
-    validated_external_lot_detail(db, lot)
+    if direct:
+        item = db.get(OrderItem, order_item_id)
+        order = db.get(Order, item.order_id)
+        detail = json.loads(lot.cost_snapshot_detail_json or '{}')
+        if (lot.finished_detail is None or lot.finished_detail.product_id != item.product_id
+                or lot.finished_detail.owner_customer_id != order.customer_id
+                or detail.get('external_receipt_item_id') != row.id
+                or detail.get('external_purchase_item_id') != row.purchase_item_id):
+            raise SubkitError('外购成品收料库存身份不一致')
+    else:
+        validated_external_lot_detail(db, lot)
     reservation = db.scalar(select(InventoryReservation).where(
-        InventoryReservation.idempotency_key == f'bom-external-pick:{row.receipt_id}:{lot.id}'))
+        InventoryReservation.idempotency_key == (f'direct-external-reserve:{row.id}' if direct
+            else f'bom-external-pick:{row.receipt_id}:{lot.id}')))
     released = False
     if reservation is not None:
         movement = db.scalar(select(InventoryMovement).where(
@@ -80,6 +92,7 @@ def reverse_graph_external_receipt(db, *, receipt_id, idempotency_key, reason, u
         items = {}
         graphs = {}
         current_items = set()
+        direct_items = set()
         for row in rows:
             purchase = db.get(ExternalPackagingPurchaseItem, row.purchase_item_id)
             item = db.get(OrderItem, purchase.sales_order_item_id) if purchase and purchase.sales_order_item_id else None
@@ -88,6 +101,13 @@ def reverse_graph_external_receipt(db, *, receipt_id, idempotency_key, reason, u
                 raise ExternalPurchaseContractError('无权撤销该客户实收或订单来源不完整', status_code=403)
             if purchase.purchase_order_id != receipt.purchase_order_id or purchase.sales_order_id != order.id:
                 raise SubkitError('外购实收订单身份不一致')
+            from app.services.direct_external_finished import eligible, conversions
+            if eligible(db, item):
+                # Also rejects receipt-only historical rows; never manufactures missing stock.
+                conversions(db, [(purchase, 0)], customer_id=order.customer_id)
+                items[item.id] = item
+                direct_items.add(item.id)
+                continue
             link, graph = external_receipt_execution_contract(db, row.id)
             if link is None or link.order_item_id != item.id or graph is None or graph.graph.customer_id != order.customer_id:
                 raise SubkitError('该实收不是完整真实BOM来源，不能按组套撤销')
@@ -126,6 +146,10 @@ def reverse_graph_external_receipt(db, *, receipt_id, idempotency_key, reason, u
                     operator_id=user.id, source_snapshot_id=graph.snapshots[0].id)
             for row in own_rows:
                 _reverse_output(db, row, order_item_id=oid, user=user)
+        for row in rows:
+            oid = db.get(ExternalPackagingPurchaseItem, row.purchase_item_id).sales_order_item_id
+            if oid in direct_items:
+                _reverse_output(db, row, order_item_id=oid, user=user, direct=True)
         reversal = ExternalPackagingReceiptReversal(receipt_id=receipt.id, idempotency_key=idempotency_key,
             request_fingerprint=fingerprint, reason=reason, reversed_by=user.id)
         db.add(reversal)

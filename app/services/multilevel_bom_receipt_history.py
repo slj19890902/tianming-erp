@@ -9,19 +9,22 @@ from app.models.external_packaging_purchase import (
 from app.models.multilevel_bom import OrderBomExternalComponent as Link
 from app.models.order import Order
 from app.models.customer import Customer
+from app.models.warehouse_inventory import InventoryLot
 
 
 def list_bom_receipts(db, *, visible_customer_ids, page, page_size, keyword=None):
     linked = select(Row.id).join(Item, Item.id == Row.purchase_item_id).join(
         Link, Link.external_component_id == Item.order_component_id).where(
         Row.receipt_id == Receipt.id, Link.order_item_id == Item.sales_order_item_id).exists()
+    direct = select(Row.id).join(InventoryLot, InventoryLot.source_ref_id == Row.id).where(
+        Row.receipt_id == Receipt.id, InventoryLot.source_ref_type == 'direct_external_receipt').exists()
     wrong_owner = select(Row.id).join(Item, Item.id == Row.purchase_item_id).where(
         Row.receipt_id == Receipt.id, or_(Item.purchase_order_id != Receipt.purchase_order_id,
             Item.sales_order_id.is_(None), Item.sales_order_id != Order.id)).correlate(Receipt, Order).exists()
     query = select(Receipt, Purchase, Order, Customer, Reversal.receipt_id).join(
         Purchase, Purchase.id == Receipt.purchase_order_id).join(Batch, Batch.id == Purchase.batch_id).join(
         Order, Order.id == Batch.sales_order_id).join(Customer, Customer.id == Order.customer_id).outerjoin(
-        Reversal, Reversal.receipt_id == Receipt.id).where(linked, ~wrong_owner)
+        Reversal, Reversal.receipt_id == Receipt.id).where(or_(linked, direct), ~wrong_owner)
     if visible_customer_ids is not None:
         query = query.where(Order.customer_id.in_(visible_customer_ids))
     if keyword and keyword.strip():
@@ -33,6 +36,8 @@ def list_bom_receipts(db, *, visible_customer_ids, page, page_size, keyword=None
     headers = db.execute(query.order_by(Receipt.id.desc()).offset((page-1)*page_size).limit(page_size)).all()
     ids = [row[0].id for row in headers]
     details = {}
+    direct_rows = set(db.scalars(select(Row.id).join(InventoryLot, InventoryLot.source_ref_id == Row.id).where(
+        Row.receipt_id.in_(ids), InventoryLot.source_ref_type == 'direct_external_receipt'))) if ids else set()
     if ids:
         rows = db.execute(select(Row, Item.product_name_snapshot, Link.external_component_id).join(
             Item, Item.id == Row.purchase_item_id).outerjoin(Link,
@@ -41,12 +46,12 @@ def list_bom_receipts(db, *, visible_customer_ids, page, page_size, keyword=None
         for row, name, link in rows:
             details.setdefault(row.receipt_id, []).append({"product_name": name,
                 "quantity": format(row.received_quantity.normalize(), "f"), "unit": row.purchase_unit_snapshot,
-                "bom": link is not None})
+                "bom": link is not None, "direct": row.id in direct_rows})
     return {"total": total, "page": page, "page_size": page_size, "items": [
         {"id": receipt.id, "receipt_number": receipt.receipt_number,
          "purchase_number": purchase.purchase_number, "supplier_name": purchase.supplier_name_snapshot,
          "order_number": order.order_number, "customer_name": customer.name,
          "received_at": receipt.received_at.isoformat() + "Z" if receipt.received_at else None,
          "reversed": reversed_id is not None, "items": details.get(receipt.id, []),
-         "supports_reversal": bool(details.get(receipt.id)) and all(r["bom"] for r in details[receipt.id])}
+         "supports_reversal": bool(details.get(receipt.id)) and all(r["bom"] or r["direct"] for r in details[receipt.id])}
         for receipt, purchase, order, customer, reversed_id in headers]}

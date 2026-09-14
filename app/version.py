@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.406"
-APP_VERSION_NAME = "原纸入库、送货撤销修复及NAS优先备份"
+APP_VERSION = "v0.22.407"
+APP_VERSION_NAME = "外购包材收料直接成品入仓"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 

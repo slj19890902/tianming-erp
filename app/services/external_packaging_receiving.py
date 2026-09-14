@@ -745,6 +745,9 @@ def record_external_purchase_receipt(
     except BomPlanError as error:
         raise ExternalPurchaseContractError(str(error), status_code=409) from error
 
+    from app.services.direct_external_finished import conversions as direct_conversions
+    direct_outputs = direct_conversions(db, normalized, customer_id=source_customer_id)
+
     ordinal = int(
         db.scalar(
             select(func.count(ExternalPackagingReceipt.id)).where(
@@ -763,7 +766,7 @@ def record_external_purchase_receipt(
     db.add(receipt)
     db.flush()
     for item, quantity in normalized:
-        converted_quantity, remainder = graph_conversions.get(item.id, (0, Decimal("0")))
+        converted_quantity, remainder = graph_conversions.get(item.id, direct_outputs.get(item.id, (0, Decimal("0"))))
         stock_item: StockReplenishmentOrderItem | None = None
         if replenishment_order is not None:
             stock_item = stock_items[int(item.stock_replenishment_item_id)]
@@ -803,6 +806,15 @@ def record_external_purchase_receipt(
         )
         db.add(receipt_item)
         db.flush()
+        if item.id in direct_outputs:
+            from app.services.direct_external_finished import post as post_direct
+            from app.services.production_workflow import ProductionWorkflowError
+            from app.services.warehouse_inventory import WarehouseInventoryError
+            try:
+                post_direct(db, purchase=item, receipt=receipt_item,
+                    customer_id=source_customer_id, operator_id=user.id)
+            except (ProductionWorkflowError, WarehouseInventoryError) as error:
+                raise ExternalPurchaseContractError(str(error), status_code=409) from error
         if item.id in graph_conversions:
             from app.services.multilevel_bom_external_receipts import post_graph_receipt_inventory
             from app.services.production_workflow import ProductionWorkflowError

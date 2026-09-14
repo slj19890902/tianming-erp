@@ -515,6 +515,11 @@ def _external_packaging_received(db: Session, order_item_id: int) -> bool:
 
 
 def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
+    from app.services.direct_external_finished import managed
+    if managed(db, order_item):
+        from app.services.production_workflow import remaining_finished_order_credit_by_item_ids
+        return min(max(int(order_item.quantity or 0) - int(order_item.delivered_quantity or 0), 0),
+            remaining_finished_order_credit_by_item_ids(db, [order_item.id]).get(order_item.id, 0))
     has_external_components = bool(
         db.scalar(
             select(SalesOrderItemExternalComponent.id)

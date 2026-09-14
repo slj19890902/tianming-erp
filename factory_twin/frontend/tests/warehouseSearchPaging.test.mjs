@@ -39,7 +39,7 @@ function pageHarness() {
   const calls = [];
   const context = {URLSearchParams, mergeWarehouseSearchPage, searchPageRequestIsCurrent,
     searchResponse: {items: [{lot_id: 1}], resources: [], pagination: {has_more: true, next_after_lot_id: 1}},
-    search: '纸箱', searchType: 'finished', searchLoading: false,
+    search: '纸箱', searchType: 'finished', searchFloor: '3F', searchLoading: false,
     searchRequestRef: {current: 1}, searchMoreBusyRef: {current: false}, searchAbortRef: {current: null},
     setSearchError: value => {context.error = value;}, setSearchMoreLoading: value => {context.loading = value;},
     setSearchResponse: update => {context.searchResponse = update(context.searchResponse);},
@@ -79,7 +79,7 @@ test('closing the actual search effect cancels loading but keeps selected map re
   let effect;
   const previousController = new AbortController();
   const response = {items: [{lot_id: 1, location_id: 8}]};
-  const context = {AbortController, search: '纸箱', searchPanelOpen: false, searchType: 'finished', searchRetryToken: 0,
+  const context = {AbortController, search: '纸箱', searchPanelOpen: false, searchType: 'finished', searchFloor: '3F', searchRetryToken: 0,
     searchRequestRef: {current: 1}, searchMoreBusyRef: {current: true}, searchAbortRef: {current: previousController},
     searchResponse: response, useEffect: callback => {effect = callback;}, setSearchMoreLoading: () => {},
     setSearchResponse: value => {context.searchResponse = value;}};

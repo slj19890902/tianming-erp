@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.404"
-APP_VERSION_NAME = "送货修改栈板周期与一楼暂存"
+APP_VERSION = "v0.22.405"
+APP_VERSION_NAME = "PDF材料抵扣与全仓查货"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 

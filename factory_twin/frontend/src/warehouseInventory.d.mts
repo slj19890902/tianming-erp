@@ -87,6 +87,7 @@ export function searchHighlightAreaCodes(
 ): string[];
 
 export function warehouseSearchProductKey(item: {
+  inventory_usage?: string | null;
   product_id?: number | null;
   customer_id?: number | null;
   customer_name?: string | null;

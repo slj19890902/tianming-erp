@@ -16552,7 +16552,8 @@ def _twin_pick_task_resources(
 @router.get("/twin-operations/locate")
 def locate_warehouse_twin_objects(
     keyword: str = Query(default="", max_length=150),
-    search_type: Literal["all", "finished", "mold", "printing_plate"] = Query(default="all"),
+    search_type: Literal["all", "inventory", "finished", "mold", "printing_plate"] = Query(default="all"),
+    search_floor: Literal["ALL", "1F", "3F", "4F", "UNLOCATED"] = Query(default="ALL"),
     customer_id: int | None = Query(default=None, gt=0),
     page_size: int = Query(default=100, ge=1, le=500),
     after_lot_id: int | None = Query(default=None, gt=0),
@@ -16562,7 +16563,7 @@ def locate_warehouse_twin_objects(
     """Unified read-only locator for inventory, pick tasks, molds and plates."""
 
     effective_keyword = keyword.strip()
-    if search_type == "finished" and customer_id is not None:
+    if search_type in {"finished", "inventory"} and customer_id is not None:
         require_customer_access(customer_id, user, db)
     if len(effective_keyword) < 2 and not (
         search_type == "finished" and customer_id is not None
@@ -16593,7 +16594,12 @@ def locate_warehouse_twin_objects(
     lots = []
     pagination = {"page_size": page_size, "has_more": False,
                   "next_after_lot_id": None, "counts_scope": "page"}
-    if search_type in {"all", "finished"}:
+    if search_floor != "ALL":
+        floor_condition = (WarehouseLocation.warehouse_floor.is_(None) if search_floor == "UNLOCATED"
+                           else WarehouseLocation.warehouse_floor == int(search_floor[0]))
+        query = query.where(InventoryLot.warehouse_location_id.in_(
+            select(WarehouseLocation.id).where(floor_condition)))
+    if search_type in {"all", "inventory", "finished"}:
         from app.services.warehouse_search_paging import search_lot_page
         lots, pagination = search_lot_page(db, query, keyword=effective_keyword,
             as_of=today, page_size=page_size, after_lot_id=after_lot_id)
@@ -16632,8 +16638,14 @@ def locate_warehouse_twin_objects(
         )
     if search_type == "all":
         resources.extend(pick_resources)
+    pending_receipts = []
+    if search_type == "inventory" and after_lot_id is None:
+        from app.services.warehouse_pending_receipts import pending_receipt_search
+        pending_receipts = pending_receipt_search(db, keyword=effective_keyword,
+            visible_customer_ids=({customer_id} if customer_id is not None else visible_customer_ids))
     return {
         **inventory,
+        "pending_receipts": pending_receipts,
         "search_type": search_type,
         "customer_id": customer_id,
         "result_count": len(inventory["items"]) + len(resources),

@@ -162,6 +162,8 @@ export function warehouseSearchProductKey(item) {
     customerIdentity,
     businessIdentity,
     item.inventory_type || "",
+    item.inventory_usage || item.inventory_type || "",
+    item.inventory_type === "semi_finished" ? item.specification || "" : "",
     item.unit || ""
   ].join("::").toLocaleLowerCase("zh-CN");
 }

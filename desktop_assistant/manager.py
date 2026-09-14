@@ -13,7 +13,7 @@ import uuid
 
 import psutil
 
-from desktop_assistant.storage import (database_info, decrypt_file, encrypt_file,
+from desktop_assistant.storage import (archive_path, database_info, decrypt_file, encrypt_file,
                                       extract_verified, pack_tree, read_json, sha, write_json, signed_release_manifest)
 from desktop_assistant.attachments import rebind_pdf_sources
 
@@ -241,7 +241,7 @@ class Manager:
             raise ValueError('附件缺失或校验失败，不能标记为完整备份')
         # Backup payload, encryption and verification all live on the selected NAS.
         # Never fall back to C/D when a mapped NAS is unavailable.
-        nas = nas.resolve()
+        nas = archive_path(nas)
         if nas == self.root or self.root in nas.parents:
             raise ValueError('NAS备份目录不能位于ERP安装目录内')
         package_ids = {current, state.get('schema_authority')} - {None}
@@ -303,7 +303,7 @@ class Manager:
         state.update(last_backup=str(final), last_backup_at=datetime.now(CN).isoformat(), backup_error=None)
         write_json(self.root / 'state.json', state)
         # Staging only, never remove managed shared data or a user-selected directory.
-        if job.resolve().parent != work_root.resolve():
+        if archive_path(job).parent != archive_path(work_root):
             raise ValueError('临时目录清理边界不匹配')
         shutil.rmtree(job)
         return final

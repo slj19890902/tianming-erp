@@ -13,7 +13,7 @@ import zipfile
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from desktop_assistant.storage import pack_tree, sha, write_json
+from desktop_assistant.storage import archive_path, pack_tree, sha, write_json
 
 
 def runtime_copy_ignore(_directory, names):
@@ -83,7 +83,7 @@ def main():
             raise ValueError('跨版本包必须同时指定起始revision及已验证可回退程序包SHA256')
         migration = {'policy': 'preserve_existing_facts_v1', 'from_revision': args.upgrade_from_revision,
                      'rollback_package_sha256': args.rollback_package_sha256}
-    root, output = args.repo.resolve(), args.output.resolve()
+    root, output = args.repo.resolve(), archive_path(args.output)
     code_sha, sources = source_snapshot(root, args.version, args.revision)
     if output.exists():
         raise ValueError('构建输出必须是新目录')

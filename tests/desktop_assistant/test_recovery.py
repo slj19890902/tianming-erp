@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from desktop_assistant.manager import Manager
-from desktop_assistant.storage import (database_info, decrypt_file, extract_verified,
+from desktop_assistant.storage import (archive_path, database_info, decrypt_file, extract_verified,
                                       pack_tree, read_json, sha, write_json)
 from desktop_assistant.windows import protect, unprotect
 
@@ -29,6 +29,26 @@ class TestManager(Manager):
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_virtual_nas_archive_path_only_handles_volume_error(self):
+        from unittest.mock import patch
+        error = OSError('virtual volume')
+        error.winerror = 1005
+        with patch.object(Path, 'resolve', side_effect=error):
+            self.assertEqual(archive_path(self.nas / 'new-job'), self.nas / 'new-job')
+        with patch.object(Path, 'resolve', side_effect=PermissionError('denied')):
+            with self.assertRaises(PermissionError):
+                archive_path(self.nas)
+
+    def test_virtual_nas_archive_path_rejects_reparse_points(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        error = OSError('virtual volume')
+        error.winerror = 1005
+        with patch.object(Path, 'resolve', side_effect=error), patch.object(
+                Path, 'lstat', return_value=SimpleNamespace(st_mode=0, st_file_attributes=0x400)):
+            with self.assertRaisesRegex(ValueError, '重解析点'):
+                archive_path(self.nas)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

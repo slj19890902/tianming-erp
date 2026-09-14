@@ -19,6 +19,28 @@ CHUNK = 1024 * 1024
 MAGIC = b'TMERPBACKUP1\n'
 
 
+def archive_path(path: Path) -> Path:
+    """Resolve archive paths, including ZSpace virtual volumes (WinError 1005).
+
+    These volumes support normal file I/O but not GetFinalPathNameByHandle.
+    Never use the fallback through a reparse point or for other OS errors.
+    """
+    try:
+        return path.resolve()
+    except OSError as error:
+        if getattr(error, 'winerror', None) != 1005:
+            raise
+        absolute = Path(os.path.abspath(path))
+        for part in (absolute, *absolute.parents):
+            try:
+                attributes = part.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(attributes.st_mode) or getattr(attributes, 'st_file_attributes', 0) & 0x400:
+                raise ValueError('NAS归档路径不能经过链接或重解析点') from error
+        return absolute
+
+
 def sha(path: Path) -> str:
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -40,7 +62,7 @@ def read_json(path: Path):
 def database_info(path: Path) -> dict:
     if not path.is_file():
         raise ValueError('数据库文件不存在')
-    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+    with closing(sqlite3.connect(archive_path(path).as_uri() + '?mode=ro', uri=True)) as db:
         db.execute('PRAGMA query_only=ON')
         if db.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
             raise ValueError('数据库完整性检查失败')

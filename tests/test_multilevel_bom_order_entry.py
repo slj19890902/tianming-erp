@@ -435,6 +435,20 @@ def test_public_external_order_freezes_links_then_receives_stock(purchase_app, _
             purchase_id, line_id, quantity = line.purchase_order_id, line.id, line.purchase_quantity
         received = receive(client, purchase_id, line_id, "public-external-receive", quantity)
         assert received.status_code == 200, received.text
+        if not direct:
+            # Receiving parts is not evidence that they have been physically assembled.
+            from app.services.bom_pending_assembly import preview, confirm
+            from app.models.user import User
+            with purchase_app.state.session_factory() as db:
+                assert not list(db.scalars(select(InventoryLot).where(InventoryLot.finished_detail.has(product_id=root_id))))
+                plan = preview(db, item_id)
+                actor = db.scalar(select(User).where(User.username == 'purchase-admin'))
+                confirm(db, item_id=item_id, actor=actor, command=dict(
+                    operation_key='public-external-physical-confirm', physical_assembly_confirmed=True,
+                    source_lot_versions=plan['source_lot_versions'], available_lot_ids=plan['available_lot_ids'],
+                    expected_outputs=plan['expected_outputs'],
+                    target_locations={o['product_id']:o['location_id'] for o in plan['outputs']}))
+                db.commit()
         with purchase_app.state.session_factory() as db:
             lots = list(db.scalars(select(InventoryLot).where(InventoryLot.finished_detail.has(product_id=root_id))))
             assert sum(lot.quantity_reserved for lot in lots) == 10

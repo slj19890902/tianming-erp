@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.396"
-APP_VERSION_NAME = "PDF核对窗口分页恢复"
+APP_VERSION = "v0.22.397"
+APP_VERSION_NAME = "长短片待组套与成套库存"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4117,3 +4117,19 @@ APP_CHANGELOG = [
 ]
 APP_CHANGES = ["修复邮箱PDF核对窗口缩小再最大化后每页只剩一行；重开窗口重新计算行数，保留编辑明细。"]
 APP_VERIFICATION_STEPS = ["刷新ERP，打开邮箱PDF核对，缩小窗口再最大化，确认行数恢复；关闭重开后核对分页与编辑内容。"]
+
+APP_CHANGELOG = [
+    *(f"v0.22.396：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.396：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "新订单自动预留同客户、实物身份匹配的已加工子件，减少对应报料；未确认身份或通用片料不自动使用。",
+    "库存配套和新收料统一待组套，插合完成后一次确认实际数量及位置才生成成套库存；多余长短片继续独立保留。",
+    "完工历史优先显示真实成套数量及当前位置，长短片投入收进来源明细；保留未配套余料、来源成本、撤销及重复提交保护。",
+]
+APP_VERIFICATION_STEPS = [
+    "新建有匹配长短片库存的BOM订单，核对预留数量和减少后的报料需求；订单未插合时不得提前显示成套库存。",
+    "4生产进入待组套，现场插合后填写实际套数及位置，点击组套完成并入库；核对完工历史的成套位置与未配套余料。",
+    "手机生产页面点待组套，确认可以进入同一确认页；重复提交不得重复扣减长短片或增加成套库存。",
+]

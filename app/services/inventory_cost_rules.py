@@ -25,7 +25,7 @@ class CostRuleConfig(BaseModel):
     basis: str = Field(min_length=1, max_length=1000)
     purchase_channel: str = Field(default="", max_length=120)
     material_id: int | None = Field(default=None, gt=0)
-    flute_type: Literal["A", "B", "C", "E", "F", "AB", "BC", "BE", "AE", "AC"] | None = None
+    flute_type: Literal["NONE", "A", "B", "C", "E", "F", "AB", "BC", "BE", "AE", "AC"] | None = None
     length_mm: Decimal | None = Field(default=None, gt=0, le=100000)
     width_mm: Decimal | None = Field(default=None, gt=0, le=100000)
     sheets_per_product: int = Field(default=1, ge=1, le=100)

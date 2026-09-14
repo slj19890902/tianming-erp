@@ -78,11 +78,11 @@ def product_readiness(product: object) -> dict[str, object]:
 
     layer_count = _value(product, "layer_count")
     flute_type = normalize_flute_type(_value(product, "flute_type"))
-    if layer_count not in {3, 5, 7}:
+    if layer_count not in {1, 3, 5, 7}:
         missing.append(("layer_count", "材质层数未填写或不合法"))
     if not flute_type:
         missing.append(("flute_type", "楞型未填写"))
-    elif layer_count in {3, 5, 7}:
+    elif layer_count in {1, 3, 5, 7}:
         flute_error = validate_flute_for_write(flute_type, layer_count)
         if flute_error:
             missing.append(("layer_flute", flute_error))

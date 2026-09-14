@@ -82,7 +82,8 @@ VALID_FLUTE_FOR_3LAYER: frozenset[str] = frozenset(["A", "B", "E"])
 VALID_FLUTE_FOR_5LAYER: frozenset[str] = frozenset(["AB", "BE"])
 VALID_FLUTE_FOR_7LAYER: frozenset[str] = frozenset(["AAA", "ABC"])
 ALL_VALID_FLUTE: frozenset[str] = (
-    VALID_FLUTE_FOR_3LAYER
+    frozenset(["NONE"])
+    | VALID_FLUTE_FOR_3LAYER
     | VALID_FLUTE_FOR_5LAYER
     | VALID_FLUTE_FOR_7LAYER
 )
@@ -182,6 +183,10 @@ def validate_flute_consistency(flute_type: str | None, layer_count: int | None) 
     flute_type = normalize_flute_type(flute_type)
     if not flute_type or not layer_count:
         return None
+    if layer_count == 1 and flute_type != "NONE":
+        return "卡纸只能选择卡纸（无楞）"
+    if flute_type == "NONE" and layer_count != 1:
+        return "卡纸（无楞）必须使用卡纸层数"
     if layer_count == 3 and flute_type not in VALID_FLUTE_FOR_3LAYER:
         return (
             f"三层瓦楞只能是 A / B / E，当前楞型 {flute_type!r} 不合法。"
@@ -213,7 +218,9 @@ def validate_flute_for_write(
     normalized_flute = normalize_flute_type(flute_type)
     if layer_count == 7 and normalized_flute is None:
         return "七层瓦楞必须明确选择 AAA 或 ABC，楞型不能为空"
-    if layer_count not in {3, 5, 7} and normalized_flute is not None:
+    if layer_count == 1 and normalized_flute is None:
+        return "卡纸必须选择卡纸（无楞）"
+    if layer_count not in {1, 3, 5, 7} and normalized_flute is not None:
         return "层数为空或未知时不能写入楞型，请先明确材质层数"
     return validate_flute_consistency(normalized_flute, layer_count)
 

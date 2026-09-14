@@ -379,7 +379,7 @@ def test_supplier_material_composer_frontend_and_migration_chain():
     assert "/api/master/materials/paper-codes" in html
     assert "/api/master/materials/compose/preview" in html
     assert "/api/master/materials/compose/save" in html
-    assert "系统自动解析和推算建议价" in html
+    assert "卡纸输入H；瓦楞材质输入3、5或7位代码" in html
     assert "代码字符（可用 + 等符号）" in html
     assert "基础代码必须是单个可见字符（支持 + 等符号）" in html
     assert "基础代码必须是单个字母或数字" not in html

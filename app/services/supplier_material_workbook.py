@@ -374,8 +374,8 @@ def _parse_material_rows(worksheet, errors: list[dict[str, Any]]) -> list[dict]:
             if not code:
                 raise ValueError("组合代码不能为空")
             layer_count = _positive_int(values[4], "层数")
-            if layer_count not in {3, 5, 7}:
-                raise ValueError("层数只能填写3、5或7")
+            if layer_count not in {1, 3, 5, 7}:
+                raise ValueError("层数只能填写1（卡纸）、3、5或7")
             if system_id is None and not re.fullmatch(
                 rf"[A-Z0-9]{{{layer_count}}}", code
             ):

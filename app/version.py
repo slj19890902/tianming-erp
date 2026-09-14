@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.407"
-APP_VERSION_NAME = "外购包材收料直接成品入仓"
+APP_VERSION = "v0.22.408"
+APP_VERSION_NAME = "灰底白板卡纸报料与材质维护"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4189,3 +4189,6 @@ APP_CHANGES = ["取消发货后编辑保存保留历史明细及出库撤销关�
 APP_VERIFICATION_STEPS = ["重新打开YL-20260914-001，添加00205数量300并保存，核对当前明细及合计；保存本身不应改变库存。", "确认发货后核对只扣本次数量，重复点击不得重复扣库；过期页面需刷新后再编辑。"]
 APP_CHANGES += ["单层原纸与白卡按张入库、无楞，管理员登记实际每张成本并逐批冻结；电脑手机共用。", "完整恢复备份及备份工作文件优先保存到配置的NAS，本地仅保留校验回执；NAS不可达时停止，不回退占用系统盘。"]
 APP_VERIFICATION_STEPS += ["原材料选择单层原纸/白卡，按真实供应商、尺寸、张数及单价入库；核对无楞标签与库存成本。", "ERP助手备份完成后核对Z盘新恢复包；正式地图、草稿及原库存不变。"]
+APP_CHANGES = ["灰底白板归入纸板供应商；常用箱支持卡纸层数及无楞，沿用正常箱型、报料尺寸和生产收料。", "新增灰底白板H基础纸种快捷默认400g，可修改克重和材质价格；已有供应商H代码不覆盖，历史单据和库存不自动转类。"]
+APP_VERIFICATION_STEPS = ["供应商纸板目录选择灰底白板，材质规则新增H纸种并核对400g，可改克重；卡纸H解析后填写真实平方价保存。", "常用箱选择正常纸板生产、箱型尺寸及卡纸/H；按真实订单报料收料，核对库存数量与位置。"]
+APP_CHANGELOG = [*(f"v0.22.408：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

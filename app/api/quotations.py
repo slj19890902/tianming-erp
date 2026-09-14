@@ -752,7 +752,7 @@ def convert_to_product(
         raise HTTPException(status_code=400, detail="请先在报价明细中选择材质")
     if not (material.supplier_name or "").strip():
         raise HTTPException(status_code=400, detail="所选材质缺少供应商，请先完善材质资料")
-    if material.layer_count not in {3, 5, 7}:
+    if material.layer_count not in {1, 3, 5, 7}:
         raise HTTPException(status_code=400, detail="所选材质缺少有效层数，请先完善材质资料")
     flute_type = _validated_quotation_flute(
         material.layer_count,

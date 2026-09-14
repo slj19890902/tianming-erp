@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.396"
-APP_VERSION_NAME = "PDF核对窗口分页恢复"
+APP_VERSION = "v0.22.397"
+APP_VERSION_NAME = "驶安特与并作PDF识别"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4117,3 +4117,11 @@ APP_CHANGELOG = [
 ]
 APP_CHANGES = ["修复邮箱PDF核对窗口缩小再最大化后每页只剩一行；重开窗口重新计算行数，保留编辑明细。"]
 APP_VERIFICATION_STEPS = ["刷新ERP，打开邮箱PDF核对，缩小窗口再最大化，确认行数恢复；关闭重开后核对分页与编辑内容。"]
+
+APP_CHANGELOG = [
+    *(f"v0.22.396：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.396：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = ["原PDF识别支持驶安特、并作采购单：需方、单号、表格分列、含税价和逐行交期；模糊编码保留候选核对。"]
+APP_VERIFICATION_STEPS = ["刷新ERP，在原PDF识别窗口重新识别两份单据；核对驶安特8行、并作1行，选择未匹配常用箱后再保存。"]

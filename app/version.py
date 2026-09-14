@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.402"
+APP_VERSION = "v0.22.403"
 APP_VERSION_NAME = "电脑仓库紧凑标签与长编码显示"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -4169,6 +4169,9 @@ APP_VERIFICATION_STEPS = [
     "新打印信息标签核对二维码为内网地址；内网/mobile/scan可选择旧标签照片识码。",
 ]
 APP_CHANGELOG = [*(f"v0.22.400：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["取消发货可恢复原盘点待归位库存及栈板；真实停用、普通未放置和被占用货位继续拦截，不改数量或位置事实。"]
+APP_VERIFICATION_STEPS = ["对原待归位库存的送货单取消发货，核对原批次数量、预占及待归位状态恢复；取消编辑不提交业务操作。"]
+APP_CHANGELOG = [*(f"v0.22.402：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 APP_CHANGES = [
     "电脑货架和货位卡片统一为紧凑两行，数量固定靠右，明细移至首行；长编码不再拆成竖排，可在编码区域横向查看。",
     "通用片料突出尺寸、楞型及数量，客户成品突出简称和编码；完整内容可在产品标签及展开明细中查看。",

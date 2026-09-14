@@ -8938,3 +8938,5 @@ def delete_order_item(
 # Explicit reserved-parts handoff, separate from ordinary order edits.
 from app.api.bom_cutover import router as bom_cutover_router
 router.include_router(bom_cutover_router)
+from app.api.admin_order_reversal import router as admin_order_reversal_router
+router.include_router(admin_order_reversal_router)

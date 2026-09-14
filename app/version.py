@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.398"
-APP_VERSION_NAME = "长短片待组套与成套库存"
+APP_VERSION = "v0.22.399"
+APP_VERSION_NAME = "管理员订单关联撤销"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4139,4 +4139,19 @@ APP_VERIFICATION_STEPS = [
     "新建有匹配长短片库存的BOM订单，核对预留数量和减少后的报料需求；订单未插合时不得提前显示成套库存。",
     "4生产进入待组套，现场插合后填写实际套数及位置，点击组套完成并入库；核对完工历史的成套位置与未配套余料。",
     "手机生产页面点待组套，确认可以进入同一确认页；重复提交不得重复扣减长短片或增加成套库存。",
+]
+APP_CHANGELOG = [
+    *(f"v0.22.398：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.398：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "管理员在订单编辑可预览关联记录，一次确认撤回、作废留库或删除纯模拟试验单；审计及其他订单库存保留。",
+    "更多操作使用短按钮及感叹号展开说明；撤回按组套、完工、收料逆序处理，解除旧BOM报料占用后可以重新报料。",
+    "整组事务、重复提交、过期预览、真实送货结算及库存后续使用保护保留；正式试验订单由管理员自行确认。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员刷新订单，打开222试验订单编辑→更多操作，点击感叹号查看说明。",
+    "点击删除试验单，核对关联及库存影响，确认纯模拟后一次确认；检查当前订单及待生产列表，旧盘点库存应保留。",
+    "真实到货不应删除模拟库存；订单取消而保留货物时选择作废留库。",
 ]

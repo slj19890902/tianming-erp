@@ -2606,7 +2606,7 @@ body.warehouse-twin-page {
 .twin-rack-stage .mold-rack-cell.selected { background:#f59e0b; border-color:#b45309; }
 .twin-rack-stage .mold-rack-cell.rack-search-hit { background: #ffeb00; border-color: #a16207; box-shadow: inset 0 0 0 2px #a16207; }
 .twin-rack-stage .mold-rack-cell.rack-search-current { border-color: #9a4800; box-shadow: inset 0 0 0 3px #c66a05; }
-.twin-rack-stage .shelf-product-card.search-product-hit { background: #fff3bf; border-color: #d18c00; }
+.twin-rack-stage .shelf-product-card.search-product-hit { background: #ffeb00; border-color: #a16207; }
 .twin-rack-stage .twin-elevation-level:has(.rack-search-hit) > span { background: #ffe8a0; color: #754000; font-weight: 800; }
 .twin-rack-stage .shelf-search-hit-marker { padding: 1px 4px; border-radius: 3px; background: #9a4800; color: white; font-size: 11px; white-space: nowrap; }
 .twin-rack-focus-panel.twin-rack-stage header p.twin-rack-search-marker { color: #754000; background: #fff3bf; padding: 4px 6px; font-size: 12px; }

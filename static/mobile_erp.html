@@ -194,7 +194,9 @@
     .warehouse-map-location.unmatched { background: #ffe4e6; border-color: #b91c1c; color: #991b1b; box-shadow: 0 0 0 3px rgba(185, 28, 28, .18); }
     .warehouse-map-location.source { outline: 4px solid var(--orange); }
     .warehouse-map-location.target { outline: 4px solid #b00020; }
-    .warehouse-map-location:not(.has-goods):not(.not-disclosed) { background:#fff; border-color:#94a3b8; color:#334155; }
+    .warehouse-map-location { background:#fff; border-color:#94a3b8; color:#334155; }
+    .warehouse-map-location.has-goods { background:#dbeafe; border-color:#2563eb; color:#1d4ed8; }
+    .warehouse-map-location.not-disclosed { background:#e5e7eb; border-color:#64748b; color:#334155; }
     .warehouse-map-location.source,.warehouse-map-location.target { background:#f59e0b; color:#172033; outline:3px solid #b45309; }
     .warehouse-map-location.deep-link { background:#ffeb00 !important; color:#172033; outline:3px solid #a16207; box-shadow:none; }
     .warehouse-map-location.unmatched { border-color:#b91c1c !important; box-shadow:0 0 0 3px #b91c1c; }
@@ -1547,6 +1549,7 @@
         state.warehouseMapGroup = "";
         state.warehouseMapFocusLocationId = Number(resolvedPreferred.locationId || 0) || null;
         state.warehouseSearchLocationId = state.warehouseMapFocusLocationId;
+        state.warehouseSearchLotId = resolvedPreferred.lotId || null;
         state.warehouseMapSource = null;
         state.warehouseMapTarget = null;
         renderWarehouseMapSelectors();
@@ -1756,8 +1759,11 @@
               button.title = heading;
             }
             const productGroups = groupWarehouseRackGoods(visibleGoods);
+            const matchesSearch = good => deepLinked && (good.search_lot_ids || [good.lot_id]).some(id => Number(id) === Number(state.warehouseSearchLotId));
+            productGroups.sort((a, b) => Number(matchesSearch(b)) - Number(matchesSearch(a)));
             productGroups.slice(0, 2).forEach(good => {
               const preview = node("span", "warehouse-rack-product-preview");
+              if (matchesSearch(good)) preview.style.background = "#ffeb00";
               const identity = warehouseGoodsDisplay(good);
               preview.append(node("small", "", `${identity.customer} · ${good.quantity_total ?? "待核对"}${good.unit || ""}`));
               preview.append(node("strong", "", identity.primary), node("small", "", identity.secondary));
@@ -1802,8 +1808,11 @@
           const key = JSON.stringify([good.customer_id, good.product_id ?? `lot:${good.lot_id}`, good.unit]);
           const quantity = good.quantity_total == null ? null : Number(good.quantity_total);
           const current = groups.get(key);
-          if (!current) groups.set(key, {...good, quantity_total: Number.isFinite(quantity) ? quantity : null});
-          else current.quantity_total = current.quantity_total == null || !Number.isFinite(quantity) ? null : current.quantity_total + quantity;
+          if (!current) groups.set(key, {...good, search_lot_ids: [good.lot_id], quantity_total: Number.isFinite(quantity) ? quantity : null});
+          else {
+            current.search_lot_ids.push(good.lot_id);
+            current.quantity_total = current.quantity_total == null || !Number.isFinite(quantity) ? null : current.quantity_total + quantity;
+          }
         }
         return [...groups.values()];
       }
@@ -1876,6 +1885,10 @@
         }
         goods.forEach(good => {
           const card = node("section", "candidate warehouse-label-card");
+          if (preferredLotId && Number(good.lot_id) === Number(preferredLotId)) {
+            card.style.backgroundColor = "#ffeb00";
+            card.style.borderColor = "#a16207";
+          }
           const summary = node("div", "warehouse-label-summary");
           const identity = warehouseGoodsDisplay(good);
           summary.append(node("span", "", identity.customer), node("span", "", identity.secondary));

@@ -57,6 +57,8 @@ interface Props {
   productionProjections?: ProductionTaskProjection[];
   highlightFeatureIds?: string[];
   highlightedPalletIds?: string[];
+  selectedAreaFeatureId?: string;
+  sourcePalletIds?: string[];
   mergeTargetPalletId?: string;
   moveLocationStates?: Record<string, string>;
   draggablePalletIds?: string[];
@@ -100,7 +102,7 @@ interface Props {
 export interface CanvasFocusTarget {
   entity: NonNullable<SelectedEntity>;
   token: number;
-  source: "search";
+  source: "search" | "selection";
 }
 
 interface CanvasRuntime {
@@ -144,7 +146,7 @@ function clearHighlightGroup(group: THREE.Group) {
   }
 }
 
-function addEntityHighlight(group: THREE.Group, object: THREE.Object3D, color: number, paddingMm: number) {
+function addEntityHighlight(group: THREE.Group, object: THREE.Object3D, color: number, paddingMm: number, order = 100) {
   const box = new THREE.Box3().setFromObject(object);
   if (box.isEmpty()) return;
   box.expandByScalar(paddingMm);
@@ -152,16 +154,16 @@ function addEntityHighlight(group: THREE.Group, object: THREE.Object3D, color: n
   const helperMaterial = helper.material as THREE.LineBasicMaterial;
   helperMaterial.transparent = true;
   helperMaterial.opacity = 0.98;
-  helper.renderOrder = 95;
+  helper.renderOrder = order;
   group.add(helper);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
   const marker = new THREE.Mesh(
     new THREE.BoxGeometry(Math.max(size.x, 220), 26, Math.max(size.z, 220)),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.48, depthTest: false, depthWrite: false })
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: order >= 110 ? 0.94 : (order < 100 ? 0.32 : 0.62), depthTest: false, depthWrite: false })
   );
   marker.position.set(center.x, box.max.y + 90, center.z);
-  marker.renderOrder = 96;
+  marker.renderOrder = order + 1;
   group.add(marker);
 }
 
@@ -171,29 +173,40 @@ function syncEntityHighlights(runtime: CanvasRuntime, selected: SelectedEntity, 
   const focusedKey = focusTarget ? entityKey(focusTarget.entity) : null;
   if (selected && entityKey(selected) !== focusedKey && !(selected.kind === "pallet" && moveStates?.[selected.id])) {
     const selectedObject = runtime.entityNodes.get(entityKey(selected));
-    if (selectedObject) addEntityHighlight(runtime.selectionHighlight, selectedObject, selected.kind === "pallet" ? 0xf59e0b : 0xe9d5ff, 90);
+    if (selectedObject) addEntityHighlight(runtime.selectionHighlight, selectedObject, selected.kind === "feature" ? 0xe9d5ff : 0xf59e0b, 90, selected.kind === "feature" ? 88 : 100);
   }
   if (focusTarget && !(focusTarget.entity.kind === "pallet" && moveStates?.[focusTarget.entity.id])) {
     const focusedObject = runtime.entityNodes.get(focusedKey!);
-    if (focusedObject) addEntityHighlight(runtime.searchHighlight, focusedObject, focusTarget.entity.kind === "pallet" ? 0xffeb00 : 0xbbf7d0, 160);
+    if (focusedObject) addEntityHighlight(runtime.searchHighlight, focusedObject,
+      focusTarget.source === "selection" ? (focusTarget.entity.kind === "feature" ? 0xe9d5ff : 0xf59e0b)
+        : focusTarget.entity.kind === "feature" ? 0xbbf7d0 : 0xffeb00, 160,
+      focusTarget.entity.kind === "feature" ? 90 : focusTarget.source === "search" ? 110 : 100);
   }
   runtime.requestRender();
 }
 
-function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], palletIds: string[], mergeTargetPalletId?: string, moveLocationStates?: Record<string, string>) {
+function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], palletIds: string[], mergeTargetPalletId?: string, moveLocationStates?: Record<string, string>, selectedAreaFeatureId?: string, sourcePalletIds: string[] = []) {
   clearHighlightGroup(runtime.resultHighlight);
-  const colors: Record<string, number> = {empty:0xffffff,occupied:0x2563eb,target:0xf59e0b,source:0xe9d5ff,blocked:0x94a3b8};
+  if (selectedAreaFeatureId && !featureIds.includes(selectedAreaFeatureId)) {
+    const area = runtime.entityNodes.get(`feature:${selectedAreaFeatureId}`);
+    if (area) addEntityHighlight(runtime.resultHighlight, area, 0xe9d5ff, 60, 88);
+  }
+  const colors: Record<string, number> = {empty:0xffffff,occupied:0x2563eb,target:0xf59e0b,source:0xf59e0b,blocked:0x94a3b8};
   for (const [id, state] of Object.entries(moveLocationStates || {})) {
     const object = runtime.entityNodes.get(`pallet:${id}`);
     if (object) addEntityHighlight(runtime.resultHighlight, object, colors[state] ?? colors.blocked, state === "target" ? 160 : 20);
   }
   for (const id of featureIds) {
     const object = runtime.entityNodes.get(`feature:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xbbf7d0, 120);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xbbf7d0, 120, 90);
+  }
+  for (const id of sourcePalletIds) {
+    const object = runtime.entityNodes.get(`pallet:${id}`);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xf59e0b, 100);
   }
   for (const id of palletIds) {
     const object = runtime.entityNodes.get(`pallet:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xffeb00, 100);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xffeb00, 100, 110);
   }
   if (mergeTargetPalletId) {
     const target = runtime.entityNodes.get(`pallet:${mergeTargetPalletId}`);
@@ -432,6 +445,8 @@ export function EditorCanvas({
   productionProjections = [],
   highlightFeatureIds = [],
   highlightedPalletIds = [],
+  selectedAreaFeatureId,
+  sourcePalletIds = [],
   mergeTargetPalletId,
   moveLocationStates,
   draggablePalletIds,
@@ -1604,7 +1619,7 @@ export function EditorCanvas({
     };
     runtimeRef.current = runtime;
     syncEntityHighlights(runtime, selectedRef.current, focusTargetRef.current, moveStatesRef.current);
-    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates);
+    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates, selectedAreaFeatureId, sourcePalletIds);
     if (focusTargetRef.current) {
       const nextFocusKey = `${focusTargetRef.current.token}:${layout.id}:${viewMode}`;
       if (lastFocusKeyRef.current !== nextFocusKey && animateFocus(runtime, focusTargetRef.current)) {
@@ -1687,8 +1702,8 @@ export function EditorCanvas({
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates);
-  }, [highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates]);
+    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates, selectedAreaFeatureId, sourcePalletIds);
+  }, [highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates, selectedAreaFeatureId, sourcePalletIds]);
 
   const realEastCompass = usesRealEastCompass(layout);
   const floor4CalibratingCompass = layout.floor_code.toUpperCase() === "4F" && calibrationMode;

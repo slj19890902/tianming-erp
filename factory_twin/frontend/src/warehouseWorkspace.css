@@ -56,11 +56,16 @@
 .twin-target-picker summary { cursor:pointer; padding:6px 0; }
 .twin-move-target-list { display:grid; gap:5px; max-height:240px; overflow:auto; padding:3px; }
 .warehouse-twin-shell .twin-move-target-list button { display:flex; justify-content:space-between; gap:6px; text-align:left; padding:8px; min-height:40px; border:1px solid; border-radius:5px; }
-.warehouse-twin-shell .move-state-empty { background:#dcfce7!important; border-color:#22c55e!important; color:#14532d!important; }
-.warehouse-twin-shell .move-state-occupied { background:#ffedd5!important; border-color:#f59e0b!important; color:#7c2d12!important; }
-.warehouse-twin-shell .move-state-source { background:#f3e8ff!important; border-color:#9333ea!important; color:#581c87!important; }
+.warehouse-twin-shell .mold-rack-cell.empty { background:#ffffff; border-color:#94a3b8; }
+.warehouse-twin-shell .mold-rack-cell.occupied { background:#dbeafe; border-color:#2563eb; }
+.warehouse-twin-shell .mold-rack-cell.selected { background:#f59e0b; border-color:#b45309; }
+.warehouse-twin-shell .move-state-empty { background:#ffffff!important; border-color:#94a3b8!important; color:#334155!important; }
+.warehouse-twin-shell .move-state-occupied { background:#dbeafe!important; border-color:#2563eb!important; color:#1e3a8a!important; }
+.warehouse-twin-shell .move-state-source { background:#f59e0b!important; border-color:#b45309!important; color:#172033!important; }
 .warehouse-twin-shell .move-state-blocked { background:#f1f5f9!important; border-color:#94a3b8!important; color:#475569!important; }
-.warehouse-twin-shell .move-state-target { background:#dbeafe!important; border-color:#2563eb!important; color:#1e3a8a!important; box-shadow:inset 0 0 0 2px #2563eb; }
+.warehouse-twin-shell .move-state-target { background:#f59e0b!important; border-color:#b45309!important; color:#172033!important; box-shadow:inset 0 0 0 2px #b45309; }
+.warehouse-twin-shell .mold-rack-cell.rack-search-hit { background:#ffeb00!important; border-color:#a16207!important; color:#172033!important; }
+.warehouse-twin-shell .mold-rack-cell[data-identity-conflict="true"] { border:2px solid #b91c1c!important; }
 .twin-target-state { font-size:12px; font-weight:700; }
 .twin-move-legend { display:flex; align-items:center; gap:5px; flex-wrap:wrap; font-size:12px; }
 .twin-move-legend i { width:12px; height:12px; border:2px solid; display:inline-block; }

@@ -141,6 +141,15 @@
     @media(max-width:1200px){.twin-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.twin-dashboard-grid{grid-template-columns:1fr 1.5fr}.twin-dashboard-grid>.twin-dashboard-column:last-child{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media(max-width:900px){.location-label-workspace{grid-template-columns:1fr}.location-label-map iframe{min-height:500px}.location-label-filters{grid-template-columns:1fr}}
     @media(max-width:780px){.twin-dashboard-head{flex-direction:column}.twin-dashboard-actions{justify-content:flex-start}.twin-kpi-grid,.twin-dashboard-grid,.twin-floor-overview,.twin-dashboard-grid>.twin-dashboard-column:last-child{grid-template-columns:1fr}.twin-dashboard-grid>.twin-dashboard-column:last-child{grid-column:auto}.twin-search-row,.twin-search-item{grid-template-columns:1fr}.twin-floor-card{min-height:230px}.twin-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.capacity-review-list{grid-template-columns:1fr}}
+    /* Ledger map uses the same meanings as the current twin and mobile map. */
+    .floor3-slot-marker { background:#fff; }
+    .floor3-slot-marker.occupied { background:#2563eb; }
+    .floor3-slot-marker.selected { background:#f59e0b; outline-color:#b45309; }
+    .floor3-slot-marker.search-match { background:#ffeb00; box-shadow:0 0 0 3px #a16207; }
+    .floor3-slot-marker.relocation { border-color:#b91c1c; }
+    .floor3-slot-marker.disabled { background:#94a3b8; }
+    .floor3-plan-hotspot.selected,.floor3-area-entry.selected { background:#e9d5ff; border-color:#9333ea; }
+    .floor3-plan-hotspot.matched,.floor3-plan-hotspot.selected.matched,.floor3-area-entry.matched { background:#bbf7d0; border-color:#15803d; }
   </style>
 </head>
 <body>

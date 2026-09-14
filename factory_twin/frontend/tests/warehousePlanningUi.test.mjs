@@ -740,7 +740,7 @@ test("area planning gives a clicked location priority over its enclosing area", 
 test("area planning shows every ground location with a full colored slot footprint", () => {
   assert.match(source, /layout\?\.id,\s*locationEditMode/);
   assert.match(source, /区域规划按已应用地图显示全部正式货位/);
-  assert.match(source, /奶白色为空货位，绿色为有货货位/);
+  assert.match(source, /白色为空货位，蓝色为有货货位/);
   assert.match(inventorySource, /const isPlanningLocationSlot = isGroundLocation/);
   assert.match(inventorySource, /planning_slot_width_mm: isPlanningLocationSlot \? standard\.width_mm/);
   assert.match(inventorySource, /planning_slot_depth_mm: isPlanningLocationSlot \? standard\.depth_mm/);

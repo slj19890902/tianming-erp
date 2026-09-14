@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.410"
-APP_VERSION_NAME = "PDF库存一键采用与保存确认"
+APP_VERSION = "v0.22.411"
+APP_VERSION_NAME = "仓库统一定位颜色与40×30出货标签"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4198,3 +4198,6 @@ APP_CHANGELOG = [*(f"v0.22.409：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["PDF库存候选点击采用即确认此批次差异，无需额外勾选；客户通用半成品确认随最终订单保存，避免采用后仍报未核对。", "完全匹配的安全成品及客户片料自动安排，本次不用库存按钮改红；保留客户范围、数量、版本与重复扣库保护。"]
 APP_VERIFICATION_STEPS = ["刷新邮箱PDF识别，打开PO2026090404，核对半成品批次、位置和数量后直接点采用，再点击核对无误并保存。", "核对完全匹配库存自动安排；不采用时点红色本次不用库存，避免为验收重复保存订单。"]
 APP_CHANGELOG = [*(f"v0.22.410：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["电脑与手机仓库统一有货蓝、空位白；搜索货位亮黄、区域淡绿；普通选中货位橙、区域淡紫，搜索优先且保留冲突提示。", "出货产品标签、历史重打及生产共用入口明确纸张尺寸、无边距和逐张分页；保留已保存标签布局、长字段完整换行及打印审计。"]
+APP_VERIFICATION_STEPS = ["管理员搜索货物，核对地图和货架层格亮黄；切换普通货位核对橙色选择，有货蓝、空位白。", "出货标签选择40×30mm纸张、100%实际大小、无边距，先试打连续三张；驱动纸宽必须为40mm，勿选40×80队列。"]
+APP_CHANGELOG = [*(f"v0.22.411：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

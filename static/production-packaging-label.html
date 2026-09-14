@@ -137,10 +137,10 @@
       .layout-stage-frame { max-width:100%; overflow:auto; }
     }
     @media print {
-      html,body { width:var(--label-width); min-height:0; background:#fff; }
+      html,body { width:var(--label-width); min-width:0; min-height:0; margin:0; padding:0; background:#fff; }
       .toolbar,.message,.print-plan-panel,.layout-editor { display:none !important; }
-      .label-list { display:block; padding:0; }
-      .label-card { width:var(--label-width); height:var(--label-height); margin:0; box-shadow:none; break-after:page; page-break-after:always; }
+      .label-list { display:block; width:var(--label-width); margin:0; padding:0; gap:0; }
+      .label-card { width:var(--label-width); height:var(--label-height); margin:0; box-shadow:none; break-inside:avoid; page-break-inside:avoid; break-after:page; page-break-after:always; }
       .label-card:last-child { break-after:auto; page-break-after:auto; }
     }
   </style>
@@ -633,8 +633,8 @@
         document.documentElement.style.setProperty("--label-height", `${template.heightMm}mm`);
         legacyPageSize.textContent = templateVersion === LEGACY_TEMPLATE_VERSION
           ? "@page { size: 65mm 45mm; margin: 0; }"
-          : "";
-        toolbarNote.textContent = `${template.label}｜缩放选 100%“实际大小”｜关闭“适合页面”、自动旋转和页眉页脚`;
+          : "@page { size: 40mm 30mm; margin: 0; }";
+        toolbarNote.textContent = `${template.label}｜打印机纸张也须选 ${template.widthMm}×${template.heightMm}mm｜100%实际大小、无边距；关闭适合页面、自动旋转及页眉页脚`;
       }
 
       function compactLabelHtml(label) {

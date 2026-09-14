@@ -415,7 +415,7 @@ export function buildAreaCapacityPreview(zone, count, rotation, standardPallet, 
       rotation_deg: (frame.rotation_deg + rotation + 360) % 360,
       is_logical_anchor: true, is_planning_location_slot: true,
       planning_slot_width_mm: standard.width_mm, planning_slot_depth_mm: standard.depth_mm,
-      visual_kind: "location_anchor", visual_status: "empty", color: "#fff8e7",
+      visual_kind: "location_anchor", visual_status: "empty", color: "#ffffff",
       status_note: "尚未保存的区域容量预览，不是正式货位，不可入库",
       is_simulated: true, version: 1, snapped: false
     };

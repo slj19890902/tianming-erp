@@ -728,10 +728,7 @@ def build_order_business_statuses(
                     "纯外购包材已收齐，等待送货",
                     external_component_count=len(required_external_components),
                 )
-            elif (
-                external_purchase_complete
-                or item.requisition_status == "外购包材已采购"
-            ):
+            elif external_purchase_complete:
                 status = "pending_incoming"
                 evidence = _evidence(
                     "confirmed_external_packaging_purchase",

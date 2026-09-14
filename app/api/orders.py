@@ -221,6 +221,7 @@ from app.services.external_packaging_purchase import (
     get_external_purchase_summary,
 )
 from app.services.external_packaging_purchase_lifecycle import (
+    fully_cancelled_external_item_ids,
     ExternalPackagingPurchaseLifecycleError,
     active_external_purchase_orders_for_order_ids,
     cancel_unreceived_external_purchases,
@@ -2296,6 +2297,10 @@ def _order_response(
     material_cost_context: MaterialCostEstimateContext | None = None,
 ) -> dict:
     item_ids = [item.id for item in order.items]
+    cancelled_external_ids = (fully_cancelled_external_item_ids(db, [
+        item.id for item in order.items if item.requisition_status == "外购包材已采购"
+        and item.material_status == "pending"
+    ]) if db is not None else set())
     reservation_map = finished_reservations_by_item_id
     if reservation_map is None:
         reservation_map = (
@@ -2609,7 +2614,7 @@ def _order_response(
                     production_required_quantity == 0
                 ),
                 "requisition_qty": item.requisition_qty,
-                "requisition_status": item.requisition_status,
+                "requisition_status": "未报料" if item.id in cancelled_external_ids else item.requisition_status,
                 "requisition_hold": (
                     {
                         "id": active_hold_map[item.id].id,
@@ -8877,14 +8882,18 @@ def delete_order_item(
     _ensure_no_production_completion_facts(db, [item.id])
     if item.delivered_quantity > 0 or item.material_status == "received":
         raise HTTPException(status_code=409, detail="已流转明细禁止删除")
-    if item.requisition_status != "未报料":
+    cancelled_external = item.id in fully_cancelled_external_item_ids(db, [item.id])
+    if item.requisition_status != "未报料" and not (
+        cancelled_external and item.requisition_status == "外购包材已采购"
+        and item.material_status == "pending"
+    ):
         raise HTTPException(status_code=409, detail="请先取消报料再删除订单明细")
     external_purchase_history = db.scalar(
         select(ExternalPackagingPurchaseItem.id)
         .where(ExternalPackagingPurchaseItem.sales_order_item_id == item.id)
         .limit(1)
     )
-    if external_purchase_history is not None:
+    if external_purchase_history is not None and not cancelled_external:
         raise HTTPException(
             status_code=409,
             detail="该明细已有外购包材采购历史，不能删除；请保留原订单用于追溯。",
@@ -8895,7 +8904,7 @@ def delete_order_item(
         )
     )
     if item_count <= 1:
-        raise HTTPException(status_code=409, detail="订单至少保留一条明细")
+        raise HTTPException(status_code=409, detail="这是订单最后一条明细，请在更多操作中删除订单组")
     deleted = {
         "item_id": item.id,
         "item_order_number": item.item_order_number,
@@ -8915,6 +8924,8 @@ def delete_order_item(
         user=user,
         request=request,
     )
+    if external_purchase_history is not None:
+        _archive_cancelled_purchase_item_before_delete(db, order=order, item=item, user=user, request=request)
     db.delete(item)
     db.flush()
     _refresh_total(db, order)
@@ -8934,6 +8945,42 @@ def delete_order_item(
     )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _archive_cancelled_purchase_item_before_delete(db: Session, *, order: Order,
+    item: OrderItem, user: User, request: Request | None) -> None:
+    """Retain the complete cancelled line snapshot in audit under the DB purge gate.
+
+    Never purge another order line, an active purchase, or any receipt history.
+    Supplier headers and cancellation facts remain available for tracing.
+    """
+    rows = list(db.scalars(select(ExternalPackagingPurchaseItem).where(
+        ExternalPackagingPurchaseItem.sales_order_item_id == item.id)))
+    batch_ids = set(db.scalars(select(ExternalPackagingPurchaseOrder.batch_id).where(
+        ExternalPackagingPurchaseOrder.id.in_({r.purchase_order_id for r in rows}))))
+    purchases = list(db.scalars(select(ExternalPackagingPurchaseOrder).where(
+        ExternalPackagingPurchaseOrder.batch_id.in_(batch_ids)).with_for_update()))
+    purchase_ids = {p.id for p in purchases}
+    cancelled = set(db.scalars(select(ExternalPackagingPurchaseCancellation.purchase_order_id).where(
+        ExternalPackagingPurchaseCancellation.purchase_order_id.in_(purchase_ids))))
+    if purchase_ids != cancelled or db.scalar(select(ExternalPackagingReceipt.id).where(
+            ExternalPackagingReceipt.purchase_order_id.in_(purchase_ids)).limit(1)):
+        raise HTTPException(409, "关联采购批次仍有有效采购或实收历史，请先撤回；有实收历史的明细请作废保留追溯")
+    _append_order_audit(db, request=request, user=user, order=order,
+        action_code="order.item.cancelled_purchase_archive", legacy_action="ARCHIVE_CANCELLED_EXT_ITEM",
+        description="删除明细前归档已撤销且从未实收的外购采购行",
+        details={"order_item_id": item.id, "purchase_items": [
+            {c.name: str(getattr(row, c.name)) if getattr(row, c.name) is not None else None
+             for c in ExternalPackagingPurchaseItem.__table__.columns} for row in rows]})
+    for bid in batch_ids:
+        db.add(ExternalPackagingPurchasePurgeAuthorization(batch_id=bid,
+            authorized_by=user.id, reason="用户删除明细：已取消且从未实收，完整采购行已归档审计"))
+    db.flush()
+    db.execute(delete(ExternalPackagingPurchaseItem).where(
+        ExternalPackagingPurchaseItem.id.in_([r.id for r in rows])))
+    db.execute(delete(ExternalPackagingPurchasePurgeAuthorization).where(
+        ExternalPackagingPurchasePurgeAuthorization.batch_id.in_(batch_ids)))
+    db.flush()
 
 # Explicit reserved-parts handoff, separate from ordinary order edits.
 from app.api.bom_cutover import router as bom_cutover_router

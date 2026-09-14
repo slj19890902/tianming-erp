@@ -889,7 +889,7 @@ def test_close_blocks_unreceived_purchase_but_allows_fully_received_purchase(
         assert build_external_purchase_print(db, purchase_id)["purchase_number"]
 
 
-def test_cancelled_purchase_history_blocks_single_item_delete_with_409(
+def test_cancelled_purchase_history_archives_before_single_item_delete(
     purchase_app,
 ) -> None:
     from app.models.user import User
@@ -927,15 +927,46 @@ def test_cancelled_purchase_history_blocks_single_item_delete_with_409(
 
         from app.api.orders import delete_order_item
 
-        with pytest.raises(HTTPException, match="外购包材采购历史") as error:
-            delete_order_item(item.id, db=db, user=admin)
-        assert error.value.status_code == 409
-        assert db.get(OrderItem, item.id) is not None
-        assert db.scalar(
+        item_id = item.id
+        # Reproduce the historical stale cached status after a real cancellation.
+        item.requisition_status = "外购包材已采购"
+        db.commit()
+        result = delete_order_item(item_id, db=db, user=admin)
+        assert result.status_code == 204
+        assert db.get(OrderItem, item_id) is None
+        assert not db.scalar(
             select(func.count())
             .select_from(ExternalPackagingPurchaseItem)
-            .where(ExternalPackagingPurchaseItem.sales_order_item_id == item.id)
+            .where(ExternalPackagingPurchaseItem.sales_order_item_id == item_id)
         )
+        from app.models.audit import OperationLog
+        archived = db.scalar(select(OperationLog).where(OperationLog.action == "ARCHIVE_CANCELLED_EXT_ITEM"))
+        assert archived is not None and "purchase_items" in archived.details
+
+
+def test_manual_purchase_cancel_resets_cached_line_and_legacy_projection(purchase_app):
+    from app.models.user import User
+    from app.api.external_packaging_purchases import cancel_external_packaging_purchase, ExternalPurchaseCancelPayload
+    order_id = purchase_app.state.fixture["order_id"]
+    with TestClient(purchase_app) as client:
+        _login(client, "purchase-admin")
+        _confirm(client, order_id)
+    with purchase_app.state.session_factory() as db:
+        admin = db.scalar(select(User).where(User.username == "purchase-admin"))
+        order, item = _order_and_item(db, order_id)
+        _make_pure_external_snapshot(item)
+        item.requisition_status = "外购包材已采购"
+        db.commit()
+        batch_id = get_external_purchase_summary(db, order_id)["batch_id"]
+        cancel_external_packaging_purchase(order_id,
+            ExternalPurchaseCancelPayload(expected_batch_id=batch_id, reason="取消试验采购", confirmed=True),
+            db=db, user=admin, _cost_user=admin)
+        assert item.requisition_status == "未报料"
+        # Existing cancelled rows must also render correctly without a data backfill.
+        item.requisition_status = "外购包材已采购"
+        db.commit()
+        projection = build_order_business_statuses(db, [order])
+        assert projection[order_id]["business_status"] == "pending_material"
 
 
 def test_cancelled_unreceived_purchase_history_allows_order_group_delete(

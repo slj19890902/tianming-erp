@@ -3297,17 +3297,18 @@
                             <span v-if="!item.draft_ready" class="status orange">常用箱缺：{{ (item.missing_fields || []).join("、") }}</span>
                           </div>
                           <div class="low-stock-detail-metrics">
-                            <span>仓库总数 <strong>{{ item.available_quantity }}</strong></span>
+                            <span>仓库总数 <strong>{{ item.available_quantity }}</strong><template v-if="item.is_virtual_composite_parent"> 套覆盖</template></span>
+                            <span v-if="item.is_virtual_composite_parent">已成套 {{ item.assembled_quantity || 0 }} · 未组装可配 {{ item.unassembled_available_set_quantity || 0 }} · 订单已预留组件 {{ item.reserved_component_set_quantity || 0 }} 套</span>
                             <span>预警线 <strong>{{ item.warning_quantity }}</strong></span>
-                            <span>距离目标还差 <strong>{{ item.suggested_replenishment_quantity }}</strong> 个成品</span>
+                            <span>距离目标还差 <strong>{{ item.suggested_replenishment_quantity }}</strong> {{ item.is_virtual_composite_parent ? '套' : '个成品' }}</span>
                             <span v-if="item.customer_board_preparation_available_sheet_quantity && item.customer_board_preparation_auto_cover_capacity">已有客户备料 <strong>{{ item.customer_board_preparation_available_sheet_quantity }}</strong> 张</span>
                             <span v-else-if="item.customer_board_preparation_available_sheet_quantity">同规格备料 <strong>{{ item.customer_board_preparation_available_sheet_quantity }}</strong> 张（已计入另一款，不重复计算）</span>
                             <span v-if="item.incoming_board_preparation_sheet_quantity && item.incoming_board_preparation_auto_cover_capacity">已报料待到 <strong>{{ item.incoming_board_preparation_sheet_quantity }}</strong> 张</span>
                             <span v-else-if="item.incoming_board_preparation_sheet_quantity">同规格在途 <strong>{{ item.incoming_board_preparation_sheet_quantity }}</strong> 张（已计入另一款，不重复计算）</span>
-                            <span v-if="item.procurement_mode==='external_purchase'">本次建议备库 <strong>{{ item.suggested_new_requisition_finished_quantity }}</strong> 个成品</span><span v-else>本次新报 <strong>{{ item.suggested_new_requisition_sheet_quantity }}</strong> 张</span>
+                            <span v-if="item.is_virtual_composite_parent">本次补料 {{ item.suggested_new_requisition_finished_quantity }} 套 · 子件纸板 {{ item.suggested_new_requisition_sheet_quantity }} 张</span><span v-else-if="item.procurement_mode==='external_purchase'">本次建议备库 <strong>{{ item.suggested_new_requisition_finished_quantity }}</strong> 个成品</span><span v-else>本次新报 <strong>{{ item.suggested_new_requisition_sheet_quantity }}</strong> 张</span>
                           </div>
                           <div class="low-stock-detail-actions">
-                            <button v-if="canRequisition && (item.procurement_mode!=='external_purchase' || (canAdmin && canViewCosts))" class="btn small success" :disabled="!item.draft_ready || !Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0)" @click="openLowStockReplenishment(item)">{{ Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0) ? (item.procurement_mode==='external_purchase' ? `建议采购备库 ${item.suggested_new_requisition_finished_quantity} 个` : `建议报料 ${item.suggested_new_requisition_sheet_quantity} 张`) : item.replenishment_state==='board_preparation_ready' ? '已有备料，待生产' : item.replenishment_state==='already_ordered' ? (item.procurement_mode==='external_purchase' ? '已采购，待到货' : '已报料，待到货') : '无需再报料' }}</button>
+                            <button v-if="canRequisition && (item.procurement_mode!=='external_purchase' || (canAdmin && canViewCosts))" class="btn small success" :disabled="!item.draft_ready || !Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0)" @click="openLowStockReplenishment(item)">{{ Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0) ? (item.is_virtual_composite_parent ? `建议报料 ${item.suggested_new_requisition_finished_quantity} 套` : item.procurement_mode==='external_purchase' ? `建议采购备库 ${item.suggested_new_requisition_finished_quantity} 个` : `建议报料 ${item.suggested_new_requisition_sheet_quantity} 张`) : item.replenishment_state==='board_preparation_ready' ? '已有备料，待生产' : item.replenishment_state==='already_ordered' ? (item.procurement_mode==='external_purchase' ? '已采购，待到货' : '已报料，待到货') : '无需再报料' }}</button>
                             <button class="btn small primary" @click="openLowStockLocations(item)">查看库存位置</button>
                             <button v-if="canRequisition" class="btn small" @click="openProductStockPolicy(item)">修改预警</button>
                           </div>
@@ -7123,7 +7124,8 @@
               <div class="field"><label>仓库当前总数</label><input class="input" :value="quickStockPolicyForm.available_quantity" readonly /></div>
               <div class="field"><label>低于多少预警</label><input class="input" type="number" min="0" step="1" v-model.number="quickStockPolicyForm.warning_quantity" @input="syncQuickStockTargetToWarning" /></div>
               <div class="field"><label>建议补到多少</label><input class="input" type="number" min="1" step="1" v-model.number="quickStockPolicyForm.target_quantity" /></div>
-              <div class="field wide muted">仓库当前总数按同一客户、同一存货编码汇总可用与已预占的实物，不含冻结、损坏、报废和已消耗；其中净可分配 {{ quickStockPolicyForm.allocatable_available_quantity }}，已预占 {{ quickStockPolicyForm.reserved_quantity }}。两个预警设置都可以高于当前库存；这里只设置提醒，不会自动报料或入库。</div>
+              <div v-if="quickStockPolicyForm.is_virtual_composite_parent" class="field wide muted">按套预警：已成套 {{ quickStockPolicyForm.assembled_quantity }}，未组装可配 {{ quickStockPolicyForm.unassembled_available_set_quantity }} 套。可配套不等于已组装；有订单后仍需现场组套确认。</div>
+              <div v-else class="field wide muted">仓库当前总数按同一客户、同一存货编码汇总可用与已预占的实物，不含冻结、损坏、报废和已消耗；其中净可分配 {{ quickStockPolicyForm.allocatable_available_quantity }}，已预占 {{ quickStockPolicyForm.reserved_quantity }}。两个预警设置都可以高于当前库存；这里只设置提醒，不会自动报料或入库。</div>
             </div>
             <div v-else-if="modal.type === 'purchaseReceiptMaterialChange'" class="form-grid">
               <div class="field wide"><label>报料材质</label><div class="notice">{{ modal.row.material_display || '-' }}。正常情况无需处理，直接点“确认实收”。</div></div>
@@ -8720,8 +8722,8 @@
                   <tr v-for="policy in stockPolicyWarnings" :key="policy.id">
                     <td><strong>{{ policy.policy_name }}</strong><div class="muted">{{ policy.product_code || policy.material_code || '-' }}</div></td>
                     <td>{{ policy.target_inventory_type === 'finished' ? '成品' : '半成品' }}</td>
-                    <td>{{ policy.available_quantity }} / {{ policy.warning_quantity }} / {{ policy.target_quantity }}</td>
-                    <td><strong>{{ policy.suggested_new_requisition_sheet_quantity ?? policy.suggested_replenishment_quantity }}</strong> 张</td>
+                    <td>{{ policy.available_quantity }} / {{ policy.warning_quantity }} / {{ policy.target_quantity }} {{ policy.is_virtual_composite_parent ? '套' : '' }}<div v-if="policy.is_virtual_composite_parent" class="muted">已成套 {{ policy.assembled_quantity || 0 }} · 未组装可配 {{ policy.unassembled_available_set_quantity || 0 }} 套</div></td>
+                    <td><strong>{{ policy.is_virtual_composite_parent ? policy.suggested_new_requisition_finished_quantity : (policy.suggested_new_requisition_sheet_quantity ?? policy.suggested_replenishment_quantity) }}</strong> {{ policy.is_virtual_composite_parent ? '套' : '张' }}</td>
                     <td>{{ policy.default_location ? inventoryLocation(policy.default_location) : '未设置' }}</td>
                     <td><button class="btn small success" type="button" @click="addStockPolicyDraft(policy)">按预警补库</button></td>
                   </tr>
@@ -26442,6 +26444,9 @@
                 product_code:data.product_code || row.product_code || "",
                 product_name:data.product_name || row.product_name || "",
                 available_quantity:Number(data.available_quantity || 0),
+                is_virtual_composite_parent:!!data.is_virtual_composite_parent,
+                assembled_quantity:Number(data.assembled_quantity || 0),
+                unassembled_available_set_quantity:Number(data.unassembled_available_set_quantity || 0),
                 allocatable_available_quantity:Number(data.allocatable_available_quantity || 0),
                 reserved_quantity:Number(data.reserved_quantity || 0),
                 warning_quantity:Number(data.warning_quantity || 0),

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from datetime import date, datetime
 from pathlib import Path
+import pytest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -181,6 +182,11 @@ def _seed(factory: sessionmaker[Session]) -> dict[str, int]:
         material_a = Material(
             code="A/K/B",
             supplier_name="匿名纸板供应商",
+            quote_price=2,
+            price_unit="元/㎡",
+            purchase_currency="CNY",
+            purchase_tax_included=True,
+            purchase_tax_rate=0.13,
             layer_count=3,
             flute_type="B",
             is_active=True,
@@ -588,8 +594,9 @@ def test_composite_parent_warehouse_total_uses_complete_sets_not_component_piece
         assert summary["physical_unconsumed_quantity"] == 1300
 
 
+@pytest.mark.parametrize("virtual", [True, False])
 def test_virtual_composite_stock_warning_drafts_required_bom_boards(
-    tmp_path: Path,
+    tmp_path: Path, virtual: bool,
 ) -> None:
     from decimal import Decimal
 
@@ -623,7 +630,9 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
             product_name="30入装格挡",
             box_category="normal",
             is_composite=True,
-            is_virtual_composite_parent=True,
+            is_virtual_composite_parent=virtual,
+            is_internal_component=not virtual,
+            unit="套",
             is_active=True,
         )
         long_piece = Product(
@@ -2136,7 +2145,7 @@ def test_frontend_exposes_read_only_alert_and_two_number_setup() -> None:
     assert "同一客户、同一存货编码汇总可用与已预占的实物" in source
     assert "quickStockPolicyForm.allocatable_available_quantity" in source
     assert "quickStockPolicyForm.reserved_quantity" in source
-    assert "距离目标还差 <strong>{{ item.suggested_replenishment_quantity }}</strong> 个成品" in source
+    assert "item.is_virtual_composite_parent ? '套' : '个成品'" in source
     assert "已有客户备料" in source
     assert "已报料待到" in source
     assert "已计入另一款，不重复计算" in source

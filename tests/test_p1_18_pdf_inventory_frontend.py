@@ -260,6 +260,11 @@ if (!methods.pdfInventoryHasButton.call(context, full)) throw new Error("full mu
 if (!methods.pdfInventoryHasButton.call(context, partial)) throw new Error("partial must have button");
 if (methods.pdfInventoryHasButton.call(context, none)) throw new Error("no-stock row must not have empty button");
 if (!methods.pdfInventoryHasButton.call(context, stale)) throw new Error("stale must retain an exception entry");
+const materialOnly = line(none._inventory.authoritative, {{semi: {{main: {{manual_candidates: [{{lot_id: 12, material_kind: "semi", available_quantity: 375, warehouse_location: {{id: 1203}}}}]}}}}}});
+if (!methods.pdfInventoryHasButton.call(context, materialOnly)) throw new Error("material-only inventory must expose deduction");
+if (methods.pdfInventoryStatusText.call(context, materialOnly) !== "材料库存 · 抵扣") throw new Error("material candidate label missing");
+context.inventoryDecisionRequired = () => "人工确认";
+if (!methods.pdfInventoryHasButton.call(context, none)) throw new Error("a blocking decision must remain actionable");
 """
     result = subprocess.run(
         [node],

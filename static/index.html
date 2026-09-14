@@ -918,6 +918,7 @@
       .pdf-inventory-table .pdf-requisition-col { width:13%; }
       .pdf-inventory-table .pdf-issue-col { width:19%; }
       .pdf-inventory-table .pdf-action-col { width:8%; }
+      .pdf-inventory-table .status { max-width:100%; white-space:normal; overflow-wrap:anywhere; box-sizing:border-box; }
       .pdf-product-name {
         display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical;
         -webkit-line-clamp:2; line-clamp:2; line-height:1.35;
@@ -7471,6 +7472,7 @@
                             <div class="toolbar-group" style="justify-content:flex-start;margin-top:4px">
                               <button v-if="item.matched_product_id && !item.is_new_product && canEditProducts" class="btn small" type="button" @click="openCommonBoxEditorFromPdf(draftIndex,item)">编辑常用箱</button>
                               <button v-if="item.matched_product_id && !item.is_new_product && canEditProducts" class="btn small" type="button" @click="startEditImportItem(draft,item)">修改本行</button>
+                              <button v-if="pdfInventoryHasButton(item)" class="btn small" type="button" @click="pdfOpenInventory(item)">库存抵扣 · 位置数量</button>
                             </div>
                           </div>
                           <div>
@@ -13947,6 +13949,7 @@
             if (!state || state.loading || state.authoritative_loading) return "库存计算中";
             if (state.stale) return "库存待刷新";
             if (state.api_error || state.authoritative_error) return "库存查询失败";
+            if (Object.values(state.semi || {}).some(part => (part.candidates || []).length || (part.manual_candidates || []).length)) return "材料库存 · 抵扣";
             return ({
               full:"有库存",
               partial:"库存不足",
@@ -13983,11 +13986,14 @@
             if (authority?.coverage_state === "unsupported") return authority.message || "组合产品需进入订单后计算";
             if (authority?.interaction_state === "decision_required" || authority?.coverage_state === "candidates_unplanned") return "有库存候选待确认";
             const decision = this.inventoryDecisionRequired(line);
-            return decision || "";
+            return decision ? "库存待确认：抵扣或不用" : "";
           },
           pdfInventoryHasButton(line) {
             if (!Number(line?.matched_product_id || line?.product_id || 0)) return false;
-            return this.pdfInventoryDisplayState(line) !== "none";
+            const materials = Object.values(line?._inventory?.semi || {});
+            return materials.some(part => (part.candidates || []).length || (part.manual_candidates || []).length)
+              || !!this.inventoryDecisionRequired(line)
+              || this.pdfInventoryDisplayState(line) !== "none";
           },
           pdfWarehouseLocatorCanOpen(candidate) {
             const location = candidate?.warehouse_location || candidate?.location || {};

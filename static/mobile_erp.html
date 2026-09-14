@@ -1800,7 +1800,7 @@
 
       function warehouseGoodsDisplay(good) {
         const customer = good.customer_id ? (good.customer_short_name || good.customer_name || "客户简称待补充") : "通用";
-        const physical = [good.specification, good.flute_type ? `${good.flute_type}楞` : "楞型待补充"].filter(Boolean).join(" · ");
+        const physical = [good.specification, good.flute_type ? (good.flute_type==="NONE"?"无楞":`${good.flute_type}楞`) : "楞型待补充"].filter(Boolean).join(" · ");
         const bound = Boolean(good.customer_id && good.product_code);
         return {customer, primary: bound ? good.product_code : (physical || "尺寸待补充"), secondary: bound ? [good.product_name, physical].filter(Boolean).join(" · ") : good.product_name || "片料"};
       }

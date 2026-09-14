@@ -1316,8 +1316,9 @@ class FinishedGoodsInventoryDetail(Base):
 class SemiFinishedInventoryDetail(Base):
     __tablename__ = "semi_finished_inventory_details"
     __table_args__ = (
-        CheckConstraint("layer_count IN (3,5,7)", name="ck_semi_inventory_layer"),
+        CheckConstraint("layer_count IN (1,3,5,7)", name="ck_semi_inventory_layer"),
         CheckConstraint(
+            "(layer_count=1 AND flute_type='NONE') OR "
             "(layer_count=3 AND flute_type IN ('A','B','E')) OR "
             "(layer_count=5 AND flute_type IN ('AB','BE')) OR "
             "(layer_count=7 AND flute_type IN ('AAA','ABC'))",

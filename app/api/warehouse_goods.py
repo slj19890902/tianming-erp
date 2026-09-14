@@ -1,6 +1,7 @@
 import hashlib
 import json
 from datetime import date
+from decimal import Decimal
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
@@ -13,13 +14,14 @@ from app.models.user import User
 from app.models.customer import Customer
 from app.models.product import Product
 from app.models.material import Material
+from app.models.supplier import Supplier
 from app.models.mold_tool import MoldTool
 from app.models.audit import OperationLog
 from app.models.warehouse_inventory import InventoryLot, InventoryMovement
 from app.models.warehouse_goods import WarehouseGoodsProfile, WarehouseGoodsMutation
 from app.services.warehouse_goods import goods_profile, lot_face
 from app.services.paper_color import material_face
-from app.services.inventory_cost_snapshot import estimate_semi_finished_cost, apply_cost_snapshot
+from app.services.inventory_cost_snapshot import InventoryCostEstimate, estimate_semi_finished_cost, apply_cost_snapshot
 from app.services.inventory_valuation import can_view_inventory_cost, freeze_entry_cost
 from app.services.material_pricing import get_effective_material_price
 from app.services.warehouse_inventory import manual_semi_finished_in, WarehouseInventoryError
@@ -72,8 +74,10 @@ class SheetEntry(BaseModel):
     internal_name: str = Field(min_length=1, max_length=200)
     board_length_mm: int = Field(gt=0, le=20000)
     board_width_mm: int = Field(gt=0, le=20000)
-    layer_count: Literal[3, 5, 7]
-    flute_type: Literal["A", "B", "E", "AB", "BE", "AAA", "ABC"]
+    layer_count: Literal[1, 3, 5, 7]
+    flute_type: Literal["NONE", "A", "B", "E", "AB", "BE", "AAA", "ABC"]
+    supplier_id: int | None = Field(default=None, ge=1)
+    sheet_unit_cost: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=4)
     pieces_per_box: int = Field(default=1, gt=0, le=100)
     stock_yield_per_sheet: int = Field(default=1, gt=0, le=100)
     component_type: Literal["whole", "cover", "base"] = "whole"
@@ -83,6 +87,19 @@ class SheetEntry(BaseModel):
     crease_right_mm: int | None = Field(default=None, ge=0)
     source_kind: Literal["existing_stocktake", "partner_transfer"] = "existing_stocktake"
     idempotency_key: str = Field(min_length=8, max_length=80)
+
+    @model_validator(mode="after")
+    def single_layer_entry(self):
+        if self.layer_count == 1:
+            if self.flute_type != "NONE":
+                raise ValueError("单层原纸请选择无楞")
+            if not self.supplier_id or self.sheet_unit_cost is None:
+                raise ValueError("单层原纸请填写供应商及含税到库单价（元/张）")
+            if self.facts.verified_material_id:
+                raise ValueError("单层原纸按张计价，请勿绑定瓦楞材质报价")
+        elif self.flute_type == "NONE" or self.supplier_id is not None or self.sheet_unit_cost is not None:
+            raise ValueError("按张原纸报价仅适用于单层无楞原纸")
+        return self
 
 
 def unrestricted(user, db):
@@ -160,6 +177,7 @@ def options(q: str = "", db: Session = Depends(get_db), user: User = Depends(can
     return dict(customers=[dict(id=c.id, name=c.chinese_short_name or c.name, full_name=c.name, code=c.customer_code) for c in db.scalars(customers.order_by(Customer.id))],
         products=[dict(id=p.id, customer_id=p.customer_id, name=p.product_name, code=p.product_code,
             mold_tool_id=p.mold_tool_id) for p in db.scalars(products.order_by(Product.id))],
+        suppliers=[dict(id=s.id, name=s.standard_name) for s in db.scalars(select(Supplier).where(Supplier.is_active.is_(True)).order_by(Supplier.sort_order, Supplier.standard_name))],
         materials=[dict(id=m.id, code=m.code, supplier=m.supplier_name, layer_count=m.layer_count,
             is_white_face=material_face(db, m) == "white") for m in db.scalars(select(Material).where(Material.is_active.is_(True)).order_by(Material.supplier_name, Material.code))],
         molds=[dict(id=m.id, name=" · ".join(dict.fromkeys(filter(None, [m.mold_code, m.mold_name]))),
@@ -220,6 +238,8 @@ def update_goods(lot_id: int, payload: GoodsUpdate, db: Session = Depends(get_db
     facts = payload.facts.model_copy(deep=True)
     material = validate_references(db, facts)
     raw = lot.semi_finished_detail.sheet_type == "raw_board"
+    if lot.semi_finished_detail.layer_count == 1 and material is None:
+        facts.face_paper = payload.facts.face_paper
     if raw != (facts.processing == "raw"):
         raise HTTPException(422, "不能通过用途编辑改变原材料或半成品的入库类型")
     if (facts.processing == "creased") != (lot.semi_finished_detail.sheet_type == "creased_sheet"):
@@ -259,6 +279,21 @@ def create_sheet(payload: SheetEntry, db: Session = Depends(get_db), user: User 
         raise HTTPException(422, "请输入材质代码，或选择供应商对应材质")
     if material and material.layer_count and material.layer_count != payload.layer_count:
         raise HTTPException(422, "层数与材质主数据不一致")
+    supplier = None
+    direct_estimate = None
+    if payload.layer_count == 1:
+        supplier = db.get(Supplier, payload.supplier_id)
+        if supplier is None or not supplier.is_active:
+            raise HTTPException(422, "原纸供应商不存在或已停用，请重新选择")
+        facts.face_paper = payload.facts.face_paper
+        direct_estimate = InventoryCostEstimate(payload.sheet_unit_cost, Decimal(0),
+            Decimal(payload.board_length_mm * payload.board_width_mm) / Decimal(1000000),
+            "manual_sheet_unit_cost", dict(currency="CNY", tax_included=True,
+                price_unit="元/张", settlement_unit_price=str(payload.sheet_unit_cost),
+                supplier_id=supplier.id, supplier_name=supplier.standard_name, supplier_version=supplier.version,
+                operator_id=user.id, stock_date=str(payload.stock_date),
+                estimate_basis="administrator_entered_sheet_cost", cost_label="原纸入库单价",
+                note="管理员登记含税到库每张成本；不生成采购应付"))
     estimate = estimate_semi_finished_cost(db, material_id=material.id, material_code=material.code,
         supplier_name=material.supplier_name, layer_count=payload.layer_count, flute_type=payload.flute_type,
         board_length_mm=payload.board_length_mm, board_width_mm=payload.board_width_mm) if material else None
@@ -284,7 +319,8 @@ def create_sheet(payload: SheetEntry, db: Session = Depends(get_db), user: User 
             stock_date=payload.stock_date, source_type="stocktake" if payload.source_kind == "existing_stocktake" else "transfer",
             material_code=facts.material_code, material_id=material.id if material else None,
             capture_material_cost=material is not None,
-            supplier_name=material.supplier_name if material else None, layer_count=payload.layer_count,
+            supplier_name=supplier.standard_name if supplier else material.supplier_name if material else None, layer_count=payload.layer_count,
+            entry_cost_estimate=direct_estimate,
             flute_type=payload.flute_type, board_length_mm=payload.board_length_mm, board_width_mm=payload.board_width_mm,
             sheet_type="raw_board" if facts.processing == "raw" else "creased_sheet" if facts.processing == "creased" else "net_sheet",
             component_type=payload.component_type, pieces_per_box=payload.pieces_per_box,
@@ -296,7 +332,7 @@ def create_sheet(payload: SheetEntry, db: Session = Depends(get_db), user: User 
             crease_middle_mm=payload.crease_middle_mm, crease_right_mm=payload.crease_right_mm,
             movement_reason="人工补录原材料" if facts.processing == "raw" else "人工补录半成品",
             remarks=facts.note, cutting_note=None)
-        if payload.source_kind != "existing_stocktake":
+        if payload.source_kind != "existing_stocktake" and direct_estimate is None:
             freeze_entry_cost(db, lot)
         return record(db, user, lot, facts, payload.idempotency_key, digest, None, "CREATE")
     except (WarehouseInventoryError, WarehouseStocktakeBatchError) as error:

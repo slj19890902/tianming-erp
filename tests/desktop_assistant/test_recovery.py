@@ -88,6 +88,7 @@ class RecoveryTests(unittest.TestCase):
 
     def test_complete_encrypted_backup_and_new_machine_restore(self):
         database = self.manager.root / 'shared/data/carton_erp.sqlite3'
+        (self.manager.root / 'shared/data/.raw-paper-proof').write_bytes(b'include hidden files')
         original = sha(database)
         backup = self.manager.backup(PASSWORD, self.nas)
         self.assertFalse(list((self.manager.root / 'backups').glob('*.tmbackup')))
@@ -102,6 +103,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(result['started'])
         self.assertEqual(sha(new.root / 'shared/data/carton_erp.sqlite3'), original)
         self.assertEqual((new.root / 'shared/data/drawing.pdf').read_bytes(), b'synthetic attachment')
+        self.assertEqual((new.root / 'shared/data/.raw-paper-proof').read_bytes(), b'include hidden files')
         self.assertEqual(sha(database), original)
         with self.assertRaisesRegex(ValueError, '全新安装'):
             new.restore(backup, PASSWORD)

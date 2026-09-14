@@ -148,14 +148,32 @@ def pack_tree(source: Path, archive: Path, metadata: dict, signer=None) -> dict:
     paths = sorted(p for p in source.rglob('*') if p.is_file())
     if any(p.is_symlink() or p.is_junction() for p in source.rglob('*')):
         raise ValueError('备份源包含链接，请先规范数据路径')
-    files = {safe_name(p.relative_to(source).as_posix()): sha(p) for p in paths}
+    return _pack_paths([(p, p.relative_to(source).as_posix()) for p in paths], archive, metadata, signer)
+
+
+def pack_recovery(shared: Path, packages: dict, archive: Path, metadata: dict) -> dict:
+    """Stream stopped local data into NAS ZIP; no loose NAS SQLite/small files."""
+    items = sorted(shared.rglob('*'))
+    if shared.is_symlink() or shared.is_junction() or any(p.is_symlink() or p.is_junction() for p in items):
+        raise ValueError('备份源包含链接，请先规范数据路径')
+    paths = [(p, 'shared/' + p.relative_to(shared).as_posix()) for p in items if p.is_file()]
+    for name, path in packages.items():
+        if path.is_symlink() or path.is_junction():
+            raise ValueError('备份程序包不能是链接')
+        paths.append((path, name))
+    return _pack_paths(paths, archive, metadata)
+
+
+def _pack_paths(paths, archive: Path, metadata: dict, signer=None) -> dict:
+    files = {safe_name(name): sha(path) for path, name in paths}
+    if len(files) != len(paths):
+        raise ValueError('备份源含重复路径')
     if 'manifest.json' in files or 'manifest.sig' in files:
         raise ValueError('源目录包含保留文件名')
     manifest = {**metadata, 'files': files}
     raw = json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode('utf-8')
     with zipfile.ZipFile(archive, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zipped:
-        for path in paths:
-            name = path.relative_to(source).as_posix()
+        for path, name in paths:
             zipped.write(path, name)
             if sha(path) != files[name]:
                 raise ValueError('打包期间文件发生变化')

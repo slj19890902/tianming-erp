@@ -14,7 +14,7 @@ import uuid
 import psutil
 
 from desktop_assistant.storage import (archive_path, database_info, decrypt_file, encrypt_file,
-                                      extract_verified, pack_tree, read_json, sha, write_json, signed_release_manifest)
+                                      extract_verified, pack_tree, pack_recovery, read_json, sha, write_json, signed_release_manifest)
 from desktop_assistant.attachments import rebind_pdf_sources
 
 CN = timezone(timedelta(hours=8))
@@ -255,31 +255,26 @@ class Manager:
             raise ValueError('NAS备份临时目录不能是链接')
         job = work_root / uuid.uuid4().hex
         job.mkdir()
-        tree = job / 'payload'
-        tree.mkdir()
-        # Full managed data includes attachments, layouts, accounts and environment.
-        shutil.copytree(self.root / 'shared', tree / 'shared')
+        # Stream local stopped data directly into the NAS archive. Virtual NAS
+        # drives need not support loose SQLite files or hidden build/test files.
         package = self.root / 'packages' / (current + '.zip')
         if sha(package) != current:
             raise ValueError('对应程序发布包已损坏')
-        shutil.copyfile(package, tree / 'release.zip')
+        packages = {'release.zip': package}
         authority = state.get('schema_authority')
         if authority and self.manifest()['revision'] != before['revision']:
             if not self.compatible(current, before['revision'], authority):
                 raise ValueError('旧程序缺少当前数据库的签名兼容授权')
-            shutil.copyfile(self.root / 'packages' / (authority + '.zip'), tree / 'compatibility.zip')
+            packages['compatibility.zip'] = self.root / 'packages' / (authority + '.zip')
         else:
             authority = None
-        if database_info(tree / 'shared/data/carton_erp.sqlite3') != before:
-            raise ValueError('备份数据复核不一致')
-        # Verify every registered PDF is included; the private copy keeps the original paths.
-        rebind_pdf_sources(tree / 'shared/data/carton_erp.sqlite3', self.root / 'shared',
-                           tree / 'shared', self.root / 'shared')
         stamp = datetime.now(CN).strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:8]
         raw = job / 'recovery.zip'
-        pack_tree(tree, raw, {'type': 'tianming.recovery.v1', 'created': datetime.now(CN).isoformat(),
+        pack_recovery(self.root / 'shared', packages, raw, {'type': 'tianming.recovery.v1', 'created': datetime.now(CN).isoformat(),
                             'release': current, 'version': self.manifest()['version'], 'database': before,
                             'source_shared': str(self.root / 'shared'), 'schema_authority': authority})
+        if database_info(self.root / 'shared/data/carton_erp.sqlite3') != before:
+            raise ValueError('备份期间数据复核不一致')
         encrypted = job / (stamp + '.tmbackup')
         encrypt_file(raw, encrypted, password)
         # Authenticate before publication and hash the independently copied NAS file.

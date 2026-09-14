@@ -70,6 +70,11 @@ class RecoveryTests(unittest.TestCase):
         database = self.manager.root / 'shared/data/carton_erp.sqlite3'
         original = sha(database)
         backup = self.manager.backup(PASSWORD, self.nas)
+        self.assertFalse(list((self.manager.root / 'backups').glob('*.tmbackup')))
+        self.assertFalse(list((self.nas / '.tianming-backup-work').iterdir()))
+        receipt = read_json(self.manager.root / 'control' / 'backup-receipts' / (backup.stem + '.json'))
+        self.assertEqual(receipt['sha256'], sha(backup))
+        self.assertEqual(receipt['storage'], 'nas')
         self.assertNotIn(b'synthetic-only', backup.read_bytes())
         new = TestManager(self.root / 'new-computer', self.public)
         result = new.restore(backup, PASSWORD)
@@ -184,6 +189,30 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'NAS'):
             self.manager.update(self.release('two'), PASSWORD, self.root / 'missing-share')
         self.assertEqual(self.manager.state['current'], current)
+
+    def test_nas_disk_full_never_creates_local_backup(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        with patch('desktop_assistant.manager.shutil.disk_usage', return_value=SimpleNamespace(free=0)):
+            with self.assertRaisesRegex(ValueError, 'NAS空间不足'):
+                self.manager.backup(PASSWORD, self.nas)
+        self.assertFalse(list((self.manager.root / 'backups').iterdir()))
+        self.assertFalse(list((self.manager.root / 'staging').iterdir()))
+        self.assertFalse(self.manager.state.get('last_backup'))
+
+    def test_corrupt_nas_copy_is_not_published(self):
+        from unittest.mock import patch
+        import shutil
+        original = shutil.copyfileobj
+        def corrupt(src, dst, length=0):
+            original(src, dst, length)
+            if str(getattr(dst, 'name', '')).endswith('.tmbackup.pending'):
+                dst.write(b'corrupt')
+        with patch('desktop_assistant.manager.shutil.copyfileobj', side_effect=corrupt):
+            with self.assertRaisesRegex(ValueError, 'NAS副本校验失败'):
+                self.manager.backup(PASSWORD, self.nas)
+        self.assertFalse(list(self.nas.glob('*.tmbackup')))
+        self.assertFalse(self.manager.state.get('last_backup'))
 
     def test_incompatible_schema_blocks_update_and_keeps_database(self):
         current = self.manager.state['current']

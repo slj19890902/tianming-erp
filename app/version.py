@@ -12,7 +12,7 @@ from typing import Any
 
 
 APP_VERSION = "v0.22.405"
-APP_VERSION_NAME = "取消发货后编辑保存与明细追溯"
+APP_VERSION_NAME = "原纸入库、送货撤销修复及NAS优先备份"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4187,3 +4187,5 @@ APP_VERIFICATION_STEPS = ["修改已发货送货单数量并保存，核对数�
 APP_CHANGELOG = [*(f"v0.22.404：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 APP_CHANGES = ["取消发货后编辑保存保留历史明细及出库撤销关联，避免误报送货单数据冲突；新明细成为当前版本，保存不扣库存。", "保留真实版本、状态、未撤销出库及重复扣库保护，保存异常按关联或重复约束明确提示并完整回滚。"]
 APP_VERIFICATION_STEPS = ["重新打开YL-20260914-001，添加00205数量300并保存，核对当前明细及合计；保存本身不应改变库存。", "确认发货后核对只扣本次数量，重复点击不得重复扣库；过期页面需刷新后再编辑。"]
+APP_CHANGES += ["单层原纸与白卡按张入库、无楞，管理员登记实际每张成本并逐批冻结；电脑手机共用。", "完整恢复备份及备份工作文件优先保存到配置的NAS，本地仅保留校验回执；NAS不可达时停止，不回退占用系统盘。"]
+APP_VERIFICATION_STEPS += ["原材料选择单层原纸/白卡，按真实供应商、尺寸、张数及单价入库；核对无楞标签与库存成本。", "ERP助手备份完成后核对Z盘新恢复包；正式地图、草稿及原库存不变。"]

@@ -239,7 +239,21 @@ class Manager:
         checks = inspect(self.root / 'shared/data/carton_erp.sqlite3', self.root / 'shared', managed=True)
         if any(checks['counts'][key] for key in ('missing', 'external', 'hash_mismatch')):
             raise ValueError('附件缺失或校验失败，不能标记为完整备份')
-        job = self.root / 'staging' / uuid.uuid4().hex
+        # Backup payload, encryption and verification all live on the selected NAS.
+        # Never fall back to C/D when a mapped NAS is unavailable.
+        nas = nas.resolve()
+        if nas == self.root or self.root in nas.parents:
+            raise ValueError('NAS备份目录不能位于ERP安装目录内')
+        package_ids = {current, state.get('schema_authority')} - {None}
+        required = 4 * (sum(p.stat().st_size for p in (self.root / 'shared').rglob('*') if p.is_file())
+                        + sum((self.root / 'packages' / (p + '.zip')).stat().st_size for p in package_ids)) + 2 * 1024**3
+        if shutil.disk_usage(nas).free < required:
+            raise ValueError('NAS空间不足，未创建备份；请保留旧备份')
+        work_root = nas / '.tianming-backup-work'
+        work_root.mkdir(exist_ok=True)
+        if work_root.is_symlink() or work_root.is_junction():
+            raise ValueError('NAS备份临时目录不能是链接')
+        job = work_root / uuid.uuid4().hex
         job.mkdir()
         tree = job / 'payload'
         tree.mkdir()
@@ -266,9 +280,9 @@ class Manager:
         pack_tree(tree, raw, {'type': 'tianming.recovery.v1', 'created': datetime.now(CN).isoformat(),
                             'release': current, 'version': self.manifest()['version'], 'database': before,
                             'source_shared': str(self.root / 'shared'), 'schema_authority': authority})
-        encrypted = self.root / 'backups' / (stamp + '.tmbackup')
+        encrypted = job / (stamp + '.tmbackup')
         encrypt_file(raw, encrypted, password)
-        # Authenticate and re-read the completed local package before copying to NAS.
+        # Authenticate before publication and hash the independently copied NAS file.
         check = job / 'check.zip'
         decrypt_file(encrypted, check, password)
         if sha(check) != sha(raw):
@@ -282,10 +296,14 @@ class Manager:
         if sha(pending) != sha(encrypted):
             raise ValueError('NAS副本校验失败，未标记成功')
         pending.rename(final)
+        (self.root / 'control' / 'backup-receipts').mkdir(exist_ok=True)
+        write_json(self.root / 'control' / 'backup-receipts' / (stamp + '.json'),
+                   {'path': str(final), 'sha256': sha(final), 'size': final.stat().st_size,
+                    'verified': True, 'storage': 'nas', 'database': before})
         state.update(last_backup=str(final), last_backup_at=datetime.now(CN).isoformat(), backup_error=None)
         write_json(self.root / 'state.json', state)
         # Staging only, never remove managed shared data or a user-selected directory.
-        if job.resolve().parent != (self.root / 'staging').resolve():
+        if job.resolve().parent != work_root.resolve():
             raise ValueError('临时目录清理边界不匹配')
         shutil.rmtree(job)
         return final

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.404"
-APP_VERSION_NAME = "送货修改栈板周期与一楼暂存"
+APP_VERSION = "v0.22.405"
+APP_VERSION_NAME = "取消发货后编辑保存与明细追溯"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4184,3 +4184,6 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.403：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 APP_CHANGES = ["送货单修改数量后重新清空栈板按独立周期记录，避免误报幂等键冲突；保留重复请求和版本保护。"]
 APP_VERIFICATION_STEPS = ["修改已发货送货单数量并保存，核对数量与库存；专用待归位可后续手工归位，不占用地图实物位。"]
+APP_CHANGELOG = [*(f"v0.22.404：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["取消发货后编辑保存保留历史明细及出库撤销关联，避免误报送货单数据冲突；新明细成为当前版本，保存不扣库存。", "保留真实版本、状态、未撤销出库及重复扣库保护，保存异常按关联或重复约束明确提示并完整回滚。"]
+APP_VERIFICATION_STEPS = ["重新打开YL-20260914-001，添加00205数量300并保存，核对当前明细及合计；保存本身不应改变库存。", "确认发货后核对只扣本次数量，重复点击不得重复扣库；过期页面需刷新后再编辑。"]

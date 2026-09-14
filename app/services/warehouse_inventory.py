@@ -782,6 +782,15 @@ def release_empty_pallets_after_delivery(
             continue
         if _pallet_has_physical_goods(db, pallet_id):
             continue
+        release_key = _delivery_pallet_release_key(delivery_id, pallet_id)
+        # A quantity edit reverses dispatch and then dispatches again. Preserve
+        # the first (legacy) key, but scope later clear operations to the pallet
+        # version restored by that cycle. Never relax clear_pallet's replay check.
+        previous_clear = db.scalar(select(InventoryLocationMovement).where(
+            InventoryLocationMovement.idempotency_key == release_key,
+        ))
+        if previous_clear is not None:
+            release_key = f"{release_key}:v{int(pallet.version)}"
         try:
             clear_pallet(
                 db,
@@ -789,7 +798,7 @@ def release_empty_pallets_after_delivery(
                 expected_version=int(pallet.version),
                 remarks=f"送货单 {delivery_id} 正式发货后货物清零，自动释放空栈板",
                 operator_id=operator_id,
-                idempotency_key=_delivery_pallet_release_key(delivery_id, pallet_id),
+                idempotency_key=release_key,
                 allow_non_operational_source=True,
             )
         except Floor3LocationError as error:

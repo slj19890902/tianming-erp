@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.403"
-APP_VERSION_NAME = "电脑仓库紧凑标签与长编码显示"
+APP_VERSION = "v0.22.404"
+APP_VERSION_NAME = "送货修改栈板周期与一楼暂存"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4181,3 +4181,6 @@ APP_VERIFICATION_STEPS = [
     "刷新仓库并打开货架正视图，核对长编码、混放片料及数量显示；长编码应保持单行。",
     "点击编码核对完整产品标签，点击明细核对批次与出入库记录，两种操作应保持独立。",
 ]
+APP_CHANGELOG = [*(f"v0.22.403：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["送货单修改数量后重新清空栈板按独立周期记录，避免误报幂等键冲突；保留重复请求和版本保护。"]
+APP_VERIFICATION_STEPS = ["修改已发货送货单数量并保存，核对数量与库存；专用待归位可后续手工归位，不占用地图实物位。"]

@@ -356,7 +356,7 @@ test("full delivery leaves a mapped empty location while partial reserved and da
   assert.deepEqual(mapped.map((item) => item.visual_status), ["empty", "waiting", "waiting", "waiting"]);
   assert.deepEqual(mapped.map((item) => item.visual_kind), ["location_anchor", "physical_pallet", "physical_pallet", "physical_pallet"]);
   assert.deepEqual(rows.map((item) => item.occupancy_status), ["empty", "occupied", "occupied", "occupied"]);
-  assert.deepEqual(mapped.map((item) => item.candidate_status_color), ["#fff8e7", "#16a34a", "#16a34a", "#16a34a"]);
+  assert.deepEqual(mapped.map((item) => item.candidate_status_color), ["#ffffff", "#2563eb", "#2563eb", "#2563eb"]);
 });
 
 test("area planning renders every mapped empty location as a full draggable slot", () => {
@@ -414,7 +414,7 @@ test("area planning renders every mapped empty location as a full draggable slot
   assert.equal(planned[0].planning_slot_depth_mm, 1000);
   assert.equal(planned[0].width_mm, 0);
   assert.equal(planned[0].depth_mm, 0);
-  assert.deepEqual(planned.map((item) => item.candidate_status_color), ["#fff8e7", "#16a34a"]);
+  assert.deepEqual(planned.map((item) => item.candidate_status_color), ["#ffffff", "#2563eb"]);
 });
 
 test("unmatched goods and known-location discrepancies keep formal positions red", () => {
@@ -1263,12 +1263,12 @@ test("empty and shared ground locations have the same footprint and status color
   assert.equal(planned.planning_slot_depth_mm, 1000);
   const [lookup] = buildMappedLocationPallets([zone], [location], "3F", STANDARD_PALLET, "layout-3f", false);
   assert.deepEqual(lookup, planned);
-  assert.equal(lookup.color, "#16a34a");
+  assert.equal(lookup.color, "#2563eb");
   const empty = {...location, occupancy_status: "empty", pallets: [], pallet: null};
   const [emptyLookup] = buildMappedLocationPallets([zone], [empty], "3F", STANDARD_PALLET, "layout-3f", false);
   const [emptyPlanning] = buildMappedLocationPallets([zone], [empty], "3F", STANDARD_PALLET, "layout-3f", true);
   assert.deepEqual(emptyLookup, emptyPlanning);
-  assert.equal(emptyLookup.color, "#fff8e7");
+  assert.equal(emptyLookup.color, "#ffffff");
   assert.equal(emptyLookup.is_planning_location_slot, true);
   assert.equal(emptyLookup.planning_slot_width_mm, 1200);
   assert.equal(emptyLookup.planning_slot_depth_mm, 1000);

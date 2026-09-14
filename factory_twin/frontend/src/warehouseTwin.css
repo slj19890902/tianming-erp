@@ -2437,10 +2437,10 @@ body.warehouse-twin-page {
 .twin-effective-map-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 6px 10px; background: #fffaf0; color: #594b2b; font-size: 13px; }
 .twin-location-legend { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; color: #334155; }
 .twin-location-legend i { display: inline-block; width: 12px; height: 10px; border: 1px solid #9b927d; margin-left: 6px; }
-.twin-location-legend .occupied { background: #16a34a; }
-.twin-location-legend .empty { background: #fff8e7; }
-.twin-location-legend .located { background: #2563eb; }
-.twin-location-legend .selected { background: #7c3aed; }
+.twin-location-legend .occupied { background: #2563eb; }
+.twin-location-legend .empty { background: #ffffff; }
+.twin-location-legend .located { background: #ffeb00; }
+.twin-location-legend .selected { background: #f59e0b; }
 .twin-location-legend .conflict { background: #dc2626; }
 
 /* Reading view: positions retain their identity; text does not mimic narrow physical edges. */
@@ -2602,7 +2602,9 @@ body.warehouse-twin-page {
 .twin-workspace.rack-focused.context-open .twin-global-search { overflow-y: auto; }
 .twin-workspace.rack-focused.context-open .twin-search-result-list { flex: 0 0 auto; max-height: 36vh; }
 .twin-workspace.rack-focused.context-open .twin-stage { grid-template-columns: minmax(180px, .65fr) minmax(0, 2fr); }
-.twin-rack-stage .mold-rack-cell.rack-search-hit { background: #fff4c2; border-color: #d18c00; box-shadow: inset 0 0 0 2px #edbd4c; }
+.twin-rack-stage .mold-rack-cell.occupied { background:#dbeafe; border-color:#2563eb; }
+.twin-rack-stage .mold-rack-cell.selected { background:#f59e0b; border-color:#b45309; }
+.twin-rack-stage .mold-rack-cell.rack-search-hit { background: #ffeb00; border-color: #a16207; box-shadow: inset 0 0 0 2px #a16207; }
 .twin-rack-stage .mold-rack-cell.rack-search-current { border-color: #9a4800; box-shadow: inset 0 0 0 3px #c66a05; }
 .twin-rack-stage .shelf-product-card.search-product-hit { background: #fff3bf; border-color: #d18c00; }
 .twin-rack-stage .twin-elevation-level:has(.rack-search-hit) > span { background: #ffe8a0; color: #754000; font-weight: 800; }

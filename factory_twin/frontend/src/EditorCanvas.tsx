@@ -171,29 +171,29 @@ function syncEntityHighlights(runtime: CanvasRuntime, selected: SelectedEntity, 
   const focusedKey = focusTarget ? entityKey(focusTarget.entity) : null;
   if (selected && entityKey(selected) !== focusedKey && !(selected.kind === "pallet" && moveStates?.[selected.id])) {
     const selectedObject = runtime.entityNodes.get(entityKey(selected));
-    if (selectedObject) addEntityHighlight(runtime.selectionHighlight, selectedObject, 0x7c3aed, 90);
+    if (selectedObject) addEntityHighlight(runtime.selectionHighlight, selectedObject, selected.kind === "pallet" ? 0xf59e0b : 0xe9d5ff, 90);
   }
   if (focusTarget && !(focusTarget.entity.kind === "pallet" && moveStates?.[focusTarget.entity.id])) {
     const focusedObject = runtime.entityNodes.get(focusedKey!);
-    if (focusedObject) addEntityHighlight(runtime.searchHighlight, focusedObject, 0x2563eb, 160);
+    if (focusedObject) addEntityHighlight(runtime.searchHighlight, focusedObject, focusTarget.entity.kind === "pallet" ? 0xffeb00 : 0xbbf7d0, 160);
   }
   runtime.requestRender();
 }
 
 function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], palletIds: string[], mergeTargetPalletId?: string, moveLocationStates?: Record<string, string>) {
   clearHighlightGroup(runtime.resultHighlight);
-  const colors: Record<string, number> = {empty:0x22c55e,occupied:0xf59e0b,target:0x2563eb,source:0x9333ea,blocked:0x94a3b8};
+  const colors: Record<string, number> = {empty:0xffffff,occupied:0x2563eb,target:0xf59e0b,source:0xe9d5ff,blocked:0x94a3b8};
   for (const [id, state] of Object.entries(moveLocationStates || {})) {
     const object = runtime.entityNodes.get(`pallet:${id}`);
     if (object) addEntityHighlight(runtime.resultHighlight, object, colors[state] ?? colors.blocked, state === "target" ? 160 : 20);
   }
   for (const id of featureIds) {
     const object = runtime.entityNodes.get(`feature:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, 0x2563eb, 120);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xbbf7d0, 120);
   }
   for (const id of palletIds) {
     const object = runtime.entityNodes.get(`pallet:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, 0x2563eb, 100);
+    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xffeb00, 100);
   }
   if (mergeTargetPalletId) {
     const target = runtime.entityNodes.get(`pallet:${mergeTargetPalletId}`);

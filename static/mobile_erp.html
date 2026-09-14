@@ -194,7 +194,10 @@
     .warehouse-map-location.unmatched { background: #ffe4e6; border-color: #b91c1c; color: #991b1b; box-shadow: 0 0 0 3px rgba(185, 28, 28, .18); }
     .warehouse-map-location.source { outline: 4px solid var(--orange); }
     .warehouse-map-location.target { outline: 4px solid #b00020; }
-    .warehouse-map-location.deep-link { outline: 4px solid #7e22ce; box-shadow: 0 0 0 7px rgba(126, 34, 206, .18); }
+    .warehouse-map-location:not(.has-goods):not(.not-disclosed) { background:#fff; border-color:#94a3b8; color:#334155; }
+    .warehouse-map-location.source,.warehouse-map-location.target { background:#f59e0b; color:#172033; outline:3px solid #b45309; }
+    .warehouse-map-location.deep-link { background:#ffeb00 !important; color:#172033; outline:3px solid #a16207; box-shadow:none; }
+    .warehouse-map-location.unmatched { border-color:#b91c1c !important; box-shadow:0 0 0 3px #b91c1c; }
     .warehouse-map-location[disabled] { border-style: dashed; opacity: .65; }
     .warehouse-rack-level { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
     .warehouse-rack-level .warehouse-map-location { position: static; min-width: 72px; min-height: 72px; flex: 1 0 72px; font-size: 13px; display: grid; gap: 6px; text-align: left; padding: 9px; }
@@ -1543,6 +1546,7 @@
         state.warehouseMapArea = resolvedPreferred.areaCode ? area?.area_code || "" : "";
         state.warehouseMapGroup = "";
         state.warehouseMapFocusLocationId = Number(resolvedPreferred.locationId || 0) || null;
+        state.warehouseSearchLocationId = state.warehouseMapFocusLocationId;
         state.warehouseMapSource = null;
         state.warehouseMapTarget = null;
         renderWarehouseMapSelectors();
@@ -1643,6 +1647,7 @@
           const focusedLocation = preferredLocation || lotLocation;
           if (focusedLocation) {
             state.warehouseMapFocusLocationId = Number(focusedLocation.location_id);
+            if (preferredLotId) state.warehouseSearchLocationId = Number(focusedLocation.location_id);
             if (focusedLocation.map_rack_id) state.warehouseSelectedRack = focusedLocation.map_rack_id;
             renderWarehouseMap();
             renderWarehouseLocationGoods(focusedLocation, preferredLotId);
@@ -1657,6 +1662,8 @@
       function renderWarehouseMap() {
         const data = state.warehouseMapData || {};
         const stage = byId("warehouseMapStage");
+        const searchArea = (data.locations || []).some(location => Number(location.location_id) === Number(state.warehouseSearchLocationId));
+        stage.style.backgroundColor = searchArea ? "#bbf7d0" : "#e9d5ff";
         ["warehouseMapFit", "warehouseMapZoomOut", "warehouseMapZoomIn"].forEach(id => { byId(id).disabled = false; });
         stage.replaceChildren();
         byId("warehouseMapCompass").textContent = data.compass?.label ? `↑ ${data.compass.label}` : "方向待校准";
@@ -1683,6 +1690,7 @@
             const polygon = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
             polygon.setAttribute("points", feature.points.map(point => `${point[0]},${-point[1]}`).join(" "));
             polygon.setAttribute("class", feature.feature_kind === "aisle" ? "warehouse-map-feature-aisle" : "warehouse-map-feature-zone");
+            if (feature.feature_kind !== "aisle") polygon.style.fill = searchArea ? "#bbf7d0" : "#e9d5ff";
             svg.append(polygon);
           });
           stage.append(svg);
@@ -1720,11 +1728,13 @@
           if (!location.geometry && !location.map_rack_id && location.storage_type !== "rack") return;
           const hasRedIssue = location.has_unmatched_inventory_observation || location.has_location_discrepancy;
           const redIssueCount = Number(location.unmatched_inventory_observation_count || 0) + Number(location.location_discrepancy_count || 0);
-          const deepLinked = Number(location.location_id) === Number(state.warehouseMapFocusLocationId);
+          const deepLinked = Number(location.location_id) === Number(state.warehouseSearchLocationId);
+          const ordinarilySelected = !deepLinked && Number(location.location_id) === Number(state.warehouseMapFocusLocationId);
           const occupied = ["occupied", "visible_goods"].includes(location.occupancy_state) || (location.goods || []).length > 0;
           const notDisclosed = location.occupancy_state === "not_disclosed";
           const button = node("button", `warehouse-map-location${occupied ? " has-goods" : ""}${notDisclosed ? " not-disclosed" : ""}${hasRedIssue ? " unmatched" : ""}${deepLinked ? " deep-link" : ""}`);
           button.type = "button";
+          if (ordinarilySelected) button.classList.add("target");
           button.dataset.locationId = String(location.location_id);
           button.textContent = `${compactWarehouseLocation(location)}${hasRedIssue ? ` · 待核对${redIssueCount || ""}` : ""}`;
           if (!location.map_rack_id && location.storage_type !== "rack") {

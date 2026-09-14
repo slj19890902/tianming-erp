@@ -470,6 +470,10 @@ def _common_box_low_stock_warnings(
                 "product_code": item["product_code"],
                 "product_name": item["product_name"],
                 "available_quantity": item["available_quantity"],
+                "is_virtual_composite_parent": item["is_virtual_composite_parent"],
+                "assembled_quantity": item["assembled_quantity"],
+                "unassembled_available_set_quantity": item["unassembled_available_set_quantity"],
+                "reserved_component_set_quantity": item["reserved_component_set_quantity"],
                 "allocatable_available_quantity": item[
                     "allocatable_available_quantity"
                 ],

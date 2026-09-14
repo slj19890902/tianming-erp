@@ -13,12 +13,27 @@ from app.models.external_packaging_purchase import (
     ExternalPackagingReceiptItem,
 )
 from app.models.stock_replenishment import StockReplenishmentOrder
+from app.models.order import OrderItem
 from app.core.time_contract import utc_now_naive
 from app.services.external_receipt_state import active_receipt_item
 
 
 class ExternalPackagingPurchaseLifecycleError(ValueError):
     pass
+
+
+def fully_cancelled_external_item_ids(db: Session, item_ids: list[int]) -> set[int]:
+    """Only an actual cancellation can supersede an old cached purchase status."""
+    if not item_ids:
+        return set()
+    rows = db.execute(select(ExternalPackagingPurchaseItem.sales_order_item_id,
+        ExternalPackagingPurchaseCancellation.id)
+        .join(ExternalPackagingPurchaseOrder, ExternalPackagingPurchaseOrder.id == ExternalPackagingPurchaseItem.purchase_order_id)
+        .outerjoin(ExternalPackagingPurchaseCancellation,
+            ExternalPackagingPurchaseCancellation.purchase_order_id == ExternalPackagingPurchaseOrder.id)
+        .where(ExternalPackagingPurchaseItem.sales_order_item_id.in_(item_ids))).all()
+    return {int(pid) for pid, cancellation in rows if cancellation is not None} - {
+        int(pid) for pid, cancellation in rows if cancellation is None}
 
 
 def cancelled_external_purchase_order_ids(
@@ -132,6 +147,12 @@ def cancel_unreceived_external_purchases(
             }
         )
     db.flush()
+    item_ids = [int(item.sales_order_item_id) for purchase in purchases
+                for item in purchase.items if item.sales_order_item_id is not None]
+    for item in db.scalars(select(OrderItem).where(
+            OrderItem.id.in_(fully_cancelled_external_item_ids(db, item_ids)))):
+        if item.requisition_status == "外购包材已采购" and item.material_status == "pending":
+            item.requisition_status = "未报料"
     return changes
 
 

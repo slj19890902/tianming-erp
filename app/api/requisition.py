@@ -115,6 +115,8 @@ from app.services.stock_replenishment import (
     theoretical_requisition_quantity,
     validate_stock_policy,
     virtual_composite_replenishment_demand_plan,
+    is_set_replenishment_product,
+    free_bom_component_coverage,
 )
 from app.services.external_packaging_stock_replenishment import (
     create_external_stock_replenishment_purchase,
@@ -14264,6 +14266,10 @@ def _finished_stock_policy_quick_summary(
         product_id=product.id,
         customer_id=product.customer_id,
     )
+    free_sets = free_bom_component_coverage(db, product)["sets"]
+    quantities["available_quantity"] += free_sets
+    quantities["unassembled_available_set_quantity"] = free_sets
+    quantities["is_virtual_composite_parent"] = is_set_replenishment_product(product)
     warning = int(policy.warning_quantity or 0) if policy else 0
     target = int(policy.target_quantity or 0) if policy else 0
     available = quantities["available_quantity"]
@@ -15101,8 +15107,7 @@ def _build_replenishment_item(
     if (
         source_type == "stock_warning"
         and policy_product is not None
-        and policy_product.is_composite
-        and policy_product.is_virtual_composite_parent
+        and is_set_replenishment_product(policy_product)
         and payload.target_inventory_type == "semi_finished"
         and reference_product_id is not None
         and not bool(
@@ -15519,8 +15524,7 @@ def create_stock_replenishment_order(
                 if (
                     item_policy is None
                     or policy_product is None
-                    or not policy_product.is_composite
-                    or not policy_product.is_virtual_composite_parent
+                    or not is_set_replenishment_product(policy_product)
                 ):
                     continue
                 policy_summary = stock_policy_dict(db, item_policy)

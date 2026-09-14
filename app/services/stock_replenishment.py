@@ -164,6 +164,13 @@ def product_replenishment_defaults(product: Product) -> dict:
     return values
 
 
+def is_set_replenishment_product(product: Product) -> bool:
+    # Assembled sub-kits are real stock (not virtual) but still replenish by BOM.
+    return bool(product.is_composite and (
+        product.is_virtual_composite_parent or str(product.unit or "").strip() == "套"
+    ))
+
+
 def virtual_composite_replenishment_components(
     db: Session,
     *,
@@ -177,7 +184,7 @@ def virtual_composite_replenishment_components(
     parent as one physical common box.
     """
 
-    if not (product.is_composite and product.is_virtual_composite_parent):
+    if not is_set_replenishment_product(product):
         return None
     relations = list(
         db.scalars(
@@ -214,7 +221,7 @@ def virtual_composite_replenishment_components(
         if component.customer_id != product.customer_id:
             missing.append(f"{label}：组件客户不一致")
             continue
-        if component.is_composite and component.is_virtual_composite_parent:
+        if is_set_replenishment_product(component):
             missing.append(f"{label}：不支持嵌套组合组件")
             continue
         quantity_per_set = int(relation.quantity_per_set or 0)
@@ -430,6 +437,7 @@ def _composite_parent_finished_quantity_summary(
     *,
     customer_id: int,
     inventory_code: str,
+    product_id: int,
 ) -> dict[str, int]:
     """Return complete parent sets without adding same-code component pieces.
 
@@ -446,7 +454,7 @@ def _composite_parent_finished_quantity_summary(
             select(Product.id).where(
                 Product.customer_id == customer_id,
                 func.lower(func.trim(Product.product_code)) == inventory_code,
-                Product.is_internal_component.is_(False),
+                Product.id == product_id,
                 or_(
                     Product.is_composite.is_(True),
                     Product.is_virtual_composite_parent.is_(True),
@@ -512,6 +520,7 @@ def _composite_parent_finished_quantity_summary(
             .where(
                 SalesOrderItemBomComponent.sales_order_item_id == order_item_id,
                 SalesOrderItemBomComponent.is_required.is_(True),
+                SalesOrderItemBomComponent.component_product_id.notin_(parent_product_ids),
             )
             .order_by(
                 SalesOrderItemBomComponent.display_order,
@@ -551,6 +560,8 @@ def _composite_parent_finished_quantity_summary(
         "general_available_quantity": int(direct["general_available_quantity"]),
         "reserved_quantity": reserved,
         "physical_unconsumed_quantity": physical_unconsumed,
+        "assembled_quantity": int(direct["physical_unconsumed_quantity"]),
+        "reserved_component_set_quantity": component_reserved_sets,
     }
 
 
@@ -609,6 +620,7 @@ def finished_product_quantity_summary(
             db,
             customer_id=customer_id,
             inventory_code=inventory_code,
+            product_id=product_id,
         )
     return _finished_inventory_quantity_summary(
         db,
@@ -911,6 +923,44 @@ def customer_board_preparation_coverage(
     }
 
 
+def free_bom_component_coverage(db: Session, product: Product) -> dict:
+    """Read-only coverage, never assembly or a stock reservation.
+
+    Match exact product and frozen physical identity; same-code long/short
+    pieces are not interchangeable. Reserved stock cannot cover another order.
+    """
+    from app.services.finished_stock_identity import product_basis
+
+    if not is_set_replenishment_product(product):
+        return {"sets": 0, "pieces": {}}
+    relations = list(db.scalars(select(ProductBomComponent).where(
+        ProductBomComponent.parent_product_id == product.id,
+        ProductBomComponent.is_required.is_(True),
+    )))
+    pieces, capacities = {}, []
+    for relation in relations:
+        component = relation.component_product
+        ratio = relation.quantity_per_set
+        if (component is None or not component.is_active or component.deleted_at
+                or component.customer_id != product.customer_id or component.is_composite
+                or not ratio or ratio <= 0 or ratio != int(ratio)):
+            return {"sets": 0, "pieces": {}}
+        quantity = int(db.scalar(select(func.coalesce(func.sum(InventoryLot.quantity_available), 0))
+            .join(FinishedGoodsInventoryDetail, FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id)
+            .join(WarehouseLocation, WarehouseLocation.id == InventoryLot.warehouse_location_id)
+            .where(InventoryLot.inventory_type == "finished", InventoryLot.status == "active",
+                InventoryLot.quantity_available > 0,
+                FinishedGoodsInventoryDetail.product_id == component.id,
+                FinishedGoodsInventoryDetail.physical_basis_json == product_basis(component),
+                or_(FinishedGoodsInventoryDetail.owner_customer_id == product.customer_id,
+                    FinishedGoodsInventoryDetail.is_general.is_(True)),
+                or_(WarehouseLocation.source_version.is_(None), WarehouseLocation.source_version != "V11",
+                    WarehouseLocation.warehouse_floor == 3))) or 0)
+        pieces[component.id] = quantity
+        capacities.append(quantity // int(ratio))
+    return {"sets": min(capacities) if capacities else 0, "pieces": pieces}
+
+
 def virtual_composite_replenishment_demand_plan(
     db: Session,
     *,
@@ -926,6 +976,7 @@ def virtual_composite_replenishment_demand_plan(
     if resolved is None:
         return None
     parent_sets = max(int(finished_quantity or 0), 0)
+    free_coverage = free_bom_component_coverage(db, product)
     component_demands: list[dict] = []
     total_sheets = 0
     parent_sets_still_needing_board = 0
@@ -943,6 +994,10 @@ def virtual_composite_replenishment_demand_plan(
         covered_pieces = (
             int(coverage["customer_board_preparation_auto_cover_capacity"])
             + int(coverage["incoming_board_preparation_auto_cover_capacity"])
+            # Complete free sets already reduced the parent's shortfall. Only
+            # unmatched surplus pieces may reduce this remaining demand again.
+            + max(free_coverage["pieces"].get(component.id, 0)
+                  - free_coverage["sets"] * quantity_per_set, 0)
         )
         outstanding_pieces = max(required_pieces - covered_pieces, 0)
         output_per_sheet = int(row["output_per_sheet"])
@@ -999,6 +1054,9 @@ def stock_policy_dict(
         if finished_summary
         else current_policy_quantity(db, policy)
     )
+    free_sets = (free_bom_component_coverage(db, policy.product)["sets"]
+                 if finished_summary and policy.product is not None else 0)
+    available += free_sets
     target = int(policy.target_quantity or 0)
     warning = int(policy.warning_quantity or 0)
     location = policy.default_location
@@ -1125,6 +1183,9 @@ def stock_policy_dict(
         "warning_quantity": warning,
         "target_quantity": target,
         "available_quantity": available,
+        "unassembled_available_set_quantity": free_sets,
+        "assembled_quantity": finished_summary.get("assembled_quantity"),
+        "reserved_component_set_quantity": finished_summary.get("reserved_component_set_quantity", 0),
         "dedicated_available_quantity": finished_summary.get(
             "dedicated_available_quantity"
         ),

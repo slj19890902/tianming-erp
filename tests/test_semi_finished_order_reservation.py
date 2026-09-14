@@ -317,7 +317,7 @@ def post_order(client: TestClient, items: list[dict], po: str):
     )
 
 
-def test_customer_generic_exact_candidate_is_direct_but_still_requires_click_plan(
+def test_customer_generic_exact_candidate_accepts_explicit_reservation_plan(
     b1_app,
 ) -> None:
     app, factory = b1_app
@@ -378,6 +378,46 @@ def test_customer_generic_exact_candidate_is_direct_but_still_requires_click_pla
     with factory() as db:
         lot = db.get(InventoryLot, lot_id)
         assert (lot.quantity_available, lot.quantity_reserved) == (7, 5)
+
+
+@pytest.mark.parametrize("role", ["sales", "admin"])
+def test_pdf_adopt_customer_generic_difference_saves_without_checkbox(b1_app, role):
+    import json
+    import shutil
+    import subprocess
+
+    app, factory = b1_app
+    lot_id, version = add_semi_lot(factory, quantity=12, key="pdf-adopt-difference")
+    with factory() as db:
+        lot = db.get(InventoryLot, lot_id)
+        lot.semi_finished_detail.customer_generic_eligible = True
+        lot.semi_finished_detail.material_code = "B416D"
+        db.commit()
+    payload = dict(customer_id=1, board_length_mm=800, board_width_mm=600,
+                   material_code="A416D", flute_type="B", component_type="whole",
+                   pieces_per_box=1, stock_yield_per_sheet=1, layer_count=3)
+    with TestClient(app) as client:
+        login(client, role)
+        response = client.post("/api/warehouse/semi-finished/products/1/candidates", json=payload)
+        assert response.status_code == 200, response.text
+        candidate = next(row for row in response.json()["items"] if row["lot_id"] == lot_id)
+        assert candidate["source"] == "customer_generic"
+        assert not candidate["direct_deduction_eligible"]
+        run = subprocess.run([shutil.which("node"), "tests/pdf_inventory_adopt_harness.cjs"],
+                             input=json.dumps(candidate), text=True, encoding="utf-8",
+                             capture_output=True, cwd=Path(__file__).resolve().parents[1])
+        assert run.returncode == 0, run.stderr
+        plan = json.loads(run.stdout)
+        forged = json.loads(run.stdout)
+        forged["semi"][0]["override"] = False
+        rejected = post_order(client, [order_item(1, 5, forged)], "PDF-NOT-ADOPTED")
+        assert rejected.status_code == 409, rejected.text
+        saved = post_order(client, [order_item(1, 5, plan)], "PDF-ADOPTED")
+        assert saved.status_code == 201, saved.text
+    with factory() as db:
+        lot = db.get(InventoryLot, lot_id)
+        assert (lot.quantity_available, lot.quantity_reserved) == (7, 5)
+        assert db.scalar(select(Order.id).where(Order.customer_po == "PDF-NOT-ADOPTED")) is None
 
 
 def test_direct_plan_rejects_changed_sheet_type_and_wrong_cutting_yield(

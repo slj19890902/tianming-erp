@@ -20,6 +20,16 @@ def test_shared_inventory_order_payload_uses_idempotent_client_lines() -> None:
     assert "idempotency_key:crypto.randomUUID()" not in INDEX
 
 
+def test_pdf_candidate_adopt_has_no_checkbox_and_skip_is_red() -> None:
+    section = INDEX.split('<table class="line-items pdf-material-table">', 1)[1].split(
+        '<div v-if="item._inventory.semi[component].unavailable_reason"', 1
+    )[0]
+    assert 'type="checkbox"' not in section
+    assert ':disabled=' not in section
+    assert 'confirmOrderLineInventory(item,component,candidate' in section
+    assert 'class="btn danger small" @click="skipOrderLineInventory(item,component)">本次不用库存' in section
+
+
 def test_quantity_input_debounces_inventory_candidate_refresh() -> None:
     assert '@input="onOrderDraftQuantityInput(item)"' in INDEX
     assert '@input="invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX
@@ -154,13 +164,13 @@ def test_general_semi_finished_source_is_manual_only_and_not_auto_selected() -> 
     assert "通用半成品，可跨客户，需人工确认" in INDEX
     assert "general_confirmation" in INDEX
     assert "明确确认并抵扣" in INDEX
-    assert "黄色人工确认" in INDEX
-    assert "不自动扣" in INDEX
+    assert "有半成品可用，请点击采用或本次不用库存。" in INDEX
+    assert "采用即确认跨客户使用" in INDEX
     assert 'candidate.source === "general_signature"' in INDEX
     assert "inventoryCandidateNeedsManualConfirmation(candidate)" in INDEX
 
 
-def test_exact_semi_finished_candidate_is_green_click_not_silent_auto_use() -> None:
+def test_exact_semi_finished_candidate_keeps_direct_deduction_contract() -> None:
     assert 'candidate?.direct_deduction_eligible === true' in INDEX
     assert '@click="confirmDirectSemiDeduction(item,component,candidate)"' in INDEX
     assert '>抵扣</button>' in INDEX
@@ -311,7 +321,7 @@ vm.runInContext({json.dumps(TIME_UTILS)}, sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const method = sandbox.definition.methods.reallocateDraftInventorySequentially;
 function candidate(lotId, stock, yieldFactor=1, finished=false, source="signature", differences=[]) {{ return {{ lot_id:lotId, version:1, source, match_rule_id:source === "learned" ? 42 : null, signature_differences:differences, available_stock_quantity:stock, quantity_available:finished ? stock : undefined, stock_yield_per_sheet:yieldFactor }}; }}
-function part(candidates=[]) {{ return {{ candidates, manual_candidates:[], selected:candidates[0] || null, selected_candidates:candidates, allocations:[], skipped:false, unavailable_reason:"" }}; }}
+function part(candidates=[]) {{ return {{ candidates, manual_candidates:[], selected:candidates[0] || null, selected_candidates:candidates, allocations:[], skipped:false, manual_override:true, unavailable_reason:"" }}; }}
 function line(quantity, semiCandidates=[], finishedCandidates=[]) {{ return {{ quantity, _inventory:{{ api_error:false, stale:false, finished:part(finishedCandidates), semi:{{ whole:part(semiCandidates), cover:part(), base:part() }} }} }}; }}
 const methods = sandbox.definition.methods;
 const context = {{ inventoryPlanApplies:methods.inventoryPlanApplies, inventoryComponents: () => ["whole"], inventoryCandidatePayload: () => ({{ pieces_per_box:1 }}), semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride, inventoryCandidateWarnings:methods.inventoryCandidateWarnings, isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate }};
@@ -439,7 +449,7 @@ def test_a3_components_and_unconfirmed_candidate_block_are_explicit() -> None:
 
 
 def test_pdf_direct_save_carries_the_same_reservation_plan() -> None:
-    start = INDEX.index("async saveConfirmedImportDrafts()")
+    start = INDEX.index("async saveConfirmedImportDrafts(targetDraft=null)")
     end = INDEX.index("openOrderEditor(group)", start)
     source = INDEX[start:end]
     assert "inventoryDecisionRequired(item)" in source
@@ -471,8 +481,8 @@ def test_manual_order_keeps_summary_and_pdf_uses_authoritative_three_state() -> 
     )[0]
     assert "confirm(" not in confirm
     assert "safeSystemInventoryCandidates(line, component)" in confirm
-    assert INDEX.count("inventoryLocation(candidate)") >= 4
-    assert INDEX.count("inventoryLocation(allocation.candidate)") >= 4
+    assert INDEX.count('<order-stock-location :candidate="candidate"') >= 4
+    assert INDEX.count('<order-stock-location :candidate="allocation.candidate"') >= 3
 
 
 def test_safe_inventory_recommendation_one_click_excludes_risky_candidates() -> None:
@@ -628,9 +638,7 @@ const context = {{
   showToast() {{ throw new Error("unexpected toast"); }},
 }};
 methods.confirmOrderLineInventory.call(context,line,"whole",general,true);
-if (part.selected_candidates.length || reallocations) throw new Error("general candidate was confirmed without acknowledgement");
-part.general_confirmation = true;
-methods.confirmOrderLineInventory.call(context,line,"whole",general,true);
+if (!part.general_confirmation) throw new Error("adopt must acknowledge the displayed general candidate");
 if (part.selected_candidates[0] !== general || reallocations !== 1) throw new Error("general candidate was not explicitly confirmed");
 part.allocations = [{{candidate:general,requested_qty:5,stock_quantity:1}}];
 const plan = methods.buildReservationPlan.call(context,line).semi[0];

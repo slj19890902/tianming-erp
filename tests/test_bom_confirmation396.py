@@ -121,6 +121,11 @@ def test_old_finished_stock_reserved_not_assembled(composite_requisition_app, _p
             from decimal import Decimal
             lot.estimated_unit_cost_snapshot = Decimal('0.1234')
             ids.append(lot.id)
+        # Stock intake alone must never create a production/assembly queue.
+        # Even a matching recipe/order cannot draw free stock before reservation.
+        from app.services.bom_pending_assembly import pending as pending_assembly
+        assert pending_assembly(db, None) == []
+        assert [(db.get(InventoryLot,lid).quantity_available,db.get(InventoryLot,lid).quantity_reserved) for lid in ids] == [(32,0),(38,0)]
         reserve_new_order_stock(db, order_item_id=1, operator_id=1)
         assert reserve_new_order_stock(db, order_item_id=1, operator_id=1) == []
         assert [(db.get(InventoryLot,lid).quantity_available,db.get(InventoryLot,lid).quantity_reserved) for lid in ids] == [(2,30),(0,38)]

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.409"
-APP_VERSION_NAME = "BOM套数预警与外购撤销状态修复"
+APP_VERSION = "v0.22.410"
+APP_VERSION_NAME = "PDF库存一键采用与保存确认"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4195,3 +4195,6 @@ APP_CHANGELOG = [*(f"v0.22.408：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["格挡套件按已成套、未组装可配套及订单已预留组件折算套数预警；子件身份不再漏算，建议报料按套展开净缺料。", "外购撤销后以有效采购事实显示待报料；已撤销且从未实收的采购明细可归档审计后删除，实收、送货、客户权限和事务保护保留。"]
 APP_VERIFICATION_STEPS = ["刷新000205库存预警，核对1500套预警线、已成套及未组装可配套数量，不为验证重复报料或组装。", "重新打开000152已撤销采购的订单，核对待报料；确需删除时正常删除明细，最后一条用更多操作删除订单组。"]
 APP_CHANGELOG = [*(f"v0.22.409：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["PDF库存候选点击采用即确认此批次差异，无需额外勾选；客户通用半成品确认随最终订单保存，避免采用后仍报未核对。", "完全匹配的安全成品及客户片料自动安排，本次不用库存按钮改红；保留客户范围、数量、版本与重复扣库保护。"]
+APP_VERIFICATION_STEPS = ["刷新邮箱PDF识别，打开PO2026090404，核对半成品批次、位置和数量后直接点采用，再点击核对无误并保存。", "核对完全匹配库存自动安排；不采用时点红色本次不用库存，避免为验收重复保存订单。"]
+APP_CHANGELOG = [*(f"v0.22.410：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

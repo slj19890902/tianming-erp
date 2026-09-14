@@ -1,0 +1,35 @@
+// Executes the actual page methods without connecting to an application.
+const fs=require('fs'), vm=require('vm'), assert=require('assert');
+const html=fs.readFileSync('static/index.html','utf8');
+const script=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(m=>m[1]).find(s=>s.trim());
+const sandbox={axios:{defaults:{},interceptors:{response:{use(){}}}},Vue:{createApp(d){sandbox.definition=d;return{component(){return this},mount(){return this}}}},localStorage:{getItem(){return ''},setItem(){},removeItem(){}},window:{},console,URLSearchParams,setTimeout,clearTimeout};
+vm.createContext(sandbox);vm.runInContext(script,sandbox);
+const ctx={...sandbox.definition.methods,inventoryComponents:()=>['whole'],reallocateAllDraftInventory(){},invalidatePdfDraftForItem(){},showToast(m){throw Error(m)}};
+const candidate=JSON.parse(fs.readFileSync(0,'utf8'));
+const state=ctx.newOrderInventoryState(), line={product_id:1,quantity:5,_inventory:state};
+state.semi.whole.candidates=[candidate];
+assert.equal(ctx.isSafeSystemInventoryCandidate('whole',candidate),false);
+ctx.confirmOrderLineInventory(line,'whole',candidate);
+assert.equal(state.semi.whole.manual_override,true);
+assert.equal(state.semi.whole.selected,candidate);
+state.semi.whole.allocations=[{candidate,requested_qty:5,stock_quantity:5}];
+const plan=ctx.buildReservationPlan(line);
+assert.equal(plan.semi[0].override,true);
+assert(plan.semi[0].warning_acknowledged_codes.includes('SEMI_SIGNATURE_OVERRIDE'));
+const snapshot=ctx.importDraftInventoryDecisionSnapshot(line);
+line._inventory=ctx.newOrderInventoryState();
+line._inventory.semi.whole.candidates=[candidate];
+(async()=>{
+ await ctx.restoreImportDraftInventoryDecision(line,snapshot,1);
+ assert.equal(line._inventory.semi.whole.manual_override,true);
+ line._inventory.semi.whole.allocations=[{candidate,requested_qty:5,stock_quantity:5}];
+ assert.equal(JSON.stringify(ctx.buildReservationPlan(line)),JSON.stringify(plan));
+ ctx.skipOrderLineInventory(line,'whole');
+ assert.equal(ctx.buildReservationPlan(line).semi.length,0);
+ assert.equal(line._inventory.semi.whole.manual_override,false);
+ const exact={...candidate,direct_deduction_eligible:true,signature_differences:[],warning_codes:['CUSTOMER_GENERIC_SEMI_FINISHED_STOCK']};
+ assert.equal(ctx.isSafeSystemInventoryCandidate('whole',exact),true);
+ assert.equal(ctx.isSafeSystemInventoryCandidate('whole',{...exact,signature_differences:['material_code']}),false);
+ assert.equal(ctx.isSafeSystemInventoryCandidate('whole',{...exact,warning_codes:['OTHER_RISK']}),false);
+ process.stdout.write(JSON.stringify(plan));
+})().catch(e=>{console.error(e);process.exit(1)});

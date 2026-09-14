@@ -1,0 +1,17 @@
+const fs=require('fs'),assert=require('assert'),vm=require('vm');
+const ts=require('../factory_twin/frontend/node_modules/typescript');
+const source=fs.readFileSync('factory_twin/frontend/src/WarehouseTwinApp.tsx','utf8');
+const helper=source.slice(source.indexOf('function warehouseCardCustomer('),source.indexOf('function InventoryLabelSummary('));
+const scope={employeeCustomerName:item=>item.customer_short_name||item.customer_name};vm.createContext(scope);
+vm.runInContext(ts.transpile(helper),scope);
+assert.equal(scope.warehouseCardPrimary({inventory_type:'semi_finished',inventory_code:'B414C',specification:'585×180mm',flute_type:'B'}),'585×180mm · B楞');
+assert.equal(scope.warehouseCardPrimary({inventory_type:'finished',inventory_code:'22000015'}),'22000015');
+assert.equal(scope.warehouseCardCustomer({customer_name:'名称里提到客户'}),'通用');
+assert.equal(scope.warehouseCardCustomer({customer_id:1,customer_short_name:'天华'}),'天华');
+const block=source.slice(source.indexOf('<div className="shelf-product-summary"'),source.indexOf('<div className="shelf-product-details"'));
+assert(block.indexOf('shelf-product-details-toggle')<block.indexOf('shelf-product-code-row'));
+assert(!block.slice(block.indexOf('shelf-product-code-row')).includes('shelf-product-details-toggle'));
+const css=fs.readFileSync('factory_twin/frontend/src/warehouseLabelCompact.css','utf8');
+assert(css.includes('white-space:nowrap'));assert(css.includes('overflow-x:auto'));assert(css.includes('flex:0 0 auto'));assert(css.includes('text-overflow:clip'));
+assert(source.includes('shelf-full-label'));assert(source.includes('点击查看完整产品标签'));
+console.log('desktop402 display identity and compact card structure passed');

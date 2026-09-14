@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.403"
+APP_VERSION = "v0.22.404"
 APP_VERSION_NAME = "送货修改栈板周期与一楼暂存"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -4168,5 +4168,19 @@ APP_VERIFICATION_STEPS = [
     "手机连接已配置VPN后，微信扫旧货位或产品标签，核对内网地址及当前库存。",
     "新打印信息标签核对二维码为内网地址；内网/mobile/scan可选择旧标签照片识码。",
 ]
+APP_CHANGELOG = [*(f"v0.22.400：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["取消发货可恢复原盘点待归位库存及栈板；真实停用、普通未放置和被占用货位继续拦截，不改数量或位置事实。"]
+APP_VERIFICATION_STEPS = ["对原待归位库存的送货单取消发货，核对原批次数量、预占及待归位状态恢复；取消编辑不提交业务操作。"]
+APP_CHANGELOG = [*(f"v0.22.402：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = [
+    "电脑货架和货位卡片统一为紧凑两行，数量固定靠右，明细移至首行；长编码不再拆成竖排，可在编码区域横向查看。",
+    "通用片料突出尺寸、楞型及数量，客户成品突出简称和编码；完整内容可在产品标签及展开明细中查看。",
+    "无数据库迁移，不改变正式地图、草稿、货位、库存数量或成本；独立供应商包材入库不在本次修复范围。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库并打开货架正视图，核对长编码、混放片料及数量显示；长编码应保持单行。",
+    "点击编码核对完整产品标签，点击明细核对批次与出入库记录，两种操作应保持独立。",
+]
+APP_CHANGELOG = [*(f"v0.22.403：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 APP_CHANGES = ["送货单修改数量后重新清空栈板按独立周期记录，避免误报幂等键冲突；保留重复请求和版本保护。"]
 APP_VERIFICATION_STEPS = ["修改已发货送货单数量并保存，核对数量与库存；专用待归位可后续手工归位，不占用地图实物位。"]

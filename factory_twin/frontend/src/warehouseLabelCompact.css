@@ -1,0 +1,16 @@
+/* Presentation only: never changes formal shelf dimensions or location geometry. */
+.warehouse-label-summary,.shelf-product-summary{display:flex;flex-wrap:nowrap;align-items:center;gap:4px;min-width:0;overflow:hidden}
+.warehouse-label-summary>span,.shelf-product-summary>span{white-space:nowrap;word-break:normal;overflow-wrap:normal;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.warehouse-label-summary>span:first-child,.shelf-product-customer{flex:0 1 auto;max-width:26%}
+.warehouse-label-summary>span:nth-child(2),.shelf-product-name{flex:1 1 auto}
+.warehouse-label-summary>span:nth-child(3),.shelf-specification{flex:0 1 auto;max-width:36%}
+.warehouse-label-summary .warehouse-label-details,.shelf-product-summary .shelf-product-details-toggle{flex:0 0 auto;min-height:28px;width:auto;padding:2px 3px;border:0;background:transparent;color:#176497;font-size:12px;white-space:nowrap;cursor:pointer}
+.warehouse-label-code-row,.shelf-product-code-row{display:flex;flex-wrap:nowrap;align-items:center;gap:7px;min-width:0;max-width:100%}
+.warehouse-label-code-row .warehouse-label-code,.shelf-product-code-row .shelf-product-label-button{flex:1 1 0;min-width:0;max-width:100%;white-space:nowrap;word-break:normal;overflow-wrap:normal;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;text-overflow:clip;line-height:1.4}
+.shelf-product-code-row .shelf-inventory-code{display:inline;white-space:nowrap;word-break:normal;overflow-wrap:normal}
+.warehouse-label-code-row>strong,.shelf-product-code-row .shelf-product-quantity{flex:0 0 auto;white-space:nowrap;word-break:normal;font-variant-numeric:tabular-nums}
+.shelf-product-card,.warehouse-label-code-row,.warehouse-label-summary{min-width:0}
+.shelf-product-details>small{display:block;overflow-wrap:anywhere}
+.shelf-full-label{font-size:14px;line-height:1.5;overflow-wrap:anywhere;white-space:normal;margin-top:6px}
+.warehouse-label-summary button:focus-visible,.shelf-product-summary button:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}
+@media(pointer:coarse){.warehouse-label-summary button,.shelf-product-summary button{min-height:36px}}

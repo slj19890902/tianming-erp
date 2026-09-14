@@ -225,6 +225,7 @@ interface InventoryItem {
   age_days?: number | null;
   version?: number;
   specification?: string | null;
+  flute_type?: string | null;
   stock_date?: string | null;
   stock_date_accuracy?: string;
   material?: string | null;
@@ -1658,15 +1659,16 @@ function WarehouseRackElevation({
                   {location && !identityConflict && <button className="shelf-position-print" type="button" title="打印货位标签" onClick={() => window.open(`/static/shelf-label.html?location_id=${location.location_id}`, '_blank', 'noopener')}>打印货位</button>}</div>
                   {cellItems.length ? <div className="shelf-product-cards">
                     {groupShelfProducts(cellItems).map(group => <article className={`shelf-product-card${group.items.some(item => searchLotIds.has(item.lot_id)) ? " search-product-hit" : ""}`} key={group.key}>
-                      <div className="shelf-product-summary"><span className="shelf-product-customer">{employeeCustomerName(group.item)}</span><span className="shelf-product-name">{group.item.product_name || "产品名称待补充"}</span><span className="shelf-specification">{group.item.specification || "规格待补充"}</span></div>
+                      <div className="shelf-product-summary" title={`${warehouseCardCustomer(group.item)} · ${group.item.product_name || ""} · ${group.item.specification || ""}`}><span className="shelf-product-customer">{warehouseCardCustomer(group.item)}</span><span className="shelf-product-name">{group.item.product_name || "产品名称待补充"}</span><span className="shelf-specification">{group.item.inventory_type === "semi_finished" ? "" : group.item.specification || ""}</span><button type="button" className="shelf-product-details-toggle" title={`${group.items.length}个批次，查看入出库明细`} aria-expanded={Boolean(expandedProductGroups[group.key])} onClick={() => setExpandedProductGroups(current => ({ ...current, [group.key]: !current[group.key] }))}>{expandedProductGroups[group.key] ? "收起" : "明细"}·{group.items.length}</button></div>
                       <div className="shelf-product-code-row">
-                      <button type="button" title="查看产品标签" aria-label={`${group.item.inventory_code || "当前产品"}：查看产品标签`} className={`shelf-product-label-button ${group.items.some(item => selectedItem?.lot_id === item.lot_id) ? "selected" : ""}`} onClick={() => { if (locationPicker && location && !identityConflict) onSelectLocation(location.location_id); setSelectedItem(group.item); setDetailOpen(false); }}>
-                        <strong className="shelf-inventory-code">{group.item.inventory_code || "存货编码待补充"}</strong>
+                      <button type="button" title={`${warehouseCardPrimary(group.item)} · 点击查看完整产品标签`} aria-label={`${warehouseCardPrimary(group.item)}：查看产品标签`} className={`shelf-product-label-button ${group.items.some(item => selectedItem?.lot_id === item.lot_id) ? "selected" : ""}`} onClick={() => { if (locationPicker && location && !identityConflict) onSelectLocation(location.location_id); setSelectedItem(group.item); setDetailOpen(false); }}>
+                        <strong className="shelf-inventory-code">{warehouseCardPrimary(group.item)}</strong>
                       </button>
                       <strong className="shelf-product-quantity">{formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</strong>
-                      <button type="button" className="shelf-product-details-toggle" aria-expanded={Boolean(expandedProductGroups[group.key])} onClick={() => setExpandedProductGroups(current => ({ ...current, [group.key]: !current[group.key] }))}>{group.items.length} 个批次 · {expandedProductGroups[group.key] ? "收起明细" : "查看明细"}</button>
                       </div>
                       <div className="shelf-product-details" hidden={!expandedProductGroups[group.key]}>
+                        <small>{warehouseCardCustomer(group.item)} · {group.item.product_name} · {group.item.specification} · {group.item.flute_type ? `${group.item.flute_type}楞` : ""}</small>
+                        <small>材质：{group.item.material || "未登记"}</small>
                         <small>可用 {formatNumber(group.available)} · 已占用 {formatNumber(group.reserved)}{group.damaged ? ` · 异常 ${formatNumber(group.damaged)}` : ""}</small>
                         <small>首次入库 {shelfStockDates(group.items).first || "待确认"} · 最近入库 {shelfStockDates(group.items).latest || "待确认"}</small>
                         {(shelfStockDates(group.items).incomplete || shelfStockDates(group.items).approximate) && <small>部分入库日期不明或非精确，见批次详情</small>}
@@ -1701,6 +1703,7 @@ function WarehouseRackElevation({
               if (at) window.open(`/static/shelf-label.html?location_id=${at.location_id}&lot_id=${selectedItem.lot_id}`, '_blank', 'noopener');
             }}>打印产品标签</button></div>
             <InventoryLabelSummary item={selectedItem} onLabel={() => setDetailOpen(false)} expanded={detailOpen} onDetails={() => setDetailOpen((value) => !value)} />
+            <div className="shelf-full-label">{warehouseCardCustomer(selectedItem)} · {selectedItem.product_name}<br />{warehouseCardPrimary(selectedItem)}{selectedItem.inventory_type !== "semi_finished" && <> · {selectedItem.specification} · {selectedItem.flute_type ? `${selectedItem.flute_type}楞` : ""}</>}</div>
             {detailOpen && <ShelfLotHistory lotId={selectedItem.lot_id} load={requestJson} />}
             {detailOpen && <dl className="twin-rack-product-detail"><div><dt>可用数量</dt><dd>{formatNumber(selectedItem.available_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>已预占</dt><dd>{formatNumber(selectedItem.reserved_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>实际位置</dt><dd>{selectedItem.location_name || "位置名称待完善"}</dd></div><div><dt>存放方式</dt><dd>{selectedItem.pallet_code ? "已绑定实物栈板" : "地堆或散存"}</dd></div><div><dt>批次</dt><dd>{selectedItem.lot_number || "—"}</dd></div></dl>}
           </article>}
@@ -1710,9 +1713,13 @@ function WarehouseRackElevation({
   </section>;
 }
 
+function warehouseCardCustomer(item: InventoryItem) { return item.customer_id ? employeeCustomerName(item) : "通用"; }
+function warehouseCardPrimary(item: InventoryItem) {
+  return item.inventory_type === "semi_finished" ? [item.specification || "尺寸待补充", item.flute_type ? `${item.flute_type}楞` : "楞型待补充"].join(" · ") : item.inventory_code || "存货编码待补充";
+}
 function InventoryLabelSummary({ item, quantity, onLabel, onDetails, expanded = false }: { item: InventoryItem; quantity?: number; onLabel: () => void; onDetails: () => void; expanded?: boolean }) {
-  return <><div className="warehouse-label-summary"><span>{employeeCustomerName(item)}</span><span>{item.product_name || "产品名称待补充"}</span><span>{item.specification || ""}</span></div>
-    <div className="warehouse-label-code-row"><button type="button" className="warehouse-label-code" title="查看产品标签" onClick={onLabel}>{item.inventory_code || item.lot_number || "存货编码待补充"}</button><strong>{formatNumber(quantity ?? inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong><button type="button" className="warehouse-label-details" aria-expanded={expanded} onClick={onDetails}>{expanded ? "收起明细" : "查看明细"}</button></div></>;
+  return <><div className="warehouse-label-summary" title={`${warehouseCardCustomer(item)} · ${item.product_name || ""} · ${item.specification || ""}`}><span>{warehouseCardCustomer(item)}</span><span>{item.product_name || "产品名称待补充"}</span><span>{item.inventory_type === "semi_finished" ? "" : item.specification || ""}</span><button type="button" className="warehouse-label-details" aria-expanded={expanded} onClick={onDetails}>{expanded ? "收起" : "明细"}</button></div>
+    <div className="warehouse-label-code-row"><button type="button" className="warehouse-label-code" title={`${warehouseCardPrimary(item)} · 点击查看完整产品标签`} onClick={onLabel}>{warehouseCardPrimary(item)}</button><strong>{formatNumber(quantity ?? inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</strong></div></>;
 }
 
 function StocktakeProductChoices({ items, selectedId, onSelect }: { items: ProductCandidate[]; selectedId: string; onSelect: (id: string) => void }) {

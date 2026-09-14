@@ -631,8 +631,11 @@ def create_app() -> FastAPI:
             return HTMLResponse(camera_page_html(), headers={"Cache-Control": "no-store"})
         application.add_api_route("/mobile/scan", mobile_camera_scan_entry, methods=["GET"], include_in_schema=False)
     if not any(route.path == "/q/{location_id}" for route in application.routes):
-        def shelf_scan_entry(location_id: int, product: str | None = None):
-            from app.services.mobile_shelf_labels import scan_page_html
+        def shelf_scan_entry(request: Request, location_id: int, product: str | None = None):
+            from app.services.mobile_shelf_labels import scan_page_html, legacy_scan_redirect
+            target = legacy_scan_redirect(request.url.hostname, location_id, product)
+            if target:
+                return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
             return HTMLResponse(scan_page_html(), headers={"Cache-Control": "no-store"})
         application.add_api_route("/q/{location_id}", shelf_scan_entry, methods=["GET"], include_in_schema=False)
         application.add_api_route("/q/{location_id}/{product}", shelf_scan_entry, methods=["GET"], include_in_schema=False)
@@ -649,6 +652,10 @@ def create_app() -> FastAPI:
                     and location_id.isascii() and location_id.isdigit() and int(location_id) > 0
                     and any(marker in request.headers.get("user-agent", "").lower()
                             for marker in ("iphone", "ipad", "android", "mobile"))):
+                from app.services.mobile_shelf_labels import legacy_scan_redirect
+                target = legacy_scan_redirect(request.url.hostname, int(location_id), request.query_params.get("product"))
+                if target:
+                    return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
                 return RedirectResponse(f"/static/shelf-scan.html?location_id={int(location_id)}",
                                         status_code=307, headers={"Cache-Control": "no-store"})
             return FileResponse(warehouse_twin_path, headers={"Cache-Control": "no-store"})

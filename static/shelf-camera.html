@@ -1,9 +1,10 @@
 <section aria-label="摄像头扫码" style="background:white;padding:12px;border-radius:10px">
-  <p>开启摄像头，对准货位或模具二维码。货位在本页查看库存；模具打开对应 ERP 信息。旧内网模具码也可在这里扫描。</p>
+  <p>扫描新旧标签，在当前 ERP 查看货位或模具。</p>
   <button id="cameraStart" type="button">开启摄像头扫码</button>
   <button id="cameraStop" type="button" hidden>关闭摄像头</button>
+  <label style="display:inline-block;padding:10px;border:1px solid #aaa;border-radius:8px">拍照／选择二维码<input id="cameraPhoto" type="file" accept="image/*" style="display:block;max-width:100%"></label>
   <p id="cameraStatus" role="status">摄像头仅用于手机本地识别，不上传视频。</p>
   <video id="cameraVideo" muted playsinline hidden style="display:block;width:100%;max-height:45vh;background:#111;border-radius:10px"></video>
   <canvas id="cameraCanvas" hidden></canvas>
-  <p id="cameraHttps" hidden>当前内网 HTTP 页面不能开启摄像头。请用 Safari 打开 <a href="https://tianmingerp0909.share.zrok.io/mobile/scan">HTTPS 扫码入口</a>。</p>
+  <p id="cameraHttps" hidden>内网页面请用“拍照／选择二维码”，无需访问旧外网地址。照片仅在手机识别。</p>
 </section>

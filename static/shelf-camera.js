@@ -3,7 +3,7 @@ function shelfIdentity(text) {
   try {
     const url = new URL(text, location.origin);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return null;
-    const hosts = new Set([location.hostname, 'tianmingerp0909.share.zrok.io', '192.168.3.80']);
+    const hosts = new Set([location.hostname, 'tianmingerp0909.share.zrok.io', '192.168.3.80', '172.16.1.26']);
     if (!hosts.has(url.hostname)) return null;
     const match = url.pathname.match(/^\/q\/([1-9]\d*)(?:\/([a-f0-9]{24}))?\/?$/);
     if (match) return {id:match[1], product:match[2] || null};
@@ -18,7 +18,7 @@ function moldIdentity(text) {
   try {
     const url = new URL(text, location.origin);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return null;
-    if (![location.hostname, 'tianmingerp0909.share.zrok.io', '192.168.3.80'].includes(url.hostname)) return null;
+    if (![location.hostname, 'tianmingerp0909.share.zrok.io', '192.168.3.80', '172.16.1.26'].includes(url.hostname)) return null;
     const match = url.pathname.match(/^\/M\/([1-9]\d*)\/?$/);
     if (match) {
       const task = url.searchParams.get('production_task_id');
@@ -118,6 +118,37 @@ async function startCamera() {
 }
 $('cameraStart').onclick=startCamera;
 $('cameraStop').onclick=()=>{stopCamera(); $('cameraStatus').textContent='摄像头已关闭';};
+// Photo decoding also works on LAN HTTP: pixels never leave this phone.
+$('cameraPhoto').onchange=async event=>{
+  const file=event.target.files?.[0];
+  if(!file)return;
+  stopCamera();
+  const epoch=cameraEpoch;
+  let objectUrl;
+  try {
+    if(!file.type.startsWith('image/') || file.size>20*1024*1024)throw Error('请选择小于20MB的二维码照片');
+    $('cameraStatus').textContent='正在识别照片…';
+    await decoderReady();
+    objectUrl=URL.createObjectURL(file);
+    const picture=new Image();
+    await new Promise((resolve,reject)=>{picture.onload=resolve;picture.onerror=()=>reject(Error('照片无法读取，请重新拍摄'));picture.src=objectUrl;});
+    if(epoch!==cameraEpoch)return;
+    const canvas=$('cameraCanvas'), context=canvas.getContext('2d',{willReadFrequently:true});
+    let result;
+    for(const edge of [1200,2400]){
+      const scale=Math.min(1,edge/Math.max(picture.naturalWidth,picture.naturalHeight));
+      canvas.width=Math.max(1,Math.round(picture.naturalWidth*scale));
+      canvas.height=Math.max(1,Math.round(picture.naturalHeight*scale));
+      context.drawImage(picture,0,0,canvas.width,canvas.height);
+      const pixels=context.getImageData(0,0,canvas.width,canvas.height);
+      result=window.jsQR(pixels.data,pixels.width,pixels.height,{inversionAttempts:'attemptBoth'});
+      if(result)break;
+    }
+    if(!result)throw Error('未找到二维码，请靠近标签重新拍摄');
+    await acceptShelf(result.data);
+  }catch(e){if(epoch===cameraEpoch)$('cameraStatus').textContent=e.message || '照片识别失败，请重试';}
+  finally{if(objectUrl)URL.revokeObjectURL(objectUrl);event.target.value='';}
+};
 window.addEventListener('pagehide',stopCamera);
 document.addEventListener('visibilitychange',()=>{if(document.hidden){stopCamera();$('cameraStatus').textContent='摄像头已暂停，返回后请点开启';}});
 $('message').textContent='扫码后在这里显示货位库存';

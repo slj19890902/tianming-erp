@@ -17498,8 +17498,8 @@ def _with_shelf_label(db, row, user, label, *, information_only=False):
     if information_only:
         from app.services.rack_information_labels import rack_information_contents
         contents = rack_information_contents(db, row.id, lambda customer_id: require_customer_access(customer_id, user, db))
-        origin = urlsplit(load_settings().browser_url)
-        url = f'{origin.scheme}://{origin.netloc}/warehouse.html?tab=locations&location_id={row.id}'
+        from app.services.mobile_shelf_labels import mobile_url
+        url = mobile_url(load_settings().browser_url, row.id)
         buffer = BytesIO()
         qrcode.make(url).save(buffer, format='PNG')
         label.update(shelf_contents=contents, lookup_url=url, qr_data_url='data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode('ascii'), information_only=True)

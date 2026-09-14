@@ -18,7 +18,7 @@ def function(name):
 
 
 def test_short_qr_serves_mobile_shell_without_redirect_or_inventory():
-    response=function("shelf_scan_entry")(1884,"a"*24)
+    response=function("shelf_scan_entry")(SimpleNamespace(url=SimpleNamespace(hostname="localhost")),1884,"a"*24)
     assert response.status_code==200
     assert response.headers["cache-control"]=="no-store"
     shell=response.body.decode()
@@ -32,7 +32,7 @@ def test_short_qr_serves_mobile_shell_without_redirect_or_inventory():
 def test_old_phone_position_qr_redirect_but_desktop_editor_stays():
     entry=function("warehouse_entry")
     for agent,tab,expected in [("iPhone","locations",307),("desktop","locations",200),("iPhone","planning",200)]:
-        request=SimpleNamespace(query_params=dict(location_id="1884",tab=tab),headers={"user-agent":agent})
+        request=SimpleNamespace(query_params=dict(location_id="1884",tab=tab),headers={"user-agent":agent},url=SimpleNamespace(hostname="localhost"))
         response=entry(request)
         assert response.status_code==expected
         if expected==307:
@@ -46,7 +46,19 @@ def test_camera_shell_has_user_gesture_and_local_decoder():
     assert 'id="cameraStart"' in shell and 'getUserMedia' in shell
     assert "'/static/vendor/jsqr/jsQR-1.4.0.js'" in shell
     assert 'audio:false' in shell
+    assert 'id="cameraPhoto"' in shell
+    assert 'URL.revokeObjectURL' in shell
     assert 'camera=(self)' in (ROOT/'app/main.py').read_text(encoding='utf8')
+
+
+def test_legacy_external_qr_redirect_is_not_cached(monkeypatch):
+    monkeypatch.setenv('ERP_SHELF_LABEL_ORIGIN', 'http://172.16.1.26:8000')
+    request = SimpleNamespace(url=SimpleNamespace(hostname='tianmingerp0909.share.zrok.io'))
+    response = function('shelf_scan_entry')(request,1203,'a'*24)
+    assert response.status_code == 302
+    assert response.headers['location'] == 'http://172.16.1.26:8000/q/1203/'+'a'*24
+    assert response.headers['cache-control'] == 'no-store'
+    assert response.headers['referrer-policy'] == 'no-referrer'
 
 
 def test_camera_policy_is_limited_to_scan_entry():

@@ -1,7 +1,9 @@
 """Read-only label identities. QR identities never grant access or reserve stock."""
 import hashlib
 import json
+import os
 import re
+from ipaddress import ip_address, ip_network
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -64,10 +66,41 @@ def readable_address(label):
 
 
 def mobile_url(browser_url, location_id, key=None):
+    browser_url = shelf_label_origin() or browser_url
     origin = urlsplit(browser_url)
     if origin.scheme not in ("https", "http") or not origin.netloc:
         raise HTTPException(409, "请配置手机访问地址")
     return f"{origin.scheme}://{origin.netloc}/q/{location_id}" + (f"/{key}" if key else "")
+
+
+def shelf_label_origin():
+    """Opt-in factory QR origin; never change the global remote ERP entrance."""
+    value = os.getenv("ERP_SHELF_LABEL_ORIGIN", "").strip().rstrip("/")
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        address = ip_address(parsed.hostname or "")
+        if (parsed.scheme != "http" or not parsed.port or parsed.username is not None
+                or parsed.password is not None or parsed.path or parsed.query or parsed.fragment
+                or not any(address in ip_network(net) for net in
+                           ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))):
+            raise ValueError()
+    except ValueError:
+        raise HTTPException(409, "货架扫码地址必须是明确的内网 HTTP IP 和端口")
+    return value
+
+
+def legacy_scan_redirect(hostname, location_id, key=None):
+    # No query/auth tokens forwarded, and no user-controlled redirect target.
+    if hostname != "tianmingerp0909.share.zrok.io":
+        return None
+    origin = shelf_label_origin()
+    if not origin:
+        return None
+    if location_id <= 0 or (key and not re.fullmatch(r"[a-f0-9]{24}", key)):
+        raise HTTPException(400, "二维码无效")
+    return mobile_url(origin, location_id, key)
 
 
 def print_address(label):

@@ -15204,8 +15204,8 @@ def _build_replenishment_item(
             raise StockReplenishmentError(
                 "半成品补库必须填写材质、层数、楞型和报料长宽。"
             )
-        if layer_count not in {3, 5, 7}:
-            raise StockReplenishmentError("半成品补库层数只允许三层、五层或七层。")
+        if layer_count not in {1, 3, 5, 7}:
+            raise StockReplenishmentError("半成品补库层数只允许卡纸、三层、五层或七层。")
         code_error = seven_layer_code_error(material_code, layer_count)
         if code_error:
             raise StockReplenishmentError(code_error)

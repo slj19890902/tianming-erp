@@ -90,7 +90,7 @@ class MaterialPayload(BaseModel):
     code: str = Field(min_length=1, max_length=100)
     paper_composition: str | None = None
     layer_count: int | None = Field(default=None, ge=1)
-    flute_type: Literal["AB", "BE", "A", "B", "E", "AAA", "ABC"] | None = None
+    flute_type: Literal["NONE", "AB", "BE", "A", "B", "E", "AAA", "ABC"] | None = None
     basis_weight_description: str | None = None
     quote_price: Decimal | None = Field(default=None, ge=0)
     rule_base_price: Decimal | None = Field(default=None, ge=0)
@@ -221,8 +221,8 @@ class SupplierPaperCodePayload(BaseModel):
 class MaterialComposePreviewPayload(BaseModel):
     supplier_name: str = Field(min_length=1, max_length=200)
     material_code: str = Field(min_length=1, max_length=7)
-    layer_count: int | None = Field(default=None, ge=3, le=7)
-    usage_flute_type: Literal["AB", "BE", "A", "B", "E", "AAA", "ABC"] | None = None
+    layer_count: int | None = Field(default=None, ge=1, le=7)
+    usage_flute_type: Literal["NONE", "AB", "BE", "A", "B", "E", "AAA", "ABC"] | None = None
     quote_price: Decimal | None = Field(default=None, ge=0)
 
     @field_validator("supplier_name")
@@ -234,14 +234,19 @@ class MaterialComposePreviewPayload(BaseModel):
     @classmethod
     def normalize_material_code(cls, value: str) -> str:
         code = unicodedata.normalize("NFKC", value or "").strip().upper()
-        if len(code) not in {3, 5, 7}:
-            raise ValueError("材质代码需为3位、5位或7位")
+        if len(code) not in {1, 3, 5, 7}:
+            raise ValueError("卡纸代码为1位，瓦楞材质为3位、5位或7位")
         if any(not char.isprintable() or char.isspace() for char in code):
             raise ValueError("材质代码只能包含可见字符，不能包含空格")
         return code
 
     @model_validator(mode="after")
     def require_seven_layer_flute(self) -> "MaterialComposePreviewPayload":
+        if len(self.material_code) == 1 and self.usage_flute_type != "NONE":
+            raise ValueError("卡纸必须选择卡纸（无楞）")
+        error = validate_flute_consistency(self.usage_flute_type, len(self.material_code))
+        if error:
+            raise ValueError(error)
         if len(self.material_code) == 7 and self.usage_flute_type not in {"AAA", "ABC"}:
             raise ValueError("七层材质必须人工选择楞型（AAA 或 ABC）")
         return self
@@ -251,7 +256,7 @@ class MaterialComposeSavePayload(MaterialComposePreviewPayload):
     remarks: str | None = None
     parsed_supplier_name: str = Field(min_length=1, max_length=200)
     parsed_material_code: str = Field(min_length=1, max_length=7)
-    parsed_layer_count: int = Field(ge=3, le=7)
+    parsed_layer_count: int = Field(ge=1, le=7)
     price_source: Literal["manual", "suggested"]
 
 
@@ -387,7 +392,7 @@ def _material_write_data(payload: MaterialPayload) -> dict:
     if data.get("is_white_face") is None:
         data.pop("is_white_face", None)
     data["code"] = clean_code(payload.code)
-    data["flute_type"] = None
+    data["flute_type"] = "NONE" if payload.layer_count == 1 else None
     data["basis_weight_description"] = normalize_basis_weight(
         payload.basis_weight_description
     )
@@ -993,6 +998,7 @@ def _compose_preview(
             detail=f"当前选择{requested_layer_count}层，但材质代码为{layer_count}位，请检查后重新解析",
         )
     roles = (
+        ["卡纸"] if layer_count == 1 else
         ["面纸", "第一楞纸", "第一芯纸", "第二楞纸", "第二芯纸", "第三楞纸", "里纸"]
         if layer_count == 7
         else
@@ -1289,7 +1295,7 @@ def save_material_composition(
             is_white_face=preview["layers"][0]["color"] == "white",
             paper_composition=composition,
             layer_count=preview["layer_count"],
-            flute_type=None,
+            flute_type="NONE" if preview["layer_count"] == 1 else None,
             basis_weight_description="/".join(f"{weight}g" for weight in weights),
             quote_price=final_price,
             rule_base_price=preview.get("quotation_base_price"),

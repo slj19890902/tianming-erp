@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 
 
-SUPPLIER_MATERIAL_FLUTES = {"AAA", "ABC", "AB", "E", "BE", "B", "C", "A"}
-MISSING_DISPLAY_TOKENS = {"NONE", "NULL", "UNDEFINED", "NAN", "N/A"}
+SUPPLIER_MATERIAL_FLUTES = {"NONE", "AAA", "ABC", "AB", "E", "BE", "B", "C", "A"}
+MISSING_DISPLAY_TOKENS = {"NULL", "UNDEFINED", "NAN", "N/A"}
 
 
 def clean_supplier_flute_type(
@@ -37,7 +37,7 @@ def clean_supplier_material_code(
     raw = str(value or "").strip().upper()
     if not raw or raw in MISSING_DISPLAY_TOKENS:
         return ""
-    expected_length = {3: 3, 5: 5, 7: 7}.get(layer_count)
+    expected_length = {1: 1, 3: 3, 5: 5, 7: 7}.get(layer_count)
     if expected_length:
         for candidate in re.split(r"\s*/\s*|\s*\|\s*", raw):
             compact = re.sub(r"\s+", "", candidate)

@@ -11,7 +11,7 @@ from app.models.supplier import Supplier, SupplierAlias
 SUPPLIER_CATEGORY_LABELS = {
     "corrugated_board": "瓦楞纸板",
     "paper_corner_guard": "纸护角",
-    "coated_board": "涂布白板/灰底白",
+    "coated_board": "灰底白板（卡纸）",
     "printed_folding_carton": "印刷折叠彩盒",
     "epe_cushion": "EPE缓冲包装",
     "hollow_board": "中空板",

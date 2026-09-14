@@ -391,7 +391,7 @@ def _completion_missing_fields(
         missing.append("材质代码")
     elif not (material.supplier_name or "").strip():
         missing.append("材质供应商")
-    if payload.layer_count not in {3, 5, 7}:
+    if payload.layer_count not in {1, 3, 5, 7}:
         missing.append("材质层数")
     if not (payload.flute_type or "").strip():
         missing.append("楞型")

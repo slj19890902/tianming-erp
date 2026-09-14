@@ -18,10 +18,10 @@ from desktop_assistant.storage import archive_path, pack_tree, sha, write_json
 
 def remove_transient_build_trees(output: Path) -> None:
     """Remove reproducible build trees after durable artifacts are complete."""
-    output = output.resolve()
+    output = archive_path(output)
     for name in ("payload", "pyi-work"):
         path = output / name
-        if path.is_symlink():
+        if path.is_symlink() or path.is_junction() or archive_path(path).parent != output:
             raise ValueError(f"构建临时目录不得为链接: {path}")
         if path.exists():
             shutil.rmtree(path)

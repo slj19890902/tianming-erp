@@ -55,6 +55,10 @@ class BuildSourceTests(unittest.TestCase):
         self.commit()
         with self.assertRaises(ValueError):
             source_snapshot(self.root, 'v2', 'b')
+        self.write('alembic/versions/c.py', 'revision = "b"\ndown_revision = "a"\n')
+        self.commit()
+        with self.assertRaises(ValueError):
+            source_snapshot(self.root, 'v2', 'b')
 
     def test_transient_build_trees_are_removed_but_artifacts_remain(self):
         output = self.root / 'output'
@@ -66,7 +70,12 @@ class BuildSourceTests(unittest.TestCase):
         self.assertFalse((output / 'payload').exists())
         self.assertFalse((output / 'pyi-work').exists())
         self.assertEqual((output / 'release.zip').read_bytes(), b'release')
-        self.write('alembic/versions/c.py', 'revision = "b"\ndown_revision = "a"\n')
-        self.commit()
-        with self.assertRaises(ValueError):
-            source_snapshot(self.root, 'v2', 'b')
+
+    def test_transient_build_cleanup_rejects_junction(self):
+        from unittest.mock import patch
+        output = self.root / 'output'
+        (output / 'payload').mkdir(parents=True)
+        with patch.object(Path, 'is_junction', return_value=True):
+            with self.assertRaises(ValueError):
+                remove_transient_build_trees(output)
+        self.assertTrue((output / 'payload').is_dir())

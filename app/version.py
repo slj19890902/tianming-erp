@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.399"
-APP_VERSION_NAME = "管理员订单关联撤销"
+APP_VERSION = "v0.22.400"
+APP_VERSION_NAME = "货架扫码内网直达"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4154,4 +4154,17 @@ APP_VERIFICATION_STEPS = [
     "管理员刷新订单，打开222试验订单编辑→更多操作，点击感叹号查看说明。",
     "点击删除试验单，核对关联及库存影响，确认纯模拟后一次确认；检查当前订单及待生产列表，旧盘点库存应保留。",
     "真实到货不应删除模拟库存；订单取消而保留货物时选择作废留库。",
+]
+APP_CHANGELOG = [
+    *(f"v0.22.399：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.399：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = [
+    "货架信息新标签直达已配置内网；旧外网标签保留货位和产品身份跳转，登录与客户权限不变。",
+    "内网扫码页支持本地照片识码，无需通过旧外网打开摄像头；旧标签微信直扫仍依赖外网首跳。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机连接已配置VPN后，微信扫旧货位或产品标签，核对内网地址及当前库存。",
+    "新打印信息标签核对二维码为内网地址；内网/mobile/scan可选择旧标签照片识码。",
 ]

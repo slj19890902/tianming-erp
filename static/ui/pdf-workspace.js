@@ -4,14 +4,21 @@
  function amount(item){return presentNumber(item.quantity) && presentNumber(item.unit_price) ? Number(item.quantity)*Number(item.unit_price) : null;}
  function install(app){app.mixin({
   data(){return this.$parent?{}:{pdfActiveDraftKey:'',pdfQueueVisible:true,pdfQueuePage:1,pdfFitCapacity:0};},
-  updated(){if(this.$parent||this.modal?.type!=='orderPdfImport')return;cancelAnimationFrame(this._pdfFitFrame);this._pdfFitFrame=requestAnimationFrame(()=>{
+  watch:{'modal.type'(){if(this.$parent)return;cancelAnimationFrame(this._pdfFitFrame);this.pdfFitCapacity=0;this._pdfFitGeometry='';}},
+  updated(){if(this.$parent||this.modal?.type!=='orderPdfImport')return;cancelAnimationFrame(this._pdfFitFrame);this._pdfFitFrame=requestAnimationFrame(()=>{this._pdfFitFrame=requestAnimationFrame(()=>{
+   if(this.modal?.type!=='orderPdfImport')return;
    const card=[...document.querySelectorAll('.pdf-order-import-modal .order-group-detail-card')].find(c=>c.getBoundingClientRect().height>0);if(!card)return;
    const table=card.querySelector('.pdf-inventory-table'),footer=card.querySelector('.pdf-savebar');if(!table||!footer)return;
    const rows=[...table.querySelectorAll(':scope > tbody > tr')].filter(r=>r.cells.length>1);if(!rows.length)return;
-   const height=Math.max(...rows.map(r=>r.getBoundingClientRect().height));
+   const geometry=[innerWidth,innerHeight,this.uiMode,this.pdfActiveDraftKey].join(':');
+   if(this._pdfFitGeometry!==geometry){this._pdfFitGeometry=geometry;this._pdfFitRowHeight=0;}
+   // Keep the tallest measured row for this geometry so paging cannot oscillate.
+   const height=Math.max(this._pdfFitRowHeight||0,...rows.map(r=>r.getBoundingClientRect().height));
+   if(!Number.isFinite(height)||height<=0)return;
+   this._pdfFitRowHeight=height;
    const next=Math.max(1,Math.min(8,Math.floor((innerHeight-table.getBoundingClientRect().top-(table.tHead?.offsetHeight||32)-footer.offsetHeight-56)/height)));
-   if(!this.pdfFitCapacity || next<this.pdfFitCapacity)this.pdfFitCapacity=next;
-  });},
+   if(next!==this.pdfFitCapacity)this.pdfFitCapacity=next;
+  });});},
   beforeUnmount(){cancelAnimationFrame(this._pdfFitFrame);},
   methods:{
    pdfDraftKey(draft){return String(draft.file_hash || draft.source_name || '');},

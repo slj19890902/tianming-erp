@@ -1,0 +1,22 @@
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
+let mixin,frames=new Map(),id=0,top=250,rowHeight=70;
+const table={querySelectorAll:()=>[{cells:[1,2],getBoundingClientRect:()=>({height:rowHeight})}],getBoundingClientRect:()=>({top}),tHead:{offsetHeight:32}};
+const card={getBoundingClientRect:()=>({height:500}),querySelector:s=>s.includes('table')?table:{offsetHeight:50}};
+const sandbox={innerWidth:1400,innerHeight:900,document:{querySelectorAll:()=>[card]},requestAnimationFrame:fn=>{frames.set(++id,fn);return id;},cancelAnimationFrame:n=>frames.delete(n)};
+vm.runInNewContext(fs.readFileSync('static/ui/pdf-workspace.js','utf8'),sandbox);
+sandbox.ERPPdfWorkspace.install({mixin:m=>mixin=m});
+const state={modal:{type:'orderPdfImport'},pdfFitCapacity:0,pdfActiveDraftKey:'a',...mixin.methods};
+function measure(){mixin.updated.call(state);for(let i=0;i<2;i++){const batch=[...frames.values()];frames.clear();batch.forEach(fn=>fn());}}
+measure();assert.equal(state.pdfFitCapacity,7);
+sandbox.innerHeight=450;measure();assert.equal(state.pdfFitCapacity,1);
+sandbox.innerHeight=900;measure();assert.equal(state.pdfFitCapacity,7);
+top=800;measure();assert.equal(state.pdfFitCapacity,1);
+top=250;measure();assert.equal(state.pdfFitCapacity,7,'stable layout recovers even without a second resize');
+rowHeight=140;measure();assert.equal(state.pdfFitCapacity,3);
+rowHeight=70;measure();assert.equal(state.pdfFitCapacity,3,'shorter page must not oscillate back to overflowing taller rows');
+state.modal=null;mixin.watch['modal.type'].call(state);assert.equal(state.pdfFitCapacity,0);
+state.modal={type:'orderPdfImport'};mixin.watch['modal.type'].call(state);measure();assert.equal(state.pdfFitCapacity,7);
+const draft={items:Array.from({length:20},(_,id)=>({id,quantity:2})),_product_page:2};
+const before=JSON.stringify(draft);assert.equal(state.pdfPageItems(draft).length,7);assert.equal(JSON.stringify(draft),before);
+mixin.updated.call(state);mixin.beforeUnmount.call(state);assert.equal(frames.size,0);
+console.log('PDF resize, recovery, reopen, stable paging and draft preservation passed');

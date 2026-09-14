@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.395"
-APP_VERSION_NAME = "来料确认与稳定分页"
-APP_BUILD_DATE = "2026-09-13"
+APP_VERSION = "v0.22.396"
+APP_VERSION_NAME = "PDF核对窗口分页恢复"
+APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -4109,3 +4109,11 @@ APP_VERIFICATION_STEPS = [
     "刷新来料待入库，核对已报料BOM子件可操作；按实际到货数量确认，不重复收料。",
     "展开多收处理选择片料备库，核对输入及选择保留、四条来料同页显示；确认实际数量和库存去向。",
 ]
+
+APP_CHANGELOG = [
+    *(f"v0.22.395：本次更新｜{item}" for item in APP_CHANGES),
+    *(f"v0.22.395：如何验证｜{item}" for item in APP_VERIFICATION_STEPS),
+    *APP_CHANGELOG,
+]
+APP_CHANGES = ["修复邮箱PDF核对窗口缩小再最大化后每页只剩一行；重开窗口重新计算行数，保留编辑明细。"]
+APP_VERIFICATION_STEPS = ["刷新ERP，打开邮箱PDF核对，缩小窗口再最大化，确认行数恢复；关闭重开后核对分页与编辑内容。"]

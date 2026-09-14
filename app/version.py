@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.401"
-APP_VERSION_NAME = "手机仓库片料识别与匹配"
+APP_VERSION = "v0.22.402"
+APP_VERSION_NAME = "电脑仓库紧凑标签与长编码显示"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4167,4 +4167,14 @@ APP_CHANGES = [
 APP_VERIFICATION_STEPS = [
     "手机连接已配置VPN后，微信扫旧货位或产品标签，核对内网地址及当前库存。",
     "新打印信息标签核对二维码为内网地址；内网/mobile/scan可选择旧标签照片识码。",
+]
+APP_CHANGELOG = [*(f"v0.22.400：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = [
+    "电脑货架和货位卡片统一为紧凑两行，数量固定靠右，明细移至首行；长编码不再拆成竖排，可在编码区域横向查看。",
+    "通用片料突出尺寸、楞型及数量，客户成品突出简称和编码；完整内容可在产品标签及展开明细中查看。",
+    "无数据库迁移，不改变正式地图、草稿、货位、库存数量或成本；独立供应商包材入库不在本次修复范围。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库并打开货架正视图，核对长编码、混放片料及数量显示；长编码应保持单行。",
+    "点击编码核对完整产品标签，点击明细核对批次与出入库记录，两种操作应保持独立。",
 ]

@@ -138,6 +138,7 @@ def _lot_business_fields(row: InventoryLot) -> dict:
                 detail.height_mm,
             ),
             "material": detail.material_code_snapshot,
+            "flute_type": detail.flute_type_snapshot,
         }
     if row.semi_finished_detail is not None:
         detail = row.semi_finished_detail
@@ -177,6 +178,7 @@ def _lot_business_fields(row: InventoryLot) -> dict:
                 else None
             ),
             "specification": dimensions,
+            "flute_type": detail.flute_type,
             "material": detail.normalized_material_code or detail.material_code_snapshot,
         }
     return {

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.408"
-APP_VERSION_NAME = "灰底白板卡纸报料与材质维护"
+APP_VERSION = "v0.22.409"
+APP_VERSION_NAME = "BOM套数预警与外购撤销状态修复"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4192,3 +4192,6 @@ APP_VERIFICATION_STEPS += ["原材料选择单层原纸/白卡，按真实供应
 APP_CHANGES = ["灰底白板归入纸板供应商；常用箱支持卡纸层数及无楞，沿用正常箱型、报料尺寸和生产收料。", "新增灰底白板H基础纸种快捷默认400g，可修改克重和材质价格；已有供应商H代码不覆盖，历史单据和库存不自动转类。"]
 APP_VERIFICATION_STEPS = ["供应商纸板目录选择灰底白板，材质规则新增H纸种并核对400g，可改克重；卡纸H解析后填写真实平方价保存。", "常用箱选择正常纸板生产、箱型尺寸及卡纸/H；按真实订单报料收料，核对库存数量与位置。"]
 APP_CHANGELOG = [*(f"v0.22.408：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["格挡套件按已成套、未组装可配套及订单已预留组件折算套数预警；子件身份不再漏算，建议报料按套展开净缺料。", "外购撤销后以有效采购事实显示待报料；已撤销且从未实收的采购明细可归档审计后删除，实收、送货、客户权限和事务保护保留。"]
+APP_VERIFICATION_STEPS = ["刷新000205库存预警，核对1500套预警线、已成套及未组装可配套数量，不为验证重复报料或组装。", "重新打开000152已撤销采购的订单，核对待报料；确需删除时正常删除明细，最后一条用更多操作删除订单组。"]
+APP_CHANGELOG = [*(f"v0.22.409：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

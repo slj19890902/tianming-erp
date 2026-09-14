@@ -890,7 +890,7 @@ def test_close_blocks_unreceived_purchase_but_allows_fully_received_purchase(
 
 
 def test_cancelled_purchase_history_archives_before_single_item_delete(
-    purchase_app,
+    purchase_app, monkeypatch,
 ) -> None:
     from app.models.user import User
 
@@ -931,6 +931,17 @@ def test_cancelled_purchase_history_archives_before_single_item_delete(
         # Reproduce the historical stale cached status after a real cancellation.
         item.requisition_status = "外购包材已采购"
         db.commit()
+        import app.api.orders as orders_api
+        def fail_audit(*args, **kwargs):
+            raise RuntimeError("audit unavailable")
+        with monkeypatch.context() as patch:
+            patch.setattr(orders_api, "_append_order_audit", fail_audit)
+            with pytest.raises(RuntimeError, match="audit unavailable"):
+                delete_order_item(item_id, db=db, user=admin)
+            db.rollback()
+        assert db.get(OrderItem, item_id) is not None
+        assert db.scalar(select(ExternalPackagingPurchaseItem.id).where(
+            ExternalPackagingPurchaseItem.sales_order_item_id == item_id)) is not None
         result = delete_order_item(item_id, db=db, user=admin)
         assert result.status_code == 204
         assert db.get(OrderItem, item_id) is None

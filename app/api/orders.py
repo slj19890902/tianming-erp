@@ -7652,6 +7652,10 @@ def _create_order_impl(
                 db, order=order, items=created_items, payload_items=payload.items,
                 selections=payload.previous_batch_selections, user=user, request=request
             )
+        else:
+            from app.services.bom_auto_reservation import reserve_new_order_stock
+            for created_item in created_items:
+                reserve_new_order_stock(db, order_item_id=created_item.id, operator_id=user.id)
         for index, created_item in enumerate(created_items, start=1):
             if created_item.combination_role != "set_parent":
                 refresh_production_task(db, created_item.id)

@@ -7,9 +7,39 @@ from sqlalchemy import select, delete
 
 from tests.test_n039_composite_bom_requisition import composite_requisition_app, _login, _component_payload
 from tests.test_p1_81_receipt_purpose_flow import (
-    _p181_published_map_identity, _seed_material_and_staging, FrozenSource, _freeze_receipt_fact, _receive,
+    _p181_published_map_identity, _seed_material_and_staging, FrozenSource, _freeze_receipt_fact, _receive as _receive_cut_parts,
 )
 from tests.test_multilevel_bom_master import save
+
+
+def _receive(client, *args, **kwargs):
+    """Legacy end-to-end scenarios now explicitly confirm physical assembly.
+
+    Receipt-only assertions live in test_bom_confirmation396, which calls the
+    original receipt helper and verifies no assembly before this separate POST.
+    """
+    result = _receive_cut_parts(client, *args, **kwargs)
+    if result.status_code == 200:
+        import hashlib, json
+        plans = client.get('/api/production/pending-assemblies')
+        assert plans.status_code == 200, plans.text
+        for row in plans.json()['items']:
+            assert not row.get('error'), row
+            payload = dict(source_lot_versions=row['source_lot_versions'], available_lot_ids=row['available_lot_ids'],
+                expected_outputs=row['expected_outputs'], target_locations={o['product_id']:o['location_id'] for o in row['outputs']},
+                physical_assembly_confirmed=True)
+            payload['operation_key']='fixture-physical-'+hashlib.sha256(json.dumps(payload,sort_keys=True).encode()).hexdigest()[:40]
+            confirmed=client.post(f"/api/production/assemblies/{row['order_item_id']}/confirm",json=payload)
+            assert confirmed.status_code==200,confirmed.text
+    return result
+
+
+def _reverse_physical_assemblies(client):
+    rows=client.get('/api/production/completions',params={'include_stock':True,'page':1,'page_size':200}).json()['items']
+    for row in rows:
+        if row.get('origin')=='bom_assembly' and row['status']=='posted':
+            result=client.post(f"/api/production/assemblies/{row['bom_assembly_id']}/reverse",json={'confirm_reverse':True})
+            assert result.status_code==200,result.text
 
 
 @pytest.mark.parametrize("liner", [False, True])
@@ -381,6 +411,7 @@ def test_real_receipts_create_nodes_then_sets_not_flat_children(composite_requis
             # This tests the inventory transaction, not the delivery API status
             # transitions. Leave the separate receipt-reversal scenario intact.
             db.rollback()
+        _reverse_physical_assemblies(client)
         for rid in reversed(receipt_ids):
             reverted = client.put(f"/api/incoming/receipt-items/{rid}/revert", json={})
             assert reverted.status_code == 200, reverted.text
@@ -458,6 +489,7 @@ def test_component_semi_stock_used_once_and_restored_on_receipt_reversal(composi
             assert [c.quantity for c in db.scalars(select(ProductionCompletion).order_by(ProductionCompletion.id))] == [18, 12]
             assert db.get(InventoryLot, lot_id).quantity_consumed == 6
             assert db.get(InventoryReservation, reservation_id).consumed_stock_quantity == 6
+        _reverse_physical_assemblies(client)
         for rid in reversed(receipt_ids):
             result = client.put(f"/api/incoming/receipt-items/{rid}/revert", json={})
             assert result.status_code == 200, result.text
@@ -542,6 +574,7 @@ def test_a3_reserved_cover_consumption_can_unwind_partial_batches(composite_requ
             result = _receive(client, source, fact.json(), quantity=5, idempotency_key=f"a3-semi-in-{i}")
             assert result.status_code == 200, result.text
             ids.append(result.json()["receipt_item_id"])
+        _reverse_physical_assemblies(client)
         for rid, remaining in zip(reversed(ids), (5, 0)):
             result = client.put(f"/api/incoming/receipt-items/{rid}/revert", json={})
             assert result.status_code == 200, result.text

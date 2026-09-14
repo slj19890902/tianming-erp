@@ -308,34 +308,42 @@ def assemble_graph_receipt(db, *, context, allocation, operator_id):
         operation_key=f"bom-receipt:{allocation.id}", operator_id=operator_id)
 
 
-def assemble_graph_order_receipt(db, *, compiled, order_item_id, operation_key, operator_id):
+def assemble_graph_order_receipt(db, *, compiled, order_item_id, operation_key, operator_id,
+                                 confirmed_command=None):
     """Shared assembly path for board and external receipt facts.
 
     Each adapter supplies its own namespaced receipt key, not a synthetic board
     allocation or production completion. The original caller owns the commit.
     """
+    # Receipt is evidence of cut parts, not evidence of physical insertion.
+    # Historical assembly facts remain untouched; only an explicit completion
+    # command can consume components and create new assembled stock.
+    if confirmed_command is None:
+        from app.services.bom_pending_assembly import reserve_pending_parts
+        reserve_pending_parts(db, order_item_id=order_item_id, compiled=compiled, operator_id=operator_id)
+        from app.models.audit import OperationLog
+        from app.models.user import User
+        from app.services.audit_log import append_audit_event
+        if not db.scalar(select(OperationLog.id).where(OperationLog.action_code=='bom.awaiting_assembly',
+                OperationLog.entity_id==order_item_id, OperationLog.object_ref==operation_key)):
+            append_audit_event(db,event_category='business',result='success',source='web',module_code='production',
+                action_code='bom.awaiting_assembly',resource='production',actor=db.get(User,operator_id) if operator_id else None,
+                entity_type='order_item',entity_id=order_item_id,object_ref=operation_key,
+                details=dict(source_ids=sorted(s.id for s in compiled.snapshots),physical_assembly_confirmed=False))
+        return ()
     from app.services.multilevel_bom_inventory import assemble_order_inventory
-    from app.services.production_workflow import _receipt_auto_finished_ground_target
     pids = {n.product_id for n in compiled.graph.nodes if n.source == "assembled"
             or (n.source == "manufactured" and any(e.parent_id == n.product_id and e.relation == "assembly"
                                                    for e in compiled.graph.edges))}
     if not pids:
         return ()
     oid = order_item_id
-    own_ids = {lot.id for lot in own_output_lots(db, oid)}
-    from app.services.multilevel_bom_output_history import current_finished_reservation_condition
-    reserved_ids = set(db.scalars(select(InventoryReservation.inventory_lot_id).where(
-        InventoryReservation.order_item_id == oid, InventoryReservation.reservation_type == "finished_order",
-        current_finished_reservation_condition(db, compiled),
-        InventoryReservation.status.in_(("active", "partial")))))
-    lots = list(db.scalars(select(InventoryLot).where(InventoryLot.id.in_(own_ids | reserved_ids),
-        InventoryLot.status == "active", InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0)))
-    targets = {pid: _receipt_auto_finished_ground_target(db, claim=True,
-        customer_id=compiled.graph.customer_id, product_id=pid).location.id for pid in sorted(pids)}
+    targets = confirmed_command['target_locations']
     results = assemble_order_inventory(db, order_item_id=oid,
-        source_lot_versions={lot.id: lot.version for lot in lots}, target_locations=targets,
+        source_lot_versions=confirmed_command['source_lot_versions'], target_locations=targets,
         operation_key=operation_key, operator_id=operator_id,
-        available_lot_ids=sorted(own_ids.intersection(lot.id for lot in lots)))
+        available_lot_ids=confirmed_command['available_lot_ids'],
+        expected_outputs=confirmed_command['expected_outputs'])
     from app.models.order import OrderItem, Order
     from app.services.multilevel_bom_plan import plan_bom
     from app.services.production_workflow import _reserve_component_completion_lot

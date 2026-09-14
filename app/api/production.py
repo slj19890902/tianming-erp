@@ -920,3 +920,5 @@ def revert_production_completion(
 
 from app.api.stock_preparation import router as stock_preparation_router
 router.include_router(stock_preparation_router)
+from app.api.bom_assembly_confirmation import router as bom_assembly_router
+router.include_router(bom_assembly_router)

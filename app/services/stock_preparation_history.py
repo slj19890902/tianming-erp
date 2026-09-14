@@ -126,12 +126,29 @@ def combined_page(db, *, allowed_customer_ids, page, page_size, **filters):
     from app.services.production_workflow import _completion_rows, list_production_completions
     stock = [] if filters.get('placement_pending') else rows(db, allowed_customer_ids, **filters)
     order_keys = _completion_rows(db, allowed_customer_ids=allowed_customer_ids, keys_only=True, **filters)
+    consumed = {}
+    if not filters.get('placement_pending'):
+        from app.services.bom_assembly_history import history
+        assembly, consumed = history(db, allowed_customer_ids, **filters)
+        stock += assembly
+        # Fold fully consumed processing records only when their assembly is
+        # included in this result. Product/date filters still expose originals.
+        from app.models.production import ProductionCompletion
+        folded = set(db.scalars(select(ProductionCompletion.id).join(InventoryLot,
+            InventoryLot.id == ProductionCompletion.inventory_lot_id).where(
+                ProductionCompletion.status == 'posted', InventoryLot.id.in_(consumed),
+                InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged == 0)))
+        order_keys = [(id, at) for id, at in order_keys if id not in folded]
     keys = [(utc_naive_to_api(at), 'order:'+str(id), id, None) for id,at in order_keys]
     keys += [(r['completed_at'], r['id'], None, r) for r in stock]
     keys.sort(key=lambda k:(datetime.fromisoformat(k[0].replace('Z','+00:00')),k[2] or 0,k[1]), reverse=True)
     selected = keys[(page-1)*page_size:page*page_size]
     ids = [k[2] for k in selected if k[2] is not None]
     orders = {r['id']:r for r in list_production_completions(db, allowed_customer_ids=allowed_customer_ids, completion_ids=ids)} if ids else {}
+    for row in orders.values():
+        if consumed.get(row.get('inventory_lot_id')):
+            row['assembly_consumed_quantity'] = consumed[row['inventory_lot_id']]
+            row['inventory_usage_label'] = '未配套余料' if row.get('current_inventory_quantity', 0) else '已用于组套'
     return [orders[k[2]] if k[2] is not None else k[3] for k in selected], len(keys)
 
 

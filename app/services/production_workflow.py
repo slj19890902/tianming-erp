@@ -2888,7 +2888,7 @@ def _consume_completion_semi_reservations(
 def _reserve_component_completion_lot(
     db: Session,
     *,
-    completion: ProductionCompletion | BomAssembly | ExternalPackagingReceiptItem,
+    completion: ProductionCompletion | BomAssembly | ExternalPackagingReceiptItem | InventoryLot,
     order: Order,
     item: OrderItem,
     snapshot_id: int,
@@ -2919,8 +2919,9 @@ def _reserve_component_completion_lot(
         ):
             raise ProductionWorkflowError("组件完工库存预占幂等标识冲突", 409)
         return existing
-    output_quantity = (completion.converted_finished_quantity
-        if isinstance(completion, ExternalPackagingReceiptItem) else completion.quantity)
+    output_quantity = (reserve_quantity if reserve_quantity is not None else
+        (completion.converted_finished_quantity
+         if isinstance(completion, ExternalPackagingReceiptItem) else completion.quantity))
     quantity = int(output_quantity if reserve_quantity is None else reserve_quantity)
     if quantity <= 0 or int(lot.quantity_available or 0) < quantity or (
         reserve_quantity is None and int(lot.quantity_available or 0) != quantity

@@ -304,7 +304,8 @@ class ReceiptAssemblyPlan:
 
 def plan_assembly(graph: FrozenBom, quantity: int, *, eligible_stock: Mapping[int, int],
                   fulfilled_stock: Mapping[int, int] | None = None,
-                  body_stock: Mapping[int, int] | None = None) -> ReceiptAssemblyPlan:
+                  body_stock: Mapping[int, int] | None = None,
+                  production_limits: Mapping[int, int] | None = None) -> ReceiptAssemblyPlan:
     """Incremental, bottom-up short-board plan; retains every excess unit.
 
     Callers must supply currently eligible balances, never cumulative receipts.
@@ -318,6 +319,10 @@ def plan_assembly(graph: FrozenBom, quantity: int, *, eligible_stock: Mapping[in
     nodes, children, order = graph.validated()
     body_ids = {pid for pid in order if nodes[pid].source == "manufactured"
                 and any(e.relation == "assembly" for e in children[pid])}
+    for pid, count in (production_limits or {}).items():
+        if pid not in nodes or (nodes[pid].source != 'assembled' and pid not in body_ids):
+            raise BomPlanError('实际组套数量包含无关产品')
+        _integer(count, '实际组套数量')
     if body_ids and body_stock is None:
         raise BomPlanError("自制本体加子件组装需要本体完工来源，不能仅凭子件余额入库")
     for pid, count in (body_stock or {}).items():
@@ -345,6 +350,8 @@ def plan_assembly(graph: FrozenBom, quantity: int, *, eligible_stock: Mapping[in
         make = min(needs[pid], *(balances[e.child_id] // e.quantity for e in inputs))
         if pid in body_ids:
             make = min(make, bodies[pid])
+        if production_limits is not None:
+            make = min(make, production_limits.get(pid, 0))
         if not make:
             continue
         consumed = tuple((e.child_id, make * e.quantity) for e in inputs)

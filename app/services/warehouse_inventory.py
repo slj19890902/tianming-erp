@@ -112,6 +112,14 @@ def _claim_inventory_restore_destination(db: Session, location_id: int) -> None:
     Read its placement version and claim it atomically; callers still verify
     the original allocation, pallet identity and occupancy before restoring.
     """
+    # Recount staging has no physical map placement by design. Undoing the
+    # original dispatch must restore that exact pending identity, not pretend
+    # that it is an enabled physical slot. Ordinary inbound claims stay strict.
+    location = db.get(WarehouseLocation, location_id, populate_existing=True)
+    if is_pending_relocation_location(location):
+        if not claim_pending_relocation_source(db, location_id):
+            raise WarehouseInventoryError("原待归位位置已变化，请刷新后重试", 409)
+        return
     layout_version = db.scalar(
         select(Floor3LocationLayout.version).where(
             Floor3LocationLayout.location_id == location_id
@@ -4165,18 +4173,7 @@ def reverse_finished_consumption(
     )
     if location_id is None:
         raise WarehouseInventoryError("成品库存预占关联库位不存在", 409)
-    current_layout_version = db.scalar(
-        select(Floor3LocationLayout.version).where(
-            Floor3LocationLayout.location_id == int(location_id)
-        )
-    )
-    _claim_inventory_destination(
-        db,
-        int(location_id),
-        expected_layout_version=(
-            int(current_layout_version) if current_layout_version is not None else None
-        ),
-    )
+    _claim_inventory_restore_destination(db, int(location_id))
     with db.begin_nested():
         reservation = db.get(InventoryReservation, reservation_id)
         allocation = db.get(DeliveryInventoryAllocation, allocation_id)

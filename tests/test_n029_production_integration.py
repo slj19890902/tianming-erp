@@ -811,8 +811,9 @@ def test_new_finished_in_reuses_released_empty_pallet(
         ) == len(movements)
 
 
+@pytest.mark.parametrize('pending_location', [False, True, 'disabled', 'ordinary_unplaced'])
 def test_cancel_full_delivery_restores_auto_released_pallet(
-    n029_delivery_app,
+    n029_delivery_app, pending_location,
 ) -> None:
     from app.models.delivery import Delivery
     from app.models.warehouse_inventory import (
@@ -824,6 +825,25 @@ def test_cancel_full_delivery_restores_auto_released_pallet(
     app, factory, ids = n029_delivery_app
     lot_id = _prepare_103_finished_stock(factory, ids)
     pallet_id = _bind_finished_lot_to_test_pallet(factory, lot_id)
+    if pending_location:
+        from app.models.warehouse_inventory import WarehouseLocation
+        with factory() as db:
+            row = db.get(WarehouseLocation, ids['temporary_location'])
+            row.location_code = 'RECOUNT-PENDING'
+            row.source_version = 'RECOUNT_PENDING'
+            row.warehouse_floor = None
+            row.placement_status = 'unplaced'
+            row.storage_type = None
+            row.warehouse_type = 'shared'
+            row.address_kind = 'legacy'
+            row.is_temporary = True
+            for field in ('area_code','address_area_id','map_rack_id','rack_code','level_no','ground_row_no','slot_no'):
+                setattr(row, field, None)
+            if pending_location == 'disabled':
+                row.is_active = False
+            if pending_location == 'ordinary_unplaced':
+                row.location_code = 'ORDINARY-UNPLACED'
+            db.commit()
     with TestClient(app) as client:
         _login(client)
         created = client.post(
@@ -844,6 +864,14 @@ def test_cancel_full_delivery_restores_auto_released_pallet(
         delivery_id = int(created.json()["id"])
         assert client.put(f"/api/deliveries/{delivery_id}/dispatch").status_code == 200
         cancelled = client.put(f"/api/deliveries/{delivery_id}/cancel")
+        if pending_location in ('disabled', 'ordinary_unplaced'):
+            assert cancelled.status_code == 409, cancelled.text
+            with factory() as db:
+                assert db.get(Delivery, delivery_id).status == 'dispatched'
+                lot = db.get(InventoryLot, lot_id)
+                assert (lot.quantity_available,lot.quantity_reserved,lot.quantity_consumed) == (0,0,103)
+                assert db.get(InventoryPallet,pallet_id).is_current is False
+            return
         assert cancelled.status_code == 200, cancelled.text
 
     with factory() as db:

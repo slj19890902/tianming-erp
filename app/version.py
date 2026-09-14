@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.401"
-APP_VERSION_NAME = "手机仓库片料识别与匹配"
+APP_VERSION = "v0.22.402"
+APP_VERSION_NAME = "待归位库存取消发货恢复"
 APP_BUILD_DATE = "2026-09-14"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4168,3 +4168,5 @@ APP_VERIFICATION_STEPS = [
     "手机连接已配置VPN后，微信扫旧货位或产品标签，核对内网地址及当前库存。",
     "新打印信息标签核对二维码为内网地址；内网/mobile/scan可选择旧标签照片识码。",
 ]
+APP_CHANGES = ["取消发货可恢复原盘点待归位库存及栈板；真实停用、普通未放置和被占用货位继续拦截，不改数量或位置事实。"]
+APP_VERIFICATION_STEPS = ["对原待归位库存的送货单取消发货，核对原批次数量、预占及待归位状态恢复；取消编辑不提交业务操作。"]

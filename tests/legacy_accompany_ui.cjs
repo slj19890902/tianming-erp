@@ -1,0 +1,23 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const page=fs.readFileSync('static/index.html','utf8');
+for(const s of page.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g))new vm.Script(s[1]);
+const ctx=vm.createContext({console,setTimeout,clearTimeout});
+vm.runInContext(fs.readFileSync('static/vendor/vue-3.5.40.global.prod.js','utf8'),ctx);
+const start=page.indexOf('this.orderItemForm = {',page.indexOf('const mat = this.allMaterials.find',page.indexOf('this.orderItemSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};',page.indexOf('async openOrderItem'))));
+assert(start>0,'Use the reactive form, not the raw object');
+const end=page.indexOf('this.modal = { type:"orderItem"',start);
+const loadStart=page.indexOf('async loadExistingOrderItemBom(form)');
+const loadEnd=page.indexOf('syncOrderBomDemandsForQuantity(',loadStart);
+ctx.itemSnapshot={id:1};ctx.orderSnapshot={};ctx.product={};ctx.mat=null;
+ctx.axios={get:async()=>({data:{is_composite:true,components:[{id:6}]}})};
+vm.runInContext(`this.formFactory=function(){${page.slice(start,end)}return activeForm;};this.methods={${page.slice(loadStart,loadEnd)}}`,ctx);
+(async()=>{
+ const app=ctx.Vue.reactive({orderItemForm:null,displayOrderNumber:()=>'',displayMaterialText:()=>'',orderSpecificationText:()=>'',money:()=>'',normalizeBoxTypeDisplay:()=>'',normalizeCuttingMode:()=>'',normalizeOrderBomDemand:(_,c)=>c,errorMessage:String});
+ const form=ctx.formFactory.call(app);assert.equal(form,app.orderItemForm);assert(ctx.Vue.isReactive(form));
+ const seen=[];ctx.Vue.watchEffect(()=>seen.push([form._bom_loading,form.bom_component_demands.length]));
+ await ctx.methods.loadExistingOrderItemBom.call(app,form);await ctx.Vue.nextTick();
+ assert.equal(form._bom_loading,false);assert.equal(form.bom_component_demands.length,1);
+ assert(seen.some(([loading])=>loading));assert.equal(seen.at(-1)[1],1);
+ assert.match(page,/axios\.post\(`\/api\/deliveries\/\$\{deliveryId\}\/prepare-accompany`\)/);
+ console.log('Inline syntax, reactive async BOM load and prepare-before-print passed');
+})().catch(e=>{console.error(e);process.exitCode=1});

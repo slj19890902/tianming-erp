@@ -419,7 +419,8 @@ def build_delivery_packaging_label_package(
         # must not be reintroduced after their consumption into a finished kit.
         from app.models.multilevel_bom import OrderBomGraph
         from app.services.bom_accompany import physical_label_rows, legacy_accompany_preview, LEGACY_WARNING
-        if db.get(OrderBomGraph, order_item.id) is not None:
+        from app.services.legacy_accompany import contract as accompany_contract
+        if db.get(OrderBomGraph, order_item.id) is not None or accompany_contract(db, order_item.id) is not None:
             rows = physical_label_rows(rows, component_rows,
                 order_item_id=order_item.id, delivery_item_id=delivery_item.id)
         elif legacy_accompany_preview(db, order_item, delivery_item.delivered_quantity):

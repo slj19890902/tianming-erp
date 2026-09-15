@@ -1143,7 +1143,9 @@ def _pick_item_component_lines(
         return []
     if not _uses_composite_inventory(db, order_item.id, is_composite):
         from app.services.bom_accompany import legacy_accompany_preview
-        return legacy_accompany_preview(db, order_item, item.original_quantity)
+        from app.services.legacy_accompany import contract
+        if contract(db, order_item.id) is None:
+            return legacy_accompany_preview(db, order_item, item.original_quantity)
     return [
         component
         for component in _delivery_component_lines(
@@ -1465,6 +1467,9 @@ def _pick_item_location_plan(
         composite_hint=composite_hint,
         read_context=read_context,
     )
+    from app.services.legacy_accompany import contract
+    if contract(db, order_item.id) is not None:
+        fulfillment_mode = 'parent_delivery'
     graph_root_ids = {int(row['component_snapshot_id']) for row in component_lines if row.get('is_graph_root')}
     if component_lines and fulfillment_mode == "parent_delivery" and not graph_root_ids:
         raw_sources = [
@@ -3237,6 +3242,11 @@ def _inventory_sources_for_order_item(
                     }
                 )
                 remaining_unreserved_surplus -= take
+    from app.services.legacy_accompany import contract
+    if contract(db, order_item.id) is not None:
+        items.extend(_composite_inventory_sources_for_order_item(db, order_item=order_item,
+            planned_delivery_quantity=planned_delivery_quantity, delivery_item_id=delivery_item_id,
+            dispatched=dispatched))
     return items
 
 
@@ -5843,6 +5853,26 @@ def _delivery_deletion_facts(
     }
 
 
+def _prepare_legacy_accompany(db, delivery, user):
+    from app.services.legacy_accompany import prepare_delivery
+    try:
+        prepare_delivery(db, delivery, user)
+    except WarehouseInventoryError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.post("/{delivery_id}/prepare-accompany")
+def prepare_delivery_accompany(delivery_id: int, db: Session = Depends(get_db), user: User = Depends(can_operate)):
+    delivery = _delivery_for_user(db, delivery_id, user)
+    try:
+        _prepare_legacy_accompany(db, delivery, user)
+        db.commit()
+        return {"delivery_id": delivery_id, "status": delivery.status}
+    except Exception:
+        db.rollback()
+        raise
+
+
 def _build_pick_task(
     db: Session,
     *,
@@ -5851,6 +5881,7 @@ def _build_pick_task(
 ) -> DeliveryPickTask:
     if delivery.status != "pending":
         raise HTTPException(status_code=409, detail="已发货送货单不能创建拿货任务")
+    _prepare_legacy_accompany(db, delivery, user)
     previous = _delivery_pick_task(db, delivery.id)
     if previous is not None:
         # The normal button is idempotent.  Editing the delivery explicitly
@@ -8871,6 +8902,7 @@ def create_delivery(
                 else "创建待发货送货单"
             ),
         )
+        _prepare_legacy_accompany(db, delivery, user)
         response = _delivery_response(db, delivery.id)
         response["warnings"] = warnings
         _record_delivery_idempotency(
@@ -9232,6 +9264,8 @@ def _dispatch_delivery(
                 f"d{delivery_id}-{dispatched_at:%Y%m%d%H%M%S%f}-i{line.id}"
             )
             from app.services.bom_accompany import legacy_accompany_preview, LEGACY_WARNING
+            from app.services.legacy_accompany import prepare_order, contract as accompany_contract
+            prepare_order(db, order_item.id, user)
             if legacy_accompany_preview(db, order_item, line.delivered_quantity):
                 raise HTTPException(status_code=409, detail=LEGACY_WARNING)
             from app.services.bom_subkit_delivery import consume_delivery_subkits
@@ -9258,6 +9292,9 @@ def _dispatch_delivery(
                     operator_id=user.id,
                     operation_key=operation_key,
                 )
+                if accompany_contract(db, order_item.id) is not None:
+                    execute_delivery_component_consumption(db, delivery_item_id=line.id,
+                        delivery_sets=line.delivered_quantity, operator_id=user.id, operation_key=operation_key)
             result = db.execute(
                 update(OrderItem)
                 .where(
@@ -10731,6 +10768,10 @@ def _cancel_delivery(
                     operation_key=operation_key,
                 )
             else:
+                from app.services.legacy_accompany import contract as accompany_contract
+                if accompany_contract(db, order_item.id) is not None:
+                    reverse_delivery_component_allocations(db, delivery_item_id=line.id,
+                        operator_id=user.id, operation_key=operation_key)
                 reverse_delivery_item_inventory(
                     db,
                     delivery_item_id=line.id,

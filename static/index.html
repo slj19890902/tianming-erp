@@ -21741,6 +21741,7 @@
               let historical = false;
               try {
                 if (row?.status === "voided") throw Object.assign(new Error("历史补打"), {historicalFallback:true});
+                if (row?.status === "pending") await axios.post(`/api/deliveries/${deliveryId}/prepare-accompany`);
                 await axios.get(`/api/deliveries/${deliveryId}/production-packaging-label-package`);
               } catch(error) {
                 const status = Number(error?.response?.status || 0);
@@ -26262,7 +26263,7 @@
             form._bom_error = "";
             form.bom_component_demands = [];
             try {
-              const {data} = await axios.get(`/api/orders/items/${form.id}/bom`);
+              const {data} = await axios.get(`/api/orders/items/${form.id}/bom`, {timeout:20000});
               if (data?.is_composite) {
                 form.bom_component_demands = (data.components || []).map(component =>
                   this.normalizeOrderBomDemand(form, component, true)
@@ -32841,7 +32842,7 @@
               this.finishedInventoryCandidatesLoaded = false;
               this.finishedInventoryReservations = [];
               const mat = this.allMaterials.find(row => Number(row.id) === Number(itemSnapshot.material_id));
-              const activeForm = {
+              this.orderItemForm = {
                 id:itemSnapshot.id, product_id:itemSnapshot.product_id || null, order_number:this.displayOrderNumber(orderSnapshot),
                 customer_name:orderSnapshot.customer_name || "", product_code:itemSnapshot.snapshot_product_code || "",
                 product_name:itemSnapshot.snapshot_product_name || "", material:itemSnapshot.display_material || this.displayMaterialText(itemSnapshot.snapshot_material) || "",
@@ -32889,7 +32890,7 @@
                 _bom_loading:false,
                 _bom_error:"",
               };
-              this.orderItemForm = activeForm;
+              const activeForm = this.orderItemForm;
               this.modal = { type:"orderItem", title:`编辑 ${this.displayOrderNumber(orderSnapshot)} 明细` };
               await Promise.all([
                 this.loadFinishedInventoryReservations(itemSnapshot.id, activeForm),
@@ -37262,6 +37263,7 @@
                 await this.applyDeliveryPickTask(frozenRow);
                 row.pick_task = {...frozenTask,status:"applied",has_exception:false};
               }
+              await axios.post(`/api/deliveries/${deliveryId}/prepare-accompany`);
               printSession = await this.openDeliveryPrintTab(deliveryId, true);
               if (!printSession) return false;
               await axios.put(`/api/deliveries/${deliveryId}/dispatch`);

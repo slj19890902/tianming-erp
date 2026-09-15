@@ -30,6 +30,20 @@ class OrderBomGraph(Base):
         DateTime, server_default=func.current_timestamp(), nullable=False)
 
 
+class LegacyAccompanyContract(Base):
+    """Remaining-only accompanying stock contract; never replaces production BOM."""
+    __tablename__ = "legacy_accompany_contracts"
+    __table_args__ = (
+        CheckConstraint("length(content_hash) = 64", name="ck_legacy_accompany_hash"),
+    )
+    order_item_id: Mapped[int] = mapped_column(
+        ForeignKey("sales_order_items.id", ondelete="RESTRICT"), primary_key=True)
+    document_json: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp(), nullable=False)
+
+
 class OrderBomProductionRevision(Base):
     """Append-only production amendments; original graph/material rows stay intact."""
     __tablename__ = "order_bom_production_revisions"

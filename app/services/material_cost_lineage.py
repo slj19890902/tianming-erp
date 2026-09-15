@@ -456,7 +456,15 @@ def _freeze_graph_cost_checked(db, **kwargs):
     from app.services.bom_subkits import SubkitError
     from app.services.warehouse_inventory import WarehouseInventoryError
     try:
-        return freeze_graph_delivery_cost(db, **kwargs)
+        fact = freeze_graph_delivery_cost(db, **kwargs)
+        if fact is None:
+            from app.services.material_cost_supplement import freeze_inventory_entry_cost
+            allocation=kwargs['allocation']
+            unordered=kwargs.get('unordered',False)
+            freeze_inventory_entry_cost(db,allocation=allocation,lot=kwargs['lot'],operator_id=kwargs['operator_id'],
+                source_kind='unordered_inventory_allocation' if unordered else 'inventory_allocation',
+                quantity=int(allocation.consumed_quantity if unordered else allocation.consumed_stock_quantity))
+        return fact
     except SubkitError as error:
         raise WarehouseInventoryError(str(error), error.status_code) from error
 

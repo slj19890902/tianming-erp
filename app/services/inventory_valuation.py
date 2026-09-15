@@ -283,6 +283,9 @@ def resolve_lot_cost(db, lot) -> CostResolution:
 
 def frozen_cost(lot, db=None, visited=None):
     """Read only the entry snapshot, never today's price or a currency conversion."""
+    if db is not None and lot.cost_snapshot_source in {'stock_preparation','bom_assembly','stock_preparation_assembly'}:
+        from app.services.derived_inventory_cost import derived_cost
+        return derived_cost(db,lot,set(visited or ()))
     unit = positive(lot.estimated_unit_cost_snapshot)
     try:
         detail = json.loads(lot.cost_snapshot_detail_json or "{}")

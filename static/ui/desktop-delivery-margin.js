@@ -7,6 +7,7 @@
   const STATUS = {empty:"无送货", complete:"完整可比", complete_with_reference:"含参考补充", partial:"部分可比"};
   const GAP_LABELS = {missing_sales_price:"销售售价缺口", missing_sales_tax_basis:"销售税口径缺口", missing_actual_material_cost:"实际材料成本缺口", missing_management_material_cost:"管理材料成本缺口", missing_reference_supplement:"参考补充缺口", foreign_currency_rate_missing:"外币汇率待核对"};
   let mounted = null;
+  Object.assign(GAP_LABELS, {missing_sales_unit:"销售单位待补", estimate_only:"成本依据待确认", missing_purchase_lineage:"采购来源待关联", no_delivery_cost_source:"出库成本来源待关联", management_cost_incomplete:"材料成本待补齐", invalid_sales_contract:"销售快照异常", actual_cost_not_frozen:"实际成本待结转"});
   const savedStates = new Map();
 
   function el(tag, className, text) {
@@ -43,8 +44,7 @@
   function gapSummary(metrics) {
     const parts = [];
     if (Number(metrics?.sales_gap_lines || 0) > 0) parts.push(`销售缺口 ${Number(metrics.sales_gap_lines)} 行`);
-    if (Number(metrics?.actual_cost_gap_lines || 0) > 0) parts.push(`实际成本缺口 ${Number(metrics.actual_cost_gap_lines)} 行`);
-    if (Number(metrics?.management_cost_gap_lines || 0) > 0) parts.push(`管理成本缺口 ${Number(metrics.management_cost_gap_lines)} 行`);
+    if (Number(metrics?.management_cost_gap_lines || 0) > 0) parts.push(`成本待补 ${Number(metrics.management_cost_gap_lines)} 行`);
     return parts.length ? parts.join("；") : "—";
   }
   function costPart(metrics, key) { return metrics?.[key] === null || metrics?.[key] === undefined || metrics?.[key] === "" ? "待补" : money(metrics[key]); }
@@ -159,11 +159,12 @@
     function renderGaps(gaps) {
       refs.gaps.replaceChildren();
       const details = el("details", "dashboard-delivery-margin-gaps");
-      details.append(el("summary", "", `缺口提示（${Number(gaps?.total_lines || 0)} 行，展开查看原因）`));
+      refs.gaps.append(el('p','muted',`已采用参考成本 ${Number(gaps?.reference_lines || 0)} 行（可计算，非历史实际采购价）`));
+      details.append(el("summary", "", `待补资料（${Number(gaps?.total_lines || 0)} 行，展开处理）`));
       const examples = Array.isArray(gaps?.examples) ? gaps.examples : [];
       if (examples.length) {
         const list = el("ul");
-        examples.forEach(item => list.append(el("li", "", `${item?.delivery_number || "送货号待补"} · 行ID ${item?.delivery_item_id ?? item?.item_id ?? "待补"} · ${gapText(item)}`)));
+        examples.forEach(item => list.append(el("li", "", `${item?.customer_po || item?.delivery_number || "单号待补"} · ${item?.product_code || "编码待补"} · ${gapText(item)}`)));
         details.append(list);
       } else details.append(el("p", "empty", "当前没有缺口示例。"));
       if (gaps?.examples_truncated === true) details.append(el("p", "muted", "仅展示前20条示例，覆盖率以完整汇总为准。"));
@@ -176,7 +177,7 @@
       renderCard("送货行", String(Number(metrics.delivery_line_count || 0)), "已覆盖明细");
       renderCard("送货数量", quantityText(metrics), "计价销售行；单位未知单列");
       renderCard("含税销售额", sales.value, metrics.sales_amount === null || metrics.sales_amount === undefined ? `已知部分 ${money(metrics.known_sales_amount)}` : "完整", sales.partial);
-      renderCard("材料成本（管理口径）", cost.value, `实际：${costPart(metrics, "actual_material_cost")} · 参考补充：${costPart(metrics, "supplemental_material_cost")} · 实际缺口 ${Number(metrics.actual_cost_gap_lines || 0)} 行 · 管理缺口 ${Number(metrics.management_cost_gap_lines || 0)} 行`, cost.partial);
+      renderCard("材料成本（实际＋参考）", cost.value, `实际：${costPart(metrics, "actual_material_cost")} · 参考：${costPart(metrics, "supplemental_material_cost")} · 待补 ${Number(metrics.management_cost_gap_lines || 0)} 行`, cost.partial);
       renderCard("材料毛利", money(metrics.material_margin), metrics.status === "complete_with_reference" ? "含已批准参考补充" : statusText(metrics.status), false);
       renderCard("材料毛利率", marginRate(metrics), "销售额为零显示横线");
       renderCard("覆盖率", coverage(metrics.coverage_rate), `${Number(metrics.comparable_lines || 0)} / ${Number(metrics.delivery_line_count || 0)} 行可比`);

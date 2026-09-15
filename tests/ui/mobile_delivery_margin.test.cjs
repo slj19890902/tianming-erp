@@ -12,7 +12,7 @@ test("mobile home wires the isolated delivery margin assets and section", () => 
   assert.equal(fs.existsSync(path.join(root, "static/ui/mobile-delivery-margin.css")), true);
   assert.equal(fs.existsSync(path.join(root, "static/ui/mobile-delivery-margin.js")), true);
   assert.match(html, /\/static\/ui\/mobile-delivery-margin\.css\?v=20260913-mobilemargin001/);
-  assert.match(html, /\/static\/ui\/mobile-delivery-margin\.js\?v=20260913-mobilemargin001/);
+  assert.match(html, /\/static\/ui\/mobile-delivery-margin\.js\?v=20260915-costcontract428/);
   assert.match(html, /id="deliveryMarginSection"/);
   assert.match(html, /state\.shell\?\.delivery_margin_allowed === true/);
   assert.match(html, /TmMobileDeliveryMargin\?\.mount/);

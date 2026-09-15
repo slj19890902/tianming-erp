@@ -401,7 +401,9 @@ def test_real_gap_collector_and_approved_reference_complete_margin_without_write
         assert result["summary"]["supplemental_material_cost"] == "2.50"
         assert result["summary"]["management_cost_gap_lines"] == 0
         assert result["gaps"]["total_lines"] == 1
-        assert "no_delivery_cost_source" in result["gaps"]["reason_counts"]
+        assert "no_delivery_cost_source" not in result["gaps"]["reason_counts"]
+        assert result["gaps"]["historical_cost_reason_counts"]["no_delivery_cost_source"] == 1
+        assert result["gaps"]["reference_lines"] == 1
 
 
 @pytest.mark.parametrize(

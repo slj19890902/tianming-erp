@@ -6,6 +6,8 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+import json
+from types import SimpleNamespace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -106,6 +108,18 @@ def _sales_projection(
     reasons: set[str] = set()
     amount: Decimal | None = None
     known_amount = Decimal("0")
+    contract = getattr(item, 'sales_contract_json', None)
+    if contract:
+        try:
+            from app.services.delivery_snapshots import read_sales_contract
+            frozen = read_sales_contract(item)
+            order_item = SimpleNamespace(unit_price=Decimal(frozen['unit_price']),
+                price_tax_mode_snapshot=frozen['tax_mode'],
+                tax_rate_snapshot=Decimal(frozen['tax_rate']) if frozen.get('tax_rate') is not None else None)
+            frozen_unit = frozen['unit']
+        except (ValueError, TypeError, KeyError, ArithmeticError):
+            return dict(amount=None,known_amount=Decimal(0),reasons={'invalid_sales_contract'},
+                financial_reasons={'invalid_sales_contract'},quantity=int(item.delivered_quantity or 0),unit=None)
     if order_item is not None:
         price = order_item.unit_price
         if price is None:
@@ -130,7 +144,7 @@ def _sales_projection(
         else:
             # Existing unordered delivery rows have no tax-basis snapshot.
             reasons.add("missing_sales_tax_basis")
-    unit = (str(item.unit_snapshot).strip() if item.unit_snapshot else None) or frozen_unit
+    unit = frozen_unit or (str(item.unit_snapshot).strip() if item.unit_snapshot else None) or getattr(order_item,'sales_unit_snapshot',None)
     unit_missing = not unit
     if unit_missing:
         reasons.add("missing_sales_unit")
@@ -357,11 +371,19 @@ def build_customer_delivery_margin(
     by_customer: dict[int, list[dict[str, Any]]] = defaultdict(list)
     by_day: dict[date, list[dict[str, Any]]] = defaultdict(list)
     reason_counts: Counter[str] = Counter()
+    historical_reason_counts: Counter[str] = Counter()
+    reference_lines = 0
     gap_lines: list[dict[str, Any]] = []
     for line in line_rows:
         by_customer[int(line["delivery"].customer_id)].append(line)
         by_day[line["delivery"].delivery_date].append(line)
-        reasons = set(line["sales"]["reasons"]) | set(line["cost"].get("reason_codes", []))
+        cost_reasons = set(line["cost"].get("reason_codes", []))
+        historical_reason_counts.update(cost_reasons)
+        if line['cost'].get('management_cost_complete'):
+            if not line['cost'].get('actual_cost_complete'):
+                reference_lines += 1
+            cost_reasons = set()
+        reasons = set(line["sales"]["reasons"]) | cost_reasons
         if line["cost"].get("management_cost_complete") is False:
             reasons.add("management_cost_incomplete")
         if reasons:
@@ -396,6 +418,8 @@ def build_customer_delivery_margin(
         },
         "daily": daily,
         "gaps": {
+            "reference_lines": reference_lines,
+            "historical_cost_reason_counts": dict(sorted(historical_reason_counts.items())),
             "total_lines": len(gap_lines), "reason_counts": dict(sorted(reason_counts.items())),
             "examples": [
                 {
@@ -403,6 +427,8 @@ def build_customer_delivery_margin(
                     "delivery_id": int(entry["line"]["delivery"].id),
                     "delivery_item_id": int(entry["line"]["item"].id),
                     "delivery_number": entry["line"]["delivery"].delivery_number,
+                    "product_code": entry['line']['item'].product_code_snapshot or (entry['line']['order_item'].snapshot_product_code if entry['line']['order_item'] else None),
+                    "customer_po": entry['line']['item'].customer_po_snapshot,
                     "reason_codes": entry["reason_codes"],
                 }
                 for entry in gap_lines[:20]

@@ -9,7 +9,7 @@ const html = fs.readFileSync(path.join(rootPath, "static/index.html"), "utf8");
 
 test("desktop margin module keeps contract markers and does not borrow report pages as customer directory", () => {
   assert.match(html, /desktop-delivery-margin\.css\?v=20260913-desktopmargin001/);
-  assert.match(html, /desktop-delivery-margin\.js\?v=20260913-desktopmargin001/);
+  assert.match(html, /desktop-delivery-margin\.js\?v=20260915-costcontract428/);
   assert.match(html, /id="desktopDeliveryMarginRoot"/);
   assert.match(html, /canViewDeliveryMargin/);
   assert.match(html, /回单确认销售额（原口径）/);
@@ -104,8 +104,8 @@ test("desktop margin permission, lifecycle, stale response and customer search f
   pending.slice(2).forEach(item => item.resolve({summary: {status: "partial", delivery_line_count: 1, sales_amount: null, known_sales_amount: "0.00", sales_gap_lines: 1, actual_material_cost: "12.00", supplemental_material_cost: "3.00", material_cost: null, known_material_cost: "15.00", actual_cost_gap_lines: 1, management_cost_gap_lines: 1, material_margin: null, material_margin_rate: null, coverage_rate: "0.0000"}, customers: {items: [{customer_name: "甲客户", metrics: {delivery_line_count: 1, sales_amount: null, known_sales_amount: "0.00", actual_material_cost: "12.00", supplemental_material_cost: "3.00", material_cost: null, known_material_cost: "15.00", sales_gap_lines: 1, actual_cost_gap_lines: 1, management_cost_gap_lines: 1, material_margin: null, material_margin_rate: null, coverage_rate: "0.0000"}}], total: 1, page: 1, page_size: 25}, daily: [], gaps: {total_lines: 1, examples: [{delivery_number: "D-1", delivery_item_id: 7, reason: "售价缺口"}]}}));
   await new Promise(resolve => setImmediate(resolve));
   assert.match(textOf(elements2.desktopDeliveryMarginSummary), /实际：¥12\.00/);
-  assert.match(textOf(elements2.desktopDeliveryMarginSummary), /参考补充：¥3\.00/);
-  assert.match(textOf(elements2.desktopDeliveryMarginCustomers), /销售缺口 1 行；实际成本缺口 1 行；管理成本缺口 1 行/);
+  assert.match(textOf(elements2.desktopDeliveryMarginSummary), /参考：¥3\.00/);
+  assert.match(textOf(elements2.desktopDeliveryMarginCustomers), /销售缺口 1 行；成本待补 1 行/);
   fresh.destroy();
   delete global.document;
 });

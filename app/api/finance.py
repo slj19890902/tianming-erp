@@ -5820,6 +5820,8 @@ def create_statement(
                     else current_price_tax_terms.tax_rate
                 )
             )
+            from app.services.delivery_snapshots import statement_sales_terms
+            unit_price,price_tax_mode,tax_rate=statement_sales_terms(delivery_item,unit_price,price_tax_mode,tax_rate)
             line_price_amount = (quantity * unit_price).quantize(
                 MONEY,
                 rounding=ROUND_HALF_UP,
@@ -6536,6 +6538,8 @@ def _new_statement_item_from_receipt(
             else terms.tax_rate
         )
     )
+    from app.services.delivery_snapshots import statement_sales_terms
+    unit_price,price_tax_mode,tax_rate=statement_sales_terms(delivery_item,unit_price,price_tax_mode,tax_rate)
     quantity = Decimal(receipt_item.actual_received_quantity)
     line_price = (quantity * unit_price).quantize(MONEY, rounding=ROUND_HALF_UP)
     receivable = (

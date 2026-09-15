@@ -37,6 +37,12 @@ def test_finished_disposition_consumes_children_and_retains_source_trace(stock_r
             assert parent.inventory_type=='finished' and parent.quantity_available==5
             assert parent.finished_detail.product_id==pid
             assert len(json.loads(parent.finished_detail.physical_basis_json)['assembly'])==2
+            from app.services.inventory_valuation import frozen_cost
+            unit,evidence=frozen_cost(parent,db)
+            assert unit is not None, evidence
+            assert evidence['currency']=='CNY'
+            assert evidence['basis']=='inherited_entry_cost_not_new_purchase'
+            assert abs(unit*5-sum(l.estimated_unit_cost_snapshot*l.quantity_consumed for l in outputs))<__import__('decimal').Decimal('.01')
 
 
 def test_semi_disposition_and_partial_later_assembly(stock_replenishment_app):

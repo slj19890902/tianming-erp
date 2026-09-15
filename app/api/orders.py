@@ -7395,6 +7395,8 @@ def _create_order_impl(
                         f"{error}"
                     ),
                 ) from error
+            if not str(product.unit or '').strip():
+                raise HTTPException(422, f'第{index + 1}行，存货编码 {product.product_code}：常用箱缺少销售单位，请完善后保存')
             item = OrderItem(
                 order_id=order.id,
                 product_id=product.id,
@@ -7407,6 +7409,7 @@ def _create_order_impl(
                 unit_price=unit_price,
                 subtotal=subtotal,
                 price_tax_mode_snapshot=price_tax_terms.price_tax_mode,
+                sales_unit_snapshot=(str(product.unit or '').strip() or None),
                 tax_rate_snapshot=price_tax_terms.tax_rate,
                 material_status="pending",
                 snapshot_product_code=(

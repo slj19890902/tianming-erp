@@ -7207,9 +7207,18 @@ def _store_unordered_finished_items(
     built: list[dict],
     user: User,
 ) -> None:
+    from app.services.delivery_snapshots import sales_contract
+    from app.services.customer_price_tax import resolve_customer_price_tax_terms
+    terms = resolve_customer_price_tax_terms(db, delivery.customer_id)
     for entry in built:
         product: Product = entry["product"]
         line: DeliveryLineCreate = entry["line"]
+        try:
+            contract = sales_contract(unit=product.unit,price=entry['unit_price'],
+                tax_mode=terms.price_tax_mode,tax_rate=terms.tax_rate,
+                source={'kind':'unordered_delivery_creation','profile_id':terms.profile_id,'profile_version':terms.profile_version}) if entry['unit_price'] is not None else None
+        except ValueError as error:
+            raise HTTPException(422, f'存货编码 {product.product_code}：{error}') from error
         delivery_item = DeliveryItem(
             delivery_id=delivery.id,
             source_type="unordered_finished",
@@ -7221,6 +7230,7 @@ def _store_unordered_finished_items(
             specification_snapshot=_product_specification(product),
             unit_snapshot=product.unit or "只",
             unit_price_snapshot=entry["unit_price"],
+            sales_contract_json=contract,
             price_source=entry["price_source"],
             delivered_quantity=int(line.delivered_quantity),
             ordered_quantity_snapshot=0,

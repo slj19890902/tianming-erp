@@ -231,6 +231,7 @@ class DeliveryItem(Base):
         Numeric(12, 4), nullable=True
     )
     price_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    sales_contract_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     delivered_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     ordered_quantity_snapshot: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False

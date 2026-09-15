@@ -270,6 +270,7 @@ class OrderItem(Base):
     )
     unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    sales_unit_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
     price_tax_mode_snapshot: Mapped[str | None] = mapped_column(
         String(30), nullable=True
     )

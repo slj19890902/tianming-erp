@@ -258,6 +258,8 @@ def dispatch_unordered_finished_inventory(
     for delivery_item in delivery_items:
         if delivery_item.source_type != "unordered_finished":
             raise WarehouseInventoryError("送货单来源不一致，禁止混合发货", 409)
+        from app.services.delivery_snapshots import ensure_unordered_sales_contract
+        ensure_unordered_sales_contract(db, delivery, delivery_item)
         allocations = db.scalars(
             select(UnorderedFinishedDeliveryAllocation)
             .where(

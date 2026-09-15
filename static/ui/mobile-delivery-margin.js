@@ -192,20 +192,22 @@
   }
 
   function renderGaps(container, gaps) {
+    const labels={missing_sales_unit:'销售单位待补',missing_sales_tax_basis:'销售税口径待补',missing_sales_price:'销售单价待补',estimate_only:'成本依据待确认',missing_purchase_lineage:'采购来源待关联',no_delivery_cost_source:'出库成本来源待关联',management_cost_incomplete:'材料成本待补齐',invalid_sales_contract:'销售快照异常',actual_cost_not_frozen:'实际成本待结转'};
     const total = Number(gaps?.total_lines);
     const lineCount = Number.isFinite(total) && total > 0 ? total : 0;
     container.replaceChildren();
+    container.append(element('p','muted',`已采用参考成本 ${Number(gaps?.reference_lines || 0)} 行（非历史实际采购价）`));
     const details = element("details", "delivery-margin-gap-summary");
-    const summary = element("summary", "", lineCount ? `缺口提示（${lineCount} 行，展开查看原因）` : "缺口提示（无）");
+    const summary = element("summary", "", lineCount ? `待补资料（${lineCount} 行，展开处理）` : "待补资料（无）");
     details.append(summary);
     if (lineCount) {
-      const reasons = Object.entries(gaps?.reason_counts || {}).map(([key, value]) => `${key} ${value}行`).join("；");
+      const reasons = Object.entries(gaps?.reason_counts || {}).map(([key, value]) => `${labels[key] || '来源待核对'} ${value}行`).join("；");
       if (reasons) details.append(element("p", "muted", `原因统计：${reasons}`));
       const list = element("div", "delivery-margin-gap-list");
       (Array.isArray(gaps?.examples) ? gaps.examples : []).forEach(example => {
         const line = [example?.delivery_number ? `送货 ${example.delivery_number}` : "", example?.delivery_item_id ? `行 ${example.delivery_item_id}` : ""].filter(Boolean).join("｜");
         const item = element("div", "delivery-margin-gap-item", line || "缺口明细");
-        const reasonCodes = example?.reason || example?.reason_message || (Array.isArray(example?.reason_codes) ? example.reason_codes.join("、") : "需核对来源");
+        const reasonCodes = example?.reason || example?.reason_message || (Array.isArray(example?.reason_codes) ? example.reason_codes.map(x=>labels[x] || '来源待核对').join("、") : "需核对来源");
         item.append(element("div", "delivery-margin-gap-reasons", reasonCodes));
         list.append(item);
       });

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.427"
-APP_VERSION_NAME = "多供应商采购预览与导出"
+APP_VERSION = "v0.22.428"
+APP_VERSION_NAME = "销售口径冻结与成本来源治理"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4248,3 +4248,6 @@ APP_CHANGELOG = [*(f"v0.22.426：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["合并报料保留本批所有供应商采购单，支持逐家切换及预览失败重试，不重复报料。", "厂内用途默认收起，按订单显示采购来源与成品/半成品/原料预占、已用和位置；对外PDF、Excel不带厂内信息。"]
 APP_VERIFICATION_STEPS = ["正常合并报料多家供应商后，顶部可逐家切换采购单；不要为验收重复报料。", "打开厂内用途核对来源与库存；分别导出PDF和Excel，确认不含厂内用途与库存位置。"]
 APP_CHANGELOG = [*(f"v0.22.427：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["新增订单冻结销售单位，新送货冻结单价及含税口径，对账和首页使用同一销售快照；无价格草稿保留，正式发货仍校验。", "加工、组套成本按投入来源守恒继承，参考成本不冒充实际采购价；历史修复按出库与已确认对账证据逐行审计，未知资料保留待核。", "电脑与手机将已采用参考成本和真正待补资料分开显示，缺项显示中文及产品编码。"]
+APP_VERIFICATION_STEPS = ["刷新电脑和手机首页本月材料毛利，核对参考成本提示与待补原因；不为验收重复出货。", "正常新增订单及送货时核对销售单位和单价，确认后续修改常用箱不会改变已冻结送货口径。", "查看仓庫中组套库存的继承成本；历史资料清单中未知尺寸和税口径仍应显示待核，不按零填补。"]
+APP_CHANGELOG = [*(f"v0.22.428：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

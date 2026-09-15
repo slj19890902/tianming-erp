@@ -7296,7 +7296,7 @@
                   <strong>人工录入模式：</strong>请逐项对照原 PDF 填写，系统不会自动补写订单事实。填写后点击“核对并匹配常用箱”；未唯一匹配的行仍需人工选择。
                 </div>
                 <div v-if="importDraftBlockReasons(draft).length" class="status red" style="display:block;margin-bottom:10px;line-height:1.7">
-                  <strong>待处理 {{importDraftBlockReasons(draft).length}} 项：</strong>{{importDraftBlockReasons(draft)[0]}}<info-note><div v-for="reason in importDraftBlockReasons(draft)" :key="reason">{{reason}}</div></info-note>
+                  <strong>订单 {{draft.customer_po || draft.source_name}} 无法保存，待处理 {{importDraftBlockReasons(draft).length}} 项：</strong><div v-for="reason in importDraftBlockReasons(draft)" :key="reason">{{reason}}</div>
                 </div>
                 <div v-if="hasImportDraftQuantityReview(draft)" class="status orange" style="display:block;margin-bottom:10px">
                   存在非整数数量，不能直接保存，请人工修改后再保存。
@@ -12958,7 +12958,7 @@
             const missing = raw?.missing_labels || raw?.missing_fields || raw?.missing || raw?.missing_items || [];
             const missingFields = Array.isArray(missing) ? missing.filter(Boolean) : [];
             const ready = raw?.ready === true || raw?.is_ready === true || raw?.complete === true || raw?.is_complete === true || raw?.status === "ready" || raw?.status === "complete" || raw?.status === "completed";
-            return { ready, missing_fields: missingFields };
+            return { ready, missing_fields: missingFields, order_save_missing_labels: raw?.order_save_missing_labels };
           },
           commonBoxReadinessTitle(source) {
             const readiness = this.commonBoxReadiness(source);
@@ -29766,6 +29766,8 @@
                 }
               }
               this.applyPdfImportEditToDraft(item, edit);
+              const latestMaster = (await axios.get(`/api/master/products/${item.matched_product_id}`)).data;
+              item._common_box_readiness = this.commonBoxReadiness(latestMaster);
               this.invalidateImportDraftConfirmation(draft);
               item._editing = false;
               item._edit = null;
@@ -30817,7 +30819,9 @@
             if (draft?.duplicate_status === "duplicate_skipped") reasons.push("重复订单已跳过。");
             if (!["passed","manual_confirmed"].includes(draft?.integrity_check?.integrity_status)) reasons.push(draft?.manual_entry ? "请先核对并匹配人工录入明细。" : "PDF识别完整性未通过或缺失，请重新识别并处理完整性异常。");
             if (this.hasImportDraftQuantityReview(draft)) reasons.push("存在非整数数量，不能直接保存，请人工修改后再保存。");
-            (draft?.items || []).forEach(item => {
+            (draft?.items || []).forEach((item, index) => {
+              const masterReason = this.importItemMasterBlockReason(item, index);
+              if (masterReason) reasons.push(masterReason);
               const inventoryReason = this.inventoryDecisionRequired(item);
               if (inventoryReason) reasons.push(`${item.product_name || item.raw_product_name || "明细"}：${inventoryReason}`);
               const line = item.line_no ? `第${item.line_no}行` : "明细行";
@@ -30829,6 +30833,14 @@
                if (!item.is_new_product && !item.matched_product_id) reasons.push(`${line}未匹配到常用箱。`);
             });
             return reasons;
+          },
+          importItemMasterBlockReason(item, index) {
+            const line = `第${item.line_no || index + 1}行【${item.normalized_product_code || item.product_code || item.raw_product_code || '未识别编码'}】`;
+            if (item.is_new_product || !item.matched_product_id) return `${line}请先登记并完善常用箱，再保存订单。`;
+            const raw = item._common_box_readiness || item.readiness || item.standard_match?.readiness;
+            const missing = raw?.order_save_missing_labels;
+            if (!Array.isArray(missing)) return `${line}请重新匹配或打开常用箱，读取最新报料资料后再保存。`;
+            return missing.length ? `${line}${missing.join('、')}；请点击该行常用箱编辑并保存。` : '';
           },
           hasImportDraftQuantityReview(draft) {
             return (draft?.items || []).some(item => !Number.isInteger(Number(item.quantity)));

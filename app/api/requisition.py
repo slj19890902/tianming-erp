@@ -21044,6 +21044,44 @@ def get_supplier_order(
     return _supplier_order_dict(order, db)
 
 
+@router.get("/supplier-orders/{order_id}/internal-trace")
+def get_supplier_order_internal_trace(
+    order_id: int, db: Session = Depends(get_db), _user: User = Depends(can_read),
+) -> dict:
+    from app.services.supplier_purchase_view import internal_trace
+    order = db.get(SupplierRequisitionOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="供应商报料单不存在")
+    _require_supplier_order_customer_access(order, _user, db)
+    return internal_trace(db, _supplier_order_dict(order, db))
+
+
+@router.get("/supplier-orders/{order_id}/pdf")
+@router.get("/supplier-orders/{order_id}/xlsx")
+def export_supplier_order(
+    order_id: int, request: Request, db: Session = Depends(get_db),
+    _user: User = Depends(can_read),
+):
+    from fastapi.responses import Response
+    from app.services.supplier_purchase_view import supplier_pdf, supplier_xlsx
+    from app.services.contract_pdf import ContractPdfFontError
+    order = db.get(SupplierRequisitionOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="供应商报料单不存在")
+    _require_supplier_order_customer_access(order, _user, db)
+    projection = _supplier_order_dict(order, db)
+    extension = 'xlsx' if request.url.path.endswith('/xlsx') else 'pdf'
+    try:
+        data = supplier_xlsx(projection) if extension == 'xlsx' else supplier_pdf(projection)
+    except ContractPdfFontError as exc:
+        raise HTTPException(status_code=503, detail="采购单中文字体不可用，请联系管理员检查字体配置") from exc
+    media_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' if extension == 'xlsx' else 'application/pdf'
+    return Response(data, media_type=media_type, headers={
+        'Content-Disposition': f'attachment; filename="supplier-order-{order.id}.{extension}"',
+        'Cache-Control': 'no-store',
+    })
+
+
 @router.get("/supplier-orders/{order_id}/production-print-package")
 def get_supplier_order_production_print_package(
     order_id: int,

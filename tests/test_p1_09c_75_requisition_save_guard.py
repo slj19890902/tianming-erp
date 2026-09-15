@@ -80,7 +80,7 @@ const vm={{
   requisitionSelected:{{td010:true}},selectedPendingKeys:["td010"],supplierRequisitionSelections:[{{type:"order_item",order_item_id:9865}}],supplierOrders:[],modal:{{type:"supplierRequisitionDraft"}},
   validateSupplierRequisitionDraft(){{return "";}},draftGroupLines(group){{return group.lines;}},
   loadRequisition:async()=>true,loadSupplierOrders:async()=>true,
-  openSupplierOrderPrint(){{throw new Error("empty created_orders must not print");}},showToast(){{}}
+  openSupplierOrderBatch(rows){{if(rows.length)throw new Error("empty created_orders must not print");this.modal=null;}},showToast(){{}}
 }};
 vm.saveSupplierRequisitionDraft=new AsyncFunction({json.dumps(block, ensure_ascii=False)}).bind(vm);
 const expect=(value,message)=>{{if(!value)throw new Error(message)}};
@@ -112,7 +112,7 @@ const vm={{
   requisitionSelected:{{a:true}},selectedPendingKeys:["a"],supplierRequisitionSelections:[{{type:"order_item",order_item_id:1}}],supplierOrders:[],modal:{{type:"supplierRequisitionDraft"}},
   validateSupplierRequisitionDraft(){{return "";}},draftGroupLines(group){{return group.lines;}},
   loadRequisition:async()=>true,loadSupplierOrders:async()=>true,
-  openSupplierOrderPrint(row){{this.modal={{type:"supplierOrderPrint",data:row}};}},
+  openSupplierOrderBatch(rows){{this.modal={{type:"supplierOrderPrint",data:rows[0]}};}},
   showToast(message,isError){{toasts.push({{message,isError}});}},errorMessage(error){{return error?.message||"error";}}
 }};
 vm.saveSupplierRequisitionDraft=new AsyncFunction({json.dumps(block, ensure_ascii=False)}).bind(vm);
@@ -156,14 +156,14 @@ const base=()=>({{
   requisitionSelected:{{a:true}},selectedPendingKeys:["a"],supplierRequisitionSelections:[{{type:"order_item",order_item_id:2}}],supplierOrders:[],modal:{{type:"supplierRequisitionDraft"}},
   validateSupplierRequisitionDraft(){{return "";}},draftGroupLines(group){{return group.lines;}},
   loadRequisition:async()=>{{throw new Error("刷新失败");}},loadSupplierOrders:async()=>false,
-  openSupplierOrderPrint(){{throw new Error("刷新失败时不应打开旧打印数据");}},showToast(){{}}
+  openSupplierOrderBatch(rows){{this.modal={{type:"supplierOrderPrint",data:rows[0]}};}},showToast(){{}}
 }});
 const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 (async()=>{{
   const vm=base();vm.saveSupplierRequisitionDraft=new AsyncFunction({json.dumps(block, ensure_ascii=False)}).bind(vm);
   const saved=await vm.saveSupplierRequisitionDraft();
   expect(saved._refresh_failed===true,"refresh failure hid the committed result");
-  expect(vm.supplierRequisitionSaveState.committed===true&&vm.modal===null,"committed draft remained resubmittable");
+  expect(vm.supplierRequisitionSaveState.committed===true&&vm.modal.type==="supplierOrderPrint","committed draft remained resubmittable");
   mode="network";const uncertain=base();uncertain.saveSupplierRequisitionDraft=new AsyncFunction({json.dumps(block, ensure_ascii=False)}).bind(uncertain);
   let caught=null;try{{await uncertain.saveSupplierRequisitionDraft();}}catch(error){{caught=error;}}
   expect(caught?._supplierRequisitionOutcomeUncertain===true,"network outcome was not marked uncertain");

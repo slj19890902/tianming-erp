@@ -1291,6 +1291,11 @@
       .pieces-per-box-cell { width: 64px; min-width: 64px; max-width: 64px; text-align: center; white-space: nowrap; }
       .supplier-print-sheet { font-family: "SimSun", serif; color: #111; }
       .supplier-print-title { text-align: center; }
+      .supplier-preview-tools { display:flex; flex-wrap:wrap; gap:8px; align-items:center; position:sticky; top:0; z-index:2; background:white; padding:8px 0; border-bottom:1px solid var(--line); }
+      .supplier-preview-tabs { display:flex; flex-wrap:wrap; gap:6px; flex:1; }
+      .supplier-internal-row { padding:8px 0; border-bottom:1px solid var(--line); }
+      .supplier-internal-line { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 16px; line-height:1.6; }
+      .supplier-internal-stock { color:#475569; font-size:12px; }
       .supplier-print-title h2 { margin: 0; font-size: 22px; font-weight: 700; }
       .supplier-print-title div { margin-top: 4px; font-size: 20px; letter-spacing: 8px; }
       .supplier-print-head { display: flex; justify-content: space-between; align-items: flex-end; margin: 8px 0 10px; }
@@ -8617,7 +8622,18 @@
             </div>
             <!-- 供应商报料单打印预览 -->
             <div v-else-if="(modal.type === 'supplierOrderPrint' || modal.type === 'stockReplenishmentPrint') && modal.data" style="max-width:900px;margin:0 auto">
-              <div id="supplier-order-print-area" class="supplier-print-sheet" style="font-size:14px;padding:20px">
+              <div v-if="modal.type === 'supplierOrderPrint'" class="supplier-preview-tools">
+                <div class="supplier-preview-tabs" aria-label="本批供应商采购单">
+                  <button v-for="(order,index) in supplierPreview.orders" :key="order.id" type="button" :class="['btn',{primary:supplierPreview.index===index}]" :aria-pressed="supplierPreview.index===index" @click="selectSupplierPreview(index)">{{ order.supplier_name }} · {{ order.order_number }}</button>
+                  <span class="muted" v-if="supplierPreview.orders.length">{{ supplierPreview.index+1 }} / {{ supplierPreview.orders.length }} 家</span>
+                </div>
+                <button type="button" class="btn" :disabled="supplierPreview.loading || !!supplierPreview.error" @click='exportSupplierOrder("pdf")'>导出PDF</button>
+                <button type="button" class="btn" :disabled="supplierPreview.loading || !!supplierPreview.error" @click='exportSupplierOrder("xlsx")'>导出Excel</button>
+                <button type="button" class="btn" :aria-expanded="supplierPreview.showInternal" @click="toggleSupplierInternal()">{{ supplierPreview.showInternal ? '收起厂内用途' : '厂内用途' }}</button>
+              </div>
+              <div v-if="modal.type==='supplierOrderPrint' && supplierPreview.loading" role="status" style="padding:16px">读取采购单…</div>
+              <div v-if="modal.type==='supplierOrderPrint' && supplierPreview.error" role="alert" style="padding:16px">{{ supplierPreview.error }} <button class="btn" @click="selectSupplierPreview(supplierPreview.index)">重试预览</button></div>
+              <div v-show="modal.type!=='supplierOrderPrint' || (!supplierPreview.loading && !supplierPreview.error)" id="supplier-order-print-area" class="supplier-print-sheet" style="font-size:14px;padding:12px 0">
                 <div class="supplier-print-title"><h2>{{ modal.data.sender?.company_name || "苏州工业园区天明纸品包装厂" }}</h2><div>采购单</div></div>
                 <div class="supplier-print-head">
                   <div><strong>TO：{{ modal.data.supplier_name || "未指定供应商" }}</strong></div>
@@ -8641,9 +8657,20 @@
                   <div v-if="modal.data.sender?.phone">电话：{{ modal.data.sender.phone }}</div>
                 </div>
               </div>
-              <div v-if="modal.type === 'supplierOrderPrint'" class="panel" style="margin-top:12px" aria-label="厂内采购用途只读详情" data-contract-field="purpose_status">
-                <div class="section-title">厂内采购用途（只读）</div>
-                <div class="muted" style="margin-bottom:8px">用途在正式采购生成时冻结，仅供厂内核对；下方内容不在供应商打印区域内。</div>
+              <div v-if="modal.type === 'supplierOrderPrint' && supplierPreview.showInternal" class="panel" style="margin-top:12px" aria-label="厂内采购用途只读详情" data-contract-field="purpose_status">
+                <div class="section-title">厂内用途 <span class="muted">不对外导出</span></div>
+                <div v-if="supplierPreview.traceLoading" role="status">读取来源与库存记录…</div>
+                <div v-else-if="supplierPreview.traceError" role="alert">{{ supplierPreview.traceError }} <button class="btn" @click="loadSupplierInternal()">重试</button></div>
+                <template v-else-if="supplierPreview.trace">
+                  <div class="muted">采购用途为冻结值；抵扣为对应订单明细当前记录，位置为批次现位置，不重复相加。</div>
+                  <div v-for="row in supplierPreview.trace.sources" :key="row.source_id" class="supplier-internal-row">
+                    <div class="supplier-internal-line"><strong>{{ row.customer_po || '未填写客户单号' }}</strong><span>{{ row.product_code || '未记录编码' }}</span><span>{{ row.report_length_mm }}×{{ row.report_width_mm }}mm</span><strong>采购 {{ row.requisition_qty }}张</strong><span>订单用 {{ row.order_purpose_sheet_qty ?? '未冻结' }}张 · 备库 {{ row.stock_purpose_sheet_qty ?? '未冻结' }}张</span></div>
+                    <div class="supplier-internal-line supplier-internal-stock"><span v-for="kind in ['finished','semi','raw']" :key="kind">{{ supplierInventorySummary(row,kind) }}</span></div>
+                    <details v-if="row.inventory_records.length"><summary>抵扣及位置明细（{{ row.inventory_records.length }}笔）</summary><div v-for="record in row.inventory_records" :key="record.id" class="supplier-internal-line supplier-internal-stock"><span>{{ record.kind_label }} · {{ record.product_code || record.lot_number }}</span><span>预占 {{ record.pending_qty }}{{ record.unit }} · 已用 {{ record.consumed_qty }}{{ record.unit }}</span><span>{{ record.location }}{{ record.location_active ? '' : '（停用位置）' }}</span></div></details>
+                  </div>
+                  <div v-if="!supplierPreview.trace.sources.length" class="muted">没有可关联的订单来源记录</div>
+                </template>
+                <details><summary>采购用途汇总</summary>
                 <table style="font-size:12px">
                   <thead><tr><th>序号</th><th>采购规格</th><th>采购总张数</th><th>订单生产用途张</th><th>客户通用片料备库张</th><th>状态</th></tr></thead>
                   <tbody>
@@ -8657,6 +8684,7 @@
                     </tr>
                   </tbody>
                 </table>
+                </details>
               </div>
               <div v-if="modal.data.focus_reported_item?.status==='voided'" :id="'supplier-order-line-'+modal.data.focus_item_id" class="reported-detail-card reported-match-row" style="margin-top:12px">
                 <div><strong>已撤销明细（历史保留）</strong><br>{{ modal.data.focus_reported_item.product_code || '-' }}｜{{ modal.data.focus_reported_item.product_name || '-' }}</div>
@@ -8665,7 +8693,7 @@
                 <div>{{ modal.data.focus_reported_item.requisition_qty || 0 }} {{ modal.data.focus_reported_item.unit || '张' }}<br><span class="muted">{{ formatDateTime(modal.data.focus_reported_item.voided_at) }}</span></div>
               </div>
               <div style="text-align:center;margin-top:12px">
-                <button class="btn primary" @click="printSupplierOrderArea()">打印</button>
+                <button class="btn primary" :disabled="modal.type==='supplierOrderPrint' && (supplierPreview.loading || !!supplierPreview.error)" @click="printSupplierOrderArea()">打印当前供应商</button>
               </div>
             </div>
             <div v-else-if="modal.type === 'requisitionMaterial'">
@@ -10271,6 +10299,7 @@
             mergeSuggestions: [], mergeSuggestionsLoading: false, mergeSuggestionsError: "", mergeSuggestionsExpanded: {}, mergeSuggestionsDeduction: {}, requisitionMergeExpanded: {}, requisitionComponentExpanded: {},
             supplierOrders: [],
             supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [], supplierRequisitionPreviewLoading:false,
+            supplierPreview:{orders:[],index:0,loading:false,error:'',showInternal:false,trace:null,traceLoading:false,traceError:''},
             supplierRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null},
             compositeRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null, requestKey:"", draftSignature:""},
             stockReplenishmentSaveState:{saving:false, committed:false, uncertain:false, result:null},
@@ -29051,12 +29080,72 @@
             if (warnings.length && !confirm(
               `当前报料单存在低于供应商最小切宽/切长的明细，请确认后再打印。\n\n${warnings.join("\n")}\n\n继续打开打印预览吗？`
             )) return;
+            this.supplierPreview = {orders:[so],index:0,loading:false,error:'',showInternal:false,trace:null,traceLoading:false,traceError:''};
             this.modal = { type: 'supplierOrderPrint', title: `供应商报料单 ${so.order_number}`, data: so };
+          },
+          openSupplierOrderBatch(orders) {
+            const seen = new Set();
+            const batch = orders.filter(row => row.supplier_order_id && !seen.has(row.supplier_order_id) && seen.add(row.supplier_order_id)).map(row => ({id:row.supplier_order_id,supplier_name:row.supplier_name,order_number:row.supplier_order_number}));
+            if (!batch.length) { this.modal = null; return; }
+            this.supplierPreview = {orders:batch,index:0,loading:false,error:'',showInternal:false,trace:null,traceLoading:false,traceError:''};
+            this.modal = {type:'supplierOrderPrint',title:'本批供应商采购单',data:batch[0]};
+            this.selectSupplierPreview(0);
+          },
+          async selectSupplierPreview(index) {
+            const state = this.supplierPreview;
+            const selected = state.orders[index];
+            if (!selected || this.modal?.type !== 'supplierOrderPrint') return;
+            const token = Symbol('supplier-preview'); state.request = token;
+            state.index=index; state.loading=true; state.error=''; state.trace=null; state.traceError=''; state.traceLoading=false;
+            this.modal.data=selected;
+            try {
+              const {data} = await axios.get(`/api/requisition/supplier-orders/${selected.id}`);
+              if (this.supplierPreview!==state || state.request!==token || this.modal?.type!=='supplierOrderPrint') return;
+              this.modal.data=data;
+              if (state.showInternal) this.loadSupplierInternal();
+            } catch (error) {
+              if (this.supplierPreview===state && state.request===token) state.error='采购单已生成，预览读取失败；请重试，不要重复报料。';
+            } finally { if (this.supplierPreview===state && state.request===token) state.loading=false; }
+          },
+          toggleSupplierInternal() {
+            this.supplierPreview.showInternal=!this.supplierPreview.showInternal;
+            if (this.supplierPreview.showInternal && !this.supplierPreview.trace) this.loadSupplierInternal();
+          },
+          async loadSupplierInternal() {
+            const state=this.supplierPreview, id=this.modal?.data?.id, token=Symbol('supplier-trace');
+            if (!id) return;
+            state.traceRequest=token; state.traceLoading=true; state.traceError='';
+            try {
+              const {data}=await axios.get(`/api/requisition/supplier-orders/${id}/internal-trace`);
+              if (this.supplierPreview===state && state.traceRequest===token && this.modal?.data?.id===id) state.trace=data;
+            } catch (error) {
+              if (this.supplierPreview===state && state.traceRequest===token && this.modal?.data?.id===id) state.traceError='厂内用途读取失败';
+            } finally { if (this.supplierPreview===state && state.traceRequest===token && this.modal?.data?.id===id) state.traceLoading=false; }
+          },
+          supplierInventorySummary(row,kind) {
+            const records=(row.inventory_records || []).filter(record=>record.kind===kind);
+            const label={finished:'成品',semi:'半成品',raw:'原料'}[kind];
+            if (!records.length) return `${label}：无关联抵扣记录`;
+            const pending=records.reduce((n,r)=>n+r.pending_qty,0), used=records.reduce((n,r)=>n+r.consumed_qty,0);
+            const units=[...new Set(records.map(r=>r.unit))];
+            const places=[...new Set(records.map(r=>r.location))];
+            return `${label}：${units.length===1 ? `预占${pending}${units[0]} / 已用${used}${units[0]}` : '多单位，见明细'} · ${places.length===1 ? places[0] : places.length+'个位置'}`;
+          },
+          async exportSupplierOrder(format) {
+            const id=this.modal?.data?.id, number=this.modal?.data?.order_number;
+            if (!id || !['pdf','xlsx'].includes(format) || this.supplierPreview.loading || this.supplierPreview.error) return;
+            try {
+              const {data}=await axios.get(`/api/requisition/supplier-orders/${id}/${format}`,{responseType:'blob'});
+              const url=URL.createObjectURL(data), link=document.createElement('a');
+              link.href=url; link.download=`${number || '采购单'}.${format}`; link.click();
+              setTimeout(()=>URL.revokeObjectURL(url),30000);
+            } catch(error) { this.showToast('导出失败，请重试；不会重新报料',true); }
           },
           printSupplierOrderArea() {
             const area = document.getElementById('supplier-order-print-area');
             if (!area) return;
             const w = window.open('', '_blank');
+            if (!w) { this.showToast('打印窗口被浏览器拦截，请允许弹窗或导出PDF',true); return; }
             w.document.write(`<html><head><title>供应商报料单</title><style>
               body{font-family:'SimSun',serif;font-size:14px;margin:20px}
               table{border-collapse:collapse;width:100%}
@@ -33854,12 +33943,7 @@
               const refreshFailed = refreshResults.some(result =>
                 result.status === "rejected" || result.value === false
               );
-              const first = (data.created_orders || [])[0];
-              const hit = first?.supplier_order_id
-                ? this.supplierOrders.find(row => row.id === first.supplier_order_id)
-                : null;
-              if (hit) this.openSupplierOrderPrint(hit);
-              else if (this.modal?.type === "supplierRequisitionDraft") this.modal = null;
+              this.openSupplierOrderBatch(data.created_orders || []);
               return {...data, _refresh_failed:refreshFailed};
             } finally {
               state.saving = false;

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.426"
-APP_VERSION_NAME = "送货单针式打印单行版式"
+APP_VERSION = "v0.22.427"
+APP_VERSION_NAME = "多供应商采购预览与导出"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4245,3 +4245,6 @@ APP_CHANGELOG = [*(f"v0.22.425：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["送货单针式打印客户单号取消绿底，完整单行显示；超长单号仅缩小自身字号。", "加宽客户单号列，缩窄数量和备注列，数量靠右；其他业务页面保留客户单号绿底。"]
 APP_VERIFICATION_STEPS = ["打开现有送货单打印预览，核对客户单号黑字无底色、完整单行和数量右对齐，不为验收提前发货。", "管理员用针式打印机试打一张，核对完整内容与分页；网页订单客户号仍为绿底。"]
 APP_CHANGELOG = [*(f"v0.22.426：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["合并报料保留本批所有供应商采购单，支持逐家切换及预览失败重试，不重复报料。", "厂内用途默认收起，按订单显示采购来源与成品/半成品/原料预占、已用和位置；对外PDF、Excel不带厂内信息。"]
+APP_VERIFICATION_STEPS = ["正常合并报料多家供应商后，顶部可逐家切换采购单；不要为验收重复报料。", "打开厂内用途核对来源与库存；分别导出PDF和Excel，确认不含厂内用途与库存位置。"]
+APP_CHANGELOG = [*(f"v0.22.427：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

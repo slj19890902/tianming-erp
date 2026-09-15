@@ -119,6 +119,8 @@ class Manager:
 
     def pause_after_backup(self, password: str, nas: Path):
         with self.lock():
+            from desktop_assistant.nas_probe import check_before_stop
+            check_before_stop(nas)
             running = bool(self._process())
             self.stop()
             try:
@@ -306,6 +308,8 @@ class Manager:
 
     def backup(self, password: str, nas: Path):
         with self.lock():
+            from desktop_assistant.nas_probe import check_before_stop
+            check_before_stop(nas)
             running = bool(self._process())
             self.stop()
             try:
@@ -398,6 +402,8 @@ class Manager:
                     or contract.get('from_revision') != revision
                     or contract.get('rollback_package_sha256') != old['current']):
                 raise ValueError('此版本需要专项迁移或缺少上版程序兼容契约，未停止服务')
+        from desktop_assistant.nas_probe import check_before_stop
+        check_before_stop(nas)
         self.stop()
         try:
             backup = self._backup_stopped(password, nas)

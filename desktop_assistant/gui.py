@@ -7,6 +7,7 @@ from pathlib import Path
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 import webbrowser
@@ -14,6 +15,7 @@ import webbrowser
 from desktop_assistant.manager import CN, Manager
 from desktop_assistant.storage import read_json, safe_name, write_json
 from desktop_assistant.windows import unprotect
+from desktop_assistant.connectivity import browser_url, inspect as inspect_connectivity
 
 
 def setup_defaults(manager):
@@ -51,6 +53,10 @@ class App:
         self.events = queue.Queue()
         self.busy = False
         self.on_success = None
+        self.connection_events = queue.Queue()
+        self.connection_check_running = False
+        self.connection_status = '网页访问：待检查'
+        self.next_connection_check = 0.0
         window.report_callback_exception = self.report_callback_exception
         window.protocol('WM_DELETE_WINDOW', self.close)
         from app.version import APP_VERSION
@@ -97,6 +103,7 @@ class App:
         self.buttons.append(self.more_button)
         self.more = ttk.Frame(box)
         for key, title, hint, action in (
+            ('repair_access', '修复网页入口', '后台正常但网页打不开时，恢复已配置私网转发；不关闭防火墙。', self.repair_access),
             ('recover', '继续上次未完成的更新', '更新断电或中断时使用，先检查再恢复。', self.recover_update),
             ('rollback', '退回上一个程序版本', '新版无法使用时使用；不会把业务数据退回旧日期。', self.rollback),
             ('finish', '完成首次接入', '接入已复制但备份中断时，修复共享盘后继续。', self.finish_import),
@@ -155,8 +162,10 @@ class App:
         except ValueError:
             last = str(last)
         running = bool(self.manager._process()) if current and hasattr(self.manager, '_process') else False
-        service = ('运行中' if running else '已停止') if current else '尚未接入'
-        text = f"ERP程序：{version}    状态：{service}\n最近成功备份：{last}"
+        service = ('进程存在' if running else '已停止') if current else '尚未接入'
+        connection = ('操作进行中，连接状态待复核' if self.busy else
+                      self.connection_status if running else '后台已停止 · 网页不可用')
+        text = f"ERP程序：{version}    状态：{service}\n{connection}\n最近成功备份：{last}"
         if state.get('backup_error'):
             text += '\n上次备份未成功，请检查共享盘连接后再点“现在备份一次”。'
         if state.get('operation') in ('migration_running', 'migration_failed'):
@@ -168,7 +177,7 @@ class App:
         self.status.set(text)
         for key, button in self.action_buttons:
             enabled = not self.busy
-            if key in ('open', 'backup', 'update', 'network', 'ai', 'pause'):
+            if key in ('open', 'backup', 'update', 'network', 'ai', 'pause', 'repair_access'):
                 enabled = enabled and current and not state.get('onboarding_pending')
                 if key == 'pause':
                     enabled = enabled and running
@@ -199,6 +208,25 @@ class App:
         threading.Thread(target=work, daemon=True).start()
 
     def poll(self):
+        try:
+            message = self.connection_events.get_nowait()
+            self.connection_status = message
+            self.connection_check_running = False
+            self.next_connection_check = time.monotonic() + 15
+            self.refresh()
+        except queue.Empty:
+            pass
+        if not self.busy and not self.connection_check_running and time.monotonic() >= self.next_connection_check:
+            self.connection_check_running = True
+            def check():
+                try:
+                    config = read_json(self.manager.root / 'shared/environment.json')
+                    result = inspect_connectivity(config, bool(self.manager._process()))
+                    message = ' · '.join(result)
+                except Exception:
+                    message = '连接配置待核对：未能完成网页检查'
+                self.connection_events.put(message)
+            threading.Thread(target=check, daemon=True).start()
         try:
             ok, message = self.events.get_nowait()
             self.busy = False
@@ -383,8 +411,20 @@ class App:
         def start():
             self.manager.resume()
             config = read_json(self.manager.root / 'shared/environment.json')
+            backend, page = inspect_connectivity(config, bool(self.manager._process()))
+            if page != '网页可访问':
+                raise ValueError(backend + '；' + page)
             webbrowser.open(browser_url(config))
         self.run('启动ERP', start)
+
+    def repair_access(self):
+        def repair():
+            from desktop_assistant.connectivity import repair_lan_forward
+            with self.manager.lock():
+                result = repair_lan_forward(read_json(self.manager.root / 'shared/environment.json'))
+            self.next_connection_check = 0.0
+            return result
+        self.run('修复已配置网页入口', repair)
 
     def backup(self):
         settings = self.settings()
@@ -451,13 +491,6 @@ class App:
             self.run('核对并复制原ERP', lambda: onboard(self.manager, Path(source), package, *settings))
 
 
-def browser_url(config):
-    # The server validates this explicit private origin independently of its
-    # HTTPS service URLs. Browser navigation must not rewrite that contract.
-    lan = (config.get('ERP_LAN_HTTP_ORIGIN') or '').strip().rstrip('/')
-    return lan + '/' if lan else config.get('ERP_BROWSER_URL', 'http://127.0.0.1:' + config['ERP_PORT'] + '/')
-
-
 def startup_root(explicit=None):
     if explicit is not None:
         return Path(explicit)
@@ -471,7 +504,14 @@ def main():
     parser.add_argument('--root', type=Path)
     parser.add_argument('--nightly', action='store_true')
     parser.add_argument('--self-test', action='store_true')
+    parser.add_argument('--nas-probe-path', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.nas_probe_path is not None:
+        from desktop_assistant.nas_probe import probe
+        try:
+            raise SystemExit(probe(args.nas_probe_path))
+        except (OSError, ValueError):
+            raise SystemExit(2)
     if args.self_test:
         import tempfile
         from types import SimpleNamespace

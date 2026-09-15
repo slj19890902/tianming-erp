@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.models.multilevel_bom import OrderBomGraph, ProductBomInventoryRelation
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.production import ProductionCompletion
+from app.models.product import Product
 
 LEGACY_WARNING = '旧单随货配套尚未冻结并落实预占；请管理员切换BOM版本，本次不补扣历史数量'
 
@@ -24,7 +25,10 @@ def legacy_accompany_preview(db, item, quantity):
         ProductBomInventoryRelation.relation == 'accompany').order_by(SalesOrderItemBomComponent.display_order))
     return [dict(component_snapshot_id=s.id, component_product_id=s.component_product_id,
         product_code=s.snapshot_component_product_code, product_name=s.snapshot_component_product_name,
-        specification=s.snapshot_component_spec, unit='片', quantity_per_set=int(s.quantity_per_set),
+        specification=s.snapshot_component_spec,
+        unit=('片' if s.snapshot_component_product_name in ('隔板', '衬板')
+              else (db.get(Product, s.component_product_id).unit or '件')),
+        quantity_per_set=int(s.quantity_per_set),
         planned_delivery_quantity=max(int(quantity), 0)*int(s.quantity_per_set),
         is_graph_root=False, is_required=True, show_on_delivery=False,
         inventory_note=LEGACY_WARNING, relation_basis='legacy_advisory_not_frozen') for s in snapshots]

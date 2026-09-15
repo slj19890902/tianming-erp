@@ -31,7 +31,8 @@
 .pdf-order-import-modal .pdf-action-col { width:70px; }
 .pdf-order-import-modal .pdf-inventory-cell { flex-direction:column; align-items:start; gap:4px; }
 .pdf-order-import-modal .compact-input { width:100%; min-width:0; }
-.pdf-order-import-modal .pdf-inventory-table-wrap { height:clamp(280px,58dvh,760px); overflow:auto; }
+.pdf-order-import-modal .pdf-inventory-table-wrap { max-height:none; overflow:visible; }
+.modal.pdf-order-import-modal { max-height:96dvh; overflow:auto; }
 .pdf-order-import-modal .pdf-inventory-table thead { position:sticky; top:0; z-index:1; background:#f0f4f8; }
 .pdf-order-import-modal .pdf-order-summary .field { display:flex; align-items:center; gap:6px; min-width:0; }
 .pdf-order-import-modal .pdf-order-summary .field label { flex:none; margin:0; }

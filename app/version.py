@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.421"
-APP_VERSION_NAME = "同货位同款汇总与BOM子件隔离"
+APP_VERSION = "v0.22.422"
+APP_VERSION_NAME = "地图实盘数量增减统一"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4230,3 +4230,6 @@ APP_CHANGELOG = [*(f"v0.22.420：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["同货位、同客户且编码、名称、箱型一致的普通成品汇总显示，整数数量不带小数尾零；原批次可展开追溯。", "BOM子件、箱型或身份不明的产品不自动汇总，不改变库存、组套、配套、预占与出库关系。"]
 APP_VERIFICATION_STEPS = ["刷新仓库后查看同位同款：主行显示合计，明细保留各批次；不同名称/箱型及BOM子件保持分开。", "手机进入同一货位，展开明细核对原批次数量；不要为验收重复入库或出货。"]
 APP_CHANGELOG = [*(f"v0.22.421：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["地图盘点填写实际数量，管理员确认后按差额增加或减少，员工上报审核。", "同位原批次分别核数，保留BOM、预占、位置及审计；盘点和新增入库分开。"]
+APP_VERIFICATION_STEPS = ["地图移货/盘点中打开货位，点击填写实际数量，可输入高于或低于系统的实际数量。", "按各批次现场实物核数，管理员确认后返回地图核对；不要为验收填写虚构数量。"]
+APP_CHANGELOG = [*(f"v0.22.422：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

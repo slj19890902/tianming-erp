@@ -174,6 +174,7 @@ class HSTSMiddleware(BaseHTTPMiddleware):
             "/warehouse.html",
             "/incoming.html",
             "/mobile/delivery-pick.html",
+            "/mobile/stocktake.html",
         }
         same_origin_embedded = (
             request.url.path in same_origin_embedded_paths

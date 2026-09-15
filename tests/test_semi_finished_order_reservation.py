@@ -376,6 +376,12 @@ def test_liner_direct_coverage_retains_source_without_completion(b1_app, style, 
             from app.services.production_workflow import list_production_tasks
             assert list_production_tasks(db, allowed_customer_ids={1}, status='pending',task_ids=[task.id]) == []
             assert db.execute(_pending_query(db=db, order_item_id=item.id)).first() is not None
+            from app.api.deliveries import _PendingDeliveryReadContext, _pending_delivery_item_payload
+            pending_rows = list(db.execute(_pending_query(db=db, order_item_id=item.id)))
+            context = _PendingDeliveryReadContext(db,pending_rows)
+            result = _pending_delivery_item_payload(db,row=pending_rows[0],registry={},context=context)
+            assert result is not None
+            assert context.remaining_quantity(db,item) == 5
             assert _delivery_remaining_quantity(db, item) == 5
             from app.models.delivery import Delivery, DeliveryItem
             from app.services.production_workflow import production_ready_quantity

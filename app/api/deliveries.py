@@ -8081,6 +8081,8 @@ class _PendingDeliveryReadContext:
         return bool(order_item and order_item.id in self.fast_item_ids)
 
     def remaining_quantity(self, db: Session, order_item: OrderItem) -> int:
+        if liner_direct_coverage(db, order_item):
+            return _delivery_remaining_quantity(db, order_item)
         if order_item.id in self.graph_item_ids:
             return max(int(self.composite_available_sets.get(order_item.id, 0)), 0)
         if order_item.id in self.receipt_auto_item_ids:

@@ -13,7 +13,7 @@ from app.services.box_type_rules import box_type_code
 
 def liner_direct_coverage(db, item: OrderItem) -> int:
     from app.services.semi_finished_inventory import (
-        requirement_signature, is_direct_semi_finished_match, finished_order_source_coverage,
+        finished_order_source_coverage, ensure_semi_finished_lot_eligibility, requirement_signature,
     )
     product = db.get(Product, item.product_id)
     if (product is None or box_type_code(product.box_style) != "liner"
@@ -42,13 +42,23 @@ def liner_direct_coverage(db, item: OrderItem) -> int:
         credit = int(reservation.credited_requirement_quantity or 0) - int(reservation.released_requirement_quantity or 0)
         if credit <= 0:
             continue
+        detail = lot.semi_finished_detail
+        # Eligibility is based on the accepted reservation and physical work,
+        # not on today's master material. Keep the actual lot/cost unchanged.
         if (reservation.sales_order_item_bom_component_id is not None or reservation.yield_factor != 1
-                or lot.semi_finished_detail is None or lot.semi_finished_detail.sheet_type != 'net_sheet' or not is_direct_semi_finished_match(
-                    lot.semi_finished_detail, expected=requirement_signature(requirement),
-                    layer_count=item.layer_count, crease_type=item.snapshot_crease_type,
-                    crease_left_mm=item.snapshot_crease_left_mm,
-                    crease_middle_mm=item.snapshot_crease_middle_mm,
-                    crease_right_mm=item.snapshot_crease_right_mm)):
+                or detail is None or detail.sheet_type != 'net_sheet'
+                or detail.pieces_per_box != 1 or detail.stock_yield_per_sheet != 1
+                or sorted((detail.board_length_mm, detail.board_width_mm)) != sorted((requirement.board_length_mm, requirement.board_width_mm))
+                or reservation.order_item_id != item.id or reservation.order_id != item.order_id
+                or detail.owner_customer_id not in (None, requirement.customer_id)
+                or ((detail.owner_customer_id is None or detail.normalized_material_code != requirement.normalized_material_code)
+                    and reservation.warning_acknowledged_by is None)):
+            return 0
+        from app.services.warehouse_inventory import WarehouseInventoryError
+        try:
+            ensure_semi_finished_lot_eligibility(db, lot=lot, product_id=item.product_id,
+                customer_id=requirement.customer_id, expected=requirement_signature(requirement))
+        except WarehouseInventoryError:
             return 0
         covered += credit
     # Mixed processing requirements must not be silently declared completed.

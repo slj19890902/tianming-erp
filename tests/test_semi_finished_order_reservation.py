@@ -358,6 +358,23 @@ def test_liner_direct_coverage_retains_source_without_completion(b1_app, style, 
             lot.semi_finished_detail.sheet_type = old_type
             db.flush()
             from app.api.deliveries import _pending_query, _delivery_remaining_quantity
+            # Already accepted public stock may retain a different real material.
+            reservation = db.scalar(select(InventoryReservation).where(InventoryReservation.order_item_id == item.id))
+            lot.semi_finished_detail.owner_customer_id = None
+            lot.semi_finished_detail.normalized_material_code = 'CCC'
+            lot.semi_finished_detail.material_code_snapshot = 'CCC'
+            lot.semi_finished_detail.crease_type = None
+            reservation.warning_acknowledged_by = None
+            db.flush()
+            assert liner_direct_coverage(db, item) == 0
+            reservation.warning_acknowledged_by = 1
+            import json
+            from app.models.warehouse_goods import WarehouseGoodsProfile
+            db.add(WarehouseGoodsProfile(lot_id=lot.id,data_json=json.dumps(dict(scope='public',customer_ids=[],product_ids=[],processing='cut',mold_tool_id=None,verified_material_id=None,material_code='CCC'))))
+            db.flush()
+            assert liner_direct_coverage(db, item) == 5
+            from app.services.production_workflow import list_production_tasks
+            assert list_production_tasks(db, allowed_customer_ids={1}, status='pending',task_ids=[task.id]) == []
             assert db.execute(_pending_query(db=db, order_item_id=item.id)).first() is not None
             assert _delivery_remaining_quantity(db, item) == 5
             from app.models.delivery import Delivery, DeliveryItem
@@ -381,6 +398,7 @@ def test_liner_direct_coverage_retains_source_without_completion(b1_app, style, 
             item.delivered_quantity = 0
             db.flush()
             assert (lot.quantity_available, lot.quantity_reserved) == (7, 5)
+            assert lot.semi_finished_detail.material_code_snapshot == 'CCC'
             assert db.scalar(select(ProductionCompletion.id)) is None
 
 

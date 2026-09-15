@@ -147,3 +147,19 @@ def test_printed_product_name_and_specification_use_separate_columns() -> None:
     assert 'class="product-spec"' not in source
     assert 'item.specification || ""' in source
     assert "规格未登记" not in source
+
+
+def test_customer_po_is_monochrome_single_line_and_columns_are_rebalanced() -> None:
+    source = _source()
+    assert 'order-reference.css' not in source
+    assert 'TMOrderReference.html' not in source
+    assert 'white-space: nowrap' in _css_block(source, '.customer-order-cell')
+    assert 'color: #000' in _css_block(source, '.customer-order-text')
+    assert 'background: transparent' in _css_block(source, '.customer-order-text')
+    assert 'text-align: right' in _css_block(source, '.item-quantity')
+    widths = re.findall(r'<col style="width:(\d+)%">', source)
+    assert widths == ['4','20','13','24','16','4','7','12']
+    assert sum(map(int,widths)) == 100
+    assert 'fitCustomerOrderNumbers(probe)' in source
+    assert 'beforeprint' in source
+    assert 'text-overflow: ellipsis' not in _css_block(source, '.customer-order-text')

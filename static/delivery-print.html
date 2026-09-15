@@ -148,12 +148,15 @@
     }
     th { font-weight: 700; }
     .product-code { font-size: 12px; }
-    .sequence { width: 5%; }
+    .sequence { width: 4%; }
+    .customer-order-cell { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
+    .customer-order-text { display: inline-block; white-space: nowrap; color: #000; background: transparent; font-size: 13px; }
+    .item-quantity { text-align: right; white-space: nowrap; }
     .product-name { text-align: left; overflow-wrap: anywhere; }
     .product-name.long-name { font-size: 12px; line-height: 1.18; }
     .product-specification { color: #222; font-size: 13px; line-height: 1.2; }
     .item-remark { font-size: 12px; }
-    .component-line td { background: #fafafa; }
+    .component-line td { background: #fff; }
     .component-line .product-name { padding-left: 10px; }
     .component-marker { font-size: 10px; font-weight: 700; white-space: nowrap; }
     .total {
@@ -249,7 +252,7 @@
       }
     }
   </style>
-<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head>
+</head>
 <body>
   <div class="toolbar no-print">
     <button id="printButton" disabled type="button">确认打印</button>
@@ -278,14 +281,14 @@
 
     <table>
       <colgroup>
-        <col style="width:5%">
-        <col style="width:14%">
+        <col style="width:4%">
+        <col style="width:20%">
         <col style="width:13%">
-        <col style="width:25%">
-        <col style="width:15%">
-        <col style="width:5%">
-        <col style="width:8%">
-        <col style="width:15%">
+        <col style="width:24%">
+        <col style="width:16%">
+        <col style="width:4%">
+        <col style="width:7%">
+        <col style="width:12%">
       </colgroup>
       <thead>
         <tr>
@@ -456,12 +459,12 @@
           : "";
         return `<tr${rowClass}>
           <td class="sequence">${entry.index + 1}</td>
-          <td>${TMOrderReference.html({customer_po:item.customer_po}, {secondary:false})}</td>
+          <td class="customer-order-cell"><span class="customer-order-text">${escapeHtml(String(item.customer_po || "").trim() || "未填写客户单号")}</span></td>
           <td class="product-code">${escapeHtml(item.product_code)}</td>
           <td class="product-name${longNameClass}">${componentMarker}${escapeHtml(productName)}</td>
           <td class="product-specification">${escapeHtml(specification)}</td>
           <td>${escapeHtml(item.unit)}</td>
-          <td>${escapeHtml(item.quantity)}</td>
+          <td class="item-quantity">${escapeHtml(item.quantity)}</td>
           <td class="item-remark">${escapeHtml(tableRemark)}</td>
         </tr>`;
       }).join("");
@@ -480,6 +483,21 @@
           .join("");
         getField(sheet, "remarkNotes").hidden = false;
       }
+    }
+
+    function orderNumberFontSize(naturalWidth, availableWidth, baseSize = 13) {
+      if (!(naturalWidth > 0) || !(availableWidth > 0)) return baseSize;
+      return Math.min(baseSize, Math.max(0.1, Math.floor(baseSize * availableWidth / naturalWidth * 100) / 100));
+    }
+
+    function fitCustomerOrderNumbers(root = document) {
+      root.querySelectorAll('.customer-order-text').forEach((text) => {
+        text.style.fontSize = '13px';
+        const cell = text.parentElement;
+        const style = getComputedStyle(cell);
+        const available = cell.clientWidth - parseFloat(style.paddingLeft || 0) - parseFloat(style.paddingRight || 0) - 1;
+        text.style.fontSize = `${orderNumberFontSize(text.getBoundingClientRect().width, available)}px`;
+      });
     }
 
     function renderDelivery(data) {
@@ -503,6 +521,7 @@
         const probe = createSheet();
         populateSheet(probe, printData, candidateEntries, 1, 1);
         container.appendChild(probe);
+        fitCustomerOrderNumbers(probe);
         const safeArea = probe.querySelector(".print-safe-area");
         const fits = safeArea.scrollHeight <= safeArea.clientHeight + 1;
         probe.remove();
@@ -528,6 +547,7 @@
         const sheet = createSheet();
         populateSheet(sheet, printData, pageEntries, index + 1, pages.length);
         container.appendChild(sheet);
+        fitCustomerOrderNumbers(sheet);
       });
       container.style.visibility = "visible";
     }
@@ -679,8 +699,13 @@
     }
 
     printButton.addEventListener("click", () => {
-      if (!printButton.disabled) window.print();
+      if (!printButton.disabled) {
+        fitCustomerOrderNumbers();
+        window.print();
+      }
     });
+    window.addEventListener('beforeprint', () => fitCustomerOrderNumbers());
+    if (document.fonts?.ready) document.fonts.ready.then(() => fitCustomerOrderNumbers());
     retryButton.addEventListener("click", () => loadDelivery());
     if (deferDeliveryLoad) {
       showLoading("等待发货确认，完成后自动读取送货单…");

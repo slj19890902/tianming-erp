@@ -13,7 +13,7 @@ assert(!malicious.includes('<img')&&!malicious.includes('<script>'));
 assert.match(malicious,/&lt;img/);
 assert(!ref.html({customer_po:'PO',order_number:'TM'},{secondary:false}).includes('TM'));
 const long='PO-'+ '1234567890'.repeat(20);assert(ref.html({customer_po:long}).includes(long));
-const pages=['index','mobile_erp','incoming','delivery-print','requisition-production-print','warehouse','mobile_product_live','mobile_mold_live','inventory-assistant','shelf-scan','customer-statement-check'];
+const pages=['index','mobile_erp','incoming','requisition-production-print','warehouse','mobile_product_live','mobile_mold_live','inventory-assistant','shelf-scan','customer-statement-check'];
 for(const name of pages){
  const page=fs.readFileSync(`static/${name}.html`,'utf8');
  assert(page.includes('/static/ui/order-reference.css?v=423'),name);
@@ -35,4 +35,5 @@ assert(index.includes('deliveryInlineEdit.customer_po'));
 assert(!index.includes('<strong>{{ row.item_order_number || row.order_number'));
 const css=fs.readFileSync('static/ui/order-reference.css','utf8');
 assert(css.includes('overflow-wrap:anywhere'));assert(css.includes('print-color-adjust:exact'));
-console.log('Customer PO identities, no ERP fallback, XSS, long values, 11 page scripts and Vue component passed');
+assert(!fs.readFileSync('static/delivery-print.html','utf8').includes('order-reference.css'),'Dot-matrix delivery page is an explicit monochrome exception');
+console.log('Customer PO identities, no ERP fallback, XSS, long values, page scripts and Vue component passed; delivery print remains monochrome');

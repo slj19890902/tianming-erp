@@ -53,16 +53,16 @@ def test_every_customer_visible_block_is_inside_the_safe_area() -> None:
 def test_name_and_spec_are_real_columns_with_larger_detail_text() -> None:
     header = _between("<thead>", "</thead>")
     assert "<th>产品名称</th>" in header
-    assert "<th>规格</th>" in header
+    assert "<th>规格（mm）</th>" in header
     assert "产品名称 / 规格" not in header
     assert "font-size: 13px" in _css("table")
     assert "font-size: 12px" in _css(".product-code")
     assert "font-size: 12px" in _css(".product-name.long-name")
     assert 'class="product-specification"' in PAGE
     assert 'class="product-spec"' not in PAGE
-    assert '<col style="width:25%">' in PAGE
-    assert '<col style="width:15%">' in PAGE
-    assert '<col style="width:5%">' in PAGE
+    assert '<col style="width:24%">' in PAGE
+    assert '<col style="width:16%">' in PAGE
+    assert '<col style="width:4%">' in PAGE
     assert "<col" in PAGE
     assert header.count("<th>") == 8
 

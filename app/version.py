@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.425"
-APP_VERSION_NAME = "客户订单号主显示"
+APP_VERSION = "v0.22.426"
+APP_VERSION_NAME = "送货单针式打印单行版式"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4242,3 +4242,6 @@ APP_CHANGELOG = [*(f"v0.22.424：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["销售订单引用统一客户单号绿底主显示，ERP订单号灰字次显示；订单、报料、来料、生产、送货、对账、手机和仓库使用同一显示规则。", "补充只读客户单号投影，保留编号生成、搜索、业务ID、库存和历史快照；无客户号不以ERP号冒充。"]
 APP_VERIFICATION_STEPS = ["刷新订单列表，客户单号应为绿底；打开详情，ERP单号仍可用灰字追溯。", "手机查询、仓库关联订单与送货打印预览核对客户单号；不要为验收提前发货。"]
 APP_CHANGELOG = [*(f"v0.22.425：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["送货单针式打印客户单号取消绿底，完整单行显示；超长单号仅缩小自身字号。", "加宽客户单号列，缩窄数量和备注列，数量靠右；其他业务页面保留客户单号绿底。"]
+APP_VERIFICATION_STEPS = ["打开现有送货单打印预览，核对客户单号黑字无底色、完整单行和数量右对齐，不为验收提前发货。", "管理员用针式打印机试打一张，核对完整内容与分页；网页订单客户号仍为绿底。"]
+APP_CHANGELOG = [*(f"v0.22.426：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

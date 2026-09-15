@@ -1081,6 +1081,14 @@ def _pick_task_read_context(
     return {
         "delivery_items": delivery_items,
         "order_items": order_items,
+        "unstocked_direct_quantities": dict(db.execute(select(
+            ProductionCompletion.order_item_id,
+            func.sum(ProductionCompletion.direct_delivery_quantity),
+        ).where(ProductionCompletion.order_item_id.in_(order_item_ids),
+                ProductionCompletion.status == 'posted',
+                ProductionCompletion.inventory_lot_id.is_(None),
+                ProductionCompletion.initial_disposition == 'direct'
+        ).group_by(ProductionCompletion.order_item_id)).all()) if order_item_ids else {},
         "composite_order_item_ids": composite_order_item_ids,
         "inventory_source_order_item_ids": inventory_source_order_item_ids,
         "lots": lots,
@@ -1131,7 +1139,7 @@ def _pick_item_component_lines(
             else is_composite_order_item(db, order_item.id)
         )
     )
-    if order_item is None or not is_composite:
+    if order_item is None or not is_composite or not _uses_composite_inventory(db, order_item.id, is_composite):
         return []
     return [
         component
@@ -1305,6 +1313,7 @@ def _pick_source_location(
                 location,
                 area=(projection_context or {}).get("area"),
                 floor=(projection_context or {}).get("floor"),
+                area_sequence=(projection_context or {}).get("area_sequence"),
             )
             if location
             else None
@@ -1385,6 +1394,21 @@ def _pick_parent_finished_sources(
     return sources
 
 
+def _pick_quantity_unit(component: dict | None = None, *, liner_direct: bool = False) -> str:
+    if liner_direct:
+        return '张'
+    unit = str((component or {}).get('unit') or '').strip()
+    if unit.lower() in {'set', 'sets'}:
+        return '套'
+    if unit.lower() in {'sheet', 'sheets'}:
+        return '张'
+    if unit.lower() in {'pcs', 'piece', 'pieces'}:
+        return '个' if (component or {}).get('is_graph_root') else '片'
+    if unit and unit.lower() not in {'box', 'boxes'}:
+        return unit
+    return '个'
+
+
 def _pick_item_location_plan(
     db: Session,
     *,
@@ -1426,14 +1450,10 @@ def _pick_item_location_plan(
         if read_context is not None
         else None
     )
-    if (
-        read_context is not None
-        and not composite_hint
-        and order_item.id not in read_context["inventory_source_order_item_ids"]
-    ):
-        return [], False
     planned_quantity = max(int(item.original_quantity or 0), 0)
-    raw_sources = _inventory_sources_for_order_item(
+    no_sources = (read_context is not None and not composite_hint
+                  and order_item.id not in read_context['inventory_source_order_item_ids'])
+    raw_sources = [] if no_sources else _inventory_sources_for_order_item(
         db,
         order_item=order_item,
         planned_delivery_quantity=planned_quantity,
@@ -1442,7 +1462,8 @@ def _pick_item_location_plan(
         composite_hint=composite_hint,
         read_context=read_context,
     )
-    if component_lines and fulfillment_mode == "parent_delivery":
+    graph_root_ids = {int(row['component_snapshot_id']) for row in component_lines if row.get('is_graph_root')}
+    if component_lines and fulfillment_mode == "parent_delivery" and not graph_root_ids:
         raw_sources = [
             *_pick_parent_finished_sources(
                 db,
@@ -1460,9 +1481,19 @@ def _pick_item_location_plan(
     lines: list[dict] = []
     covered_by_component: dict[int, int] = {}
     finished_covered = 0
-    is_direct_liner = liner_direct_coverage(db, order_item) > 0
+    is_direct_liner = any(s.get('source_type') == 'semi_finished' for s in raw_sources) and liner_direct_coverage(db, order_item) > 0
+    parent_unit = (order_item.external_packaging_purchase_unit_snapshot
+                   if order_item.supply_mode_snapshot == 'external_purchase'
+                   and order_item.external_packaging_quantity_per_finished_unit_snapshot in (None, 1)
+                   else None)
 
+    seen_reservations: set[int] = set()
     for source in raw_sources:
+        reservation_id = source.get('reservation_id')
+        if reservation_id is not None:
+            if reservation_id in seen_reservations:
+                continue
+            seen_reservations.add(reservation_id)
         source_type = str(source.get("source_type") or "")
         # Semi-finished reservations are production inputs, not finished goods
         # that a driver should load.  Their eventual finished output is listed
@@ -1489,6 +1520,8 @@ def _pick_item_location_plan(
             covered_by_component[snapshot_id] = (
                 covered_by_component.get(snapshot_id, 0) + requirement_quantity
             )
+            if snapshot_id in graph_root_ids:
+                finished_covered += requirement_quantity
         elif source_type == "finished" or liner_direct:
             finished_covered += requirement_quantity
         location = _pick_source_location(
@@ -1524,7 +1557,7 @@ def _pick_item_location_plan(
                 ),
                 "pick_quantity": display_quantity,
                 "requirement_quantity": requirement_quantity,
-                "unit": "个",
+                "unit": _pick_quantity_unit(component or {'unit': parent_unit}, liner_direct=liner_direct),
                 "location_id": None if is_direct else location["location_id"],
                 "location_code": None if is_direct else location["location_code"],
                 "location_name": None if is_direct else location["location_name"],
@@ -1564,112 +1597,50 @@ def _pick_item_location_plan(
             }
         )
 
+    def append_missing(quantity: int, component: dict | None = None) -> None:
+        if quantity <= 0:
+            return
+        lines.append({
+            "pick_item_id": item.id, "order_item_id": item.order_item_id,
+            "source_type": "unassigned", "reservation_id": None, "lot_id": None,
+            "lot_number": None, "component_snapshot_id": (component or {}).get("component_snapshot_id"),
+            "product_code": (component or {}).get("product_code") or item.product_code_snapshot,
+            "product_name": (component or {}).get("product_name") or item.product_name_snapshot,
+            "specification": (component or {}).get("specification") or item.specification_snapshot,
+            "pick_quantity": quantity, "requirement_quantity": quantity,
+            "unit": _pick_quantity_unit(component or {'unit': parent_unit}, liner_direct=is_direct_liner),
+            "location_id": None, "location_code": None, "location_name": None,
+            "warehouse_floor": None, "area_code": None, "location_sort_order": None,
+            "placement_status": None, "pallet_id": None, "pallet_code": None,
+            "location_operational": False, "needs_relocation": False, "requires_attention": True,
+            "shortage_reason": "未落实库存或取货位置，请核对",
+        })
+
     if component_lines:
-        parent_direct_quantity = (
-            max(planned_quantity - finished_covered, 0)
-            if fulfillment_mode == "parent_delivery"
-            else 0
-        )
-        if parent_direct_quantity > 0:
-            lines.append(
-                {
-                    "pick_item_id": item.id,
-                    "order_item_id": item.order_item_id,
-                    "source_type": "production_direct",
-                    "reservation_id": None,
-                    "lot_id": None,
-                    "lot_number": None,
-                    "component_snapshot_id": None,
-                    "product_code": item.product_code_snapshot,
-                    "product_name": item.product_name_snapshot,
-                    "specification": item.specification_snapshot,
-                    "pick_quantity": parent_direct_quantity,
-                    "requirement_quantity": parent_direct_quantity,
-                    "unit": "个",
-                    "location_id": None,
-                    "location_code": None,
-                    "location_name": None,
-                    "warehouse_floor": None,
-                    "area_code": None,
-                    "location_sort_order": None,
-                    "placement_status": None,
-                    "pallet_id": None,
-                    "pallet_code": None,
-                    "location_operational": True,
-                    "needs_relocation": False,
-                    "requires_attention": False,
-                }
-            )
+        if fulfillment_mode == "parent_delivery" and not graph_root_ids:
+            append_missing(max(planned_quantity - finished_covered, 0))
         for component in component_lines:
             snapshot_id = int(component["component_snapshot_id"])
-            expected = max(
-                int(component.get("planned_delivery_quantity") or 0),
-                0,
-            )
-            missing = max(expected - covered_by_component.get(snapshot_id, 0), 0)
-            if missing <= 0:
-                continue
-            lines.append(
-                {
-                    "pick_item_id": item.id,
-                    "order_item_id": item.order_item_id,
-                    "source_type": "unassigned",
-                    "reservation_id": None,
-                    "lot_id": None,
-                    "lot_number": None,
-                    "component_snapshot_id": snapshot_id,
-                    "product_code": component.get("product_code"),
-                    "product_name": component.get("product_name"),
-                    "specification": component.get("specification"),
-                    "pick_quantity": missing,
-                    "requirement_quantity": missing,
-                    "unit": "个",
-                    "location_id": None,
-                    "location_code": None,
-                    "location_name": None,
-                    "warehouse_floor": None,
-                    "area_code": None,
-                    "location_sort_order": None,
-                    "placement_status": None,
-                    "pallet_id": None,
-                    "pallet_code": None,
-                    "location_operational": False,
-                    "needs_relocation": False,
-                    "requires_attention": True,
-                }
-            )
+            append_missing(max(int(component.get("planned_delivery_quantity") or 0)
+                               - covered_by_component.get(snapshot_id, 0), 0), component)
     else:
-        direct_quantity = max(planned_quantity - finished_covered, 0)
-        if direct_quantity > 0:
-            lines.append(
-                {
-                    "pick_item_id": item.id,
-                    "order_item_id": item.order_item_id,
-                    "source_type": "production_direct",
-                    "reservation_id": None,
-                    "lot_id": None,
-                    "lot_number": None,
-                    "component_snapshot_id": None,
-                    "product_code": item.product_code_snapshot,
-                    "product_name": item.product_name_snapshot,
-                    "specification": item.specification_snapshot,
-                    "pick_quantity": direct_quantity,
-                    "requirement_quantity": direct_quantity,
-                    "unit": "个",
-                    "location_id": None,
-                    "location_code": None,
-                    "location_name": None,
-                    "warehouse_floor": None,
-                    "area_code": None,
-                    "location_sort_order": None,
-                    "placement_status": None,
-                    "pallet_id": None,
-                    "pallet_code": None,
-                    "location_operational": True,
-                    "needs_relocation": False,
-                    "requires_attention": False,
-                }
-            )
+        # A short reservation is NOT evidence of stock waiting in production.
+        # Preserve explicit legacy direct output only when it never created a lot.
+        direct_total = read_context['unstocked_direct_quantities'].get(order_item.id, 0) if read_context is not None else db.scalar(select(func.coalesce(func.sum(
+            ProductionCompletion.direct_delivery_quantity), 0)).where(
+                ProductionCompletion.order_item_id == order_item.id,
+                ProductionCompletion.status == "posted",
+                ProductionCompletion.inventory_lot_id.is_(None),
+                ProductionCompletion.initial_disposition == "direct",
+            ))
+        direct_capacity = max(int(direct_total or 0) - int(order_item.delivered_quantity or 0), 0)
+        missing = max(planned_quantity - finished_covered, 0)
+        direct = min(missing, direct_capacity)
+        if direct:
+            append_missing(direct)
+            lines[-1].update(source_type="production_direct", location_operational=True,
+                             requires_attention=False, shortage_reason=None)
+        append_missing(missing - direct)
     return lines, not any(line["requires_attention"] for line in lines)
 
 
@@ -1813,6 +1784,7 @@ def _pick_location_groups(
                 location,
                 area=projection_context.get("area"),
                 floor=projection_context.get("floor"),
+                area_sequence=projection_context.get("area_sequence"),
             )
             group.update(
                 {
@@ -1892,6 +1864,15 @@ def _pick_item_response(
         if include_location_plan
         else ([], True)
     )
+    if component_lines and not any(c.get('is_graph_root') for c in component_lines):
+        from app.models.multilevel_bom import ProductBomProfile
+        order_item = db.get(OrderItem, item.order_item_id)
+        profile = db.get(ProductBomProfile, order_item.product_id) if order_item else None
+        if profile and profile.source == 'assembled':
+            for line in location_lines:
+                line['inventory_note'] = '旧单子件账，成套库存未登记；勿按此重复拿长短片'
+                line['requires_attention'] = True
+            location_plan_complete = False
     return {
         "id": item.id,
         "delivery_item_id": item.delivery_item_id,
@@ -1986,6 +1967,11 @@ def _pick_task_response(
                         "lot_id": line.get("lot_id"),
                         "units_per_bundle": line.get("units_per_bundle"),
                         "putaway_pending": line.get("putaway_pending"),
+                        "unit": line.get("unit"),
+                        "component_snapshot_id": line.get("component_snapshot_id"),
+                        "location_name": line.get("location_name"),
+                        "inventory_note": line.get("inventory_note"),
+                        "requires_attention": line.get("requires_attention"),
                         "specification_display": line.get("specification_display"),
                         "customer_inventory_code": line.get("customer_inventory_code"),
                     }
@@ -2591,6 +2577,7 @@ def _composite_inventory_sources_for_order_item(
                     location,
                     area=(projection_context or {}).get("area"),
                     floor=(projection_context or {}).get("floor"),
+                    area_sequence=(projection_context or {}).get("area_sequence"),
                 )
                 if location
                 else None
@@ -2611,6 +2598,8 @@ def _composite_inventory_sources_for_order_item(
             "component_code": demand.component_code,
             "component_name": demand.component_name,
             "quantity_per_set": demand.quantity_per_set,
+            "unit": demand.unit,
+            "is_graph_root": demand.is_graph_root,
             "quantity_to_pick_stock": quantity if reservation else 0,
             "quantity_to_pick_requirement": quantity,
         }
@@ -3121,6 +3110,7 @@ def _inventory_sources_for_order_item(
                         location,
                         area=(projection_context or {}).get("area"),
                         floor=(projection_context or {}).get("floor"),
+                        area_sequence=(projection_context or {}).get("area_sequence"),
                     )
                     if location
                     else None
@@ -3631,6 +3621,7 @@ def _delivery_list_location_payload(
                 location,
                 area=projection_context.get("area"),
                 floor=projection_context.get("floor"),
+                area_sequence=projection_context.get("area_sequence"),
             )
             if location is not None
             else None
@@ -3848,6 +3839,8 @@ def _delivery_list_composite_inventory_sources(
             "component_code": demand.component_code,
             "component_name": demand.component_name,
             "quantity_per_set": demand.quantity_per_set,
+            "unit": demand.unit,
+            "is_graph_root": demand.is_graph_root,
             "quantity_to_pick_stock": quantity if reservation else 0,
             "quantity_to_pick_requirement": quantity,
         }
@@ -4153,7 +4146,7 @@ def _unordered_finished_allocation_payload(
         "location_id": row.warehouse_location_id_snapshot,
         "location_code": row.warehouse_location_code_snapshot,
         "location_name": employee_location_name(
-            location, area=context.get("area"), floor=context.get("floor")
+            location, area=context.get("area"), floor=context.get("floor"), area_sequence=context.get("area_sequence")
         ) if location is not None else None,
         "pallet_code": row.pallet_code_snapshot,
         "quantity": int(row.planned_quantity or 0),
@@ -7530,6 +7523,7 @@ def unordered_finished_candidates(
                     location,
                     area=projection_contexts.get(int(location.id), {}).get("area"),
                     floor=projection_contexts.get(int(location.id), {}).get("floor"),
+                    area_sequence=projection_contexts.get(int(location.id), {}).get("area_sequence"),
                 ),
                 "pallet_code": pallet.pallet_code if pallet else None,
                 "order_pending_quantity": int(

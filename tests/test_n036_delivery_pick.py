@@ -419,7 +419,8 @@ def test_phase2c9_map_locator_exposes_assigned_delivery_pick_route(pick_app) -> 
                 "location_group_count": len(task["location_groups"]),
             }
         ]
-        assert located.json()["resources"] == []
+        assert len(located.json()["resources"]) == 1
+        assert located.json()["resources"][0]['resource_id'].endswith(':unassigned')
 
         _login(client, "delivery_picker")
         assigned = client.get(
@@ -619,7 +620,7 @@ def test_editing_delivery_invalidates_old_pick_snapshot(pick_app) -> None:
         assert client.get("/api/delivery-picks").json()["items"] == []
 
 
-def test_n083_location_first_plan_and_one_click_normal_completion(
+def test_n083_location_first_plan_rejects_unbacked_shortage_completion(
     pick_app,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -840,8 +841,8 @@ def test_n083_location_first_plan_and_one_click_normal_completion(
         groups = task["location_groups"]
         assert [group["source_type"] for group in groups] == [
             "finished_inventory",
-            "production_direct",
             "finished_inventory",
+            "unassigned",
         ]
         assert groups[0]["location_code"] == "B2-L01"
         assert groups[0]["pallet_code"] == "PLT-N083-1"
@@ -853,32 +854,28 @@ def test_n083_location_first_plan_and_one_click_normal_completion(
         assert groups[0]["published_map_revision"] == current_revision
         assert groups[0]["location_name"] != "LEGACY-B2-L01"
         assert "A架" in groups[0]["location_name"]
-        assert groups[1]["label"] == "生产区直接拿货"
-        assert groups[1]["map_status"] == "text_only"
-        assert groups[1]["lines"][0]["pick_quantity"] == 40
-        assert groups[2]["location_code"] == "E1-L09"
-        assert groups[2]["pallet_code"] == "PLT-N083-2"
-        assert groups[2]["needs_relocation"] is True
+        assert groups[2]["source_type"] == "unassigned"
         assert groups[2]["map_status"] == "text_only"
-        assert groups[2]["position_status"] != "mapped"
-        assert groups[2].get("map_point") is None
-        assert task["location_plan_complete"] is True
+        assert groups[2]["lines"][0]["pick_quantity"] == 40
+        assert groups[2]["requires_attention"] is True
+        assert groups[1]["location_code"] == "E1-L09"
+        assert groups[1]["pallet_code"] == "PLT-N083-2"
+        assert groups[1]["needs_relocation"] is True
+        assert groups[1]["map_status"] == "text_only"
+        assert groups[1]["position_status"] != "mapped"
+        assert groups[1].get("map_point") is None
+        assert task["location_plan_complete"] is False
 
         _login(client, "delivery_picker")
         completed = client.post(
             f"/api/delivery-picks/{task['id']}/complete-planned"
         )
-        assert completed.status_code == 200, completed.text
-        assert completed.json()["status"] == "driver_confirmed"
-        assert {
-            (row["pick_status"], row["picked_quantity"])
-            for row in completed.json()["items"]
-        } == {("picked", 100), ("picked", 50)}
+        assert completed.status_code == 409, completed.text
+        assert '未分配拿货来源' in completed.json()['detail']
         repeated = client.post(
             f"/api/delivery-picks/{task['id']}/complete-planned"
         )
-        assert repeated.status_code == 200
-        assert repeated.json()["status"] == "driver_confirmed"
+        assert repeated.status_code == 409
 
     with factory() as db:
         assert db.get(Delivery, ids["delivery"]).status == "pending"
@@ -886,12 +883,12 @@ def test_n083_location_first_plan_and_one_click_normal_completion(
             select(DeliveryPickTaskItem).order_by(DeliveryPickTaskItem.id)
         ).all()
         assert [(row.status, row.picked_quantity) for row in saved] == [
-            ("picked", 100),
-            ("picked", 50),
+            ("pending", 0),
+            ("pending", 0),
         ]
         logs = db.scalars(
             select(operation_log).where(
                 operation_log.action == "COMPLETE_PICK_TASK_PLANNED"
             )
         ).all()
-        assert len(logs) == 1
+        assert len(logs) == 0

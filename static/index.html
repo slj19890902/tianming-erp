@@ -14198,7 +14198,8 @@
                 const component = [source.component_code, source.component_name].filter(Boolean).join(" / ") || "复合组件";
                 const location = this.inventoryLocation(source);
                 const quantity = source.quantity_to_pick_component ?? source.quantity_to_pick_piece ?? source.quantity_to_pick_requirement ?? source.quantity_to_pick_stock ?? source.quantity ?? 0;
-                return `组件 ${component} ${location} 取货${quantity}片`;
+                const unit = ({PCS:'片',pcs:'片',boxes:'个',sheets:'张',sets:'套'})[source.unit] || source.unit || '片';
+                return `${source.is_graph_root ? '成套成品' : '组件'} ${component} ${location} 取货${quantity}${unit}`;
               }
               return `${source.source_type === "semi_finished" ? "半成品" : "成品"}${this.componentLabel(source.component_type)} ${source.lot_number || "-"} ${this.inventoryLocation(source)} ×${source.quantity_to_pick_requirement ?? source.quantity_to_pick_stock ?? source.quantity ?? 0}`;
             }).join("；");

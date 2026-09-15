@@ -88,7 +88,7 @@ def test_print_uses_existing_location_plan_and_never_writes_business_state() -> 
     ):
         assert forbidden not in PRINT
     assert "本单只用于仓库找货备货，不代表已出库" in PRINT
-    assert "纸面填写不改库存、不发货" in PRINT
+    assert "纸面填写和扫码拿齐不改库存、不发货" in PRINT
     assert "line.location_code ||" not in PRINT
     assert "row.pallet" not in PRINT
 

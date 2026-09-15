@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.416"
-APP_VERSION_NAME = "衬板已采用异材质库存原位直发"
+APP_VERSION = "v0.22.417"
+APP_VERSION_NAME = "找货单数量来源与当前地图地址校正"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4216,3 +4216,5 @@ APP_CHANGELOG = [*(f"v0.22.415：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["衬板认可已人工采用的公共净片和异材质库存，不再用常用箱材质重复阻挡；按原批次位置直接待送，不重复生产入库。", "实际材质、成本及预占保持不变，保留加工、适用范围、数量和出货撤销保护。"]
 APP_VERIFICATION_STEPS = ["刷新PO2026090404的21302044，核对10张不再出现在待生产、可送数量为10，找货指向南F货架2第一层第二格。", "正常送货时按实际数量取原库存；不要重新入库或修改库存材质。"]
 APP_CHANGELOG = [*(f"v0.22.416：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["找货单按实际库存来源列示，缺口不再虚构生产区或漏行；成套根产品不重复计数，父件库存不重复带出旧子件。", "地址使用地图当前编号，套/片/根分开显示汇总；旧子件账明确提示待核对，不自动转换库存。"]
+APP_CHANGELOG = [*(f"v0.22.417：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

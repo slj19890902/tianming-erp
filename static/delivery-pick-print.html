@@ -29,6 +29,7 @@
     .subtotal { color: #111827; font-weight: 700; }
     .route { font-weight: 700; }
     .muted { color: #6b7280; }
+    .warning { color: #b91c1c; font-weight: 700; }
     .write-line { display: block; min-height: 5mm; border-bottom: 1px solid #111827; }
     .footer { margin-top: auto; padding-top: 4mm; font-size: 12px; }
     .summary { display: flex; justify-content: space-between; gap: 10mm; margin-bottom: 5mm; }
@@ -83,7 +84,7 @@
       const rows = [];
       (task.location_groups || []).forEach(group => {
         [...(group.lines || [])].sort((left, right) => String(left.product_code || "").localeCompare(String(right.product_code || ""), "zh-CN")).forEach(line => {
-          const itemKey = String(line.pick_item_id ?? `${line.product_code || ""}|${line.product_name || ""}`);
+          const itemKey = JSON.stringify([line.pick_item_id, line.component_snapshot_id, line.product_code, line.product_name, line.specification, line.unit]);
           totals.set(itemKey, (totals.get(itemKey) || 0) + Number(line.pick_quantity || 0));
           rows.push({
             itemKey,
@@ -96,6 +97,7 @@
             unit: line.unit || "个",
             bundleText: line.bundle_text || "每捆数量待核",
             putawayPending: !!line.putaway_pending,
+            warning: line.inventory_note || (line.source_type === 'unassigned' ? '库存/位置未落实，不代表可拿货' : line.requires_attention ? '位置待核对' : ''),
             staging: items.get(String(line.pick_item_id))?.staging_required
               ? items.get(String(line.pick_item_id)).staging_area_label || '集货区待配置'
               : '',
@@ -115,21 +117,24 @@
         <td>${row.sequence}</td>
         <td>${escapeHtml(row.productCode)}</td>
         <td class="product"><div class="product-name">${escapeHtml(row.productName)}</div><div class="spec">${escapeHtml(row.specification)}</div>${row.productTotal === null ? "" : `<div class="subtotal">本品合计 ${row.productTotal} ${escapeHtml(row.unit)}</div>`}</td>
-        <td class="location"><div class="route">第 ${row.routeSequence || "-"} 站</div><div>${escapeHtml(row.location)}</div>${row.staging ? `<div class="spec">集中到：${escapeHtml(row.staging)}</div>` : ''}</td>
+        <td class="location"><div class="route">第 ${row.routeSequence || "-"} 站</div><div>${escapeHtml(row.location)}</div>${row.warning ? `<div class="warning">${escapeHtml(row.warning)}</div>` : ''}${row.staging ? `<div class="spec">集中到：${escapeHtml(row.staging)}</div>` : ''}</td>
         <td>${row.quantity} ${escapeHtml(row.unit)}<div class="spec">${escapeHtml(row.bundleText)}</div>${row.putawayPending?'<div class="spec">待上架</div>':""}</td>
         <td><span class="write-line"></span></td>
         <td><span class="write-line"></span></td>
       </tr>`;
     }
     function pageHtml(task, user, rows, pageIndex, pageCount, pageRows = rows.slice(pageIndex * ROWS_PER_PAGE, (pageIndex + 1) * ROWS_PER_PAGE)) {
-      const totalQuantity = rows.reduce((sum, row) => sum + row.quantity, 0);
+      const totalsByUnit = new Map();
+      rows.forEach(row => totalsByUnit.set(row.unit, (totalsByUnit.get(row.unit) || 0) + row.quantity));
+      const totalQuantity = [...totalsByUnit].map(([unit, quantity]) => `${quantity}${unit}`).join('、');
       const printUser = user.display_name || user.real_name || user.username || "-";
       const summaryText = pageIndex === pageCount - 1
-        ? `整单共 ${rows.length} 个位置行，计划 ${totalQuantity}（各行单位为准）`
+        ? `整单共 ${rows.length} 行，列示 ${escapeHtml(totalQuantity)}（含待核对）`
         : `本页 ${pageRows.length} 个位置行，整单合计见末页`;
       return `<section class="page">
         <div class="page-number">第 ${pageIndex + 1}/${pageCount} 页</div>
         <h1>仓库找货单（出库备货）</h1>
+        ${rows.some(row => row.warning) ? '<div class="warning">有库存或位置待核对项，请勿按本单默认拿齐。</div>' : ''}
         <div class="meta">
           <div><strong>客户：</strong>${escapeHtml(task.customer_name || "-")}</div>
           <div><strong>拿货单号：</strong>NH-${escapeHtml(task.id)}</div>

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.420"
-APP_VERSION_NAME = "PDF明细工作区与取消订单提示"
+APP_VERSION = "v0.22.421"
+APP_VERSION_NAME = "同货位同款汇总与BOM子件隔离"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4227,3 +4227,6 @@ APP_CHANGELOG = [*(f"v0.22.419：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["PDF识别每页30行，单一纵向滚动，客户单头和提示压缩显示，不再因提示高度变成每页1行。", "已取消订单明确提示尚未删除，保留重复订单保护及历史事实；保留v419全部BOM更新。"]
 APP_VERIFICATION_STEPS = ["重新打开PDF识别，29行应在同一页连续核对；展开待处理可查看全部行号和原因。", "原单已取消时应明确提示未删除；请在已作废/取消订单列表核对，不重复录入。"]
 APP_CHANGELOG = [*(f"v0.22.420：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["同货位、同客户且编码、名称、箱型一致的普通成品汇总显示，整数数量不带小数尾零；原批次可展开追溯。", "BOM子件、箱型或身份不明的产品不自动汇总，不改变库存、组套、配套、预占与出库关系。"]
+APP_VERIFICATION_STEPS = ["刷新仓库后查看同位同款：主行显示合计，明细保留各批次；不同名称/箱型及BOM子件保持分开。", "手机进入同一货位，展开明细核对原批次数量；不要为验收重复入库或出货。"]
+APP_CHANGELOG = [*(f"v0.22.421：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

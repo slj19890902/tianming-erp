@@ -1,0 +1,17 @@
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const page = fs.readFileSync('static/mobile_erp.html', 'utf8');
+for (const script of page.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) new vm.Script(script[1]);
+const start = page.indexOf('function groupWarehouseRackGoods(');
+const end = page.indexOf('function warehouseGoodsDisplay(', start);
+const context = vm.createContext({});
+vm.runInContext(page.slice(start,end)+';this.group=groupWarehouseRackGoods;', context);
+const a = {lot_id:1,location_id:10,customer_id:1,product_id:2,product_code:'A',product_name:'纸箱',box_style:'A1',is_bom_component:false,inventory_type:'finished',unit:'只',ledger_unit:'boxes',quantity_total:20};
+const b = {...a,lot_id:2,quantity_total:30,material_code:'other'};
+const rows = [a,b,a], before = JSON.stringify(rows);
+const result = context.group(rows);
+assert.equal(result.length,1); assert.equal(result[0].quantity_total,50);
+assert.equal(result[0].source_goods.length,2); assert.equal(JSON.stringify(rows),before);
+for (const change of [{product_code:'B'},{product_name:'子件'},{box_style:'A2'},{box_style:null},{is_bom_component:true},{is_bom_component:undefined},{location_id:11},{product_id:3},{customer_id:2},{ledger_unit:'sets'}]) assert.equal(context.group([a,{...b,...change}]).length,2);
+assert.match(page,/group\.source_goods\.forEach\(good =>/);
+assert.match(page,/selectWarehouseMapSource\(good, location\)/);
+console.log('mobile grouping, identity boundaries, intact source actions and JS syntax passed');

@@ -3127,6 +3127,8 @@ def _claim_mobile_warehouse_floors(
 
 
 def _mobile_goods_payload(lot: InventoryLot) -> dict:
+    from app.services.warehouse_reading_identity import shelf_merge_identity
+    from app.services.warehouse_display_units import lot_display_unit
     if lot.finished_detail is not None:
         detail = lot.finished_detail
         product_id = detail.product_id
@@ -3154,6 +3156,9 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
     )
     damaged_quantity = int(lot.quantity_damaged or 0)
     return {
+        **shelf_merge_identity(lot),
+        "location_id": lot.warehouse_location_id,
+        "ledger_unit": lot.unit,
         "lot_id": int(lot.id),
         "lot_version": int(lot.version),
         "inventory_type": lot.inventory_type,
@@ -3171,7 +3176,7 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
         "quantity_movable": movable_quantity,
         "quantity_total": movable_quantity + damaged_quantity,
         "status": lot.status,
-        "unit": "只" if lot.inventory_type == "finished" else "张",
+        "unit": {"boxes": "只", "sheets": "张", "sets": "套", "pieces": "片"}.get(lot_display_unit(lot), lot_display_unit(lot)),
         "stock_date": lot.stock_date,
         "last_movement_at": utc_naive_to_api(lot.last_movement_at),
         "can_move": (

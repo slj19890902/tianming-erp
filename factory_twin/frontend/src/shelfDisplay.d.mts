@@ -1,8 +1,10 @@
 export interface ShelfReadingItem {
   stock_date?: string | null; stock_date_accuracy?: string;
   lot_id: number; product_id?: number | null; customer_id?: number | null;
+  inventory_code?: string | null; product_name?: string | null; box_style?: string | null;
+  is_bom_component?: boolean | null;
   inventory_type?: string; unit?: string; specification?: string | null; material?: string | null;
-  location_id?: number; location_code?: string | null; quantity?: number;
+  location_id?: number | null; location_code?: string | null; quantity?: number;
   available_quantity?: number; reserved_quantity?: number; damaged_quantity?: number;
   composite_parent_group_key?: string | null;
 }

@@ -204,6 +204,9 @@ interface AreaDistribution {
 }
 
 interface InventoryItem {
+  location_id?: number | null;
+  box_style?: string | null;
+  is_bom_component?: boolean | null;
   lot_id: number;
   product_id?: number | null;
   inventory_type?: "finished" | "semi_finished";
@@ -1533,6 +1536,7 @@ function WarehouseRackElevation({
   const levelCellCounts = rackLevelCellCounts(rack);
   const [selectedItem, setSelectedItem] = useState<RackInventoryItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const selectedReadingGroup = selectedItem ? groupShelfProducts(locations.flatMap(rackLocationInventoryItems)).find(group => group.items.some(item => item.lot_id === selectedItem.lot_id)) : undefined;
   const [expandedProductGroups, setExpandedProductGroups] = useState<Record<string, boolean>>({});
   const elevationRef = useRef<HTMLDivElement>(null);
   const searchLotIds = useMemo(() => new Set(highlightedLotIds), [highlightedLotIds]);
@@ -1703,9 +1707,9 @@ function WarehouseRackElevation({
               const at = locations.find(location => rackLocationInventoryItems(location).some(item => item.lot_id === selectedItem.lot_id));
               if (at) window.open(`/static/shelf-label.html?location_id=${at.location_id}&lot_id=${selectedItem.lot_id}`, '_blank', 'noopener');
             }}>打印产品标签</button></div>
-            <InventoryLabelSummary item={selectedItem} onLabel={() => setDetailOpen(false)} expanded={detailOpen} onDetails={() => setDetailOpen((value) => !value)} />
+            <InventoryLabelSummary item={selectedItem} quantity={selectedReadingGroup?.physical} onLabel={() => setDetailOpen(false)} expanded={detailOpen} onDetails={() => setDetailOpen((value) => !value)} />
             <div className="shelf-full-label">{warehouseCardCustomer(selectedItem)} · {selectedItem.product_name}<br />{warehouseCardPrimary(selectedItem)}{selectedItem.inventory_type !== "semi_finished" && <> · {selectedItem.specification} · {selectedItem.flute_type ? `${selectedItem.flute_type}楞` : ""}</>}</div>
-            {detailOpen && <ShelfLotHistory lotId={selectedItem.lot_id} load={requestJson} />}
+            {detailOpen && (selectedReadingGroup?.items || [selectedItem]).map(batch => <div key={batch.lot_id}><small>{batch.lot_number} · {formatNumber(inventoryLabelQuantity(batch))} {inventoryUnitLabel(batch.unit)} · {batch.material} · {batch.specification}</small><ShelfLotHistory lotId={batch.lot_id} load={requestJson} /></div>)}
             {detailOpen && <dl className="twin-rack-product-detail"><div><dt>可用数量</dt><dd>{formatNumber(selectedItem.available_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>已预占</dt><dd>{formatNumber(selectedItem.reserved_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>实际位置</dt><dd>{selectedItem.location_name || "位置名称待完善"}</dd></div><div><dt>存放方式</dt><dd>{selectedItem.pallet_code ? "已绑定实物栈板" : "地堆或散存"}</dd></div><div><dt>批次</dt><dd>{selectedItem.lot_number || "—"}</dd></div></dl>}
           </article>}
         </aside>
@@ -2933,11 +2937,13 @@ export function WarehouseTwinApp() {
       : selectedLocation?.occupancy_status === "empty"
         ? "当前空库位"
         : "客户待确认";
+  const selectedLocationProductGroups = groupShelfProducts(selectedLocationTraceItems);
+  const selectedLocationProductItems = selectedLocationProductGroups.map(group => group.item);
   const visibleSelectedLocationItems = mapMode !== "lookup"
     ? selectedLocationItems
     : locationItemsExpanded
-      ? selectedLocationTraceItems
-      : selectedLocationTraceItems.slice(0, 4);
+      ? selectedLocationProductItems
+      : selectedLocationProductItems.slice(0, 4);
   const selectedLocationHasColumnConflict = Boolean(
     selectedLocation && operationalColumnConflictIds.has(`erp-location-${selectedLocation.location_id}`)
   );
@@ -6755,19 +6761,20 @@ export function WarehouseTwinApp() {
             <div className="twin-composite-component-lines">{summary.components.map((component) => <span key={component.snapshot_id}>{component.product_code || component.product_name || `组件 ${component.snapshot_id}`}：{formatNumber(component.available_piece_quantity)} 件 / 每套 {formatNumber(component.quantity_per_set)} 件{component.is_required ? "" : "（可选）"}</span>)}</div>
           </article>)}
           {visibleSelectedLocationItems.map((item, itemIndex) => {
+            const displayGroup = mapMode === "lookup" ? selectedLocationProductGroups.find(group => group.item === item) : undefined;
             const stocktakeBlockReason = mapMode === "move" && moveAction === "stocktake"
               ? selectedLocationStocktakeBlockReason || stocktakeDecreaseBlockReason(item)
               : null;
             return <article className={`twin-location-item ${traceFocusedLotId === item.lot_id ? "order-location-current" : ""} ${stocktakeLotId === item.lot_id ? "correction-selected" : ""}`} key={item.lot_id || `${item.inventory_code}-${itemIndex}`}>
-              <InventoryLabelSummary item={item} onLabel={() => setSidebarLabelLotId((current) => current === item.lot_id ? null : item.lot_id)} expanded={Boolean(sidebarExpandedLots[item.lot_id])} onDetails={() => setSidebarExpandedLots((current) => ({ ...current, [item.lot_id]: !current[item.lot_id] }))} />
-              {sidebarLabelLotId === item.lot_id && <div className="twin-sidebar-product-label"><b>产品标签</b><div>{employeeCustomerName(item)} · {item.product_name}</div><strong>{item.inventory_code}</strong><div>{item.specification} · {formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</div></div>}
-              {sidebarExpandedLots[item.lot_id] && <ShelfLotHistory lotId={item.lot_id} load={requestJson} />}
+              <InventoryLabelSummary item={item} quantity={displayGroup?.physical} onLabel={() => setSidebarLabelLotId((current) => current === item.lot_id ? null : item.lot_id)} expanded={Boolean(sidebarExpandedLots[item.lot_id])} onDetails={() => setSidebarExpandedLots((current) => ({ ...current, [item.lot_id]: !current[item.lot_id] }))} />
+              {sidebarLabelLotId === item.lot_id && <div className="twin-sidebar-product-label"><b>产品标签</b><div>{employeeCustomerName(item)} · {item.product_name}</div><strong>{item.inventory_code}</strong><div>{item.specification} · {formatNumber(displayGroup?.physical ?? inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</div></div>}
+              {sidebarExpandedLots[item.lot_id] && (displayGroup?.items || [item]).map(batch => <div key={batch.lot_id}><small>{batch.lot_number} · {formatNumber(inventoryLabelQuantity(batch))} {inventoryUnitLabel(batch.unit)} · {batch.material} · {batch.specification}</small><ShelfLotHistory lotId={batch.lot_id} load={requestJson} /></div>)}
               {canExecuteWarehouse && mapMode === "move" && moveAction === "relocate" && item.inventory_type === "finished" && <button type="button" className="twin-stocktake-details" disabled={!item.version || movableLotQuantity(item) <= 0} onClick={() => chooseMoveSource(lotMoveSource(selectedLocation, item))}>{moveSource?.source_key === `lot:${item.lot_id}` ? "已选此产品" : "移动此产品"}</button>}
               {mapMode === "move" && moveAction === "stocktake" && <button type="button" className="twin-stocktake-decrease" disabled={Boolean(stocktakeBlockReason)} title={stocktakeBlockReason || ""} onClick={() => { setStocktakeLotId(item.lot_id); setStocktakeDecreaseQuantity(""); setWarehouseOperationMessage(""); }}>调减{stocktakeBlockReason ? "（不可用）" : ""}</button>}
               {item.inventory_type === "semi_finished" && <><button type="button" className="twin-stocktake-details" onClick={() => setMaterialMatchLotId((current) => current === item.lot_id ? null : item.lot_id)}>匹配产品</button>{materialMatchLotId === item.lot_id && <MaterialCandidates key={item.lot_id} lotId={item.lot_id} canSave={canCorrectInventory && !traceReadOnly} onSaved={refreshDashboard} />}</>}
             </article>;
           })}
-          {mapMode === "lookup" && selectedLocationTraceItems.length > 4 && <button type="button" className="twin-detail-toggle" aria-expanded={locationItemsExpanded} onClick={() => setLocationItemsExpanded((current) => !current)}>{locationItemsExpanded ? "收起货物" : `查看全部 ${selectedLocationTraceItems.length} 条货物`}</button>}
+          {mapMode === "lookup" && selectedLocationProductItems.length > 4 && <button type="button" className="twin-detail-toggle" aria-expanded={locationItemsExpanded} onClick={() => setLocationItemsExpanded((current) => !current)}>{locationItemsExpanded ? "收起货物" : `查看全部 ${selectedLocationProductItems.length} 款货物`}</button>}
           {displayedLocationConflictIds.has(`erp-location-${selectedLocation.location_id}`) && <p className="twin-location-column-warning">{locationEditMode ? "该货位越界，或与其他货位、柱子、设备、货架、禁放区冲突，可先保存调整，再拖到安全位置；应用前会核对冲突。" : selectedLocationPlanningWarning}</p>}
           {viewMode === "25d" && <p className="twin-location-readonly-note">等距视图仅查看库位与货物标签；调整请切换二维平面。</p>}
           {warehouseOperationMessage && <div className="twin-location-message">{warehouseOperationMessage}</div>}

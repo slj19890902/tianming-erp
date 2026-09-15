@@ -8,9 +8,14 @@ export function groupShelfProducts(items) {
     const batch = `${item.inventory_type || ''}/${item.lot_id}/${item.location_id || item.location_code || ''}`;
     if (seen.has(batch)) continue;
     seen.add(batch);
+    // Unknown BOM/box identity is not safe to merge.
+    const mergeable = item.inventory_type === 'finished' && item.product_id &&
+      item.inventory_code && item.product_name && item.box_style &&
+      item.is_bom_component === false && !item.composite_parent_group_key;
     const key = JSON.stringify([item.customer_id, item.product_id || `lot:${item.lot_id}`,
-      item.inventory_type, item.unit, item.specification || '', item.material || '',
-      item.composite_parent_group_key || null, item.location_id || item.location_code || null]);
+      item.inventory_type, item.unit, item.inventory_code, item.product_name, item.box_style,
+      mergeable ? null : `lot:${item.lot_id}`,
+      item.location_id || item.location_code || `unlocated:${item.lot_id}`]);
     let group = groups.get(key);
     if (!group) {
       group = { key, item, items: [], physical: 0, available: 0, reserved: 0, damaged: 0 };

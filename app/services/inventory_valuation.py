@@ -347,3 +347,14 @@ def freeze_entry_cost(db, lot, product=None):
         raise WarehouseInventoryError("未能确定入库成本：" + "；".join(result.missing), 422)
     apply_cost_snapshot(lot, result.estimate)
     return result.estimate
+
+
+def require_inherited_entry_cost(db, lot):
+    """A conversion cannot turn unknown source cost into a new priced batch."""
+    unit, detail = frozen_cost(lot, db)
+    stored = positive(lot.estimated_unit_cost_snapshot)
+    if unit is None or stored is None or abs(unit - stored) > Q:
+        from app.services.warehouse_inventory import WarehouseInventoryError
+        issue = detail.get('validation_issue') or '请先补齐并确认该来源批次的入库成本'
+        raise WarehouseInventoryError(f'批次 {lot.lot_number} 成本依据不完整：{issue}', 409)
+    return stored

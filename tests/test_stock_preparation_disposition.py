@@ -63,6 +63,36 @@ def test_semi_disposition_and_partial_later_assembly(stock_replenishment_app):
             assert db.get(InventoryLot,result.json()['output_lot_id']).quantity_available==3
 
 
+def test_missing_second_child_cost_rolls_back_entire_assembly(stock_replenishment_app):
+    app, factory = stock_replenishment_app
+    app.include_router(router, prefix='/api/production')
+    with TestClient(app) as client:
+        pid, body = arranged(app, factory, client, 'semi')
+        url = '/api/production/stock-preparation/group-actions'
+        response = client.post(url, json=body)
+        assert response.status_code == 200, response.text
+        with factory() as db:
+            jobs = list(db.scalars(select(Job).order_by(Job.id)))
+            outputs = [db.get(InventoryLot, j.output_lot_id) for j in jobs]
+            outputs[-1].estimated_unit_cost_snapshot = None
+            db.commit()
+            before = {l.id: (l.quantity_available, l.quantity_consumed, l.version) for l in outputs}
+            count = len(list(db.scalars(select(InventoryLot))))
+            members = [dict(job_id=j.id, job_version=j.version, lot_version=1,
+                            output_version=db.get(InventoryLot, j.output_lot_id).version) for j in jobs]
+        assembly = dict(action='assemble', operation_key='missing-child-cost', parent_id=pid,
+                        group_key=response.json()['group_key'], sets=3, location_id=7,
+                        layout_version=1, jobs=members)
+        result = client.post(url, json=assembly)
+        assert result.status_code == 409 and '成本' in result.text, result.text
+        with factory() as db:
+            assert len(list(db.scalars(select(InventoryLot)))) == count
+            assert db.get(Command, 'missing-child-cost') is None
+            for lot_id, balances in before.items():
+                lot = db.get(InventoryLot, lot_id)
+                assert (lot.quantity_available, lot.quantity_consumed, lot.version) == balances
+
+
 def test_disposition_failure_rolls_back_all_stock(stock_replenishment_app,monkeypatch):
     app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
     with TestClient(app,raise_server_exceptions=False) as client:

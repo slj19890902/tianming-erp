@@ -50,3 +50,13 @@ def test_statement_terms_do_not_reprice_an_existing_delivery():
     from app.services.delivery_snapshots import statement_sales_terms,sales_contract
     item=NS(sales_contract_json=sales_contract(unit='张',price='3',tax_mode='tax_exclusive',tax_rate='.13',source={}))
     assert statement_sales_terms(item,Decimal('99'),'tax_inclusive',Decimal('.09')) == (Decimal('3'),'tax_exclusive',Decimal('.13'))
+
+
+def test_bom_does_not_accept_a_bare_number_as_confirmed_input_cost():
+    from app.services.bom_subkit_costs import source_cost
+    from app.services.bom_subkits import SubkitError
+    lot=NS(id=99,lot_number='legacy',inventory_type='finished',source_ref_type=None,
+           estimated_unit_cost_snapshot=Decimal('3'),cost_snapshot_source=None,cost_snapshot_detail_json=None,
+           finished_detail=None)
+    with pytest.raises(SubkitError,match='成本'):
+        source_cost(None,lot,2)

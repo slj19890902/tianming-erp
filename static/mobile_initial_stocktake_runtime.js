@@ -33,6 +33,7 @@ function resetInitialInbound() {
 }
 
 function renderInitialInbound() {
+  if(typeof embeddedStocktake!=="undefined"&&embeddedStocktake){$("initialInbound").classList.add("hidden");return;}
   const enabled = state.user?.role === "admin" && state.selectedLocation && !state.locked;
   $("initialInbound").classList.toggle("hidden", !enabled);
   if (!enabled) return;

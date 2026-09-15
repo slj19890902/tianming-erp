@@ -257,7 +257,7 @@ def test_label_print_accepts_each_selected_supplier_item_independently(
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 global.confirm=()=>true;const gets=[];const opened=[];
-global.window={{open(){{const tab={{location:{{href:'about:blank'}},close(){{this.closed=true;}}}};opened.push(tab);return tab;}}}};
+global.window={{open(url){{const tab={{location:{{href:url}},close(){{this.closed=true;}}}};opened.push(tab);return tab;}}}};
 global.axios={{get:async(url)=>{{gets.push(url);return {{data:{{label_count:2}}}};}}}};
 const rows=[31,32].map(item_id=>({{stable_id:`supplier_order:3:${{item_id}}`,source_type:'supplier_order',status:'active',can_print_label:true,active_item_count:2,document_id:3,document_number:'SRO-3',item_id,product_code:`P${{item_id}}`}}));
 const vm={{reportedItemPrintBusy:false,reportedItemPrintErrors:[],reportedLabelRecoveryUrls:[],authGeneration:1,user:{{id:2}},activePage:'requisition',requisitionTab:'submitted',selection:[rows[0]],
@@ -282,7 +282,7 @@ def test_label_print_opens_one_unified_page_for_multiple_supplier_orders(
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 global.confirm=()=>true;const gets=[];const opened=[];
-global.window={{open(){{const tab={{location:{{href:'about:blank'}},close(){{this.closed=true;}}}};opened.push(tab);return tab;}}}};
+global.window={{open(url){{const tab={{location:{{href:url}},close(){{this.closed=true;}}}};opened.push(tab);return tab;}}}};
 global.axios={{get:async(url)=>{{gets.push(url);return {{data:{{label_count:120}}}};}}}};
 const rows=[
   {{stable_id:'supplier_order:147:1',source_type:'supplier_order',status:'active',can_print_label:true,active_item_count:1,document_id:147,document_number:'SRO-147',item_id:1,product_code:'A'}},
@@ -343,7 +343,7 @@ def test_reported_labels_print_enabled_items_and_explain_excluded_items(
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let prompt='';const opened=[];
 global.confirm=message=>{{prompt=String(message);return true;}};
-global.window={{open(){{const tab={{location:{{href:'about:blank'}},close(){{this.closed=true;}}}};opened.push(tab);return tab;}}}};
+global.window={{open(url){{const tab={{location:{{href:url}},close(){{this.closed=true;}}}};opened.push(tab);return tab;}}}};
 global.axios={{get:async()=>({{data:{{label_count:3,production_task_count:1,excluded_items:[{{product_code:'NO-LABEL',reason:'常用箱未勾选打印标签'}}]}}}})}};
 const rows=[31,32].map(item_id=>({{stable_id:`supplier_order:3:${{item_id}}`,source_type:'supplier_order',status:'active',can_print_label:true,document_id:3,document_number:'SRO-3',item_id,product_code:item_id===31?'PRINT':'NO-LABEL'}}));
 const vm={{reportedItemPrintBusy:false,reportedItemPrintErrors:[],reportedLabelRecoveryUrls:[],authGeneration:1,user:{{id:2}},activePage:'requisition',requisitionTab:'submitted',
@@ -353,7 +353,9 @@ vm.openReportedItemLabels=new AsyncFunction({json.dumps(body, ensure_ascii=False
 const expect=(value,message)=>{{if(!value)throw new Error(message);}};
 (async()=>{{
   expect(await vm.openReportedItemLabels()===true,'eligible label was blocked by disabled companion');
+  expect(opened.length===1,'the valid selection opened extra blank tabs');
   expect(opened[0].location.href==='/production-packaging-label.html?id=3&item_ids=31%2C32','selected identities were lost');
+  expect(vm.reportedLabelRecoveryUrls.length===1&&vm.reportedLabelRecoveryUrls[0].url===opened[0].location.href,'manual label link was not retained');
   expect(prompt.includes('NO-LABEL')&&prompt.includes('到常用箱打开“打印标签”并保存'),'confirmation did not explain excluded item and action');
   expect(vm.reportedItemPrintErrors.some(message=>message.includes('NO-LABEL')&&message.includes('刷新后即可加入')),'excluded item was silently omitted after opening');
 }})().catch(error=>{{console.error(error);process.exit(1);}});
@@ -380,11 +382,42 @@ const expect=(value,message)=>{{if(!value)throw new Error(message);}};
 (async()=>{{
   expect(await vm.openReportedItemLabels()===false,'all-disabled label request reported success');
   expect(confirmCount===0,'all-disabled selection asked to print an empty package');
-  expect(opened.length===1&&opened[0].closed===true,'pre-opened blank tab was left behind');
+  expect(opened.length===0,'an ineligible label request flashed a blank browser tab');
   expect(vm.reportedItemPrintErrors.some(message=>message.includes('ALL-OFF')&&message.includes('到常用箱打开“打印标签”并保存')),'complete reason and action were not shown');
 }})().catch(error=>{{console.error(error);process.exit(1);}});
 """
     _run_node(script, tmp_path, "p0-38-reported-label-all-disabled.js")
+
+
+def test_reported_labels_six_items_across_two_orders_wait_for_package_and_keep_link(
+    tmp_path: Path,
+) -> None:
+    body = _method_body("openReportedItemLabels")
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+let resolvePackage;const opened=[];const gets=[];const toasts=[];
+global.confirm=()=>true;
+global.window={{open(url){{opened.push(url);return null;}}}};
+global.axios={{get:url=>{{gets.push(url);return new Promise(resolve=>{{resolvePackage=resolve;}});}}}};
+const rows=[491,492,493,494,495,496].map((item_id,index)=>({{stable_id:`supplier_order:${{index<1?170:171}}:${{item_id}}`,source_type:'supplier_order',can_print_label:true,document_id:index<1?170:171,item_id,document_number:index<1?'SRO-1':'SRO-2'}}));
+const vm={{reportedItemPrintBusy:false,reportedItemPrintErrors:[],reportedLabelRecoveryUrls:[],authGeneration:1,user:{{id:2}},activePage:'requisition',requisitionTab:'submitted',
+  reportedSelectedItems(){{return rows;}},reportedPrintBlockMessage(){{throw new Error('unexpected blocker');}},showToast(message){{toasts.push(message);}},errorMessage(error){{return error.message;}},resetPagePerformanceState(){{throw new Error('unexpected reset');}},
+}};
+vm.openReportedItemLabels=new AsyncFunction({json.dumps(body, ensure_ascii=False)}).bind(vm);
+const expect=(value,message)=>{{if(!value)throw new Error(message);}};
+(async()=>{{
+  const pending=vm.openReportedItemLabels();
+  expect(opened.length===0,'blank label page appeared before server eligibility was known');
+  expect(gets.length===1&&gets[0].includes('order_ids=170%2C171')&&gets[0].includes('item_ids=491%2C492%2C493%2C494%2C495%2C496'),'two-order six-item selection was not sent exactly');
+  resolvePackage({{data:{{label_count:182,production_task_count:6,excluded_items:[]}}}});
+  expect(await pending===true,'eligible supplier batch was rejected');
+  expect(opened.length===1,'cross-order selection opened more than one label page');
+  expect(opened[0]==='/production-packaging-label.html?ids=170%2C171&item_ids=491%2C492%2C493%2C494%2C495%2C496','batch label URL lost exact item identities');
+  expect(vm.reportedLabelRecoveryUrls.length===1&&vm.reportedLabelRecoveryUrls[0].url===opened[0],'popup-blocked user cannot open the verified label URL');
+  expect(toasts.some(message=>message.includes('请点击页面中的打开标签页链接')),'popup-blocked path gave no visible action');
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "reported-six-cross-order-popup.js")
 
 
 def test_incoming_label_entry_reuses_label_package_and_keeps_popup_recovery(

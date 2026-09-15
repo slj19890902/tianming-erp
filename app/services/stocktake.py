@@ -353,6 +353,7 @@ def _lot_identity(lot: InventoryLot) -> dict[str, object]:
 
 
 def lot_payload(lot: InventoryLot) -> dict[str, object]:
+    from app.services.warehouse_display_units import lot_display_unit
     available = int(lot.quantity_available)
     reserved = int(lot.quantity_reserved)
     detail = lot.finished_detail or lot.semi_finished_detail
@@ -367,6 +368,7 @@ def lot_payload(lot: InventoryLot) -> dict[str, object]:
         "quantity_reserved": reserved,
         "on_hand": available + reserved,
         "unit": lot.unit,
+        "display_unit": lot_display_unit(lot),
         "version": lot.version,
         "expected_version": lot.version,
         "expected_available": available,

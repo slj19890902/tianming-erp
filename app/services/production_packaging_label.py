@@ -620,7 +620,8 @@ def build_supplier_requisition_packaging_label_package(
     deduplication key; procurement sheet quantities are deliberately ignored.
     Every selected requisition item is projected independently.  The enabled
     flag, units-per-label and template come from the current Product master, and
-    the quantity comes from the current outstanding production demand.  A
+    the quantity comes from current outstanding demand for unfinished tasks;
+    completed tasks retain their recorded label quantity snapshot.  A
     prepared print job freezes that projection; an actually printed job remains
     immutable.
     """
@@ -808,18 +809,30 @@ def build_supplier_requisition_packaging_label_package(
         template_versions.add(template_version)
 
         units_per_label = _positive_int(product.production_label_units_per_label)
-        try:
-            # Local import avoids the module cycle: label operations use this
-            # projector when they freeze a prepared print job.
-            from app.services.production_label_operations import (
-                ProductionLabelOperationError,
-                _task_product_and_total,
-            )
+        if task.status == "completed":
+            # Outstanding demand is zero after completion.  Do not recalculate
+            # a past batch from a mutable order or from procurement sheet units.
+            # The task's positive, persisted finished-product label quantity is
+            # the only auditable source for printing that completed batch.
+            total_quantity = int(task.production_label_total_quantity_snapshot or 0)
+            if not bool(task.production_label_enabled_snapshot) or total_quantity <= 0:
+                package_review_messages.append(
+                    f"生产任务 #{task_id}：已完工任务缺少有效产品标签数量快照，请核对完工记录"
+                )
+                continue
+        else:
+            try:
+                # Local import avoids the module cycle: label operations use this
+                # projector when they freeze a prepared print job.
+                from app.services.production_label_operations import (
+                    ProductionLabelOperationError,
+                    _task_product_and_total,
+                )
 
-            _current_product, total_quantity = _task_product_and_total(db, task)
-        except ProductionLabelOperationError as error:
-            package_review_messages.append(f"生产任务 #{task_id}：{error}")
-            continue
+                _current_product, total_quantity = _task_product_and_total(db, task)
+            except ProductionLabelOperationError as error:
+                package_review_messages.append(f"生产任务 #{task_id}：{error}")
+                continue
         total_quantity = _positive_int(total_quantity)
         label_count = ceil(total_quantity / units_per_label) if units_per_label else 0
         if not units_per_label or not total_quantity or not label_count:

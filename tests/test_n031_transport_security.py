@@ -257,11 +257,13 @@ def test_production_only_allows_explicit_same_origin_embedded_frames(
             client.get("/warehouse.html?embedded=1"),
             client.get("/incoming.html?embedded=1"),
             client.get("/mobile/delivery-pick.html?embedded=1"),
+            client.get("/mobile/stocktake.html?embedded=1"),
         ]
         standalone_responses = [
             client.get("/warehouse.html"),
             client.get("/incoming.html"),
             client.get("/mobile/delivery-pick.html"),
+            client.get("/mobile/stocktake.html"),
             client.get("/incoming.html?embedded=0"),
         ]
         dashboard = client.get("/")

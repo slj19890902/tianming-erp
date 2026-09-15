@@ -249,7 +249,7 @@
       }
     }
   </style>
-</head>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head>
 <body>
   <div class="toolbar no-print">
     <button id="printButton" disabled type="button">确认打印</button>
@@ -456,7 +456,7 @@
           : "";
         return `<tr${rowClass}>
           <td class="sequence">${entry.index + 1}</td>
-          <td>${escapeHtml(item.customer_po)}</td>
+          <td>${TMOrderReference.html({customer_po:item.customer_po}, {secondary:false})}</td>
           <td class="product-code">${escapeHtml(item.product_code)}</td>
           <td class="product-name${longNameClass}">${componentMarker}${escapeHtml(productName)}</td>
           <td class="product-specification">${escapeHtml(specification)}</td>

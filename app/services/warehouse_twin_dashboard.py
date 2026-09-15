@@ -321,6 +321,7 @@ def _parent_delivery_inventory_projections(
             "group_key": group_key,
             "order_item_id": item_id,
             "order_number": order.order_number,
+            "customer_po": order.customer_po,
             "product_id": int(item.product_id),
             "inventory_code": item.snapshot_product_code,
             "product_name": item.snapshot_product_name,
@@ -611,6 +612,7 @@ def _delayed_direct_dispatch_projection(
                 "idle_days": age_days,
                 "order_id": int(order.id),
                 "order_number": order.order_number,
+                "customer_po": order.customer_po,
                 "order_item_id": int(order_item.id),
                 "delivery_date": (
                     order.delivery_date.isoformat() if order.delivery_date else None

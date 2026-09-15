@@ -1,13 +1,14 @@
+import { OrderReference } from './OrderReference';
 import { useEffect, useState } from 'react';
 import { beijingDisplay } from './beijingDisplay.mjs';
 
 interface History {
   id: number;
   time_archive?: { formed_on?: string | null; formation_accuracy?: string; entered_current_location_at?: string | null };
-  reservations?: Array<{id: number; order_number?: string; remaining_reserved_stock_quantity: number; status: string}>;
+  reservations?: Array<{id: number; order_number?: string; customer_po?: string | null; remaining_reserved_stock_quantity: number; status: string}>;
   shelf_deliveries?: Array<{delivery_id: number; delivery_number: string; dispatched_at: string}>;
   shelf_related_inventory?: {
-    source_order?: {order_number: string} | null;
+    source_order?: {order_number: string; customer_po?: string | null} | null;
     same_product_locations: Array<{lot_id: number; location_id: number; location_name: string;
       floor: number; physical_quantity: number; available_quantity: number; reserved_quantity: number; status: string; unit: string}>;
   };
@@ -35,8 +36,8 @@ export function ShelfLotHistory({lotId, load}: {lotId: number; load: (url: strin
     <dl className="shelf-lot-times"><div><dt>入库日期</dt><dd>{beijingDisplay(archive.formed_on)}{archive.formed_on && archive.formation_accuracy !== 'exact' ? '（约）' : ''}</dd></div>
       <div><dt>进入货位</dt><dd>{beijingDisplay(archive.entered_current_location_at)}</dd></div></dl>
     <details><summary>关联订单与送货</summary>
-    <p>来源订单：{data.shelf_related_inventory?.source_order?.order_number || '—'}</p>
-    {reservations.length ? reservations.map(row => <p key={row.id}>{row.order_number || '关联订单待确认'} · 占用 {row.remaining_reserved_stock_quantity}</p>) : <p>无可见未消耗预占记录</p>}
+    <p>来源订单：<OrderReference row={data.shelf_related_inventory?.source_order} /></p>
+    {reservations.length ? reservations.map(row => <p key={row.id}><OrderReference row={row} /> · 占用 {row.remaining_reserved_stock_quantity}</p>) : <p>无可见未消耗预占记录</p>}
     <details><summary>送货记录（{deliveries.length}）</summary>{deliveries.map(row => <p key={row.delivery_id}>{row.delivery_number} · {beijingDisplay(row.dispatched_at)}</p>)}</details>
     </details>
     <details><summary>同款库存位置</summary>

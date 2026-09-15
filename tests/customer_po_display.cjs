@@ -1,0 +1,38 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const ctx=vm.createContext({console});
+vm.runInContext(fs.readFileSync('static/ui/order-reference.js','utf8'),ctx);
+const ref=ctx.TMOrderReference;
+assert.equal(ref.parts({customer_po:' PO-001 ',order_number:'TM-002'}).customer,'PO-001');
+assert.equal(ref.parts({customer_order_number:'PO-A',order_number:'TM-A'}).customer,'PO-A');
+assert.equal(ref.parts({customer_order_no:'PO-B'}).customer,'PO-B');
+assert.equal(ref.parts({order_number:'TM-002',display_order_number:'TM-002'}).customer,'');
+assert.match(ref.html({order_number:'TM-002'}),/customer-po-missing/);
+assert.doesNotMatch(ref.html({order_number:'TM-002'}),/class="customer-po"/);
+const malicious=ref.html({customer_po:'<img src=x onerror=alert(1)>',order_number:'<script>'});
+assert(!malicious.includes('<img')&&!malicious.includes('<script>'));
+assert.match(malicious,/&lt;img/);
+assert(!ref.html({customer_po:'PO',order_number:'TM'},{secondary:false}).includes('TM'));
+const long='PO-'+ '1234567890'.repeat(20);assert(ref.html({customer_po:long}).includes(long));
+const pages=['index','mobile_erp','incoming','delivery-print','requisition-production-print','warehouse','mobile_product_live','mobile_mold_live','inventory-assistant','shelf-scan','customer-statement-check'];
+for(const name of pages){
+ const page=fs.readFileSync(`static/${name}.html`,'utf8');
+ assert(page.includes('/static/ui/order-reference.css?v=423'),name);
+ assert(page.includes('/static/ui/order-reference.js?v=423'),name);
+ for(const match of page.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g))new vm.Script(match[1],{filename:name});
+}
+new vm.Script(fs.readFileSync('static/shelf-scan.js','utf8'));
+vm.runInContext(fs.readFileSync('static/vendor/vue-3.5.40.global.prod.js','utf8'),ctx);
+const errors=[];
+ctx.Vue.compile(ref.component.template,{decodeEntities:s=>s,onError:e=>errors.push(e.message)});
+assert.deepEqual(errors,[]);
+const index=fs.readFileSync('static/index.html','utf8');
+const start=index.indexOf('<div id="app"');assert(start>0);
+ctx.Vue.compile(index.slice(start,index.indexOf('<script',start)),{decodeEntities:s=>s,onError:e=>errors.push(e.message)});
+assert.deepEqual(errors,[],'Desktop Vue template must compile');
+assert(index.includes('app.component("order-reference", TMOrderReference.component)'));
+assert(index.includes('orderSearchHighlightParts(group.customer_po'));
+assert(index.includes('deliveryInlineEdit.customer_po'));
+assert(!index.includes('<strong>{{ row.item_order_number || row.order_number'));
+const css=fs.readFileSync('static/ui/order-reference.css','utf8');
+assert(css.includes('overflow-wrap:anywhere'));assert(css.includes('print-color-adjust:exact'));
+console.log('Customer PO identities, no ERP fallback, XSS, long values, 11 page scripts and Vue component passed');

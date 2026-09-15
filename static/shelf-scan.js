@@ -11,7 +11,7 @@ function bomRelations(rows) {
   return '<details><summary>BOM 配套关系</summary><small>当前常用箱关系；位置不代表本批已预占。</small>'+rows.map(row=>
     '<p><b>'+h(row.direction==='parent'?'父件':'子件')+' '+h(row.product_code)+'</b> · '+h(row.product_name)+' · 每套 '+h(row.quantity_per_set)+' · '+h(row.relation==='accompany'?'随货配套':'组装消耗')+'</p>'+
     ((row.locations||[]).map(loc=>'<p>'+h(loc.location_name)+' · '+h(loc.quantity)+' '+h(unit(loc.unit))+(loc.status==='frozen'?' · 已冻结':'')+'</p>'+
-      (loc.reservations||[]).map(r=>'<small>'+h(r.order_number)+' · 已占 '+h(r.quantity)+' '+h(unit(loc.unit))+'</small>').join('')).join('')||'<small>暂无可见在库位置</small>')
+      (loc.reservations||[]).map(r=>'<small>'+TMOrderReference.html(r)+' · 已占 '+h(r.quantity)+' '+h(unit(loc.unit))+'</small>').join('')).join('')||'<small>暂无可见在库位置</small>')
   ).join('')+'</details>';
 }
 let generation = 0;
@@ -48,8 +48,8 @@ async function loadOrders(node,current){
     if(current!==generation)return;
     if(Number(data.location?.id)!==Number(id)){box.textContent='批次位置已变更，请刷新';return;}
     const orders=(data.reservations||[]).filter(x=>x.remaining_reserved_stock_quantity>0);
-    const source=data.shelf_related_inventory?.source_order?.order_number;
-    box.innerHTML=(source?'<p>来源订单：'+h(source)+'</p>':'')+orders.map(x=>'<p>'+h(x.order_number||'关联订单')+' · 预占 '+h(x.remaining_reserved_stock_quantity)+'</p>').join('');
+    const source=data.shelf_related_inventory?.source_order;
+    box.innerHTML=(source?'<p>来源订单：'+TMOrderReference.html(source)+'</p>':'')+orders.map(x=>'<p>'+TMOrderReference.html(x)+' · 预占 '+h(x.remaining_reserved_stock_quantity)+'</p>').join('');
     if(!box.innerHTML)box.textContent='暂无可见关联订单';
     box.insertAdjacentHTML('beforeend',bomRelations(data.shelf_related_inventory?.bom_relations));
     node.dataset.loaded='1';

@@ -151,7 +151,7 @@
     .floor3-plan-hotspot.selected,.floor3-area-entry.selected { background:#e9d5ff; border-color:#9333ea; }
     .floor3-plan-hotspot.matched,.floor3-plan-hotspot.selected.matched,.floor3-area-entry.matched { background:#bbf7d0; border-color:#15803d; }
   </style>
-</head>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head>
 <body>
   <header>
     <div><h1>仓库库存管理</h1><span class="muted desktop-note">成品入仓、三楼货位与库存流水联动</span></div>
@@ -1884,7 +1884,7 @@
       try{
         const data=await api(`/api/warehouse/reservations?inventory_lot_id=${lotId}`);
         $("reservationTitle").textContent=`${lotNumber} 成品库存预占记录`;
-       $("reservationBody").innerHTML=(data.items||[]).map(x=>`<tr><td>${x.reserved_at?formatDateTime(x.reserved_at):"-"}</td><td>${x.order_number||"-"}</td><td>${x.customer_name||"-"}<br>${x.product_name||"-"}</td><td><b>${x.reserved_stock_quantity}</b> 个</td><td>${labels[x.status]||x.status}</td><td>${x.released_at?formatDateTime(x.released_at):"-"}<br>${x.release_reason||""}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">暂无预占记录</td></tr>`;
+       $("reservationBody").innerHTML=(data.items||[]).map(x=>`<tr><td>${x.reserved_at?formatDateTime(x.reserved_at):"-"}</td><td>${TMOrderReference.html(x)}</td><td>${x.customer_name||"-"}<br>${x.product_name||"-"}</td><td><b>${x.reserved_stock_quantity}</b> 个</td><td>${labels[x.status]||x.status}</td><td>${x.released_at?formatDateTime(x.released_at):"-"}<br>${x.release_reason||""}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">暂无预占记录</td></tr>`;
         $("reservationPanel").classList.remove("hidden");
       }catch(err){toast(err.message,true)}
     }
@@ -3100,7 +3100,7 @@
       const sourceTag=item.official_inventory?'<span class="tag">正式成品库存</span>':(item.match_status==="pending"?'<span class="tag warn">待匹配快照</span>':(item.item_type==="finished"&&item.official_inventory===false?'<span class="tag warn">旧版已匹配快照 · 待同步成品仓</span>':'<span class="tag warn">现场盘点快照</span>'));
       const itemTypeLabel=item.item_type==="finished"?"成品":(item.item_type==="semi_finished"?"半成品":"其他");
       const selected=Number(item.inventory_lot_id||item.lot_id||0)===Number(state.floor3.deepLinkLotId||0);
-      return `<div class="floor3-item ${selected?"deep-link-target":""}"><b>${h(item.product_name||item.name||item.inventory_code||"待匹配")}</b><div class="floor3-item-labels"><span class="floor3-item-label"><small>客户</small><b>${h(item.customer_name||item.customer||"-")}</b></span><span class="floor3-item-label"><small>存货编码</small><b>${h(item.inventory_code||item.product_code||"-")}</b></span><span class="floor3-item-label"><small>订单</small><b>${h(item.order_no||item.order_number||"-")}</b></span><span class="floor3-item-label"><small>货物类型</small><b>${h(itemTypeLabel)}</b></span></div>${floor3QuantityHtml(item)}${sourceTag}${floor3PromotionButton(item,pallet,locationId)}</div>`;
+      return `<div class="floor3-item ${selected?"deep-link-target":""}"><b>${h(item.product_name||item.name||item.inventory_code||"待匹配")}</b><div class="floor3-item-labels"><span class="floor3-item-label"><small>客户</small><b>${h(item.customer_name||item.customer||"-")}</b></span><span class="floor3-item-label"><small>存货编码</small><b>${h(item.inventory_code||item.product_code||"-")}</b></span><span class="floor3-item-label"><small>订单</small>${TMOrderReference.html(item)}</span><span class="floor3-item-label"><small>货物类型</small><b>${h(itemTypeLabel)}</b></span></div>${floor3QuantityHtml(item)}${sourceTag}${floor3PromotionButton(item,pallet,locationId)}</div>`;
     }
     function floor3MoveFloorOptions(){
       const seen=new Map();

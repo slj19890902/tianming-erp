@@ -1,3 +1,4 @@
+import { OrderReference } from './OrderReference';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import { EditorCanvas } from "./EditorCanvas";
@@ -449,7 +450,7 @@ export default function App() {
       const next = await loadProductionProjections(layout.id);
       const updated = next.items.find((item) => item.source_task_id === selectedProductionTask.source_task_id);
       if (updated?.mapping) setSelected({ kind: updated.mapping.target_kind === "pallet" ? "pallet" : "feature", id: updated.mapping.target_id });
-      setMessage(`只读任务 ${selectedProductionTask.order_number} 已人工定位；ERP订单、数量和状态未修改`);
+      setMessage(`只读任务 ${selectedProductionTask.customer_po || selectedProductionTask.order_number} 已人工定位；ERP订单、数量和状态未修改`);
     } catch (error) { setMessage((error as Error).message); }
     finally { setProductionBusy(false); }
   };
@@ -459,7 +460,7 @@ export default function App() {
     try {
       await api.deleteProductionProjection(layout.id, selectedProductionTask.source_task_id, selectedProductionTask.mapping.version);
       await loadProductionProjections(layout.id);
-      setMessage(`已移除 ${selectedProductionTask.order_number} 的地图定位；ERP任务保持不变`);
+      setMessage(`已移除 ${selectedProductionTask.customer_po || selectedProductionTask.order_number} 的地图定位；ERP任务保持不变`);
     } catch (error) { setMessage((error as Error).message); }
     finally { setProductionBusy(false); }
   };
@@ -1082,12 +1083,12 @@ export default function App() {
               <div className="production-task-list">
                 {!visibleProductionTasks.length && <p className="projection-empty">当前ERP没有待生产任务；地图不会生成虚假任务。</p>}
                 {visibleProductionTasks.map((task) => <button type="button" key={task.source_task_id} className={`${productionTaskId === task.source_task_id ? "selected" : ""} ${task.mapping && !task.mapping.target_missing ? "mapped" : "pending-location"}`} onClick={() => chooseProductionTask(task)}>
-                  <span className="projection-task-head"><b>{task.order_number}</b><em>{task.mapping && !task.mapping.target_missing ? task.mapping.target_code : "待定位"}</em></span>
+                  <span className="projection-task-head"><b><OrderReference row={task} /></b><em>{task.mapping && !task.mapping.target_missing ? task.mapping.target_code : "待定位"}</em></span>
                   <strong>{task.customer_name}</strong><small>{task.product_code} · {task.product_name}</small><small>{task.planned_quantity} {task.production_quantity_unit === "pieces" ? "件" : "套"} · 更新 {formatProjectionTime(task.task_updated_at)}</small>
                 </button>)}
               </div>
               {selectedProductionTask && <form className="projection-bind-form" onSubmit={saveProductionProjection}>
-                <div className="projection-readonly-card"><span>ERP只读事实</span><b>{selectedProductionTask.order_number} · 待生产</b><small>{selectedProductionTask.customer_name} / {selectedProductionTask.product_name}</small><small>计划 {selectedProductionTask.planned_quantity} {selectedProductionTask.production_quantity_unit === "pieces" ? "件" : "套"}；此处不能改数量或确认完工</small></div>
+                <div className="projection-readonly-card"><span>ERP只读事实</span><b><OrderReference row={selectedProductionTask} /> · 待生产</b><small>{selectedProductionTask.customer_name} / {selectedProductionTask.product_name}</small><small>计划 {selectedProductionTask.planned_quantity} {selectedProductionTask.production_quantity_unit === "pieces" ? "件" : "套"}；此处不能改数量或确认完工</small></div>
                 <div className="dimension-row two"><label>定位对象<select value={productionTargetKind} onChange={(event) => { const kind = event.target.value as "pallet" | "zone"; setProductionTargetKind(kind); setProductionTargetId(kind === "pallet" ? layout.pallets[0]?.id || "" : layout.features.find((item) => item.feature_kind === "zone")?.id || ""); }}><option value="pallet">现有栈板</option><option value="zone">现有区域</option></select></label><label>人工选择<select value={productionTargetId} onChange={(event) => setProductionTargetId(event.target.value)}>{productionTargetKind === "pallet" ? layout.pallets.map((item) => <option key={item.id} value={item.id}>{item.pallet_code} · {item.zone_code}</option>) : layout.features.filter((item) => item.feature_kind === "zone").map((item) => <option key={item.id} value={item.id}>{item.feature_code} · {item.name}</option>)}</select></label></div>
                 <button type="submit" className="confirm" disabled={productionBusy || !productionTargetId}>{selectedProductionTask.mapping ? "更新人工定位" : "确认投影到地图"}</button>
                 {selectedProductionTask.mapping && <button type="button" className="secondary" disabled={productionBusy} onClick={removeProductionProjection}>移回待定位</button>}

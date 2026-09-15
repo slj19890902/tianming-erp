@@ -252,7 +252,7 @@
     .warehouse-label-operation { background:#edf9f5; padding:10px; border:1px solid #cce9df; border-radius:8px; }
     .warehouse-label-operation .warehouse-empty-search { margin:6px 0 0; background:transparent; }
   </style>
-</head>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head>
 <body>
   <div class="app">
     <header class="topbar">
@@ -1011,7 +1011,7 @@
       function lookupItemFacts(groupId, item) {
         if (groupId === "orders") {
           return {
-            title: item.order_number || item.item_order_number || "订单",
+            title: TMOrderReference.parts(item).customer || "未填写客户单号",
             lines: [
               `${item.customer_name || "客户未填写"}｜${item.product_code || "无存货编码"}｜${item.product_name || "产品未填写"}`,
               `${item.specification || "规格未填写"}｜订单 ${Number(item.quantity || 0)} ${item.unit || "只"}｜已送 ${Number(item.delivered_quantity || 0)} ${item.unit || "只"}｜未送 ${Number(item.remaining_quantity || 0)} ${item.unit || "只"}`,
@@ -1024,7 +1024,7 @@
           return {
             title: `${item.customer_name || "客户未填写"}｜${item.product_code || item.item_order_number || "待收材料"}`,
             lines: [
-              `${item.order_number || "订单号未填写"}｜${item.product_name || "产品未填写"}`,
+              `${item.product_name || "产品未填写"}`,
               `报料 ${item.report_length_mm || "?"}×${item.report_width_mm || "?"}mm｜待收 ${item.pending_quantity ?? "?"}${item.unit || "张"}`,
               `${item.material || "材质未填写"}${item.flute_type ? `｜楞型 ${item.flute_type}` : ""}｜压线 ${item.crease_values_mm?.length ? item.crease_values_mm.join("+") + "mm" : item.crease_type || "未填写"}`,
             ],
@@ -1046,7 +1046,7 @@
           return {
             title: `任务 ${item.task_id}｜${item.product_code || "无存货编码"}`,
             lines: [
-              `${item.customer_name || "客户未填写"}｜${item.order_number || "订单号未填写"}`,
+              `${item.customer_name || "客户未填写"}`,
               `${item.product_name || "产品未填写"}｜${item.carton_specification || "规格未填写"}｜${Number(item.order_quantity || 0)}只`,
               `${item.process_tags?.length ? item.process_tags.join("、") : "工艺待核对"}${item.mold_display_name || item.mold_name ? `｜模具 ${item.mold_display_name || item.mold_name} ${item.mold_location_display || item.mold_location || ""}` : ""}`,
             ],
@@ -1158,7 +1158,8 @@
             visibleItems += 1;
             const facts = lookupItemFacts(group.id, item);
             const card = node("article", "card lookup-result");
-            card.append(node("strong", "", facts.title));
+            if (["orders","materials","production"].includes(group.id)) card.append(TMOrderReference.node(item));
+            if (group.id !== "orders") card.append(node("strong", "", facts.title));
             facts.lines.filter(Boolean).forEach(line => card.append(node("span", "", line)));
             appendLookupAction(card, group.id, item);
             section.append(card);
@@ -1992,11 +1993,11 @@
               const related = detail.shelf_related_inventory || {};
               historyBody.replaceChildren(
                 node("p", "", `入库日期：${archive.formed_on || "历史日期待确认"}${archive.formed_on && archive.formation_accuracy !== "exact" ? "（非精确）" : ""}`),
-                node("p", "", `来源订单：${related.source_order?.order_number || "无可确认的生产来源"}`),
+                TMOrderReference.node(related.source_order),
                 node("p", "", `最近实际送货：${detail.shelf_deliveries?.[0]?.dispatched_at || "无可见正式发货记录"}`)
               );
               (detail.reservations || []).filter(row => row.remaining_reserved_stock_quantity > 0).forEach(row => {
-                historyBody.append(node("p", "", `${row.order_number || "关联订单待确认"} · 占用 ${row.remaining_reserved_stock_quantity}${good.unit || ""}`));
+                historyBody.append(TMOrderReference.node(row),node("p", "", `占用 ${row.remaining_reserved_stock_quantity}${good.unit || ""}`));
               });
               if ((related.bom_relations || []).length) {
                 const bom = node("details", "");
@@ -2007,7 +2008,7 @@
                   (row.locations || []).forEach(loc => {
                     const unit = ({boxes:'只',pieces:'片',sheets:'张',sets:'套'})[loc.unit] || loc.unit || '';
                     bom.append(node("p", "muted", `${loc.location_name} · ${loc.quantity}${unit}${loc.status === 'frozen' ? ' · 已冻结' : ''}`));
-                    (loc.reservations || []).forEach(r => bom.append(node("small", "muted", `${r.order_number} · 已占 ${r.quantity}${unit} `)));
+                    (loc.reservations || []).forEach(r => bom.append(TMOrderReference.node(r),node("small", "muted", `已占 ${r.quantity}${unit} `)));
                   });
                   if (!(row.locations || []).length) bom.append(node("small", "muted", "暂无可见在库位置"));
                 });
@@ -2469,8 +2470,9 @@
         const title = node("div");
         title.append(
           node("h2", "", `${task.product_code || "无存货编码"}｜${task.product_name || "未填写名称"}`),
-          node("p", "fact-line", `${task.customer_name || "未填写客户"}｜订单 ${task.order_number || "-"}｜任务 ${task.task_id}`)
+          node("p", "fact-line", `${task.customer_name || "未填写客户"}｜任务 ${task.task_id}`)
         );
+        title.append(TMOrderReference.node(task));
         head.append(title, node("span", `tag ${dieCut ? "unplaced" : "mapped"}`, dieCut ? "模切" : "印刷"));
         card.append(head);
         if (task.carton_specification) card.append(node("p", "fact-line", `规格：${task.carton_specification}`));
@@ -2628,8 +2630,9 @@
         const title = node("div");
         title.append(
           node("h2", "", `${item.product_code || "无存货编码"}｜${item.product_name || "未填写产品名称"}`),
-          node("p", "fact-line", `${item.customer_name || "未填写客户"}｜订单 ${item.order_number || "-"}`)
+          node("p", "fact-line", `${item.customer_name || "未填写客户"}`)
         );
+        title.append(TMOrderReference.node(item));
         head.append(title, node("span", `tag ${item.material_state === "材料未齐" ? "unplaced" : "mapped"}`, item.material_state));
         card.append(head);
         const boardSize = item.board_length_mm && item.board_width_mm
@@ -2677,13 +2680,14 @@
           const head = node("div", "production-head");
           const title = node("div");
           title.append(
-            node("h2", "", `${task.customer_name || "未填写客户"}｜订单 ${task.order_number || "-"}`),
+            node("h2", "", `${task.customer_name || "未填写客户"}`),
             node("p", "fact-line", [
               task.customer_po ? `客户单号 ${task.customer_po}` : "",
               task.delivery_date ? `交货 ${task.delivery_date}` : "",
               `生产任务 ${task.task_id}`,
             ].filter(Boolean).join("｜"))
           );
+          title.append(TMOrderReference.node(task));
           head.append(title, node("span", "tag mapped", "待生产"));
           card.append(head, productionTaskCard(task));
           container.append(card);

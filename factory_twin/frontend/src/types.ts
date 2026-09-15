@@ -138,6 +138,7 @@ export interface ProductionTaskProjection {
   source_version: number;
   order_id: number;
   order_number: string;
+  customer_po?: string | null;
   customer_name: string;
   product_code: string;
   product_name: string;

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.422"
-APP_VERSION_NAME = "旧单随货自动预占与发货扣库"
+APP_VERSION = "v0.22.423"
+APP_VERSION_NAME = "客户订单号主显示"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4233,3 +4233,6 @@ APP_CHANGELOG = [*(f"v0.22.421：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["旧单剩余随货配套自动冻结和预占，点击发货打印才扣库，历史已送部分不补扣；重复操作不重复扣，撤销恢复原批次。", "找货及产品标签同时显示父件和配套子件；修复订单编辑子件持续读取，保留v421货位汇总更新。"]
 APP_VERIFICATION_STEPS = ["YL-20260914-001应显示纸箱30盒及隔板120片和各自货位；尚未点击发货打印前隔板仅预占。", "确认真实发货后再点发货打印；历史已送隔板不补扣，勿为验收重复发货或新增库存。"]
 APP_CHANGELOG = [*(f"v0.22.422：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["销售订单引用统一客户单号绿底主显示，ERP订单号灰字次显示；订单、报料、来料、生产、送货、对账、手机和仓库使用同一显示规则。", "补充只读客户单号投影，保留编号生成、搜索、业务ID、库存和历史快照；无客户号不以ERP号冒充。"]
+APP_VERIFICATION_STEPS = ["刷新订单列表，客户单号应为绿底；打开详情，ERP单号仍可用灰字追溯。", "手机查询、仓库关联订单与送货打印预览核对客户单号；不要为验收提前发货。"]
+APP_CHANGELOG = [*(f"v0.22.423：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

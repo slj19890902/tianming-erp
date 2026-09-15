@@ -126,6 +126,7 @@ def build_production_projection(
                     task.get("item_order_number") or task.get("order_number") or ""
                 ),
                 "customer_name": str(task.get("customer_name") or ""),
+                "customer_po": task.get("customer_po") or task.get("customer_order_number"),
                 "product_code": str(task.get("product_code") or ""),
                 "product_name": str(task.get("product_name") or ""),
                 "specification": str(task.get("specification") or ""),

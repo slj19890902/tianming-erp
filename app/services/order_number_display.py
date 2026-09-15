@@ -57,4 +57,5 @@ def serialize_order_number_fields(
     return {
         "order_number": display,
         "display_order_number": display,
+        "customer_po": order.customer_po,
     }

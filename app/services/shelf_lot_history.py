@@ -38,7 +38,7 @@ def shelf_related_inventory(db: Session, lot: InventoryLot, visible_customer_ids
             .where(ProductionCompletion.id == lot.source_ref_id, Order.customer_id == detail.owner_customer_id)).first()
         if source:
             order, item = source
-            result['source_order'] = {"order_id": order.id, "order_item_id": item.id, "order_number": order.order_number}
+            result['source_order'] = {"order_id": order.id, "order_item_id": item.id, "order_number": order.order_number, "customer_po": order.customer_po}
     # This is a location lookup, not a reservation recommendation. Show physical
     # quantities and status; the existing order service alone decides eligibility.
     query = select(InventoryLot).join(FinishedGoodsInventoryDetail,
@@ -108,7 +108,7 @@ def shelf_bom_relations(db: Session, product_id: int, customer_id: int) -> list[
                 InventoryReservation.inventory_lot_id.in_([l.id for l in lots]), Order.customer_id == customer_id,
                 InventoryReservation.reserved_stock_quantity > InventoryReservation.consumed_stock_quantity + InventoryReservation.released_stock_quantity)):
             reservations.setdefault(res.inventory_lot_id, []).append(dict(
-                order_id=order.id, order_item_id=res.order_item_id, order_number=order.order_number,
+                order_id=order.id, order_item_id=res.order_item_id, order_number=order.order_number, customer_po=order.customer_po,
                 reservation_id=res.id, quantity=res.reserved_stock_quantity-res.consumed_stock_quantity-res.released_stock_quantity))
     for row in related:
         for lot in lots:

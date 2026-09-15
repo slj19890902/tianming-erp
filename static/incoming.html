@@ -23,7 +23,7 @@
     .btn-danger { background: #b91c1c; color: #fff; border: none; border-radius: 10px; min-height: 44px; padding: 0 16px; font-weight: 700; }
   </style>
   <link rel="stylesheet" href="/static/vendor/tailwindcss-3.4.17-incoming.min.css?v=77e10624d5e1">
-</head>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head>
 <body class="min-h-screen bg-slate-100 text-slate-900">
   <header class="sticky top-0 z-20 border-b border-slate-300 bg-slate-900 px-4 py-3 text-white shadow">
     <div class="mx-auto flex max-w-2xl items-center justify-between gap-3">
@@ -594,7 +594,7 @@
                 <div><p class="text-slate-500">存货编码</p><p class="font-bold break-words">${escapeHtml(item.product_code || "未填写")}</p></div>
                 <div class="col-span-2"><p class="text-slate-500">产品名称</p><p class="font-bold break-words">${escapeHtml(item.product_name)}</p></div>
                 <div><p class="text-slate-500">报料日期</p><p class="font-bold">${escapeHtml(item.requisition_date || "未填写")}</p></div>
-                <div><p class="text-slate-500">订单号</p><p class="font-bold break-words">${escapeHtml(item.order_number)}</p></div>
+                <div><p class="text-slate-500">客户订单号</p>${TMOrderReference.html(item)}</div>
                 <div class="col-span-2"><p class="text-slate-500">备注</p><p class="font-bold break-words">${escapeHtml(item.requisition_remark || "无")}</p></div>
               </div>
               ${productionDetailButton}
@@ -918,7 +918,7 @@
                 <span class="rounded-full bg-blue-50 px-2 py-1 text-sm font-bold text-blue-700">${escapeHtml(task.status_text || task.status)}</span>
               </div>
               <div class="mt-2 grid grid-cols-2 gap-2 text-sm">
-                <div><p class="text-slate-500">订单号</p><p class="font-bold">${escapeHtml(task.order_number || "-")}</p></div>
+                <div><p class="text-slate-500">客户订单号</p>${TMOrderReference.html(task)}</div>
                 <div><p class="text-slate-500">${task.receipt_purpose_managed ? "已自动形成" : "计划生产"}</p><p class="font-bold">${escapeHtml(task.receipt_purpose_managed ? (task.actual_output_quantity ?? 0) : (task.planned_output_quantity ?? task.order_quantity ?? 0))} 只</p></div>
                 <div><p class="text-slate-500">当前可生产</p><p class="font-bold">${escapeHtml(task.current_producible_quantity ?? 0)} 只</p></div>
                 <div><p class="text-slate-500">工艺</p><p class="font-bold">${escapeHtml(task.production_process || task.cutting_mode || "-")}</p></div>
@@ -930,7 +930,7 @@
         <div class="mb-3 rounded-xl bg-white p-3 shadow-sm">
           <p class="text-sm text-slate-500">本次精确关联的待收料</p>
           <p class="text-lg font-black">${escapeHtml(item.customer_name)} · ${escapeHtml(item.product_code || "未填款号")}</p>
-          <p class="mt-1 text-sm">${escapeHtml(item.product_name)} · 报料 ${escapeHtml(formatBoardSpec(item.cardboard_len, item.cardboard_width))} · 订单 ${escapeHtml(item.order_number)}</p>
+          <p class="mt-1 text-sm">${escapeHtml(item.product_name)} · 报料 ${escapeHtml(formatBoardSpec(item.cardboard_len, item.cardboard_width))} · ${TMOrderReference.html(item)}</p>
         </div>
         <div class="space-y-2">${taskCards}</div>`;
     }

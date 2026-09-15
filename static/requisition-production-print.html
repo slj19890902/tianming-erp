@@ -196,7 +196,7 @@
       .page { box-shadow:none; margin:0; }
     }
   </style>
-</head>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head>
 <body>
   <div class="toolbar">
     <button id="retryButton" type="button">重新加载</button>
@@ -523,7 +523,7 @@
               ["剩余待收", `${numberText(card.remaining_quantity || 0)} ${quantityUnit}`],
               ["采购张数", `${numberText(card.requisition_quantity)} 张`],
             ];
-        return `<div class="order-facts" data-capacity-label="订单与生产数量">${rows.map(([label, value]) => `<div class="order-fact"><span>${escapeHtml(label)}</span><strong>${escapeHtml(fitLevel === "ultra" ? paperText(value, 20) : value)}</strong></div>`).join("")}</div>`;
+        return `<div class="order-facts" data-capacity-label="订单与生产数量">${rows.map(([label, value]) => `<div class="order-fact"><span>${escapeHtml(label)}</span><strong class="${label === "客户订单号" ? "customer-po" : label === "来源单号" ? "erp-order-no" : ""}">${escapeHtml(fitLevel === "ultra" ? paperText(value, 20) : value)}</strong></div>`).join("")}</div>`;
       }
 
       function productionNotesHtml(card, fitLevel = "normal") {

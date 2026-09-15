@@ -1,3 +1,4 @@
+import { OrderReference } from './OrderReference';
 import { WarehouseGoods } from "./WarehouseGoods";
 import { mergeWarehouseSearchPage, searchPageRequestIsCurrent } from "./warehouseSearchPaging.mjs";
 import { moveLocationState, areaSortKey, type MoveLocationState } from "./warehouseWorkspace.mjs";
@@ -238,6 +239,7 @@ interface InventoryItem {
     group_key: string;
     order_item_id: number;
     order_number: string;
+  customer_po?: string | null;
     product_id: number;
     inventory_code?: string | null;
     product_name: string;
@@ -360,6 +362,7 @@ interface DelayedDispatchCandidate {
   idle_days: number;
   order_id: number;
   order_number: string;
+  customer_po?: string | null;
   order_item_id: number;
   delivery_date?: string | null;
   quantity: number;
@@ -3744,7 +3747,7 @@ export function WarehouseTwinApp() {
       } else {
         setSelected(null);
       }
-      setProductionMessage(`${selectedProductionTask.order_number} 已人工定位；生产任务、数量和状态未修改`);
+      setProductionMessage(`${selectedProductionTask.customer_po || selectedProductionTask.order_number} 已人工定位；生产任务、数量和状态未修改`);
     } catch (reason) {
       setProductionMessage((reason as Error).message);
     } finally {
@@ -3761,7 +3764,7 @@ export function WarehouseTwinApp() {
         "DELETE"
       );
       await refreshProduction(layout.id);
-      setProductionMessage(`${selectedProductionTask.order_number} 已移回待定位；生产任务保持不变`);
+      setProductionMessage(`${selectedProductionTask.customer_po || selectedProductionTask.order_number} 已移回待定位；生产任务保持不变`);
     } catch (reason) {
       setProductionMessage((reason as Error).message);
     } finally {
@@ -6540,10 +6543,10 @@ export function WarehouseTwinApp() {
             <input value={productionSearch} onChange={(event) => setProductionSearch(event.target.value)} placeholder="订单、客户或品号" />
             <div className="twin-production-list">
               {productionProjection && !visibleProductionTasks.length && <div className="twin-empty-note">当前没有待生产任务。</div>}
-              {visibleProductionTasks.map((task) => <button type="button" key={task.source_task_id} className={productionTaskId === task.source_task_id ? "selected" : ""} onClick={() => chooseProductionTask(task)}><span><b>{task.order_number}</b><em>{task.mapping && !task.mapping.target_missing ? task.mapping.target_code : "待定位"}</em></span><strong>{task.customer_name}</strong><small>{task.product_code} · {task.product_name}</small><small>计划 {formatNumber(task.planned_quantity)} {task.production_quantity_unit === "pieces" ? "件" : "套"} · 交期 {task.delivery_date || "未填"}</small></button>)}
+              {visibleProductionTasks.map((task) => <button type="button" key={task.source_task_id} className={productionTaskId === task.source_task_id ? "selected" : ""} onClick={() => chooseProductionTask(task)}><span><b><OrderReference row={task} /></b><em>{task.mapping && !task.mapping.target_missing ? task.mapping.target_code : "待定位"}</em></span><strong>{task.customer_name}</strong><small>{task.product_code} · {task.product_name}</small><small>计划 {formatNumber(task.planned_quantity)} {task.production_quantity_unit === "pieces" ? "件" : "套"} · 交期 {task.delivery_date || "未填"}</small></button>)}
             </div>
               {selectedProductionTask && layout && mapMode === "planning" && <div className="twin-production-bind">
-              <b>{selectedProductionTask.order_number} · 系统只读</b><small>{selectedProductionTask.customer_name} / {selectedProductionTask.product_name}</small>
+              <b><OrderReference row={selectedProductionTask} /> · 系统只读</b><small>{selectedProductionTask.customer_name} / {selectedProductionTask.product_name}</small>
               <label>定位对象<select value={productionTargetKind} onChange={(event) => { const kind = event.target.value as "pallet" | "zone"; setProductionTargetKind(kind); setProductionTargetId(kind === "pallet" ? layout.pallets[0]?.id || "" : layout.features.find((item) => item.feature_kind === "zone")?.id || ""); }}><option value="pallet">现有栈板</option><option value="zone">现有区域</option></select></label>
               <label>人工选择<select value={productionTargetId} onChange={(event) => setProductionTargetId(event.target.value)}>{productionTargetKind === "pallet" ? layout.pallets.map((item) => <option key={item.id} value={item.id}>{item.pallet_code} · {item.zone_code}</option>) : layout.features.filter((item) => item.feature_kind === "zone").map((item) => <option key={item.id} value={item.id}>{item.feature_code} · {employeeAreaName(item, { floorCode })}</option>)}</select></label>
               <button type="button" className="twin-primary-action" disabled={productionBusy || !productionTargetId} onClick={saveProductionMapping}>{selectedProductionTask.mapping ? "更新人工定位" : "确认投影到地图"}</button>
@@ -6670,7 +6673,7 @@ export function WarehouseTwinApp() {
           <div className="twin-dispatch-label-list">
             {dashboard.delayed_dispatch_relocation.items.map((candidate) => <article key={`delayed-dispatch-${candidate.pallet_id}`}>
               <button type="button" className="twin-delayed-focus" aria-label={`延期待送地图定位 ${candidate.product_names.join("、")}`} onClick={() => focusDelayedDispatchCandidate(candidate)}>
-                <small>{candidate.order_number} · 已等待 {candidate.idle_days} 天</small>
+                <small><OrderReference row={candidate} /> · 已等待 {candidate.idle_days} 天</small>
                 <b>{formatNumber(candidate.quantity)} {inventoryUnitLabel(candidate.unit)}</b>
                 <strong>{candidate.product_names.join("、")}</strong>
                 <span>{candidate.customer_name || "客户待确认"} · {candidate.source_location_name || "待送区"}</span>
@@ -6756,7 +6759,7 @@ export function WarehouseTwinApp() {
           {mapMode === "lookup" && selectedLocationCompositeParentSummaries.map(({ item, summary }) => <article className="twin-location-item twin-composite-parent-item" key={summary.group_key}>
             <div className="twin-location-item-code"><b>{summary.inventory_code || `组合父件 ${summary.order_item_id}`}</b><strong>{summary.available_set_quantity > 0 ? `${formatNumber(summary.available_set_quantity)} 套` : "待齐套"}</strong></div>
             <h4>{summary.product_name}</h4>
-            <div className="twin-location-item-summary"><span>{item.customer_name || "客户待确认"} · {summary.order_number}</span></div>
+            <div className="twin-location-item-summary"><span>{item.customer_name || "客户待确认"} · <OrderReference row={summary} /></span></div>
             <small>按最短组件自动计算；底层 {summary.component_lot_count} 个正式批次仍独立追溯</small>
             <div className="twin-composite-component-lines">{summary.components.map((component) => <span key={component.snapshot_id}>{component.product_code || component.product_name || `组件 ${component.snapshot_id}`}：{formatNumber(component.available_piece_quantity)} 件 / 每套 {formatNumber(component.quantity_per_set)} 件{component.is_required ? "" : "（可选）"}</span>)}</div>
           </article>)}

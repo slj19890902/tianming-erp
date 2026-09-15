@@ -2899,6 +2899,7 @@ def _reservation_dict(
         "order_id": row.order_id,
         "order_item_id": row.order_item_id,
         "order_number": order.order_number if order else None,
+        "customer_po": order.customer_po if order else None,
         "customer_name": customer.name if customer else None,
         "product_name": item.snapshot_product_name if item else None,
         "reserved_stock_quantity": row.reserved_stock_quantity,
@@ -21291,6 +21292,7 @@ def _mold_live_tasks(
                 "order_id": int(order.id),
                 "order_item_id": int(item.id),
                 "order_number": order.order_number,
+                "customer_po": order.customer_po,
                 "order_status": order.status,
                 "order_status_label": persisted_order_status_label(order.status),
                 "delivery_date": order.delivery_date.isoformat()

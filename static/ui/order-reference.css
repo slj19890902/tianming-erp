@@ -1,0 +1,7 @@
+/* Sales order references: customer PO is the visual identity, never a document ID. */
+.order-reference { display:inline-flex; flex-direction:column; align-items:flex-start; gap:2px; max-width:100%; vertical-align:middle; }
+.customer-po { display:inline-block; max-width:100%; padding:2px 7px; border-radius:5px; background:#dcfce7; color:#14532d; font-weight:650; line-height:1.4; overflow-wrap:anywhere; white-space:normal; vertical-align:middle; }
+.customer-po-missing { color:#64748b; font-size:12px; font-weight:400; }
+.erp-order-no, .sys-num { color:#6b7280!important; font-size:11px!important; font-weight:400!important; overflow-wrap:anywhere; white-space:normal; }
+input.customer-po { box-sizing:border-box; border:1px solid #86b99a; }
+@media print { .customer-po { print-color-adjust:exact; -webkit-print-color-adjust:exact; } }

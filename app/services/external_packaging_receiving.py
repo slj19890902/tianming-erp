@@ -257,6 +257,7 @@ def _purchase_payload(
             "sales_order" if sales_order is not None else "stock_replenishment"
         ),
         "sales_order_id": sales_order.id if sales_order is not None else None,
+        "customer_po": sales_order.customer_po if sales_order is not None else None,
         "stock_replenishment_order_id": (
             replenishment_order.id if replenishment_order is not None else None
         ),

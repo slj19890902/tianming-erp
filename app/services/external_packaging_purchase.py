@@ -1253,6 +1253,7 @@ def build_external_purchase_preview(
         return {
             "order_id": order.id,
             "order_number": order.order_number,
+            "customer_po": order.customer_po,
             "status": "cancelled",
             "message": "该订单原外购包材采购已随订单流程撤回作废，不能重新确认。",
             "history": history,
@@ -1271,6 +1272,7 @@ def build_external_purchase_preview(
         return {
             "order_id": order.id,
             "order_number": order.order_number,
+            "customer_po": order.customer_po,
             "status": "confirmed",
             "confirmation": _serialize_batch(batch),
             "history": history,
@@ -1344,6 +1346,7 @@ def build_external_purchase_preview(
     return {
         "order_id": order.id,
         "order_number": order.order_number,
+        "customer_po": order.customer_po,
         "status": "stock_covered" if not items else "pending",
         "additional_purchase": additional is not None,
         "as_of": as_of.isoformat(),

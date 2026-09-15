@@ -73,6 +73,15 @@ def historical_delivery_component_demands(db, *, delivery_item_id, order_item_id
         raise BomPlanError("历史拿货明细与订单身份不一致")
     demands = effective_component_demands(db, order_item_id)
     if db.get(OrderBomGraph, order_item_id) is None:
+        from app.services.legacy_accompany import frozen_demands
+        legacy = frozen_demands(db, order_item_id, demands)
+        if legacy is not None:
+            # Actual allocation rows, not the current master, define new prints.
+            allocated = set(db.scalars(select(InventoryReservation.sales_order_item_bom_component_id)
+                .join(DeliveryInventoryAllocation, DeliveryInventoryAllocation.reservation_id == InventoryReservation.id)
+                .where(DeliveryInventoryAllocation.delivery_item_id == delivery_item_id)))
+            if any(d.snapshot_id in allocated for d in legacy):
+                return legacy
         return demands
     # Retain reversed allocations too: cancellation does not change which
     # frozen recipe originally owned this delivery. No product master lookup.

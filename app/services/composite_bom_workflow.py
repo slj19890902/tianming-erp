@@ -625,7 +625,14 @@ def _delivered_component_quantity(db: Session, snapshot_id: int) -> int:
             DeliveryInventoryAllocation.status.in_(ACTIVE_RESERVATION_STATUSES),
         )
     )
-    return int(direct_quantity or 0) + int(stock_quantity or 0)
+    total = int(direct_quantity or 0) + int(stock_quantity or 0)
+    from app.services.legacy_accompany import contract
+    snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
+    doc = contract(db, snapshot.sales_order_item_id) if snapshot else None
+    if doc:
+        baseline = next((p['consumed_before'] for p in doc['parts'] if p['snapshot_id'] == snapshot_id), 0)
+        total = max(total - baseline, 0)
+    return total
 
 
 def delivered_component_quantities(
@@ -723,6 +730,10 @@ def delivery_component_demands(db: Session, order_item_id: int) -> list[Componen
     from app.models.multilevel_bom import OrderBomGraph
     demands = effective_component_demands(db, order_item_id)
     if db.get(OrderBomGraph, order_item_id) is None:
+        from app.services.legacy_accompany import frozen_demands
+        legacy = frozen_demands(db, order_item_id, demands)
+        if legacy is not None:
+            return legacy
         return demands
     from app.services.multilevel_bom_orders import read_compiled_order_bom
     compiled = read_compiled_order_bom(db, order_item_id)

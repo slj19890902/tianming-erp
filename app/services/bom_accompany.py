@@ -15,6 +15,9 @@ LEGACY_WARNING = '旧单随货配套尚未冻结并落实预占；请管理员�
 def legacy_accompany_preview(db, item, quantity):
     if item is None or db.get(OrderBomGraph, item.id) is not None:
         return []
+    from app.services.legacy_accompany import contract
+    if contract(db, item.id) is not None:
+        return []
     if db.scalar(select(ProductionCompletion.id).where(
             ProductionCompletion.order_item_id == item.id,
             ProductionCompletion.status == 'posted', ProductionCompletion.origin == 'receipt_auto').limit(1)) is None:

@@ -1979,6 +1979,21 @@
               (detail.reservations || []).filter(row => row.remaining_reserved_stock_quantity > 0).forEach(row => {
                 historyBody.append(node("p", "", `${row.order_number || "关联订单待确认"} · 占用 ${row.remaining_reserved_stock_quantity}${good.unit || ""}`));
               });
+              if ((related.bom_relations || []).length) {
+                const bom = node("details", "");
+                bom.append(node("summary", "", "BOM 配套关系"));
+                bom.append(node("small", "muted", "当前常用箱关系；位置不代表本批已预占。"));
+                related.bom_relations.forEach(row => {
+                  bom.append(node("p", "", `${row.direction === 'parent' ? '父件' : '子件'} ${row.product_code || ''} · ${row.product_name || ''} · 每套 ${row.quantity_per_set} · ${row.relation === 'accompany' ? '随货配套' : '组装消耗'}`));
+                  (row.locations || []).forEach(loc => {
+                    const unit = ({boxes:'只',pieces:'片',sheets:'张',sets:'套'})[loc.unit] || loc.unit || '';
+                    bom.append(node("p", "muted", `${loc.location_name} · ${loc.quantity}${unit}${loc.status === 'frozen' ? ' · 已冻结' : ''}`));
+                    (loc.reservations || []).forEach(r => bom.append(node("small", "muted", `${r.order_number} · 已占 ${r.quantity}${unit} `)));
+                  });
+                  if (!(row.locations || []).length) bom.append(node("small", "muted", "暂无可见在库位置"));
+                });
+                historyBody.append(bom);
+              }
               historyBody.append(node("strong", "", "同款库存位置"));
               (related.same_product_locations || []).forEach(row => {
                 historyBody.append(node("p", "", `${row.location_name} · 实物 ${row.physical_quantity}${good.unit || ""} · 已占用 ${row.reserved_quantity}${row.status === "frozen" ? " · 已冻结" : ""}`));

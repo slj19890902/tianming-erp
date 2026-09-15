@@ -776,7 +776,13 @@ def delivery_component_required_quantities(
             max(delivered_after - demand.delivered_before_cutover, 0) * demand.quantity_per_set,
             demand.required_piece_quantity,
         )
-        result[demand.snapshot_id] = max(target_after_dispatch - consumed, 0)
+        target_before_dispatch = min(
+            max(delivered_before - demand.delivered_before_cutover, 0) * demand.quantity_per_set,
+            demand.required_piece_quantity,
+        )
+        # A new dispatch must not silently recover historical unrecorded parts.
+        # Historical reconciliation is an explicit, separately audited operation.
+        result[demand.snapshot_id] = max(target_after_dispatch - max(consumed, target_before_dispatch), 0)
     return result
 
 

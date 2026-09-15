@@ -242,7 +242,7 @@ def test_split_movement_keeps_receipt_cost_and_finished_coverage(
                 assert sum(a.quantity for a in active) == 10
 
 
-def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, separate=False, quantity=None, cutting_modes=None, finished_slot_count=8):
+def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, separate=False, quantity=None, cutting_modes=None, finished_slot_count=8, accompany=False):
     from app.models.warehouse_inventory import WarehouseLocation
     from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
@@ -272,6 +272,8 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, sepa
             p.report_width_mm = 700
             p.pieces_per_box = 1
             p.default_cutting_mode = "一开一"
+            if accompany:
+                p.length_mm, p.width_mm, p.height_mm = 1000, 700, 20
             if cutting_modes and pid in cutting_modes:
                 p.default_cutting_mode = cutting_modes[pid]
         if separate:
@@ -281,6 +283,8 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, sepa
                 components=[dict(component_product_id=2, quantity_per_set=3, inventory_relation="accompany"),
                             dict(component_product_id=3, quantity_per_set=4, inventory_relation="accompany")])
             item.composite_fulfillment_mode_snapshot = "component_delivery"
+        elif accompany:
+            save(db, actor, 1, "manufactured", [(2, 4, "accompany")])
         elif liner:
             kit = Product(customer_id=1, product_code="LINER", customer_material_code="LINER",
                           product_name="真实内衬", unit="套")

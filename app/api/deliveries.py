@@ -1139,8 +1139,11 @@ def _pick_item_component_lines(
             else is_composite_order_item(db, order_item.id)
         )
     )
-    if order_item is None or not is_composite or not _uses_composite_inventory(db, order_item.id, is_composite):
+    if order_item is None or not is_composite:
         return []
+    if not _uses_composite_inventory(db, order_item.id, is_composite):
+        from app.services.bom_accompany import legacy_accompany_preview
+        return legacy_accompany_preview(db, order_item, item.original_quantity)
     return [
         component
         for component in _delivery_component_lines(
@@ -1873,6 +1876,12 @@ def _pick_item_response(
                 line['inventory_note'] = '旧单子件账，成套库存未登记；勿按此重复拿长短片'
                 line['requires_attention'] = True
             location_plan_complete = False
+    if any(c.get('relation_basis') == 'legacy_advisory_not_frozen' for c in component_lines):
+        from app.services.bom_accompany import LEGACY_WARNING
+        for line in location_lines:
+            line['inventory_note'] = LEGACY_WARNING
+            line['requires_attention'] = True
+        location_plan_complete = False
     return {
         "id": item.id,
         "delivery_item_id": item.delivery_item_id,
@@ -9222,6 +9231,9 @@ def _dispatch_delivery(
             operation_key = (
                 f"d{delivery_id}-{dispatched_at:%Y%m%d%H%M%S%f}-i{line.id}"
             )
+            from app.services.bom_accompany import legacy_accompany_preview, LEGACY_WARNING
+            if legacy_accompany_preview(db, order_item, line.delivered_quantity):
+                raise HTTPException(status_code=409, detail=LEGACY_WARNING)
             from app.services.bom_subkit_delivery import consume_delivery_subkits
             from app.services.bom_subkits import SubkitError
             try:

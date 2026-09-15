@@ -17652,6 +17652,7 @@ def mobile_shelf_scan(location_id: int, response: Response,
                       product: str | None = Query(default=None, pattern=r"^[a-f0-9]{24}$"),
                       db: Session = Depends(get_db), user: User = Depends(can_read)):
     from app.services.mobile_shelf_labels import product_key, product_fields
+    from app.services.warehouse_reading_identity import shelf_merge_identity
     _, result = _mobile_shelf_location(db, location_id)
     query = select(InventoryLot).options(selectinload(InventoryLot.finished_detail),
         selectinload(InventoryLot.semi_finished_detail)).where(
@@ -17665,11 +17666,16 @@ def mobile_shelf_scan(location_id: int, response: Response,
         key = product_key(lot)
         if product and key != product:
             continue
-        if key not in groups:
+        identity = shelf_merge_identity(lot)
+        detail = lot.finished_detail
+        mergeable = bool(detail and detail.inventory_code_snapshot and detail.product_name_snapshot and identity["box_style"] and identity["is_bom_component"] is False)
+        display_key = (detail.owner_customer_id, detail.product_id, detail.inventory_code_snapshot,
+                       detail.product_name_snapshot, identity["box_style"], lot.unit) if mergeable else ("lot", lot.id)
+        if display_key not in groups:
             from app.services.warehouse_display_units import lot_display_unit
-            groups[key] = dict(key=key, **product_fields(db, lot), unit=lot_display_unit(lot),
+            groups[display_key] = dict(key=key, **product_fields(db, lot), unit=lot_display_unit(lot),
                                quantity=0, available=0, reserved=0, damaged=0, lots=[])
-        item = groups[key]
+        item = groups[display_key]
         item["quantity"] += lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged
         item["available"] += lot.quantity_available
         item["reserved"] += lot.quantity_reserved

@@ -119,9 +119,11 @@ def _age_bucket_key(days: int | None) -> str:
 
 
 def _lot_business_fields(row: InventoryLot) -> dict:
+    from app.services.warehouse_reading_identity import shelf_merge_identity
     if row.finished_detail is not None:
         detail = row.finished_detail
         return {
+            **shelf_merge_identity(row),
             "product_id": detail.product_id,
             "inventory_code": detail.inventory_code_snapshot,
             "product_name": detail.product_name_snapshot,
@@ -352,6 +354,7 @@ def _lot_payload(
     age_days = _age_days(row, as_of)
     payload = {
         "lot_id": row.id,
+        "location_id": row.warehouse_location_id,
         "lot_number": row.lot_number,
         "inventory_type": row.inventory_type,
         "inventory_usage": ("raw_material" if row.semi_finished_detail is not None and row.semi_finished_detail.sheet_type == "raw_board" else row.inventory_type),

@@ -1804,12 +1804,18 @@
 
       function groupWarehouseRackGoods(goods) {
         const groups = new Map();
+        const seen = new Set();
         for (const good of goods) {
-          const key = JSON.stringify([good.customer_id, good.product_id ?? `lot:${good.lot_id}`, good.unit]);
+          const batch = JSON.stringify([good.location_id, good.lot_id]);
+          if (seen.has(batch)) continue;
+          seen.add(batch);
+          const mergeable = good.inventory_type === "finished" && good.product_id && good.product_code && good.product_name && good.box_style && good.is_bom_component === false;
+          const key = JSON.stringify([good.location_id, good.customer_id, good.product_id, good.product_code, good.product_name, good.box_style, good.inventory_type, good.ledger_unit || good.unit, mergeable ? null : good.lot_id]);
           const quantity = good.quantity_total == null ? null : Number(good.quantity_total);
           const current = groups.get(key);
-          if (!current) groups.set(key, {...good, search_lot_ids: [good.lot_id], quantity_total: Number.isFinite(quantity) ? quantity : null});
+          if (!current) groups.set(key, {...good, source_goods: [good], search_lot_ids: [good.lot_id], quantity_total: Number.isFinite(quantity) ? quantity : null});
           else {
+            current.source_goods.push(good);
             current.search_lot_ids.push(good.lot_id);
             current.quantity_total = current.quantity_total == null || !Number.isFinite(quantity) ? null : current.quantity_total + quantity;
           }
@@ -1883,7 +1889,20 @@
           addPanel.append(stocktake);
 
         }
-        goods.forEach(good => {
+        groupWarehouseRackGoods(goods).forEach(group => {
+          let batchContainer = container;
+          if (group.source_goods.length > 1) {
+            const groupedCard = node("section", "candidate warehouse-label-card");
+            const identity = warehouseGoodsDisplay(group);
+            groupedCard.append(node("strong", "warehouse-label-code", identity.primary), node("div", "", `${identity.customer} · ${Number(group.quantity_total)}${group.unit || ""}`));
+            const batches = node("details");
+            batches.append(node("summary", "", "查看明细 / 搬运"));
+            batches.open = group.search_lot_ids.some(id => Number(id) === Number(preferredLotId));
+            groupedCard.append(batches);
+            container.append(groupedCard);
+            batchContainer = batches;
+          }
+          group.source_goods.forEach(good => {
           const card = node("section", "candidate warehouse-label-card");
           if (preferredLotId && Number(good.lot_id) === Number(preferredLotId)) {
             card.style.backgroundColor = "#ffeb00";
@@ -2005,8 +2024,9 @@
             } finally { historyLoading = false; }
           });
           card.append(history);
-          container.append(card);
+          batchContainer.append(card);
           if (Number(good.lot_id) === Number(preferredLotId) && good.can_move) selectWarehouseMapSource(good, location);
+          });
         });
         container.append(addPanel);
         container.hidden = false;

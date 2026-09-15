@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.418"
-APP_VERSION_NAME = "识别订单报料资料保存前校验"
+APP_VERSION = "v0.22.419"
+APP_VERSION_NAME = "BOM随货配套扣库与标签关联"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4221,3 +4221,6 @@ APP_CHANGELOG = [*(f"v0.22.417：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["识别订单在单份和批量保存前校验常用箱报料长宽、材质及供应商，明确订单、行号、编码和缺项。", "编辑常用箱返回后同步更新缺项；外购成品与虚拟/组装父件不强制本体纸板字段，不自动补写历史订单或库存。"]
 APP_VERIFICATION_STEPS = ["重开识别草稿，缺报料资料的行应明确显示缺项并阻止保存；点击该行编辑常用箱补齐后返回。", "核对缺项解除后再保存，已保存订单不重复导入；直接外购仍按供应商产品资料处理。"]
 APP_CHANGELOG = [*(f"v0.22.418：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["随货配套与客户单据显示分开：父件、配套子件按冻结数量分别预占和扣库，标签包含实际随货子件，撤销恢复原批次。", "扫码详情增加父子件及库存位置关联；旧单缺冻结关系或预占时明确提示，不静默漏扣或补扣历史数量。"]
+APP_VERIFICATION_STEPS = ["打开新配套订单：每箱4片时送30箱应显示纸箱30、衬板120及各自位置，产品标签包含两款。", "扫码展开BOM配套关系核对关联位置；当前旧00139仍需另行处理历史预占，不为验收重复出货或入库。"]
+APP_CHANGELOG = [*(f"v0.22.419：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

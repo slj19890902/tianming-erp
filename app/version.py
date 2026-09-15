@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.423"
-APP_VERSION_NAME = "地图实盘数量增减统一"
+APP_VERSION = "v0.22.424"
+APP_VERSION_NAME = "已完工来料产品标签与报料打印入口修复"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4236,3 +4236,6 @@ APP_CHANGELOG = [*(f"v0.22.422：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["地图盘点填写实际数量，管理员确认后按差额增加或减少，员工上报审核。", "同位原批次分别核数，保留BOM、预占、位置及审计；盘点和新增入库分开。"]
 APP_VERIFICATION_STEPS = ["地图移货/盘点中打开货位，点击填写实际数量，可输入高于或低于系统的实际数量。", "按各批次现场实物核数，管理员确认后返回地图核对；不要为验收填写虚构数量。"]
 APP_CHANGELOG = [*(f"v0.22.423：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["已完工生产任务的来料产品标签按保存的产品数量快照打印，不再按已归零的待生产需求拦截。", "已报料标签核验失败时显示原因，不再闪现后立即关闭空白页；核验通过保留标签页入口。"]
+APP_VERIFICATION_STEPS = ["在来料勾选聚晟达六款已实收产品，打开标签核对六款数量与位置；不要为验收新增收料。", "在已报料勾选对应六款打印产品标签，核验失败应留在原页面显示原因；核验通过后确认标签页正常打开。"]
+APP_CHANGELOG = [*(f"v0.22.424：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

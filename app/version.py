@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.429"
-APP_VERSION_NAME = "加工组套来源成本完整性保护"
+APP_VERSION = "v0.22.430"
+APP_VERSION_NAME = "成本来源保护与助手连接诊断"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4254,3 +4254,6 @@ APP_CHANGELOG = [*(f"v0.22.428：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["备库完工和组套先核对投入批次的入库成本依据，缺少依据时提示批次，不再生成新的无成本库存。", "组套任一子件成本校验失败，整笔操作回滚，不扣其他子件、不生成成套库存；保留来源成本及参考属性。"]
 APP_VERIFICATION_STEPS = ["正常备库完工或组套后核对成本继承；若提示来源成本不完整，先维护真实依据，不为验收伪造价格。", "失败后刷新核对原库存数量不变；不要为验收重复生产或组套。"]
 APP_CHANGELOG = [*(f"v0.22.429：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["保留加工组套成本来源校验，缺少依据时整笔回滚，不再生成无成本库存。", "助手分别检查后台和网页，提供已配置私网入口修复；异地NAS备份或更新先读写预检，失败不先停ERP。"]
+APP_VERIFICATION_STEPS = ["打开助手查看后台与网页分项状态；网页不可达时可检查并修复配置中的私网入口。", "正常备库完工/组套核对成本继承，不为验收新增业务；远程NAS预检成功不等同完整备份成功。"]
+APP_CHANGELOG = [*(f"v0.22.430：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -45,7 +45,14 @@ def inspect(config, running, request=fetch):
         port = int(config['ERP_PORT'])
         if not 1 <= port <= 65535:
             raise ValueError()
-        if not health(f'http://127.0.0.1:{port}/api/health', request):
+        host = config.get('ERP_BIND_HOST', '127.0.0.1')
+        if host in ('0.0.0.0', '::', 'localhost'):
+            host = '127.0.0.1'
+        address = ipaddress.ip_address(host)
+        if not (address.is_private or address.is_loopback) or address.is_multicast:
+            raise ValueError()
+        authority = f'[{host}]' if address.version == 6 else host
+        if not health(f'http://{authority}:{port}/api/health', request):
             raise ValueError()
     except Exception:
         return '进程存在，但后台无响应', '网页状态待核对'

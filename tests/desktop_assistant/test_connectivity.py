@@ -25,6 +25,16 @@ def test_normal_and_stopped():
     assert inspect(CONFIG, False, lambda _: pytest.fail('must not request')) == ('后台已停止', '网页不可用')
 
 
+def test_direct_lan_install_uses_actual_bind_address():
+    config = dict(CONFIG, ERP_BIND_HOST='192.168.3.80', ERP_PORT='8000')
+    calls = []
+    def request(url):
+        calls.append(url)
+        return good(url)
+    assert inspect(config, True, request) == ('后台正常', '网页可访问')
+    assert all('127.0.0.1' not in url for url in calls)
+
+
 @pytest.mark.parametrize('payload', [b'{}', b'not-json', b'{"ok":false}'])
 def test_bad_backend_health(payload):
     assert '无响应' in inspect(CONFIG, True, lambda _: (200, 'application/json', payload))[0]

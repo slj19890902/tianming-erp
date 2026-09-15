@@ -6,6 +6,14 @@ const unit = v => ({pcs:'只',pc:'只',piece:'片',pieces:'片',set:'套',sets:'
 function productCard(item) {
   return `<article><div class="product-grid"><div class="product-main"><small>存货编码</small><div class="code">${h(item.code)}</div><div class="product-name">${h(item.name)}</div><div class="spec">${h(item.specification)}</div></div><aside class="product-side"><small>客户</small><b class="customer">${h(item.customer)}</b>${item.customer_name&&item.customer_name!==item.customer?`<small class="customer-full">${h(item.customer_name)}</small>`:''}<small class="quantity-label">实时数量</small><div class="quantity">${h(item.quantity)} <span>${h(unit(item.unit))}</span></div></aside></div><div class="balances"><span>可用 <b>${h(item.available)}</b></span><span>预占 <b>${h(item.reserved)}</b></span>${item.damaged?'<span>异常 <b>'+h(item.damaged)+'</b></span>':''}</div>${item.lots.map(lot=>`<details data-lot="${lot.id}"><summary>批次 · ${h(lot.quantity)} ${h(unit(item.unit))}${lot.status==='frozen'?' · 已冻结':''} · 订单</summary><div class="orders"></div></details>`).join('')}</article>`;
 }
+function bomRelations(rows) {
+  if (!(rows || []).length) return '';
+  return '<details><summary>BOM 配套关系</summary><small>当前常用箱关系；位置不代表本批已预占。</small>'+rows.map(row=>
+    '<p><b>'+h(row.direction==='parent'?'父件':'子件')+' '+h(row.product_code)+'</b> · '+h(row.product_name)+' · 每套 '+h(row.quantity_per_set)+' · '+h(row.relation==='accompany'?'随货配套':'组装消耗')+'</p>'+
+    ((row.locations||[]).map(loc=>'<p>'+h(loc.location_name)+' · '+h(loc.quantity)+' '+h(unit(loc.unit))+(loc.status==='frozen'?' · 已冻结':'')+'</p>'+
+      (loc.reservations||[]).map(r=>'<small>'+h(r.order_number)+' · 已占 '+h(r.quantity)+' '+h(unit(loc.unit))+'</small>').join('')).join('')||'<small>暂无可见在库位置</small>')
+  ).join('')+'</details>';
+}
 let generation = 0;
 async function request(url, options={}) {
   const r = await fetch(url, {credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(12000),...options});
@@ -43,6 +51,7 @@ async function loadOrders(node,current){
     const source=data.shelf_related_inventory?.source_order?.order_number;
     box.innerHTML=(source?'<p>来源订单：'+h(source)+'</p>':'')+orders.map(x=>'<p>'+h(x.order_number||'关联订单')+' · 预占 '+h(x.remaining_reserved_stock_quantity)+'</p>').join('');
     if(!box.innerHTML)box.textContent='暂无可见关联订单';
+    box.insertAdjacentHTML('beforeend',bomRelations(data.shelf_related_inventory?.bom_relations));
     node.dataset.loaded='1';
   }catch(e){box.textContent=e.status===401?'登录已失效，请刷新登录':e.message;const retry=document.createElement('button');retry.textContent='重试';retry.onclick=()=>loadOrders(node,current);box.append(retry);}
   finally{delete node.dataset.busy;}

@@ -138,6 +138,20 @@ def test_direct_pdf_same_po_cannot_create_again_with_changed_details(tmp_path):
     app=_order_import_app(tmp_path)
     payload=fixture(app)
     payload.pop('email_attachment_id')
+    # Recognized orders require complete current master data since v418.
+    from app.models.product import Product
+    from app.models.material import Material
+    from app.models.supplier import Supplier
+    from app.services.supplier_master import normalize_supplier_identity
+    with session(app) as db:
+        db.add(Supplier(standard_name='Fixture supplier', normalized_name=normalize_supplier_identity('Fixture supplier'), is_active=True))
+        material=Material(code='A6A',supplier_name='Fixture supplier',is_active=True,layer_count=3,flute_type='A')
+        db.add(material);db.flush()
+        product=db.get(Product,payload['items'][0]['product_id'])
+        product.material_id=material.id
+        product.report_length_mm=800;product.report_width_mm=600
+        product.layer_count=3;product.flute_type='A'
+        db.commit()
     with TestClient(app) as client:
         client.post('/api/auth/login',json={'username':'admin','password':'RolePass123!'})
         first=client.post('/api/orders',json=payload)

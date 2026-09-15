@@ -31,7 +31,13 @@
 .pdf-order-import-modal .pdf-action-col { width:70px; }
 .pdf-order-import-modal .pdf-inventory-cell { flex-direction:column; align-items:start; gap:4px; }
 .pdf-order-import-modal .compact-input { width:100%; min-width:0; }
-.pdf-order-import-modal .pdf-inventory-table-wrap { max-height:none; overflow:visible; }
+.pdf-order-import-modal .pdf-inventory-table-wrap { height:clamp(280px,58dvh,760px); overflow:auto; }
+.pdf-order-import-modal .pdf-inventory-table thead { position:sticky; top:0; z-index:1; background:#f0f4f8; }
+.pdf-order-import-modal .pdf-order-summary .field { display:flex; align-items:center; gap:6px; min-width:0; }
+.pdf-order-import-modal .pdf-order-summary .field label { flex:none; margin:0; }
+.pdf-order-import-modal .pdf-order-summary .field > :last-child { flex:1; min-width:0; }
+.pdf-order-import-modal .pdf-block-reasons[open] { max-height:160px; overflow:auto; }
+.pdf-order-import-modal .pdf-block-reasons summary { cursor:pointer; }
 .pdf-stock-overlay-row > td { padding:0!important; border:0!important; }
 .workspace-dialog-mask { position:fixed; inset:0; z-index:130; padding:24px; background:#18344b55; display:flex; align-items:center; justify-content:center; }
 .workspace-dialog { width:min(1080px,100%); padding:18px; border-radius:14px; background:white; box-shadow:0 12px 60px #122b4b40; color:#172b45; }

@@ -7201,9 +7201,9 @@
                 <summary>已排除 {{ emailQueueExcluded.length }} 份（已录入、已处理或早于2026-09-01，不计入红标）</summary>
                 <div v-for="entry in emailQueueExcluded" style="padding:4px 0">{{ entry.filename }} · {{ ({duplicate:'同一客户单号已录入',processed:'已人工处理或已保存',deleted:'已删除',before_start:'早于2026-09-01'})[entry.reason] }}<span v-if="entry.customer_po"> · {{ entry.customer_po }}</span><span v-if="entry.order_number"> · ERP订单 {{ entry.order_number }}</span></div>
               </details>
-              <div v-if="!emailQueueMode" class="form-grid" style="margin-bottom:12px">
+              <div v-if="!emailQueueMode" class="form-grid pdf-upload-controls" style="margin-bottom:4px">
                 <div class="field wide">
-                  <label>上传客户采购订单 PDF（可多选）</label>
+                  <label v-if="!orderImportDrafts.length">上传客户采购订单 PDF（可多选）</label>
                   <input class="input" type="file" multiple accept="application/pdf,.pdf" @change="onOrderPdfFileChange" />
                 </div>
               </div>
@@ -7222,7 +7222,7 @@
                 </tbody></table>
                 <pager :page="pdfQueuePage" :total="pdfQueueDrafts().length" :page-size="pdfPageSize()" :always="true" @change="pdfQueuePage=$event"></pager>
               </div>
-              <div v-if="(!emailQueueMode || !pdfQueueVisible) && pdfQueueDrafts().length" class="toolbar pdf-document-nav">
+              <div v-if="(!emailQueueMode || !pdfQueueVisible) && (pdfQueueDrafts().length > 1 || emailQueueMode)" class="toolbar pdf-document-nav">
                 <button v-if="emailQueueMode" class="btn small" @click="pdfQueueVisible=true">返回单据列表</button>
                 <div class="toolbar-group"><button class="btn small" :disabled="pdfDraftPosition()<=1" @click="pdfMoveDraft(-1)">上一份</button><strong>第 {{pdfDraftPosition()}} / {{pdfQueueDrafts().length}} 份</strong><button class="btn small" :disabled="pdfDraftPosition()>=pdfQueueDrafts().length" @click="pdfMoveDraft(1)">下一份</button></div>
               </div>
@@ -7295,9 +7295,9 @@
                 <div v-if="draft.manual_entry" class="notice" style="margin-bottom:10px;white-space:normal">
                   <strong>人工录入模式：</strong>请逐项对照原 PDF 填写，系统不会自动补写订单事实。填写后点击“核对并匹配常用箱”；未唯一匹配的行仍需人工选择。
                 </div>
-                <div v-if="importDraftBlockReasons(draft).length" class="status red" style="display:block;margin-bottom:10px;line-height:1.7">
-                  <strong>订单 {{draft.customer_po || draft.source_name}} 无法保存，待处理 {{importDraftBlockReasons(draft).length}} 项：</strong><div v-for="reason in importDraftBlockReasons(draft)" :key="reason">{{reason}}</div>
-                </div>
+                <details v-if="importDraftBlockReasons(draft).length" class="status red pdf-block-reasons" style="display:block;margin-bottom:6px;line-height:1.7">
+                  <summary>无法保存 · {{importDraftBlockReasons(draft).length}} 项待处理 · 展开查看行号和原因</summary><div v-for="reason in importDraftBlockReasons(draft)" :key="reason">{{reason}}</div>
+                </details>
                 <div v-if="hasImportDraftQuantityReview(draft)" class="status orange" style="display:block;margin-bottom:10px">
                   存在非整数数量，不能直接保存，请人工修改后再保存。
                 </div>

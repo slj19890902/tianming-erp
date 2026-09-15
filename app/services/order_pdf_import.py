@@ -3023,7 +3023,11 @@ def mark_order_duplicate(db: Session, draft: dict) -> dict:
         order = orders[0]
         result.update(
             duplicate_status="duplicate_skipped",
-            duplicate_reason=f"该客户的客户单号 {customer_po} 已录入（ERP订单 {order.order_number}），已跳过重复录入；如需修订，请编辑原订单。",
+            duplicate_reason=(
+                f"原订单 {order.order_number} 已取消，但未删除，明细和历史仍保留。客户单号 {customer_po} 暂不能重复录入；请在订单的已取消列表查看原单，如需重录请由管理员先完成受控删除。"
+                if order.status == "cancelled" else
+                f"该客户的客户单号 {customer_po} 已录入（ERP订单 {order.order_number}），已跳过重复录入；如需修订，请编辑原订单。"
+            ),
             duplicate_order_id=order.id,
             duplicate_order_number=order.order_number,
         )

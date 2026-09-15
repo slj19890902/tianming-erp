@@ -32,7 +32,8 @@
    pdfMoveDraft(step){const all=this.pdfQueueDrafts();const index=all.findIndex(d=>this.pdfCurrentDraft(d));if(all[index+step])this.pdfOpenDraft(all[index+step]);},
    pdfDraftPosition(){const all=this.pdfQueueDrafts();return Math.max(1,all.findIndex(d=>this.pdfCurrentDraft(d))+1);},
    pdfCustomerShort(draft){const customer=(this.customerOptions||[]).find(c=>Number(c.id)===Number(draft.matched_customer_id));return customer?.chinese_short_name || customer?.short_name || customer?.abbreviation || customer?.name || draft.customer_name || draft.customer_name_raw || '客户待确认';},
-   pdfPageSize(){return this.pdfFitCapacity||Math.max(1,Math.min(8,Math.floor(((this.workspaceHeight||768)-(this.uiMode==='large'?500:440))/(this.uiMode==='large'?90:70))));},
+   // Editing rows must not disappear when warnings or details grow taller.
+   pdfPageSize(){return 30;},
    async confirmAndSavePdf(draft){if(this.loading||this.isImportDraftLocked(draft)||!this.canConfirmImportDraft(draft))return;draft.confirmed=true;await this.saveConfirmedImportDrafts(draft);},
    async confirmAndApplyPdf(draft){if(!this.canConfirmImportDraft(draft)||this.isImportDraftLocked(draft))return;draft.confirmed=true;await this.applyPdfDraftToOrderForm(draft);},
    pdfPageItems(draft){const size=this.pdfPageSize();const page=Math.min(draft._product_page||1,Math.max(1,Math.ceil((draft.items||[]).length/size)));return (draft.items||[]).slice((page-1)*size,page*size);},

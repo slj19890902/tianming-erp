@@ -1,0 +1,10 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const sandbox={};vm.createContext(sandbox);vm.runInContext(fs.readFileSync('static/ui/pdf-workspace.js','utf8'),sandbox);
+let mixin;sandbox.ERPPdfWorkspace.install({mixin(m){mixin=m;}});
+const ctx={...mixin.methods,pdfFitCapacity:1,workspaceHeight:600,uiMode:'large'};
+const rows=Array.from({length:29},(_,i)=>({line_no:i+1}));
+assert.equal(ctx.pdfPageSize(),30);assert.equal(ctx.pdfPageItems({items:rows}).length,29);
+const many=Array.from({length:61},(_,i)=>({line_no:i+1}));
+assert.equal(ctx.pdfPageItems({items:many,_product_page:2})[0].line_no,31);
+assert.equal(ctx.pdfPageItems({items:many,_product_page:3}).length,1);
+console.log('Stable PDF pagination: 29 rows on one page, no warning-height repagination');

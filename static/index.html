@@ -6579,6 +6579,7 @@
                 </div>
                 <div v-if="productForm.box_style!=='其他'" class="field product-supply-compact"><label>结构</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板生产</option><option value="mixed_bom">纸板＋外购组件</option></select></div>
               </div>
+              <div class="muted" style="font-size:12px;margin:4px 0">直接外购成品：选“其他”并绑定供应商产品；外购彩印纸板、本厂模切粘合：选实际箱型＋“纸板生产”，填写本厂加工资料。</div>
 
               <div v-if="productForm.supply_mode==='external_purchase'" class="panel" style="margin:10px 0;border-color:#f59e0b">
                 <div class="toolbar"><div><strong>外购包材资料</strong><info-note>只选择供应商已登记的真实产品；单一候选自动设为默认，多候选必须人工指定一个默认，不会按最低价自动选择。</info-note></div><span class="status orange">不走纸板材质与生产工艺</span></div>
@@ -9511,6 +9512,7 @@
             </div>
           </div>
           <div v-if="modal?.type === 'product'" class="modal-foot product-editor-actions">
+            <span v-if="productSaveBlockReason" class="status orange" role="status" style="flex:1;white-space:normal">{{ productSaveBlockReason }}</span>
             <button type="button" class="btn primary product-inline-save" :disabled="(!!productForm.id && !canEditProducts) || loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : (productEditReturnContext && productEditReturnContext.source!=='bom' ? '保存并返回订单' : '保存') }}</button>
           </div>
           <div v-if="!['product','orderPdfImport'].includes(modal?.type)" class="modal-foot">
@@ -11179,6 +11181,7 @@
           isForcedPassword() { return this.modal?.type === "password" && this.modal.force; },
           productCreaseMismatch() {
             if (!this.modal || this.modal.type !== "product") return "";
+            if (this.productForm.supply_mode === "external_purchase") return "";
             if (this.productForm.id && !this.productReportCreaseTouched()) return "";
             return this.validateProductCreaseAndReport(this.productForm) || "";
           },
@@ -11209,11 +11212,13 @@
           },
           productMoldError() {
             if (!this.modal || this.modal.type !== "product") return "";
+            if (this.productForm.supply_mode === "external_purchase") return "";
             if (!this.productUsesMold(this.productForm)) return "";
             return this.productForm.mold_tool_id ? "" : "生产工艺包含模切，必须选择已登记的生产模具及货架位置";
           },
           productPrintingPlateError() {
             if (!this.modal || this.modal.type !== "product") return "";
+            if (this.productForm.supply_mode === "external_purchase") return "";
             if (!this.productHasPrinting(this.productForm) || this.productForm.printing_plate_mode !== "plate") return "";
             const count = this.productPrintingPlateCount(this.productForm);
             if (!count) return "挂板印刷至少保留一行";
@@ -11225,6 +11230,7 @@
             return "";
           },
           productPrintingColorError() {
+            if (this.productForm.supply_mode === "external_purchase") return "";
             if (!this.modal || this.modal.type !== "product" || !this.productUsesDirectPrinting(this.productForm)) return "";
             if (this.productForm.id && !this.productForm._printing_colors_touched) return "";
             const count = this.productDirectPrintingColorCount(this.productForm);
@@ -11245,6 +11251,13 @@
             if (raw === null || raw === undefined || String(raw).trim() === "") return "开启包装标签后，必须填写每张标签数量";
             const value = Number(raw);
             return Number.isInteger(value) && value > 0 ? "" : "每张标签数量必须是正整数";
+          },
+          productSaveBlockReason() {
+            if (this.modal?.type !== "product") return "";
+            if (this.productForm.id && !this.canEditProducts) return "当前账号没有编辑权限";
+            if (this.masterSavePending) return "正在保存，请稍候";
+            if (this.loading) return "资料正在读取，请稍候";
+            return this.productCreaseMismatch || this.productMoldError || this.productPrintingPlateError || this.productPrintingColorError || this.productProductionLabelError || "";
           },
           stockReplenishmentCreaseBlocked() {
             if (!this.modal || this.modal.type !== "stockReplenishment") return false;
@@ -12375,7 +12388,7 @@
             if (!isExternal && this.productMoldError) throw new Error(this.productMoldError);
             if (!isExternal && this.productPrintingPlateError) throw new Error(this.productPrintingPlateError);
             if (!isExternal && this.productPrintingColorError) throw new Error(this.productPrintingColorError);
-            if (!isExternal && this.productProductionLabelError) throw new Error(this.productProductionLabelError);
+            if (this.productProductionLabelError) throw new Error(this.productProductionLabelError);
             const payload = { ...this.productForm };
             const printing = this.productPrintingWriteFields(this.productForm);
             Object.assign(payload,printing);

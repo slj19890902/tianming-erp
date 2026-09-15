@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.421"
-APP_VERSION_NAME = "同货位同款汇总与BOM子件隔离"
+APP_VERSION = "v0.22.422"
+APP_VERSION_NAME = "旧单随货自动预占与发货扣库"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4230,3 +4230,6 @@ APP_CHANGELOG = [*(f"v0.22.420：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["同货位、同客户且编码、名称、箱型一致的普通成品汇总显示，整数数量不带小数尾零；原批次可展开追溯。", "BOM子件、箱型或身份不明的产品不自动汇总，不改变库存、组套、配套、预占与出库关系。"]
 APP_VERIFICATION_STEPS = ["刷新仓库后查看同位同款：主行显示合计，明细保留各批次；不同名称/箱型及BOM子件保持分开。", "手机进入同一货位，展开明细核对原批次数量；不要为验收重复入库或出货。"]
 APP_CHANGELOG = [*(f"v0.22.421：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["旧单剩余随货配套自动冻结和预占，点击发货打印才扣库，历史已送部分不补扣；重复操作不重复扣，撤销恢复原批次。", "找货及产品标签同时显示父件和配套子件；修复订单编辑子件持续读取，保留v421货位汇总更新。"]
+APP_VERIFICATION_STEPS = ["YL-20260914-001应显示纸箱30盒及隔板120片和各自货位；尚未点击发货打印前隔板仅预占。", "确认真实发货后再点发货打印；历史已送隔板不补扣，勿为验收重复发货或新增库存。"]
+APP_CHANGELOG = [*(f"v0.22.422：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

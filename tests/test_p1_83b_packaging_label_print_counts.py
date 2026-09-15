@@ -605,6 +605,59 @@ def test_current_common_box_label_setting_prints_selected_item_without_task_refr
         assert db.scalar(select(func.count(ProductionLabelPlanRefresh.id))) == 0
 
 
+def test_completed_received_task_keeps_printable_recorded_label_quantity(
+    production_print_app,
+) -> None:
+    from app.models.production import ProductionTask
+    from app.models.product import Product
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+
+    fixture = production_print_app
+    with fixture["session_factory"]() as db:
+        task = db.scalar(select(ProductionTask).where(
+            ProductionTask.order_item_id == fixture["order_item_id"]
+        ))
+        product = db.get(Product, fixture["product_id"])
+        order = db.get(SupplierRequisitionOrder, fixture["supplier_order_id"])
+        assert task is not None and product is not None and order is not None
+        product.production_label_enabled = True
+        product.production_label_units_per_label = 5
+        task.status = "completed"
+        task.planned_quantity = 23
+        task.ordered_quantity_snapshot = 23
+        task.production_label_enabled_snapshot = True
+        task.production_label_units_per_label_snapshot = 5
+        task.production_label_total_quantity_snapshot = 23
+        task.production_label_count_snapshot = 5
+        db.commit()
+        task_id = int(task.id)
+
+        package = build_supplier_requisition_packaging_label_package(
+            db, order, selected_supplier_item_ids={fixture["supplier_item_id"]}
+        )
+
+    assert package["review_required"] is False
+    assert package["printable"] is True
+    assert package["plans"][0]["production_task_id"] == task_id
+    assert package["plans"][0]["total_quantity"] == 23
+    assert [label["quantity"] for label in package["labels"]] == [5, 5, 5, 5, 3]
+
+    with TestClient(fixture["app"]) as client:
+        _login(client, "p132a2-admin")
+        result = client.post(
+            f"/api/requisition/supplier-orders/{fixture['supplier_order_id']}"
+            "/production-packaging-label-jobs",
+            json={
+                "idempotency_key": "completed-received-task-label-job",
+                "plan_fingerprint": package["plan_fingerprint"],
+                "confirmed": True,
+                "items": [{"production_task_id": task_id, "print_label_count": 5}],
+            },
+        )
+        assert result.status_code == 200, result.text
+        assert result.json()["package"]["label_count"] == 5
+
+
 def test_supplier_label_batch_freezes_two_orders_and_confirms_them_atomically(
     production_print_app,
 ) -> None:

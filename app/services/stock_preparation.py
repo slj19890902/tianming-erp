@@ -196,6 +196,8 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='
             reservation.released_by=actor.id; reservation.released_at=utc_now_naive()
             movement_type="release_reserve"; job.status="cancelled"
         elif action == "complete":
+            from app.services.inventory_valuation import require_inherited_entry_cost
+            require_inherited_entry_cost(db, lot)
             actual = payload["actual_output"]
             if actual <= 0:
                 fail("请填写实际成品数量")

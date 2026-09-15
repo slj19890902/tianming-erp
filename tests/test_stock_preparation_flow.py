@@ -58,6 +58,29 @@ def test_partial_production_replay_and_stock_conservation(stock_replenishment_ap
         assert db.scalar(select(func.count()).select_from(StockPreparationCommand))==3
 
 
+def test_missing_input_cost_cannot_create_new_priceless_output(stock_replenishment_app):
+    app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    with TestClient(app) as client:
+        row=setup(client)
+        assert send(client,row,'plan',quantity=8).status_code==200
+        row=refresh(client);job=row['jobs'][0]
+        with factory() as db:
+            stored_job=db.get(StockPreparationJob,job['id'])
+            reservation=db.get(InventoryReservation,stored_job.reservation_id)
+            lot=db.get(InventoryLot,reservation.inventory_lot_id)
+            lot.estimated_unit_cost_snapshot=None
+            db.commit()
+            count=db.scalar(select(func.count()).select_from(InventoryLot))
+        response=send(client,row,'complete',job_id=job['id'],job_version=job['version'],actual_output=job['expected_output'],location_id=7,layout_version=1)
+        assert response.status_code==409,response.text
+        assert '成本' in response.json()['detail']
+        with factory() as db:
+            assert db.scalar(select(func.count()).select_from(InventoryLot))==count
+            assert db.get(StockPreparationJob,job['id']).status=='pending'
+            receipt=db.get(IncomingReceiptItem,row['receipt_item_id']);lot=db.get(InventoryLot,receipt.received_inventory_lot_id)
+            assert lot.quantity_consumed==0 and lot.quantity_reserved==8
+
+
 def test_cancel_stale_overproduction_and_atomic_failure(stock_replenishment_app,monkeypatch):
     app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
     with TestClient(app,raise_server_exceptions=False) as client:

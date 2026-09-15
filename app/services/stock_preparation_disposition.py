@@ -105,6 +105,8 @@ def assemble(db,payload,actor):
         if not lot or lot.version!=v['output_version'] or job.version!=v['job_version'] or lot.source_ref_type!='stock_preparation' or lot.source_ref_id!=job.id or lot.status!='active':prep.fail('子件库存已变化，请刷新')
         take=min(remaining[job.product_id],lot.quantity_available)
         if not take:continue
+        from app.services.inventory_valuation import require_inherited_entry_cost
+        require_inherited_entry_cost(db,lot)
         before=prep._balances(lot)
         changed=db.execute(update(InventoryLot).where(InventoryLot.id==lot.id,InventoryLot.version==v['output_version'],InventoryLot.quantity_available>=take).values(quantity_available=InventoryLot.quantity_available-take,quantity_consumed=InventoryLot.quantity_consumed+take,version=InventoryLot.version+1,last_movement_at=utc_now_naive()))
         if changed.rowcount!=1:prep.fail('子件数量已变化')

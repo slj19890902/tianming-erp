@@ -75,7 +75,14 @@ def source_cost(db, lot, take):
     if lot.estimated_unit_cost_snapshot is None or lot.estimated_unit_cost_snapshot < 0:
         raise SubkitError("组套原片缺少有效来源成本")
     # Legacy stock is not promoted to actual purchase cost merely by assembling it.
-    return estimated_slice(lot, take)
+    from app.services.inventory_valuation import require_inherited_entry_cost
+    from app.services.warehouse_inventory import WarehouseInventoryError
+    try:
+        require_inherited_entry_cost(db, lot)
+    except WarehouseInventoryError as error:
+        raise SubkitError(str(error)) from error
+    amount, evidence = estimated_slice(lot, take)
+    return amount, dict(evidence, currency='CNY', reason='继承已核对入库参考成本，不认定新的实际采购')
 
 
 def delivery_cost(db, lot, take):

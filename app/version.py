@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.428"
-APP_VERSION_NAME = "销售口径冻结与成本来源治理"
+APP_VERSION = "v0.22.429"
+APP_VERSION_NAME = "加工组套来源成本完整性保护"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4251,3 +4251,6 @@ APP_CHANGELOG = [*(f"v0.22.427：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["新增订单冻结销售单位，新送货冻结单价及含税口径，对账和首页使用同一销售快照；无价格草稿保留，正式发货仍校验。", "加工、组套成本按投入来源守恒继承，参考成本不冒充实际采购价；历史修复按出库与已确认对账证据逐行审计，未知资料保留待核。", "电脑与手机将已采用参考成本和真正待补资料分开显示，缺项显示中文及产品编码。"]
 APP_VERIFICATION_STEPS = ["刷新电脑和手机首页本月材料毛利，核对参考成本提示与待补原因；不为验收重复出货。", "正常新增订单及送货时核对销售单位和单价，确认后续修改常用箱不会改变已冻结送货口径。", "查看仓庫中组套库存的继承成本；历史资料清单中未知尺寸和税口径仍应显示待核，不按零填补。"]
 APP_CHANGELOG = [*(f"v0.22.428：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["备库完工和组套先核对投入批次的入库成本依据，缺少依据时提示批次，不再生成新的无成本库存。", "组套任一子件成本校验失败，整笔操作回滚，不扣其他子件、不生成成套库存；保留来源成本及参考属性。"]
+APP_VERIFICATION_STEPS = ["正常备库完工或组套后核对成本继承；若提示来源成本不完整，先维护真实依据，不为验收伪造价格。", "失败后刷新核对原库存数量不变；不要为验收重复生产或组套。"]
+APP_CHANGELOG = [*(f"v0.22.429：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.415"
+APP_VERSION = "v0.22.416"
 APP_VERSION_NAME = "衬板已采用异材质库存原位直发"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -4210,6 +4210,9 @@ APP_CHANGELOG = [*(f"v0.22.413：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["无印刷、无需加工且净片完全抵扣的衬板原位直发，不重复生产入库；出货撤销恢复原批次预占。", "待组套补齐订单缺件及未预占备库子件，展示数量、原位置和缺口；配套与子件交货不强制组装，不自动转换库存。"]
 APP_VERIFICATION_STEPS = ["刷新待生产与待送货，核对已完全抵扣净片的衬板无需再次生产，找货位置仍为原半成品位置。", "打开待组套，核对订单未配齐子件与备库子件的数量、位置；仅实际完成组装后按既有确认流程处理，勿为验收重复组装。"]
 APP_CHANGELOG = [*(f"v0.22.414：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["常用箱外购成品不再被隐藏的模具、压线和印刷字段拦住保存；本厂加工和混合BOM仍保留加工校验。", "保存按钮旁显示实际禁用原因；外购供应商、采购比例、标签每张数量和权限校验保留，不修改历史产品、订单或库存。"]
+APP_VERIFICATION_STEPS = ["刷新常用箱编辑，直接外购成品选择其他并完成供应商产品资料，核对保存不再要求本厂模具。", "本厂模切产品仍需选择模具；启用打印标签仍需每张数量。检查保存旁的具体提示，按实际产品资料保存，不为验收改动历史订单。"]
+APP_CHANGELOG = [*(f"v0.22.415：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 APP_CHANGES = ["衬板认可已人工采用的公共净片和异材质库存，不再用常用箱材质重复阻挡；按原批次位置直接待送，不重复生产入库。", "实际材质、成本及预占保持不变，保留加工、适用范围、数量和出货撤销保护。"]
 APP_VERIFICATION_STEPS = ["刷新PO2026090404的21302044，核对10张不再出现在待生产、可送数量为10，找货指向南F货架2第一层第二格。", "正常送货时按实际数量取原库存；不要重新入库或修改库存材质。"]
-APP_CHANGELOG = [*(f"v0.22.415：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.416：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

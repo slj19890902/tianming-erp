@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.417"
-APP_VERSION_NAME = "找货单数量来源与当前地图地址校正"
+APP_VERSION = "v0.22.418"
+APP_VERSION_NAME = "识别订单报料资料保存前校验"
 APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4218,3 +4218,6 @@ APP_VERIFICATION_STEPS = ["刷新PO2026090404的21302044，核对10张不再出�
 APP_CHANGELOG = [*(f"v0.22.416：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 APP_CHANGES = ["找货单按实际库存来源列示，缺口不再虚构生产区或漏行；成套根产品不重复计数，父件库存不重复带出旧子件。", "地址使用地图当前编号，套/片/根分开显示汇总；旧子件账明确提示待核对，不自动转换库存。"]
 APP_CHANGELOG = [*(f"v0.22.417：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["识别订单在单份和批量保存前校验常用箱报料长宽、材质及供应商，明确订单、行号、编码和缺项。", "编辑常用箱返回后同步更新缺项；外购成品与虚拟/组装父件不强制本体纸板字段，不自动补写历史订单或库存。"]
+APP_VERIFICATION_STEPS = ["重开识别草稿，缺报料资料的行应明确显示缺项并阻止保存；点击该行编辑常用箱补齐后返回。", "核对缺项解除后再保存，已保存订单不重复导入；直接外购仍按供应商产品资料处理。"]
+APP_CHANGELOG = [*(f"v0.22.418：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -6948,6 +6948,21 @@ def _create_order_impl(
 
         customer_po = (payload.customer_po or "").strip() or None
 
+        if payload.pdf_import_confirmation is not None:
+            _set_order_save_stage(observability, "validate_pdf_master")
+            from app.services.product_readiness import product_readiness
+            master_issues = []
+            for line_no, line in enumerate(payload.items, start=1):
+                master = db.get(Product, line.product_id) if line.product_id and not line.is_new_product else None
+                if master is not None and master.customer_id != customer.id:
+                    raise HTTPException(400, f"第{line_no}行产品不属于当前客户")
+                code = (master.product_code if master is not None else line.product_code) or "未识别编码"
+                missing = product_readiness(master)["order_save_missing_labels"] if master is not None else ["未完成常用箱登记"]
+                if missing:
+                    master_issues.append(f"第{line_no}行【{code}】：{'、'.join(missing)}")
+            if master_issues:
+                raise HTTPException(400, "订单" + (customer_po or "识别草稿") + "无法保存：" + "；".join(master_issues) + "。请先编辑并保存对应常用箱，再返回保存订单。")
+
         new_product_cache: dict[str, Product] = {}
         resolved_products: dict[int, Product] = {}
         graph_modes: dict[int, str | None] = {}

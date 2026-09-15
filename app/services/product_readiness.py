@@ -17,6 +17,24 @@ def is_telescoping_lid_box(box_style: str | None) -> bool:
     return "A3" in value or "天地盖" in str(box_style or "")
 
 
+def _order_save_missing(product: object, missing: list[tuple[str, str]]) -> list[str]:
+    if _value(product, "is_virtual_composite_parent") or _value(product, "supply_mode") == "external_purchase":
+        return []
+    # An assembled parent has no own board; existing BOM validation handles its graph.
+    from sqlalchemy import inspect
+    from sqlalchemy.orm import object_session
+    if inspect(product, raiseerr=False) is not None:
+        session = object_session(product)
+        if session is not None and _value(product, "id"):
+            from app.models.multilevel_bom import ProductBomProfile
+            profile = session.get(ProductBomProfile, product.id)
+            if profile is not None and profile.source == "assembled":
+                return []
+    required = {"material", "material_code", "supplier", "report_length_mm", "report_width_mm",
+                "base_report_length_mm", "base_report_width_mm"}
+    return [label for field, label in missing if field in required]
+
+
 def product_readiness(product: object) -> dict[str, object]:
     """Return a display-only readiness result for a common-box master record.
 
@@ -36,6 +54,7 @@ def product_readiness(product: object) -> dict[str, object]:
         labels = [label for _field, label in missing]
         return {
             "ready": not missing,
+            "order_save_missing_labels": [],
             "status": "资料已完善" if not missing else "待完善",
             "missing_fields": fields,
             "missing_labels": labels,
@@ -62,6 +81,7 @@ def product_readiness(product: object) -> dict[str, object]:
         labels = [label for _field, label in missing]
         return {
             "ready": not missing,
+            "order_save_missing_labels": [],
             "status": "资料已完善" if not missing else "待完善",
             "missing_fields": fields,
             "missing_labels": labels,
@@ -124,6 +144,7 @@ def product_readiness(product: object) -> dict[str, object]:
     labels = [label for _field, label in missing]
     return {
         "ready": not missing,
+        "order_save_missing_labels": _order_save_missing(product, missing),
         "status": "资料已完善" if not missing else "待完善",
         "missing_fields": fields,
         "missing_labels": labels,

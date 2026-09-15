@@ -581,6 +581,9 @@ def build_order_business_statuses(
         else:
             production_ready = tasks.get(None) in READY_PRODUCTION_STATUSES
         finished_coverage = finished_coverage_by_item.get(item_id, 0)
+        from app.services.liner_direct_delivery import liner_direct_coverage
+        direct_liner = liner_direct_coverage(db, item)
+        production_ready = production_ready or direct_liner > 0
         legacy_taskless_delivery_ready = bool(
             not required_components
             and not tasks

@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.413"
-APP_VERSION_NAME = "补库按实收多收与短收结单"
-APP_BUILD_DATE = "2026-09-14"
+APP_VERSION = "v0.22.414"
+APP_VERSION_NAME = "衬板原位直发与未组套子件总览"
+APP_BUILD_DATE = "2026-09-15"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -4207,3 +4207,6 @@ APP_CHANGELOG = [*(f"v0.22.412：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["补库供应商多送片料按实际数量入库，保留原报料数、差额及实际收料价格快照，不再要求另开补库单。", "短收可继续等补货或按已收数结单；结清余量不再占用在途、不生成虚假库存，生产与报料列表统一实收口径。"]
 APP_VERIFICATION_STEPS = ["刷新补库来料页，按现场真实数量确认实收；多收按实收统一入原料暂存位，之后可移至实际半成品货位。", "少收不再补料时选择按已收数结单；核对原报料数、实收数、差额和待来料列表，不为验收重复收货。"]
 APP_CHANGELOG = [*(f"v0.22.413：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["无印刷、无需加工且净片完全抵扣的衬板原位直发，不重复生产入库；出货撤销恢复原批次预占。", "待组套补齐订单缺件及未预占备库子件，展示数量、原位置和缺口；配套与子件交货不强制组装，不自动转换库存。"]
+APP_VERIFICATION_STEPS = ["刷新待生产与待送货，核对已完全抵扣净片的衬板无需再次生产，找货位置仍为原半成品位置。", "打开待组套，核对订单未配齐子件与备库子件的数量、位置；仅实际完成组装后按既有确认流程处理，勿为验收重复组装。"]
+APP_CHANGELOG = [*(f"v0.22.414：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

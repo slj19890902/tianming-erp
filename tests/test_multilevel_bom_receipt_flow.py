@@ -24,6 +24,8 @@ def _receive(client, *args, **kwargs):
         plans = client.get('/api/production/pending-assemblies')
         assert plans.status_code == 200, plans.text
         for row in plans.json()['items']:
+            if row.get('source_kind') == 'stock' or not any(row.get('expected_outputs', {}).values()):
+                continue
             assert not row.get('error'), row
             payload = dict(source_lot_versions=row['source_lot_versions'], available_lot_ids=row['available_lot_ids'],
                 expected_outputs=row['expected_outputs'], target_locations={o['product_id']:o['location_id'] for o in row['outputs']},

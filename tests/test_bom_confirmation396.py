@@ -121,10 +121,12 @@ def test_old_finished_stock_reserved_not_assembled(composite_requisition_app, _p
             from decimal import Decimal
             lot.estimated_unit_cost_snapshot = Decimal('0.1234')
             ids.append(lot.id)
-        # Stock intake alone must never create a production/assembly queue.
-        # Even a matching recipe/order cannot draw free stock before reservation.
+        # Free stock now appears in the read-only queue, without being reserved.
         from app.services.bom_pending_assembly import pending as pending_assembly
-        assert pending_assembly(db, None) == []
+        stock_rows = pending_assembly(db, None)
+        assert len(stock_rows) == 1 and stock_rows[0]['source_kind'] == 'stock'
+        assert stock_rows[0]['available_sets'] == 9
+        assert pending_assembly(db, {999}) == []
         assert [(db.get(InventoryLot,lid).quantity_available,db.get(InventoryLot,lid).quantity_reserved) for lid in ids] == [(32,0),(38,0)]
         reserve_new_order_stock(db, order_item_id=1, operator_id=1)
         assert reserve_new_order_stock(db, order_item_id=1, operator_id=1) == []
@@ -137,6 +139,7 @@ def test_old_finished_stock_reserved_not_assembled(composite_requisition_app, _p
         _login(client)
         row = client.get('/api/production/pending-assemblies').json()['items'][0]
         assert row['expected_outputs'] == {'1':9}
+        assert {c['product_id']:c['missing'] for c in row['children']} == {2:0,3:2}
         partial = command(row, 'partial396')
         partial['expected_outputs'] = {'1':5}
         saved = client.post('/api/production/assemblies/1/confirm', json=partial)
@@ -176,3 +179,15 @@ def test_real_new_order_automatically_reserves_exact_stock(composite_requisition
         assert db.get(InventoryLot,lid).quantity_available == 50
         assert {m.product_id:m.purchase_sheets for m in read_graph_requirements(db,iid).plan.materials} == {2:0,3:40}
         assert db.scalar(select(InventoryReservation.order_item_id).where(InventoryReservation.inventory_lot_id==lid)) == iid
+        from app.services.bom_pending_assembly import pending
+        rows = pending(db, {1})
+        order_row = next(row for row in rows if row.get('order_item_id') == iid)
+        assert not any(order_row['expected_outputs'].values())
+        assert {c['product_id']:c['missing'] for c in order_row['children']} == {2:0,3:40}
+        assert order_row['sources'][0]['quantity'] == 30
+        stock_row = next(row for row in rows if row.get('source_kind') == 'stock')
+        assert stock_row['available_sets'] == 0
+        assert stock_row['sources'][0]['quantity'] == 50
+        assert {c['product_id']:c['missing_next_set'] for c in stock_row['children']} == {2:0,3:4}
+        assert pending(db, {999}) == []
+        assert list(db.scalars(select(BomAssembly))) == []

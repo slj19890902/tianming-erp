@@ -317,6 +317,73 @@ def post_order(client: TestClient, items: list[dict], po: str):
     )
 
 
+@pytest.mark.parametrize("style, reserved, expected", [("衬板", 5, 5), ("普通箱", 5, 0), ("衬板", 3, 0)])
+def test_liner_direct_coverage_retains_source_without_completion(b1_app, style, reserved, expected):
+    from app.models.production import ProductionCompletion
+    from app.services.liner_direct_delivery import liner_direct_coverage
+    app, factory = b1_app
+    lot_id, version = add_semi_lot(factory, quantity=12, key="liner-direct")
+    with factory() as db:
+        product = db.get(Product, 1)
+        product.box_style = style
+        product.crease_type = "净料"
+        lot = db.get(InventoryLot, lot_id)
+        lot.semi_finished_detail.crease_type = "净料"
+        original_location = lot.warehouse_location_id
+        db.commit()
+    with TestClient(app) as client:
+        login(client)
+        saved = post_order(client, [order_item(1, 5, {"semi": [semi_plan(lot_id, version, reserved)]})], "LINER-DIRECT")
+    assert saved.status_code == 201, saved.text
+    with factory() as db:
+        item = db.scalar(select(OrderItem))
+        assert liner_direct_coverage(db, item) == expected
+        lot = db.get(InventoryLot, lot_id)
+        assert lot.warehouse_location_id == original_location
+        assert (lot.quantity_available, lot.quantity_reserved) == (12 - reserved, reserved)
+        assert db.scalar(select(ProductionCompletion.id)) is None
+        if expected:
+            from app.models.production import ProductionTask
+            task = db.scalar(select(ProductionTask).where(ProductionTask.order_item_id == item.id))
+            assert task is not None
+            previous_print = task.print_content_snapshot
+            task.print_content_snapshot = '需印客户图案'
+            db.flush()
+            assert liner_direct_coverage(db, item) == 0
+            task.print_content_snapshot = previous_print
+            old_type = lot.semi_finished_detail.sheet_type
+            lot.semi_finished_detail.sheet_type = 'raw_board'
+            db.flush()
+            assert liner_direct_coverage(db, item) == 0
+            lot.semi_finished_detail.sheet_type = old_type
+            db.flush()
+            from app.api.deliveries import _pending_query, _delivery_remaining_quantity
+            assert db.execute(_pending_query(db=db, order_item_id=item.id)).first() is not None
+            assert _delivery_remaining_quantity(db, item) == 5
+            from app.models.delivery import Delivery, DeliveryItem
+            from app.services.production_workflow import production_ready_quantity
+            from app.services.semi_finished_inventory import consume_delivery_item_inventory, reverse_delivery_item_inventory
+            delivery = Delivery(delivery_number="LINER-PICK", customer_id=1, delivery_date=date.today())
+            db.add(delivery)
+            db.flush()
+            line = DeliveryItem(delivery_id=delivery.id, order_item_id=item.id, delivered_quantity=2)
+            db.add(line)
+            db.flush()
+            consume_delivery_item_inventory(db, delivery_item_id=line.id, delivered_quantity_after_dispatch=2,
+                                            operator_id=1, operation_key="liner-dispatch")
+            item.delivered_quantity = 2
+            db.flush()
+            assert production_ready_quantity(db, item) == 5
+            assert lot.quantity_reserved == 3
+            assert lot.warehouse_location_id == original_location
+            reverse_delivery_item_inventory(db, delivery_item_id=line.id, delivered_quantity_after_cancel=0,
+                                            operator_id=1, operation_key="liner-reverse")
+            item.delivered_quantity = 0
+            db.flush()
+            assert (lot.quantity_available, lot.quantity_reserved) == (7, 5)
+            assert db.scalar(select(ProductionCompletion.id)) is None
+
+
 def test_customer_generic_exact_candidate_accepts_explicit_reservation_plan(
     b1_app,
 ) -> None:

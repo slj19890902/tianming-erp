@@ -1075,6 +1075,8 @@ def refresh_production_task(
             order_quantity,
         )
     )
+    from app.services.liner_direct_delivery import liner_direct_coverage
+    finished_coverage += liner_direct_coverage(db, item)
     received_quantity, material_input_quantity = _material_quantity_facts(db, item)
     output_factor = cutting_output_factor(item.special_process)
     pieces_per_box = production_pieces_per_box(item)
@@ -1351,6 +1353,12 @@ def production_ready_quantity(db: Session, order_item: OrderItem | int) -> int:
     item = db.get(OrderItem, order_item) if isinstance(order_item, int) else order_item
     if item is None:
         raise ProductionWorkflowError("订单明细不存在", 404)
+    from app.services.liner_direct_delivery import liner_direct_coverage
+    direct_liner = liner_direct_coverage(db, item)
+    if direct_liner:
+        # Eligibility requires full coverage; delivered semi sheets must not
+        # be counted again through delivered-plus-remaining finished coverage.
+        return int(item.quantity or 0)
     if item.supply_mode_snapshot == "external_purchase":
         return db.scalar(
             select(ProductionTask).where(
@@ -5569,6 +5577,9 @@ def _filtered_task_query(
     )
     if status:
         query = query.where(_effective_task_status_condition(status))
+    if status == PENDING:
+        from app.services.liner_direct_delivery import direct_liner_item_ids
+        query = query.where(ProductionTask.order_item_id.notin_(direct_liner_item_ids(db)))
     return query
 
 

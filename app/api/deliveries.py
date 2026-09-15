@@ -1,5 +1,6 @@
 from __future__ import annotations
 from app.services.external_receipt_state import active_receipt_item
+from app.services.liner_direct_delivery import direct_liner_item_ids, liner_direct_coverage
 
 import hashlib
 import json
@@ -556,6 +557,8 @@ def _delivery_remaining_quantity(db: Session, order_item: OrderItem) -> int:
     if has_receipt_auto_finished:
         return _receipt_auto_delivery_ready_quantity(db, order_item.id)
     if task is not None:
+        if liner_direct_coverage(db, order_item):
+            return max(production_ready_quantity(db, order_item) - int(order_item.delivered_quantity or 0), 0)
         if task.status not in {"completed", "not_required"}:
             return 0
         max_deliverable = max(production_ready_quantity(db, order_item), 0)
@@ -1457,13 +1460,15 @@ def _pick_item_location_plan(
     lines: list[dict] = []
     covered_by_component: dict[int, int] = {}
     finished_covered = 0
+    is_direct_liner = liner_direct_coverage(db, order_item) > 0
 
     for source in raw_sources:
         source_type = str(source.get("source_type") or "")
         # Semi-finished reservations are production inputs, not finished goods
         # that a driver should load.  Their eventual finished output is listed
         # below as a production-area direct pick.
-        if source_type == "semi_finished":
+        liner_direct = source_type == "semi_finished" and is_direct_liner
+        if source_type == "semi_finished" and not liner_direct:
             continue
         stock_quantity = max(int(source.get("quantity_to_pick_stock") or 0), 0)
         requirement_quantity = max(
@@ -1484,7 +1489,7 @@ def _pick_item_location_plan(
             covered_by_component[snapshot_id] = (
                 covered_by_component.get(snapshot_id, 0) + requirement_quantity
             )
-        elif source_type == "finished":
+        elif source_type == "finished" or liner_direct:
             finished_covered += requirement_quantity
         location = _pick_source_location(
             db,
@@ -2090,6 +2095,7 @@ class ForceCloseRequest(BaseModel):
 
 def _pending_query(
     *,
+    db: Session | None = None,
     order_item_id: int | None = None,
     customer_id: int | None = None,
     customer_ids: set[int] | None = None,
@@ -2302,6 +2308,7 @@ def _pending_query(
             external_packaging_gate,
             or_(
                 production_task_ready,
+                OrderItem.id.in_(direct_liner_item_ids(db) if db is not None else []),
                 receipt_auto_delivery_ready,
                 and_(
                     ~production_task_exists,
@@ -7099,7 +7106,7 @@ def _pending_order_quantities_by_product_code(
 ) -> dict[str, int]:
     """Return authoritative currently deliverable order quantity by stock code."""
 
-    rows = list(db.execute(_pending_query(customer_id=customer_id)))
+    rows = list(db.execute(_pending_query(db=db, customer_id=customer_id)))
     if not rows:
         return {}
     context = _PendingDeliveryReadContext(db, rows)
@@ -7547,7 +7554,7 @@ def delivery_route_suggestions(
 ) -> dict:
     raw_rows = list(
         db.execute(
-            _pending_query(customer_ids=_visible_customer_ids(user, db))
+            _pending_query(db=db, customer_ids=_visible_customer_ids(user, db))
         )
     )
     customer_ids = {
@@ -8194,7 +8201,7 @@ def pending_delivery_items(
     user: User = Depends(can_read),
 ) -> dict:
     rows = list(
-        db.execute(_pending_query(customer_ids=_visible_customer_ids(user, db)))
+        db.execute(_pending_query(db=db, customer_ids=_visible_customer_ids(user, db)))
     )
     context = _PendingDeliveryReadContext(db, rows)
     registry = {
@@ -8231,7 +8238,7 @@ def pending_delivery_customer_summaries(
     display payloads are deliberately not expanded here.
     """
 
-    rows = list(db.execute(_pending_query(customer_ids=_visible_customer_ids(user, db))))
+    rows = list(db.execute(_pending_query(db=db, customer_ids=_visible_customer_ids(user, db))))
     context = _PendingDeliveryReadContext(
         db,
         rows,
@@ -8368,6 +8375,7 @@ def search_pending_delivery_items(
     load_all = list_all and page_size is None and limit is None
     effective_limit = page_size or limit or (100 if list_all else 20)
     base_query = _pending_query(
+        db=db,
         order_item_id=order_item_id,
         customer_id=customer_id,
         inventory_keyword=inventory_keyword,

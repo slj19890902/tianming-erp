@@ -2,6 +2,7 @@
 from sqlalchemy import select
 from app.models.order import Order, OrderItem
 from app.models.customer import Customer
+from app.models.product import Product
 from app.models.multilevel_bom import OrderBomGraph
 from app.models.warehouse_inventory import InventoryLot, InventoryReservation, WarehouseLocation
 from app.services.multilevel_bom_orders import read_compiled_order_bom
@@ -85,15 +86,39 @@ def preview(db, item_id):
         outputs.append(dict(product_id=pid, product_name=nodes[pid].name,
             quantity=quantity, unit=nodes[pid].unit, location_id=target_id, location_name=target_name))
     sources = []
+    child_ids = {e.child_id for e in compiled.graph.edges if e.relation == 'assembly'}
+    reserved_by_lot = {}
+    for reservation in db.scalars(select(InventoryReservation).where(
+        InventoryReservation.order_item_id == item_id, InventoryReservation.reservation_type == 'finished_order',
+        InventoryReservation.status.in_(('active', 'partial')))):
+        remaining = max(0, reservation.reserved_stock_quantity - reservation.consumed_stock_quantity - reservation.released_stock_quantity)
+        reserved_by_lot[reservation.inventory_lot_id] = reserved_by_lot.get(reservation.inventory_lot_id, 0) + remaining
     for lot in lots:
         detail = lot.finished_detail
+        if not detail or detail.product_id not in child_ids:
+            continue
         location = db.get(WarehouseLocation, lot.warehouse_location_id)
         sources.append(dict(lot_id=lot.id, product_name=detail.product_name_snapshot if detail else '箱体',
+            product_id=detail.product_id, product_code=detail.inventory_code_snapshot,
+            quantity=(lot.quantity_available if lot.id in free else 0) + reserved_by_lot.get(lot.id, 0), unit=nodes[detail.product_id].unit,
             location=location.location_name if location else '位置待核对'))
     customer = db.get(Customer, order.customer_id)
-    return dict(order_item_id=item.id, order_number=order.order_number, customer_order_number=order.customer_po,
+    sources = [source for source in sources if source['quantity'] > 0]
+    from app.services.multilevel_bom_plan import plan_bom
+    assembled_ids = {e.parent_id for e in compiled.graph.edges if e.relation == 'assembly'}
+    assembled_stock = {}
+    for lot in lots:
+        if lot.finished_detail and lot.finished_detail.product_id in assembled_ids:
+            pid = lot.finished_detail.product_id
+            assembled_stock[pid] = assembled_stock.get(pid,0) + (lot.quantity_available if lot.id in free else 0) + reserved_by_lot.get(lot.id,0)
+    required = {p.product_id: p.required_units for p in plan_bom(compiled.graph, max(0, item.quantity-item.delivered_quantity), eligible_stock=assembled_stock).products}
+    children = [dict(product_id=pid, product_code=db.get(Product,pid).product_code,
+        product_name=nodes[pid].name, unit=nodes[pid].unit, required=required.get(pid, 0),
+        quantity=sum(s['quantity'] for s in sources if s['product_id']==pid),
+        missing=max(0, required.get(pid,0)-sum(s['quantity'] for s in sources if s['product_id']==pid))) for pid in sorted(child_ids)]
+    return dict(key=f'order:{item.id}', source_kind='order', order_item_id=item.id, order_number=order.order_number, customer_order_number=order.customer_po,
         customer_id=order.customer_id, customer_name=customer.chinese_short_name or customer.name,
-        outputs=outputs, sources=sources, source_lot_versions=versions, available_lot_ids=free,
+        outputs=outputs, sources=sources, children=children, source_lot_versions=versions, available_lot_ids=free,
         expected_outputs=quantities)
 
 
@@ -118,9 +143,10 @@ def pending(db, scope):
             # Surface invalid plans, never silently hide a blocked order.
             rows.append(dict(order_item_id=item_id, error=str(error), outputs=[]))
             continue
-        if any(o['quantity'] for o in row['outputs']):
+        if row['sources'] or any(o['quantity'] for o in row['outputs']):
             rows.append(row)
-    return rows
+    from app.services.bom_stock_pending import pending_stock
+    return rows + pending_stock(db, scope)
 
 
 def confirm(db, *, item_id, command, actor):

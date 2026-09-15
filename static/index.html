@@ -4774,16 +4774,18 @@
                 <div class="toolbar-group"><span>插合完成后确认，余片保留原位</span><button class="btn small" @click="loadPendingAssemblies(assemblyPage)">刷新</button><pager :page="assemblyPage" :total="assemblyTotal" :page-size="30" :always="true" @change="loadPendingAssemblies($event)"></pager></div>
                 <div v-if="assemblyError" class="status orange">{{assemblyError}}</div>
                 <div v-if="assemblyLoading" class="muted">正在核对配套库存…</div>
-                <div v-else-if="!pendingAssemblies.length" class="empty">暂无已配齐的待组套产品</div>
-                <article v-for="row in pendingAssemblies" :key="row.order_item_id" class="panel" style="margin-top:10px;background:#f0f8f5">
+                <div v-else-if="!pendingAssemblies.length" class="empty">暂无未组套子件</div>
+                <article v-for="row in pendingAssemblies" :key="row.key || row.order_item_id" class="panel" style="margin-top:10px;background:#f0f8f5">
                   <strong>{{row.customer_name}} · {{row.customer_order_number || row.order_number || ('订单明细 '+row.order_item_id)}}</strong>
                   <div v-if="row.error" class="status orange">{{row.error}}</div>
+                  <div v-if="row.source_kind==='stock'" class="toolbar-group"><strong>{{row.product_name}}</strong><span>子件配比参考 {{row.available_sets}} 套</span><span class="muted">{{row.notice}}</span></div>
+                  <div v-for="child in row.children" :key="child.product_id" class="toolbar-group" style="margin-top:6px"><strong>{{child.product_code}}</strong><span>{{child.product_name}} · {{child.quantity}} {{child.unit}}</span><span v-if="child.required!==undefined">需 {{child.required}}</span><span v-if="child.missing" class="status orange">缺 {{child.missing}}</span><span v-if="row.source_kind==='stock' && child.missing_next_set" class="muted">再配一套缺 {{child.missing_next_set}}</span></div>
                   <div v-for="output in row.outputs" :key="output.product_id" class="toolbar-group" style="margin-top:8px">
                     <strong>{{output.product_name}}</strong><input class="input" type="number" min="0" :max="row.expected_outputs[output.product_id]" step="1" v-model.number="output.quantity" :aria-label="output.product_name+'实际组套数量'" style="width:90px" /><span>{{output.unit}}（最多{{row.expected_outputs[output.product_id]}}）</span>
                     <select v-model="output.location_id" class="select" :aria-label="output.product_name+'成套位置'" style="max-width:360px"><option :value="null">选择成套实际位置</option><option v-for="loc in assemblyLocations" :key="loc.id" :value="loc.id">{{loc.name}}</option></select>
                   </div>
-                  <details v-if="row.sources?.length" style="margin:8px 0"><summary>查看长短片来源</summary><div v-for="source in row.sources" :key="source.lot_id">{{source.product_name}} · {{source.location}}</div></details>
-                  <button v-if="!row.error && canProductionExecute" class="btn success" :disabled="assemblyLoading || productionBusy || row.outputs.some(o=>!o.location_id)" @click="confirmPendingAssembly(row)">组套完成并入库</button>
+                  <details v-if="row.sources?.length" style="margin:8px 0"><summary>查看子件位置</summary><div v-for="source in row.sources" :key="source.lot_id">{{source.product_code}} · {{source.product_name}} · {{source.quantity}} {{source.unit}} · {{source.location}}</div></details>
+                  <button v-if="row.source_kind!=='stock' && !row.error && canProductionExecute" class="btn success" :disabled="assemblyLoading || productionBusy || !row.outputs.some(o=>Number(o.quantity)>0) || row.outputs.some(o=>!o.location_id)" @click="confirmPendingAssembly(row)">组套完成并入库</button>
                 </article>
               </section>
               <div v-if="productionTab==='pending'" class="toolbar-group" style="margin-bottom:10px"><button :class="['btn','small',productionPendingSource==='stock'?'primary':'']" @click="productionPendingSource='stock'">备库 / 整组 {{stockPrepPendingCount}}</button><button :class="['btn','small',productionPendingSource==='orders'?'primary':'']" @click="productionPendingSource='orders'">订单生产 {{productionPendingTotal}}</button></div>

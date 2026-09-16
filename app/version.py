@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.434"
-APP_VERSION_NAME = "网页仓库尺寸详细查找"
+APP_VERSION = "v0.22.435"
+APP_VERSION_NAME = "旧外购余货实体入仓"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4269,3 +4269,6 @@ APP_CHANGELOG = [*(f"v0.22.433：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["网页仓库查找左侧新增详细查找，纸板长宽、纸箱长宽高与楞型筛选，默认大小两侧接近匹配，越接近越靠前。", "真实库存分页显示数量与位置，按正式货位定位，原文字查找和手机取用保持不变；保留v433组套与库存去向修复。"]
 APP_VERIFICATION_STEPS = ["刷新仓库地图，点击详细查找输入尺寸，核对大小两侧接近排序及楞型筛选。", "翻页并点选库存查看位置；收起后重新展开保留条件，原查找仍可用，不为验收执行库存取用。"]
 APP_CHANGELOG = [*(f"v0.22.434：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["核实的旧外购余货支持正式货位、采购冻结成本及订单预占承接；历史已送数量不重复扣库。", "承接后新送货正常扣减实体批次，撤销恢复对应库存；保留网页尺寸查找及旧组套修复。"]
+APP_VERIFICATION_STEPS = ["仓库查找Z.001.000152，核对200根位于三楼R006一层1格；按实际需要使用移货。", "后续余货另建送货单正常发货；旧已送800根不作测试撤销，旧单退货需另行核对实物。"]
+APP_CHANGELOG = [*(f"v0.22.435：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

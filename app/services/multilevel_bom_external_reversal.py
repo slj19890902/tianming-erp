@@ -25,6 +25,11 @@ from app.services.warehouse_inventory import _balances, _movement, release_finis
 
 
 def _reverse_output(db, row, *, order_item_id, user, direct=False):
+    if direct:
+        from app.services.external_legacy_stock import record
+        cutover = record(db, order_item_id)
+        if cutover and cutover['receipt_item_id'] == row.id:
+            raise SubkitError('该旧实收已确认历史发货及实物余货，不能整体撤销实收；请先单独核对旧单退货与余货')
     source = 'direct_external_receipt' if direct else 'bom_external_receipt'
     lots = list(db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type == source,
         InventoryLot.source_ref_id == row.id)))

@@ -1681,7 +1681,8 @@ def consume_delivery_item_inventory(
         raise WarehouseInventoryError("送货明细关联订单不存在", 409)
     target_delivered = max(int(delivered_quantity_after_dispatch), 0)
     ordered_quantity = max(int(item.quantity or 0), 0)
-    target_order_delivery = min(target_delivered, ordered_quantity)
+    from app.services.external_legacy_stock import delivered_offset
+    target_order_delivery = max(min(target_delivered, ordered_quantity) - delivered_offset(db,item,delivery_item,target_delivered), 0)
     finished_reservations = db.scalars(
         select(InventoryReservation).where(
             InventoryReservation.order_item_id == item.id,
@@ -1911,7 +1912,8 @@ def reverse_delivery_item_inventory(
         raise WarehouseInventoryError("送货明细关联订单不存在", 409)
     target_delivered = max(int(delivered_quantity_after_cancel), 0)
     ordered_quantity = max(int(item.quantity or 0), 0)
-    target_order_delivery = min(target_delivered, ordered_quantity)
+    from app.services.external_legacy_stock import delivered_offset
+    target_order_delivery = max(min(target_delivered, ordered_quantity) - delivered_offset(db,item,delivery_item,target_delivered), 0)
     finished_reservations = db.scalars(
         select(InventoryReservation).where(
             InventoryReservation.order_item_id == item.id,

@@ -53,7 +53,9 @@ def conversions(db, normalized, *, customer_id):
             after = before + Fraction(old.received_quantity)
             expected = int(after // ratio) - int(before // ratio)
             if old.converted_finished_quantity != expected:
-                raise ExternalPurchaseContractError('此采购已有未入仓的历史收料，请先核对旧库存，不能重复入库')
+                from app.services.external_legacy_stock import receipt_credit
+                if receipt_credit(db, item.id, old.id) != expected:
+                    raise ExternalPurchaseContractError('此采购已有未入仓的历史收料，请先核对旧库存，不能重复入库')
             if expected and db.scalar(select(InventoryLot.id).where(
                     InventoryLot.source_ref_type == SOURCE, InventoryLot.source_ref_id == old.id).limit(1)) is None:
                 raise ExternalPurchaseContractError('既有收料库存身份缺失，请先核对原入仓记录')
@@ -66,10 +68,15 @@ def conversions(db, normalized, *, customer_id):
 
 
 def post(db, *, purchase, receipt, customer_id, operator_id):
+    return _post_quantity(db, purchase=purchase, receipt=receipt, customer_id=customer_id,
+                          operator_id=operator_id, quantity=int(receipt.converted_finished_quantity))
+
+
+def _post_quantity(db, *, purchase, receipt, customer_id, operator_id, quantity,
+                   location_id=None, layout_version=None):
     from app.core.time_contract import beijing_today, utc_now_naive
     from app.services.production_workflow import _receipt_auto_finished_ground_target, _reserve_component_completion_lot
     from app.services.warehouse_inventory import manual_finished_in
-    quantity = int(receipt.converted_finished_quantity)
     if quantity <= 0:
         return None
     item = db.get(OrderItem, purchase.sales_order_item_id)
@@ -82,7 +89,14 @@ def post(db, *, purchase, receipt, customer_id, operator_id):
         item.snapshot_material, item.flute_type,
         {**{key:getattr(item, key, None) for key in FIELDS},
          'production_notes':item.snapshot_production_notes, 'mold_tool_id':None, 'die_cut_path':None})
-    target = _receipt_auto_finished_ground_target(db, claim=True, customer_id=customer_id, product_id=item.product_id)
+    if location_id is None:
+        target = _receipt_auto_finished_ground_target(db, claim=True, customer_id=customer_id, product_id=item.product_id)
+    else:
+        from types import SimpleNamespace
+        from app.models.warehouse_inventory import WarehouseLocation
+        target = SimpleNamespace(location=db.get(WarehouseLocation, location_id), layout_version=layout_version)
+        if target.location is None:
+            raise ExternalPurchaseContractError('正式货位不存在')
     lot = manual_finished_in(db, customer_id=customer_id, product_id=item.product_id,
         location_id=target.location.id, quantity=quantity, stock_date=beijing_today(),
         source_type='purchase_reserve', source_ref_type=SOURCE, source_ref_id=receipt.id,

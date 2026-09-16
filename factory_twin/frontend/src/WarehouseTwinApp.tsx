@@ -6239,7 +6239,7 @@ export function WarehouseTwinApp() {
       </div>
       <div className="twin-top-search">
         <input aria-label="全仓查货" placeholder="全仓查货：客户 / 编码 / 名称 / 规格" value={search} onFocus={() => {setDetailSearchOpen(false);setSearchPanelOpen(true);}} onChange={event => {setSearch(event.target.value);setSearchPanelOpen(true);setFocusedSearchItem(null);setFocusedSearchProductKey(null);setPendingRackSearchLocationId(null);setPendingLocationId(null);setPendingAreaCode(null);}} />
-        <button type="button" disabled={mapMode !== "lookup" || spatialEditBusy} aria-expanded={searchPanelOpen && detailSearchOpen} onClick={() => {setSearchPanelOpen(true);setDetailSearchOpen(value => !value);}}>详细查找</button>
+        <button type="button" disabled={mapMode !== "lookup" || spatialEditBusy} aria-expanded={searchPanelOpen && detailSearchOpen} onClick={() => {setSearchPanelOpen(true);setDetailSearchOpen(value => !searchPanelOpen || !value);}}>详细查找</button>
         <button type="button" aria-expanded={searchPanelOpen && !detailSearchOpen} onClick={() => {setDetailSearchOpen(false);setSearchPanelOpen(value => detailSearchOpen || !value);}}>{searchPanelOpen && !detailSearchOpen ? "收起结果" : "查找"}</button>
       </div>
       {!traceReadOnly && <nav className="twin-top-ledger" aria-label="库存账目"><a href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a></nav>}

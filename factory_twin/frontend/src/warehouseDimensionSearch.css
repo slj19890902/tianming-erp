@@ -1,6 +1,7 @@
 .warehouse-twin-shell .twin-workspace > .twin-context-rail[hidden],.twin-context-rail [hidden]{display:none!important}
 .twin-context-rail > .dimension-search-content{min-height:0;overflow:auto;flex:1}
 .warehouse-twin-shell .dimension-search-content .twin-global-search{overflow:visible!important}
+.warehouse-twin-shell .twin-top-search button{white-space:nowrap;flex-shrink:0}
 .twin-dimension-search{padding:10px;min-width:0;font-size:12px}
 .twin-dimension-search label{display:flex;gap:4px;align-items:center;min-width:0}
 .twin-dimension-search input,.twin-dimension-search select{box-sizing:border-box;min-width:0;padding:5px;border:1px solid #cbd5e1;border-radius:5px;background:white;height:32px}

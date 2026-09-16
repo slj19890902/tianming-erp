@@ -1239,6 +1239,7 @@ def _preflight_reservation_plans(
                     product_id=product.id,
                     customer_id=customer_id,
                     expected=expected,
+                    reviewed=entry.override and SIGNATURE_OVERRIDE_WARNING in entry.warning_acknowledged_codes,
                 )
                 if entry.direct_deduction:
                     (

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import object_session
 from app.models.warehouse_goods import WarehouseGoodsProfile
 from app.services.warehouse_goods import goods_profile, qualification_issues
+from app.services.processed_sheet_matching import processed_match
 
 from app.models.delivery import DeliveryItem
 from app.models.order import Order, OrderItem
@@ -81,6 +82,9 @@ class SemiFinishedCandidate:
     warning_codes: tuple[str, ...]
     warning_messages: tuple[str, ...]
     direct_deduction_eligible: bool = False
+    automatic_recommendation: bool = False
+    match_reason: str = ""
+    match_score: int = 100
 
 
 @dataclass(frozen=True)
@@ -468,6 +472,9 @@ def direct_semi_finished_deduction_eligible(
         or detail is None
     ):
         return False
+    processed = processed_match(db, lot, product, expected)
+    if processed:
+        return bool(processed["automatic"] and layer_count and detail.layer_count == layer_count)
     scope = _lot_eligibility_scope(
         lot,
         customer_id=customer_id,
@@ -564,6 +571,10 @@ def _customer_generic_crease_direction(
     )
     if expected_layer and int(detail.layer_count or 0) != int(expected_layer):
         return "blocked"
+    # A die-cut shape is evaluated by product/mold identity, not raw-board crease coordinates.
+    profile = goods_profile(db, db.get(InventoryLot, detail.inventory_lot_id))
+    if profile and profile.get("processing") == "die_cut":
+        return "compatible"
     stock_type = _normalize_crease_type(detail.crease_type)
     uncreased = {"", "毛片", "净料", "其他"}
     if stock_type in uncreased and expected_type in uncreased:
@@ -634,6 +645,8 @@ def _lot_eligibility_scope(
         return None
     db = object_session(lot)
     product = db.get(Product, product_id)
+    if product is not None and processed_match(db, lot, product, expected):
+        return "customer_generic"
     if product is None or qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code):
         return None
     profile = goods_profile(db, lot)
@@ -668,6 +681,7 @@ def ensure_semi_finished_lot_eligibility(
     product_id: int,
     customer_id: int,
     expected: SemiFinishedSignature,
+    reviewed: bool = False,
 ) -> str:
     """Recheck the lot-level hard authorization independently of client data."""
 
@@ -681,6 +695,11 @@ def ensure_semi_finished_lot_eligibility(
         raise WarehouseInventoryError("所选批次不是半成品库存", 409)
     if detail.component_type != expected.component_type:
         raise WarehouseInventoryError("半成品库存组件与订单需求不一致", 409)
+    processed = processed_match(db, lot, product, expected)
+    if processed:
+        if not processed["known"] and not reviewed:
+            raise WarehouseInventoryError("加工片料用途待确认，请点击该批次采用", 409)
+        return "customer_generic"
     issues = qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code)
     if issues:
         raise WarehouseInventoryError("所选库存不能抵扣：" + "、".join(issues), 409)
@@ -1081,6 +1100,7 @@ def _semi_finished_candidates_for_signature(
             continue
         if scope == "customer_generic":
             differences = _customer_generic_signature_differences(expected, detail)
+            processed = processed_match(db, lot, db.get(Product, product_id), expected)
             codes = [MANUAL_CONFIRM_WARNING, CUSTOMER_GENERIC_SEMI_FINISHED_STOCK]
             messages = [
                 "每次半成品库存抵扣都必须人工确认。",
@@ -1100,7 +1120,10 @@ def _semi_finished_candidates_for_signature(
                     ),
                     signature_differences=differences,
                     warning_codes=tuple(codes),
-                    warning_messages=tuple(messages),
+                    warning_messages=(processed["reason"],) if processed else tuple(messages),
+                    automatic_recommendation=bool(processed and processed["automatic"]),
+                    match_reason=processed["reason"] if processed else "",
+                    match_score=processed["score"] if processed else 100,
                 )
             )
             continue
@@ -1162,7 +1185,8 @@ def _semi_finished_candidates_for_signature(
                 warning_messages=tuple(warning_messages),
             )
         )
-    return sorted(candidates, key=lambda c: c.lot.semi_finished_detail.sheet_type == "raw_board")
+    return sorted(candidates, key=lambda c: (c.lot.semi_finished_detail.sheet_type == "raw_board",
+                                            not c.automatic_recommendation, -c.match_score))
 
 
 def browse_semi_finished_inventory(
@@ -1384,12 +1408,14 @@ def confirm_semi_finished_match(
     if lot.inventory_type != "semi_finished" or lot.status != "active":
         raise WarehouseInventoryError("该半成品库存批次当前不可匹配", 409)
     detail = lot.semi_finished_detail
+    processed = processed_match(db, lot, db.get(Product, product_id), requirement_signature(requirement))
     scope = ensure_semi_finished_lot_eligibility(
         db,
         lot=lot,
         product_id=product_id,
         customer_id=requirement.customer_id,
         expected=requirement_signature(requirement),
+        reviewed=override and SIGNATURE_OVERRIDE_WARNING in warning_acknowledged_codes,
     )
     if scope == "general":
         differences = _physical_signature_differences(
@@ -1415,9 +1441,7 @@ def confirm_semi_finished_match(
                 "客户通用半成品抵扣必须确认 CUSTOMER_GENERIC_SEMI_FINISHED_STOCK 警告",
                 409,
             )
-        crease_direction = _customer_generic_crease_direction(
-            db, requirement, detail
-        )
+        crease_direction = _customer_generic_crease_direction(db, requirement, detail)
         if crease_direction == "blocked":
             raise WarehouseInventoryError(
                 "该客户通用半成品的层数或压线事实不能满足当前订单需求",
@@ -1480,6 +1504,13 @@ def confirm_semi_finished_match(
             )
             if mapping is None:
                 raise WarehouseInventoryError("规则产品关联并发保存失败，请重试", 409)
+    if processed and not processed["known"]:
+        # This explicit adoption confirms only this lot/product. Preserve all material and quantity facts.
+        if not db.scalar(select(SemiFinishedLotAllowedProduct.id).where(
+            SemiFinishedLotAllowedProduct.inventory_lot_id == lot.id,
+            SemiFinishedLotAllowedProduct.product_id == product_id)):
+            db.add(SemiFinishedLotAllowedProduct(inventory_lot_id=lot.id, product_id=product_id,
+                confirmed_by=operator_id, confirmed_at=now))
     db.flush()
     warning_codes: list[str] = []
     if scope == "general":

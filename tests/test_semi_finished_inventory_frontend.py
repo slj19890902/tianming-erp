@@ -79,6 +79,7 @@ const sandbox = {{
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
   window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
+sandbox.TMOrderReference = {{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const method = sandbox.definition.methods.draftSemiInventoryCandidates;
@@ -192,6 +193,7 @@ const sandbox = {{
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
   window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
+sandbox.TMOrderReference = {{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const methods = sandbox.definition.methods;
@@ -242,6 +244,7 @@ const sandbox = {{
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
   window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
+sandbox.TMOrderReference = {{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const methods = sandbox.definition.methods;
@@ -316,6 +319,7 @@ const sandbox = {{
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
   window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
+sandbox.TMOrderReference = {{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(TIME_UTILS)}, sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
@@ -502,6 +506,7 @@ const sandbox = {{
   window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
   confirm() {{ throw new Error("browser confirm must not run"); }},
 }};
+sandbox.TMOrderReference = {{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const methods = sandbox.definition.methods;
@@ -559,6 +564,7 @@ const sandbox = {{
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
   window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
+sandbox.TMOrderReference = {{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const methods = sandbox.definition.methods;
@@ -621,6 +627,7 @@ const sandbox = {{
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
   window: {{}}, console, URLSearchParams, setTimeout, clearTimeout,
 }};
+sandbox.TMOrderReference = {{component:{{}}}};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(script)}, sandbox);
 const methods = sandbox.definition.methods;

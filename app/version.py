@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.437"
-APP_VERSION_NAME = "BOM组套成品箱型入口"
+APP_VERSION = "v0.22.438"
+APP_VERSION_NAME = "加工半成品分型匹配与自动推荐"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4278,3 +4278,6 @@ APP_CHANGELOG = [*(f"v0.22.436：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["常用箱新增BOM组合箱型，默认按套、零件组装和父件交付，不要求父件纸板材质及报料尺寸。", "父件与配方原子保存，合法配方显示资料完善；实际组套确认才消耗子件并继承成本，可选父件标签，历史订单和库存不自动改写。"]
 APP_VERIFICATION_STEPS = ["常用箱选择BOM组合，核对单位套、子件每套用量及按套售价；按实际业务保存并重新打开核对。", "核对父件不要求纸板资料，空配方明确阻止保存；只有实际插合完成才确认组套，勿为验收重复入库。"]
 APP_CHANGELOG = [*(f"v0.22.437：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["原板与加工半成品分开匹配，模切后尺寸用于排序，不再因用途尚未绑定而隐藏候选。", "已确认适用或同模具未印刷片料支持跨编码自动推荐；不确定形状首次点击采用，保存后记住本批适用关系。", "保留原始材质、位置、成本、数量及客户范围，订单保存重新核验预占与版本，历史库存不自动改写。"]
+APP_VERIFICATION_STEPS = ["新建TH 21301435订单查看库存候选，核对121张和300张的真实位置；首次按实物形状确认适用，不为验收虚构抵扣。", "同模具未印刷或已确认适用批次应自动安排，保存后核对报料扣减；本次不用库存可取消安排。"]
+APP_CHANGELOG = [*(f"v0.22.438：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

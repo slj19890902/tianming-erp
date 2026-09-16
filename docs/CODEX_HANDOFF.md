@@ -1,5 +1,9 @@
 # Codex 项目交接
 
+## 2026-09-16 SHEET-DEDUCTION-COLUMNS v0.22.445
+
+- 运行2c151667，包fd228563，head cc0915无DDL。普通/PDF抵扣按录入名称、长宽、楞型、材质、加工类型、数量、位置及采用操作排列；59项定向、模板、自检、NAS备份和只读健康/资源核对通过，无历史业务写入。待人工验收，见docs/release_reports/SHEET_DEDUCTION_COLUMNS_20260916.md及NAS同任务回执。
+
 ## 2026-09-16 SHEET-RECOMMEND-RANKING v0.22.444
 
 - 运行9dd68a7d，包ba344dc6，唯一head cc0915无DDL；同楞型同纸色、近尺寸优先及数量次序，大片料折叠不自动安排，普通/PDF入口同步。55项定向、模板及签名自检、NAS完整备份、只读健康/静态核对通过；保留v443，无历史业务写入，待管理员人工验收。见docs/release_reports/SHEET_RECOMMEND_RANKING_20260916.md及NAS同任务独立回执。

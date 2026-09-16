@@ -5684,3 +5684,4 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 
 - 2026-09-12 PREPDISP005正式v389：代码75269e73，包1c11cf003963b8f01dd4cf66d661b9615a9d70a7cae09e39379b7a7ce683f1ec；仅备库一键待生产/成套与半成品用途入库，保留v388分页，无DDL，mq0912。托管运行D:\TianmingERP，助手385；完整备份和只读健康通过，待管理员人工验收。NAS回执20260912-PREPDISP005-v389-备库用途入库发布.md。
 - 2026-09-16 MOBILE-DIMENSION-TAKE 正式 v0.22.432：运行代码 a95c490b3f4f289eb0cb334874925f427b6b6b20，cc0915 无新增迁移；手机独立尺寸筛选与直接取用，保留原查询、预占及BOM身份门禁。备份、NAS回读、只读健康通过，未代操作正式库存，待管理员人工验收。详见 docs/release_reports/MOBILE_DIMENSION_TAKE432_20260916.md 与 NAS 同名任务回执。
+- 2026-09-16 WAREHOUSE-DIMENSION-SEARCH 正式v434：运行代码 e19f72d77151d066c568c5d09fa3976caae7373e，保留v433，cc0915无新增迁移；网页仓库详细尺寸/楞型近似查找、实际数量与位置，未改业务数据。定向测试、备份/NAS回读/健康通过，待人工验收。详见 docs/release_reports/WAREHOUSE_DIMENSION_SEARCH_20260916.md 和NAS同名回执。

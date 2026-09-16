@@ -1,5 +1,9 @@
 # Codex 项目交接
 
+## 2026-09-16 BOM-UNIFIED v0.22.442
+
+- 运行78de4a42，包cd3626ed，head cc0915无DDL；自制/外购本体与完整成套分离，BOM组装消耗/随货交付、盘点成本、预占报料和撤销闭环统一。保留v440/v441，187定向及75前端、签名自检、NAS完整备份和健康/静态核对通过，无历史业务写入，待管理员人工验收。见docs/release_reports/BOM_UNIFIED_20260916.md及NAS独立回执20260916-BOM全链路统一-v442.md。
+
 ## 2026-09-16 WAREHOUSE-ALL-SEARCH v0.22.441
 
 - 运行9bd918f5，包39e77e4d，head cc0915无DDL。楼层文字查找默认全楼层、包含待归位，暂无库存ERP产品单列；保留v440半成品UI，16后端/14前端/构建及NAS备份、只读核验通过，无业务写入，待管理员人工验收。见docs/release_reports/WAREHOUSE_ALL_SEARCH_20260916.md。

@@ -76,10 +76,15 @@ class Settings:
     session_expire_minutes: int = 480
     session_cookie_secure: bool = False
     lan_http_origin: str = ""
+    additional_private_http_origins: tuple[str, ...] = ()
+
+    @property
+    def private_http_origins(self) -> tuple[str, ...]:
+        return ((self.lan_http_origin,) if self.lan_http_origin else ()) + self.additional_private_http_origins
 
     def cookie_secure_for(self, scope) -> bool:
         return self.session_cookie_secure and not is_lan_http_scope(
-            scope, self.lan_http_origin
+            scope, self.private_http_origins
         )
 
     @property
@@ -211,9 +216,42 @@ def _lan_http_origin(*, production: bool, transport: str) -> str:
     return value
 
 
-def is_lan_http_scope(scope, origin: str) -> bool:
+def _additional_private_http_origins(
+    *, production: bool, transport: str, lan_http_origin: str
+) -> tuple[str, ...]:
+    raw = os.getenv("ERP_ADDITIONAL_PRIVATE_HTTP_ORIGINS", "")
+    values = tuple(item.strip().rstrip("/") for item in raw.split(",") if item.strip())
+    if not values:
+        return ()
+    if not production or transport != "https_proxy" or not lan_http_origin:
+        raise ValueError("ERP_ADDITIONAL_PRIVATE_HTTP_ORIGINS 仅用于已配置双入口的正式 HTTPS 代理")
+    if len(values) > 4 or len(set(values)) != len(values) or lan_http_origin in values:
+        raise ValueError("ERP_ADDITIONAL_PRIVATE_HTTP_ORIGINS 必须是互不重复的明确私网入口")
+    for value in values:
+        parsed = urlsplit(value)
+        try:
+            address = ip_address(parsed.hostname or "")
+            port = parsed.port
+        except ValueError as error:
+            raise ValueError("ERP_ADDITIONAL_PRIVATE_HTTP_ORIGINS 必须使用明确私网 IP 和端口") from error
+        if (
+            parsed.scheme != "http"
+            or not any(address in network for network in PRIVATE_LAN_NETWORKS)
+            or not port
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("ERP_ADDITIONAL_PRIVATE_HTTP_ORIGINS 必须使用明确私网 IP 和端口")
+    return values
+
+
+def is_lan_http_scope(scope, origin: str | tuple[str, ...]) -> bool:
     """Only an explicit private origin and a private client may use LAN HTTP."""
-    if not origin or scope.get("type") != "http" or scope.get("scheme") != "http":
+    origins = (origin,) if isinstance(origin, str) else origin
+    if not origins or scope.get("type") != "http" or scope.get("scheme") != "http":
         return False
     client = scope.get("client")
     if not client or not _is_private_lan_host(client[0]):
@@ -223,7 +261,7 @@ def is_lan_http_scope(scope, origin: str) -> bool:
     except ValueError:
         return False
     host = dict(scope.get("headers", ())).get(b"host", b"").decode("latin-1")
-    return f"http://{host}" == origin
+    return f"http://{host}" in origins
 
 
 def _production_allowed_origins(
@@ -410,8 +448,14 @@ def load_settings() -> Settings:
     lan_http_origin = _lan_http_origin(
         production=is_production, transport=production_transport
     )
-    if lan_http_origin:
-        allowed_origins = (*allowed_origins, lan_http_origin)
+    additional_private_http_origins = _additional_private_http_origins(
+        production=is_production,
+        transport=production_transport,
+        lan_http_origin=lan_http_origin,
+    )
+    private_http_origins = ((lan_http_origin,) if lan_http_origin else ()) + additional_private_http_origins
+    if private_http_origins:
+        allowed_origins = (*allowed_origins, *private_http_origins)
     health_url = _service_url(
         "ERP_HEALTH_URL",
         production=is_production,
@@ -445,7 +489,7 @@ def load_settings() -> Settings:
         allowed_origin_regex=None if is_production else PRIVATE_LAN_ORIGIN_REGEX,
         trusted_hosts=(
             *_trusted_hosts(production=is_production),
-            *((urlsplit(lan_http_origin).hostname,) if lan_http_origin else ()),
+            *(urlsplit(origin).hostname for origin in private_http_origins),
         ),
         trusted_proxy_ips=_trusted_proxy_ips(
             production=is_production,
@@ -474,6 +518,7 @@ def load_settings() -> Settings:
         session_cookie_secure=(is_production and production_transport == "https_proxy")
         or cookie_secure_requested,
         lan_http_origin=lan_http_origin,
+        additional_private_http_origins=additional_private_http_origins,
     )
     if os.getenv("ERP_UAT_ROOT"):
         validate_uat_environment(result)

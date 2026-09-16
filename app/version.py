@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.430"
-APP_VERSION_NAME = "成本来源保护与助手连接诊断"
-APP_BUILD_DATE = "2026-09-15"
+APP_VERSION = "v0.22.431"
+APP_VERSION_NAME = "蒲公英私网手机入口修复"
+APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -4257,3 +4257,6 @@ APP_CHANGELOG = [*(f"v0.22.429：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["保留加工组套成本来源校验，缺少依据时整笔回滚，不再生成无成本库存。", "助手分别检查后台和网页，提供已配置私网入口修复；异地NAS备份或更新先读写预检，失败不先停ERP。"]
 APP_VERIFICATION_STEPS = ["打开助手查看后台与网页分项状态；网页不可达时可检查并修复配置中的私网入口。", "正常备库完工/组套核对成本继承，不为验收新增业务；远程NAS预检成功不等同完整备份成功。"]
 APP_CHANGELOG = [*(f"v0.22.430：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["蒲公英 VPN 地址可作为明确配置的第二私网 HTTP 入口，手机与厂内和公网入口共用正式 ERP 登录、权限与数据。", "陌生 Host、跨入口写请求和公网 HTTP 跳转门禁保持；不修改订单、库存或账号。"]
+APP_VERIFICATION_STEPS = ["iPhone 连接蒲公英后打开 http://172.16.1.26:8000/mobile/，用原账号登录并查看仓库。", "厂内电脑检查 192.168.3.80:8000 页面仍可打开；断开蒲公英后的 5G 访问仍按原公网入口。"]
+APP_CHANGELOG = [*(f"v0.22.431：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

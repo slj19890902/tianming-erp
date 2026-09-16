@@ -158,7 +158,7 @@ def apply_production_security(application: FastAPI, current) -> None:
 
 class HSTSMiddleware(BaseHTTPMiddleware):
     def __init__(
-        self, app, *, include_hsts: bool = True, lan_http_origin: str = ""
+        self, app, *, include_hsts: bool = True, lan_http_origin: str | tuple[str, ...] = ""
     ) -> None:
         super().__init__(app)
         self.include_hsts = include_hsts
@@ -236,7 +236,7 @@ class CookieOriginCSRFMiddleware(BaseHTTPMiddleware):
 class HTTPSRedirectMiddleware(StarletteHTTPSRedirectMiddleware):
     """Keep the loopback liveness probe HTTP-only without weakening public HTTPS."""
 
-    def __init__(self, app, *, lan_http_origin: str = "") -> None:
+    def __init__(self, app, *, lan_http_origin: str | tuple[str, ...] = "") -> None:
         super().__init__(app)
         self.lan_http_origin = lan_http_origin
 
@@ -296,11 +296,11 @@ def apply_transport_security(application: FastAPI, current) -> None:
         CookieOriginCSRFMiddleware,
         allowed_origins=current.allowed_origins,
         session_cookie_name=current.session_cookie_name,
-        require_same_origin=bool(current.lan_http_origin),
+        require_same_origin=bool(current.private_http_origins),
     )
     if current.uses_https_proxy:
         application.add_middleware(
-            HTTPSRedirectMiddleware, lan_http_origin=current.lan_http_origin
+            HTTPSRedirectMiddleware, lan_http_origin=current.private_http_origins
         )
     application.add_middleware(
         TrustedHostMiddleware,
@@ -314,7 +314,7 @@ def apply_transport_security(application: FastAPI, current) -> None:
     application.add_middleware(
         HSTSMiddleware,
         include_hsts=current.uses_https_proxy,
-        lan_http_origin=current.lan_http_origin,
+        lan_http_origin=current.private_http_origins,
     )
     if current.trusted_proxy_ips:
         application.add_middleware(

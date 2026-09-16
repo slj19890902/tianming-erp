@@ -11,7 +11,7 @@
     <script src="/static/ui/workspace.js?v=20260914-incoming395"></script>
     <script src="/static/ui/pdf-workspace.js?v=20260915-pdf419"></script>
     <script src="/static/ui/purchase-workspace.js?v=66709867c608"></script>
-    <script src="/static/ui/production-workspace.js?v=20260912-798ffca5c4df"></script>
+    <script src="/static/ui/production-workspace.js?v=20260916-stockdest"></script>
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
     <script src="/static/ui/desktop-delivery-margin.js?v=20260915-costcontract428"></script>
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
@@ -4860,11 +4860,15 @@
                           <pager v-if="stockPrepDialog.jobs?.length>3" :page="stockPrepDialog.page" :total="stockPrepDialog.jobs.length" :page-size="3" @change="stockPrepDialog.page=$event"></pager>
                         </details>
                       </template>
-                      <template v-else><div>{{stockPrepDialog.row.specification}} · {{stockPrepDialog.row.material}} · 可用 {{stockPrepDialog.row.available}} {{stockPrepDialog.row.unit}}</div>
-                        <div>当前位置：{{stockPrepDialog.row.location}}</div>
+                      <template v-else>
+                        <div v-if="stockOutputQuantity(stockPrepDialog.row)>0"><strong>当前{{stockOutputLabel(stockPrepDialog.row)}} {{stockOutputQuantity(stockPrepDialog.row)}}</strong>
+                          <div v-for="job in stockPrepDialog.row.jobs" :key="job.id"><a v-for="place in (job.output_locations||[])" :key="place.lot_id" :href="stockDestinationUrl(place)" target="_blank" rel="noopener" class="btn small">{{place.location}} · {{place.quantity}}</a></div>
+                        </div>
+                        <div v-if="stockPrepDialog.row.physical>0 || !stockOutputQuantity(stockPrepDialog.row)">{{stockPrepDialog.row.specification}} · {{stockPrepDialog.row.material}} · 可用 {{stockPrepDialog.row.available}} {{stockPrepDialog.row.unit}}<div>当前位置：{{stockPrepDialog.row.location}}</div></div>
+                        <details v-else><summary>原料历史（已用完）</summary>{{stockPrepDialog.row.specification}} · {{stockPrepDialog.row.material}} · {{stockPrepDialog.row.location}}</details>
                         <select v-if="stockPrepDialog.row.can_plan" class="select" v-model="stockPrepDialog.keepKind"><option value="keep_raw">原料存放</option><option value="keep_semi">半成品存放</option></select>
                       </template>
-                      <div v-if="stockPrepDialog.row.status!=='waiting'" class="stock-location-field"><label>{{stockPrepDialog.disposition==='semi'?'默认半成品位置':'存放位置'}}</label><location-picker v-model="stockPrepDialog.location" :locations="stockLocations" :disabled="stockPrepDialog.loading"></location-picker><button class="btn" :disabled="stockPrepDialog.loading" @click="openStockLocationMap()">地图选位</button></div>
+                      <div v-if="stockPrepDialog.row.status!=='waiting' && (stockPrepDialog.row.can_plan && stockPrepDialog.row.available>0 || ['group_job','group_stock','single_output','single_job'].includes(stockPrepDialog.row.entry_type))" class="stock-location-field"><label>{{stockPrepDialog.disposition==='semi'?'默认半成品位置':'存放位置'}}</label><location-picker v-model="stockPrepDialog.location" :locations="stockLocations" :disabled="stockPrepDialog.loading"></location-picker><button class="btn" :disabled="stockPrepDialog.loading" @click="openStockLocationMap()">地图选位</button></div>
                       <div class="toolbar-group" style="margin-top:12px">
                         <button v-if="['group_job','group_stock'].includes(stockPrepDialog.row.entry_type)" class="btn primary" :disabled="!canAdmin||stockPrepDialog.loading" @click="saveStockDialog(stockPrepDialog.row.entry_type==='group_job'?'dispose':stockPrepDialog.disposition==='semi'?'store_outputs':'assemble')">保存入库</button>
                         <button v-else-if="stockPrepDialog.row.entry_type==='single_output'" class="btn primary" :disabled="!canAdmin||stockPrepDialog.loading" @click="saveStockDialog('store_output')">保存位置</button><button v-else-if="stockPrepDialog.row.entry_type==='single_job'" class="btn primary" :disabled="!canAdmin||stockPrepDialog.loading" @click="saveStockDialog('complete')">保存入库</button>

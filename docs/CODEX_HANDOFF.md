@@ -1,5 +1,9 @@
 # Codex 项目交接
 
+## 2026-09-16 BOM148-EDIT v0.22.446
+
+- 运行5469ea32，包1625e56d，head cc0915无DDL；BOM形成方式及旧嵌套关系提示明确化，保留v445。26项定向、签名包、NAS备份和只读健康/资源核对通过，无业务数据写入，待人工验收。见docs/release_reports/BOM148_EDIT_20260916.md。附加春山隔板匹配仅完成只读诊断，不属于本版修复。
+
 ## 2026-09-16 SHEET-DEDUCTION-COLUMNS v0.22.445
 
 - 运行2c151667，包fd228563，head cc0915无DDL。普通/PDF抵扣按录入名称、长宽、楞型、材质、加工类型、数量、位置及采用操作排列；59项定向、模板、自检、NAS备份和只读健康/资源核对通过，无历史业务写入。待人工验收，见docs/release_reports/SHEET_DEDUCTION_COLUMNS_20260916.md及NAS同任务回执。

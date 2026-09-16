@@ -4284,3 +4284,7 @@ APP_CHANGELOG = [*(f"v0.22.438：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["BOM成套盘点按实际子件用量和每张开料产出计材料成本，不再要求无本体父件填写纸板资料。", "组套默认50套/人时，可在常用箱调整单款人工；材料与标准组装人工分开冻结显示，历史库存不重定价。"]
 APP_VERIFICATION_STEPS = ["刷新常用箱160008，核对ABC一开16/15/8及每套5/9/1，按实际成套数量盘点入库。", "管理员展开货位成本查看材料和标准组装人工；常用箱组合BOM内可设置组装人工。"]
 APP_CHANGELOG = [*(f"v0.22.439：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["仓库文字查找默认全部楼层，指定楼层也包含待归位库存；逻辑暂存不再误判为已归位。", "无实物库存的ERP产品单独显示暂无库存，支持继续加载，保持客户权限和真实批次数量。"]
+APP_VERIFICATION_STEPS = ["刷新仓库查找，输入已知待归位产品编码，确认全部楼层及三楼都显示待归位。", "搜索暂无库存的产品，核对产品资料区域；搜索已归位产品仍可查看真实位置。"]
+APP_CHANGELOG = [*(f"v0.22.441：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

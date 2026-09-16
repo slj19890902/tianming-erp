@@ -452,6 +452,12 @@ interface SearchItem extends InventoryItem {
   pending_relocation?: boolean;
 }
 
+interface CatalogSearchResponse {
+  items: Array<{product_id: number; customer_name: string; inventory_code: string; product_name: string; specification: string; is_active: boolean; stock_status: string}>;
+  has_more: boolean;
+  next_after_product_id: number | null;
+}
+
 interface SearchResponse {
   pending_receipts?: Array<{delivery_item_id:number; delivery_number:string; customer_name:string; inventory_code:string; product_name:string; specification:string; quantity:number; unit:string; location_name:string}>;
   pagination?: {has_more: boolean; next_after_lot_id: number | null; counts_scope: "page"};
@@ -1770,7 +1776,11 @@ export function WarehouseTwinApp() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [searchType, setSearchType] = useState<WarehouseSearchType>("finished");
-  const [searchFloor, setSearchFloor] = useState("3F");
+  const [searchFloor, setSearchFloor] = useState("ALL");
+  const [catalogSearch, setCatalogSearch] = useState<CatalogSearchResponse | null>(null);
+  const [catalogError, setCatalogError] = useState("");
+  const [catalogMoreLoading, setCatalogMoreLoading] = useState(false);
+  const catalogMoreBusyRef = useRef(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [searchRetryToken, setSearchRetryToken] = useState(0);
@@ -2145,6 +2155,10 @@ export function WarehouseTwinApp() {
     searchAbortRef.current = controller;
     searchMoreBusyRef.current = false;
     setSearchMoreLoading(false);
+    setCatalogSearch(null);
+    setCatalogError("");
+    setCatalogMoreLoading(false);
+    catalogMoreBusyRef.current = false;
     if (!searchPanelOpen) return;
     setSearchResponse(null);
     if (keyword.length < 2) {
@@ -2162,6 +2176,11 @@ export function WarehouseTwinApp() {
       const params = new URLSearchParams({ search_type: searchType === "finished" ? "inventory" : searchType, search_floor: searchFloor, keyword, page_size: "100" });
       setSearchLoading(true);
       setSearchError("");
+      if (searchType === "finished") {
+        requestJson<CatalogSearchResponse>(`/api/warehouse/twin-operations/catalog-search?${new URLSearchParams({keyword, page_size: "100"})}`, controller.signal)
+          .then(value => { if (active && searchPageRequestIsCurrent(requestId, searchRequestRef.current)) setCatalogSearch(value); })
+          .catch((reason: Error) => { if (active) setCatalogError(reason.message); });
+      }
       requestJson<SearchResponse>(`/api/warehouse/twin-operations/locate?${params.toString()}`, controller.signal)
         .then((value) => {
           if (!active || !searchPageRequestIsCurrent(requestId, searchRequestRef.current)) return;
@@ -2176,6 +2195,27 @@ export function WarehouseTwinApp() {
     }, 300);
     return () => { active = false; ++searchRequestRef.current; controller.abort(); window.clearTimeout(timer); };
   }, [searchPanelOpen, searchType, searchFloor, search, searchRetryToken]);
+
+  async function loadMoreCatalogResults() {
+    const cursor = catalogSearch?.next_after_product_id;
+    if (!cursor || !catalogSearch?.has_more || catalogMoreBusyRef.current) return;
+    const requestId = searchRequestRef.current;
+    catalogMoreBusyRef.current = true;
+    setCatalogMoreLoading(true);
+    setCatalogError("");
+    try {
+      const page = await requestJson<CatalogSearchResponse>(`/api/warehouse/twin-operations/catalog-search?${new URLSearchParams({keyword: search.trim(), page_size: "100", after_product_id: String(cursor)})}`, searchAbortRef.current?.signal);
+      if (!searchPageRequestIsCurrent(requestId, searchRequestRef.current)) return;
+      setCatalogSearch(previous => ({...page, items: [...new Map([...(previous?.items || []), ...page.items].map(row => [row.product_id, row])).values()]}));
+    } catch (reason) {
+      if (searchPageRequestIsCurrent(requestId, searchRequestRef.current)) setCatalogError((reason as Error).message);
+    } finally {
+      if (searchPageRequestIsCurrent(requestId, searchRequestRef.current)) {
+        catalogMoreBusyRef.current = false;
+        setCatalogMoreLoading(false);
+      }
+    }
+  }
 
   async function loadMoreSearchResults() {
     const cursor = searchResponse?.pagination?.next_after_lot_id;
@@ -6356,7 +6396,7 @@ export function WarehouseTwinApp() {
           </div>
           {searchType === "finished" ? <>
             <label className="twin-search-step"><span>搜索楼层</span><select value={searchFloor} onChange={event => { setSearchFloor(event.target.value); setFocusedSearchProductKey(null); }}><option value="ALL">全部楼层（含待归位）</option><option value="3F">三楼</option><option value="1F">一楼</option><option value="4F">四楼</option><option value="UNLOCATED">待归位 / 未定位</option></select></label>
-            <small>实存含预占；成品与材料按各自单位分别汇总。待归位可选全部楼层。</small>
+            <small>实存含预占；成品与材料按各自单位分别汇总。各楼层均包含待归位；暂无库存的ERP产品另列。</small>
             <label className="twin-search-step"><span>客户、简写、存货编码、产品名称或规格</span><input value={search} onChange={(event) => { setSearch(event.target.value); setFocusedSearchProductKey(null); setFocusedSearchItem(null); setRackFocusId(null); setPendingRackSearchLocationId(null); setPendingLocationId(null); setPendingAreaCode(null); }} placeholder="例如：天华、TH、TM-FG、加强纸箱、520×350×300" autoFocus /></label>
             <small>{search.trim().length < 2 ? "输入任意 2 个字符即可查找，不必先记住存货编码。" : searchLoading ? "正在读取有权限的真实库存…" : searchResponse ? `${searchResponse.pagination?.has_more ? "已加载" : "匹配"} ${searchProductGroups.length} 个产品 · ${searchResponse.inventory_result_count} 个真实位置批次${searchResponse.pagination?.has_more ? " · 数量与位置仅汇总已加载结果" : ""}` : "等待查找结果"}</small>
           </> : <>
@@ -6365,14 +6405,16 @@ export function WarehouseTwinApp() {
           </>}
           {searchError && <div className="twin-search-error"><b>查货失败</b><span>{searchError}</span><button type="button" onClick={() => setSearchRetryToken((value) => value + 1)}>重试</button></div>}
           {searchResponse && <div className="twin-search-result-list">
-            {searchType === "finished" && searchProductGroups.map((group) => <button type="button" className={focusedSearchProductKey === group.key ? "selected product-selected" : ""} key={group.key} onClick={() => focusSearchProduct(group)}><b>{group.inventory_code}</b><strong>{group.product_name}</strong><span>{group.customer_name}{group.specification ? ` · ${group.specification}` : ""}</span><small><em>{formatNumber(group.total_quantity)} {inventoryUnitLabel(group.unit)}</em> · {group.location_count} 个实际位置</small><small className="twin-search-floor-line">{group.floor_summaries.map((floor) => `${floor.floor_code === "UNLOCATED" ? "待定位" : floor.floor_code} ${formatNumber(floor.quantity)} ${inventoryUnitLabel(group.unit)} / ${floor.location_count}处`).join(" · ")}</small></button>)}
+            {searchType === "finished" && searchProductGroups.map((group) => <button type="button" className={focusedSearchProductKey === group.key ? "selected product-selected" : ""} key={group.key} onClick={() => focusSearchProduct(group)}><b>{group.inventory_code}</b><strong>{group.product_name}</strong><span>{group.customer_name}{group.specification ? ` · ${group.specification}` : ""}</span><small><em>{formatNumber(group.total_quantity)} {inventoryUnitLabel(group.unit)}</em> · {group.location_count} 个实际位置</small><small className="twin-search-floor-line">{group.floor_summaries.map((floor) => `${floor.floor_code === "UNLOCATED" ? "待归位" : floor.floor_code} ${formatNumber(floor.quantity)} ${inventoryUnitLabel(group.unit)} / ${floor.location_count}处`).join(" · ")}</small></button>)}
             {searchType !== "finished" && searchResponse.resources.slice(0, 60).map((item) => <button type="button" className={focusedResource?.resource_id === item.resource_id ? "selected" : ""} key={item.resource_id} onClick={() => focusLocateResource(item)}><b>{item.kind === "mold_area" || item.kind === "printing_plate_area" ? "功能区域" : item.primary_code || item.title}</b><strong>{item.title}</strong><span>{item.subtitle}</span><small>{item.floor_code === "TEXT" ? "文字位置" : item.floor_code} · {item.map_status === "mapped" ? "点击定位到地图" : "仅有文字位置"}</small></button>)}
-            {searchType === "finished" && !searchProductGroups.length && <div className="twin-area-empty"><b>没有匹配的成品库存</b><span>可改用客户全称/简写、存货编码片段、产品名称或规格。</span></div>}
+            {searchType === "finished" && !searchProductGroups.length && <div className="twin-area-empty"><b>没有匹配的实物库存</b><span>可改用客户全称/简写、存货编码片段、产品名称或规格。</span></div>}
             {searchType !== "finished" && !searchResponse.resources.length && <div className="twin-area-empty"><b>没有匹配结果</b><span>请更换编码、名称或区域关键词。</span></div>}
           </div>}
           {searchResponse?.pagination?.has_more && <button type="button" disabled={searchMoreLoading || searchLoading} onClick={loadMoreSearchResults}>{searchMoreLoading ? "正在加载…" : "继续加载库存结果"}</button>}
           {searchType === "finished" && !!searchResponse?.pending_receipts?.length && <section className="twin-search-result-list"><b>已发出 · 待回单（不计入在厂实存）</b>{searchResponse.pending_receipts.map(row => <article key={row.delivery_item_id}><b>{row.inventory_code} · {row.customer_name}</b><div>{row.product_name} {row.specification}</div><strong>{formatNumber(row.quantity)} {inventoryUnitLabel(row.unit)}</strong><div>{row.location_name} · {row.delivery_number}</div></article>)}</section>}
-          {focusedSearchProduct && <div className="twin-search-focus-note product-focus"><b>{searchResponse?.pagination?.has_more ? "已加载的真实位置已选中" : "全部真实位置已选中"}</b><span>{focusedSearchProduct.customer_name} · {focusedSearchProduct.inventory_code} · {searchResponse?.pagination?.has_more ? "已加载" : "共"} {formatNumber(focusedSearchProduct.total_quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {focusedSearchProduct.location_count} 个位置</span><div className="twin-search-floor-actions">{focusedSearchProduct.floor_summaries.map((floor) => <button type="button" key={floor.floor_code} disabled={!isWarehouseOperationalFloorCode(floor.floor_code)} className={floorCode === floor.floor_code ? "active" : ""} onClick={() => focusSearchFloor(focusedSearchProduct, floor.floor_code)}>{floor.floor_code === "UNLOCATED" ? "待定位" : floor.floor_code} · {formatNumber(floor.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {floor.location_count}处</button>)}</div><div className="twin-search-location-list">{focusedSearchProduct.location_summaries.map((location) => <button type="button" key={location.key} disabled={!isWarehouseOperationalFloorCode(location.floor_code)} onClick={() => focusSearchLocation(focusedSearchProduct, location)}><b>{location.floor_code === "UNLOCATED" ? "待定位" : location.floor_code}</b><span>{location.location_name || "位置名称待完善"}</span><em>{formatNumber(location.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {location.position_status === "mapped" ? "地图可定位" : "真实文字位置"}</em></button>)}</div></div>}
+          {searchType === "finished" && catalogError && <div className="twin-search-error"><b>产品资料读取失败</b><span>{catalogError}</span><button type="button" onClick={() => setSearchRetryToken(value => value + 1)}>重试</button></div>}
+          {searchType === "finished" && !!catalogSearch?.items.length && <section className="twin-search-result-list"><b>ERP产品资料 · 暂无库存</b>{catalogSearch.items.map(row => <article key={row.product_id}><b>{row.inventory_code} · {row.customer_name}</b><div>{row.product_name} {row.specification}</div><small>暂无库存{!row.is_active ? " · 产品已停用" : ""}</small></article>)}{catalogSearch.has_more && <button type="button" disabled={catalogMoreLoading} onClick={loadMoreCatalogResults}>{catalogMoreLoading ? "正在加载…" : "继续加载产品资料"}</button>}</section>}
+          {focusedSearchProduct && <div className="twin-search-focus-note product-focus"><b>{searchResponse?.pagination?.has_more ? "已加载的真实位置已选中" : "全部真实位置已选中"}</b><span>{focusedSearchProduct.customer_name} · {focusedSearchProduct.inventory_code} · {searchResponse?.pagination?.has_more ? "已加载" : "共"} {formatNumber(focusedSearchProduct.total_quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {focusedSearchProduct.location_count} 个位置</span><div className="twin-search-floor-actions">{focusedSearchProduct.floor_summaries.map((floor) => <button type="button" key={floor.floor_code} disabled={!isWarehouseOperationalFloorCode(floor.floor_code)} className={floorCode === floor.floor_code ? "active" : ""} onClick={() => focusSearchFloor(focusedSearchProduct, floor.floor_code)}>{floor.floor_code === "UNLOCATED" ? "待归位" : floor.floor_code} · {formatNumber(floor.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {floor.location_count}处</button>)}</div><div className="twin-search-location-list">{focusedSearchProduct.location_summaries.map((location) => <button type="button" key={location.key} disabled={!isWarehouseOperationalFloorCode(location.floor_code)} onClick={() => focusSearchLocation(focusedSearchProduct, location)}><b>{location.floor_code === "UNLOCATED" ? "待归位" : location.floor_code}</b><span>{location.location_name || "位置名称待完善"}</span><em>{formatNumber(location.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {location.position_status === "mapped" ? "地图可定位" : "真实文字位置"}</em></button>)}</div></div>}
           {focusedResource && <div className="twin-search-focus-note"><b>{focusedResource.map_status === "mapped" ? "地图定位指引" : "文字定位指引"}</b><span>{focusedResource.prompt}</span></div>}
         </section>
         </div>

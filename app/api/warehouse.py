@@ -16553,6 +16553,22 @@ def _twin_pick_task_resources(
     return resources, task_rows
 
 
+@router.get("/twin-operations/catalog-search")
+def warehouse_catalog_search(
+    keyword: str = Query(min_length=2, max_length=150),
+    page_size: int = Query(default=100, ge=1, le=500),
+    after_product_id: int | None = Query(default=None, gt=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(_can_locate_twin),
+) -> dict:
+    if len(keyword.strip()) < 2:
+        raise HTTPException(status_code=422, detail="至少输入2个字符")
+    from app.services.warehouse_product_search import catalog_without_stock
+    return catalog_without_stock(db, keyword=keyword.strip(),
+        visible_customer_ids=_twin_locator_visible_customer_ids(db, user),
+        page_size=page_size, after_product_id=after_product_id)
+
+
 @router.get("/twin-operations/locate")
 def locate_warehouse_twin_objects(
     keyword: str = Query(default="", max_length=150),
@@ -16599,10 +16615,13 @@ def locate_warehouse_twin_objects(
     pagination = {"page_size": page_size, "has_more": False,
                   "next_after_lot_id": None, "counts_scope": "page"}
     if search_floor != "ALL":
-        floor_condition = (WarehouseLocation.warehouse_floor.is_(None) if search_floor == "UNLOCATED"
-                           else WarehouseLocation.warehouse_floor == int(search_floor[0]))
-        query = query.where(InventoryLot.warehouse_location_id.in_(
-            select(WarehouseLocation.id).where(floor_condition)))
+        # Logical pending locations may have a nominal floor, but are not placed.
+        pending_condition = or_(WarehouseLocation.warehouse_floor.is_(None),
+                                WarehouseLocation.placement_status == "unplaced")
+        floor_condition = (pending_condition if search_floor == "UNLOCATED" else
+                           or_(pending_condition, WarehouseLocation.warehouse_floor == int(search_floor[0])))
+        query = query.where(or_(InventoryLot.warehouse_location_id.is_(None),
+            InventoryLot.warehouse_location_id.in_(select(WarehouseLocation.id).where(floor_condition))))
     if search_type in {"all", "inventory", "finished"}:
         from app.services.warehouse_search_paging import search_lot_page
         lots, pagination = search_lot_page(db, query, keyword=effective_keyword,

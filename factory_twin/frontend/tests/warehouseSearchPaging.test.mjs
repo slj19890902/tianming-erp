@@ -81,6 +81,7 @@ test('closing the actual search effect cancels loading but keeps selected map re
   const response = {items: [{lot_id: 1, location_id: 8}]};
   const context = {AbortController, search: '纸箱', searchPanelOpen: false, searchType: 'finished', searchFloor: '3F', searchRetryToken: 0,
     searchRequestRef: {current: 1}, searchMoreBusyRef: {current: true}, searchAbortRef: {current: previousController},
+    catalogMoreBusyRef: {current: true}, setCatalogSearch: () => {}, setCatalogError: () => {}, setCatalogMoreLoading: () => {},
     searchResponse: response, useEffect: callback => {effect = callback;}, setSearchMoreLoading: () => {},
     setSearchResponse: value => {context.searchResponse = value;}};
   vm.createContext(context);
@@ -92,4 +93,43 @@ test('closing the actual search effect cancels loading but keeps selected map re
   assert.equal(context.searchResponse, response);
   assert.ok(!source.includes('searchProductGroups.slice(0, 80)'));
   assert.ok(source.includes('数量与位置仅汇总已加载结果'));
+});
+
+function catalogHarness() {
+  const calls = [];
+  const context = {URLSearchParams, searchPageRequestIsCurrent, search: '纸箱',
+    catalogSearch: {items: [{product_id: 1}], has_more: true, next_after_product_id: 1},
+    catalogMoreBusyRef: {current: false}, searchRequestRef: {current: 1}, searchAbortRef: {current: null},
+    setCatalogMoreLoading: value => {context.loading = value;}, setCatalogError: value => {context.error = value;},
+    setCatalogSearch: update => {context.catalogSearch = update(context.catalogSearch);},
+    requestJson: url => new Promise((resolve, reject) => calls.push({url, resolve, reject}))};
+  vm.createContext(context);
+  const start = source.indexOf('  async function loadMoreCatalogResults()');
+  vm.runInContext(compile(source.slice(start, source.indexOf('  async function loadMoreSearchResults()', start))), context);
+  return {context, calls};
+}
+test('catalog pages reject double clicks and stale responses after scope changes', async () => {
+  const {context, calls} = catalogHarness();
+  const pending = context.loadMoreCatalogResults();
+  await context.loadMoreCatalogResults();
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].url.includes('after_product_id=1'));
+  context.searchRequestRef.current++;
+  context.catalogSearch = null;
+  calls[0].resolve({items: [{product_id: 2}], has_more: false});
+  await pending;
+  assert.equal(context.catalogSearch, null);
+});
+test('catalog retry preserves and deduplicates loaded product records', async () => {
+  const {context, calls} = catalogHarness();
+  let pending = context.loadMoreCatalogResults();
+  calls[0].reject(new Error('offline'));
+  await pending;
+  assert.equal(context.catalogSearch.items.length, 1);
+  assert.equal(context.error, 'offline');
+  pending = context.loadMoreCatalogResults();
+  calls[1].resolve({items: [{product_id: 1}, {product_id: 2}], has_more: false});
+  await pending;
+  assert.equal(context.catalogSearch.items.length, 2);
+  assert.equal(context.catalogMoreBusyRef.current, false);
 });

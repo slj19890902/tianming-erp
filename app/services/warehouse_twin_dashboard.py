@@ -2072,19 +2072,23 @@ def build_inventory_code_search_results(
             else None
         )
         current_pallet = current_same_location_pallet(row)
-        floor_code = _floor_key(location.warehouse_floor if location else None)
+        pending_relocation = location is None or location.warehouse_floor is None or location.placement_status == "unplaced"
+        floor_code = "UNLOCATED" if pending_relocation else _floor_key(location.warehouse_floor)
+        if pending_relocation:
+            position_status, map_position = "unplaced", None
         result = {
             **payload,
             "floor_code": floor_code,
+            "pending_relocation": pending_relocation,
             "area_code": location.area_code if location else None,
             "location_id": location.id if location else None,
             "location_code": location.location_code if location else None,
-            "location_name": (
+            "location_name": "待归位" if pending_relocation else (
                 address_payload["employee_location_name"]
                 if address_payload is not None
                 else "尚未绑定正式位置"
             ),
-            "employee_location_name": (
+            "employee_location_name": "待归位" if pending_relocation else (
                 address_payload["employee_location_name"]
                 if address_payload is not None
                 else "尚未绑定正式位置"

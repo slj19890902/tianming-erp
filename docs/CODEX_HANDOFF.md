@@ -1,5 +1,13 @@
 # Codex 项目交接
 
+## 2026-09-16 WAREHOUSE-ALL-SEARCH v0.22.441
+
+- 运行9bd918f5，包39e77e4d，head cc0915无DDL。楼层文字查找默认全楼层、包含待归位，暂无库存ERP产品单列；保留v440半成品UI，16后端/14前端/构建及NAS备份、只读核验通过，无业务写入，待管理员人工验收。见docs/release_reports/WAREHOUSE_ALL_SEARCH_20260916.md。
+
+## 2026-09-16 SEMI-STOCK-UI v0.22.440
+
+- 运行9ae7b738，包02b24ed8，head cc0915无DDL；订单半成品黄色入口显示可用量，按货位简表采用/不采用，底层批次不合并。32项定向、Vue编译、NAS完整备份和健康/静态检查通过；无正式业务写入，保留v439，待管理员人工验收。见docs/release_reports/SEMI_STOCK_UI_20260916.md。
+
 ## 2026-09-16 BOM-ENTRY-COST v0.22.439
 
 - 运行039a9b32，包46b13c7a，head cc0915无DDL；保留v438半成品匹配，成套盘点按开料产出分摊子件材料成本，标准人工默认50套/人时、单款可调并独立冻结。合并后116项及追加2项、前端10项通过；NAS完整备份、健康和静态核对通过，无历史事实改写，技术发布待人工。见docs/release_reports/BOM_ENTRY_COST_20260916.md。

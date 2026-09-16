@@ -898,6 +898,12 @@
       .inventory-auto-summary { margin-top:4px; color:#166534; font-size:11px; line-height:1.45; white-space:normal; }
       .inventory-auto-summary.attention { color:#9a3412; }
       .inventory-auto-detail-button { margin-top:4px; }
+      .btn.inventory-semi-yellow { background:#fef3c7;color:#92400e;border:1px solid #f59e0b; }
+      .semi-stock-table { width:100%;border-collapse:collapse;margin-top:5px;table-layout:fixed; }
+      .semi-stock-table th,.semi-stock-table td { padding:6px;text-align:left;white-space:normal;overflow-wrap:anywhere;border-bottom:1px solid #e5e7eb; }
+      .semi-stock-table th { font-size:11px;color:#64748b; }
+      .semi-stock-table .semi-stock-actions { width:155px;white-space:nowrap; }
+      .semi-stock-table .semi-stock-actions .btn { margin-right:4px; }
       .order-entry-modal { width: min(1760px, 100%); }
       .pdf-order-import-modal { width:min(1760px, 100%); }
       .pdf-inventory-table-wrap {
@@ -7809,7 +7815,7 @@
 	                      </select>
 	                      <div v-if="item._validation_error" class="order-entry-error">{{ item._validation_error }}</div>
 	                      <div v-if="inventoryPlanApplies(item) && item._inventory" :class="['inventory-auto-summary',{'attention':orderLineInventoryNeedsAttention(item)}]">{{ orderLineInventoryAutoSummary(item) }}</div>
-	                      <button v-if="inventoryPlanApplies(item) && item._inventory" :class="['btn','small','inventory-auto-detail-button',orderLineInventoryNeedsAttention(item)?'danger':'']" type="button" @click="item._show_inventory_details=!item._show_inventory_details">{{ item._show_inventory_details ? '收起库存安排' : (orderLineInventoryNeedsAttention(item) ? '处理库存例外' : '查看库存安排') }}</button>
+                      <button v-if="inventoryPlanApplies(item) && item._inventory" :class="['btn','small','inventory-auto-detail-button',orderLineInventoryButtonClass(item)]" type="button" @click="item._show_inventory_details=!item._show_inventory_details">{{ item._show_inventory_details ? '收起' : (item._inventory.api_error ? '重试库存查询' : (orderLineSemiAvailable(item) > 0 ? '半成品抵扣 · ' + orderLineSemiAvailable(item) + '张' : '查看库存安排')) }}</button>
 	                    </td>
 	                    <td v-if="canViewSalesAmounts" class="order-entry-price sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" @input="item.manual_size_entry && markManualSizeUnitPrice(item)" /><div v-if="item.manual_size_entry" class="manual-size-quote">{{ manualSizeQuoteText(item) }}</div></td>
 	                    <td v-if="canViewSalesAmounts" class="order-entry-total sensitive-price"><span class="order-entry-total-value">¥ {{ money(orderItemSaleAmount(item)) }}</span></td>
@@ -7902,15 +7908,27 @@
 	                  <tr v-if="item.product_id && item._inventory && item._show_inventory_details">
 	                    <td colspan="8" style="padding:4px 6px 8px">
                       <div style="border:1px solid #bfdbfe;border-radius:6px;padding:7px;background:#f8fbff;font-size:12px">
-                        <div class="toolbar-group"><strong>库存安排</strong><span v-if="item._inventory.loading" class="muted">正在查询…</span><span v-else-if="item._inventory.stale" class="status orange">信息已变化</span><button class="btn small" type="button" :disabled="item._inventory.loading" @click="loadOrderLineInventory(item,orderForm.customer_id)">重新查询</button><span v-if="inventoryDecisionRequired(item)" class="status orange">{{ inventoryDecisionRequired(item) }}</span></div>
+                        <div class="toolbar-group"><span v-if="item._inventory.loading" class="muted">查询中…</span><span v-else-if="item._inventory.stale" class="status orange">请刷新库存</span><button class="btn small" type="button" :disabled="item._inventory.loading" @click="loadOrderLineInventory(item,orderForm.customer_id)">刷新</button></div>
                          <div v-if="item._inventory.error" class="danger-text" style="margin-top:4px">{{ item._inventory.error }}</div>
-                         <template v-for="component in inventoryComponents(item)" :key="`general-confirm-${component}`">
-                           <div v-if="generalSemiFinishedCandidates(item._inventory.semi[component]).length" style="margin-top:5px;padding:5px;background:#fffbeb;border:1px solid #f59e0b;border-radius:5px;color:#92400e">
-                           <div class="toolbar-group"><strong>通用半成品，可跨客户，需人工确认</strong><span>{{ generalSemiFinishedCandidates(item._inventory.semi[component]).map(candidate => candidate.lot_number).join('、') }}</span><label><input type="checkbox" v-model="item._inventory.semi[component].general_confirmation" /> 我已明确确认可跨客户抵扣</label><button class="btn small success" type="button" :disabled="!item._inventory.semi[component].general_confirmation" @click="confirmOrderLineInventory(item,component,generalSemiFinishedCandidates(item._inventory.semi[component])[0],true)">明确确认并抵扣</button></div>
-                           </div>
-                         </template>
                          <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品库存：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，<order-stock-location :candidate="candidate" :item="item"></order-stock-location></span><button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">采用安全推荐</button><button class="btn danger small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 个，<order-stock-location :candidate="allocation.candidate" :item="item"></order-stock-location></div></div>
-                        <div v-for="component in inventoryComponents(item)" :key="component" style="margin-top:5px"><strong>半成品{{ componentLabel(component) }}库存：</strong><span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span><template v-if="item._inventory.semi[component].candidates.length"><span v-for="candidate in item._inventory.semi[component].candidates" :key="candidate.lot_id" style="margin-left:8px">{{ inventorySourceLabel(candidate) }} {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，<order-stock-location :candidate="candidate" :item="item"></order-stock-location> <span v-if="(candidate.signature_differences||[]).length" class="status orange">差异警告：{{ candidate.signature_differences.join('、') }}</span> <small v-if="candidate.match_reason">{{ candidate.match_reason }}</small> <button v-if="!isDirectSemiDeductionCandidate(candidate) && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component,candidate,true)">确认适用并采用</button> <button v-if="isDirectSemiDeductionCandidate(candidate) && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmDirectSemiDeduction(item,component,candidate)">抵扣</button></span><button v-if="safeSystemInventoryCandidates(item,component).length && !item._inventory.semi[component].selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,component)">采用安全推荐</button></template><span v-else-if="!item._inventory.semi[component].unavailable_reason" class="muted">暂无可用库存</span><button class="btn danger small" type="button" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,component,orderForm.customer_id)">重新选择</button><button class="btn small" type="button" @click="loadOrderLineManualInventory(item,component,orderForm.customer_id)">查看其他候选</button><div v-for="candidate in item._inventory.semi[component].manual_candidates" :key="`manual-${candidate.lot_id}`" style="margin:4px 0 0 12px">人工匹配 {{ candidate.lot_number }} 可用 {{ candidate.available_stock_quantity }}，<order-stock-location :candidate="candidate" :item="item"></order-stock-location>；差异：{{ (candidate.signature_differences||[]).join('、') || '无' }}；{{ (candidate.warning_messages||candidate.warnings||[]).join('、') }} <button class="btn small success" type="button" @click="confirmOrderLineInventory(item,component,candidate,true)">确认使用</button></div><div v-for="allocation in item._inventory.semi[component].allocations" :key="`semi-plan-${component}-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 片 / {{ allocation.stock_quantity }} 张，<order-stock-location :candidate="allocation.candidate" :item="item"></order-stock-location></div></div>
+                        <!-- compact semi stock -->
+                        <div v-for="component in inventoryComponents(item)" :key="component">
+                          <strong>半成品{{ componentLabel(component) }}</strong>
+                          <span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span>
+                          <table v-if="semiStockGroups(item,component).length" class="semi-stock-table">
+                            <thead><tr><th>可用数量</th><th>位置</th><th>尺寸（mm）</th><th>楞型</th><th>材质</th><th class="semi-stock-actions"></th></tr></thead>
+                            <tbody><tr v-for="group in semiStockGroups(item,component)" :key="group.key">
+                              <td><strong>{{ group.quantity }} 张</strong><div v-if="group.adopted" class="status green">采用 {{ group.adopted }} 张</div><small v-else-if="group.rejected" class="muted"> · 不采用</small></td>
+                              <td><order-stock-location :candidate="group.candidate" :item="item"></order-stock-location></td>
+                              <td>{{ semiStockField(group,'dimensions') }}</td>
+                              <td>{{ semiStockField(group,'flute_type') }}</td>
+                              <td>{{ semiStockField(group,'material_code') }}<small v-if="group.candidates.some(c => isGeneralSemiFinishedCandidate(c))"> · 跨客户</small></td>
+                              <td class="semi-stock-actions"><button class="btn small success" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,true)">采用</button><button class="btn small danger" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,false)">不采用</button></td>
+                            </tr></tbody>
+                          </table>
+                          <span v-else class="muted">暂无可用库存</span>
+                        </div>
+                        <!-- /compact semi stock -->
                       </div>
                     </td>
                   </tr>
@@ -14193,7 +14211,7 @@
           safeSystemInventoryCandidates(line, component) {
             const state = line?._inventory;
             const part = component === "finished" ? state?.finished : state?.semi?.[component];
-            return (part?.candidates || []).filter(candidate => this.isSafeSystemInventoryCandidate(component, candidate));
+            return (part?.candidates || []).filter(candidate => !(part?._excluded_lot_ids || []).includes(Number(candidate.lot_id)) && this.isSafeSystemInventoryCandidate(component, candidate));
           },
           hasSafeOrderLineInventoryRecommendation(line) {
             const state = line?._inventory;
@@ -14225,6 +14243,63 @@
             if (!state || state.loading) return false;
             return Boolean(this.inventoryDecisionRequired(line));
           },
+          semiStockCandidates(line, component) {
+            const part = line?._inventory?.semi?.[component];
+            const seen = new Set();
+            return [...(part?.candidates || []), ...(part?.manual_candidates || [])].filter(candidate => {
+              const id = Number(candidate.lot_id);
+              if (!id || seen.has(id) || !(Number(candidate.available_stock_quantity) > 0)) return false;
+              seen.add(id); return true;
+            });
+          },
+          semiStockGroups(line, component) {
+            const part = line._inventory.semi[component], groups = new Map();
+            for (const candidate of this.semiStockCandidates(line, component)) {
+              const location = candidate.warehouse_location || candidate.location || {};
+              const key = location.id ? `location-${location.id}` : `lot-${candidate.lot_id}`;
+              if (!groups.has(key)) groups.set(key, {key,candidate,candidates:[],quantity:0,adopted:0});
+              const group = groups.get(key);
+              group.candidates.push(candidate);
+              group.quantity += Number(candidate.available_stock_quantity);
+              group.adopted += (part.allocations || []).filter(a => Number(a.candidate.lot_id) === Number(candidate.lot_id)).reduce((n,a) => n + Number(a.stock_quantity || 0), 0);
+            }
+            return [...groups.values()].map(group => ({...group,rejected:group.candidates.every(c => (part._excluded_lot_ids || []).includes(Number(c.lot_id)))}));
+          },
+          orderLineSemiAvailable(line) {
+            const seen = new Set();
+            return this.inventoryComponents(line).reduce((total, component) => total + this.semiStockCandidates(line, component).reduce((sum,candidate) => {
+              if (seen.has(Number(candidate.lot_id)) || candidate.sheet_type === 'raw_board') return sum;
+              seen.add(Number(candidate.lot_id)); return sum + Number(candidate.available_stock_quantity);
+            },0),0);
+          },
+          semiStockField(group, field) {
+            return [...new Set(group.candidates.map(c => field === 'dimensions'
+              ? `${c.board_length_mm || '—'} × ${c.board_width_mm || '—'}`
+              : field === 'flute_type' ? (c.flute_type === 'NONE' ? '卡纸' : c.flute_type || '—')
+              : c[field] || '—'))].join(' / ');
+          },
+          orderLineInventoryButtonClass(line) {
+            const state = line?._inventory;
+            if (state?.api_error || state?.stale) return 'danger';
+            return this.orderLineSemiAvailable(line) > 0 ? 'inventory-semi-yellow' : '';
+          },
+          chooseSemiStockGroup(line, component, group, adopt) {
+            const state = line._inventory, part = state.semi[component];
+            if (state.loading || state.stale || state.api_error) return;
+            const ids = new Set(group.candidates.map(c => Number(c.lot_id)));
+            const excluded = new Set(part._excluded_lot_ids || []);
+            let selected = (part.selected_candidates || []).filter(c => !ids.has(Number(c.lot_id)));
+            if (adopt) { selected.push(...group.candidates); ids.forEach(id => excluded.delete(id)); }
+            else ids.forEach(id => excluded.add(id));
+            part._excluded_lot_ids = [...excluded];
+            part.selected_candidates = selected; part.selected = selected[0] || null;
+            part.allocations = []; part._batch_auto_skipped = false;
+            part.skipped = !selected.length && this.semiStockCandidates(line,component).every(c => excluded.has(Number(c.lot_id)));
+            part.manual_override = selected.some(c => this.semiCandidateNeedsOverride(c));
+            part.general_confirmation = selected.some(c => this.isGeneralSemiFinishedCandidate(c));
+            this.invalidatePdfDraftForItem?.(line);
+            this.reallocateAllDraftInventory();
+          },
           orderLineInventoryAutoSummary(line) {
             const state = line?._inventory;
             const orderQuantity = Math.max(Number(line?.quantity || 0), 0);
@@ -14244,7 +14319,8 @@
               0,
             );
             const productionRequired = Math.max(orderQuantity - reservedFinished, 0);
-            return `成品${reservedFinished}｜半成品${semiPieces}｜需生产${productionRequired}`;
+            const semiAvailable = this.orderLineSemiAvailable(line);
+            return `成品${reservedFinished}｜半成品可用${semiAvailable}张｜已安排${semiPieces}片｜需生产${productionRequired}`;
           },
           inventorySourcesText(sources) {
             return (sources || []).map(source => {

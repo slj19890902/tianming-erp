@@ -4936,7 +4936,7 @@
                   <data-panel :empty="!productionPlacement.length">
                     <table class="production-placement-table" style="table-layout:fixed;width:100%">
                       <thead><tr><th style="width:12%">客户订单号 / 中文简称</th><th style="width:18%">存货编码 / 产品</th><th style="width:8%">实际完工</th><th style="width:18%">当前待送位置</th><th>现场实际位置</th></tr></thead>
-                      <tbody><tr v-for="row in productionPlacement" :key="`placement-${row.id}`"><td><div class="placement-two-lines"><strong :class="row.customer_order_number ? 'customer-po' : 'customer-po-missing'" :title="row.customer_order_number || ''">{{ row.customer_order_number || '客户订单号未填写' }}</strong><span class="placement-line muted" :title="row.customer_short_name || ''">{{ row.customer_short_name || '中文简称未填写' }}</span></div></td><td><div class="placement-two-lines" :title="productionProductTitle(row)"><strong class="placement-line">{{ row.product_code || '-' }}</strong><span class="placement-line">{{ row.product_name || '-' }}</span></div></td><td><strong>{{ row.actual_output_quantity || row.quantity || 0 }}</strong></td><td><div v-if="row.receipt_placement?.label" :class="['status',row.receipt_placement.color]">{{ row.receipt_placement.label }}</div><div class="placement-current-location" :title="row.warehouse_location_name || row.warehouse_location_code || '真实成品位置'">{{ row.warehouse_location_name || row.warehouse_location_code || '真实成品位置' }}</div></td><td><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个位置）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个位置）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选实际位置' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}</option></select><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id" @click="transferProductionCompletionToStock(row)">归位</button></div></td></tr></tbody>
+                      <tbody><tr v-for="row in productionPlacement" :key="`placement-${row.id}`"><td><div class="placement-two-lines"><strong :class="row.customer_order_number ? 'customer-po' : 'customer-po-missing'" :title="row.customer_order_number || ''">{{ row.customer_order_number || '客户订单号未填写' }}</strong><span class="placement-line muted" :title="row.customer_short_name || ''">{{ row.customer_short_name || '中文简称未填写' }}</span></div></td><td><div class="placement-two-lines" :title="productionProductTitle(row)"><strong class="placement-line">{{ row.product_code || '-' }}</strong><span class="placement-line">{{ row.product_name || '-' }}</span></div></td><td><strong>{{ row.quantity || 0 }} {{ row.output_unit || '' }}</strong></td><td><div v-if="row.receipt_placement?.label" :class="['status',row.receipt_placement.color]">{{ row.receipt_placement.label }}</div><div class="placement-current-location" :title="row.warehouse_location_name || row.warehouse_location_code || '真实成品位置'">{{ row.warehouse_location_name || row.warehouse_location_code || '真实成品位置' }}</div></td><td><div class="production-location-picker"><select class="select" v-model.number="row.transfer_floor_number" :disabled="productionBusy" @change="onProductionFloorChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option :value="null">先选楼层</option><option v-for="floor in productionLocationFloors" :key="floor.number" :value="floor.number">{{ floor.label }}（{{ floor.count }} 个位置）</option></select><select class="select" v-model="row.transfer_area_code" :disabled="productionBusy || !row.transfer_floor_number" @change="onProductionAreaChange(row,'transfer_floor_number','transfer_area_code','transfer_location_id')"><option value="">{{ row.transfer_floor_number ? '再选区域' : '请先选择楼层' }}</option><option v-for="area in productionAreasForFloor(row.transfer_floor_number)" :key="area.code" :value="area.code">{{ area.label }}（{{ area.count }} 个位置）</option></select><select class="select" v-model.number="row.transfer_location_id" :disabled="productionBusy || !row.transfer_area_code"><option :value="null">{{ row.transfer_area_code ? '再选实际位置' : '请先选择区域' }}</option><option v-for="location in productionLocationsForArea(row.transfer_floor_number,row.transfer_area_code)" :key="location.id" :value="location.id">{{ inventoryLocation(location) }}</option></select><button class="btn small success" :disabled="productionBusy || !row.transfer_location_id || !row.can_place || !canWarehouseExecute || !canProductionExecute" :title="row.placement_block || ''" @click="transferProductionCompletionToStock(row)">归位</button></div></td></tr></tbody>
                     </table>
                   </data-panel>
                 </div>
@@ -19634,14 +19634,13 @@
             try {
               await this.ensureProductionLocations();
               const params = {
-                placement_pending:true,
                 page:this.pages.productionPlacement,
                 page_size:this.productionHistoryPageSize(),
               };
               Object.entries(this.productionPlacementFilters || {}).forEach(([key,value]) => {
                 if (value !== "" && value !== null && value !== undefined) params[key] = value;
               });
-              const { data } = await axios.get("/api/production/completions", { params,signal:controller.signal });
+              const { data } = await axios.get("/api/production/placement-stock", { params,signal:controller.signal });
             if(controller.signal.aborted || latestRequestControllers.get("production:placement")!==controller)return;
               const loadedFloors = this.productionLocationFloors;
               const singleFloor = loadedFloors.length === 1 ? loadedFloors[0].number : null;
@@ -19652,6 +19651,11 @@
                 transfer_location_id:null,
               }));
               this.productionPlacementTotal = Number(data.total || 0);
+              const lastPage=Math.max(1,Math.ceil(this.productionPlacementTotal/params.page_size));
+              if(this.pages.productionPlacement>lastPage){
+                this.pages.productionPlacement=lastPage;
+                return await this.loadProductionPlacement();
+              }
               return true;
             } catch (error) {
               if(controller.signal.aborted || latestRequestControllers.get("production:placement")!==controller)return false;
@@ -20188,7 +20192,13 @@
             const idempotencyKey = this.productionTransferAttempts[row.id].idempotency_key;
             this.productionBusy = true;
             try {
-              await axios.post(`/api/production/completions/${row.id}/stock-transfers`, {
+              if(row.inventory_lot_id) {
+                await axios.post(`/api/production/placement-stock/${row.inventory_lot_id}/transfer`, {
+                  idempotency_key:idempotencyKey, expected_version:row.inventory_version,
+                  quantity:row.movable_quantity, location_id:Number(location.id),
+                  expected_layout_version:location.layout_version,
+                });
+              } else await axios.post(`/api/production/completions/${row.id}/stock-transfers`, {
                 idempotency_key: idempotencyKey,
                 location_id: Number(location.id),
                 expected_layout_version: location.layout_version || null,

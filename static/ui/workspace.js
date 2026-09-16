@@ -51,6 +51,9 @@
           if (this.activePage === 'orders' && this.orderWorkspace === 'queue'
               && this.workspaceCapacities[currentKey]) return;
           if (this.activePage === 'products' && this.workspaceCapacities[currentKey]) return;
+          // Production pages have different row heights and expandable controls.
+          // Only a real viewport/mode change may recalculate their capacity.
+          if (this.activePage === 'production' && this.workspaceCapacities[currentKey]) return;
           const top = table.getBoundingClientRect().top;
           const main = panel.closest('.main');
           const mainRect = main.getBoundingClientRect();

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.435"
-APP_VERSION_NAME = "旧外购余货实体入仓"
+APP_VERSION = "v0.22.436"
+APP_VERSION_NAME = "生产历史分页与待入库归位"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4272,3 +4272,6 @@ APP_CHANGELOG = [*(f"v0.22.434：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["核实的旧外购余货支持正式货位、采购冻结成本及订单预占承接；历史已送数量不重复扣库。", "承接后新送货正常扣减实体批次，撤销恢复对应库存；保留网页尺寸查找及旧组套修复。"]
 APP_VERIFICATION_STEPS = ["仓库查找Z.001.000152，核对200根位于三楼R006一层1格；按实际需要使用移货。", "后续余货另建送货单正常发货；旧已送800根不作测试撤销，旧单退货需另行核对实物。"]
 APP_CHANGELOG = [*(f"v0.22.435：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["生产完工历史及归位分页不再因行高变化跳回第一页。", "待送成品归位按待入库区现存批次分页展示，包含部分送货余货、外购及盘点成品；归位沿用库存预占、版本和审计，不重复入库。"]
+APP_VERIFICATION_STEPS = ["打开生产完工历史，连续点击下一页，确认页码与记录都改变。", "打开待送成品归位，核对总数、翻页和存放位置；仅对实际已搬运货物选择目标位置并归位。"]
+APP_CHANGELOG = [*(f"v0.22.436：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

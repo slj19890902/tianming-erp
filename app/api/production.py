@@ -522,6 +522,64 @@ def get_temporary_locations(
     return {"items": list_temporary_locations(db)}
 
 
+@router.get("/placement-stock")
+def get_placement_stock(
+    page: int = Query(default=1, ge=1), page_size: int = Query(default=20, ge=1, le=200),
+    customer_id: int | None = Query(default=None, gt=0),
+    order_keyword: str | None = Query(default=None, max_length=150),
+    product_code: str | None = Query(default=None, max_length=150),
+    product_name: str | None = Query(default=None, max_length=250),
+    completed_date_from: date | None = None, completed_date_to: date | None = None,
+    user: User = Depends(can_read), db: Session = Depends(get_db),
+) -> dict:
+    from app.services.production_placement import page as placement_page
+    items,total=placement_page(db,allowed_customer_ids=_allowed_customer_ids(user,db),page=page,page_size=page_size,
+        customer_id=customer_id,order_keyword=order_keyword,product_code=product_code,product_name=product_name,
+        completed_date_from=completed_date_from,completed_date_to=completed_date_to)
+    return dict(items=items,total=total,page=page,page_size=page_size)
+
+
+class PlacementStockRequest(BaseModel):
+    expected_version: int = Field(gt=0)
+    quantity: int = Field(gt=0)
+    location_id: int = Field(gt=0)
+    expected_layout_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=1,max_length=120)
+
+
+@router.post("/placement-stock/{lot_id}/transfer")
+def transfer_placement_stock(lot_id: int,payload: PlacementStockRequest,
+        user: User = Depends(can_complete),db: Session = Depends(get_db)) -> dict:
+    if not has_permission(user,'warehouse.execute'):
+        raise HTTPException(status_code=403,detail='归位需要仓库执行权限')
+    lot=db.get(InventoryLot,lot_id)
+    if lot is None or lot.finished_detail is None:
+        raise HTTPException(status_code=404,detail='成品库存不存在')
+    require_customer_access(lot.finished_detail.owner_customer_id,current_user=user,db=db)
+    from app.services.production_placement import transfer
+    try:
+        result=transfer(db,lot_id=lot_id,expected_version=payload.expected_version,quantity=payload.quantity,
+            location_id=payload.location_id,layout_version=payload.expected_layout_version,
+            operator_id=user.id,idempotency_key=payload.idempotency_key)
+        if not result.replayed:
+            append_audit_event(db,event_category='business',result='success',source='web',module_code='production',
+                action_code='production.staging_stock.transfer',resource='InventoryLotTransfer',actor=user,
+                entity_type='inventory_lot_transfer',entity_id=result.transfer.id,
+                details=dict(source_lot_id=lot_id,target_lot_id=result.target_lot.id,quantity=payload.quantity,
+                    location_id=payload.location_id,idempotency_key=payload.idempotency_key))
+        db.commit()
+        return dict(target_lot_id=result.target_lot.id,replayed=result.replayed)
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _raise_workflow_error(error)
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409,detail='库存归位发生并发冲突，请刷新后重试') from error
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.post("/completion-batches")
 def post_completion_batch(
     payload: CompletionBatchRequest,

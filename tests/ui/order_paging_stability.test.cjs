@@ -62,3 +62,17 @@ test('incoming drafts and expanded rows never trigger a pagination reload',async
   assert.equal(f.ctx.pages.incomingPending,2);assert.equal(f.ctx.screenPageSize(12),12);
   f.ctx.uiMode='large';assert.equal(f.ctx.screenPageSize(8),8);
 });
+
+for(const tab of ['history','placement'])test(`production ${tab} paging cannot trigger resize reset`,async()=>{
+  const f=fixture();f.ctx.activePage='production';f.ctx.productionTab=tab;
+  f.ctx.pages.productionHistory=1;f.ctx.pages.productionPlacement=1;
+  let calls=0;f.ctx.loadProductionHistory=async()=>{calls++;};f.ctx.loadProductionPlacement=async()=>{calls++;};
+  await f.measure();const size=f.ctx.screenPageSize(13);calls=0;
+  const field=tab==='history'?'productionHistory':'productionPlacement';
+  for(const [page,height] of [[2,120],[3,40],[2,200]]){
+    f.ctx.pages[field]=page;f.dimensions.row=height;await f.measure();
+    assert.equal(f.ctx.pages[field],page);assert.equal(f.ctx.screenPageSize(13),size);
+  }
+  assert.equal(calls,0);
+  f.resize();await f.measure();assert.equal(f.ctx.pages[field],1);assert.equal(calls,1);
+});

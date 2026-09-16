@@ -51,7 +51,7 @@ def test_external_purchase_can_edit_and_round_trip_real_accompany_bom():
       assert.equal(ctx.bomEditor.inventory_mode,'purchased');
       assert.equal(ctx._productBomDirty(),false);
       ctx.bomEditor.components[0].inventory_relation='assembly';
-      assert.match(ctx.validateProductBom(),/请选择自制或组套/);
+      assert.equal(ctx.validateProductBom(),'');
     """)
 
 
@@ -87,7 +87,7 @@ def test_body_assembly_is_editable_and_invalid_sources_still_rejected():
       ctx.bomEditor.components=[{...blankBomComponent(),component_product_id:2,inventory_relation:'assembly'}];
       assert.equal(ctx.validateProductBom(),'');
       ctx.bomEditor.inventory_mode='purchased';
-      assert.match(ctx.validateProductBom(),/请选择自制或组套/);
+      assert.equal(ctx.validateProductBom(),'');
       ctx.bomEditor.inventory_mode='assembled';ctx.productForm.composite_fulfillment_mode='parent_delivery';ctx.bomEditor.components=[];
       assert.match(ctx.validateProductBom(),/至少需要一个组装子件/);
     """)

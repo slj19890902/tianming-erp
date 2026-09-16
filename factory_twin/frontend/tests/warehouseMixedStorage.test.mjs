@@ -19,3 +19,13 @@ test("mixed draft identities and units stay independent",()=>{
  assert.equal(drafts.length,3);
  assert.deepEqual(buildStocktakeBatchPayload("mixed",drafts).items.map(i=>i.inventory_type),["finished","semi_finished","raw_material"]);
 });
+test("body and complete stock drafts never merge and preserve their stage",()=>{
+ const base={operation:"add",location_id:1,expected_layout_version:1,customer_id:2,product_id:3,inventory_type:"finished",unit:"boxes",quantity:5,stock_date:"2026-09-16"};
+ let drafts=[];
+ for(const stage of ["complete","body"]){
+  const result=upsertStocktakeDraft(drafts,{...base,client_item_id:stage,stock_stage:stage});
+  assert.equal(result.error,null);drafts=result.items;
+ }
+ assert.equal(drafts.length,2);
+ assert.deepEqual(buildStocktakeBatchPayload("stages",drafts).items.map(i=>i.stock_stage || "complete"),["complete","body"]);
+});

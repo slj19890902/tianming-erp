@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.441"
-APP_VERSION_NAME = "仓库全产品查找与待归位显示"
+APP_VERSION = "v0.22.442"
+APP_VERSION_NAME = "BOM本体子件全链路与库存成本"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4291,3 +4291,6 @@ APP_CHANGELOG = [*(f"v0.22.440：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["仓库文字查找默认全部楼层，指定楼层也包含待归位库存；逻辑暂存不再误判为已归位。", "无实物库存的ERP产品单独显示暂无库存，支持继续加载，保持客户权限和真实批次数量。"]
 APP_VERIFICATION_STEPS = ["刷新仓库查找，输入已知待归位产品编码，确认全部楼层及三楼都显示待归位。", "搜索暂无库存的产品，核对产品资料区域；搜索已归位产品仍可查看真实位置。"]
 APP_CHANGELOG = [*(f"v0.22.441：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["BOM分开设置实际箱型、来源及子件用途；支持自制或外购本体参与组装，子件消耗与随货交付独立。", "盘点区分完整成品和未组装本体；成套按本体加消耗子件成本入库，本体只抵扣自身报料，不冒充成套、不重复扣子件。", "实际组装确认后才生成成套库存；外购待组套预占可在无后续操作时按来源撤销，保留数量、成本、版本及审计保护。"]
+APP_VERIFICATION_STEPS = ["常用箱按实物箱型填写报料资料；组合BOM每行选择组装消耗或随货交付，检查每个父件所需数量。", "盘点已完整成套选完整成品；仅有纸箱本体未装子件选未组装本体。核对待组套预留及实际插合完成确认，勿为验收重复入库。", "核对收料、组装、发货和撤销的实物数量与位置；旧配方、历史订单及地图没有自动改写。"]
+APP_CHANGELOG = [*(f"v0.22.442：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

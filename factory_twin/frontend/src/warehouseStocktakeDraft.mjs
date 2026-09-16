@@ -228,7 +228,7 @@ export function buildStocktakeBatchPayload(idempotencyKey, drafts) {
       quantity: draft.quantity,
       stock_date: draft.stock_date,
       source_kind: draft.source_kind || "existing_stocktake",
-      stock_stage: draft.stock_stage || "complete"
+      ...(draft.stock_stage === "body" ? {stock_stage: "body"} : {})
     } : {
       client_item_id: draft.client_item_id,
       operation: "decrease",

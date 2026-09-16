@@ -20,7 +20,7 @@ def run_js(body):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js unavailable")
-    names = ["bomComponentOption", "normalizeBomComponent", "applyBomResponse", "mergeBomComponentOptions",
+    names = ["bomComponentUnit", "bomComponentOption", "normalizeBomComponent", "applyBomResponse", "mergeBomComponentOptions",
         "onBomInventoryModeChange", "_productBomSaveFields", "_productBomDirty", "validateProductBom",
         "bomPayload", "openBomChildEditor", "returnFromCommonBoxEditor", "bindBomYieldToCurrentProduct", "selectBomComponent"]
     constants = HTML[HTML.index("      let bomComponentKeyCounter"):HTML.index("      const blankMaterial =")]
@@ -88,14 +88,14 @@ def test_body_assembly_is_editable_and_invalid_sources_still_rejected():
       assert.equal(ctx.validateProductBom(),'');
       ctx.bomEditor.inventory_mode='purchased';
       assert.match(ctx.validateProductBom(),/请选择自制或组套/);
-      ctx.bomEditor.inventory_mode='assembled';ctx.bomEditor.components=[];
+      ctx.bomEditor.inventory_mode='assembled';ctx.productForm.composite_fulfillment_mode='parent_delivery';ctx.bomEditor.components=[];
       assert.match(ctx.validateProductBom(),/至少需要一个组装子件/);
     """)
 
 
 def test_real_product_use_is_integer_without_changing_legacy_decimal_contract():
     run_js("""
-      const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1}};
+      const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1,composite_fulfillment_mode:'parent_delivery'}};
       ctx.bomEditor.enabled=true;ctx.bomEditor.inventory_mode='assembled';
       ctx.bomEditor.components=[{...blankBomComponent(),component_product_id:2,
         inventory_relation:'assembly',quantity_per_set:1.5}];
@@ -160,7 +160,7 @@ def test_yield_edit_reads_current_real_mold_and_round_trips_limits():
     run_js("""
       const row={...blankBomComponent(),component_product_id:2,inventory_relation:'assembly',
         mold_max_yield_per_sheet:4,spare_sheet_quantity:5};
-      const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1,customer_id:9},errorMessage:e=>e.message,spec:()=>''};
+      const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1,customer_id:9,composite_fulfillment_mode:'parent_delivery'},errorMessage:e=>e.message,spec:()=>''};
       ctx.bomEditor.enabled=true;ctx.bomEditor.inventory_mode='assembled';ctx.bomEditor.components=[row];
       axios.get=async()=>({data:{id:2,customer_id:9,is_active:true,box_category:'die_cut',mold_tool_id:40}});
       await ctx.bindBomYieldToCurrentProduct(row);
@@ -179,7 +179,7 @@ def test_yield_edit_reads_current_real_mold_and_round_trips_limits():
 def test_yield_lookup_failure_and_stale_response_do_not_overwrite_another_product():
     run_js("""
       const row={...blankBomComponent(),component_product_id:2,inventory_relation:'assembly',mold_max_yield_per_sheet:4};
-      const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1,customer_id:9},errorMessage:e=>e.message};
+      const ctx={...methods,bomEditor:blankBomEditor(),productForm:{id:1,customer_id:9,composite_fulfillment_mode:'parent_delivery'},errorMessage:e=>e.message};
       ctx.bomEditor.enabled=true;ctx.bomEditor.inventory_mode='assembled';ctx.bomEditor.components=[row];
       let resolve;axios.get=()=>new Promise(r=>{resolve=r});
       const pending=ctx.bindBomYieldToCurrentProduct(row);

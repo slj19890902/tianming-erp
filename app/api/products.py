@@ -569,6 +569,14 @@ class ProductPayload(BaseModel):
     @model_validator(mode="after")
     def validate_flute_layer_consistency(self) -> "ProductPayload":
         """拒绝非法楞型/层数组合；七层写入必须明确 AAA/ABC。"""
+        if self.box_style == "BOM组合":
+            if self.is_virtual_composite_parent or self.supply_mode == "external_purchase":
+                raise ValueError("BOM组合是实际组套成品，不是虚拟分存或直接外购产品")
+            self.unit = "套"
+            self.combination_mode = "parent_priced_set"
+            self.composite_fulfillment_mode = "parent_delivery"
+            _clear_virtual_composite_parent_fields(self)
+            return self
         if self.combination_mode == "component_priced" and self.composite_fulfillment_mode != "component_delivery":
             raise ValueError("组件分别计价时必须按子件交付、打印标签和存放")
         if self.is_virtual_composite_parent:
@@ -2437,6 +2445,8 @@ def create_product(
 
 def _create_product(payload, db, user, *, commit=True) -> dict:
     require_customer_access(payload.customer_id, current_user=user, db=db)
+    if payload.box_style == "BOM组合" and commit:
+        raise HTTPException(422, "BOM组合请同时填写子件和每套用量后保存")
     supply_updates = _normalize_product_external_supply(db, payload=payload)
     _normalize_product_joining_method(payload)
     _normalize_product_mold_binding(payload)
@@ -2508,6 +2518,11 @@ def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
     require_customer_access(payload.customer_id, current_user=user, db=db)
+    if payload.box_style == "BOM组合" and commit:
+        from app.models.multilevel_bom import ProductBomProfile
+        profile = db.get(ProductBomProfile, product_id)
+        if not profile or profile.source != "assembled" or profile.delivery_mode != "parent":
+            raise HTTPException(422, "BOM组合请同时保存组套配方，不能只修改箱型")
     updates = _validated_product_versioned_updates(
         db,
         product=product,

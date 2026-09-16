@@ -498,6 +498,8 @@ def _replace_product_bom(
         raise CompositeBOMError("请选择产品的自制、外购或组套来源")
     material_mode = material_mode if material_mode is not None else (profile.material_mode if profile else None)
     delivery_mode = delivery_mode if delivery_mode is not None else (profile.delivery_mode if profile else None)
+    if parent.box_style == "BOM组合" and (mode != "assembled" or delivery_mode != "parent"):
+        raise CompositeBOMError("BOM组合必须采用零件组装、父件交付；请同时保存箱型和配方")
     if material_mode is not None or delivery_mode is not None or mode == "separate":
         if mode == "legacy" or material_mode != "expand_children" or delivery_mode not in {"parent", "components"}:
             raise CompositeBOMError("请明确保存报料展开方式、库存方式和交货方式")

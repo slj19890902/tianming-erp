@@ -47,6 +47,22 @@ def product_readiness(product: object) -> dict[str, object]:
     if not str(_value(product, "product_name") or "").strip():
         missing.append(("product_name", "产品名称未填写"))
 
+    if _value(product, "box_style") == "BOM组合":
+        from sqlalchemy import inspect
+        from sqlalchemy.orm import object_session
+        from app.models.multilevel_bom import ProductBomProfile
+        session = object_session(product) if inspect(product, raiseerr=False) is not None else None
+        profile = session.get(ProductBomProfile, product.id) if session else None
+        if not profile or profile.source != "assembled" or profile.delivery_mode != "parent" or not _value(product, "is_composite"):
+            missing.append(("bom_components", "组套配方尚未保存"))
+        return {
+            "ready": not missing,
+            "order_save_missing_labels": [label for _, label in missing],
+            "status": "资料已完善" if not missing else "待完善",
+            "missing_fields": [field for field, _ in missing],
+            "missing_labels": [label for _, label in missing],
+        }
+
     if bool(_value(product, "is_virtual_composite_parent")):
         if not bool(_value(product, "is_composite")):
             missing.append(("bom_components", "虚拟组合套装尚未配置 BOM 组件"))

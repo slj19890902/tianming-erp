@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.436"
-APP_VERSION_NAME = "生产历史分页与待入库归位"
+APP_VERSION = "v0.22.437"
+APP_VERSION_NAME = "BOM组套成品箱型入口"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4275,3 +4275,6 @@ APP_CHANGELOG = [*(f"v0.22.435：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["生产完工历史及归位分页不再因行高变化跳回第一页。", "待送成品归位按待入库区现存批次分页展示，包含部分送货余货、外购及盘点成品；归位沿用库存预占、版本和审计，不重复入库。"]
 APP_VERIFICATION_STEPS = ["打开生产完工历史，连续点击下一页，确认页码与记录都改变。", "打开待送成品归位，核对总数、翻页和存放位置；仅对实际已搬运货物选择目标位置并归位。"]
 APP_CHANGELOG = [*(f"v0.22.436：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["常用箱新增BOM组合箱型，默认按套、零件组装和父件交付，不要求父件纸板材质及报料尺寸。", "父件与配方原子保存，合法配方显示资料完善；实际组套确认才消耗子件并继承成本，可选父件标签，历史订单和库存不自动改写。"]
+APP_VERIFICATION_STEPS = ["常用箱选择BOM组合，核对单位套、子件每套用量及按套售价；按实际业务保存并重新打开核对。", "核对父件不要求纸板资料，空配方明确阻止保存；只有实际插合完成才确认组套，勿为验收重复入库。"]
+APP_CHANGELOG = [*(f"v0.22.437：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

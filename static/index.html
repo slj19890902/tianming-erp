@@ -6584,11 +6584,12 @@
                 <div class="field"><label>箱型</label>
                   <select class="select" v-model="productForm.box_style" @change="onProductBoxStyleChange">
                     <option value="">请选择箱型</option>
+                    <option value="BOM组合">BOM组合（组套成品）</option>
                     <option v-for="boxType in productBoxStyleOptions" :key="boxType" :value="boxType">{{ boxType }}</option>
-                    <option v-if="productForm.box_style && !productBoxStyleOptions.includes(productForm.box_style)" :value="productForm.box_style">原记录：{{ productForm.box_style }}</option>
+                    <option v-if="productForm.box_style && productForm.box_style!=='BOM组合' && !productBoxStyleOptions.includes(productForm.box_style)" :value="productForm.box_style">原记录：{{ productForm.box_style }}</option>
                   </select>
                 </div>
-                <div v-if="productForm.box_style!=='其他'" class="field product-supply-compact"><label>结构</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板生产</option><option value="mixed_bom">纸板＋外购组件</option></select></div>
+                <div v-if="!['其他','BOM组合'].includes(productForm.box_style)" class="field product-supply-compact"><label>结构</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板生产</option><option value="mixed_bom">纸板＋外购组件</option></select></div>
               </div>
               <div class="muted" style="font-size:12px;margin:4px 0">直接外购成品：选“其他”并绑定供应商产品；外购彩印纸板、本厂模切粘合：选实际箱型＋“纸板生产”，填写本厂加工资料。</div>
 
@@ -6642,7 +6643,7 @@
                 <div v-if="canViewCosts && productForm.supply_mode==='external_purchase'" class="muted sensitive-price" style="margin-top:6px">上表是供应商采购成本；下方“客户默认销售单价”是对客户报价，两者独立，系统不会互相覆盖。</div>
               </div>
 
-              <div v-if="productForm.supply_mode!=='external_purchase'" class="product-form-row product-size-report-row" :class="productSizeReportRowClass(productForm.box_style)">
+              <div v-if="productForm.supply_mode!=='external_purchase' && productForm.box_style!=='BOM组合'" class="product-form-row product-size-report-row" :class="productSizeReportRowClass(productForm.box_style)">
                 <div v-if="productRequiresDimension(productForm.box_style,'length_mm')" class="field product-dimension-field"><label>长(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.length_mm" /></div>
                 <div v-if="productRequiresDimension(productForm.box_style,'width_mm')" class="field product-dimension-field"><label>宽(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.width_mm" /></div>
                 <div v-if="productRequiresDimension(productForm.box_style,'height_mm')" class="field product-dimension-field"><label>高(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.height_mm" /></div>
@@ -6745,7 +6746,7 @@
                 <div v-if="productCreaseMismatch" class="field wide product-crease-warning status orange" style="display:block">{{ productCreaseMismatch }}</div>
               </div>
 
-              <div v-if="productForm.supply_mode!=='external_purchase'" class="product-material-workbench">
+              <div v-if="productForm.supply_mode!=='external_purchase' && productForm.box_style!=='BOM组合'" class="product-material-workbench">
                 <div v-if="productEditorOptionsLoading" class="muted" style="margin-bottom:8px">正在读取材质与模具选择数据…</div>
                 <div v-else-if="productEditorOptionsError" class="notice error" style="margin-bottom:8px">{{ productEditorOptionsError }} <button type="button" class="btn small" @click="ensureProductEditorOptions({force:true})">重试</button></div>
                 <div class="product-material-controls">
@@ -6904,7 +6905,7 @@
               </div>
 
               <div class="product-form-row product-print-row">
-                <div v-if="productForm.supply_mode!=='external_purchase'" class="field product-process-field"><label>结合 / 模切</label>
+                <div v-if="productForm.supply_mode!=='external_purchase' && productForm.box_style!=='BOM组合'" class="field product-process-field"><label>结合 / 模切</label>
                   <div class="process-options">
                     <label class="process-option"><input type="checkbox" value="粘贴" v-model="productForm._production_processes" @change="onProductProcessesChanged" />粘贴</label>
                     <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" @change="onProductProcessesChanged" />打钉</label>
@@ -6913,7 +6914,7 @@
                   </div>
                 </div>
                 <div v-if="productForm.supply_mode!=='external_purchase' && productUsesMold(productForm)" class="field product-mold-adjacent"><label>生产模具 / 货架位置（必选）</label><search-select v-model="productForm.mold_tool_id" :options="moldToolSelectOptions()" label-key="_label" value-key="id" placeholder="输入模具标签名称、客户或位置" :allow-empty="false" @search="searchMoldTools"></search-select><div v-if="productMoldError" class="status orange" style="display:block;margin-top:4px">{{ productMoldError }}</div></div>
-                <div v-if="productForm.supply_mode!=='external_purchase'" class="product-printing-direct-workbench" :class="{'has-direct-colors':productUsesDirectPrinting(productForm)}">
+                <div v-if="productForm.supply_mode!=='external_purchase' && productForm.box_style!=='BOM组合'" class="product-printing-direct-workbench" :class="{'has-direct-colors':productUsesDirectPrinting(productForm)}">
                   <div class="field product-print-status-field"><label>印刷情况</label>
                     <select class="select" v-model="productForm._printing_situation" @change="onProductPrintingSituationChanged">
                       <option value="无印刷">无印刷</option>
@@ -6964,7 +6965,7 @@
                 </div>
                 <div class="product-production-label-config">
                   <label class="product-production-label-switch"><input type="checkbox" v-model="productForm.production_label_enabled" @change="onProductProductionLabelToggle" />打印标签</label>
-                  <div class="field product-production-label-quantity"><label>数量</label><input class="input" type="number" min="1" max="999" step="1" inputmode="numeric" v-model="productForm.production_label_units_per_label" :disabled="!productForm.production_label_enabled" aria-label="每张标签代表只数" /><div v-if="productProductionLabelError" class="status orange" style="display:block;margin-top:4px">{{ productProductionLabelError }}</div></div>
+                  <div class="field product-production-label-quantity"><label>{{ productForm.box_style==='BOM组合' ? '每张套数' : '数量' }}</label><input class="input" type="number" min="1" max="999" step="1" inputmode="numeric" v-model="productForm.production_label_units_per_label" :disabled="!productForm.production_label_enabled" :aria-label="productForm.box_style==='BOM组合' ? '每张标签代表套数' : '每张标签代表只数'" /><div v-if="productProductionLabelError" class="status orange" style="display:block;margin-top:4px">{{ productProductionLabelError }}</div></div>
                 </div>
               </div>
 
@@ -7003,14 +7004,15 @@
                   <div v-if="receiptStorage.message" role="status">{{ receiptStorage.message }}</div>
                 </div>
               </details>
-              <details class="product-secondary-disclosure">
+              <details class="product-secondary-disclosure" :open="productForm.box_style==='BOM组合'">
               <summary>组合 BOM</summary>
+              <div v-if="productForm.box_style==='BOM组合'" class="notice">每 1 套填写子件用量；父件不报料，组装确认后扣子件、入成套库存。按套计价，可选打印标签。</div>
               <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
                 <div class="bom-editor-heading">
                   <div class="bom-editor-heading-controls">
-                    <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="!productForm.id" /> 启用</label>
+                    <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="productForm.box_style==='BOM组合' || !productForm.id" /> 启用</label>
                     <label class="remember-line">产品形成方式
-                      <select class="select" aria-label="BOM库存来源" v-model="bomEditor.inventory_mode" @change="onBomInventoryModeChange" :disabled="!!bomEditor.subkit?.enabled">
+                      <select class="select" aria-label="BOM库存来源" v-model="bomEditor.inventory_mode" @change="onBomInventoryModeChange" :disabled="productForm.box_style==='BOM组合' || !!bomEditor.subkit?.enabled">
                         <option v-if="bomEditor.persisted_inventory_mode === 'legacy'" value="legacy">保留旧规则</option>
                         <option value="manufactured">自己生产</option>
                         <option value="assembled">零件组装</option>
@@ -7019,12 +7021,12 @@
                       </select>
                     </label>
                     <label class="remember-line">父件单位
-                      <select class="select" aria-label="产品库存单位" v-model="productForm.unit">
+                      <select class="select" aria-label="产品库存单位" v-model="productForm.unit" :disabled="productForm.box_style==='BOM组合'">
                         <option v-if="productForm.unit && !['只','套','片'].includes(productForm.unit)" :value="productForm.unit">{{ productForm.unit }}</option>
                         <option v-for="unit in ['只','套','片']" :key="unit" :value="unit">{{ unit }}</option>
                       </select>
                     </label>
-                    <details class="bom-more-settings"><summary>更多设置</summary><div class="bom-more-settings-body">
+                    <details v-if="productForm.box_style!=='BOM组合'" class="bom-more-settings"><summary>更多设置</summary><div class="bom-more-settings-body">
                     <label class="remember-line">计价方式
                       <select class="select" v-model="productForm.combination_mode" @change="productForm.is_virtual_composite_parent = productForm.combination_mode === 'parent_priced_set' ? productForm.is_virtual_composite_parent : false; productForm.composite_fulfillment_mode = productForm.combination_mode === 'component_priced' ? 'component_delivery' : productForm.composite_fulfillment_mode">
                         <option value="parent_priced_set">整套计价</option>
@@ -7044,7 +7046,7 @@
                       </select>
                     </label>
                     </div></details>
-                    <button v-show="bomEditor.enabled" type="button" class="btn small" :disabled="!productForm.id || !!bomEditor.error" @click="addBomComponent">添加子件</button>
+                    <button v-show="bomEditor.enabled" type="button" class="btn small" :disabled="!productForm.customer_id || !!bomEditor.error" @click="addBomComponent">添加子件</button>
                   </div>
                 </div>
                 <div v-if="bomEditor.enabled" class="bom-relationship-summary">
@@ -11215,6 +11217,7 @@
           },
           isForcedPassword() { return this.modal?.type === "password" && this.modal.force; },
           productCreaseMismatch() {
+            if (this.productForm.box_style === "BOM组合") return "";
             if (!this.modal || this.modal.type !== "product") return "";
             if (this.productForm.supply_mode === "external_purchase") return "";
             if (this.productForm.id && !this.productReportCreaseTouched()) return "";
@@ -11246,12 +11249,14 @@
             ) || "";
           },
           productMoldError() {
+            if (this.productForm.box_style === "BOM组合") return "";
             if (!this.modal || this.modal.type !== "product") return "";
             if (this.productForm.supply_mode === "external_purchase") return "";
             if (!this.productUsesMold(this.productForm)) return "";
             return this.productForm.mold_tool_id ? "" : "生产工艺包含模切，必须选择已登记的生产模具及货架位置";
           },
           productPrintingPlateError() {
+            if (this.productForm.box_style === "BOM组合") return "";
             if (!this.modal || this.modal.type !== "product") return "";
             if (this.productForm.supply_mode === "external_purchase") return "";
             if (!this.productHasPrinting(this.productForm) || this.productForm.printing_plate_mode !== "plate") return "";
@@ -11265,6 +11270,7 @@
             return "";
           },
           productPrintingColorError() {
+            if (this.productForm.box_style === "BOM组合") return "";
             if (this.productForm.supply_mode === "external_purchase") return "";
             if (!this.modal || this.modal.type !== "product" || !this.productUsesDirectPrinting(this.productForm)) return "";
             if (this.productForm.id && !this.productForm._printing_colors_touched) return "";
@@ -12418,7 +12424,7 @@
           },
           buildProductWritePayload(options = null) {
             const isExternal = this.productForm.supply_mode === "external_purchase";
-            const productCreaseError = isExternal ? null : this.validateProductCreaseAndReport(this.productForm);
+            const productCreaseError = isExternal || this.productForm.box_style === "BOM组合" ? null : this.validateProductCreaseAndReport(this.productForm);
             if (productCreaseError) throw new Error(productCreaseError);
             if (!isExternal && this.productMoldError) throw new Error(this.productMoldError);
             if (!isExternal && this.productPrintingPlateError) throw new Error(this.productPrintingPlateError);
@@ -25900,8 +25906,8 @@
             }
           },
           addBomComponent() {
-            if (!this.productForm.id) {
-              this.showToast("请先保存父产品，再添加内部组件", true);
+            if (!this.productForm.customer_id) {
+              this.showToast("请先选择客户，再添加子件", true);
               return;
             }
             this.bomEditor.components.push({...blankBomComponent(), inventory_relation:
@@ -26000,6 +26006,7 @@
           },
           validateProductBom() {
             const mode = this.bomEditor.inventory_mode || "legacy";
+            if (this.productForm.box_style === "BOM组合" && (mode !== "assembled" || this.productForm.unit !== "套" || this.productForm.combination_mode !== "parent_priced_set" || this.productForm.is_virtual_composite_parent)) return "BOM组合须按套组装、整套计价，请重新选择BOM组合箱型";
             if (mode === "assembled" && this.productForm.composite_fulfillment_mode !== "parent_delivery") return "组装成套后按父件交货；如需子件实发，请选择子件分存";
             if (mode === "assembled" && (!this.bomEditor.enabled || !this.bomEditor.components.some(row => row.inventory_relation === "assembly"))) return "组套成品至少需要一个组装子件";
             if (!this.bomEditor.enabled) return "";
@@ -29596,6 +29603,17 @@
           onProductBoxStyleChange() {
             this.productForm.box_style = this.normalizeBoxTypeDisplay(this.productForm.box_style);
             const selected = this.productForm.box_style;
+            if (selected === "BOM组合") {
+              if (this.bomEditor.subkit?.enabled) {
+                this.showToast("旧收料组套规则须先完成受控转换，不能直接改为BOM组合", true);
+                return;
+              }
+              Object.assign(this.productForm, {unit:"套", supply_mode:"corrugated_production", box_category:"normal", is_virtual_composite_parent:false, combination_mode:"parent_priced_set", composite_fulfillment_mode:"parent_delivery"});
+              Object.assign(this.productForm, {material_id:null, mold_tool_id:null, production_process:"", _production_processes:[], _production_process_legacy:"", print_content:"无印刷", printing_plate_mode:"no_plate", _printing_situation:"无印刷"});
+              Object.assign(this.bomEditor, {enabled:true, inventory_mode:"assembled"});
+              this.onBomInventoryModeChange();
+              return;
+            }
             if (selected === "其他") {
               this.productForm.supply_mode = "external_purchase";
               this.$nextTick(()=>this.loadProductExternalSupplyCandidates());

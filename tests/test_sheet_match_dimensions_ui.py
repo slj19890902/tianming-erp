@@ -13,11 +13,10 @@ def test_mobile_and_desktop_share_matching_contract():
     mobile=(ROOT/'static/mobile_erp.html').read_text(encoding='utf-8')
     for source in (desktop,mobile):
         assert 'material-candidates' in source
-        assert 'near_dimension_match' in source
         assert 'dimension_basis' in source
-        assert 'dimension_notice' in source
-        assert 'showCuttable' in source
-        assert '非近尺寸推荐' in source
+        assert 'box_styles' in source
+        assert '不含衬板' in source and '仅衬板' in source
+        assert 'match_reason' in source
 
 
 def test_mobile_inline_scripts_parse(tmp_path):

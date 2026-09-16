@@ -3509,6 +3509,11 @@ def complete_production_batch(
                 pieces_per_box,
             )
             received_now = max(received_now, allowed_input_now)
+        from app.services.cut_production_contract import completion_contract
+        cut_contract = completion_contract(db, task, item, int(task.planned_quantity or 0))
+        if cut_contract:
+            allowed_input_now = cut_contract['input_quantity']
+            received_now = allowed_input_now
         prior_input = int(
             db.scalar(
                 select(
@@ -3539,6 +3544,10 @@ def complete_production_batch(
             factor,
             pieces_per_box,
         )
+        if cut_contract:
+            if material_input != cut_contract['input_quantity'] or prior_input:
+                raise ProductionWorkflowError('裁切批次请按本次预占片料整批确认；拆分数量应先调整本批预占', 409)
+            planned_output = cut_contract['planned_output']
         if planned_output <= 0:
             raise ProductionWorkflowError(
                 f"本次实际投入不足以组成 1 个成品；每箱需要 {pieces_per_box} 片",
@@ -3694,6 +3703,7 @@ def complete_production_batch(
             if direct_ground_target is not None:
                 claimed_direct_location_ids.add(int(location.id))
         prepared[task.id] = {
+            "cut_contract": cut_contract,
             "received": received_now,
             "allowed_input": allowed_input_now,
             "factor": factor,
@@ -3826,6 +3836,10 @@ def complete_production_batch(
             planned_quantity=int(facts["planned"]),
             operator_id=operator_id,
         )
+        if facts['cut_contract'] and completion.inventory_lot_id:
+            from app.services.cut_production_contract import freeze_completion_cost
+            freeze_completion_cost(db.get(InventoryLot, completion.inventory_lot_id), completion,
+                facts['cut_contract'], now)
         result = db.execute(
             update(ProductionTask)
             .where(
@@ -3840,7 +3854,7 @@ def complete_production_batch(
                 material_received_quantity=int(facts["received"]),
                 material_input_quantity=int(facts["allowed_input"]),
                 output_factor=int(facts["factor"]),
-                planned_quantity=production_output_quantity(
+                planned_quantity=int(facts['planned']) if facts['cut_contract'] else production_output_quantity(
                     int(facts["allowed_input"]),
                     int(facts["factor"]),
                     int(facts["pieces_per_box"]),
@@ -4361,6 +4375,9 @@ def adjust_production_completion_actual_quantity(
 
     completion.quantity = desired
     completion.actual_output_quantity = desired
+    if lot.cost_snapshot_source == 'sheet_cut_production':
+        from app.services.cut_production_contract import freeze_completion_cost
+        freeze_completion_cost(lot, completion, json.loads(lot.cost_snapshot_detail_json), utc_now_naive())
     if completion.initial_disposition == "stock":
         completion.direct_delivery_quantity = 0
         completion.stock_quantity = desired
@@ -5868,7 +5885,7 @@ def _active_customer_board_preparation_sources(
     result: list[dict] = []
     for reservation, lot, location, floor, area in rows:
         detail = lot.semi_finished_detail
-        if detail is None or detail.owner_customer_id is None:
+        if detail is None:
             continue
         remaining_sheets = max(
             int(reservation.reserved_stock_quantity or 0)
@@ -5903,7 +5920,7 @@ def _active_customer_board_preparation_sources(
                 "remaining_sheet_quantity": remaining_sheets,
                 "remaining_product_quantity": remaining_pieces,
                 "stock_yield_per_sheet": int(
-                    detail.stock_yield_per_sheet or reservation.yield_factor or 1
+                    reservation.yield_factor or detail.stock_yield_per_sheet or 1
                 ),
                 "display_name": (
                     detail.internal_name
@@ -6394,6 +6411,14 @@ def list_production_tasks(
                 )
             ),
         })
+        if task.status == PENDING:
+            from app.services.cut_production_contract import completion_contract
+            cut_contract = completion_contract(db, task, item, int(task.planned_quantity or 0), require_cost=False)
+            if cut_contract:
+                result[-1].update(cut_contract=cut_contract,
+                    material_input_quantity=cut_contract['input_quantity'],
+                    available_material_input_quantity=cut_contract['input_quantity'],
+                    planned_output_quantity=cut_contract['planned_output'])
     for row in result:
         order_item_id = int(row["order_item_id"])
         receipt_purpose_managed = order_item_id in receipt_purpose_summaries

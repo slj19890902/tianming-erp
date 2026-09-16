@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.447"
-APP_VERSION_NAME = "片料匹配统一毫米与净片尺寸"
+APP_VERSION = "v0.22.448"
+APP_VERSION_NAME = "双向片料用途与裁切换算"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4309,3 +4309,6 @@ APP_CHANGELOG = [*(f"v0.22.446：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["货位匹配统一使用明确的毫米尺寸：原纸看报料尺寸，隔板衬板净片看实际净尺寸，不再把旧无单位纸板值当毫米。", "电脑与手机默认只显示长宽各相差不超过10%的近尺寸产品；其他可裁切项单独展开，保留楞向、面纸和人工加工核对。"]
 APP_VERIFICATION_STEPS = ["打开360×125mm、B楞春山隔板的匹配产品，确认不再出现1500×910mm的误推荐，显示净片毫米尺寸。", "核对电脑及手机的箱型筛选、其他可裁切项和已保存用途；不得为验收改库存或保存虚构用途。"]
 APP_CHANGELOG = [*(f"v0.22.447：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["库存找产品与订单找片料统一核对用途、楞型、纸色和毫米尺寸；已确认加工用途优先，未知模切用途不能凭尺寸直接采用。", "矩形裁切按每次预占冻结开数，数量、生产投入及继承材料成本不改产品主档开数；未裁切不得直接发货。", "电脑和手机增加不含衬板、仅衬板、全部筛选及完整箱型；说明折叠，候选精简显示。"]
+APP_VERIFICATION_STEPS = ["刷新依工976×1303片料匹配，核对21301411、21301501的已确认用途及真实R7A材质。", "衬板1000×200查半成品，核对1120×440理论一张两片，确认修边刀缝；只有实际订单需要时采用，裁切完成才确认生产。", "核对两端异形箱和衬板筛选、实际数量与货位；混合来料未齐套或来源成本缺失时按明确提示补齐，不为验收虚构业务。"]
+APP_CHANGELOG = [*(f"v0.22.448：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

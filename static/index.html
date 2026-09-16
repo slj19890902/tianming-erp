@@ -7673,7 +7673,7 @@
                                     <td>{{semiStockField({candidates:[candidate]},'flute_type')}}</td><td>{{candidate.material_code || '—'}}<info-note v-if="candidate.signature_differences?.length || candidate.warning_messages?.length">{{[...(candidate.signature_differences||[]),...(candidate.warning_messages||[])].join('；')}}</info-note></td>
                                     <td>{{semiStockField({candidates:[candidate]},'processing')}}</td>
                                     <td>{{candidate.available_stock_quantity}} 张<small v-if="candidate.deductible_requirement_quantity!==candidate.available_stock_quantity">（可抵 {{candidate.deductible_requirement_quantity}} 片）</small><div v-if="item._inventory.semi[component].allocations.some(a=>a.candidate.lot_id===candidate.lot_id)" class="status green">采用 {{item._inventory.semi[component].allocations.filter(a=>a.candidate.lot_id===candidate.lot_id).reduce((n,a)=>n+Number(a.stock_quantity||0),0)}} 张</div></td><td><order-stock-location :candidate="candidate" :item="item"></order-stock-location></td>
-                                    <td class="semi-stock-actions"><button class="btn success small" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" :title="isGeneralSemiFinishedCandidate(candidate)?'采用即确认跨客户使用':'采用即确认此批次适配'" @click="isDirectSemiDeductionCandidate(candidate)?confirmDirectSemiDeduction(item,component,candidate):confirmOrderLineInventory(item,component,candidate,semiCandidateNeedsOverride(candidate))">采用</button><button class="btn danger small" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,{candidates:[candidate]},false)">不采用</button>
+                                    <td class="semi-stock-actions"><small>{{candidate.match_reason}}</small><button class="btn success small" :disabled="candidate.selectable===false || item._inventory.loading || item._inventory.stale || item._inventory.api_error" :title="candidate.cut_plan?'按此理论开数采用，需核对修边/刀缝；裁切完成后才能出货':isGeneralSemiFinishedCandidate(candidate)?'采用即确认跨客户使用':'采用即确认此批次适配'" @click="isDirectSemiDeductionCandidate(candidate)?confirmDirectSemiDeduction(item,component,candidate):confirmOrderLineInventory(item,component,candidate,semiCandidateNeedsOverride(candidate))">{{candidate.selectable===false?'用途待核':'采用'}}</button><button class="btn danger small" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,{candidates:[candidate]},false)">不采用</button>
                                     </td>
                                   </tr><tr v-if="!pdfMaterialCandidates(item,component,item._inventory_tab).length"><td colspan="9">暂无符合条件的可用材料</td></tr>
                                 </tbody></table>
@@ -7932,7 +7932,7 @@
                               <td>{{ semiStockField(group,'processing') }}</td>
                               <td><strong>{{ group.quantity }} 张</strong><div v-if="group.adopted" class="status green">采用 {{ group.adopted }} 张</div><small v-else-if="group.rejected" class="muted"> · 不采用</small></td>
                               <td><order-stock-location :candidate="group.candidate" :item="item"></order-stock-location></td>
-                              <td class="semi-stock-actions"><button class="btn small success" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,true)">采用</button><button class="btn small danger" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,false)">不采用</button></td>
+                              <td class="semi-stock-actions"><small>{{group.candidates.map(c=>c.match_reason).filter(Boolean).join('；')}}</small><button class="btn small success" type="button" :disabled="group.candidates.every(c=>c.selectable===false) || item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,true)">采用</button><button class="btn small danger" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,false)">不采用</button></td>
                             </tr></tbody>
                           </table>
                           <span v-else class="muted">暂无可用库存</span>
@@ -14314,7 +14314,7 @@
             const ids = new Set(group.candidates.map(c => Number(c.lot_id)));
             const excluded = new Set(part._excluded_lot_ids || []);
             let selected = (part.selected_candidates || []).filter(c => !ids.has(Number(c.lot_id)));
-            if (adopt) { selected.push(...group.candidates); ids.forEach(id => excluded.delete(id)); }
+            if (adopt) { selected.push(...group.candidates.filter(c=>c.selectable!==false)); ids.forEach(id => excluded.delete(id)); }
             else ids.forEach(id => excluded.add(id));
             part._excluded_lot_ids = [...excluded];
             part.selected_candidates = selected; part.selected = selected[0] || null;
@@ -14637,6 +14637,7 @@
             } catch (error) { line._inventory.api_error = true; line._inventory.error = `人工候选加载失败：${this.errorMessage(error)}`; }
           },
           confirmOrderLineInventory(line, component, candidate=null, manual=false) {
+            if (candidate?.selectable === false) { this.showToast("该批次用途待核，请管理员先维护实际适用产品", true); return; }
             const state = component === "finished" ? line._inventory.finished : line._inventory.semi[component];
             const general = this.isGeneralSemiFinishedCandidate(candidate);
             const candidates = candidate ? [candidate] : this.safeSystemInventoryCandidates(line, component);
@@ -20063,6 +20064,7 @@
           productionTheoreticalOutput(row) {
             if (row?.completion_actionable === false) return 0;
             const input = Math.max(Number(row.actual_input_quantity || 0), 0);
+            if (row?.cut_contract) return input === Number(row.cut_contract.input_quantity) ? Number(row.cut_contract.planned_output) : 0;
             const factor = Math.max(Number(row.output_factor || 1), 1);
             const piecesPerBox = Math.max(Number(row.pieces_per_box || 1), 1);
             return Math.floor(input * factor / piecesPerBox);

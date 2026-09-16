@@ -44,6 +44,10 @@ class GoodsFacts(BaseModel):
     face_paper: Literal["kraft", "white", "unknown"] = "kraft"
     processing: Literal["raw", "cut", "die_cut", "creased", "printed"] = "raw"
     mold_tool_id: int | None = Field(default=None, ge=1)
+    mold_version: int | None = Field(default=None, ge=1)
+    blank_unprinted: bool = False
+    cut_trim_mm: float = Field(default=0, ge=0, le=500, allow_inf_nan=False)
+    cut_kerf_mm: float = Field(default=0, ge=0, le=100, allow_inf_nan=False)
     allow_material_substitution: bool = False
     usage_confirmed: bool = False
     note: str = Field(default="", max_length=1000)
@@ -123,6 +127,11 @@ def validate_references(db, facts):
             raise HTTPException(422, "模具不存在或不可用")
         if any(p.mold_tool_id != mold.id for p in products):
             raise HTTPException(422, "已选产品的模具不一致")
+        facts.mold_version = mold.version
+    else:
+        facts.mold_version = None
+    if facts.processing != "die_cut":
+        facts.blank_unprinted = False
     material = db.get(Material, facts.verified_material_id) if facts.verified_material_id else None
     if facts.verified_material_id and (not material or not material.is_active):
         raise HTTPException(422, "材质不存在或已停用")

@@ -1707,6 +1707,7 @@ class InventoryReservation(Base):
     reserved_stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     credited_requirement_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     yield_factor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cut_plan_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     consumed_stock_quantity: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False
     )

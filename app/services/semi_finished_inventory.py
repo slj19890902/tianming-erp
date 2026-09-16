@@ -48,6 +48,7 @@ from app.services.warehouse_inventory import (
     utc_now,
 )
 from app.services.requisition_quantities import cutting_factor
+from app.services.sheet_cut_plan import rectangular_cut_plan
 
 
 VALID_COMPONENT_TYPES = {"whole", "cover", "base"}
@@ -87,6 +88,8 @@ class SemiFinishedCandidate:
     match_score: int = 100
     recommendation_tier: str = "near"
     dimension_distance: float = 0.0
+    cut_plan: dict | None = None
+    selectable: bool = True
 
 
 def _rank_sheet_candidates(db, product_id, expected, candidates):
@@ -102,7 +105,15 @@ def _rank_sheet_candidates(db, product_id, expected, candidates):
                 (detail.board_width_mm, expected.board_width_mm)]
         valid = all(a and b and a > 0 and b > 0 for a, b in axes)
         near = valid and all(abs(a-b)*10 <= b for a, b in axes)
+        known = processed_match(db, row.lot, product, expected)
+        if known and known["known"]:
+            near = True
         distance = sum(abs(a-b)/b for a, b in axes) if valid else 1e9
+        if known and known["known"]:
+            distance = -1
+        elif row.cut_plan:
+            near = True  # A valid multi-up plan is recommended even beyond 10% dimensions.
+            distance = 1 - row.cut_plan['utilization'] / 100
         rows.append(replace(row, recommendation_tier="near" if near else "more",
                             dimension_distance=distance,
                             automatic_recommendation=row.automatic_recommendation and near))
@@ -669,6 +680,11 @@ def _lot_eligibility_scope(
     product = db.get(Product, product_id)
     if product is not None and processed_match(db, lot, product, expected):
         return "customer_generic"
+    profile = goods_profile(db, lot)
+    if profile and profile.get("processing") in {"die_cut", "printed", "creased"}:
+        return None
+    if product is not None and rectangular_cut_plan(db, lot, product, expected):
+        return "customer_generic"
     if product is None or qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code):
         return None
     profile = goods_profile(db, lot)
@@ -719,8 +735,13 @@ def ensure_semi_finished_lot_eligibility(
         raise WarehouseInventoryError("半成品库存组件与订单需求不一致", 409)
     processed = processed_match(db, lot, product, expected)
     if processed:
-        if not processed["known"] and not reviewed:
-            raise WarehouseInventoryError("加工片料用途待确认，请点击该批次采用", 409)
+        if not processed["known"]:
+            raise WarehouseInventoryError("加工片料用途待确认：请管理员在库存用途维护确认具体产品、模具及加工状态，不能仅按尺寸采用", 409)
+        return "customer_generic"
+    profile = goods_profile(db, lot)
+    if profile and profile.get("processing") in {"die_cut", "printed", "creased"}:
+        raise WarehouseInventoryError("加工片料用途或模具版本不符，请先核对原加工记录", 409)
+    if rectangular_cut_plan(db, lot, product, expected):
         return "customer_generic"
     issues = qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code)
     if issues:
@@ -1056,6 +1077,8 @@ def browse_semi_finished_inventory_for_product(
                 "每次半成品库存抵扣都必须人工确认。",
                 "人工浏览候选必须核对差异并明确 override。",
             )
+        cut_plan = rectangular_cut_plan(db, lot, product, expected)
+        processed = processed_match(db, lot, product, expected)
         candidates.append(
             SemiFinishedCandidate(
                 lot=lot,
@@ -1063,11 +1086,14 @@ def browse_semi_finished_inventory_for_product(
                 match_rule_id=None,
                 available_stock_quantity=lot.quantity_available,
                 deductible_requirement_quantity=(
-                    lot.quantity_available * detail.stock_yield_per_sheet
+                    lot.quantity_available * (cut_plan["yield_factor"] if cut_plan else detail.stock_yield_per_sheet)
                 ),
                 signature_differences=differences,
                 warning_codes=warning_codes,
                 warning_messages=warning_messages,
+                cut_plan=cut_plan,
+                selectable=not processed or processed["known"],
+                match_reason=processed["reason"] if processed else (f"需裁切 · 一张出{cut_plan['yield_factor']}片" if cut_plan else ""),
             )
         )
     return _rank_sheet_candidates(db, product.id, expected, candidates)
@@ -1123,6 +1149,7 @@ def _semi_finished_candidates_for_signature(
         if scope == "customer_generic":
             differences = _customer_generic_signature_differences(expected, detail)
             processed = processed_match(db, lot, db.get(Product, product_id), expected)
+            cut_plan = rectangular_cut_plan(db, lot, db.get(Product, product_id), expected)
             codes = [MANUAL_CONFIRM_WARNING, CUSTOMER_GENERIC_SEMI_FINISHED_STOCK]
             messages = [
                 "每次半成品库存抵扣都必须人工确认。",
@@ -1138,14 +1165,16 @@ def _semi_finished_candidates_for_signature(
                     match_rule_id=None,
                     available_stock_quantity=lot.quantity_available,
                     deductible_requirement_quantity=(
-                        lot.quantity_available * detail.stock_yield_per_sheet
+                        lot.quantity_available * (cut_plan["yield_factor"] if cut_plan else detail.stock_yield_per_sheet)
                     ),
                     signature_differences=differences,
                     warning_codes=tuple(codes),
-                    warning_messages=(processed["reason"],) if processed else tuple(messages),
+                    warning_messages=(processed["reason"],) if processed else ((f"需裁切：理论一张出{cut_plan['yield_factor']}片；采用前核对修边/刀缝",) if cut_plan else tuple(messages)),
                     automatic_recommendation=bool(processed and processed["automatic"]),
-                    match_reason=processed["reason"] if processed else "",
+                    match_reason=processed["reason"] if processed else (f"需裁切 · 一张出{cut_plan['yield_factor']}片" if cut_plan else ""),
                     match_score=processed["score"] if processed else 100,
+                    cut_plan=cut_plan,
+                    selectable=not processed or processed["known"],
                 )
             )
             continue
@@ -1525,13 +1554,6 @@ def confirm_semi_finished_match(
             )
             if mapping is None:
                 raise WarehouseInventoryError("规则产品关联并发保存失败，请重试", 409)
-    if processed and not processed["known"]:
-        # This explicit adoption confirms only this lot/product. Preserve all material and quantity facts.
-        if not db.scalar(select(SemiFinishedLotAllowedProduct.id).where(
-            SemiFinishedLotAllowedProduct.inventory_lot_id == lot.id,
-            SemiFinishedLotAllowedProduct.product_id == product_id)):
-            db.add(SemiFinishedLotAllowedProduct(inventory_lot_id=lot.id, product_id=product_id,
-                confirmed_by=operator_id, confirmed_at=now))
     db.flush()
     warning_codes: list[str] = []
     if scope == "general":
@@ -2325,11 +2347,13 @@ def reserve_semi_finished_inventory(
             )
             detail = lot.semi_finished_detail
             remaining_target = target - allocated
-            capacity = lot.quantity_available * detail.stock_yield_per_sheet
+            cut_plan = rectangular_cut_plan(db, lot, db.get(Product, _requirement_product_id(db, requirement)), requirement_signature(requirement))
+            allocation_yield = cut_plan["yield_factor"] if cut_plan else detail.stock_yield_per_sheet
+            capacity = lot.quantity_available * allocation_yield
             credited = min(remaining_target, capacity)
             if credited <= 0:
                 break
-            stock_quantity = ceil(credited / detail.stock_yield_per_sheet)
+            stock_quantity = ceil(credited / allocation_yield)
             before = _balances(lot)
             now = utc_now()
             result = db.execute(
@@ -2375,7 +2399,8 @@ def reserve_semi_finished_inventory(
                 match_rule_id=confirmation.rule.id,
                 reserved_stock_quantity=stock_quantity,
                 credited_requirement_quantity=credited,
-                yield_factor=detail.stock_yield_per_sheet,
+                yield_factor=allocation_yield,
+                cut_plan_json=json.dumps(cut_plan, ensure_ascii=False, sort_keys=True) if cut_plan else None,
                 consumed_stock_quantity=0,
                 released_stock_quantity=0,
                 consumed_requirement_quantity=0,
@@ -2693,6 +2718,15 @@ def consume_semi_finished_reservation(
         ):
             raise WarehouseInventoryError("半成品预占关联数据不完整", 409)
         requirement_product_id = _requirement_product_id(db, requirement)
+        if reservation.cut_plan_json:
+            if delivery_item_id is not None:
+                raise WarehouseInventoryError("所选片料需先裁切生产并确认完工，不能直接发货扣料", 409)
+            frozen_plan = json.loads(reservation.cut_plan_json)
+            if (frozen_plan.get("lot_id") != lot.id or frozen_plan.get("product_id") != requirement_product_id
+                    or frozen_plan.get("yield_factor") != reservation.yield_factor
+                    or (frozen_plan.get("source_length_mm"), frozen_plan.get("source_width_mm")) != (detail.board_length_mm, detail.board_width_mm)
+                    or (frozen_plan.get("target_length_mm"), frozen_plan.get("target_width_mm")) != (requirement.board_length_mm, requirement.board_width_mm)):
+                raise WarehouseInventoryError("裁切分配资料已变化，请核对冻结方案", 409)
         ensure_semi_finished_lot_eligibility(
             db,
             lot=lot,

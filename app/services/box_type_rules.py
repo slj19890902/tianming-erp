@@ -162,7 +162,7 @@ BOX_TYPE_RULES: tuple[BoxTypeRule, ...] = (
     BoxTypeRule(
         code="liner",
         display_name="衬板",
-        aliases=("衬板", "CB 单瓦衬板"),
+        aliases=("衬板", "CB 单瓦衬板", "SC 双瓦衬板"),
         required_dimensions=("length_mm", "width_mm"),
         formula_version="tm_liner_20260729_v1",
         is_component=True,

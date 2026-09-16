@@ -3878,6 +3878,7 @@ def preview_order_inventory_draft(
 
     used_stock_by_lot: dict[int, int] = {}
     response_items: list[dict] = []
+    preflight_by_line = {row.client_line_id: row for row in preflight_items}
     for draft_item, product in zip(payload.items, products, strict=True):
         order_quantity = int(draft_item.quantity)
         if is_composite_product(product):
@@ -3958,6 +3959,14 @@ def preview_order_inventory_draft(
                     int(detail.stock_yield_per_sheet or 1),
                     1,
                 )
+                from app.services.sheet_cut_plan import rectangular_cut_plan
+                cutting_plan = rectangular_cut_plan(db, lot, product, _preflight_semi_signature(
+                    customer_id=payload.customer_id, product=product,
+                    item_payload=preflight_by_line[draft_item.client_line_id], component_type=component_type,
+                    stock_yield_per_sheet=cutting_factor(product.default_cutting_mode),
+                ))
+                if cutting_plan:
+                    output_per_stock_sheet = cutting_plan["yield_factor"]
                 used_sheets = used_stock_by_lot.get(lot.id, 0)
                 available_sheets = max(
                     int(lot.quantity_available or 0) - used_sheets,

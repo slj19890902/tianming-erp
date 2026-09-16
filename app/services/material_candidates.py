@@ -10,6 +10,11 @@ from app.models.customer import Customer
 from app.models.material import Material
 from app.services.warehouse_goods import goods_profile, qualification_issues, lot_face, product_face
 from app.services.box_type_rules import get_box_type_rule
+from app.services.box_type_rules import BOX_TYPE_RULES
+from app.services.processed_sheet_matching import processed_match
+from app.services.sheet_cut_plan import rectangular_cut_plan
+from app.services.requisition_quantities import cutting_factor
+from types import SimpleNamespace
 
 
 def matching_dimensions(product, detail):
@@ -48,19 +53,42 @@ def candidate_items(db, lot, visible_customer_ids=None):
         Product.is_active.is_(True), Product.is_composite.is_(False),
         Product.deleted_at.is_(None), Customer.status == "active",
         Product.supply_mode == "corrugated_production",
-        Product.flute_type == detail.flute_type, func.coalesce(Product.layer_count, Material.layer_count) == detail.layer_count,
-        columns[0] > 0, columns[0] <= length, columns[1] > 0, columns[1] <= width)
+        Product.flute_type == detail.flute_type, func.coalesce(Product.layer_count, Material.layer_count) == detail.layer_count)
     if visible_customer_ids is not None:
         query = query.where(Product.customer_id.in_(visible_customer_ids))
     items = []
     for product in db.scalars(query):
+        rule = get_box_type_rule(product.box_style)
+        expected = SimpleNamespace(customer_id=product.customer_id,
+            board_length_mm=product.base_report_length_mm if detail.component_type == "base" else product.report_length_mm,
+            board_width_mm=product.base_report_width_mm if detail.component_type == "base" else product.report_width_mm,
+            normalized_material_code=(product.material.code if product.material else product.default_material_code) or "",
+            flute_type=product.flute_type, component_type=detail.component_type,
+            pieces_per_box=product.pieces_per_box or 1, stock_yield_per_sheet=cutting_factor(product.default_cutting_mode))
+        processed = processed_match(db, lot, product, expected) if expected.board_length_mm and expected.board_width_mm else None
+        if processed:
+            items.append(dict(product_id=product.id, customer_id=product.customer_id,
+                customer_name=product.customer.chinese_short_name or product.customer.name,
+                inventory_code=product.product_code, product_name=product.product_name,
+                box_style=rule.display_name if rule else product.box_style or "未设置箱型",
+                is_liner=bool(rule and rule.code == "liner"), match_kind="confirmed_use" if processed["known"] else "needs_review",
+                match_reason=processed["reason"], length_mm=float(length), width_mm=float(width), flute_type=product.flute_type,
+                dimension_basis="库存净片；按用途匹配", near_dimension_match=processed["known"],
+                score=processed["score"], color_compatible=True, selectable=processed["known"],
+                warnings=[f"报料 {expected.board_length_mm}×{expected.board_width_mm}mm；库存净片 {length}×{width}mm",
+                    f"实际材质 {detail.material_code_snapshot}；产品材质 {expected.normalized_material_code}"] + ([] if processed["known"] else ["需在用途维护确认实物形状、模具及印刷，不能直接采用"]),
+                exact_dimension_match=False, requires_production_review=True, face_paper=product_face(product)))
+            continue
+        if profile and profile.get("processing") in {"die_cut", "printed", "creased"}:
+            continue  # Never fall back to rectangle matching for a shaped blank.
         dimensions = matching_dimensions(product, detail)
         if dimensions is None:
             continue
         pl, pw, basis = dimensions
         if pl > length or pw > width:
             continue  # Preserve flute direction; never rotate to force a match.
-        score = float((Decimal(pl * pw) * 100 / Decimal(length * width)).quantize(Decimal("0.01"), rounding=ROUND_DOWN))
+        cut_plan = rectangular_cut_plan(db, lot, product, expected) if expected.board_length_mm and expected.board_width_mm else None
+        score = cut_plan["utilization"] if cut_plan else float((Decimal(pl * pw) * 100 / Decimal(length * width)).quantize(Decimal("0.01"), rounding=ROUND_DOWN))
         cross_customer = detail.owner_customer_id is not None and product.customer_id != detail.owner_customer_id
         warnings = ["跨客户：使用前需人工确认"] if cross_customer else []
         if not detail.material_id or detail.material_id != product.material_id:
@@ -77,15 +105,18 @@ def candidate_items(db, lot, visible_customer_ids=None):
         items.append(dict(product_id=product.id, customer_id=product.customer_id,
             customer_name=product.customer.chinese_short_name or product.customer.name,
             inventory_code=product.product_code, product_name=product.product_name,
-            box_style=product.box_style or "未设置箱型",
+            box_style=rule.display_name if rule else product.box_style or "未设置箱型",
+            is_liner=bool(rule and rule.code == "liner"), match_kind="cuttable" if cut_plan else "dimensions",
+            match_reason=f"需裁切 · 一张出{cut_plan['yield_factor']}片" if cut_plan else "尺寸一致" if pl == length and pw == width else "尺寸候选，待核用途",
+            cut_plan=cut_plan,
             length_mm=float(pl), width_mm=float(pw), flute_type=product.flute_type,
             dimension_basis=basis,
             near_dimension_match=pl >= Decimal(length) * Decimal("0.9") and pw >= Decimal(width) * Decimal("0.9"),
-            score=score, color_compatible=color_compatible, selectable=score > 70 and color_compatible, warnings=list(dict.fromkeys(warnings)),
+            score=score, color_compatible=color_compatible, selectable=bool(cut_plan or score > 70) and color_compatible and not issues, warnings=list(dict.fromkeys(warnings)),
             exact_dimension_match=pl == length and pw == width,
             requires_production_review=True,
             face_paper=product_face(product)))
-    return sorted(items, key=lambda item: (not item["exact_dimension_match"], not item["near_dimension_match"], -item["score"], item["customer_name"], item["inventory_code"], item["product_id"]))
+    return sorted(items, key=lambda item: (not item["selectable"], item["is_liner"], item["match_kind"] != "confirmed_use", not item["exact_dimension_match"], -item["score"], item["customer_name"], item["inventory_code"], item["product_id"]))
 
 
 def candidate_response(db, lot, visible_customer_ids=None):
@@ -97,6 +128,7 @@ def candidate_response(db, lot, visible_customer_ids=None):
         saved = [item for item in saved if item["customer_id"] in visible_customer_ids]
     detail = lot.semi_finished_detail
     return dict(lot_id=lot.id, version=lot.version, items=items, saved=saved,
+        box_styles=[rule.display_name for rule in BOX_TYPE_RULES],
         editable=lot.status == "active" and lot.quantity_available > 0,
         source=f"{detail.board_length_mm}×{detail.board_width_mm} mm · {detail.flute_type}楞",
         dimension_notice=("原纸按常用箱报料毫米尺寸比较；旧尺寸单位不明的不参与匹配。" if detail.sheet_type == "raw_board" else

@@ -36,9 +36,11 @@ def test_unknown_processed_is_visible_not_automatic_then_single_confirmation(eli
         confirm_semi_finished_match(db,requirement_id=r.id,inventory_lot_id=lot.id,operator_id=data['admin'].id,
             override=False,warning_acknowledged_codes=[CUSTOMER_GENERIC_SEMI_FINISHED_STOCK])
     before=(lot.quantity_available,lot.quantity_reserved,lot.semi_finished_detail.board_length_mm)
-    confirm_semi_finished_match(db,requirement_id=r.id,inventory_lot_id=lot.id,operator_id=data['admin'].id,
-        override=True,warning_acknowledged_codes=[CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,SIGNATURE_OVERRIDE_WARNING])
-    assert db.scalar(select(SemiFinishedLotAllowedProduct.id))
+    with pytest.raises(WarehouseInventoryError,match='用途待确认'):
+        confirm_semi_finished_match(db,requirement_id=r.id,inventory_lot_id=lot.id,operator_id=data['admin'].id,
+            override=True,warning_acknowledged_codes=[CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,SIGNATURE_OVERRIDE_WARNING])
+    assert not db.scalar(select(SemiFinishedLotAllowedProduct.id))
+    facts['product_ids']=[p.id];profile.data_json=json.dumps(facts);db.flush()
     assert candidates(db,p)[0].automatic_recommendation
     assert before==(lot.quantity_available,lot.quantity_reserved,lot.semi_finished_detail.board_length_mm)
     assert ensure_semi_finished_lot_eligibility(db,lot=lot,product_id=p.id,customer_id=p.customer_id,
@@ -46,8 +48,8 @@ def test_unknown_processed_is_visible_not_automatic_then_single_confirmation(eli
 
 def test_confirmed_post_cut_identity_survives_large_dimension_reduction(eligibility_db):
     db,data=eligibility_db;p,lot,profile,facts=setup(db,data,length=400,approved=True)
-    assert not candidates(db,p)[0].automatic_recommendation
-    assert candidates(db,p)[0].recommendation_tier == 'more'
+    assert candidates(db,p)[0].automatic_recommendation
+    assert candidates(db,p)[0].recommendation_tier == 'near'
     assert candidates(db,p)[0].direct_deduction_eligible
 
 def test_equal_dimensions_do_not_authorize_unknown_shape(eligibility_db):
@@ -56,7 +58,7 @@ def test_equal_dimensions_do_not_authorize_unknown_shape(eligibility_db):
 
 def test_failed_reservation_rolls_back_learned_use_and_stock(eligibility_db):
     from app.services.semi_finished_inventory import reserve_semi_finished_inventory, SemiFinishedLotVersion
-    db,data=eligibility_db;p,lot,profile,facts=setup(db,data)
+    db,data=eligibility_db;p,lot,profile,facts=setup(db,data,approved=True)
     _,_,r=_add_requirement(db,data,product=p,key='ROLLBACK-PROCESSED');db.commit()
     before=(lot.quantity_available,lot.quantity_reserved,lot.version)
     with db.begin_nested() as transaction:
@@ -64,7 +66,7 @@ def test_failed_reservation_rolls_back_learned_use_and_stock(eligibility_db):
             lots=[SemiFinishedLotVersion(lot.id,lot.version)],operator_id=data['admin'].id,
             idempotency_key='rollback-processed',confirmed=True,override=True,
             warning_acknowledged_codes=[CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,SIGNATURE_OVERRIDE_WARNING])
-        assert db.scalar(select(SemiFinishedLotAllowedProduct.id))
+        assert lot.quantity_reserved == 4
         transaction.rollback()
     db.refresh(lot)
     assert not db.scalar(select(SemiFinishedLotAllowedProduct.id))
@@ -112,7 +114,7 @@ def test_blank_same_mold_multiple_codes_automatic_but_printed_not_inferred(eligi
     db,data=eligibility_db;p,lot,profile,facts=setup(db,data)
     mold=MoldTool(mold_code='TEST-SHARED',mold_name='测试共刀',rack_location='测试位',is_active=True)
     db.add(mold);db.flush()
-    facts['mold_tool_id']=mold.id;profile.data_json=json.dumps(facts)
+    facts.update(mold_tool_id=mold.id,mold_version=mold.version,blank_unprinted=True);profile.data_json=json.dumps(facts)
     for product in data['products'][:2]:product.mold_tool_id=mold.id
     db.flush()
     for product in data['products'][:2]:assert candidates(db,product)[0].automatic_recommendation
@@ -123,7 +125,7 @@ def test_blank_same_mold_multiple_codes_automatic_but_printed_not_inferred(eligi
 def test_reservation_preflight_replay_and_real_quantity_path(eligibility_db):
     from app.api.orders import OrderItemCreate, OrderItemReservationPlan, SemiReservationPlanEntry, _preflight_reservation_plans
     from app.services.semi_finished_inventory import reserve_semi_finished_inventory, SemiFinishedLotVersion
-    db,data=eligibility_db;p,lot,profile,facts=setup(db,data)
+    db,data=eligibility_db;p,lot,profile,facts=setup(db,data,approved=True)
     warnings=[CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,SIGNATURE_OVERRIDE_WARNING]
     entry=SemiReservationPlanEntry(lot_id=lot.id,expected_version=lot.version,requested_qty=4,component_type='whole',
         recommendation_source='customer_generic',confirmed=True,override=True,warning_acknowledged_codes=warnings)

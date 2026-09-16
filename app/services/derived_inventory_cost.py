@@ -12,6 +12,33 @@ def derived_cost(db, lot, visited):
     visited=set(visited)|{lot.id}
     try:
         detail=json.loads(lot.cost_snapshot_detail_json or '{}')
+        if lot.cost_snapshot_source == 'sheet_cut_production':
+            from app.models.production import ProductionCompletion
+            from app.services.production_workflow import _stable_key
+            completion = db.get(ProductionCompletion, detail['completion_id'])
+            qty = int(detail['output_quantity'])
+            if not completion or completion.status != 'posted' or completion.inventory_lot_id != lot.id or completion.actual_output_quantity != qty or qty <= 0:
+                return None, {'validation_issue':'裁切完工来源不一致'}
+            total = Decimal(0)
+            evidence = []
+            seen = set()
+            for row in detail['inputs']:
+                reservation = db.get(InventoryReservation, row['reservation_id'])
+                origin = db.get(InventoryLot, row['lot_id'])
+                movement = db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key ==
+                    _stable_key('production-completion', completion.id, 'semi', row['reservation_id'])))
+                if row['reservation_id'] in seen or not reservation or not origin or reservation.inventory_lot_id != origin.id or not movement or movement.inventory_lot_id != origin.id or movement.quantity != row['quantity'] or movement.movement_type != 'consume':
+                    return None, {'validation_issue':'裁切投入缺少一致的实际消耗记录'}
+                seen.add(row['reservation_id'])
+                unit, basis = frozen_cost(origin, db, visited)
+                if unit is None or abs(unit - Decimal(row['unit_cost'])) > Decimal('.0001'):
+                    return None, {'validation_issue':'裁切投入冻结成本待核对'}
+                total += Decimal(row['unit_cost']) * row['quantity']
+                evidence.append(dict(lot_id=origin.id, quantity=row['quantity'], basis=basis))
+            if not seen or abs(total-Decimal(detail['total_cost'])) > Decimal('.01') or abs(total / qty - Decimal(str(lot.estimated_unit_cost_snapshot))) > Decimal('.0001'):
+                return None, {'validation_issue':'裁切产出成本不守恒'}
+            return total / qty, dict(currency='CNY', cost_label='裁切继承材料成本', inputs=evidence,
+                quantity=qty, total_cost=str(total), basis='inherited_entry_cost_not_new_purchase')
         if lot.cost_snapshot_source=='stock_preparation':
             from app.models.stock_preparation import StockPreparationJob
             job=db.get(StockPreparationJob,lot.source_ref_id)

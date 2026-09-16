@@ -59,6 +59,8 @@ def qualification_issues(db, lot, product, profile=None, expected_material_code=
     elif normalize_material_code(actual_code) != normalize_material_code(expected_code):
         if detail.sheet_type == "raw_board" and face != "white":
             issues.append("材质不一致，不能抵扣")
+        elif not (profile.get('allow_material_substitution') and profile.get('usage_confirmed')):
+            issues.append("替代材质尚未确认适用，不能按尺寸推断强度合格")
     if product.layer_count and detail.layer_count != product.layer_count:
         issues.append("层数不一致")
     return issues

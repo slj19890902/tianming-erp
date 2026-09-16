@@ -25,8 +25,12 @@ def processed_match(db, lot, product, expected):
         SemiFinishedLotAllowedProduct.product_id == product.id)) is not None
     # Blank die-cut sheets can serve different printed products using the same registered mold.
     mold = db.get(MoldTool, profile["mold_tool_id"]) if profile.get("mold_tool_id") else None
+    if mold and profile.get("mold_version") is not None and (not mold.is_active or profile["mold_version"] != mold.version):
+        return None
     mold_match = (profile.get("processing") == "die_cut" and mold and mold.is_active
-                  and profile["mold_tool_id"] == product.mold_tool_id)
+                  and profile["mold_tool_id"] == product.mold_tool_id
+                  and profile.get("mold_version") == mold.version
+                  and profile.get("blank_unprinted") is True)
     known = bool(approved or mold_match)
     closeness = sum(abs(a-b)/max(b,1) for a,b in [
         (detail.board_length_mm,expected.board_length_mm),
@@ -35,5 +39,5 @@ def processed_match(db, lot, product, expected):
     same_customer = profile.get("scope") == "customers" and product.customer_id in profile.get("customer_ids", [])
     auto = (known and same_customer and profile.get("material_confidence") == "confirmed"
             and bool(product.layer_count) and profile.get("processing") == "die_cut")
-    return {"known": known, "automatic": bool(auto), "score": max(0, 100-round(closeness*100)),
+    return {"known": known, "automatic": bool(auto), "score": 100 if known else max(0, 100-round(closeness*100)),
             "reason": "已确认产品适用" if approved else "同模具未印刷片料" if mold_match else "加工后片料，需确认形状与用途"}

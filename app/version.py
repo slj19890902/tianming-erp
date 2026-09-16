@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.433"
-APP_VERSION_NAME = "旧组套承接与库存去向定位"
+APP_VERSION = "v0.22.434"
+APP_VERSION_NAME = "网页仓库尺寸详细查找"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4266,3 +4266,6 @@ APP_CHANGELOG = [*(f"v0.22.432：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["旧组套缺失父件身份时支持有审计的实物确认承接，保留原子件材质、配比和成本；确认本身不扣库存、不生成成品。", "组套按不可修改流水追加投入凭据与最终结果，避免正式库流水保护导致保存失败，重复提交不重复扣料。", "库存去向优先显示现存成品货位和地图定位链接，耗尽原料位置折叠到历史。"]
 APP_VERIFICATION_STEPS = ["刷新205安排用途，实际插合完成后按真实套数和货位确认一次；未插合不要为验收确认入库。", "查看082库存去向，核对现存成品位置及地图链接；耗尽原料只在历史中查看。"]
 APP_CHANGELOG = [*(f"v0.22.433：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["网页仓库查找左侧新增详细查找，纸板长宽、纸箱长宽高与楞型筛选，默认大小两侧接近匹配，越接近越靠前。", "真实库存分页显示数量与位置，按正式货位定位，原文字查找和手机取用保持不变；保留v433组套与库存去向修复。"]
+APP_VERIFICATION_STEPS = ["刷新仓库地图，点击详细查找输入尺寸，核对大小两侧接近排序及楞型筛选。", "翻页并点选库存查看位置；收起后重新展开保留条件，原查找仍可用，不为验收执行库存取用。"]
+APP_CHANGELOG = [*(f"v0.22.434：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

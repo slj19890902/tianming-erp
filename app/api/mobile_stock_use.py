@@ -36,6 +36,8 @@ def _stock_payload(lot):
         "location_id": location.id, "address_version": location.address_version,
         "location_name": address["employee_location_name"],
         "floor": location.warehouse_floor, "status": lot.status,
+        "area_code": location.area_code,
+        "placement_status": location.placement_status,
         "name": (finished.product_name_snapshot if finished else detail.internal_name or "纸板"),
         "code": finished.inventory_code_snapshot if finished else detail.material_code_snapshot,
         "customer": detail.owner_customer_name_snapshot or "通用",
@@ -56,9 +58,9 @@ def search(
     length: str | None = Query(None, pattern=r"^[0-9]{1,5}$"),
     width: str | None = Query(None, pattern=r"^[0-9]{1,5}$"),
     height: str | None = Query(None, pattern=r"^[0-9]{1,5}$"),
-    length_op: Literal["eq", "ge", "le"] = "ge",
-    width_op: Literal["eq", "ge", "le"] = "ge",
-    height_op: Literal["eq", "ge", "le"] = "ge",
+    length_op: Literal["near", "eq", "ge", "le"] = "ge",
+    width_op: Literal["near", "eq", "ge", "le"] = "ge",
+    height_op: Literal["near", "eq", "ge", "le"] = "ge",
     flute: str | None = Query(None, max_length=20),
     offset: int = Query(0, ge=0), limit: int = Query(30, ge=1, le=100),
     db: Session = Depends(get_db), user: User = Depends(PermissionChecker("warehouse.view")),
@@ -87,8 +89,9 @@ def search(
         if value is None:
             continue
         value = int(value)
-        query = query.where(column.is_not(None), column > 0,
-                            {"eq": column == value, "ge": column >= value, "le": column <= value}[operator])
+        query = query.where(column.is_not(None), column > 0)
+        if operator != "near":
+            query = query.where({"eq": column == value, "ge": column >= value, "le": column <= value}[operator])
         distance = distance + func.abs(column - value)
     if flute:
         column = Board.flute_type if kind == "board" else Finished.flute_type_snapshot

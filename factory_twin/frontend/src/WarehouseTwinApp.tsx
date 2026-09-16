@@ -1,5 +1,6 @@
 import { OrderReference } from './OrderReference';
 import { WarehouseGoods } from "./WarehouseGoods";
+import { WarehouseDimensionSearch, type DimensionStock } from "./WarehouseDimensionSearch";
 import { ActualStocktakeDialog } from "./ActualStocktakeDialog";
 import { mergeWarehouseSearchPage, searchPageRequestIsCurrent } from "./warehouseSearchPaging.mjs";
 import { moveLocationState, areaSortKey, type MoveLocationState } from "./warehouseWorkspace.mjs";
@@ -1809,6 +1810,7 @@ export function WarehouseTwinApp() {
   const [moldRackRefreshToken, setMoldRackRefreshToken] = useState(0);
   const [layerPanelOpen, setLayerPanelOpen] = useState(false);
   const [searchPanelOpen, setSearchPanelOpen] = useState(false);
+  const [detailSearchOpen, setDetailSearchOpen] = useState(false);
   const [mapMode, setMapMode] = useState<WarehouseMapMode>(() => {
     if (traceReadOnly) return "lookup";
     const requested = query.get("mode");
@@ -3477,7 +3479,7 @@ export function WarehouseTwinApp() {
     }
     if (pendingRackSearchLocationId === location.location_id) {
       const rack = searchRackForLocation(location, visualLocations, layout.racks);
-      const hasSearchedLot = rackLocationInventoryItems(location).some((item) => item.lot_id === focusedSearchItem?.lot_id);
+      const hasSearchedLot = rackLocationInventoryItems(location).some((item) => item.lot_id === (pendingLotId ?? focusedSearchItem?.lot_id));
       setRackFocusId(rack && hasSearchedLot ? rack.id : null);
       if (location.storage_type === "rack" && (!rack || !hasSearchedLot)) {
         setSearchError("该产品货架层格绑定不完整或货物位置已变化，请刷新查货后重试。");
@@ -4358,6 +4360,22 @@ export function WarehouseTwinApp() {
     }
   };
   const disableSelectedLocation = () => selectedLocation && deleteEmptyMapLocation(selectedLocation.location_id);
+
+  const focusDimensionStock = (item: DimensionStock) => {
+    if (mapMode !== "lookup" || spatialEditBusy) return;
+    const targetFloor = String(item.floor || "").replace(/F$/i, "") + "F";
+    if (!isWarehouseOperationalFloorCode(targetFloor) || item.placement_status !== "placed") {
+      setLocationEditMessage(`${item.location_name || "位置待确认"}：尚未完成地图归位，请按文字位置核对。`);
+      return;
+    }
+    setRackFocusId(null); setFocusedSearchItem(null); setFocusedSearchProductKey(null);
+    setFocusedResource(null); setPendingLocateResource(null); setPendingAreaCode(null);
+    setAreaInventorySearch(""); setPendingLotId(item.id);
+    setPendingLocationId(item.location_id); setPendingRackSearchLocationId(item.location_id);
+    setFloorCode(targetFloor); setSearchPanelOpen(false);
+    cameraFocusSequenceRef.current += 1;
+    setCameraFocusTarget({ entity: { kind: "pallet", id: `erp-location-${item.location_id}` }, token: cameraFocusSequenceRef.current, source: "search" });
+  };
 
   const focusSearchItem = (item: SearchItem) => {
     setRackFocusId(null);
@@ -6220,8 +6238,9 @@ export function WarehouseTwinApp() {
         <label>区域<select aria-label="地图区域" value={selectedAreaCode || ""} disabled={spatialEditBusy} onChange={event => switchWorkspaceArea(event.target.value)}><option value="">全部区域</option>{workspaceAreaGroups.map(([letter,areas]) => <optgroup key={letter} label={letter}>{areas.map(feature => <option key={feature.id} value={featureAreaCode(feature) || ""}>{employeeAreaName(feature,{floorCode})}</option>)}</optgroup>)}</select></label>
       </div>
       <div className="twin-top-search">
-        <input aria-label="全仓查货" placeholder="全仓查货：客户 / 编码 / 名称 / 规格" value={search} onFocus={() => setSearchPanelOpen(true)} onChange={event => {setSearch(event.target.value);setSearchPanelOpen(true);setFocusedSearchItem(null);setFocusedSearchProductKey(null);setPendingRackSearchLocationId(null);setPendingLocationId(null);setPendingAreaCode(null);}} />
-        <button type="button" aria-expanded={searchPanelOpen} onClick={() => setSearchPanelOpen(value => !value)}>{searchPanelOpen ? "收起结果" : "查找"}</button>
+        <input aria-label="全仓查货" placeholder="全仓查货：客户 / 编码 / 名称 / 规格" value={search} onFocus={() => {setDetailSearchOpen(false);setSearchPanelOpen(true);}} onChange={event => {setSearch(event.target.value);setSearchPanelOpen(true);setFocusedSearchItem(null);setFocusedSearchProductKey(null);setPendingRackSearchLocationId(null);setPendingLocationId(null);setPendingAreaCode(null);}} />
+        <button type="button" disabled={mapMode !== "lookup" || spatialEditBusy} aria-expanded={searchPanelOpen && detailSearchOpen} onClick={() => {setSearchPanelOpen(true);setDetailSearchOpen(value => !searchPanelOpen || !value);}}>详细查找</button>
+        <button type="button" aria-expanded={searchPanelOpen && !detailSearchOpen} onClick={() => {setDetailSearchOpen(false);setSearchPanelOpen(value => detailSearchOpen || !value);}}>{searchPanelOpen && !detailSearchOpen ? "收起结果" : "查找"}</button>
       </div>
       {!traceReadOnly && <nav className="twin-top-ledger" aria-label="库存账目"><a href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a></nav>}
       <div className="twin-operation-modes" role="tablist" aria-label="仓库地图操作模式">
@@ -6312,8 +6331,10 @@ export function WarehouseTwinApp() {
         ] as Array<[keyof LayerVisibility, string]>).map(([key, label]) => <button type="button" key={key} className={layers[key] ? "active" : ""} onClick={() => toggleLayer(key)}><i /><span>{label}</span></button>)}
       </aside>}
 
-      {searchPanelOpen && <aside className="twin-context-rail">
-        <header><h2>全仓搜索结果</h2><button type="button" onClick={() => setSearchPanelOpen(false)}>收起</button></header>
+      <aside className="twin-context-rail" hidden={!searchPanelOpen}>
+        <header><h2>{detailSearchOpen ? "详细查找" : "全仓搜索结果"}</h2><button type="button" onClick={() => setSearchPanelOpen(false)}>收起</button></header>
+        <div className="dimension-search-content" hidden={!detailSearchOpen}><WarehouseDimensionSearch request={requestJson} onLocate={focusDimensionStock} /></div>
+        <div className="dimension-search-content" hidden={detailSearchOpen}>
         <section className="twin-global-search">
           <div className="twin-context-heading"><b>统一查货</b>{search && <button type="button" onClick={() => { setSearch(""); setSearchResponse(null); setSearchError(""); setFocusedSearchItem(null); setFocusedSearchProductKey(null); setFocusedResource(null); setCameraFocusTarget(null); setAreaInventorySearch(""); setRackFocusId(null); setPendingRackSearchLocationId(null); setPendingLocationId(null); setPendingAreaCode(null); }}>清除</button>}</div>
           {pendingRelocationItems.length > 0 && <div className="twin-location-message">盘点待归位 {pendingRelocationItems.length} 批 · 点选货位后“添加货物”</div>}
@@ -6354,7 +6375,8 @@ export function WarehouseTwinApp() {
           {focusedSearchProduct && <div className="twin-search-focus-note product-focus"><b>{searchResponse?.pagination?.has_more ? "已加载的真实位置已选中" : "全部真实位置已选中"}</b><span>{focusedSearchProduct.customer_name} · {focusedSearchProduct.inventory_code} · {searchResponse?.pagination?.has_more ? "已加载" : "共"} {formatNumber(focusedSearchProduct.total_quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {focusedSearchProduct.location_count} 个位置</span><div className="twin-search-floor-actions">{focusedSearchProduct.floor_summaries.map((floor) => <button type="button" key={floor.floor_code} disabled={!isWarehouseOperationalFloorCode(floor.floor_code)} className={floorCode === floor.floor_code ? "active" : ""} onClick={() => focusSearchFloor(focusedSearchProduct, floor.floor_code)}>{floor.floor_code === "UNLOCATED" ? "待定位" : floor.floor_code} · {formatNumber(floor.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {floor.location_count}处</button>)}</div><div className="twin-search-location-list">{focusedSearchProduct.location_summaries.map((location) => <button type="button" key={location.key} disabled={!isWarehouseOperationalFloorCode(location.floor_code)} onClick={() => focusSearchLocation(focusedSearchProduct, location)}><b>{location.floor_code === "UNLOCATED" ? "待定位" : location.floor_code}</b><span>{location.location_name || "位置名称待完善"}</span><em>{formatNumber(location.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {location.position_status === "mapped" ? "地图可定位" : "真实文字位置"}</em></button>)}</div></div>}
           {focusedResource && <div className="twin-search-focus-note"><b>{focusedResource.map_status === "mapped" ? "地图定位指引" : "文字定位指引"}</b><span>{focusedResource.prompt}</span></div>}
         </section>
-      </aside>}
+        </div>
+      </aside>
 
       <div className={`twin-stage ${focusedRack ? "rack-focused" : ""}`}>
         <div className="twin-map-pane">

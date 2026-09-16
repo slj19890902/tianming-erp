@@ -1,5 +1,9 @@
 # Codex 项目交接
 
+## 2026-09-16 SHEET-MEASUREMENT-MATCH v0.22.449
+
+- 运行f539d8d0，包07b26d08，唯一head sc0916无DDL；净片后加工、10mm测量待核、W/Y白纸、压线A1可裁及切换批次旧筛选修复。33项定向、签名自检、NAS完整备份、健康/两端资源/正式只读样本通过；无历史业务改写，保留v448。5批模切缺具体用途需现场确认，北K21301853宽差1mm仅待核。见docs/release_reports/SHEET_MEASUREMENT_MATCH_20260916.md及NAS同任务v449回执，待管理员人工验收。
+
 ## 2026-09-16 BIDIRECTIONAL-SHEET-MATCH v0.22.448
 
 - 运行c18e6ca3，包bb7ebcdb，唯一head sc0916（新增冻结裁切合同）；双向用途/毫米/裁切及成本数量衔接，电脑手机统一筛选。批准写入仅871用途203/404及296款衬板命名，审计20621；库存数量、价格成本、地图草稿不变。NAS备份、隔离迁移、健康/资源/正式样本核对通过；首次辅助依赖问题保护回退后已修复成功部署。详见docs/release_reports/BIDIRECTIONAL_SHEET_MATCH_20260916.md及NAS同任务v448回执，待管理员人工验收。

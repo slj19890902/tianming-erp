@@ -42,7 +42,7 @@ def _stock_payload(lot):
         "dimensions": ([finished.length_mm, finished.width_mm, finished.height_mm] if finished
                        else [detail.board_length_mm, detail.board_width_mm]),
         "flute": finished.flute_type_snapshot if finished else detail.flute_type,
-        "unit": lot_display_unit(lot), "available": lot.quantity_available,
+        "unit": {"boxes": "只", "sheets": "张", "pieces": "片", "sets": "套"}.get(lot_display_unit(lot), lot_display_unit(lot)), "available": lot.quantity_available,
         "reserved": lot.quantity_reserved, "damaged": lot.quantity_damaged,
         "physical": lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged,
         "can_take": lot.status == "active" and location.is_active and lot.quantity_available > 0,
@@ -152,6 +152,18 @@ def take(lot_id: int, payload: TakeRequest, request: Request,
         if changed.rowcount != 1:
             raise HTTPException(409, "库存已变化，请重新查询后取用")
         db.expire(lot)
+        # Keep an existing current pallet projection in step with the ledger.
+        # Zero-stock links retain their historical positive snapshot (schema
+        # requires >0); all current quantity readers use the linked lot balance.
+        pallet_item = lot.pallet_item
+        physical = lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged
+        if pallet_item is not None and pallet_item.pallet.is_current:
+            if pallet_item.pallet.location_id != lot.warehouse_location_id:
+                raise HTTPException(409, "栈板位置与库存不一致，请先核对位置")
+            if physical > 0:
+                pallet_item.quantity = physical
+            pallet_item.pallet.version += 1
+            pallet_item.pallet.updated_by = user.id
         movement = _movement(db, lot=lot, movement_type="consume", quantity=payload.quantity,
                              before=before, operator_id=user.id, reason=PURPOSES[payload.purpose],
                              remarks=signature, idempotency_key=key)

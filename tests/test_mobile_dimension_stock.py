@@ -48,12 +48,14 @@ def test_search_all_dimensions_flute_scope_pagination(stock_api):
         assert data['total'] == 3
         assert [row['id'] for row in data['items']] == [ids['lot1'],ids['lot2']]
         assert data['items'][0]['physical'] == 12
+        assert data['items'][0]['unit'] == '只'
         assert data['items'][1]['can_take'] is False
         assert client.get(BASE+'?kind=box&length=500&offset=2&limit=2').json()['items'][0]['id'] == ids['other_lot']
         assert client.get(BASE+'?kind=box&length=500&length_op=eq').json()['total']==2
         assert client.get(BASE+'?kind=box&length=509&length_op=le').json()['total']==2
         assert client.get(BASE+'?kind=box&length=300&width=500&length_op=eq&width_op=eq').json()['total']==0
-        assert client.get(BASE+'?kind=board&length=900&flute=NONE').json()['items'][0]['id']==ids['semi_lot']
+        board=client.get(BASE+'?kind=board&length=900&flute=NONE').json()['items'][0]
+        assert board['id']==ids['semi_lot'] and board['unit']=='张'
         assert client.get(BASE+'?kind=board&flute=B').json()['total']==0
         _login(client, 'n035-restricted')
         assert client.get(BASE+'?kind=box&length=1').json()['total']==0
@@ -184,3 +186,36 @@ def test_empty_lot_receipt_accessible_and_execute_permission_enforced(stock_api)
             db.commit()
         _login(client,'n035-workshop')
         assert client.post(BASE+f"/{ids['lot1']}/take",json=body(factory,ids)).status_code==403
+
+
+def test_pallet_projection_and_bom_identity_are_preserved(stock_api):
+    from app.models.warehouse_inventory import InventoryPallet, InventoryPalletItem
+    from app.models.product_bom import ProductBomComponent
+    from app.models.product import Product
+    app,factory,ids=stock_api
+    with factory() as db:
+        lot=db.get(InventoryLot,ids['lot1'])
+        detail=lot.finished_detail
+        child=Product(customer_id=detail.owner_customer_id,product_code='CHILD',customer_material_code='CHILD',product_name='子件',box_category='normal')
+        db.add(child);db.flush()
+        bom=ProductBomComponent(parent_product_id=detail.product_id,component_product_id=child.id,
+                                quantity_per_set=4,display_order=0,internal_component_code='C1',is_die_cut=False)
+        pallet=InventoryPallet(pallet_code='TAKE-PALLET',location_id=lot.warehouse_location_id)
+        db.add_all([pallet,bom]);db.flush()
+        db.add(InventoryPalletItem(pallet_id=pallet.id,inventory_lot_id=lot.id,
+                                  customer_id=detail.owner_customer_id,product_id=detail.product_id,
+                                  item_type='finished',quantity=12,unit='boxes',match_status='matched'))
+        lot.cost_snapshot_detail_json='{"source":"unchanged"}'
+        detail.physical_basis_json='{"frozen":"unchanged"}'
+        db.commit();bom_id=bom.id
+    with TestClient(app) as client:
+        _login(client,'n035-admin')
+        result=client.post(BASE+f"/{ids['lot1']}/take",json=body(factory,ids))
+        assert result.status_code==200,result.text
+    with factory() as db:
+        lot=db.get(InventoryLot,ids['lot1'])
+        assert lot.pallet_item.quantity==9 and lot.pallet_item.pallet.version==2
+        assert lot.cost_snapshot_detail_json=='{"source":"unchanged"}'
+        assert lot.finished_detail.physical_basis_json=='{"frozen":"unchanged"}'
+        assert db.get(ProductBomComponent,bom_id).quantity_per_set==4
+        assert db.get(InventoryLot,ids['other_lot']).quantity_available==7

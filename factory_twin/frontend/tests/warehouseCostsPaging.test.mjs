@@ -93,7 +93,17 @@ test('all live desktop/mobile references use the new shared cost asset version',
   for(const path of ['factory_twin/frontend/warehouse-twin.html','static/factory-twin-assets/warehouse-twin.html',
     'static/factory-twin-assets/warehouse-costs.html','static/mobile_stocktake.html','static/mobile_erp.html','static/warehouse.html']){
     const html=fs.readFileSync(new URL('../../../'+path,import.meta.url),'utf8');
-    assert.match(html,/warehouse-costs\.js\?v=20260912-opt003/);
+    assert.match(html,/warehouse-costs\.js\?v=20260916-bom438/);
     assert.ok(!html.includes('warehouse-costs.js?v=20260911-3'));
   }
+});
+
+test('assembled batch keeps material separate from standard labour and displays sets',async()=>{
+  const f=fixture();await mount(f);f.find('button','下一页').click();
+  const data=page(2);Object.assign(data.rows[0],{display_unit:'套',standard_labour_unit_cost:'0.5288',standard_total_unit_cost:'1.5288',standard_total_value:'4.59'});
+  f.calls.at(-1).resolve(data);await tick();
+  assert.match(f.host.shadowRoot.textContent,/3套 · 材料单价/);
+  assert.match(f.host.shadowRoot.textContent,/标准组装人工 ¥0.5288\/套/);
+  assert.match(f.host.shadowRoot.textContent,/含组装人工单价 ¥1.5288/);
+  assert.match(f.find('summary').textContent,/材料成本金额 ¥999.00/);
 });

@@ -152,12 +152,18 @@ def _authorized_product_recipe(db, product):
     return None
 
 
-def resolve_product_cost(db: Session, product: Product, visited=None, *, main_only=False) -> CostResolution:
+def resolve_product_cost(db: Session, product: Product, visited=None, *, main_only=False,
+                         physical_yield=None, assembled_body_only=False) -> CostResolution:
     from app.services.inventory_cost_rules import resolve_rule, estimate_rule
     explicit = resolve_rule(db, product)
     if explicit is not None:
         return explicit
-    result = _resolve_product_cost(db, product, visited, main_only=main_only)
+    from app.models.multilevel_bom import ProductBomProfile
+    profile = db.get(ProductBomProfile, product.id)
+    if profile and profile.source == 'assembled' and not assembled_body_only:
+        from app.services.bom_entry_cost import assembled_entry_cost
+        return assembled_entry_cost(db, product)
+    result = _resolve_product_cost(db, product, visited, main_only=main_only, physical_yield=physical_yield)
     # A kit sale price cannot be copied to a separately stored physical component.
     # Kits need an explicit allocation rule; a zero/unknown sale is never a price.
     if not result.estimate and not product.is_composite and positive(product.sale_unit_price):
@@ -168,7 +174,7 @@ def resolve_product_cost(db: Session, product: Product, visited=None, *, main_on
     return result
 
 
-def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_only=False) -> CostResolution:
+def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_only=False, physical_yield=None) -> CostResolution:
     visited = set(visited or ())
     if product.id in visited:
         return CostResolution(None, ["组合产品存在循环关系"])
@@ -239,19 +245,34 @@ def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_o
     estimate = estimate_finished_product_cost(db, product=view)
     if estimate is None or estimate.unit_cost <= 0:
         return CostResolution(None, ["供应商平方价、价格单位或天地盖底片尺寸不完整"])
-    unit = estimate.unit_cost
+    from app.services.requisition_quantities import CUTTING_MODE_BOX_STYLES, cutting_factor, normalize_cutting_mode
+    try:
+        mode = normalize_cutting_mode(product.default_cutting_mode, strict=True) if product.box_style in CUTTING_MODE_BOX_STYLES else '一开一'
+    except ValueError as error:
+        return CostResolution(None, [str(error)])
+    output = physical_yield if physical_yield is not None else cutting_factor(mode)
+    if type(output) is not int or output <= 0:
+        return CostResolution(None, ['开料每张产出必须为正整数'])
+    unit = estimate.unit_cost / output
     if material.purchase_tax_included is False:
         if material.purchase_tax_rate is None:
             return CostResolution(None, ["材质未税报价缺少税率"])
         unit = (unit * (1 + material.purchase_tax_rate)).quantize(Q, rounding=ROUND_HALF_UP)
     elif material.purchase_tax_included is not True:
         return CostResolution(None, ["材质报价未明确含税口径"])
+    unit = unit.quantize(Q, rounding=ROUND_HALF_UP)
+    if unit <= 0:
+        return CostResolution(None, ['每片成本低于有效精度，请核对每张开料产出和单价'])
     detail = {**estimate.detail, **mapping_evidence, "algorithm_version": ALGORITHM,
+        "cutting_mode": mode, "yield_per_sheet": output,
+        "sheet_basis_cost": str(estimate.unit_cost),
+        "formula": "纸板面积 × 平方价 × 每件用片数 / 每张开料产出（再按税口径换算）",
         "formula_version": formula_version, "currency": "CNY", "tax_included": True,
         "source_tax_included": material.purchase_tax_included, "source_tax_rate": str(material.purchase_tax_rate),
         "material_version": material.version, "product_id": product.id, "product_version": product.version,
         "estimate_basis": "stocktake_confirmed_current_material"}
-    return CostResolution(InventoryCostEstimate(unit, estimate.square_price, estimate.area_m2, CONFIRMED_SOURCE, detail), [])
+    return CostResolution(InventoryCostEstimate(unit, estimate.square_price,
+        (estimate.area_m2 / output).quantize(Decimal('.000001'), rounding=ROUND_HALF_UP), CONFIRMED_SOURCE, detail), [])
 
 
 def resolve_lot_cost(db, lot) -> CostResolution:
@@ -329,7 +350,14 @@ def frozen_cost(lot, db=None, visited=None):
 def cost_payload(lot, db=None):
     unit, detail = frozen_cost(lot, db)
     quantity = lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged
+    labour = detail.get('standard_labour_unit_cost') if unit is not None else None
+    total_unit = unit + Decimal(labour) if labour is not None else None
     return {"lot_id": lot.id, "unit_cost": str(unit) if unit else None,
+        "display_unit": detail.get('product_unit') or ('张' if lot.unit == 'sheets' else '只'),
+        "standard_labour_unit_cost": labour,
+        "standard_total_unit_cost": str(total_unit) if total_unit is not None else None,
+        "standard_total_value": str((total_unit * quantity).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)) if total_unit is not None else None,
+        "standard_labour_missing": detail.get('standard_labour_missing'),
         "inventory_value": str((unit * quantity).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if unit else None,
         "quantity": quantity, "unit": lot.unit, "currency": "CNY",
         "source": lot.cost_snapshot_source, "captured_at": str(lot.cost_snapshot_at) if lot.cost_snapshot_at else None,

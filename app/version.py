@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.437"
-APP_VERSION_NAME = "BOM组套成品箱型入口"
+APP_VERSION = "v0.22.438"
+APP_VERSION_NAME = "BOM成套入库开料成本与组装人工"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4278,3 +4278,6 @@ APP_CHANGELOG = [*(f"v0.22.436：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["常用箱新增BOM组合箱型，默认按套、零件组装和父件交付，不要求父件纸板材质及报料尺寸。", "父件与配方原子保存，合法配方显示资料完善；实际组套确认才消耗子件并继承成本，可选父件标签，历史订单和库存不自动改写。"]
 APP_VERIFICATION_STEPS = ["常用箱选择BOM组合，核对单位套、子件每套用量及按套售价；按实际业务保存并重新打开核对。", "核对父件不要求纸板资料，空配方明确阻止保存；只有实际插合完成才确认组套，勿为验收重复入库。"]
 APP_CHANGELOG = [*(f"v0.22.437：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["BOM成套盘点按实际子件用量和每张开料产出计材料成本，不再要求无本体父件填写纸板资料。", "组套默认50套/人时，可在常用箱调整单款人工；材料与标准组装人工分开冻结显示，历史库存不重定价。"]
+APP_VERIFICATION_STEPS = ["刷新常用箱160008，核对ABC一开16/15/8及每套5/9/1，按实际成套数量盘点入库。", "管理员展开货位成本查看材料和标准组装人工；常用箱组合BOM内可设置组装人工。"]
+APP_CHANGELOG = [*(f"v0.22.438：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

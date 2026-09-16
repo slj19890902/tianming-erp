@@ -97,7 +97,10 @@ export function stocktakeBlockResolution(reason) {
   if (/单位|类型/.test(message)) {
     return "请改选与货位用途、库存类型和单位一致的正式货物；不要直接改写数量。";
   }
-  return "刷新地图并核对最新库存；仍无法处理时请管理员从库存明细解除对应约束。";
+  if (/成本|材质报价|展开纸板|人工费用/.test(message)) {
+    return "请在常用箱核对提示的产品或子件开料尺寸、每张产出及供应商报价；组套父件不用补纸板资料。修正后保留草稿重试，无需解除库存约束。";
+  }
+  return "刷新地图并核对最新库存；仍无法处理时请管理员从库存明细核对对应业务来源。";
 }
 
 function locationInventoryItems(location) {

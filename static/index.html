@@ -7006,6 +7006,16 @@
               </details>
               <details class="product-secondary-disclosure" :open="productForm.box_style==='BOM组合'">
               <summary>组合 BOM</summary>
+              <div v-if="bomEditor.enabled && bomEditor.inventory_mode==='assembled' && canManageFinanceCosts" style="margin:8px 0">
+                <button type="button" class="btn small" :disabled="!productForm.id || bomLabor.busy" @click="openBomLabor">组装人工</button>
+                <span class="muted">默认50套/人·小时；单款可调整，历史批次不改价。</span>
+                <div v-if="bomLabor.product_id===productForm.id && bomLabor.settings" class="toolbar-group" style="margin-top:8px">
+                  <label>套/人·小时 <input class="input" style="width:100px" type="number" min="0.01" step="0.01" v-model="bomLabor.rate" :disabled="bomLabor.busy" /></label>
+                  <span>标准组装人工 ¥{{ bomLaborPreview() }}/套</span>
+                  <button type="button" class="btn small primary" :disabled="bomLabor.busy" @click="saveBomLabor">保存人工</button>
+                  <button type="button" class="btn small" :disabled="bomLabor.busy" @click="bomLabor.product_id=null">收起</button>
+                </div>
+              </div>
               <div v-if="productForm.box_style==='BOM组合'" class="notice">每 1 套填写子件用量；父件不报料，组装确认后扣子件、入成套库存。按套计价，可选打印标签。</div>
               <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
                 <div class="bom-editor-heading">
@@ -10393,6 +10403,7 @@
             financeProcessingSettings:blankFinanceProcessingSettings(),
             financeProcessingProfiles:[], financeProcessingProfileTotal:0, financeProcessingSearch:"",
             financeProcessingProfileForm:blankFinanceProcessingProfile(),
+            bomLabor:{product_id:null,settings:null,profile:null,rate:50,busy:false,signature:'',key:''},
             financeProcessingSettingsAttempt:{signature:"",idempotencyKey:"",outcomeUncertain:false},
             financeProcessingProfileAttempt:{signature:"",idempotencyKey:"",outcomeUncertain:false,action:""},
             financeProcessingDefaultPrinterModes:[{value:"new",label:"新印刷机"},{value:"old",label:"旧印刷机"}],
@@ -22435,6 +22446,40 @@
               if (this.financeCostRequestIsCurrent(requestKey,controller,authGeneration,userId)) this.financeProcessingState.profilesLoading = false;
               this.finishLatestRequest(requestKey,controller);
             }
+          },
+          async openBomLabor() {
+            if (!this.canManageFinanceCosts || !this.productForm.id || this.bomLabor.busy) return;
+            const pid=Number(this.productForm.id), generation=this.authGeneration;
+            this.bomLabor={product_id:null,settings:null,profile:null,rate:50,busy:true,signature:'',key:''};
+            try {
+              const [s,p]=await Promise.all([axios.get('/api/finance/processing-settings'),axios.get(`/api/finance/product-processing-profiles/${pid}`)]);
+              if (generation!==this.authGeneration || pid!==Number(this.productForm.id)) return;
+              const days=Number(p.data.assembly_worker_days_per_1000);
+              this.bomLabor={product_id:pid,settings:s.data,profile:p.data,
+                rate:days>0?Number((1000/days/Number(s.data.working_hours_per_day)).toFixed(4)):50,busy:false,signature:'',key:''};
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+            finally { this.bomLabor.busy=false; }
+          },
+          bomLaborPreview() {
+            const f=this.bomLabor,s=f.settings;
+            if (!s || !s.average_worker_monthly_salary || !(Number(f.rate)>0)) return '待维护人工基础设置';
+            return ((Number(s.average_worker_monthly_salary)+Number(s.average_worker_monthly_social_cost||0))/Number(s.working_days_per_month)/Number(s.working_hours_per_day)/Number(f.rate)).toFixed(4);
+          },
+          async saveBomLabor() {
+            const f=this.bomLabor, generation=this.authGeneration;
+            if (!this.canManageFinanceCosts || f.busy || f.product_id!==Number(this.productForm.id)) return;
+            if (!Number.isFinite(Number(f.rate)) || Number(f.rate)<=0) {this.showToast('每人每小时套数必须大于0',true);return;}
+            const payload={printer_mode:f.profile.printer_mode,die_cut_mode:f.profile.die_cut_mode,
+              assembly_output_per_person_hour:String(f.rate),assembly_settings_version:f.settings.version,expected_version:f.profile.version};
+            const signature=JSON.stringify({id:f.product_id,...payload});
+            if (f.signature!==signature) { f.signature=signature;f.key=createIdempotencyKey(); }
+            f.busy=true;
+            try {
+              const result=await axios.put(`/api/finance/product-processing-profiles/${f.product_id}`,{...payload,idempotency_key:f.key});
+              if(generation!==this.authGeneration)return;
+              f.profile=result.data;f.signature='';f.key='';this.showToast('组装人工已保存，后续入库采用新标准');
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+            finally {f.busy=false;}
           },
           editFinanceProcessingProfile(row) {
             if (!row?.product_id) return false;

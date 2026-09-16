@@ -41,9 +41,11 @@ class WarehouseCosts extends HTMLElement {
         for(const r of data.rows){
           const article=el("article");article.append(el("div",[r.customer_name,r.product_code,r.product_name].filter(Boolean).join(" · ")));
           const row=el("div");row.className="row";
-          row.append(el("span",`${r.quantity}${r.unit==="sheets"?"张":"只"} · 单价 ${r.unit_cost==null?"待补价":`¥${r.unit_cost}`}`),el("strong",r.inventory_value==null?"成本待补":`¥${r.inventory_value}`));
+          row.append(el("span",`${r.quantity}${r.display_unit||(r.unit==="sheets"?"张":"只")} · 材料单价 ${r.unit_cost==null?"待补价":`¥${r.unit_cost}`}`),el("strong",r.inventory_value==null?"成本待补":`¥${r.inventory_value}`));
           const info=el("div",`${r.stock_date} · ${r.lot_number}${location?"":` · ${r.location_name}`} · ${r.label}`);info.className="muted";
           article.append(row,info);list.append(article);
+          if(r.standard_labour_unit_cost!=null){const labour=el("div",`标准组装人工 ¥${r.standard_labour_unit_cost}/${r.display_unit||'套'} · 含组装人工单价 ¥${r.standard_total_unit_cost} · 合计 ¥${r.standard_total_value}`);labour.className="muted";article.append(labour);}
+          if(r.standard_labour_missing){const missing=el("div",`组装人工待补：${r.standard_labour_missing}`);missing.className="warning";article.append(missing);}
           if(r.cost_basis){const b=el("div",r.cost_basis);b.className="muted";article.append(b);}
           if(auth.user.role==="admin"&&r.product_id&&!location){const edit=el("button","成本依据");edit.type="button";edit.addEventListener("click",async()=>{const {editCostRule}=await import("./warehouse-cost-rule-editor.js?v=20260911-1");if(!lifetime.signal.aborted)await editCostRule(root,r,()=>this.load());});article.append(edit);}
           if(r.validation_issue){const warning=el("div",r.validation_issue);warning.className="warning";article.append(warning);}
@@ -62,7 +64,7 @@ class WarehouseCosts extends HTMLElement {
           const lastPage=Math.max(1,Math.ceil(data.total/data.page_size));
           if(page>lastPage){await loadPage(lastPage,keyword);return;}
           currentPage=data.page;hasMore=data.has_more;
-          summary.textContent=`${location?"本货位":"仓库"}已定价金额 ¥${data.inventory_value}${data.missing_lots?` · ${data.missing_lots} 批待核价`:""}`;
+          summary.textContent=`${location?"本货位":"仓库"}材料成本金额 ¥${data.inventory_value}${data.missing_lots?` · ${data.missing_lots} 批待核价`:""}`;
           basis.textContent=`${data.basis}。上方为${location?"本货位":"全部可见库存"}合计，不随下面筛选或翻页改变。`;
           pageLabel.textContent=`第 ${currentPage} / ${lastPage} 页 · ${data.total} 批${keyword?"符合筛选":""}`;
           renderRows(data);

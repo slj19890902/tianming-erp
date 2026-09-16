@@ -19,6 +19,12 @@ def test_receipts_wait_then_explicit_assembly_and_history(composite_requisition_
     from app.api.deliveries import router as delivery_router
     app.include_router(delivery_router,prefix='/api/deliveries')
     mid, snapshots = seed_graph(factory)
+    from app.models.processing_cost import ProcessingCostSettings
+    with factory() as db:
+        settings = db.get(ProcessingCostSettings, 1)
+        settings.average_worker_monthly_salary = 5500
+        settings.average_worker_monthly_social_cost = 0
+        db.commit()
     with TestClient(app) as client:
         _login(client)
         for index, source in enumerate(purchase_sources(client, factory, mid, snapshots)):
@@ -92,6 +98,13 @@ def test_receipts_wait_then_explicit_assembly_and_history(composite_requisition_
             assert sum(a.quantity for a in db.scalars(select(BomAssembly))) == 10
             output = db.scalar(select(InventoryLot).where(InventoryLot.source_ref_type=='bom_assembly'))
             assert output.quantity_consumed == 4 and output.quantity_reserved == 6
+            from app.services.inventory_valuation import cost_payload
+            frozen = cost_payload(output, db)
+            assert frozen['standard_labour_unit_cost'] == '0.5288'
+            settings = db.get(ProcessingCostSettings, 1)
+            settings.average_worker_monthly_salary = 11000
+            db.flush()
+            assert cost_payload(output, db)['standard_labour_unit_cost'] == '0.5288'
             assert len(graph_material_sources(db,output)) == 2
             from app.services.bom_assembly_history import history as assembly_history
             from app.services.bom_pending_assembly import pending as pending_assembly

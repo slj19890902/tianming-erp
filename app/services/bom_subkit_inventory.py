@@ -185,6 +185,7 @@ def assemble_subkit_inventory(
             to_consume[body_product_id] = plan.kit_quantity
         cost = Decimal(0)
         cost_sources = []
+        labour_sources = []
         for lot in sorted(lots, key=inventory_fifo_sort_key):
             pid = product_by_lot[lot.id]
             take = min(free_by_lot[lot.id] + reserved_qty.get(lot.id, 0), to_consume[pid])
@@ -195,6 +196,7 @@ def assemble_subkit_inventory(
             from app.services.bom_subkit_costs import source_cost
             part_cost, lineage = source_cost(db, lot, take)
             cost_sources.append({**lineage, "lot_id": lot.id, "quantity": take, "cost": str(part_cost)})
+            labour_sources.append((lot, take))
             currencies = {r["currency"] for r in cost_sources if r["currency"]}
             if len(currencies) > 1:
                 raise SubkitError("原片采购币种不同，请先确认换算成本，不能直接合并")
@@ -249,7 +251,9 @@ def assemble_subkit_inventory(
             output.finished_detail.product_name_snapshot = snapshot.kit_name_snapshot
             output.estimated_unit_cost_snapshot = (cost / plan.kit_quantity).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
             output.cost_snapshot_source = source_ref
-            output.cost_snapshot_detail_json = json.dumps({"conversion_id": conversion.id, "total_cost": str(cost), "quantity": plan.kit_quantity})
+            from app.services.bom_entry_cost import freeze_assembly_standard
+            labour = freeze_assembly_standard(db, snapshot.kit_product_id, labour_sources, plan.kit_quantity)
+            output.cost_snapshot_detail_json = json.dumps({"conversion_id": conversion.id, "total_cost": str(cost), "quantity": plan.kit_quantity, **labour})
             output.cost_snapshot_at = utc_now_naive()
             conversion.output_lot_id = output.id
         conversion.total_cost = cost

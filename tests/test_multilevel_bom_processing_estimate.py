@@ -112,16 +112,16 @@ def test_cost_freeze_retains_node_process_after_master_edit(context):
     assert json.loads(original)["standard_processing"]["nodes"]
 
 
-def test_missing_assembly_labor_is_not_silently_free(context):
+def test_missing_assembly_override_uses_50_per_hour_and_freezes(context):
     db, actor, item, _ = context
     prepare(db, actor, item)
     profile = db.scalar(select(ProductProcessingProfile).where(ProductProcessingProfile.product_id == 2))
     profile.assembly_worker_days_per_1000 = None
     db.commit()
     result = estimate_order_item_processing_cost(db, item)
-    assert result["calculation_status"] == "incomplete"
-    assert result["estimated_processing_cost"] is None
-    assert any("组装人工" in text for text in result["missing_items"])
+    assert result["calculation_status"] == "calculated"
+    node=next(r for r in result['nodes'] if r['product_id']==2)
+    assert Decimal(node['processing']['extra_assembly']['assembly_worker_days_per_1000'])==Decimal('2.5')
     assert Decimal(result["known_processing_subtotal"]) > 0
     material, _ = freeze_order_item_material_cost(db, item)
     first, _ = freeze_order_item_estimated_cost(db, item, material_snapshot=material)
@@ -131,8 +131,8 @@ def test_missing_assembly_labor_is_not_silently_free(context):
     profile.version += 1
     db.commit()
     second, created = freeze_order_item_estimated_cost(db, item, material_snapshot=material)
-    assert created and second.calculation_status == "calculated"
-    assert first.calculation_status == "partial" and first.breakdown_json == original
+    assert not created and second.id==first.id
+    assert first.calculation_status == "calculated" and first.breakdown_json == original
 
 
 def test_changed_master_before_first_cost_cannot_invent_historical_printing(context):

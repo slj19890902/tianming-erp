@@ -53,7 +53,7 @@ def derived_cost(db, lot, visited):
                 calculated+=stored*row['quantity'];evidence.append(dict(lot_id=origin.id,quantity=row['quantity'],basis=basis))
             if abs(calculated-total)>Decimal('.01') or abs(total/qty-Decimal(str(lot.estimated_unit_cost_snapshot)))>Decimal('.0001'):
                 return None, {'validation_issue':'备库组套成本不守恒'}
-            return total/qty,dict(currency='CNY',cost_label='备库组套继承成本',quantity=qty,total_cost=str(total),inputs=evidence,basis='inherited_entry_cost_not_new_purchase')
+            return total/qty,dict(**{k:detail[k] for k in ('assembly_standard','standard_labour_unit_cost','standard_labour_missing','product_unit') if k in detail},currency='CNY',cost_label='备库组套继承成本',quantity=qty,total_cost=str(total),inputs=evidence,basis='inherited_entry_cost_not_new_purchase')
         if lot.cost_snapshot_source=='bom_assembly':
             from app.models.multilevel_bom import BomAssembly, BomAssemblyInput
             assembly=db.get(BomAssembly,lot.source_ref_id)
@@ -79,7 +79,7 @@ def derived_cost(db, lot, visited):
             result=assembly.total_cost/assembly.quantity
             if lot.estimated_unit_cost_snapshot is None or abs(result-Decimal(str(lot.estimated_unit_cost_snapshot)))>Decimal('.0001'):
                 return None, {'validation_issue':'组套产出单价与来源不一致'}
-            return result,dict(currency='CNY',cost_label='组套继承成本',assembly_id=assembly.id,
+            return result,dict(**{k:detail[k] for k in ('assembly_standard','standard_labour_unit_cost','standard_labour_missing','product_unit') if k in detail},currency='CNY',cost_label='组套继承成本',assembly_id=assembly.id,
                 total_cost=str(assembly.total_cost),quantity=assembly.quantity,inputs=evidence,basis='inherited_entry_cost_not_new_purchase')
     except (ValueError,TypeError,KeyError,ArithmeticError):
         return None, {'validation_issue':'加工或组套成本记录格式不完整'}

@@ -179,6 +179,8 @@ class ProductProcessingProfileFields(BaseModel):
     assembly_workers: Decimal | None = None
     assembly_days: Decimal | None = None
     assembly_output_quantity: Decimal | None = None
+    assembly_output_per_person_hour: Decimal | None = Field(default=None, gt=0)
+    assembly_settings_version: int | None = Field(default=None, ge=1)
 
     @field_validator("printer_mode")
     @classmethod
@@ -214,6 +216,14 @@ class ProductProcessingProfileFields(BaseModel):
 
     @model_validator(mode="after")
     def calculate_assembly_days_per_1000(self):
+        if self.assembly_output_per_person_hour is not None:
+            if not self.assembly_output_per_person_hour.is_finite():
+                raise ValueError('每人每小时完成套数必须为有限正数')
+            if self.assembly_settings_version is None:
+                raise ValueError('请刷新人工基础设置后保存')
+            if any(v is not None for v in (self.assembly_worker_days_per_1000,
+                    self.assembly_workers, self.assembly_days, self.assembly_output_quantity)):
+                raise ValueError('每小时套数与工日换算只能填写一种')
         source_values = (
             self.assembly_workers,
             self.assembly_days,
@@ -346,8 +356,8 @@ def _product_context(
     return result
 
 
-def _profile_values(payload: ProductProcessingProfileFields) -> dict[str, Any]:
-    return payload.model_dump(
+def _profile_values(payload: ProductProcessingProfileFields, db: Session) -> dict[str, Any]:
+    values = payload.model_dump(
         exclude={
             "product_id",
             "expected_version",
@@ -355,8 +365,18 @@ def _profile_values(payload: ProductProcessingProfileFields) -> dict[str, Any]:
             "assembly_workers",
             "assembly_days",
             "assembly_output_quantity",
+            "assembly_output_per_person_hour", "assembly_settings_version",
         }
     )
+    if payload.assembly_output_per_person_hour is not None:
+        settings = get_processing_cost_settings(db)
+        if settings.version != payload.assembly_settings_version:
+            raise HTTPException(status_code=409, detail='人工基础设置已变化，请重新打开组装人工设置')
+        values['assembly_worker_days_per_1000'] = (Decimal(1000) /
+            payload.assembly_output_per_person_hour / settings.working_hours_per_day).quantize(Decimal('.000001'), rounding=ROUND_HALF_UP)
+        if values['assembly_worker_days_per_1000'] <= 0:
+            raise HTTPException(status_code=422, detail='每小时完成套数过大')
+    return values
 
 
 @router.get("/processing-settings")
@@ -539,7 +559,7 @@ def _create_profile(
 ) -> ProductProcessingProfile:
     row = ProductProcessingProfile(
         product_id=product.id,
-        **_profile_values(payload),
+        **_profile_values(payload, db),
         version=1,
         created_by=user.id,
         updated_by=user.id,
@@ -672,7 +692,7 @@ def upsert_product_processing_profile(
                     ProductProcessingProfile.version == payload.expected_version,
                 )
                 .values(
-                    **_profile_values(payload),
+                    **_profile_values(payload, db),
                     version=payload.expected_version + 1,
                     updated_by=user.id,
                     updated_at=beijing_now_naive(),

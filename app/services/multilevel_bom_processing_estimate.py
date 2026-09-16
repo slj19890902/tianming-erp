@@ -56,6 +56,13 @@ def _inputs(db, item, compiled):
             product = db.get(Product, node.product_id)
             if product is None or product.customer_id != compiled.graph.customer_id or product.version != node.version:
                 raise BomPlanError("加工资料尚未冻结且产品版本已变化，不能推算历史工艺")
+            profile_values = _profile_values(get_product_processing_profile(db, node.product_id))
+            if node.source == 'assembled' and profile_values['assembly_worker_days_per_1000'] is None:
+                from app.services.bom_entry_cost import assembly_standard
+                try:
+                    profile_values['assembly_worker_days_per_1000'] = assembly_standard(db, node.product_id)['worker_days_per_1000']
+                except ValueError:
+                    pass  # Existing incomplete-cost explanation remains explicit.
             rows.append(dict(product_id=node.product_id, product_version=node.version,
                 bom_snapshot_id=snapshot.id, source=node.source,
                 product=dict(id=node.product_id, box_category=snapshot.snapshot_component_box_category,
@@ -63,7 +70,7 @@ def _inputs(db, item, compiled):
                     production_process=snapshot.snapshot_component_production_process,
                     splice_mode=snapshot.snapshot_component_splice_mode,
                     **{key: getattr(product, key) for key in PRINT_FIELDS}),
-                profile=_profile_values(get_product_processing_profile(db, node.product_id))))
+                profile=profile_values))
     if not isinstance(rows, list) or any(not isinstance(row, dict)
             or not {"product_id", "product_version", "bom_snapshot_id", "source", "product", "profile"} <= row.keys()
             or not isinstance(row["product"], dict) or "id" not in row["product"]

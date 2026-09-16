@@ -140,7 +140,9 @@ def assemble(db,payload,actor):
     output.source_ref_id=output.id
     output.finished_detail.inventory_code_snapshot=recipe['code'];output.finished_detail.product_name_snapshot=recipe['name']+'（成套）'
     output.estimated_unit_cost_snapshot=total_cost/sets if cost_known else None
-    output.cost_snapshot_source='stock_preparation_assembly';output.cost_snapshot_detail_json=encode(dict(inputs=inputs,total_cost=str(total_cost) if cost_known else None))
+    from app.services.bom_entry_cost import freeze_assembly_standard
+    labour=freeze_assembly_standard(db,recipe['parent_id'],[(db.get(InventoryLot,r['lot_id']),r['quantity']) for r in inputs],sets)
+    output.cost_snapshot_source='stock_preparation_assembly';output.cost_snapshot_detail_json=encode(dict(inputs=inputs,total_cost=str(total_cost) if cost_known else None,**labour))
     for source in inputs:release_empty_output_pallet(db,db.get(InventoryLot,source['lot_id']),actor)
     result['output_lot_id']=output.id;result['placed_at_utc']=utc_now_naive().isoformat()
     db.add(Command(operation_key=key,receipt_item_id=jobs[0].receipt_item_id,

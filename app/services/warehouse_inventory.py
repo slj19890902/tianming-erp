@@ -2188,6 +2188,15 @@ def _transfer_finished_lot_location(
             raise WarehouseInventoryError("目标货位已有货物，请选择空位", 409)
         for target_lot in target_lots:
             target_detail = target_lot.finished_detail
+            operator = db.get(User, operator_id) if operator_id is not None else None
+            if (target_lot.inventory_type == "semi_finished"
+                    and target_lot.semi_finished_detail is not None
+                    and target_lot.status == "active"
+                    and int(target_lot.quantity_damaged or 0) == 0
+                    and operator is not None and operator.role == "admin"):
+                # Physical co-location preserves the existing material lot and
+                # its reservations; it does not convert or merge sheet stock.
+                continue
             if (
                 target_lot.status != "active"
                 or int(target_lot.quantity_damaged or 0) > 0

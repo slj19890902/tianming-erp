@@ -624,6 +624,14 @@ def assert_location_add_compatible(db: Session, location_id: int) -> None:
                 409,
             )
         linked_lot = pallet_item.inventory_lot
+        # Ledger history is not current occupancy. A fully counted-out/moved-out
+        # batch may keep its old pallet snapshot for traceability.
+        if linked_lot is not None and (
+            int(linked_lot.quantity_available or 0)
+            + int(linked_lot.quantity_reserved or 0)
+            + int(linked_lot.quantity_damaged or 0)
+        ) == 0:
+            continue
         linked_detail = linked_lot.finished_detail if linked_lot is not None else None
         linked_product = (
             db.get(Product, linked_detail.product_id)

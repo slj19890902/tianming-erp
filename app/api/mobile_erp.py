@@ -3186,7 +3186,7 @@ def _mobile_goods_payload(lot: InventoryLot) -> dict:
         "stock_date": lot.stock_date,
         "last_movement_at": utc_naive_to_api(lot.last_movement_at),
         "can_move": (
-            lot.inventory_type == "finished"
+            lot.inventory_type in {"finished", "semi_finished"}
             and lot.status == "active"
             and damaged_quantity == 0
             and movable_quantity > 0
@@ -3842,7 +3842,11 @@ def mobile_move_warehouse_lot(
         elif int(discrepancy.reported_quantity) != int(payload.quantity):
             raise HTTPException(status_code=409, detail="请一次搬完该红色标记记录的现场数量")
     try:
-        result = transfer_finished_lot_between_locations(
+        from app.services.warehouse_sheet_transfer import transfer_sheet_lot_between_locations
+        transfer_lot = (transfer_sheet_lot_between_locations
+                        if source_lot.inventory_type == "semi_finished"
+                        else transfer_finished_lot_between_locations)
+        result = transfer_lot(
             db,
             lot_id=lot_id,
             expected_version=payload.expected_version,

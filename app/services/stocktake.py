@@ -102,13 +102,18 @@ def _order_options():
     )
 
 
-def _countable_lots_statement(location_id: int):
+def _countable_lots_statement(location_id: int, *, include_lot_ids=()):
     return (
         select(InventoryLot)
         .where(
             InventoryLot.warehouse_location_id == location_id,
             InventoryLot.inventory_type.in_(("finished", "semi_finished")),
             InventoryLot.status.in_(COUNTABLE_LOT_STATUSES),
+            or_(
+                InventoryLot.quantity_available + InventoryLot.quantity_reserved
+                + InventoryLot.quantity_damaged > 0,
+                InventoryLot.id.in_(include_lot_ids),
+            ),
         )
         .options(*_lot_options())
         .order_by(InventoryLot.id)
@@ -225,6 +230,8 @@ def list_locations(db: Session) -> list[dict[str, object]]:
             and_(
                 InventoryLot.warehouse_location_id == WarehouseLocation.id,
                 InventoryLot.inventory_type.in_(("finished", "semi_finished")),
+                InventoryLot.quantity_available + InventoryLot.quantity_reserved
+                + InventoryLot.quantity_damaged > 0,
             ),
         )
         .where(
@@ -1035,7 +1042,7 @@ def approve_stocktake(
 
     items_by_lot = {item.inventory_lot_id: item for item in order.items}
     lots = db.scalars(
-        _countable_lots_statement(order.location_id).with_for_update()
+        _countable_lots_statement(order.location_id, include_lot_ids=items_by_lot).with_for_update()
     ).all()
     if {lot.id for lot in lots} != set(items_by_lot):
         raise StocktakeError(

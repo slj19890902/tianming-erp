@@ -5686,3 +5686,4 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 - 2026-09-16 MOBILE-DIMENSION-TAKE 正式 v0.22.432：运行代码 a95c490b3f4f289eb0cb334874925f427b6b6b20，cc0915 无新增迁移；手机独立尺寸筛选与直接取用，保留原查询、预占及BOM身份门禁。备份、NAS回读、只读健康通过，未代操作正式库存，待管理员人工验收。详见 docs/release_reports/MOBILE_DIMENSION_TAKE432_20260916.md 与 NAS 同名任务回执。
 - 2026-09-16 WAREHOUSE-DIMENSION-SEARCH 正式v434：运行代码 e19f72d77151d066c568c5d09fa3976caae7373e，保留v433，cc0915无新增迁移；网页仓库详细尺寸/楞型近似查找、实际数量与位置，未改业务数据。定向测试、备份/NAS回读/健康通过，待人工验收。详见 docs/release_reports/WAREHOUSE_DIMENSION_SEARCH_20260916.md 和NAS同名回执。
 - 2026-09-16 EXTERNAL152正式v435：代码0f1e7b96，cc0915无DDL，保留v434；授权承接152余货200根至正式2149/R006一层1格，批次856，原已送800保持。NAS验证备份和隔离移库/新发货撤销通过。承接后不得仅降回v434；恢复须审核后续事实与完整备份。详见docs/release_reports/EXTERNAL152_20260916.md及NAS v435回执，待人工验收。
+- 2026-09-16 PRODUCTION-PAGING正式v436：代码a0881c91，cc0915无DDL；生产历史/归位分页容量稳定，归位按待入库区真实成品批次而非完工状态筛选，保留v435。定向测试、隔离移库回滚、NAS备份和健康通过；无正式业务写入。详见docs/release_reports/PRODUCTION_PAGING_20260916.md及NAS v436回执，待人工验收。

@@ -315,6 +315,8 @@
 
       <section id="lookupPage" hidden>
         <h1 class="page-title">现场查询</h1>
+        <section id="dimensionStock" class="card" aria-label="按尺寸找库存"></section>
+        <h2>综合查询</h2>
         <p class="page-help">一次输入订单号、客户、存货编码、模具标签名称或尺寸；只返回当前账号有权限且在客户范围内的资料，不显示价格、成本或毛利。</p>
         <div class="searchbar">
           <input id="lookupInput" maxlength="100" autocomplete="off" inputmode="search" placeholder="输入订单、客户、产品、模具或尺寸">
@@ -504,6 +506,7 @@
     </div>
   </section>
 
+  <script src="/static/ui/mobile-dimension-stock.js?v=20260916-1"></script>
   <script src="/static/ui/mobile-delivery-margin.js?v=20260915-costcontract428"></script>
   <script>
     (() => {
@@ -792,7 +795,10 @@
         }
         if (!response.ok) {
           const detail = data && data.detail;
-          throw new Error(typeof detail === "string" ? detail : `操作失败（HTTP ${response.status}）`);
+          const error = new Error(typeof detail === "string" ? detail : `操作失败（HTTP ${response.status}）`);
+          error.status = response.status;
+          error.requestRejected = response.headers.get("X-Stock-Take-Rejected") === "1";
+          throw error;
         }
         return data;
       }
@@ -3082,6 +3088,7 @@
           window.history.replaceState(null, "", `#${state.activePage}`);
         }
       });
+      window.TmDimensionStock?.mount({apiGet, apiPost});
       initialize();
     })();
   </script>

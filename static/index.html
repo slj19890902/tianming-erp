@@ -904,6 +904,8 @@
       .semi-stock-table th { font-size:11px;color:#64748b; }
       .semi-stock-table .semi-stock-actions { width:155px;white-space:nowrap; }
       .semi-stock-table .semi-stock-actions .btn { margin-right:4px; }
+      .pdf-material-table th:last-child,.pdf-material-table .semi-stock-actions { width:150px; }
+      .pdf-material-table .semi-stock-actions .btn { margin:2px; }
       .order-entry-modal { width: min(1760px, 100%); }
       .pdf-order-import-modal { width:min(1760px, 100%); }
       .pdf-inventory-table-wrap {
@@ -7664,14 +7666,15 @@
                               <div class="toolbar-group" v-if="inventoryComponents(item).length>1"><button v-for="component in inventoryComponents(item)" :key="component" :class="['btn','small',(item._inventory_component||inventoryComponents(item)[0])===component?'primary':'']" @click="item._inventory_component=component;item._inventory_page=1">{{componentLabel(component)||'整件'}}</button></div>
                               <template v-for="component in inventoryComponents(item)" :key="component"><div v-if="component===(item._inventory_component||inventoryComponents(item)[0])">
                                 <button v-if="semiStockMoreCount(item,component)" class="btn small" type="button" @click="item._inventory.semi[component].show_more_sizes = !item._inventory.semi[component].show_more_sizes; item._inventory_page=1">{{ item._inventory.semi[component].show_more_sizes ? '收起' : '展开' }}大片料 / 其他尺寸（{{ semiStockMoreCount(item,component) }}）</button>
-                                <table class="line-items pdf-material-table"><thead><tr><th>规格 / 压线</th><th>材质 / 楞型</th><th>可用 / 可覆盖</th><th>位置</th><th>本次拟用</th></tr></thead><tbody>
+                                <table class="line-items pdf-material-table"><thead><tr><th>货物名称</th><th>纸板长（mm）</th><th>纸板宽（mm）</th><th>楞型</th><th>材质</th><th>加工类型</th><th>数量</th><th>位置</th><th>采用 / 不采用</th></tr></thead><tbody>
                                   <tr v-for="candidate in pdfMaterialCandidates(item,component,item._inventory_tab).slice(((item._inventory_page||1)-1)*4,(item._inventory_page||1)*4)" :key="candidate.lot_id">
-                                    <td><strong>{{candidate.board_length_mm}} × {{candidate.board_width_mm}} mm</strong><div>{{pdfCandidateCrease(candidate)}}</div></td><td>{{candidate.material_code}} / {{candidate.flute_type}}<div><span :class="['status',pdfCandidateExact(candidate)?'green':'orange']">{{pdfCandidateExact(candidate)?'完全符合':'需核对适配'}}</span><info-note v-if="candidate.signature_differences?.length || candidate.warning_messages?.length">{{[...(candidate.signature_differences||[]),...(candidate.warning_messages||[])].join('；')}}</info-note></div></td>
-                                    <td>{{candidate.available_stock_quantity}} 张<div>可覆盖 {{candidate.deductible_requirement_quantity}} 片</div></td><td><order-stock-location :candidate="candidate" :item="item"></order-stock-location><info-note>{{candidate.lot_number}}</info-note></td>
-                                    <td><strong v-if="item._inventory.semi[component].allocations.some(a=>a.candidate.lot_id===candidate.lot_id)">{{item._inventory.semi[component].allocations.filter(a=>a.candidate.lot_id===candidate.lot_id).reduce((n,a)=>n+Number(a.stock_quantity||0),0)}} 张</strong>
-                                      <template v-else><button class="btn primary small" :title="isGeneralSemiFinishedCandidate(candidate)?'采用即确认跨客户使用':'采用即确认此批次适配'" @click="isDirectSemiDeductionCandidate(candidate)?confirmDirectSemiDeduction(item,component,candidate):confirmOrderLineInventory(item,component,candidate,semiCandidateNeedsOverride(candidate))">采用</button></template>
+                                    <td>{{candidate.internal_name || '—'}}</td><td>{{candidate.board_length_mm || '—'}}</td><td>{{candidate.board_width_mm || '—'}}</td>
+                                    <td>{{semiStockField({candidates:[candidate]},'flute_type')}}</td><td>{{candidate.material_code || '—'}}<info-note v-if="candidate.signature_differences?.length || candidate.warning_messages?.length">{{[...(candidate.signature_differences||[]),...(candidate.warning_messages||[])].join('；')}}</info-note></td>
+                                    <td>{{semiStockField({candidates:[candidate]},'processing')}}</td>
+                                    <td>{{candidate.available_stock_quantity}} 张<small v-if="candidate.deductible_requirement_quantity!==candidate.available_stock_quantity">（可抵 {{candidate.deductible_requirement_quantity}} 片）</small><div v-if="item._inventory.semi[component].allocations.some(a=>a.candidate.lot_id===candidate.lot_id)" class="status green">采用 {{item._inventory.semi[component].allocations.filter(a=>a.candidate.lot_id===candidate.lot_id).reduce((n,a)=>n+Number(a.stock_quantity||0),0)}} 张</div></td><td><order-stock-location :candidate="candidate" :item="item"></order-stock-location></td>
+                                    <td class="semi-stock-actions"><button class="btn success small" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" :title="isGeneralSemiFinishedCandidate(candidate)?'采用即确认跨客户使用':'采用即确认此批次适配'" @click="isDirectSemiDeductionCandidate(candidate)?confirmDirectSemiDeduction(item,component,candidate):confirmOrderLineInventory(item,component,candidate,semiCandidateNeedsOverride(candidate))">采用</button><button class="btn danger small" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,{candidates:[candidate]},false)">不采用</button>
                                     </td>
-                                  </tr><tr v-if="!pdfMaterialCandidates(item,component,item._inventory_tab).length"><td colspan="5">暂无符合条件的可用材料</td></tr>
+                                  </tr><tr v-if="!pdfMaterialCandidates(item,component,item._inventory_tab).length"><td colspan="9">暂无符合条件的可用材料</td></tr>
                                 </tbody></table>
                                 <div class="toolbar-group"><button class="btn danger small" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" @click="loadOrderLineManualInventory(item,component,draft.matched_customer_id)">查找更多适配</button><pager :page="item._inventory_page||1" :total="pdfMaterialCandidates(item,component,item._inventory_tab).length" :page-size="4" @change="item._inventory_page=$event"></pager></div>
                                 <div v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{item._inventory.semi[component].unavailable_reason}}</div>
@@ -7918,13 +7921,16 @@
                           <button v-if="semiStockMoreCount(item,component)" class="btn small" type="button" @click="item._inventory.semi[component].show_more_sizes = !item._inventory.semi[component].show_more_sizes">{{ item._inventory.semi[component].show_more_sizes ? '收起' : '展开' }}大片料 / 其他尺寸（{{ semiStockMoreCount(item,component) }}）</button>
                           <span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span>
                           <table v-if="semiStockGroups(item,component).length" class="semi-stock-table">
-                            <thead><tr><th>可用数量</th><th>位置</th><th>尺寸（mm）</th><th>楞型</th><th>材质</th><th class="semi-stock-actions"></th></tr></thead>
+                            <thead><tr><th>货物名称</th><th>纸板长（mm）</th><th>纸板宽（mm）</th><th>楞型</th><th>材质</th><th>加工类型</th><th>数量</th><th>位置</th><th class="semi-stock-actions">采用 / 不采用</th></tr></thead>
                             <tbody><tr v-for="group in semiStockGroups(item,component)" :key="group.key">
-                              <td><strong>{{ group.quantity }} 张</strong><div v-if="group.adopted" class="status green">采用 {{ group.adopted }} 张</div><small v-else-if="group.rejected" class="muted"> · 不采用</small></td>
-                              <td><order-stock-location :candidate="group.candidate" :item="item"></order-stock-location></td>
-                              <td>{{ semiStockField(group,'dimensions') }}</td>
+                              <td>{{ semiStockField(group,'internal_name') }}</td>
+                              <td>{{ semiStockField(group,'board_length_mm') }}</td>
+                              <td>{{ semiStockField(group,'board_width_mm') }}</td>
                               <td>{{ semiStockField(group,'flute_type') }}</td>
                               <td>{{ semiStockField(group,'material_code') }}<small v-if="group.candidates.some(c => isGeneralSemiFinishedCandidate(c))"> · 跨客户</small></td>
+                              <td>{{ semiStockField(group,'processing') }}</td>
+                              <td><strong>{{ group.quantity }} 张</strong><div v-if="group.adopted" class="status green">采用 {{ group.adopted }} 张</div><small v-else-if="group.rejected" class="muted"> · 不采用</small></td>
+                              <td><order-stock-location :candidate="group.candidate" :item="item"></order-stock-location></td>
                               <td class="semi-stock-actions"><button class="btn small success" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,true)">采用</button><button class="btn small danger" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,false)">不采用</button></td>
                             </tr></tbody>
                           </table>
@@ -14293,6 +14299,7 @@
             return [...new Set(group.candidates.map(c => field === 'dimensions'
               ? `${c.board_length_mm || '—'} × ${c.board_width_mm || '—'}`
               : field === 'flute_type' ? (c.flute_type === 'NONE' ? '卡纸' : c.flute_type || '—')
+              : field === 'processing' ? ({raw:'未加工',cut:'已裁切',die_cut:'已模切',creased:'已压线',printed:'已印刷'}[c.processing] || '未登记')
               : c[field] || '—'))].join(' / ');
           },
           orderLineInventoryButtonClass(line) {

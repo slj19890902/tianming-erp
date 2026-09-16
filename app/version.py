@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.444"
-APP_VERSION_NAME = "片料近尺寸优先推荐"
+APP_VERSION = "v0.22.445"
+APP_VERSION_NAME = "片料抵扣信息顺序优化"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4300,3 +4300,5 @@ APP_VERIFICATION_STEPS = ["手机刷新货位，选一批半成品或原料，�
 APP_CHANGES = ["片料候选先校验楞型和纸色，默认只显示各轴尺寸偏差不超过10%的近尺寸材料。", "大片料及其他尺寸默认收起，不自动安排；尺寸接近优先，数量接近其次，新订单与PDF共用规则。"]
 APP_VERIFICATION_STEPS = ["刷新新建订单，选择有不同尺寸库存的产品，核对近尺寸先显示、异楞型和异纸色不推荐。", "展开大片料/其他尺寸，核对数量和位置；只有实际需要时采用，不为验收保存虚构订单。"]
 APP_CHANGELOG = [*(f"v0.22.443：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["半成品及原料抵扣按录入货物名称、纸板长宽、楞型、材质、加工类型、数量、位置、采用/不采用排列。", "新建订单与PDF订单统一列顺序，加工类型按录入记录显示，未知不猜测；保留近尺寸推荐和库存核验。"]
+APP_VERIFICATION_STEPS = ["刷新新建订单或PDF订单，展开半成品/原料，核对列顺序及录入货物名称。", "核对加工类型、可用数量和位置，仅按真实订单需要采用或不采用，不为验收重复扣库。"]

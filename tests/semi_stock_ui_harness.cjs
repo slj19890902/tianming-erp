@@ -36,6 +36,13 @@ assert(!html.includes('处理库存例外'));
 const section=html.split('<!-- compact semi stock -->')[1].split('<!-- /compact semi stock -->')[0];
 assert(!section.includes('lot_number'));assert(!section.includes('signature_differences'));assert(section.includes('btn small success'));assert(section.includes('btn small danger'));
 console.log('semi stock UI: quantity, grouping, adopt/reject, batch payload, safety and rendering passed');
+const recorded={...a,internal_name:'现场灰板',processing:'die_cut'};
+assert.equal(ctx.semiStockField({candidates:[recorded]},'internal_name'),'现场灰板');
+assert.equal(ctx.semiStockField({candidates:[recorded]},'board_length_mm'),'1345');
+assert.equal(ctx.semiStockField({candidates:[recorded]},'board_width_mm'),'1300');
+assert.equal(ctx.semiStockField({candidates:[recorded]},'processing'),'已模切');
+assert.equal(ctx.semiStockField({candidates:[a]},'processing'),'未登记');
+assert.equal(ctx.semiStockField({candidates:[{...a,flute_type:'NONE'}]},'flute_type'),'卡纸');
 
 const near1={...a,lot_id:901,dimension_distance:0.02,available_stock_quantity:105,recommendation_tier:'near'};
 const near2={...a,lot_id:902,dimension_distance:0.02,available_stock_quantity:300,recommendation_tier:'near'};

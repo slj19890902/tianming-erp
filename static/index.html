@@ -7030,8 +7030,9 @@
                   <div class="bom-editor-heading-controls">
                     <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="productForm.box_style==='BOM组合' || !productForm.id" /> 启用</label>
                     <label class="remember-line">产品形成方式
-                      <select class="select" aria-label="BOM库存来源" v-model="bomEditor.inventory_mode" @change="onBomInventoryModeChange" :disabled="productForm.box_style==='BOM组合' || !!bomEditor.subkit?.enabled">
-                        <option v-if="bomEditor.persisted_inventory_mode === 'legacy'" value="legacy">保留旧规则</option>
+                      <span v-if="productForm.box_style==='BOM组合'" class="status blue">零件组装 · 父件不报料</span>
+                      <select v-else class="select" aria-label="BOM库存来源" v-model="bomEditor.inventory_mode" @change="onBomInventoryModeChange" :disabled="!!bomEditor.subkit?.enabled">
+                        <option v-if="bomEditor.persisted_inventory_mode === 'legacy'" value="legacy">旧规则 · 请选实际形成方式</option>
                         <option value="manufactured">自己生产</option>
                         <option value="assembled">零件组装</option>
                         <option value="separate">只列配套清单</option>
@@ -7087,7 +7088,7 @@
                           <details v-if="component.component_product_id || component.product_code || component.product_name" class="bom-component-info"><summary>编码 / 规格</summary><div class="bom-component-identity"><span>编码：{{ component.product_code || component.component?.product_code || '-' }}</span><span>名称：{{ component.product_name || component.component?.product_name || '未命名产品' }}</span><span>规格：{{ bomComponentSpecification(component) }}</span></div></details>
                         </div>
                         <div class="field bom-quantity-field"><label>每1{{ productForm.unit || '父件' }}用量</label><input class="input" aria-label="每父件子件用量" type="number" min="1" step="1" v-model.number="component.quantity_per_set" /><span>{{ bomComponentUnit(component) || '单位缺失' }}</span></div>
-                        <label v-if="bomEditor.inventory_mode === 'legacy'" class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> {{ component.is_required === false ? '可选' : '必需' }}</label>
+                        <div v-if="bomEditor.inventory_mode === 'legacy'" class="bom-component-compact-meta"><label class="remember-line"><input type="checkbox" v-model="component.is_required" /> {{ component.is_required === false ? '可选' : '必需' }}</label><small>先选产品形成方式，再选组装消耗 / 随货配套</small></div>
                         <select v-else class="select bom-component-relation" aria-label="子件库存关系" v-model="component.inventory_relation">
                           <option value="assembly" :disabled="!['assembled', 'manufactured', 'purchased'].includes(bomEditor.inventory_mode)">组装消耗</option>
                           <option value="accompany">随货配套</option>

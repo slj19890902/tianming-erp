@@ -9,6 +9,12 @@ ROOT = Path(__file__).resolve().parents[1]
 HTML = (ROOT / "static/index.html").read_text(encoding="utf-8")
 
 
+def test_bom_set_fixed_source_and_legacy_upgrade_are_explained():
+    assert '零件组装 · 父件不报料' in HTML
+    assert '旧规则 · 请选实际形成方式' in HTML
+    assert '先选产品形成方式，再选组装消耗 / 随货配套' in HTML
+
+
 def method(name):
     pattern = re.compile(r"^          (?:async )?" + re.escape(name) + r"\(", re.M)
     start = pattern.search(HTML).start()

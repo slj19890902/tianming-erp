@@ -127,7 +127,7 @@ def validate_component_graph(
     for component_id in component_product_ids:
         children = set(adjacency.get(component_id, ()))
         if children and not allow_nested:
-            raise CompositeBOMError("BOM 组件不能再是组合品（禁止嵌套 BOM）")
+            raise CompositeBOMError("旧规则不支持多级BOM：请先选择产品形成方式，再设置子件的组装消耗或随货配套关系")
 
         pending = [component_id]
         visited: set[int] = set()
@@ -690,7 +690,7 @@ def _replace_product_bom(
         if not advanced and (bool(getattr(component, "is_composite", False)) or bool(
             getattr(component, "is_virtual_composite_parent", False)
         )):
-            raise CompositeBOMError("BOM 组件不能再是组合品（禁止嵌套 BOM）")
+            raise CompositeBOMError("旧规则不支持多级BOM：请先选择产品形成方式，再设置子件的组装消耗或随货配套关系")
         if advanced and adjacency.get(component.id) and db.get(ProductBomProfile, component.id) is None:
             raise CompositeBOMError(f"请先设置子件 {component.product_name} 的真实BOM来源")
         relation = normalized[position - 1]

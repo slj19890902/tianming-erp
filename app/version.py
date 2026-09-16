@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.445"
-APP_VERSION_NAME = "片料抵扣信息顺序优化"
+APP_VERSION = "v0.22.446"
+APP_VERSION_NAME = "BOM形成方式与嵌套关系提示"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4302,3 +4302,7 @@ APP_VERIFICATION_STEPS = ["刷新新建订单，选择有不同尺寸库存的�
 APP_CHANGELOG = [*(f"v0.22.443：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 APP_CHANGES = ["半成品及原料抵扣按录入货物名称、纸板长宽、楞型、材质、加工类型、数量、位置、采用/不采用排列。", "新建订单与PDF订单统一列顺序，加工类型按录入记录显示，未知不猜测；保留近尺寸推荐和库存核验。"]
 APP_VERIFICATION_STEPS = ["刷新新建订单或PDF订单，展开半成品/原料，核对列顺序及录入货物名称。", "核对加工类型、可用数量和位置，仅按真实订单需要采用或不采用，不为验收重复扣库。"]
+APP_CHANGELOG = [*(f"v0.22.445：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["BOM组合明确显示零件组装、父件不报料；旧规则提示先选择产品形成方式，再配置组装消耗或随货配套。", "旧配方添加组合子件时明确指引升级配置，不改变已有配方、库存和历史订单。"]
+APP_VERIFICATION_STEPS = ["打开BOM组合常用箱，核对固定零件组装说明及每套子件用量。", "打开普通纸盒组合BOM，按实际业务选择自己生产，再设置内衬随货配套；勿为验收新增虚构库存。"]
+APP_CHANGELOG = [*(f"v0.22.446：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

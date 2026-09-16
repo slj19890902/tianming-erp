@@ -77,6 +77,9 @@ def test_mobile_counted_sheet_moves_into_finished_location(mobile_erp_app, quant
             rows=list(db.scalars(select(InventoryReservation).where(InventoryReservation.inventory_lot_id.in_({sheet_id,target_lot_id}))))
             assert sum(r.reserved_stock_quantity-r.released_stock_quantity for r in rows)==7
             assert sum(r.credited_requirement_quantity-r.released_requirement_quantity for r in rows)==13
+            for row in rows:
+                if quantity<10 and row.inventory_lot_id==target_lot_id:
+                    assert row.reservation_group_requested_quantity==row.credited_requirement_quantity
         moves=list(db.scalars(select(InventoryMovement).where(InventoryMovement.inventory_lot_id.in_({sheet_id,target_lot_id}))))
         assert len(moves)==(2 if quantity<10 else 1)
 

@@ -131,7 +131,7 @@ def transfer_sheet_lot_between_locations(db, **args):
                 reserved_stock_quantity=take, credited_requirement_quantity=credit,
                 status='active', idempotency_key=inv._transfer_key('sheet-move', key, reservation.id),
                 reservation_group_key=inv._transfer_key('sheet-move', key, reservation.id),
-                reservation_group_requested_quantity=take))
+                reservation_group_requested_quantity=credit))
             reservation.released_stock_quantity += take
             reservation.released_requirement_quantity += credit
             reservation.released_by = args['operator_id']

@@ -21,6 +21,7 @@ from app.models.warehouse_inventory import InventoryLot, InventoryMovement
 from app.models.warehouse_goods import WarehouseGoodsProfile, WarehouseGoodsMutation
 from app.services.warehouse_goods import goods_profile, lot_face
 from app.services.paper_color import material_face
+from app.services.box_type_rules import get_box_type_rule
 from app.services.inventory_cost_snapshot import InventoryCostEstimate, estimate_semi_finished_cost, apply_cost_snapshot
 from app.services.inventory_valuation import can_view_inventory_cost, freeze_entry_cost
 from app.services.material_pricing import get_effective_material_price
@@ -46,6 +47,8 @@ class GoodsFacts(BaseModel):
     mold_tool_id: int | None = Field(default=None, ge=1)
     mold_version: int | None = Field(default=None, ge=1)
     blank_unprinted: bool = False
+    dimension_source: Literal["unknown", "tape", "label"] = "unknown"
+    crease_product_id: int | None = Field(default=None, ge=1)
     cut_trim_mm: float = Field(default=0, ge=0, le=500, allow_inf_nan=False)
     cut_kerf_mm: float = Field(default=0, ge=0, le=100, allow_inf_nan=False)
     allow_material_substitution: bool = False
@@ -94,6 +97,16 @@ class SheetEntry(BaseModel):
 
     @model_validator(mode="after")
     def single_layer_entry(self):
+        if self.facts.processing == "creased":
+            self.crease_type = "压线"
+            values = [self.crease_left_mm,self.crease_middle_mm,self.crease_right_mm]
+            if any(v is None or v <= 0 for v in values):
+                raise ValueError("请从常用箱取用压线，并填写三段实际尺寸")
+            tolerance = 0 if self.facts.dimension_source == "label" else 10
+            if abs(sum(values)-self.board_width_mm) > tolerance:
+                raise ValueError(f"三段压线合计{sum(values)}mm与纸板宽{self.board_width_mm}mm不符；允许测量差{tolerance}mm")
+        elif any(v is not None for v in [self.crease_left_mm,self.crease_middle_mm,self.crease_right_mm]):
+            raise ValueError("存在压线尺寸，请选择已压线，不可登记为未压线净片")
         if self.layer_count == 1:
             if self.flute_type != "NONE":
                 raise ValueError("单层原纸请选择无楞")
@@ -132,6 +145,16 @@ def validate_references(db, facts):
         facts.mold_version = None
     if facts.processing != "die_cut":
         facts.blank_unprinted = False
+    if facts.crease_product_id:
+        template=db.get(Product,facts.crease_product_id)
+        rule=get_box_type_rule(template.box_style) if template else None
+        if (not template or template.deleted_at or not template.is_active or not rule or rule.code != "a1_0201"
+                or any(not getattr(template,f"crease_{part}_mm") for part in ("left","middle","right"))):
+            raise HTTPException(422,"压线模板请选择三段压线完整的常用箱A1产品")
+        if facts.scope == "customers" and template.customer_id not in facts.customer_ids:
+            raise HTTPException(422,"压线模板不属于所选客户")
+    if facts.processing != "creased":
+        facts.crease_product_id=None
     material = db.get(Material, facts.verified_material_id) if facts.verified_material_id else None
     if facts.verified_material_id and (not material or not material.is_active):
         raise HTTPException(422, "材质不存在或已停用")
@@ -185,7 +208,11 @@ def options(q: str = "", db: Session = Depends(get_db), user: User = Depends(can
     # The picker searches in the browser; complete authorized options avoid a silent 50-row cutoff.
     return dict(customers=[dict(id=c.id, name=c.chinese_short_name or c.name, full_name=c.name, code=c.customer_code) for c in db.scalars(customers.order_by(Customer.id))],
         products=[dict(id=p.id, customer_id=p.customer_id, name=p.product_name, code=p.product_code,
-            mold_tool_id=p.mold_tool_id) for p in db.scalars(products.order_by(Product.id))],
+            mold_tool_id=p.mold_tool_id, box_style=p.box_style,
+            is_liner=bool((rule:=get_box_type_rule(p.box_style)) and rule.code=="liner"),
+            is_a1=bool(rule and rule.code=="a1_0201"),
+            crease_values=[p.crease_left_mm,p.crease_middle_mm,p.crease_right_mm],
+            report_width_mm=p.report_width_mm,flute_type=p.flute_type) for p in db.scalars(products.order_by(Product.id))],
         suppliers=[dict(id=s.id, name=s.standard_name) for s in db.scalars(select(Supplier).where(Supplier.is_active.is_(True)).order_by(Supplier.sort_order, Supplier.standard_name))],
         materials=[dict(id=m.id, code=m.code, supplier=m.supplier_name, layer_count=m.layer_count,
             is_white_face=material_face(db, m) == "white") for m in db.scalars(select(Material).where(Material.is_active.is_(True)).order_by(Material.supplier_name, Material.code))],

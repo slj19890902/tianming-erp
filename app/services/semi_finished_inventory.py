@@ -12,6 +12,7 @@ from sqlalchemy.orm import object_session
 from app.models.warehouse_goods import WarehouseGoodsProfile
 from app.services.warehouse_goods import goods_profile, qualification_issues, lot_face, product_face
 from app.services.processed_sheet_matching import processed_match
+from app.services.sheet_measurement import crease_geometry
 
 from app.models.delivery import DeliveryItem
 from app.models.order import Order, OrderItem
@@ -608,6 +609,14 @@ def _customer_generic_crease_direction(
     profile = goods_profile(db, db.get(InventoryLot, detail.inventory_lot_id))
     if profile and profile.get("processing") == "die_cut":
         return "compatible"
+    if profile and profile.get("processing") == "creased":
+        product = db.get(Product, _requirement_product_id(db, requirement))
+        match = processed_match(db, db.get(InventoryLot,detail.inventory_lot_id), product, requirement_signature(requirement))
+        if (match and match["known"] and expected_type == "压线" and
+                crease_geometry(detail,(expected_left,expected_middle,expected_right),
+                    requirement.board_length_mm,requirement.board_width_mm)):
+            return "compatible"
+        return "blocked"  # Frozen order creases, not today's changed template, authorize use.
     stock_type = _normalize_crease_type(detail.crease_type)
     uncreased = {"", "毛片", "净料", "其他"}
     if stock_type in uncreased and expected_type in uncreased:
@@ -681,7 +690,7 @@ def _lot_eligibility_scope(
     if product is not None and processed_match(db, lot, product, expected):
         return "customer_generic"
     profile = goods_profile(db, lot)
-    if profile and profile.get("processing") in {"die_cut", "printed", "creased"}:
+    if detail.sheet_type == "creased_sheet" or (profile and profile.get("processing") in {"die_cut", "printed", "creased"}):
         return None
     if product is not None and rectangular_cut_plan(db, lot, product, expected):
         return "customer_generic"
@@ -736,10 +745,12 @@ def ensure_semi_finished_lot_eligibility(
     processed = processed_match(db, lot, product, expected)
     if processed:
         if not processed["known"]:
+            if processed.get("measurement_review"):
+                raise WarehouseInventoryError(processed["reason"],409)
             raise WarehouseInventoryError("加工片料用途待确认：请管理员在库存用途维护确认具体产品、模具及加工状态，不能仅按尺寸采用", 409)
         return "customer_generic"
     profile = goods_profile(db, lot)
-    if profile and profile.get("processing") in {"die_cut", "printed", "creased"}:
+    if detail.sheet_type == "creased_sheet" or (profile and profile.get("processing") in {"die_cut", "printed", "creased"}):
         raise WarehouseInventoryError("加工片料用途或模具版本不符，请先核对原加工记录", 409)
     if rectangular_cut_plan(db, lot, product, expected):
         return "customer_generic"

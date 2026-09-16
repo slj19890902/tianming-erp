@@ -27,10 +27,13 @@ def matching_dimensions(product, detail):
         basis = "报料尺寸 mm"
     else:
         rule = get_box_type_rule(product.box_style)
-        if detail.component_type == "base" or not rule or rule.code not in {"liner", "divider", "die_cut_partition"}:
-            return None
-        values = product.length_mm, product.width_mm
-        basis = "净片尺寸 mm"
+        if detail.component_type != "base" and rule and rule.code in {"liner", "divider", "die_cut_partition"}:
+            values = product.length_mm, product.width_mm
+            basis = "净片尺寸 mm"
+        else:
+            values = ((product.base_report_length_mm, product.base_report_width_mm) if detail.component_type == "base"
+                else (product.report_length_mm, product.report_width_mm))
+            basis = "后续加工展开尺寸 mm"
     if any(value is None or value <= 0 for value in values):
         return None
     return Decimal(values[0]), Decimal(values[1]), basis
@@ -71,15 +74,15 @@ def candidate_items(db, lot, visible_customer_ids=None):
                 customer_name=product.customer.chinese_short_name or product.customer.name,
                 inventory_code=product.product_code, product_name=product.product_name,
                 box_style=rule.display_name if rule else product.box_style or "未设置箱型",
-                is_liner=bool(rule and rule.code == "liner"), match_kind="confirmed_use" if processed["known"] else "needs_review",
+                is_liner=bool(rule and rule.code == "liner"), match_kind="measurement_review" if processed.get("measurement_review") else "confirmed_use" if processed["known"] else "needs_review",
                 match_reason=processed["reason"], length_mm=float(length), width_mm=float(width), flute_type=product.flute_type,
                 dimension_basis="库存净片；按用途匹配", near_dimension_match=processed["known"],
                 score=processed["score"], color_compatible=True, selectable=processed["known"],
                 warnings=[f"报料 {expected.board_length_mm}×{expected.board_width_mm}mm；库存净片 {length}×{width}mm",
-                    f"实际材质 {detail.material_code_snapshot}；产品材质 {expected.normalized_material_code}"] + ([] if processed["known"] else ["需在用途维护确认实物形状、模具及印刷，不能直接采用"]),
+                    f"实际材质 {detail.material_code_snapshot}；产品材质 {expected.normalized_material_code}"] + ([] if processed["known"] else [processed["reason"]]),
                 exact_dimension_match=False, requires_production_review=True, face_paper=product_face(product)))
             continue
-        if profile and profile.get("processing") in {"die_cut", "printed", "creased"}:
+        if detail.sheet_type == "creased_sheet" or (profile and profile.get("processing") in {"die_cut", "printed", "creased"}):
             continue  # Never fall back to rectangle matching for a shaped blank.
         dimensions = matching_dimensions(product, detail)
         if dimensions is None:
@@ -131,6 +134,5 @@ def candidate_response(db, lot, visible_customer_ids=None):
         box_styles=[rule.display_name for rule in BOX_TYPE_RULES],
         editable=lot.status == "active" and lot.quantity_available > 0,
         source=f"{detail.board_length_mm}×{detail.board_width_mm} mm · {detail.flute_type}楞",
-        dimension_notice=("原纸按常用箱报料毫米尺寸比较；旧尺寸单位不明的不参与匹配。" if detail.sheet_type == "raw_board" else
-            "加工片按隔板、衬板等平片的净尺寸（毫米）比较；缺净尺寸或立体箱展开尺寸未明确的不参与匹配。"),
+        dimension_notice="按工艺及毫米尺寸匹配；卷尺10mm内差异只作待核候选，不增加可用尺寸或产能。",
         saved_at=latest.created_at.isoformat() if latest else None)

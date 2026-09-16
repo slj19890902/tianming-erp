@@ -181,7 +181,11 @@ def test_net_sheet_requires_flat_dimensions_and_filters_flute_layer_scope(lot_db
     b.length_mm=None
     c.flute_type='E'
     db.commit()
-    assert candidate_items(db,lot)==[]
+    rows=candidate_items(db,lot)
+    assert [row['product_id'] for row in rows]==[a.id]
+    assert rows[0]['dimension_basis']=='后续加工展开尺寸 mm'
+    a.report_length_mm=None;db.flush()
+    assert candidate_items(db,lot)==[]  # Never substitute the finished footprint.
     c.flute_type='B';c.layer_count=5;db.commit()
     assert candidate_items(db,lot)==[]
     c.layer_count=3;db.commit()

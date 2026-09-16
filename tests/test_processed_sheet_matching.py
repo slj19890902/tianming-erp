@@ -107,7 +107,9 @@ def test_customer_exclusion_and_estimated_material_not_auto(eligibility_db):
 def test_raw_board_not_treated_as_post_cut(eligibility_db):
     db,data=eligibility_db;p,lot,profile,facts=setup(db,data)
     facts['processing']='raw';profile.data_json=json.dumps(facts);lot.semi_finished_detail.sheet_type='raw_board';db.flush()
-    assert not candidates(db,p)
+    rows=candidates(db,p)
+    assert rows and not rows[0].selectable and not rows[0].automatic_recommendation
+    assert '测量待核' in rows[0].match_reason  # 10mm discovery does not certify a shaped blank.
 
 def test_blank_same_mold_multiple_codes_automatic_but_printed_not_inferred(eligibility_db):
     from app.models.mold_tool import MoldTool

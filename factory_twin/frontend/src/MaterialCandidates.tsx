@@ -19,16 +19,20 @@ export function MaterialCandidates({lotId, canSave, onSaved}:{lotId:number;canSa
   const [data,setData] = useState<Result|null>(null), [selected,setSelected] = useState<number[]>([]);
   const [busy,setBusy] = useState(false), [message,setMessage] = useState("");
   const alive = useRef(true), pending = useRef<{signature:string;key:string}|null>(null);
+  const generation = useRef(0);
   useEffect(()=>{alive.current=true;return()=>{alive.current=false};},[]);
+  useEffect(()=>{generation.current++;setData(null);setSelected([]);setSearch("");setBoxStyle("");setScope("exclude");setMore(false);setOpen(false);setBusy(false);setMessage("");pending.current=null;},[lotId]);
   const accept = (result:Result)=>{setData(result);setSelected(result.saved.map(item=>item.product_id));};
   const load = async()=>{
+    const ticket=++generation.current;
     setBusy(true);setMessage("");
-    try {const result=await request(lotId);if(alive.current) {accept(result);pending.current=null;}}
-    catch(error){if(alive.current)setMessage(error instanceof Error?error.message:"读取失败");}
-    finally{if(alive.current)setBusy(false);}
+    try {const result=await request(lotId);if(alive.current&&ticket===generation.current) {accept(result);pending.current=null;}}
+    catch(error){if(alive.current&&ticket===generation.current)setMessage(error instanceof Error?error.message:"读取失败");}
+    finally{if(alive.current&&ticket===generation.current)setBusy(false);}
   };
   const save = async()=>{
     if(!data || busy)return;
+    const ticket=++generation.current;
     const payload={product_ids:selected,expected_version:data.version};
     const signature=JSON.stringify(payload);
     if(pending.current?.signature!==signature)pending.current={signature,key:`material-${lotId}-${Date.now()}-${Math.random().toString(36).slice(2)}`};
@@ -36,11 +40,11 @@ export function MaterialCandidates({lotId, canSave, onSaved}:{lotId:number;canSa
     try {
       const result=await request(lotId,{method:"PUT",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({...payload,idempotency_key:pending.current.key})});
-      if(!alive.current)return;
+      if(!alive.current||ticket!==generation.current)return;
       accept(result);pending.current=null;setMessage("候选用途已保存");
       try {await onSaved();}catch{if(alive.current)setMessage("候选用途已保存，地图刷新失败，请刷新页面");}
-    }catch(error){if(alive.current)setMessage(error instanceof Error?error.message:"保存失败");}
-    finally{if(alive.current)setBusy(false);}
+    }catch(error){if(alive.current&&ticket===generation.current)setMessage(error instanceof Error?error.message:"保存失败");}
+    finally{if(alive.current&&ticket===generation.current)setBusy(false);}
   };
   const stale=data?.saved.filter(item=>!data.items.some(current=>current.product_id===item.product_id && current.selectable)) || [];
   const filtered=data?.items.filter(item=>(scope==="all"||(scope==="liner"?item.is_liner:!item.is_liner))&&(!boxStyle||item.box_style===boxStyle)&&`${item.customer_name} ${item.inventory_code} ${item.product_name}`.toLowerCase().includes(search.toLowerCase()))||[];

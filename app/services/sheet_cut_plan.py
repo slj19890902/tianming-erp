@@ -2,11 +2,23 @@
 from decimal import Decimal
 from app.services.box_type_rules import get_box_type_rule
 from app.services.warehouse_goods import goods_profile, qualification_issues, lot_face, product_face
+from app.services.sheet_measurement import crease_match
 
 
 def rectangular_cut_plan(db, lot, product, expected):
     detail = lot.semi_finished_detail
     profile = goods_profile(db, lot)
+    if detail and ((profile or {}).get("processing") == "creased" or detail.sheet_type == "creased_sheet"):
+        match = crease_match(db,lot,product,expected)
+        if not match or not match["known"]:
+            return None
+        return dict(schema=1,method="crease_preserving_trim",product_id=product.id,lot_id=lot.id,
+            source_length_mm=detail.board_length_mm,source_width_mm=detail.board_width_mm,
+            target_length_mm=expected.board_length_mm,target_width_mm=expected.board_width_mm,
+            source_creases=[detail.crease_left_mm,detail.crease_middle_mm,detail.crease_right_mm],
+            target_creases=match["target_creases"],rows=1,columns=1,blank_yield=1,yield_factor=1,
+            rotated=False,requires_production=True,material_code=detail.material_code_snapshot,flute_type=detail.flute_type,
+            utilization=round(expected.board_length_mm*expected.board_width_mm*100/(detail.board_length_mm*detail.board_width_mm),2))
     # Only explicitly intact, unprinted rectangles. A die-cut bounding box is not a sheet.
     if not detail or not profile or profile.get("processing") not in {"raw", "cut"}:
         return None
@@ -22,12 +34,10 @@ def rectangular_cut_plan(db, lot, product, expected):
             or detail.stock_yield_per_sheet != 1):
         return None
     rule = get_box_type_rule(product.box_style)
-    if detail.sheet_type != "raw_board" and (not rule or rule.code not in {"liner", "divider", "die_cut_partition"}):
-        return None
     # The requirement's frozen report dimensions define one production blank. For
     # plain one-up flat pieces net dimensions must agree; never guess old cm fields.
     length, width = expected.board_length_mm, expected.board_width_mm
-    if detail.sheet_type != "raw_board":
+    if detail.sheet_type != "raw_board" and rule and rule.code in {"liner", "divider", "die_cut_partition"}:
         if expected.stock_yield_per_sheet != 1 or (product.length_mm, product.width_mm) != (length, width):
             return None
     if any(not value or value <= 0 for value in (length, width, detail.board_length_mm, detail.board_width_mm)):

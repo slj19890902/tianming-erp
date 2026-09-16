@@ -3,6 +3,8 @@ from sqlalchemy import select
 from app.models.warehouse_inventory import SemiFinishedLotAllowedProduct
 from app.models.mold_tool import MoldTool
 from app.services.warehouse_goods import goods_profile, qualification_issues
+from app.services.sheet_measurement import crease_match, measurement_review
+from app.services.box_type_rules import get_box_type_rule
 
 MISSING_USE = "加工过的片料须逐款确认可用产品"
 
@@ -10,7 +12,17 @@ MISSING_USE = "加工过的片料须逐款确认可用产品"
 def processed_match(db, lot, product, expected):
     profile = goods_profile(db, lot)
     detail = lot.semi_finished_detail
+    if not detail:
+        return None
+    if (profile or {}).get("processing") == "creased" or detail.sheet_type == "creased_sheet":
+        return crease_match(db, lot, product, expected)
+    review = measurement_review(db, lot, product, expected)
+    if review:
+        return review
     if not profile or not detail or profile.get("processing") not in {"die_cut", "printed", "creased"}:
+        return None
+    rule = get_box_type_rule(product.box_style)
+    if profile.get("processing") == "die_cut" and rule and rule.code == "liner":
         return None
     # Explicit customer/product exclusions, face, material, layer and mold conflicts remain hard.
     issues = qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code)

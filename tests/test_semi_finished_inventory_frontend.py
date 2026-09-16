@@ -14,6 +14,14 @@ TIME_UTILS = (ROOT / "static" / "assets" / "time-utils.js").read_text(
 )
 
 
+def test_compact_stock_quantity_location_selection_and_payload() -> None:
+    node = shutil.which("node")
+    assert node
+    result = subprocess.run([node, "tests/semi_stock_ui_harness.cjs"], cwd=ROOT, text=True,
+                            encoding="utf-8", capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
 def test_shared_inventory_order_payload_uses_idempotent_client_lines() -> None:
     assert "client_line_id: item.client_line_id || createIdempotencyKey()" in INDEX
     assert "reservation_plan: this.buildReservationPlan(item)" in INDEX
@@ -162,9 +170,9 @@ def test_general_semi_finished_source_is_manual_only_and_not_auto_selected() -> 
     assert "general_signature" in INDEX
     assert "GENERAL_SEMI_FINISHED_STOCK" in INDEX
     assert "通用半成品（general_signature）" in INDEX
-    assert "通用半成品，可跨客户，需人工确认" in INDEX
+    assert "isGeneralSemiFinishedCandidate(c))\"> · 跨客户" in INDEX
     assert "general_confirmation" in INDEX
-    assert "明确确认并抵扣" in INDEX
+    assert "chooseSemiStockGroup(item,component,group,true)" in INDEX
     assert "有半成品可用，请点击采用或本次不用库存。" in INDEX
     assert "采用即确认跨客户使用" in INDEX
     assert 'candidate.source === "general_signature"' in INDEX
@@ -173,8 +181,8 @@ def test_general_semi_finished_source_is_manual_only_and_not_auto_selected() -> 
 
 def test_exact_semi_finished_candidate_keeps_direct_deduction_contract() -> None:
     assert 'candidate?.direct_deduction_eligible === true' in INDEX
-    assert '@click="confirmDirectSemiDeduction(item,component,candidate)"' in INDEX
-    assert '>抵扣</button>' in INDEX
+    assert 'confirmDirectSemiDeduction(item,component,candidate)' in INDEX
+    assert 'chooseSemiStockGroup(item,component,group,true)' in INDEX
     assert "direct_deduction:directDeduction" in INDEX
     assert 'warningAcknowledgedCodes.push("CUSTOMER_GENERIC_SEMI_FINISHED_STOCK")' in INDEX
 
@@ -438,7 +446,7 @@ def test_semi_plan_warnings_and_line_removal_reallocation_are_explicit() -> None
     assert '"GENERAL_SEMI_FINISHED_STOCK"' in INDEX
     assert 'candidate?.source === "learned"' in INDEX
     assert 'const recommendationSource = candidate.recommendation_source || candidate.source || "signature"' in INDEX
-    assert "差异警告" in INDEX
+    assert 'warningAcknowledgedCodes.push("SEMI_SIGNATURE_OVERRIDE")' in INDEX
     start = INDEX.index("removeOrderItem(index)")
     end = INDEX.index("async searchOrderProducts", start)
     assert "this.orderForm.items.splice(index,1);" in INDEX[start:end]
@@ -472,7 +480,8 @@ def test_manual_order_keeps_summary_and_pdf_uses_authoritative_three_state() -> 
     assert "下单${orderQuantity}" not in INDEX
     assert "现有成品${availableFinished}" not in INDEX
     assert "成品${reservedFinished}" in INDEX
-    assert "半成品${semiPieces}" in INDEX
+    assert "半成品可用${semiAvailable}张" in INDEX
+    assert "已安排${semiPieces}片" in INDEX
     assert "需生产${productionRequired}" in INDEX
     assert '@input="onOrderDraftQuantityInput(item)"' in INDEX
     assert '@input="invalidateImportDraftConfirmation(draft); scheduleOrderLineInventoryRefresh(item,draft.matched_customer_id)"' in INDEX
@@ -485,8 +494,9 @@ def test_manual_order_keeps_summary_and_pdf_uses_authoritative_three_state() -> 
     )[0]
     assert "confirm(" not in confirm
     assert "safeSystemInventoryCandidates(line, component)" in confirm
-    assert INDEX.count('<order-stock-location :candidate="candidate"') >= 4
-    assert INDEX.count('<order-stock-location :candidate="allocation.candidate"') >= 3
+    assert INDEX.count('<order-stock-location :candidate="candidate"') >= 3
+    assert '<order-stock-location :candidate="group.candidate"' in INDEX
+    assert '<order-stock-location :candidate="allocation.candidate"' in INDEX
 
 
 def test_safe_inventory_recommendation_one_click_excludes_risky_candidates() -> None:

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.439"
-APP_VERSION_NAME = "BOM成套入库开料成本与组装人工"
+APP_VERSION = "v0.22.440"
+APP_VERSION_NAME = "半成品抵扣数量与货位简明列表"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4284,3 +4284,6 @@ APP_CHANGELOG = [*(f"v0.22.438：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["BOM成套盘点按实际子件用量和每张开料产出计材料成本，不再要求无本体父件填写纸板资料。", "组套默认50套/人时，可在常用箱调整单款人工；材料与标准组装人工分开冻结显示，历史库存不重定价。"]
 APP_VERIFICATION_STEPS = ["刷新常用箱160008，核对ABC一开16/15/8及每套5/9/1，按实际成套数量盘点入库。", "管理员展开货位成本查看材料和标准组装人工；常用箱组合BOM内可设置组装人工。"]
 APP_CHANGELOG = [*(f"v0.22.439：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["订单半成品抵扣改为黄色入口，显示可用张数，与本次已安排数量分开。", "展开按货位一行显示数量、位置、尺寸、楞型和材质，绿色采用、红色不采用；隐藏内部批次号和冗长说明，底层仍按原批次核验。"]
+APP_VERIFICATION_STEPS = ["刷新订单录入页面，选择有半成品候选的产品，核对黄色入口和可用数量。", "展开后逐货位采用或不采用，核对本次采用数量；只为实际订单保存，不为验收重复扣库。"]
+APP_CHANGELOG = [*(f"v0.22.440：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

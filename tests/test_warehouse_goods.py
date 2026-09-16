@@ -71,6 +71,7 @@ def test_face_conflict_is_bidirectional_and_cannot_be_reserved(lot_db,white):
     stock=material(db,white=white);target=material(db,'B416D',not white)
     lot.semi_finished_detail.material_id=stock.id
     product=data['products'][0];product.material_id=target.id
+    product.box_style='衬板';product.length_mm=800;product.width_mm=600
     db.commit();db.expire_all()
     item=next(i for i in candidate_items(db,lot) if i['product_id']==product.id)
     assert not item['selectable'] and '白面纸与瓦楞色不能互用' in item['warnings']
@@ -97,12 +98,14 @@ def test_material_entry_does_not_require_extra_confidence_approval(lot_db):
     assert ensure_semi_finished_lot_eligibility(db,lot=lot,product_id=product.id,customer_id=product.customer_id,expected=expected)=='customer_generic'
 
 
-def test_reverse_matches_legacy_report_dimensions_and_material_layer(lot_db):
+def test_reverse_rejects_unitless_legacy_size_then_uses_explicit_net_mm_and_material_layer(lot_db):
     db,data,lot,user=prepare(lot_db)
     p=data['products'][0];m=material(db)
     p.material_id=m.id;p.layer_count=None;p.report_length_mm=None;p.report_width_mm=None
     p.default_cardboard_length=800;p.default_cardboard_width=600
     db.commit()
+    assert p.id not in [i['product_id'] for i in candidate_items(db,lot)]
+    p.box_style='衬板';p.length_mm=800;p.width_mm=600;db.commit()
     row=next(i for i in candidate_items(db,lot) if i['product_id']==p.id)
     assert row['exact_dimension_match']
     json.dumps(row)

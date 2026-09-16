@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.446"
-APP_VERSION_NAME = "BOM形成方式与嵌套关系提示"
+APP_VERSION = "v0.22.447"
+APP_VERSION_NAME = "片料匹配统一毫米与净片尺寸"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4306,3 +4306,6 @@ APP_CHANGELOG = [*(f"v0.22.445：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["BOM组合明确显示零件组装、父件不报料；旧规则提示先选择产品形成方式，再配置组装消耗或随货配套。", "旧配方添加组合子件时明确指引升级配置，不改变已有配方、库存和历史订单。"]
 APP_VERIFICATION_STEPS = ["打开BOM组合常用箱，核对固定零件组装说明及每套子件用量。", "打开普通纸盒组合BOM，按实际业务选择自己生产，再设置内衬随货配套；勿为验收新增虚构库存。"]
 APP_CHANGELOG = [*(f"v0.22.446：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["货位匹配统一使用明确的毫米尺寸：原纸看报料尺寸，隔板衬板净片看实际净尺寸，不再把旧无单位纸板值当毫米。", "电脑与手机默认只显示长宽各相差不超过10%的近尺寸产品；其他可裁切项单独展开，保留楞向、面纸和人工加工核对。"]
+APP_VERIFICATION_STEPS = ["打开360×125mm、B楞春山隔板的匹配产品，确认不再出现1500×910mm的误推荐，显示净片毫米尺寸。", "核对电脑及手机的箱型筛选、其他可裁切项和已保存用途；不得为验收改库存或保存虚构用途。"]
+APP_CHANGELOG = [*(f"v0.22.447：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -1959,17 +1959,19 @@
                 [...new Set(result.items.map(item => item.box_style || "未设置箱型"))].sort().forEach(style => { const option = node("option", "", style); option.value = style; type.append(option); });
                 const query = node("input"); query.placeholder = "客户、编码、名称"; query.setAttribute("aria-label", "筛选匹配产品");
                 const rows = node("div"), more = node("button", "small-btn", "显示更多"); more.type = "button";
-                let limit = 5;
+                let limit = 5, showCuttable = false;
+                const cutting = node("button", "small-btn", "展开其他可裁切项（非近尺寸推荐）"); cutting.type = "button";
                 const render = () => {
-                  const filtered = result.items.filter(item => (!type.value || (item.box_style || "未设置箱型") === type.value) && `${item.customer_name} ${item.inventory_code} ${item.product_name}`.toLowerCase().includes(query.value.trim().toLowerCase()));
+                  const filtered = result.items.filter(item => (showCuttable || item.near_dimension_match) && (!type.value || (item.box_style || "未设置箱型") === type.value) && `${item.customer_name} ${item.inventory_code} ${item.product_name}`.toLowerCase().includes(query.value.trim().toLowerCase()));
                   rows.replaceChildren();
-                  filtered.slice(0, limit).forEach(item => { const row = node("section", "card"); row.append(node("strong", "", `${item.customer_name} · ${item.inventory_code}`), node("div", "", item.product_name), node("div", "", `${item.length_mm}×${item.width_mm}mm · ${item.flute_type}楞 · ${item.exact_dimension_match ? "尺寸一致" : `利用率${item.score}%`}`)); if (item.warnings?.length) row.append(node("small", "muted", item.warnings.join(" · "))); rows.append(row); });
+                  filtered.slice(0, limit).forEach(item => { const row = node("section", "card"); row.append(node("strong", "", `${item.customer_name} · ${item.inventory_code}`), node("div", "", item.product_name), node("div", "", `${item.length_mm}×${item.width_mm}mm · ${item.flute_type}楞 · ${item.exact_dimension_match ? "尺寸一致" : `${item.near_dimension_match ? "尺寸相近" : "其他裁切项"} · 利用率${item.score}%`}`), node("small", "muted", item.dimension_basis)); if (item.warnings?.length) row.append(node("small", "muted", item.warnings.join(" · "))); rows.append(row); });
                   if (!filtered.length) rows.append(node("p", "muted", "没有符合该箱型及筛选条件的常用箱"));
                   more.hidden = filtered.length <= limit;
                 };
                 type.onchange = query.oninput = () => { limit = 5; render(); };
                 more.onclick = () => { limit += 10; render(); };
-                body.replaceChildren(type, query, node("p", "muted", "同楞型、同层数，尺寸一致优先；仅供匹配，不改归属或库存。"), rows, more);
+                cutting.onclick = () => { showCuttable = !showCuttable; limit = 5; cutting.textContent = showCuttable ? "只看尺寸相近" : "展开其他可裁切项（非近尺寸推荐）"; render(); };
+                body.replaceChildren(type, query, node("p", "muted", `${result.dimension_notice} 同楞型、同层数，不旋转；默认长宽各相差不超过10%。模切形状、压线及印刷仍需核对，不改归属或库存。`), cutting, rows, more);
                 loaded = true; render();
               } catch (error) { body.replaceChildren(node("p", "status error", `${error.message}；收起后重开可重试`)); }
               finally { loading = false; }

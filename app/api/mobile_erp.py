@@ -105,6 +105,8 @@ from app.services.warehouse_twin_layout import (
 
 
 router = APIRouter()
+from app.api.mobile_stock_use import router as mobile_stock_use_router
+router.include_router(mobile_stock_use_router)
 can_read_inventory = PermissionChecker("warehouse.view")
 can_execute_inventory = PermissionChecker("warehouse.execute")
 can_correct_inventory = PermissionChecker("warehouse.correct")

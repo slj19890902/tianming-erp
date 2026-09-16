@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.431"
-APP_VERSION_NAME = "蒲公英私网手机入口修复"
+APP_VERSION = "v0.22.432"
+APP_VERSION_NAME = "手机尺寸查库存与直接取用"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4260,3 +4260,6 @@ APP_CHANGELOG = [*(f"v0.22.430：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["蒲公英 VPN 地址可作为明确配置的第二私网 HTTP 入口，手机与厂内和公网入口共用正式 ERP 登录、权限与数据。", "陌生 Host、跨入口写请求和公网 HTTP 跳转门禁保持；不修改订单、库存或账号。"]
 APP_VERIFICATION_STEPS = ["iPhone 连接蒲公英后打开 http://172.16.1.26:8000/mobile/，用原账号登录并查看仓库。", "厂内电脑检查 192.168.3.80:8000 页面仍可打开；断开蒲公英后的 5G 访问仍按原公网入口。"]
 APP_CHANGELOG = [*(f"v0.22.431：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["手机现场查询新增独立尺寸库存筛选：纸板长宽、纸箱长宽高、楞型及大小条件，按接近度分页显示数量和位置。", "现金取用或免费打样直接扣减可用库存，记录账号、位置、数量和用途；不关联订单财务，预占及BOM关系不变。"]
+APP_VERIFICATION_STEPS = ["手机进入查询，填写尺寸和楞型，点结果核对数量及位置；下方综合查询保持原功能。", "在实际取用时填写数量及用途后点红色取用，核对库存和最近取用记录；绿色取消不扣库。"]
+APP_CHANGELOG = [*(f"v0.22.432：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -99,6 +99,7 @@
      if(row.source_kind==='legacy_stock'&&['stock','keep'].includes(row.status))return '已入库·备库库存';
      return this.stockPrepLabels()[row.status];
     },
+    stockDestinationUrl(place){return '/warehouse.html?'+new URLSearchParams({readonly:'1',source:'order-context',tab:'map',floor:String(place.floor)+'F',mode:'lookup',view:'2d',inventory_type:place.inventory_type,location_id:String(place.location_id),lot_id:String(place.lot_id)}).toString();},
     stockOutputLabel(row){const jobs=(row.jobs||[]).filter(j=>j.output_remaining>0&&(!row.grouped_output_hidden||!j.product.preparation_group));return jobs.length&&jobs.every(j=>j.output_kind==='semi')?'半成品':'成品';},
     stockOutputQuantity(row){return (row.jobs||[]).filter(j=>!row.grouped_output_hidden||!j.product.preparation_group).reduce((sum,j)=>sum+Number(j.output_remaining||0),0);},
     stockOutputLocations(row){return [...new Set((row.jobs||[]).filter(j=>j.output_remaining>0&&(!row.grouped_output_hidden||!j.product.preparation_group)).map(j=>j.output_location).filter(Boolean))].join(' / ');},

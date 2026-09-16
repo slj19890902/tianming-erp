@@ -77,6 +77,8 @@ def assert_assembly_evidence(db,key,product_id,customer_id,quantity):
     command=db.get(Command,key)
     if not command:prep.fail('缺少组装来源记录')
     data=json.loads(command.result_json)
+    if data.get('final_operation_key') and db.get(Command,data['final_operation_key']):
+        prep.fail('组装来源已使用，不能重复生成成套库存')
     if data.get('recipe',{}).get('parent_id')!=product_id or data['recipe']['customer_id']!=customer_id or data.get('sets')!=quantity or data.get('output_lot_id'):
         prep.fail('组装身份与数量不一致')
     quantities=defaultdict(int)
@@ -98,6 +100,8 @@ def assemble(db,payload,actor):
     if any(j.status!='completed' for j in jobs):prep.fail('子件尚未完成，不能组装入库')
     submitted={v['job_id']:v for v in payload['jobs']}
     if len(submitted)!=len(payload['jobs']) or set(submitted)!={j.id for j in jobs}:prep.fail('请核对整组所有子件')
+    from app.services.stock_preparation_identity import resolve_parent_basis
+    parent_basis = resolve_parent_basis(db, jobs)
     sets=payload['sets'];destination(db,payload['location_id'],payload['layout_version'])
     remaining={c['product_id']:sets*c['per_set'] for c in recipe['children']};inputs=[];total_cost=Decimal(0);cost_known=True
     for job in jobs:
@@ -118,23 +122,29 @@ def assemble(db,payload,actor):
         else:total_cost+=Decimal(str(lot.estimated_unit_cost_snapshot))*take
     if any(remaining.values()):prep.fail('可用子件不足，不能形成所填套数')
     result=dict(action='assemble',group_key=payload['group_key'],sets=sets,recipe=recipe,inputs=inputs,output_lot_id=None)
-    command=Command(operation_key=key,receipt_item_id=jobs[0].receipt_item_id,request_json=request,result_json=encode(result),actor_id=actor.id)
-    db.add(command);db.flush()
+    # The production database protects commands with append-only triggers.
+    # Keep consumed-input evidence and the final outcome as separate immutable
+    # records in the SAME transaction; never insert then UPDATE a command.
+    evidence_key='assembly-inputs:'+digest(key)[:45]
+    db.add(Command(operation_key=evidence_key,receipt_item_id=jobs[0].receipt_item_id,
+        request_json=encode(dict(action='assemble_inputs',operation_key=key)),
+        result_json=encode(dict(result,final_operation_key=key)),actor_id=actor.id))
+    db.flush()
     from app.services.finished_stock_identity import product_basis,_with_assembly,_child_basis
-    parent=db.get(Product,recipe['parent_id'])
-    if (not group.get('parent_basis') and parent.version!=recipe['version']) or parent.customer_id!=recipe['customer_id']:prep.fail('组合资料已变化，请先核对原配方')
-    basis=_with_assembly(group.get('parent_basis') or product_basis(parent),[
+    basis=_with_assembly(parent_basis,[
         _child_basis(c['product_id'],c['per_set'],json.loads(next(j for j in jobs if j.product_id==c['product_id']).product_snapshot)['physical_basis']) for c in recipe['children']])
     output=manual_finished_in(db,customer_id=recipe['customer_id'],product_id=recipe['parent_id'],location_id=payload['location_id'],quantity=sets,
         stock_date=beijing_today(),source_type='transfer',remarks='备库子件已组装成套',operator_id=actor.id,idempotency_key='prep-kit:'+key,
         source_ref_type='preparation_assembly',source_ref_id=jobs[0].id,expected_layout_version=payload['layout_version'],
-        physical_basis_json=basis,assembly_command_key=key)
+        physical_basis_json=basis,assembly_command_key=evidence_key)
     output.source_ref_id=output.id
     output.finished_detail.inventory_code_snapshot=recipe['code'];output.finished_detail.product_name_snapshot=recipe['name']+'（成套）'
     output.estimated_unit_cost_snapshot=total_cost/sets if cost_known else None
     output.cost_snapshot_source='stock_preparation_assembly';output.cost_snapshot_detail_json=encode(dict(inputs=inputs,total_cost=str(total_cost) if cost_known else None))
     for source in inputs:release_empty_output_pallet(db,db.get(InventoryLot,source['lot_id']),actor)
-    result['output_lot_id']=output.id;result['placed_at_utc']=utc_now_naive().isoformat();command.result_json=encode(result)
+    result['output_lot_id']=output.id;result['placed_at_utc']=utc_now_naive().isoformat()
+    db.add(Command(operation_key=key,receipt_item_id=jobs[0].receipt_item_id,
+        request_json=request,result_json=encode(result),actor_id=actor.id))
     append_audit_event(db,event_category='business',result='success',source='web',module_code='production',action_code='stock_preparation.assemble',resource='production',actor=actor,entity_type='inventory_lot',entity_id=output.id,details=result)
     db.flush();return result
 

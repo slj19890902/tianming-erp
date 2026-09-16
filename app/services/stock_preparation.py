@@ -37,13 +37,23 @@ def location_name(db, lot):
 def job_dict(db, job):
     output = db.get(InventoryLot, job.output_lot_id) if job.output_lot_id else None
     outputs = list(db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type == "stock_preparation", InventoryLot.source_ref_id == job.id))) if output else []
+    active_outputs = [lot for lot in outputs if lot.status == 'active' and
+                      lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged > 0]
+    locations = [dict(lot_id=lot.id, location_id=lot.warehouse_location_id,
+                      location=location_name(db, lot),
+                      floor=db.get(WarehouseLocation, lot.warehouse_location_id).warehouse_floor,
+                      inventory_type=lot.inventory_type,
+                      quantity=lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged)
+                 for lot in active_outputs if lot.warehouse_location_id]
     return dict(id=job.id, receipt_item_id=job.receipt_item_id, version=job.version, status=job.status, input_quantity=job.input_quantity,
         expected_output=job.expected_output, actual_output=job.actual_output,
         product=json.loads(job.product_snapshot), output_lot_number=" / ".join(lot.lot_number for lot in outputs) if output else None,
         output_location=" / ".join(dict.fromkeys(location_name(db,lot) for lot in outputs if lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged)) if output else None,
         output_remaining=sum(lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged for lot in outputs),
         output_available=output.quantity_available if output else 0,output_version=output.version if output else 0,
-        output_kind='semi' if output and output.inventory_type=='semi_finished' else 'finished',output_location_id=output.warehouse_location_id if output else None)
+        output_locations=locations,
+        output_kind='semi' if output and output.inventory_type=='semi_finished' else 'finished',
+        output_location_id=locations[0]['location_id'] if len({v['location_id'] for v in locations}) == 1 else None)
 
 
 def list_rows(db, *, scope=None, query=""):

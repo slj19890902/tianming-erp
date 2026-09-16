@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.443"
-APP_VERSION_NAME = "手机盘点移货与混放修复"
+APP_VERSION = "v0.22.444"
+APP_VERSION_NAME = "片料近尺寸优先推荐"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4296,4 +4296,7 @@ APP_VERIFICATION_STEPS = ["常用箱按实物箱型填写报料资料；组合BO
 APP_CHANGELOG = [*(f"v0.22.442：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 APP_CHANGES = ["手机盘点片料支持整批搬运和数量拆分，预占、用途及成本随批次保留。", "零实存批次退出当前货位盘点列表，历史流水保留；已清空旧栈板条目不再阻止混放添加。", "管理员可以在成品、半成品和原料共位时继续添加和移货，各类数量、单位及BOM关系保持独立。"]
 APP_VERIFICATION_STEPS = ["手机刷新货位，选一批半成品或原料，按实际搬运数量移到目标货位，核对两边合计不变。", "在已有成品货位添加实际原料或半成品，核对分别显示；无真实入库需求时不要为测试重复新增。", "实际盘点为零并保存后确认该产品退出当前货位列表，历史盘点单仍可追溯。"]
+
+APP_CHANGES = ["片料候选先校验楞型和纸色，默认只显示各轴尺寸偏差不超过10%的近尺寸材料。", "大片料及其他尺寸默认收起，不自动安排；尺寸接近优先，数量接近其次，新订单与PDF共用规则。"]
+APP_VERIFICATION_STEPS = ["刷新新建订单，选择有不同尺寸库存的产品，核对近尺寸先显示、异楞型和异纸色不推荐。", "展开大片料/其他尺寸，核对数量和位置；只有实际需要时采用，不为验收保存虚构订单。"]
 APP_CHANGELOG = [*(f"v0.22.443：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

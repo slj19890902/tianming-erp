@@ -9,7 +9,7 @@
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <script src="/static/ui/order-context.js?v=217850427bf4"></script>
     <script src="/static/ui/workspace.js?v=20260914-incoming395"></script>
-    <script src="/static/ui/pdf-workspace.js?v=20260915-pdf419"></script>
+    <script src="/static/ui/pdf-workspace.js?v=20260916-ranking444"></script>
     <script src="/static/ui/purchase-workspace.js?v=66709867c608"></script>
     <script src="/static/ui/production-workspace.js?v=20260916-stockdest"></script>
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
@@ -7663,6 +7663,7 @@
                             <template v-else>
                               <div class="toolbar-group" v-if="inventoryComponents(item).length>1"><button v-for="component in inventoryComponents(item)" :key="component" :class="['btn','small',(item._inventory_component||inventoryComponents(item)[0])===component?'primary':'']" @click="item._inventory_component=component;item._inventory_page=1">{{componentLabel(component)||'整件'}}</button></div>
                               <template v-for="component in inventoryComponents(item)" :key="component"><div v-if="component===(item._inventory_component||inventoryComponents(item)[0])">
+                                <button v-if="semiStockMoreCount(item,component)" class="btn small" type="button" @click="item._inventory.semi[component].show_more_sizes = !item._inventory.semi[component].show_more_sizes; item._inventory_page=1">{{ item._inventory.semi[component].show_more_sizes ? '收起' : '展开' }}大片料 / 其他尺寸（{{ semiStockMoreCount(item,component) }}）</button>
                                 <table class="line-items pdf-material-table"><thead><tr><th>规格 / 压线</th><th>材质 / 楞型</th><th>可用 / 可覆盖</th><th>位置</th><th>本次拟用</th></tr></thead><tbody>
                                   <tr v-for="candidate in pdfMaterialCandidates(item,component,item._inventory_tab).slice(((item._inventory_page||1)-1)*4,(item._inventory_page||1)*4)" :key="candidate.lot_id">
                                     <td><strong>{{candidate.board_length_mm}} × {{candidate.board_width_mm}} mm</strong><div>{{pdfCandidateCrease(candidate)}}</div></td><td>{{candidate.material_code}} / {{candidate.flute_type}}<div><span :class="['status',pdfCandidateExact(candidate)?'green':'orange']">{{pdfCandidateExact(candidate)?'完全符合':'需核对适配'}}</span><info-note v-if="candidate.signature_differences?.length || candidate.warning_messages?.length">{{[...(candidate.signature_differences||[]),...(candidate.warning_messages||[])].join('；')}}</info-note></div></td>
@@ -7913,7 +7914,8 @@
                          <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品库存：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，<order-stock-location :candidate="candidate" :item="item"></order-stock-location></span><button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">采用安全推荐</button><button class="btn danger small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 个，<order-stock-location :candidate="allocation.candidate" :item="item"></order-stock-location></div></div>
                         <!-- compact semi stock -->
                         <div v-for="component in inventoryComponents(item)" :key="component">
-                          <strong>半成品{{ componentLabel(component) }}</strong>
+                          <strong>半成品 / 原料{{ componentLabel(component) }}</strong>
+                          <button v-if="semiStockMoreCount(item,component)" class="btn small" type="button" @click="item._inventory.semi[component].show_more_sizes = !item._inventory.semi[component].show_more_sizes">{{ item._inventory.semi[component].show_more_sizes ? '收起' : '展开' }}大片料 / 其他尺寸（{{ semiStockMoreCount(item,component) }}）</button>
                           <span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span>
                           <table v-if="semiStockGroups(item,component).length" class="semi-stock-table">
                             <thead><tr><th>可用数量</th><th>位置</th><th>尺寸（mm）</th><th>楞型</th><th>材质</th><th class="semi-stock-actions"></th></tr></thead>
@@ -14197,6 +14199,7 @@
             ].filter(Boolean);
           },
           isSafeSystemInventoryCandidate(component, candidate) {
+            if (component !== "finished" && candidate?.recommendation_tier === 'more') return false;
             if (component !== "finished" && candidate?.automatic_recommendation === true && this.isDirectSemiDeductionCandidate(candidate)) return true;
             if (component !== "finished" && this.isDirectSemiDeductionCandidate?.(candidate) === true
                 && (candidate.recommendation_source || candidate.source) === "customer_generic"
@@ -14211,7 +14214,8 @@
           safeSystemInventoryCandidates(line, component) {
             const state = line?._inventory;
             const part = component === "finished" ? state?.finished : state?.semi?.[component];
-            return (part?.candidates || []).filter(candidate => !(part?._excluded_lot_ids || []).includes(Number(candidate.lot_id)) && this.isSafeSystemInventoryCandidate(component, candidate));
+            const rows = (part?.candidates || []).filter(candidate => !(part?._excluded_lot_ids || []).includes(Number(candidate.lot_id)) && this.isSafeSystemInventoryCandidate(component, candidate));
+            return component === 'finished' ? rows : this.rankSemiStockCandidates(line, rows);
           },
           hasSafeOrderLineInventoryRecommendation(line) {
             const state = line?._inventory;
@@ -14243,14 +14247,27 @@
             if (!state || state.loading) return false;
             return Boolean(this.inventoryDecisionRequired(line));
           },
-          semiStockCandidates(line, component) {
+          rankSemiStockCandidates(line, candidates) {
+            return [...candidates].sort((a,b) => {
+              const dimension = Number(a.dimension_distance || 0) - Number(b.dimension_distance || 0);
+              const demand = Math.max(Number(line.quantity || 0),0);
+              const difference = c => Math.abs(Number(c.deductible_requirement_quantity ?? Number(c.available_stock_quantity)*Number(c.stock_yield_per_sheet || 1)) - demand*Number(c.pieces_per_box || 1));
+              return (a.recommendation_tier === 'more') - (b.recommendation_tier === 'more') || dimension || difference(a)-difference(b) || Number(a.lot_id)-Number(b.lot_id);
+            });
+          },
+          semiStockCandidates(line, component, includeMore = false) {
             const part = line?._inventory?.semi?.[component];
             const seen = new Set();
-            return [...(part?.candidates || []), ...(part?.manual_candidates || [])].filter(candidate => {
+            const selected = new Set((part?.selected_candidates || []).map(c => Number(c.lot_id)));
+            return this.rankSemiStockCandidates(line, [...(part?.candidates || []), ...(part?.manual_candidates || [])].filter(candidate => {
               const id = Number(candidate.lot_id);
               if (!id || seen.has(id) || !(Number(candidate.available_stock_quantity) > 0)) return false;
-              seen.add(id); return true;
-            });
+              seen.add(id);
+              return includeMore || part?.show_more_sizes || candidate.recommendation_tier !== 'more' || selected.has(id);
+            }));
+          },
+          semiStockMoreCount(line, component) {
+            return this.semiStockCandidates(line,component,true).filter(c => c.recommendation_tier === 'more').length;
           },
           semiStockGroups(line, component) {
             const part = line._inventory.semi[component], groups = new Map();
@@ -14911,8 +14928,9 @@
               const part = state.semi[component];
               if (part.unavailable_reason && !part.skipped) return `${part.unavailable_reason}，请选择本次不用半成品库存。`;
               if ((part.selected_candidates || []).some(candidate => this.isGeneralSemiFinishedCandidate(candidate)) && !part.general_confirmation && !part.skipped) return `请核对候选后点击采用，或选择本次不用库存。`;
-              if ((part.candidates || []).some(candidate => this.inventoryCandidateNeedsManualConfirmation(candidate)) && !part.skipped && !part.selected_candidates.length) return `有半成品可用，请点击采用或本次不用库存。`;
-              if ((part.candidates.length || part.manual_candidates.length) && !part.skipped && !part.selected_candidates.length) return `存在半成品${this.componentLabel(component)}候选，请确认抵扣或选择本次不用库存。`;
+              const primary = [...(part.candidates || []), ...(part.manual_candidates || [])].filter(c => c.recommendation_tier !== 'more');
+              if (primary.some(candidate => this.inventoryCandidateNeedsManualConfirmation(candidate)) && !part.skipped && !part.selected_candidates.length) return `有半成品可用，请点击采用或本次不用库存。`;
+              if (primary.length && !part.skipped && !part.selected_candidates.length) return `存在半成品${this.componentLabel(component)}候选，请确认抵扣或选择本次不用库存。`;
               if (part.selected_candidates.length && !part.allocations.length && !part.skipped) return `半成品${this.componentLabel(component)}推荐批次已无可分配库存，请刷新或选择本次不用库存。`;
             }
             return "";

@@ -2984,6 +2984,8 @@ def _semi_candidate_dict(
         "automatic_recommendation": row.automatic_recommendation,
         "match_reason": row.match_reason,
         "match_score": row.match_score,
+        "recommendation_tier": row.recommendation_tier,
+        "dimension_distance": row.dimension_distance,
         "signature_differences": list(row.signature_differences),
         "warning_codes": list(row.warning_codes),
         "warning_messages": list(row.warning_messages),

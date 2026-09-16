@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import object_session
 from app.models.warehouse_goods import WarehouseGoodsProfile
-from app.services.warehouse_goods import goods_profile, qualification_issues
+from app.services.warehouse_goods import goods_profile, qualification_issues, lot_face, product_face
 from app.services.processed_sheet_matching import processed_match
 
 from app.models.delivery import DeliveryItem
@@ -85,6 +85,28 @@ class SemiFinishedCandidate:
     automatic_recommendation: bool = False
     match_reason: str = ""
     match_score: int = 100
+    recommendation_tier: str = "near"
+    dimension_distance: float = 0.0
+
+
+def _rank_sheet_candidates(db, product_id, expected, candidates):
+    """Discovery ranking only; never alter frozen reservations or stock identity."""
+    product = db.get(Product, product_id)
+    rows = []
+    for row in candidates:
+        detail = row.lot.semi_finished_detail
+        if (not product or detail.flute_type != expected.flute_type
+                or lot_face(db, row.lot, goods_profile(db, row.lot)) != product_face(product)):
+            continue
+        axes = [(detail.board_length_mm, expected.board_length_mm),
+                (detail.board_width_mm, expected.board_width_mm)]
+        valid = all(a and b and a > 0 and b > 0 for a, b in axes)
+        near = valid and all(abs(a-b)*10 <= b for a, b in axes)
+        distance = sum(abs(a-b)/b for a, b in axes) if valid else 1e9
+        rows.append(replace(row, recommendation_tier="near" if near else "more",
+                            dimension_distance=distance,
+                            automatic_recommendation=row.automatic_recommendation and near))
+    return sorted(rows, key=lambda r: (r.recommendation_tier != "near", r.dimension_distance))
 
 
 @dataclass(frozen=True)
@@ -1048,7 +1070,7 @@ def browse_semi_finished_inventory_for_product(
                 warning_messages=warning_messages,
             )
         )
-    return sorted(candidates, key=lambda c: c.lot.semi_finished_detail.sheet_type == "raw_board")
+    return _rank_sheet_candidates(db, product.id, expected, candidates)
 
 
 def _semi_finished_candidates_for_signature(
@@ -1185,8 +1207,7 @@ def _semi_finished_candidates_for_signature(
                 warning_messages=tuple(warning_messages),
             )
         )
-    return sorted(candidates, key=lambda c: (c.lot.semi_finished_detail.sheet_type == "raw_board",
-                                            not c.automatic_recommendation, -c.match_score))
+    return _rank_sheet_candidates(db, product_id, expected, candidates)
 
 
 def browse_semi_finished_inventory(
@@ -1276,7 +1297,7 @@ def browse_semi_finished_inventory(
                 warning_messages=warning_messages,
             )
         )
-    return sorted(candidates, key=lambda c: c.lot.semi_finished_detail.sheet_type == "raw_board")
+    return _rank_sheet_candidates(db, product_id, expected, candidates)
 
 
 def _rule_for_signature(

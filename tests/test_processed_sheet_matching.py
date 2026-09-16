@@ -46,7 +46,8 @@ def test_unknown_processed_is_visible_not_automatic_then_single_confirmation(eli
 
 def test_confirmed_post_cut_identity_survives_large_dimension_reduction(eligibility_db):
     db,data=eligibility_db;p,lot,profile,facts=setup(db,data,length=400,approved=True)
-    assert candidates(db,p)[0].automatic_recommendation
+    assert not candidates(db,p)[0].automatic_recommendation
+    assert candidates(db,p)[0].recommendation_tier == 'more'
     assert candidates(db,p)[0].direct_deduction_eligible
 
 def test_equal_dimensions_do_not_authorize_unknown_shape(eligibility_db):

@@ -13,8 +13,9 @@ from app.services.multilevel_bom_requirements import read_graph_requirements
 def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
     requirements = read_graph_requirements(db, order_item_id)
     graph = requirements.compiled.graph
-    body_ids = {n.product_id for n in graph.nodes if n.source == "manufactured"
-                and any(e.parent_id == n.product_id and e.relation == "assembly" for e in graph.edges)}
+    from app.services.bom_inventory_contract import body_product_ids
+    body_ids = body_product_ids(graph)
+    body_credits = {row.product_id: row.body_credited_units for row in requirements.plan.products}
     snapshots = {s.component_product_id: s for s in requirements.compiled.snapshots}
     from app.services.multilevel_bom_carried_material import carried_material_pieces, carried_semi_pieces
     inherited_semi = carried_semi_pieces(db, requirements.compiled)
@@ -54,8 +55,8 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
         stock = requirements.finished_units.get(node.product_id, 0)
         if node.product_id in body_ids:
             received[node.product_id] = planned[node.product_id] = stock
-            received_bodies[node.product_id] = min(current_routes, default=0)
-            planned_bodies[node.product_id] = min(planned_routes, default=0)
+            received_bodies[node.product_id] = body_credits.get(node.product_id, 0) + min(current_routes, default=0)
+            planned_bodies[node.product_id] = body_credits.get(node.product_id, 0) + min(planned_routes, default=0)
         else:
             received[node.product_id] = stock + min(current_routes, default=0)
             planned[node.product_id] = stock + min(planned_routes, default=0)

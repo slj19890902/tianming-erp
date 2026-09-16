@@ -49,8 +49,10 @@ def read_graph_requirements(db, order_item_id):
     handoffs = handoff_assembly_ids(db, compiled)
     own_lots = [lot for lot in own_lots if not (lot.source_ref_type == "bom_assembly" and lot.source_ref_id in handoffs)]
     own_ids = {lot.id for lot in own_lots}
+    from app.services.bom_inventory_contract import is_body_lot
     own_root_used = sum(lot.quantity_consumed for lot in own_lots
-                       if lot.finished_detail and lot.finished_detail.product_id == graph.root_id)
+                       if lot.finished_detail and not is_body_lot(lot)
+                       and lot.finished_detail.product_id == graph.root_id)
     from app.services.multilevel_bom_output_history import current_finished_reservation_condition
     reserves = list(db.scalars(select(InventoryReservation).where(
         InventoryReservation.order_item_id == item.id, InventoryReservation.reservation_type == "finished_order",
@@ -60,6 +62,17 @@ def read_graph_requirements(db, order_item_id):
     # purchased material. Crediting them AND subtracting existing purchases
     # would hide the unreported balance on a partially procured order.
     reserves = [r for r in reserves if r.inventory_lot_id not in own_ids]
+    from app.services.bom_inventory_contract import is_body_lot
+    bodies = {}
+    product_by_snapshot = {s.id:s.component_product_id for s in compiled.snapshots}
+    for reserve in reserves:
+        lot = db.get(InventoryLot, reserve.inventory_lot_id)
+        if lot is not None and is_body_lot(lot):
+            pid = product_by_snapshot.get(reserve.sales_order_item_bom_component_id)
+            if pid is None:
+                raise BomPlanError('本体预占缺少冻结BOM节点')
+            bodies[pid] = bodies.get(pid, 0) + max(0, reserve.credited_requirement_quantity - reserve.released_requirement_quantity)
+    reserves = [r for r in reserves if not is_body_lot(db.get(InventoryLot, r.inventory_lot_id))]
     finished, pieces = {}, {}
     from app.services.multilevel_bom_carried_material import carried_semi_pieces
     inherited_semi = carried_semi_pieces(db, compiled)
@@ -87,4 +100,4 @@ def read_graph_requirements(db, order_item_id):
             coverage = component_inventory_coverage(db, row.id, component_type=route.key)
             pieces[node.product_id, route.key] = coverage["semi_piece_quantity"] + inherited_semi.get((node.product_id, route.key), 0)
     return GraphRequirements(quantity, compiled, plan_bom(graph, quantity,
-        eligible_stock=finished, eligible_pieces=pieces), finished, pieces)
+        eligible_stock=finished, eligible_pieces=pieces, eligible_bodies=bodies), finished, pieces)

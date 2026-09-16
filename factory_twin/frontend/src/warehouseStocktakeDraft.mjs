@@ -12,7 +12,8 @@ function draftIdentity(draft) {
       positiveInteger(draft.product_id),
       draft.inventory_type,
       draft.unit,
-      draft.source_kind
+      draft.source_kind,
+      draft.stock_stage || "complete"
     ].join(":");
   }
   if (draft?.operation === "decrease") return `decrease:${positiveInteger(draft.lot_id) || ""}`;
@@ -226,7 +227,8 @@ export function buildStocktakeBatchPayload(idempotencyKey, drafts) {
       unit: draft.unit,
       quantity: draft.quantity,
       stock_date: draft.stock_date,
-      source_kind: draft.source_kind || "existing_stocktake"
+      source_kind: draft.source_kind || "existing_stocktake",
+      stock_stage: draft.stock_stage || "complete"
     } : {
       client_item_id: draft.client_item_id,
       operation: "decrease",

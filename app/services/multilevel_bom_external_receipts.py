@@ -74,11 +74,15 @@ def post_graph_receipt_inventory(db, *, purchase_item, receipt_item, customer_id
     target = _receipt_auto_finished_ground_target(db, claim=True,
         customer_id=customer_id, product_id=node.product_id)
     from app.services.finished_stock_identity import compiled_product_bases
+    from app.services.bom_inventory_contract import body_product_ids
+    is_body = node.product_id in body_product_ids(original.graph)
     lot = manual_finished_in(db, customer_id=customer_id, product_id=node.product_id,
         location_id=target.location.id, quantity=quantity, stock_date=beijing_today(),
         source_type='purchase_reserve', source_ref_type='bom_external_receipt',
         source_ref_id=receipt_item.id, remarks='外购子件收料入库', operator_id=operator_id,
         physical_basis_json=compiled_product_bases(original)[node.product_id],
+        stock_stage='body' if is_body else 'complete',
+        frozen_body=is_body,
         idempotency_key=f'bom-external-receipt:{receipt_item.id}',
         expected_layout_version=target.layout_version, require_empty_pallet=False,
         movement_reason='外购子件收料入库')
@@ -105,6 +109,7 @@ def reserve_external_picking(db, *, receipt_id, item, operator_id):
     from app.models.order import Order
     from app.services.multilevel_bom_plan import plan_bom
     from app.services.production_workflow import _reserve_component_completion_lot
+    from app.services.bom_inventory_contract import is_body_lot
     compiled = read_compiled_order_bom(db, item.id)
     order = db.get(Order, item.order_id)
     if compiled is None or order is None or order.customer_id != compiled.graph.customer_id:
@@ -122,6 +127,8 @@ def reserve_external_picking(db, *, receipt_id, item, operator_id):
         if pid not in credits:
             continue
         reserved_lot = db.get(InventoryLot, reservation.inventory_lot_id)
+        if is_body_lot(reserved_lot):
+            continue
         if (reserved_lot is None or reserved_lot.finished_detail is None
                 or reserved_lot.finished_detail.product_id != pid
                 or reserved_lot.finished_detail.owner_customer_id != order.customer_id
@@ -137,6 +144,8 @@ def reserve_external_picking(db, *, receipt_id, item, operator_id):
     lots = db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type == 'bom_external_receipt',
         InventoryLot.source_ref_id.in_(sources), InventoryLot.quantity_available > 0).order_by(InventoryLot.id))
     for lot in lots:
+        if is_body_lot(lot):
+            continue
         pid = lot.finished_detail.product_id
         if pid not in picking:
             continue

@@ -7027,7 +7027,7 @@
                         <option value="manufactured">自己生产</option>
                         <option value="assembled">零件组装</option>
                         <option value="separate">只列配套清单</option>
-                        <option value="purchased">直接买成品</option>
+                        <option value="purchased">外购本体 / 整件</option>
                       </select>
                     </label>
                     <label class="remember-line">父件单位
@@ -7063,7 +7063,7 @@
                   <div class="bom-relationship-title">组合关系</div>
                   <div class="bom-relationship-line">{{ bomRelationshipSummary() }}</div>
                   <div class="muted">{{ bomInventoryModeHint() }}</div>
-                  <details class="bom-mode-help"><summary>怎么选？</summary><div>自己生产：本体按材料生产，可另配附件。<br>零件组装：扣减零件，增加组装品库存。<br>直接买成品：采购本体入库，可另配附件。<br>只列配套清单：父件不入库，子件分别存放。<br>组装消耗：零件变成组装品；随货配套：各自保留库存，出货时配齐。<br>用量只填每1个父件需要多少，不填上一级合计。</div></details>
+                  <details class="bom-mode-help"><summary>怎么选？</summary><div>自己生产：保留实际箱型、材质和报料尺寸，先生产本体。<br>零件组装：父件不报纸板，按子件用量备料，组装后入库。<br>外购本体 / 整件：有组装消耗子件时先收本体，组装后才是完整成品；没有则直接收成品。<br>只列配套清单：不存父件，按子件备货交付。<br>组装消耗：组装时扣子件；随货配套：发货时扣子件。子件也可独立接单。<br>用量只填每1个父件所需数量；开料一开几只换算张数，不放大组合用量。售价和标签不改变扣库规则。</div></details>
                 </div>
                 <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存父产品，再维护内部组件 BOM。</div>
                 <div v-else-if="bomEditor.error" class="status orange" style="display:block;white-space:normal">{{ bomEditor.error }}</div>
@@ -7081,7 +7081,7 @@
                         <div class="field bom-quantity-field"><label>每1{{ productForm.unit || '父件' }}用量</label><input class="input" aria-label="每父件子件用量" type="number" min="1" step="1" v-model.number="component.quantity_per_set" /><span>{{ bomComponentUnit(component) || '单位缺失' }}</span></div>
                         <label v-if="bomEditor.inventory_mode === 'legacy'" class="remember-line bom-component-compact-meta"><input type="checkbox" v-model="component.is_required" /> {{ component.is_required === false ? '可选' : '必需' }}</label>
                         <select v-else class="select bom-component-relation" aria-label="子件库存关系" v-model="component.inventory_relation">
-                          <option value="assembly" :disabled="!['assembled', 'manufactured'].includes(bomEditor.inventory_mode)">组装消耗</option>
+                          <option value="assembly" :disabled="!['assembled', 'manufactured', 'purchased'].includes(bomEditor.inventory_mode)">组装消耗</option>
                           <option value="accompany">随货配套</option>
                         </select>
                         <span class="bom-component-actions"><button type="button" class="btn small" :aria-expanded="!!component._planningOpen" @click="component._planningOpen = !component._planningOpen">备料</button><button type="button" class="btn small" :disabled="!component.component_product_id || bomEditor.loading || masterSavePending || !canEditProducts" @click="openBomChildEditor(component)">子件资料</button><button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button></span>
@@ -25804,7 +25804,7 @@
             return String(component?.component?.unit ?? component?.unit ?? "").trim();
           },
           bomInventoryModeHint() {
-            return {manufactured:"本体自己生产入库；附件按下方关系处理。", assembled:"组装时扣减子件，增加组装品库存；用量按每套填写。", purchased:"本体直接采购入库；附件独立配套。", separate:"只管理配套清单，不产生父件库存。", legacy:"当前保留旧配方；切换形成方式后须核对组装或配套关系。"}[this.bomEditor.inventory_mode] || "请选择产品形成方式。";
+            return {manufactured:"保留实际箱型；有组装消耗子件时，生产本体后还须组装。", assembled:"父件不报材料；确认组装扣减子件，增加成套库存。", purchased:"有组装消耗子件：买本体后组装；没有：直接买完整成品。", separate:"只管理配套清单，不产生父件库存。", legacy:"保留旧配方；切换前先核对实际组装或随货关系。"}[this.bomEditor.inventory_mode] || "请选择产品形成方式。";
           },
           bomRelationshipSummary() {
             const parentUnit = String(this.productForm?.unit || "").trim() || "父件单位待选";
@@ -26067,7 +26067,7 @@
               if (ids.has(String(component.component_product_id))) return "同一个内部组件不能重复添加";
               ids.add(String(component.component_product_id));
               if (mode !== "legacy" && !["assembly", "accompany"].includes(component.inventory_relation)) return "请选择子件的组装或配套关系";
-              if (mode !== "legacy" && !["assembled", "manufactured"].includes(mode) && component.inventory_relation === "assembly") return "组装消耗请选择自制或组套来源";
+              if (mode !== "legacy" && !["assembled", "manufactured", "purchased"].includes(mode) && component.inventory_relation === "assembly") return "组装消耗请选择自制本体、外购本体或零件组装";
               if (!Number.isFinite(Number(component.quantity_per_set)) || Number(component.quantity_per_set) <= 0) return "每套数量必须大于0";
               if (mode !== "legacy" && !Number.isInteger(Number(component.quantity_per_set))) return "每套用量必须为正整数";
               if (component.is_die_cut && !component.mold_tool_id) return "模切组件必须选择生产模具";

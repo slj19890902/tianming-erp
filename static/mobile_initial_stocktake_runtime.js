@@ -201,7 +201,8 @@ async function saveInitialInbound() {
         location_id: Number(pick(state.selectedLocation, ["id", "location_id"])),
         expected_layout_version: Number(state.selectedLocation.layout_version),
         customer_id: Number($("inboundCustomer").value), product_id: Number($("inboundProduct").value),
-        quantity, stock_date: $("inboundDate").value, source_kind: "existing_stocktake"}],
+        quantity, stock_date: $("inboundDate").value, source_kind: "existing_stocktake",
+        stock_stage: $("inboundStage")?.value || "complete"}],
     };
     persistInboundAttempt();
   }
@@ -235,6 +236,7 @@ $("inboundFindCustomer").onclick = findInboundCustomers;
 $("inboundFindProduct").onclick = findInboundProducts;
 $("inboundCustomer").onchange = () => { invalidateInboundSelection(); $("inboundProduct").innerHTML = '<option value="">请选择产品</option>'; findInboundProducts(); };
 $("inboundProduct").onchange = () => {
+  if ($("inboundStage")) $("inboundStage").value = "complete";
   const option = $("inboundProduct").selectedOptions[0];
   if (option?.dataset.customerId && $("inboundCustomer").value !== option.dataset.customerId) {
     const customer = document.createElement("option");

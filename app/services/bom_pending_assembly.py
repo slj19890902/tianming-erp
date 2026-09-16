@@ -18,7 +18,8 @@ def reserve_pending_parts(db, *, order_item_id, compiled, operator_id):
     from app.services.multilevel_bom_requirements import read_graph_requirements
     from app.services.production_workflow import _reserve_component_completion_lot
     requirements = read_graph_requirements(db, order_item_id)
-    child_ids = {e.child_id for e in compiled.graph.edges if e.relation == 'assembly'}
+    from app.services.bom_inventory_contract import body_product_ids, is_body_lot
+    child_ids = {e.child_id for e in compiled.graph.edges if e.relation == 'assembly'} | body_product_ids(compiled.graph)
     own = {lot.id: lot for lot in own_output_lots(db, order_item_id)}
     snapshots = {s.component_product_id: s for s in compiled.snapshots}
     needs = {p.product_id: p.make_units for p in requirements.plan.products if p.product_id in child_ids}
@@ -87,6 +88,8 @@ def preview(db, item_id):
             quantity=quantity, unit=nodes[pid].unit, location_id=target_id, location_name=target_name))
     sources = []
     child_ids = {e.child_id for e in compiled.graph.edges if e.relation == 'assembly'}
+    from app.services.bom_inventory_contract import body_product_ids, is_body_lot
+    child_ids |= body_product_ids(compiled.graph)
     reserved_by_lot = {}
     for reservation in db.scalars(select(InventoryReservation).where(
         InventoryReservation.order_item_id == item_id, InventoryReservation.reservation_type == 'finished_order',
@@ -95,12 +98,14 @@ def preview(db, item_id):
         reserved_by_lot[reservation.inventory_lot_id] = reserved_by_lot.get(reservation.inventory_lot_id, 0) + remaining
     for lot in lots:
         detail = lot.finished_detail
-        if not detail or detail.product_id not in child_ids:
+        from app.services.multilevel_bom_body_inventory import stock_product_identity
+        pid, _ = stock_product_identity(db, lot)
+        if pid not in child_ids:
             continue
         location = db.get(WarehouseLocation, lot.warehouse_location_id)
-        sources.append(dict(lot_id=lot.id, product_name=detail.product_name_snapshot if detail else '箱体',
-            product_id=detail.product_id, product_code=detail.inventory_code_snapshot,
-            quantity=(lot.quantity_available if lot.id in free else 0) + reserved_by_lot.get(lot.id, 0), unit=nodes[detail.product_id].unit,
+        sources.append(dict(lot_id=lot.id, product_name=nodes[pid].name + ('（未组装本体）' if is_body_lot(lot) else ''),
+            product_id=pid, product_code=detail.inventory_code_snapshot if detail else db.get(Product,pid).product_code,
+            quantity=(lot.quantity_available if lot.id in free else 0) + reserved_by_lot.get(lot.id, 0), unit=nodes[pid].unit,
             location=location.location_name if location else '位置待核对'))
     customer = db.get(Customer, order.customer_id)
     sources = [source for source in sources if source['quantity'] > 0]
@@ -108,7 +113,7 @@ def preview(db, item_id):
     assembled_ids = {e.parent_id for e in compiled.graph.edges if e.relation == 'assembly'}
     assembled_stock = {}
     for lot in lots:
-        if lot.finished_detail and lot.finished_detail.product_id in assembled_ids:
+        if lot.finished_detail and not is_body_lot(lot) and lot.finished_detail.product_id in assembled_ids:
             pid = lot.finished_detail.product_id
             assembled_stock[pid] = assembled_stock.get(pid,0) + (lot.quantity_available if lot.id in free else 0) + reserved_by_lot.get(lot.id,0)
     required = {p.product_id: p.required_units for p in plan_bom(compiled.graph, max(0, item.quantity-item.delivered_quantity), eligible_stock=assembled_stock).products}

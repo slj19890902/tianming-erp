@@ -89,7 +89,6 @@ def test_cycle_and_legacy_parent_cannot_be_bypassed(context):
 @pytest.mark.parametrize("mode,rows", [
     ("assembled", []),
     ("assembled", [(3, 1, "accompany")]),
-    ("purchased", [(3, 1, "assembly")]),
     ("assembled", [(3, 1, "unknown")]),
 ])
 def test_invalid_source_or_relationship_is_rejected_before_writes(context, mode, rows):

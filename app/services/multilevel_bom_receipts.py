@@ -333,7 +333,7 @@ def assemble_graph_order_receipt(db, *, compiled, order_item_id, operation_key, 
         return ()
     from app.services.multilevel_bom_inventory import assemble_order_inventory
     pids = {n.product_id for n in compiled.graph.nodes if n.source == "assembled"
-            or (n.source == "manufactured" and any(e.parent_id == n.product_id and e.relation == "assembly"
+            or (n.source in ("manufactured", "purchased") and any(e.parent_id == n.product_id and e.relation == "assembly"
                                                    for e in compiled.graph.edges))}
     if not pids:
         return ()
@@ -420,8 +420,9 @@ def refresh_graph_main_task(db, item, *, create_if_missing):
         BomAssembly.order_item_id == item.id, BomAssembly.status == "posted")):
         consumed[source.lot_id] += source.quantity
     quantities = defaultdict(int)
+    from app.services.bom_inventory_contract import is_body_lot
     for lot in own_lots:
-        if lot.inventory_type == "assembly_body":
+        if is_body_lot(lot):
             from app.services.multilevel_bom_body_inventory import stock_product_identity
             stock_product_identity(db, lot)
             continue
@@ -434,7 +435,7 @@ def refresh_graph_main_task(db, item, *, create_if_missing):
         if reserve.inventory_lot_id in own_ids:
             continue
         lot = db.get(InventoryLot, reserve.inventory_lot_id)
-        if lot and lot.finished_detail:
+        if lot and lot.finished_detail and not is_body_lot(lot):
             quantities[lot.finished_detail.product_id] += max(int(reserve.credited_requirement_quantity or 0)
                                                             - reserve.released_requirement_quantity, 0)
     execution_quantity = compiled.execution_window.execution_quantity if compiled.execution_window else item.quantity

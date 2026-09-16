@@ -508,7 +508,7 @@ def _stock_reservations(
     db: Session,
     snapshot_id: int,
 ) -> list[InventoryReservation]:
-    return list(
+    rows = list(
         db.scalars(
             select(InventoryReservation)
             .where(
@@ -519,6 +519,8 @@ def _stock_reservations(
             .order_by(InventoryReservation.id)
         ).all()
     )
+    from app.services.bom_inventory_contract import is_body_lot
+    return [row for row in rows if not is_body_lot(db.get(InventoryLot, row.inventory_lot_id))]
 
 
 def _direct_completion_rows(db: Session, snapshot_id: int):
@@ -1309,6 +1311,9 @@ def execute_delivery_component_consumption(
                 lot = db.get(InventoryLot, reservation.inventory_lot_id)
                 if lot is None or _remaining_reservation_quantity(reservation) < part.quantity:
                     raise CompositeBomWorkflowError("组件成品预占数量不足，请刷新后重试")
+                from app.services.bom_inventory_contract import is_body_lot
+                if is_body_lot(lot):
+                    raise CompositeBomWorkflowError("未组装本体不能作为完整产品送货，请先完成组装")
                 if int(lot.quantity_reserved or 0) < part.quantity:
                     raise CompositeBomWorkflowError("组件库存预占余额异常，请刷新后重试")
                 before = _balances(lot)

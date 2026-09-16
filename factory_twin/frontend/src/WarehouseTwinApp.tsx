@@ -608,6 +608,7 @@ interface StocktakeBatchResultItem {
   inventory_type: "finished" | "semi_finished" | "raw_material";
   version_after: number;
   source_kind?: "existing_stocktake" | "partner_transfer" | null;
+  stock_stage?: "complete" | "body";
 }
 
 interface StocktakeBatchResult {
@@ -1942,12 +1943,14 @@ export function WarehouseTwinApp() {
   const [stocktakeMissingOpen, setStocktakeMissingOpen] = useState(false);
   const [stocktakeInventoryType, setStocktakeInventoryType] = useState<StocktakeInventoryType>("finished");
   const [stocktakeSourceKind, setStocktakeSourceKind] = useState<"existing_stocktake" | "partner_transfer">("existing_stocktake");
+  const [stocktakeStage, setStocktakeStage] = useState<"complete" | "body">("complete");
   const [stocktakeCustomerQuery, setStocktakeCustomerQuery] = useState("");
   const [stocktakeCustomers, setStocktakeCustomers] = useState<CustomerOption[]>([]);
   const [stocktakeCustomerId, setStocktakeCustomerId] = useState("all");
   const [stocktakeProductQuery, setStocktakeProductQuery] = useState("");
   const [stocktakeProductCandidates, setStocktakeProductCandidates] = useState<ProductCandidate[]>([]);
   const [stocktakeProductId, setStocktakeProductId] = useState("");
+  useEffect(() => { setStocktakeStage("complete"); }, [stocktakeProductId]);
   const [stocktakeAddQuantity, setStocktakeAddQuantity] = useState("");
   const [stocktakeSupplementConfirmed, setStocktakeSupplementConfirmed] = useState(false);
   const [stocktakeStockDate, setStocktakeStockDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -4576,7 +4579,8 @@ export function WarehouseTwinApp() {
       inventory_code: selectedStocktakeProduct.product_code || selectedStocktakeProduct.customer_material_code || String(selectedStocktakeProduct.product_id),
       product_name: selectedStocktakeProduct.product_name, inventory_type: stocktakeInventoryType,
       unit: stocktakeInventoryType === "finished" ? "boxes" : "sheets", quantity,
-      stock_date: stocktakeStockDate, source_kind: stocktakeSourceKind
+      stock_date: stocktakeStockDate, source_kind: stocktakeSourceKind,
+      stock_stage: stocktakeInventoryType === "finished" ? stocktakeStage : "complete"
     };
     const result = upsertStocktakeDraft(stocktakeDrafts, draft);
     if (result.error) { setWarehouseOperationMessage(result.error); return; }
@@ -6853,6 +6857,7 @@ export function WarehouseTwinApp() {
               {stocktakeOutsideAreaLocations.some((item) => item.inventory_type === "semi_finished") && <small className="twin-stocktake-resolution">半成品现有库存先按位置定位核对；当前盘点页不伪造半成品移货，需使用库存明细的正式转位流程。</small>}
             </div>}
             <div className="twin-formal-operation-grid"><label><span>数量（{stocktakeInventoryType === "finished" ? "箱" : "张"}）</span><input type="number" min="1" step="1" value={stocktakeAddQuantity} onChange={(event) => { setStocktakeAddQuantity(event.target.value); setStocktakeSupplementConfirmed(false); }} /></label><label><span>库存日期</span><input type="date" value={stocktakeStockDate} onChange={(event) => setStocktakeStockDate(event.target.value)} /></label></div>
+            {stocktakeInventoryType === "finished" && <label>实物状态<select value={stocktakeStage} onChange={event => setStocktakeStage(event.target.value as typeof stocktakeStage)}><option value="complete">完整成品 / 独立子件</option><option value="body">仅本体，尚未装入子件</option></select><small>完整成品直接入库，不重复扣子件；仅本体用于后续组装。</small></label>}
             {!canEditLocations && <p className="twin-stocktake-block-reason">新增入库由管理员操作；现有货物可填写实际数量并上报盘点。</p>}
             {canEditLocations && (stocktakeOutsideAreaLocations.length > 0 || pendingProductExists) && !stocktakeSupplementConfirmed && <button type="button" className="twin-stocktake-supplement-toggle" onClick={() => setStocktakeSupplementConfirmed(true)}>现存数量仍不足，补录缺少部分</button>}
             {canEditLocations && ((!stocktakeOutsideAreaLocations.length && !pendingProductExists) || stocktakeSupplementConfirmed) && <button type="button" className="twin-primary-action" title={selectedLocationAddBlockReason || ""} disabled={!selectedStocktakeCustomer || !selectedStocktakeProduct || !stocktakeAddQuantity || !stocktakeStockDate || !selectedLocationCanReceiveStocktakeProduct} onClick={queueStocktakeAddDraft}>加入盘点</button>}

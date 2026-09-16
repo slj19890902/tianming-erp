@@ -353,6 +353,7 @@ def _finished_inventory_quantity_summary(
     customer_id: int,
     product_condition,
 ) -> dict[str, int]:
+    from app.services.bom_inventory_contract import complete_stock_condition
     row = db.execute(
         select(
             func.coalesce(func.sum(InventoryLot.quantity_available), 0),
@@ -393,6 +394,7 @@ def _finished_inventory_quantity_summary(
         )
         .join(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
         .where(
+            complete_stock_condition(),
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
             Product.customer_id == customer_id,

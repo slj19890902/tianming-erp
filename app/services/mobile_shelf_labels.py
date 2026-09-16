@@ -117,6 +117,7 @@ def print_address(label):
 
 
 def product_fields(db, lot):
+    from app.services.bom_inventory_contract import display_name
     from app.models.customer import Customer
     detail = lot.finished_detail or lot.semi_finished_detail
     customer = db.get(Customer, detail.owner_customer_id) if detail and detail.owner_customer_id else None
@@ -124,7 +125,7 @@ def product_fields(db, lot):
         "customer": (customer.chinese_short_name or customer.name) if customer else "通用库存",
         "customer_name": customer.name if customer else "通用库存",
         "code": getattr(detail, "inventory_code_snapshot", None) or "待补充",
-        "name": getattr(detail, "product_name_snapshot", None) or "待补充",
+        "name": display_name(lot, getattr(detail, "product_name_snapshot", None) or "待补充"),
         "specification": "×".join(format(value, "g") for value in
             (getattr(detail, field, None) for field in ("length_mm", "width_mm", "height_mm")) if value is not None),
     }

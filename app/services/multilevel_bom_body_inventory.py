@@ -150,6 +150,15 @@ def carried_body_quantity(db, compiled, completion):
 
 def validate_body_execution(db, compiled, lot):
     """Physical identity alone does not authorize an old body for a new rule."""
+    if lot.inventory_type == 'finished':
+        from app.services.bom_inventory_contract import is_body_lot, body_basis, body_product_ids
+        from app.services.finished_stock_identity import compiled_product_bases
+        pid, customer_id = stock_product_identity(db, lot)
+        if (not is_body_lot(lot) or pid not in body_product_ids(compiled.graph)
+                or customer_id != compiled.graph.customer_id
+                or lot.finished_detail.physical_basis_json != body_basis(compiled_product_bases(compiled)[pid])):
+            raise SubkitError('库存本体的规格工艺与当前冻结BOM不匹配')
+        return
     if compiled.rule_revision_id is None:
         return
     from app.services.multilevel_bom_output_history import completion_source_id

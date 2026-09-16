@@ -2645,9 +2645,14 @@ def manual_finished_in(
     physical_basis_json: str | None = None,
     remember_storage: bool = True,
     assembly_command_key: str | None = None,
+    stock_stage: str = 'complete',
+    frozen_body: bool = False,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
+        from app.services.bom_inventory_contract import is_body_lot
+        if (stock_stage == 'body') != is_body_lot(existing):
+            raise WarehouseInventoryError('同一入库请求的组装状态已变化，请核对原入库记录', 409)
         _ensure_finished_projection_postcondition(
             db,
             lot=existing,
@@ -2702,6 +2707,15 @@ def manual_finished_in(
         raise WarehouseInventoryError("产品不存在", 404)
     if not is_general and product.customer_id != customer_id:
         raise WarehouseInventoryError("所选产品不属于该客户")
+    from app.services.finished_stock_identity import product_basis, order_product_basis
+    from app.services.bom_inventory_contract import entry_basis
+    if physical_basis_json is None and completion is not None:
+        physical_basis_json = order_product_basis(db, completion.order_item_id, product_id)
+    try:
+        physical_basis_json = entry_basis(product, physical_basis_json or product_basis(product), stock_stage,
+                                         frozen_body=frozen_body)
+    except ValueError as error:
+        raise WarehouseInventoryError(str(error), 409) from error
     date_accuracy, date_original_text = normalize_stock_date_metadata(
         stock_date=stock_date,
         stock_date_accuracy=stock_date_accuracy,
@@ -2728,9 +2742,10 @@ def manual_finished_in(
         remarks=remarks,
         created_by=operator_id,
     )
-    if source_type == "stocktake":
+    freeze_cost = source_type == "stocktake" or (stock_stage == 'body' and not frozen_body)
+    if freeze_cost:
         from app.services.inventory_valuation import freeze_entry_cost
-        freeze_entry_cost(db, lot, product)
+        freeze_entry_cost(db, lot, product, stock_stage=stock_stage)
     apply_cost_snapshot(
         lot,
         estimate_finished_product_cost(
@@ -2738,7 +2753,7 @@ def manual_finished_in(
             product=product,
             material_code=material_code,
             flute_type=product.flute_type,
-        ) if source_type != "stocktake" else None,
+        ) if not freeze_cost else None,
         captured_at=now,
     )
     db.add(lot)
@@ -3060,7 +3075,7 @@ def component_inventory_coverage(
 
 
 def finished_inventory_candidates_for_bom_component(
-    db: Session, *, order_item_id: int, bom_snapshot_id: int
+    db: Session, *, order_item_id: int, bom_snapshot_id: int, stock_stage: str = 'complete'
 ) -> list[InventoryLot]:
     """Candidates for an internal component, limited to the owning customer.
 
@@ -3096,7 +3111,14 @@ def finished_inventory_candidates_for_bom_component(
     ).all()
     from app.services.finished_stock_identity import order_product_basis
     expected = order_product_basis(db, item.id, snapshot.component_product_id)
-    return [lot for lot in rows if expected is None or lot.finished_detail.physical_basis_json == expected]
+    if stock_stage == 'body':
+        from app.services.bom_inventory_contract import body_basis
+        if expected is None:
+            return []
+        expected = body_basis(expected)
+    from app.services.bom_inventory_contract import is_body_lot
+    return [lot for lot in rows if (stock_stage == 'body') == is_body_lot(lot)
+            and (expected is None or lot.finished_detail.physical_basis_json == expected)]
 
 
 def reserve_finished_inventory_for_bom_component(
@@ -3110,6 +3132,7 @@ def reserve_finished_inventory_for_bom_component(
     operator_id: int | None,
     idempotency_key: str,
     warning_acknowledged_codes: list[str],
+    stock_stage: str = 'complete',
 ) -> InventoryReservation:
     """Reserve formal component stock without changing parent-order coverage."""
     existing = db.scalar(select(InventoryReservation).where(
@@ -3157,8 +3180,18 @@ def reserve_finished_inventory_for_bom_component(
     detail = lot.finished_detail
     if detail.product_id != snapshot.component_product_id:
         raise WarehouseInventoryError("库存产品与组件不一致", 409)
+    from app.services.bom_inventory_contract import is_body_lot
+    if (stock_stage == 'body') != is_body_lot(lot):
+        raise WarehouseInventoryError("所选库存的本体/成套状态与预占用途不一致", 409)
     from app.services.finished_stock_identity import matching_component_basis
-    if not matching_component_basis(db, snapshot, lot):
+    if stock_stage == 'body':
+        from app.services.multilevel_bom_orders import read_compiled_order_bom
+        from app.services.multilevel_bom_body_inventory import validate_body_execution
+        try:
+            validate_body_execution(db, read_compiled_order_bom(db, item.id), lot)
+        except (ValueError, AttributeError) as error:
+            raise WarehouseInventoryError(str(error), 409) from error
+    elif not matching_component_basis(db, snapshot, lot):
         raise WarehouseInventoryError("库存缺少匹配的冻结规格、单位或工艺依据，请先核实该批次身份", 409)
     warnings: list[str] = []
     if detail.is_general:
@@ -3278,7 +3311,9 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
     ).all()
     from app.services.finished_stock_identity import order_product_basis
     expected = order_product_basis(db, item.id, item.product_id)
-    return [lot for lot in rows if expected is None or lot.finished_detail.physical_basis_json == expected]
+    from app.services.bom_inventory_contract import is_body_lot
+    return [lot for lot in rows if not is_body_lot(lot)
+            and (expected is None or lot.finished_detail.physical_basis_json == expected)]
 
 
 def finished_inventory_candidates_for_product(
@@ -3293,7 +3328,7 @@ def finished_inventory_candidates_for_product(
     if product.customer_id != customer_id:
         raise WarehouseInventoryError("产品不属于所选客户", 409)
     from app.services.fixed_shelf_staging import held_for_staging_expression
-    return db.scalars(
+    rows = db.scalars(
         select(InventoryLot)
         .join(
             FinishedGoodsInventoryDetail,
@@ -3312,6 +3347,8 @@ def finished_inventory_candidates_for_product(
         )
         .order_by(*inventory_fifo_order_columns())
     ).all()
+    from app.services.bom_inventory_contract import is_body_lot
+    return [lot for lot in rows if not is_body_lot(lot)]
 
 
 def has_unconsumed_inventory_reservations(
@@ -3419,6 +3456,9 @@ def reserve_finished_inventory(
     if lot is None or lot.finished_detail is None:
         raise WarehouseInventoryError("成品库存批次不存在", 404)
     detail = lot.finished_detail
+    from app.services.bom_inventory_contract import is_body_lot
+    if is_body_lot(lot):
+        raise WarehouseInventoryError("未组装本体仅能抵扣本体生产，不可抵扣整套成品", 409)
     if lot.inventory_type != "finished" or lot.status != "active":
         raise WarehouseInventoryError("该库存批次当前不可预占", 409)
     from app.services.bom_subkits import require_free_subkit_stock, SubkitError
@@ -3560,6 +3600,9 @@ def reserve_completed_finished_inventory(
     lot = db.get(InventoryLot, inventory_lot_id)
     if lot is None or lot.finished_detail is None:
         raise WarehouseInventoryError("生产完工成品库存批次不存在", 404)
+    from app.services.bom_inventory_contract import is_body_lot
+    if is_body_lot(lot):
+        raise WarehouseInventoryError("未组装本体不能预占为完整成品", 409)
     detail = lot.finished_detail
     if (
         lot.inventory_type != "finished"
@@ -3726,6 +3769,9 @@ def reserve_finished_surplus_for_delivery(
     reservations: list[InventoryReservation] = []
     now = utc_now_naive()
     for lot in lots:
+        from app.services.bom_inventory_contract import is_body_lot
+        if is_body_lot(lot):
+            continue
         if remaining <= 0:
             break
         take = min(int(lot.quantity_available or 0), remaining)
@@ -4077,6 +4123,9 @@ def consume_finished_reservation(
         lot = db.get(InventoryLot, reservation.inventory_lot_id)
         if order_item is None or order is None or lot is None or lot.finished_detail is None:
             raise WarehouseInventoryError("成品预占关联数据不完整", 409)
+        from app.services.bom_inventory_contract import is_body_lot
+        if is_body_lot(lot):
+            raise WarehouseInventoryError("未组装本体不能作为完整成品送货，请先完成组装", 409)
         detail = lot.finished_detail
         if detail.product_id != order_item.product_id:
             raise WarehouseInventoryError("成品库存与订单产品不一致", 409)
@@ -5126,6 +5175,9 @@ def edit_finished_lot(
         or detail.owner_customer_id != owner_customer_id
         or detail.is_general != is_general
     )
+    from app.services.bom_inventory_contract import is_body_lot
+    if identity_changed and is_body_lot(lot):
+        raise WarehouseInventoryError("未组装本体不可直接改成其他产品或完整成品；请通过组装入库", 409)
     if identity_changed and (
         lot.quantity_reserved > 0 or lot.quantity_consumed > 0
     ):
@@ -5145,7 +5197,7 @@ def edit_finished_lot(
     physical_changed = any(getattr(detail, field) != target_snapshots[field] for field in (
         "box_type_snapshot", "length_mm", "width_mm", "height_mm",
         "material_code_snapshot", "flute_type_snapshot"))
-    if physical_changed and (lot.quantity_reserved > 0 or lot.quantity_consumed > 0):
+    if physical_changed and (lot.quantity_reserved > 0 or lot.quantity_consumed > 0 or is_body_lot(lot)):
         # Editing quantity/location must not silently replace physical facts
         # from a subsequently changed product master.
         for field in ("box_type_snapshot", "length_mm", "width_mm", "height_mm",

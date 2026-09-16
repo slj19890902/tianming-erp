@@ -153,17 +153,22 @@ def _authorized_product_recipe(db, product):
 
 
 def resolve_product_cost(db: Session, product: Product, visited=None, *, main_only=False,
-                         physical_yield=None, assembled_body_only=False) -> CostResolution:
+                         physical_yield=None, assembled_body_only=False, stock_stage='complete') -> CostResolution:
     from app.services.inventory_cost_rules import resolve_rule, estimate_rule
-    explicit = resolve_rule(db, product)
+    from app.services.bom_inventory_contract import product_has_assembly
+    # A whole-kit reference override is not evidence of the bare body's cost.
+    bare_body = (stock_stage == 'body' or assembled_body_only) and product_has_assembly(db, product.id)
+    explicit = None if bare_body else resolve_rule(db, product)
     if explicit is not None:
         return explicit
     from app.models.multilevel_bom import ProductBomProfile
     profile = db.get(ProductBomProfile, product.id)
-    if profile and profile.source == 'assembled' and not assembled_body_only:
+    from app.services.bom_inventory_contract import product_has_assembly
+    if profile and not assembled_body_only and stock_stage == 'complete' and (
+            profile.source == 'assembled' or product_has_assembly(db, product.id)):
         from app.services.bom_entry_cost import assembled_entry_cost
         return assembled_entry_cost(db, product)
-    result = _resolve_product_cost(db, product, visited, main_only=main_only, physical_yield=physical_yield)
+    result = _resolve_product_cost(db, product, visited, main_only=main_only or stock_stage == 'body', physical_yield=physical_yield)
     # A kit sale price cannot be copied to a separately stored physical component.
     # Kits need an explicit allocation rule; a zero/unknown sale is never a price.
     if not result.estimate and not product.is_composite and positive(product.sale_unit_price):
@@ -278,7 +283,9 @@ def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_o
 def resolve_lot_cost(db, lot) -> CostResolution:
     if lot.finished_detail:
         product = db.get(Product, lot.finished_detail.product_id)
-        return resolve_product_cost(db, product, main_only=True) if product else CostResolution(None, ["产品不存在"])
+        from app.services.bom_inventory_contract import is_body_lot
+        return resolve_product_cost(db, product, main_only=True,
+            stock_stage='body' if is_body_lot(lot) else 'complete') if product else CostResolution(None, ["产品不存在"])
     detail = lot.semi_finished_detail
     if detail is None:
         return CostResolution(None, ["批次缺少产品或片料资料"])
@@ -368,8 +375,8 @@ def cost_payload(lot, db=None):
         "cost_basis": (detail.get("cost_rule") or {}).get("basis"), "temporary": bool(detail.get("temporary"))}
 
 
-def freeze_entry_cost(db, lot, product=None):
-    result = resolve_product_cost(db, product, main_only=True) if product else resolve_lot_cost(db, lot)
+def freeze_entry_cost(db, lot, product=None, *, stock_stage='complete'):
+    result = resolve_product_cost(db, product, main_only=True, stock_stage=stock_stage) if product else resolve_lot_cost(db, lot)
     if not result.estimate:
         from app.services.warehouse_inventory import WarehouseInventoryError
         raise WarehouseInventoryError("未能确定入库成本：" + "；".join(result.missing), 422)

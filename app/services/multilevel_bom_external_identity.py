@@ -185,7 +185,7 @@ def frozen_purchase_quantities(db, components, order_items):
     compiled_by_id = {oid: requirement.compiled for oid, requirement in requirements.items()}
     from app.services.multilevel_bom_carried_procurement import carried_purchase_stock
     carried = {oid: carried_purchase_stock(db, compiled) for oid, compiled in compiled_by_id.items()}
-    demands = {oid: {d.product_id: d.make_units for d in requirement.plan.products}
+    demands = {oid: {d.product_id: d.make_units - d.body_credited_units for d in requirement.plan.products}
                for oid, requirement in requirements.items()}
     for component in components:
         oid = component.sales_order_item_id

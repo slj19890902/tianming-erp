@@ -47,6 +47,9 @@ def seed(factory, *, child_quantity):
                 source_type="manual", remarks="isolated body assembly test",
                 idempotency_key="body-child-in", expected_layout_version=2)
             child.estimated_unit_cost_snapshot = Decimal("0.10")
+            from app.services.inventory_valuation import CONFIRMED_SOURCE
+            child.cost_snapshot_source = CONFIRMED_SOURCE
+            child.cost_snapshot_detail_json = json.dumps({"currency":"CNY", "basis":"isolated_test_reviewed_cost"})
             lots.append(child)
         db.commit()
         return lid, {lot.id:lot.version for lot in lots}

@@ -91,7 +91,7 @@ def assembled_entry_cost(db, product):
             {**evidence, 'algorithm_version':'assembled-entry-v1', 'currency':'CNY', 'tax_included':True,
              'product_unit':product.unit,
              'estimate_basis':'stocktake_current_bom_reference_not_historical_purchase',
-             'formula':'各组装子件每片材料成本 × 每套用量；无父件本体纸板',
+             'formula':'本体材料或外购成本（如有）＋各组装子件每片成本 × 每套用量；不含随货附件',
              'standard_labour_unit_cost':str(labour), 'material_unit_cost':str(material),
              'standard_total_unit_cost':str(material+labour)}), [])
     except ValueError as error:

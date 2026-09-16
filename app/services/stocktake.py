@@ -324,7 +324,8 @@ def _lot_identity(lot: InventoryLot) -> dict[str, object]:
         customer_id = detail.owner_customer_id
         customer_name = detail.owner_customer_name_snapshot
         product_id = detail.product_id
-        product_name = detail.product_name_snapshot
+        from app.services.bom_inventory_contract import display_name
+        product_name = display_name(lot, detail.product_name_snapshot)
         inventory_code = detail.inventory_code_snapshot
         material_code = detail.material_code_snapshot
         specification = dimension_specification(

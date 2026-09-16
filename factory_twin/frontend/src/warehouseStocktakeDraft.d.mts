@@ -65,6 +65,7 @@ export interface StocktakeAddDraft extends StocktakeDraftBase {
   unit: StocktakeUnit;
   stock_date: string;
   source_kind: StocktakeSourceKind;
+  stock_stage?: "complete" | "body";
 }
 
 export interface StocktakeDecreaseDraft extends StocktakeDraftBase {

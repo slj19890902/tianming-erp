@@ -77,9 +77,9 @@ def assemble_subkit_inventory(
             node = next((n for n in compiled.graph.nodes if n.product_id == graph_product_id), None)
             has_assembly = any(e.parent_id == graph_product_id and e.relation == "assembly"
                                for e in compiled.graph.edges)
-            if node is None or not has_assembly or node.source not in ("assembled", "manufactured"):
+            if node is None or not has_assembly or node.source not in ("assembled", "manufactured", "purchased"):
                 raise SubkitError("只能组装冻结BOM中的组套成品")
-            body_product_id = graph_product_id if node.source == "manufactured" else None
+            body_product_id = graph_product_id if node.source in ("manufactured", "purchased") else None
             sources = {r.component_product_id: r.id for r in compiled.snapshots}
             recipe = [{"product_id": e.child_id, "pieces_per_kit": e.quantity,
                        "bom_snapshot_id": sources[e.child_id]} for e in compiled.graph.edges
@@ -104,6 +104,8 @@ def assemble_subkit_inventory(
         recipe = recipe if recipe is not None else recipe_rows(snapshot)
         member_ids = {r["product_id"] for r in recipe}
         snapshot_ids = {r["bom_snapshot_id"] for r in recipe}
+        if body_product_id is not None:
+            snapshot_ids.add(sources[body_product_id])
         from app.services.composite_bom_workflow import _remaining_reservation_quantity, _reservation_status
         reservations = list(db.scalars(select(InventoryReservation).where(
             InventoryReservation.order_item_id == item.id,
@@ -127,8 +129,14 @@ def assemble_subkit_inventory(
                 raise SubkitError("组套原片库存状态或版本已变化")
             from app.services.multilevel_bom_body_inventory import stock_product_identity
             pid, customer_id = stock_product_identity(db, lot)
-            is_body = lot.inventory_type == "assembly_body"
-            if is_body:
+            from app.services.bom_inventory_contract import is_body_lot
+            is_body = is_body_lot(lot)
+            if is_body and lot.inventory_type == 'finished':
+                from app.services.multilevel_bom_body_inventory import validate_body_execution
+                validate_body_execution(db, compiled, lot)
+                if pid != body_product_id or lot.finished_detail.is_general:
+                    raise SubkitError('组装本体产品与本次组装不一致')
+            elif is_body:
                 from app.models.multilevel_bom import BomBodyInventoryDetail
                 from app.services.multilevel_bom_body_inventory import validate_body_execution
                 validate_body_execution(db, compiled, lot)

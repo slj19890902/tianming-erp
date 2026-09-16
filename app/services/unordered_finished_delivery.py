@@ -223,6 +223,9 @@ def _validated_customer_lot(
     detail = db.get(FinishedGoodsInventoryDetail, allocation.inventory_lot_id)
     if lot is None or detail is None:
         raise WarehouseInventoryError("所选成品库存批次不存在", 409)
+    from app.services.bom_inventory_contract import is_body_lot
+    if is_body_lot(lot):
+        raise WarehouseInventoryError("该批次是未组装本体，请完成组装后再送货", 409)
     from app.services.bom_subkits import require_free_subkit_stock, SubkitError
     try:
         require_free_subkit_stock(db, lot)

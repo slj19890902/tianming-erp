@@ -7,6 +7,10 @@ from app.models.order import OrderItem
 
 
 def shelf_merge_identity(lot):
+    from app.services.bom_inventory_contract import is_body_lot
+    if is_body_lot(lot):
+        return {"box_style": getattr(lot.finished_detail, "box_type_snapshot", None),
+                "is_bom_component": True, "inventory_stage": "body"}
     detail = lot.finished_detail
     if detail is None:
         return {"box_style": None, "is_bom_component": None}

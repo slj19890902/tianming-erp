@@ -40,4 +40,25 @@ def reserve_new_order_stock(db, *, order_item_id, operator_id):
                 need -= take
                 if not need:
                     break
+        from app.services.bom_inventory_contract import body_product_ids
+        for pid in body_product_ids(requirements.compiled.graph):
+            requirements = read_graph_requirements(db, order_item_id)
+            row = next(p for p in requirements.plan.products if p.product_id == pid)
+            need = row.make_units - row.body_credited_units
+            if need <= 0:
+                continue
+            for lot in finished_inventory_candidates_for_bom_component(db, order_item_id=order_item_id,
+                    bom_snapshot_id=snapshots[pid], stock_stage='body'):
+                if lot.finished_detail.is_general or lot.finished_detail.owner_customer_id != requirements.compiled.graph.customer_id:
+                    continue
+                take = min(need, lot.quantity_available)
+                reservation = reserve_finished_inventory_for_bom_component(db, order_item_id=order_item_id,
+                    bom_snapshot_id=snapshots[pid], inventory_lot_id=lot.id, quantity=take,
+                    expected_version=lot.version, operator_id=operator_id, stock_stage='body',
+                    idempotency_key=f'bom-body-auto:{order_item_id}:{snapshots[pid]}:{lot.id}',
+                    warning_acknowledged_codes=[])
+                reserved.append(reservation.id)
+                need -= take
+                if not need:
+                    break
         return reserved

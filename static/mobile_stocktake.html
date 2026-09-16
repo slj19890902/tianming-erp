@@ -90,6 +90,7 @@
           </details>
           <div id="inboundContext" class="notice" aria-live="polite">请选择客户、产品</div>
           <label id="inboundExistingLabel" class="hidden"><input id="inboundExistingAcknowledged" type="checkbox" style="width:auto;min-height:24px"> 确认新增实物，非已登记库存移位</label>
+          <div class="field"><label for="inboundStage">实物状态</label><select id="inboundStage"><option value="complete">完整成品 / 独立子件</option><option value="body">仅本体，尚未装入子件</option></select><small>完整成品不重复扣子件；仅本体用于后续组装。</small></div>
           <div class="inbound-pair"><div class="field"><label for="inboundQuantity">新增数量（只）</label><input id="inboundQuantity" type="number" min="1" step="1" inputmode="numeric"></div>
           <div class="field"><label for="inboundDate">入库日期</label><input id="inboundDate" type="date"></div></div>
         </fieldset>

@@ -86,6 +86,7 @@ class ProductDemand:
     required_units: int
     credited_units: int
     make_units: int
+    body_credited_units: int = 0
 
 
 @dataclass(frozen=True)
@@ -187,8 +188,6 @@ class FrozenBom:
             assembly = [edge for edge in children[pid] if edge.relation == "assembly"]
             if node.source == "assembled" and not assembly:
                 raise BomPlanError("组套产品缺少组装子件")
-            if node.source == "purchased" and assembly:
-                raise BomPlanError("外购成品不可同时重复消耗组装子件")
             if node.source == "separate" and (assembly or not children[pid]):
                 raise BomPlanError("子件分存组合必须有配套子件，不能消耗子件生成父库存")
         # Deterministic Kahn order handles shared children without recursion limits.
@@ -219,6 +218,7 @@ def plan_bom(
     *,
     eligible_stock: Mapping[int, int] | None = None,
     eligible_pieces: Mapping[tuple[int, str], int] | None = None,
+    eligible_bodies: Mapping[int, int] | None = None,
 ) -> BomPlan:
     """Net eligible product stock once, then physical-piece stock once.
 
@@ -230,6 +230,13 @@ def plan_bom(
     nodes, children, order = graph.validated()
     stock = dict(eligible_stock or {})
     pieces = dict(eligible_pieces or {})
+    bodies = dict(eligible_bodies or {})
+    from app.services.bom_inventory_contract import body_product_ids
+    body_ids = body_product_ids(graph)
+    for pid, count in bodies.items():
+        if type(pid) is not int or pid not in body_ids:
+            raise BomPlanError('本体抵扣包含不需要本体组装的产品')
+        _integer(count, '可抵扣本体数')
     for pid, count in stock.items():
         if type(pid) is not int or pid not in nodes:
             raise BomPlanError("库存抵扣包含无关产品")
@@ -255,9 +262,10 @@ def plan_bom(
         required = demand[pid]
         credited = min(stock.get(pid, 0), required)
         make = required - credited
-        products.append(ProductDemand(pid, required, credited, make))
+        body_credit = min(bodies.get(pid, 0), make)
+        products.append(ProductDemand(pid, required, credited, make, body_credit))
         for route in nodes[pid].routes:
-            required_pieces = make * route.pieces_per_unit
+            required_pieces = (make - body_credit) * route.pieces_per_unit
             piece_credit = min(pieces.get((pid, route.key), 0), required_pieces)
             net = required_pieces - piece_credit
             sheets = (net + route.pieces_per_sheet - 1) // route.pieces_per_sheet
@@ -317,8 +325,8 @@ def plan_assembly(graph: FrozenBom, quantity: int, *, eligible_stock: Mapping[in
     versions, audit and atomic debits/credits before applying any step.
     """
     nodes, children, order = graph.validated()
-    body_ids = {pid for pid in order if nodes[pid].source == "manufactured"
-                and any(e.relation == "assembly" for e in children[pid])}
+    from app.services.bom_inventory_contract import body_product_ids
+    body_ids = body_product_ids(graph)
     for pid, count in (production_limits or {}).items():
         if pid not in nodes or (nodes[pid].source != 'assembled' and pid not in body_ids):
             raise BomPlanError('实际组套数量包含无关产品')

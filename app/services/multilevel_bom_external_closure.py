@@ -61,5 +61,5 @@ def external_graph_receipts_closed(db, *, item, requirements):
         produced, _ = cumulative_receipt_conversion(original_node, received_before=0, received_now=received)
         if produced != int(outputs.get(purchase.id, 0)):
             raise BomPlanError('外购实收产出与冻结换算不一致')
-    return not pending and all(received_stock[p.product_id] >= p.make_units
+    return not pending and all(received_stock[p.product_id] >= p.make_units - p.body_credited_units
         for p in requirements.plan.products if p.product_id in nodes)

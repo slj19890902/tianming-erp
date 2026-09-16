@@ -1148,6 +1148,7 @@ class TwinStocktakeBatchItemPayload(BaseModel):
     lot_id: int | None = Field(default=None, gt=0)
     expected_version: int | None = Field(default=None, gt=0)
     source_kind: Literal["existing_stocktake", "partner_transfer"] | None = None
+    stock_stage: Literal["complete", "body"] = "complete"
 
     @field_validator("client_item_id")
     @classmethod
@@ -1159,6 +1160,8 @@ class TwinStocktakeBatchItemPayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_stocktake_operation_fields(self) -> "TwinStocktakeBatchItemPayload":
+        if self.stock_stage == "body" and (self.operation != "add" or self.inventory_type != "finished"):
+            raise ValueError("未组装本体只能作为成品类新增盘点，原料与半成品保持自身类型")
         if self.operation == "add":
             expected_unit = {
                 "finished": "boxes",
@@ -1816,6 +1819,7 @@ class FinishedManualInPayload(BaseModel):
     stock_date_accuracy: Literal["exact", "estimated", "unknown"] = "exact"
     stock_date_original_text: str | None = Field(default=None, max_length=100)
     source_type: str = "manual"
+    stock_stage: Literal["complete", "body"] = "complete"
     remarks: str | None = None
     idempotency_key: str | None = Field(default=None, max_length=100)
 
@@ -8989,6 +8993,7 @@ def confirm_twin_stocktake_batch(
             lot_id=item.lot_id,
             expected_version=item.expected_version,
             source_kind=item.source_kind,
+            stock_stage=item.stock_stage,
         )
         for item in payload.items
     ]

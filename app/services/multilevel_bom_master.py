@@ -40,8 +40,8 @@ def load_master_structure(db, root_product_id):
             if not row.is_required:
                 raise BomPlanError("多级BOM子件必须为必需项")
             source = profiles[row.parent_product_id]
-            if meanings[row.id] == "assembly" and source not in {"assembled", "manufactured"}:
-                raise BomPlanError("组装子件的父产品必须为自制或组套来源")
+            if meanings[row.id] == "assembly" and source not in {"assembled", "manufactured", "purchased"}:
+                raise BomPlanError("组装子件的父产品必须为自制本体、外购本体或零件组装来源")
             if row.quantity_per_set <= 0 or row.quantity_per_set != int(row.quantity_per_set):
                 raise BomPlanError("每父件子件用量必须为正整数")
             edges.append({"bom_component_id": row.id, "parent_id": row.parent_product_id,

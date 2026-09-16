@@ -133,6 +133,11 @@ def test_old_finished_stock_reserved_not_assembled(composite_requisition_app, _p
                 operator_id=1, idempotency_key=f'old396-{pid}',expected_layout_version=target.layout_version)
             from decimal import Decimal
             lot.estimated_unit_cost_snapshot = Decimal('0.1234')
+            # Old-stock fixture needs explicit reviewed entry-cost evidence,
+            # not just an amount that bypasses the inherited-cost gate.
+            from app.services.inventory_valuation import CONFIRMED_SOURCE
+            lot.cost_snapshot_source = CONFIRMED_SOURCE
+            lot.cost_snapshot_detail_json = '{"currency":"CNY","basis":"isolated_test_reviewed_cost"}'
             ids.append(lot.id)
         # Free stock now appears in the read-only queue, without being reserved.
         from app.services.bom_pending_assembly import pending as pending_assembly

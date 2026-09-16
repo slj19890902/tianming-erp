@@ -119,6 +119,7 @@ def _age_bucket_key(days: int | None) -> str:
 
 
 def _lot_business_fields(row: InventoryLot) -> dict:
+    from app.services.bom_inventory_contract import display_name
     from app.services.warehouse_reading_identity import shelf_merge_identity
     if row.finished_detail is not None:
         detail = row.finished_detail
@@ -126,7 +127,7 @@ def _lot_business_fields(row: InventoryLot) -> dict:
             **shelf_merge_identity(row),
             "product_id": detail.product_id,
             "inventory_code": detail.inventory_code_snapshot,
-            "product_name": detail.product_name_snapshot,
+            "product_name": display_name(row, detail.product_name_snapshot),
             "customer_id": detail.owner_customer_id,
             "customer_name": detail.owner_customer_name_snapshot or "通用库存",
             "customer_short_name": (

@@ -20,7 +20,7 @@ from test_p1_33c5_external_packaging_receiving import _login, _confirm
 from tests.test_p1_81_receipt_purpose_flow import _seed_material_and_staging, _p181_published_map_identity
 
 
-def prepare(app, *, stock_basis=1, purchase_basis=3, two=False, direct=False, quantity=10):
+def prepare(app, *, stock_basis=1, purchase_basis=3, two=False, direct=False, quantity=10, body=False):
     with app.state.session_factory() as db:
         actor = db.scalar(select(User).where(User.username == 'purchase-admin'))
         old = db.get(Order, app.state.fixture['order_id'])
@@ -49,7 +49,14 @@ def prepare(app, *, stock_basis=1, purchase_basis=3, two=False, direct=False, qu
             db.add(second)
             db.flush()
             components.append((second.id, 6, 'assembly'))
-        if direct:
+        if body:
+            for key in ('supply_mode', 'external_packaging_category_code', 'external_packaging_specification_json',
+                    'external_packaging_specification_summary', 'external_packaging_purchase_unit',
+                    'external_packaging_default_order_quantity_basis', 'external_packaging_default_purchase_quantity_basis',
+                    'external_packaging_candidate_snapshot_json'):
+                setattr(root, key, getattr(child, key))
+            save(db, actor, root.id, 'purchased', components)
+        elif direct:
             root = child
             save(db, actor, root.id, 'purchased', [])
         else:

@@ -43,8 +43,8 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
         if compiled is None:
             raise SubkitError("订单缺少完整多级BOM快照")
         nodes, children, topo = compiled.graph.validated()
-        body_ids = {pid for pid in topo if nodes[pid].source == "manufactured"
-                    and any(e.relation == "assembly" for e in children[pid])}
+        from app.services.bom_inventory_contract import body_product_ids, is_body_lot
+        body_ids = body_product_ids(compiled.graph)
         product_ids = [pid for pid in reversed(topo) if nodes[pid].source == "assembled" or pid in body_ids]
         keys = _node_keys(operation_key, product_ids)
         if not product_ids:
@@ -110,8 +110,11 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
                 raise SubkitError("逐层组装来源库存状态或版本已变化")
             from app.services.multilevel_bom_body_inventory import stock_product_identity
             pid, customer_id = stock_product_identity(db, lot)
-            is_body = lot.inventory_type == "assembly_body"
-            if is_body:
+            is_body = is_body_lot(lot)
+            if is_body and lot.inventory_type == 'finished':
+                from app.services.multilevel_bom_body_inventory import validate_body_execution
+                validate_body_execution(db, compiled, lot)
+            elif is_body:
                 from app.models.multilevel_bom import BomBodyInventoryDetail
                 body = db.get(BomBodyInventoryDetail, lid)
                 if (pid not in body_ids or body.order_item_id != item.id
@@ -163,8 +166,8 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
         for pid in product_ids:
             child_ids = {e.child_id for e in children[pid] if e.relation == "assembly"}
             inputs = {lid: lot.version for lid, lot in lots.items()
-                      if (lot.inventory_type == "finished" and identities[lid] in child_ids)
-                      or (lot.inventory_type == "assembly_body" and identities[lid] == pid)}
+                      if (not is_body_lot(lot) and lot.inventory_type == "finished" and identities[lid] in child_ids)
+                      or (is_body_lot(lot) and identities[lid] == pid)}
             expected = steps[pid].produced_units if pid in steps else 0
             result = assemble_subkit_inventory(db, order_item_id=item.id, graph_product_id=pid,
                 source_lot_versions=inputs, target_location_id=target_locations[pid],

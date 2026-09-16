@@ -26,7 +26,7 @@ def preview_semi_production(db, *, order_item_id, product_id):
     context, plan = plan_semi_only_production(db, order_item_id=order_item_id, product_id=product_id)
     from app.services.production_workflow import _receipt_auto_finished_ground_target
     target_products = {node.product_id for node in context.compiled.graph.nodes
-        if node.source == "assembled" or (node.source == "manufactured" and any(
+        if node.source == "assembled" or (node.source in ("manufactured", "purchased") and any(
             edge.parent_id == node.product_id and edge.relation == "assembly" for edge in context.compiled.graph.edges))}
     production_target = _receipt_auto_finished_ground_target(db, claim=False,
         customer_id=context.compiled.graph.customer_id, product_id=product_id)

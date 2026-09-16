@@ -54,6 +54,14 @@ def _reverse_output(db, row, *, order_item_id, user, direct=False):
     reservation = db.scalar(select(InventoryReservation).where(
         InventoryReservation.idempotency_key == (f'direct-external-reserve:{row.id}' if direct
             else f'bom-external-pick:{row.receipt_id}:{lot.id}')))
+    if reservation is None and not direct:
+        waiting = list(db.scalars(select(InventoryReservation).where(
+            InventoryReservation.inventory_lot_id == lot.id,
+            InventoryReservation.order_item_id == order_item_id,
+            InventoryReservation.idempotency_key.startswith(f'bom-wait-assembly:{lot.id}:'),
+            InventoryReservation.status.in_(('active', 'partial')))))
+        if len(waiting) == 1:
+            reservation = waiting[0]
     released = False
     if reservation is not None:
         movement = db.scalar(select(InventoryMovement).where(

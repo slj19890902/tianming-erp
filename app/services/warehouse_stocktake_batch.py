@@ -68,6 +68,7 @@ class WarehouseStocktakeBatchItem:
     lot_id: int | None = None
     expected_version: int | None = None
     source_kind: Literal["existing_stocktake", "partner_transfer"] | None = None
+    stock_stage: Literal["complete", "body"] = "complete"
 
 
 class WarehouseStocktakeBatchError(ValueError):
@@ -98,6 +99,8 @@ def stocktake_batch_request_hash(
         # newly added field. Explicit source selections remain part of the hash.
         if item.source_kind is not None:
             value["source_kind"] = item.source_kind
+        if item.stock_stage != "complete":
+            value["stock_stage"] = item.stock_stage
         return value
 
     canonical = {
@@ -174,6 +177,7 @@ def stocktake_batch_replay(
                         "status_after": values[12],
                         "released_pallet_id": values[13],
                         "source_kind": values[14] if len(values) > 14 else None,
+                        "stock_stage": values[15] if len(values) > 15 else "complete",
                     }
                     for values in compact["items"]
                 ],
@@ -220,6 +224,7 @@ def stocktake_batch_audit_details(
                 row.get("status_after"),
                 row.get("released_pallet_id"),
                 row.get("source_kind"),
+                row.get("stock_stage", "complete"),
             ]
             for row in result.get("items", [])
         ],
@@ -694,6 +699,8 @@ def _semi_product_facts(product: Product) -> dict:
 def _preflight_add(
     db: Session, item: WarehouseStocktakeBatchItem
 ) -> None:
+    if item.stock_stage not in {"complete", "body"} or (item.stock_stage == "body" and item.inventory_type != "finished"):
+        raise WarehouseStocktakeBatchError("本体盘点类型无效", 422)
     expected_unit = {
         "finished": "boxes",
         "semi_finished": "sheets",
@@ -775,6 +782,7 @@ def _preflight_decrease(
         or item.product_id is not None
         or item.stock_date is not None
         or item.source_kind is not None
+        or item.stock_stage != "complete"
     ):
         raise WarehouseStocktakeBatchError(
             "盘点调减只允许填写货位、批次、版本和数量", 422
@@ -1002,6 +1010,7 @@ def _execute_add(
             quantity=item.quantity,
             stock_date=item.stock_date,
             source_type="stocktake",
+            stock_stage=item.stock_stage,
             remarks=f"{source_label}；盘点批次 {batch_id}",
             operator_id=operator_id,
             idempotency_key=subkey,
@@ -1083,6 +1092,7 @@ def _execute_add(
         "status_after": lot.status,
         "released_pallet_id": None,
         "source_kind": item.source_kind or "existing_stocktake",
+        "stock_stage": item.stock_stage,
     }
 
 

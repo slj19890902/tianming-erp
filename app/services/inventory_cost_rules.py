@@ -161,7 +161,12 @@ def preview_revalue(db, product, lot_ids):
         InventoryLot.id.in_(ids), FinishedGoodsInventoryDetail.product_id == product.id).order_by(InventoryLot.id)))
     if not ids or len(lots) != len(ids):
         raise ValueError("请选择同一产品的有效在库批次")
-    resolution = resolve_product_cost(db, product, main_only=True)
+    from app.services.bom_inventory_contract import is_body_lot
+    stages = {is_body_lot(lot) for lot in lots}
+    if len(stages) != 1:
+        raise ValueError("未组装本体和完整成品成本不同，请分开选择批次")
+    resolution = resolve_product_cost(db, product, main_only=True,
+        stock_stage='body' if True in stages else 'complete')
     if not resolution.estimate:
         raise ValueError("；".join(resolution.missing))
     estimate = resolution.estimate

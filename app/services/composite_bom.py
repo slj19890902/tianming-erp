@@ -526,8 +526,8 @@ def _replace_product_bom(
             relation = component.get("inventory_relation")
             if relation not in {"assembly", "accompany"}:
                 raise CompositeBOMError("每个子件请选择组装或配套")
-            if relation == "assembly" and mode not in {"assembled", "manufactured"}:
-                raise CompositeBOMError("组装消耗请选择自制或组套来源")
+            if relation == "assembly" and mode not in {"assembled", "manufactured", "purchased"}:
+                raise CompositeBOMError("组装消耗请选择自制本体、外购本体或零件组装")
             if not component.get("is_required", True):
                 raise CompositeBOMError("真实BOM的组装和配套子件必须为必需项")
 

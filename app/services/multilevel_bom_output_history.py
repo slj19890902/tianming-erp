@@ -146,9 +146,15 @@ def current_output_lots(db, compiled, lots):
             expected_product = (db.get(BomAssembly, lot.source_ref_id).output_product_id
                 if lot.source_ref_type == "bom_assembly" else
                 next(row.component_product_id for row in contract.snapshots if row.id == min(ids)))
+            expected_basis = compiled_product_bases(contract)[expected_product]
+            from app.services.bom_inventory_contract import is_body_lot, body_basis, body_product_ids
+            if is_body_lot(lot):
+                if lot.source_ref_type != 'bom_external_receipt' or expected_product not in body_product_ids(contract.graph):
+                    raise BomPlanError("本体来源与原冻结BOM不一致")
+                expected_basis = body_basis(expected_basis)
             if (lot.finished_detail.product_id != expected_product
                     or lot.finished_detail.owner_customer_id != contract.graph.customer_id
-                    or lot.finished_detail.physical_basis_json != compiled_product_bases(contract)[expected_product]):
+                    or lot.finished_detail.physical_basis_json != expected_basis):
                 raise BomPlanError("产出批次产品、客户或规格工艺与原冻结版本不一致")
         if ids.issubset(current_ids):
             result.append(lot)

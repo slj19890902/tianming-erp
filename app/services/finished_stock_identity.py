@@ -100,6 +100,9 @@ def compiled_product_bases(compiled):
 
 
 def matching_component_basis(db, snapshot, lot):
+    from app.services.bom_inventory_contract import is_body_lot
+    if is_body_lot(lot):
+        return False
     expected = order_product_basis(db, snapshot.sales_order_item_id, snapshot.component_product_id)
     # Legacy orders retain their existing matching contract. New graph orders
     # require evidence captured on inbound; an unknown old lot is not a match.

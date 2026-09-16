@@ -70,6 +70,20 @@ def test_slower_assembly_changes_labour_not_material(db):
     assert b.detail['standard_labour_unit_cost']=='1.0577'
 
 
+def test_bom_set_without_parent_material_freezes_children_cost(db):
+    parent, children, material, location = seed(db)
+    parent.box_style = 'BOM组合'
+    parent.material_id = None
+    parent.report_length_mm = None
+    parent.report_width_mm = None
+    db.flush()
+    lot = InventoryLot()
+    estimate = freeze_entry_cost(db, lot, parent, stock_stage='complete')
+    assert estimate.unit_cost > 0
+    assert lot.estimated_unit_cost_snapshot == estimate.unit_cost
+    assert estimate.detail['algorithm_version'] == 'assembled-entry-v1'
+
+
 def test_child_missing_cost_identifies_child_not_parent(db):
     p,children,m,location=seed(db)
     children[0].report_length_mm=None;children[0].report_width_mm=None

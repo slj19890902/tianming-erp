@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.444"
-APP_VERSION_NAME = "片料近尺寸优先推荐"
+APP_VERSION = "v0.22.445"
+APP_VERSION_NAME = "BOM形成方式与嵌套关系提示"
 APP_BUILD_DATE = "2026-09-16"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4300,3 +4300,6 @@ APP_VERIFICATION_STEPS = ["手机刷新货位，选一批半成品或原料，�
 APP_CHANGES = ["片料候选先校验楞型和纸色，默认只显示各轴尺寸偏差不超过10%的近尺寸材料。", "大片料及其他尺寸默认收起，不自动安排；尺寸接近优先，数量接近其次，新订单与PDF共用规则。"]
 APP_VERIFICATION_STEPS = ["刷新新建订单，选择有不同尺寸库存的产品，核对近尺寸先显示、异楞型和异纸色不推荐。", "展开大片料/其他尺寸，核对数量和位置；只有实际需要时采用，不为验收保存虚构订单。"]
 APP_CHANGELOG = [*(f"v0.22.443：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["BOM组合明确显示零件组装、父件不报料；旧规则提示先选择产品形成方式，再配置组装消耗或随货配套。", "旧配方添加组合子件时明确指引升级配置，不改变已有配方、库存和历史订单。"]
+APP_VERIFICATION_STEPS = ["打开BOM组合常用箱，核对固定零件组装说明及每套子件用量。", "打开普通纸盒组合BOM，按实际业务选择自己生产，再设置内衬随货配套；勿为验收新增虚构库存。"]
+APP_CHANGELOG = [*(f"v0.22.445：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

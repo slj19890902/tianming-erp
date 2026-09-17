@@ -33,11 +33,12 @@ def test_pdf_candidate_adopt_has_no_checkbox_and_skip_is_red() -> None:
         '<div v-if="item._inventory.semi[component].unavailable_reason"', 1
     )[0]
     assert 'type="checkbox"' not in section
-    # Only transient loading/stale/error guards; no extra human-confirm checkbox.
+    # Qualification and transient guards stay; no extra human-confirm checkbox.
     assert set(re.findall(r':disabled="([^"]+)"', section)) == {
-        'item._inventory.loading || item._inventory.stale || item._inventory.api_error'
+        'item._inventory.loading || item._inventory.stale || item._inventory.api_error',
+        'candidate.selectable===false || item._inventory.loading || item._inventory.stale || item._inventory.api_error'
     }
-    assert 'confirmOrderLineInventory(item,component,candidate' in section
+    assert 'chooseSemiStockGroup(item,component,{candidates:[candidate]},true)' in section
     assert 'class="btn danger small" @click="skipOrderLineInventory(item,component)">本次不用库存' in section
 
 

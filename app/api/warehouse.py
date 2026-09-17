@@ -2956,6 +2956,7 @@ def _semi_candidate_dict(
     detail = lot.semi_finished_detail
     session = object_session(lot)
     profile = goods_profile(session, lot) if session is not None else None
+    customer_bound = bool(profile.get("scope") == "customers" and profile.get("customer_ids")) if profile else bool(detail.owner_customer_id)
     return {
         "lot_id": lot.id,
         "lot_number": lot.lot_number,
@@ -2966,6 +2967,7 @@ def _semi_candidate_dict(
         "deductible_requirement_quantity": row.deductible_requirement_quantity,
         "warehouse_location": _location_dict(lot.location, projection_context),
         "customer_id": detail.owner_customer_id,
+        "customer_bound": customer_bound,
         "customer_name": detail.owner_customer_name_snapshot,
         "customer_generic_eligible": bool(detail.customer_generic_eligible),
         "internal_name": detail.internal_name,
@@ -2987,7 +2989,7 @@ def _semi_candidate_dict(
         "crease_middle_mm": detail.crease_middle_mm,
         "crease_right_mm": detail.crease_right_mm,
         "direct_deduction_eligible": row.direct_deduction_eligible,
-        "automatic_recommendation": row.automatic_recommendation,
+        "automatic_recommendation": row.automatic_recommendation and customer_bound,
         "match_reason": row.match_reason,
         "match_score": row.match_score,
         "recommendation_tier": row.recommendation_tier,

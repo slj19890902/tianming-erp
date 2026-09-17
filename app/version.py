@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.449"
-APP_VERSION_NAME = "片料测量容差与压线工艺匹配"
-APP_BUILD_DATE = "2026-09-16"
+APP_VERSION = "v0.22.450"
+APP_VERSION_NAME = "通用片料默认不采用与一键取消安排"
+APP_BUILD_DATE = "2026-09-17"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -4315,3 +4315,6 @@ APP_CHANGELOG = [*(f"v0.22.448：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["矩形净片支持后续模切，已模切不推荐衬板；供应商同白色W/Y材质可匹配，保留实际成本。", "盘点区分卷尺和标签尺寸；10mm内测量短差显示待核，不自动放大库存尺寸或裁切产能。", "压线从常用箱取用三段，核对合计板宽；同中段高度的A1片料可保线裁切，订单冻结压线仍核验。", "切换货物时清空旧匹配结果和筛选，电脑及手机共用规则与录入组件。"]
 APP_VERIFICATION_STEPS = ["刷新北I1的1036×1272净片，核对21301818等异形箱；北K1296×1060查看21301853及宽差1mm待核提示。", "实际盘点时选择卷尺/标签及加工状态；压线选择常用箱模板，核对三段与板宽，勿为验收重复增加库存。", "订单选料核对可用及待核状态；仅真实符合工艺的材料采用，生产完成后确认，不用容差冒充尺寸。"]
 APP_CHANGELOG = [*(f"v0.22.449：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = ["通用片料只推荐、默认不采用，不再要求逐条拒绝才能保存订单。", "订单/PDF支持本行或本次导入片料全部不采用，保留成品抵扣，可单独重新采用并在刷新后保留选择。", "裁切说明移到加工栏，采用/不采用按钮独立显示。"]
+APP_VERIFICATION_STEPS = ["订单导入查看通用片料：未点采用时不抵扣、不因这些候选阻止保存。", "点击本次导入片料全部不采用，再选一批采用并刷新；确认成品选择不变，片料仅保留所选批次。", "查看需裁切/一张多片候选，确认按钮清晰可见；勿为验收保存模拟订单。"]
+APP_CHANGELOG = [*(f"v0.22.450：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

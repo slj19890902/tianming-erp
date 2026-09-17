@@ -906,6 +906,9 @@
       .semi-stock-table .semi-stock-actions .btn { margin-right:4px; }
       .pdf-material-table th:last-child,.pdf-material-table .semi-stock-actions { width:150px; }
       .pdf-material-table .semi-stock-actions .btn { margin:2px; }
+      .semi-stock-actions { min-width:150px;white-space:nowrap!important; }
+      .semi-stock-actions .btn { flex-shrink:0;display:inline-block;min-width:58px; }
+      .semi-stock-match-note { display:block;white-space:normal;overflow-wrap:anywhere;color:#64748b;margin-top:3px; }
       .order-entry-modal { width: min(1760px, 100%); }
       .pdf-order-import-modal { width:min(1760px, 100%); }
       .pdf-inventory-table-wrap {
@@ -7271,6 +7274,7 @@
                 >
                 <div class="toolbar" style="margin-bottom:8px">
                   <div><strong>识别结果：{{ draft.items?.length || 0 }} 行</strong><info-note>核对产品、数量和价格后确认保存。</info-note></div>
+                  <button class="btn danger small" type="button" @click="skipImportedSheets(draft)">本次导入片料全部不采用</button>
                   <div v-if="draft.email_attachment_id" class="toolbar-group"><button class="btn small" type="button" :disabled="draft._email_retrying || isImportDraftLocked(draft)" @click="retryEmailPdf(draft,draftIndex)">{{ draft._email_retrying ? '重新识别中…' : '重新识别' }}</button><button class="btn small" type="button" :disabled="draft._email_draft_saving || loading" @click="saveEmailPdfWorkingDraft(draft)">{{ draft._email_draft_saving ? '暂存中…' : '暂存核对进度' }}</button><info-note>{{ draft.email_draft_restored ? '已恢复上次核对；请重新确认后保存订单' : (draft.email_draft_saved_at ? '已暂存，可关闭后继续；后续修改需再次暂存' : '暂存不会创建订单') }}</info-note></div>
                   <button class="btn small" type="button" @click="draft._show_advanced_details=!draft._show_advanced_details">{{ draft._show_advanced_details ? '隐藏高级详情' : '高级匹配详情' }}</button>
                 </div>
@@ -7651,6 +7655,8 @@
                               <info-note>当前为草稿拟用，保存正式订单后才预占库存。半成品和原料抵扣材料需求，仍需完成生产。</info-note>
                             </div>
                             <div class="toolbar-group pdf-stock-tabs">
+                              <button class="btn danger small" type="button" @click="skipAllLineSheets(item)">本行全部不采用片料</button>
+                              <small class="muted">通用片料仅推荐，采用后才抵扣</small>
                               <button :class="['btn',item._inventory_tab==='summary'?'primary':'']" @click="item._inventory_tab='summary';item._inventory_page=1">抵扣与位置</button>
                               <button v-for="kind in ['semi','raw']" :key="kind" :class="['btn',pdfMaterialButton(item,kind).tone]" @click="item._inventory_tab=kind;item._inventory_page=1">{{kind==='semi'?'半成品':'原材料'}} · {{pdfMaterialButton(item,kind).text}}</button>
                               <button class="btn small" @click="loadOrderLineInventory(item,draft.matched_customer_id)">刷新库存</button>
@@ -7671,9 +7677,9 @@
                                   <tr v-for="candidate in pdfMaterialCandidates(item,component,item._inventory_tab).slice(((item._inventory_page||1)-1)*4,(item._inventory_page||1)*4)" :key="candidate.lot_id">
                                     <td>{{candidate.internal_name || '—'}}</td><td>{{candidate.board_length_mm || '—'}}</td><td>{{candidate.board_width_mm || '—'}}</td>
                                     <td>{{semiStockField({candidates:[candidate]},'flute_type')}}</td><td>{{candidate.material_code || '—'}}<info-note v-if="candidate.signature_differences?.length || candidate.warning_messages?.length">{{[...(candidate.signature_differences||[]),...(candidate.warning_messages||[])].join('；')}}</info-note></td>
-                                    <td>{{semiStockField({candidates:[candidate]},'processing')}}</td>
+                                    <td>{{semiStockField({candidates:[candidate]},'processing')}}<small class="semi-stock-match-note">{{candidate.match_reason}}</small></td>
                                     <td>{{candidate.available_stock_quantity}} 张<small v-if="candidate.deductible_requirement_quantity!==candidate.available_stock_quantity">（可抵 {{candidate.deductible_requirement_quantity}} 片）</small><div v-if="item._inventory.semi[component].allocations.some(a=>a.candidate.lot_id===candidate.lot_id)" class="status green">采用 {{item._inventory.semi[component].allocations.filter(a=>a.candidate.lot_id===candidate.lot_id).reduce((n,a)=>n+Number(a.stock_quantity||0),0)}} 张</div></td><td><order-stock-location :candidate="candidate" :item="item"></order-stock-location></td>
-                                    <td class="semi-stock-actions"><small>{{candidate.match_reason}}</small><button class="btn success small" :disabled="candidate.selectable===false || item._inventory.loading || item._inventory.stale || item._inventory.api_error" :title="candidate.cut_plan?'按此理论开数采用，需核对修边/刀缝；裁切完成后才能出货':isGeneralSemiFinishedCandidate(candidate)?'采用即确认跨客户使用':'采用即确认此批次适配'" @click="isDirectSemiDeductionCandidate(candidate)?confirmDirectSemiDeduction(item,component,candidate):confirmOrderLineInventory(item,component,candidate,semiCandidateNeedsOverride(candidate))">{{candidate.selectable===false?'用途待核':'采用'}}</button><button class="btn danger small" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,{candidates:[candidate]},false)">不采用</button>
+                                    <td class="semi-stock-actions"><button class="btn success small" :disabled="candidate.selectable===false || item._inventory.loading || item._inventory.stale || item._inventory.api_error" :title="candidate.cut_plan?'按此理论开数采用，需核对修边/刀缝；裁切完成后才能出货':isGeneralSemiFinishedCandidate(candidate)?'采用即确认跨客户使用':'采用即确认此批次适配'" @click="chooseSemiStockGroup(item,component,{candidates:[candidate]},true)">{{candidate.selectable===false?'用途待核':'采用'}}</button><button class="btn danger small" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,{candidates:[candidate]},false)">不采用</button>
                                     </td>
                                   </tr><tr v-if="!pdfMaterialCandidates(item,component,item._inventory_tab).length"><td colspan="9">暂无符合条件的可用材料</td></tr>
                                 </tbody></table>
@@ -7917,6 +7923,7 @@
                          <div v-if="item._inventory.error" class="danger-text" style="margin-top:4px">{{ item._inventory.error }}</div>
                          <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品库存：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，<order-stock-location :candidate="candidate" :item="item"></order-stock-location></span><button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">采用安全推荐</button><button class="btn danger small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 个，<order-stock-location :candidate="allocation.candidate" :item="item"></order-stock-location></div></div>
                         <!-- compact semi stock -->
+                        <div class="toolbar-group"><button class="btn danger small" type="button" @click="skipAllLineSheets(item)">本行全部不采用片料</button><small class="muted">通用片料仅推荐，采用后才抵扣</small></div>
                         <div v-for="component in inventoryComponents(item)" :key="component">
                           <strong>半成品 / 原料{{ componentLabel(component) }}</strong>
                           <button v-if="semiStockMoreCount(item,component)" class="btn small" type="button" @click="item._inventory.semi[component].show_more_sizes = !item._inventory.semi[component].show_more_sizes">{{ item._inventory.semi[component].show_more_sizes ? '收起' : '展开' }}大片料 / 其他尺寸（{{ semiStockMoreCount(item,component) }}）</button>
@@ -7929,10 +7936,10 @@
                               <td>{{ semiStockField(group,'board_width_mm') }}</td>
                               <td>{{ semiStockField(group,'flute_type') }}</td>
                               <td>{{ semiStockField(group,'material_code') }}<small v-if="group.candidates.some(c => isGeneralSemiFinishedCandidate(c))"> · 跨客户</small></td>
-                              <td>{{ semiStockField(group,'processing') }}</td>
+                              <td>{{ semiStockField(group,'processing') }}<small class="semi-stock-match-note">{{group.candidates.map(c=>c.match_reason).filter(Boolean).join('；')}}</small></td>
                               <td><strong>{{ group.quantity }} 张</strong><div v-if="group.adopted" class="status green">采用 {{ group.adopted }} 张</div><small v-else-if="group.rejected" class="muted"> · 不采用</small></td>
                               <td><order-stock-location :candidate="group.candidate" :item="item"></order-stock-location></td>
-                              <td class="semi-stock-actions"><small>{{group.candidates.map(c=>c.match_reason).filter(Boolean).join('；')}}</small><button class="btn small success" type="button" :disabled="group.candidates.every(c=>c.selectable===false) || item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,true)">采用</button><button class="btn small danger" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,false)">不采用</button></td>
+                              <td class="semi-stock-actions"><button class="btn small success" type="button" :disabled="group.candidates.every(c=>c.selectable===false) || item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,true)">采用</button><button class="btn small danger" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,false)">不采用</button></td>
                             </tr></tbody>
                           </table>
                           <span v-else class="muted">暂无可用库存</span>
@@ -14186,6 +14193,10 @@
           isGeneralSemiFinishedCandidate(candidate) {
             return candidate?.source === "general_signature" || candidate?.recommendation_source === "general_signature" || candidate?.source_type === "general_signature" || this.inventoryCandidateWarnings(candidate).includes("GENERAL_SEMI_FINISHED_STOCK");
           },
+          isOptInSheetCandidate(candidate) {
+            if (candidate?.customer_bound !== undefined) return candidate.customer_bound !== true;
+            return candidate?.customer_id === null || this.isGeneralSemiFinishedCandidate(candidate);
+          },
           isDirectSemiDeductionCandidate(candidate) {
             if (candidate?.automatic_recommendation === true && candidate?.direct_deduction_eligible === true) return true;
             return candidate?.direct_deduction_eligible === true
@@ -14206,6 +14217,7 @@
             ].filter(Boolean);
           },
           isSafeSystemInventoryCandidate(component, candidate) {
+            if (component !== "finished" && this.isOptInSheetCandidate(candidate)) return false;
             if (component !== "finished" && candidate?.recommendation_tier === 'more') return false;
             if (component !== "finished" && candidate?.automatic_recommendation === true && this.isDirectSemiDeductionCandidate(candidate)) return true;
             if (component !== "finished" && this.isDirectSemiDeductionCandidate?.(candidate) === true
@@ -14311,6 +14323,7 @@
           chooseSemiStockGroup(line, component, group, adopt) {
             const state = line._inventory, part = state.semi[component];
             if (state.loading || state.stale || state.api_error) return;
+            if (adopt) line._semi_all_declined = false;
             const ids = new Set(group.candidates.map(c => Number(c.lot_id)));
             const excluded = new Set(part._excluded_lot_ids || []);
             let selected = (part.selected_candidates || []).filter(c => !ids.has(Number(c.lot_id)));
@@ -14578,6 +14591,7 @@
             const productId = Number(line.product_id || line.matched_product_id || 0);
             customerId = Number(customerId || this.inventoryCustomerForLine(line));
             if (!productId || !customerId) return;
+            const previousDecision = this.inventoryStateMatchesLine(line,customerId) ? this.importDraftInventoryDecisionSnapshot(line) : null;
             const state = this.newOrderInventoryState();
             let components = [];
             line._inventory = state; state.loading = true;
@@ -14607,10 +14621,17 @@
               state.api_error = true;
               state.error = `库存候选加载失败：${this.errorMessage(error)}`;
             } finally {
+              if (line._inventory !== state) return;
               state.loading = false;
               state.stale = false;
-              components.forEach(component => {
-                if (state.semi[component].unavailable_reason) state.semi[component].skipped = true;
+              if (!state.api_error && previousDecision) {
+                try { await this.restoreImportDraftInventoryDecision(line,previousDecision,customerId); }
+                catch(error) { state.api_error = true; state.error = this.errorMessage(error); }
+              }
+              Object.keys(state.semi).forEach(component => {
+                if (state.semi[component].unavailable_reason || line._semi_all_declined) {
+                  Object.assign(state.semi[component],{selected:null,selected_candidates:[],allocations:[],skipped:true,_batch_auto_skipped:false});
+                }
               });
               this.confirmSafeOrderLineInventoryRecommendations?.(line);
               this.reallocateAllDraftInventory();
@@ -14642,6 +14663,7 @@
             const general = this.isGeneralSemiFinishedCandidate(candidate);
             const candidates = candidate ? [candidate] : this.safeSystemInventoryCandidates(line, component);
             if (!candidates.length) { this.showToast("没有可一键确认的安全系统推荐；风险候选需人工核对或选择本次不用库存", true); return; }
+            if (component !== 'finished') line._semi_all_declined = false;
             // Explicit adoption confirms only the displayed candidate, never other risk lots.
             state.general_confirmation = !!candidate && general;
             state.manual_override = !!candidate && (manual || this.semiCandidateNeedsOverride(candidate));
@@ -14650,6 +14672,7 @@
             this.reallocateAllDraftInventory();
           },
           confirmDirectSemiDeduction(line, component, candidate) {
+            line._semi_all_declined = false;
             if (!this.isDirectSemiDeductionCandidate(candidate)) {
               this.showToast("该半成品已不再完全匹配，请刷新后重新核对", true);
               return;
@@ -14668,6 +14691,22 @@
           skipOrderLineInventory(line, component) {
             const state = component === "finished" ? line._inventory.finished : line._inventory.semi[component];
             state.selected = null; state.selected_candidates = []; state.allocations = []; state.skipped = true; state._batch_auto_skipped = false; state.general_confirmation = false; state.manual_override = false; this.invalidatePdfDraftForItem?.(line); this.reallocateAllDraftInventory();
+          },
+          skipAllLineSheets(line, reallocate = true) {
+            line._semi_all_declined = true;
+            line._inventory ||= this.newOrderInventoryState();
+            Object.values(line._inventory.semi).forEach(part => Object.assign(part, {
+              selected:null, selected_candidates:[], allocations:[], skipped:true,
+              _batch_auto_skipped:false, general_confirmation:false, manual_override:false,
+              _excluded_lot_ids:[...new Set([...(part.candidates||[]),...(part.manual_candidates||[])].map(c=>Number(c.lot_id)))],
+            }));
+            this.invalidatePdfDraftForItem?.(line);
+            if (reallocate) this.reallocateAllDraftInventory();
+          },
+          skipImportedSheets(draft) {
+            if (this.isImportDraftLocked(draft)) return;
+            (draft.items || []).forEach(line => this.skipAllLineSheets(line,false));
+            this.reallocateAllDraftInventory();
           },
           rechooseOrderLineInventory(line, component, customerId) {
             this.invalidatePdfDraftForItem?.(line);
@@ -14937,7 +14976,7 @@
               const part = state.semi[component];
               if (part.unavailable_reason && !part.skipped) return `${part.unavailable_reason}，请选择本次不用半成品库存。`;
               if ((part.selected_candidates || []).some(candidate => this.isGeneralSemiFinishedCandidate(candidate)) && !part.general_confirmation && !part.skipped) return `请核对候选后点击采用，或选择本次不用库存。`;
-              const primary = [...(part.candidates || []), ...(part.manual_candidates || [])].filter(c => c.recommendation_tier !== 'more');
+              const primary = [...(part.candidates || []), ...(part.manual_candidates || [])].filter(c => c.recommendation_tier !== 'more' && !this.isOptInSheetCandidate(c));
               if (primary.some(candidate => this.inventoryCandidateNeedsManualConfirmation(candidate)) && !part.skipped && !part.selected_candidates.length) return `有半成品可用，请点击采用或本次不用库存。`;
               if (primary.length && !part.skipped && !part.selected_candidates.length) return `存在半成品${this.componentLabel(component)}候选，请确认抵扣或选择本次不用库存。`;
               if (part.selected_candidates.length && !part.allocations.length && !part.skipped) return `半成品${this.componentLabel(component)}推荐批次已无可分配库存，请刷新或选择本次不用库存。`;

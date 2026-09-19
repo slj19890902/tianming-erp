@@ -5767,3 +5767,7 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 ## 2026-09-19 R08 v459 正式基线
 
 代码 ea600910 / 包 6db3f190，正式库 rp0919（新增4张关联表，无历史回填）。备份及迁移验证通过，技术发布完成、待管理员人工验收；R09继续。见 docs/release_reports/PACKAGE_C_R08_RELEASE_20260919.md 及NAS独立回执。
+
+
+## 2026-09-20 R09 v460 正式技术发布
+正式代码 8161efd648b6041bba7d13cf31e4082a969c47c2，签名包 e005aa512b0bf16a67a064c1a4d95a22a7500f4874f73c08379397a6836a2918，db0919；NAS已验证备份后追加3空表、293原表事实保留。R01—R09技术交付完成，R10限可用资料证据对比；待管理员人工验收。详见 docs/release_reports/PACKAGE_D_R09_RELEASE_20260920.md 与 FACTORY_ROUND_R01_R10_DELIVERY_20260920.md。

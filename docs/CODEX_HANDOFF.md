@@ -5752,3 +5752,6 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 
 
 2026-09-19 A-0016-R1：v0.22.454 PDF保存幂等及原结果恢复已技术发布，代码b82f07ea，revision sc0916无迁移；待管理员人工验收。详见docs/release_reports/A0016_R1_PDF_SAVE_RELEASE_20260919.md。
+
+
+2026-09-19 UI-CONTINUITY：v0.22.455列表定位与编辑状态已技术发布，代码06f287b6，sc0916无迁移；待管理员人工验收。详见docs/release_reports/UI_CONTINUITY_RELEASE_20260919.md。

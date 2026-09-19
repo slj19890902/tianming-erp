@@ -71,8 +71,9 @@ def test_assembled_child_keeps_upstream_price_and_internal_recipe(
         db.commit()
         assert item.combination_quantity_per_set_snapshot == 1
         assert item.combination_parent_name_snapshot == parent_name
-    from tests.test_multilevel_bom_receipt_flow import purchase_sources
-    from tests.test_p1_81_receipt_purpose_flow import _freeze_receipt_fact, _receive
+    # Actual assembled liners require the existing explicit physical confirmation.
+    from tests.test_multilevel_bom_receipt_flow import purchase_sources, _receive
+    from tests.test_p1_81_receipt_purpose_flow import _freeze_receipt_fact
     from tests.test_bom_commercial_settlement import _dispatch, _confirm_receipt
     from datetime import date
     from decimal import Decimal

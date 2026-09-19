@@ -548,7 +548,7 @@ def _replace_product_bom(
         and fulfillment_mode != "component_delivery"
     ):
         raise CompositeBOMError("组件分别计价时必须按子件交付")
-    if fulfillment_mode == "component_delivery":
+    if fulfillment_mode == "component_delivery" and mode not in {"manufactured", "purchased"}:
         # The parent is only a commercial/set identity in component-delivery
         # mode.  Labels belong to the physical child products, so retaining a
         # parent label policy would make the reported-items page ambiguous.

@@ -1960,7 +1960,13 @@ def _validated_combination_provenance(
             "combination_quantity_per_set_snapshot": None,
         }
 
-    if product_mode == "component_priced":
+    physical_priced_parent = False
+    if product_mode == "component_priced" and item_payload.combination_parent_product_id == product.id:
+        from app.models.multilevel_bom import ProductBomProfile
+        profile = db.get(ProductBomProfile, product.id)
+        physical_priced_parent = bool(profile and profile.source in {"manufactured", "purchased"}
+            and not product.is_virtual_composite_parent and item_payload.combination_role == "priced_component")
+    if product_mode == "component_priced" and not physical_priced_parent:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -2031,12 +2037,12 @@ def _validated_combination_provenance(
             ProductBomComponent.component_product_id == product.id,
         )
     )
-    if relation is None:
+    if relation is None and not physical_priced_parent:
         raise HTTPException(
             status_code=400,
             detail=f"第{item_index}条产品不是该组合父件的组件",
         )
-    expected_per_set = int(Decimal(str(relation.quantity_per_set)))
+    expected_per_set = 1 if physical_priced_parent else int(Decimal(str(relation.quantity_per_set)))
     if item_payload.combination_quantity_per_set_snapshot != expected_per_set:
         raise HTTPException(
             status_code=400,

@@ -7038,7 +7038,7 @@
                         <option v-if="bomEditor.persisted_inventory_mode === 'legacy'" value="legacy">旧规则 · 请选实际形成方式</option>
                         <option value="manufactured">自己生产</option>
                         <option value="assembled">零件组装</option>
-                        <option value="separate">只列配套清单</option>
+                        <option value="separate">配套清单 / 客户与实物数量换算（不组装）</option>
                         <option value="purchased">外购本体 / 整件</option>
                       </select>
                     </label>
@@ -7052,7 +7052,7 @@
                     <label class="remember-line">计价方式
                       <select class="select" v-model="productForm.combination_mode" @change="productForm.is_virtual_composite_parent = productForm.combination_mode === 'parent_priced_set' ? productForm.is_virtual_composite_parent : false; productForm.composite_fulfillment_mode = productForm.combination_mode === 'component_priced' ? 'component_delivery' : productForm.composite_fulfillment_mode">
                         <option value="parent_priced_set">整套计价</option>
-                        <option value="component_priced">组件计价</option>
+                        <option value="component_priced">实体父件与子件分别计价、分别送货</option>
                       </select>
                     </label>
                     <label v-show="bomEditor.inventory_mode === 'legacy' && bomEditor.enabled && productForm.combination_mode === 'parent_priced_set'" class="remember-line" title="父件只表示整套数量和价格，不报料、不生产；尺寸用于送货规格"><input type="checkbox" v-model="productForm.is_virtual_composite_parent" /> 父件无自身材料</label>
@@ -7075,6 +7075,7 @@
                   <div class="bom-relationship-title">组合关系</div>
                   <div class="bom-relationship-line">{{ bomRelationshipSummary() }}</div>
                   <div class="muted">{{ bomInventoryModeHint() }}</div>
+                  <div v-if="bomEditor.inventory_mode === 'separate' && productForm.combination_mode === 'parent_priced_set'" class="notice">客户按父件规格、数量和单价结算，仓库按子件实物备货。双片示例：客户 800×180×120，实物 800×180×60，每1只用量填2片；交付方式选择“父件交付”，600只对应1200片。没有组装工序；不足两片不折算成一只。更改关系只影响新订单。</div>
                   <details class="bom-mode-help"><summary>怎么选？</summary><div>自己生产：保留实际箱型、材质和报料尺寸，先生产本体。<br>零件组装：父件不报纸板，按子件用量备料，组装后入库。<br>外购本体 / 整件：有组装消耗子件时先收本体，组装后才是完整成品；没有则直接收成品。<br>只列配套清单：不存父件，按子件备货交付。<br>组装消耗：组装时扣子件；随货配套：发货时扣子件。子件也可独立接单。<br>用量只填每1个父件所需数量；开料一开几只换算张数，不放大组合用量。售价和标签不改变扣库规则。</div></details>
                 </div>
                 <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存父产品，再维护内部组件 BOM。</div>
@@ -32239,6 +32240,7 @@
             };
           },
           async expandComponentPricedOrderLine(index, parent, previousLine) {
+            const targetLine = this.orderForm.items[index], customerId = this.orderForm.customer_id;
             const sets = Number(previousLine.quantity) > 0 ? Math.floor(Number(previousLine.quantity)) : 1;
             const { data: bom } = await axios.get(`/api/master/products/${parent.id}/bom`);
             const components = Array.isArray(bom.bom_components) ? bom.bom_components : (bom.components || []);
@@ -32251,17 +32253,37 @@
               const response = await axios.get(`/api/master/products/${component.component_product_id}`);
               return { component, product: response.data };
             }));
+            if (this.orderForm.customer_id !== customerId || this.orderForm.items[index] !== targetLine) throw new Error("订单客户或明细已变化，请重新选择组合产品");
+            if (["manufactured", "purchased"].includes(bom.inventory_mode) && !parent.is_virtual_composite_parent) {
+              if (components.some(component => component.inventory_relation !== "accompany")) throw new Error("分项计价的实体父件只能展开独立配套子件，不能重复销售已消耗的组装零件");
+              details.unshift({component:{quantity_per_set:1}, product:parent});
+            }
             const groupKey = this._componentPricedGroupKey();
             const lines = details.map(({component, product}) => this._componentPricedOrderLine(product, component, parent, sets, groupKey));
-            this.orderForm.items.splice(index, 1, ...lines);
+            // Reuse an imported real child row instead of charging it twice.
+            const reused = [];
+            for (let n = 0; n < lines.length; n++) {
+              const matching = this.orderForm.items.map((row, position) => ({row, position})).filter(({row, position}) => position !== index && !row.combination_group_key && Number(row.product_id) === Number(lines[n].product_id));
+              if (matching.length > 1) throw new Error("导入中同一子件有多行，请先核对数量后再展开组合");
+              if (matching.length === 1) {
+                const {row, position} = matching[0];
+                if (Number(row.quantity) !== Number(lines[n].quantity)) throw new Error("已有子件数量与配套数量不一致，请核对后再展开，系统不会重复生成或覆盖数量");
+                const provenance = Object.fromEntries(Object.entries(lines[n]).filter(([key]) => key.startsWith("combination_") || key === "composite_fulfillment_mode_snapshot"));
+                lines[n] = {...row, ...provenance}; reused.push(position);
+              }
+            }
+            const originalItems = [...this.orderForm.items];
+            for (const position of reused.sort((a,b) => b-a)) this.orderForm.items.splice(position,1);
+            const insertion = index - reused.filter(position => position < index).length;
+            this.orderForm.items.splice(insertion, 1, ...lines);
             try {
               await Promise.all(lines.flatMap((line, offset) => [
-                this.recalculateOrderCost(index + offset),
+                this.recalculateOrderCost(insertion + offset),
                 this.refreshOrderLineInventory(line, this.orderForm.customer_id),
               ]));
               await this.refreshOrderNumberPreview();
             } catch (error) {
-              this.orderForm.items.splice(index, lines.length, previousLine);
+              this.orderForm.items = originalItems;
               throw error;
             }
           },

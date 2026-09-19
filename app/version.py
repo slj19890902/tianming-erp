@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.451"
-APP_VERSION_NAME = "订单库存查询恢复与客户片料范围"
+APP_VERSION = "v0.22.452"
+APP_VERSION_NAME = "实体组合分项计价与双片数量换算"
 APP_BUILD_DATE = "2026-09-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4322,3 +4322,7 @@ APP_CHANGELOG = [*(f"v0.22.450：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["修复导入常用箱后库存查询持续加载，查询失败或超时时保留录入内容；未选择抵扣的合法订单可以保存。", "默认只查询绑定当前客户的片料，点击查询其他可用片料后才查询其他范围并分页显示。", "切换客户、产品和数量后忽略过期请求；保留已选库存后端核验，保存重试避免重复建单和预占。"]
 APP_VERIFICATION_STEPS = ["刷新订单页，选择客户并导入真实常用箱，确认库存查询结束，未选抵扣时可以正常保存。", "核对默认片料仅属于当前客户，点击查询其他可用片料后查看范围提示和分页。", "切换客户或产品检查旧候选清除；仅按真实业务采用库存，不为验收创建虚构订单。"]
 APP_CHANGELOG = [*(f"v0.22.451：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["实体纸箱与配套子件按各自数量和单价建单、送货及对账，保留同组来源，不重复生成虚拟收费行。", "导入已有同量子件时复用原行，数量不符保留草稿并提示；组装消耗零件不得重复分别收费。", "常用箱明确客户单位与实物片数换算设置，沿用冻结配套关系；YL两片对应一只，发货整数折算，取消恢复。"]
+APP_VERIFICATION_STEPS = ["真实组合选分项计价，核对纸箱、网格、衬板三条实物数量和价格，分别送货并按实际回单对账。", "YL产品按客户规格维护父件、实物规格维护子件，配套清单不组装、每只2片、父件交付；核对客户600只对应实物1200片。", "只在真实业务需要时保存或发货；既有订单快照不随主档更改，管理员核对正式页面。"]
+APP_CHANGELOG = [*(f"v0.22.452：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

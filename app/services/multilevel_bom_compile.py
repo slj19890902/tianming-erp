@@ -43,6 +43,18 @@ def compile_master_order_bom(db, order_item, *, root_order_snapshot=False):
     if type(order_item.quantity) is not int or order_item.quantity <= 0:
         raise BomPlanError("订单数量必须为正整数")
     structure = load_master_structure(db, order_item.product_id)
+    # An explicitly priced physical parent has its own order line. Its separately
+    # priced accessories belong to their own lines, never this line's pick plan.
+    if (order_item.combination_role == "priced_component"
+            and order_item.combination_parent_product_id == order_item.product_id):
+        root_id = order_item.product_id
+        if structure["profiles"].get(root_id) not in {"manufactured", "purchased"}:
+            raise BomPlanError("分项计价父件必须是明确的实体产品")
+        if any(e["relation"] != "accompany" for e in structure["edges"] if e["parent_id"] == root_id):
+            raise BomPlanError("组装消耗子件不能与实体父件重复分别计价，请先核对配套关系")
+        structure = {**structure, "products": {root_id: structure["products"][root_id]},
+            "profiles": {root_id: structure["profiles"][root_id]}, "edges": [], "order": [root_id],
+            "material_mode": "expand_children", "delivery_mode": "parent"}
     products, profiles = structure["products"], structure["profiles"]
     if order_item.product_id not in profiles:
         raise BomPlanError("父产品尚未配置真实BOM库存来源")

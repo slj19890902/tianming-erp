@@ -5,9 +5,17 @@ never creates inventory or infers that production has happened.
 """
 import json
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import uuid4
 from sqlalchemy import select, update
 from app.models.incoming_receipt import IncomingReceiptItem
+from app.models.purchase_receipt import IncomingReceiptPurposeAllocation
+from app.models.supplier_requisition_order import (
+    PurchasePurposeSourceSnapshot,
+    SupplierRequisitionOrderItem,
+)
+from app.models.order import OrderItem
+from app.models.customer import Customer
 from app.models.stock_replenishment import StockReplenishmentOrderItem, StockReplenishmentOrder
 from app.models.stock_preparation import StockPreparationJob as Job, StockPreparationCommand as Command
 from app.models.product import Product
@@ -24,12 +32,63 @@ def fail(message):
 def source(db, receipt_id):
     receipt = db.get(IncomingReceiptItem, receipt_id)
     item = db.get(StockReplenishmentOrderItem, receipt.stock_replenishment_item_id) if receipt and receipt.stock_replenishment_item_id else None
-    if not item:
+    if item:
+        from app.models.raw_purchase_plan import RawPurchasePlan
+        if db.scalar(select(RawPurchasePlan.id).where(RawPurchasePlan.stock_item_id==item.id)):
+            fail('统一原片已按订单分配，请从订单片料加工入口确认，不得重复安排备库生产')
+        return receipt, item, db.get(InventoryLot, receipt.received_inventory_lot_id) if receipt.received_inventory_lot_id else None
+    purpose = db.scalar(select(IncomingReceiptPurposeAllocation).where(
+        IncomingReceiptPurposeAllocation.incoming_receipt_item_id == receipt_id
+    )) if receipt else None
+    if (not purpose or purpose.status != "posted"
+            or purpose.purpose_contract_status_snapshot != "frozen"
+            or purpose.surplus_disposition != "semi_finished_reserve"
+            or purpose.receipt_reserve_purpose_sheet_qty <= 0
+            or purpose.source_kind != "order_item"
+            or purpose.component_type != "whole"
+            or not purpose.source_order_item_id
+            or not purpose.semi_finished_inventory_lot_id
+            or not purpose.purchase_purpose_source_snapshot_id
+            or not purpose.supplier_requisition_order_item_id):
         fail("备库收料来源不存在")
-    from app.models.raw_purchase_plan import RawPurchasePlan
-    if db.scalar(select(RawPurchasePlan.id).where(RawPurchasePlan.stock_item_id==item.id)):
-        fail('统一原片已按订单分配，请从订单片料加工入口确认，不得重复安排备库生产')
-    return receipt, item, db.get(InventoryLot, receipt.received_inventory_lot_id) if receipt.received_inventory_lot_id else None
+    snapshot = db.get(PurchasePurposeSourceSnapshot, purpose.purchase_purpose_source_snapshot_id)
+    order_item = db.get(OrderItem, purpose.source_order_item_id)
+    supplier_item = db.get(SupplierRequisitionOrderItem, purpose.supplier_requisition_order_item_id)
+    lot = db.get(InventoryLot, purpose.semi_finished_inventory_lot_id)
+    if (not snapshot or snapshot.source_kind != "order_item"
+            or snapshot.component_type != "whole"
+            or snapshot.source_order_item_id != purpose.source_order_item_id
+            or snapshot.customer_id != purpose.customer_id
+            or snapshot.yield_per_sheet_snapshot <= 0
+            or snapshot.pieces_per_finished_snapshot <= 0
+            or not order_item or order_item.product_id is None
+            or order_item.order.customer_id != purpose.customer_id
+            or not supplier_item
+            or not lot or lot.inventory_type != "semi_finished"
+            or lot.id != purpose.semi_finished_inventory_lot_id):
+        fail("备库收料来源不存在")
+    customer = db.get(Customer, purpose.customer_id)
+    item = SimpleNamespace(
+        customer_id=purpose.customer_id,
+        customer=customer,
+        order=supplier_item.supplier_order,
+        source_active=(supplier_item.status == "active"
+                       and supplier_item.supplier_order.status != "voided"),
+        frozen_order_reserve=True,
+        reference_product_id=None,
+        product_id=order_item.product_id,
+        product_code_snapshot=order_item.snapshot_product_code,
+        product_name_snapshot=order_item.snapshot_product_name,
+        report_length_mm=(supplier_item.report_length_mm or order_item.snapshot_report_length_mm),
+        report_width_mm=(supplier_item.report_width_mm or order_item.snapshot_report_width_mm),
+        material_code_snapshot=(supplier_item.material_code_snapshot or order_item.snapshot_material),
+        target_inventory_type="semi_finished",
+        stock_yield_per_sheet=snapshot.yield_per_sheet_snapshot,
+        pieces_per_box=snapshot.pieces_per_finished_snapshot,
+        reserve_quantity=purpose.receipt_reserve_purpose_sheet_qty,
+        customer_order_number=order_item.order.order_number,
+    )
+    return receipt, item, lot
 
 
 def location_name(db, lot):
@@ -112,6 +171,74 @@ def list_rows(db, *, scope=None, query=""):
                 movements=[dict(at=utc_naive_to_api(m.created_at),reason=m.reason,quantity=m.quantity,unit='张' if m.unit=='sheets' else '只',order_item_id=m.related_order_item_id,lot_id=m.inventory_lot_id,available_before=m.before_available,available_after=m.after_available) for m in db.scalars(select(InventoryMovement).where(InventoryMovement.inventory_lot_id.in_([l.id for l in lot_family]+[j.output_lot_id for j in jobs if j.output_lot_id])).order_by(InventoryMovement.id))] if lot else [])
             if query.casefold() in " ".join(str(row[k] or "") for k in ("code","name","customer_name","order_number","lot_number")).casefold():
                 rows.append(row)
+    purpose_stmt = select(IncomingReceiptPurposeAllocation).where(
+        IncomingReceiptPurposeAllocation.status == "posted",
+        IncomingReceiptPurposeAllocation.purpose_contract_status_snapshot == "frozen",
+        IncomingReceiptPurposeAllocation.surplus_disposition == "semi_finished_reserve",
+        IncomingReceiptPurposeAllocation.receipt_reserve_purpose_sheet_qty > 0,
+        IncomingReceiptPurposeAllocation.source_kind == "order_item",
+        IncomingReceiptPurposeAllocation.component_type == "whole",
+    )
+    if scope is not None:
+        purpose_stmt = purpose_stmt.where(IncomingReceiptPurposeAllocation.customer_id.in_(scope))
+    for purpose in db.scalars(purpose_stmt.order_by(IncomingReceiptPurposeAllocation.id.desc())):
+        try:
+            receipt, item, lot = source(db, purpose.incoming_receipt_item_id)
+        except WarehouseInventoryError:
+            continue
+        jobs = list(db.scalars(select(Job).where(Job.receipt_item_id == receipt.id).order_by(Job.id)))
+        commands = list(db.scalars(select(Command).where(Command.receipt_item_id == receipt.id).order_by(Command.created_at, Command.operation_key)))
+        keep = next((json.loads(c.request_json)["action"] for c in reversed(commands)
+                     if json.loads(c.request_json)["action"].startswith("keep_")), None)
+        physical = lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged
+        status = ("history" if receipt.status != "posted" or item.order.status == "voided"
+                  or not item.source_active
+                  else "pending" if any(j.status == "pending" for j in jobs)
+                  else "keep" if physical and keep else "arrange" if physical
+                  else "stock" if any(job_dict(db, j)["output_remaining"] for j in jobs)
+                  else "history")
+        related_lot_ids = [lot.id] + [j.output_lot_id for j in jobs if j.output_lot_id]
+        row = dict(
+            key=f"receipt:{receipt.id}", receipt_item_id=receipt.id,
+            customer_name=((item.customer.chinese_short_name or item.customer.name)
+                           if item.customer else purpose.customer_name_snapshot),
+            code=item.product_code_snapshot, name=item.product_name_snapshot,
+            specification=f"{item.report_length_mm or '-'} × {item.report_width_mm or '-'} mm",
+            material=item.material_code_snapshot, order_number=item.order.order_number,
+            quantity=item.reserve_quantity, unit="张", available=lot.quantity_available,
+            reserved=lot.quantity_reserved, physical=physical, lot_version=lot.version,
+            lot_number=lot.lot_number, location=location_name(db, lot), status=status,
+            keep=keep, source_kind="order_reserve",
+            source_trace=dict(
+                order_number=item.order.order_number, supplier=item.order.supplier_name,
+                customer_order_number=item.customer_order_number,
+                ordered_at=utc_naive_to_api(item.order.created_at),
+                received_at=utc_naive_to_api(receipt.created_at),
+                received_quantity=item.reserve_quantity,
+                production_consumed=sum(j.input_quantity for j in jobs if j.status == 'completed'),
+                remaining=lot.quantity_available,
+            ),
+            can_plan=bool(lot.status == "active" and receipt.status == "posted"
+                          and item.order.status != "voided" and item.source_active),
+            product_id=item.product_id, factor=item.stock_yield_per_sheet,
+            pieces_per_box=item.pieces_per_box,
+            jobs=[job_dict(db, j) for j in jobs],
+            history=[dict(at=utc_naive_to_api(c.created_at),
+                          action=json.loads(c.request_json)["action"], actor_id=c.actor_id)
+                     for c in commands],
+            movements=[dict(
+                at=utc_naive_to_api(m.created_at), reason=m.reason, quantity=m.quantity,
+                unit='张' if m.unit == 'sheets' else '只',
+                order_item_id=m.related_order_item_id, lot_id=m.inventory_lot_id,
+                available_before=m.before_available, available_after=m.after_available,
+            ) for m in db.scalars(select(InventoryMovement).where(
+                InventoryMovement.inventory_lot_id.in_(related_lot_ids)
+            ).order_by(InventoryMovement.id))],
+        )
+        if query.casefold() in " ".join(str(row[k] or "") for k in (
+            "code", "name", "customer_name", "order_number", "lot_number"
+        )).casefold():
+            rows.append(row)
     priority = {"arrange":0,"pending":1,"waiting":2,"keep":3,"stock":4,"history":5}
     return sorted(rows,key=lambda row:priority[row["status"]])
 
@@ -123,6 +250,10 @@ def plan_product(db, item, lot):
         fail("备料缺少有效的同客户目标产品，请先完善补货产品资料")
     if product.is_virtual_composite_parent:
         fail("虚拟组合母件不能直接入库，请使用实际子件")
+    if getattr(item, "frozen_order_reserve", False):
+        if lot.allowed_products and product.id not in {binding.product_id for binding in lot.allowed_products}:
+            fail("该批材料的已确认适用产品范围不包含目标产品")
+        return product
     detail = lot.semi_finished_detail
     if (not detail or detail.flute_type != product.flute_type
             or (product.report_length_mm and product.report_length_mm > detail.board_length_mm)
@@ -147,7 +278,9 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='
         if previous.request_json != request or previous.actor_id != actor.id:
             fail("操作标识已用于其他内容，请刷新后重试")
         return json.loads(previous.result_json)
-    if receipt.status != "posted" or item.order.status == "voided" or not lot or lot.status != "active":
+    if (receipt.status != "posted" or item.order.status == "voided"
+            or not getattr(item, "source_active", True)
+            or not lot or lot.status != "active"):
         fail("收料已撤销或库存不可用，请刷新")
     if lot.version != payload["lot_version"]:
         fail("库存已变化，请刷新后重新安排")

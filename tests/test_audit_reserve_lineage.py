@@ -98,8 +98,10 @@ def test_receipt_derived_reserve_keeps_identity_through_later_order_consumption(
             assert db.scalar(select(func.count()).select_from(InventoryLot).where(
                 InventoryLot.inventory_type=='semi_finished'))==1
             from app.services.stock_preparation import source as stock_source
-            with pytest.raises(WarehouseInventoryError, match='备库收料来源不存在'):
-                stock_source(db,receipt_id)
+            source_receipt, source_item, source_lot = stock_source(db,receipt_id)
+            assert source_receipt.id == receipt_id
+            assert source_item.product_id == original.product_id
+            assert source_lot.id == lot_id
         blocked = client.put(f'/api/incoming/receipt-items/{receipt_id}/revert',json={})
         assert blocked.status_code == 409, blocked.text
         assert blocked.json()['detail']['code']=='RESERVE_INVENTORY_ALREADY_USED'

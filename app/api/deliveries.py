@@ -9375,6 +9375,8 @@ def _dispatch_delivery(
                 },
                 description="确认送货单发货",
             )
+        from app.services.delivery_backlogs import dispatch as post_backlog_dispatch
+        post_backlog_dispatch(db,delivery,lines,user,dispatched_at)
         db.commit() if commit else db.flush()
         return _delivery_response(db, delivery_id)
     except HTTPException:
@@ -10846,6 +10848,8 @@ def _cancel_delivery(
                     else "取消送货单发货并回滚已送数量"
                 ),
             )
+        from app.services.delivery_backlogs import reverse as reverse_backlog_dispatch
+        reverse_backlog_dispatch(db,delivery,user)
         db.commit() if commit else db.flush()
         return _delivery_response(db, delivery_id)
     except HTTPException:

@@ -105,7 +105,7 @@
             <div class="spec">规格：${escapeHtml(item.specification || "-")}</div>
             ${locations ? `<div class="locations">${locations}</div>` : ""}
             <div class="pick-row"><label for="qty-${item.item_id}">拿货数量</label><input id="qty-${item.item_id}" class="qty" type="number" min="0" inputmode="numeric" value="${qty}" /></div>
-            <div class="actions"><button class="action picked-btn"${disabled} onclick="saveItem(${item.item_id},'picked')">已拿货</button><button class="action partial-btn"${disabled} onclick="saveItem(${item.item_id},'partial')">部分拿货</button><button class="action stock-btn"${disabled} onclick="saveItem(${item.item_id},'no_stock')">没货</button></div>
+            <div class="actions"><button class="action picked-btn"${disabled} onclick="saveItem(${item.item_id},'picked')">已拿货</button><button class="action partial-btn"${disabled} onclick="saveItem(${item.item_id},'partial')">部分拿货，余量待补</button><button class="action stock-btn"${disabled} onclick="saveItem(${item.item_id},'no_stock')">等待下次送货</button></div>
           </article>`;
         }).join("") : '<div class="empty">当前筛选暂无拿货明细</div>';
       }
@@ -154,12 +154,12 @@
           const result=await request(`/api/mobile/tianhua-pick/items/${id}`,{
             method:"PUT",
             headers:{"Content-Type":"application/json"},
-            body:JSON.stringify({token,mobile_pick_status:status,mobile_picked_qty:status==="no_stock"?0:qty,mobile_pick_note:current.mobile_pick_note || ""})
+            body:JSON.stringify({token,wait_next:status!=="picked",mobile_pick_status:status,mobile_picked_qty:status==="no_stock"?0:qty,mobile_pick_note:current.mobile_pick_note || ""})
           });
           Object.assign(current,result.item);
           busyItems.delete(id);
           render();
-          const messages={picked:"已转入“已拿货”",partial:"已记录部分拿货",no_stock:"已记录没货"};
+          const messages={picked:"已转入“已拿货”",partial:"已记录部分拿货，余量持续待补送",no_stock:"已保留为持续待补送"};
           toast(messages[result.item.mobile_pick_status] || "拿货状态已保存");
         } catch (error) {
           toast(error.message);

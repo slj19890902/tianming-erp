@@ -306,3 +306,4 @@ from app.models.receipt_putaway import ProductStoragePreference, ReceiptStagingA
 from app.models.stock_preparation import StockPreparationJob, StockPreparationCommand  # noqa: E402,F401
 from app.models.procurement_source import ProcurementSourceLink  # noqa: E402,F401
 from app.models.raw_purchase_plan import RawPurchasePlan, RawPurchaseDemand, RawPurchaseReceiptAllocation  # noqa: E402,F401
+from app.models.delivery_backlog import DeliveryBacklog, DeliveryBacklogSource, DeliveryBacklogFulfillment  # noqa: E402,F401

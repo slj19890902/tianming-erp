@@ -53,6 +53,7 @@ class MobilePickUpdate(BaseModel):
     mobile_pick_status:str
     mobile_picked_qty:int|None=Field(default=None,ge=0)
     mobile_pick_note:str|None=Field(default=None,max_length=500)
+    wait_next:bool=False
 
 
 def _batch(db,batch_id):
@@ -273,6 +274,16 @@ def update_mobile_pick(item_id:int,payload:MobilePickUpdate,db:Session=Depends(g
     import_item=db.get(TianhuaPreDeliveryImportItem,item.import_item_id)
     if import_item is None:
         raise HTTPException(status_code=409,detail="拿货明细关联数据不存在")
+    if payload.wait_next:
+        from app.models.delivery_backlog import DeliveryBacklogSource
+        prior=db.scalar(select(DeliveryBacklogSource).where(DeliveryBacklogSource.import_item_id==import_item.id))
+        if prior:
+            # A lost response may be retried after the draft quantity shrank.
+            # Replaying the same pick must not change its status or owed quantity.
+            requested=0 if payload.mobile_pick_status=='no_stock' else payload.mobile_picked_qty
+            if requested==item.mobile_picked_qty and payload.mobile_pick_status==item.mobile_pick_status and (payload.mobile_pick_note or '').strip()==(item.mobile_pick_note or ''):
+                return {"ok":True,"item":next(value for value in _mobile_items(db,draft) if value["item_id"]==item.id)}
+            raise HTTPException(status_code=409,detail="该通知已登记待补送；修改本次拿货请回电脑端核对，不能覆盖原欠送记录")
     target=int(item.delivery_qty or 0)
     qty=0 if payload.mobile_pick_status=="no_stock" else payload.mobile_picked_qty
     if qty is None:
@@ -285,6 +296,12 @@ def update_mobile_pick(item_id:int,payload:MobilePickUpdate,db:Session=Depends(g
         if qty>target:
             raise HTTPException(status_code=409,detail=f"拿货数量不能超过当前送货草稿数量 {target}")
     actual_status="no_stock" if payload.mobile_pick_status=="no_stock" else ("partial" if qty<target else "picked")
+    if payload.wait_next:
+        from app.services.delivery_backlogs import defer
+        try:
+            defer(db,import_item,quantity=target-qty,reason=(payload.mobile_pick_note or '本次库存不足，等待下次送货'),mobile=True,
+                excluded_delivery_id=draft.delivery_id,excluded_quantity=qty)
+        except Exception:db.rollback();raise
     item.mobile_pick_status=actual_status
     item.mobile_picked_qty=qty
     item.mobile_pick_note=(payload.mobile_pick_note or "").strip() or None
@@ -299,3 +316,7 @@ def update_mobile_pick(item_id:int,payload:MobilePickUpdate,db:Session=Depends(g
     db.commit()
     db.refresh(item)
     return {"ok":True,"item":next(value for value in _mobile_items(db,draft) if value["item_id"]==item.id)}
+
+
+from app.api.delivery_backlogs import router as backlog_router
+router.include_router(backlog_router)

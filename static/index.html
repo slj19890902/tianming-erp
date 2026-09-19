@@ -3250,6 +3250,12 @@
             <template v-if="activePage === 'dashboard'">
               <div class="page-head"><div><h2>首页仪表盘</h2><p>一打开就能看到今天最该处理的订单、报料、送货、回单和对账事项。</p><span v-if="overview.as_of" class="muted">统计截至 {{ formatDateTime(overview.as_of) }} · 对账月份 {{ overview.statement_month }}</span></div></div>
               <div v-if="overviewLoading" class="status blue" style="margin-bottom: 12px;">首页数据加载中……</div>
+              <section v-if="hasPermission('deliveries.view')" class="panel" style="border-left:5px solid #d97706;margin-bottom:12px" aria-label="持续待补送提醒">
+                <div class="toolbar"><strong>持续待补送 · 按最早交期排列</strong><button class="btn" @click="openDeliveryBacklogs">查看全部与历史</button></div>
+                <div v-if="deliveryBacklogs.error" class="status orange">{{ deliveryBacklogs.error }} <button class="btn small" @click="loadDeliveryBacklogs(1)">重试</button></div>
+                <div v-for="row in deliveryBacklogs.items.slice(0,5)" :key="row.id" style="padding:6px 0">{{ row.customer_name }} · {{ row.stock_code }} {{ row.product_name }}：待补 <strong>{{ row.remaining_quantity }}</strong>，可补送 {{ row.ready_quantity }} · 交期 {{ row.due_date || '未登记' }} · {{ row.reason }}</div>
+                <div v-if="!deliveryBacklogs.items.length && !deliveryBacklogs.error" class="muted">{{ deliveryBacklogs.loading ? '正在查询待补送…' : '暂无登记中的待补送' }}</div>
+              </section>
               <div v-if="overviewError" class="status red" style="margin-bottom: 12px;">首页数据加载失败：{{ overviewError }}</div>
               <div v-if="dashboardCards.length" class="dashboard-cards">
                 <div v-for="card in dashboardCards" :key="card.key" class="card dashboard-card" @click="openDashboardTarget(card)">
@@ -4967,7 +4973,7 @@
             </template>
 
             <template v-else-if="activePage === 'deliveries'">
-              <div class="page-head delivery-page-head"><div><h2>送货与回单</h2></div><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button><button class="btn" @click="loadDeliveries">刷新</button></div></div>
+              <div class="page-head delivery-page-head"><div><h2>送货与回单</h2></div><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入天华预送货</button><button class="btn" @click="openDeliveryBacklogs">持续待补送</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button><button class="btn" @click="loadDeliveries">刷新</button></div></div>
               <div v-if="deliveryDashboardMode==='pending_customers'" class="panel" style="margin-bottom:10px">
                 <div class="toolbar"><div><strong>下一步：选客户开送货单</strong><span class="muted" style="margin-left:8px">点客户后直接进入送货明细</span></div><button class="btn small" @click="deliveryDashboardMode=''">查看全部送货单</button></div>
                 <div v-if="deliveryPendingState.loading" class="empty">正在加载待送货客户…</div>
@@ -9064,6 +9070,21 @@
                 </template>
               </div>
             </div>
+            <div v-else-if="modal.type === 'deliveryBacklogs'">
+              <div class="toolbar"><label><input type="checkbox" v-model="deliveryBacklogs.history" @change="loadDeliveryBacklogs(1)" /> 包含已补齐及管理员取消记录</label><button class="btn" :disabled="deliveryBacklogs.loading" @click="loadDeliveryBacklogs(deliveryBacklogs.page)">刷新</button></div>
+              <p class="muted">这是原订单欠送的持续提醒，不另加一笔欠送。可补送仅计本单已有合资格成品；保存草稿不会核销，实际发货后才减少。</p>
+              <div v-if="deliveryBacklogs.error" class="status orange">{{ deliveryBacklogs.error }}</div>
+              <div class="table-wrap"><table class="table"><thead><tr><th>客户 / 产品</th><th>原订单 / 客户单号 / 交期</th><th>最初 / 当前追踪 / 已补 / 剩余</th><th>可补送 / 可安排成品</th><th>原因 / 状态</th><th>来源与发货</th><th>操作</th></tr></thead><tbody>
+                <tr v-for="row in deliveryBacklogs.items" :key="row.id"><td>{{ row.customer_name }}<br>{{ row.stock_code }} {{ row.product_name }}</td><td>{{ row.order_number }}<br>{{ row.customer_order_no || '-' }}<br>{{ row.due_date || '-' }}</td><td>{{ row.original_quantity }} / {{ row.target_quantity }} / {{ row.fulfilled_quantity }} / <strong>{{ row.remaining_quantity }}</strong></td><td>{{ row.ready_quantity }} / {{ row.available_finished_quantity }}</td><td>{{ row.reason }}<br>{{ backlogStatusLabel(row.status) }}<span v-if="row.cancelled_reason">：{{ row.cancelled_reason }}</span></td><td><details><summary>追溯 {{ row.sources.length }} 条通知</summary><div v-for="s in row.sources" :key="s.import_item_id">通知 {{ s.batch_number }}，{{ s.requested_quantity }}，{{ s.reason }}</div><div v-for="(d,i) in row.deliveries" :key="i">送货单 ID {{ d.delivery_id }}：{{ d.quantity }}，{{ d.status==='posted'?'已核销':'已撤销恢复' }}，{{ formatTime(d.dispatched_at) }}</div></details></td><td><button v-if="canDelivery && row.remaining_quantity" class="btn small" @click="previewDeliveryBacklogs(row)">预览同款分配</button><button v-if="user.role==='admin' && row.remaining_quantity" class="btn small danger" :disabled="deliveryBacklogs.loading" @click="cancelDeliveryBacklog(row)">取消待补送</button></td></tr>
+                <tr v-if="!deliveryBacklogs.items.length"><td colspan="7" class="empty">{{ deliveryBacklogs.loading?'查询中…':'没有符合条件的记录' }}</td></tr>
+              </tbody></table></div>
+              <div class="toolbar-group"><button class="btn" :disabled="deliveryBacklogs.loading || deliveryBacklogs.page<=1" @click="loadDeliveryBacklogs(deliveryBacklogs.page-1)">上一页</button><span>第 {{ deliveryBacklogs.page }} 页</span><button class="btn" :disabled="deliveryBacklogs.loading || !deliveryBacklogs.has_more" @click="loadDeliveryBacklogs(deliveryBacklogs.page+1)">下一页</button></div>
+              <div v-if="deliveryBacklogs.preview" class="panel" style="margin-top:12px">
+                <strong>整体分配预览 · {{ deliveryBacklogs.preview.stock_code }}</strong><p>同客户单号优先，再按交期与建立时间。管理员可调整数量；没有合资格成品的行不安排发货。</p>
+                <div v-for="r in deliveryBacklogs.preview.items" :key="r.id" class="toolbar">{{ r.order_number }} / {{ r.customer_order_no || '-' }} / {{ r.due_date || '-' }}：欠 {{ r.remaining_quantity }}，可补 {{ r.ready_quantity }}<label>本次 <input class="input" type="number" min="0" :max="r.ready_quantity" v-model.number="r.take" :disabled="user.role!=='admin'" /></label></div>
+                <p class="muted">本次总量上限 {{ deliveryBacklogs.preview.requested_quantity }}；未分配 {{ deliveryBacklogs.preview.unallocated_quantity }}。这里只建立原订单的送货草稿。</p><button class="btn primary" :disabled="deliveryBacklogs.loading" @click="applyDeliveryBacklogs">按以上分配填写补送草稿</button>
+              </div>
+            </div>
             <div v-else-if="modal.type === 'deliveryRoute'">
               <div class="status orange" style="display:block;white-space:normal;margin-bottom:10px">{{ deliveryRoutePlan.disclaimer }}</div>
               <div v-if="!deliveryRoutePlan.disclaimer" class="muted" style="margin-bottom:10px">区域同车建议不是实时路况最优解；请打开地图分段导航后由司机确认最终顺序。</div>
@@ -9143,8 +9164,13 @@
                   <td>{{ line.source_type==='unordered_finished' ? (line.location_name || '按所选库存批次') : inventorySourcesText(line.inventory_sources) }}<div v-if="line.source_type==='unordered_finished' && deliveryForm.editing_status==='dispatched'" v-for="allocation in line.allocations" :key="allocation.inventory_lot_id">批次 {{ allocation.inventory_lot_id }}<input class="input" type="number" min="1" v-model.number="allocation.quantity" @input="syncUnorderedDeliveryLineQuantity(line)" /></div></td>
                   <td><template v-if="line.source_type==='unordered_finished'"><strong>{{ line.delivered_quantity }}</strong><div class="muted">所选批次合计</div></template><template v-else><input class="input delivery-selection-quantity" type="number" min="1" :max="line.deliverable_quantity || undefined" v-model.number="line.delivered_quantity" @input="onDeliveryQuantityChanged(line)" /><div class="muted">待送 {{ line.order_remaining_quantity }} / 可用 {{ line.deliverable_quantity }}</div><div v-if="Number(line.delivered_quantity)>Number(line.order_remaining_quantity)" class="status orange">超送 {{ Number(line.delivered_quantity)-Number(line.order_remaining_quantity) }}，保存须确认</div></template></td>
                   <td><input v-if="line.source_type==='unordered_finished'" class="input delivery-selection-quantity" type="number" min="0" step="0.0001" v-model.number="line.unit_price" placeholder="可后补" /><span v-else>{{ money(line.unit_price) }}</span><div v-if="line.source_type==='unordered_finished' && !Number(line.unit_price)" class="muted">待补价，对账前补齐</div></td>
-                  <td><input class="input" v-model.trim="line.remarks" placeholder="会打印给客户" /></td><td><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></td>
+                  <td><input class="input" v-model.trim="line.remarks" placeholder="会打印给客户" /></td><td><button v-if="line.order_item_id && !deliveryForm.editingId" class="btn small" type="button" :disabled="deliveryBacklogs.loading" @click="previewDeliveryBacklogs(line,true)">先分配同款旧欠送</button><button class="btn small danger" type="button" @click="removeDeliveryLine(line.key)">删除</button></td>
                 </tr></tbody></table>
+              </div>
+              <div v-if="deliveryBacklogs.preview?.originKey" class="panel" style="border-left:4px solid #d97706">
+                <strong>同款旧欠送整体分配</strong><p>同客户单号优先，再按交期和建立时间。确认后，本次已填数量将分配给以下原订单；未分配部分仍保留在当前订单，不增加本单总量。</p>
+                <div v-for="r in deliveryBacklogs.preview.items" :key="r.id" class="toolbar">{{ r.order_number }} / {{ r.customer_order_no || '-' }} / {{ r.due_date || '-' }}：欠 {{ r.remaining_quantity }}，可补 {{ r.ready_quantity }}<label>本次 <input class="input" type="number" min="0" :max="r.ready_quantity" v-model.number="r.take" :disabled="user.role!=='admin'" /></label></div>
+                <button class="btn primary" type="button" :disabled="deliveryBacklogs.loading" @click="applyDeliveryBacklogs">确认分配到以上原订单</button><button class="btn" type="button" @click="deliveryBacklogs.preview=null">保留当前明细</button>
               </div>
               <button v-if="deliveryForm.editingId" class="btn small" type="button" :disabled="deliveryOperationState.action" @click="saveDeliveryCustomerPo">保存客户单号</button>
               <div v-if="deliveryForm.editingId" class="muted" style="font-size:12px">仅更新本送货单及后续对账的客户单号，不修改原订单、报料、来料和生产记录。</div>
@@ -9211,7 +9237,7 @@
                       <td><input class="input compact-input" type="number" min="1" v-model.number="row.final_delivery_qty" :disabled="!isTianhuaRowGeneratable(row)" /></td>
                       <td>{{ row.product_name || "-" }}</td><td><order-reference :row="row"></order-reference></td><td>{{ row.candidate_count ?? 0 }}</td><td>{{ row.match_reason || "-" }}</td>
                       <td>{{ tianhuaPickStatusLabel(row.mobile_pick_status) }}</td><td>{{ row.mobile_picked_qty ?? "-" }}</td><td>{{ row.mobile_pick_note || "-" }}</td><td>{{ row.mobile_picked_at ? formatTime(row.mobile_picked_at) : "-" }}</td><td>{{ row.warning || "-" }}</td>
-                      <td class="toolbar-group"><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaImageQty(row)">按图片数量</button><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaPendingQty(row)">补齐未送数量</button></td>
+                      <td class="toolbar-group"><button v-if="row.order_item_id && canDelivery" class="btn small" :disabled="loading" @click="deferTianhuaRow(row)">等待下次送货</button><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaImageQty(row)">按图片数量</button><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaPendingQty(row)">补齐未送数量</button></td>
                     </tr>
                     <tr v-if="!tianhuaPreimport.items.length"><td colspan="16" class="empty">上传图片并开始识别后，在这里显示预处理结果。</td></tr>
                   </tbody>
@@ -9219,7 +9245,7 @@
               </div>
               <div class="form-grid" style="margin-top:12px"><div class="field wide"><label>内部说明（不打印）</label><input class="input" v-model.trim="tianhuaPreimport.remark" /></div></div>
               <div class="toolbar-group" style="justify-content:flex-end">
-                <button v-if="tianhuaPreimport.draft" class="btn" :disabled="loading" @click="loadTianhuaBatch">刷新拿货状态</button>
+                <button class="btn" @click="openDeliveryBacklogs">查看持续待补送</button><button v-if="tianhuaPreimport.draft" class="btn" :disabled="loading" @click="loadTianhuaBatch">刷新拿货状态</button>
                 <button v-if="tianhuaPreimport.draft" class="btn primary" :disabled="loading" @click="generateTianhuaMobileToken">生成手机拿货二维码</button>
                 <button class="btn success" :disabled="!tianhuaSelectedCount() || loading" @click="createTianhuaDraft">{{ tianhuaPreimport.draft ? "保存草稿修改" : "生成送货单草稿" }}</button>
               </div>
@@ -10240,6 +10266,7 @@
             warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F", warehouseTwinFloors: [{code:"1F",label:"生产车间"},{code:"3F",label:"成品仓库"},{code:"4F",label:"成品仓库"}],
             warehouseTwinMetrics: {active_lots:0,occupied_locations:0,mapped_locations:0,unlocated_finished:0,unmatched_observations:0,column_conflicts:0},
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
+            deliveryBacklogs:{items:[],page:1,has_more:false,history:false,loading:false,error:'',preview:null,sequence:0},
             overview: { cards: [], todos: [], summary: {} }, warehouseCapacitySummary:null, overviewError: "", overviewLoading: false, dashboardDetailsVisible:false,
             kpi: {}, customers: [], customerOptions: [], orderCustomerOptions: [], products: [], materials: [], orders: [],
             orderWorkspace: "queue", customerHeatItems:[], customerHeatTotal:0, customerHeatLoading:false, customerHeatError:"", customerHeatAmountVisible:false, customerHeatAsOf:"", customerHeatThresholdContract:null, customerHeatThresholdVersion:"", customerHeatThresholdStatus:"prototype_pending_p1_61c_acceptance", customerHeatSortBy:"heat", customerHeatSortDirection:"desc", customerHeatAppliedSignature:"", customerHeatExpanded:{}, customerHeatOrders:{},
@@ -16126,6 +16153,7 @@
             module._mountedRoot = root;
           },
           async loadOverview() {
+            if(this.hasPermission('deliveries.view')) this.loadDeliveryBacklogs(1,false);
             this.overviewLoading = true;
             this.overviewError = "";
             this.overview = { cards: [], todos: [], summary: {} };
@@ -36461,8 +36489,12 @@
               candidate_message: this.deliveryKitSummary(candidate) || "已带出待送货明细",
               candidate_error: false,
             }));
+            if(this.modal?.type==='delivery' && !this.deliveryForm.editingId && line.product_id){
+              this.$nextTick(()=>{if(this.deliveryForm.lines.includes(line))this.previewDeliveryBacklogs(line,true);});
+            }
           },
           async openDelivery(preferredCustomerId = null) {
+            this.deliveryBacklogs.preview=null;
             if (!Number.isInteger(Number(preferredCustomerId))) preferredCustomerId = null;
             this.resetDeliveryReminderState();
             this.deliverySaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
@@ -36489,6 +36521,79 @@
             } catch (error) {
               this.showToast("路线建议加载失败：" + this.errorMessage(error), true);
             }
+          },
+          backlogStatusLabel(status) { return ({waiting:'等待下次送货',partial:'部分补送',fulfilled:'已补齐',cancelled:'管理员已取消'})[status] || status; },
+          async loadDeliveryBacklogs(page=1,history=this.deliveryBacklogs.history) {
+            const state=this.deliveryBacklogs, seq=++state.sequence;state.loading=true;state.error='';state.items=[];
+            try {
+              const {data}=await axios.get('/api/deliveries/tianhua-backlogs/list',{params:{page,history},timeout:15000});
+              if(seq!==state.sequence)return;
+              Object.assign(state,{items:data.items||[],page:data.page,has_more:data.has_more,history});
+            } catch(e) { if(seq===state.sequence)state.error='待补送查询失败：'+this.errorMessage(e); }
+            finally { if(seq===state.sequence)state.loading=false; }
+          },
+          async openDeliveryBacklogs() {
+            this.deliveryBacklogs.preview=null;this.modal={type:'deliveryBacklogs',title:'持续待补送'};await this.loadDeliveryBacklogs(1,false);
+          },
+          async deferTianhuaRow(row) {
+            if(this.loading)return;
+            const quantity=Number(row.final_delivery_qty || row.image_qty || row.system_pending_qty);
+            if(!Number.isInteger(quantity)||quantity<=0)return this.showToast('请先确认本次未送数量',true);
+            const reason=window.prompt(`存货 ${row.stock_code}：本次 ${quantity} 留待下次送货，请填写未送原因。`);
+            if(!reason?.trim())return;
+            this.loading=true;
+            try {
+              await axios.post(`/api/deliveries/tianhua-backlogs/defer/${row.item_id}`,{quantity,reason:reason.trim()},{timeout:15000});
+              await this.loadTianhuaBatch();this.showToast('已保留为待补送，本次其他明细可继续送货');
+            } catch(e){this.showToast(this.errorMessage(e),true);}finally{this.loading=false;}
+          },
+          async cancelDeliveryBacklog(row) {
+            if(this.deliveryBacklogs.loading)return;
+            const reason=window.prompt('请填写客户取消待补送的原因。这里只取消提醒；原订单数量不会自动修改，需要时另走订单关闭流程。');
+            if(!reason?.trim())return;
+            this.deliveryBacklogs.loading=true;
+            try {
+              await axios.post(`/api/deliveries/tianhua-backlogs/${row.id}/cancel`,{expected_version:row.version,reason:reason.trim()},{timeout:15000});
+              await this.loadDeliveryBacklogs(this.deliveryBacklogs.page);
+            } catch(e){this.showToast(this.errorMessage(e),true);}finally{this.deliveryBacklogs.loading=false;}
+          },
+          async previewDeliveryBacklogs(row,fromDelivery=false) {
+            const state=this.deliveryBacklogs;if(state.loading)return;state.loading=true;state.preview=null;
+            const signature=fromDelivery?this.deliveryFormSignature():null;
+            const customer_id=fromDelivery?this.deliveryForm.customer_id:row.customer_id;
+            const quantity=Number(fromDelivery?row.delivered_quantity:row.remaining_quantity);
+            if(!Number.isInteger(quantity)||quantity<=0){state.loading=false;return this.showToast('请先填写本次数量',true);}
+            try {
+              const {data}=await axios.post('/api/deliveries/tianhua-backlogs/suggest',{customer_id,product_id:row.product_id,quantity,customer_order_no:row.customer_po||row.customer_order_no||null},{timeout:15000});
+              if(fromDelivery && (this.modal.type!=='delivery'||this.deliveryFormSignature()!==signature))return;
+              if(!fromDelivery && this.modal.type!=='deliveryBacklogs')return;
+              if(!data.items.length)return;
+              state.preview={...data,customer_id,stock_code:row.stock_code||row.product_code,signature,originKey:fromDelivery?row.key:null,items:data.items.map(r=>({...r,take:r.suggested_quantity}))};
+            }catch(e){this.showToast(this.errorMessage(e),true);}finally{state.loading=false;}
+          },
+          async applyDeliveryBacklogs() {
+            const state=this.deliveryBacklogs,p=state.preview;if(!p||state.loading)return;
+            const chosen=p.items.filter(r=>Number(r.take)>0),total=chosen.reduce((n,r)=>n+Number(r.take),0);
+            if(!chosen.length||total>p.requested_quantity||p.items.some(r=>!Number.isInteger(Number(r.take))||Number(r.take)<0||Number(r.take)>r.ready_quantity))return this.showToast('分配数量须为整数且不能超过本次数量、欠送和可补送数量',true);
+            if(p.originKey && this.deliveryFormSignature()!==p.signature)return this.showToast('送货内容已变化，请重新预览分配',true);
+            state.loading=true;
+            try {
+              if(!p.originKey)await this.openDelivery(p.customer_id);
+              if(this.modal.type!=='delivery'||Number(this.deliveryForm.customer_id)!==Number(p.customer_id))return;
+              const origin=p.originKey?this.deliveryForm.lines.find(r=>r.key===p.originKey):null;
+              if(p.originKey && (!origin||this.deliveryFormSignature()!==p.signature))return this.showToast('送货内容已变化，请重新预览',true);
+              if(chosen.some(r=>this.deliveryForm.lines.some(line=>line.key!==p.originKey&&Number(line.order_item_id)===r.order_item_id)))return this.showToast('分配中的旧订单已在本单中，请先合并核对，不能重复添加',true);
+              const additions=chosen.map(r=>this.createDeliveryLine({...r.candidate,inventory_code:r.stock_code,delivered_quantity:Number(r.take)}));
+              if(origin){
+                const leftover=Number(origin.delivered_quantity)-total;
+                const same=additions.find(r=>Number(r.order_item_id)===Number(origin.order_item_id));
+                if(same){same.delivered_quantity+=leftover;same.remarks=origin.remarks;}
+                else if(leftover>0)additions.push({...origin,delivered_quantity:leftover});
+                this.deliveryForm.lines=this.deliveryForm.lines.filter(r=>r.key!==origin.key);
+              }
+              this.deliveryForm.lines.push(...additions);state.preview=null;
+              this.showToast('已按原订单填写，请核对完整明细后保存草稿；实际发货才核销待补送');
+            }finally{state.loading=false;}
           },
           openTianhuaPreimport() {
             this.tianhuaPreimport = { files:[], preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" };

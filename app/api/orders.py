@@ -4873,6 +4873,10 @@ def _unlink_predelivery_order_bindings(
 
 def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
     labels: list[str] = []
+    from app.models.delivery_backlog import DeliveryBacklog
+    if db.scalar(select(DeliveryBacklog.id).join(OrderItem,OrderItem.id==DeliveryBacklog.order_item_id)
+            .where(OrderItem.order_id.in_(order_ids)).limit(1)):
+        labels.append('预送货待补送及实际发货追溯')
     from app.models.raw_purchase_plan import RawPurchaseDemand
     if db.scalar(select(RawPurchaseDemand.id).join(OrderItem,OrderItem.id==RawPurchaseDemand.order_item_id)
             .where(OrderItem.order_id.in_(order_ids)).limit(1)):

@@ -241,3 +241,55 @@ def test_raw_graph_each_real_product_waits_for_processing(composite_requisition_
             assert (lot.quantity_available,lot.quantity_reserved,lot.quantity_consumed)==(5,0,100)
             summary=receipt_purpose_summaries_by_order_item_ids(db,[1])[1]
             assert not summary['requires_component_processing'] and not summary['projection_inconsistent']
+
+
+def test_raw_migration_immutable_facts_and_nonempty_downgrade_refused(requisition_app):
+    import importlib.util
+    import pytest
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+    from app.models import Base
+    app,factory=requisition_app;setup_raw(app,factory)
+    engine=factory.kw['bind']
+    spec=importlib.util.spec_from_file_location('r08_migration','alembic/versions/rp0919_raw_purchase_plans.py')
+    migration=importlib.util.module_from_spec(spec);spec.loader.exec_module(migration)
+    with engine.begin() as conn:
+        for name in ('raw_purchase_delivery_cost_portions','raw_purchase_receipt_allocations','raw_purchase_demands','raw_purchase_plans'):
+            Base.metadata.tables[name].drop(conn)
+        migration.op=Operations(MigrationContext.configure(conn));migration.upgrade()
+    with TestClient(app) as client:
+        _login(client,'admin');payload=raw_payload(client)
+        review=client.post('/api/requisition/raw-plans/preview',json=payload)
+        created=client.post('/api/requisition/raw-plans',json=dict(plan=payload,reviewed_hash=review.json()['reviewed_hash'],operation_key='r08-migration'))
+        assert created.status_code==200,created.text
+    for sql in ('UPDATE raw_purchase_plans SET snapshot_json=\'{}\'','DELETE FROM raw_purchase_plans','UPDATE raw_purchase_demands SET raw_quantity=21'):
+        with engine.begin() as conn:
+            with pytest.raises(IntegrityError):conn.execute(text(sql))
+    with engine.begin() as conn:
+        migration.op=Operations(MigrationContext.configure(conn))
+        with pytest.raises(RuntimeError,match='禁止删除历史'):migration.downgrade()
+        assert conn.execute(text('SELECT count(*) FROM raw_purchase_plans')).scalar_one()==1
+        assert conn.execute(text('SELECT count(*) FROM raw_purchase_demands')).scalar_one()==2
+
+
+def test_explicit_raw_plan_for_ordinary_box_requires_real_processing(requisition_app):
+    from app.models.product import Product
+    from app.models.order import OrderItem
+    from app.api.bom_cutover import router
+    app,factory=requisition_app;setup_raw(app,factory);app.include_router(router,prefix='/api/orders')
+    with factory() as db:
+        item=db.get(OrderItem,1);pid=item.product_id;db.get(Product,pid).box_style='A1';db.commit()
+    with TestClient(app) as client:
+        _login(client,'admin');payload=raw_payload(client);payload['quantity']=25
+        review=client.post('/api/requisition/raw-plans/preview',json=payload);assert review.status_code==200,review.text
+        assert len(review.json()['requirements'])==1 and review.json()['allocated_quantity']==20
+        result=client.post('/api/requisition/raw-plans',json=dict(plan=payload,reviewed_hash=review.json()['reviewed_hash'],operation_key='r08-a1'))
+        assert result.status_code==200,result.text
+        receipt=client.put(f"/api/incoming/receive/sr{result.json()['stock_item_id']}",json=dict(received_quantity=25,idempotency_key='r08-a1-in'))
+        assert receipt.status_code==200,receipt.text
+        review=client.post('/api/orders/items/1/component-processing/preview',json={'product_id':pid});assert review.status_code==200,review.text
+        assert review.json()['quantity']==20
+        result=client.post('/api/orders/items/1/component-processing/execute',json=dict(product_id=pid,reviewed_hash=review.json()['reviewed_hash'],operation_key='r08-a1-process'))
+        assert result.status_code==200,result.text

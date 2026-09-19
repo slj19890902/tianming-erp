@@ -23,9 +23,24 @@ def prepare(app,factory,client):
         parent_id=parent.id;second_id=second.id;db.commit()
     _login(client)
     payload=_customer_replenishment_payload(30)
+    payload['idempotency_key']='stock-preparation-group-draft'
     second=copy.deepcopy(payload['items'][0]);second['product_id']=second_id;payload['items'].append(second)
     response=client.post('/api/requisition/stock-replenishment/orders',json=payload);assert response.status_code==201,response.text
-    for item in response.json()['items']:
+    created_items=response.json()['items']
+    pending=client.get('/api/requisition/pending');assert pending.status_code==200,pending.text
+    pending_rows=[row for row in pending.json()['items'] if row.get('stock_replenishment_item_id') in {item['id'] for item in created_items}]
+    groups={}
+    for row in pending_rows:
+        groups.setdefault(row['supplier_name'],[]).append({
+            'stock_replenishment_item_id':row['stock_replenishment_item_id'],
+            'source_fingerprint':row['source_fingerprint'],
+        })
+    purchase=client.post('/api/requisition/supplier-orders/from-pending-selection',json={
+        'supplier_groups':[{'supplier_name':name,'request_key':f'stock-preparation-group-purchase-{index}',
+                            'stock_sources':sources}
+                           for index,(name,sources) in enumerate(groups.items(),1)]})
+    assert purchase.status_code==201,purchase.text
+    for item in created_items:
         received=client.put(f"/api/incoming/receive/sr{item['id']}",json={'received_quantity':30,'idempotency_key':f"kit-receive-{item['id']}"})
         assert received.status_code==200,received.text
     return parent_id

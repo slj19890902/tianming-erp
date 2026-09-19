@@ -5749,3 +5749,6 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 运行52f666e8，sc0916无迁移，备份健康验证通过，待管理员人工验收；包C/D继续。见[包B发布回执](release_reports/PACKAGE_B_RELEASE_20260919.md)及[R10旧ERP证据](release_reports/R10_LEGACY_EVIDENCE_20260919.md)。
 
 2026-09-19 R06：正式v0.22.453 / ee4168e4 / sc0916，无迁移；完整备份及只读健康通过，待管理员人工验收。见docs/release_reports/PACKAGE_C_R06_RELEASE_20260919.md。R05/R07/R08/R09继续，原未提交文档保留。
+
+
+2026-09-19 A-0016-R1：v0.22.454 PDF保存幂等及原结果恢复已技术发布，代码b82f07ea，revision sc0916无迁移；待管理员人工验收。详见docs/release_reports/A0016_R1_PDF_SAVE_RELEASE_20260919.md。

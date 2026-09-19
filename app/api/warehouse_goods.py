@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.api.deps import get_db, PermissionChecker
@@ -35,6 +35,7 @@ router = APIRouter()
 
 
 class GoodsFacts(BaseModel):
+    display_name: str = Field(default="", max_length=200)
     scope: Literal["general", "customers"] = "general"
     customer_ids: list[int] = Field(default_factory=list, max_length=500)
     product_ids: list[int] = Field(default_factory=list, max_length=500)
@@ -70,6 +71,10 @@ class GoodsUpdate(BaseModel):
     facts: GoodsFacts
     expected_version: int = Field(ge=1)
     idempotency_key: str = Field(min_length=8, max_length=80)
+    correction_reason: str = Field(default="", max_length=500)
+    sync_product_id: int | None = Field(default=None, ge=1)
+    impact_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    correction_quantity: int | None = Field(default=None, gt=0)
 
 
 class SheetEntry(BaseModel):
@@ -179,8 +184,13 @@ def replay(db, key, digest):
         return json.loads(row.response_json)
 
 
-def record(db, user, lot, facts, key, digest, before, action):
-    data = facts.model_dump()
+def record(db, user, lot, facts, key, digest, before, action, *, reason=""):
+    # Applicability edits must not erase server-frozen production provenance.
+    data = {**(before or {}), **facts.model_dump()}
+    if "source_customer_id" not in data:
+        detail = lot.semi_finished_detail or lot.finished_detail
+        data["source_customer_id"] = detail.owner_customer_id
+        data["source_customer_name"] = detail.owner_customer_name_snapshot
     row = db.get(WarehouseGoodsProfile, lot.id)
     if row is None:
         row = WarehouseGoodsProfile(lot_id=lot.id)
@@ -192,9 +202,34 @@ def record(db, user, lot, facts, key, digest, before, action):
     db.add(OperationLog(user_id=user.id, username=user.username, role=user.role, action=action,
         resource=f"warehouse/goods/{lot.id}", entity_type="warehouse_goods_profile", entity_id=lot.id,
         description="人工登记货物及适用范围" if action == "CREATE" else "人工修改货物适用资料（不改变数量及历史材质）",
-        details=json.dumps(dict(before=before, after=data), ensure_ascii=False)))
+        details=json.dumps(dict(before=before, after=data, reason=reason), ensure_ascii=False)))
     db.commit()
     return result
+
+
+def correction_impact(db, user, lot, payload):
+    from app.models.order import OrderItem
+    product = db.get(Product, payload.sync_product_id) if payload.sync_product_id else None
+    if payload.sync_product_id and (product is None or product.deleted_at or not product.is_active
+            or product.id not in payload.facts.product_ids):
+        raise HTTPException(422, "同步常用箱必须选择一个已确认适用且有效的产品")
+    if product and not payload.facts.display_name.strip():
+        raise HTTPException(422, "同步常用箱请填写修正后的产品名称")
+    detail = lot.semi_finished_detail or lot.finished_detail
+    impact = dict(lot_id=lot.id, lot_version=lot.version, original_customer_id=detail.owner_customer_id,
+        product_id=product.id if product else None, product_version=product.version if product else None,
+        old_product_name=product.product_name if product else None, new_product_name=payload.facts.display_name.strip(),
+        historical_order_lines=int(db.scalar(select(func.count()).select_from(OrderItem).where(OrderItem.product_id==product.id)) or 0) if product else 0,
+        history_unchanged=True)
+    raw = json.dumps([impact, payload.model_dump(mode="json", exclude={"impact_fingerprint", "idempotency_key"})],sort_keys=True,ensure_ascii=False)
+    return {**impact, "fingerprint": hashlib.sha256(raw.encode()).hexdigest()}
+
+
+@router.post("/{lot_id}/correction-preview", dependencies=[Depends(PermissionChecker("warehouse.correct"))])
+def preview_correction(lot_id: int, payload: GoodsUpdate, db: Session=Depends(get_db), user: User=Depends(admin_only)):
+    unrestricted(user, db)
+    lot = _require_lot_customer_access(db, lot_id, user)
+    return correction_impact(db, user, lot, payload)
 
 
 @router.get("/options")
@@ -242,18 +277,31 @@ def material_price(material_id: int, flute_type: str = "", length_mm: int = 0, w
 @router.get("/{lot_id}")
 def get_goods(lot_id: int, db: Session = Depends(get_db), user: User = Depends(can_read)):
     lot = _require_lot_customer_access(db, lot_id, user)
-    if not lot.semi_finished_detail:
-        raise HTTPException(422, "成品仍按其客户存货编码管理")
     profile = goods_profile(db, lot)
+    if lot.finished_detail:
+        detail = lot.finished_detail
+        profile = profile or GoodsFacts(scope="general" if detail.is_general else "customers",
+            customer_ids=[] if detail.is_general else [detail.owner_customer_id],
+            product_ids=[detail.product_id], processing="cut", display_name=detail.product_name_snapshot or "",
+            note=lot.remarks or "").model_dump()
+        profile.setdefault("source_customer_id", detail.owner_customer_id)
+        profile.setdefault("source_customer_name", detail.owner_customer_name_snapshot)
+        return dict(lot_id=lot.id, version=lot.version, facts=profile, inventory_type="finished",
+            physical=dict(length=detail.length_mm,width=detail.width_mm,flute=detail.flute_type_snapshot,
+                name=profile.get("display_name") or detail.product_name_snapshot,material=detail.material_code_snapshot),
+            editable=lot.status=="active" and lot.quantity_reserved==0 and lot.quantity_available>0)
     detail = lot.semi_finished_detail
     if profile is None:
         profile = GoodsFacts(scope="customers" if detail.owner_customer_id else "general",
             customer_ids=[detail.owner_customer_id] if detail.owner_customer_id else [],
             processing="raw" if detail.sheet_type == "raw_board" else "creased" if detail.sheet_type == "creased_sheet" else "cut",
-            face_paper=lot_face(db, lot), estimated_material=detail.material_code_snapshot or "").model_dump()
+            face_paper=lot_face(db, lot), estimated_material=detail.material_code_snapshot or "",
+            display_name=detail.internal_name or "", note=lot.remarks or "").model_dump()
     profile["material_code"] = profile.get("material_code") or detail.material_code_snapshot or ""
+    profile.setdefault("source_customer_id", detail.owner_customer_id)
+    profile.setdefault("source_customer_name", detail.owner_customer_name_snapshot)
     physical = dict(length=detail.board_length_mm, width=detail.board_width_mm, flute=detail.flute_type,
-        material=detail.material_code_snapshot, name=detail.internal_name)
+        material=detail.material_code_snapshot, name=profile.get("display_name") or detail.internal_name)
     if can_view_inventory_cost(user):
         from app.services.inventory_valuation import cost_payload
         physical["settlement_unit_price"] = cost_payload(lot, db)["unit_cost"]
@@ -269,23 +317,67 @@ def update_goods(lot_id: int, payload: GoodsUpdate, db: Session = Depends(get_db
     previous = replay(db, payload.idempotency_key, digest)
     if previous is not None:
         return previous
-    if not lot.semi_finished_detail:
-        raise HTTPException(422, "成品不能改为通用片料")
+    if not payload.correction_reason.strip():
+        raise HTTPException(422, "请填写资料修正原因")
+    from app.services.fixed_shelf_staging import staging_owner
+    if staging_owner(db, lot.id):
+        raise HTTPException(409, "该批次已集货待送，请先解除集货后修正资料")
+    if lot.pallet_item and (not lot.pallet_item.pallet or not lot.pallet_item.pallet.is_current
+            or lot.pallet_item.pallet.location_id != lot.warehouse_location_id):
+        raise HTTPException(409, "栈板位置与库存不一致，请先核对")
     facts = payload.facts.model_copy(deep=True)
     material = validate_references(db, facts)
-    raw = lot.semi_finished_detail.sheet_type == "raw_board"
-    if lot.semi_finished_detail.layer_count == 1 and material is None:
-        facts.face_paper = payload.facts.face_paper
-    if raw != (facts.processing == "raw"):
-        raise HTTPException(422, "不能通过用途编辑改变原材料或半成品的入库类型")
-    if (facts.processing == "creased") != (lot.semi_finished_detail.sheet_type == "creased_sheet"):
-        raise HTTPException(422, "压线状态应按原始入库事实维护，不能通过用途编辑新增或取消压线")
-    if material and material.layer_count and material.layer_count != lot.semi_finished_detail.layer_count:
-        raise HTTPException(422, "核实材质的层数与原始库存不一致，请先核对")
-    if not facts.material_code:
-        facts.material_code = lot.semi_finished_detail.material_code_snapshot
-    before = goods_profile(db, lot)
+    detail = lot.semi_finished_detail or lot.finished_detail
+    finished_product = None
+    if lot.finished_detail:
+        if not payload.correction_reason.strip():
+            raise HTTPException(422, "请填写资料修正原因")
+        if len(facts.customer_ids)>1 or len(facts.product_ids)>1:
+            raise HTTPException(422, "成品批次只可对应一款实际产品和一个专用客户")
+        pid = facts.product_ids[0] if facts.product_ids else detail.product_id
+        finished_product = db.get(Product, pid)
+        if not finished_product or (facts.scope=="customers" and finished_product.customer_id not in facts.customer_ids):
+            raise HTTPException(422, "请选择适用客户下实际规格相同的产品")
+        if pid != detail.product_id:
+            from app.services.finished_stock_identity import product_basis
+            from app.services.bom_inventory_contract import is_body_lot
+            old_basis = json.loads(detail.physical_basis_json or "null")
+            new_basis = json.loads(product_basis(finished_product))
+            if is_body_lot(lot) or not old_basis or {k:v for k,v in old_basis.items() if k!="product_id"}!={k:v for k,v in new_basis.items() if k!="product_id"}:
+                raise HTTPException(409, "客户产品变更必须有完全相同的冻结实物规格和工艺依据，请先核实身份")
+    else:
+        raw = detail.sheet_type == "raw_board"
+        if detail.layer_count == 1 and material is None:
+            facts.face_paper = payload.facts.face_paper
+        if raw != (facts.processing == "raw"):
+            raise HTTPException(422, "不能通过用途编辑改变原材料或半成品的入库类型")
+        if (facts.processing == "creased") != (detail.sheet_type == "creased_sheet"):
+            raise HTTPException(422, "压线状态应按原始入库事实维护，不能通过用途编辑新增或取消压线")
+        if material and material.layer_count and material.layer_count != detail.layer_count:
+            raise HTTPException(422, "核实材质的层数与原始库存不一致，请先核对")
+        if not facts.material_code:
+            facts.material_code = detail.material_code_snapshot
+    before = get_goods(lot_id, db, user)["facts"]
+    before.setdefault("source_customer_id", detail.owner_customer_id)
+    before.setdefault("source_customer_name", detail.owner_customer_name_snapshot)
+    before["display_name"] = before.get("display_name") or (detail.product_name_snapshot if lot.finished_detail else detail.internal_name) or ""
+    before.setdefault("source_display_name", before["display_name"])
+    if "display_name" not in payload.facts.model_fields_set:
+        facts.display_name = (before or {}).get("display_name", "")
+    if facts.display_name != (before or {}).get("display_name", "") and not payload.correction_reason.strip():
+        raise HTTPException(422, "请填写资料修正原因")
     try:
+        if payload.sync_product_id:
+            impact = correction_impact(db, user, lot, payload)
+            if not payload.correction_reason.strip() or payload.impact_fingerprint != impact["fingerprint"]:
+                raise HTTPException(409, "请预览常用箱同步影响并填写修正原因，资料变化后须重新预览")
+            changed_product = db.execute(update(Product).where(Product.id == payload.sync_product_id,
+                Product.version == impact["product_version"]).values(product_name=facts.display_name.strip(), version=Product.version+1))
+            if changed_product.rowcount != 1:
+                raise HTTPException(409, "常用箱已变化，请重新预览")
+            db.add(OperationLog(user_id=user.id,username=user.username,role=user.role,action="UPDATE",
+                resource=f"products/{payload.sync_product_id}",entity_type="product",entity_id=payload.sync_product_id,
+                description="盘点资料修正：管理员明确同步常用箱名称",details=json.dumps(dict(impact=impact,reason=payload.correction_reason),ensure_ascii=False)))
         changed = db.execute(update(InventoryLot).where(InventoryLot.id == lot_id,
             InventoryLot.version == payload.expected_version, InventoryLot.status == "active",
             InventoryLot.quantity_reserved == 0, InventoryLot.quantity_available > 0).values(version=InventoryLot.version + 1),
@@ -293,7 +385,55 @@ def update_goods(lot_id: int, payload: GoodsUpdate, db: Session = Depends(get_db
         if changed.rowcount != 1:
             raise HTTPException(409, "批次已变化、已预占或不可用，请刷新后核对")
         db.refresh(lot)
-        return record(db, user, lot, facts, payload.idempotency_key, digest, before, "UPDATE")
+        take = payload.correction_quantity or lot.quantity_available
+        if take > lot.quantity_available:
+            raise HTTPException(409, "修正数量超过可用库存，请刷新")
+        if take < lot.quantity_available or lot.quantity_consumed or lot.quantity_scrapped or lot.quantity_damaged:
+            if not payload.correction_reason.strip():
+                raise HTTPException(422, "拆分修正请填写原因")
+            from app.services.warehouse_goods_correction import split_for_correction
+            lot = split_for_correction(db, lot, take, user, payload.idempotency_key)
+        if finished_product:
+            detail = lot.finished_detail
+            if detail.product_id != finished_product.id:
+                from app.services.finished_stock_identity import product_basis
+                detail.physical_basis_json = product_basis(finished_product)
+                detail.product_id = finished_product.id
+                detail.inventory_code_snapshot = finished_product.product_code
+            detail.is_general = facts.scope=="general"
+            detail.owner_customer_id = None if detail.is_general else facts.customer_ids[0]
+            customer = db.get(Customer, detail.owner_customer_id) if detail.owner_customer_id else None
+            detail.owner_customer_name_snapshot = customer.name if customer else None
+            detail.product_name_snapshot = facts.display_name or detail.product_name_snapshot
+            if lot.pallet_item:
+                from app.models.warehouse_inventory import InventoryPallet
+                pallet = lot.pallet_item.pallet
+                changed_pallet = db.execute(update(InventoryPallet).where(InventoryPallet.id==pallet.id,
+                    InventoryPallet.version==pallet.version).values(version=InventoryPallet.version+1,updated_by=user.id))
+                if changed_pallet.rowcount != 1:
+                    raise HTTPException(409, "栈板已变化，请刷新")
+                lot.pallet_item.customer_id=detail.owner_customer_id
+                lot.pallet_item.customer_name_snapshot=detail.owner_customer_name_snapshot
+                lot.pallet_item.product_id=detail.product_id
+                lot.pallet_item.inventory_code=detail.inventory_code_snapshot
+                lot.pallet_item.product_name=detail.product_name_snapshot
+        elif lot.pallet_item:
+            from app.models.warehouse_inventory import InventoryPallet
+            pallet = lot.pallet_item.pallet
+            if not pallet or not pallet.is_current or pallet.location_id != lot.warehouse_location_id:
+                raise HTTPException(409, "栈板位置与库存不一致，请先核对")
+            changed_pallet = db.execute(update(InventoryPallet).where(InventoryPallet.id==pallet.id,
+                InventoryPallet.version==pallet.version).values(version=InventoryPallet.version+1,updated_by=user.id))
+            if changed_pallet.rowcount != 1:
+                raise HTTPException(409, "栈板已变化，请刷新")
+            lot.pallet_item.product_name=facts.display_name or lot.pallet_item.product_name
+        if lot.semi_finished_detail:
+            lot.semi_finished_detail.internal_name = facts.display_name or lot.semi_finished_detail.internal_name
+        lot.remarks = facts.note
+        return record(db, user, lot, facts, payload.idempotency_key, digest, before, "UPDATE", reason=payload.correction_reason.strip())
+    except WarehouseInventoryError as error:
+        db.rollback()
+        raise HTTPException(error.status_code, str(error)) from error
     except Exception:
         db.rollback()
         raise

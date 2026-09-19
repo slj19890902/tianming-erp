@@ -44,7 +44,7 @@ def test_different_white_codes_share_without_extra_flags_and_color_blocks(lot_db
     product=data['products'][0];product.material_id=target.id
     if raw:lot.semi_finished_detail.sheet_type='raw_board'
     facts=GoodsFacts(verified_material_id=stock.id,processing='raw' if raw else 'cut')
-    update_goods(lot.id,GoodsUpdate(facts=facts,expected_version=1,idempotency_key=f'color-use-{raw}'),db,user)
+    update_goods(lot.id,GoodsUpdate(correction_reason="测试核实用途", facts=facts,expected_version=1,idempotency_key=f'color-use-{raw}'),db,user)
     assert not qualification_issues(db,lot,product)
     expected=SemiFinishedSignature(customer_id=product.customer_id,board_length_mm=800,board_width_mm=600,
         normalized_material_code='Y1Y',flute_type='B',component_type='whole',pieces_per_box=1,stock_yield_per_sheet=1)

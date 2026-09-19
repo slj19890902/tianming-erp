@@ -2,7 +2,7 @@ import {useEffect, useRef, useState} from "react";
 import "./warehouseGoods.css";
 import {goodsSearchText,matchesGoodsSearch,loadGoodsPinyin,type GoodsPinyin} from "./goodsSearch.mjs";
 
-type Facts = {scope:"general"|"customers"; customer_ids:number[]; product_ids:number[];
+type Facts = {display_name?:string; source_customer_name?:string|null; source_customer_id?:number|null; scope:"general"|"customers"; customer_ids:number[]; product_ids:number[];
   face_paper?:"white"|"kraft"|"unknown"; dimension_source?:"unknown"|"tape"|"label"; crease_product_id?:number|null;
   material_code:string; verified_material_id:number|null;
   processing:"raw"|"cut"|"die_cut"|"creased"|"printed"; mold_tool_id:number|null; note:string; cut_trim_mm?:number; cut_kerf_mm?:number; blank_unprinted?:boolean};
@@ -48,17 +48,24 @@ function FactsEditor({facts,setFacts,options,raw,flute,canPrice,length,width,qua
 
 export function WarehouseGoods({lotId,locationId,layoutVersion,raw=false,canSave,onSaved,onBusyChange}:{lotId?:number;locationId?:number;layoutVersion?:number;raw?:boolean;canSave:boolean;onSaved:()=>Promise<unknown>;onBusyChange?:(busy:boolean)=>void}) {
   const [facts,setFacts]=useState<Facts>(initialFacts(raw)),[options,setOptions]=useState<Options|null>(null),[version,setVersion]=useState(0),[editable,setEditable]=useState(true);
+  const [finished,setFinished]=useState(false),[finishedSearch,setFinishedSearch]=useState("");
   const [message,setMessage]=useState(""),[busy,setBusy]=useState(false),[physical,setPhysical]=useState("");
   const [name,setName]=useState(""),[length,setLength]=useState(""),[width,setWidth]=useState(""),[quantity,setQuantity]=useState("");
   const [layer,setLayer]=useState(3),[flute,setFlute]=useState("B"),[stockDate,setStockDate]=useState(new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Shanghai"}));
   const [supplierId,setSupplierId]=useState(""),[sheetCost,setSheetCost]=useState("");
   const [pieces,setPieces]=useState("1"),[yieldPerSheet,setYield]=useState("1"),[component,setComponent]=useState("whole"),[source,setSource]=useState("existing_stocktake");
   const [creaseSearch,setCreaseSearch]=useState(""),[creaseLeft,setCreaseLeft]=useState(""),[creaseMiddle,setCreaseMiddle]=useState(""),[creaseRight,setCreaseRight]=useState("");
+  const [correctionReason,setCorrectionReason]=useState(""),[correctionQuantity,setCorrectionQuantity]=useState(""),[syncProduct,setSyncProduct]=useState(""),[impact,setImpact]=useState<{fingerprint:string;old_product_name:string;new_product_name:string;historical_order_lines:number}|null>(null);
   const pending=useRef<{signature:string;key:string}|null>(null),saving=useRef(false);
-  useEffect(()=>{let alive=true;void Promise.all([api("/options"),lotId?api(`/${lotId}`):Promise.resolve(null)]).then(([o,d])=>{if(!alive)return;setOptions(o);if(d){setFacts(d.facts);setFlute(d.physical.flute);setVersion(d.version);setEditable(d.editable);setPhysical(`${d.physical.name||"片料"} · ${d.physical.length}×${d.physical.width} · ${d.physical.flute==="NONE"?"无楞":`${d.physical.flute}楞`} · 原入库材质 ${d.physical.material}${d.physical.settlement_unit_price ? ` · 入库结算单价 ${d.physical.settlement_unit_price}元/张` : ""}`);}}).catch(e=>{if(alive)setMessage(e.message);});return()=>{alive=false};},[lotId]);
+  useEffect(()=>{let alive=true;void Promise.all([api("/options"),lotId?api(`/${lotId}`):Promise.resolve(null)]).then(([o,d])=>{if(!alive)return;setOptions(o);if(d){setFacts({...d.facts,display_name:d.facts.display_name||d.physical.name||""});setFlute(d.physical.flute);setVersion(d.version);setFinished(d.inventory_type==="finished");setEditable(d.editable);setPhysical(`${d.physical.name||"片料"} · ${d.physical.length}×${d.physical.width} · ${d.physical.flute==="NONE"?"无楞":`${d.physical.flute}楞`} · 原入库材质 ${d.physical.material}${d.physical.settlement_unit_price ? ` · 入库结算单价 ${d.physical.settlement_unit_price}元/张` : ""}`);}}).catch(e=>{if(alive)setMessage(e.message);});return()=>{alive=false};},[lotId]);
+  useEffect(()=>setImpact(null),[facts,correctionReason,correctionQuantity,syncProduct]);
+  const correctionPayload=()=>({facts,expected_version:version,correction_reason:correctionReason,correction_quantity:correctionQuantity?Number(correctionQuantity):null,sync_product_id:syncProduct?Number(syncProduct):null,impact_fingerprint:impact?.fingerprint||null});
+  const preview=async()=>{try{const result=await api(`/${lotId}/correction-preview`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...correctionPayload(),idempotency_key:"correction-preview"})});setImpact(result);setMessage("");}catch(e){setMessage(e instanceof Error?e.message:"预览失败");}};
   const save=async()=>{
     if(saving.current||!canSave||!options)return;
-    const payload=lotId?{facts,expected_version:version}:{facts,location_id:locationId,expected_layout_version:layoutVersion,
+    if(lotId&&!correctionReason.trim()){setMessage("请填写资料修正原因");return;}
+    if(lotId&&syncProduct&&!impact){setMessage("请先预览同步常用箱的影响");return;}
+    const payload=lotId?correctionPayload():{facts,location_id:locationId,expected_layout_version:layoutVersion,
       quantity:Number(quantity),stock_date:stockDate,internal_name:name,board_length_mm:Number(length),board_width_mm:Number(width),layer_count:layer,flute_type:flute,
       ...(layer===1?{supplier_id:Number(supplierId),sheet_unit_cost:sheetCost}:{}),
       pieces_per_box:Number(pieces),stock_yield_per_sheet:Number(yieldPerSheet),component_type:component,source_kind:source,
@@ -68,13 +75,16 @@ export function WarehouseGoods({lotId,locationId,layoutVersion,raw=false,canSave
     saving.current=true;setBusy(true);onBusyChange?.(true);setMessage("");
     try{const result=await api(lotId?`/${lotId}`:"/sheet-entry",{method:lotId?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...payload,idempotency_key:pending.current.key})});
       setVersion(result.version);setFacts(result.facts);setMessage(lotId?"适用资料已保存，库存数量未改变":"货物已入库");pending.current=null;
+      if(lotId&&result.lot_id!==lotId){setEditable(false);setMessage("已在原位置拆分新批次并修正资料；总数量不变，请重新选择新批次继续维护。");}
       if(!lotId){setQuantity("");setName("");}
       try{await onSaved();}catch{setMessage("已保存；地图刷新失败，请刷新核对后再操作");setEditable(false);}
     }catch(e){setMessage(e instanceof Error?e.message:"保存失败");}finally{saving.current=false;setBusy(false);onBusyChange?.(false);}
   };
-  return <section className="warehouse-goods"><h4>{lotId?"适用客户与加工资料":raw?"新增原材料（张）":"新增半成品（张）"}</h4>
+  return <section className="warehouse-goods"><h4>{lotId?"修正库存资料":raw?"新增原材料（张）":"新增半成品（张）"}</h4>
     {physical&&<p>{physical}</p>}
+    {lotId&&<p>原始来源客户：{facts.source_customer_name||options?.customers.find(c=>c.id===facts.source_customer_id)?.name||"未登记"}（保留原记录）</p>}
     {options&&<fieldset disabled={busy||!canSave||!editable}>
+      {lotId&&<div className="goods-fields"><label>当前库存名称<input maxLength={200} value={facts.display_name||""} onChange={e=>setFacts({...facts,display_name:e.target.value})}/></label><label>修正原因<input maxLength={500} value={correctionReason} onChange={e=>setCorrectionReason(e.target.value)}/></label><label>仅修正部分数量（留空为全部可用数量）<input type="number" min={1} step={1} value={correctionQuantity} onChange={e=>setCorrectionQuantity(e.target.value)}/></label><p>原来源客户和历史记录保留；部分修正会在原位置拆分批次，不调整库存总量。</p><label>同步更新常用箱<select value={syncProduct} onChange={e=>setSyncProduct(e.target.value)}><option value="">不修改常用箱（默认）</option>{options.products.filter(p=>facts.product_ids.includes(p.id)).map(p=><option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></label>{syncProduct&&<><button type="button" onClick={()=>void preview()}>预览常用箱同步影响</button>{impact&&<p>{impact.old_product_name} → {impact.new_product_name}；只改以后使用的主档名称，{impact.historical_order_lines}条历史订单快照保持不变。</p>}</>}</div>}
       {!lotId&&<div className="goods-fields"><label>货物名称<input value={name} maxLength={200} onChange={e=>setName(e.target.value)} placeholder={raw?"例如 B楞纸板":"例如 通用衬板 / 模切待印刷片"}/></label>
         <div className="goods-pair"><label>纸板长（mm）<input type="number" inputMode="numeric" step={1} min={1} value={length} onChange={e=>setLength(e.target.value)}/></label><label>纸板宽（mm）<input type="number" inputMode="numeric" step={1} min={1} value={width} onChange={e=>setWidth(e.target.value)}/></label></div>
         <div className="goods-pair"><label>纸张类型<select value={layer} onChange={e=>{const n=Number(e.target.value);setLayer(n);setFlute(n===1?"NONE":n===3?"B":n===5?"AB":"AAA");setFacts({...facts,verified_material_id:null,face_paper:n===1?"white":"kraft"});}}>{[1,3,5,7].map(n=><option key={n} value={n}>{n===1?"单层原纸 / 白卡":`${n}层瓦楞纸板`}</option>)}</select></label><label>楞型<select value={flute} disabled={layer===1} onChange={e=>setFlute(e.target.value)}>{(layer===1?["NONE"]:layer===3?["A","B","E"]:layer===5?["AB","BE"]:["AAA","ABC"]).map(v=><option key={v} value={v}>{v==="NONE"?"无楞":v}</option>)}</select></label></div>
@@ -82,9 +92,15 @@ export function WarehouseGoods({lotId,locationId,layoutVersion,raw=false,canSave
         <div className="goods-pair"><label>实际数量（张）<input type="number" inputMode="numeric" step={1} min={1} value={quantity} onChange={e=>setQuantity(e.target.value)}/></label><label>库存日期<input type="date" value={stockDate} onChange={e=>setStockDate(e.target.value)}/></label></div>
         <details><summary>片数换算与来源</summary><label>组件<select value={component} onChange={e=>setComponent(e.target.value)}><option value="whole">整片</option><option value="cover">盖片</option><option value="base">底片</option></select></label><label>每箱所需片数<input type="number" min={1} value={pieces} onChange={e=>setPieces(e.target.value)}/></label><label>每库存张产出片数<input type="number" min={1} value={yieldPerSheet} onChange={e=>setYield(e.target.value)}/></label><label>来源<select value={source} onChange={e=>setSource(e.target.value)}><option value="existing_stocktake">本厂现场盘点发现</option><option value="partner_transfer">合作纸箱厂搬入</option></select></label></details>
       </div>}
-      <FactsEditor facts={facts} setFacts={setFacts} options={options} raw={lotId?facts.processing==="raw":raw} flute={flute} canPrice={canSave&&!lotId} length={length} width={width} quantity={quantity}/>
+      {finished?<div className="goods-fields">
+        <label>库存用途<select value={facts.scope} onChange={e=>setFacts({...facts,scope:e.target.value as Facts["scope"],customer_ids:e.target.value==="general"?[]:facts.customer_ids})}><option value="general">通用</option><option value="customers">指定客户</option></select></label>
+        {facts.scope==="customers"&&<label>适用客户<select value={facts.customer_ids[0]||""} onChange={e=>setFacts({...facts,customer_ids:[Number(e.target.value)],product_ids:[]})}><option value="">请选择</option>{options.customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>}
+        <label>对应实际产品<input placeholder="按编码或名称筛选" value={finishedSearch} onChange={e=>setFinishedSearch(e.target.value)}/><select value={facts.product_ids[0]||""} onChange={e=>setFacts({...facts,product_ids:[Number(e.target.value)]})}><option value="">请选择</option>{options.products.filter(p=>(facts.scope==="general"||facts.customer_ids.includes(p.customer_id))&&(facts.product_ids.includes(p.id)||`${p.code} ${p.name}`.toLowerCase().includes(finishedSearch.toLowerCase()))).filter((p,i)=>i<80||facts.product_ids.includes(p.id)).map(p=><option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}</select></label>
+        <small>更换客户产品须有完全相同的冻结实物规格和工艺；不会更改成品尺寸、数量或成本。</small>
+        <label>盘点备注<textarea maxLength={1000} value={facts.note} onChange={e=>setFacts({...facts,note:e.target.value})}/></label>
+      </div>:<FactsEditor facts={facts} setFacts={setFacts} options={options} raw={lotId?facts.processing==="raw":raw} flute={flute} canPrice={canSave&&!lotId} length={length} width={width} quantity={quantity}/>}
       {!lotId&&facts.processing==="creased"&&<div className="goods-fields"><label>取用常用箱压线<input placeholder="客户、编码或名称" value={creaseSearch} onChange={e=>setCreaseSearch(e.target.value)}/><select value={facts.crease_product_id||""} onChange={e=>{const id=Number(e.target.value)||null;const p=options.products.find(p=>p.id===id);setFacts({...facts,crease_product_id:id});if(p){setCreaseLeft(String(p.crease_values[0]));setCreaseMiddle(String(p.crease_values[1]));setCreaseRight(String(p.crease_values[2]));}}}><option value="">选择模板（或下方实测）</option>{options.products.filter(p=>p.is_a1&&p.flute_type===flute&&p.crease_values.every(v=>v&&v>0)&&(facts.scope==="general"||facts.customer_ids.includes(p.customer_id))&&`${p.code} ${p.name} ${options.customers.find(c=>c.id===p.customer_id)?.name}`.toLowerCase().includes(creaseSearch.toLowerCase())).slice(0,80).map(p=><option key={p.id} value={p.id}>{options.customers.find(c=>c.id===p.customer_id)?.name} · {p.code} · {p.crease_values.join("+")}</option>)}</select></label><div className="goods-pair">{[["左翼",creaseLeft,setCreaseLeft],["中段高度",creaseMiddle,setCreaseMiddle],["右翼",creaseRight,setCreaseRight]].map(([label,value,setter])=><label key={String(label)}>{String(label)}（mm）<input type="number" inputMode="numeric" min={1} step={1} value={String(value)} onChange={e=>(setter as (s:string)=>void)(e.target.value)}/></label>)}</div><small>合计 {Number(creaseLeft)+Number(creaseMiddle)+Number(creaseRight)}mm / 板宽 {width||"—"}mm · {facts.dimension_source==="label"?"应相等":"测量差≤10mm"}</small></div>}
-      {canSave&&<button type="button" className="twin-primary-action" onClick={()=>void save()}>{busy?"保存中…":lotId?"保存适用资料":"确认增加库存"}</button>}
+      {canSave&&<button type="button" className="twin-primary-action" onClick={()=>void save()}>{busy?"保存中…":lotId?"保存资料修正":"确认增加库存"}</button>}
     </fieldset>}
     {!options&&!message&&<p>正在读取可选资料…</p>}{!editable&&<p>批次已预占或不可用，请解除相关预占后再维护用途。</p>}{message&&<p role="status">{message}</p>}
   </section>;

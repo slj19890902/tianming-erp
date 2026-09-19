@@ -35,7 +35,7 @@ def test_profile_manual_scope_replay_version_audit_and_no_stock_change(lot_db):
     m=material(db)
     facts=GoodsFacts(scope="customers",customer_ids=[data['customer'].id,data['other_product'].customer_id],
         material_confidence="confirmed",verified_material_id=m.id,processing="cut",usage_confirmed=True)
-    payload=GoodsUpdate(facts=facts,expected_version=lot.version,idempotency_key="goods-profile-save")
+    payload=GoodsUpdate(correction_reason="测试核实用途", facts=facts,expected_version=lot.version,idempotency_key="goods-profile-save")
     before=(lot.quantity_available,lot.quantity_reserved,lot.semi_finished_detail.material_code_snapshot,
         db.scalar(select(func.count()).select_from(InventoryMovement)))
     result=update_goods(lot.id,payload,db,user)
@@ -60,7 +60,7 @@ def test_profile_audit_failure_rolls_back(lot_db,monkeypatch):
         original(row)
     monkeypatch.setattr(db,'add',fail)
     with pytest.raises(RuntimeError):
-        update_goods(lot.id,GoodsUpdate(facts=GoodsFacts(processing="cut"),expected_version=1,idempotency_key="goods-fail-audit"),db,user)
+        update_goods(lot.id,GoodsUpdate(correction_reason="测试核实用途", facts=GoodsFacts(processing="cut"),expected_version=1,idempotency_key="goods-fail-audit"),db,user)
     db.refresh(lot)
     assert lot.version==1 and db.get(WarehouseGoodsProfile,lot.id) is None
 
@@ -84,7 +84,7 @@ def test_face_conflict_is_bidirectional_and_cannot_be_reserved(lot_db,white):
 def test_material_entry_does_not_require_extra_confidence_approval(lot_db):
     db,data,lot,user=prepare(lot_db)
     lot.semi_finished_detail.sheet_type='raw_board'
-    update_goods(lot.id,GoodsUpdate(facts=GoodsFacts(material_confidence='estimated',estimated_material='目测牛卡'),
+    update_goods(lot.id,GoodsUpdate(correction_reason="测试核实用途", facts=GoodsFacts(material_confidence='estimated',estimated_material='目测牛卡'),
         expected_version=1,idempotency_key='goods-estimated'),db,user)
     data['products'][1].report_length_mm=720;db.commit()
     items=candidate_items(db,lot)
@@ -119,11 +119,11 @@ def test_processed_goods_require_product_approval_and_multiple_customers(lot_db)
     facts=GoodsFacts(scope='customers',customer_ids=[product.customer_id],product_ids=[product.id],
         material_confidence='confirmed',verified_material_id=m.id,processing='die_cut',usage_confirmed=True,
         allow_material_substitution=True)
-    update_goods(lot.id,GoodsUpdate(facts=facts,expected_version=1,idempotency_key='goods-die-cut'),db,user)
+    update_goods(lot.id,GoodsUpdate(correction_reason="测试核实用途", facts=facts,expected_version=1,idempotency_key='goods-die-cut'),db,user)
     assert not qualification_issues(db,lot,product)
     assert '不在已确认的适用客户范围' in qualification_issues(db,lot,other)
     facts.customer_ids.append(other.customer_id);facts.product_ids.append(other.id)
-    update_goods(lot.id,GoodsUpdate(facts=facts,expected_version=2,idempotency_key='goods-second-customer'),db,user)
+    update_goods(lot.id,GoodsUpdate(correction_reason="测试核实用途", facts=facts,expected_version=2,idempotency_key='goods-second-customer'),db,user)
     assert not qualification_issues(db,lot,other)
     assert '不在已确认的适用产品范围' in qualification_issues(db,lot,data['products'][1])
 
@@ -206,7 +206,7 @@ def test_reserved_profile_and_api_permissions(lot_db):
     from app.api.deps import get_db, get_current_user
     db,data,lot,user=prepare(lot_db)
     lot.quantity_reserved=1;db.commit()
-    payload=GoodsUpdate(facts=GoodsFacts(processing='cut'),expected_version=1,idempotency_key='goods-reserved')
+    payload=GoodsUpdate(correction_reason="测试核实用途", facts=GoodsFacts(processing='cut'),expected_version=1,idempotency_key='goods-reserved')
     with pytest.raises(HTTPException) as error:update_goods(lot.id,payload,db,user)
     assert error.value.status_code==409
     app=FastAPI();app.include_router(router,prefix='/goods')
@@ -224,7 +224,7 @@ def test_migration_cannot_drop_usage_history(lot_db):
     import importlib.util
     from pathlib import Path
     db,data,lot,user=prepare(lot_db)
-    update_goods(lot.id,GoodsUpdate(facts=GoodsFacts(processing='cut'),expected_version=1,idempotency_key='goods-history'),db,user)
+    update_goods(lot.id,GoodsUpdate(correction_reason="测试核实用途", facts=GoodsFacts(processing='cut'),expected_version=1,idempotency_key='goods-history'),db,user)
     path=Path(__file__).parents[1]/'alembic/versions/rv10v8x9z70_warehouse_goods_profiles.py'
     spec=importlib.util.spec_from_file_location('goods_migration',path)
     migration=importlib.util.module_from_spec(spec);spec.loader.exec_module(migration)

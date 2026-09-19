@@ -73,7 +73,7 @@ export function MaterialCandidates({lotId, canSave, onSaved}:{lotId:number;canSa
           {canSave&&<button type="button" disabled={busy||!data.editable} onClick={()=>void save()}>{busy?"处理中…":"保存候选用途"}</button>}</div>
         {data.saved_at&&<small>已保存 {data.saved.length} 款 · {data.saved_at.replace("T"," ").slice(0,16)}</small>}
       </>}
-      {canSave&&<details><summary>人工维护适用客户、材质和加工资料</summary><WarehouseGoods key={lotId} lotId={lotId} canSave={canSave} onSaved={async()=>{await onSaved();await load();}} /></details>}
+      {canSave&&<details><summary>修正资料（名称、用途、客户、备注）</summary><WarehouseGoods key={lotId} lotId={lotId} canSave={canSave} onSaved={async()=>{await onSaved();await load();}} /></details>}
       {busy&&!data&&<p role="status">正在匹配…</p>}
       {message&&<p role="status">{message}</p>}
       <button type="button" className="twin-detail-toggle secondary" disabled={busy} onClick={()=>void load()}>重新读取匹配与已保存用途</button>

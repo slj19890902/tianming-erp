@@ -596,7 +596,24 @@ def receipt_purpose_summaries_by_order_item_ids(
             / Decimal(pieces_per_finished)
         )
 
+    from app.models.warehouse_inventory import InventoryLot
+    from app.services.unfinished_components import unfinished_reservations
+    import json
+    unfinished_items={r.order_item_id for r,_,_ in unfinished_reservations(db,normalized_ids)}
+    manual_by_item={}
+    for completion,encoded,root_product_id in db.execute(select(ProductionCompletion,InventoryLot.cost_snapshot_detail_json,OrderItem.product_id)
+            .join(InventoryLot,InventoryLot.id==ProductionCompletion.inventory_lot_id)
+            .join(OrderItem,OrderItem.id==ProductionCompletion.order_item_id)
+            .where(ProductionCompletion.order_item_id.in_(normalized_ids),ProductionCompletion.status=='posted',ProductionCompletion.origin=='manual')):
+        detail=json.loads(encoded or '{}')
+        if detail.get('component_processing_confirmation') and detail.get('processing_product_id')==root_product_id:
+            manual_by_item.setdefault(completion.order_item_id,[]).append(completion)
     for order_item_id, summary in summaries.items():
+        manual_rows=manual_by_item.get(order_item_id,[])
+        summary['manual_processing_output_qty']=sum(r.actual_output_quantity for r in manual_rows)
+        summary['manual_processing_reserved_qty']=sum(r.order_reserved_quantity for r in manual_rows)
+        summary['manual_processing_surplus_qty']=sum(r.surplus_finished_quantity for r in manual_rows)
+        summary['requires_component_processing']=order_item_id in unfinished_items
         from app.models.multilevel_bom import OrderBomGraph
         if db.get(OrderBomGraph, order_item_id) is not None:
             from app.services.multilevel_bom_receipt_projection import project_graph_receipts
@@ -692,14 +709,17 @@ def receipt_purpose_summaries_by_order_item_ids(
             summary["automatic_order_reserved_quantity"] = posted_order_reserved
             summary["automatic_surplus_finished_quantity"] = posted_surplus
         automatic_output = int(summary["automatic_finished_output_qty"])
-        currently_unposted = max(theoretical_capacity - automatic_output, 0)
-        automatic_output_exceeds_capacity = automatic_output > theoretical_capacity
+        combined_output=automatic_output+summary['manual_processing_output_qty']
+        unposted_capacity=max(theoretical_capacity-combined_output,0)
+        summary['pending_processing_quantity']=unposted_capacity if summary['requires_component_processing'] else 0
+        currently_unposted = 0 if summary['requires_component_processing'] else unposted_capacity
+        automatic_output_exceeds_capacity = combined_output > theoretical_capacity
         summary.update(
             {
                 "current_theoretical_finished_capacity_qty": theoretical_capacity,
                 "currently_unposted_finished_capacity_qty": currently_unposted,
                 "future_planned_finished_capacity_qty": max(
-                    planned_capacity - automatic_output,
+                    planned_capacity - combined_output,
                     0,
                 ),
                 "remaining_order_purpose_sheet_qty": sum(

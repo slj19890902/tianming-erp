@@ -139,6 +139,15 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
         raise SubkitError("组套材料完工成本来源无效")
     identity = _same_output(db, lot, original)
     detail = json.loads(original.cost_snapshot_detail_json or "{}")
+    if detail.get('component_processing_confirmation'):
+        from app.models.order import OrderItem
+        from app.services.component_processing import material_sources
+        if detail.get('processing_product_id') != identity[0]:
+            raise SubkitError('专用部件加工成本产品身份不一致')
+        rows, _ = material_sources(db, db.get(OrderItem, completion.order_item_id), identity[0], detail['bom_material_inputs'])
+        if rows is not None and sum((r['amount'] for r in rows), Decimal(0)) != _amount(detail['capitalized_material_cost']):
+            raise SubkitError('专用部件加工成本不守恒')
+        return rows
     if "bom_material_product_id" not in detail:
         return None
     if detail["bom_material_product_id"] != identity[0]:

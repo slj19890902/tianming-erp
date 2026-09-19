@@ -18,7 +18,7 @@ def is_graph_output(lot):
         return "bom_return_cost" in json.loads(lot.cost_snapshot_detail_json or "{}")
     return source_type in ("bom_assembly", "bom_external_receipt") or (
         source_type == "production_completion"
-        and "bom_material_product_id" in json.loads(lot.cost_snapshot_detail_json or "{}"))
+        and any(key in json.loads(lot.cost_snapshot_detail_json or "{}") for key in ('bom_material_product_id', 'component_processing_confirmation')))
 
 
 def freeze_graph_delivery_cost(db, *, allocation, lot, operator_id, unordered=False):

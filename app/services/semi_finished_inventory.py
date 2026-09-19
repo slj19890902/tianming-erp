@@ -607,6 +607,12 @@ def _customer_generic_crease_direction(
         return "blocked"
     # A die-cut shape is evaluated by product/mold identity, not raw-board crease coordinates.
     profile = goods_profile(db, db.get(InventoryLot, detail.inventory_lot_id))
+    if profile and profile.get("processing") == "dedicated_component":
+        product = db.get(Product,_requirement_product_id(db,requirement))
+        matched = processed_match(db,db.get(InventoryLot,detail.inventory_lot_id),product,requirement_signature(requirement))
+        actual = (_normalize_crease_type(detail.crease_type),detail.crease_left_mm,detail.crease_middle_mm,detail.crease_right_mm)
+        frozen = (expected_type,expected_left,expected_middle,expected_right)
+        return "compatible" if matched and actual == frozen else "blocked"
     if profile and profile.get("processing") == "die_cut":
         return "compatible"
     if profile and profile.get("processing") == "creased":
@@ -690,7 +696,7 @@ def _lot_eligibility_scope(
     if product is not None and processed_match(db, lot, product, expected):
         return "customer_generic"
     profile = goods_profile(db, lot)
-    if detail.sheet_type == "creased_sheet" or (profile and profile.get("processing") in {"die_cut", "printed", "creased"}):
+    if detail.sheet_type == "creased_sheet" or (profile and profile.get("processing") in {"die_cut", "printed", "creased", "dedicated_component"}):
         return None
     if product is not None and rectangular_cut_plan(db, lot, product, expected):
         return "customer_generic"
@@ -750,7 +756,7 @@ def ensure_semi_finished_lot_eligibility(
             raise WarehouseInventoryError("加工片料用途待确认：请管理员在库存用途维护确认具体产品、模具及加工状态，不能仅按尺寸采用", 409)
         return "customer_generic"
     profile = goods_profile(db, lot)
-    if detail.sheet_type == "creased_sheet" or (profile and profile.get("processing") in {"die_cut", "printed", "creased"}):
+    if detail.sheet_type == "creased_sheet" or (profile and profile.get("processing") in {"die_cut", "printed", "creased", "dedicated_component"}):
         raise WarehouseInventoryError("加工片料用途或模具版本不符，请先核对原加工记录", 409)
     if rectangular_cut_plan(db, lot, product, expected):
         return "customer_generic"

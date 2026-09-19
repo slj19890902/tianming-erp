@@ -46,7 +46,7 @@ def qualification_issues(db, lot, product, profile=None, expected_material_code=
         issues.append("不在已确认的适用客户范围")
     if profile["product_ids"] and product.id not in profile["product_ids"]:
         issues.append("不在已确认的适用产品范围")
-    if profile["processing"] in {"die_cut", "printed", "creased"} and product.id not in profile["product_ids"]:
+    if profile["processing"] in {"die_cut", "printed", "creased", "dedicated_component"} and product.id not in profile["product_ids"]:
         issues.append("加工过的片料须逐款确认可用产品")
     if profile["mold_tool_id"] and product.mold_tool_id != profile["mold_tool_id"]:
         issues.append("模具不同或产品未登记模具")

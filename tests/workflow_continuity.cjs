@@ -1,0 +1,33 @@
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
+const listeners={};let focused=false;const main={scrollTop:240};const body={};
+const row={dataset:{workflowRow:'order:12'},focus(){focused=true}};
+const document={body,activeElement:body,querySelector:()=>main,querySelectorAll:()=>[row],addEventListener:(name,fn)=>listeners[name]=fn,removeEventListener:name=>delete listeners[name]};
+const box={console,document};vm.createContext(box);
+vm.runInContext(fs.readFileSync('static/ui/workflow-continuity.js','utf8'),box);
+const api=box.ERPWorkflowContinuity;let mixin;api.install({mixin:m=>mixin=m});
+const root={activePage:'orders',user:{id:1},filters:{orderKeyword:'KEEP'},pages:{orders:3},orderEditForm:{customer_po:'PO1',remark:''},$nextTick:fn=>fn(),...mixin.data.call({})};
+Object.assign(root,mixin.methods);mixin.mounted.call(root);
+root.selectWorkflowRow('order:12');assert(root.workflowRowSelected('order:12'));
+mixin.watch['modal.type'].call(root,'orderEdit',undefined);
+assert.equal(mixin.computed.workflowStatus.call({...root,modal:{type:'orderEdit'}}).label,'编辑中');
+root.orderEditForm.remark='changed';assert.equal(mixin.computed.workflowStatus.call({...root,modal:{type:'orderEdit'}}).label,'有未保存修改');
+main.scrollTop=0;mixin.watch['modal.type'].call(root,undefined,'orderEdit');assert.equal(main.scrollTop,240);assert(focused);assert.equal(root.filters.orderKeyword,'KEEP');assert.equal(root.pages.orders,3);
+assert.equal(api.status('orderDetail').label,'只读查看');assert.equal(api.status('orderEdit',{saving:true},true).label,'正在保存');
+assert.equal(api.status('delivery',{committed:true}).label,'已保存');
+assert.equal(api.status('supplierRequisitionDraft',{uncertain:true}).label,'结果待确认');
+assert.equal(api.status('orderEdit',{outcomeUncertain:true,committed:true,result:{succeeded_ids:[1],failed_ids:[2]}}).label,'结果待确认');
+assert.equal(api.status('orderEdit',{committed:true,result:{succeeded_ids:[1],failed_ids:[2]}}).label,'部分已保存');
+assert.equal(api.fingerprint({items:[{quantity:10,_inventory:{version:1},estimated_cost:2}]}),api.fingerprint({items:[{quantity:10,_inventory:{version:9},estimated_cost:8}]}));
+assert.notEqual(api.fingerprint({items:[{quantity:10}]}),api.fingerprint({items:[{quantity:11}]}));
+assert.notEqual(api.fingerprint({lines:[{delivered_quantity:10,remarks:'A'}]}),api.fingerprint({lines:[{delivered_quantity:11,remarks:'B'}]}));
+assert.notEqual(api.fingerprint({supplier_groups:[{items:[{purchase_total_sheet_qty:500}]}]}),api.fingerprint({supplier_groups:[{items:[{purchase_total_sheet_qty:600}]}]}));
+assert.match(mixin.computed.workflowSourceHint.call({modal:{type:'orderItem'},orderItemForm:{sync_product:true}}),/已勾选同步常用箱/);
+for(const page of ['requisition','incoming','deliveries']){root.activePage=page;root.selectWorkflowRow(page+':1');assert(root.workflowRowSelected(page+':1'));assert(!root.workflowRowSelected('order:12'));}
+root.workflowReturn={scope:api.scope(root),actor:1,top:120};root.user.id=2;mixin.watch['user.id'].call(root);assert.equal(Object.keys(root.workflowSelection).length,0);assert.equal(root.workflowReturn,null);
+mixin.beforeUnmount.call(root);assert.equal(Object.keys(listeners).length,0);
+// Compile the status ribbon extracted from the real Vue template.
+const compileBox={console};vm.createContext(compileBox);vm.runInContext(fs.readFileSync('static/vendor/vue-3.5.40.global.prod.js','utf8'),compileBox);
+const html=fs.readFileSync('static/index.html','utf8');
+const template=html.slice(html.indexOf('<div v-if="workflowStatus"')).split('</div>')[0]+'</div>';
+const errors=[];compileBox.Vue.compile(template,{onError:e=>errors.push(String(e))});assert.deepEqual(errors,[]);
+console.log('PASS: real template, row continuity, dirty fields, save states, partial results, identity cleanup');

@@ -257,6 +257,8 @@ def release_stock_sources(db, purchase, user):
             IncomingReceiptItem.status == "posted").limit(1))
         if receipt or item.stocked_quantity or item.inventory_lot_id:
             raise HTTPException(409, "补库来源已有实际收货或库存事实，请先撤销对应来料")
+        from app.services.raw_purchase_plans import void_unreceived_plan
+        void_unreceived_plan(db,item.id,user)
         link.status = "voided"
     db.flush()
 

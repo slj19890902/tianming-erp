@@ -73,11 +73,13 @@ def return_graph_sources(db, lot):
             or lot.finished_detail.owner_customer_id != source.finished_detail.owner_customer_id
             or lot.finished_detail.physical_basis_json != source.finished_detail.physical_basis_json):
         raise SubkitError("退回批次与原发货成本身份不一致")
-    portions = list(db.scalars(select(Portion).where(Portion.fact_id == fact.id).order_by(Portion.ordinal)))
+    from app.services.graph_delivery_cost import cost_portions
+    portions = cost_portions(db,[fact.id])
     if not portions or sum(row.charged_cost for row in portions) != fact.total_cost:
         raise SubkitError("退回成本缺少原采购份额")
     rows = [dict(purchase_receipt_fact_id=row.purchase_receipt_fact_id,
         allocation_id=row.purpose_allocation_id, external_receipt_item_id=row.external_receipt_item_id,
+        raw_receipt_allocation_id=getattr(row,'raw_receipt_allocation_id',None),
         amount=cost_slice(row.full_output_cost, fact.source_quantity, data["offset"], data["quantity"]),
         currency=fact.currency, tax_included=row.tax_included, tax_rate=row.tax_rate) for row in portions]
     return data["quantity"], rows

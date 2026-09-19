@@ -2772,13 +2772,15 @@ def consume_semi_finished_reservation(
                     or (frozen_plan.get("source_length_mm"), frozen_plan.get("source_width_mm")) != (detail.board_length_mm, detail.board_width_mm)
                     or (frozen_plan.get("target_length_mm"), frozen_plan.get("target_width_mm")) != (requirement.board_length_mm, requirement.board_width_mm)):
                 raise WarehouseInventoryError("裁切分配资料已变化，请核对冻结方案", 409)
-        ensure_semi_finished_lot_eligibility(
-            db,
-            lot=lot,
-            product_id=requirement_product_id,
-            customer_id=order.customer_id,
-            expected=requirement_signature(requirement),
-        )
+        from app.services.raw_purchase_plans import validate_reservation
+        if not validate_reservation(db,reservation,lot,requirement,delivery=delivery_item_id is not None):
+            ensure_semi_finished_lot_eligibility(
+                db,
+                lot=lot,
+                product_id=requirement_product_id,
+                customer_id=order.customer_id,
+                expected=requirement_signature(requirement),
+            )
         if lot.version != expected_version:
             raise WarehouseInventoryError("库存已被其他人修改，请刷新后重试", 409)
         before = _balances(lot)

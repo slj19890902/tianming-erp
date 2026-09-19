@@ -60,11 +60,13 @@ def plan_processing(db,item_id,product_id):
     else:
         from app.services.box_type_rules import get_box_type_rule
         product=db.get(Product,product_id)
-        if product_id!=item.product_id or not product or not (rule:=get_box_type_rule(product.box_style)) or rule.code!='a3_set':
+        raw_case=any(profile.get('raw_purchase_plan_id') for _,_,profile in pending)
+        if product_id!=item.product_id or not product or not (rule:=get_box_type_rule(product.box_style)) or (rule.code!='a3_set' and not raw_case):
             raise SubkitError('专用部件加工请选择本订单天地盖产品')
         if any(s.source_bom_requisition_source_id for s in snapshots):
             raise SubkitError('旧组合订单请先完成既有BOM受控转换，再确认专用部件加工')
-        sources={'cover':[],'base':[]};per={'cover':1,'base':1}
+        routes=('cover','base') if rule.code=='a3_set' else ('whole',)
+        sources={r:[] for r in routes};per={r:1 for r in routes}
         reservations=db.execute(select(InventoryReservation,OrderItemSemiRequirement,InventoryLot)
             .join(OrderItemSemiRequirement,OrderItemSemiRequirement.id==InventoryReservation.semi_requirement_id)
             .join(InventoryLot,InventoryLot.id==InventoryReservation.inventory_lot_id)
@@ -80,7 +82,8 @@ def plan_processing(db,item_id,product_id):
             factor=int(reservation.yield_factor or 0)
             if factor<=0 or pieces>sheets*factor: raise SubkitError('预占片数与出数不一致')
             per[route]=requirement.pieces_per_box
-            sources[route].append(dict(kind='reservation',id=reservation.id,quantity=pieces,total_cost=lot.estimated_unit_cost_snapshot*sheets,
+            from app.services.raw_purchase_plans import reservation_cost
+            sources[route].append(dict(kind='reservation',id=reservation.id,quantity=pieces,total_cost=reservation_cost(db,reservation,lot.estimated_unit_cost_snapshot*sheets),
                 factor=factor,consumed=reservation.consumed_stock_quantity,lot_id=lot.id))
         by_id={s.id:s for s in snapshots}
         for allocation in allocations:
@@ -144,6 +147,10 @@ def material_sources(db, item, product_id, inputs):
             if not reservation or reservation.order_item_id != item.id or reservation.inventory_lot_id != entry['lot_id']:
                 raise SubkitError('加工库存成本来源身份无效')
             lot = db.get(InventoryLot, entry['lot_id'])
+            from app.services.raw_purchase_plans import raw_cost_source
+            raw_source=raw_cost_source(db,reservation,entry,amount,product_id)
+            if raw_source:
+                rows.append(raw_source);currencies.add(raw_source['currency']);continue
             resolved = resolve_lot_actual_material_cost(db, lot)
             if resolved is None:
                 complete = False
@@ -185,7 +192,7 @@ def preview_processing(db,*,order_item_id,product_id):
         profiles=[p[2] for p in pending],allocations=[_row(a) for a in allocations],target=_row(target.location),targets={pid:_row(location) for pid,location in targets.items()},map_hash=_map_hash())
     return dict(product_id=product_id,quantity=plan['after']-plan['before'],unit='只',estimated_cost=str(plan['total_cost']),ready=True,
         reviewed_hash=digest(document),source_locations={lid:l.warehouse_location_id for lid,l in lots.items()},
-        production_location=dict(id=target.location.id,name=target.location.location_name),target_locations={pid:loc.id for pid,loc in targets.items()},target_names={pid:loc.location_name for pid,loc in targets.items()},remaining_processes=['打钉'],map_hash=document['map_hash'])
+        production_location=dict(id=target.location.id,name=target.location.location_name),target_locations={pid:loc.id for pid,loc in targets.items()},target_names={pid:loc.location_name for pid,loc in targets.items()},remaining_processes=['按原订单完成裁切、压线、开槽及成型'] if any(p[2].get('raw_purchase_plan_id') for p in pending) else ['打钉'],map_hash=document['map_hash'])
 
 
 def confirm_processing(db,*,order_item_id,product_id,reviewed_hash,operation_key,actor):
@@ -208,7 +215,7 @@ def confirm_processing(db,*,order_item_id,product_id,reviewed_hash,operation_key
         item,graph,plan,pending,allocations=plan_processing(db,order_item_id,product_id)
         completion=post_automatic_receipt_completion(db,order_item_id=order_item_id,previous_theoretical_quantity=plan['before'],new_theoretical_quantity=plan['after'],
             material_input_delta=max(1,sum(e.get('stock_after',0)-e.get('stock_before',0) for e in plan['detail']['bom_material_inputs'])),
-            material_input_cumulative=max(1,sum(a.receipt_order_purpose_sheet_qty for a in allocations)),operator_id=actor.id,idempotency_key=key,
+            material_input_cumulative=max(1,sum(a.receipt_order_purpose_sheet_qty for a in allocations),sum(db.get(InventoryReservation,e['id']).reserved_stock_quantity for e in plan['detail']['bom_material_inputs'] if e['kind']=='reservation')),operator_id=actor.id,idempotency_key=key,
             capitalized_material_cost=plan['total_cost'],cost_detail={**plan['detail'],'processing_request_hash':request},
             bom_snapshot_id=graph.snapshot.id if graph else None,processing_manual=True)
         if completion.warehouse_location_id!=preview['production_location']['id']: raise SubkitError('加工入库位置已变化')

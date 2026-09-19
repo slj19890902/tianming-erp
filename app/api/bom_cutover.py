@@ -130,7 +130,7 @@ class UnstartedExecute(UnstartedPreview):
     rule_revision: int | None = Field(default=None, ge=0, strict=True)
 
 
-def _access(db, user, item_id):
+def _access(db, user, item_id, *, allow_raw_processing=False):
     db.refresh(user)
     if user.role != "admin" or not user.is_active:
         raise HTTPException(403, "仅活动管理员可执行此操作")
@@ -139,6 +139,9 @@ def _access(db, user, item_id):
     if order is None:
         raise HTTPException(404, "订单明细不存在")
     require_customer_access(order.customer_id, user, db)
+    if not allow_raw_processing:
+        from app.services.raw_purchase_plans import assert_no_plan
+        assert_no_plan(db,[item_id])
     return order.customer_id
 
 
@@ -351,7 +354,7 @@ def execute_unstarted(item_id: int, payload: UnstartedExecute, db: Session = Dep
 
 @router.get('/items/{item_id}/component-processing')
 def list_component_processing(item_id:int,db:Session=Depends(get_db),user:User=Depends(can_confirm_production)):
-    _access(db,user,item_id)
+    _access(db,user,item_id,allow_raw_processing=True)
     from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
     from app.services.unfinished_components import unfinished_reservations
@@ -368,7 +371,7 @@ def list_component_processing(item_id:int,db:Session=Depends(get_db),user:User=D
 
 @router.post('/items/{item_id}/component-processing/preview')
 def preview_component_processing(item_id:int,payload:SemiProductionPreview,db:Session=Depends(get_db),user:User=Depends(can_confirm_production)):
-    _access(db,user,item_id)
+    _access(db,user,item_id,allow_raw_processing=True)
     from app.services.component_processing import preview_processing
     from app.services.production_workflow import ProductionWorkflowError
     try:
@@ -379,7 +382,7 @@ def preview_component_processing(item_id:int,payload:SemiProductionPreview,db:Se
 
 @router.post('/items/{item_id}/component-processing/execute',dependencies=[Depends(can_execute_inventory)])
 def confirm_component_processing(item_id:int,payload:SemiProductionExecute,db:Session=Depends(get_db),user:User=Depends(can_confirm_production)):
-    _access(db,user,item_id)
+    _access(db,user,item_id,allow_raw_processing=True)
     from app.services.component_processing import confirm_processing
     from app.services.production_workflow import ProductionWorkflowError
     try:
@@ -393,7 +396,7 @@ def confirm_component_processing(item_id:int,payload:SemiProductionExecute,db:Se
 
 @router.post('/items/{item_id}/component-processing/{completion_id}/revert',dependencies=[Depends(can_execute_inventory)])
 def revert_component_processing(item_id:int,completion_id:int,db:Session=Depends(get_db),user:User=Depends(can_confirm_production)):
-    _access(db,user,item_id)
+    _access(db,user,item_id,allow_raw_processing=True)
     from app.services.component_processing import reverse_processing
     from app.services.production_workflow import ProductionWorkflowError
     try:

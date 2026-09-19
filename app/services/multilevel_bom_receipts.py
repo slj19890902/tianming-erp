@@ -91,6 +91,7 @@ def node_receipt_plan(db, context, *, snapshots, allocations, current_snapshot,
     may wait for another A3 route; its unused material/cost stays uncapitalized.
     Extra cut pieces can complete a later increment without buying them again.
     """
+    from app.services.raw_purchase_plans import reservation_cost
     by_id = {s.id: s for s in node_purpose_snapshots(db, context, snapshots)}
     sources = {r.key: [] for r in context.node.routes}
     # A graph reserve always has an unambiguous frozen physical route. Reject
@@ -117,7 +118,7 @@ def node_receipt_plan(db, context, *, snapshots, allocations, current_snapshot,
         if factor <= 0 or pieces > sheets * factor:
             raise SubkitError("BOM备料预占物理片数与开料出数不一致")
         sources[route].append({"kind": "reservation", "id": reservation.id, "quantity": pieces,
-            "total_cost": lot.estimated_unit_cost_snapshot * sheets, "currency": "", "actual": False,
+            "total_cost": reservation_cost(db,reservation,lot.estimated_unit_cost_snapshot * sheets), "currency": "", "actual": False,
             "yield": factor, "stock_quantity": sheets, "consumed_stock": reservation.consumed_stock_quantity,
             "lot_id": lot.id})
     for allocation in sorted(allocations, key=lambda a: a.id):

@@ -8675,6 +8675,10 @@ def _create_supplier_order_for_pending_entries(
     entries: list[dict],
     user: User,
 ) -> SupplierRequisitionOrder:
+    from app.services.raw_purchase_plans import assert_no_plan
+    from app.services.production_workflow import lock_order_rows_for_production_transition
+    lock_order_rows_for_production_transition(db,sorted({entry['order_item'].order_id for entry in entries}))
+    assert_no_plan(db,[entry['order_item'].id for entry in entries])
     supplier_name = _require_active_supplier(db, supplier_name)
     first = entries[0]
     first_item: OrderItem = first["order_item"]
@@ -9408,6 +9412,8 @@ def _pending_requisition_candidates(
             OrderItem.is_force_closed.is_(False),
         )
     )
+    from app.services.raw_purchase_plans import active_order_items
+    base_query=base_query.where(~OrderItem.id.in_(active_order_items()))
     if merged_order_item_ids:
         base_query = base_query.where(~OrderItem.id.in_(merged_order_item_ids))
     if held_order_item_ids:
@@ -12533,6 +12539,11 @@ def _create_batch_locked(
         supplier_name = (payload.supplier_name or "").strip()
         if supplier_name:
             supplier_name = _require_active_supplier(db, supplier_name)
+        from app.services.raw_purchase_plans import assert_no_plan
+        from app.services.production_workflow import lock_order_rows_for_production_transition
+        raw_item_ids=[line.order_item_id for line in payload.items]
+        lock_order_rows_for_production_transition(db,list(db.scalars(select(OrderItem.order_id).where(OrderItem.id.in_(raw_item_ids)))))
+        assert_no_plan(db,raw_item_ids)
         batch = Requisition(
             requisition_number=_next_number(db, requisition_date),
             request_key=request_key,
@@ -17510,6 +17521,9 @@ def _supplier_order_purchase_lines(
 
 
 def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
+    from app.models.raw_purchase_plan import RawPurchasePlan
+    from app.services.raw_purchase_plans import describe as describe_raw_plan
+    raw_plans = [describe_raw_plan(db,p) for p in db.scalars(select(RawPurchasePlan).where(RawPurchasePlan.supplier_order_id==order.id))]
     material = db.get(Material, order.material_id) if order.material_id else None
     material_code = material.code if material else None
     material_layer_count = order.layer_count or (material.layer_count if material else None)
@@ -17534,6 +17548,7 @@ def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
         "order_number": order.order_number,
         "supplier_name": order.supplier_name,
         "sender": _company_sender(db),
+        "raw_purchase_plans": raw_plans,
         "material_id": order.material_id,
         "material_code": _clean_supplier_material_code(material_code, material_layer_count),
         "material_display": _format_supplier_material(
@@ -23299,3 +23314,6 @@ def void_supplier_order(
         raise
     db.refresh(order)
     return _supplier_order_dict(order, db)
+
+from app.api.raw_purchase_plans import router as raw_purchase_router
+router.include_router(raw_purchase_router)

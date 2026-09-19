@@ -4873,6 +4873,10 @@ def _unlink_predelivery_order_bindings(
 
 def _order_flow_dependencies(db: Session, order_ids: list[int]) -> list[str]:
     labels: list[str] = []
+    from app.models.raw_purchase_plan import RawPurchaseDemand
+    if db.scalar(select(RawPurchaseDemand.id).join(OrderItem,OrderItem.id==RawPurchaseDemand.order_item_id)
+            .where(OrderItem.order_id.in_(order_ids)).limit(1)):
+        labels.append('统一原片采购及分配历史')
     if db.scalar(
         select(func.count())
         .select_from(ExternalPackagingPurchaseItem)
@@ -5490,7 +5494,10 @@ def _lock_orders_for_production_transition(
     order_ids: list[int],
 ) -> dict[int, Order]:
     try:
-        return lock_order_rows_for_production_transition(db, order_ids)
+        locked=lock_order_rows_for_production_transition(db, order_ids)
+        from app.services.raw_purchase_plans import assert_no_plan
+        assert_no_plan(db,list(db.scalars(select(OrderItem.id).where(OrderItem.order_id.in_(order_ids)))))
+        return locked
     except ProductionWorkflowError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
@@ -6526,6 +6533,11 @@ _INACTIVE_REQUISITION_STATUSES = {
 
 
 def _component_has_active_requisition(db: Session, snapshot_id: int) -> bool:
+    from app.models.raw_purchase_plan import RawPurchaseDemand
+    from app.models.warehouse_inventory import OrderItemSemiRequirement
+    if db.scalar(select(RawPurchaseDemand.id).join(OrderItemSemiRequirement,OrderItemSemiRequirement.id==RawPurchaseDemand.requirement_id)
+            .where(OrderItemSemiRequirement.sales_order_item_bom_component_id==snapshot_id,RawPurchaseDemand.status=='active').limit(1)):
+        return True
     return (
         db.scalar(
             select(RequisitionItemBomSource.id)
@@ -8158,6 +8170,7 @@ def update_order_item(
     require_customer_access(
         order_for_scope.customer_id, current_user=user, db=db
     )
+    _lock_orders_for_production_transition(db,[item.order_id])
     require_order_mold_repair_confirmation(
         db,
         product_ids=[item.product_id] if item.product_id else [],

@@ -63,6 +63,11 @@ def freeze_graph_delivery_cost(db, *, allocation, lot, operator_id, unordered=Fa
     db.add(fact)
     db.flush()
     for index, (row, amount) in enumerate(zip(rows, amounts)):
+        if row.get('raw_receipt_allocation_id'):
+            from app.models.raw_purchase_plan import RawPurchaseDeliveryCostPortion
+            db.add(RawPurchaseDeliveryCostPortion(fact_id=fact.id,ordinal=index,raw_receipt_allocation_id=row['raw_receipt_allocation_id'],
+                full_output_cost=row['amount'],charged_cost=amount,tax_included=row['tax_included'],tax_rate=row['tax_rate']))
+            continue
         db.add(Portion(fact_id=fact.id, ordinal=index, purchase_receipt_fact_id=row.get("purchase_receipt_fact_id"),
             purpose_allocation_id=row.get("allocation_id"), external_receipt_item_id=row.get("external_receipt_item_id"),
             full_output_cost=row["amount"], charged_cost=amount,
@@ -71,10 +76,18 @@ def freeze_graph_delivery_cost(db, *, allocation, lot, operator_id, unordered=Fa
     return fact
 
 
+def cost_portions(db,fact_ids):
+    from app.models.raw_purchase_plan import RawPurchaseDeliveryCostPortion
+    if not fact_ids:return []
+    rows=list(db.scalars(select(Portion).where(Portion.fact_id.in_(fact_ids))))
+    rows+=list(db.scalars(select(RawPurchaseDeliveryCostPortion).where(RawPurchaseDeliveryCostPortion.fact_id.in_(fact_ids))))
+    return sorted(rows,key=lambda row:(row.fact_id,row.ordinal))
+
+
 def graph_cost_report_sources(db, delivery_item_ids):
     facts = list(db.scalars(select(Fact).where(Fact.delivery_item_id.in_(delivery_item_ids)).order_by(Fact.id))) if delivery_item_ids else []
     portions = {}
-    for row in db.scalars(select(Portion).where(Portion.fact_id.in_([f.id for f in facts])).order_by(Portion.ordinal)) if facts else []:
+    for row in cost_portions(db,[f.id for f in facts]):
         portions.setdefault(row.fact_id, []).append(row)
     return {("unordered_inventory_allocation" if f.unordered_allocation_id else "inventory_allocation",
              f.unordered_allocation_id or f.delivery_inventory_allocation_id): (f, portions.get(f.id, [])) for f in facts}

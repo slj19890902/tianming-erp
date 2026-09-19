@@ -5160,7 +5160,7 @@ def post_automatic_receipt_completion(
         initial_disposition="stock" if is_assembly_body else "direct",
         warehouse_location_id=location.id,
         inventory_lot_id=None,
-        remarks="确认专用盖底打钉完成" if processing_manual else "确认半成品预占加工完成" if semi_only else "收料后按冻结订单用途自动形成理论成品",
+        remarks="确认按冻结订单要求完成部件加工" if processing_manual else "确认半成品预占加工完成" if semi_only else "收料后按冻结订单用途自动形成理论成品",
         completed_by=operator_id,
         completed_at=now,
     )
@@ -6161,6 +6161,8 @@ def _receipt_managed_completion_block(
     automatic_output: int,
 ) -> tuple[str, str]:
     if summary.get('requires_component_processing'):
+        if summary.get('raw_purchase_processing'):
+            return ('component_processing_required','统一原片尚待加工；按原订单完成裁切、压线、开槽和成型后，从订单明细确认片料加工。')
         return ('component_processing_required','预占含已压线开槽的专用盖/底，仍须打钉；实际加工完成后从订单明细确认专用部件加工。')
     unposted_capacity = max(
         int(summary.get("currently_unposted_finished_capacity_qty") or 0),

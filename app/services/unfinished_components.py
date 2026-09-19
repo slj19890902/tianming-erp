@@ -42,7 +42,7 @@ def unfinished_reservations(db, order_item_id, *, bom_snapshot_id=None):
             InventoryReservation.reservation_type=='semi_order',InventoryReservation.status!='cancelled',
             InventoryReservation.credited_requirement_quantity > InventoryReservation.consumed_requirement_quantity + InventoryReservation.released_requirement_quantity)).all()
     return [(reservation,requirement,json.loads(profile.data_json)) for reservation,requirement,profile in rows
-        if json.loads(profile.data_json).get('processing')==PROCESSING
+        if (json.loads(profile.data_json).get('processing')==PROCESSING or json.loads(profile.data_json).get('raw_purchase_plan_id'))
         and (bom_snapshot_id is None or requirement.sales_order_item_bom_component_id==bom_snapshot_id)]
 
 

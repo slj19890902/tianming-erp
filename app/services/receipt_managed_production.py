@@ -69,7 +69,7 @@ def _empty_summary() -> dict[str, Any]:
     }
 
 
-def receipt_purpose_summaries_by_order_item_ids(
+def _frozen_receipt_purpose_summaries_by_order_item_ids(
     db: Session,
     order_item_ids: Sequence[int],
 ) -> dict[int, dict[str, Any]]:
@@ -745,6 +745,13 @@ def receipt_purpose_summaries_by_order_item_ids(
                 ),
             }
         )
+    return summaries
+
+
+def receipt_purpose_summaries_by_order_item_ids(db, order_item_ids):
+    from app.services.raw_purchase_plans import production_summaries
+    summaries=_frozen_receipt_purpose_summaries_by_order_item_ids(db,order_item_ids)
+    summaries.update(production_summaries(db,order_item_ids))
     return summaries
 
 

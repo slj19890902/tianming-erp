@@ -26,6 +26,9 @@ def source(db, receipt_id):
     item = db.get(StockReplenishmentOrderItem, receipt.stock_replenishment_item_id) if receipt and receipt.stock_replenishment_item_id else None
     if not item:
         fail("备库收料来源不存在")
+    from app.models.raw_purchase_plan import RawPurchasePlan
+    if db.scalar(select(RawPurchasePlan.id).where(RawPurchasePlan.stock_item_id==item.id)):
+        fail('统一原片已按订单分配，请从订单片料加工入口确认，不得重复安排备库生产')
     return receipt, item, db.get(InventoryLot, receipt.received_inventory_lot_id) if receipt.received_inventory_lot_id else None
 
 

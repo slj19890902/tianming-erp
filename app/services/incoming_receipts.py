@@ -1723,6 +1723,8 @@ def _receive_stock_replenishment_one(
     except StockReplenishmentError as error:
         raise IncomingReceiptError(str(error), error.status_code) from error
     receipt_item.received_inventory_lot_id = lot.id
+    from app.services.raw_purchase_plans import on_receipt
+    on_receipt(db,receipt_item,lot,settlement_price_fact,user)
     from app.services.replenishment_receipt_progress import refresh_order_progress
     if resolution_status == "resolved" or cumulative >= planned:
         for pending in db.scalars(select(IncomingReceiptItem).where(

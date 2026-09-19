@@ -4423,6 +4423,8 @@
               </div>
               <fieldset :disabled="requisitionInventoryActionBlocked() || requisitionVoidActionBlocked()" style="border:0;padding:0;margin:0;min-width:0">
               <div v-if="requisitionTab==='pending'" class="supplier-priority-bar">
+                <button v-if="canAdmin && canRequisition" class="btn" :disabled="requisitionPendingLoading" @click="openRawPurchase(false)">采购方案调整</button>
+                <button v-if="canAdmin && canRequisition" class="btn" @click="openRawPurchase(true)">原片方案记录</button>
                 <strong>供应商优先选择</strong>
                 <button :class="['btn','small','supplier-count-button',{active:!requisitionSupplierFilter}]" :disabled="requisitionPendingLoading" @click="selectRequisitionSupplierFilter('')">全部供应商（{{ requisitionPendingOverallTotal }}）</button>
                 <button v-for="row in requisitionSupplierCounts" :key="row.supplier_name"
@@ -8450,10 +8452,41 @@
                 </div>
               </template>
             </div>
+            <div v-else-if="modal.type === 'rawPurchase' && rawPurchase">
+              <p class="muted">将所选订单的全部未采购部件分配到一行实际原片采购。原订单的最终尺寸和工艺保持冻结；收料只形成原片，实际加工完成后再到订单详情确认。</p>
+              <p v-if="rawPurchase.error" class="status orange" role="alert">{{ rawPurchase.error }}</p>
+              <fieldset v-if="!rawPurchase.history && !rawPurchase.result" :disabled="rawPurchase.loading || !!rawPurchase.pending" style="border:0;padding:0" @input="rawPurchase.review=null" @change="rawPurchase.review=null">
+                <div class="form-grid">
+                  <label>实际采购长 mm<input type="number" min="1" v-model.number="rawPurchase.form.length_mm"></label>
+                  <label>实际采购宽 mm<input type="number" min="1" v-model.number="rawPurchase.form.width_mm"></label>
+                  <label>采购总张数（含备用）<input type="number" min="1" v-model.number="rawPurchase.form.quantity"></label>
+                  <label>原片类型<select v-model="rawPurchase.form.sheet_type"><option value="raw_board">毛片</option><option value="net_sheet">净片</option></select></label>
+                  <label>实际原片楞向<select v-model="rawPurchase.form.flute_direction"><option value="">请选择</option><option value="length">沿长</option><option value="width">沿宽</option></select></label>
+                  <label>每边修边 mm<input type="number" min="0" v-model.number="rawPurchase.form.trim_mm"></label>
+                  <label>刀缝 mm<input type="number" min="0" v-model.number="rawPurchase.form.kerf_mm"></label>
+                </div>
+                <p class="muted">请按实际排版填写出数、修边和刀缝；尺寸容纳仅作上限核验，不代替现场工艺确认。</p>
+                <div style="overflow:auto"><table><thead><tr><th>原订单 / 部件</th><th>最终尺寸 mm</th><th>原压线</th><th>所需片数</th><th>每张出数</th><th>旋转</th><th>最终部件楞向</th></tr></thead><tbody>
+                  <tr v-for="(row,index) in rawPurchase.rows" :key="row.source_key"><td>{{ row.product_code }} {{ row.product_name }} · {{ ({cover:'盖',base:'底',whole:'本体'})[row.component_type] || row.component_type }} · 订单明细 {{ row.order_item_id }}</td><td>{{ row.report_length_mm }} × {{ row.report_width_mm }}</td><td>{{ row.crease_type }} {{ [row.crease_left_mm,row.crease_middle_mm,row.crease_right_mm].filter(x=>x!=null).join(' / ') }}</td><td>{{ row.piece_quantity }} 片</td><td><input style="width:75px" type="number" min="1" v-model.number="rawPurchase.form.allocations[index].yield_factor"></td><td><input type="checkbox" v-model="rawPurchase.form.allocations[index].rotate"></td><td><select v-model="rawPurchase.form.allocations[index].piece_flute_direction"><option value="">请选择</option><option value="length">沿长</option><option value="width">沿宽</option></select></td></tr>
+                </tbody></table></div>
+              </fieldset>
+              <p v-if="rawPurchase.review">供应商 {{ rawPurchase.review.supplier_name }} · {{ rawPurchase.review.material_code }} {{ rawPurchase.review.flute_type }} · 分配 {{ rawPurchase.review.allocated_quantity }} 张 + 备用 {{ rawPurchase.review.reserve_quantity }} 张 = 采购 {{ rawPurchase.review.request.quantity }} 张。供应商不压线。</p>
+              <div v-if="!rawPurchase.history && !rawPurchase.result" class="toolbar-group"><button class="btn" :disabled="rawPurchase.loading || !!rawPurchase.pending" @click="previewRawPurchase">预览分配</button><button class="btn primary" :disabled="rawPurchase.loading || (!rawPurchase.review && !rawPurchase.pending)" @click="confirmRawPurchase">{{ rawPurchase.pending ? '重试同一方案' : '确认生成采购' }}</button></div>
+              <p v-if="rawPurchase.result" class="status green">采购 {{ rawPurchase.result.supplier_order_number }} 已生成。原订单需求、分配及实际来料可在方案记录展开查看。</p>
+              <div v-if="rawPurchase.history" class="toolbar-group"><button class="btn" :disabled="rawPurchase.loading || rawPurchase.page<=1" @click="loadRawPurchases(rawPurchase.page-1)">上一页</button><span>第 {{ rawPurchase.page }} 页</span><button class="btn" :disabled="rawPurchase.loading || rawPurchase.items.length<20" @click="loadRawPurchases(rawPurchase.page+1)">下一页</button><button class="btn" :disabled="rawPurchase.loading" @click="loadRawPurchases(rawPurchase.page)">刷新</button></div>
+              <details v-for="row in (rawPurchase.result ? [rawPurchase.result] : rawPurchase.items)" :key="row.id" :open="!!rawPurchase.result">
+                <summary>{{ row.supplier_order_number }} · {{ row.request.length_mm }} × {{ row.request.width_mm }} · {{ row.request.quantity }} 张 · {{ row.status==='active' ? '有效' : '已撤销' }}</summary>
+                <p>{{ row.supplier_name }} · {{ row.material_code }} {{ row.flute_type }} · 分配 {{ row.allocated_quantity }} 张 / 备用 {{ row.reserve_quantity }} 张；原片楞向 {{ row.request.flute_direction==='length' ? '沿长' : '沿宽' }}</p>
+                <table><thead><tr><th>冻结需求</th><th>最终尺寸 / 压线</th><th>分配</th></tr></thead><tbody><tr v-for="d in row.requirements" :key="d.source_key"><td>{{ d.product_name }} · {{ ({cover:'盖',base:'底',whole:'本体'})[d.component_type] || d.component_type }} · 订单明细 {{ d.order_item_id }}</td><td>{{ d.report_length_mm }} × {{ d.report_width_mm }} · {{ d.crease_type }} {{ [d.crease_left_mm,d.crease_middle_mm,d.crease_right_mm].filter(x=>x!=null).join(' / ') }}</td><td>{{ d.raw_quantity }} 张 × {{ d.yield_factor }} = {{ d.piece_quantity }} 片</td></tr></tbody></table>
+                <p v-for="lot in row.receipts || []" :key="lot.receipt_item_id">实收 {{ lot.quantity }} 张 · 可用 {{ lot.available }} / 预占 {{ lot.reserved }} / 已消耗 {{ lot.consumed }} 张 · 实收成本 {{ lot.total_cost }} {{ lot.currency }} · 货位 {{ lot.location_name }} · 批次 {{ lot.lot_id }}</p>
+                <button class="btn" :disabled="rawPurchase.loading || !!rawPurchase.pending" @click="printRawPurchase(row)">供应商打印预览</button>
+                <p class="muted">未收料方案沿用已报料列表的作废入口；已有收料及加工历史时不可重写采购方案。</p>
+              </details>
+            </div>
             <div v-else-if="modal.type === 'semiProduction' && semiProduction">
               <label>生产产品 <select v-model.number="semiProduction.productId" :disabled="semiProduction.loading || !!semiProduction.pending" @change="semiProduction.review=null"><option :value="0">请选择</option><option v-for="product in semiProduction.products" :key="product.id" :value="product.id">{{ product.name }} · #{{ product.id }} · {{ product.unit }}</option></select></label>
               <info-note>用于半成品预占已完整覆盖的自制产品。实际加工完成后确认；本体保持待装配阶段，不新增来料或采购数量。</info-note>
-              <p v-if="semiProduction.route==='component-processing'" class="status orange">仅在实物打钉完成后确认；预览和收料都不会替代实际加工。</p>
+              <p v-if="semiProduction.route==='component-processing'" class="status orange">仅在原订单要求的实际加工全部完成后确认；专用盖底仍须打钉，统一原片须完成裁切、压线、开槽及成型等原要求。预览和收料不代表加工完成。</p>
               <p v-if="semiProduction.error" role="alert" class="status orange">{{ semiProduction.error }}</p>
               <p v-if="semiProduction.review">本次 {{ semiProduction.review.quantity }} {{ semiProduction.review.unit }} · 材料估算成本 {{ semiProduction.review.estimated_cost }} · 来源货位 {{ Object.values(semiProduction.review.source_locations).join('、') }}</p>
               <p v-if="semiProduction.review" class="muted">生产位置：{{ semiProduction.review.production_location.name }}（ID {{ semiProduction.review.production_location.id }}）<span v-if="Object.keys(semiProduction.review.target_locations).length">；组装位置：{{ Object.entries(semiProduction.review.target_locations).map(([pid,lid])=>`${semiProduction.review.target_names[pid]}（ID ${lid}）`).join('、') }}</span></p>
@@ -8484,7 +8517,7 @@
               </tr></thead>
               <tbody><tr v-for="item in orderDetail.items" :key="item.id">
                 <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}<div style="margin-top:4px"><status-tag :value="itemBusinessStatusKey(item)"></status-tag></div><div v-if="item.requisition_hold?.status === 'active'" class="status orange" style="margin-top:4px">{{ item.requisition_hold.label || '等候中' }}</div><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
-                <td>{{ item.snapshot_product_code }}<div v-if="canAdmin && hasBomComponents(item) && Number(item.quantity)>Number(item.business_delivered_quantity || item.delivered_quantity || 0)"><button class="btn small" type="button" @click="openReservedKitCutover(orderDetail,item)">切换未完成BOM</button><button class="btn small" type="button" @click="openSemiProduction(item)">半成品生产</button></div><button v-if="canAdmin && (hasBomComponents(item) || isTelescopingLidBoxStyle(item.box_style))" class="btn small" type="button" @click="openSemiProduction(item,'component-processing')">专用盖/底加工</button></td>
+                <td>{{ item.snapshot_product_code }}<div v-if="canAdmin && hasBomComponents(item) && Number(item.quantity)>Number(item.business_delivered_quantity || item.delivered_quantity || 0)"><button class="btn small" type="button" @click="openReservedKitCutover(orderDetail,item)">切换未完成BOM</button><button class="btn small" type="button" @click="openSemiProduction(item)">半成品生产</button></div><button v-if="canAdmin" class="btn small" type="button" @click="openSemiProduction(item,'component-processing')">专用部件/原片加工</button></td>
                 <td :title="item.snapshot_product_name" style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:normal">
                   {{ item.snapshot_product_name }}
                   <div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div>
@@ -8756,6 +8789,11 @@
                 </table>
                 </details>
               </div>
+              <details v-for="plan in modal.data.raw_purchase_plans || []" :key="plan.id" class="panel" style="margin-top:12px">
+                <summary>厂内需求分配：{{ plan.allocated_quantity }} 张 + 备用 {{ plan.reserve_quantity }} 张（不进入供应商打印）</summary>
+                <p v-for="d in plan.requirements" :key="d.source_key">{{ d.product_code }} {{ d.product_name }} · {{ ({cover:'盖',base:'底',whole:'本体'})[d.component_type] || d.component_type }} · 原要求 {{ d.report_length_mm }} × {{ d.report_width_mm }} mm / {{ d.crease_type }} {{ [d.crease_left_mm,d.crease_middle_mm,d.crease_right_mm].filter(x=>x!=null).join(' / ') }} · {{ d.raw_quantity }} 张 × {{ d.yield_factor }} = {{ d.piece_quantity }} 片</p>
+                <p class="muted">原片须在厂内完成上述最终工艺；收料不表示已加工。剩余原片保留原客户、产品范围。</p>
+              </details>
               <div v-if="modal.data.focus_reported_item?.status==='voided'" :id="'supplier-order-line-'+modal.data.focus_item_id" class="reported-detail-card reported-match-row" style="margin-top:12px">
                 <div><strong>已撤销明细（历史保留）</strong><br>{{ modal.data.focus_reported_item.product_code || '-' }}｜{{ modal.data.focus_reported_item.product_name || '-' }}</div>
                 <div>{{ modal.data.focus_reported_item.report_length_mm || '-' }} × {{ modal.data.focus_reported_item.report_width_mm || '-' }} mm<br><span class="muted">{{ modal.data.focus_reported_item.crease_display || '-' }}</span></div>
@@ -10423,6 +10461,7 @@
             costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
             costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
             bomCutover:null,
+            rawPurchase:null,
             semiProduction:null,
             orderDetail:null, orderCustomerCharges:[], customerChargeForm:{visible:false,id:null,version:null,charge_type:"mold",display_name:"",quantity:1,unit:"项",unit_price:"",amount:"",price_tax_mode:"",tax_rate:"",tax_project_name:"",tax_classification_code:"",note:"",saving:false}, orderGroupDetail:null, orderTrace:null, orderTraceEventDetail:null, orderTraceEventDetailLoadingKey:"", orderTraceReturnContext:null, traceRollbackBusy:false, drawingFile:null,
             externalPurchase:{loading:false,saving:false,cancelSaving:false,refreshingCandidates:false,error:"",submitError:"",status:"",orderId:null,orderLabel:"",items:[],confirmation:null,history:[],cancelReason:"采购内容或数量需要重新核对",idempotencyKey:""},
@@ -34363,6 +34402,51 @@
             controller?.abort();
             if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
             this.supplierRequisitionPreviewLoading = false;
+          },
+          async openRawPurchase(history=false) {
+            const opener=this.rememberModalOpener();
+            if(this.rawPurchase?.pending || this.rawPurchase?.loading) {
+              this.modal={type:'rawPurchase',title:'采购方案调整'};this.focusAccessibleModal(opener);return;
+            }
+            const rows=history ? [] : this.selectedPendingRows();
+            if(!history && (!rows.length || rows.some(r=>!/^\d+$/.test(String(r.item_id))))) {this.showToast('请先选择待报料的原订单；已有补库或采购来源不能再次合并',true);return;}
+            const ids=[...new Set(rows.map(r=>Number(r.item_id)))];
+            const state={history,page:1,items:[],rows:[],review:null,reviewPayload:null,pending:null,result:null,loading:false,error:'',form:{order_item_ids:ids,length_mm:0,width_mm:0,quantity:0,sheet_type:'raw_board',flute_direction:'',trim_mm:0,kerf_mm:0,allocations:[]}};
+            this.rawPurchase=state;this.modal={type:'rawPurchase',title:history?'原片方案记录':'采购方案调整'};this.focusAccessibleModal(opener);
+            if(history){await this.loadRawPurchases(1);return;}
+            state.loading=true;
+            try {const {data}=await axios.post('/api/requisition/raw-plans/choices',{order_item_ids:ids},{timeout:20000});
+              if(this.rawPurchase!==state)return;
+              state.rows=data.requirements;
+              Object.assign(state.form,{length_mm:Math.max(...state.rows.map(r=>r.report_length_mm)),width_mm:Math.max(...state.rows.map(r=>r.report_width_mm)),quantity:state.rows.reduce((n,r)=>n+r.piece_quantity,0),allocations:state.rows.map(r=>({source_key:r.source_key,yield_factor:1,rotate:false,piece_flute_direction:''}))});
+            } catch(error){state.error=this.errorMessage(error);}finally{state.loading=false;}
+          },
+          async loadRawPurchases(page=1) {
+            const state=this.rawPurchase;if(!state || state.loading)return;state.loading=true;state.error='';
+            try {const {data}=await axios.get('/api/requisition/raw-plans',{params:{page},timeout:20000});if(this.rawPurchase!==state)return;state.items=data.items;state.page=page;}
+            catch(error){state.error=this.errorMessage(error);}finally{state.loading=false;}
+          },
+          async previewRawPurchase() {
+            const state=this.rawPurchase;if(!state || state.loading || state.pending)return;
+            state.loading=true;state.error='';state.review=null;const payload=JSON.parse(JSON.stringify(state.form));
+            try {const {data}=await axios.post('/api/requisition/raw-plans/preview',payload,{timeout:20000});
+              if(this.rawPurchase===state && JSON.stringify(payload)===JSON.stringify(state.form)){state.review=data;state.reviewPayload=payload;}
+            }catch(error){state.error=this.errorMessage(error);}finally{state.loading=false;}
+          },
+          async confirmRawPurchase() {
+            const state=this.rawPurchase;if(!state || state.loading || state.result || (!state.pending && !state.review))return;
+            if(!state.pending){if(JSON.stringify(state.form)!==JSON.stringify(state.reviewPayload)){state.review=null;state.error='方案已变化，请重新预览';return;}
+              state.pending={plan:JSON.parse(JSON.stringify(state.reviewPayload)),reviewed_hash:state.review.reviewed_hash,operation_key:crypto.randomUUID()};}
+            state.loading=true;state.error='';
+            try {const {data}=await axios.post('/api/requisition/raw-plans',state.pending,{timeout:30000});state.result=data;state.pending=null;state.review=null;
+              try {await this.loadRequisition();}catch(error){state.error='采购已生成，列表刷新失败；请刷新列表，不要重新提交。';}
+            }catch(error){state.error=this.errorMessage(error);if([400,403,409,422].includes(error.response?.status)){state.pending=null;state.review=null;}}
+            finally{state.loading=false;}
+          },
+          async printRawPurchase(row) {
+            const state=this.rawPurchase;if(!state || state.loading || state.pending)return;state.loading=true;
+            try{const {data}=await axios.get(`/api/requisition/supplier-orders/${row.supplier_order_id}`,{timeout:20000});this.openSupplierOrderPrint(data);}
+            catch(error){state.error=this.errorMessage(error);}finally{state.loading=false;}
           },
           async openSupplierRequisitionDraft(rows = null) {
             if (!this.canRequisition) return;

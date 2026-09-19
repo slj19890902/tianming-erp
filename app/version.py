@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.450"
-APP_VERSION_NAME = "通用片料默认不采用与一键取消安排"
-APP_BUILD_DATE = "2026-09-17"
+APP_VERSION = "v0.22.451"
+APP_VERSION_NAME = "订单库存查询恢复与客户片料范围"
+APP_BUILD_DATE = "2026-09-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -4318,3 +4318,7 @@ APP_CHANGELOG = [*(f"v0.22.449：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["通用片料只推荐、默认不采用，不再要求逐条拒绝才能保存订单。", "订单/PDF支持本行或本次导入片料全部不采用，保留成品抵扣，可单独重新采用并在刷新后保留选择。", "裁切说明移到加工栏，采用/不采用按钮独立显示。"]
 APP_VERIFICATION_STEPS = ["订单导入查看通用片料：未点采用时不抵扣、不因这些候选阻止保存。", "点击本次导入片料全部不采用，再选一批采用并刷新；确认成品选择不变，片料仅保留所选批次。", "查看需裁切/一张多片候选，确认按钮清晰可见；勿为验收保存模拟订单。"]
 APP_CHANGELOG = [*(f"v0.22.450：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["修复导入常用箱后库存查询持续加载，查询失败或超时时保留录入内容；未选择抵扣的合法订单可以保存。", "默认只查询绑定当前客户的片料，点击查询其他可用片料后才查询其他范围并分页显示。", "切换客户、产品和数量后忽略过期请求；保留已选库存后端核验，保存重试避免重复建单和预占。"]
+APP_VERIFICATION_STEPS = ["刷新订单页，选择客户并导入真实常用箱，确认库存查询结束，未选抵扣时可以正常保存。", "核对默认片料仅属于当前客户，点击查询其他可用片料后查看范围提示和分页。", "切换客户或产品检查旧候选清除；仅按真实业务采用库存，不为验收创建虚构订单。"]
+APP_CHANGELOG = [*(f"v0.22.451：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

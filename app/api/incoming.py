@@ -669,6 +669,9 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
         int | None, dict[str, object]
     ] = {}
 
+    from app.services.unfinished_components import unfinished_reservations
+    unfinished_keys = {(reservation.order_item_id,requirement.sales_order_item_bom_component_id)
+        for reservation,requirement,_ in unfinished_reservations(db,list(order_item_ids))} if order_item_ids else set()
     for row in rows:
         supplier_id = row.get("supplier_order_item_id")
         requisition_id = row.get("requisition_item_id")
@@ -749,6 +752,11 @@ def _decorate_rows_with_receipt_purpose(db: Session, rows: list[dict]) -> None:
         finished_disposition_finished_after = receipt_purpose_finished_capacity(
             db, item_snapshots, finished_disposition_sheets
         )
+        processing_required = (order_item_id,component_snapshot.id if component_snapshot else None) in unfinished_keys
+        row['requires_component_processing'] = processing_required
+        if processing_required:
+            reserve_disposition_finished_after = finished_before
+            finished_disposition_finished_after = finished_before
         finished_output_increases = (
             finished_disposition_finished_after > finished_before
         )
@@ -1150,6 +1158,7 @@ class ReceiveRequest(BaseModel):
     resolution_action: str | None = None
     resolution_reason: str | None = None
     surplus_disposition: Literal["finished", "semi_finished_reserve"] | None = None
+    processed_component_direction: Literal["length", "width"] | None = None
     surplus_location_id: int | None = Field(default=None, gt=0)
     expected_surplus_layout_version: int | None = Field(default=None, gt=0)
     expected_receipt_fact_version: int | None = Field(default=None, gt=0)
@@ -1179,6 +1188,7 @@ class BatchReceiveLine(BaseModel):
     resolution_action: str | None = None
     resolution_reason: str | None = None
     surplus_disposition: Literal["finished", "semi_finished_reserve"] | None = None
+    processed_component_direction: Literal["length", "width"] | None = None
     surplus_location_id: int | None = Field(default=None, gt=0)
     expected_surplus_layout_version: int | None = Field(default=None, gt=0)
     expected_receipt_fact_version: int | None = Field(default=None, gt=0)
@@ -4600,6 +4610,7 @@ def receive_item(
             resolution_action=(payload.resolution_action if payload else None),
             resolution_reason=(payload.resolution_reason if payload else None),
             surplus_disposition=(payload.surplus_disposition if payload else None),
+            processed_component_direction=(payload.processed_component_direction if payload else None),
             surplus_location_id=(payload.surplus_location_id if payload else None),
             expected_surplus_layout_version=(
                 payload.expected_surplus_layout_version if payload else None
@@ -4733,6 +4744,7 @@ def batch_receive_items(
                     resolution_action=line.resolution_action,
                     resolution_reason=line.resolution_reason,
                     surplus_disposition=line.surplus_disposition,
+                    processed_component_direction=line.processed_component_direction,
                     surplus_location_id=line.surplus_location_id,
                     expected_surplus_layout_version=(
                         line.expected_surplus_layout_version

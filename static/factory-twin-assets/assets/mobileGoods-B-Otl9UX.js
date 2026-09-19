@@ -1,0 +1,1 @@
+import{c as s,j as e}from"./client-XPznW3iY.js";import{W as n}from"./WarehouseGoods-CSIhq8Wu.js";window.mountMobileGoods=(r,t)=>{const o=s.createRoot(r);return o.render(e.jsx(n,{...t})),()=>o.unmount()};

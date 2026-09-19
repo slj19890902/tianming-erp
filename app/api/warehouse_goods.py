@@ -44,7 +44,7 @@ class GoodsFacts(BaseModel):
     verified_material_id: int | None = Field(default=None, ge=1)
     material_code: str = Field(default="", max_length=100)
     face_paper: Literal["kraft", "white", "unknown"] = "kraft"
-    processing: Literal["raw", "cut", "die_cut", "creased", "printed"] = "raw"
+    processing: Literal["raw", "cut", "die_cut", "creased", "printed", "dedicated_component"] = "raw"
     mold_tool_id: int | None = Field(default=None, ge=1)
     mold_version: int | None = Field(default=None, ge=1)
     blank_unprinted: bool = False
@@ -358,6 +358,12 @@ def update_goods(lot_id: int, payload: GoodsUpdate, db: Session = Depends(get_db
         if not facts.material_code:
             facts.material_code = detail.material_code_snapshot
     before = get_goods(lot_id, db, user)["facts"]
+    if (before or {}).get('processing') == 'dedicated_component' and any(
+            facts.model_dump().get(key) != before.get(key) for key in ('processing','scope','customer_ids','product_ids')):
+        raise HTTPException(409,'专用盖/底的客户、产品及未完工身份不能通过资料修正改为通用片料')
+    if facts.processing == 'dedicated_component' and (before or {}).get('processing') != 'dedicated_component':
+        raise HTTPException(409,'不能通过资料编辑伪造已压线开槽的专用部件来源')
+
     before.setdefault("source_customer_id", detail.owner_customer_id)
     before.setdefault("source_customer_name", detail.owner_customer_name_snapshot)
     before["display_name"] = before.get("display_name") or (detail.product_name_snapshot if lot.finished_detail else detail.internal_name) or ""
@@ -447,6 +453,8 @@ def create_sheet(payload: SheetEntry, db: Session = Depends(get_db), user: User 
     if previous is not None:
         return previous
     facts = payload.facts.model_copy(deep=True)
+    if facts.processing == 'dedicated_component':
+        raise HTTPException(422,'专用盖/底请从采购来料的实际余片确认入库，保留冻结来源')
     movement_key = "goods:" + payload.idempotency_key
     if db.scalar(select(InventoryMovement.id).where(InventoryMovement.idempotency_key == movement_key)):
         raise HTTPException(409, "入库流水已存在但用途回执不完整，请刷新核对，不重复入库")

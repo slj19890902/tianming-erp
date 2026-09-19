@@ -1419,6 +1419,7 @@ def _idempotent_receipt_item(
     receipt_plan_fingerprint: str | None = None,
     expected_actual_material_version: int | None = None,
     actual_material_fingerprint: str | None = None,
+    processed_component_direction: str | None = None,
 ) -> IncomingReceiptItem:
     if len(receipt.items) != 1:
         raise IncomingReceiptError("幂等键已用于其他入库操作", 409)
@@ -1528,6 +1529,12 @@ def _idempotent_receipt_item(
                 or row.supplier_order_item_id == compatible_supplier_item_id
             )
         )
+    from app.services.warehouse_goods import goods_profile
+    reserve_lot = db.get(InventoryLot, allocation.semi_finished_inventory_lot_id) if allocation and allocation.semi_finished_inventory_lot_id else None
+    stored_profile = goods_profile(db, reserve_lot) if reserve_lot else {}
+    stored_direction = (stored_profile or {}).get('flute_direction') if (stored_profile or {}).get('processing') == 'dedicated_component' else None
+    if processed_component_direction != stored_direction:
+        raise IncomingReceiptError('入库幂等键已使用，专用部件方向或加工用途不同',409)
     normalized_action = (resolution_action or "").strip() or None
     normalized_reason = (resolution_reason or "").strip() or None
     normalized_disposition = (surplus_disposition or "").strip() or None
@@ -1791,6 +1798,7 @@ def receive_one(
     expected_actual_material_version: int | None = None,
     actual_material_fingerprint: str | None = None,
     audit_context: dict[str, object] | None = None,
+    processed_component_direction: str | None = None,
 ) -> IncomingReceiptItem:
     submitted_key = (idempotency_key or "").strip()
     key = submitted_key or uuid4().hex
@@ -1800,6 +1808,7 @@ def receive_one(
     if existing_receipt is not None:
         return _idempotent_receipt_item(
             db,
+            processed_component_direction=processed_component_direction,
             receipt=existing_receipt,
             item_key=item_key,
             received_quantity=received_quantity,
@@ -1816,6 +1825,8 @@ def receive_one(
             actual_material_fingerprint=actual_material_fingerprint,
         )
 
+    if _stock_item_id(item_key) is not None and processed_component_direction is not None:
+        raise IncomingReceiptError('补库来源请沿原补库收货流程，不能提交订单专用余片用途',409)
     if _stock_item_id(item_key) is not None:
         return _receive_stock_replenishment_one(
             db,
@@ -1842,11 +1853,13 @@ def receive_one(
     if existing_receipt is not None:
         return _idempotent_receipt_item(
             db,
+            processed_component_direction=processed_component_direction,
             receipt=existing_receipt,
             item_key=item_key,
             received_quantity=received_quantity,
             resolution_action=resolution_action,
             resolution_reason=resolution_reason,
+            surplus_disposition=surplus_disposition,
             surplus_location_id=surplus_location_id,
             user=user,
             expected_receipt_fact_version=expected_receipt_fact_version,
@@ -1887,6 +1900,15 @@ def receive_one(
         raise IncomingReceiptError(
             str(error), error.status_code, code=error.code
         ) from error
+    component_identity = None
+    if processed_component_direction is not None:
+        if purpose_context is None or surplus_disposition != 'semi_finished_reserve':
+            raise IncomingReceiptError('专用部件只可与冻结采购的多收片料备库用途一起确认',409)
+        from app.services.unfinished_components import receipt_component_identity
+        try:
+            component_identity = receipt_component_identity(db,target,purpose_context,processed_component_direction)
+        except WarehouseInventoryError as error:
+            raise IncomingReceiptError(str(error),error.status_code) from error
     if purpose_context is not None and not submitted_key:
         raise IncomingReceiptError(
             "正式采购用途收料必须提交非空幂等键",
@@ -2047,6 +2069,7 @@ def receive_one(
                 surplus_disposition=(
                     normalized_disposition or "not_applicable"
                 ),
+                component_identity=component_identity,
             )
         except ReceiptPurposeFlowError as error:
             raise IncomingReceiptError(

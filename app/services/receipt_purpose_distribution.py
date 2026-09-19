@@ -1163,6 +1163,7 @@ def post_receipt_purpose_allocation(
     operator_id: int,
     idempotency_key: str,
     surplus_disposition: str,
+    component_identity: dict | None = None,
 ) -> IncomingReceiptPurposeAllocation:
     snapshot = context.snapshot
     fact = context.receipt_fact
@@ -1270,6 +1271,9 @@ def post_receipt_purpose_allocation(
         )
         or 0
     )
+    if graph_context is None:
+        from app.services.component_processing import completed_units
+        finished_before = completed_units(db,order_item_id)
     finished_after = finished_before if graph_context is not None else _finished_capacity(
         db,
         snapshots,
@@ -1307,6 +1311,9 @@ def post_receipt_purpose_allocation(
             Decimal("0"),
         )
     )
+    from app.services.component_processing import processing_completions
+    prior_unallocated_cost -= sum((Decimal(detail.get('processing_allocation_cost','0'))
+        for _,detail in processing_completions(db,order_item_id)),Decimal(0))
     capitalized_cost = (
         _money(max(prior_unallocated_cost, Decimal("0")) + (Decimal("0") if subkit_component_receipt else order_cost))
         if finished_delta > 0
@@ -1320,6 +1327,11 @@ def post_receipt_purpose_allocation(
         finished_before, finished_after = graph_plan["before"], graph_plan["after"]
         finished_delta = finished_after - finished_before
         capitalized_cost = graph_plan["total_cost"]
+    from app.services.unfinished_components import unfinished_reservations
+    if unfinished_reservations(db,order_item_id,bom_snapshot_id=graph_context.snapshot.id if graph_context else None):
+        finished_after = finished_before
+        finished_delta = 0
+        capitalized_cost = Decimal('0.0000')
     material_input_before = sum(before_sheets.values())
     material_input_after = sum(after_sheets.values())
 
@@ -1401,7 +1413,7 @@ def post_receipt_purpose_allocation(
                 ),
                 board_length_mm=board_length,
                 board_width_mm=board_width,
-                sheet_type="raw_board",
+                sheet_type="net_sheet" if component_identity else "raw_board",
                 component_type=snapshot.component_type,
                 pieces_per_box=max(int(snapshot.pieces_per_finished_snapshot or 1), 1),
                 stock_yield_per_sheet=max(int(snapshot.yield_per_sheet_snapshot or 1), 1),
@@ -1420,7 +1432,7 @@ def post_receipt_purpose_allocation(
                 material_id=fact.actual_material_id,
                 movement_reason="采购收料按冻结用途进入客户通用片料库存",
                 allow_raw_material_staging=True,
-                customer_generic_eligible=True,
+                customer_generic_eligible=not bool(component_identity),
                 internal_name=(
                     f"{snapshot.customer_name_snapshot or '客户'} "
                     f"{board_length}x{board_width} 通用备料"
@@ -1431,6 +1443,15 @@ def post_receipt_purpose_allocation(
                     else None
                 ),
             )
+            if component_identity:
+                from app.services.unfinished_components import freeze_component_profile
+                from app.models.warehouse_inventory import SemiFinishedLotAllowedProduct
+                detail = reserve_lot.semi_finished_detail
+                detail.internal_name = f"{component_identity['product_name']} {'盖' if snapshot.component_type == 'cover' else '底'}（待打钉）"
+                for name,value in zip(('crease_type','crease_left_mm','crease_middle_mm','crease_right_mm'),component_identity['crease']):
+                    setattr(detail,name,value)
+                db.add(SemiFinishedLotAllowedProduct(inventory_lot_id=reserve_lot.id,product_id=component_identity['product_id'],confirmed_at=utc_now_naive()))
+                freeze_component_profile(db,reserve_lot,component_identity,receipt_item,snapshot)
             reserve_lot.estimated_unit_cost_snapshot = sheet_cost
             reserve_lot.estimated_square_price_snapshot = None
             reserve_lot.estimated_cost_area_m2_snapshot = None
@@ -1476,6 +1497,7 @@ def post_receipt_purpose_allocation(
             "receipt_order_purpose_sheet_qty": order_delta,
             "receipt_reserve_purpose_sheet_qty": reserve_delta,
             "surplus_disposition": disposition,
+            **({"processed_component_identity":component_identity} if component_identity else {}),
             "receipt_plan_fingerprint": fact.receipt_plan_fingerprint,
         }
     )
@@ -1846,6 +1868,9 @@ def reverse_receipt_purpose_allocation(
             "INCOMING_PURPOSE_ALLOCATION_MISSING",
             "收料用途分配事实不存在或已经撤销。",
         )
+    from app.services.component_processing import processing_completions
+    if any(allocation.id in detail.get('processing_allocation_ids',[]) for _,detail in processing_completions(db,receipt_item.order_item_id)):
+        raise ReceiptPurposeFlowError('PROCESSING_ALREADY_CONFIRMED','该来料已用于实际部件加工，请先撤销加工及后续发货',409)
     newer = db.scalar(
         _active_allocation_statement()
         .join(

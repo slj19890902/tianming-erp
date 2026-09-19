@@ -14,6 +14,9 @@ def processed_match(db, lot, product, expected):
     detail = lot.semi_finished_detail
     if not detail:
         return None
+    if (profile or {}).get('processing') == 'dedicated_component':
+        from app.services.unfinished_components import component_match
+        return component_match(db,lot,product,expected,profile)
     if (profile or {}).get("processing") == "creased" or detail.sheet_type == "creased_sheet":
         return crease_match(db, lot, product, expected)
     review = measurement_review(db, lot, product, expected)

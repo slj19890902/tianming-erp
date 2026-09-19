@@ -123,14 +123,15 @@ def project_graph_receipts(db, order_item_id, summary, states, semi_credits):
     output = outputs[graph.root_id]
     capacity = max(received[graph.root_id] - requirements.finished_units.get(graph.root_id, 0), 0)
     future = max(planned[graph.root_id] - requirements.finished_units.get(graph.root_id, 0), 0)
-    summary.update(automatic_finished_output_qty=output,
-        automatic_order_reserved_quantity=root_reserved,
-        automatic_surplus_finished_quantity=max(output-root_reserved, 0),
+    summary.update(automatic_finished_output_qty=output-int(summary.get("manual_processing_output_qty",0)),
+        automatic_order_reserved_quantity=root_reserved-int(summary.get("manual_processing_reserved_qty",0)),
+        automatic_surplus_finished_quantity=max(output-root_reserved-int(summary.get("manual_processing_surplus_qty",0)), 0),
         current_theoretical_finished_capacity_qty=capacity,
-        currently_unposted_finished_capacity_qty=max(capacity-output, 0),
+        currently_unposted_finished_capacity_qty=0 if summary.get("requires_component_processing") else max(capacity-output, 0),
+        pending_processing_quantity=max(capacity-output,0) if summary.get("requires_component_processing") else 0,
         future_planned_finished_capacity_qty=max(future-output, 0),
         remaining_order_purpose_sheet_qty=sum(r["remaining_order_sheet_qty"] for r in rows),
         waiting_component_labels=[r["component_label"] for r in rows if r["waiting_for_pairing"]],
         waiting_component_gap_quantity=max((r["planned_finished_capacity_qty"]-r["current_finished_capacity_qty"] for r in rows), default=0),
         component_progress=rows, product_output_quantities=outputs,
-        projection_inconsistent=bool(summary["projection_inconsistent"] or output != capacity))
+        projection_inconsistent=bool(summary["projection_inconsistent"] or (output != capacity and not summary.get("requires_component_processing"))))

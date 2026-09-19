@@ -4740,7 +4740,13 @@
                                 <option value="finished">做成品</option>
                                 <option value="semi_finished_reserve">片料备库</option>
                               </select>
+                              <template v-if="row.surplus_disposition==='semi_finished_reserve' && ['cover','base'].includes(row.component_type)">
+                                <label><input type="checkbox" v-model="row.processed_component" /> 实收余片已压线开槽，尚待打钉（专用盖/底）</label>
+                                <select v-if="row.processed_component" class="select" v-model="row.processed_component_direction"><option value="">确认瓦楞方向</option><option value="length">瓦楞沿报料长度</option><option value="width">瓦楞沿报料宽度</option></select>
+                              </template>
+
                             </template>
+                            <div v-if="row.requires_component_processing" class="status orange">订单预占含待打钉专用部件，收料不自动形成成品；实际打钉后在订单明细确认加工。</div>
                             <template v-if="!incomingSurplusDispositionRequired(row) || row.surplus_disposition">
                               <div style="margin-top:6px">预计订单用途 {{ incomingPurposeProjection(row).orderSheets }} 张｜预计片料备库 {{ incomingPurposeProjection(row).reserveSheets }} 张<template v-if="incomingPurposeProjection(row).finishedOutput!==null">｜预计形成成品 {{ incomingPurposeProjection(row).finishedOutput }} 只</template><template v-else>｜成品数量按已冻结换算确认</template></div>
                               <div v-if="Number(incomingPurposeProjection(row).orderSheets || 0)>0 && row.finished_location_name">成品位置：{{ row.finished_location_name }}</div>
@@ -8447,6 +8453,7 @@
             <div v-else-if="modal.type === 'semiProduction' && semiProduction">
               <label>生产产品 <select v-model.number="semiProduction.productId" :disabled="semiProduction.loading || !!semiProduction.pending" @change="semiProduction.review=null"><option :value="0">请选择</option><option v-for="product in semiProduction.products" :key="product.id" :value="product.id">{{ product.name }} · #{{ product.id }} · {{ product.unit }}</option></select></label>
               <info-note>用于半成品预占已完整覆盖的自制产品。实际加工完成后确认；本体保持待装配阶段，不新增来料或采购数量。</info-note>
+              <p v-if="semiProduction.route==='component-processing'" class="status orange">仅在实物打钉完成后确认；预览和收料都不会替代实际加工。</p>
               <p v-if="semiProduction.error" role="alert" class="status orange">{{ semiProduction.error }}</p>
               <p v-if="semiProduction.review">本次 {{ semiProduction.review.quantity }} {{ semiProduction.review.unit }} · 材料估算成本 {{ semiProduction.review.estimated_cost }} · 来源货位 {{ Object.values(semiProduction.review.source_locations).join('、') }}</p>
               <p v-if="semiProduction.review" class="muted">生产位置：{{ semiProduction.review.production_location.name }}（ID {{ semiProduction.review.production_location.id }}）<span v-if="Object.keys(semiProduction.review.target_locations).length">；组装位置：{{ Object.entries(semiProduction.review.target_locations).map(([pid,lid])=>`${semiProduction.review.target_names[pid]}（ID ${lid}）`).join('、') }}</span></p>
@@ -8477,7 +8484,7 @@
               </tr></thead>
               <tbody><tr v-for="item in orderDetail.items" :key="item.id">
                 <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}<div style="margin-top:4px"><status-tag :value="itemBusinessStatusKey(item)"></status-tag></div><div v-if="item.requisition_hold?.status === 'active'" class="status orange" style="margin-top:4px">{{ item.requisition_hold.label || '等候中' }}</div><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
-                <td>{{ item.snapshot_product_code }}<div v-if="canAdmin && hasBomComponents(item) && Number(item.quantity)>Number(item.business_delivered_quantity || item.delivered_quantity || 0)"><button class="btn small" type="button" @click="openReservedKitCutover(orderDetail,item)">切换未完成BOM</button><button class="btn small" type="button" @click="openSemiProduction(item)">半成品生产</button></div></td>
+                <td>{{ item.snapshot_product_code }}<div v-if="canAdmin && hasBomComponents(item) && Number(item.quantity)>Number(item.business_delivered_quantity || item.delivered_quantity || 0)"><button class="btn small" type="button" @click="openReservedKitCutover(orderDetail,item)">切换未完成BOM</button><button class="btn small" type="button" @click="openSemiProduction(item)">半成品生产</button></div><button v-if="canAdmin && (hasBomComponents(item) || isTelescopingLidBoxStyle(item.box_style))" class="btn small" type="button" @click="openSemiProduction(item,'component-processing')">专用盖/底加工</button></td>
                 <td :title="item.snapshot_product_name" style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:normal">
                   {{ item.snapshot_product_name }}
                   <div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div>
@@ -21371,7 +21378,7 @@
               if (executionIssue) throw new Error(executionIssue);
             }
             const surplusLocation=this.incomingLocations.find(location=>Number(location.id)===Number(row.surplus_location_id));
-            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_disposition:surplusDisposition,surplus_location_id:row.source_type==="stock_replenishment"?null:(Number(row.surplus_location_id)||null),expected_surplus_layout_version:surplusLocation?.layout_version||null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
+            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_disposition:surplusDisposition,processed_component_direction:row.processed_component && surplusDisposition==="semi_finished_reserve" ? row.processed_component_direction || null : null,surplus_location_id:row.source_type==="stock_replenishment"?null:(Number(row.surplus_location_id)||null),expected_surplus_layout_version:surplusLocation?.layout_version||null,purchase_purpose_source_snapshot_id:row.purchase_purpose_source_snapshot_id ?? null,expected_receipt_fact_version:row.expected_receipt_fact_version ?? null,expected_purpose_snapshot_version:row.expected_purpose_snapshot_version ?? null,receipt_plan_fingerprint:row.receipt_plan_fingerprint || null,expected_actual_material_version:row.expected_actual_material_version ?? null,actual_material_fingerprint:row.actual_material_fingerprint || null};
           },
           canReceiveIncoming(row) {
             const sourceReady = typeof row?.source_receivable === "boolean"
@@ -21383,6 +21390,7 @@
             return this.incomingPending.filter(row => this.canReceiveIncoming(row) && this.incomingSelected[row.item_id]).length;
           },
           incomingReceiptExecutionIssue(row) {
+            if (row.processed_component && row.surplus_disposition==="semi_finished_reserve" && !["length","width"].includes(row.processed_component_direction)) return "请确认专用盖/底的瓦楞方向";
             if (this.incomingSurplusDispositionRequired(row) && !["finished","semi_finished_reserve"].includes(String(row?.surplus_disposition || ""))) {
               return `本次比订单成品用途多 ${this.incomingFrozenSurplusQuantity(row)} 张，请选择做成品或片料备库`;
             }
@@ -21413,7 +21421,7 @@
             const code=String(detail?.code || "");
             if (!code.startsWith("SUPPLIER_RECEIPT_") && !["PAPERBOARD_PURCHASE_SOURCE_MISSING","PURCHASE_RECEIPT_FACT_REQUIRED","MATERIAL_MASTER_PRICE_REQUIRED"].includes(code)) return false;
             const draft={};
-            for (const field of ["incoming_quantity","resolution_action","resolution_reason","surplus_disposition","surplus_location_id"]) draft[field]=row[field];
+            for (const field of ["incoming_quantity","resolution_action","resolution_reason","surplus_disposition","surplus_location_id","processed_component","processed_component_direction"]) draft[field]=row[field];
             const key=String(row.item_id);
             this.incomingPriceRecovery[key]={message:String(detail.message || this.errorMessage(error)),draft,idempotencyKey:idempotencyKey || row._receipt_price_retry_key || ""};
             return true;
@@ -32923,33 +32931,33 @@
               return true;
             } catch(error) { this.showToast(this.errorMessage(error), true); return false; }
           },
-          async openSemiProduction(item) {
-            if(this.semiProduction?.pending && this.semiProduction.itemId!==item.id) {this.showToast("请先重试上一笔半成品生产确认，核实执行结果");return;}
+          async openSemiProduction(item, route="semi-production") {
+            if(this.semiProduction?.pending && (this.semiProduction.itemId!==item.id || this.semiProduction.route!==route)) {this.showToast("请先重试上一笔半成品生产确认，核实执行结果");return;}
             const opener=this.rememberModalOpener();
-            if(this.semiProduction?.itemId!==item.id)this.semiProduction={itemId:item.id,productId:0,products:[],completions:[],review:null,pending:null,loading:false,error:""};
+            if(this.semiProduction?.itemId!==item.id || this.semiProduction?.route!==route)this.semiProduction={itemId:item.id,route,productId:0,products:[],completions:[],review:null,pending:null,loading:false,error:""};
             this.modal={type:"semiProduction",title:"半成品生产确认"};this.focusAccessibleModal(opener);
             const state=this.semiProduction;state.loading=true;
-            try {const {data}=await axios.get(`/api/orders/items/${state.itemId}/semi-production`);Object.assign(state,data);}
+            try {const {data}=await axios.get(`/api/orders/items/${state.itemId}/${state.route || "semi-production"}`);Object.assign(state,data);}
             catch(error){state.error=this.errorMessage(error);}finally{state.loading=false;}
           },
           async previewSemiProduction() {
             const state=this.semiProduction;if(!state || state.loading || state.pending)return;
             state.loading=true;state.error="";state.review=null;
-            try {const {data}=await axios.post(`/api/orders/items/${state.itemId}/semi-production/preview`,{product_id:state.productId});state.review=data;}
+            try {const {data}=await axios.post(`/api/orders/items/${state.itemId}/${state.route || "semi-production"}/preview`,{product_id:state.productId});state.review=data;}
             catch(error){state.error=this.errorMessage(error);}finally{state.loading=false;}
           },
           async confirmSemiProduction() {
             const state=this.semiProduction;if(!state || state.loading || (!state.pending && !state.review?.ready))return;
             if(!state.pending)state.pending={product_id:state.productId,reviewed_hash:state.review.reviewed_hash,operation_key:crypto.randomUUID()};
             state.loading=true;state.error="";
-            try {await axios.post(`/api/orders/items/${state.itemId}/semi-production/execute`,state.pending);state.pending=null;state.review=null;const {data}=await axios.get(`/api/orders/items/${state.itemId}/semi-production`);Object.assign(state,data);}
+            try {await axios.post(`/api/orders/items/${state.itemId}/${state.route || "semi-production"}/execute`,state.pending);state.pending=null;state.review=null;const {data}=await axios.get(`/api/orders/items/${state.itemId}/${state.route || "semi-production"}`);Object.assign(state,data);}
             catch(error){state.error=this.errorMessage(error);if(error.response && [400,403,404,409,422].includes(error.response.status)){state.pending=null;state.review=null;}}
             finally{state.loading=false;}
           },
           async reverseSemiProduction(completionId) {
             const state=this.semiProduction;if(!state || state.loading || state.pending)return;
             state.loading=true;state.error="";
-            try {await axios.post(`/api/orders/items/${state.itemId}/semi-production/${completionId}/revert`);const {data}=await axios.get(`/api/orders/items/${state.itemId}/semi-production`);Object.assign(state,data);state.review=null;}
+            try {await axios.post(`/api/orders/items/${state.itemId}/${state.route || "semi-production"}/${completionId}/revert`);const {data}=await axios.get(`/api/orders/items/${state.itemId}/${state.route || "semi-production"}`);Object.assign(state,data);state.review=null;}
             catch(error){state.error=this.errorMessage(error);}finally{state.loading=false;}
           },
           async openReservedKitCutover(order,item,mode="reserved") {

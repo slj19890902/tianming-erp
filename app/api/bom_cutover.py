@@ -348,3 +348,58 @@ def execute_unstarted(item_id: int, payload: UnstartedExecute, db: Session = Dep
     except Exception:
         db.rollback()
         raise
+
+@router.get('/items/{item_id}/component-processing')
+def list_component_processing(item_id:int,db:Session=Depends(get_db),user:User=Depends(can_confirm_production)):
+    _access(db,user,item_id)
+    from app.models.product import Product
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.services.unfinished_components import unfinished_reservations
+    from app.services.component_processing import processing_completions
+    item=db.get(OrderItem,item_id)
+    products=set()
+    for _,requirement,_ in unfinished_reservations(db,item_id):
+        snapshot=db.get(SalesOrderItemBomComponent,requirement.sales_order_item_bom_component_id) if requirement.sales_order_item_bom_component_id else None
+        products.add(snapshot.component_product_id if snapshot else item.product_id)
+    completions=[dict(id=c.id,product_id=d['processing_product_id'],quantity=c.quantity,status=c.status)
+        for c,d in processing_completions(db,item_id,posted=False)]
+    return dict(products=[dict(id=pid,name=db.get(Product,pid).product_name,unit='只') for pid in sorted(products)],completions=completions)
+
+
+@router.post('/items/{item_id}/component-processing/preview')
+def preview_component_processing(item_id:int,payload:SemiProductionPreview,db:Session=Depends(get_db),user:User=Depends(can_confirm_production)):
+    _access(db,user,item_id)
+    from app.services.component_processing import preview_processing
+    from app.services.production_workflow import ProductionWorkflowError
+    try:
+        return preview_processing(db,order_item_id=item_id,product_id=payload.product_id)
+    except (SubkitError,WarehouseInventoryError,ProductionWorkflowError) as error:
+        raise HTTPException(409,str(error)) from error
+
+
+@router.post('/items/{item_id}/component-processing/execute',dependencies=[Depends(can_execute_inventory)])
+def confirm_component_processing(item_id:int,payload:SemiProductionExecute,db:Session=Depends(get_db),user:User=Depends(can_confirm_production)):
+    _access(db,user,item_id)
+    from app.services.component_processing import confirm_processing
+    from app.services.production_workflow import ProductionWorkflowError
+    try:
+        result=confirm_processing(db,order_item_id=item_id,actor=user,**payload.model_dump())
+        db.commit()
+        return result
+    except (SubkitError,WarehouseInventoryError,ProductionWorkflowError) as error:
+        db.rollback()
+        raise HTTPException(409,str(error)) from error
+
+
+@router.post('/items/{item_id}/component-processing/{completion_id}/revert',dependencies=[Depends(can_execute_inventory)])
+def revert_component_processing(item_id:int,completion_id:int,db:Session=Depends(get_db),user:User=Depends(can_confirm_production)):
+    _access(db,user,item_id)
+    from app.services.component_processing import reverse_processing
+    from app.services.production_workflow import ProductionWorkflowError
+    try:
+        result=reverse_processing(db,order_item_id=item_id,completion_id=completion_id,actor=user)
+        db.commit()
+        return result
+    except (SubkitError,WarehouseInventoryError,ProductionWorkflowError) as error:
+        db.rollback()
+        raise HTTPException(409,str(error)) from error

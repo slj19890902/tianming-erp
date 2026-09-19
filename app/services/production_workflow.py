@@ -4959,6 +4959,7 @@ def post_automatic_receipt_completion(
     cost_detail: dict[str, object],
     bom_snapshot_id: int | None = None,
     semi_only: bool = False,
+    processing_manual: bool = False,
 ) -> ProductionCompletion | None:
     """Post one receipt-derived finished increment through the existing ledger.
 
@@ -5049,6 +5050,17 @@ def post_automatic_receipt_completion(
                 or any(key in cost_detail for key in ("incoming_receipt_item_id", "purchase_receipt_fact_id", "purchase_purpose_source_snapshot_id"))):
             raise ProductionWorkflowError("半成品生产确认与真实预占、数量或成本不一致", 409)
         cost_detail = {**cost_detail, "bom_semi_confirmation": True}
+    from app.services.unfinished_components import unfinished_reservations
+    if processing_manual:
+        from app.services.component_processing import plan_processing
+        _, _, processing_plan, _, _ = plan_processing(db,item.id,int(cost_detail.get('processing_product_id') or 0))
+        if (before != processing_plan['before'] or after != processing_plan['after']
+                or capitalized_material_cost != processing_plan['total_cost']
+                or cost_detail.get('bom_material_inputs') != processing_plan['detail']['bom_material_inputs']
+                or not cost_detail.get('component_processing_confirmation')):
+            raise ProductionWorkflowError('专用部件加工与当前真实材料、数量及成本不一致',409)
+    elif not semi_only and unfinished_reservations(db,item.id,bom_snapshot_id=graph_snapshot.id if graph_snapshot else None):
+        raise ProductionWorkflowError('专用盖/底仍需打钉，请确认实际加工后再形成成品',409)
     received_before = int(task.material_received_quantity or 0)
     payload = {
         "order_item_id": item.id,
@@ -5136,7 +5148,7 @@ def post_automatic_receipt_completion(
         expected_version=max(int(task.version or 1), 1),
         quantity=delta,
         completion_type=completion_type,
-        origin="manual" if semi_only else "receipt_auto",
+        origin="manual" if (semi_only or processing_manual) else "receipt_auto",
         material_input_quantity=int(material_input_delta),
         planned_output_quantity=delta,
         actual_output_quantity=delta,
@@ -5148,13 +5160,13 @@ def post_automatic_receipt_completion(
         initial_disposition="stock" if is_assembly_body else "direct",
         warehouse_location_id=location.id,
         inventory_lot_id=None,
-        remarks="确认半成品预占加工完成" if semi_only else "收料后按冻结订单用途自动形成理论成品",
+        remarks="确认专用盖底打钉完成" if processing_manual else "确认半成品预占加工完成" if semi_only else "收料后按冻结订单用途自动形成理论成品",
         completed_by=operator_id,
         completed_at=now,
     )
     db.add(completion)
     db.flush()
-    if graph_snapshot is not None:
+    if graph_snapshot is not None or processing_manual:
         from app.services.multilevel_bom_receipts import consume_node_semi_inputs
         consume_node_semi_inputs(db, completion=completion,
             inputs=cost_detail.get("bom_material_inputs", []), operator_id=operator_id)
@@ -5170,7 +5182,7 @@ def post_automatic_receipt_completion(
         material_input_quantity=int(material_input_delta),
         actual_output_quantity=delta,
         direct_delivery_quantity=0 if is_assembly_body else delta,
-        remarks="半成品加工完成进入当前真实成品位置" if semi_only else "收料自动成品进入当前真实成品位置",
+        remarks="半成品加工完成进入当前真实成品位置" if (semi_only or processing_manual) else "收料自动成品进入当前真实成品位置",
     )
     lot = _stock_completion_lot(
         db,
@@ -5184,7 +5196,7 @@ def post_automatic_receipt_completion(
         location_id_override=location.id,
         finished_ground_target=ground_target,
         source_type="production_completion",
-        movement_reason="半成品预占加工完成入库" if semi_only else "订单用途来料自动形成成品并进入当前真实成品位置",
+        movement_reason="半成品预占加工完成入库" if (semi_only or processing_manual) else "订单用途来料自动形成成品并进入当前真实成品位置",
         semi_cost_detail=cost_detail if semi_only else None,
     )
     completion.inventory_lot_id = lot.id
@@ -5215,7 +5227,7 @@ def post_automatic_receipt_completion(
     ).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
     lot.estimated_square_price_snapshot = None
     lot.estimated_cost_area_m2_snapshot = None
-    lot.cost_snapshot_source = "semi_finished_estimate" if semi_only else "purchase_receipt_actual"
+    lot.cost_snapshot_source = ("component_processing_actual" if cost_detail.get('actual') else "component_processing_estimate") if processing_manual else "semi_finished_estimate" if semi_only else "purchase_receipt_actual"
     lot.cost_snapshot_detail_json = json.dumps(
         {
             **cost_detail,
@@ -5242,7 +5254,7 @@ def post_automatic_receipt_completion(
     task.ordered_quantity_snapshot = required_quantity
     task.material_received_quantity = received_before if semi_only else int(material_input_cumulative)
     task.material_input_quantity = int(material_input_cumulative)
-    task.readiness_basis = "semi_finished_confirmation" if semi_only else "automatic_receipt"
+    task.readiness_basis = "component_processing_confirmation" if processing_manual else "semi_finished_confirmation" if semi_only else "automatic_receipt"
     task.ready_at = task.ready_at or now
     task.version = max(int(task.version or 1), 1) + 1
     db.flush()
@@ -6148,6 +6160,8 @@ def _receipt_managed_completion_block(
     *,
     automatic_output: int,
 ) -> tuple[str, str]:
+    if summary.get('requires_component_processing'):
+        return ('component_processing_required','预占含已压线开槽的专用盖/底，仍须打钉；实际加工完成后从订单明细确认专用部件加工。')
     unposted_capacity = max(
         int(summary.get("currently_unposted_finished_capacity_qty") or 0),
         0,
@@ -6453,13 +6467,13 @@ def list_production_tasks(
             row["material_input_quantity"] = 0
             row["available_material_input_quantity"] = 0
             row["planned_output_quantity"] = 0
-            row["actual_output_quantity"] = automatic_output
+            row["actual_output_quantity"] = automatic_output + int(summary.get("manual_processing_output_qty",0))
             row["order_reserved_quantity"] = max(
-                int(summary["automatic_order_reserved_quantity"] or 0),
+                int(summary["automatic_order_reserved_quantity"] or 0) + int(summary.get("manual_processing_reserved_qty",0)),
                 0,
             )
             row["surplus_finished_quantity"] = max(
-                int(summary["automatic_surplus_finished_quantity"] or 0),
+                int(summary["automatic_surplus_finished_quantity"] or 0) + int(summary.get("manual_processing_surplus_qty",0)),
                 0,
             )
             row["can_supplement"] = False

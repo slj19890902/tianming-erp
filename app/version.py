@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.453"
-APP_VERSION_NAME = "库存资料修正与剩余批次保护"
+APP_VERSION = "v0.22.454"
+APP_VERSION_NAME = "PDF保存重试与原订单恢复"
 APP_BUILD_DATE = "2026-09-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4330,3 +4330,7 @@ APP_CHANGELOG = [*(f"v0.22.452：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["盘点后可修正当前库存名称、用途、适用客户和备注，必须填写原因并保留修改前后与原来源客户。", "部分数量或已有出库的批次先拆分剩余库存，保持原位置、总数量及原成本；历史批次和业务快照保留。", "默认不改常用箱，管理员额外选择并预览影响后才同步名称；保留实物身份、客户权限、版本、幂等和事务校验。"]
 APP_VERIFICATION_STEPS = ["仓库地图选择真实需要修正的批次，成品打开修正资料，片料在匹配产品中打开修正资料，核对原来源客户。", "填写名称、用途、客户或备注及原因，必要时填部分数量；核对原位新批次和总量，默认常用箱不变。", "确有业务需要时选择同步常用箱并预览影响；核对历史订单、送货快照不变。不要为验收修改真实库存。"]
 APP_CHANGELOG = [*(f"v0.22.453：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["PDF直接保存使用稳定请求标识；结果不确定时冻结原内容，重试恢复同一订单及预占。", "批量保存成功的草稿保持锁定，只重试未完成项；刷新后重开原PDF可先查询原保存结果。", "保留同客户单号防重、客户权限、签名、主档和库存版本校验，无数据库迁移或历史数据改写。"]
+APP_VERIFICATION_STEPS = ["刷新页面，在真实业务需要时核对并保存PDF，确认订单只出现一次且成功草稿锁定。", "若保存结果不确定，点击查询/重试原保存；关闭或刷新后重开同一PDF，先查询原结果，未查到时重新核对再保存。", "批量部分失败时只处理失败项；不要为了验收创建模拟订单。清除站点数据或换电脑后，先人工核实订单记录。"]
+APP_CHANGELOG = [*(f"v0.22.454：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

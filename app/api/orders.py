@@ -7835,6 +7835,32 @@ def _log_order_save_failure(
     )
 
 
+@router.get("/create-attempts/{idempotency_key}")
+def read_order_create_attempt(
+    idempotency_key: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+) -> dict:
+    """Resolve a browser's uncertain save without creating or refreshing an order."""
+    if not 8 <= len(idempotency_key) <= 100:
+        raise HTTPException(422, "保存请求标识无效")
+    key = hashlib.sha256(f"order-create:{user.id}:{idempotency_key}".encode()).hexdigest()
+    previous = db.scalar(select(OperationLog).where(
+        OperationLog.request_id == key,
+        OperationLog.action == "order_create_replay",
+    ))
+    if previous is None:
+        # Absence is not permission to change identities: an original request
+        # may still be in flight. The caller must retain the same key.
+        return {"status": "not_found"}
+    record = json.loads(previous.details)
+    require_customer_access(record["response"]["customer_id"], current_user=user, db=db)
+    order = db.get(Order, record["response"]["id"])
+    if order is None:
+        raise HTTPException(409, "原订单已不存在，请核对历史记录，不能重复创建。")
+    return {"status": "completed", "order": {"id": order.id, "customer_id": order.customer_id}}
+
+
 def _order_create_identity(payload: OrderCreate, actor_id: int):
     key = hashlib.sha256(f"order-create:{actor_id}:{payload.idempotency_key}".encode()).hexdigest()
     body = payload.model_dump(mode="json", exclude={"idempotency_key", "mold_repair_confirmation_token"})

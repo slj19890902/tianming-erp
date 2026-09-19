@@ -1407,6 +1407,9 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
     n028_customer_scope_app,
 ) -> None:
     from app.models.product import Product
+    from app.models.supplier import Supplier
+    from app.models.material import Material
+    from app.services.supplier_master import normalize_supplier_identity
     from app.models.stock_replenishment import (
         StockReplenishmentOrder,
         StockReplenishmentOrderItem,
@@ -1421,6 +1424,13 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
 
     app, ids, factory = n028_customer_scope_app
     with factory() as db:
+        db.add(Supplier(standard_name="N028 stock supplier", normalized_name=normalize_supplier_identity("N028 stock supplier"), is_active=True, version=1))
+        material = Material(code="A416D", layer_count=5, supplier_name="N028 stock supplier",
+            quote_price=Decimal("2.8"), price_unit="元/㎡", purchase_currency="CNY",
+            purchase_tax_included=True, purchase_tax_rate=Decimal("0.13"), is_active=True)
+        db.add(material)
+        db.flush()
+        stock_material_id = material.id
         products = {
             row.customer_id: row for row in db.scalars(select(Product)).all()
         }
@@ -1539,6 +1549,7 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
 
     def finished_item(customer_id: int, quantity: int = 2) -> dict:
         return {
+            "material_id": stock_material_id,
             "target_inventory_type": "semi_finished",
             "customer_id": customer_id,
             "product_id": product_ids[customer_id],
@@ -1587,11 +1598,24 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
         }
         order_ids = {}
         for label, payload in order_payloads.items():
+            payload["idempotency_key"] = f"n028-stock-scope-{label}"
+            payload["supplier_name"] = "N028 stock supplier"
             response = client.post(
                 "/api/requisition/stock-replenishment/orders", json=payload
             )
             assert response.status_code == 201, response.text
             order_ids[label] = response.json()["id"]
+
+        pending_sources = [row for row in client.get('/api/requisition/pending').json()['items']
+                           if row.get('source_type') == 'stock_replenishment']
+        for label, stock_id in order_ids.items():
+            sources = [row for row in pending_sources if row['source_id'] == stock_id]
+            created = client.post('/api/requisition/supplier-orders/from-pending-selection', json={
+                'supplier_groups': [{'supplier_name': sources[0]['supplier_name'],
+                    'request_key': f'n028-unified-scope-{label}',
+                    'stock_sources': [{'stock_replenishment_item_id': row['stock_replenishment_item_id'],
+                                       'source_fingerprint': row['source_fingerprint']} for row in sources]}]})
+            assert created.status_code == 201, created.text
 
         with factory() as db:
             legacy_unlinked = StockReplenishmentOrder(
@@ -1698,6 +1722,7 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
         ).status_code == 403
         top_level_mismatch = {
             **order_payloads["A"],
+            "idempotency_key": "n028-stock-scope-mismatch",
             "customer_id": ids["other_customer"],
         }
         assert client.post(

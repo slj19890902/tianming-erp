@@ -136,6 +136,7 @@ class StockReplenishmentOrder(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     order_number: Mapped[str] = mapped_column(String(40), nullable=False)
+    request_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     supplier_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     customer_id: Mapped[int | None] = mapped_column(
         ForeignKey("customers.id", ondelete="SET NULL"), nullable=True

@@ -1775,6 +1775,11 @@ class PendingSupplierOrderDraftLine(BaseModel):
         return _validated_cutting_mode(value)
 
 
+class PendingStockPurchaseSource(BaseModel):
+    stock_replenishment_item_id: int = Field(gt=0)
+    source_fingerprint: str = Field(min_length=64, max_length=64)
+
+
 class PendingSupplierOrderDraftGroup(BaseModel):
     supplier_name: str | None = None
     request_key: str | None = None
@@ -1782,6 +1787,8 @@ class PendingSupplierOrderDraftGroup(BaseModel):
     lines: list[PendingSupplierOrderDraftLine] = Field(default_factory=list)
     # Backward-compatible input for the previous flat source-item draft shape.
     items: list[dict] = Field(default_factory=list)
+    stock_sources: list[PendingStockPurchaseSource] = Field(default_factory=list)
+    bom_items: list[RequisitionLinePayload] = Field(default_factory=list)
 
     @field_validator("request_key")
     @classmethod
@@ -1804,6 +1811,10 @@ def _pending_supplier_group_request_hash(
     if group._request_hash_override:
         return group._request_hash_override
     canonical = group.model_dump(mode="json", exclude_none=False)
+    # Preserve the already-issued ordinary request contract byte for byte.
+    for field in ("stock_sources", "bom_items"):
+        if not canonical.get(field):
+            canonical.pop(field, None)
     return hashlib.sha256(
         json.dumps(
             canonical,
@@ -5278,20 +5289,11 @@ def _supplier_order_is_visible(
     allowed = _allowed_customer_ids(user, db)
     if allowed is None:
         return True
-    # Supplier orders only carry a customer name snapshot.  Scope through the
-    # linked order item; an unlinked legacy/manual line is deliberately hidden.
-    linked_ids = [item.order_item_id for item in order.items if item.order_item_id]
-    if not linked_ids or len(linked_ids) != len(order.items):
-        return False
-    rows = db.execute(
-        select(OrderItem.id, Order.customer_id)
-        .join(Order, OrderItem.order_id == Order.id)
-        .where(OrderItem.id.in_(linked_ids))
-    ).all()
-    return (
-        len(rows) == len(set(linked_ids))
-        and {customer_id for _item_id, customer_id in rows}.issubset(allowed)
-    )
+    from app.services.unified_procurement import supplier_line_customer_expression
+    rows = db.scalars(select(supplier_line_customer_expression())
+        .select_from(SupplierRequisitionOrderItem)
+        .where(SupplierRequisitionOrderItem.supplier_order_id == order.id)).all()
+    return bool(rows) and all(customer_id in allowed for customer_id in rows)
 
 
 def _require_supplier_order_customer_access(
@@ -5306,47 +5308,29 @@ def _supplier_order_audit_customers(
     order: SupplierRequisitionOrder,
 ) -> tuple[list[int], list[str]]:
     """Return stable customer snapshots for one supplier requisition order."""
-    linked_ids = sorted(
-        {
-            int(item.order_item_id)
-            for item in order.items
-            if item.order_item_id is not None
-        }
-    )
-    if not linked_ids:
-        return [], []
-    rows = db.execute(
-        select(Customer.id, Customer.name)
-        .join(Order, Order.customer_id == Customer.id)
-        .join(OrderItem, OrderItem.order_id == Order.id)
-        .where(OrderItem.id.in_(linked_ids))
-        .distinct()
-        .order_by(Customer.id)
-    ).all()
-    return (
-        [int(customer_id) for customer_id, _name in rows],
-        [str(name) for _customer_id, name in rows],
-    )
+    from app.services.unified_procurement import supplier_line_customer_expression
+    customer_ids = set(db.scalars(select(supplier_line_customer_expression())
+        .select_from(SupplierRequisitionOrderItem)
+        .where(SupplierRequisitionOrderItem.supplier_order_id == order.id)).all()) - {None}
+    customers = db.execute(select(Customer.id, Customer.name).where(Customer.id.in_(customer_ids)).order_by(Customer.id)).all()
+    return [row.id for row in customers], [row.name for row in customers]
 
 
 def _apply_supplier_order_scope_ids(query, allowed: set[int] | None):
     if allowed is None:
         return query
+    from app.services.unified_procurement import supplier_line_customer_expression
+    customer_id = supplier_line_customer_expression()
     visible_order_ids = (
         select(SupplierRequisitionOrderItem.supplier_order_id)
-        .join(OrderItem, OrderItem.id == SupplierRequisitionOrderItem.order_item_id)
-        .join(Order, Order.id == OrderItem.order_id)
-        .where(Order.customer_id.in_(allowed))
+        .where(customer_id.in_(allowed))
     )
     inaccessible_order_ids = (
         select(SupplierRequisitionOrderItem.supplier_order_id)
-        .outerjoin(OrderItem, OrderItem.id == SupplierRequisitionOrderItem.order_item_id)
-        .outerjoin(Order, Order.id == OrderItem.order_id)
         .where(
             or_(
-                SupplierRequisitionOrderItem.order_item_id.is_(None),
-                Order.customer_id.is_(None),
-                ~Order.customer_id.in_(allowed),
+                customer_id.is_(None),
+                ~customer_id.in_(allowed),
             )
         )
     )
@@ -10137,11 +10121,15 @@ def pending_requisitions(
     page_size: Annotated[int | None, Query(ge=1, le=200)] = None,
     supplier_name: Annotated[str | None, Query(max_length=200)] = None,
 ) -> dict:
+    from app.services.unified_procurement import pending_stock_rows
     user = _user
+    stock_rows = pending_stock_rows(db, user)
     if page is None and page_size is None and supplier_name is None:
-        return _pending_requisitions_full_payload(db, user)
+        result = _pending_requisitions_full_payload(db, user)
+        result["items"].extend(stock_rows)
+        return result
 
-    eligible_rows = _pending_requisition_eligible_rows(db, user)
+    eligible_rows = _pending_requisition_eligible_rows(db, user) + stock_rows
     overall_total = len(eligible_rows)
     supplier_counts = _pending_supplier_counts(eligible_rows)
     normalized_supplier_name = (
@@ -10172,7 +10160,7 @@ def pending_requisitions(
     selected_order_item_ids = {
         int(row["order_item_id"])
         for row in selected_rows
-        if not row.get("is_merge_group")
+        if not row.get("is_merge_group") and row.get("source_type") != "stock_replenishment"
     }
     if selected_rows:
         page_payload = _pending_requisitions_full_payload(
@@ -10190,12 +10178,15 @@ def pending_requisitions(
             else ("item", int(row["item_id"])): row
             for row in page_payload["items"]
         }
+        decorated_by_identity.update({("stock", row["stock_replenishment_item_id"]): row for row in stock_rows})
         items = [
             decorated_by_identity[identity]
             for row in selected_rows
             if (
                 identity := (
-                    ("merge", int(row["merge_group_id"]))
+                    ("stock", row["stock_replenishment_item_id"])
+                    if row.get("source_type") == "stock_replenishment"
+                    else ("merge", int(row["merge_group_id"]))
                     if row.get("is_merge_group")
                     else ("item", int(row["order_item_id"]))
                 )
@@ -12517,6 +12508,7 @@ def _create_batch_locked(
     payload: RequisitionBatchCreate,
     db: Session,
     user: User,
+    commit: bool = True,
 ) -> dict:
     requisition_date = beijing_today()
     request_key = payload.request_key or uuid4().hex
@@ -13375,7 +13367,8 @@ def _create_batch_locked(
             },
             description="生成采购报料单",
         )
-        db.commit()
+        if commit:
+            db.commit()
         return {
             "id": batch.id,
             "requisition_number": batch.requisition_number,
@@ -13743,6 +13736,17 @@ def void_composite_requisition_batch(
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    from app.models.procurement_source import ProcurementSourceLink
+    linked = db.scalar(select(ProcurementSourceLink.id).join(RequisitionItem,
+        RequisitionItem.id == ProcurementSourceLink.material_requisition_item_id)
+        .where(RequisitionItem.requisition_id == batch_id, ProcurementSourceLink.status == "active").limit(1))
+    if linked:
+        raise HTTPException(409, "该组合需求已关联统一采购单，请从对应采购单整单撤销")
+    return _void_composite_requisition_batch(db=db, user=user, batch_id=batch_id,
+        payload=payload, order_item_id=order_item_id)
+
+
+def _void_composite_requisition_batch(*, db, user, batch_id, payload, order_item_id=None, commit=True):
     batch = db.scalar(
         select(Requisition)
         .options(selectinload(Requisition.items))
@@ -13928,7 +13932,8 @@ def void_composite_requisition_batch(
             description="整组作废组合 BOM 父件报料并退回待报料池",
         )
     )
-    db.commit()
+    if commit:
+        db.commit()
     return {
         "id": batch.id,
         "status": batch.status,
@@ -15282,6 +15287,9 @@ def create_stock_replenishment_order(
     user: User = Depends(can_operate),
 ) -> dict:
     idempotent_order_number: str | None = None
+    request_hash = canonical_purchase_purpose_hash(
+        {"actor_id": user.id, "payload": payload.model_dump(mode="json", exclude_none=False)}
+    )
     requested_external_purchase = any(
         str(item.procurement_mode or "").strip() == "external_purchase"
         or item.external_purchase_quantity is not None
@@ -15308,7 +15316,7 @@ def create_stock_replenishment_order(
             raise StockReplenishmentError(
                 "库存补库只能先生成报料草稿，不能保存后直接写入库存。"
             )
-        if payload.source_type == "stock_warning" and payload.idempotency_key is None:
+        if payload.idempotency_key is None:
             raise StockReplenishmentError(
                 "库存预警报料草稿缺少防重复标识，请关闭后重新打开再保存。"
             )
@@ -15394,6 +15402,8 @@ def create_stock_replenishment_order(
                         409,
                     )
                 if not existing_external_purchase:
+                    if existing_order.request_hash != request_hash:
+                        raise StockReplenishmentError("同一提交标识的补库内容或操作人已变化，请重新打开草稿。", 409)
                     return replenishment_order_dict(existing_order, db=db)
                 if len(payload.items) != 1:
                     raise StockReplenishmentError(
@@ -15718,11 +15728,10 @@ def create_stock_replenishment_order(
             or None,
             customer_id=payload.customer_id,
             source_type=payload.source_type,
-            status="confirmed",
+            request_hash=request_hash,
+            status="draft",
             remark=payload.remark,
             created_by=user.id,
-            confirmed_by=user.id,
-            confirmed_at=utc_now_naive(),
         )
         order.items = items
         _require_stock_replenishment_order_access(db, order, user)
@@ -15805,6 +15814,8 @@ def create_stock_replenishment_order(
                             detail="外购包材备库并发写入状态不完整，请刷新后重试。",
                         )
                     return _replenishment_order_response(db, replayed_order)
+                if existing_order.request_hash != request_hash:
+                    raise HTTPException(status_code=409, detail="同一提交标识的补库内容或操作人已变化，请重新打开草稿。")
                 return replenishment_order_dict(existing_order, db=db)
         raise
     except HTTPException:
@@ -15890,6 +15901,8 @@ def print_stock_replenishment_order(
     _require_stock_replenishment_order_access(
         db, order, _user, relationships_loaded=True
     )
+    if order.status == "draft":
+        raise HTTPException(409, "补库需求尚未生成采购单，请在待报料中统一采购后打印")
     payload = replenishment_order_dict(order, db=db)
     payload["sender"] = _company_sender(db)
     return payload
@@ -16011,6 +16024,11 @@ def void_stock_replenishment_order(
     )
     if order.status == "voided":
         return replenishment_order_dict(order, db=db)
+    from app.models.procurement_source import ProcurementSourceLink
+    if db.scalar(select(ProcurementSourceLink.id).where(
+        ProcurementSourceLink.stock_replenishment_item_id.in_([item.id for item in order.items]),
+        ProcurementSourceLink.status == "active").limit(1)):
+        raise HTTPException(409, "补库需求已关联统一采购单，请先撤销对应采购单")
     received_quantity = sum(int(item.stocked_quantity or 0) for item in order.items)
     receipt_fact_count = int(
         db.scalar(
@@ -16028,7 +16046,7 @@ def void_stock_replenishment_order(
         or 0
     )
     if (
-        order.status != "confirmed"
+        order.status not in {"draft", "confirmed"}
         or received_quantity > 0
         or receipt_fact_count > 0
     ):
@@ -17171,10 +17189,21 @@ def _supplier_order_purchase_lines(
     order: SupplierRequisitionOrder,
     db: Session,
 ) -> list[dict]:
+    from app.models.procurement_source import ProcurementSourceLink
+    typed_links = {row.supplier_item_id: row for row in db.scalars(
+        select(ProcurementSourceLink).join(SupplierRequisitionOrderItem,
+            SupplierRequisitionOrderItem.id == ProcurementSourceLink.supplier_item_id)
+        .where(SupplierRequisitionOrderItem.supplier_order_id == order.id)).all()}
+    typed_snapshots = {key: json.loads(row.source_snapshot_json) for key, row in typed_links.items()}
     active_item_ids = [
         int(item.id) for item in order.items if item.status == "active"
     ]
     snapshots_by_item: dict[int, list[PurchasePurposeSourceSnapshot]] = {}
+    material_links = {row.material_requisition_item_id: key for key, row in typed_links.items() if row.material_requisition_item_id}
+    if material_links:
+        for purpose in db.scalars(select(PurchasePurposeSourceSnapshot).where(
+            PurchasePurposeSourceSnapshot.material_requisition_item_id.in_(material_links))).all():
+            snapshots_by_item.setdefault(material_links[purpose.material_requisition_item_id], []).append(purpose)
     if active_item_ids:
         purpose_rows = db.scalars(
             select(PurchasePurposeSourceSnapshot)
@@ -17239,6 +17268,9 @@ def _supplier_order_purchase_lines(
             else None
         )
         component_type = _supplier_order_item_component_type(item)
+        typed_snapshot = typed_snapshots.get(item.id)
+        if typed_snapshot:
+            component_type = typed_snapshot.get("component_type") or component_type
         material_id = item.material_id or (
             order_item.material_id if order_item and order_item.material_id else order.material_id
         )
@@ -17289,6 +17321,10 @@ def _supplier_order_purchase_lines(
         cutting_mode = item.cutting_mode or (
             order_item.special_process if order_item is not None else None
         ) or order.cutting_mode or DEFAULT_CUTTING_MODE
+        if typed_snapshot:
+            crease_type, crease_left, crease_middle, crease_right = (
+                typed_snapshot.get(field) for field in (
+                    "crease_type", "crease_left_mm", "crease_middle_mm", "crease_right_mm"))
         remark = (
             order_item.requisition_remark if order_item is not None and order_item.requisition_remark else order.remark
         ) or ""
@@ -17315,6 +17351,10 @@ def _supplier_order_purchase_lines(
             "remark": remark,
         }
         line_key = _purchase_line_key(order.supplier_name, spec)
+        if typed_snapshot:
+            # A typed source lacks the ordinary line's complete direction/net
+            # board contract; retain its own line rather than guessing a merge.
+            line_key += f":source:{item.id}"
         line = line_map.get(line_key)
         if line is None:
             crease_display = (
@@ -17391,6 +17431,19 @@ def _supplier_order_purchase_lines(
             line["purpose_plan_fingerprints"].update(
                 str(row.preview_fingerprint) for row in item_purpose_rows
             )
+        elif item.id in typed_links and typed_links[item.id].stock_replenishment_item_id:
+            item_purchase_total = int(item.requisition_qty)
+            item_order_purpose = 0
+            item_stock_purpose = item_purchase_total
+            item_purpose_status = "frozen"
+            line["purchase_total_sheet_qty"] += item_purchase_total
+            line["stock_purpose_sheet_qty"] += item_stock_purpose
+            line["purpose_allocations"].append({
+                "source_kind": "stock_replenishment", "source_key": item.source_key,
+                "stock_replenishment_item_id": typed_links[item.id].stock_replenishment_item_id,
+                "customer_id": typed_snapshot.get("source_customer_id"),
+                "purchase_total_sheet_qty": item_purchase_total,
+                "order_purpose_sheet_qty": 0, "stock_purpose_sheet_qty": item_stock_purpose})
         else:
             item_purchase_total = None
             item_order_purpose = None
@@ -17401,6 +17454,8 @@ def _supplier_order_purchase_lines(
             {
                 "id": item.id,
                 "order_item_id": item.order_item_id,
+                "stock_replenishment_item_id": typed_links[item.id].stock_replenishment_item_id if item.id in typed_links else None,
+                "material_requisition_item_id": typed_links[item.id].material_requisition_item_id if item.id in typed_links else None,
                 "component_type": component_type,
                 "order_number": item.order_number,
                 "product_code": item.product_code,
@@ -18219,20 +18274,36 @@ def _create_supplier_orders_from_pending_selection_locked(
                 detail="该批报料已有部分请求完成，请刷新已报料列表核对，禁止重复生成",
             )
     try:
+        from app.services.unified_procurement import attach_stock_sources, attach_bom_sources
+        supplier_names = [str(group.supplier_name or "").strip() for group in payload.supplier_groups]
+        if len(set(supplier_names)) != len(supplier_names):
+            raise HTTPException(400, "同一供应商只能保留一个采购组")
+        ordinary_groups = [group for group in payload.supplier_groups if group.lines or group.items]
         grouped, touched_groups = _draft_group_entries_by_purchase_lines(
-            db,
-            payload,
-            user,
-        )
+            db, PendingSupplierOrderFinalizePayload(supplier_groups=ordinary_groups), user,
+        ) if ordinary_groups else ({}, [])
         created_orders: list[SupplierRequisitionOrder] = []
         created_entries: dict[int, list[dict]] = {}
-        for supplier_name, entries in grouped.items():
-            created_order = _create_supplier_order_for_pending_entries(
-                db,
-                supplier_name=supplier_name,
-                entries=entries,
-                user=user,
-            )
+        for request_group in payload.supplier_groups:
+            supplier_name = _require_active_supplier(db, str(request_group.supplier_name or "").strip())
+            entries = grouped.get(supplier_name, [])
+            if not entries and not request_group.stock_sources and not request_group.bom_items:
+                raise HTTPException(400, "采购组没有有效来源")
+            if entries:
+                created_order = _create_supplier_order_for_pending_entries(
+                    db, supplier_name=supplier_name, entries=entries, user=user)
+            else:
+                created_order = SupplierRequisitionOrder(
+                    order_number=_supplier_order_number(db), supplier_name=supplier_name,
+                    request_key=request_group.request_key,
+                    request_hash=_pending_supplier_group_request_hash(request_group), request_actor_id=user.id,
+                    status="confirmed", created_by=user.id, total_quantity=0, requisition_qty=0,
+                    stock_deduction_qty=0, required_piece_qty=0)
+                db.add(created_order)
+                db.flush()
+            attach_stock_sources(db, purchase=created_order, selections=request_group.stock_sources, user=user)
+            attach_bom_sources(db, purchase=created_order, lines=request_group.bom_items, user=user)
+            db.expire(created_order, ["items"])
             created_orders.append(created_order)
             created_entries[created_order.id] = entries
         for group in touched_groups:
@@ -18656,6 +18727,7 @@ def list_reported_customer_options(
 
 def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
     """Build scope-safe filter projections without full response decoration."""
+    from app.services.unified_procurement import internal_material_batch_clause, supplier_line_customer_expression, typed_purchase_snapshots
 
     documents: list[dict] = []
     allowed_customer_ids = _allowed_customer_ids(user, db)
@@ -18704,6 +18776,7 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
         )
     ).mappings().all()
     supplier_ids = [int(row["document_id"]) for row in supplier_headers]
+    typed_snapshots = typed_purchase_snapshots(db, supplier_ids)
     supplier_items_by_order: dict[int, list] = {}
     if supplier_ids:
         supplier_item_rows = db.execute(
@@ -18740,7 +18813,7 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                 SupplierRequisitionOrderItem.status.label("item_status"),
                 SupplierRequisitionOrderItem.version.label("item_version"),
                 SupplierRequisitionOrderItem.voided_at.label("item_voided_at"),
-                Order.customer_id.label("customer_id"),
+                supplier_line_customer_expression().label("customer_id"),
             )
             .outerjoin(
                 OrderItem,
@@ -18806,6 +18879,10 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     fallback_right_mm=header["document_crease_right_mm"],
                 )
             )
+            if int(item["item_id"]) in typed_snapshots:
+                frozen = typed_snapshots[int(item["item_id"])]
+                crease_type, crease_left, crease_middle, crease_right = (
+                    frozen.get(key) for key in ("crease_type", "crease_left_mm", "crease_middle_mm", "crease_right_mm"))
             lines.append(
                 {
                     "_item_id": int(item["item_id"]),
@@ -18873,6 +18950,7 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
             stock_order_customer,
             stock_order_customer.id == StockReplenishmentOrder.customer_id,
         )
+        .where(StockReplenishmentOrder.request_hash.is_(None))
         .order_by(
             StockReplenishmentOrder.created_at.desc(),
             StockReplenishmentOrder.id.desc(),
@@ -19101,7 +19179,7 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                 RequisitionItem.status,
             ),
         )
-        .where(Requisition.status.notin_(["merged_pending", "supplier_requisition_created"]))
+        .where(Requisition.status.notin_(["merged_pending", "supplier_requisition_created"]), ~internal_material_batch_clause())
         .order_by(Requisition.created_at.desc(), Requisition.id.desc())
     )
     legacy_batches = db.scalars(
@@ -19719,6 +19797,7 @@ def _build_reported_documents(
     selected_identities: set[tuple[str, int]] | None = None,
 ) -> list[dict]:
     """Fully decorate reported documents, optionally for selected identities only."""
+    from app.services.unified_procurement import internal_material_batch_clause, supplier_line_customer_expression, typed_purchase_snapshots
 
     if selected_identities is not None and not selected_identities:
         return []
@@ -19756,6 +19835,7 @@ def _build_reported_documents(
     supplier_customer_ids: dict[int, set[int]] = {}
     supplier_item_customer_ids: dict[int, int] = {}
     supplier_order_ids = [order.id for order in supplier_orders if order.items]
+    typed_snapshots = typed_purchase_snapshots(db, supplier_order_ids)
     supplier_source_order_item_ids = {
         int(item.order_item_id)
         for order in supplier_orders
@@ -19779,13 +19859,8 @@ def _build_reported_documents(
             select(
                 SupplierRequisitionOrderItem.id,
                 SupplierRequisitionOrderItem.supplier_order_id,
-                Order.customer_id,
+                supplier_line_customer_expression(),
             )
-            .join(
-                OrderItem,
-                OrderItem.id == SupplierRequisitionOrderItem.order_item_id,
-            )
-            .join(Order, Order.id == OrderItem.order_id)
             .where(
                 SupplierRequisitionOrderItem.supplier_order_id.in_(
                     supplier_order_ids
@@ -19834,6 +19909,10 @@ def _build_reported_documents(
                     fallback_right_mm=order.crease_right_mm,
                 )
             )
+            if item.id in typed_snapshots:
+                frozen = typed_snapshots[item.id]
+                crease_type, crease_left, crease_middle, crease_right = (
+                    frozen.get(key) for key in ("crease_type", "crease_left_mm", "crease_middle_mm", "crease_right_mm"))
             crease_display = (
                 f"{crease_left}+{crease_middle}+{crease_right}"
                 if crease_type == "压线" and crease_middle is not None
@@ -19891,7 +19970,7 @@ def _build_reported_documents(
         )
 
     stock_ids = selected_ids("stock_replenishment")
-    stock_query = _replenishment_order_query().order_by(
+    stock_query = _replenishment_order_query().where(StockReplenishmentOrder.request_hash.is_(None)).order_by(
         StockReplenishmentOrder.created_at.desc(),
         StockReplenishmentOrder.id.desc(),
     )
@@ -19999,7 +20078,7 @@ def _build_reported_documents(
     legacy_query = (
         select(Requisition)
         .options(selectinload(Requisition.items))
-        .where(Requisition.status.notin_(["merged_pending", "supplier_requisition_created"]))
+        .where(Requisition.status.notin_(["merged_pending", "supplier_requisition_created"]), ~internal_material_batch_clause())
         .order_by(Requisition.created_at.desc(), Requisition.id.desc())
     )
     if legacy_ids is not None:
@@ -22838,6 +22917,9 @@ def void_supplier_requisition_item(
                     == payload.idempotency_key
                 )
             )
+            from app.models.procurement_source import ProcurementSourceLink
+            if db.scalar(select(ProcurementSourceLink.id).where(ProcurementSourceLink.supplier_item_id == item.id)):
+                raise HTTPException(409, "统一采购来源请通过整单撤销入口处理，不能仅删除采购明细")
             if existing_key_item is not None:
                 if (
                     existing_key_item.id != item.id
@@ -23120,6 +23202,8 @@ def void_supplier_order(
                     oi.requisition_remark = None
 
     try:
+        from app.services.unified_procurement import release_stock_sources
+        release_stock_sources(db, order, user)
         if order_item_ids:
             active_requisition_ids = select(RequisitionItem.id).where(
                 RequisitionItem.order_item_id.in_(order_item_ids),

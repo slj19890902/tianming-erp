@@ -1450,6 +1450,7 @@ def _pending_order_item_query(query):
 def _stock_replenishment_pending_query(query, *, db: Session, user: User):
     """Apply the authoritative stock-replenishment incoming eligibility."""
     from app.services.replenishment_receipt_progress import short_closed_clause
+    from app.services.unified_procurement import active_stock_purchase_clause
     external_purchase_source = (
         select(ExternalPackagingPurchaseItem.id)
         .where(
@@ -1459,6 +1460,7 @@ def _stock_replenishment_pending_query(query, *, db: Session, user: User):
         .exists()
     )
     query = query.where(
+        active_stock_purchase_clause(),
         StockReplenishmentOrder.status.in_(("confirmed", "partially_stocked")),
         StockReplenishmentOrderItem.stocked_quantity
         < StockReplenishmentOrderItem.quantity,
@@ -2613,7 +2615,8 @@ def _rows(
             if item_id in rows_by_id
         ]
     _decorate_rows_with_receipt_purpose(db, rows)
-    return rows
+    from app.services.unified_procurement import decorate_incoming_purchase_numbers
+    return decorate_incoming_purchase_numbers(db, rows)
 
 
 def _decorate_rows_with_display_numbers(

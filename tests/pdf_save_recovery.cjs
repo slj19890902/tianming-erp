@@ -37,6 +37,3 @@ function context(d){return {...box.methods,user:{id:7},orderImportDrafts:d,order
  const blocked=draft('storage'),s=context([blocked]);const count=posts.length;box.localStorage.setItem=()=>{throw Error('quota')};await s.saveConfirmedImportDrafts();assert.equal(posts.length,count);assert.equal(blocked._save_status,'failed');
  console.log('PASS: PDF loss/retry, frozen request, reload, partial batch, account and storage protection');
 })().catch(e=>{console.error(e);process.exitCode=1});
-
-
-

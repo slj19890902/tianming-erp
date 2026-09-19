@@ -5755,3 +5755,7 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 
 
 2026-09-19 UI-CONTINUITY：v0.22.455列表定位与编辑状态已技术发布，代码06f287b6，sc0916无迁移；待管理员人工验收。详见docs/release_reports/UI_CONTINUITY_RELEASE_20260919.md。
+
+
+## 2026-09-19 R05 统一待报料采购 v456
+正式代码 38bf64c61172fbc53bdc9293ff907c2ae303a8b9，唯一迁移 up0919，运行包 8c8602ee73b543eb5c11e8670e54f3fb7bc9e865ef51811fefb08955e1d3a96f；完整 NAS 备份及历史事实对照通过。保留并行 v455 UI/v454 PDF 修复。见 docs/release_reports/PACKAGE_C_R05_RELEASE_20260919.md。技术发布完成待管理员人工验收；R07/R08/R09 未完成。

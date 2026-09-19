@@ -5743,3 +5743,7 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 ## 2026-09-19 包 A R01/R02 v0.22.451
 
 运行 de443144，签名包 2f89faf5，唯一 head sc0916 无迁移；NAS 完整备份、签名资产、健康及正式只读核对通过。正式基线已推送，待管理员人工验收。见 docs/release_reports/PACKAGE_A_RELEASE_20260919.md 及 NAS 同任务 v451 回执。
+
+
+### 2026-09-19 包B正式v0.22.452
+运行52f666e8，sc0916无迁移，备份健康验证通过，待管理员人工验收；包C/D继续。见[包B发布回执](release_reports/PACKAGE_B_RELEASE_20260919.md)及[R10旧ERP证据](release_reports/R10_LEGACY_EVIDENCE_20260919.md)。

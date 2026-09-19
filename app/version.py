@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.454"
-APP_VERSION_NAME = "PDF保存重试与原订单恢复"
+APP_VERSION = "v0.22.455"
+APP_VERSION_NAME = "业务列表定位与编辑状态"
 APP_BUILD_DATE = "2026-09-19"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4334,3 +4334,7 @@ APP_CHANGELOG = [*(f"v0.22.453：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["PDF直接保存使用稳定请求标识；结果不确定时冻结原内容，重试恢复同一订单及预占。", "批量保存成功的草稿保持锁定，只重试未完成项；刷新后重开原PDF可先查询原保存结果。", "保留同客户单号防重、客户权限、签名、主档和库存版本校验，无数据库迁移或历史数据改写。"]
 APP_VERIFICATION_STEPS = ["刷新页面，在真实业务需要时核对并保存PDF，确认订单只出现一次且成功草稿锁定。", "若保存结果不确定，点击查询/重试原保存；关闭或刷新后重开同一PDF，先查询原结果，未查到时重新核对再保存。", "批量部分失败时只处理失败项；不要为了验收创建模拟订单。清除站点数据或换电脑后，先人工核实订单记录。"]
 APP_CHANGELOG = [*(f"v0.22.454：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["订单、采购、来料和送货列表标记当前行，弹窗返回保留原列表位置、筛选与页码。", "订单及采购、送货编辑窗口明确未保存、保存中、已保存和待核对结果，继续使用原保存防重与校验。", "订单明细并列显示订单、已送、未交数量；提示常用箱同步边界及采购批量选择范围，不修改业务事实。"]
+APP_VERIFICATION_STEPS = ["刷新订单列表，在第2页打开编辑，修改后核对未保存提示；取消返回后确认页码、筛选和当前行保留。", "展开真实订单明细，核对订单、已送、未交数量；编辑明细时核对常用箱同步提示。", "按实际业务查看采购勾选摘要和送货编辑状态；出现结果不确定时按原提示核对，不重复提交，不为验收保存模拟数据。"]
+APP_CHANGELOG = [*(f"v0.22.455：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

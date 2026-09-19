@@ -2968,6 +2968,8 @@ def _semi_candidate_dict(
         "warehouse_location": _location_dict(lot.location, projection_context),
         "customer_id": detail.owner_customer_id,
         "customer_bound": customer_bound,
+        "applicability_scope": (profile or {}).get("scope", "customers" if detail.owner_customer_id else "unconfirmed"),
+        "applicable_customer_ids": (profile or {}).get("customer_ids", [detail.owner_customer_id] if detail.owner_customer_id else []),
         "customer_name": detail.owner_customer_name_snapshot,
         "customer_generic_eligible": bool(detail.customer_generic_eligible),
         "internal_name": detail.internal_name,
@@ -3634,6 +3636,7 @@ def semi_product_candidates(
         rows = semi_finished_candidates_for_product(
             db,
             product_id=product_id,
+            customer_bound_only=True,
             **payload.model_dump(),
         )
         rows = _visible_semi_candidates(rows, user, db)
@@ -3649,19 +3652,25 @@ def semi_product_candidates(
 def semi_product_inventory_browser(
     product_id: int,
     payload: SemiProductCandidatePayload,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=50),
     db: Session = Depends(get_db),
     user: User = Depends(can_view_reservations),
 ) -> dict:
     require_customer_access(payload.customer_id, user, db)
     try:
+        page_info = {}
         rows = browse_semi_finished_inventory_for_product(
             db,
+            page=page, page_size=page_size, page_info=page_info,
+            visible_customer_ids=_visible_customer_ids(user, db),
             product_id=product_id,
             **payload.model_dump(),
         )
         rows = _visible_semi_candidates(rows, user, db)
         return {
             "product_id": product_id,
+            "page":page, "page_size":page_size, "total":page_info["total"],
             "items": _semi_candidate_dicts(db, rows),
         }
     except WarehouseInventoryError as error:

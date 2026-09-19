@@ -3,7 +3,7 @@ const html=fs.readFileSync(process.argv[2]||'static/index.html','utf8');
 const script=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(m=>m[1]).find(s=>s.trim());
 const sandbox={axios:{defaults:{},interceptors:{response:{use(){}}}},Vue:{createApp(d){sandbox.definition=d;return{component(){return this},mount(){return this}}}},TMOrderReference:{component:{}},localStorage:{getItem(){return ''},setItem(){},removeItem(){}},window:{},console,URLSearchParams,setTimeout,clearTimeout};
 vm.createContext(sandbox);vm.runInContext(script,sandbox);
-const ctx={...sandbox.definition.methods,inventoryComponents:()=>['whole','base'],inventoryPlanApplies:()=>true,inventoryStateMatchesLine:()=>true,reallocateAllDraftInventory(){},invalidatePdfDraftForItem(){},isImportDraftLocked:d=>!!d.saved};
+const ctx={...sandbox.definition.methods,inventoryCustomerForLine:()=>1,inventoryComponents:()=>['whole','base'],inventoryPlanApplies:()=>true,inventoryStateMatchesLine:()=>true,reallocateAllDraftInventory(){},invalidatePdfDraftForItem(){},isImportDraftLocked:d=>!!d.saved};
 const general={lot_id:1,customer_id:null,customer_bound:false,source:'customer_generic',automatic_recommendation:true,direct_deduction_eligible:true,available_stock_quantity:100,signature_differences:[],warning_codes:[]};
 assert.equal(ctx.isSafeSystemInventoryCandidate('whole',general),false,'general stock must never auto-adopt');
 assert.equal(ctx.isSafeSystemInventoryCandidate('whole',{...general,customer_bound:true}),true);

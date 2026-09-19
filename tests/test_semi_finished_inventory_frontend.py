@@ -36,7 +36,8 @@ def test_pdf_candidate_adopt_has_no_checkbox_and_skip_is_red() -> None:
     # Qualification and transient guards stay; no extra human-confirm checkbox.
     assert set(re.findall(r':disabled="([^"]+)"', section)) == {
         'item._inventory.loading || item._inventory.stale || item._inventory.api_error',
-        'candidate.selectable===false || item._inventory.loading || item._inventory.stale || item._inventory.api_error'
+        'candidate.selectable===false || item._inventory.loading || item._inventory.stale || item._inventory.api_error',
+        'item._inventory.semi[component].manual_loading'
     }
     assert 'chooseSemiStockGroup(item,component,{candidates:[candidate]},true)' in section
     assert 'class="btn danger small" @click="skipOrderLineInventory(item,component)">本次不用库存' in section
@@ -185,7 +186,7 @@ def test_general_semi_finished_source_is_manual_only_and_not_auto_selected() -> 
 
 def test_exact_semi_finished_candidate_keeps_direct_deduction_contract() -> None:
     assert 'candidate?.direct_deduction_eligible === true' in INDEX
-    assert 'confirmDirectSemiDeduction(item,component,candidate)' in INDEX
+    assert 'chooseSemiStockGroup(item,component,{candidates:[candidate]},true)' in INDEX
     assert 'chooseSemiStockGroup(item,component,group,true)' in INDEX
     assert "direct_deduction:directDeduction" in INDEX
     assert 'warningAcknowledgedCodes.push("CUSTOMER_GENERIC_SEMI_FINISHED_STOCK")' in INDEX
@@ -214,7 +215,7 @@ const candidate = {{
   direct_deduction_eligible: true, signature_differences: [],
   warning_codes: ["MANUAL_DEDUCTION_CONFIRM_REQUIRED", "CUSTOMER_GENERIC_SEMI_FINISHED_STOCK"],
 }};
-const context = {{
+const context = {{ ...methods, orderImportDrafts:[],
   inventoryPlanApplies() {{ return true; }},
   inventoryComponents() {{ return ["whole"]; }},
   inventoryCandidateWarnings: methods.inventoryCandidateWarnings,
@@ -263,7 +264,7 @@ const methods = sandbox.definition.methods;
 const direct = {{lot_id:17,source:"signature",direct_deduction_eligible:true,signature_differences:[]}};
 const part = candidate => ({{candidates:[candidate],manual_candidates:[],selected:candidate,selected_candidates:[candidate],allocations:[],skipped:false,manual_override:false,general_confirmation:false}});
 const line = {{_inventory:{{finished:{{candidates:[],manual_candidates:[],selected:null,selected_candidates:[],allocations:[],skipped:true}},semi:{{whole:part(direct)}}}}}};
-const context = {{
+const context = {{ ...methods, orderImportDrafts:[],
   inventoryComponents() {{ return ["whole"]; }},
   isDirectSemiDeductionCandidate:methods.isDirectSemiDeductionCandidate,
   isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate,
@@ -340,7 +341,7 @@ function candidate(lotId, stock, yieldFactor=1, finished=false, source="signatur
 function part(candidates=[]) {{ return {{ candidates, manual_candidates:[], selected:candidates[0] || null, selected_candidates:candidates, allocations:[], skipped:false, manual_override:true, unavailable_reason:"" }}; }}
 function line(quantity, semiCandidates=[], finishedCandidates=[]) {{ return {{ quantity, _inventory:{{ api_error:false, stale:false, finished:part(finishedCandidates), semi:{{ whole:part(semiCandidates), cover:part(), base:part() }} }} }}; }}
 const methods = sandbox.definition.methods;
-const context = {{ inventoryPlanApplies:methods.inventoryPlanApplies, inventoryComponents: () => ["whole"], inventoryCandidatePayload: () => ({{ pieces_per_box:1 }}), semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride, inventoryCandidateWarnings:methods.inventoryCandidateWarnings, isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate }};
+const context = {{ ...methods, orderImportDrafts:[], inventoryHasSelection:methods.inventoryHasSelection, inventoryPlanApplies:methods.inventoryPlanApplies, inventoryComponents: () => ["whole"], inventoryCandidatePayload: () => ({{ pieces_per_box:1 }}), semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride, inventoryCandidateWarnings:methods.inventoryCandidateWarnings, isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate }};
 const shared = [line(50,[candidate(7,100)]), line(30,[candidate(7,100)]), line(30,[candidate(7,100)])];
 method.call(context, shared);
 const yielded = [line(1,[candidate(8,2,3)]), line(5,[candidate(8,2,3)])];
@@ -353,7 +354,7 @@ method.call(context, manual);
 const manualPlan = methods.buildReservationPlan.call(context, manual[0]);
 const finished = [line(4,[],[candidate(11,5,1,true)]), line(4,[],[candidate(11,5,1,true)])];
 method.call(context, finished);
-const decisionContext = {{ inventoryPlanApplies:methods.inventoryPlanApplies, inventoryComponents:() => ["whole"], inventoryStateMatchesLine:() => true, componentLabel:methods.componentLabel }};
+const decisionContext = {{ inventoryHasSelection:methods.inventoryHasSelection, inventoryPlanApplies:methods.inventoryPlanApplies, inventoryComponents:() => ["whole"], inventoryStateMatchesLine:() => true, componentLabel:methods.componentLabel }};
 const apiError = line(1); apiError._inventory.api_error = true; apiError._inventory.error = "库存候选加载失败：网络错误";
 const incomplete = line(1); incomplete._inventory.semi.whole.unavailable_reason = "常用箱缺少报料尺寸/材质/楞型，无法推荐半成品";
 const apiBlocked = methods.inventoryDecisionRequired.call(decisionContext, apiError);
@@ -370,7 +371,7 @@ const result = {{
   finished:finished.map(row => row._inventory.finished.allocations.reduce((sum,a) => sum+a.requested_qty,0)),
   gates:[!!apiBlocked,!!incompleteBlocked,incompleteSkipped],
 }};
-const expected = {{shared:[50,30,20],yielded:[1,3],yieldedStock:2,multiPlan:[3,4],multiWarnings:[[true,["SEMI_SIGNATURE_OVERRIDE"]],[false,[]]],manualWarning:[true,["SEMI_SIGNATURE_OVERRIDE"]],finished:[4,1],gates:[true,true,""]}};
+const expected = {{shared:[50,30,20],yielded:[1,3],yieldedStock:2,multiPlan:[3,4],multiWarnings:[[true,["SEMI_SIGNATURE_OVERRIDE"]],[false,[]]],manualWarning:[true,["SEMI_SIGNATURE_OVERRIDE"]],finished:[4,1],gates:[false,false,""]}};
 if (JSON.stringify(result) !== JSON.stringify(expected)) throw new Error(JSON.stringify(result));
 let removeReallocations = 0;
 const removeContext = {{orderForm:{{items:[{{}},{{}}]}},modal:null,syncOrderReminderVisibility() {{}},reallocateAllDraftInventory() {{ removeReallocations += 1; }}}};
@@ -381,7 +382,7 @@ if (removeContext.orderForm.items.length !== 1 || removeReallocations !== 1) thr
   sandbox.axios.get = async (url) => {{ requests.push(url); return url.includes("/api/master/products/") ? {{data:{{id:99,report_length_mm:10,report_width_mm:20,material_code:"C4C",flute_type:"B",pieces_per_box:1}}}} : {{data:{{items:[]}}}}; }};
   sandbox.axios.post = async (url) => {{ requests.push(url); return {{data:{{items:[]}}}}; }};
   const fallbackLine = {{matched_product_id:99,quantity:2}};
-  const loadContext = {{
+  const loadContext = {{ ...methods, orderImportDrafts:[],
     inventoryPlanApplies:methods.inventoryPlanApplies,
     inventoryCustomerForLine:() => 5, newOrderInventoryState:methods.newOrderInventoryState,
     inventoryComponents:() => ["whole"], inventoryCandidatePayload:() => ({{board_length_mm:10,board_width_mm:20,material_code:"C4C",flute_type:"B"}}),
@@ -432,7 +433,8 @@ def test_api_failures_block_but_incomplete_signature_can_be_skipped() -> None:
     assert "常用箱缺少报料尺寸/材质/楞型，无法推荐半成品" in INDEX
     assert "if (reason) state.semi[component].unavailable_reason = reason" in INDEX
     assert "if (part.unavailable_reason && !part.skipped)" in INDEX
-    assert "if (state.semi[component].unavailable_reason) state.semi[component].skipped = true" in INDEX
+    assert "if (!this.inventoryHasSelection(line)) return" in INDEX
+    assert "state.semi[component].unavailable_reason || line._semi_all_declined" in INDEX
 
 
 def test_multi_lot_plans_and_zero_allocations_use_allocation_records() -> None:
@@ -533,7 +535,7 @@ const learnedDifference = {{lot_id:4,source:"learned",available_stock_quantity:2
 const accidentalManual = {{lot_id:5,source:"manual",available_stock_quantity:20,signature_differences:[],warning_codes:[]}};
 const line = {{product_id:99,quantity:10,_inventory:{{loading:false,stale:false,api_error:false,context:{{product_id:99,customer_id:7,quantity:10}},finished:part([dedicated,general,warningAlias]),semi:{{whole:part([safeSemi,learnedDifference,accidentalManual]),cover:part([]),base:part([])}}}}}};
 let reallocations = 0;
-const context = {{
+const context = {{ ...methods, orderImportDrafts:[],
   inventoryComponents:() => ["whole"], inventoryStateMatchesLine:() => true,
   semiCandidateNeedsOverride:methods.semiCandidateNeedsOverride,
   isGeneralSemiFinishedCandidate:methods.isGeneralSemiFinishedCandidate,
@@ -591,7 +593,7 @@ sandbox.axios.get = async url => url.includes("/api/master/products/")
 sandbox.axios.post = async () => ({{data:{{items:[generalSemi]}}}});
 const line = {{product_id:99,quantity:5}};
 let reallocations = 0;
-const context = {{
+const context = {{ ...methods, orderImportDrafts:[],
   inventoryPlanApplies:methods.inventoryPlanApplies,
   inventoryCustomerForLine:() => 7,
   newOrderInventoryState:methods.newOrderInventoryState,
@@ -651,7 +653,7 @@ const general = {{lot_id:11,version:3,source:"general_signature",recommendation_
 const part = {{candidates:[general],manual_candidates:[],selected:null,selected_candidates:[],allocations:[],skipped:false,manual_override:false,general_confirmation:false,unavailable_reason:""}};
 const line = {{product_id:99,quantity:5,_inventory:{{loading:false,stale:false,api_error:false,context:{{product_id:99,customer_id:7,quantity:5}},finished:{{candidates:[],manual_candidates:[],selected:null,selected_candidates:[],allocations:[],skipped:false}},semi:{{whole:part,cover:{{candidates:[],manual_candidates:[],selected_candidates:[],allocations:[],skipped:false}},base:{{candidates:[],manual_candidates:[],selected_candidates:[],allocations:[],skipped:false}}}}}}}};
 let reallocations = 0;
-const context = {{
+const context = {{ ...methods, orderImportDrafts:[],
   inventoryPlanApplies:methods.inventoryPlanApplies,
   inventoryComponents:() => ["whole"],
   inventoryCandidateWarnings:methods.inventoryCandidateWarnings,

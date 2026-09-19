@@ -7675,7 +7675,7 @@
                                 <button v-if="semiStockMoreCount(item,component)" class="btn small" type="button" @click="item._inventory.semi[component].show_more_sizes = !item._inventory.semi[component].show_more_sizes; item._inventory_page=1">{{ item._inventory.semi[component].show_more_sizes ? '收起' : '展开' }}大片料 / 其他尺寸（{{ semiStockMoreCount(item,component) }}）</button>
                                 <table class="line-items pdf-material-table"><thead><tr><th>货物名称</th><th>纸板长（mm）</th><th>纸板宽（mm）</th><th>楞型</th><th>材质</th><th>加工类型</th><th>数量</th><th>位置</th><th>采用 / 不采用</th></tr></thead><tbody>
                                   <tr v-for="candidate in pdfMaterialCandidates(item,component,item._inventory_tab).slice(((item._inventory_page||1)-1)*4,(item._inventory_page||1)*4)" :key="candidate.lot_id">
-                                    <td>{{candidate.internal_name || '—'}}</td><td>{{candidate.board_length_mm || '—'}}</td><td>{{candidate.board_width_mm || '—'}}</td>
+                                    <td>{{candidate.internal_name || '—'}}<small>{{inventoryCandidateScope(candidate)}}</small></td><td>{{candidate.board_length_mm || '—'}}</td><td>{{candidate.board_width_mm || '—'}}</td>
                                     <td>{{semiStockField({candidates:[candidate]},'flute_type')}}</td><td>{{candidate.material_code || '—'}}<info-note v-if="candidate.signature_differences?.length || candidate.warning_messages?.length">{{[...(candidate.signature_differences||[]),...(candidate.warning_messages||[])].join('；')}}</info-note></td>
                                     <td>{{semiStockField({candidates:[candidate]},'processing')}}<small class="semi-stock-match-note">{{candidate.match_reason}}</small></td>
                                     <td>{{candidate.available_stock_quantity}} 张<small v-if="candidate.deductible_requirement_quantity!==candidate.available_stock_quantity">（可抵 {{candidate.deductible_requirement_quantity}} 片）</small><div v-if="item._inventory.semi[component].allocations.some(a=>a.candidate.lot_id===candidate.lot_id)" class="status green">采用 {{item._inventory.semi[component].allocations.filter(a=>a.candidate.lot_id===candidate.lot_id).reduce((n,a)=>n+Number(a.stock_quantity||0),0)}} 张</div></td><td><order-stock-location :candidate="candidate" :item="item"></order-stock-location></td>
@@ -7683,7 +7683,9 @@
                                     </td>
                                   </tr><tr v-if="!pdfMaterialCandidates(item,component,item._inventory_tab).length"><td colspan="9">暂无符合条件的可用材料</td></tr>
                                 </tbody></table>
-                                <div class="toolbar-group"><button class="btn danger small" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" @click="loadOrderLineManualInventory(item,component,draft.matched_customer_id)">查找更多适配</button><pager :page="item._inventory_page||1" :total="pdfMaterialCandidates(item,component,item._inventory_tab).length" :page-size="4" @change="item._inventory_page=$event"></pager></div>
+                                <div class="toolbar-group"><button class="btn danger small" @click="skipOrderLineInventory(item,component)">本次不用库存</button><button class="btn small" type="button" :disabled="item._inventory.semi[component].manual_loading" @click="loadOrderLineManualInventory(item,component,inventoryCustomerForLine(item))">查询其他可用片料</button>
+                          <span v-if="item._inventory.semi[component].manual_error" class="danger-text">{{item._inventory.semi[component].manual_error}}</span>
+                          <pager v-if="item._inventory.semi[component].manual_total" :page="item._inventory.semi[component].manual_page||1" :total="item._inventory.semi[component].manual_total" :page-size="20" @change="loadOrderLineManualInventory(item,component,inventoryCustomerForLine(item),$event)"></pager><pager :page="item._inventory_page||1" :total="pdfMaterialCandidates(item,component,item._inventory_tab).length" :page-size="4" @change="item._inventory_page=$event"></pager></div>
                                 <div v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{item._inventory.semi[component].unavailable_reason}}</div>
                               </div></template>
                             </template>
@@ -7920,18 +7922,20 @@
 	                    <td colspan="8" style="padding:4px 6px 8px">
                       <div style="border:1px solid #bfdbfe;border-radius:6px;padding:7px;background:#f8fbff;font-size:12px">
                         <div class="toolbar-group"><span v-if="item._inventory.loading" class="muted">查询中…</span><span v-else-if="item._inventory.stale" class="status orange">请刷新库存</span><button class="btn small" type="button" :disabled="item._inventory.loading" @click="loadOrderLineInventory(item,orderForm.customer_id)">刷新</button></div>
-                         <div v-if="item._inventory.error" class="danger-text" style="margin-top:4px">{{ item._inventory.error }}</div>
+                         <div v-if="!inventoryHasSelection(item)" class="muted">未选择库存抵扣，可继续保存；查询失败不代表库存为零，不会自动报料。</div><div v-if="item._inventory.error" class="danger-text" style="margin-top:4px">{{ item._inventory.error }}</div>
                          <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品库存：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，<order-stock-location :candidate="candidate" :item="item"></order-stock-location></span><button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">采用安全推荐</button><button class="btn danger small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 个，<order-stock-location :candidate="allocation.candidate" :item="item"></order-stock-location></div></div>
                         <!-- compact semi stock -->
                         <div class="toolbar-group"><button class="btn danger small" type="button" @click="skipAllLineSheets(item)">本行全部不采用片料</button><small class="muted">通用片料仅推荐，采用后才抵扣</small></div>
                         <div v-for="component in inventoryComponents(item)" :key="component">
-                          <strong>半成品 / 原料{{ componentLabel(component) }}</strong>
+                          <strong>半成品 / 原料{{ componentLabel(component) }}</strong><button class="btn small" type="button" :disabled="item._inventory.semi[component].manual_loading" @click="loadOrderLineManualInventory(item,component,inventoryCustomerForLine(item))">查询其他可用片料</button>
+                          <span v-if="item._inventory.semi[component].manual_error" class="danger-text">{{item._inventory.semi[component].manual_error}}</span>
+                          <pager v-if="item._inventory.semi[component].manual_total" :page="item._inventory.semi[component].manual_page||1" :total="item._inventory.semi[component].manual_total" :page-size="20" @change="loadOrderLineManualInventory(item,component,inventoryCustomerForLine(item),$event)"></pager>
                           <button v-if="semiStockMoreCount(item,component)" class="btn small" type="button" @click="item._inventory.semi[component].show_more_sizes = !item._inventory.semi[component].show_more_sizes">{{ item._inventory.semi[component].show_more_sizes ? '收起' : '展开' }}大片料 / 其他尺寸（{{ semiStockMoreCount(item,component) }}）</button>
                           <span v-if="item._inventory.semi[component].unavailable_reason" class="status orange">{{ item._inventory.semi[component].unavailable_reason }}</span>
                           <table v-if="semiStockGroups(item,component).length" class="semi-stock-table">
                             <thead><tr><th>货物名称</th><th>纸板长（mm）</th><th>纸板宽（mm）</th><th>楞型</th><th>材质</th><th>加工类型</th><th>数量</th><th>位置</th><th class="semi-stock-actions">采用 / 不采用</th></tr></thead>
                             <tbody><tr v-for="group in semiStockGroups(item,component)" :key="group.key">
-                              <td>{{ semiStockField(group,'internal_name') }}</td>
+                              <td>{{ semiStockField(group,'internal_name') }}<small>{{group.candidates.map(c=>inventoryCandidateScope(c)).filter((v,i,a)=>a.indexOf(v)===i).join('；')}}</small></td>
                               <td>{{ semiStockField(group,'board_length_mm') }}</td>
                               <td>{{ semiStockField(group,'board_width_mm') }}</td>
                               <td>{{ semiStockField(group,'flute_type') }}</td>
@@ -7942,7 +7946,7 @@
                               <td class="semi-stock-actions"><button class="btn small success" type="button" :disabled="group.candidates.every(c=>c.selectable===false) || item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,true)">采用</button><button class="btn small danger" type="button" :disabled="item._inventory.loading || item._inventory.stale || item._inventory.api_error" @click="chooseSemiStockGroup(item,component,group,false)">不采用</button></td>
                             </tr></tbody>
                           </table>
-                          <span v-else class="muted">暂无可用库存</span>
+                          <span v-else class="muted">{{inventoryQueryStatus(item)}}</span>
                         </div>
                         <!-- /compact semi stock -->
                       </div>
@@ -9609,7 +9613,7 @@
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && deliveryForm.editing_status==='pending' && !deliveryFormIsDirty()" class="btn" :disabled="loading || deliverySaveState.saving || !deliveryForm.pick_task || !!deliveryOperationState.action" :title="deliveryForm.pick_task ? '打印款号、名称、尺寸、数量和具体位置' : '请先点拿货生成库位计划'" @click="openCurrentDeliveryPickPrint">打印仓库找货单</button>
             <span v-if="modal?.type === 'delivery' && deliveryForm.editingId && deliveryForm.editing_status==='pending' && !deliveryFormIsDirty() && !deliveryForm.pick_task" class="muted">先点“拿货”生成库位计划，再打印找货单</span>
             <button v-if="canSaveModal && modal?.type==='quotationConvert'" class="btn primary" :disabled="loading || quotationConversionState.saving || quotationConversionState.committed || quotationConversionState.outcomeUncertain || !!quotationConvertCreaseMismatch" @click="saveModal()">{{ quotationConversionState.saving ? '正在转入…' : (quotationConversionState.committed ? '已转入常用箱' : '保存') }}</button>
-            <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderCreateSaveState.outcomeUncertain || orderReminderBlocking()" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
+            <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderReminderBlocking()" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderItem'" class="btn primary" :disabled="loading || orderItemSaveState.saving || orderItemSaveState.committed || orderItemSaveState.outcomeUncertain || finishedReservationActionBlocked() || !!orderItemCreaseMismatch" @click="saveModal()">{{ orderItemSaveState.saving ? '正在保存明细…' : (orderItemSaveState.committed ? '订单明细已保存' : '保存') }}</button>
             <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :class="{'delivery-guide-target':modal?.type==='delivery' && ['review','save','print'].includes(deliveryGuideStage)}" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
@@ -14532,6 +14536,7 @@
             return !!context && !state.loading && !state.stale && !state.api_error && Number(context.product_id) === Number(line.product_id || line.matched_product_id) && Number(context.customer_id) === Number(customerId || this.inventoryCustomerForLine(line)) && Number(context.quantity) === Number(line.quantity || 0);
           },
           invalidateLineInventory(line) {
+            line._inventory_request = Number(line._inventory_request || 0) + 1;
             if (!this.inventoryPlanApplies(line)) {
               if (line._inventory_refresh_timer) clearTimeout(line._inventory_refresh_timer);
               line._inventory_refresh_timer = null;
@@ -14545,7 +14550,8 @@
             state.authoritative = null;
             state.authoritative_loading = false;
             state.authoritative_error = "";
-            [state.finished, ...Object.values(state.semi)].forEach(part => { part.selected = null; part.selected_candidates = []; part.allocations = []; part.skipped = false; part.manual_override = false; part.general_confirmation = false; });
+            state.loading = false;
+            [state.finished, ...Object.values(state.semi)].forEach(part => { part.candidates = []; part.manual_candidates = []; });
             line._inventory = state;
           },
           scheduleOrderLineInventoryRefresh(line, customerId) {
@@ -14591,23 +14597,38 @@
             const productId = Number(line.product_id || line.matched_product_id || 0);
             customerId = Number(customerId || this.inventoryCustomerForLine(line));
             if (!productId || !customerId) return;
+            const prior = line._inventory;
             const previousDecision = this.inventoryStateMatchesLine(line,customerId) ? this.importDraftInventoryDecisionSnapshot(line) : null;
-            const state = this.newOrderInventoryState();
+            let state = this.newOrderInventoryState();
             let components = [];
-            line._inventory = state; state.loading = true;
+            line._inventory_request = Number(line._inventory_request || 0) + 1;
+            const requestId = line._inventory_request;
+            const quantity = Number(line.quantity || 0);
+            const current = () => line._inventory_request === requestId && Number(line.product_id || line.matched_product_id) === productId && Number(line.quantity || 0) === quantity && Number(this.inventoryCustomerForLine(line)) === customerId;
+              if (prior && this.inventoryHasSelection({_inventory:prior})) {
+                ["finished", ...Object.keys(state.semi)].forEach(key => {
+                  const oldPart = key === "finished" ? prior.finished : prior.semi[key];
+                  const part = key === "finished" ? state.finished : state.semi[key];
+                  for (const field of ["selected","selected_candidates","allocations","skipped","manual_override","general_confirmation"]) part[field] = oldPart[field];
+                });
+                if (!previousDecision) { state.stale = true; state.error = "产品、客户或数量已变化，请重新确认已选库存或明确取消抵扣。"; }
+              }
+            line._inventory = state; state = line._inventory; state.loading = true;
             try {
-              const product = (await axios.get(`/api/master/products/${productId}`)).data;
+              const product = (await axios.get(`/api/master/products/${productId}`, {timeout:10000})).data;
+              if (!current()) return;
               line._inventory_product = product;
               state.context = { product_id:productId, customer_id:customerId, quantity:Number(line.quantity || 0) };
               components = this.inventoryComponents(line);
-              const requests = [{ key:"finished", label:"成品", promise:axios.get(`/api/warehouse/finished/products/${productId}/candidates`, { params:{ customer_id:customerId } }) }];
+              const requests = [{ key:"finished", label:"成品", promise:axios.get(`/api/warehouse/finished/products/${productId}/candidates`, { params:{ customer_id:customerId }, timeout:10000 }) }];
               components.forEach(component => {
                 const payload = this.inventoryCandidatePayload(line, component);
                 const reason = this.inventoryPayloadUnavailableReason(payload);
                 if (reason) state.semi[component].unavailable_reason = reason;
-                else requests.push({ key:component, label:`半成品${this.componentLabel(component)}`, promise:axios.post(`/api/warehouse/semi-finished/products/${productId}/candidates`, payload) });
+                else requests.push({ key:component, label:`半成品${this.componentLabel(component)}`, promise:axios.post(`/api/warehouse/semi-finished/products/${productId}/candidates`, payload, {timeout:10000}) });
               });
               const responses = await Promise.allSettled(requests.map(request => request.promise));
+              if (!current()) return;
               const failures = [];
               responses.forEach((response, index) => {
                 const request = requests[index];
@@ -14621,41 +14642,44 @@
               state.api_error = true;
               state.error = `库存候选加载失败：${this.errorMessage(error)}`;
             } finally {
-              if (line._inventory !== state) return;
+              if (!current()) return;
               state.loading = false;
-              state.stale = false;
               if (!state.api_error && previousDecision) {
                 try { await this.restoreImportDraftInventoryDecision(line,previousDecision,customerId); }
                 catch(error) { state.api_error = true; state.error = this.errorMessage(error); }
               }
+              if (!current()) return;
               Object.keys(state.semi).forEach(component => {
                 if (state.semi[component].unavailable_reason || line._semi_all_declined) {
                   Object.assign(state.semi[component],{selected:null,selected_candidates:[],allocations:[],skipped:true,_batch_auto_skipped:false});
                 }
               });
-              this.confirmSafeOrderLineInventoryRecommendations?.(line);
+              if (!state.api_error && !state.stale) this.confirmSafeOrderLineInventoryRecommendations?.(line);
               this.reallocateAllDraftInventory();
             }
           },
-          async loadOrderLineManualInventory(line, component, customerId) {
+          async loadOrderLineManualInventory(line, component, customerId, page=1) {
             const productId = Number(line.product_id || line.matched_product_id || 0);
             customerId = Number(customerId || this.inventoryCustomerForLine(line));
-            if (!productId || !customerId) return;
+            if (!productId || !customerId || !line._inventory) return;
             const payload = this.inventoryCandidatePayload(line, component);
+            const state = line._inventory, part = state.semi[component];
+            const generation = Number(part.manual_generation || 0) + 1;
+            part.manual_generation = generation;
+            const requestId = line._inventory_request;
+            const current = () => requestId === line._inventory_request && part.manual_generation === generation && Number(this.inventoryCustomerForLine(line)) === customerId;
             const reason = this.inventoryPayloadUnavailableReason(payload);
-            if (reason) { line._inventory.semi[component].unavailable_reason = reason; return; }
+            if (reason) { part.unavailable_reason = reason; return; }
+            part.manual_loading = true; part.manual_error = "";
             try {
-              const { data } = await axios.post(`/api/warehouse/semi-finished/products/${productId}/inventory`, payload);
-              line._inventory.semi[component].manual_candidates = (data.items || []).map(candidate => {
-                const recommendationSource = candidate.recommendation_source || candidate.source || "manual";
-                return {
-                  ...candidate,
-                  recommendation_source: recommendationSource,
-                  source: recommendationSource === "general_signature" ? "general_signature" : "manual",
-                };
-              });
+              const { data } = await axios.post(`/api/warehouse/semi-finished/products/${productId}/inventory`, payload, {params:{page,page_size:20},timeout:10000});
+              if (!current()) return;
+              part.manual_candidates = (data.items || []).map(candidate => ({...candidate, recommendation_source:candidate.recommendation_source || candidate.source || "manual", source:candidate.source === "general_signature" ? "general_signature" : "manual"}));
+              part.manual_page = page; part.manual_total = data.total || 0;
               this.reallocateAllDraftInventory();
-            } catch (error) { line._inventory.api_error = true; line._inventory.error = `人工候选加载失败：${this.errorMessage(error)}`; }
+            } catch (error) {
+              if (current()) part.manual_error = `查询失败，可重试：${this.errorMessage(error)}`;
+            } finally { if (current()) part.manual_loading = false; }
           },
           confirmOrderLineInventory(line, component, candidate=null, manual=false) {
             if (candidate?.selectable === false) { this.showToast("该批次用途待核，请管理员先维护实际适用产品", true); return; }
@@ -14750,7 +14774,7 @@
             };
             (lines || []).forEach(line => {
               const state = line._inventory;
-              if (!state) return;
+              if (!state || state.loading || state.stale || state.api_error) return;
               allocate(line, state.finished, Number(line.quantity || 0), false, "finished");
               const finishedQty = state.finished.allocations.reduce((sum, allocation) => sum + allocation.requested_qty, 0);
               this.inventoryComponents(line).forEach(component => {
@@ -14797,7 +14821,7 @@
                   finished_skipped:!!line._inventory?.finished?.skipped,
                 })),
               };
-              const { data } = await axios.post("/api/orders/inventory-draft-preview", payload);
+              const { data } = await axios.post("/api/orders/inventory-draft-preview", payload, {timeout:10000});
               if (Number(draft._inventory_authority_generation) !== generation) return;
               const byLineId = new Map((data?.items || []).map(row => [String(row.client_line_id), row]));
               items.forEach(line => {
@@ -14888,15 +14912,9 @@
                 return;
               }
               if (decision.mode !== "exact") return;
-              let pool = [...(part.candidates || []), ...(part.manual_candidates || [])];
+              let pool = [...(part.candidates || []), ...(part.manual_candidates || []), ...(part.selected_candidates || [])];
               let byLotId = new Map(pool.map(candidate => [Number(candidate.lot_id), candidate]));
               let missing = decision.lot_ids.filter(lotId => !byLotId.has(Number(lotId)));
-              if (missing.length && component !== "finished") {
-                await this.loadOrderLineManualInventory(line, component, customerId);
-                pool = [...(part.candidates || []), ...(part.manual_candidates || [])];
-                byLotId = new Map(pool.map(candidate => [Number(candidate.lot_id), candidate]));
-                missing = decision.lot_ids.filter(lotId => !byLotId.has(Number(lotId)));
-              }
               if (missing.length) {
                 throw new Error(`库存批次 ${missing.join("、")} 已变化，系统已刷新，请重新核对本份草稿后再保存。`);
               }
@@ -14961,9 +14979,27 @@
             });
             return { finished, semi };
           },
+          inventoryCandidateScope(candidate) {
+            const scope = candidate.applicability_scope;
+            return `原客户：${candidate.customer_name || "未登记"} · ${scope === "customers" ? "指定客户" : ["general","public"].includes(scope) ? "通用" : "归属待确认"}${candidate.selectable === false ? " · 仅查看，须先确认用途" : ""}`;
+          },
+          inventoryQueryStatus(line) {
+            const state = line?._inventory;
+            if (!state) return "未查询";
+            if (this.inventoryHasSelection(line)) return "已选择库存抵扣";
+            if (state.loading) return "正在查询；未选抵扣可继续保存";
+            if (state.api_error) return "查询失败，可重试；未选抵扣可继续保存";
+            if (state.stale) return "未查询当前资料";
+            return "无本客户库存；可主动查询其他可用片料";
+          },
+          inventoryHasSelection(line) {
+            const state = line?._inventory;
+            return !!state && [state.finished, ...Object.values(state.semi)].some(part => !part.skipped && (part.selected || part.selected_candidates?.length || part.allocations?.length));
+          },
           inventoryDecisionRequired(line) {
             if (!this.inventoryPlanApplies(line)) return "";
             const state = line?._inventory;
+            if (!this.inventoryHasSelection(line)) return "";
             if (!state || state.loading) return "库存候选正在加载，请稍候。";
             if (state.api_error) return state.error || "库存候选加载失败，请刷新后重试。";
             if (state.stale) return "库存候选已过期，请重新获取并确认。";
@@ -36684,8 +36720,10 @@
           },
           async saveNewOrder(orderPayload) {
             const state = this.orderCreateSaveState || {};
-            if (state.saving || state.committed || state.outcomeUncertain) return {_in_flight:true};
+            if (state.saving || state.committed) return {_in_flight:true};
             const payload = JSON.parse(JSON.stringify(orderPayload));
+            this.orderForm._create_key ||= createIdempotencyKey();
+            payload.idempotency_key = this.orderForm._create_key;
             this.orderCreateSaveState = {saving:true,committed:false,outcomeUncertain:false,result:null};
             let repairConfirmation;
             try {
@@ -36707,7 +36745,6 @@
             } catch (error) {
               if (!error?.response) {
                 this.orderCreateSaveState = {saving:false,committed:false,outcomeUncertain:true,result:null};
-                this.closeModal();
                 error._orderCreateOutcomeUncertain = true;
               } else {
                 this.orderCreateSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
@@ -36923,7 +36960,7 @@
               );
               return false;
             }
-            if (this.modal?.type === "order" && (this.orderCreateSaveState.saving || this.orderCreateSaveState.committed || this.orderCreateSaveState.outcomeUncertain)) {
+            if (this.modal?.type === "order" && (this.orderCreateSaveState.saving || this.orderCreateSaveState.committed)) {
               this.showToast(
                 this.orderCreateSaveState.saving
                   ? "订单正在保存，请勿重复点击"
@@ -37496,7 +37533,7 @@
                 return false;
               }
               if (error?._orderCreateOutcomeUncertain) {
-                this.showToast("订单保存请求连接中断，结果暂不确定。原窗口已关闭，请刷新订单列表，按客户单号和明细核对，不要重复点击原草稿。", true);
+                this.showToast("订单保存请求连接中断，录入内容已保留。可原样重试保存，系统按同一请求核对，不会重复建单；请勿修改待确认的提交内容。", true);
                 return false;
               }
               if (error?._quotationConversionOutcomeUncertain) {

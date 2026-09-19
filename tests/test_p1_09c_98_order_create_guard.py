@@ -50,11 +50,13 @@ def test_order_create_runtime_blocks_duplicate_and_freezes_payload(tmp_path: Pat
     body = _method_body("async saveNewOrder(orderPayload) {", "async saveCurrentOrderItem(orderItemId, orderItemPayload) {")
     script = f"""
 const body={json.dumps(body, ensure_ascii=False)};
+globalThis.createIdempotencyKey=()=>"package-a-test-key";
 let release,postCount=0,closeCount=0;const calls=[];
 const axios={{post:(url,payload)=>{{postCount+=1;calls.push({{url,payload}});return new Promise(resolve=>{{release=()=>resolve({{data:{{id:9,order_number:"TM-009"}}}});}});}}}};
 const factory=new Function("axios","return async function(orderPayload) {{"+body+"}}");
 const source={{customer_id:5,customer_po:"PO-1",items:[{{client_line_id:"L1",quantity:10}}]}};
 const vm={{
+  orderForm:{{}},
   orderCreateSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},
   prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   closeModal(){{closeCount+=1;}},loadOrders:async()=>true,loadKpi:async()=>true,
@@ -84,10 +86,12 @@ def test_order_create_refresh_failure_preserves_committed_success(tmp_path: Path
     body = _method_body("async saveNewOrder(orderPayload) {", "async saveCurrentOrderItem(orderItemId, orderItemPayload) {")
     script = f"""
 const body={json.dumps(body, ensure_ascii=False)};
+globalThis.createIdempotencyKey=()=>"package-a-test-key";
 const axios={{post:async()=>({{data:{{id:9,order_number:"TM-009"}}}})}};
 const factory=new Function("axios","return async function(orderPayload) {{"+body+"}}");
 const toasts=[];let closed=false;
 const vm={{
+  orderForm:{{}},
   orderCreateSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},
   prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   closeModal(){{closed=true;}},loadOrders:async()=>{{throw new Error("orders offline");}},loadKpi:async()=>true,
@@ -103,12 +107,14 @@ const vm={{
     _run_node(script, tmp_path, "order-create-refresh.js")
 
 
-def test_order_create_network_uncertain_closes_but_explicit_failure_retries(tmp_path: Path) -> None:
+def test_order_create_network_uncertain_retains_form_for_idempotent_retry(tmp_path: Path) -> None:
     body = _method_body("async saveNewOrder(orderPayload) {", "async saveCurrentOrderItem(orderItemId, orderItemPayload) {")
     script = f"""
 const body={json.dumps(body, ensure_ascii=False)};
+globalThis.createIdempotencyKey=()=>"package-a-test-key";
 const factory=axios=>new Function("axios","return async function(orderPayload) {{"+body+"}}")(axios);
 const makeVm=()=>({{
+  orderForm:{{}},
   orderCreateSaveState:{{saving:false,committed:false,outcomeUncertain:false,result:null}},
   prepareMoldRepairConfirmation:async()=>({{confirmed:true,confirmation_token:null}}),
   closeCount:0,closeModal(){{this.closeCount+=1;}},loadOrders:async()=>true,loadKpi:async()=>true,
@@ -120,8 +126,11 @@ const payload={{customer_id:5,items:[{{client_line_id:"L1"}}]}};
   try{{await factory({{post:async()=>{{throw networkError;}}}}).bind(networkVm)(payload);throw new Error("network did not throw");}}
   catch(error){{
     if(error!==networkError||!error._orderCreateOutcomeUncertain)throw error;
-    if(networkVm.closeCount!==1||!networkVm.orderCreateSaveState.outcomeUncertain)throw new Error("uncertain order kept original modal active");
+    if(networkVm.closeCount!==0||!networkVm.orderCreateSaveState.outcomeUncertain)throw new Error("uncertain order kept original modal active");
   }}
+  let retriedKey;
+  await factory({{post:async(url,body)=>{{retriedKey=body.idempotency_key;return {{data:{{id:8}}}};}}}}).bind(networkVm)(payload);
+  if(retriedKey!==networkVm.orderForm._create_key || !networkVm.orderCreateSaveState.committed)throw new Error("uncertain request was not retried with original key");
   const explicitVm=makeVm();const explicitError=new Error("validation");explicitError.response={{status:422}};
   try{{await factory({{post:async()=>{{throw explicitError;}}}}).bind(explicitVm)(payload);throw new Error("explicit failure did not throw");}}
   catch(error){{
@@ -143,4 +152,4 @@ def test_save_modal_routes_new_order_outcome_without_losing_existing_errors() ->
     assert "this.applyOrderRequisitionFailure(error, message);" in body
     assert "if (error?._orderCreateOutcomeUncertain)" in body
     assert "结果暂不确定" in body
-    assert "按客户单号和明细核对" in body
+    assert "可原样重试保存" in body

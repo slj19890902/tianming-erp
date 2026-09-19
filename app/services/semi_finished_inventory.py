@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 import json
 from math import ceil
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, cast, Integer, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import object_session
@@ -909,6 +909,19 @@ def semi_finished_candidates_for_bom_component(db: Session, *, snapshot_id: int,
         for row in _semi_finished_candidates_for_signature(db, product_id=product.id, expected=expected)]
 
 
+def _bound_customer_clause(customer_id: int):
+    # Explicit current applicability wins over historical batch ownership.
+    members = func.json_each(WarehouseGoodsProfile.data_json, "$.customer_ids").table_valued("value").alias("bound_customers")
+    profile_bound = select(WarehouseGoodsProfile.lot_id).where(
+        func.json_extract(WarehouseGoodsProfile.data_json, "$.scope") == "customers",
+        select(members.c.value).where(cast(members.c.value, Integer) == customer_id).exists(),
+    )
+    return or_(InventoryLot.id.in_(profile_bound), and_(
+        ~InventoryLot.id.in_(select(WarehouseGoodsProfile.lot_id)),
+        SemiFinishedInventoryDetail.owner_customer_id == customer_id,
+    ))
+
+
 def semi_finished_candidates_for_product(
     db: Session,
     *,
@@ -921,6 +934,7 @@ def semi_finished_candidates_for_product(
     component_type: str,
     pieces_per_box: int,
     stock_yield_per_sheet: int,
+    customer_bound_only: bool = False,
     layer_count: int | None = None,
     crease_type: str | None = None,
     crease_left_mm: int | None = None,
@@ -959,7 +973,7 @@ def semi_finished_candidates_for_product(
         stock_yield_per_sheet=authoritative_stock_yield,
     )
     rows = _semi_finished_candidates_for_signature(
-        db, product_id=product.id, expected=expected
+        db, product_id=product.id, expected=expected, customer_bound_only=customer_bound_only
     )
     return [
         replace(
@@ -993,6 +1007,10 @@ def browse_semi_finished_inventory_for_product(
     component_type: str,
     pieces_per_box: int,
     stock_yield_per_sheet: int,
+    page: int | None = None,
+    page_info: dict | None = None,
+    page_size: int = 20,
+    visible_customer_ids: list[int] | None = None,
     layer_count: int | None = None,
     crease_type: str | None = None,
     crease_left_mm: int | None = None,
@@ -1025,25 +1043,22 @@ def browse_semi_finished_inventory_for_product(
         pieces_per_box=authoritative_pieces_per_box,
         stock_yield_per_sheet=cutting_factor(product.default_cutting_mode),
     )
-    rows = db.scalars(
-        select(InventoryLot)
+    query = (select(InventoryLot)
         .join(
             SemiFinishedInventoryDetail,
             SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
         )
         .where(
+            SemiFinishedInventoryDetail.owner_customer_id.in_(visible_customer_ids) if visible_customer_ids is not None else True,
             InventoryLot.inventory_type == "semi_finished",
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
-            or_(
-                SemiFinishedInventoryDetail.owner_customer_id.is_(None),
-                InventoryLot.id.in_(select(WarehouseGoodsProfile.lot_id)),
-                SemiFinishedInventoryDetail.owner_customer_id == customer_id,
-            ),
+
             SemiFinishedInventoryDetail.component_type == expected.component_type,
         )
-        .order_by(*inventory_fifo_order_columns())
-    ).all()
+        .order_by(*inventory_fifo_order_columns(), InventoryLot.id)
+    )
+    rows = db.scalars(query).all()
     allowed_lot_ids = _allowed_lot_ids_for_product(db, product.id)
     candidates: list[SemiFinishedCandidate] = []
     for lot in rows:
@@ -1057,9 +1072,15 @@ def browse_semi_finished_inventory_for_product(
             allowed_lot_ids=allowed_lot_ids,
             product_id=product.id,
         )
-        if scope is None:
+        browse_only = scope is None
+        if browse_only and _physical_signature_differences(expected, detail):
             continue
-        if scope == "customer_generic":
+        if browse_only:
+            source = "manual"
+            differences = _signature_differences_from_signature(expected, detail)
+            warning_codes = (MANUAL_CONFIRM_WARNING,)
+            warning_messages = ("仅供查看：当前客户或产品尚无适用授权，请先按现有规则确认库存用途。",)
+        elif scope == "customer_generic":
             source = "customer_generic"
             differences = _customer_generic_signature_differences(expected, detail)
             codes = [MANUAL_CONFIRM_WARNING, CUSTOMER_GENERIC_SEMI_FINISHED_STOCK]
@@ -1103,11 +1124,16 @@ def browse_semi_finished_inventory_for_product(
                 warning_codes=warning_codes,
                 warning_messages=warning_messages,
                 cut_plan=cut_plan,
-                selectable=not processed or processed["known"],
-                match_reason=processed["reason"] if processed else (f"需裁切 · 一张出{cut_plan['yield_factor']}片" if cut_plan else ""),
+                selectable=not browse_only and (not processed or processed["known"]),
+                match_reason=warning_messages[0] if browse_only else processed["reason"] if processed else (f"需裁切 · 一张出{cut_plan['yield_factor']}片" if cut_plan else ""),
             )
         )
-    return _rank_sheet_candidates(db, product.id, expected, candidates)
+    ranked = _rank_sheet_candidates(db, product.id, expected, candidates)
+    if page_info is not None:
+        page_info["total"] = len(ranked)
+    if page is not None:
+        return ranked[(page - 1) * page_size:page * page_size]
+    return ranked
 
 
 def _semi_finished_candidates_for_signature(
@@ -1115,6 +1141,7 @@ def _semi_finished_candidates_for_signature(
     *,
     product_id: int,
     expected: SemiFinishedSignature,
+    customer_bound_only: bool = False,
 ) -> list[SemiFinishedCandidate]:
     learned = _learned_rules_for_product(
         db,
@@ -1129,6 +1156,7 @@ def _semi_finished_candidates_for_signature(
             SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
         )
         .where(
+            _bound_customer_clause(expected.customer_id) if customer_bound_only else True,
             InventoryLot.inventory_type == "semi_finished",
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,

@@ -690,6 +690,7 @@ class EstimatedCostUpdate(BaseModel):
 
 
 class OrderCreate(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=100)
     model_config = ConfigDict(extra="ignore")
 
     email_attachment_id: int | None = Field(default=None, ge=1)
@@ -7719,6 +7720,13 @@ def _create_order_impl(
             response["items"], payload.items, strict=True
         ):
             response_item["client_line_id"] = request_item.client_line_id
+        if payload.idempotency_key:
+            from fastapi.encoders import jsonable_encoder
+            key, digest = observability["create_identity"] if observability and "create_identity" in observability else _order_create_identity(payload, user.id)
+            db.add(OperationLog(user_id=user.id, action="order_create_replay", resource="orders",
+                request_id=key, entity_type="order", entity_id=order.id,
+                details=json.dumps({"digest":digest,"response":jsonable_encoder(response)}, ensure_ascii=False),
+                event_category="business", module_code="orders", action_code="create_replay_record", result="success"))
         if commit:
             _set_order_save_stage(observability, "commit")
             db.commit()
@@ -7821,6 +7829,13 @@ def _log_order_save_failure(
     )
 
 
+def _order_create_identity(payload: OrderCreate, actor_id: int):
+    key = hashlib.sha256(f"order-create:{actor_id}:{payload.idempotency_key}".encode()).hexdigest()
+    body = payload.model_dump(mode="json", exclude={"idempotency_key", "mold_repair_confirmation_token"})
+    digest = hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return key, digest
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_order(
     payload: OrderCreate,
@@ -7852,6 +7867,30 @@ def create_order(
         "failure_stage": "entry",
     }
     try:
+        if payload.idempotency_key:
+            connection = db.connection()
+            if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+            key, digest = _order_create_identity(payload, user.id)
+            observability["create_identity"] = (key, digest)
+            previous = db.scalar(select(OperationLog).where(
+                OperationLog.request_id == key,
+                OperationLog.action == "order_create_replay",
+            ))
+            if previous:
+                record = json.loads(previous.details)
+                require_customer_access(record["response"]["customer_id"], current_user=user, db=db)
+                if record["digest"] != digest:
+                    raise HTTPException(409, "此保存请求已完成，不能以同一请求标识提交不同内容；请核对原订单。")
+                order = db.get(Order, record["response"]["id"])
+                if order is None:
+                    raise HTTPException(409, "原订单已不存在，请核对历史记录，不能重复创建。")
+                response = _order_response(order, user, db=db)
+                line_ids = {item["id"]: item.get("client_line_id") for item in record["response"].get("items", [])}
+                for item in response.get("items", []):
+                    item["client_line_id"] = line_ids.get(item["id"])
+                db.rollback()
+                return response
         return _create_order_impl(
             payload,
             db,

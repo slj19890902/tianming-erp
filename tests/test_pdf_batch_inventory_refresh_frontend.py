@@ -22,11 +22,12 @@ const html = fs.readFileSync(process.argv[2], "utf8");
 const script = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
   .map(match => match[1])
   .find(source => source.trim());
+const storage = new Map();
 const sandbox = {
   axios: { defaults:{}, interceptors:{ response:{ use() {} } } },
   Vue: { createApp(definition) { sandbox.definition = definition; return { component() { return this; }, mount() { return this; } }; } },
-  localStorage: { getItem() { return ""; }, setItem() {}, removeItem() {} },
-  window: {}, console, URLSearchParams, setTimeout, clearTimeout,
+  localStorage: { getItem(k) { return storage.get(k) || ""; }, setItem(k,v) {storage.set(k,v)}, removeItem() {} },
+  window: {}, TMOrderReference:{component:{}}, console, URLSearchParams, setTimeout, clearTimeout,
 };
 vm.createContext(sandbox);
 vm.runInContext(script, sandbox);
@@ -58,7 +59,7 @@ function item(name, quantity, version=1) {
 }
 function draft(name, line) {
   return {
-    source_name:name, confirmed:true, _save_status:"idle", _save_message:"",
+    source_name:name, file_hash:name, confirmed:true, _save_status:"idle", _save_message:"",
     matched_customer_id:1, customer_po:`PO-${name}`, order_date:"2026-08-04",
     delivery_date:null, preview_safety_token:`token-${name}`,
     integrity_check:{ integrity_status:"passed", integrity_errors:[] }, items:[line],
@@ -69,6 +70,7 @@ const first = draft("first.pdf", item("first", 20));
 const second = draft("second.pdf", item("second", 25));
 const context = {
   ...methods,
+  user:{id:1},
   orderForm:{ items:[] },
   orderImportBatch:{ retryDraft:null },
   orderImportDrafts:[first, second],

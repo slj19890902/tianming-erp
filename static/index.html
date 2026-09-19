@@ -7315,13 +7315,13 @@
                 >
                   <strong>{{ draft.source_name || "草稿" }}：</strong>{{ draft._save_message || importDraftSaveStatusText(draft) }}
                   <button
-                    v-if="draft._save_status === 'failed'"
+                    v-if="['failed','unknown'].includes(draft._save_status)"
                     class="btn small"
                     type="button"
                     style="margin-left:8px"
-                    :disabled="loading || !draft.confirmed || !canConfirmImportDraft(draft)"
+                    :disabled="loading || (draft._save_status !== 'unknown' && (!draft.confirmed || !canConfirmImportDraft(draft)))"
                     @click="retryFailedImportDraft(draft)"
-                  >重试此文件</button>
+                  >{{ draft._save_status === 'unknown' ? '查询/重试原保存' : '重试此文件' }}</button>
                 </div>
                 <div v-if="draft.duplicate_reason" class="status orange" style="display:block;margin-bottom:10px">{{ draft.duplicate_reason }}</div>
                 <div v-if="!draft.manual_entry && (draft.recognition_status === 'failed' || !draft.items?.length)" class="panel" style="margin-bottom:10px;border-color:#93c5fd;background:#f8fbff">
@@ -30593,6 +30593,7 @@
 	            );
 	          },
 	          prepareImportDraftReminderState(draft) {
+                this.restorePdfSaveAttempt(draft);
 	            return Object.assign(draft, {
 	              _reminder_loading:false,_reminder_error:"",_reminder_items:[],_reminder_total:0,
 	              _reminder_loaded:false,_reminder_customer_id:Number(draft?.matched_customer_id || 0) || null,
@@ -31226,7 +31227,7 @@
             confirmable.forEach(draft => { draft.confirmed = shouldConfirm; });
           },
           isImportDraftLocked(draft) {
-            return ["saving","success"].includes(draft?._save_status);
+            return ["saving","success","unknown"].includes(draft?._save_status);
           },
           invalidateImportDraftConfirmation(draft) {
             if (!draft || this.isImportDraftLocked(draft)) return;
@@ -31249,6 +31250,10 @@
             return draft?.confirmed ? "已加入批量保存" : "待核对";
           },
           async retryFailedImportDraft(draft) {
+            if (draft?._save_status === "unknown" && !this.loading) {
+              await this.saveConfirmedImportDrafts(draft);
+              return;
+            }
             if (
               !draft
               || draft._save_status !== "failed"
@@ -31600,82 +31605,147 @@
             this.reallocateAllDraftInventory();
             await this.refreshOrderNumberPreview();
           },
+          pdfSaveStorageKey(draft) {
+            if (!this.user?.id || !draft?.file_hash) throw new Error("无法保存恢复凭据，请重新登录并识别原 PDF。");
+            return `erp.pdf-save.v1:${this.user.id}:${draft.file_hash}`;
+          },
+          restorePdfSaveAttempt(draft) {
+            if (!this.user?.id || !draft?.file_hash || draft._create_key) return;
+            try {
+              const key = localStorage.getItem(this.pdfSaveStorageKey(draft));
+              if (key) {
+                draft._create_key = key;
+                draft._save_actor_id = this.user.id;
+                draft._save_status = "unknown";
+                draft._save_message = "此文件有过保存请求，请先查询原保存结果；不会直接再次建单。";
+              }
+            } catch (_) {
+              // The save path checks storage again and blocks before any POST.
+            }
+          },
+          rememberPdfSaveAttempt(draft) {
+            const storageKey = this.pdfSaveStorageKey(draft);
+            const existing = localStorage.getItem(storageKey);
+            if (existing && existing !== draft._create_key) throw new Error("此文件已有保存请求，请重新打开原 PDF 查询结果。");
+            draft._create_key ||= createIdempotencyKey();
+            draft._save_actor_id = this.user.id;
+            localStorage.setItem(storageKey, draft._create_key);
+            if (localStorage.getItem(storageKey) !== draft._create_key) throw new Error("浏览器无法保存恢复凭据，请检查存储设置后重试。");
+          },
           async saveConfirmedImportDrafts(targetDraft=null) {
+            if (this.loading) return;
             const retryDraft = this.orderImportBatch.retryDraft;
             const candidates = retryDraft ? [retryDraft] : targetDraft?.items ? [targetDraft] : this.orderImportDrafts;
             const drafts = candidates.filter(
-              draft => draft.confirmed
-                && this.canConfirmImportDraft(draft)
+              draft => (draft._save_status === "unknown" || (draft.confirmed
+                && this.canConfirmImportDraft(draft)))
                 && !["saving","success"].includes(draft._save_status)
             );
             if (!drafts.length) { this.showToast("请先确认至少一份完整草稿", true); return; }
-            const repairConfirmation = await this.prepareMoldRepairConfirmation({
-              product_ids:drafts.flatMap(draft => (draft.items || []).map(item => item.is_new_product ? null : item.matched_product_id)),
-            });
-            if (!repairConfirmation.confirmed) return;
             this.loading = true;
             const succeeded = [];
             const failed = [];
             try {
               for (const draft of drafts) {
+                let requestStarted = false;
+                let resolving = false;
                 try {
+                  const recovering = draft._save_status === "unknown";
                   draft._save_status = "saving";
-                  draft._save_message = "正在刷新库存并保存正式订单…";
-                  await this.refreshImportDraftInventoryForSave(draft);
-                  const inventoryError = (draft.items || []).map((item, index) => {
-                    this.refreshPdfPriceConflict(item);
-                    const reason = this.inventoryDecisionRequired(item);
-                    return reason ? `第${index + 1}条${reason}` : "";
-                  }).find(Boolean);
-                  if (inventoryError) throw new Error(inventoryError);
-                  await axios.post("/api/orders", {
-                    customer_id:draft.matched_customer_id, customer_po:draft.customer_po,
-                    order_date:draft.order_date || today(), delivery_date:draft.delivery_date || null,
-                    remark:`PDF识别草稿：${draft.source_name}`,
-                    email_attachment_id:draft.email_attachment_id || null,
-                    import_draft:true,
-                    import_integrity_status:draft.integrity_check?.integrity_status || null,
-                    import_integrity_errors:draft.integrity_check?.integrity_errors || [],
-                    pdf_import_confirmation: {
-                      preview_safety_token:draft.preview_safety_token,
-                      confirmed:!!draft.confirmed,
-                    },
-                    mold_repair_confirmation_token:repairConfirmation.confirmation_token,
-                    items:draft.items.map(item => {
-                      // 优先使用常用箱数据，回退到 PDF 原始识别
-                      const useStd = !!(item.matched_product_id && !item.is_new_product);
-                      const matCode = this.pdfImportItemMaterialCode(item);
-                      return {
-                        client_line_id: item.client_line_id || createIdempotencyKey(),
-                        reservation_plan: this.buildReservationPlan(item),
-                        product_id: item.is_new_product ? null : (item.matched_product_id || null),
-                        is_new_product: !!item.is_new_product,
-                        material_id: item.matched_material_id || null,
-                        original_material_code: item.standard_match?.pdf_material_code || item.raw_material || null,
-                        product_code: item.normalized_product_code || item.product_code || item.raw_product_code || null,
-                        product_name: (useStd && item.product_name) ? item.product_name : (item.raw_product_name || null),
-                        material: matCode,
-                        specification: (useStd && item.specification) ? item.specification : (item.raw_spec_model || null),
-                        customer_model: item.customer_model || null,
-                        production_notes: item.production_notes || null,
-                        layer_count: item.layer_count || null,
-                        flute_type: item.flute_type || null,
-                        temp_drawing_token: item.temp_drawing_token || null,
-                        drawing_save_option: item.temp_drawing_token ? "order_only" : null,
-                        quantity: Number(item.quantity),
-                        unit_price: item.unit_price,
-                      };
-                    })
-                  });
+                  let savedOrder = null;
+                  if (draft._create_key) {
+                    requestStarted = true;
+                    resolving = true;
+                    if (draft._save_actor_id !== this.user?.id) throw new Error("请使用原保存账号查询结果。");
+                    const {data} = await axios.get(`/api/orders/create-attempts/${encodeURIComponent(draft._create_key)}`);
+                    if (data.status === "completed") savedOrder = data.order;
+                    else if (data.status !== "not_found") throw new Error("保存结果无法确认，请稍后查询。");
+                    requestStarted = false;
+                    resolving = false;
+                    if (!savedOrder && recovering && !draft._save_payload) {
+                      draft._save_status = "idle";
+                      draft.confirmed = false;
+                      draft._save_message = "未查到已保存订单，请重新核对当前草稿后保存；继续沿用原请求标识。";
+                      continue;
+                    }
+                  }
+                  if (!savedOrder) {
+                    if (!draft._save_payload) {
+                      const repairConfirmation = await this.prepareMoldRepairConfirmation({
+                        product_ids:(draft.items || []).map(item => item.is_new_product ? null : item.matched_product_id),
+                      });
+                      if (!repairConfirmation.confirmed) { draft._save_status = "idle"; continue; }
+                      draft._save_message = "正在刷新库存并保存正式订单…";
+                      await this.refreshImportDraftInventoryForSave(draft);
+                      const inventoryError = (draft.items || []).map((item, index) => {
+                        this.refreshPdfPriceConflict(item);
+                        const reason = this.inventoryDecisionRequired(item);
+                        return reason ? `第${index + 1}条${reason}` : "";
+                      }).find(Boolean);
+                      if (inventoryError) throw new Error(inventoryError);
+                      this.rememberPdfSaveAttempt(draft);
+                      draft._save_payload = JSON.stringify({
+                        idempotency_key:draft._create_key,
+                        customer_id:draft.matched_customer_id, customer_po:draft.customer_po,
+                        order_date:draft.order_date || today(), delivery_date:draft.delivery_date || null,
+                        remark:`PDF识别草稿：${draft.source_name}`,
+                        email_attachment_id:draft.email_attachment_id || null,
+                        import_draft:true,
+                        import_integrity_status:draft.integrity_check?.integrity_status || null,
+                        import_integrity_errors:draft.integrity_check?.integrity_errors || [],
+                        pdf_import_confirmation: {
+                          preview_safety_token:draft.preview_safety_token,
+                          confirmed:!!draft.confirmed,
+                        },
+                        mold_repair_confirmation_token:repairConfirmation.confirmation_token,
+                        items:draft.items.map(item => {
+                          // 优先使用常用箱数据，回退到 PDF 原始识别
+                          const useStd = !!(item.matched_product_id && !item.is_new_product);
+                          const matCode = this.pdfImportItemMaterialCode(item);
+                          return {
+                            client_line_id: (item.client_line_id ||= createIdempotencyKey()),
+                            reservation_plan: this.buildReservationPlan(item),
+                            product_id: item.is_new_product ? null : (item.matched_product_id || null),
+                            is_new_product: !!item.is_new_product,
+                            material_id: item.matched_material_id || null,
+                            original_material_code: item.standard_match?.pdf_material_code || item.raw_material || null,
+                            product_code: item.normalized_product_code || item.product_code || item.raw_product_code || null,
+                            product_name: (useStd && item.product_name) ? item.product_name : (item.raw_product_name || null),
+                            material: matCode,
+                            specification: (useStd && item.specification) ? item.specification : (item.raw_spec_model || null),
+                            customer_model: item.customer_model || null,
+                            production_notes: item.production_notes || null,
+                            layer_count: item.layer_count || null,
+                            flute_type: item.flute_type || null,
+                            temp_drawing_token: item.temp_drawing_token || null,
+                            drawing_save_option: item.temp_drawing_token ? "order_only" : null,
+                            quantity: Number(item.quantity),
+                            unit_price: item.unit_price,
+                          };
+                        })
+                      });
+                    }
+                    draft._save_message = "正在确认原保存请求结果…";
+                    requestStarted = true;
+                    const {data} = await axios.post("/api/orders", JSON.parse(draft._save_payload));
+                    savedOrder = data;
+                  }
+                  draft._saved_order_id = savedOrder.id;
                   succeeded.push(draft.source_name || "草稿");
                   draft._save_status = "success";
+                  draft._save_payload = null;
                   if (draft.email_attachment_id) this.refreshEmailQueueCount();
                   draft._save_message = "保存成功；本草稿已锁定，不会再次提交。";
                   draft.confirmed = false;
                 } catch (error) {
                   const message = this.normalizeOrderSaveError(error);
-                  draft._save_status = "failed";
-                  draft._save_message = message;
+                  // Only an explicit validation rejection permits editing. Network,
+                  // server and auth errors leave the original request frozen.
+                  const rejected = !resolving && [400,409,422].includes(error?.response?.status);
+                  const unknown = requestStarted && !rejected;
+                  draft._save_status = unknown ? "unknown" : "failed";
+                  if (!unknown) draft._save_payload = null;
+                  draft._save_message = unknown ? `保存结果尚未确认，草稿已锁定；请查询/重试原请求。${message}` : message;
                   failed.push(`${draft.source_name || "草稿"}：${message}`);
                 }
               }
@@ -31684,11 +31754,10 @@
                 this.showOrderNextStepGuide({count:succeeded.length,source:"pdf"});
               }
               const remainingFailed = this.orderImportDrafts.filter(
-                draft => draft._save_status === "failed"
+                draft => ["failed","unknown"].includes(draft._save_status)
               );
               const remainingPending = this.orderImportDrafts.filter(
-                draft => draft.confirmed
-                  && this.canConfirmImportDraft(draft)
+                draft => (drafts.includes(draft) || (draft.confirmed && this.canConfirmImportDraft(draft)))
                   && draft._save_status !== "success"
               );
               if (!remainingFailed.length && !remainingPending.length) {
@@ -31698,7 +31767,7 @@
                 const failedSummary = remainingFailed.map(
                   draft => `${draft.source_name || "草稿"}：${draft._save_message || "订单保存失败"}`
                 );
-                this.showToast(`本次成功 ${succeeded.length} 份；当前失败 ${remainingFailed.length} 份 — ${failedSummary.join("｜")}`, true);
+                this.showToast(`本次成功 ${succeeded.length} 份；待处理 ${remainingPending.length} 份 — ${failedSummary.join("｜") || "请核对草稿上的保存提示"}`, true);
               }
             } finally { this.loading=false; }
           },

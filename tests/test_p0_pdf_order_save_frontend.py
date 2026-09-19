@@ -15,7 +15,7 @@ def test_pdf_order_save_template_exposes_persistent_per_file_status_and_retry() 
     for expected in (
         "importDraftSaveStatusClass(draft)",
         "importDraftSaveStatusText(draft)",
-        "draft._save_status === 'failed'",
+        "['failed','unknown'].includes(draft._save_status)",
         "retryFailedImportDraft(draft)",
         "successfulImportDraftCount",
         "failedImportDraftCount",
@@ -37,9 +37,9 @@ def test_pdf_order_save_template_exposes_persistent_per_file_status_and_retry() 
     assert '!["saving","success"].includes(draft._save_status)' in save_block
     assert 'draft._save_status = "saving"' in save_block
     assert 'draft._save_status = "success"' in save_block
-    assert 'draft._save_status = "failed"' in save_block
+    assert 'draft._save_status = unknown ? "unknown" : "failed"' in save_block
     assert "draft.confirmed = false" in save_block
-    assert "draft._save_message = message" in save_block
+    assert 'draft._save_message = unknown ?' in save_block
 
 
 def test_pdf_order_save_error_matrix_and_partial_retry_execute_real_vue_methods() -> None:
@@ -59,6 +59,7 @@ if (scripts.length !== 1) {
   throw new Error(`Expected one inline application script, found ${scripts.length}`);
 }
 
+const storage = new Map();
 const sandbox = {
   axios: {
     defaults: {},
@@ -74,11 +75,11 @@ const sandbox = {
     },
   },
   localStorage: {
-    getItem() { return ""; },
-    setItem() {},
+    getItem(k) { return storage.get(k) || ""; },
+    setItem(k,v) { storage.set(k,v); },
     removeItem() {},
   },
-  window: {},
+  window: {}, TMOrderReference:{component:{}},
   console,
   URLSearchParams,
   setTimeout,
@@ -228,6 +229,7 @@ for (const message of normalizedMessages) {
 
 let failSecondOnce = true;
 const postCalls = [];
+sandbox.axios.get = async () => ({data:{status:'not_found'}});
 sandbox.axios.post = async (url, payload) => {
   if (url === "/api/orders/mold-repair-preview") {
     return { data: { required: false, warnings: [], confirmation_token: null } };
@@ -280,16 +282,19 @@ const baseDraft = {
 const successDraft = {
   ...baseDraft,
   source_name: "success.pdf",
+  file_hash: "success-hash",
   items: [makeItem()],
 };
 const failedDraft = {
   ...baseDraft,
   source_name: "failed.pdf",
+  file_hash: "failed-hash",
   items: [makeItem()],
 };
 const toasts = [];
 let commonBoxSyncAttempts = 0;
 Object.assign(context, {
+  user: {id:1},
   orderImportBatch: { retryDraft: null },
   orderImportDrafts: [successDraft, failedDraft],
   loading: false,
@@ -297,6 +302,7 @@ Object.assign(context, {
   canConfirmImportDraft() { return true; },
   inventoryDecisionRequired() { return ""; },
   buildReservationPlan() { return {}; },
+  async refreshImportDraftInventoryForSave() {},
   async loadOrders() {},
   async loadKpi() {},
   showToast(message, error = false) { toasts.push({ message, error }); },

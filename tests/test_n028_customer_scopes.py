@@ -1685,7 +1685,7 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
         ).status_code == 200
         assert client.get(
             f"/api/requisition/stock-replenishment/orders/{order_ids['A']}/print"
-        ).status_code == 200
+        ).status_code == 409  # New demands print through their unified purchase.
         for label in ("B", "MIXED", "UNLINKED"):
             assert client.get(
                 f"/api/requisition/stock-replenishment/orders/{order_ids[label]}"
@@ -1738,7 +1738,7 @@ def test_stock_replenishment_full_chain_is_customer_scoped(
         assert {row["id"] for row in boss_rows} == set(order_ids.values())
         assert client.get(
             f"/api/requisition/stock-replenishment/orders/{order_ids['B']}/print"
-        ).status_code == 200
+        ).status_code == 409
 
     with factory() as db:
         assert db.scalar(

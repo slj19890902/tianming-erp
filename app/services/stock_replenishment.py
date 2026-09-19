@@ -869,6 +869,7 @@ def customer_board_preparation_coverage(
     incoming_finished_capacity = 0
     incoming_auto_cover_capacity = 0
     from app.services.replenishment_receipt_progress import short_closed_clause
+    from app.services.unified_procurement import active_stock_purchase_clause
     if signature is not None:
         incoming_items = db.scalars(
             select(StockReplenishmentOrderItem)
@@ -879,6 +880,7 @@ def customer_board_preparation_coverage(
             )
             .where(
                 StockReplenishmentOrder.source_type == "stock_warning",
+                active_stock_purchase_clause(),
                 StockReplenishmentOrder.status.in_(
                     ("confirmed", "partially_stocked")
                 ),

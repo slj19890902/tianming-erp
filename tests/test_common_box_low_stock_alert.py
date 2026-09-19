@@ -925,6 +925,15 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
             },
         )
         assert saved.status_code == 201, saved.text
+        assert saved.json()["status"] == "draft"
+        selected_ids = {line['id'] for line in saved.json()['items']}
+        sources = [row for row in client.get('/api/requisition/pending').json()['items']
+                   if row.get('stock_replenishment_item_id') in selected_ids]
+        assert len(sources) == 2
+        purchase = client.post('/api/requisition/supplier-orders/from-pending-selection', json={
+            'supplier_groups':[{'supplier_name':sources[0]['supplier_name'], 'request_key':'virtual-warning-unified-001',
+                'stock_sources':[{'stock_replenishment_item_id':row['stock_replenishment_item_id'], 'source_fingerprint':row['source_fingerprint']} for row in sources]}]})
+        assert purchase.status_code == 201, purchase.text
 
     with factory() as db:
         saved_items = list(
@@ -1468,7 +1477,7 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             json=payload,
         )
         assert saved.status_code == 201, saved.text
-        assert saved.json()["status"] == "confirmed"
+        assert saved.json()["status"] == "draft"
         assert saved.json()["stocked_quantity"] == 0
         repeated_save = client.post(
             "/api/requisition/stock-replenishment/orders",
@@ -1476,6 +1485,15 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
         )
         assert repeated_save.status_code == 201, repeated_save.text
         assert repeated_save.json()["id"] == saved.json()["id"]
+        with factory() as db:
+            from app.services.stock_replenishment import stock_policy_dict
+            assert stock_policy_dict(db, db.get(InventoryStockPolicy, ids["policy_a"]))["incoming_board_preparation_sheet_quantity"] == 0
+        pending_sources = client.get('/api/requisition/pending').json()['items']
+        source = next(row for row in pending_sources if row.get('stock_replenishment_item_id') == saved.json()['items'][0]['id'])
+        purchased = client.post('/api/requisition/supplier-orders/from-pending-selection', json={
+            'supplier_groups':[{'supplier_name':source['supplier_name'], 'request_key':'warning-unified-purchase-001',
+                'stock_sources':[{'stock_replenishment_item_id':source['stock_replenishment_item_id'], 'source_fingerprint':source['source_fingerprint']}]}]})
+        assert purchased.status_code == 201, purchased.text
         with factory() as db:
             from app.services.stock_replenishment import stock_policy_dict
 

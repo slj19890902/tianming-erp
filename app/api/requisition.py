@@ -15901,8 +15901,8 @@ def print_stock_replenishment_order(
     _require_stock_replenishment_order_access(
         db, order, _user, relationships_loaded=True
     )
-    if order.status == "draft":
-        raise HTTPException(409, "补库需求尚未生成采购单，请在待报料中统一采购后打印")
+    if order.request_hash:
+        raise HTTPException(409, "这是补库来源需求，请在统一采购单中打印正式采购内容")
     payload = replenishment_order_dict(order, db=db)
     payload["sender"] = _company_sender(db)
     return payload
@@ -16060,7 +16060,11 @@ def void_stock_replenishment_order(
         update(StockReplenishmentOrder)
         .where(
             StockReplenishmentOrder.id == order_id,
-            StockReplenishmentOrder.status == "confirmed",
+            StockReplenishmentOrder.status == order.status,
+            ~select(ProcurementSourceLink.id).join(StockReplenishmentOrderItem,
+                StockReplenishmentOrderItem.id == ProcurementSourceLink.stock_replenishment_item_id)
+                .where(StockReplenishmentOrderItem.replenishment_order_id == order_id,
+                       ProcurementSourceLink.status == "active").exists(),
         )
         .values(status="voided", voided_at=voided_at)
         .execution_options(synchronize_session=False)
@@ -23114,6 +23118,15 @@ def void_supplier_order(
     _require_supplier_order_customer_access(order, user, db)
     if order.status == "voided":
         raise HTTPException(status_code=400, detail="该报料单已作废")
+    # Serialize source-receipt and void checks before reading their mutable facts.
+    claimed = db.execute(update(SupplierRequisitionOrder).where(
+        SupplierRequisitionOrder.id == order_id, SupplierRequisitionOrder.status == "confirmed")
+        .values(status=SupplierRequisitionOrder.status))
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(409, "采购单状态已变化，请刷新后重试")
+    db.expire_all()
+    order = db.get(SupplierRequisitionOrder, order_id)
 
     order_item_ids = {
         int(item.order_item_id)

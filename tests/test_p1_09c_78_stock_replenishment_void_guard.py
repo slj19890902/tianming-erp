@@ -158,7 +158,9 @@ def test_backend_uses_atomic_void_and_receipt_claim_contracts() -> None:
         '@router.get("/historical-purchases/search")', 1
     )[0]
     assert "update(StockReplenishmentOrder)" in void_block
-    assert 'StockReplenishmentOrder.status == "confirmed"' in void_block
+    assert 'order.status not in {"draft", "confirmed"}' in void_block
+    assert 'StockReplenishmentOrder.status == order.status' in void_block
+    assert 'ProcurementSourceLink.status == "active"' in void_block
     assert 'values(status="voided", voided_at=voided_at)' in void_block
     assert "if transition.rowcount != 1:" in void_block
 

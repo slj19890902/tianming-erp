@@ -267,3 +267,29 @@ def test_ordinary_bom_and_stock_share_purchase_without_duplicate_demand(composit
         assert projection['requisition_qty'] == 75
         assert len(projection['source_items']) == 5
         assert client.post('/api/requisition/supplier-orders/from-pending-selection', json=payload).json()['idempotent_replay']
+
+
+def test_unified_bom_inventory_refresh_rejects_replaced_draft(tmp_path):
+    import subprocess
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[1] / 'static/index.html').read_text(encoding='utf-8')
+    method = html.split('async autoCoverCompositeDraftLine(line) {', 1)[1].split('          requisitionBatchLinePayload(line) {', 1)[0].rsplit('},', 1)[0]
+    script = r"""
+const assert=require('node:assert/strict');
+const createIdempotencyKey=()=> 'r05-inventory-00001';
+const run=async function(line){""" + method + r"""};
+(async()=>{
+ const line={order_item_id:1,bom_snapshot_id:2};
+ const group={bom_lines:[line]}; let refreshed=0;
+ const ctx={activePage:'requisition',modal:{type:'supplierRequisitionDraft'},supplierRequisitionDraft:{supplier_groups:[group]},
+  recalculateCompositeDraftLine(value){assert.equal(value,line);refreshed++;},loadRequisition:async()=>{},
+  executeRequisitionInventoryAction:async options=>options.refresh({data:{finished_reserved_piece_qty:3,semi_finished_reserved_piece_qty:2,remaining_required_piece_qty:15}})};
+ assert.equal(await run.call(ctx,line),true);assert.equal(line.remaining_required_piece_qty,15);assert.equal(refreshed,1);assert.equal(line._auto_cover_loading,false);
+ group.bom_lines=[];line.remaining_required_piece_qty=20;
+ assert.equal(await run.call(ctx,line),false);assert.equal(line.remaining_required_piece_qty,20);assert.equal(refreshed,1);assert.equal(line._auto_cover_loading,false);
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+    target=tmp_path / 'unified-inventory.cjs'
+    target.write_text(script,encoding='utf-8')
+    result=subprocess.run(['node',str(target)],capture_output=True,text=True,encoding='utf-8')
+    assert result.returncode == 0, result.stderr

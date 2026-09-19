@@ -11,9 +11,20 @@ from app.models.incoming_receipt import IncomingReceiptItem
 
 def setup(client):
     _login(client)
-    created=client.post('/api/requisition/stock-replenishment/orders',json=_customer_replenishment_payload(quantity=30))
+    payload=_customer_replenishment_payload(quantity=30)
+    payload['idempotency_key']='prep-test-demand'
+    created=client.post('/api/requisition/stock-replenishment/orders',json=payload)
     assert created.status_code==201,created.text
     item=created.json()['items'][0]
+    # R05: a demand draft is not a purchase. Confirm through the real pending workflow.
+    pending=client.get('/api/requisition/pending')
+    assert pending.status_code==200,pending.text
+    row=next(r for r in pending.json()['items'] if r.get('stock_replenishment_item_id')==item['id'])
+    purchase=client.post('/api/requisition/supplier-orders/from-pending-selection',json={
+        'supplier_groups':[{'supplier_name':row['supplier_name'],'request_key':'prep-test-purchase',
+            'stock_sources':[{'stock_replenishment_item_id':item['id'],
+                              'source_fingerprint':row['source_fingerprint']}]}]})
+    assert purchase.status_code==201,purchase.text
     before=client.get('/api/production/stock-preparation').json()
     assert before['counts']['waiting']==1
     received=client.put(f"/api/incoming/receive/sr{item['id']}",json={'received_quantity':20,'idempotency_key':'prep-test-receive','resolution_action':'await_supplier'})

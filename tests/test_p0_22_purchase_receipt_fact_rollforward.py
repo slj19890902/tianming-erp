@@ -121,9 +121,9 @@ def test_auto_freeze_rolls_current_master_contract_forward_without_rewriting_his
             session_factory,
             source.material_id,
             unit_price="108.8800",
-            currency="USD",
-            tax_included=False,
-            tax_rate="0.06",
+            currency="CNY",
+            tax_included=True,
+            tax_rate="0.13",
         )
         pending = client.get("/api/incoming/pending")
         assert pending.status_code == 200, pending.text
@@ -146,9 +146,9 @@ def test_auto_freeze_rolls_current_master_contract_forward_without_rewriting_his
         second_fact = second_response.json()
         assert second_fact["receipt_fact_version"] == 2
         assert second_fact["unit_price"] == "108.8800"
-        assert second_fact["currency"] == "USD"
-        assert second_fact["tax_included"] is False
-        assert second_fact["tax_rate"] == "0.0600"
+        assert second_fact["currency"] == "CNY"
+        assert second_fact["tax_included"] is True
+        assert second_fact["tax_rate"] == "0.1300"
         second_receipt = _receive(
             client,
             source,
@@ -173,7 +173,11 @@ def test_auto_freeze_rolls_current_master_contract_forward_without_rewriting_his
         assert Decimal(facts[0].unit_price) == Decimal("99.990000")
         assert facts[0].currency == "CNY"
         assert Decimal(facts[1].unit_price) == Decimal("108.880000")
-        assert facts[1].currency == "USD"
+        assert facts[1].currency == "CNY"
+        assert facts[0].tax_included is True
+        assert facts[1].tax_included is True
+        assert Decimal(facts[0].tax_rate) == Decimal("0.130000")
+        assert Decimal(facts[1].tax_rate) == Decimal("0.130000")
         allocations = list(
             session.scalars(
                 select(IncomingReceiptPurposeAllocation)

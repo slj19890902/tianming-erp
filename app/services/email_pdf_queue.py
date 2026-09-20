@@ -9,7 +9,6 @@ from app.models.email_intake import (
     EmailIntakeSettings, EmailIntakeMessage, EmailIntakeAttachment,
     EmailIntakeOrderLink, EmailPdfRecognition, EmailPdfDisposition,
 )
-from app.models.order import Order
 from app.services.email_sender_filter import normalize_senders, sender_matches
 
 recognition_lock = threading.Lock()
@@ -66,8 +65,7 @@ def queue_entries(db):
         .join(EmailIntakeMessage, EmailIntakeMessage.id == EmailIntakeAttachment.message_id)
         .where(EmailIntakeMessage.status == 'pending')
         .order_by(EmailIntakeAttachment.id))
-    result, seen, customer_cache = [], set(), {}
-    from app.services.order_pdf_import import resolve_import_customer
+    result, seen = [], set()
     for attachment, sender, received in rows:
         if (not attachment.filename.lower().endswith('.pdf') or attachment.sha256 in seen
                 or not sender_matches([sender], allowed)):
@@ -85,17 +83,6 @@ def queue_entries(db):
             state = 'deleted'
         elif before_start(received, mail_date=True) or before_start(raw.get('order_date')):
             state = 'before_start'
-        elif po:
-            key = json.dumps([raw.get('customer_route'), raw.get('customer_name_raw') or raw.get('customer_name')], sort_keys=True)
-            if key not in customer_cache:
-                customer_cache[key] = resolve_import_customer(db, raw)[1]
-            customer_id = customer_cache[key]
-            if customer_id:
-                existing = db.execute(select(Order.customer_po, Order.order_number)
-                    .where(Order.customer_id == customer_id, Order.customer_po == str(po).strip())
-                    .order_by(Order.id).limit(1)).first()
-                if existing:
-                    state, po, order_number = 'duplicate', existing.customer_po, existing.order_number
         result.append({'attachment': attachment, 'state': state, 'customer_po': po, 'order_number': order_number})
     return result
 

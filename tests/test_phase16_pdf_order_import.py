@@ -744,6 +744,9 @@ def _signed_pdf_preview_token(
     customer_match_status: str = "matched",
     integrity_status: str = "passed",
     matched_customer_id: int = 1,
+    source_hash: str = "a" * 64,
+    source_name: str = "needs-confirmation.pdf",
+    items: list[dict] | None = None,
 ) -> str:
     from sqlalchemy import select
 
@@ -753,8 +756,17 @@ def _signed_pdf_preview_token(
     user = _database_scalar(app, select(User).where(User.username == "sales"))
     return _encode_pdf_preview_safety_token(
         {
-            "source_name": "needs-confirmation.pdf",
-            "file_hash": "a" * 64,
+            "source_name": source_name,
+            "file_hash": source_hash,
+            "items": items or [
+                {
+                    "line_no": 1,
+                    "product_code": "21312009",
+                    "product_name": "中性内箱",
+                    "quantity": 30,
+                    "unit_price": "1.79",
+                }
+            ],
             "recognition_status": recognition_status,
             "customer_route": {"status": customer_route_status},
             "customer_match_status": customer_match_status,
@@ -816,6 +828,9 @@ def test_pdf_preview_endpoint_returns_draft_without_writing_order(
     assert claims["customer_route_status"] == body["customer_route"]["status"]
     assert claims["customer_match_status"] == body["customer_match_status"]
     assert claims["integrity_status"] == body["integrity_check"]["integrity_status"]
+    assert len(claims["source_lines"]) == body["item_count"]
+    assert [row["position"] for row in claims["source_lines"]] == [1, 2, 3]
+    assert claims["source_lines"][0]["source_line_label"] == str(body["items"][0]["line_no"])
     assert body["customer_po"] == "PO2026060469"
     assert body["matched_customer_id"] == 1
     assert body["item_count"] == 3
@@ -1086,8 +1101,21 @@ def test_draft_rematch_rejects_source_name_or_hash_mismatch(tmp_path: Path) -> N
             },
         )
 
+        rematched = client.post(
+            "/api/orders/draft-rematch",
+            json={
+                "draft": base_draft,
+                "customer_id": 1,
+                "preview_safety_token": token,
+            },
+        )
+
     assert wrong_name.status_code == 409
     assert wrong_hash.status_code == 409
+    assert rematched.status_code == 200
+    assert _decode_pdf_preview_token_for_test(rematched.json()["preview_safety_token"])[
+        "source_lines"
+    ] == _decode_pdf_preview_token_for_test(token)["source_lines"]
     assert wrong_name.json()["detail"]["code"] == "PDF_PREVIEW_TOKEN_STALE"
     assert wrong_hash.json()["detail"]["code"] == "PDF_PREVIEW_TOKEN_STALE"
 

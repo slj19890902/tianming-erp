@@ -78,7 +78,7 @@ def test_terminal_action_replay_new_uid_permissions_and_no_sales_change(mobile_p
         assert preview['drafts']==[] and len(preview['excluded'])==1
 
 
-def test_customer_po_duplicate_ignores_spec_price_format_and_stays_after_deletion(mobile_portal_app):
+def test_new_email_source_with_existing_customer_po_stays_pending(mobile_portal_app):
     _,_,factory=mobile_portal_app
     with factory() as db:
         configure(db)
@@ -87,20 +87,20 @@ def test_customer_po_duplicate_ignores_spec_price_format_and_stays_after_deletio
         raw={'customer_name_raw':customer.name,'customer_po':order.customer_po,'order_date':'2026-09-01','items':[{'product_code':'same','quantity':10,'specification':'42*31*26cm','unit_price':'2.50'}]}
         a=add_pdf(db,1,raw=raw)
         marked=mark_order_duplicate(db,{**raw,'matched_customer_id':customer.id})
-        assert marked['duplicate_status']=='duplicate_skipped'
-        assert '明细不同' not in marked['duplicate_reason']
+        assert marked['duplicate_status']=='existing_po_found'
+        assert '独立订单' in marked['duplicate_reason']
         assert order.order_number in marked['duplicate_reason']
         other=db.scalar(select(Order).where(Order.customer_po=='PO-OTHER-MOBILE'))
         cross=mark_order_duplicate(db,{**raw,'matched_customer_id':other.customer_id})
         assert not cross.get('duplicate_status')
-        assert pending_attachments(db)==[]
+        assert [row.id for row in pending_attachments(db)]==[a.id]
         settle_queue(db)
-        assert db.get(EmailPdfDisposition,a.sha256).action=='duplicate'
-        # Order changes/removal cannot resurrect the same source PDF.
+        assert db.get(EmailPdfDisposition,a.sha256) is None
+        # A second message carrying identical bytes is one pending source occurrence.
         order.customer_po='fixture-renamed'
         db.commit()
         add_pdf(db,2)
-        assert pending_attachments(db)==[]
+        assert [row.sha256 for row in pending_attachments(db)]==[a.sha256]
 
 
 def test_deleted_link_and_ignored_duplicate_never_return(mobile_portal_app):
@@ -132,7 +132,7 @@ def test_disposition_audit_failure_rolls_back(mobile_portal_app,monkeypatch):
         assert len(pending_attachments(db))==1
 
 
-def test_direct_pdf_same_po_cannot_create_again_with_changed_details(tmp_path):
+def test_direct_pdf_same_source_cannot_create_again_with_changed_details(tmp_path):
     from tests.test_email_order_link import session, fixture
     from tests.test_phase16_pdf_order_import import _order_import_app
     app=_order_import_app(tmp_path)
@@ -144,9 +144,14 @@ def test_direct_pdf_same_po_cannot_create_again_with_changed_details(tmp_path):
     from app.models.supplier import Supplier
     from app.services.supplier_master import normalize_supplier_identity
     with session(app) as db:
-        db.add(Supplier(standard_name='Fixture supplier', normalized_name=normalize_supplier_identity('Fixture supplier'), is_active=True))
-        material=Material(code='A6A',supplier_name='Fixture supplier',is_active=True,layer_count=3,flute_type='A')
-        db.add(material);db.flush()
+        supplier=db.scalar(select(Supplier).where(Supplier.is_active.is_(True)))
+        if supplier is None:
+            supplier=Supplier(standard_name='Fixture supplier', normalized_name=normalize_supplier_identity('Fixture supplier'), is_active=True)
+            db.add(supplier);db.flush()
+        material=db.scalar(select(Material).where(Material.code=='A6A'))
+        if material is None:
+            material=Material(code='A6A',supplier_name=supplier.standard_name,is_active=True,layer_count=3,flute_type='A')
+            db.add(material);db.flush()
         product=db.get(Product,payload['items'][0]['product_id'])
         product.material_id=material.id
         product.report_length_mm=800;product.report_width_mm=600
@@ -158,7 +163,7 @@ def test_direct_pdf_same_po_cannot_create_again_with_changed_details(tmp_path):
         assert first.status_code==201,first.text
         payload['items'][0]['quantity']+=1
         second=client.post('/api/orders',json=payload)
-        assert second.status_code==409 and '已录入' in second.text,second.text
+        assert second.status_code==409 and 'PDF 来源' in second.text,second.text
     with session(app) as db:
         assert db.scalar(select(func.count()).select_from(Order))==1
         configure(db)

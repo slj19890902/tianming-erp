@@ -43,7 +43,10 @@ def test_pdf_committed_response_lost_replays_one_order_and_reservation(b1_app, p
         changed = deepcopy(payload); changed['items'][0]['quantity'] = 11
         assert client.post('/api/orders', json=changed).status_code == 409
         stale = deepcopy(payload); stale['idempotency_key'] = 'another-operation'
-        assert client.post('/api/orders', json=stale).status_code == 409
+        source_replay = client.post('/api/orders', json=stale)
+        assert source_replay.status_code == 201
+        assert source_replay.json()['id'] == first.json()['id']
+        assert source_replay.json()['source_replay'] is True
         with factory() as db:
             assert db.scalar(select(func.count()).select_from(Order)) == 1
             assert db.scalar(select(func.count()).select_from(InventoryReservation)) == 1

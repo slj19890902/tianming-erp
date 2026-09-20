@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from copy import deepcopy
 from fastapi.testclient import TestClient
 from sqlalchemy import select, func
 from app.api.deps import get_db
@@ -6,6 +7,7 @@ from app.api.orders import _encode_pdf_preview_safety_token
 from app.models.user import User
 from app.models.order import Order
 from app.models.email_intake import EmailIntakeMessage, EmailIntakeAttachment, EmailIntakeOrderLink
+from app.models.order_import_source import OrderImportSource
 from tests.test_phase16_pdf_order_import import _order_import_app, _pdf_order_payload
 
 
@@ -20,7 +22,31 @@ def session(app):
 
 def fixture(app):
     with session(app) as db:
+        from app.models.material import Material
+        from app.models.product import Product
+        from app.models.supplier import Supplier
+        from app.services.supplier_master import normalize_supplier_identity
+
         user = db.scalar(select(User).where(User.username == 'admin'))
+        supplier = db.scalar(select(Supplier).where(Supplier.is_active.is_(True)))
+        if supplier is None:
+            supplier = Supplier(
+                standard_name='Fixture supplier',
+                normalized_name=normalize_supplier_identity('Fixture supplier'),
+                is_active=True,
+            )
+            db.add(supplier);db.flush()
+        material = db.scalar(select(Material).where(Material.code == 'A6A'))
+        if material is None:
+            material = Material(
+                code='A6A', supplier_name=supplier.standard_name, is_active=True,
+                layer_count=3, flute_type='A',
+            )
+            db.add(material);db.flush()
+        product = db.get(Product, 1)
+        product.material_id=material.id
+        product.report_length_mm=800;product.report_width_mm=600
+        product.layer_count=3;product.flute_type='A'
         mail = EmailIntakeMessage(mailbox_key='test', uid_validity='1', uid=1)
         db.add(mail); db.flush()
         attachment = EmailIntakeAttachment(message_id=mail.id, part_number=1,
@@ -29,7 +55,10 @@ def fixture(app):
         token = _encode_pdf_preview_safety_token({'source_name':'test.pdf', 'file_hash':'a'*64,
             'recognition_status':'needs_confirmation', 'customer_route':{'status':'needs_confirmation'},
             'customer_match_status':'matched', 'integrity_check':{'integrity_status':'passed'},
-            'matched_customer_id':1}, user)
+            'matched_customer_id':1, 'items':[{
+                'line_no':1, 'product_code':'21312009', 'product_name':'中性内箱',
+                'quantity':30, 'unit_price':'1.79',
+            }]}, user)
         payload = _pdf_order_payload(confirmed=True, token=token)
         payload['email_attachment_id'] = attachment.id
         return payload
@@ -94,6 +123,35 @@ def test_email_source_scope_and_hash_cannot_be_forged(tmp_path):
         assert response.status_code == 403
     with session(app) as db:
         assert db.scalar(select(func.count()).select_from(Order)) == 0
+
+
+def test_distinct_email_attachments_with_same_bytes_are_distinct_sources(tmp_path):
+    app = _order_import_app(tmp_path)
+    payload = fixture(app)
+    with session(app) as db:
+        second_mail = EmailIntakeMessage(mailbox_key='test', uid_validity='1', uid=2)
+        db.add(second_mail);db.flush()
+        second_attachment = EmailIntakeAttachment(
+            message_id=second_mail.id,
+            part_number=1,
+            filename='same-bytes-new-occurrence.pdf',
+            sha256='a'*64,
+            content=b'%PDF-fixture',
+        )
+        db.add(second_attachment);db.commit()
+        second_attachment_id = second_attachment.id
+    second_payload = deepcopy(payload)
+    second_payload['email_attachment_id'] = second_attachment_id
+    with TestClient(app) as client:
+        client.post('/api/auth/login', json={'username':'admin','password':'RolePass123!'})
+        first = client.post('/api/orders', json=payload)
+        second = client.post('/api/orders', json=second_payload)
+    assert first.status_code == second.status_code == 201
+    assert first.json()['id'] != second.json()['id']
+    with session(app) as db:
+        assert db.scalar(select(func.count()).select_from(Order)) == 2
+        assert db.scalar(select(func.count()).select_from(EmailIntakeOrderLink)) == 2
+        assert db.scalar(select(func.count()).select_from(OrderImportSource)) == 2
 
 
 def test_pdf_mail_list_and_source_follow_live_orders_and_duplicate_content(tmp_path):

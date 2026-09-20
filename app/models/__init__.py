@@ -71,6 +71,10 @@ from app.models.historical_requisition import (  # noqa: E402,F401
 from app.models.historical_purchase import HistoricalPurchaseEntry  # noqa: E402,F401
 from app.models.migration import MigrationEntityMap  # noqa: E402,F401
 from app.models.order import Order, OrderDailySequence, OrderItem  # noqa: E402,F401
+from app.models.order_import_source import (  # noqa: E402,F401
+    OrderImportSource,
+    OrderImportSourceLine,
+)
 from app.models.customer_charge import CustomerCharge  # noqa: E402,F401
 from app.models.material_cost_supplement import FinanceMaterialCostSupplement  # noqa: E402,F401
 from app.models.order_material_cost_snapshot import (  # noqa: E402,F401

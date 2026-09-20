@@ -7384,7 +7384,13 @@
                     @click="retryFailedImportDraft(draft)"
                   >{{ draft._save_status === 'unknown' ? '查询/重试原保存' : '重试此文件' }}</button>
                 </div>
-                <div v-if="draft.duplicate_reason" class="status orange" style="display:block;margin-bottom:10px">{{ draft.duplicate_reason }}</div>
+                <div v-if="draft.duplicate_reason" class="status orange" style="display:block;margin-bottom:10px;white-space:normal">
+                  <div>{{ draft.duplicate_reason }}</div>
+                  <div v-if="draft.duplicate_status === 'existing_po_found'" class="toolbar-group" style="margin-top:7px">
+                    <strong>确认保存将新建一张独立 ERP 订单，原订单及其采购、送货等下游事实不变。</strong>
+                    <a v-if="draft.duplicate_order_id" class="btn small" :href="`/?page=orders&email_order=${draft.duplicate_order_id}`" target="_blank" rel="noopener">查看原订单</a>
+                  </div>
+                </div>
                 <div v-if="!draft.manual_entry && (draft.recognition_status === 'failed' || !draft.items?.length)" class="panel" style="margin-bottom:10px;border-color:#93c5fd;background:#f8fbff">
                   <strong>这份 PDF 可以按原单人工录入</strong>
                   <div class="muted" style="margin:4px 0 8px">系统保留原 PDF 文件凭据；请人工填写客户单号和明细，再由系统匹配该客户的常用箱。</div>
@@ -31334,6 +31340,7 @@
           },
           importStatusText(draft) {
             if (draft.duplicate_status === "duplicate_skipped") return "重复已跳过";
+            if (draft.duplicate_status === "existing_po_found") return "同单号新来源待确认";
             return ({recognizing:"识别中",recognized:"已识别",needs_confirmation:"需人工确认",failed:"识别失败"})[draft.recognition_status] || "需人工确认";
           },
           importCustomerOptions(draft) {

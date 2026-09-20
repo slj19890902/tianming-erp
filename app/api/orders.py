@@ -824,6 +824,8 @@ def _encode_pdf_preview_safety_token(
     *,
     state_overrides: dict | None = None,
 ) -> str:
+    from app.services.order_import_source import signed_source_lines
+
     now = datetime.now(timezone.utc)
     states = {**_pdf_preview_safety_states(draft), **(state_overrides or {})}
     claims = {
@@ -831,6 +833,7 @@ def _encode_pdf_preview_safety_token(
         "type": PDF_PREVIEW_SAFETY_TOKEN_TYPE,
         "source_name": str(draft.get("source_name") or ""),
         "source_hash": str(draft.get("file_hash") or ""),
+        "source_lines": signed_source_lines(draft),
         **states,
         "iat": now,
         "exp": now + timedelta(minutes=PDF_PREVIEW_SAFETY_TOKEN_TTL_MINUTES),
@@ -890,6 +893,7 @@ def _decode_pdf_preview_safety_token(
         "type",
         "source_name",
         "source_hash",
+        "source_lines",
         "recognition_status",
         "customer_route_status",
         "customer_match_status",
@@ -4440,6 +4444,7 @@ def rematch_order_draft(
             "customer_match_status": "matched",
             "integrity_status": trusted_claims["integrity_status"],
             "matched_customer_id": payload.customer_id,
+            "source_lines": trusted_claims["source_lines"],
         },
     )
 
@@ -6969,12 +6974,36 @@ def _create_order_impl(
 
     try:
         from app.services.email_order_link import prepare as prepare_email_source, attach as attach_email_source
+        from app.services.order_import_source import (
+            attach as attach_import_source,
+            audit_summary as import_source_audit_summary,
+            prepare as prepare_import_source,
+            replay_client_line_ids,
+        )
         email_context, email_existing = prepare_email_source(db, payload, user, pdf_safety_claims)
         if email_existing is not None:
             existing_order = db.get(Order, email_existing.order_id)
             if existing_order is None:
                 raise HTTPException(409, "邮件关联订单不存在，请核对来源记录")
             return _order_response(existing_order, user, db=db)
+        import_source_context, existing_import_source = prepare_import_source(
+            db,
+            payload,
+            user,
+            pdf_safety_claims,
+            email_context,
+        )
+        if existing_import_source is not None:
+            existing_order = db.get(Order, existing_import_source.order_id)
+            if existing_order is None:
+                raise HTTPException(409, "PDF 来源关联订单不存在，请核对来源记录")
+            response = _order_response(existing_order, user, db=db)
+            line_ids = replay_client_line_ids(existing_import_source)
+            for item in response.get("items", []):
+                item["client_line_id"] = line_ids.get(item["id"])
+            response["source_replay"] = True
+            response["import_source_id"] = existing_import_source.id
+            return response
         _set_order_save_stage(observability, "validate_customer")
         customer = db.get(Customer, payload.customer_id)
         if customer is None:
@@ -7276,9 +7305,10 @@ def _create_order_impl(
             resolved_products=resolved_products,
         )
 
+        related_orders: list[Order] = []
         if customer_po:
             _set_order_save_stage(observability, "duplicate_check")
-            existing_orders = db.scalars(
+            related_orders = db.scalars(
                 select(Order)
                 .options(selectinload(Order.items))
                 .where(
@@ -7286,42 +7316,41 @@ def _create_order_impl(
                     Order.customer_po == customer_po,
                 )
             ).all()
-            if existing_orders and payload.pdf_import_confirmation is not None:
-                raise HTTPException(409, f"该客户的客户单号 {customer_po} 已录入（ERP订单 {existing_orders[0].order_number}），请查看原订单；未重复生成。")
-            incoming_signature = sorted(
-                (
-                    resolved_products[index].id,
-                    validated_quantities[index],
-                    str(Decimal(str(item.unit_price)).quantize(Decimal("0.0001"))),
+            if payload.pdf_import_confirmation is None:
+                incoming_signature = sorted(
                     (
-                        resolved_product_specification(
-                            item.specification,
-                            resolved_products[index],
-                        )
-                        or ""
-                    ),
-                    str(validated_external_purchase_ratios[index][0] or ""),
-                    str(validated_external_purchase_ratios[index][1] or ""),
-                )
-                for index, item in enumerate(payload.items, start=1)
-            )
-            for existing_order in existing_orders:
-                existing_signature = sorted(
-                    (
-                        item.product_id,
-                        item.quantity,
+                        resolved_products[index].id,
+                        validated_quantities[index],
                         str(Decimal(str(item.unit_price)).quantize(Decimal("0.0001"))),
-                        (item.snapshot_spec or "").strip(),
-                        str(item.external_packaging_order_quantity_basis_snapshot or ""),
-                        str(item.external_packaging_purchase_quantity_basis_snapshot or ""),
+                        (
+                            resolved_product_specification(
+                                item.specification,
+                                resolved_products[index],
+                            )
+                            or ""
+                        ),
+                        str(validated_external_purchase_ratios[index][0] or ""),
+                        str(validated_external_purchase_ratios[index][1] or ""),
                     )
-                    for item in existing_order.items
+                    for index, item in enumerate(payload.items, start=1)
                 )
-                if existing_signature == incoming_signature:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="系统中已存在相同客户、客户单号和明细的订单，未重复生成。",
+                for existing_order in related_orders:
+                    existing_signature = sorted(
+                        (
+                            item.product_id,
+                            item.quantity,
+                            str(Decimal(str(item.unit_price)).quantize(Decimal("0.0001"))),
+                            (item.snapshot_spec or "").strip(),
+                            str(item.external_packaging_order_quantity_basis_snapshot or ""),
+                            str(item.external_packaging_purchase_quantity_basis_snapshot or ""),
+                        )
+                        for item in existing_order.items
                     )
+                    if existing_signature == incoming_signature:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="系统中已存在相同客户、客户单号和明细的订单，未重复生成。",
+                        )
 
         _set_order_save_stage(observability, "persist_order")
         order_date = payload.order_date or beijing_today()
@@ -7590,6 +7619,16 @@ def _create_order_impl(
             MONEY_QUANTUM,
             rounding=ROUND_HALF_UP,
         )
+        db.flush()
+        import_source = attach_import_source(
+            db,
+            import_source_context,
+            order,
+            created_items,
+            payload.items,
+            actor_id=user.id,
+            override_reasons=pdf_safety_override_reasons,
+        )
         _append_order_audit(
             db,
             request=request,
@@ -7618,6 +7657,9 @@ def _create_order_impl(
                 "total_amount": str(order.total_amount),
                 "source_contract_id": source_contract_id,
                 "source_hash": pdf_safety_claims.get("source_hash") if pdf_safety_claims else None,
+                "import_source_id": import_source.id if import_source is not None else None,
+                "import_source_summary": import_source_audit_summary(db, import_source),
+                "related_existing_order_ids": [row.id for row in related_orders],
             },
         )
         if pdf_safety_override_reasons:
@@ -7748,6 +7790,14 @@ def _create_order_impl(
             response["items"], payload.items, strict=True
         ):
             response_item["client_line_id"] = request_item.client_line_id
+        if import_source is not None:
+            response["source_replay"] = False
+            response["import_source_id"] = import_source.id
+        if related_orders:
+            response["related_existing_orders"] = [
+                {"id": row.id, "order_number": row.order_number, "status": row.status}
+                for row in related_orders
+            ]
         if payload.idempotency_key:
             from fastapi.encoders import jsonable_encoder
             key, digest = observability["create_identity"] if observability and "create_identity" in observability else _order_create_identity(payload, user.id)
@@ -7921,7 +7971,7 @@ def create_order(
         "failure_stage": "entry",
     }
     try:
-        if payload.idempotency_key:
+        if payload.idempotency_key or payload.pdf_import_confirmation is not None:
             connection = db.connection()
             if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
                 connection.exec_driver_sql("BEGIN IMMEDIATE")

@@ -6329,7 +6329,7 @@
       </div>
 
       <div v-if="modal" class="modal-mask" @click.self="onModalMaskClick">
-        <div ref="businessModal" class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product', 'product-editor-large': modal.type === 'product' && isLargeUi}" :role="isAccessibleBusinessDialog ? 'dialog' : null" :aria-modal="isAccessibleBusinessDialog ? 'true' : null" :aria-labelledby="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null" :aria-describedby="isAccessibleReadOnlyOrderDialog ? 'erp-order-detail-description' : null" :tabindex="isAccessibleBusinessDialog ? -1 : null" @keydown="onModalKeydown">
+        <div ref="businessModal" class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product', 'product-editor-large': modal.type === 'product' && isLargeUi}" :role="isAccessibleBusinessDialog ? 'dialog' : null" :aria-modal="isAccessibleBusinessDialog ? 'true' : null" :aria-labelledby="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null" :aria-describedby="isAccessibleReadOnlyOrderDialog ? 'erp-order-detail-description' : null" :tabindex="isAccessibleBusinessDialog ? -1 : null" @keydown="onModalKeydown($event); onOrderEntryKeydown($event)">
           <div class="modal-head"><strong :id="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null">{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small high-frequency-action" @click="closeModal">{{ modal.type==='product' && productEditReturnContext && productEditReturnContext.source!=='bom' ? '返回订单' : workflowReturnLabel }}</button></div>
           <div v-if="workflowStatus" class="workflow-status" :data-tone="workflowStatus.tone" role="status" aria-live="polite">
             <strong>{{ workflowStatus.label }}</strong><span>{{ workflowStatus.detail }}</span>
@@ -7777,11 +7777,11 @@
             </div>
             <div v-else-if="modal.type === 'order'">
               <div class="order-entry-header">
-                <div class="field"><label>客户</label><search-select v-model="orderForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="输入客户名称或拼音首字母" @change="handleOrderCustomerChange"></search-select></div>
-                <div class="field"><label>客户订单号</label><input class="input customer-po" v-model.trim="orderForm.customer_po" /></div>
-                <div class="field"><label>下单日期</label><input class="input" type="date" v-model="orderForm.order_date" @change="refreshOrderNumberPreview" /></div>
-                <div class="field"><label>报料策略</label><select class="select" v-model="orderForm.requisition_strategy" @change="onOrderRequisitionStrategyChange"><option value="normal">正常进入待报料</option><option value="wait_previous_batch">同款上一批送完后再报</option></select></div>
-                <div class="field"><label>交货日期</label><input class="input" type="date" v-model="orderForm.delivery_date" /></div>
+                <div class="field" data-order-entry-focus="customer"><label>客户</label><search-select v-model="orderForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="输入客户名称或拼音首字母" @change="handleOrderCustomerChange"></search-select></div>
+                <div class="field" data-order-entry-focus="customer-po"><label>客户订单号</label><input class="input customer-po" data-order-entry-enter-next data-order-entry-next="order-date" v-model.trim="orderForm.customer_po" /></div>
+                <div class="field" data-order-entry-focus="order-date"><label>下单日期</label><input class="input" type="date" data-order-entry-enter-next data-order-entry-next="requisition-strategy" v-model="orderForm.order_date" @change="refreshOrderNumberPreview" /></div>
+                <div class="field" data-order-entry-focus="requisition-strategy"><label>报料策略</label><select class="select" v-model="orderForm.requisition_strategy" @change="onOrderRequisitionStrategyChange"><option value="normal">正常进入待报料</option><option value="wait_previous_batch">同款上一批送完后再报</option></select></div>
+                <div class="field" data-order-entry-focus="delivery-date"><label>交货日期</label><input class="input" type="date" data-order-entry-enter-next data-order-entry-next="product-0" v-model="orderForm.delivery_date" /></div>
               </div>
               <div v-if="!orderForm.customer_id" class="status orange" style="margin:10px 0">请先选择客户，再选择常用箱并填写数量。</div>
               <div v-else class="muted" style="font-size:12px;margin:6px 0 10px;color:#6b7280">
@@ -7808,7 +7808,7 @@
                 <div v-if="orderRequisitionPreview.error" class="danger-text" style="margin-top:5px">{{ orderRequisitionPreview.error }}</div>
               </div>
               <div class="order-entry-actions">
-                <button class="btn primary" type="button" @click="addOrderItem">增加明细</button>
+                <button class="btn primary" type="button" data-order-entry-focus="add-line" @click="addOrderItem">增加明细</button>
                 <button class="btn success" type="button" :disabled="!orderForm.customer_id" @click="openOrderCommonBoxPicker">导入常用箱</button>
                 <button class="btn manual-size-entry" type="button" :disabled="!orderForm.customer_id" @click="addManualSizeOrderItem">手工尺寸</button>
                 <span class="muted">每款只占一行；可一次选择多款。</span>
@@ -7837,7 +7837,7 @@
 	                    </td>
 	                  </tr>
 	                  <tr :class="{'order-entry-row-error': !!item._validation_error, 'manual-size-line': !!item.manual_size_entry}">
-	                    <td class="order-entry-code">
+	                    <td class="order-entry-code" :data-order-entry-focus="'product-'+index">
 	                      <span v-if="item.manual_size_entry" class="manual-size-code">手工尺寸</span>
 	                      <search-select v-else v-model="item.product_id" :disabled="!orderForm.customer_id"
 	                        :options="orderProductOptions[index] || []" label-key="_compact_label" value-key="id"
@@ -7888,8 +7888,8 @@
 	                        </search-select>
 	                      </div>
 	                    </td>
-	                    <td class="order-entry-quantity">
-	                      <input :id="`order-quantity-${index}`" class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" @input="onOrderDraftQuantityInput(item)" />
+	                    <td class="order-entry-quantity" :data-order-entry-focus="'quantity-'+index">
+	                      <input :id="`order-quantity-${index}`" class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="1" data-order-entry-enter-next :data-order-entry-next="canViewSalesAmounts ? 'price-'+index : (orderForm.items[index+1] ? 'product-'+(index+1) : 'add-line')" v-model.number="item.quantity" @input="onOrderDraftQuantityInput(item)" />
 	                      <select v-if="item.bom_component_demands?.length && item.combination_role !== 'priced_component'" class="select" style="margin-top:5px;font-size:12px" v-model="item.composite_fulfillment_mode_snapshot">
 	                        <option value="component_delivery">子件交付 / 分开存放</option>
 	                        <option value="parent_delivery">父件交付 / 子件同位存放并自动投影父件</option>
@@ -7898,7 +7898,7 @@
 	                      <div v-if="inventoryPlanApplies(item) && item._inventory" :class="['inventory-auto-summary',{'attention':orderLineInventoryNeedsAttention(item)}]">{{ orderLineInventoryAutoSummary(item) }}</div>
                       <button v-if="inventoryPlanApplies(item) && item._inventory" :class="['btn','small','inventory-auto-detail-button',orderLineInventoryButtonClass(item)]" type="button" @click="item._show_inventory_details=!item._show_inventory_details">{{ item._show_inventory_details ? '收起' : (item._inventory.api_error ? '重试库存查询' : (orderLineSemiAvailable(item) > 0 ? '半成品抵扣 · ' + orderLineSemiAvailable(item) + '张' : '查看库存安排')) }}</button>
 	                    </td>
-	                    <td v-if="canViewSalesAmounts" class="order-entry-price sensitive-price"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" @input="item.manual_size_entry && markManualSizeUnitPrice(item)" /><div v-if="item.manual_size_entry" class="manual-size-quote">{{ manualSizeQuoteText(item) }}</div></td>
+	                    <td v-if="canViewSalesAmounts" class="order-entry-price sensitive-price" :data-order-entry-focus="'price-'+index"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" data-order-entry-enter-next :data-order-entry-next="orderForm.items[index+1] ? 'product-'+(index+1) : 'add-line'" v-model="item.unit_price" @input="item.manual_size_entry && markManualSizeUnitPrice(item)" /><div v-if="item.manual_size_entry" class="manual-size-quote">{{ manualSizeQuoteText(item) }}</div></td>
 	                    <td v-if="canViewSalesAmounts" class="order-entry-total sensitive-price"><span class="order-entry-total-value">¥ {{ money(orderItemSaleAmount(item)) }}</span></td>
 	                    <td class="order-entry-actions-col">
 	                      <div class="order-entry-drawing-actions">
@@ -9764,7 +9764,7 @@
             <button v-if="modal?.type === 'delivery' && deliveryForm.editingId && deliveryForm.editing_status==='pending' && !deliveryFormIsDirty()" class="btn" :disabled="loading || deliverySaveState.saving || !deliveryForm.pick_task || !!deliveryOperationState.action" :title="deliveryForm.pick_task ? '打印款号、名称、尺寸、数量和具体位置' : '请先点拿货生成库位计划'" @click="openCurrentDeliveryPickPrint">打印仓库找货单</button>
             <span v-if="modal?.type === 'delivery' && deliveryForm.editingId && deliveryForm.editing_status==='pending' && !deliveryFormIsDirty() && !deliveryForm.pick_task" class="muted">先点“拿货”生成库位计划，再打印找货单</span>
             <button v-if="canSaveModal && modal?.type==='quotationConvert'" class="btn primary" :disabled="loading || quotationConversionState.saving || quotationConversionState.committed || quotationConversionState.outcomeUncertain || !!quotationConvertCreaseMismatch" @click="saveModal()">{{ quotationConversionState.saving ? '正在转入…' : (quotationConversionState.committed ? '已转入常用箱' : '保存') }}</button>
-            <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderReminderBlocking()" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
+            <button v-if="canSaveModal && modal?.type==='order'" class="btn primary" title="保存（Ctrl+Enter）" :disabled="loading || orderCreateSaveState.saving || orderCreateSaveState.committed || orderReminderBlocking()" @click="saveModal()">{{ orderCreateSaveState.saving ? '正在保存订单…' : (orderCreateSaveState.committed ? '订单已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderEdit'" class="btn primary" :disabled="loading || orderGroupSaveState.saving || orderGroupSaveState.committed || orderGroupSaveState.outcomeUncertain" @click="saveModal()">{{ orderGroupSaveState.saving ? '正在保存订单组…' : (orderGroupSaveState.committed ? '订单组已保存' : '保存') }}</button>
             <button v-if="canSaveModal && modal?.type==='orderItem'" class="btn primary" :disabled="loading || orderItemSaveState.saving || orderItemSaveState.committed || orderItemSaveState.outcomeUncertain || finishedReservationActionBlocked() || !!orderItemCreaseMismatch" @click="saveModal()">{{ orderItemSaveState.saving ? '正在保存明细…' : (orderItemSaveState.committed ? '订单明细已保存' : '保存') }}</button>
             <button v-if="canSaveModal && !['quotationConvert','order','orderEdit','orderItem'].includes(modal?.type)" class="btn primary" :class="{'delivery-guide-target':modal?.type==='delivery' && ['review','save','print'].includes(deliveryGuideStage)}" :disabled="loading || masterSavePending || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='supplierRequisitionDraft' && (supplierRequisitionSaveState.saving || supplierRequisitionSaveState.committed)) || (modal?.type==='requisition' && (compositeRequisitionSaveState.saving || compositeRequisitionSaveState.committed)) || (modal?.type==='stockReplenishment' && (stockReplenishmentSaveState.saving || stockReplenishmentSaveState.committed)) || (modal?.type==='product' && (!!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError)) || (modal?.type==='stockReplenishment' && stockReplenishmentSaveBlocked) || (modal?.type==='delivery' && (deliverySaveState.saving || deliverySaveState.outcomeUncertain || !!deliveryValidationError || !!deliveryOperationState.action)) || (modal?.type==='receipt' && !!receiptOperationState.action) || (modal?.type==='requisitionHold' && requisitionHoldSaveBlocked)" @click="modal?.type==='delivery' ? deliveryPrimaryAction() : saveModal()">{{ ['customer','product','material','supplier'].includes(modal?.type) && masterSavePending ? '保存中…' : (modal?.type==='delivery' ? (deliverySaveState.saving ? '正在保存草稿…' : deliveryPrimaryLabel()) : (modal?.type==='receipt' ? (receiptOperationState.action==='save' ? '保存中…' : '保存回单') : (modal?.type==='supplierRequisitionDraft' ? (supplierRequisitionSaveState.saving ? '正在生成采购单…' : (supplierRequisitionSaveState.committed ? '采购单已生成' : '确认生成正式采购单')) : (modal?.type==='requisition' ? (compositeRequisitionSaveState.saving ? '正在生成组合报料…' : (compositeRequisitionSaveState.committed ? '组合报料已生成' : '确认生成正式采购单')) : (modal?.type==='requisitionHold' ? '确认暂缓' : (modal?.type==='stockReplenishment' ? (stockReplenishmentSaveState.saving ? '正在保存补库草稿…' : (stockReplenishmentSaveState.committed ? '补库草稿已保存' : (stockReplenishmentForm.source_type==='stock_warning' ? '保存报料草稿' : '保存补库报料草稿'))) : '保存')))))) }}</button>
@@ -11529,7 +11529,7 @@
             return ["orderDetail", "orderGroupDetail"].includes(this.modal?.type);
           },
           isAccessibleBusinessDialog() {
-            return this.isAccessibleReadOnlyOrderDialog || modalA11ySessionActive;
+            return this.isAccessibleReadOnlyOrderDialog || this.modal?.type === "order" || modalA11ySessionActive;
           },
           canSaveModal() {
             if (!this.modal) return false;
@@ -12129,6 +12129,39 @@
               event.preventDefault();
               first.focus();
             }
+          },
+          focusOrderEntryField(name) {
+            if (!name) return false;
+            const container = this.$refs.businessModal;
+            const field = [...(container?.querySelectorAll("[data-order-entry-focus]") || [])]
+              .find(element => element.dataset.orderEntryFocus === name);
+            const target = this.focusableElements(field)[0];
+            if (!target) return false;
+            target.focus({preventScroll:true});
+            return true;
+          },
+          onOrderEntryKeydown(event) {
+            if (this.modal?.type !== "order" || event.isComposing || event.keyCode === 229) return;
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              this.closeModal();
+              return;
+            }
+            if (event.key !== "Enter") return;
+            if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+              if (this.orderCreateSaveState.saving || this.orderCreateSaveState.committed || this.orderReminderBlocking()) return;
+              event.preventDefault();
+              event.stopPropagation();
+              void this.saveModal();
+              return;
+            }
+            const target = event.target;
+            if (!(target instanceof HTMLElement) || target.tagName === "TEXTAREA" || !target.matches("[data-order-entry-enter-next]")) return;
+            const next = target.dataset.orderEntryNext;
+            if (!this.focusOrderEntryField(next)) return;
+            event.preventDefault();
+            event.stopPropagation();
           },
           async setUiMode(mode) {
             if (!["standard", "large"].includes(mode) || mode === this.uiMode || this.uiModeSaving) return;
@@ -30899,6 +30932,7 @@
 	            return true;
 	          },
 	          async openOrder() {
+	            const modalOpener = this.rememberModalOpener();
 	            if (!this.customerOptions.length) await this.loadCustomerOptions();
 	            this.orderCreateSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
 	            this.resetOrderReminderState();
@@ -30910,6 +30944,7 @@
 	            this.modal = { type:"order", title:"新建多明细订单" };
 	            this.addOrderItem();
 	            this.refreshOrderNumberPreview();
+	            this.$nextTick(() => this.focusAccessibleModal(modalOpener));
 	          },
 	          resetOrderCommonBoxPicker() {
 	            this.orderCommonBoxPicker = {

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.466"
-APP_VERSION_NAME = "PDF来源身份与同单号独立订单"
+APP_VERSION = "v0.22.467"
+APP_VERSION_NAME = "订单键盘连续录入与取消保护"
 APP_BUILD_DATE = "2026-09-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4407,3 +4407,15 @@ APP_VERIFICATION_STEPS = [
     "同一来源重复提交或网络结果不确定时再次保存，确认系统返回原订单而不重复建单；不要为验收创建模拟订单。",
 ]
 APP_CHANGELOG = [*(f"v0.22.466：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "订单新建弹窗为客户订单号、日期、数量和单价等单行字段增加可预测的 Enter 焦点推进；表单仍保留浏览器原生 Tab/Shift+Tab 顺序和可见焦点。",
+    "Esc 现在只取消当前未保存的订单弹窗并返回打开控件，不会调用保存；中文输入法组合输入、文本域回车和未标记控件继续使用原有输入行为。",
+    "Ctrl+Enter 复用既有保存路径，仍受权限、客户范围、字段校验、保存中状态、幂等、事务和审计门禁约束；本版无数据库迁移，也不改写历史订单。",
+]
+APP_VERIFICATION_STEPS = [
+    "在隔离 UAT 的订单新建弹窗中，用 Tab/Shift+Tab 检查焦点留在弹窗内；从客户订单号、下单日期、交货日期、数量和单价按 Enter，确认焦点按字段顺序推进。",
+    "在未保存订单弹窗按 Esc，确认弹窗关闭、焦点回到打开按钮且没有新订单；在文本备注输入框按 Enter，确认仍输入换行。",
+    "填写合规订单后按 Ctrl+Enter，确认仍走原有校验和保存结果；保存中重复按快捷键不得创建重复订单。不要为验收在正式库创建模拟订单。",
+]
+APP_CHANGELOG = [*(f"v0.22.467：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

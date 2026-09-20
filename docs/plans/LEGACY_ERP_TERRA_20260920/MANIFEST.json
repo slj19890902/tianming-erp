@@ -1,7 +1,7 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
-  "kind": "continuous_goal_prompt_execution_plan_t02_integrated_t03_candidate",
-  "local_head": "6b161d2cd11473b156028a6297163d165f7b3ff7",
+  "kind": "continuous_goal_execution_t02_released_v469_t17_signing_gated",
+  "local_head": "3fdbe33b6e3664cce7f5beb15083e96c89ed3b9d",
   "remote_head_reverified": true,
   "audit_integrity": {
     "files": 66,
@@ -26,11 +26,11 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "2af8e2db4a1d52ff19eff6260e8f84d3ccde4a39587c59b26eea909097d3e2e4"
+      "sha256": "a639ccb6ab8a28f6d4d1a36e682755fa6c4e98867bfb1f925c517f722ee1cc1f"
     },
     {
       "path": "04_场景覆盖与验收.md",
-      "sha256": "91a55f3693966e339d0015d0eac2c224e7868513fa11d4321289ebe5c1329e06"
+      "sha256": "1cb5ebdce872c9704f591ed9d7ef54f744d1bcaa3be65732097dfde20f23255a"
     },
     {
       "path": "05_已确认合同速查.md",
@@ -114,7 +114,7 @@
     },
     {
       "path": "tasks/T02.md",
-      "sha256": "284b2946f28aa27c8358d33b8f6b78ccf5cb929e562fd5400fec69183b1f937d"
+      "sha256": "6368334972000d643475f916f70cb3dc8b5d26bdd58c53e296eb1a987f8b291c"
     },
     {
       "path": "tasks/T03.md",
@@ -174,7 +174,7 @@
     },
     {
       "path": "tasks/T17.md",
-      "sha256": "c66a258f1ff87f9b643d7050aacc000974ac3cdef46d1e7f0f28ebfefbc7cec8"
+      "sha256": "938818d0bd4ab07d4bda2c63cf2d19226bb915d7897227335d74385e4b692d0e"
     },
     {
       "path": "tasks/T18.md",
@@ -231,14 +231,15 @@
     "scope": "environment_only_not_T02_implementation"
   },
   "t02_candidate": {
-    "status": "ready_for_release",
-    "formal_baseline": "278f765da1a7a0f05ae2d583e5b9d686c7d9d572",
+    "status": "released_pending_external_acceptance",
     "implementation_commit": "f49346376bbe33c384f92776087a648382ab3f10",
-    "release_metadata_commit": "3b787b51c528e75a0cfafe3624c2675fe59acbd3",
-    "alembic_head": "du0920",
-    "focused_tests": "32 passed",
-    "isolated_migration": "dt0920 -> du0920 -> dt0920 -> du0920",
-    "formal_database_written": false,
-    "push_status": "blocked_by_automatic_external_export_review"
+    "formal_source_commit": "659696a3a3a4c3201a0c26bfd361e735efc9739d",
+    "formal_package": "90fb655c163a167bf20c8fcfad97c16c022d7a9e7889092dbc70c4b7818dadb9",
+    "formal_revision": "du0920",
+    "focused_tests": "7 passed in 13.53s",
+    "isolated_working_database_sha256": "52c3ac173b44fedfa75f3b5d8adce5190ff18e4227bfaca6bc3a6b784b7a54a5",
+    "isolated_pre_migration_backup_sha256": "562b72192ec6fa184668982cac14291b43c21e23c204f59e99deb2fed88fa8c2",
+    "formal_database_written_by_this_reverification": false,
+    "administrator_acceptance": "pending_real_new_pdf_business_flow"
   }
 }

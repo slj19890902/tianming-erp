@@ -2014,6 +2014,10 @@ class SemiProductCandidatePayload(BaseModel):
     crease_left_mm: int | None = Field(default=None, ge=0)
     crease_middle_mm: int | None = Field(default=None, ge=0)
     crease_right_mm: int | None = Field(default=None, ge=0)
+    # New orders and PDF imports may only adopt stock that is already a usable
+    # semi-finished part.  Stock that requires a fresh cutting decision stays
+    # visible to the requisition workflow, where its cutting plan is confirmed.
+    stage: Literal["order", "requisition"] = "order"
 
 
 class SemiMatchConfirmPayload(BaseModel):
@@ -2957,6 +2961,13 @@ def _semi_candidate_dict(
     session = object_session(lot)
     profile = goods_profile(session, lot) if session is not None else None
     customer_bound = bool(profile.get("scope") == "customers" and profile.get("customer_ids")) if profile else bool(detail.owner_customer_id)
+    handling_stage = (
+        "requisition"
+        if row.cut_plan
+        else "order"
+        if row.selectable
+        else "review"
+    )
     return {
         "lot_id": lot.id,
         "lot_number": lot.lot_number,
@@ -2983,6 +2994,15 @@ def _semi_candidate_dict(
         "pieces_per_box": detail.pieces_per_box,
         "stock_yield_per_sheet": row.cut_plan["yield_factor"] if row.cut_plan else detail.stock_yield_per_sheet,
         "cut_plan": row.cut_plan,
+        "handling_stage": handling_stage,
+        "handling_reason": (
+            "需要在报料中确认分切方案"
+            if row.cut_plan
+            else "当前订单可直接采用"
+            if row.selectable
+            else "库存用途或适用性待核对"
+        ),
+        "requires_requisition_cut_plan": bool(row.cut_plan),
         "selectable": row.selectable,
         "layer_count": detail.layer_count,
         "sheet_type": detail.sheet_type,
@@ -3637,8 +3657,10 @@ def semi_product_candidates(
             db,
             product_id=product_id,
             customer_bound_only=True,
-            **payload.model_dump(),
+            **payload.model_dump(exclude={"stage"}),
         )
+        if payload.stage == "order":
+            rows = [row for row in rows if row.cut_plan is None]
         rows = _visible_semi_candidates(rows, user, db)
         return {
             "product_id": product_id,
@@ -3665,8 +3687,10 @@ def semi_product_inventory_browser(
             page=page, page_size=page_size, page_info=page_info,
             visible_customer_ids=_visible_customer_ids(user, db),
             product_id=product_id,
-            **payload.model_dump(),
+            **payload.model_dump(exclude={"stage"}),
         )
+        if payload.stage == "order":
+            rows = [row for row in rows if row.cut_plan is None]
         rows = _visible_semi_candidates(rows, user, db)
         return {
             "product_id": product_id,

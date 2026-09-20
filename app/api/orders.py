@@ -286,6 +286,7 @@ from app.services.semi_finished_inventory import (
     save_order_item_semi_requirement,
     semi_finished_inventory_candidates,
 )
+from app.services.sheet_cut_plan import rectangular_cut_plan
 from app.services.requisition_quantities import (
     CUTTING_MODE_BOX_STYLES,
     DEFAULT_CUTTING_MODE,
@@ -1242,6 +1243,11 @@ def _preflight_reservation_plans(
                     expected=expected,
                     reviewed=entry.override and SIGNATURE_OVERRIDE_WARNING in entry.warning_acknowledged_codes,
                 )
+                if rectangular_cut_plan(db, lot, product, expected) is not None:
+                    raise WarehouseInventoryError(
+                        "该片料需要先在报料中确认分切方案，不能在订单录入阶段直接抵扣",
+                        409,
+                    )
                 if entry.direct_deduction:
                     (
                         layer_count,

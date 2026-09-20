@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from datetime import date
 from decimal import Decimal
+import json
 from pathlib import Path
 
 import pytest
@@ -550,6 +551,92 @@ def test_direct_plan_rejects_changed_sheet_type_and_wrong_cutting_yield(
             0,
             version,
         )
+
+
+def test_order_stage_defers_cut_stock_to_requisition(b1_app) -> None:
+    """A cut yield is a requisition decision, never an order/PDF reservation."""
+    from app.models.warehouse_goods import WarehouseGoodsProfile
+
+    app, factory = b1_app
+    lot_id, version = add_semi_lot(
+        factory,
+        quantity=6,
+        key="order-stage-defers-cut",
+        length=1120,
+        width=440,
+        customer_id=1,
+    )
+    with factory() as db:
+        product = db.get(Product, 1)
+        product.box_style = "衬板"
+        product.length_mm = 1000
+        product.width_mm = 200
+        product.report_length_mm = 1000
+        product.report_width_mm = 200
+        lot = db.get(InventoryLot, lot_id)
+        assert lot is not None and lot.semi_finished_detail is not None
+        db.add(
+            WarehouseGoodsProfile(
+                lot_id=lot.id,
+                data_json=json.dumps(
+                    {
+                        "scope": "customers",
+                        "customer_ids": [1],
+                        "product_ids": [1],
+                        "processing": "cut",
+                        "material_confidence": "confirmed",
+                        "verified_material_id": None,
+                        "material_code": "A416D",
+                        "face_paper": "kraft",
+                        "mold_tool_id": None,
+                    }
+                ),
+            )
+        )
+        db.commit()
+    payload = {
+        "customer_id": 1,
+        "board_length_mm": 1000,
+        "board_width_mm": 200,
+        "material_code": "A416D",
+        "flute_type": "B",
+        "component_type": "whole",
+        "pieces_per_box": 1,
+        "stock_yield_per_sheet": 1,
+        "layer_count": 3,
+    }
+    with TestClient(app) as client:
+        login(client)
+        order_candidates = client.post(
+            "/api/warehouse/semi-finished/products/1/candidates", json=payload
+        )
+        assert order_candidates.status_code == 200, order_candidates.text
+        assert all(row["lot_id"] != lot_id for row in order_candidates.json()["items"])
+        requisition_candidates = client.post(
+            "/api/warehouse/semi-finished/products/1/candidates",
+            json={**payload, "stage": "requisition"},
+        )
+        assert requisition_candidates.status_code == 200, requisition_candidates.text
+        candidate = next(
+            row
+            for row in requisition_candidates.json()["items"]
+            if row["lot_id"] == lot_id
+        )
+        assert candidate["cut_plan"]["yield_factor"] == 2
+        assert candidate["handling_stage"] == "requisition"
+        assert candidate["requires_requisition_cut_plan"] is True
+        rejected = post_order(
+            client,
+            [order_item(1, 5, {"semi": [semi_plan(lot_id, version, 5)]})],
+            "B1-CUT-MUST-REQUIRE",
+        )
+        assert rejected.status_code == 409, rejected.text
+        assert "报料中确认分切方案" in rejected.json()["detail"]
+    with factory() as db:
+        lot = db.get(InventoryLot, lot_id)
+        assert lot is not None
+        assert (lot.quantity_available, lot.quantity_reserved, lot.version) == (6, 0, version)
+        assert db.scalar(select(Order.id).where(Order.customer_po == "B1-CUT-MUST-REQUIRE")) is None
 
 
 def test_old_payload_and_pdf_shaped_payload_only_reserve_on_final_post(b1_app) -> None:

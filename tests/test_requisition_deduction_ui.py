@@ -6,6 +6,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy import select, event
 
+from app.models.warehouse_goods import WarehouseGoodsProfile
+from app.models.product import Product
 from app.models.warehouse_inventory import InventoryLot, InventoryReservation
 from app.models.audit import OperationLog
 from test_semi_finished_order_reservation import b1_app, login, post_order, order_item, add_semi_lot
@@ -82,6 +84,78 @@ def test_explicit_lot_full_cover_replay_and_changed_payload_rejected(b1_app):
             assert db.get(InventoryLot, chosen).quantity_reserved == 20
             assert len(db.scalars(select(InventoryReservation)).all()) == 1
             assert len(db.scalars(select(OperationLog).where(OperationLog.action == "RESERVE_LATE_SEMI_INVENTORY_FROM_REQUISITION")).all()) == 1
+
+
+def test_cut_stock_is_confirmed_as_requisition_material_plan_without_purchase(b1_app):
+    app, factory = b1_app
+    with factory() as db:
+        product = db.get(Product, 1)
+        assert product is not None
+        product.box_style = "衬板"
+        product.length_mm = product.report_length_mm = 1000
+        product.width_mm = product.report_width_mm = 200
+        db.commit()
+    chosen, version = add_semi_lot(
+        factory,
+        quantity=10,
+        key="ui-cut-material-plan",
+        length=1120,
+        width=440,
+    )
+    with factory() as db:
+        db.add(
+            WarehouseGoodsProfile(
+                lot_id=chosen,
+                data_json=json.dumps(
+                    {
+                        "scope": "customers",
+                        "customer_ids": [1],
+                        "product_ids": [1],
+                        "processing": "cut",
+                        "material_confidence": "confirmed",
+                        "verified_material_id": None,
+                        "material_code": "A416D",
+                        "face_paper": "kraft",
+                        "mold_tool_id": None,
+                    }
+                ),
+            )
+        )
+        db.commit()
+    with TestClient(app) as client:
+        login(client)
+        item_id = make_pending(client, "UI-CUT-MATERIAL-PLAN")
+        options = client.get(
+            f"/api/requisition/pending/{item_id}/semi-inventory-options"
+        )
+        assert options.status_code == 200, options.text
+        candidate = next(
+            row for row in options.json()["candidates"] if row["lot_id"] == chosen
+        )
+        assert candidate["requires_requisition_cut_plan"] is True
+        assert candidate["handling_stage"] == "requisition"
+        assert candidate["cut_plan"]["yield_factor"] == 2
+        response = client.post(
+            "/api/requisition/semi-inventory/reserve-from-pending",
+            json={
+                "order_item_id": item_id,
+                "component_type": "whole",
+                "requested_requirement_quantity": 20,
+                "lots": [{"lot_id": chosen, "expected_version": version}],
+                "override": bool(candidate["signature_differences"]),
+                "warning_acknowledged_codes": candidate["warning_codes"],
+                "idempotency_key": "ui-cut-material-plan-reserve",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["material_plan_confirmed"] is True
+        assert response.json()["requisition_qty"] == 0
+    with factory() as db:
+        lot = db.get(InventoryLot, chosen)
+        assert lot is not None and lot.quantity_available == 0 and lot.quantity_reserved == 10
+        reservation = db.scalar(select(InventoryReservation).where(InventoryReservation.order_item_id == item_id))
+        assert reservation is not None and reservation.cut_plan_json is not None
+        assert json.loads(reservation.cut_plan_json)["yield_factor"] == 2
 
 
 def test_stale_version_and_audit_failure_rollback(b1_app, monkeypatch):

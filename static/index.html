@@ -7714,13 +7714,13 @@
                             <div class="toolbar"><strong>{{item.normalized_product_code||item.raw_product_code}} · {{pdfCommonBoxProductName(item)}}</strong><button class="btn small workspace-dialog-close" @click="item._show_inventory_details=false">返回核单</button></div>
                             <div class="pdf-stock-summary" v-if="item._inventory.authoritative">
                               <span>订单 <b>{{item._inventory.authoritative.order_quantity}}</b> 个</span><span>拟用成品 <b>{{item._inventory.authoritative.finished_planned_quantity||0}}</b> 个</span><span>还需生产 <b>{{item._inventory.authoritative.production_required_quantity||0}}</b> 个</span><span>需报 <b>{{pdfInventoryRequisitionText(item)}}</b></span>
-                              <info-note>当前为草稿拟用，保存正式订单后才预占库存。半成品和原料抵扣材料需求，仍需完成生产。</info-note>
+                              <info-note>当前为草稿拟用，保存正式订单后才预占库存。这里仅抵扣成品和无需重新分切的半成品；原料及需分切片料在报料时确认用料和分切方案。</info-note>
                             </div>
                             <div class="toolbar-group pdf-stock-tabs">
                               <button class="btn danger small" type="button" @click="skipAllLineSheets(item)">本行全部不采用片料</button>
                               <small class="muted">通用片料仅推荐，采用后才抵扣</small>
                               <button :class="['btn',item._inventory_tab==='summary'?'primary':'']" @click="item._inventory_tab='summary';item._inventory_page=1">抵扣与位置</button>
-                              <button v-for="kind in ['semi','raw']" :key="kind" :class="['btn',pdfMaterialButton(item,kind).tone]" @click="item._inventory_tab=kind;item._inventory_page=1">{{kind==='semi'?'半成品':'原材料'}} · {{pdfMaterialButton(item,kind).text}}</button>
+                              <button v-for="kind in ['semi']" :key="kind" :class="['btn',pdfMaterialButton(item,kind).tone]" @click="item._inventory_tab=kind;item._inventory_page=1">半成品 · {{pdfMaterialButton(item,kind).text}}</button>
                               <button class="btn small" @click="loadOrderLineInventory(item,draft.matched_customer_id)">刷新库存</button>
                             </div>
                             <div v-if="item._inventory.loading || item._inventory.authoritative_loading" class="workspace-state" role="status"><span class="workspace-spinner"></span>正在查询库存…</div>
@@ -7987,9 +7987,9 @@
                          <div v-if="!inventoryHasSelection(item)" class="muted">未选择库存抵扣，可继续保存；查询失败不代表库存为零，不会自动报料。</div><div v-if="item._inventory.error" class="danger-text" style="margin-top:4px">{{ item._inventory.error }}</div>
                          <div v-if="item._inventory.finished.candidates.length" style="margin-top:5px"><strong>成品库存：</strong><span v-for="candidate in item._inventory.finished.candidates" :key="candidate.lot_id" style="margin-left:8px">{{ candidate.lot_number }} 可用 {{ candidate.quantity_available }}，<order-stock-location :candidate="candidate" :item="item"></order-stock-location></span><button v-if="safeSystemInventoryCandidates(item,'finished').length && !item._inventory.finished.selected_candidates.length" class="btn small success" type="button" @click="confirmOrderLineInventory(item,'finished')">采用安全推荐</button><button class="btn danger small" type="button" @click="skipOrderLineInventory(item,'finished')">本次不用库存</button><button class="btn small" type="button" @click="rechooseOrderLineInventory(item,'finished',orderForm.customer_id)">重新选择</button><div v-for="allocation in item._inventory.finished.allocations" :key="`finished-plan-${allocation.candidate.lot_id}`" class="status green">系统已安排：{{ allocation.candidate.lot_number }} 使用 {{ allocation.requested_qty }} 个，<order-stock-location :candidate="allocation.candidate" :item="item"></order-stock-location></div></div>
                         <!-- compact semi stock -->
-                        <div class="toolbar-group"><button class="btn danger small" type="button" @click="skipAllLineSheets(item)">本行全部不采用片料</button><small class="muted">通用片料仅推荐，采用后才抵扣</small></div>
+                        <div class="toolbar-group"><button class="btn danger small" type="button" @click="skipAllLineSheets(item)">本行全部不采用片料</button><small class="muted">订单阶段仅显示无需重新分切的半成品；通用库存仅推荐，采用后才抵扣</small></div>
                         <div v-for="component in inventoryComponents(item)" :key="component">
-                          <strong>半成品 / 原料{{ componentLabel(component) }}</strong><button class="btn small" type="button" :disabled="item._inventory.semi[component].manual_loading" @click="loadOrderLineManualInventory(item,component,inventoryCustomerForLine(item))">查询其他可用片料</button>
+                          <strong>半成品{{ componentLabel(component) }}</strong><button class="btn small" type="button" :disabled="item._inventory.semi[component].manual_loading" @click="loadOrderLineManualInventory(item,component,inventoryCustomerForLine(item))">查询其他可用半成品</button><small class="muted">需分切片料请在合并报料中确认用料。</small>
                           <span v-if="item._inventory.semi[component].manual_error" class="danger-text">{{item._inventory.semi[component].manual_error}}</span>
                           <pager v-if="item._inventory.semi[component].manual_total" :page="item._inventory.semi[component].manual_page||1" :total="item._inventory.semi[component].manual_total" :page-size="20" @change="loadOrderLineManualInventory(item,component,inventoryCustomerForLine(item),$event)"></pager>
                           <button v-if="semiStockMoreCount(item,component)" class="btn small" type="button" @click="item._inventory.semi[component].show_more_sizes = !item._inventory.semi[component].show_more_sizes">{{ item._inventory.semi[component].show_more_sizes ? '收起' : '展开' }}大片料 / 其他尺寸（{{ semiStockMoreCount(item,component) }}）</button>
@@ -9034,7 +9034,7 @@
                             <div class="draft-stock-heading"><div><strong>{{ option.product_code }} · {{ componentLabel(option.component_type) || '片料' }}</strong><div class="muted">{{ option.order_number }} · 尚需 {{ option.remaining_requirement_quantity }} 片 · 已预占 {{ option.reserved_piece_quantity }} 片</div></div>
                               <button class="btn small" type="button" :disabled="option._manual_loading" @click="queryDraftOtherSemiInventory(option)">{{ option._manual_loading ? '正在查询…' : '查询其他可用片料' }}</button>
                             </div>
-                            <p class="muted">仅查询和查看不会占用库存；核对本批规格、加工及换算后点击“采用本批”，立即预占并重算采购。仅供查看的库存须先取得适用授权。</p>
+                            <p class="muted">仅查询和查看不会占用库存；需分切的片料在此确认用料和分切方案后才预占，库存全额覆盖时会转入生产且不生成零张采购单。仅供查看的库存须先取得适用授权。</p>
                             <div v-if="option._manual_error" role="alert" class="status orange">{{ option._manual_error }}</div>
                             <div class="draft-stock-scroll">
                               <table class="draft-stock-table">
@@ -9042,13 +9042,13 @@
                                 <tbody><tr v-for="candidate in draftSemiInventoryCandidates(option)" :key="candidate.lot_id">
                                   <td><strong>{{ candidate.internal_name || '未命名片料' }}</strong><details><summary>批次详情</summary>{{ candidate.lot_number }}</details></td>
                                   <td>{{ candidate.board_length_mm }} × {{ candidate.board_width_mm }} mm<div>{{ candidate.material_code }} · {{ candidate.flute_type }}楞 · {{ candidate.layer_count || '待核对' }}层</div></td>
-                                  <td>{{ candidate.sheet_type === 'creased_sheet' ? '已压线' : candidate.sheet_type === 'plain_sheet' ? '未压线片料' : '加工状态需核对' }}<div>压线：{{ candidate.crease_type || '未记录' }}</div><div v-if="candidate.crease_dimensions_mm?.some(value => value != null)">{{ candidate.crease_dimensions_mm.map(value => value ?? '—').join(' / ') }} mm</div><div v-if="candidate.cutting_note">{{ candidate.cutting_note }}</div></td>
+                                  <td>{{ candidate.sheet_type === 'creased_sheet' ? '已压线' : candidate.sheet_type === 'plain_sheet' ? '未压线片料' : '加工状态需核对' }}<div v-if="candidate.requires_requisition_cut_plan" class="status orange">待确认分切方案：每张 {{ candidate.stock_yield_per_sheet }} 片</div><div>压线：{{ candidate.crease_type || '未记录' }}</div><div v-if="candidate.crease_dimensions_mm?.some(value => value != null)">{{ candidate.crease_dimensions_mm.map(value => value ?? '—').join(' / ') }} mm</div><div v-if="candidate.cutting_note">{{ candidate.cutting_note }}</div></td>
                                   <td><strong>{{ candidate.available_stock_quantity }} 张</strong><div>可抵 {{ candidate.deductible_requirement_quantity }} 片</div></td>
                                   <td>{{ inventoryLocation(candidate) }}</td>
                                   <td><span :class="['status', candidate.selectable === false ? 'orange' : 'blue']">{{ candidate.selectable === false ? '仅供查看' : '待人工采用' }}</span><div v-if="candidate.signature_differences?.length">核对：{{ draftSemiDifferenceLabel(candidate.signature_differences) }}</div><div>{{ candidate.match_reason }}</div><details v-if="candidate.warning_messages?.length"><summary>匹配说明</summary><div v-for="warning in candidate.warning_messages" :key="warning" class="muted">{{ warning }}</div></details>
                                     <div v-if="candidate.warning_codes?.includes('REVERSE_CREASE_ADMIN_OVERRIDE') && (canAdmin || user.role==='boss')"><label><input type="checkbox" v-model="candidate._reverse_crease_override" /> 管理员特批已压线库存反向使用</label><input class="input" maxlength="300" v-model.trim="candidate._reverse_crease_reason" placeholder="必填特批原因（至少4字）" /></div>
                                   </td>
-                                  <td><input class="input" type="number" min="1" step="1" :max="Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" :value="candidate._deduct_quantity ?? Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" @input="candidate._deduct_quantity=$event.target.value" :aria-label="'本批抵扣片数 ' + candidate.internal_name" :disabled="candidate.selectable === false" /><button class="btn small success" type="button" :disabled="candidate.selectable === false || requisitionInventoryActionBlocked()" @click="confirmDraftSemiInventory(option, candidate)">采用本批并重算</button></td>
+                                  <td><input class="input" type="number" min="1" step="1" :max="Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" :value="candidate._deduct_quantity ?? Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" @input="candidate._deduct_quantity=$event.target.value" :aria-label="'本批抵扣片数 ' + candidate.internal_name" :disabled="candidate.selectable === false" /><button class="btn small success" type="button" :disabled="candidate.selectable === false || requisitionInventoryActionBlocked()" @click="confirmDraftSemiInventory(option, candidate)">{{ candidate.requires_requisition_cut_plan ? '确认用料并预占' : '采用本批并重算' }}</button></td>
                                 </tr><tr v-if="!draftSemiInventoryCandidates(option).length"><td colspan="7" class="muted">当前范围未发现候选；可查询其他片料，或直接保存本次报料。</td></tr></tbody>
                               </table>
                             </div>
@@ -13605,7 +13605,9 @@
                 await this.refreshSupplierRequisitionDraftAfterInventoryReservation();
                 return true;
               },
-              successMessage:response => `已抵扣 ${response?.data?.allocated_requirement_quantity || 0} 片半成品库存，采购张数已重新计算`,
+              successMessage:response => response?.data?.material_plan_confirmed
+                ? `已确认用料和分切方案，预占 ${response?.data?.allocated_requirement_quantity || 0} 片并转入生产；采购张数已重新计算`
+                : `已抵扣 ${response?.data?.allocated_requirement_quantity || 0} 片半成品库存，采购张数已重新计算`,
               errorPrefix:"半成品库存抵扣失败：",
             });
           },
@@ -14748,6 +14750,7 @@
               crease_left_mm:product[`${creasePrefix}crease_left_mm`] ?? null,
               crease_middle_mm:product[`${creasePrefix}crease_middle_mm`] ?? null,
               crease_right_mm:product[`${creasePrefix}crease_right_mm`] ?? null,
+              stage:"order",
             };
           },
           inventoryPayloadUnavailableReason(payload) {

@@ -3834,6 +3834,7 @@ def _semi_candidate_dict_for_requisition(
     detail = lot.semi_finished_detail
     location = lot.location
     context = projection_context or {}
+    cut_plan = row.cut_plan
     return {
         "lot_id": lot.id,
         "lot_number": lot.lot_number,
@@ -3867,7 +3868,10 @@ def _semi_candidate_dict_for_requisition(
         "internal_name": detail.internal_name,
         "component_type": detail.component_type,
         "pieces_per_box": detail.pieces_per_box,
-        "stock_yield_per_sheet": detail.stock_yield_per_sheet,
+        "stock_yield_per_sheet": cut_plan["yield_factor"] if cut_plan else detail.stock_yield_per_sheet,
+        "cut_plan": cut_plan,
+        "requires_requisition_cut_plan": bool(cut_plan),
+        "handling_stage": "requisition" if cut_plan else ("order" if row.selectable else "review"),
         "signature_differences": list(row.signature_differences),
         "warning_codes": list(row.warning_codes),
         "warning_messages": list(row.warning_messages),
@@ -17800,6 +17804,9 @@ def reserve_semi_inventory_from_pending(
             "unallocated_requirement_quantity": result.unallocated_requirement_quantity,
             "remaining_requirement_quantity": int(updated["remaining_required_piece_qty"]),
             "requisition_qty": int(updated["requisition_qty"]),
+            "material_plan_confirmed": any(
+                bool(reservation.cut_plan_json) for reservation in result.reservations
+            ),
         }
         _audit(
             db,

@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 import jwt
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -36,10 +36,19 @@ from app.core.database import (
 )
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
+from app.models.customer import Customer
 from app.models.user import User
 from app.services.delivery_print_settings import (
     get_delivery_print_settings,
     save_delivery_print_settings,
+)
+from app.services.delivery_print_templates import (
+    DeliveryPrintTemplateConflict,
+    DeliveryPrintTemplateError,
+    admin_state as delivery_template_admin_state,
+    publish_draft as publish_delivery_template_draft,
+    rollback_release as rollback_delivery_template_release,
+    save_draft as save_delivery_template_draft,
 )
 from app.services.audit_log import append_audit_event
 from app.services.ui_layout_settings import (
@@ -100,6 +109,48 @@ class DeliveryPrintSettingsUpdate(BaseModel):
     orientation_mode: str = "driver_managed"
     paper_width_mm: float
     paper_height_mm: float
+
+
+class DeliveryPrintTemplateElementPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=40)
+    x_mm: float
+    y_mm: float
+    font_size_pt: float
+    visible: bool = True
+
+
+class DeliveryPrintTemplatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    catalog_version: str = Field(min_length=1, max_length=40)
+    elements: list[DeliveryPrintTemplateElementPayload] = Field(
+        min_length=6, max_length=6
+    )
+    column_widths: dict[str, float]
+    show_remarks: bool = True
+
+
+class DeliveryPrintTemplateDraftRequest(BaseModel):
+    customer_id: int | None = Field(default=None, gt=0)
+    expected_release_version: int = Field(ge=0)
+    operation_key: str = Field(min_length=8, max_length=120)
+    layout: DeliveryPrintTemplatePayload
+
+
+class DeliveryPrintTemplatePublishRequest(BaseModel):
+    customer_id: int | None = Field(default=None, gt=0)
+    draft_version: int = Field(gt=0)
+    expected_release_version: int = Field(ge=0)
+    operation_key: str = Field(min_length=8, max_length=120)
+
+
+class DeliveryPrintTemplateRollbackRequest(BaseModel):
+    customer_id: int | None = Field(default=None, gt=0)
+    source_version: int = Field(gt=0)
+    expected_release_version: int = Field(gt=0)
+    operation_key: str = Field(min_length=8, max_length=120)
 
 
 class UiLayoutComponentPayload(BaseModel):
@@ -1480,6 +1531,122 @@ def update_delivery_print_paper_settings(
     )
     db.commit()
     return settings
+
+
+def _delivery_template_customer(db: Session, customer_id: int | None) -> None:
+    if customer_id is not None and db.get(Customer, customer_id) is None:
+        raise HTTPException(status_code=404, detail="客户不存在")
+
+
+def _delivery_template_write(operation, *, db: Session, user: User, request: Request):
+    try:
+        result = operation()
+        if not result.get("replayed"):
+            append_audit_event(
+                db,
+                event_category="business",
+                result="success",
+                source="web",
+                module_code="system",
+                action_code="system.delivery_print_template",
+                legacy_action="DELIVERY_PRINT_TEMPLATE",
+                resource="DeliveryPrintTemplateRevision",
+                request=request,
+                actor=user,
+                entity_type="delivery_print_template",
+                object_ref=result["profile_key"],
+                description="管理员维护送货单打印模板",
+                details={"version": result["version"], "source": result["source"]},
+            )
+        db.commit()
+        return result
+    except DeliveryPrintTemplateConflict as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except DeliveryPrintTemplateError as error:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="模板已被其他请求更新，请重新加载") from error
+
+
+@router.get("/delivery-print-templates/admin", dependencies=[Depends(admin_only)])
+def get_delivery_print_template_admin(
+    customer_id: int | None = Query(default=None, gt=0),
+    db: Session = Depends(get_db),
+) -> dict:
+    _delivery_template_customer(db, customer_id)
+    return delivery_template_admin_state(db, customer_id)
+
+
+@router.put("/delivery-print-templates/admin/draft", dependencies=[Depends(admin_only)])
+def put_delivery_print_template_draft(
+    body: DeliveryPrintTemplateDraftRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    _delivery_template_customer(db, body.customer_id)
+    return _delivery_template_write(
+        lambda: save_delivery_template_draft(
+            db,
+            customer_id=body.customer_id,
+            layout=body.layout.model_dump(),
+            expected_release_version=body.expected_release_version,
+            operation_key=body.operation_key,
+            actor_id=user.id,
+        ),
+        db=db,
+        user=user,
+        request=request,
+    )
+
+
+@router.post("/delivery-print-templates/admin/publish", dependencies=[Depends(admin_only)])
+def post_delivery_print_template_publish(
+    body: DeliveryPrintTemplatePublishRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    _delivery_template_customer(db, body.customer_id)
+    return _delivery_template_write(
+        lambda: publish_delivery_template_draft(
+            db,
+            customer_id=body.customer_id,
+            draft_version=body.draft_version,
+            expected_release_version=body.expected_release_version,
+            operation_key=body.operation_key,
+            actor_id=user.id,
+        ),
+        db=db,
+        user=user,
+        request=request,
+    )
+
+
+@router.post("/delivery-print-templates/admin/rollback", dependencies=[Depends(admin_only)])
+def post_delivery_print_template_rollback(
+    body: DeliveryPrintTemplateRollbackRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict:
+    _delivery_template_customer(db, body.customer_id)
+    return _delivery_template_write(
+        lambda: rollback_delivery_template_release(
+            db,
+            customer_id=body.customer_id,
+            source_version=body.source_version,
+            expected_release_version=body.expected_release_version,
+            operation_key=body.operation_key,
+            actor_id=user.id,
+        ),
+        db=db,
+        user=user,
+        request=request,
+    )
 
 
 # ---------------------------------------------------------------------------

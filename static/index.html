@@ -5942,8 +5942,9 @@
                     <input class="input" type="number" min="80" max="400" step="0.01" v-model.number="deliveryPrintSettings.paper_height_mm" :disabled="user.role !== 'admin'" />
                   </div>
                   <button v-if="user.role === 'admin'" class="btn primary" @click="saveDeliveryPrintSettings">保存打印档案</button>
+                  <a v-if="user.role === 'admin'" class="btn" href="/delivery-print-designer.html" target="_blank" rel="noopener">设计送货单版式</a>
                 </div>
-                <info-note>该打印档案保存在 ERP 服务器，所有电脑自动读取同一型号和尺寸。默认 EPSON SK820、241 × 139.5mm；宽是两侧针孔之间的横向纸宽，高是相邻横向撕纸线之间的走纸高度，不要交换宽高。为避免新 ERP 再旋转 90°，纸张物理方向沿用实际打印电脑已安装的打印机驱动，与旧 ERP 的正常打印方式一致。</info-note>
+                <info-note>纸张档案控制实际纸型；“设计送货单版式”控制抬头、客户资料、明细、合计和签字区的位置、字号及列宽。模板先保存草稿，再发布；新送货单冻结采用的版本，旧单重打不随以后修改变化。</info-note>
               </div>
               </template>
 

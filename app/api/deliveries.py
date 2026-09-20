@@ -87,6 +87,11 @@ from app.models.warehouse_inventory import (
 from app.services.order_number_display import display_order_number
 from app.services.audit_log import append_audit_event
 from app.services.fulfillment_reminders import list_delivery_reminders
+from app.services.delivery_print_templates import (
+    DeliveryPrintTemplateError,
+    decode_snapshot as decode_delivery_print_template_snapshot,
+    snapshot_for_delivery as delivery_print_template_snapshot,
+)
 from app.services.location_candidates import (
     current_same_location_pallet,
     has_space_ledger,
@@ -8808,6 +8813,9 @@ def create_delivery(
         company = db.scalar(
             select(CompanyConfig).where(CompanyConfig.id == 1)
         )
+        print_template = delivery_print_template_snapshot(
+            db, payload.customer_id
+        )
         delivery = Delivery(
             delivery_number=next_delivery_number(
                 db,
@@ -8845,6 +8853,10 @@ def create_delivery(
             sender_contact_phone_snapshot=(
                 company.contact_phone if company else None
             ),
+            print_template_profile_key=print_template["profile_key"],
+            print_template_version=print_template["version"],
+            print_template_payload_json=print_template["payload_json"],
+            print_template_payload_hash=print_template["payload_hash"],
             source_mode=payload.source_mode,
             status="pending",
             total_quantity=0,
@@ -11114,6 +11126,15 @@ def get_delivery_print_data(
     customer = db.get(Customer, delivery.customer_id)
     company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
     frozen_print_header = delivery.print_snapshot_version == 1
+    try:
+        print_template = decode_delivery_print_template_snapshot(
+            profile_key_value=delivery.print_template_profile_key,
+            version=delivery.print_template_version,
+            payload_json=delivery.print_template_payload_json,
+            expected_hash=delivery.print_template_payload_hash,
+        )
+    except DeliveryPrintTemplateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     rows = db.execute(
         select(
             DeliveryItem.id.label("delivery_item_id"),
@@ -11277,6 +11298,7 @@ def get_delivery_print_data(
         "print_snapshot_basis": (
             "frozen_v1" if frozen_print_header else "legacy_current_fallback"
         ),
+        "print_template": print_template,
         "customer": {
             "name": (
                 delivery.customer_name_snapshot

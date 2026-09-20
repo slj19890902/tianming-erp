@@ -418,6 +418,21 @@ def create_app() -> FastAPI:
             include_in_schema=False,
         )
     if not any(
+        route.path == "/delivery-print-designer.html"
+        for route in application.routes
+    ):
+        delivery_print_designer_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "delivery-print-designer.html"
+        )
+        application.add_api_route(
+            "/delivery-print-designer.html",
+            _conditional_file_endpoint(delivery_print_designer_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(
         route.path == "/external-purchase-print.html"
         for route in application.routes
     ):

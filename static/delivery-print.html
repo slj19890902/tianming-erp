@@ -266,11 +266,13 @@
   <template id="sheetTemplate">
   <main class="sheet">
     <div class="print-safe-area">
-    <h1 data-field="senderCompanyName" class="company">苏州天明包装有限公司</h1>
-    <h2 class="document-title">送货单</h2>
-    <div data-field="senderContact" class="factory-address">地址：苏州市吴中区临湖镇浦庄大道工业区　电话：0512-66530018</div>
+    <div data-layout-element="company_header">
+      <h1 data-field="senderCompanyName" class="company">苏州天明包装有限公司</h1>
+      <div data-field="senderContact" class="factory-address">地址：苏州市吴中区临湖镇浦庄大道工业区　电话：0512-66530018</div>
+    </div>
+    <h2 data-layout-element="document_title" class="document-title">送货单</h2>
 
-    <section class="meta">
+    <section data-layout-element="customer_meta" class="meta">
       <div class="meta-row"><span>客户名称：</span><span data-field="customerName" class="meta-value"></span></div>
       <div class="meta-row"><span>送货单号：</span><span data-field="deliveryNumber" class="meta-value"></span></div>
       <div class="meta-row"><span>联系电话：</span><span data-field="customerPhone" class="meta-value"></span></div>
@@ -279,7 +281,7 @@
       <div class="meta-row"><span>车牌号码：</span><span data-field="vehicleNumber" class="meta-value"></span></div>
     </section>
 
-    <table>
+    <table data-layout-element="item_table">
       <colgroup>
         <col style="width:4%">
         <col style="width:20%">
@@ -306,11 +308,14 @@
     </table>
 
     <footer class="print-footer">
+      <div data-layout-element="summary_notes">
       <div class="total">本页数量：<span data-field="pageQuantity"></span>　总数：<span data-field="totalQuantity"></span></div>
       <section data-field="remarkNotes" class="remark-notes" hidden>
         <strong>备注说明：</strong>
         <div data-field="remarkNoteItems"></div>
       </section>
+      </div>
+      <div data-layout-element="signature_footer">
       <section class="signatures">
         <div class="signature-item sender-signature">送货人：</div>
         <div class="signature-item receiver-signature">收货单位(签章)：<span class="signature-line"></span></div>
@@ -318,6 +323,7 @@
       <div class="footer-meta">
         <div class="page-number" data-field="pageNumber"></div>
         <div class="footer-detail">开单时间：<span data-field="createdAt"></span>　白联存档　红联客户　黄联回单</div>
+      </div>
       </div>
     </footer>
     </div>
@@ -423,7 +429,35 @@
       return normalized;
     }
 
+    function applyTemplateLayout(sheet, templateEnvelope) {
+      const layout = templateEnvelope?.layout;
+      if (!layout || layout.catalog_version !== "delivery-print-v1") {
+        throw new Error("送货单冻结模板无效，不能使用当前版式冒充历史模板。");
+      }
+      const elements = new Map((layout.elements || []).map(item => [item.id, item]));
+      sheet.querySelectorAll("[data-layout-element]").forEach((node) => {
+        const setting = elements.get(node.dataset.layoutElement);
+        if (!setting) throw new Error("送货单冻结模板缺少必需版式元素。");
+        node.style.transform = `translate(${Number(setting.x_mm) || 0}mm, ${Number(setting.y_mm) || 0}mm)`;
+        node.style.fontSize = `${Number(setting.font_size_pt) || 11}pt`;
+        node.querySelectorAll("*").forEach((child) => {
+          child.style.fontSize = "inherit";
+        });
+        node.hidden = setting.visible === false;
+      });
+      const widths = layout.column_widths || {};
+      const columnKeys = ["sequence", "customer_po", "product_code", "product_name", "specification", "unit", "quantity", "remarks"];
+      sheet.querySelectorAll("colgroup col").forEach((column, index) => {
+        const width = Number(widths[columnKeys[index]]);
+        if (!(width >= 3 && width <= 40)) throw new Error("送货单冻结模板列宽无效。");
+        column.style.width = `${width}%`;
+      });
+      sheet.dataset.templateProfile = String(templateEnvelope.profile_key || "");
+      sheet.dataset.templateVersion = String(templateEnvelope.version ?? "");
+    }
+
     function populateSheet(sheet, data, entries, pageNumber, totalPages) {
+      applyTemplateLayout(sheet, data.print_template);
       const sender = data.sender || {};
       const senderParts = [];
       if (sender.address) senderParts.push(`地址：${sender.address}`);
@@ -477,7 +511,7 @@
           };
         })
         .filter((entry) => entry.text);
-      if (remarkNotes.length) {
+      if (remarkNotes.length && data.print_template.layout.show_remarks !== false) {
         getField(sheet, "remarkNoteItems").innerHTML = remarkNotes
           .map((entry) => `<div class="remark-note">${entry.index}. ${escapeHtml(entry.text)}</div>`)
           .join("");

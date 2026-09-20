@@ -127,6 +127,18 @@ class Delivery(Base):
     sender_contact_phone_snapshot: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )
+    print_template_profile_key: Mapped[str | None] = mapped_column(
+        String(80), nullable=True
+    )
+    print_template_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    print_template_payload_json: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    print_template_payload_hash: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     source_mode: Mapped[str] = mapped_column(
         String(30),
         default="order",

@@ -307,3 +307,4 @@ from app.models.stock_preparation import StockPreparationJob, StockPreparationCo
 from app.models.procurement_source import ProcurementSourceLink  # noqa: E402,F401
 from app.models.raw_purchase_plan import RawPurchasePlan, RawPurchaseDemand, RawPurchaseReceiptAllocation  # noqa: E402,F401
 from app.models.delivery_backlog import DeliveryBacklog, DeliveryBacklogSource, DeliveryBacklogFulfillment  # noqa: E402,F401
+from app.models.delivery_print_template import DeliveryPrintTemplateRevision  # noqa: E402,F401

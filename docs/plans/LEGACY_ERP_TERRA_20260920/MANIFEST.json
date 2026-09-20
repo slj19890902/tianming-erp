@@ -1,7 +1,7 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
   "kind": "continuous_goal_prompt_execution_plan_t02_integrated_t03_candidate",
-  "local_head": "58be668ea950c362e5160ac8f1784e5b289ea69e",
+  "local_head": "67a47e29b27f8e5e2cb8463dee96e5f88cab5aef",
   "remote_head_reverified": true,
   "audit_integrity": {
     "files": 66,
@@ -26,7 +26,7 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "83fb14c533a0fd673315bea4bef17b949b93703e3c37bde26e15dfc15e86db2d"
+      "sha256": "fb1b4c607a33d594f400f8337ee4466708ccc4e84e3b6f98b6e9f30fc14fe53b"
     },
     {
       "path": "04_场景覆盖与验收.md",
@@ -66,7 +66,7 @@
     },
     {
       "path": "20260920-T06-合并采购分批来料与冲正核验.md",
-      "sha256": "05a1acb50150ff3dd3f418c4e3af5848864ee4d79d83caaa97110879554686ca"
+      "sha256": "1ea0e5a2e6a28f3db64e5afb0e3b8c0f3b6baedbca35b65bc7da0356e5519e42"
     },
     {
       "path": "README.md",
@@ -98,7 +98,7 @@
     },
     {
       "path": "tasks/T06.md",
-      "sha256": "ce917dec49882c648be569ff438f41e02014c6762f5554b036da5630038abfad"
+      "sha256": "c4a0cd7a8bf3dad87ef8071a63c2ed805e9dadd53d444eeb87ad323d15319bd2"
     },
     {
       "path": "tasks/T07.md",

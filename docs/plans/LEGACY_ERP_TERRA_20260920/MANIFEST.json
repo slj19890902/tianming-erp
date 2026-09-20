@@ -1,7 +1,7 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
   "kind": "continuous_goal_complete_astra_handoff_with_deferred_safety_boundaries",
-  "local_head": "98b4a45c8682cf69cbbfcf68e2c0fb46a0c0327d",
+  "local_head": "6537ebdeccd6d8b39d36210cc7ffeef245d2a270",
   "remote_head_reverified": true,
   "audit_integrity": {
     "files": 66,
@@ -26,7 +26,7 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "88f18d0aa3022726c2952c785eeb9ec6f4adfe65a64afef59a5941ef012ddb34"
+      "sha256": "995df332f02911d7e4e1f9415ceb5691c5cc34f6d2f9b800820e0a01bf80955a"
     },
     {
       "path": "04_场景覆盖与验收.md",
@@ -114,7 +114,7 @@
     },
     {
       "path": "tasks/T02.md",
-      "sha256": "6368334972000d643475f916f70cb3dc8b5d26bdd58c53e296eb1a987f8b291c"
+      "sha256": "fcf7f3b53b2d91d374c2c9b5faf5677ddebd3c0c2314a6b60d94d731e543033c"
     },
     {
       "path": "tasks/T03.md",
@@ -186,7 +186,7 @@
     },
     {
       "path": "tasks/T20.md",
-      "sha256": "f9f8913d5d62c9f44760b3e5af7798a581d74c54151b7a5b6ea75db3d13a9b4a"
+      "sha256": "41dad69d2e2fbf15bb2fbe6adf92ca5c6fec8d7d6f14c863d1cf33a4b562519a"
     }
   ],
   "source_fingerprints": [

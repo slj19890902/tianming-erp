@@ -3839,6 +3839,8 @@ def _semi_candidate_dict_for_requisition(
         "lot_number": lot.lot_number,
         "version": lot.version,
         "source": row.source,
+        "selectable": row.selectable,
+        "match_reason": row.match_reason,
         "match_rule_id": row.match_rule_id,
         "available_stock_quantity": row.available_stock_quantity,
         "deductible_requirement_quantity": row.deductible_requirement_quantity,
@@ -3856,6 +3858,11 @@ def _semi_candidate_dict_for_requisition(
         "board_width_mm": detail.board_width_mm,
         "material_code": detail.material_code_snapshot,
         "flute_type": detail.flute_type,
+        "layer_count": detail.layer_count,
+        "sheet_type": detail.sheet_type,
+        "crease_type": detail.crease_type,
+        "crease_dimensions_mm": [detail.crease_left_mm, detail.crease_middle_mm, detail.crease_right_mm],
+        "cutting_note": detail.cutting_note,
         "customer_generic_eligible": bool(detail.customer_generic_eligible),
         "internal_name": detail.internal_name,
         "component_type": detail.component_type,
@@ -3867,7 +3874,10 @@ def _semi_candidate_dict_for_requisition(
     }
 
 
-def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
+def _late_semi_inventory_options(
+    db: Session, entry: dict, *, manual_page: int | None = None,
+    visible_customer_ids: list[int] | None = None,
+) -> list[dict]:
     item: OrderItem = entry["order_item"]
     product: Product = entry["product"]
     req_item: RequisitionItem | None = entry.get("req_item")
@@ -3909,7 +3919,7 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
         if remaining <= 0:
             continue
         recommended = (
-            semi_finished_inventory_candidates(db, requirement.id)
+            semi_finished_inventory_candidates(db, requirement.id, customer_bound_only=True)
             if requirement is not None
             else semi_finished_candidates_for_product(
                 db,
@@ -3922,9 +3932,11 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
                 component_type=component,
                 pieces_per_box=int(spec["pieces_per_box"]),
                 stock_yield_per_sheet=stock_yield,
+                customer_bound_only=True,
             )
         )
         recommended_ids = {row.lot.id for row in recommended}
+        page_info: dict = {}
         review_candidates = [
             row
             for row in browse_semi_finished_inventory_for_product(
@@ -3938,14 +3950,17 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
                 component_type=component,
                 pieces_per_box=int(spec["pieces_per_box"]),
                 stock_yield_per_sheet=stock_yield,
+                customer_bound_only=manual_page is None,
+                visible_customer_ids=visible_customer_ids,
+                page=manual_page,
+                page_size=10,
+                page_info=page_info,
             )
-            if row.lot.id not in recommended_ids
-            and set(row.signature_differences).issubset(
-                _LATE_SEMI_REVIEWABLE_DIFFERENCES
+            if manual_page is not None or (
+                row.lot.id not in recommended_ids
+                and set(row.signature_differences).issubset(_LATE_SEMI_REVIEWABLE_DIFFERENCES)
             )
         ]
-        if not recommended and not review_candidates:
-            continue
         projection_contexts = load_warehouse_location_projection_contexts(
             db,
             [
@@ -3977,6 +3992,9 @@ def _late_semi_inventory_options(db: Session, entry: dict) -> list[dict]:
                     requirements["semi_finished_reserved_piece_qty"]
                 ),
                 "remaining_requirement_quantity": remaining,
+                "candidate_page": manual_page or 1,
+                "candidate_page_size": 10,
+                "candidate_total": page_info.get("total", 0),
                 "recommended_candidates": [
                     _semi_candidate_dict_for_requisition(
                         row,
@@ -17607,6 +17625,30 @@ def _supplier_order_dict(order: SupplierRequisitionOrder, db: Session) -> dict:
     }
 
 
+@router.get("/pending/{order_item_id}/semi-inventory-options")
+def pending_semi_inventory_options(
+    order_item_id: int,
+    component_type: Literal["whole", "cover", "base"] = "whole",
+    page: int = Query(default=1, ge=1, le=10000),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """Explicit, read-only other-stock lookup; viewing never reserves inventory."""
+    item = _item_or_404(db, order_item_id)
+    order, customer = _order_customer_for_item(db, item, user)
+    product = db.get(Product, item.product_id)
+    if product is None:
+        raise HTTPException(status_code=409, detail="订单产品关联已失效")
+    options = _late_semi_inventory_options(db, {
+        "order_item": item, "order": order, "customer": customer, "product": product,
+    }, manual_page=page, visible_customer_ids=_allowed_customer_ids(user, db))
+    option = next((row for row in options if row["component_type"] == component_type), None)
+    if option is None:
+        return {"candidates": [], "page": page, "page_size": 10, "total": 0}
+    return {"candidates": option["review_candidates"], "page": page,
+            "page_size": 10, "total": option["candidate_total"]}
+
+
 @router.post("/semi-inventory/reserve-from-pending")
 def reserve_semi_inventory_from_pending(
     payload: PendingSemiInventoryReservationPayload,
@@ -17614,6 +17656,24 @@ def reserve_semi_inventory_from_pending(
     user: User = Depends(can_operate),
 ) -> dict:
     try:
+        # Replay the exact acknowledged request before checking today's remaining
+        # demand; a fully covered order must still accept a lost-response retry.
+        connection = db.connection()
+        if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        item = _item_or_404(db, payload.order_item_id)
+        _require_order_item_customer_access(db, item, user)
+        receipt = db.scalar(select(OperationLog).where(
+            OperationLog.action == "RESERVE_LATE_SEMI_INVENTORY_FROM_REQUISITION",
+            OperationLog.entity_id == payload.order_item_id,
+            func.json_extract(OperationLog.details, "$.request.idempotency_key") == payload.idempotency_key,
+        ).order_by(OperationLog.id.desc()))
+        if receipt is not None:
+            recorded = json.loads(receipt.details)
+            if recorded.get("request") != payload.model_dump() or receipt.user_id != user.id:
+                raise HTTPException(status_code=409, detail="该请求标识已用于不同的库存抵扣，请勿更换批次或数量重试")
+            db.rollback()
+            return recorded["response"]
         item, _order, _customer, product = _ensure_pending_order_item_for_supplier_order(
             db, payload.order_item_id
         )
@@ -17699,7 +17759,9 @@ def reserve_semi_inventory_from_pending(
                 customer_id=requirement.customer_id,
                 expected=expected,
             )
-        requested = min(payload.requested_requirement_quantity, remaining)
+        requested = payload.requested_requirement_quantity
+        if requested > remaining:
+            raise HTTPException(status_code=409, detail="待抵扣需求已变化，请核对最新数量后重试")
         if payload.admin_reverse_crease_override and user.role not in {"admin", "boss"}:
             raise HTTPException(status_code=403, detail="仅管理员可特批已有压线库存用于无压线订单")
         result = reserve_semi_finished_inventory(
@@ -17721,12 +17783,24 @@ def reserve_semi_inventory_from_pending(
             admin_reverse_crease_override=payload.admin_reverse_crease_override,
             reverse_crease_override_reason=payload.reverse_crease_override_reason,
         )
+        if result.allocated_requirement_quantity != requested:
+            raise HTTPException(status_code=409, detail="所选批次可用数量不足，本次未预占；请核对库存后重试")
         updated = _current_requisition_requirements(
             db,
             item,
             pieces_per_box=int(spec["pieces_per_box"]),
             component_type=payload.component_type,
         )
+        response = {
+            "order_item_id": item.id,
+            "requirement_id": requirement.id,
+            "component_type": payload.component_type,
+            "requested_requirement_quantity": result.requested_requirement_quantity,
+            "allocated_requirement_quantity": result.allocated_requirement_quantity,
+            "unallocated_requirement_quantity": result.unallocated_requirement_quantity,
+            "remaining_requirement_quantity": int(updated["remaining_required_piece_qty"]),
+            "requisition_qty": int(updated["requisition_qty"]),
+        }
         _audit(
             db,
             user=user,
@@ -17742,28 +17816,13 @@ def reserve_semi_inventory_from_pending(
                 "override": payload.override,
                 "admin_reverse_crease_override": payload.admin_reverse_crease_override,
                 "reverse_crease_override_reason": payload.reverse_crease_override_reason,
+                "request": payload.model_dump(),
+                "response": response,
             },
             description="合并报料前重新检查并确认半成品库存抵扣",
         )
         db.commit()
-        return {
-            "order_item_id": item.id,
-            "requirement_id": requirement.id,
-            "component_type": payload.component_type,
-            "requested_requirement_quantity": (
-                result.requested_requirement_quantity
-            ),
-            "allocated_requirement_quantity": (
-                result.allocated_requirement_quantity
-            ),
-            "unallocated_requirement_quantity": (
-                result.unallocated_requirement_quantity
-            ),
-            "remaining_requirement_quantity": int(
-                updated["remaining_required_piece_qty"]
-            ),
-            "requisition_qty": int(updated["requisition_qty"]),
-        }
+        return response
     except WarehouseInventoryError as error:
         db.rollback()
         raise HTTPException(
@@ -17771,6 +17830,10 @@ def reserve_semi_inventory_from_pending(
             detail=str(error),
         ) from error
     except HTTPException:
+        db.rollback()
+        raise
+
+    except Exception:
         db.rollback()
         raise
 

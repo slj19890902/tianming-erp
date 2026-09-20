@@ -137,7 +137,7 @@ def test_replenishment_supplier_follows_material_and_layout_is_responsive() -> N
 
 
 def test_customer_generic_crease_override_is_explicit_and_admin_only() -> None:
-    assert "同客户通用备料" in INDEX
+    assert "管理员特批已压线库存反向使用" in INDEX
     assert "REVERSE_CREASE_ADMIN_OVERRIDE" in INDEX
     assert "draftSemiInventoryNeedsReverseCreaseAdmin(option)" in INDEX
     assert "admin_reverse_crease_override" in INDEX

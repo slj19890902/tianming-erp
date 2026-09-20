@@ -1,0 +1,43 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const html=fs.readFileSync('static/index.html','utf8');
+const script=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(m=>m[1]).find(s=>s.trim());
+const sandbox={axios:{defaults:{},interceptors:{response:{use(){}}}},Vue:{createApp(d){sandbox.definition=d;return{component(){return this},mount(){return this}}}},TMOrderReference:{component:{}},localStorage:{getItem(){return ''},setItem(){},removeItem(){}},window:{},console,URLSearchParams,setTimeout,clearTimeout,crypto:require('crypto').webcrypto};
+vm.createContext(sandbox);vm.runInContext(script,sandbox);
+const ctx={...sandbox.definition.methods,modal:{type:'supplierRequisitionDraft'},supplierRequisitionDraft:{supplier_groups:[]},requisitionInventoryActionBlocked:()=>false,showToast(){},canAdmin:true,user:{role:'admin'}};
+const chosen={lot_id:11,version:3,source:'signature',deductible_requirement_quantity:12,_deduct_quantity:4};
+const other={lot_id:12,version:8,source:'manual',deductible_requirement_quantity:99,signature_differences:['customer'],warning_codes:['REVERSE_CREASE_ADMIN_OVERRIDE']};
+const option={order_item_id:7,component_type:'whole',remaining_requirement_quantity:20,recommended_candidates:[chosen,other]};
+(async()=>{
+  const requests=[];
+  sandbox.axios.post=async(url,data)=>{requests.push(JSON.parse(JSON.stringify(data)));return {data:{allocated_requirement_quantity:4}}};
+  ctx.executeRequisitionInventoryAction=async config=>{chosen.lot_id=88;chosen.version=9;await config.submit();return true;};
+  assert(await ctx.confirmDraftSemiInventory(option,chosen));
+  assert.deepEqual(requests[0].lots,[{lot_id:11,expected_version:3}]);
+  assert.equal(requests[0].requested_requirement_quantity,4);
+  assert.equal(requests[0].override,false);
+  assert.equal(requests[0].admin_reverse_crease_override,false);
+  await ctx.confirmDraftSemiInventory(option);assert.equal(requests.length,1,'no implicit select-all');
+  await ctx.confirmDraftSemiInventory(option,{...other,selectable:false});assert.equal(requests.length,1);
+  await ctx.confirmDraftSemiInventory(option,{...chosen,_deduct_quantity:100});assert.equal(requests.length,1);
+  let resolve;
+  sandbox.axios.get=()=>new Promise(r=>resolve=r);
+  const pending=ctx.queryDraftOtherSemiInventory(option);
+  assert(option._manual_loading);
+  ctx.supplierRequisitionDraft={supplier_groups:[]};
+  resolve({data:{candidates:[other],page:1,total:1}});await pending;
+  assert.equal(option._manual_candidates,undefined,'late result ignored');assert.equal(option._manual_loading,false);
+  for(const code of ['ECONNABORTED','ERR_CANCELED','ERR_NETWORK']){
+    sandbox.axios.get=async()=>{throw Object.assign(Error(code),{code})};
+    await ctx.queryDraftOtherSemiInventory(option);assert.equal(option._manual_loading,false);assert(option._manual_error);
+  }
+  const source=[{order_item_id:7,component_type:'whole'}];
+  const old={supplier_groups:[{supplier_name:'改过的供应商',lines:[{source_items:source,remark:'保留备注',report_length_mm:800,report_width_mm:600,cutting_mode:'一开一',stock_purpose_sheet_qty:5,_inventory_expanded:true}]}]};
+  const fresh={supplier_groups:[{supplier_name:'原供应商',lines:[{source_items:source,order_purpose_sheet_qty:8,purchase_total_sheet_qty:8,requisition_qty:8}]}]};
+  ctx.restoreSupplierDraftEdits(old,fresh);
+  assert.equal(fresh.supplier_groups[0].supplier_name,'改过的供应商');
+  const line=fresh.supplier_groups[0].lines[0];assert.equal(line.remark,'保留备注');assert.equal(line.purchase_total_sheet_qty,13);assert.equal(line.order_purpose_sheet_qty,8);assert.equal(line.stock_purpose_sheet_qty,5);
+  ctx.supplierRequisitionDraft={supplier_groups:[{supplier_name:'供应商',lines:[{report_length_mm:800,report_width_mm:600,source_items:[{order_item_id:7,late_semi_inventory_options:[option]}]}]}]};
+  Object.assign(ctx,{initializePurchasePurposeLine(){},purchasePurposeValidationError:()=>'',isMergedRequisitionCuttingLine:()=>false,supplierDraftLineIsSwapped:()=>false});
+  assert.equal(ctx.validateSupplierRequisitionDraft(),'','unselected candidates do not block save');
+  console.log('PASS explicit choice, quantity, browse-only, frozen payload, stale/error cleanup, preserved edits, unselected save');
+})().catch(error=>{console.error(error);process.exit(1)});

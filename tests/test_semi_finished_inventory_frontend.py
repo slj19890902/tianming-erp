@@ -58,22 +58,22 @@ def test_pending_requisition_explains_semi_deduction_and_purchase_shortage() -> 
 
 
 def test_supplier_draft_rechecks_late_semi_inventory_before_purchase() -> None:
-    assert "发现可抵扣半成品" in INDEX
-    assert "条可抵扣半成品库存" in INDEX
-    assert "确认抵扣并重算采购" in INDEX
+    assert "片料库存可按需核对" in INDEX
+    assert "未采用的候选不影响保存" in INDEX
+    assert "采用本批并重算" in INDEX
     assert "本次不用库存" in INDEX
     assert "/api/requisition/semi-inventory/reserve-from-pending" in INDEX
     assert "this.supplierRequisitionSelections = selections;" in INDEX
     assert "refreshSupplierRequisitionDraftAfterSemiReservation" in INDEX
-    assert "发现可抵扣半成品库存，请先确认抵扣或选择本次不用库存" in INDEX
-    assert "我已核对换算差异，同意本次匹配并记忆" in INDEX
-    assert "按上次人工匹配推荐" in INDEX
-    assert "首次人工匹配" in INDEX
+    assert "发现可抵扣半成品库存，请先确认抵扣或选择本次不用库存" not in INDEX
+    assert "confirmDraftSemiInventory(option, candidate)" in INDEX
+    assert "queryDraftOtherSemiInventory(option)" in INDEX
+    assert "draft-stock-table" in INDEX
     assert "candidate.lot_number" in INDEX
     assert "inventoryLocation(candidate)" in INDEX
     assert "supplierDraftSemiInventoryOptions()" in INDEX
     assert "[...recommended, ...review]" in INDEX
-    assert ".slice(0, 1)" not in INDEX[INDEX.index("draftSemiInventoryCandidates(option)"):INDEX.index("draftSemiInventoryNeedsOverride(option)")]
+    assert ".slice(0, 1)" not in INDEX[INDEX.index("draftSemiInventoryCandidates(option) {"):INDEX.index("draftSemiInventoryNeedsOverride(option) {")]
 
 
 def test_supplier_draft_keeps_recommended_and_review_lots_visible() -> None:

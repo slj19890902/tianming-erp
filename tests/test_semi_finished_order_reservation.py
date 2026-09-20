@@ -1458,10 +1458,9 @@ def test_requisition_preview_rechecks_late_semi_stock_and_recalculates_purchase(
         assert refreshed_line["semi_finished_reserved_piece_qty"] == 30
         assert refreshed_line["remaining_required_piece_qty"] == 10
         assert refreshed_line["requisition_qty"] == 10
-        assert (
-            refreshed_line["source_items"][0]["late_semi_inventory_options"]
-            == []
-        )
+        empty_option = refreshed_line["source_items"][0]["late_semi_inventory_options"][0]
+        assert empty_option["recommended_candidates"] == []
+        assert empty_option["review_candidates"] == []
 
     with factory() as db:
         lot = db.get(InventoryLot, lot_id)

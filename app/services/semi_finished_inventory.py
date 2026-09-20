@@ -827,6 +827,8 @@ def _learned_rules_for_product(
 def semi_finished_inventory_candidates(
     db: Session,
     requirement_id: int,
+    *,
+    customer_bound_only: bool = False,
 ) -> list[SemiFinishedCandidate]:
     requirement = db.get(OrderItemSemiRequirement, requirement_id)
     if requirement is None:
@@ -836,6 +838,7 @@ def semi_finished_inventory_candidates(
         db,
         product_id=_requirement_product_id(db, requirement),
         expected=expected,
+        customer_bound_only=customer_bound_only,
     )
     resolved: list[SemiFinishedCandidate] = []
     for row in candidates:
@@ -1017,6 +1020,7 @@ def browse_semi_finished_inventory_for_product(
     page_info: dict | None = None,
     page_size: int = 20,
     visible_customer_ids: list[int] | None = None,
+    customer_bound_only: bool = False,
     layer_count: int | None = None,
     crease_type: str | None = None,
     crease_left_mm: int | None = None,
@@ -1055,6 +1059,7 @@ def browse_semi_finished_inventory_for_product(
             SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
         )
         .where(
+            _bound_customer_clause(customer_id) if customer_bound_only else True,
             SemiFinishedInventoryDetail.owner_customer_id.in_(visible_customer_ids) if visible_customer_ids is not None else True,
             InventoryLot.inventory_type == "semi_finished",
             InventoryLot.status == "active",

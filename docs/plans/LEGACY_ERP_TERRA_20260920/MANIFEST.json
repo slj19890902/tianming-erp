@@ -1,7 +1,7 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
   "kind": "continuous_goal_execution_t02_released_v469_t17_signing_gated",
-  "local_head": "3fdbe33b6e3664cce7f5beb15083e96c89ed3b9d",
+  "local_head": "7a4c88737da7b08c081b11c2b436cc7638e92e09",
   "remote_head_reverified": true,
   "audit_integrity": {
     "files": 66,
@@ -26,7 +26,7 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "a639ccb6ab8a28f6d4d1a36e682755fa6c4e98867bfb1f925c517f722ee1cc1f"
+      "sha256": "08f540ec388778c1ca4ee58ac0cbe90edea390f9bdb9436e2c0f6da2342e1e74"
     },
     {
       "path": "04_场景覆盖与验收.md",
@@ -178,7 +178,7 @@
     },
     {
       "path": "tasks/T18.md",
-      "sha256": "ad39fbf25cbb452bbeffffbe824cef7905dd09627fc2eb25173d8a0bc2aecdfa"
+      "sha256": "7d08b5e19936021e5d19490e57dc1a0704c01eb5eb8390a2c3d5e3190e835cb1"
     },
     {
       "path": "tasks/T19.md",

@@ -1,7 +1,7 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
   "kind": "continuous_goal_prompt_execution_plan_t02_integrated_t03_candidate",
-  "local_head": "4567f3007dcde70b1b8d242144a7020ed0d55251",
+  "local_head": "0c786ae53ef5011280985009ae4a226a07422493",
   "remote_head_reverified": true,
   "audit_integrity": {
     "files": 66,
@@ -73,6 +73,10 @@
       "sha256": "0baddb8d603d219c7b38bdef3f451beba6e93256623fd00d49fd9fa7693da4db"
     },
     {
+      "path": "20260920-T08-送货打印回单与待补送边界核验.md",
+      "sha256": "f28231984cfa4514ffc310f1214a2e3be509e35f7a24e989dcc0592a7d5cbb3d"
+    },
+    {
       "path": "README.md",
       "sha256": "cdc968762758ff1426a6cefed9404a1aca54a87a5bae71974c29a0efdd5218d6"
     },
@@ -110,7 +114,7 @@
     },
     {
       "path": "tasks/T08.md",
-      "sha256": "26b6f584f54b340280563e49fe22d59c77dc7ddb386beb5ab95c4e5a2a931d73"
+      "sha256": "c2624499176f1700e168cabe0521e2392ae2cb00a662a7f44c31dfc2cd7c3d77"
     },
     {
       "path": "tasks/T09.md",

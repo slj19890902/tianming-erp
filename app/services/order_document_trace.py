@@ -241,6 +241,219 @@ def _status_label(
     return "状态待确认"
 
 
+def _execution_summary(
+    *,
+    events: list[dict[str, Any]],
+    current_inventory: list[dict[str, Any]],
+    item: OrderItem,
+    permissions: set[str],
+) -> dict[str, Any]:
+    """Project read-only execution quantities without mixing sheets and pieces."""
+
+    def quantity_total(rows: list[dict[str, Any]], field: str) -> float:
+        return sum(float(row.get(field) or 0) for row in rows)
+
+    def latest_source(*, stages: set[str]) -> dict[str, Any] | None:
+        event = next(
+            (
+                row
+                for row in reversed(events)
+                if row["is_effective"] and row["stage"] in stages
+            ),
+            None,
+        )
+        if event is None:
+            return None
+        return {
+            "event_key": event["key"],
+            "source_type": event["source_type"],
+            "source_id": event["source_id"],
+            "document_number": event["document_number"],
+        }
+
+    def metric(
+        key: str,
+        label: str,
+        value: Any,
+        unit: str,
+        status: str,
+        status_label: str,
+        basis: str,
+        source: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        return {
+            "key": key,
+            "label": label,
+            "value": _quantity(value),
+            "unit": unit,
+            "status": status,
+            "status_label": status_label,
+            "basis": basis,
+            "source": source,
+        }
+
+    order_quantity = max(float(item.quantity or 0), 0)
+    delivered_quantity = max(float(item.delivered_quantity or 0), 0)
+    remaining_quantity = max(order_quantity - delivered_quantity, 0)
+    order_source = latest_source(stages={"order"})
+    delivery_source = latest_source(stages={"delivery"}) or order_source
+
+    incoming_visible = "incoming.view" in permissions
+    received_sheets = sum(
+        float(row.get("quantity") or 0)
+        for row in events
+        if row["stage"] == "incoming"
+        and row["source_type"] == "incoming_receipt"
+        and row["is_effective"]
+    )
+    incoming_source = latest_source(stages={"incoming"})
+
+    inventory_visible = "warehouse.view" in permissions
+    finished_rows = [
+        row for row in current_inventory if row["inventory_type"] == "finished"
+    ]
+    semi_rows = [
+        row for row in current_inventory if row["inventory_type"] == "semi_finished"
+    ]
+    finished_available = quantity_total(finished_rows, "quantity_available")
+    finished_reserved = quantity_total(finished_rows, "quantity_reserved")
+    finished_accounted = sum(
+        float(row.get("quantity_available") or 0)
+        + float(row.get("quantity_reserved") or 0)
+        + float(row.get("quantity_consumed") or 0)
+        for row in finished_rows
+    )
+    reserve_sheets = sum(
+        float(row.get("quantity_available") or 0)
+        + float(row.get("quantity_reserved") or 0)
+        for row in semi_rows
+    )
+    deliverable_quantity = min(
+        remaining_quantity,
+        finished_available + finished_reserved,
+    )
+    inventory_source = latest_source(stages={"inventory", "production"})
+
+    metrics = [
+        metric(
+            "ordered",
+            "订单数量",
+            order_quantity,
+            "只",
+            "done",
+            "已冻结",
+            "订单明细冻结数量",
+            order_source,
+        ),
+        metric(
+            "received_sheets",
+            "累计实收",
+            received_sheets if incoming_visible else None,
+            "张",
+            (
+                "restricted"
+                if not incoming_visible
+                else "done"
+                if received_sheets > 0
+                else "pending"
+            ),
+            (
+                "权限受限"
+                if not incoming_visible
+                else "已有实收"
+                if received_sheets > 0
+                else "待实收"
+            ),
+            "当前明细有效来料实收合计",
+            incoming_source if incoming_visible else None,
+        ),
+        metric(
+            "finished_accounted",
+            "订单成品",
+            finished_accounted if inventory_visible else None,
+            "只",
+            (
+                "restricted"
+                if not inventory_visible
+                else "done"
+                if finished_accounted >= order_quantity and order_quantity > 0
+                else "pending"
+            ),
+            (
+                "权限受限"
+                if not inventory_visible
+                else "已满足订单"
+                if finished_accounted >= order_quantity and order_quantity > 0
+                else "仍在形成"
+            ),
+            "精确关联成品批次的可用、预占及已耗用合计",
+            inventory_source if inventory_visible else None,
+        ),
+        metric(
+            "finished_available",
+            "成品可用 / 预占",
+            finished_available if inventory_visible else None,
+            "只",
+            "restricted" if not inventory_visible else "done" if finished_available + finished_reserved > 0 else "pending",
+            "权限受限" if not inventory_visible else "已有库存" if finished_available + finished_reserved > 0 else "待入库",
+            f"当前可用；另有预占 {_quantity(finished_reserved) or 0} 只",
+            inventory_source if inventory_visible else None,
+        ),
+        metric(
+            "delivered",
+            "已送 / 未交",
+            delivered_quantity,
+            "只",
+            "done" if remaining_quantity <= 0 else "pending",
+            "已送完" if remaining_quantity <= 0 else "仍有未交",
+            f"订单明细累计已送；未交 {_quantity(remaining_quantity) or 0} 只",
+            delivery_source,
+        ),
+        metric(
+            "deliverable",
+            "当前可送",
+            deliverable_quantity if inventory_visible else None,
+            "只",
+            (
+                "restricted"
+                if not inventory_visible
+                else "done"
+                if remaining_quantity <= 0
+                else "blocked"
+                if deliverable_quantity <= 0
+                else "pending"
+            ),
+            (
+                "权限受限"
+                if not inventory_visible
+                else "订单已送完"
+                if remaining_quantity <= 0
+                else "暂无可送"
+                if deliverable_quantity <= 0
+                else "可安排送货"
+            ),
+            "当前精确关联成品可用及预占合计，并受未交数量封顶",
+            inventory_source if inventory_visible else None,
+        ),
+        metric(
+            "reserve_sheets",
+            "余料张数",
+            reserve_sheets if inventory_visible else None,
+            "张",
+            "restricted" if not inventory_visible else "done" if reserve_sheets > 0 else "pending",
+            "权限受限" if not inventory_visible else "尚有余料" if reserve_sheets > 0 else "暂无余料",
+            "精确关联半成品批次的当前可用及预占张数",
+            inventory_source if inventory_visible else None,
+        ),
+    ]
+    return {
+        "metrics": metrics,
+        "finished_available": _quantity(finished_available) if inventory_visible else None,
+        "finished_reserved": _quantity(finished_reserved) if inventory_visible else None,
+        "remaining_quantity": _quantity(remaining_quantity),
+    }
+
+
 def build_order_item_document_trace(
     db: Session,
     *,
@@ -1091,6 +1304,12 @@ def build_order_item_document_trace(
         (row for row in reversed(events) if row["is_effective"]),
         events[-1] if events else None,
     )
+    execution_summary = _execution_summary(
+        events=events,
+        current_inventory=current_inventory,
+        item=item,
+        permissions=permissions,
+    )
     return {
         "order": {
             "id": order.id,
@@ -1111,6 +1330,7 @@ def build_order_item_document_trace(
             "delivered_quantity": item.delivered_quantity,
         },
         "restricted_stages": restricted_stages,
+        "execution_summary": execution_summary,
         "current_inventory": current_inventory,
         "current_event_key": current_event["key"] if current_event else None,
         "events": events,

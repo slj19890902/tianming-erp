@@ -420,6 +420,12 @@ def test_exact_item_trace_does_not_mix_same_customer_po(order_trace_app) -> None
     assert body["current_event_key"] in {
         event["key"] for event in body["events"] if event["is_effective"]
     }
+    summary = body["execution_summary"]
+    summary_metrics = {row["key"]: row for row in summary["metrics"]}
+    assert summary_metrics["ordered"]["value"] == 30
+    assert summary_metrics["delivered"]["value"] == 30
+    assert summary["remaining_quantity"] == 0
+    assert summary_metrics["deliverable"]["status_label"] == "订单已送完"
     assert all(event["target"]["source_id"] == event["source_id"] for event in body["events"])
     assert not any("unit_cost" in str(event) for event in body["events"])
 

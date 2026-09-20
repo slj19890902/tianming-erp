@@ -26,7 +26,7 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "70c2287b3e72ddf90ec5061593ced7b105ea140c6330bfd36b2344b35e172bb9"
+      "sha256": "3061788e856b69d5f4ea243c74fa5dd3e605f683bffe5a894566c36f4becab38"
     },
     {
       "path": "04_场景覆盖与验收.md",
@@ -77,6 +77,10 @@
       "sha256": "f28231984cfa4514ffc310f1214a2e3be509e35f7a24e989dcc0592a7d5cbb3d"
     },
     {
+      "path": "20260920-T09-下游引用与撤销纠错矩阵核验.md",
+      "sha256": "947af67e49a0f55e6aaa4c5dec1844d9d3cd8b1d0730a82300271e837123f75c"
+    },
+    {
       "path": "README.md",
       "sha256": "cdc968762758ff1426a6cefed9404a1aca54a87a5bae71974c29a0efdd5218d6"
     },
@@ -118,7 +122,7 @@
     },
     {
       "path": "tasks/T09.md",
-      "sha256": "f77a3416cf81339e19605240efd00beacf19659c63df4fdad606ce450af64847"
+      "sha256": "1195172b985826ee78f8ff1be8e7f2eeff88f92ad7d237425a79bfc9fce0ca01"
     },
     {
       "path": "tasks/T10.md",

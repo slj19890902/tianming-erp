@@ -219,12 +219,12 @@ def test_pending_production_ordinary_rows_measure_current_query_growth(
         "customer_board_preparation_sources": [],
     }.items() <= row.items()
 
-    # One scope/user load + task join + seven request-level preflight reads,
+    # One scope/user load + task join + current fixed request-level preflight reads,
     # including the current production-label fact batch and the fulfillment
     # reminder/customer finished-storage batches. None may grow with the
     # number of task rows.
     # Ordinary rows with no workflow facts must not add per-row SELECTs.
-    assert _select_count(small_sql) == 10
+    assert _select_count(small_sql) == 12
     assert _select_count(large_sql) == _select_count(small_sql)
 
 

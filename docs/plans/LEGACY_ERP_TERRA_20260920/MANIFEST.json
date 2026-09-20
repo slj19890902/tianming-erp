@@ -1,7 +1,7 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
   "kind": "continuous_goal_prompt_execution_plan_t02_integrated_t03_candidate",
-  "local_head": "659696a3a3a4c3201a0c26bfd361e735efc9739d",
+  "local_head": "6b161d2cd11473b156028a6297163d165f7b3ff7",
   "remote_head_reverified": true,
   "audit_integrity": {
     "files": 66,
@@ -26,7 +26,7 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "bbf1e2517e6ae1319cfbd76d9058044a13b3c51a00a74d0ede1f8ab24db9d09c"
+      "sha256": "2af8e2db4a1d52ff19eff6260e8f84d3ccde4a39587c59b26eea909097d3e2e4"
     },
     {
       "path": "04_场景覆盖与验收.md",
@@ -95,6 +95,10 @@
     {
       "path": "20260920-T13-权限与客户范围穿透验证.md",
       "sha256": "9fb97a48f0b223b64b7ee4e027f5cee205dca3fb38723d7f6a6cf7b0cb5643db"
+    },
+    {
+      "path": "20260920-T17-性能规模回归基线核验.md",
+      "sha256": "7afb04ed5ac08ca36138a65caa925d638dc601190bc769e2db41c8032302a289"
     },
     {
       "path": "README.md",
@@ -170,7 +174,7 @@
     },
     {
       "path": "tasks/T17.md",
-      "sha256": "adc973ed5e85bdc83dabdb4614c5500c34c516ae6fae9ebf4094a99131e59fb0"
+      "sha256": "c66a258f1ff87f9b643d7050aacc000974ac3cdef46d1e7f0f28ebfefbc7cec8"
     },
     {
       "path": "tasks/T18.md",

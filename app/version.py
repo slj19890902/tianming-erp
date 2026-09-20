@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.468"
-APP_VERSION_NAME = "订单列表个人列偏好"
+APP_VERSION = "v0.22.469"
+APP_VERSION_NAME = "合并报料自动发现与整组库存抵扣"
 APP_BUILD_DATE = "2026-09-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4431,3 +4431,15 @@ APP_VERIFICATION_STEPS = [
     "以无销售金额权限账号打开订单队列，确认金额列和金额开关均不出现；订单筛选、分页、详情、打印和导出权限保持原规则。",
 ]
 APP_CHANGELOG = [*(f"v0.22.468：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "进入合并报料即自动查找同楞型、实际长宽逐轴完全一致且客户适用或明确通用的片料，直接显示绿色安全抵扣；不同楞型始终排除。",
+    "绿色一键抵扣按合并总需求原子分配多个批次，只采购剩余缺口；同批库存不能跨组重复占用，重复请求返回同一回执。",
+    "不同尺寸片料仅在主动点击查询后显示黄色分切方案，并按每批实际长宽和合法开料方式计算；查看本身不预占库存。本版不新增数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "强制刷新合并报料，选择真实待报料需求，确认同楞型且报料长宽完全一致的合格片料自动显示绿色提示；不同楞型和不同尺寸不进入绿色列表。",
+    "点击绿色一键抵扣并核对多批库存按总需求分配、采购只保留缺口；不要为了验收在正式库创建模拟库存或订单。",
+    "需要使用异尺寸库存时主动点击查询其他尺寸片料，核对黄色方案的实际原片长宽、出片数和可抵数量后再确认。",
+]
+APP_CHANGELOG = [*(f"v0.22.469：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

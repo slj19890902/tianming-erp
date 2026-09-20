@@ -801,6 +801,156 @@ def test_print_response_contains_no_financial_fields(delivery_api_app) -> None:
     assert response.json()["items"][0]["unit"] == "PCS"
 
 
+def test_new_delivery_print_header_is_frozen_at_creation(
+    delivery_api_app,
+) -> None:
+    from app.models.company_config import CompanyConfig
+    from app.models.customer import Customer
+
+    app, session_factory = delivery_api_app
+    with session_factory() as session:
+        session.add(
+            CompanyConfig(
+                id=1,
+                company_name="创建时公司",
+                address="创建时公司地址",
+                phone="0512-10000000",
+                fax="0512-10000001",
+                tax_number="TAX-OLD",
+                bank_name="创建时银行",
+                bank_account="BANK-OLD",
+                contact_person="创建时发货人",
+                contact_phone="13800000001",
+            )
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/deliveries", json=_create_payload())
+        assert created.status_code == 201, created.text
+        delivery_id = created.json()["id"]
+
+        with session_factory() as session:
+            customer = session.get(Customer, 1)
+            customer.name = "修改后客户"
+            customer.contact_person = "修改后联系人"
+            customer.phone = "0512-20000000"
+            customer.address = "修改后客户地址"
+            company = session.get(CompanyConfig, 1)
+            company.company_name = "修改后公司"
+            company.address = "修改后公司地址"
+            company.phone = "0512-30000000"
+            company.fax = "0512-30000001"
+            company.tax_number = "TAX-NEW"
+            company.bank_name = "修改后银行"
+            company.bank_account = "BANK-NEW"
+            company.contact_person = "修改后发货人"
+            company.contact_phone = "13800000002"
+            session.commit()
+
+        printed = client.get(f"/api/deliveries/{delivery_id}/print")
+
+    assert printed.status_code == 200, printed.text
+    body = printed.json()
+    assert body["print_snapshot_basis"] == "frozen_v1"
+    assert body["customer"] == {
+        "name": "苏州思迈尔包装有限公司",
+        "contact_person": "张经理",
+        "phone": "0512-66778899",
+        "address": "苏州市吴中区东太湖路88号",
+    }
+    assert body["sender"] == {
+        "company_name": "创建时公司",
+        "address": "创建时公司地址",
+        "phone": "0512-10000000",
+        "fax": "0512-10000001",
+        "tax_number": "TAX-OLD",
+        "bank_name": "创建时银行",
+        "bank_account": "BANK-OLD",
+        "contact_person": "创建时发货人",
+        "contact_phone": "13800000001",
+    }
+
+
+def test_new_delivery_print_header_preserves_snapshot_nulls(
+    delivery_api_app,
+) -> None:
+    from app.models.company_config import CompanyConfig
+    from app.models.customer import Customer
+
+    app, session_factory = delivery_api_app
+    with session_factory() as session:
+        customer = session.get(Customer, 1)
+        customer.phone = None
+        customer.address = None
+        session.add(CompanyConfig(id=1, company_name="创建时公司"))
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/deliveries", json=_create_payload())
+        assert created.status_code == 201, created.text
+        delivery_id = created.json()["id"]
+
+        with session_factory() as session:
+            customer = session.get(Customer, 1)
+            customer.phone = "后补客户电话"
+            customer.address = "后补客户地址"
+            company = session.get(CompanyConfig, 1)
+            company.fax = "后补传真"
+            company.contact_phone = "后补公司电话"
+            session.commit()
+
+        printed = client.get(f"/api/deliveries/{delivery_id}/print")
+
+    assert printed.status_code == 200, printed.text
+    body = printed.json()
+    assert body["print_snapshot_basis"] == "frozen_v1"
+    assert body["customer"]["phone"] is None
+    assert body["customer"]["address"] is None
+    assert body["sender"]["fax"] is None
+    assert body["sender"]["contact_phone"] is None
+
+
+def test_legacy_delivery_print_header_uses_current_master_fallback(
+    delivery_api_app,
+) -> None:
+    from app.models.company_config import CompanyConfig
+    from app.models.customer import Customer
+    from app.models.delivery import Delivery
+
+    app, session_factory = delivery_api_app
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/deliveries", json=_create_payload())
+        assert created.status_code == 201, created.text
+        delivery_id = created.json()["id"]
+
+        with session_factory() as session:
+            delivery = session.get(Delivery, delivery_id)
+            delivery.print_snapshot_version = None
+            customer = session.get(Customer, 1)
+            customer.phone = "旧单当前客户电话"
+            session.add(
+                CompanyConfig(
+                    id=1,
+                    company_name="旧单当前公司",
+                    phone="旧单当前公司电话",
+                )
+            )
+            session.commit()
+
+        printed = client.get(f"/api/deliveries/{delivery_id}/print")
+
+    assert printed.status_code == 200, printed.text
+    body = printed.json()
+    assert body["print_snapshot_basis"] == "legacy_current_fallback"
+    assert body["customer"]["phone"] == "旧单当前客户电话"
+    assert body["sender"]["company_name"] == "旧单当前公司"
+    assert body["sender"]["phone"] == "旧单当前公司电话"
+
+
 def test_over_delivery_facts_are_not_appended_to_customer_remark(
     delivery_api_app,
 ) -> None:

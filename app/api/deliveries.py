@@ -8805,6 +8805,9 @@ def create_delivery(
         _delivery_for_user(db, replay_record.resource_id, user)
         return replay
     try:
+        company = db.scalar(
+            select(CompanyConfig).where(CompanyConfig.id == 1)
+        )
         delivery = Delivery(
             delivery_number=next_delivery_number(
                 db,
@@ -8818,6 +8821,30 @@ def create_delivery(
             backfilled_at=(_utc_now() if payload.historical_backfill else None),
             version=1,
             vehicle_number=(payload.vehicle_number or "").strip() or None,
+            print_snapshot_version=1,
+            customer_name_snapshot=customer.name,
+            customer_contact_snapshot=customer.contact_person,
+            customer_phone_snapshot=customer.phone,
+            customer_address_snapshot=customer.address,
+            sender_company_name_snapshot=(
+                company.company_name if company else ""
+            ),
+            sender_address_snapshot=company.address if company else None,
+            sender_phone_snapshot=company.phone if company else None,
+            sender_fax_snapshot=company.fax if company else None,
+            sender_tax_number_snapshot=(
+                company.tax_number if company else None
+            ),
+            sender_bank_name_snapshot=company.bank_name if company else None,
+            sender_bank_account_snapshot=(
+                company.bank_account if company else None
+            ),
+            sender_contact_snapshot=(
+                company.contact_person if company else None
+            ),
+            sender_contact_phone_snapshot=(
+                company.contact_phone if company else None
+            ),
             source_mode=payload.source_mode,
             status="pending",
             total_quantity=0,
@@ -11086,6 +11113,7 @@ def get_delivery_print_data(
         )
     customer = db.get(Customer, delivery.customer_id)
     company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
+    frozen_print_header = delivery.print_snapshot_version == 1
     rows = db.execute(
         select(
             DeliveryItem.id.label("delivery_item_id"),
@@ -11246,22 +11274,77 @@ def get_delivery_print_data(
         ),
         "actual_goods_items": actual_goods_items,
         "created_at": utc_naive_to_api(delivery.created_at),
+        "print_snapshot_basis": (
+            "frozen_v1" if frozen_print_header else "legacy_current_fallback"
+        ),
         "customer": {
-            "name": customer.name if customer else "",
-            "contact_person": customer.contact_person if customer else None,
-            "phone": customer.phone if customer else None,
-            "address": customer.address if customer else None,
+            "name": (
+                delivery.customer_name_snapshot
+                if frozen_print_header
+                else (customer.name if customer else "")
+            ),
+            "contact_person": (
+                delivery.customer_contact_snapshot
+                if frozen_print_header
+                else (customer.contact_person if customer else None)
+            ),
+            "phone": (
+                delivery.customer_phone_snapshot
+                if frozen_print_header
+                else (customer.phone if customer else None)
+            ),
+            "address": (
+                delivery.customer_address_snapshot
+                if frozen_print_header
+                else (customer.address if customer else None)
+            ),
         },
         "sender": {
-            "company_name": company.company_name if company else "",
-            "address": company.address if company else None,
-            "phone": company.phone if company else None,
-            "fax": company.fax if company else None,
-            "tax_number": company.tax_number if company else None,
-            "bank_name": company.bank_name if company else None,
-            "bank_account": company.bank_account if company else None,
-            "contact_person": company.contact_person if company else None,
-            "contact_phone": company.contact_phone if company else None,
+            "company_name": (
+                delivery.sender_company_name_snapshot
+                if frozen_print_header
+                else (company.company_name if company else "")
+            ),
+            "address": (
+                delivery.sender_address_snapshot
+                if frozen_print_header
+                else (company.address if company else None)
+            ),
+            "phone": (
+                delivery.sender_phone_snapshot
+                if frozen_print_header
+                else (company.phone if company else None)
+            ),
+            "fax": (
+                delivery.sender_fax_snapshot
+                if frozen_print_header
+                else (company.fax if company else None)
+            ),
+            "tax_number": (
+                delivery.sender_tax_number_snapshot
+                if frozen_print_header
+                else (company.tax_number if company else None)
+            ),
+            "bank_name": (
+                delivery.sender_bank_name_snapshot
+                if frozen_print_header
+                else (company.bank_name if company else None)
+            ),
+            "bank_account": (
+                delivery.sender_bank_account_snapshot
+                if frozen_print_header
+                else (company.bank_account if company else None)
+            ),
+            "contact_person": (
+                delivery.sender_contact_snapshot
+                if frozen_print_header
+                else (company.contact_person if company else None)
+            ),
+            "contact_phone": (
+                delivery.sender_contact_phone_snapshot
+                if frozen_print_header
+                else (company.contact_phone if company else None)
+            ),
         },
         "items": print_items,
     }

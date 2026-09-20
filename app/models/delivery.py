@@ -93,6 +93,40 @@ class Delivery(Base):
         nullable=False,
     )
     vehicle_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    print_snapshot_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    customer_name_snapshot: Mapped[str | None] = mapped_column(
+        String(250), nullable=True
+    )
+    customer_contact_snapshot: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    customer_phone_snapshot: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    customer_address_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sender_company_name_snapshot: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    sender_address_snapshot: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
+    sender_phone_snapshot: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    sender_fax_snapshot: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    sender_tax_number_snapshot: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    sender_bank_name_snapshot: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    sender_bank_account_snapshot: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    sender_contact_snapshot: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    sender_contact_phone_snapshot: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
     source_mode: Mapped[str] = mapped_column(
         String(30),
         default="order",

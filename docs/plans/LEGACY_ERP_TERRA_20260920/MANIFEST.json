@@ -1,7 +1,7 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
   "kind": "continuous_goal_prompt_execution_plan_t02_integrated_t03_candidate",
-  "local_head": "b920276503f7d7b063c6c82398e3c1e4da39a3e5",
+  "local_head": "e5641fe2b72b0b30f8f50d6db1ecd6ff7fb54725",
   "remote_head_reverified": true,
   "audit_integrity": {
     "files": 66,
@@ -26,7 +26,7 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "040b7a8a76cd79a192fb2a78f77671d3d1fa5c6feb6b1917af88babde6e5a723"
+      "sha256": "1d53123078d6b690de477b1dec0ad65d69dfbd3694642c0625d73f0204af4122"
     },
     {
       "path": "04_场景覆盖与验收.md",
@@ -57,6 +57,10 @@
       "sha256": "7a4141d6df047519777ede8e9193a49f1c4e4d5724e7939d9a7e86421e98a95a"
     },
     {
+      "path": "20260920-T04-订单列表个人列偏好.md",
+      "sha256": "2d06a557964e494a9c5b97926829fa123b0a4015aad3c08a535dab17b4b05d65"
+    },
+    {
       "path": "README.md",
       "sha256": "cdc968762758ff1426a6cefed9404a1aca54a87a5bae71974c29a0efdd5218d6"
     },
@@ -78,7 +82,7 @@
     },
     {
       "path": "tasks/T04.md",
-      "sha256": "b0477e9470cd99d8c150a06e56ccc28eeda7b8ac196701dc03a12e92da301a1f"
+      "sha256": "a9bdc5a078876c89c84fda1ee2a227bc9688f5c390a547dd11e414da2e41af7a"
     },
     {
       "path": "tasks/T05.md",

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.467"
-APP_VERSION_NAME = "订单键盘连续录入与取消保护"
+APP_VERSION = "v0.22.468"
+APP_VERSION_NAME = "订单列表个人列偏好"
 APP_BUILD_DATE = "2026-09-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4419,3 +4419,15 @@ APP_VERIFICATION_STEPS = [
     "填写合规订单后按 Ctrl+Enter，确认仍走原有校验和保存结果；保存中重复按快捷键不得创建重复订单。不要为验收在正式库创建模拟订单。",
 ]
 APP_CHANGELOG = [*(f"v0.22.467：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "订单业务队列支持当前账号、本机浏览器的列显隐偏好；偏好只保存列标识和布尔值，以账号 ID 与 schema 版本隔离，不保存客户、订单、筛选、选择、令牌或业务数据。",
+    "客户单号、状态和操作保持必显；客户名称、日期、交期、子单数和数量可按个人习惯隐藏，并提供“恢复本页默认”。",
+    "金额列继续由既有销售金额权限控制：无权限账号既看不到金额列，也没有金额列配置入口。本版无数据库迁移，不修改列表接口、导出权限或订单事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "在隔离 UAT 以账号甲打开订单业务队列，点击“列表列”隐藏交期并刷新页面；确认同一账号仍保持设置。",
+    "切换账号乙打开相同页面，确认交期仍按默认显示；回到账号甲点击“恢复本页默认”，确认交期恢复。",
+    "以无销售金额权限账号打开订单队列，确认金额列和金额开关均不出现；订单筛选、分页、详情、打印和导出权限保持原规则。",
+]
+APP_CHANGELOG = [*(f"v0.22.468：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -3438,7 +3438,7 @@
                 <div class="toolbar-group"><button class="btn" :disabled="customerPhoneGovernanceExporting" @click="exportCustomerPhoneGovernance">{{ customerPhoneGovernanceExporting ? '生成清单中…' : '导出电话待核对清单' }}</button><label><input type="checkbox" v-model="filters.showInactive" @change="runExplicitPageListLoad('customers',{resetPage:true})" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @input="queuePageSearch('customers')" @keyup.enter="runExplicitPageListLoad('customers',{resetPage:true})" /><button class="btn" @click="runExplicitPageListLoad('customers',{resetPage:true})">查询</button></div>
               </div>
               <data-panel :empty="!customers.length">
-                <table class="customer-list-table"><colgroup><col class="customer-col-number" /><col class="customer-col-code" /><col class="customer-col-label-short" /><col class="customer-col-name" /><col class="customer-col-contact" /><col class="customer-col-phone" /><col class="customer-col-term" /><col class="customer-col-delivery" /><col class="customer-col-status" /><col class="customer-col-actions" /></colgroup><thead><tr><th>客户编号</th><th>客户缩写</th><th>标签中文简称</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th>状态</th><th>操作</th></tr></thead>
+                <table class="customer-list-table"><colgroup><col class="customer-col-number" /><col class="customer-col-code" /><col class="customer-col-label-short" /><col class="customer-col-name" /><col class="customer-col-contact" /><col class="customer-col-phone" /><col class="customer-col-term" /><col class="customer-col-delivery" /><col class="customer-col-status" /><col class="customer-col-actions" /></colgroup><thead><tr><th>客户编号</th><th>客户缩写</th><th>标签中文简称</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th v-if="orderListColumnVisible('status')">状态</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in customers" :key="row.id">
                   <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td><span :class="row.chinese_short_name ? '' : 'status orange'">{{ row.chinese_short_name || "待补录" }}</span></td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td><span>{{ customerPhoneDisplay(row.phone) || "-" }}</span><span v-if="customerPhoneAnalysis(row.phone).needs_review" class="phone-review-note">疑似占位，待核对</span></td>
                   <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
@@ -4107,9 +4107,13 @@
                     </div>
                     <div class="toolbar-group">
                       <button v-if="orderWorkspace === 'queue' && canViewCosts" ref="costGapTrigger" class="btn" @click="openCostGaps">成本与利润提醒</button>
+                      <button v-if="orderWorkspace === 'queue'" class="btn" :aria-expanded="orderListColumnPanelOpen" @click="orderListColumnPanelOpen=!orderListColumnPanelOpen">列表列</button>
                       <button class="btn" @click="refreshCurrentOrderWorkspace()">刷新</button>
                     </div>
                   </div>
+                </div>
+                <div v-if="orderWorkspace === 'queue' && orderListColumnPanelOpen" class="order-filter-card" aria-label="订单列表列偏好">
+                  <div class="toolbar-group"><strong>本机、当前账号的订单列表列</strong><label v-for="column in orderListColumnOptions()" :key="column.id"><input type="checkbox" :checked="orderListColumnVisible(column.id)" @change="setOrderListColumnVisible(column.id,$event.target.checked)" /> {{ column.label }}</label><button class="btn small" @click="resetOrderListColumns">恢复本页默认</button></div>
                 </div>
                 <div class="order-filter-card">
                   <div class="order-filter-compact">
@@ -4219,34 +4223,34 @@
                 <table class="order-group-table">
                   <thead>
                     <tr>
-                      <th class="col-customer-name"><button class="order-sort-button" @click="toggleOrderSort('customer_name')">客户名称 <span class="order-sort-indicator">{{ orderSortIndicator('customer_name') }}</span></button></th>
-                      <th class="col-customer-po">客户单号</th>
-                      <th><button class="order-sort-button" @click="toggleOrderSort('order_date')">下单日期 <span class="order-sort-indicator">{{ orderSortIndicator('order_date') }}</span></button></th>
-                      <th><button class="order-sort-button" @click="toggleOrderSort('delivery_date')">交期 <span class="order-sort-indicator">{{ orderSortIndicator('delivery_date') }}</span></button></th>
-                      <th>子单数</th>
-                      <th class="cell-right">总数量</th>
-                      <th v-if="canViewSalesAmounts" class="sensitive-price cell-right">总金额</th>
+                      <th v-if="orderListColumnVisible('customer_name')" class="col-customer-name"><button class="order-sort-button" @click="toggleOrderSort('customer_name')">客户名称 <span class="order-sort-indicator">{{ orderSortIndicator('customer_name') }}</span></button></th>
+                      <th v-if="orderListColumnVisible('customer_po')" class="col-customer-po">客户单号</th>
+                      <th v-if="orderListColumnVisible('order_date')"><button class="order-sort-button" @click="toggleOrderSort('order_date')">下单日期 <span class="order-sort-indicator">{{ orderSortIndicator('order_date') }}</span></button></th>
+                      <th v-if="orderListColumnVisible('delivery_date')"><button class="order-sort-button" @click="toggleOrderSort('delivery_date')">交期 <span class="order-sort-indicator">{{ orderSortIndicator('delivery_date') }}</span></button></th>
+                      <th v-if="orderListColumnVisible('child_count')">子单数</th>
+                      <th v-if="orderListColumnVisible('total_quantity')" class="cell-right">总数量</th>
+                      <th v-if="orderListColumnVisible('total_amount')" class="sensitive-price cell-right">总金额</th>
                       <th>状态</th>
-                      <th class="col-actions">操作</th>
+                      <th v-if="orderListColumnVisible('actions')" class="col-actions">操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     <template v-for="group in groupedOrderRows" :key="group.key">
                       <tr class="order-group-row" :style="customerRowStyle(group.customer_id)" :data-workflow-row="'order:'+group.orders[0]?.id" :class="{'workflow-current':workflowRowSelected('order:'+group.orders[0]?.id)}" tabindex="0" @keydown.enter.self="openOrderGroupDetail(group)">
-                        <td class="col-customer-name">
+                        <td v-if="orderListColumnVisible('customer_name')" class="col-customer-name">
                           <div class="order-group-summary">
                             <strong><span v-for="(part,index) in orderSearchHighlightParts(group.customer_name || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></strong>
                             <small v-if="group.orders.length > 1">按客户 + 客户单号合并显示</small>
                           </div>
                         </td>
-                        <td class="col-customer-po"><span :class="group.customer_po ? 'customer-po' : 'customer-po-missing'"><span v-for="(part,index) in orderSearchHighlightParts(group.customer_po || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></span></td>
-                        <td>{{ group.order_date || "-" }}</td>
-                        <td>{{ group.latest_delivery_date || "-" }}</td>
-                        <td>{{ group.child_count }}</td>
-                        <td class="cell-right">{{ group.total_quantity }}</td>
-                        <td v-if="canViewSalesAmounts" class="sensitive-price cell-right">¥ {{ money(group.total_amount) }}</td>
-                        <td><status-tag :value="group.group_status"></status-tag></td>
-                        <td class="cell-actions">
+                        <td v-if="orderListColumnVisible('customer_po')" class="col-customer-po"><span :class="group.customer_po ? 'customer-po' : 'customer-po-missing'"><span v-for="(part,index) in orderSearchHighlightParts(group.customer_po || '-')" :key="index" :class="{'order-search-highlight':part.match}">{{ part.text }}</span></span></td>
+                        <td v-if="orderListColumnVisible('order_date')">{{ group.order_date || "-" }}</td>
+                        <td v-if="orderListColumnVisible('delivery_date')">{{ group.latest_delivery_date || "-" }}</td>
+                        <td v-if="orderListColumnVisible('child_count')">{{ group.child_count }}</td>
+                        <td v-if="orderListColumnVisible('total_quantity')" class="cell-right">{{ group.total_quantity }}</td>
+                        <td v-if="orderListColumnVisible('total_amount')" class="sensitive-price cell-right">¥ {{ money(group.total_amount) }}</td>
+                        <td v-if="orderListColumnVisible('status')"><status-tag :value="group.group_status"></status-tag></td>
+                        <td v-if="orderListColumnVisible('actions')" class="cell-actions">
                           <div class="toolbar-group">
                             <button class="btn small" :disabled="orderGroupDetailLoading[group.key]" @click="toggleOrderGroup(group)">{{ orderGroupDetailLoading[group.key] ? "加载中" : (expandedOrders[group.key] ? "收起" : "展开") }}</button>
                             <button class="btn small" @click="openOrderGroupDetail(group)">详情</button>
@@ -4255,7 +4259,7 @@
                         </td>
                       </tr>
                       <tr v-if="expandedOrders[group.key]" class="order-group-detail-row">
-                        <td :colspan="canViewSalesAmounts ? 9 : 8">
+                        <td :colspan="orderListTableColumnCount()">
                           <div class="order-group-detail-card">
                             <div v-if="orderGroupDetailLoading[group.key]" class="empty">正在加载订单明细…</div>
                             <div v-else-if="orderGroupDetailErrors[group.key]" class="empty error-text">{{ orderGroupDetailErrors[group.key] }} <button class="btn small" @click="retryOrderGroupDetail(group)">重新加载</button></div>
@@ -10333,7 +10337,7 @@
             deliveryBacklogs:{items:[],page:1,has_more:false,history:false,loading:false,error:'',preview:null,sequence:0},
             overview: { cards: [], todos: [], summary: {} }, warehouseCapacitySummary:null, overviewError: "", overviewLoading: false, dashboardDetailsVisible:false,
             kpi: {}, customers: [], customerOptions: [], orderCustomerOptions: [], products: [], materials: [], orders: [],
-            orderWorkspace: "queue", customerHeatItems:[], customerHeatTotal:0, customerHeatLoading:false, customerHeatError:"", customerHeatAmountVisible:false, customerHeatAsOf:"", customerHeatThresholdContract:null, customerHeatThresholdVersion:"", customerHeatThresholdStatus:"prototype_pending_p1_61c_acceptance", customerHeatSortBy:"heat", customerHeatSortDirection:"desc", customerHeatAppliedSignature:"", customerHeatExpanded:{}, customerHeatOrders:{},
+            orderWorkspace: "queue", orderListColumnPanelOpen:false, orderListColumns:{customer_name:true,customer_po:true,order_date:true,delivery_date:true,child_count:true,total_quantity:true,total_amount:true,status:true,actions:true}, customerHeatItems:[], customerHeatTotal:0, customerHeatLoading:false, customerHeatError:"", customerHeatAmountVisible:false, customerHeatAsOf:"", customerHeatThresholdContract:null, customerHeatThresholdVersion:"", customerHeatThresholdStatus:"prototype_pending_p1_61c_acceptance", customerHeatSortBy:"heat", customerHeatSortDirection:"desc", customerHeatAppliedSignature:"", customerHeatExpanded:{}, customerHeatOrders:{},
             customerPhoneGovernanceExporting: false,
             quotationCustomer: null,
             quotationDraft: { id:null, quotation_date:today(), remarks:"", items:[blankQuotationLine()] },
@@ -11992,6 +11996,8 @@
             this.resetModalA11ySession({discardModal:true});
             this.uiModeSaving = false;
             this.uiLayoutEffective = null;
+            this.orderListColumnPanelOpen = false;
+            this.orderListColumns = this.orderListColumnDefaults();
             this.uiLayoutAdminPreview = false;
             this.activePage = "dashboard";
             this.user = null;
@@ -13798,6 +13804,15 @@
             // Vue text interpolation renders every part as escaped text; no HTML is constructed from search input or order data.
             return parts.length ? parts : [{ text, match: false }];
           },
+          orderListColumnDefaults() { return {customer_name:true,customer_po:true,order_date:true,delivery_date:true,child_count:true,total_quantity:true,total_amount:true,status:true,actions:true}; },
+          orderListColumnPreferenceKey() { const id=Number(this.user?.id||0); return Number.isInteger(id) && id>0 ? `erp_order_list_columns_v1:${id}` : null; },
+          orderListColumnOptions() { return [{id:"customer_name",label:"客户名称"},{id:"order_date",label:"下单日期"},{id:"delivery_date",label:"交期"},{id:"child_count",label:"子单数"},{id:"total_quantity",label:"总数量"},...(this.canViewSalesAmounts?[{id:"total_amount",label:"总金额"}]:[])]; },
+          orderListColumnVisible(column) { if (["customer_po","status","actions"].includes(column)) return true; if (column === "total_amount" && !this.canViewSalesAmounts) return false; return this.orderListColumns?.[column] !== false; },
+          orderListTableColumnCount() { return ["customer_name","customer_po","order_date","delivery_date","child_count","total_quantity","total_amount","status","actions"].filter(column=>this.orderListColumnVisible(column)).length; },
+          loadOrderListColumnPreferences() { const defaults=this.orderListColumnDefaults(), key=this.orderListColumnPreferenceKey(); this.orderListColumnPanelOpen=false; if (!key) { this.orderListColumns=defaults; return; } try { const saved=JSON.parse(localStorage.getItem(key)||""); const columns=saved?.schema === "t04-v1" && saved?.columns && typeof saved.columns === "object" ? saved.columns : {}; this.orderListColumns={...defaults,...Object.fromEntries(Object.keys(defaults).map(column=>[column, columns[column] !== false]))}; } catch (_error) { this.orderListColumns=defaults; } },
+          persistOrderListColumns() { const key=this.orderListColumnPreferenceKey(); if (!key) return; const columns=Object.fromEntries(Object.keys(this.orderListColumnDefaults()).map(column=>[column,this.orderListColumnVisible(column)])); localStorage.setItem(key,JSON.stringify({schema:"t04-v1",columns})); },
+          setOrderListColumnVisible(column, visible) { if (!this.orderListColumnOptions().some(item=>item.id===column)) return; this.orderListColumns={...this.orderListColumns,[column]:!!visible}; this.persistOrderListColumns(); },
+          resetOrderListColumns() { this.orderListColumns=this.orderListColumnDefaults(); const key=this.orderListColumnPreferenceKey(); if (key) localStorage.removeItem(key); },
           toggleOrderSort(field) {
             const allowed = ["customer_name", "order_date", "delivery_date"];
             if (!allowed.includes(field)) return;
@@ -15413,6 +15428,7 @@
               const sessionUser = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
               this.user = sessionUser;
               this.syncDesktopListPageSize(this.uiMode);
+              this.loadOrderListColumnPreferences();
               this.restoreFinanceManualMutationAttemptsForCurrentUser();
               if (!requestIsCurrent() || Number(this.user?.id || 0) !== Number(sessionUser.id || 0)) return;
               if (this.user?.role === "delivery_picker" && this.user?.must_change_password) {
@@ -15455,6 +15471,7 @@
               const loginUser = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
               this.user = loginUser;
               this.syncDesktopListPageSize(this.uiMode);
+              this.loadOrderListColumnPreferences();
               this.restoreFinanceManualMutationAttemptsForCurrentUser();
               if (!requestIsCurrent() || Number(this.user?.id || 0) !== Number(loginUser.id || 0)) return;
               const currentPassword = loginPayload.password;

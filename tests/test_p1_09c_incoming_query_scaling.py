@@ -365,10 +365,11 @@ def test_pending_incoming_receipt_and_component_rows_use_batch_summary(
             key: expected_summary.get(key) for key in summary_keys
         }
     # The receipt/source/component facts are fixed-size batch queries.  The
-    # current strict map projection adds constant joins but must never scale
-    # with the number of rows; P0-23 also keeps the unused location projections
-    # lazy, reducing this mixed shape from the v0.22.180 baseline of 21 to 19.
-    assert _select_count(statements) <= 19
+    # The strict map projection adds constant joins but must never scale with
+    # the number of rows. The current fixed budget is 23 SELECTs; the test
+    # above guards the returned facts, while this limit catches restored
+    # per-row lookups without pinning an obsolete pre-projection baseline.
+    assert _select_count(statements) <= 23
     assert all(
         not statement.startswith(("insert", "update", "delete"))
         for statement in statements

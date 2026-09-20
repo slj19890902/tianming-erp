@@ -225,6 +225,7 @@ def _workflow_projection_rows(
             selectinload(Order.items).load_only(
                 OrderItem.id,
                 OrderItem.order_id,
+                OrderItem.product_id,
                 OrderItem.item_sequence,
                 OrderItem.quantity,
                 OrderItem.delivered_quantity,
@@ -232,7 +233,7 @@ def _workflow_projection_rows(
                 OrderItem.material_status,
                 OrderItem.snapshot_product_code,
                 OrderItem.supply_mode_snapshot,
-            ),
+            ).selectinload(OrderItem.product),
         )
         .where(
             Order.status.notin_(["cancelled", "dead", "closed", "archived"]),

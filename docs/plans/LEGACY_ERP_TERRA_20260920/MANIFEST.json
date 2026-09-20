@@ -14,127 +14,131 @@
   "files": [
     {
       "path": "00_交给Terra的启动提示词.md",
-      "sha256": "15aff3f7d34a5c164f72eb25f1593563446c80c583f90bef1b64b204463ffada"
+      "sha256": "00067575cae541fc5c9701db4b0b86129be4e8344796e926ad2018f0b6573fef"
     },
     {
       "path": "01_实施总方案.md",
-      "sha256": "3f8f3b1601d58242d022003371e98f1da6c8311468dd0abec8fb000e284d882f"
+      "sha256": "646910362e57826f27b2d3538b505ef1ca22317e4d544c130c57ce6daed1eca2"
     },
     {
       "path": "02_执行与发布规程.md",
-      "sha256": "84cf233e3eb0bfdbe54f2c21e37da17033dffca9d6adc34d2d5a115706497b9d"
+      "sha256": "29c03d04114fb9cb47c21d9f85e50887c8a58fe8a02a687217a18275a5bcc1e3"
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "b242e32224a301338afbde0a2018310d86319e30f3ad41ea85f5469da29c5224"
+      "sha256": "ec67a5c7eed5c17dc2626f5baaba2b2e7c2e8864356d896794d05b5957f323a7"
     },
     {
       "path": "04_场景覆盖与验收.md",
-      "sha256": "39cb4af8c0af294e59e9143e7790c6e2cf43b40cf2bdc818c6485df5468c2b69"
+      "sha256": "91a55f3693966e339d0015d0eac2c224e7868513fa11d4321289ebe5c1329e06"
     },
     {
       "path": "05_已确认合同速查.md",
-      "sha256": "128da7bbadfa6992b7ea1d24a701b818350fc59cd151974bf6e3259c86800f9b"
+      "sha256": "73fbbe285de988231dae9c4c703a6816b7d73461da8318fe1dd8516c15631400"
     },
     {
       "path": "06_Astra最终验收交接.md",
-      "sha256": "5446567d5ed94b6e8060cdd4b99277586686992af71b37cb100fdc752fb54f35"
+      "sha256": "75e114bf85c2bc8de9821dfc47f279b0e0802bea5c65b2f89659e4f1d36c1298"
     },
     {
       "path": "20260920-T02-候选实现与隔离迁移验证.md",
-      "sha256": "a4c73ce95150161c5ea64fc60bae2e1908ac1af73df0dfe5e070f78ccc4a99da"
+      "sha256": "9b874b2f5930a5cbcc9e2ed054c36b49d1fc341f35a72641b95d464d626d26a7"
     },
     {
       "path": "20260920-T02-独立工作区与隔离数据库预检.md",
-      "sha256": "73c7d0cc5c9c112ca22d28a6ed6805f761b83b861f3bd4d7bda273f692a82509"
+      "sha256": "088681e81de613ec631876846b121683b6f329b5661b45460d21e4af46a54ec2"
+    },
+    {
+      "path": "20260920-T02-远端整合与发布准备.md",
+      "sha256": "328947c8d391448dfefd7ab157c631f2212859eb9fb21822c6863ef0a101bf60"
     },
     {
       "path": "README.md",
-      "sha256": "829d97f7f1251584c2c92482783d7555b6a362457ce71ad3043df03d3797a445"
+      "sha256": "cdc968762758ff1426a6cefed9404a1aca54a87a5bae71974c29a0efdd5218d6"
     },
     {
       "path": "tasks/T00.md",
-      "sha256": "4e0c11f6ffaee709374bd6e4e9925fc5e8b4f2329415fe8fe748c57e7f130d10"
+      "sha256": "8917be2e14051ae35a5b01c622dd64a4d4f4758a10b7a7bc4f2d43603aa4d7ba"
     },
     {
       "path": "tasks/T01.md",
-      "sha256": "a1e144d7af247ec816a71d6b9e179663568b850132ec0cafe09304e434a3b0a1"
+      "sha256": "47b39d218c205c891024e6bfb374cc3e51e6e11f356797d292ca38a0d71d9ce0"
     },
     {
       "path": "tasks/T02.md",
-      "sha256": "2e0edcfbd7d96e8baadb0e0bac96b95bdfd2f8998c0287473c1270a5c7c79e85"
+      "sha256": "b1e1121e72e701c383093e2dcb824022a910fd078dab1efb1db81a61fee8a3e0"
     },
     {
       "path": "tasks/T03.md",
-      "sha256": "f40bee2a0d228082af4f323822495848d2f68ccd04c2946eb3f8182c24fa4cd3"
+      "sha256": "8b96d7f004d4f8bfcb5cd58c4c4ac30ac00ec7004624f6d1af7add3004c3570e"
     },
     {
       "path": "tasks/T04.md",
-      "sha256": "ea71997a4e306a35602936880bf8aaf71f50c5ee1fd5735fd36b5775f10d6b96"
+      "sha256": "b0477e9470cd99d8c150a06e56ccc28eeda7b8ac196701dc03a12e92da301a1f"
     },
     {
       "path": "tasks/T05.md",
-      "sha256": "302af25ca482c088da81e7f642d67c42da494f033b641f28589cbbe83bd248b4"
+      "sha256": "e345f13d63157e9ab083801e0c5f236b358c950b353b407415dfabceb57133fc"
     },
     {
       "path": "tasks/T06.md",
-      "sha256": "3a2bef1f92b4e28902ed5cb281d6dadc03c317d5c4b62d289c322d2103f365ee"
+      "sha256": "3338fdffb750521b0e2ab980733313f2e63c62a49339d7f036c66d6914d2c77a"
     },
     {
       "path": "tasks/T07.md",
-      "sha256": "505a26da45bb3bef5280ba23b4bdd68ae26500beecea2ca7cb1770156fed7ba3"
+      "sha256": "43112272ce9a55093b9e46e0ef9ca6cd5024e63649f9e0e870e6314ff2af5490"
     },
     {
       "path": "tasks/T08.md",
-      "sha256": "fdd40c1b0ce8fc46c30cd4f01f6e57db2d10d11ecf12d7d9d39ba81dcc139942"
+      "sha256": "26b6f584f54b340280563e49fe22d59c77dc7ddb386beb5ab95c4e5a2a931d73"
     },
     {
       "path": "tasks/T09.md",
-      "sha256": "412479fd50c3ac70e96ac83e495baeea0571d72a955aa01706cdc078f5f88f70"
+      "sha256": "f77a3416cf81339e19605240efd00beacf19659c63df4fdad606ce450af64847"
     },
     {
       "path": "tasks/T10.md",
-      "sha256": "daf2c68cc850d60cca4ea99325ec35a7556773537b16ef95d4e8bb731aec1f86"
+      "sha256": "ade4ae5f0ec5d69463636bf610b32156a06ae1e1c8db69713259c133c47e4d47"
     },
     {
       "path": "tasks/T11.md",
-      "sha256": "34e8350bf21d9a58afaf24f784bcef2dbb67653e2a81787f4bf9b2370272481c"
+      "sha256": "dd9cc34fdfa10ba0d0bca38a8b5280e214fb816c31fdf7378ad5a10ce2b14f26"
     },
     {
       "path": "tasks/T12.md",
-      "sha256": "e172e06c3df30134984a7b0d5deef21e05babf418092644389242f241f070944"
+      "sha256": "e542a7ce2ca8ba8c2f16daa3103b0da4845da12ac6c78a94741ed80f44307a0d"
     },
     {
       "path": "tasks/T13.md",
-      "sha256": "a9b2fc22f019d193d39eb76b07a9ddaf9709e267c7fa90ae6cdda350084b0dc4"
+      "sha256": "26a19f0f5c54907d10214c010bbcca0db22e6e557d4087fab01db2ef5d0ae2ab"
     },
     {
       "path": "tasks/T14.md",
-      "sha256": "29aa874be75e1d30e0e18d58c68897976902a557960851f963f18927560ba8e4"
+      "sha256": "abefbc5f0421d6065b1c67a495c16ee008ca33ac3e2258309823b868f12ef35c"
     },
     {
       "path": "tasks/T15.md",
-      "sha256": "2893c0a2e8f4742594869f13aae7f0e701e815a65c1dc89141d440d1b612df01"
+      "sha256": "550771abacbb36812adfabab8b5323d498d3888c49c46c0b2b72668e294ad4fa"
     },
     {
       "path": "tasks/T16.md",
-      "sha256": "7d25811d457a9860c993b5cb9488fef594f4002c1529974af8e9d69e38fb3ad8"
+      "sha256": "7071c000b3ae3ea998ef528da3d6944324b85809a22fe15d289e30dc103c08dd"
     },
     {
       "path": "tasks/T17.md",
-      "sha256": "8769f18491d8d4289bb97e17830135b99195073d7961436920974735cbc778aa"
+      "sha256": "adc973ed5e85bdc83dabdb4614c5500c34c516ae6fae9ebf4094a99131e59fb0"
     },
     {
       "path": "tasks/T18.md",
-      "sha256": "a8b59f016b9a3a7660fa7d5db1b299567c5341b8e76d7dc7ffc4ac1198313ae3"
+      "sha256": "ad39fbf25cbb452bbeffffbe824cef7905dd09627fc2eb25173d8a0bc2aecdfa"
     },
     {
       "path": "tasks/T19.md",
-      "sha256": "50eed8878a495498138d0517b4122db44a49a44ab352441a9c90a697376bd137"
+      "sha256": "3fce9a1cd7a02dfe70678fb9a3a3d174f034e017139c9b9874d56fd426538aee"
     },
     {
       "path": "tasks/T20.md",
-      "sha256": "87df7d4f14da8972f157cc98853dcf5caffe3774ba0cace0b85585cfba958057"
+      "sha256": "eea64592b2621b5e005b709d31a59c3451e311b2dc4fbc3a013ca9b0825309d0"
     }
   ],
   "source_fingerprints": [

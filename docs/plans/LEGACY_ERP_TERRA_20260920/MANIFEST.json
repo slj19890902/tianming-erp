@@ -1,7 +1,7 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
-  "kind": "continuous_goal_execution_t02_released_v469_t17_signing_gated",
-  "local_head": "ccf78dba7a6f7c160d18ab8350da18aed509de66",
+  "kind": "continuous_goal_complete_astra_handoff_with_deferred_safety_boundaries",
+  "local_head": "98b4a45c8682cf69cbbfcf68e2c0fb46a0c0327d",
   "remote_head_reverified": true,
   "audit_integrity": {
     "files": 66,
@@ -26,11 +26,11 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "c4f418a189ffeba146ba1b35827f69519d03b33da3d24a84e9b3a42753fe35ac"
+      "sha256": "88f18d0aa3022726c2952c785eeb9ec6f4adfe65a64afef59a5941ef012ddb34"
     },
     {
       "path": "04_场景覆盖与验收.md",
-      "sha256": "1cb5ebdce872c9704f591ed9d7ef54f744d1bcaa3be65732097dfde20f23255a"
+      "sha256": "0c8bd31916a2182ea4e978302fd41bdab6152c879410101255840148630d6dca"
     },
     {
       "path": "05_已确认合同速查.md",
@@ -38,7 +38,7 @@
     },
     {
       "path": "06_Astra最终验收交接.md",
-      "sha256": "75e114bf85c2bc8de9821dfc47f279b0e0802bea5c65b2f89659e4f1d36c1298"
+      "sha256": "02154c6f24350e019281d625370cf0744e8f24f52f4b867ea305a2f402d82f3a"
     },
     {
       "path": "20260920-T02-候选实现与隔离迁移验证.md",
@@ -186,7 +186,7 @@
     },
     {
       "path": "tasks/T20.md",
-      "sha256": "26fc2fe4b3bdc26e4660473b4b9d162575c2b982479489e395da9550372fd3c4"
+      "sha256": "f9f8913d5d62c9f44760b3e5af7798a581d74c54151b7a5b6ea75db3d13a9b4a"
     }
   ],
   "source_fingerprints": [

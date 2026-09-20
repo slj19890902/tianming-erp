@@ -5775,3 +5775,7 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 ## 2026-09-20 v0.22.463 合并报料布局与逐批抵扣
 
 技术发布完成，待管理员人工验收；dc0920 无新增迁移。代码 3e18e180，默认客户绑定、主动其他查询、逐批采用与事务幂等保护。独立回执：`docs/release_reports/REQUISITION_DEDUCTION_UI_RELEASE_20260920.md`。
+
+## 2026-09-20 v0.22.465 订单与报料分阶段抵扣
+
+技术发布完成，待管理员人工验收；代码 d01b1de1，签名包 3d08c0b0，dt0920 无迁移。订单/PDF 仅直接抵扣无需分切的库存，需分切片料移至合并报料确认方案后预占。详见 docs/release_reports/ORDER_REQUISITION_STAGED_DEDUCTION_RELEASE_20260920.md。

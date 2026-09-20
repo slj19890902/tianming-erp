@@ -34,7 +34,17 @@ def test_default_sql_bound_manual_paged_and_read_only(b1_app):
         item_id = make_pending(client)
         own, _ = add_semi_lot(factory, quantity=8, key="ui-own")
         general = [add_semi_lot(factory, quantity=3, key=f"ui-general-{n}", customer_id=None, bind_product=False)[0] for n in range(12)]
+        different_size, _ = add_semi_lot(factory, quantity=3, key="ui-other-size", customer_id=None,
+                                         bind_product=False, length=1600, width=600)
         other, _ = add_semi_lot(factory, quantity=5, key="ui-other", customer_id=2, bind_product=False)
+        with factory() as db:
+            db.add(WarehouseGoodsProfile(lot_id=different_size, data_json=json.dumps({
+                "scope": "customers", "customer_ids": [1], "product_ids": [1],
+                "processing": "raw", "material_confidence": "confirmed", "material_code": "A416D",
+                "face_paper": "kraft", "cut_trim_mm": 0, "cut_kerf_mm": 0,
+                "mold_tool_id": None, "verified_material_id": None,
+            })))
+            db.commit()
         queries = []
         engine = factory.kw["bind"]
         def observe(conn, cursor, statement, parameters, context, many):
@@ -46,8 +56,8 @@ def test_default_sql_bound_manual_paged_and_read_only(b1_app):
         finally:
             event.remove(engine, "before_cursor_execute", observe)
         candidates = option["recommended_candidates"] + option["review_candidates"]
-        assert {row["lot_id"] for row in candidates} == {own}
-        assert queries and all("bound_customers" in sql for sql in queries)
+        assert {row["lot_id"] for row in candidates} == {own, *general}
+        assert queries and all("board_length_mm" in sql and "flute_type" in sql for sql in queries)
         seen = set()
         for page in (1, 2):
             response = client.get(f"/api/requisition/pending/{item_id}/semi-inventory-options", params={"page": page})
@@ -57,7 +67,8 @@ def test_default_sql_bound_manual_paged_and_read_only(b1_app):
                 seen.add(row["lot_id"])
                 if row["lot_id"] == other:
                     assert row["selectable"] is False
-        assert set(general + [own, other]) <= seen
+        assert different_size in seen
+        assert other not in seen
         with factory() as db:
             assert not db.scalars(select(InventoryReservation)).all()
             assert db.get(InventoryLot, own).quantity_available == 8
@@ -143,6 +154,7 @@ def test_cut_stock_is_confirmed_as_requisition_material_plan_without_purchase(b1
                 "requested_requirement_quantity": 20,
                 "lots": [{"lot_id": chosen, "expected_version": version}],
                 "override": bool(candidate["signature_differences"]),
+                "allow_other_dimensions": True,
                 "warning_acknowledged_codes": candidate["warning_codes"],
                 "idempotency_key": "ui-cut-material-plan-reserve",
             },
@@ -188,9 +200,15 @@ def test_manual_query_respects_customer_permission(b1_app):
     with TestClient(app) as client:
         login(client)
         item_id = make_pending(client)
-        own, _ = add_semi_lot(factory, quantity=8, key="scoped-own")
+        own, _ = add_semi_lot(factory, quantity=8, key="scoped-own", length=1600, width=600)
         other, _ = add_semi_lot(factory, quantity=5, key="scoped-other", customer_id=2, bind_product=False)
         with factory() as db:
+            db.add(WarehouseGoodsProfile(lot_id=own, data_json=json.dumps({
+                "scope": "customers", "customer_ids": [1], "product_ids": [1],
+                "processing": "raw", "material_confidence": "confirmed", "material_code": "A416D",
+                "face_paper": "kraft", "cut_trim_mm": 0, "cut_kerf_mm": 0,
+                "mold_tool_id": None, "verified_material_id": None,
+            })))
             user = db.scalar(select(User).where(User.username == "sales"))
             user.customer_access_mode = "selected"
             db.add(UserCustomerScope(user_id=user.id, customer_id=1))
@@ -201,6 +219,89 @@ def test_manual_query_respects_customer_permission(b1_app):
         assert response.status_code == 200, response.text
         ids = {row["lot_id"] for row in response.json()["candidates"]}
         assert own in ids and other not in ids
+
+
+def test_requisition_hard_filters_flute_and_rejects_forged_override(b1_app):
+    app, factory = b1_app
+    with TestClient(app) as client:
+        login(client)
+        item_id = make_pending(client, "UI-FLUTE-HARD-FILTER")
+        lot_id, version = add_semi_lot(factory, quantity=20, key="ui-wrong-flute")
+        with factory() as db:
+            lot = db.get(InventoryLot, lot_id)
+            lot.semi_finished_detail.flute_type = "E"
+            db.commit()
+        option = preview(client, item_id)
+        assert lot_id not in {row["lot_id"] for row in option["recommended_candidates"]}
+        manual = client.get(f"/api/requisition/pending/{item_id}/semi-inventory-options")
+        assert manual.status_code == 200
+        assert lot_id not in {row["lot_id"] for row in manual.json()["candidates"]}
+        forged = client.post("/api/requisition/semi-inventory/reserve-from-pending", json={
+            "order_item_id": item_id, "component_type": "whole", "requested_requirement_quantity": 1,
+            "lots": [{"lot_id": lot_id, "expected_version": version}], "override": True,
+            "allow_other_dimensions": True, "idempotency_key": "ui-forged-flute",
+        })
+        assert forged.status_code == 409
+        with factory() as db:
+            assert db.get(InventoryLot, lot_id).quantity_available == 20
+
+
+def test_exact_safe_batch_reserves_multiple_groups_atomically(b1_app):
+    app, factory = b1_app
+    with TestClient(app) as client:
+        login(client)
+        response = post_order(client, [order_item(1, 10, None, "BATCH-1"), order_item(2, 10, None, "BATCH-2")], "UI-SAFE-BATCH")
+        assert response.status_code == 201, response.text
+        item_ids = [row["id"] for row in response.json()["items"]]
+        lot_a, version_a = add_semi_lot(factory, product_index=1, quantity=10, key="batch-a")
+        lot_b, version_b = add_semi_lot(factory, product_index=2, quantity=10, key="batch-b")
+        batch = client.post("/api/requisition/semi-inventory/reserve-safe-batch", json={
+            "idempotency_key": "safe-batch-1",
+            "items": [
+                {"order_item_id": item_ids[0], "component_type": "whole", "requested_requirement_quantity": 10,
+                 "lots": [{"lot_id": lot_a, "expected_version": version_a}], "warning_acknowledged_codes": ["MANUAL_DEDUCTION_CONFIRM_REQUIRED"]},
+                {"order_item_id": item_ids[1], "component_type": "whole", "requested_requirement_quantity": 10,
+                 "lots": [{"lot_id": lot_b, "expected_version": version_b}], "warning_acknowledged_codes": ["MANUAL_DEDUCTION_CONFIRM_REQUIRED"]},
+            ],
+        })
+        assert batch.status_code == 200, batch.text
+        assert batch.json()["allocated_requirement_quantity"] == 20
+        replay = client.post("/api/requisition/semi-inventory/reserve-safe-batch", json={
+            "idempotency_key": "safe-batch-1", "items": [
+                {"order_item_id": item_ids[0], "component_type": "whole", "requested_requirement_quantity": 10,
+                 "lots": [{"lot_id": lot_a, "expected_version": version_a}], "warning_acknowledged_codes": ["MANUAL_DEDUCTION_CONFIRM_REQUIRED"]},
+                {"order_item_id": item_ids[1], "component_type": "whole", "requested_requirement_quantity": 10,
+                 "lots": [{"lot_id": lot_b, "expected_version": version_b}], "warning_acknowledged_codes": ["MANUAL_DEDUCTION_CONFIRM_REQUIRED"]},
+            ],
+        })
+        assert replay.status_code == 200 and replay.json() == batch.json()
+
+
+def test_exact_safe_batch_rolls_back_all_groups_when_one_version_is_stale(b1_app):
+    app, factory = b1_app
+    with TestClient(app) as client:
+        login(client)
+        response = post_order(client, [order_item(1, 10, None, "ROLLBACK-1"), order_item(2, 10, None, "ROLLBACK-2")], "UI-SAFE-BATCH-ROLLBACK")
+        assert response.status_code == 201, response.text
+        item_ids = [row["id"] for row in response.json()["items"]]
+        lot_a, version_a = add_semi_lot(factory, product_index=1, quantity=10, key="rollback-a")
+        lot_b, version_b = add_semi_lot(factory, product_index=2, quantity=10, key="rollback-b")
+        with factory() as db:
+            db.get(InventoryLot, lot_b).version += 1
+            db.commit()
+        failed = client.post("/api/requisition/semi-inventory/reserve-safe-batch", json={
+            "idempotency_key": "safe-batch-rollback",
+            "items": [
+                {"order_item_id": item_ids[0], "component_type": "whole", "requested_requirement_quantity": 10,
+                 "lots": [{"lot_id": lot_a, "expected_version": version_a}], "warning_acknowledged_codes": ["MANUAL_DEDUCTION_CONFIRM_REQUIRED"]},
+                {"order_item_id": item_ids[1], "component_type": "whole", "requested_requirement_quantity": 10,
+                 "lots": [{"lot_id": lot_b, "expected_version": version_b}], "warning_acknowledged_codes": ["MANUAL_DEDUCTION_CONFIRM_REQUIRED"]},
+            ],
+        })
+        assert failed.status_code == 409
+        with factory() as db:
+            assert db.get(InventoryLot, lot_a).quantity_available == 10
+            assert not db.scalars(select(InventoryReservation)).all()
 
 
 def test_concurrent_same_key_reserves_once(b1_app):

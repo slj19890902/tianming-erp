@@ -12,7 +12,7 @@ from tests.test_p1_81_receipt_purpose_flow import (
 )
 
 
-def test_sx11_300_plus_300_dispatch_300_and_print_current_customer(requisition_app):
+def test_sx11_300_plus_300_dispatch_300_and_print_frozen_customer(requisition_app):
     from app.api.deliveries import router, _delivery_remaining_quantity
     from app.models.order import OrderItem
     from app.models.customer import Customer
@@ -64,6 +64,9 @@ def test_sx11_300_plus_300_dispatch_300_and_print_current_customer(requisition_a
         assert (final['order'], final['sheets'], final['finished'], final['delivered'], final['to_deliver']) == (500,100,200,300,200)
         first_print = client.get(f'/api/deliveries/{delivery_id}/print')
         assert first_print.status_code == 200, first_print.text
+        first_payload = first_print.json()
+        assert first_payload['print_snapshot_basis'] == 'frozen_v1'
+        frozen_customer = dict(first_payload['customer'])
         with factory() as db:
             customer = db.get(Customer, 1)
             customer.name = 'AUDIT-RENAMED'
@@ -71,8 +74,9 @@ def test_sx11_300_plus_300_dispatch_300_and_print_current_customer(requisition_a
             db.commit()
         second_print = client.get(f'/api/deliveries/{delivery_id}/print')
         assert second_print.status_code == 200, second_print.text
-        assert second_print.json()['customer']['name'] == 'AUDIT-RENAMED'
-        assert second_print.json()['customer']['address'] == 'AUDIT-NEW-ADDRESS'
-        assert first_print.json()['items'] == second_print.json()['items']
+        second_payload = second_print.json()
+        assert second_payload['print_snapshot_basis'] == 'frozen_v1'
+        assert second_payload['customer'] == frozen_customer
+        assert first_payload['items'] == second_payload['items']
         after_print = snapshot('reprint')
         assert {k:v for k,v in final.items() if k != 'stage'} == {k:v for k,v in after_print.items() if k != 'stage'}

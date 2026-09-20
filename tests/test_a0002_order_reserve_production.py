@@ -1,4 +1,8 @@
 """A-0002-R3: frozen order-derived reserve can use the stock-production ledger."""
+from datetime import datetime
+from types import SimpleNamespace
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -16,8 +20,87 @@ from app.models.purchase_receipt import IncomingReceiptPurposeAllocation
 from app.models.product import Product
 from app.models.order import OrderItem
 from app.models.stock_preparation import StockPreparationJob
-from app.models.warehouse_inventory import InventoryLot
+from app.models.warehouse_inventory import (
+    InventoryLot,
+    InventoryMovement,
+    InventoryReservation,
+)
+from app.services.stock_preparation import plan_product
 from app.services.stock_preparation_history import rows as history_rows
+from app.services.warehouse_inventory import WarehouseInventoryError
+
+
+class _ProductDb:
+    def __init__(self, product):
+        self.product = product
+
+    def get(self, model, identity):
+        assert model is Product
+        assert identity == self.product.id
+        return self.product
+
+
+def _frozen_item():
+    return SimpleNamespace(
+        reference_product_id=None,
+        product_id=17,
+        customer_id=10,
+        frozen_order_reserve=True,
+    )
+
+
+def _current_product(**overrides):
+    values = dict(
+        id=17,
+        customer_id=10,
+        is_active=True,
+        deleted_at=None,
+        is_virtual_composite_parent=False,
+        flute_type='BC',
+        report_length_mm=9999,
+        report_width_mm=9999,
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_frozen_order_reserve_keeps_frozen_fit_after_current_spec_drift():
+    product = _current_product()
+    lot = SimpleNamespace(
+        allowed_products=[],
+        semi_finished_detail=SimpleNamespace(
+            flute_type='B', board_length_mm=100, board_width_mm=100
+        ),
+    )
+
+    assert plan_product(_ProductDb(product), _frozen_item(), lot) is product
+
+
+@pytest.mark.parametrize(
+    ('overrides', 'message'),
+    [
+        ({'is_active': False}, '缺少有效的同客户目标产品'),
+        ({'deleted_at': datetime(2026, 9, 20)}, '缺少有效的同客户目标产品'),
+        ({'customer_id': 11}, '缺少有效的同客户目标产品'),
+        ({'is_virtual_composite_parent': True}, '虚拟组合母件不能直接入库'),
+    ],
+)
+def test_frozen_order_reserve_rechecks_current_product_identity(overrides, message):
+    product = _current_product(**overrides)
+    lot = SimpleNamespace(allowed_products=[])
+
+    with pytest.raises(WarehouseInventoryError, match=message):
+        plan_product(_ProductDb(product), _frozen_item(), lot)
+
+
+def test_frozen_order_reserve_obeys_current_explicit_allowed_product_scope():
+    product = _current_product()
+    lot = SimpleNamespace(
+        allowed_products=[SimpleNamespace(product_id=99)]
+    )
+
+    with pytest.raises(WarehouseInventoryError, match='适用产品范围不包含目标产品'):
+        plan_product(_ProductDb(product), _frozen_item(), lot)
 
 
 def _row(client, receipt_id):

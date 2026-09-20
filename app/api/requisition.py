@@ -170,6 +170,7 @@ from app.services.semi_finished_inventory import (
     semi_finished_candidates_for_product,
     semi_finished_inventory_candidates,
 )
+from app.services.sheet_cut_plan import rectangular_cut_plan
 from app.services.composite_bom_execution import (
     CompositeBOMExecutionError,
     require_positive_integer,
@@ -1492,6 +1493,7 @@ class PendingSemiInventoryReservationPayload(BaseModel):
     requested_requirement_quantity: int = Field(gt=0)
     lots: list[PendingSemiInventoryLot] = Field(min_length=1)
     override: bool = False
+    allow_other_dimensions: bool = False
     admin_reverse_crease_override: bool = False
     reverse_crease_override_reason: str | None = Field(default=None, max_length=300)
     warning_acknowledged_codes: list[str] = Field(default_factory=list)
@@ -1511,6 +1513,31 @@ class PendingSemiInventoryReservationPayload(BaseModel):
         self.reverse_crease_override_reason = reason or None
         if self.admin_reverse_crease_override and len(reason) < 4:
             raise ValueError("压线反向特批必须填写至少4个字符的原因")
+        return self
+
+
+class PendingSafeSemiInventoryBatchItem(BaseModel):
+    order_item_id: int
+    component_type: str
+    requested_requirement_quantity: int = Field(gt=0)
+    lots: list[PendingSemiInventoryLot] = Field(min_length=1)
+    warning_acknowledged_codes: list[str] = Field(default_factory=list)
+
+    @field_validator("component_type")
+    @classmethod
+    def validate_component_type(cls, value: str) -> str:
+        return PendingSemiInventoryReservationPayload.validate_component_type(value)
+
+
+class PendingSafeSemiInventoryBatchPayload(BaseModel):
+    items: list[PendingSafeSemiInventoryBatchItem] = Field(min_length=1, max_length=100)
+    idempotency_key: str = Field(min_length=1, max_length=60)
+
+    @model_validator(mode="after")
+    def validate_unique_requirements(self):
+        keys = [(row.order_item_id, row.component_type) for row in self.items]
+        if len(keys) != len(set(keys)):
+            raise ValueError("同一订单组件不能重复加入整组抵扣")
         return self
 
 
@@ -3871,6 +3898,7 @@ def _semi_candidate_dict_for_requisition(
         "stock_yield_per_sheet": cut_plan["yield_factor"] if cut_plan else detail.stock_yield_per_sheet,
         "cut_plan": cut_plan,
         "requires_requisition_cut_plan": bool(cut_plan),
+        "match_kind": "other_dimension_cut" if cut_plan else "exact",
         "handling_stage": "requisition" if cut_plan else ("order" if row.selectable else "review"),
         "signature_differences": list(row.signature_differences),
         "warning_codes": list(row.warning_codes),
@@ -3923,7 +3951,9 @@ def _late_semi_inventory_options(
         if remaining <= 0:
             continue
         recommended = (
-            semi_finished_inventory_candidates(db, requirement.id, customer_bound_only=True)
+            semi_finished_inventory_candidates(
+                db, requirement.id, customer_bound_only=False, exact_physical_only=True
+            )
             if requirement is not None
             else semi_finished_candidates_for_product(
                 db,
@@ -3936,14 +3966,16 @@ def _late_semi_inventory_options(
                 component_type=component,
                 pieces_per_box=int(spec["pieces_per_box"]),
                 stock_yield_per_sheet=stock_yield,
-                customer_bound_only=True,
+                customer_bound_only=False,
+                exact_physical_only=True,
             )
         )
-        recommended_ids = {row.lot.id for row in recommended}
         page_info: dict = {}
-        review_candidates = [
-            row
-            for row in browse_semi_finished_inventory_for_product(
+        review_candidates = []
+        if manual_page is not None:
+            review_candidates = [
+                row
+                for row in browse_semi_finished_inventory_for_product(
                 db,
                 product_id=product.id,
                 customer_id=entry["customer"].id,
@@ -3954,17 +3986,17 @@ def _late_semi_inventory_options(
                 component_type=component,
                 pieces_per_box=int(spec["pieces_per_box"]),
                 stock_yield_per_sheet=stock_yield,
-                customer_bound_only=manual_page is None,
+                customer_bound_only=False,
+                exact_flute_only=True,
+                exclude_exact_dimensions=True,
+                eligible_only=True,
                 visible_customer_ids=visible_customer_ids,
                 page=manual_page,
                 page_size=10,
                 page_info=page_info,
-            )
-            if manual_page is not None or (
-                row.lot.id not in recommended_ids
-                and set(row.signature_differences).issubset(_LATE_SEMI_REVIEWABLE_DIFFERENCES)
-            )
-        ]
+                )
+                if row.cut_plan is not None
+            ]
         projection_contexts = load_warehouse_location_projection_contexts(
             db,
             [
@@ -7885,7 +7917,64 @@ def _pending_selection_preview_groups(
                 "items": lines,
             }
         )
-    return {"supplier_groups": supplier_groups}
+
+    # This is deliberately only a decision aid.  A new procurement document
+    # may choose an approved compatible material, but the source order's
+    # frozen material and historical cost must never be rewritten merely
+    # because two requirements happen to share a board size.
+    alternative_groups: dict[tuple, list[dict]] = {}
+    for supplier_name, entries in grouped.items():
+        for entry in entries:
+            item = entry["order_item"]
+            material: Material | None = entry.get("material")
+            key = (
+                int(entry["customer"].id),
+                str(entry.get("component_type") or "whole"),
+                _int_value(entry.get("cardboard_len")),
+                _int_value(entry.get("cardboard_width")),
+                _clean_supplier_flute(item.flute_type),
+                int(item.layer_count or (material.layer_count if material else 0)),
+                bool(material.is_white_face) if material is not None else None,
+                _component_crease(item, str(entry.get("component_type") or "whole")),
+            )
+            alternative_groups.setdefault(key, []).append({
+                "order_item_id": int(item.id),
+                "component_type": str(entry.get("component_type") or "whole"),
+                "supplier_name": supplier_name,
+                "material_id": material.id if material is not None else item.material_id,
+                "material_code": material.code if material is not None else item.snapshot_material,
+                "material_display": _format_supplier_material(
+                    material.code if material is not None else item.snapshot_material,
+                    item.layer_count or (material.layer_count if material else None),
+                    item.flute_type,
+                    fallback_text=item.snapshot_material,
+                ),
+            })
+    material_substitution_suggestions = []
+    for key, members in alternative_groups.items():
+        alternatives = {
+            (row["supplier_name"], row["material_id"], row["material_code"])
+            for row in members
+        }
+        if len(members) < 2 or len(alternatives) < 2:
+            continue
+        customer_id, component_type, length, width, flute, layer_count, is_white_face, _crease = key
+        material_substitution_suggestions.append({
+            "customer_id": customer_id,
+            "component_type": component_type,
+            "report_length_mm": length,
+            "report_width_mm": width,
+            "flute_type": flute,
+            "layer_count": layer_count,
+            "is_white_face": is_white_face,
+            "members": members,
+            "approval_required": True,
+            "notice": "同规格但材质或供应商不同；仅管理员/老板可在人工核对纸色和加工条件后决定是否合并。未采纳时保持原订单材质、历史成本和分别报料。",
+        })
+    return {
+        "supplier_groups": supplier_groups,
+        "material_substitution_suggestions": material_substitution_suggestions,
+    }
 
 
 def _draft_group_entries_by_purchase_lines(
@@ -17653,11 +17742,11 @@ def pending_semi_inventory_options(
             "page_size": 10, "total": option["candidate_total"]}
 
 
-@router.post("/semi-inventory/reserve-from-pending")
-def reserve_semi_inventory_from_pending(
+def _reserve_semi_inventory_from_pending(
     payload: PendingSemiInventoryReservationPayload,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
+    commit: bool = True,
 ) -> dict:
     try:
         # Replay the exact acknowledged request before checking today's remaining
@@ -17756,6 +17845,25 @@ def reserve_semi_inventory_from_pending(
         )
         expected = requirement_signature(requirement)
         for lot in inventory_lots:
+            detail = lot.semi_finished_detail
+            if detail is None:
+                raise HTTPException(status_code=409, detail="所选批次不是半成品库存")
+            if (detail.flute_type or "").strip().upper() != expected.flute_type:
+                raise HTTPException(status_code=409, detail="库存楞型与订单楞型不一致，不能用于本次报料")
+            dimensions_match = (
+                int(detail.board_length_mm) == int(expected.board_length_mm)
+                and int(detail.board_width_mm) == int(expected.board_width_mm)
+            )
+            if not dimensions_match and not payload.allow_other_dimensions:
+                raise HTTPException(
+                    status_code=409,
+                    detail="异尺寸片料必须先查询并确认分切方案，不能作为同尺寸一键抵扣使用",
+                )
+            if not dimensions_match and rectangular_cut_plan(db, lot, product, expected) is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="该异尺寸片料没有合法分切方案，不能用于本次报料",
+                )
             ensure_semi_finished_lot_eligibility(
                 db,
                 lot=lot,
@@ -17821,6 +17929,7 @@ def reserve_semi_inventory_from_pending(
                     result.allocated_requirement_quantity
                 ),
                 "override": payload.override,
+                "allow_other_dimensions": payload.allow_other_dimensions,
                 "admin_reverse_crease_override": payload.admin_reverse_crease_override,
                 "reverse_crease_override_reason": payload.reverse_crease_override_reason,
                 "request": payload.model_dump(),
@@ -17828,7 +17937,8 @@ def reserve_semi_inventory_from_pending(
             },
             description="合并报料前重新检查并确认半成品库存抵扣",
         )
-        db.commit()
+        if commit:
+            db.commit()
         return response
     except WarehouseInventoryError as error:
         db.rollback()
@@ -17840,6 +17950,80 @@ def reserve_semi_inventory_from_pending(
         db.rollback()
         raise
 
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post("/semi-inventory/reserve-from-pending")
+def reserve_semi_inventory_from_pending(
+    payload: PendingSemiInventoryReservationPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    return _reserve_semi_inventory_from_pending(payload, db, user, commit=True)
+
+
+@router.post("/semi-inventory/reserve-safe-batch")
+def reserve_safe_semi_inventory_batch(
+    payload: PendingSafeSemiInventoryBatchPayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """Atomically reserve the user-selected exact-size safe groups.
+
+    The client may only send exact candidates shown in the draft.  Each child
+    request is still checked by the normal reservation path, so forged lots,
+    flute differences and stale versions fail the entire batch.
+    """
+    try:
+        connection = db.connection()
+        if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        entity_id = payload.items[0].order_item_id
+        receipt = db.scalar(select(OperationLog).where(
+            OperationLog.action == "RESERVE_REQUISITION_SAFE_BATCH",
+            OperationLog.entity_id == entity_id,
+            func.json_extract(OperationLog.details, "$.request.idempotency_key") == payload.idempotency_key,
+        ).order_by(OperationLog.id.desc()))
+        if receipt is not None:
+            recorded = json.loads(receipt.details)
+            if recorded.get("request") != payload.model_dump() or receipt.user_id != user.id:
+                raise HTTPException(status_code=409, detail="该整组抵扣标识已用于不同的库存选择")
+            db.rollback()
+            return recorded["response"]
+        seen_lot_ids: set[int] = set()
+        results = []
+        for row in payload.items:
+            lot_ids = {lot.lot_id for lot in row.lots}
+            if seen_lot_ids.intersection(lot_ids):
+                raise HTTPException(status_code=409, detail="同一库存批次不能跨安全组重复抵扣")
+            seen_lot_ids.update(lot_ids)
+            child = PendingSemiInventoryReservationPayload(
+                order_item_id=row.order_item_id,
+                component_type=row.component_type,
+                requested_requirement_quantity=row.requested_requirement_quantity,
+                lots=row.lots,
+                warning_acknowledged_codes=row.warning_acknowledged_codes,
+                idempotency_key=f"{payload.idempotency_key}:{row.order_item_id}:{row.component_type}",
+            )
+            results.append(_reserve_semi_inventory_from_pending(child, db, user, commit=False))
+        response = {
+            "items": results,
+            "allocated_requirement_quantity": sum(int(row["allocated_requirement_quantity"]) for row in results),
+            "remaining_requirement_quantity": sum(int(row["remaining_requirement_quantity"]) for row in results),
+            "message": "同尺寸安全组库存已整组预占，采购草稿只保留缺口。",
+        }
+        _audit(
+            db, user=user, action="RESERVE_REQUISITION_SAFE_BATCH", entity_id=entity_id,
+            details={"request": payload.model_dump(), "response": response, "lot_ids": sorted(seen_lot_ids)},
+            description="合并报料同楞同尺寸安全组整组库存抵扣",
+        )
+        db.commit()
+        return response
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
         raise

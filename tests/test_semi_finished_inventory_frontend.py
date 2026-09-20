@@ -58,11 +58,15 @@ def test_pending_requisition_explains_semi_deduction_and_purchase_shortage() -> 
 
 
 def test_supplier_draft_rechecks_late_semi_inventory_before_purchase() -> None:
-    assert "片料库存可按需核对" in INDEX
-    assert "未采用的候选不影响保存" in INDEX
+    assert "发现 {{ supplierDraftExactSemiOptions().length }} 组同楞同尺寸可抵扣片料" in INDEX
+    assert "查询其他尺寸片料" in INDEX
+    assert "一键抵扣全部同尺寸安全组" in INDEX
+    assert "同规格材质/供应商合并提示" in INDEX
+    assert "material_substitution_suggestions" in INDEX
     assert "采用本批并重算" in INDEX
     assert "本次不用库存" in INDEX
     assert "/api/requisition/semi-inventory/reserve-from-pending" in INDEX
+    assert "/api/requisition/semi-inventory/reserve-safe-batch" in INDEX
     assert "this.supplierRequisitionSelections = selections;" in INDEX
     assert "refreshSupplierRequisitionDraftAfterSemiReservation" in INDEX
     assert "发现可抵扣半成品库存，请先确认抵扣或选择本次不用库存" not in INDEX

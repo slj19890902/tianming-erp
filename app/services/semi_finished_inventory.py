@@ -829,6 +829,7 @@ def semi_finished_inventory_candidates(
     requirement_id: int,
     *,
     customer_bound_only: bool = False,
+    exact_physical_only: bool = False,
 ) -> list[SemiFinishedCandidate]:
     requirement = db.get(OrderItemSemiRequirement, requirement_id)
     if requirement is None:
@@ -839,6 +840,7 @@ def semi_finished_inventory_candidates(
         product_id=_requirement_product_id(db, requirement),
         expected=expected,
         customer_bound_only=customer_bound_only,
+        exact_physical_only=exact_physical_only,
     )
     resolved: list[SemiFinishedCandidate] = []
     for row in candidates:
@@ -944,6 +946,7 @@ def semi_finished_candidates_for_product(
     pieces_per_box: int,
     stock_yield_per_sheet: int,
     customer_bound_only: bool = False,
+    exact_physical_only: bool = False,
     layer_count: int | None = None,
     crease_type: str | None = None,
     crease_left_mm: int | None = None,
@@ -982,7 +985,8 @@ def semi_finished_candidates_for_product(
         stock_yield_per_sheet=authoritative_stock_yield,
     )
     rows = _semi_finished_candidates_for_signature(
-        db, product_id=product.id, expected=expected, customer_bound_only=customer_bound_only
+        db, product_id=product.id, expected=expected, customer_bound_only=customer_bound_only,
+        exact_physical_only=exact_physical_only,
     )
     return [
         replace(
@@ -1021,6 +1025,9 @@ def browse_semi_finished_inventory_for_product(
     page_size: int = 20,
     visible_customer_ids: list[int] | None = None,
     customer_bound_only: bool = False,
+    exact_flute_only: bool = False,
+    exclude_exact_dimensions: bool = False,
+    eligible_only: bool = False,
     layer_count: int | None = None,
     crease_type: str | None = None,
     crease_left_mm: int | None = None,
@@ -1066,6 +1073,11 @@ def browse_semi_finished_inventory_for_product(
             InventoryLot.quantity_available > 0,
 
             SemiFinishedInventoryDetail.component_type == expected.component_type,
+            SemiFinishedInventoryDetail.flute_type == expected.flute_type if exact_flute_only else True,
+            or_(
+                SemiFinishedInventoryDetail.board_length_mm != expected.board_length_mm,
+                SemiFinishedInventoryDetail.board_width_mm != expected.board_width_mm,
+            ) if exclude_exact_dimensions else True,
         )
         .order_by(*inventory_fifo_order_columns(), InventoryLot.id)
     )
@@ -1084,6 +1096,8 @@ def browse_semi_finished_inventory_for_product(
             product_id=product.id,
         )
         browse_only = scope is None
+        if eligible_only and browse_only:
+            continue
         if browse_only and _physical_signature_differences(expected, detail):
             continue
         if browse_only:
@@ -1153,6 +1167,7 @@ def _semi_finished_candidates_for_signature(
     product_id: int,
     expected: SemiFinishedSignature,
     customer_bound_only: bool = False,
+    exact_physical_only: bool = False,
 ) -> list[SemiFinishedCandidate]:
     learned = _learned_rules_for_product(
         db,
@@ -1178,6 +1193,9 @@ def _semi_finished_candidates_for_signature(
                 == expected.customer_id,
             ),
             SemiFinishedInventoryDetail.component_type == expected.component_type,
+            SemiFinishedInventoryDetail.flute_type == expected.flute_type if exact_physical_only else True,
+            SemiFinishedInventoryDetail.board_length_mm == expected.board_length_mm if exact_physical_only else True,
+            SemiFinishedInventoryDetail.board_width_mm == expected.board_width_mm if exact_physical_only else True,
         )
         .order_by(*inventory_fifo_order_columns())
     ).all()

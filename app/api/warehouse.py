@@ -3954,6 +3954,7 @@ def _semi_lot_assignment_response(
             Product.customer_id == detail.owner_customer_id,
             Product.is_active.is_(True),
             Product.deleted_at.is_(None),
+            func.upper(func.trim(Product.flute_type)) == detail.flute_type,
         )
     )
     text = (keyword or "").strip()

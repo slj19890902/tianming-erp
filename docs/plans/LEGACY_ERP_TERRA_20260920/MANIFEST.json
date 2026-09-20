@@ -26,7 +26,7 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "3061788e856b69d5f4ea243c74fa5dd3e605f683bffe5a894566c36f4becab38"
+      "sha256": "8bbb54e7a49fb508e4909f30dedadd0678112164046ce4fd96bb8bc9ae9cead3"
     },
     {
       "path": "04_场景覆盖与验收.md",
@@ -81,6 +81,10 @@
       "sha256": "947af67e49a0f55e6aaa4c5dec1844d9d3cd8b1d0730a82300271e837123f75c"
     },
     {
+      "path": "20260920-T10-业务财务精度账期付款折让核验.md",
+      "sha256": "0ccc9218f3ec870943c85daf33c5ce6869a71f201afde482577f05e97336ead4"
+    },
+    {
       "path": "README.md",
       "sha256": "cdc968762758ff1426a6cefed9404a1aca54a87a5bae71974c29a0efdd5218d6"
     },
@@ -126,7 +130,7 @@
     },
     {
       "path": "tasks/T10.md",
-      "sha256": "ade4ae5f0ec5d69463636bf610b32156a06ae1e1c8db69713259c133c47e4d47"
+      "sha256": "065775e9b6a901abd78348fdfc778ffaa3c4bd1d9fb6c42743d05d8ccbd712e6"
     },
     {
       "path": "tasks/T11.md",

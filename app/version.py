@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.469"
-APP_VERSION_NAME = "合并报料自动发现与整组库存抵扣"
+APP_VERSION = "v0.22.470"
+APP_VERSION_NAME = "仪表盘来料查询规模修复"
 APP_BUILD_DATE = "2026-09-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4443,3 +4443,13 @@ APP_VERIFICATION_STEPS = [
     "需要使用异尺寸库存时主动点击查询其他尺寸片料，核对黄色方案的实际原片长宽、出片数和可抵数量后再确认。",
 ]
 APP_CHANGELOG = [*(f"v0.22.469：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复首页待入库卡片在订单明细增多时逐行读取产品资料的问题；工作流投影改为批量预取，数量与权限口径不变。",
+    "来料收料/组件混合投影继续使用固定批查询；本版无数据库迁移，不修改订单、报料、来料、库存、生产或财务事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "打开首页，确认待入库卡片的数量与来料页面一致；正常业务无需重新保存、收料或修改库存。",
+    "在有多条待入库明细时刷新首页，确认页面正常显示；不要为验收创建模拟订单或收料。",
+]
+APP_CHANGELOG = [*(f"v0.22.470：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

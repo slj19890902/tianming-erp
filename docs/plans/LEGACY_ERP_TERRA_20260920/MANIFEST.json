@@ -1,0 +1,192 @@
+{
+  "created_at": "2026-09-20T09:00:18.204545Z",
+  "kind": "continuous_goal_prompt_execution_plan_and_verified_t02_candidate",
+  "local_head": "3b787b51c528e75a0cfafe3624c2675fe59acbd3",
+  "remote_head_reverified": true,
+  "audit_integrity": {
+    "files": 66,
+    "evidence": 26,
+    "result": "PASS",
+    "scope": "package_integrity_only"
+  },
+  "task_count": 21,
+  "scenario_count": 32,
+  "files": [
+    {
+      "path": "00_交给Terra的启动提示词.md",
+      "sha256": "15aff3f7d34a5c164f72eb25f1593563446c80c583f90bef1b64b204463ffada"
+    },
+    {
+      "path": "01_实施总方案.md",
+      "sha256": "3f8f3b1601d58242d022003371e98f1da6c8311468dd0abec8fb000e284d882f"
+    },
+    {
+      "path": "02_执行与发布规程.md",
+      "sha256": "84cf233e3eb0bfdbe54f2c21e37da17033dffca9d6adc34d2d5a115706497b9d"
+    },
+    {
+      "path": "03_进度与决策.md",
+      "sha256": "b242e32224a301338afbde0a2018310d86319e30f3ad41ea85f5469da29c5224"
+    },
+    {
+      "path": "04_场景覆盖与验收.md",
+      "sha256": "39cb4af8c0af294e59e9143e7790c6e2cf43b40cf2bdc818c6485df5468c2b69"
+    },
+    {
+      "path": "05_已确认合同速查.md",
+      "sha256": "128da7bbadfa6992b7ea1d24a701b818350fc59cd151974bf6e3259c86800f9b"
+    },
+    {
+      "path": "06_Astra最终验收交接.md",
+      "sha256": "5446567d5ed94b6e8060cdd4b99277586686992af71b37cb100fdc752fb54f35"
+    },
+    {
+      "path": "20260920-T02-候选实现与隔离迁移验证.md",
+      "sha256": "a4c73ce95150161c5ea64fc60bae2e1908ac1af73df0dfe5e070f78ccc4a99da"
+    },
+    {
+      "path": "20260920-T02-独立工作区与隔离数据库预检.md",
+      "sha256": "73c7d0cc5c9c112ca22d28a6ed6805f761b83b861f3bd4d7bda273f692a82509"
+    },
+    {
+      "path": "README.md",
+      "sha256": "829d97f7f1251584c2c92482783d7555b6a362457ce71ad3043df03d3797a445"
+    },
+    {
+      "path": "tasks/T00.md",
+      "sha256": "4e0c11f6ffaee709374bd6e4e9925fc5e8b4f2329415fe8fe748c57e7f130d10"
+    },
+    {
+      "path": "tasks/T01.md",
+      "sha256": "a1e144d7af247ec816a71d6b9e179663568b850132ec0cafe09304e434a3b0a1"
+    },
+    {
+      "path": "tasks/T02.md",
+      "sha256": "2e0edcfbd7d96e8baadb0e0bac96b95bdfd2f8998c0287473c1270a5c7c79e85"
+    },
+    {
+      "path": "tasks/T03.md",
+      "sha256": "f40bee2a0d228082af4f323822495848d2f68ccd04c2946eb3f8182c24fa4cd3"
+    },
+    {
+      "path": "tasks/T04.md",
+      "sha256": "ea71997a4e306a35602936880bf8aaf71f50c5ee1fd5735fd36b5775f10d6b96"
+    },
+    {
+      "path": "tasks/T05.md",
+      "sha256": "302af25ca482c088da81e7f642d67c42da494f033b641f28589cbbe83bd248b4"
+    },
+    {
+      "path": "tasks/T06.md",
+      "sha256": "3a2bef1f92b4e28902ed5cb281d6dadc03c317d5c4b62d289c322d2103f365ee"
+    },
+    {
+      "path": "tasks/T07.md",
+      "sha256": "505a26da45bb3bef5280ba23b4bdd68ae26500beecea2ca7cb1770156fed7ba3"
+    },
+    {
+      "path": "tasks/T08.md",
+      "sha256": "fdd40c1b0ce8fc46c30cd4f01f6e57db2d10d11ecf12d7d9d39ba81dcc139942"
+    },
+    {
+      "path": "tasks/T09.md",
+      "sha256": "412479fd50c3ac70e96ac83e495baeea0571d72a955aa01706cdc078f5f88f70"
+    },
+    {
+      "path": "tasks/T10.md",
+      "sha256": "daf2c68cc850d60cca4ea99325ec35a7556773537b16ef95d4e8bb731aec1f86"
+    },
+    {
+      "path": "tasks/T11.md",
+      "sha256": "34e8350bf21d9a58afaf24f784bcef2dbb67653e2a81787f4bf9b2370272481c"
+    },
+    {
+      "path": "tasks/T12.md",
+      "sha256": "e172e06c3df30134984a7b0d5deef21e05babf418092644389242f241f070944"
+    },
+    {
+      "path": "tasks/T13.md",
+      "sha256": "a9b2fc22f019d193d39eb76b07a9ddaf9709e267c7fa90ae6cdda350084b0dc4"
+    },
+    {
+      "path": "tasks/T14.md",
+      "sha256": "29aa874be75e1d30e0e18d58c68897976902a557960851f963f18927560ba8e4"
+    },
+    {
+      "path": "tasks/T15.md",
+      "sha256": "2893c0a2e8f4742594869f13aae7f0e701e815a65c1dc89141d440d1b612df01"
+    },
+    {
+      "path": "tasks/T16.md",
+      "sha256": "7d25811d457a9860c993b5cb9488fef594f4002c1529974af8e9d69e38fb3ad8"
+    },
+    {
+      "path": "tasks/T17.md",
+      "sha256": "8769f18491d8d4289bb97e17830135b99195073d7961436920974735cbc778aa"
+    },
+    {
+      "path": "tasks/T18.md",
+      "sha256": "a8b59f016b9a3a7660fa7d5db1b299567c5341b8e76d7dc7ffc4ac1198313ae3"
+    },
+    {
+      "path": "tasks/T19.md",
+      "sha256": "50eed8878a495498138d0517b4122db44a49a44ab352441a9c90a697376bd137"
+    },
+    {
+      "path": "tasks/T20.md",
+      "sha256": "87df7d4f14da8972f157cc98853dcf5caffe3774ba0cace0b85585cfba958057"
+    }
+  ],
+  "source_fingerprints": [
+    {
+      "path": "docs/CODEX_START.md",
+      "sha256": "56c6cb6584e492df7cc3d07834094bce5094bb08f5d2881b86431d6c65f33a6e"
+    },
+    {
+      "path": "docs/CODEX_EXECUTION_CHARTER.md",
+      "sha256": "155ceabd9ef271049a68e9c545a207b840694d4bb958062543ab92921be91a50"
+    },
+    {
+      "path": "docs/TIANMING_ERP_MASTER_REQUIREMENTS.md",
+      "sha256": "7c2ce91cf1734583f18c9fbeb5d8f713f14f18b1a6f891f4ca162fbca2ccc5d4"
+    },
+    {
+      "path": "docs/release_reports/A0004_R2_ORDER_EXECUTION_STATUS_RELEASE_20260920.md",
+      "sha256": "8d52185ab569a0c1ffae787e9832cb6f54d4bcb4995ca0113241b11a42863a82"
+    },
+    {
+      "path": "docs/release_reports/A0008_R2_DELIVERY_TEMPLATE_DESIGNER_RELEASE_20260920.md",
+      "sha256": "78f6d2bf804efcfbf4914709e434ebe9456daf072224d8c710342a9793169447"
+    },
+    {
+      "path": "app/core/database.py",
+      "sha256": "06cbafea5ace493c72fd567508f6d36f77ac17062f416a7cc1dd8cf59e768c6a"
+    },
+    {
+      "path": "app/api/orders.py",
+      "sha256": "5a5f8d84932c1469824bda67a1e102ddc6207147d43bd4eebb593223adc9f4d2"
+    },
+    {
+      "path": "app/version.py",
+      "sha256": "79c5ac65cd502050804e049e1b11ad11e79f0b5110deae097469c1f5e4594c74"
+    }
+  ],
+  "validation_errors": [],
+  "environment_recovery": {
+    "checked_at": "2026-09-20T15:25:06.4752275+08:00",
+    "remote_head": "e365c9aaf1e44d614b8f97e648d40ebd22351603",
+    "result": "host ls-remote twice and fetch passed; sandbox context mismatch",
+    "scope": "environment_only_not_T02_implementation"
+  },
+  "t02_candidate": {
+    "status": "ready_for_release",
+    "formal_baseline": "278f765da1a7a0f05ae2d583e5b9d686c7d9d572",
+    "implementation_commit": "f49346376bbe33c384f92776087a648382ab3f10",
+    "release_metadata_commit": "3b787b51c528e75a0cfafe3624c2675fe59acbd3",
+    "alembic_head": "du0920",
+    "focused_tests": "32 passed",
+    "isolated_migration": "dt0920 -> du0920 -> dt0920 -> du0920",
+    "formal_database_written": false,
+    "push_status": "blocked_by_automatic_external_export_review"
+  }
+}

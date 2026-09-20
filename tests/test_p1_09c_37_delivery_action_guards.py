@@ -86,18 +86,21 @@ vm.dispatchDelivery = new AsyncFunction("row", "options", {json.dumps(dispatch_b
   const duplicateDispatch = vm.dispatchDelivery({{id:22,delivery_number:"TH004",status:"pending",pick_task:null}});
   await Promise.resolve();
   deliveryRow.id = 98;
-  if (printSessions.length !== 1 || printSessions[0].id !== 21) throw new Error("dispatch print session duplicated or target was not frozen");
   if (await duplicateDispatch !== false) throw new Error("duplicate dispatch was not rejected");
-  if (pending.length !== 2 || pending[1].url !== "/api/deliveries/21/dispatch") throw new Error("dispatch request missing or target changed");
+  if (pending.length !== 2 || pending[1].url !== "/api/deliveries/21/prepare-accompany") throw new Error("preparation request missing or target changed");
   pending[1].resolve({{data:{{ok:true}}}});
-  await Promise.resolve();
-  if (pending.length !== 3 || pending[2].url !== "/api/deliveries/21/printed") throw new Error("printed marker missing or target changed");
+  await new Promise(resolve => setImmediate(resolve));
+  if (printSessions.length !== 1 || printSessions[0].id !== 21) throw new Error("dispatch print session duplicated or target was not frozen");
+  if (pending.length !== 3 || pending[2].url !== "/api/deliveries/21/dispatch") throw new Error("dispatch request missing or target changed");
   pending[2].resolve({{data:{{ok:true}}}});
+  await Promise.resolve();
+  if (pending.length !== 4 || pending[3].url !== "/api/deliveries/21/printed") throw new Error("printed marker missing or target changed");
+  pending[3].resolve({{data:{{ok:true}}}});
   if (await dispatching !== true || vm.deliveryOperationState.action || printSessions[0].activated !== 1 || printSessions[0].aborted) throw new Error("dispatch did not activate print and unlock");
 
   confirms = [false];
   const cancelled = await vm.dispatchDelivery({{id:30,delivery_number:"TH005",pick_task:null}});
-  if (cancelled !== false || vm.deliveryOperationState.action || pending.length !== 3 || printSessions.length !== 1) throw new Error("cancelled confirmation had side effects");
+  if (cancelled !== false || vm.deliveryOperationState.action || pending.length !== 4 || printSessions.length !== 1) throw new Error("cancelled confirmation had side effects");
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
     target = tmp_path / "delivery-action-single-flight.js"
@@ -120,6 +123,7 @@ const messages = [];
 const invalidated = [];
 globalThis.confirm = () => true;
 globalThis.axios = {{
+  async post() {{ return {{data:{{ok:true}}}}; }},
   async put(url) {{
     putCalls.push(url);
     if (url.endsWith("/printed") && mode === "printed-fails") throw new Error("打印登记断开");

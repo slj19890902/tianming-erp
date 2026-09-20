@@ -39,8 +39,9 @@ def test_reprint_button_shows_busy_state_and_shares_delivery_lock() -> None:
     ]
     assert "deliveryOperationState.action==='reprint'" in delivery
     assert "打开中…" in delivery
-    assert '@click="printDelivery(row)"' in delivery
-    assert ':disabled="!!deliveryOperationState.action || !!receiptOperationState.action"' in delivery
+    assert '@click="runDeliveryPrimaryRowAction(row)"' in delivery
+    assert 'return this.printDelivery(row);' in INDEX
+    assert ':disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit"' in delivery
 
 
 def test_reprint_is_single_flight_freezes_target_and_recovers(tmp_path: Path) -> None:

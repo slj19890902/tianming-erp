@@ -53,7 +53,7 @@ def test_open_save_and_cancel_receipt_are_single_flight_and_freeze_targets(
     )
     cancel_body = _method_body(
         "async cancelReceipt(row) {",
-        'exportStatement(row, format="xlsx") {',
+        'openCustomerStatementCheck(row) {',
     )
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
@@ -147,7 +147,7 @@ def test_receipt_success_is_not_misreported_when_refresh_fails(tmp_path: Path) -
     )
     cancel_body = _method_body(
         "async cancelReceipt(row) {",
-        'exportStatement(row, format="xlsx") {',
+        'openCustomerStatementCheck(row) {',
     )
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;

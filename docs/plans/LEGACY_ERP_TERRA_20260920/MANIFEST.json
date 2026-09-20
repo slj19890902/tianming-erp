@@ -1,7 +1,7 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
   "kind": "continuous_goal_prompt_execution_plan_t02_integrated_t03_candidate",
-  "local_head": "c8089e4f06738c46a67ebcee8830b2922c437007",
+  "local_head": "b920276503f7d7b063c6c82398e3c1e4da39a3e5",
   "remote_head_reverified": true,
   "audit_integrity": {
     "files": 66,
@@ -26,7 +26,7 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "cd229f3bcf10a2dc9c632531c05777afe93d08049da806a328899de6b37cb4c9"
+      "sha256": "040b7a8a76cd79a192fb2a78f77671d3d1fa5c6feb6b1917af88babde6e5a723"
     },
     {
       "path": "04_场景覆盖与验收.md",
@@ -54,7 +54,7 @@
     },
     {
       "path": "20260920-T03-订单键盘连续录入与隔离验证.md",
-      "sha256": "eac883234cfbe6853ce952251dbb4aa7291d210c6321bdcb7f718ba04e2de9f4"
+      "sha256": "7a4141d6df047519777ede8e9193a49f1c4e4d5724e7939d9a7e86421e98a95a"
     },
     {
       "path": "README.md",
@@ -74,7 +74,7 @@
     },
     {
       "path": "tasks/T03.md",
-      "sha256": "2a9e2f3535dc20ed3e7cb9ae77772f4fa41c5d0186e6206fb9edeb295221db8b"
+      "sha256": "41dadfbf97ea0347a338915b0f2582da5c43522278923e9da98cae5c38f66c68"
     },
     {
       "path": "tasks/T04.md",

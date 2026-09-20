@@ -19,6 +19,12 @@ const option={order_item_id:7,component_type:'whole',remaining_requirement_quant
   await ctx.confirmDraftSemiInventory(option);assert.equal(requests.length,1,'no implicit select-all');
   await ctx.confirmDraftSemiInventory(option,{...other,selectable:false});assert.equal(requests.length,1);
   await ctx.confirmDraftSemiInventory(option,{...chosen,_deduct_quantity:100});assert.equal(requests.length,1);
+  const extraDraft={supplier_groups:[{lines:[{stock_purpose_sheet_qty:5,source_items:[{order_item_id:7,component_type:'whole'}]}]}]};
+  ctx.supplierRequisitionDraft=extraDraft;
+  await ctx.confirmDraftSemiInventory({...option,remaining_requirement_quantity:4},chosen);
+  assert.equal(requests.length,1,'full coverage cannot silently discard extra stock');
+  assert.equal(ctx.supplierRequisitionDraft,extraDraft);
+  ctx.supplierRequisitionDraft={supplier_groups:[]};
   let resolve;
   sandbox.axios.get=()=>new Promise(r=>resolve=r);
   const pending=ctx.queryDraftOtherSemiInventory(option);

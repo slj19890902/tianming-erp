@@ -13569,6 +13569,13 @@
               this.showToast(`抵扣片数须为 1～${maximum} 的整数，请核对数量`, true);
               return false;
             }
+            const hasExtraStock = (this.supplierRequisitionDraft?.supplier_groups || []).some(group => this.draftGroupLines(group).some(line =>
+              Number(line.stock_purpose_sheet_qty || 0) > 0 && (line.source_items || []).some(source =>
+                Number(source.order_item_id) === orderItemId && (source.component_type || 'whole') === (componentType || 'whole'))));
+            if (hasExtraStock && requested >= Number(option.remaining_requirement_quantity || 0)) {
+              this.showToast("本行还填写了额外备库数量。全额抵扣会移出订单报料，请先将额外备库转为独立补库报料，再采用全额库存；当前内容和库存均未改动", true);
+              return false;
+            }
             const warningCodes = [...new Set(candidates.flatMap(candidate => candidate.warning_codes || []))];
             const idempotencyKey = createIdempotencyKey();
             return await this.executeRequisitionInventoryAction({

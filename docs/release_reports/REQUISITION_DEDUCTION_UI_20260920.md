@@ -10,7 +10,7 @@
 2. 高影响范围问题：默认浏览包含更广范围库存，并把候选称为可抵扣或同客户通用备料。默认 SQL 仅查询当前客户绑定片料；“查询其他可用片料”才查询其他权限允许范围，每页 10 条。显示待核对差异，不把候选视为已经可用；查看不预占。
 3. 高影响决策问题：候选可能一起提交，未逐项处理会阻止保存。现在每个“采用”按钮只提交该批次和明确片数，不自动采纳其他候选；可不抵扣直接保存。后端客户权限、适用性、版本、数量、反压线管理员确认等校验保留。
 4. 高影响事务问题：SQLite 保存点在外层事务未真正开始时，审计故障可留下已提交预占。故障注入复现后，增加真实外层写事务，并以审计回执核对幂等同键同载荷；部分数量不足整笔拒绝，失败全部回滚。
-5. 编辑保护：抵扣刷新采购缺口时保留供应商、备注、额外备库量和人工采购数量上限；查询失败/超时/取消解除加载，旧草稿请求不覆盖新草稿。采购保存和库存采用互斥，保留原有提交不确定状态保护。
+5. 编辑保护：部分抵扣刷新采购缺口时保留供应商、备注、额外备库量和人工采购数量上限；若本行含额外备库且将全额抵扣，提交前明确要求先转为独立补库报料，保留原草稿且不预占，防止整行移除丢失备库需求。查询失败/超时/取消解除加载，旧草稿请求不覆盖新草稿。采购保存和库存采用互斥，保留原有提交不确定状态保护。
 
 本轮沿用现有弹窗与设计，不是全面视觉重做。加工和规格尚未确认的资料仍要求人工核对，没有修改正式主档来消除提示；未做完整无障碍合规审计。
 
@@ -34,6 +34,8 @@ D:\纸箱厂erp软件搭建\.venv\Scripts\python.exe -X utf8 -m pytest tests/tes
 未隐瞒的既有失败：上述排除的 4 个测试名称（其中一个参数化 3 例）已在干净的原基线 `158a606b` 单独复现，结果 4 failed, 2 passed。分别为衬板覆盖历史行为和 3 个旧前端文字/源码断言，本轮未顺带修复。该结论不是全量测试全部通过。完整日志 `D:\tm-uat\requisition-ui-20260920\targeted-tests.log`。Python 编译、Node 实际方法执行、差异检查通过。
 
 同期 v462 由另一任务完成送货快照迁移后，本任务继承正式 dc0920，无新增或重复正式迁移。集成后再次执行 `python -X utf8 -m pytest tests/test_requisition_deduction_ui.py tests/test_delivery_print_snapshot_migration.py -q --tb=short`：**9 passed, 12 warnings，58.09 秒**；最新 Alembic 唯一 head 为 dc0920。初次 db0919/v462 预构建包未部署、不再使用；本任务只部署基于已完成 v462 的 v463 无迁移包。
+
+补齐“全额抵扣加额外备库”前置保护后，`node tests/requisition_deduction_ui.cjs` 通过（含不请求预占且草稿保持原对象）；`python -X utf8 -m pytest tests/test_p1_09c_105_requisition_inventory_action_guard.py tests/test_p0_37_vue_template_browser_safety.py -q --tb=short`：8 passed，1.61 秒。该保护为独立补库业务边界提示，没有自动转换采购用途。
 
 修改：`app/api/requisition.py`、`app/services/semi_finished_inventory.py`、`static/index.html`、`app/version.py`；新增 `tests/test_requisition_deduction_ui.py`、`tests/requisition_deduction_ui.cjs`；更新 4 个既有前端/预占测试和本任务文档。
 

@@ -260,3 +260,81 @@ def test_order_reserve_partial_production_replay_reversal_and_scope(
         assert client.get('/api/production/stock-preparation').json()['total'] == 0
 
     assert _posted_finished_quantity(factory) == 500
+
+
+def test_order_reserve_cancel_restores_and_concurrent_plan_cannot_overconsume(
+    requisition_app,
+):
+    """T07: one frozen reserve lot permits one CAS winner and a reversible 60-sheet plan."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    app, factory = requisition_app
+    app.include_router(router, prefix='/api/production')
+    _seed_material_and_staging(factory)
+    with TestClient(app) as client:
+        _login(client, 'admin')
+        source = _create_frozen_sources(
+            client, factory, order_quantity=500, purchase_total=600,
+            order_purpose=500, stock_purpose=100,
+        )[0]
+        frozen = _freeze_receipt_fact(client, source, idempotency_key='a0002-t07-price')
+        assert frozen.status_code == 200, frozen.text
+        assert _receive(
+            client, source, frozen.json(), quantity=600,
+            idempotency_key='a0002-t07-receive',
+            overrides={'surplus_disposition': 'semi_finished_reserve'},
+        ).status_code == 200
+        receipt_id = client.get('/api/production/stock-preparation').json()['items'][0]['receipt_item_id']
+        row = _row(client, receipt_id)
+
+        first = _action(client, row, 'plan', 'a0002-t07-plan-first', quantity=60)
+        assert first.status_code == 200, first.text
+        planned = _row(client, receipt_id)
+        assert (planned['available'], planned['reserved']) == (40, 60)
+        cancelled = _action(
+            client, planned, 'cancel', 'a0002-t07-cancel-first',
+            job_id=first.json()['job_id'], job_version=planned['jobs'][0]['version'],
+        )
+        assert cancelled.status_code == 200, cancelled.text
+        restored = _row(client, receipt_id)
+        assert (restored['available'], restored['reserved']) == (100, 0)
+
+    barrier = Barrier(2)
+
+    def submit(index):
+        with TestClient(app) as competing_client:
+            _login(competing_client, 'admin')
+            barrier.wait(timeout=10)
+            return _action(
+                competing_client, restored, 'plan', f'a0002-t07-concurrent-{index}',
+                quantity=60,
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(submit, (1, 2)))
+    assert sorted(response.status_code for response in responses) == [200, 409]
+
+    with TestClient(app) as client:
+        _login(client, 'admin')
+        final = _row(client, receipt_id)
+        assert (final['available'], final['reserved']) == (40, 60)
+        assert len(final['jobs']) == 2
+        winner = next(job for job in final['jobs'] if job['status'] == 'pending')
+        locations = client.get('/api/production/stock-preparation/locations')
+        assert locations.status_code == 200, locations.text
+        location = next(item for item in locations.json()['items']
+                        if item.get('area_code') == 'FIN-001' and item.get('is_empty'))
+        completed = _action(
+            client, final, 'complete', 'a0002-t07-complete',
+            job_id=winner['id'], job_version=winner['version'], actual_output=60,
+            location_id=location['id'], layout_version=location['layout_version'],
+        )
+        assert completed.status_code == 200, completed.text
+
+    with factory() as db:
+        allocation = db.scalar(select(IncomingReceiptPurposeAllocation).where(
+            IncomingReceiptPurposeAllocation.incoming_receipt_item_id == receipt_id
+        ))
+        lot = db.get(InventoryLot, allocation.semi_finished_inventory_lot_id)
+        assert (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed) == (40, 0, 60)

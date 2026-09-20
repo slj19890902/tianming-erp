@@ -1,6 +1,6 @@
 # 合并报料 UI 与逐批片料抵扣评估、验证
 
-日期：2026-09-20。范围：生成供应商采购报料单弹窗；不变更采购模型、成品推荐和数据库结构。开发分支 `codex/requisition-deduction-ui-20260920`，实现提交 `9f8f7356`，集成基线 `be6cde96` / v0.22.461 / db0919。发布版本 v0.22.462，最终发布证据另记回执。
+日期：2026-09-20。范围：生成供应商采购报料单弹窗；不变更采购模型、成品推荐和数据库结构。开发分支 `codex/requisition-deduction-ui-20260920`，实现提交 `9f8f7356`。先集成 `be6cde96` / v0.22.461 / db0919，再保留同期送货打印快照提交 `4b1e6035` / v0.22.462 / dc0920。本任务顺延发布 v0.22.463，最终发布证据另记回执。
 
 ## 评估结论及改进
 
@@ -31,7 +31,9 @@ D:\纸箱厂erp软件搭建\.venv\Scripts\python.exe -X utf8 -m pytest tests/tes
 
 结果：**178 passed, 6 deselected, 204 warnings，267.21 秒**。警告为测试 JWT 短密钥。包括后端范围/权限、数量不足、过期版本、同键重放/异载荷拒绝、并发同键、审计故障回滚；Node 执行实际前端方法验证逐批选择、冻结载荷、失败/超时/取消、旧请求、编辑保留和无抵扣保存；并回归 R01/R02、合并开料、采购用途、刚发布的订单状态。
 
-未隐瞒的既有失败：上述排除的 4 个测试名称（其中一个参数化 3 例）已在干净的原基线 `158a606b` 单独复现，结果 4 failed, 2 passed。分别为衬板覆盖历史行为和 3 个旧前端文字/源码断言，本轮未顺带修复。该结论不是全量测试全部通过。完整日志 `D:\tm-uat\requisition-ui-20260920\targeted-tests.log`。Python 编译、Node 实际方法执行、差异检查通过，Alembic 唯一 head 为 db0919。
+未隐瞒的既有失败：上述排除的 4 个测试名称（其中一个参数化 3 例）已在干净的原基线 `158a606b` 单独复现，结果 4 failed, 2 passed。分别为衬板覆盖历史行为和 3 个旧前端文字/源码断言，本轮未顺带修复。该结论不是全量测试全部通过。完整日志 `D:\tm-uat\requisition-ui-20260920\targeted-tests.log`。Python 编译、Node 实际方法执行、差异检查通过。
+
+同期 v462 由另一任务完成送货快照迁移后，本任务继承正式 dc0920，无新增或重复正式迁移。集成后再次执行 `python -X utf8 -m pytest tests/test_requisition_deduction_ui.py tests/test_delivery_print_snapshot_migration.py -q --tb=short`：**9 passed, 12 warnings，58.09 秒**；最新 Alembic 唯一 head 为 dc0920。初次 db0919/v462 预构建包未部署、不再使用；本任务只部署基于已完成 v462 的 v463 无迁移包。
 
 修改：`app/api/requisition.py`、`app/services/semi_finished_inventory.py`、`static/index.html`、`app/version.py`；新增 `tests/test_requisition_deduction_ui.py`、`tests/requisition_deduction_ui.cjs`；更新 4 个既有前端/预占测试和本任务文档。
 

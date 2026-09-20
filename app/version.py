@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.464"
-APP_VERSION_NAME = "管理员送货单版式设计"
+APP_VERSION = "v0.22.465"
+APP_VERSION_NAME = "订单与报料分阶段抵扣"
 APP_BUILD_DATE = "2026-09-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4383,3 +4383,15 @@ APP_VERIFICATION_STEPS = [
     "对一张发布前已建立的送货单重新打印，确认仍保持原冻结版式；普通账号不能保存、发布或回滚模板。",
 ]
 APP_CHANGELOG = [*(f"v0.22.464：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "新建订单和 PDF 核单仅安排成品及无需重新分切的半成品；原料和需分切片料改在合并报料中确认用料。",
+    "后端按候选用途标记订单、报料或待核对阶段，并拒绝绕过页面把待分切库存作为订单直接抵扣。",
+    "合并报料显示每张出片数和确认用料入口；全额由库存覆盖时冻结用料方案并进入生产，不生成零张采购单。本版无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "新建订单或 PDF 核单时，确认库存安排仅列成品和无需重新分切的半成品；待分切材料提示转到报料。",
+    "在合并报料中选择实际需分切片料，核对每张出片数、可抵片数和库位后确认用料，采购只保留缺口。",
+    "库存全额覆盖时核对没有零张采购单，订单仍进入生产；不要为验收在正式库创建模拟订单、库存或采购。",
+]
+APP_CHANGELOG = [*(f"v0.22.465：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

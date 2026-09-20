@@ -1,7 +1,7 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
   "kind": "continuous_goal_prompt_execution_plan_t02_integrated_t03_candidate",
-  "local_head": "0c786ae53ef5011280985009ae4a226a07422493",
+  "local_head": "737d2eb3d9b98c137358f83243c88cfea579a5d6",
   "remote_head_reverified": true,
   "audit_integrity": {
     "files": 66,
@@ -26,7 +26,7 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "8bbb54e7a49fb508e4909f30dedadd0678112164046ce4fd96bb8bc9ae9cead3"
+      "sha256": "73f7564e70099e51d04cd84cdfd839e18cac68ae923d4dd2795a60023b5476f1"
     },
     {
       "path": "04_场景覆盖与验收.md",
@@ -85,6 +85,10 @@
       "sha256": "0ccc9218f3ec870943c85daf33c5ce6869a71f201afde482577f05e97336ead4"
     },
     {
+      "path": "20260920-T11-打印设计器与历史输出核验.md",
+      "sha256": "05aeb66a83c7b2a9f10181c9e1c14514f0cc7273134dea93d58db54b0c56b0ea"
+    },
+    {
       "path": "README.md",
       "sha256": "cdc968762758ff1426a6cefed9404a1aca54a87a5bae71974c29a0efdd5218d6"
     },
@@ -130,11 +134,11 @@
     },
     {
       "path": "tasks/T10.md",
-      "sha256": "065775e9b6a901abd78348fdfc778ffaa3c4bd1d9fb6c42743d05d8ccbd712e6"
+      "sha256": "a393dbf539bb75523c48681a6e88b95a17f5ad57f645f1d5ccf123312890e327"
     },
     {
       "path": "tasks/T11.md",
-      "sha256": "dd9cc34fdfa10ba0d0bca38a8b5280e214fb816c31fdf7378ad5a10ce2b14f26"
+      "sha256": "4e1716048e32501b3fd04b56d2be8ebbf051660a2959e58ef4228e0f7c6c8ef2"
     },
     {
       "path": "tasks/T12.md",

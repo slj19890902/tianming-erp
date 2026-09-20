@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.465"
-APP_VERSION_NAME = "订单与报料分阶段抵扣"
+APP_VERSION = "v0.22.466"
+APP_VERSION_NAME = "PDF来源身份与同单号独立订单"
 APP_BUILD_DATE = "2026-09-20"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4395,3 +4395,15 @@ APP_VERIFICATION_STEPS = [
     "库存全额覆盖时核对没有零张采购单，订单仍进入生产；不要为验收在正式库创建模拟订单、库存或采购。",
 ]
 APP_CHANGELOG = [*(f"v0.22.465：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "客户单号改为订单显示分组：不同且可验证的 PDF 或邮件附件来源，即使客户单号、料号和数量相同，也会建立相互独立的 ERP 订单，原订单及其采购、送货等事实不被覆盖。",
+    "同一 PDF 来源跨设备或更换操作键重试只返回原订单；来源相同但客户、明细或处理方式变化时明确拒绝，并保留原页码、原行号、确认结果和人工修订摘要。",
+    "PDF 核单页面发现已有同客户单号时改为提示并提供查看原订单入口，不再误判为禁止保存；新增 du0920 来源与来源行映射迁移，不回填或改写历史订单。",
+]
+APP_VERIFICATION_STEPS = [
+    "强制刷新订单 PDF 核单页；遇到已有客户单号时，确认页面显示“同单号新来源待确认”、新建独立订单说明和“查看原订单”入口。",
+    "只在收到真实的新 PDF 或新邮件附件时保存，确认生成新的 ERP 订单；原订单的数量、状态、采购和送货记录保持不变。",
+    "同一来源重复提交或网络结果不确定时再次保存，确认系统返回原订单而不重复建单；不要为验收创建模拟订单。",
+]
+APP_CHANGELOG = [*(f"v0.22.466：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

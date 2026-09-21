@@ -3104,6 +3104,14 @@ def _inventory_sources_for_order_item(
             if read_context is not None and location is not None
             else None
         )
+        if location is not None and projection_context is None:
+            # A direct document response must use the same canonical employee
+            # address as the page batcher.  The list path supplies this
+            # context up front; the single-document path resolves it once.
+            projection_context = load_warehouse_location_projection_contexts(
+                db,
+                [location],
+            ).get(int(location.id), {})
         requirement = requirements.get(reservation.semi_requirement_id)
         pick_stock, pick_credit = (
             allocated_by_reservation.get(reservation.id, (0, 0))
@@ -4664,7 +4672,14 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
         ).all()
     } if assigned_user_ids else {}
     internal_remarks = _tianhua_internal_remarks_by_delivery_item(
-        db, [int(row["id"]) for row in item_rows]
+        db,
+        [
+            int(row["id"])
+            for row in item_rows
+            if str(row["remarks"] or "").strip().startswith(
+                "来源：天华预送货草稿 "
+            )
+        ],
     )
     inventory_backed_delivery_item_ids = {
         int(allocation.delivery_item_id)

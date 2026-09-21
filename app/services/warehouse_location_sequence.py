@@ -50,13 +50,14 @@ def spatial_sequences(rows):
     return result
 
 
-def load_spatial_sequences(db, floor_numbers, area_codes):
+def load_spatial_sequences(db, floor_numbers, area_codes, *, rows=None):
     if not floor_numbers or not area_codes:
         return {}
-    rows = db.execute(select(WarehouseLocation, Floor3LocationLayout)
-        .outerjoin(Floor3LocationLayout, Floor3LocationLayout.location_id == WarehouseLocation.id)
-        .where(WarehouseLocation.warehouse_floor.in_(floor_numbers),
-               WarehouseLocation.area_code.in_(area_codes), WarehouseLocation.is_active.is_(True))).all()
+    if rows is None:
+        rows = db.execute(select(WarehouseLocation, Floor3LocationLayout)
+            .outerjoin(Floor3LocationLayout, Floor3LocationLayout.location_id == WarehouseLocation.id)
+            .where(WarehouseLocation.warehouse_floor.in_(floor_numbers),
+                   WarehouseLocation.area_code.in_(area_codes), WarehouseLocation.is_active.is_(True))).all()
     from app.services.warehouse_twin_layout import load_warehouse_twin_floor, WarehouseTwinLayoutNotFoundError
     features = {}
     for floor_number in floor_numbers:

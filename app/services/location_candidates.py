@@ -192,12 +192,16 @@ def load_warehouse_location_projection_contexts(
         if str(row.area_code or "").strip()
     }
     area_sequences: dict[int, int] = {}
+    sequence_rows = []
     if floor_numbers and area_codes:
         sequence_rows = db.execute(
             select(
-                WarehouseLocation.id,
-                WarehouseLocation.warehouse_floor,
-                WarehouseLocation.area_code,
+                WarehouseLocation,
+                Floor3LocationLayout,
+            )
+            .outerjoin(
+                Floor3LocationLayout,
+                Floor3LocationLayout.location_id == WarehouseLocation.id,
             )
             .where(
                 WarehouseLocation.warehouse_floor.in_(floor_numbers),
@@ -213,7 +217,10 @@ def load_warehouse_location_projection_contexts(
         ).all()
         current_key: tuple[int, str] | None = None
         current_sequence = 0
-        for location_id, floor_number, area_code in sequence_rows:
+        for sequence_location, _layout in sequence_rows:
+            location_id = sequence_location.id
+            floor_number = sequence_location.warehouse_floor
+            area_code = sequence_location.area_code
             key = (int(floor_number or 0), str(area_code or "").strip().upper())
             if key != current_key:
                 current_key = key
@@ -222,7 +229,14 @@ def load_warehouse_location_projection_contexts(
             area_sequences[int(location_id)] = current_sequence
 
     from app.services.warehouse_location_sequence import load_spatial_sequences
-    area_sequences.update(load_spatial_sequences(db, floor_numbers, area_codes))
+    area_sequences.update(
+        load_spatial_sequences(
+            db,
+            floor_numbers,
+            area_codes,
+            rows=sequence_rows,
+        )
+    )
 
     published_identities: dict[int, dict | None] = {}
     for floor_number in {

@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, joinedload, load_only, selectinload
 
 from app.api.deps import (
     PermissionChecker,
@@ -143,6 +143,7 @@ from app.services.order_cost_readiness import (
 )
 from app.services.audit_log import append_audit_event
 from app.services.order_business_status import (
+    active_order_status_badge_snapshot,
     BUSINESS_STATUS_ORDER,
     DERIVED_BUSINESS_STATUSES,
     build_order_business_statuses,
@@ -318,6 +319,27 @@ def _include_order_list_unfinished_total() -> bool:
     """Keep the public list badge while allowing internal scoped reuse to skip it."""
 
     return True
+
+
+def _business_status_projection_load_options() -> list:
+    """Load exactly the fields consumed by the read-only status projection."""
+
+    return [
+        load_only(Order.id, Order.status),
+        selectinload(Order.items).load_only(
+            OrderItem.id,
+            OrderItem.order_id,
+            OrderItem.product_id,
+            OrderItem.item_sequence,
+            OrderItem.quantity,
+            OrderItem.delivered_quantity,
+            OrderItem.material_status,
+            OrderItem.requisition_status,
+            OrderItem.supply_mode_snapshot,
+            OrderItem.is_force_closed,
+            OrderItem.composite_fulfillment_mode_snapshot,
+        ),
+    ]
 
 
 def _can_view_order_sales_amount(user: User) -> bool:
@@ -2991,13 +3013,78 @@ def list_orders(
     candidate_orders: list[Order] = []
     candidate_order_map: dict[int, Order] = {}
     candidate_projection: dict[int, dict] = {}
+    badge_unfinished_ids: list[int] | None = None
+    badge_unfinished_projections: dict[int, dict] | None = None
+    badge_unfinished_order_map: dict[int, Order] = {}
+    badge_snapshot_cache_hit = False
     needs_business_projection = bool(derived_status_filter) or resolved_scope in {
         "active",
         "completed",
     }
     if needs_business_projection:
         candidate_ids = list(db.scalars(ids_query).all())
-        if candidate_ids:
+        # The menu badge is global within the caller's customer scope.  A
+        # filtered active list used to calculate its overlapping status
+        # projection once for the page and once again for the badge.  Build
+        # the global read-only projection once and reuse its overlapping rows.
+        has_active_list_filter = bool(
+            requested_customer_ids
+            or search_keyword
+            or (order_number and order_number.strip())
+            or (customer_name and customer_name.strip())
+            or order_date is not None
+            or date_from is not None
+            or date_to is not None
+            or order_date_from is not None
+            or order_date_to is not None
+            or delivery_date_from is not None
+            or delivery_date_to is not None
+            or (customer_po and customer_po.strip())
+            or (product_code and product_code.strip())
+            or (product_name and product_name.strip())
+            or (specification and specification.strip())
+        )
+        if (
+            include_unfinished_total
+            and resolved_scope == "active"
+            and has_active_list_filter
+            and not derived_status_filter
+            and not raw_status_filters
+        ):
+            badge_snapshot, badge_unfinished_order_map, badge_snapshot_cache_hit = (
+                active_order_status_badge_snapshot(
+                    db,
+                    scoped_customer_ids=(
+                        scoped_customer_ids if is_customer_scope_restricted else None
+                    ),
+                    include_finance=has_permission(user, "finance.view"),
+                )
+            )
+            badge_unfinished_ids = list(badge_snapshot.order_ids)
+            badge_unfinished_projections = badge_snapshot.projections
+            candidate_orders = (
+                [
+                    badge_unfinished_order_map[order_id]
+                    for order_id in candidate_ids
+                    if order_id in badge_unfinished_order_map
+                ]
+                if not badge_snapshot_cache_hit
+                else []
+            )
+            missing_candidate_ids = [
+                order_id
+                for order_id in candidate_ids
+                if order_id not in badge_unfinished_projections
+            ]
+            if missing_candidate_ids:
+                candidate_orders.extend(
+                    db.scalars(
+                        select(Order)
+                        .options(selectinload(Order.items))
+                        .where(Order.id.in_(missing_candidate_ids))
+                    ).all()
+                )
+        elif candidate_ids:
             candidate_orders = list(
                 db.scalars(
                     select(Order)
@@ -3005,11 +3092,29 @@ def list_orders(
                     .where(Order.id.in_(candidate_ids))
                 ).all()
             )
-        candidate_projection = build_order_business_statuses(
-            db,
-            candidate_orders,
-            include_finance=has_permission(user, "finance.view"),
+        candidate_projection = (
+            {
+                order_id: badge_unfinished_projections[order_id]
+                for order_id in candidate_ids
+                if badge_unfinished_projections is not None
+                and order_id in badge_unfinished_projections
+            }
+            if badge_unfinished_projections is not None
+            else {}
         )
+        missing_projection_orders = [
+            order
+            for order in candidate_orders
+            if int(order.id) not in candidate_projection
+        ]
+        if missing_projection_orders:
+            candidate_projection.update(
+                build_order_business_statuses(
+                    db,
+                    missing_projection_orders,
+                    include_finance=has_permission(user, "finance.view"),
+                )
+            )
         candidate_order_map = {int(order.id): order for order in candidate_orders}
         matched_ids = [
             order_id
@@ -3029,7 +3134,10 @@ def list_orders(
                     not derived_status_filter
                     or candidate_projection.get(order_id, {}).get("business_status")
                     in derived_status_filter
-                    or candidate_order_map[order_id].status in raw_status_filters
+                    or (
+                        order_id in candidate_order_map
+                        and candidate_order_map[order_id].status in raw_status_filters
+                    )
                 )
             )
         ]
@@ -3047,7 +3155,11 @@ def list_orders(
 
     orders: list[Order] = []
     if page_ids:
-        if detail_level == "summary" and needs_business_projection:
+        if (
+            detail_level == "summary"
+            and needs_business_projection
+            and all(item_id in candidate_order_map for item_id in page_ids)
+        ):
             orders = [
                 candidate_order_map[item_id]
                 for item_id in page_ids
@@ -3128,7 +3240,10 @@ def list_orders(
             and not (product_name and product_name.strip())
             and not (specification and specification.strip())
         )
-        if can_reuse_global_candidate_projection:
+        if badge_unfinished_ids is not None and badge_unfinished_projections is not None:
+            unfinished_ids = badge_unfinished_ids
+            unfinished_projections = badge_unfinished_projections
+        elif can_reuse_global_candidate_projection:
             unfinished_ids = [
                 int(order.id) for order in candidate_orders if order.items
             ]
@@ -3147,7 +3262,7 @@ def list_orders(
                 list(
                     db.scalars(
                         select(Order)
-                        .options(selectinload(Order.items))
+                        .options(*_business_status_projection_load_options())
                         .where(Order.id.in_(unfinished_ids))
                     ).all()
                 )

@@ -9,6 +9,7 @@ from time import monotonic
 
 from fastapi import Request
 from fastapi.testclient import TestClient
+import pytest
 from sqlalchemy import event, func, select
 
 from tests.test_p1_81_receipt_purpose_flow import (
@@ -34,10 +35,11 @@ def _receive_payload(source, fact: dict, *, idempotency_key: str) -> dict:
     }
 
 
-def test_same_key_receipt_race_uses_two_connections_and_one_fact(
-    requisition_app, monkeypatch
+@pytest.mark.parametrize("concurrency", [2, 5])
+def test_same_key_receipt_race_uses_independent_connections_and_one_fact(
+    requisition_app, monkeypatch, concurrency: int
 ) -> None:
-    """Two real request transactions cross a DB barrier, then replay one fact."""
+    """Concurrent real request transactions cross a DB barrier, then replay one fact."""
 
     from app.api.deps import get_db
     from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
@@ -46,8 +48,8 @@ def test_same_key_receipt_race_uses_two_connections_and_one_fact(
     _use_p181_published_map_identity(monkeypatch)
     _seed_material_and_staging(session_factory)
     original_get_db = app.dependency_overrides[get_db]
-    request_barrier = Barrier(2, timeout=10)
-    start_barrier = Barrier(3, timeout=10)
+    request_barrier = Barrier(concurrency, timeout=10)
+    start_barrier = Barrier(concurrency + 1, timeout=10)
     trace_lock = Lock()
     trace: list[dict[str, object]] = []
 
@@ -112,24 +114,23 @@ def test_same_key_receipt_race_uses_two_connections_and_one_fact(
             ended = monotonic()
         return {"attempt": attempt, "started": started, "ended": ended, "response": response}
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(submit, attempt) for attempt in ("A", "B")]
+    attempts = [f"attempt-{index}" for index in range(1, concurrency + 1)]
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = [pool.submit(submit, attempt) for attempt in attempts]
         start_barrier.wait()
         results = [future.result() for future in futures]
 
-    assert {entry["attempt"] for entry in trace} == {"A", "B"}
-    assert len({entry["connection_id"] for entry in trace}) == 2
+    assert {entry["attempt"] for entry in trace} == set(attempts)
+    assert len({entry["connection_id"] for entry in trace}) == concurrency
     assert max(result["started"] for result in results) - min(
         result["started"] for result in results
     ) < 1
     assert all(result["ended"] >= result["started"] for result in results)
     responses = [result["response"] for result in results]
-    assert [response.status_code for response in responses] == [200, 200], [
+    assert [response.status_code for response in responses] == [200] * concurrency, [
         response.text for response in responses
     ]
-    assert responses[0].json()["receipt_item_id"] == responses[1].json()[
-        "receipt_item_id"
-    ]
+    assert len({response.json()["receipt_item_id"] for response in responses}) == 1
     transaction_zero = min(entry["transaction_started"] for entry in trace)
     trace_by_attempt = {str(entry["attempt"]): entry for entry in trace}
     print(

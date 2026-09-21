@@ -1,12 +1,14 @@
 from __future__ import annotations
 from app.services.external_receipt_state import active_receipt_item
 
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
+from dataclasses import dataclass
 from decimal import Decimal
+from threading import RLock
 from typing import Iterable, Sequence
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import event, func, or_, select
+from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.external_packaging_purchase import (
@@ -26,6 +28,7 @@ from app.models.finance import (
 )
 from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
 from app.models.order import Order, OrderItem
+from app.models.product import Product
 from app.models.order_external_packaging import SalesOrderItemExternalComponent
 from app.services.multilevel_bom_external_identity import current_external_component_predicate
 from app.services.multilevel_bom_execution_boundary import current_snapshot_predicate
@@ -43,6 +46,7 @@ from app.models.warehouse_inventory import (
 )
 from app.services.order_status_policy import (
     MANAGEMENT_ORDER_STATUSES,
+    MANAGEMENT_TERMINAL_ORDER_STATUSES,
     PERSISTED_ORDER_STATUS_LABELS,
 )
 
@@ -77,6 +81,92 @@ READY_PRODUCTION_STATUSES = frozenset({"completed", "not_required"})
 _STATUS_RANK = {
     status: index for index, status in enumerate(BUSINESS_STATUS_ORDER)
 }
+
+
+@dataclass(frozen=True)
+class ActiveOrderStatusBadgeSnapshot:
+    """A read-only active-order projection, scoped to one database and role."""
+
+    order_ids: tuple[int, ...]
+    projections: dict[int, dict]
+
+
+_ACTIVE_STATUS_BADGE_CACHE: OrderedDict[
+    tuple[str, tuple[int, ...] | None, bool], ActiveOrderStatusBadgeSnapshot
+] = OrderedDict()
+_ACTIVE_STATUS_BADGE_CACHE_LOCK = RLock()
+_ACTIVE_STATUS_BADGE_CACHE_LIMIT = 8
+
+
+def _clear_active_status_badge_cache(*_args) -> None:
+    """A committed mutation makes every process-local badge projection stale."""
+
+    with _ACTIVE_STATUS_BADGE_CACHE_LOCK:
+        _ACTIVE_STATUS_BADGE_CACHE.clear()
+
+
+event.listen(Session, "after_commit", _clear_active_status_badge_cache)
+
+
+def active_order_status_badge_snapshot(
+    db: Session,
+    *,
+    scoped_customer_ids: set[int] | None,
+    include_finance: bool,
+) -> tuple[ActiveOrderStatusBadgeSnapshot, dict[int, Order], bool]:
+    """Return the exact active-order badge projection with commit invalidation.
+
+    The projection remains a presentation cache only.  It is keyed by database,
+    customer scope and finance visibility, is never used by a write path, and
+    is cleared after every SQLAlchemy commit before the next reader can reuse
+    it.  The third return value marks a cache hit; ORM rows are intentionally
+    returned only on the miss because they belong to the caller's Session.
+    """
+
+    database_key = str(db.get_bind().url)
+    scope_key = (
+        tuple(sorted(int(customer_id) for customer_id in scoped_customer_ids))
+        if scoped_customer_ids is not None
+        else None
+    )
+    key = (database_key, scope_key, bool(include_finance))
+    with _ACTIVE_STATUS_BADGE_CACHE_LOCK:
+        cached = _ACTIVE_STATUS_BADGE_CACHE.get(key)
+        if cached is not None:
+            _ACTIVE_STATUS_BADGE_CACHE.move_to_end(key)
+            return cached, {}, True
+
+        query = select(Order.id).where(
+            Order.status.notin_(MANAGEMENT_TERMINAL_ORDER_STATUSES),
+            Order.items.any(),
+        )
+        if scoped_customer_ids is not None:
+            query = query.where(Order.customer_id.in_(scoped_customer_ids))
+        order_ids = tuple(int(order_id) for order_id in db.scalars(query).all())
+        orders = (
+            list(
+                db.scalars(
+                    select(Order)
+                    .options(selectinload(Order.items))
+                    .where(Order.id.in_(order_ids))
+                ).all()
+            )
+            if order_ids
+            else []
+        )
+        snapshot = ActiveOrderStatusBadgeSnapshot(
+            order_ids=order_ids,
+            projections=build_order_business_statuses(
+                db,
+                orders,
+                include_finance=include_finance,
+            ),
+        )
+        _ACTIVE_STATUS_BADGE_CACHE[key] = snapshot
+        _ACTIVE_STATUS_BADGE_CACHE.move_to_end(key)
+        while len(_ACTIVE_STATUS_BADGE_CACHE) > _ACTIVE_STATUS_BADGE_CACHE_LIMIT:
+            _ACTIVE_STATUS_BADGE_CACHE.popitem(last=False)
+        return snapshot, {int(order.id): order for order in orders}, False
 
 
 def status_label(status: str) -> str:
@@ -154,6 +244,23 @@ def build_order_business_statuses(
             }
             for order in orders
         }
+
+    product_ids = {int(item.product_id) for item in items if item.product_id is not None}
+    products_by_id = (
+        {
+            int(product.id): product
+            for product in db.scalars(
+                select(Product)
+                .options(load_only(Product.id, Product.box_style, Product.box_category))
+                .where(Product.id.in_(product_ids))
+            ).all()
+        }
+        # Small detail pages already retain their few products in the session.
+        # The explicit batch matters only for large list projections, where it
+        # prevents the direct-liner check from reloading the same products.
+        if len(item_ids) > 100 and product_ids
+        else {}
+    )
 
     confirmed_supplier_item_ids: set[int] = set()
     closed_incoming_item_ids: set[int] = set()
@@ -582,7 +689,13 @@ def build_order_business_statuses(
             production_ready = tasks.get(None) in READY_PRODUCTION_STATUSES
         finished_coverage = finished_coverage_by_item.get(item_id, 0)
         from app.services.liner_direct_delivery import liner_direct_coverage
-        direct_liner = liner_direct_coverage(db, item)
+        direct_liner = liner_direct_coverage(
+            db,
+            item,
+            product=products_by_id.get(int(item.product_id))
+            if item.product_id is not None
+            else None,
+        )
         production_ready = production_ready or direct_liner > 0
         legacy_taskless_delivery_ready = bool(
             not required_components

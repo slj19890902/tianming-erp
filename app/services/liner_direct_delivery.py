@@ -11,11 +11,14 @@ from app.models.warehouse_inventory import InventoryLot, InventoryReservation, O
 from app.services.box_type_rules import box_type_code
 
 
-def liner_direct_coverage(db, item: OrderItem) -> int:
+def liner_direct_coverage(db, item: OrderItem, *, product: Product | None = None) -> int:
     from app.services.semi_finished_inventory import (
         finished_order_source_coverage, ensure_semi_finished_lot_eligibility, requirement_signature,
     )
-    product = db.get(Product, item.product_id)
+    # List and dashboard status projections can pre-load the small product
+    # set for many items.  Reuse that authoritative object when available;
+    # retaining the lookup fallback keeps direct callers unchanged.
+    product = product if product is not None else db.get(Product, item.product_id)
     if (product is None or box_type_code(product.box_style) != "liner"
             or product.box_category == "die_cut" or item.composite_fulfillment_mode_snapshot):
         return 0

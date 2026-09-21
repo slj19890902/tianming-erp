@@ -9381,7 +9381,13 @@
                     <td><span v-if="row.selection_blocked" class="status red">{{ row.missing_price_count ? "待补价" : "异常历史" }}</span><span v-else class="status green">可选择</span><div v-if="row.selection_blocked" class="statement-delivery-exception">{{ row.exception_reason || '该对账组存在历史异常，暂不可选择。' }}</div></td>
                     <td><button class="btn small" @click="toggleStatementDeliveryExpanded(row)">{{ expandedStatementDeliveries[row.delivery_id] ? '收起明细' : '查看明细' }}</button></td>
                   </tr>
-                  <tr v-if="expandedStatementDeliveries[row.delivery_id]" class="statement-delivery-detail-row"><td colspan="8"><div class="statement-delivery-detail"><table><thead><tr><th>产品</th><th>规格</th><th>实收数量</th><th class="sensitive-price">应收金额</th><th>差异原因</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.return_receipt_item_id"><td>{{ item.product_code }} / {{ item.product_name }}</td><td>{{ item.specification || '-' }}</td><td>{{ item.actual_received_quantity }}</td><td class="sensitive-price"><template v-if="item.missing_price">待补价</template><template v-else>¥ {{ money(item.receivable_amount) }}</template></td><td>{{ item.difference_reason || '-' }}</td></tr><tr v-if="!row.items.length"><td colspan="5" class="empty">暂无产品明细</td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedStatementDeliveries[row.delivery_id]" class="statement-delivery-detail-row"><td colspan="8"><div class="statement-delivery-detail"><table><thead><tr><th>产品</th><th>规格</th><th>实收数量</th><th class="sensitive-price">应收金额</th><th>差异原因</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.return_receipt_item_id"><td>{{ item.product_code }} / {{ item.product_name }}</td><td>{{ item.specification || '-' }}</td><td>{{ item.actual_received_quantity }}</td><td class="sensitive-price"><template v-if="item.missing_price">待补价 <button v-if="canFinance && item.delivery_source_type==='unordered_finished'" class="btn small primary" :disabled="statementPriceSupplement.saving || !!statementPriceSupplement.payload" @click="openStatementPriceSupplement(item)">补录销售单价</button></template><template v-else>¥ {{ money(item.receivable_amount) }}</template></td><td>{{ item.difference_reason || '-' }}</td></tr><tr v-if="!row.items.length"><td colspan="5" class="empty">暂无产品明细</td></tr></tbody></table><div v-if="statementPriceSupplement.item?.delivery_id===row.delivery_id" class="notice" style="margin-top:12px">
+<strong>补录销售单价 · {{ statementPriceSupplement.item.product_name }} · 实收 {{ statementPriceSupplement.item.actual_received_quantity }} {{ statementPriceSupplement.item.unit_snapshot }}</strong>
+<div class="muted">{{ statementPriceSupplement.item.source_customer_name }} · {{ row.delivery_number }}。此笔为无订单库存送货，只补齐首次成交价格，保留原回单、库存及打印记录。已有价格不能在此覆盖。</div>
+<div class="form-grid" style="margin-top:8px"><div class="field"><label>实际成交单价（元/{{ statementPriceSupplement.item.unit_snapshot }}）</label><input class="input" type="number" min="0.0001" step="0.0001" v-model="statementPriceSupplement.unit_price" :disabled="statementPriceSupplement.saving || !!statementPriceSupplement.payload" /></div><div class="field"><label>单价口径</label><select class="select" v-model="statementPriceSupplement.price_tax_mode" :disabled="statementPriceSupplement.saving || !!statementPriceSupplement.payload"><option value="">请选择</option><option value="tax_inclusive">含税单价</option><option value="tax_exclusive">未税单价（对账另加税额）</option></select></div><div class="field"><label>税率</label><select class="select" v-model="statementPriceSupplement.tax_rate" :disabled="statementPriceSupplement.saving || !!statementPriceSupplement.payload"><option value="">请选择</option><option value="0">0%</option><option value="0.01">1%</option><option value="0.03">3%</option><option value="0.06">6%</option><option value="0.09">9%</option><option value="0.13">13%</option></select></div><div class="field wide"><label>补录说明</label><input class="input" maxlength="300" v-model="statementPriceSupplement.note" :disabled="statementPriceSupplement.saving || !!statementPriceSupplement.payload" /></div></div>
+<button class="btn primary" :disabled="statementPriceSupplement.saving || statementPriceSupplement.committed" @click="saveStatementPriceSupplement">{{ statementPriceSupplement.saving ? '保存中…' : statementPriceSupplement.committed ? '已保存，请刷新' : statementPriceSupplement.payload ? '重试核对保存结果' : '保存销售单价' }}</button>
+<button v-if="!statementPriceSupplement.payload" class="btn" :disabled="statementPriceSupplement.saving" @click="statementPriceSupplement.item=null">取消</button>
+</div></div></td></tr>
                 </template>
               </tbody></table>
               <div v-if="pendingStatementCharges.length" style="margin-top:12px"><div class="section-title">已确认客户附加收费</div><table><thead><tr><th>选择</th><th>客户单号</th><th>收费名称</th><th>数量/单位</th><th class="sensitive-price">应收金额</th></tr></thead><tbody><tr v-for="charge in pendingStatementCharges" :key="`statement-charge-${charge.id}`"><td><input type="checkbox" v-model="statementForm.selectedCharges[charge.id]" /></td><td><order-reference :row="charge"></order-reference></td><td>{{ charge.display_name }}<div class="muted">{{ customerChargeTypeText(charge.charge_type) }}</div></td><td>{{ charge.quantity }} {{ charge.unit }}</td><td class="sensitive-price">¥ {{ money(charge.amount) }}</td></tr></tbody></table></div>
@@ -10764,6 +10770,7 @@
             unorderedFinishedPicker: { visible: false, loading: false, keyword:"", items: [], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message: "", error: false },
             tianhuaPreimport: { files:[], preDeliveryDate:plusDays(1), batchId:null, batchNumber:"", items:[], draft:null, mobileToken:null, remark:"天华邮件截图导入" },
             statementForm: { customer_id: null, statement_month: month(), selected: {}, selectedCharges:{}, idempotency_key:null },
+            statementPriceSupplement: {item:null, saving:false, committed:false, payload:null},
             expandedStatementDeliveries: {}, statementCyclePeriod: "",
             passwordForm: { current_password: "", new_password: "", confirm_password: "" },
             resetPasswordForm: { username: "", new_password: "", confirm_password: "" },
@@ -37154,6 +37161,7 @@
             if (statementMonth && typeof statementMonth !== "string") statementMonth = null;
             this.statementForm = { customer_id:preferredCustomerId ? Number(preferredCustomerId) : null, statement_month:statementMonth || month(), selected:{}, selectedCharges:{}, idempotency_key:null };
             this.expandedStatementDeliveries = {};
+            this.statementPriceSupplement = {item:null, saving:false, committed:false, payload:null};
             this.pendingStatements = [];
             this.pendingStatementCharges = [];
             this.statementCustomers = [];
@@ -37241,6 +37249,45 @@
           async refreshStatementFilters() {
             await this.loadStatementCustomers();
             await this.loadPendingStatements();
+          },
+          openStatementPriceSupplement(item) {
+            if (this.statementPriceSupplement.saving || this.statementPriceSupplement.payload) return;
+            this.statementPriceSupplement = {item:{...item}, customerId:this.statementForm.customer_id,
+              statementMonth:this.statementForm.statement_month, unit_price:"", price_tax_mode:"", tax_rate:"",
+              note:"对账前首次补录实际成交价", saving:false, committed:false, payload:null};
+          },
+          async saveStatementPriceSupplement() {
+            const state = this.statementPriceSupplement;
+            if (!state.item || state.saving || state.committed) return false;
+            if (state.customerId !== this.statementForm.customer_id || state.statementMonth !== this.statementForm.statement_month) {
+              this.showToast("客户或账期已变化，请重新打开补价明细",true); return false;
+            }
+            if (!state.payload) {
+              if (!Number.isFinite(Number(state.unit_price)) || Number(state.unit_price)<=0 || !["tax_inclusive","tax_exclusive"].includes(state.price_tax_mode) || state.tax_rate==="" || !Number.isFinite(Number(state.tax_rate)) || Number(state.tax_rate)<0 || Number(state.tax_rate)>1) {
+                this.showToast("请填写大于0的实际成交单价，并选择含税口径和税率",true); return false;
+              }
+              state.payload = {unit_price:String(state.unit_price),price_tax_mode:state.price_tax_mode,tax_rate:String(state.tax_rate),
+                note:state.note || "对账前首次补录实际成交价",expected_delivery_version:state.item.delivery_version,
+                expected_receipt_version:state.item.receipt_version,idempotency_key:createIdempotencyKey()};
+            }
+            state.saving = true;
+            const form = this.statementForm;
+            try {
+              await axios.post(`/api/finance/delivery-items/${state.item.delivery_item_id}/supplement-price`,state.payload);
+              state.committed = true;
+              this.showToast("销售单价已补录；签收数量和库存未变，可以继续生成对账单");
+              try {
+                if (this.statementForm === form && this.modal.type === "statement") await this.loadPendingStatements();
+                await this.loadFinance();
+                if (this.statementPriceSupplement === state) this.statementPriceSupplement={item:null,saving:false,committed:false,payload:null};
+              } catch (error) { this.showToast("价格已保存，但列表刷新失败；请刷新查看，不要重复补录",true); }
+              return true;
+            } catch (error) {
+              const status = Number(error?.response?.status || 0);
+              if (status>=400 && status<500) state.payload=null;
+              this.showToast(status ? this.errorMessage(error) : "保存结果暂不确定，请点击重试；将使用同一请求核对，避免重复补录",true);
+              return false;
+            } finally { state.saving=false; }
           },
           async openStatementDetail(row) {
             const requestId = this.statementDetailRequestId = (this.statementDetailRequestId || 0) + 1;

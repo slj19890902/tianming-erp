@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.477"
-APP_VERSION_NAME = "对账客户定位与待办归属修复"
+APP_VERSION = "v0.22.478"
+APP_VERSION_NAME = "无订单送货首次销售补价"
 APP_BUILD_DATE = "2026-09-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4526,3 +4526,15 @@ APP_VERIFICATION_STEPS = [
     "查看新振8月XZ-20260819-002，确认1500个纸箱42×37×22显示待补价；按真实成交依据走受控更正，不以零价生成。",
 ]
 APP_CHANGELOG = [*(f"v0.22.477：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "待对账缺价明细增加补录销售单价入口，可填写实际成交价、含税口径和税率；已确认回单的无订单库存送货无需撤销回单即可首次补价。",
+    "只允许缺失价格且未进入对账单的当前明细；已有销售价格和冻结合同不能覆盖。保留权限、客户范围、版本、重复提交和审计保护，不改签收数量、库存及原打印记录。",
+    "补价后刷新待对账金额并可继续生成对账单，未税价格按明确税率计入应收。程序发布不会自动填入任何正式成交价。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新客户对账，在待对账找到新振2026-08，点击查看缺价明细，展开XZ-20260819-002。",
+    "对1500只纸箱42×37×22点击补录销售单价，填写真实成交单价、单价口径和税率后保存。",
+    "核对金额和数量，确认缺价提示解除后再按实际业务生成对账单；不要用测试价格录入正式记录。",
+]
+APP_CHANGELOG = [*(f"v0.22.478：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

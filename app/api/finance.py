@@ -26,7 +26,7 @@ from app.api.deps import (
     has_unrestricted_customer_access,
     require_customer_access,
 )
-from app.core.time_contract import beijing_today
+from app.core.time_contract import beijing_today, beijing_now_naive
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
 from app.models.customer import Customer
@@ -3858,6 +3858,124 @@ def update_return_receipt_reconciliation_month(
     return response
 
 
+class MissingDeliveryPricePayload(BaseModel):
+    expected_delivery_version: int = Field(gt=0)
+    expected_receipt_version: int = Field(gt=0)
+    unit_price: Decimal = Field(gt=0, max_digits=12, decimal_places=4)
+    price_tax_mode: str
+    tax_rate: Decimal = Field(ge=0, le=1, max_digits=7, decimal_places=6)
+    note: str = Field(default="对账前首次补录实际成交价", min_length=2, max_length=300)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+    @field_validator("price_tax_mode")
+    @classmethod
+    def valid_tax_mode(cls, value: str) -> str:
+        if value not in VALID_PRICE_TAX_MODES:
+            raise ValueError("请选择含税或未税单价")
+        return value
+
+
+@router.post("/delivery-items/{item_id}/supplement-price")
+def supplement_missing_delivery_price(
+    item_id: int, payload: MissingDeliveryPricePayload,
+    db: Session = Depends(get_db), user: User = Depends(can_operate),
+) -> dict:
+    """First pricing only: never revise a receipt, an inventory fact or a frozen sale."""
+    item = db.get(DeliveryItem, item_id)
+    if item is None:
+        raise HTTPException(404, "送货明细不存在")
+    delivery = db.get(Delivery, item.delivery_id)
+    require_customer_access(delivery.customer_id, user, db)
+    action = "unordered_delivery_price_supplement"
+    request_hash = _finance_request_hash(action, {"item_id": item_id, **payload.model_dump(exclude={"idempotency_key"})})
+
+    def replay():
+        return _finance_idempotency_replay(db, idempotency_key=payload.idempotency_key,
+            request_hash=request_hash, action=action, actor=user)[0]
+
+    previous = replay()
+    if previous is not None:
+        return previous
+    try:
+        claimed = db.execute(update(Delivery).where(
+            Delivery.id == delivery.id, Delivery.version == payload.expected_delivery_version,
+            Delivery.status == "dispatched",
+        ).values(version=Delivery.version + 1).execution_options(synchronize_session=False))
+        if claimed.rowcount != 1:
+            raise HTTPException(409, "送货单状态或版本已变化，请刷新后重试")
+        # The write claim serializes with receipt/statement mutations. Re-read
+        # eligibility after acquiring it, including any existing statement link.
+        db.refresh(item)
+        receipt = db.scalar(select(ReturnReceipt).where(ReturnReceipt.delivery_id == delivery.id))
+        if receipt is None or receipt.status != "confirmed":
+            raise HTTPException(409, "只允许对已确认回单的送货明细补录单价")
+        _claim_return_receipt_version(db, receipt_id=receipt.id, expected_status="confirmed",
+                                      expected_version=payload.expected_receipt_version)
+        linked = db.scalar(select(StatementItem.id).join(ReturnReceiptItem,
+            ReturnReceiptItem.id == StatementItem.return_receipt_item_id
+        ).where(ReturnReceiptItem.delivery_item_id == item_id).limit(1))
+        if linked is not None:
+            raise HTTPException(409, "明细已进入对账单，不能在补价入口修改历史")
+        if (not item.is_current or item.source_type != "unordered_finished"
+                or item.unit_price_snapshot is not None or item.sales_contract_json is not None):
+            raise HTTPException(409, "只允许补录当前无订单明细的缺失单价，已有价格和销售快照不能覆盖")
+        from app.services.delivery_snapshots import sales_contract
+        try:
+            contract = sales_contract(unit=item.unit_snapshot, price=payload.unit_price,
+                tax_mode=payload.price_tax_mode, tax_rate=payload.tax_rate,
+                source={"kind": action, "actor_id": user.id, "recorded_at": beijing_now_naive().isoformat(), "timezone": "Asia/Shanghai",
+                        "delivery_id": delivery.id, "delivery_version": payload.expected_delivery_version + 1,
+                        "note": payload.note})
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
+        before = {"unit_price_snapshot": None, "sales_contract_json": None, "price_source": item.price_source}
+        item.unit_price_snapshot = payload.unit_price
+        item.sales_contract_json = contract
+        item.price_source = "finance_supplement"
+        response = {"item_id": item_id, "delivery_id": delivery.id,
+                    "delivery_version": payload.expected_delivery_version + 1,
+                    "receipt_version": payload.expected_receipt_version + 1,
+                    "unit_price": str(payload.unit_price)}
+        _audit(db, user=user, action="SUPPLEMENT_DELIVERY_SALES_PRICE", resource="DeliveryItem",
+            entity_id=item_id, description="首次补录无订单库存送货销售价格；不修改签收数量及库存",
+            details={"before": before, "after": {"unit_price_snapshot": str(payload.unit_price),
+                     "sales_contract_json": contract, "price_source": item.price_source},
+                     "delivery_id": delivery.id, "receipt_id": receipt.id, "note": payload.note,
+                     "expected_delivery_version": payload.expected_delivery_version,
+                     "expected_receipt_version": payload.expected_receipt_version})
+        _record_finance_idempotency(db, idempotency_key=payload.idempotency_key, request_hash=request_hash,
+            action=action, actor=user, resource_type="delivery", resource_id=delivery.id, response=response)
+        db.commit()
+        return response
+    except HTTPException as error:
+        db.rollback()
+        if error.status_code == 409:
+            previous = replay()
+            if previous is not None:
+                return previous
+        raise
+    except (IntegrityError, OperationalError) as error:
+        db.rollback()
+        previous = replay()
+        if previous is not None:
+            return previous
+        raise HTTPException(409, "价格或关联记录正在变化，请刷新后重试；未补价") from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _pending_line_amount(unit_price):
+    # Newly supplemented exclusive prices carry explicit tax terms; keep the
+    # pending projection equal to the amount that statement creation freezes.
+    base = ReturnReceiptItem.actual_received_quantity * unit_price
+    supplemented_exclusive = and_(DeliveryItem.price_source == "finance_supplement",
+        func.json_extract(DeliveryItem.sales_contract_json, "$.tax_mode") == "tax_exclusive")
+    return case((supplemented_exclusive,
+                 func.round(base, 2) + func.round(func.round(base, 2) * func.json_extract(DeliveryItem.sales_contract_json, "$.tax_rate"), 2)),
+                else_=base)
+
+
 def _pending_statement_query(
     customer_id: int,
     *,
@@ -3876,10 +3994,15 @@ def _pending_statement_query(
         select(
             ReturnReceiptItem.id.label("return_receipt_item_id"),
             ReturnReceipt.id.label("return_receipt_id"),
+            ReturnReceipt.version.label("receipt_version"),
             ReturnReceipt.actual_received_date,
             ReturnReceipt.reconciliation_month,
             ReturnReceiptItem.reconciliation_month_override,
             Delivery.id.label("delivery_id"),
+            Delivery.version.label("delivery_version"),
+            DeliveryItem.id.label("delivery_item_id"),
+            DeliveryItem.source_type.label("delivery_source_type"),
+            DeliveryItem.unit_snapshot,
             Delivery.delivery_number,
             Delivery.delivery_date,
             Delivery.customer_id,
@@ -3913,9 +4036,7 @@ def _pending_statement_query(
             DeliveryItem.over_delivery_quantity,
             ReturnReceiptItem.actual_received_quantity,
             effective_unit_price.label("unit_price"),
-            (
-                ReturnReceiptItem.actual_received_quantity * effective_unit_price
-            ).label("receivable_amount"),
+            _pending_line_amount(effective_unit_price).label("receivable_amount"),
             ReturnReceiptItem.difference_reason,
             StatementItem.id.label("statement_item_id"),
             StatementItem.statement_id,
@@ -4084,7 +4205,7 @@ def _pending_statement_groups(
                 ).quantize(MONEY, rounding=ROUND_HALF_UP),
                 "selection_blocked": selection_blocked,
                 "exception_reason": (
-                    "缺少冻结销售单价，金额待核定；请核对原送货单，通过受控回单/送货更正流程补齐实际成交价后再对账。"
+                    "缺少冻结销售单价，金额待核定；请展开明细，点击补录销售单价，填写实际成交价后再对账。"
                     if missing_price_count
                     else
                     "该送货单已有部分明细进入其他对账单，请先处理原对账单。"
@@ -4183,7 +4304,7 @@ def pending_statement_customer_summaries(
         case(
             (
                 StatementItem.id.is_(None),
-                ReturnReceiptItem.actual_received_quantity * effective_unit_price,
+                _pending_line_amount(effective_unit_price),
             ),
             else_=0,
         )

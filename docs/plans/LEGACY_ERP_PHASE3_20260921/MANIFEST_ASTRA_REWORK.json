@@ -1,15 +1,1672 @@
 {
   "schema_version": 2,
   "hash_rule": "SHA-256 of file bytes with CRLF normalized to LF",
-  "source_commit": "26e3a4008c71006e7337799a7acf2cb24bc49422",
+  "source_commit": "656e9d76b3050793c094512a5af091482c48f485",
+  "source_commit_scope": "tested code/tools; documents are identified by final file hashes and external final commit receipt",
   "manifest_excluded_from_hashed_universe": true,
   "groups": [
     {
-      "name": "code",
+      "name": "application_code",
       "files": [
         {
-          "path": "scripts/qa/verify_phase3_manifest.py",
-          "sha256_lf": "2ce7074833276f23b130a0e28e2d29865bf6b984ac0aec77558e9b1c79870944"
+          "path": "app/__init__.py",
+          "sha256_lf": "e2205b525f06d7a8f87cf14cbc5d3c8f25143ceeb4cb07e2e37fdcb85aac2301"
+        },
+        {
+          "path": "app/api/__init__.py",
+          "sha256_lf": "37840e613d0db8134063ba2fe1d84f0e0e68d127ccb0c26271e999a17b5b97b0"
+        },
+        {
+          "path": "app/api/admin_order_reversal.py",
+          "sha256_lf": "7ac91ffecfe80f8d6f47e29a869873feb71dfedbe0040b1c743a7a848318d5f8"
+        },
+        {
+          "path": "app/api/ai_assistant.py",
+          "sha256_lf": "f724e10ff4b7f73b0f5372c5b425fe4348712799bd9579b3e14dc0e29802daae"
+        },
+        {
+          "path": "app/api/audit.py",
+          "sha256_lf": "b8e934cac719603c44f53c504002007e49484c670b1e1d7caa45656799e0468c"
+        },
+        {
+          "path": "app/api/auth.py",
+          "sha256_lf": "ef27a1506332e0cd2e2154cc0ae06c8aa045d61c79b35aecdf33c0caec87b0f3"
+        },
+        {
+          "path": "app/api/bom_assembly_confirmation.py",
+          "sha256_lf": "6a2ff1b386900839f82029a3b9b3c5e1e64c8fa365be3ca446b4bd1cf7bd91aa"
+        },
+        {
+          "path": "app/api/bom_cutover.py",
+          "sha256_lf": "0af85c22b735d5d2a8097e596979e7f9d30626c1729abe568b95c7276496311f"
+        },
+        {
+          "path": "app/api/contracts.py",
+          "sha256_lf": "758b988e652967546e7c767723d793b1386039dd8ca1fa51fe094daf7ef15a40"
+        },
+        {
+          "path": "app/api/cost_accounting.py",
+          "sha256_lf": "7c9a6151b0218dcfb9a3f172015b841a3498c6a78c109969a729a12ba6bdb9d2"
+        },
+        {
+          "path": "app/api/customers.py",
+          "sha256_lf": "6c170c2fbe718b9a94ef5b2f7291ba8e776d0799b1d210c1036b813f55be2700"
+        },
+        {
+          "path": "app/api/dashboard.py",
+          "sha256_lf": "2890c8f0e1c453cc3d75798c9d70e4588ab5bf2cff587e8fb2ba7fa78ef5df6d"
+        },
+        {
+          "path": "app/api/deliveries.py",
+          "sha256_lf": "fd76764b41da70c030a0ff340fdb48e56e2b1c1ccdec644119b73229fe32b2a4"
+        },
+        {
+          "path": "app/api/delivery_backlogs.py",
+          "sha256_lf": "adbb13e385f61cb66cdc84f83e071d510599eddb79ffbb22493fe7fee9a59a6f"
+        },
+        {
+          "path": "app/api/deps.py",
+          "sha256_lf": "bfd0a71411f3217b27a4730fe37412b0be348e4e7822fa16dffa539292efb815"
+        },
+        {
+          "path": "app/api/email_intake.py",
+          "sha256_lf": "b5d25f79199823c981ef2ed5613ae16af425e934d3d783d5843e2e1af80d22ec"
+        },
+        {
+          "path": "app/api/external_packaging_components.py",
+          "sha256_lf": "f32c460935d6d129af51887b968b29cb2695c922c6bc588f7e426b134ba8dd96"
+        },
+        {
+          "path": "app/api/external_packaging_prices.py",
+          "sha256_lf": "27e08f861d61943fe7f50f8060ef15ce3795613b253ebed616db9807b998eb22"
+        },
+        {
+          "path": "app/api/external_packaging_purchases.py",
+          "sha256_lf": "eaee469b18e84971fcf4eb0ce1e16eaa11e275e51e0a17be1b184f2d0c8c6651"
+        },
+        {
+          "path": "app/api/finance.py",
+          "sha256_lf": "e9efe37a585836132ff51fb9178dfd9e7838c3a548165a378615427f7064bbba"
+        },
+        {
+          "path": "app/api/finance_simplified.py",
+          "sha256_lf": "e0ffc8f2517e69d9f9a8292e415e285effa00c54b2e4b94f7b7e64041e49959e"
+        },
+        {
+          "path": "app/api/fixed_shelf.py",
+          "sha256_lf": "aa97886b33eceab6de50e90f9d8b06a9a45cb3537187da57f41b6a1c00d221b4"
+        },
+        {
+          "path": "app/api/incoming.py",
+          "sha256_lf": "c722d7d891a0eb225c62f3f961e783963f34ba98bb681c233edd6b45818a88ba"
+        },
+        {
+          "path": "app/api/inventory_assistant.py",
+          "sha256_lf": "3affcd7799a2f8cc29e43aa09bd6066394df2463c232ed66566d0efaf2f0ee87"
+        },
+        {
+          "path": "app/api/inventory_cost_rules.py",
+          "sha256_lf": "c1384c38a5f465261be588e34d9ce5dbf6d569616080ad42a935e0581da6e30a"
+        },
+        {
+          "path": "app/api/inventory_onboarding.py",
+          "sha256_lf": "7ca5ebf8764cd2992b3ce95632ba7b78b2b400b8435f31d51536611b29ec81ad"
+        },
+        {
+          "path": "app/api/invoice_tasks.py",
+          "sha256_lf": "906b93388a826f5ec2b8de1a37461845bebe6c58e740c08308e2d1541958e386"
+        },
+        {
+          "path": "app/api/master_data_common.py",
+          "sha256_lf": "b112a6148b60b4793eb6dc249af33d591a2442d1c1706d1b8f438ef47fc674a5"
+        },
+        {
+          "path": "app/api/master_data_versions.py",
+          "sha256_lf": "96db1847304b4f6da5932c0207ee7af0a1a5e55c768244cd8dacda58104d3c7b"
+        },
+        {
+          "path": "app/api/material_candidates.py",
+          "sha256_lf": "c2b24df48daabde06f283de1c8d9b96202509cf1ef78e5676bb5c3d0a0019721"
+        },
+        {
+          "path": "app/api/materials.py",
+          "sha256_lf": "768fcb70ebc976443e7eb561ab3c3c565e4dbd1f833509eaefa7b6c50c5c2c34"
+        },
+        {
+          "path": "app/api/mobile_erp.py",
+          "sha256_lf": "295568126aa5ba80dcd1fb77af59d2c7b60a8443547025600e55d4037ada6135"
+        },
+        {
+          "path": "app/api/mobile_stock_use.py",
+          "sha256_lf": "7584c2aa4ce406d4ea2eba907db3d9f9402de57ff7e2888376e6ca3a66fbbc10"
+        },
+        {
+          "path": "app/api/orders.py",
+          "sha256_lf": "7d1468e6ea3a2e45a08e093e50ab8967eadeb0ae25e4b9180377d16e07f79dbf"
+        },
+        {
+          "path": "app/api/pdf_training.py",
+          "sha256_lf": "47bff40c1b43a7a6cdc0a42edb37c659ceb909bc92150a9b437fd0961c55130d"
+        },
+        {
+          "path": "app/api/pricing.py",
+          "sha256_lf": "dce9c15a530411794bf45287719fe477e288d512aba63f26df1a5a0bfdb21c23"
+        },
+        {
+          "path": "app/api/processing_cost.py",
+          "sha256_lf": "9d825c07d7062c1b50b8d224a5909b9a2ce5e46aca4f807d73334b89f04a2377"
+        },
+        {
+          "path": "app/api/product_import.py",
+          "sha256_lf": "1eff239c1e619c37d111bb769440720dd115689499fcff54c538297f88b5c5a2"
+        },
+        {
+          "path": "app/api/production.py",
+          "sha256_lf": "839fae4c596d72fbdc1138926219da6767aae21429d4a1e029d2a524f65eeb5a"
+        },
+        {
+          "path": "app/api/products.py",
+          "sha256_lf": "3878df9028d17e14c501c8b56d1b511a4b5f1307437b885604ba50717fdaad24"
+        },
+        {
+          "path": "app/api/quotations.py",
+          "sha256_lf": "8897bc9117f05f9d4a05826c04b6ed1d6db2c0dde1aff6d9f0da587cadf078e6"
+        },
+        {
+          "path": "app/api/raw_purchase_plans.py",
+          "sha256_lf": "1a412758adeb2c1c607e465ab125820126226855dcb74dc0ae061dd6dcf907c5"
+        },
+        {
+          "path": "app/api/requisition.py",
+          "sha256_lf": "1ea3d70b5ffd7642d29539ddcaf49a3f7a3d89111019b57a3785773de901756b"
+        },
+        {
+          "path": "app/api/shelf_pick_scan.py",
+          "sha256_lf": "2c883e2955c0b0963735ed18c9b54976e4695d36d1ee15689dd0bebc5a00cc5c"
+        },
+        {
+          "path": "app/api/stock_preparation.py",
+          "sha256_lf": "9255ccb3e5e3117f6fe8037c0a7b5013f50f208863196700a3137e82ea9514c1"
+        },
+        {
+          "path": "app/api/stocktake.py",
+          "sha256_lf": "f94ae3ef569ccfc11dd82e123e14edc9f937ef14d3b212163d8993c14b3449ab"
+        },
+        {
+          "path": "app/api/supplier_settlements.py",
+          "sha256_lf": "5563cddc5a4884fe4c49d4c330262c3a065315e1b8f6f2cc32eaa86de5389426"
+        },
+        {
+          "path": "app/api/suppliers.py",
+          "sha256_lf": "f90796381ed78a5d075a55b7babd31481afcc87f368d32c95877dae0cb5b9327"
+        },
+        {
+          "path": "app/api/system.py",
+          "sha256_lf": "841e1a4f06bb860ac14c8cc15fde4bea519eb0135ce051504b3da5b46db6f124"
+        },
+        {
+          "path": "app/api/tianhua_pre_delivery.py",
+          "sha256_lf": "500756af16e7ba21074b56ca0b1ceefeae6c82b6de436dd764b7eab31e2b2b27"
+        },
+        {
+          "path": "app/api/warehouse.py",
+          "sha256_lf": "3cb6f1733481f776423494cedeb183b20e9fe827f4370d46d2f16e89b8d24a19"
+        },
+        {
+          "path": "app/api/warehouse_goods.py",
+          "sha256_lf": "aa77de865366521412c555d3b3bba84fc94473ba2d36154dc1d7b76c971fa771"
+        },
+        {
+          "path": "app/core/__init__.py",
+          "sha256_lf": "58e6c7608a42a171f9435156edba2e42648de82bdcdff8625cc857b07d5387c8"
+        },
+        {
+          "path": "app/core/backup_retention.py",
+          "sha256_lf": "873021b50072a237690e0fdae8bf670b20d6177b2af7c2503b947dbcf24b1ea3"
+        },
+        {
+          "path": "app/core/config.py",
+          "sha256_lf": "42da3cd7bbb9de9697a7576440876deb129c5b81329d66ca1d3baf1df580e37e"
+        },
+        {
+          "path": "app/core/database.py",
+          "sha256_lf": "e64f94df92d41cb917f9f1c69fab7e269e4b42144b5d3f84ebb6bb586d902105"
+        },
+        {
+          "path": "app/core/password_policy.py",
+          "sha256_lf": "abeea381bfb503cf828132d3a5fb8c72868ee35640c0c2551f6dd05d6433b5fe"
+        },
+        {
+          "path": "app/core/receipt_price_guard.py",
+          "sha256_lf": "d1b731cee5652d07f19c94e08622fab14d88ceafacd4103dd6eaa3f5746e10d2"
+        },
+        {
+          "path": "app/core/request_context.py",
+          "sha256_lf": "8c3ada8958a8e69ecfb16832f199709a3e9c569cf2d0f4cfe692109f9db7f236"
+        },
+        {
+          "path": "app/core/security.py",
+          "sha256_lf": "a46a676d86df1c0c49d1018c097b83185eb94a74fd56836ae769bf0a48c0c88d"
+        },
+        {
+          "path": "app/core/time_contract.py",
+          "sha256_lf": "5b2275964571742e1dd0100209d278f344bdde5a03aa99b8be458c076d21fdf1"
+        },
+        {
+          "path": "app/core/uat_isolation.py",
+          "sha256_lf": "61027b8767c9bab00ec8af5054e6a06820ce2e59207c5b524c03260da6edcd4a"
+        },
+        {
+          "path": "app/main.py",
+          "sha256_lf": "469aca18990f212c2d9fe4dbdf6366f5c04a6f1d582579c9ad99a7f63f272015"
+        },
+        {
+          "path": "app/middleware/__init__.py",
+          "sha256_lf": "5fdc6755d416a1a6fc954edca922cf76ffbe46ded8391ec3016cd48d063470b2"
+        },
+        {
+          "path": "app/middleware/mold_private.py",
+          "sha256_lf": "21a886cba5abb664e0606b770cb70af68a55f2906b288043200ee64f6ba676a5"
+        },
+        {
+          "path": "app/middleware/performance.py",
+          "sha256_lf": "2d4dc0ec1f741de371e52b960a97c918304e576cd6d586440bb472be86221212"
+        },
+        {
+          "path": "app/middleware/private_uploads.py",
+          "sha256_lf": "a5a7aca51b1918a0e5fd3594a60b261c379b38fbc88286bba4b78577ee6fa86d"
+        },
+        {
+          "path": "app/models/__init__.py",
+          "sha256_lf": "4ac727fc7d5c3bdc7241271549a029e09a445cbef8967257eef9b6189025dc2b"
+        },
+        {
+          "path": "app/models/access_control.py",
+          "sha256_lf": "0db69f32d9b4f52dca3c6063dbcd9c0e4f6ff52990e3973cb66518e2c6e3563c"
+        },
+        {
+          "path": "app/models/ai_assistant.py",
+          "sha256_lf": "ce7b8e10be073624b521ee04f857f87f1142f380946c5a38188c85ca2390759e"
+        },
+        {
+          "path": "app/models/audit.py",
+          "sha256_lf": "edb278dd9b25b7a29fbed5f5b471e79cde082dd14ba05117bb88a5c4b7613e22"
+        },
+        {
+          "path": "app/models/bom_subkit.py",
+          "sha256_lf": "d10e9e17cc528bbf97e66fe06e403fb132c6892acf5aff58d3ebe0872e8898d6"
+        },
+        {
+          "path": "app/models/company_config.py",
+          "sha256_lf": "a378b944a2782ed90ede607fde07237c702b078254867ec68fe6c180f337d599"
+        },
+        {
+          "path": "app/models/customer.py",
+          "sha256_lf": "00c519d4fe6d82838463a8bc09a3e752a01b3fd01e396d5b0ac9d843d0113cb2"
+        },
+        {
+          "path": "app/models/customer_charge.py",
+          "sha256_lf": "f5e1379ab4b7f02a90f204afa5c3bbd3c88b31a4a510d5802c31ccd58bd059c5"
+        },
+        {
+          "path": "app/models/customer_contract.py",
+          "sha256_lf": "f4d61551a4d91a011ef94c1bc4ca3d63065a5fe0def7d2e2cbb4efecf8f827b4"
+        },
+        {
+          "path": "app/models/customer_finished_storage_preference.py",
+          "sha256_lf": "451ff6ed0f454ae651179be7ff65e086d903f997b62290a3d61ef9ef4f67aed4"
+        },
+        {
+          "path": "app/models/customer_material.py",
+          "sha256_lf": "8740965c879f6f1cb7771044fa50552b28eb63f945ce61fbf28e69c4f80fa7fc"
+        },
+        {
+          "path": "app/models/customer_quote_preference.py",
+          "sha256_lf": "845e37cb810da6a0e73aeaf2be764f8d545cdaad77b94b3e1d781cfdc3941bf4"
+        },
+        {
+          "path": "app/models/delivery.py",
+          "sha256_lf": "9ba2d918b319fea11648d436ff6bc0d1900c36085d14ebd8e69c0143a5ad22b6"
+        },
+        {
+          "path": "app/models/delivery_backlog.py",
+          "sha256_lf": "236268f49b5dc0c894caa1f7ea73de89e1f9a34b54268c5e56b6b92cc853bd3c"
+        },
+        {
+          "path": "app/models/delivery_print_template.py",
+          "sha256_lf": "83bbefa12613557fb00b54278f9b433aea7aa3d472317854705d956975112943"
+        },
+        {
+          "path": "app/models/email_intake.py",
+          "sha256_lf": "9db7a0c28fbf16684990c059282ff1a25d01b0fa185585e67e00a87d7e53da87"
+        },
+        {
+          "path": "app/models/external_packaging_component.py",
+          "sha256_lf": "90c36a076b936f61dde55581d5f66a757e9304b84ab79ae1b72694c560117c95"
+        },
+        {
+          "path": "app/models/external_packaging_price.py",
+          "sha256_lf": "cb49325c9e1f3dd9783fe8215cf3d978b2ef9c0797357d421fe354c59ca44f75"
+        },
+        {
+          "path": "app/models/external_packaging_purchase.py",
+          "sha256_lf": "053ba23b2781ad56332cba05ee58f1741992567dcda98856622e5560f296984a"
+        },
+        {
+          "path": "app/models/finance.py",
+          "sha256_lf": "12ca7d4c9f592573348afcb4408fb06ef1260db5b633910de2ceed2f4dd4dce5"
+        },
+        {
+          "path": "app/models/finance_cost.py",
+          "sha256_lf": "1dcd82eab1dc90d0ecaaf34184f41614ec7fa677ae7154dffefdc7da77bd8065"
+        },
+        {
+          "path": "app/models/finance_payable.py",
+          "sha256_lf": "8b97653c60788df4265b9dc58f01bfbf4939c6b3e2a5ee39ec504243e58a2c2c"
+        },
+        {
+          "path": "app/models/finance_simplified.py",
+          "sha256_lf": "0ef683cf4240cd31863ab9c37782c12a0263f9f5e538d3f97e5958331036022f"
+        },
+        {
+          "path": "app/models/fixed_shelf.py",
+          "sha256_lf": "5617d117eb9d6105ec845e7b2ddf2c571c1d3ec41eb4307e81dbb47853307198"
+        },
+        {
+          "path": "app/models/fulfillment_reminder.py",
+          "sha256_lf": "985665839396a0a8bc5266813e5604686f66619447ec9443ce7e57c3b902d0ef"
+        },
+        {
+          "path": "app/models/graph_material_cost.py",
+          "sha256_lf": "0f05d4f8fce19dc14992991efd84faaac327d45253831f4875c34708a43c241f"
+        },
+        {
+          "path": "app/models/historical_purchase.py",
+          "sha256_lf": "4bb8759f17db2da005b954701b5015c330842ec81fffe3c7a2c4dcf671396338"
+        },
+        {
+          "path": "app/models/historical_requisition.py",
+          "sha256_lf": "7541259d376f333b10759daac649be575066fb1abe5466253faf9f7cd60c3729"
+        },
+        {
+          "path": "app/models/incoming_receipt.py",
+          "sha256_lf": "945d8661180d0450421aca3ded96cd8c41fe2d587e75ea0fc06a26902731c291"
+        },
+        {
+          "path": "app/models/inventory_cost_rule.py",
+          "sha256_lf": "096dcb1249e74c6e7362454b87410699a39609bee5d6ecc5e22e99573f014e3d"
+        },
+        {
+          "path": "app/models/inventory_onboarding.py",
+          "sha256_lf": "9cdedc18228efd8966331eb2080bf7f0ce8021393bb9a562a33947c9b32ce172"
+        },
+        {
+          "path": "app/models/inventory_onboarding_posting.py",
+          "sha256_lf": "c0b802e3e13de369864f11fa6762a8da2ee9da147472c10c1ac5635cbce9dadd"
+        },
+        {
+          "path": "app/models/invoice_task.py",
+          "sha256_lf": "bc585d8b41d61210eb8eb7cc34b39c1e398a3434575857e9b3f532bc07cbab76"
+        },
+        {
+          "path": "app/models/master_data_object_version.py",
+          "sha256_lf": "f77feef2cbb7f13ff085e9a5e8e40678a8868dd8193cb345107f771efcb059be"
+        },
+        {
+          "path": "app/models/material.py",
+          "sha256_lf": "0d1b8d9caa481baa025f8b4c8fd8f02ff5f483447bf324f525546568a2d088ab"
+        },
+        {
+          "path": "app/models/material_candidate.py",
+          "sha256_lf": "81d749a4834f977ef9f1c40d5293bec6ce6a253381b84f6d6078cf0ca34aaf06"
+        },
+        {
+          "path": "app/models/material_cost.py",
+          "sha256_lf": "9f4c74f10f1b7147932ffe068716478e5a44e9f04c80b1e85a3e1b4028fe0feb"
+        },
+        {
+          "path": "app/models/material_cost_supplement.py",
+          "sha256_lf": "66ad1ce0527b2aff6008ef7b42d1d3aceb25fe44fa025d2a5fa1b8e2f805435e"
+        },
+        {
+          "path": "app/models/material_mapping.py",
+          "sha256_lf": "8d59a1f971a4fcd19d48c98813f4dcb7c05f2e169aa97c23d59d59de4dcf2697"
+        },
+        {
+          "path": "app/models/material_price_history.py",
+          "sha256_lf": "2ada6918d162af36ad373c6527a2f0bce31b351f3b435f65f35111faf3582c4f"
+        },
+        {
+          "path": "app/models/migration.py",
+          "sha256_lf": "cbcd922ed4becc633ce2b825609d2f6325446a417f23c4de2685ce936aa7a93c"
+        },
+        {
+          "path": "app/models/mold_tool.py",
+          "sha256_lf": "59f506ba4b99d24a8963a2d7399c84e7ab886faf0334ee59fbf0a96d8c0eb5f8"
+        },
+        {
+          "path": "app/models/multilevel_bom.py",
+          "sha256_lf": "a4b6aeb7cf39452a2a3c1fe4beb050c37dcb7058a5a8d8422b2b1a885cb51dda"
+        },
+        {
+          "path": "app/models/order.py",
+          "sha256_lf": "264f797a136e4df3286d9fad4db9ddca641c7d9d3bad801115594d61f9c6c318"
+        },
+        {
+          "path": "app/models/order_estimated_cost_snapshot.py",
+          "sha256_lf": "eae0fa838c1679da08fd76516271165d6e6b50f1c593096bf3e855470570d5e4"
+        },
+        {
+          "path": "app/models/order_external_packaging.py",
+          "sha256_lf": "6b1042152184b8fa5d9afc9de2e734f72c47138fbb634c7404d619f72eaa9898"
+        },
+        {
+          "path": "app/models/order_import_source.py",
+          "sha256_lf": "29f2b048233cb20c95639ab7a3281986392c5e3d58f0e46f018c6c6e78123897"
+        },
+        {
+          "path": "app/models/order_material_cost_snapshot.py",
+          "sha256_lf": "269a268deb48b5f6bebea8f732ca9187bfc7a05dca729cba27d11cd32e3df65c"
+        },
+        {
+          "path": "app/models/pdf_training.py",
+          "sha256_lf": "a9f877815b76d5f8ca68e44ceb6581b3e8c1f955f2ee7277383e916e1d93bfc1"
+        },
+        {
+          "path": "app/models/printing_plate.py",
+          "sha256_lf": "7db41a3a1a28945fb17b9275129633773e6723ae0abd6af4e4f6154476a70034"
+        },
+        {
+          "path": "app/models/processing_cost.py",
+          "sha256_lf": "a052b791f08551fdbaae3da5135c4ae370b7be65dc86cfb0d38e7f1d87c86b33"
+        },
+        {
+          "path": "app/models/procurement_source.py",
+          "sha256_lf": "6b8a7723855234dd22ee1af37b878b525e6375cacadc0ef216d110e65a2bbbc3"
+        },
+        {
+          "path": "app/models/product.py",
+          "sha256_lf": "7726d7b81c9efd981a161b1fa54520b656c5c9805cb62679ec6c3dccc1f14194"
+        },
+        {
+          "path": "app/models/product_bom.py",
+          "sha256_lf": "5f8eb28b3c325b093a6e85420ff98c938c6a95e3320560e8d3f6a157814addcc"
+        },
+        {
+          "path": "app/models/product_drawing.py",
+          "sha256_lf": "9eb0a0c3a146162817e237232b65bec0bf89f4f52dbd59463dcde6df04218d65"
+        },
+        {
+          "path": "app/models/production.py",
+          "sha256_lf": "70eb5a5d9c3802f0d12c4feac007f2b6027f4e285512f36497f4dbd4614f69f9"
+        },
+        {
+          "path": "app/models/production_label_print.py",
+          "sha256_lf": "d51406ea855dad42f4b63d8fb63dd52fd2a89eac4d1e355758f1c392f0cf4323"
+        },
+        {
+          "path": "app/models/purchase_receipt.py",
+          "sha256_lf": "14d8afe221db2b8a16fdbc5a988f36a1dccb840f6817e733be00e1e708680a50"
+        },
+        {
+          "path": "app/models/quotation.py",
+          "sha256_lf": "abc2dcb8d173846a772966da0643d1370f1cc85517cfa80a995bbf57fe11c761"
+        },
+        {
+          "path": "app/models/raw_purchase_plan.py",
+          "sha256_lf": "99d116e99a8d7fe1e5344671ef39e66fdf7bcbd8756c964d33b3e8ae2891e417"
+        },
+        {
+          "path": "app/models/receipt_putaway.py",
+          "sha256_lf": "98a84beda43b737315d74ae373f96ccaa705b7b3c47cc163d0c48e95c37c2dc3"
+        },
+        {
+          "path": "app/models/requisition.py",
+          "sha256_lf": "dac792afd815a2e03ae3b807df909e9782b89b9cffea6792559a57343f0c6b7d"
+        },
+        {
+          "path": "app/models/stock_preparation.py",
+          "sha256_lf": "942c1a32db903b4277795b41dc22075d906c7cf0dd7fcc801f7f71af8a5d201f"
+        },
+        {
+          "path": "app/models/stock_replenishment.py",
+          "sha256_lf": "cb4d5987bb0c0463cdf352d834242296a9278a1095917c76ef11cee0260a7462"
+        },
+        {
+          "path": "app/models/stocktake.py",
+          "sha256_lf": "fbd4ef4c705319545ea77dac2a71c26f854448c738c0b4df6943ef58378dad2f"
+        },
+        {
+          "path": "app/models/supplier.py",
+          "sha256_lf": "5de8377c69d502193db25ebd17b919251057565c4be4fc31dbf3a4f8645c47fc"
+        },
+        {
+          "path": "app/models/supplier_flute_price_rule.py",
+          "sha256_lf": "8c68846e9609d3bdcf33d5099a6d5ba6f9456f282261efdd23b1eb3a50356081"
+        },
+        {
+          "path": "app/models/supplier_material_rule.py",
+          "sha256_lf": "06c47858dd28145387105c764409c8d0e7756662a4032902962de2cc094b9ad9"
+        },
+        {
+          "path": "app/models/supplier_paper_code.py",
+          "sha256_lf": "146518b8eb4be320945558377922d3b25aad880da3208c1a07f534721e4787dc"
+        },
+        {
+          "path": "app/models/supplier_requisition_order.py",
+          "sha256_lf": "301b6a0b4b946f161e1301b12689cef21af5c34ae362a77eb4443eeb1a396fd7"
+        },
+        {
+          "path": "app/models/supplier_settlement.py",
+          "sha256_lf": "f02c0357d3d8a40d461c311806bca784b56ad783a9cdd4c9a24e35a17b8005a5"
+        },
+        {
+          "path": "app/models/tianhua_pre_delivery.py",
+          "sha256_lf": "df0466e83badeac0577f08145b4edd5a6d63837f91853dc277a2eb86b4be83af"
+        },
+        {
+          "path": "app/models/ui_layout_revision.py",
+          "sha256_lf": "097d24e76a768001dc67e78d600fa9d77aad205fd1cebb4e7537e0d2d138edf9"
+        },
+        {
+          "path": "app/models/user.py",
+          "sha256_lf": "22301ecb6cb7fd6363df9f9165ff1135e447e4e4f3f4da522b262bf85f975570"
+        },
+        {
+          "path": "app/models/warehouse_capacity.py",
+          "sha256_lf": "22b335e43ec606d21627463d16c7ffcd53193027fae7589b24d45b3e74f3041f"
+        },
+        {
+          "path": "app/models/warehouse_goods.py",
+          "sha256_lf": "a0623d92b2c05b47b97a76f3ca8507f71a7705edb5c48051275bda860a0e6b13"
+        },
+        {
+          "path": "app/models/warehouse_inventory.py",
+          "sha256_lf": "a83a28c81835d875b8f47f05ae6af1ec7699c2a1296726472ccae344333954d1"
+        },
+        {
+          "path": "app/resources/invoice_tax_templates/发票开具项目信息导入模板.xlsx",
+          "sha256_lf": "fb02b3907c459fa2c43342ab7b0af5b2f73e95cb1b5a7874c1e3a341fc785709"
+        },
+        {
+          "path": "app/services/__init__.py",
+          "sha256_lf": "eb13e14e2f24a81bf7e2f5f8951efb963147dfb20e4527db5188e5099cac198b"
+        },
+        {
+          "path": "app/services/admin_order_reversal.py",
+          "sha256_lf": "eab7c862d42ce21eaeef1ac3c2a80084d46e8c46bcf1a813d5d8874bbd974e33"
+        },
+        {
+          "path": "app/services/admin_order_reversal_scope.py",
+          "sha256_lf": "fdf102d3c021c977ef7bfa212bf338db191cdb8a9c18aca3be6744054b4cf4a4"
+        },
+        {
+          "path": "app/services/ai/__init__.py",
+          "sha256_lf": "a105330561cffca7dc3e1741fd66d81262d94cb47e8adf5b4833d12909da0f73"
+        },
+        {
+          "path": "app/services/ai/inventory_assistant.py",
+          "sha256_lf": "10e3f6fda3addbc4c9d2027d1600ea15d48209f8ae15f926a67347b90f3fee06"
+        },
+        {
+          "path": "app/services/ai/providers.py",
+          "sha256_lf": "34ba21b11ff5d7930c77ebcaae062db1f4c3a7bbaedef8163c4252a0ff8ac00a"
+        },
+        {
+          "path": "app/services/asset_time_archive.py",
+          "sha256_lf": "0465bf1f6e78c92e4557af2dd80aab6f4bf462bbbbac64016530a38c61cc32d8"
+        },
+        {
+          "path": "app/services/audit_log.py",
+          "sha256_lf": "2ae46d451eb99d04c655311389816ecf9a80f11cb3ac331a8f8ec1966fa04bad"
+        },
+        {
+          "path": "app/services/bom_accompany.py",
+          "sha256_lf": "b943e77d8c066dffe0d44eae8ddf1cf3ecaa8d2aecd4c60bd9a164fcac5082c6"
+        },
+        {
+          "path": "app/services/bom_assembly_history.py",
+          "sha256_lf": "b16473de4483c8d94dd9f7223f33bb6fa7a9b87b8901ff4e3a09346e71d8fbda"
+        },
+        {
+          "path": "app/services/bom_auto_reservation.py",
+          "sha256_lf": "7e7cbbafbcc123576eea5571701628a8dbcccc8cec5eb30323e768c4667dde7e"
+        },
+        {
+          "path": "app/services/bom_entry_cost.py",
+          "sha256_lf": "7c760e135a0a13c23693154c288816ac983ced8c78e360827a1a3abff8f128ca"
+        },
+        {
+          "path": "app/services/bom_inventory_contract.py",
+          "sha256_lf": "d1e3558dff3187a215a24be890a3ec0ba7a6183adfb550656550e5a8526dd5da"
+        },
+        {
+          "path": "app/services/bom_pending_assembly.py",
+          "sha256_lf": "fbe33ad81655a91901b672321c7c9ef622f28011c6f704b25c5ad120037d57e9"
+        },
+        {
+          "path": "app/services/bom_physical_quantities.py",
+          "sha256_lf": "22159a58dfbfde8853d8a49b21a937fc8b10221e7b29509e0bc5635df6847aab"
+        },
+        {
+          "path": "app/services/bom_return_cost.py",
+          "sha256_lf": "3efdfd20744605ecd70f415c788e41326fdc488fda8d90cb57b09601ff65a9ce"
+        },
+        {
+          "path": "app/services/bom_stock_pending.py",
+          "sha256_lf": "0454ffbb5e7fef7a5978cd89524f039ee31851d818b87b6692f888d42645e1ec"
+        },
+        {
+          "path": "app/services/bom_subkit_costs.py",
+          "sha256_lf": "fe04a11055bd73cf1ab817dad49e356af26f129a3778dc71048921472e3e398d"
+        },
+        {
+          "path": "app/services/bom_subkit_delivery.py",
+          "sha256_lf": "aabd752a2d0012c770ed55b6f636bf34a84226641e651acdbcb2ca7174df4078"
+        },
+        {
+          "path": "app/services/bom_subkit_inventory.py",
+          "sha256_lf": "f9f2196b7cb028f23ae418411e14390e960ac810ec601105c2014f38748324e4"
+        },
+        {
+          "path": "app/services/bom_subkit_planning.py",
+          "sha256_lf": "31c09021e2ccca7ae7fd55b0475fb661ecc163ff8a4509ebf9a37a06e7baf195"
+        },
+        {
+          "path": "app/services/bom_subkit_receipts.py",
+          "sha256_lf": "317d6c1e14481fa39253f913937178a8308dc0e079efb439a8afe21695c05a92"
+        },
+        {
+          "path": "app/services/bom_subkits.py",
+          "sha256_lf": "70f8b4b310e8219c305e5cd647d2a9be03c85c39a28bee52cdb2262f356d4823"
+        },
+        {
+          "path": "app/services/bom_transactions.py",
+          "sha256_lf": "3f2cb6eaf5880fa40ba0f2a9a734e91cbe30de4f87fcc73ea7802c758bcccfba"
+        },
+        {
+          "path": "app/services/box_type_rules.py",
+          "sha256_lf": "c6ca67be45832a471645e8a8ec6110875c26bcd559065f09942863fd073d7fff"
+        },
+        {
+          "path": "app/services/component_processing.py",
+          "sha256_lf": "8d697c4dda13f7137919a2462ad3fb0262b691229dacfc79a17df81db4e817bb"
+        },
+        {
+          "path": "app/services/composite_bom.py",
+          "sha256_lf": "70daedf863f2f4e2c3e5631e752d9a37b6999400f6163e851f4d5ae3b67b86d9"
+        },
+        {
+          "path": "app/services/composite_bom_execution.py",
+          "sha256_lf": "2b7c9bcf16f67229fea890c3c9d001e85657c6f3d0f55b6df58a62af487a442e"
+        },
+        {
+          "path": "app/services/composite_bom_workflow.py",
+          "sha256_lf": "a3d176e9dd144fff8833d0103755295da267eb8290a2f3b6e3f1f37026f703f9"
+        },
+        {
+          "path": "app/services/contract_pdf.py",
+          "sha256_lf": "8d815579e6fd9c9616a514f198c86cb662cd32d67af8a8584ee81645a5c4ef51"
+        },
+        {
+          "path": "app/services/corner_guard_pricing.py",
+          "sha256_lf": "7099e548f349fbebc3e41e03d19b6efb313f5f74bbaecafe6f443e6e8dd96d99"
+        },
+        {
+          "path": "app/services/corrugated_material_pricing.py",
+          "sha256_lf": "b922752a0841be965a25ac86406d43b5e8b8aa8d72ba7c0411ce7aa19c61d49d"
+        },
+        {
+          "path": "app/services/current_map_raw_staging.py",
+          "sha256_lf": "1cf16e88b6b6e8969854ca5653c7bb01993a25b55d3dd3e038648bf68a9200f4"
+        },
+        {
+          "path": "app/services/customer_delivery_margin.py",
+          "sha256_lf": "1c8b1d7d8b617746ca969f1417f7eea29db4cce9784d70e0e6078945323bb725"
+        },
+        {
+          "path": "app/services/customer_finished_storage.py",
+          "sha256_lf": "f2bda02c7d9539d63c2ec553be48c7be9d7e3614f91b004c09ad8e275d6c9aa2"
+        },
+        {
+          "path": "app/services/customer_material_candidates.py",
+          "sha256_lf": "068c450a85731da978ba5b47fc4654088d8a45ab0f3a43e1137d69ec28aa6223"
+        },
+        {
+          "path": "app/services/customer_price_tax.py",
+          "sha256_lf": "2ed9bed59528190d64d98de20c41c0b84de6200575133172210226f70572e512"
+        },
+        {
+          "path": "app/services/customer_quote_pricing.py",
+          "sha256_lf": "cfac61513427b1c6af3bd3418713bf3145803400bf8fe04e8d8e140c715ab312"
+        },
+        {
+          "path": "app/services/customer_search.py",
+          "sha256_lf": "74cfde11f9c1cd43cdced17982780651b3d1685f4d43832c32c6c85595603304"
+        },
+        {
+          "path": "app/services/customer_statement_check.py",
+          "sha256_lf": "c7f93ebe7106713f351b56170877999d011f7308bd36f445c41a93e8a4a190ab"
+        },
+        {
+          "path": "app/services/cut_production_contract.py",
+          "sha256_lf": "e55dbb1244e07b3d1e1975556dbf3806ef02642f35a800f79f9d2d11e8e29b65"
+        },
+        {
+          "path": "app/services/dashboard_metric_contracts.py",
+          "sha256_lf": "8e08bd633de1a162d5ae467a26b0bac35f74ab1ed9d2bfc6bf94e530c70bec7a"
+        },
+        {
+          "path": "app/services/delivery_backlogs.py",
+          "sha256_lf": "a8df2accd839125183c3694870a37f73f2204d9df5cb8d3aaec08c111ea76fd2"
+        },
+        {
+          "path": "app/services/delivery_goods_projection.py",
+          "sha256_lf": "ea397d17de9e894c4b8d4309cc85a275d186738f2ab654658ec115780c07e16b"
+        },
+        {
+          "path": "app/services/delivery_numbering.py",
+          "sha256_lf": "f6e0f2f7af0c3fe5701b4b3a7fd9398d888ed1de8aeacc348eff0491201f8c7a"
+        },
+        {
+          "path": "app/services/delivery_print_settings.py",
+          "sha256_lf": "44f9b8f9d203baaf0a83902aab2ea169d615de5d0492cf193fbd000d54974538"
+        },
+        {
+          "path": "app/services/delivery_print_templates.py",
+          "sha256_lf": "76847b92d564a84f8a6ef3afeb8d92e6e647cf3d562a90e9a15dff16681f57c7"
+        },
+        {
+          "path": "app/services/delivery_snapshots.py",
+          "sha256_lf": "58d822f82dcb61817c6323a8c5f643eb6357331ddbd789f272bff5c005dacefc"
+        },
+        {
+          "path": "app/services/derived_inventory_cost.py",
+          "sha256_lf": "5ae33e4758d165262dca960ab093da9e4fa18e2fb9be8275aa5b31426d9f8d41"
+        },
+        {
+          "path": "app/services/direct_external_finished.py",
+          "sha256_lf": "fbbf1e50407f5bbf45c9aa11754e416001267f5fc724a0bfde7e986028a7fb79"
+        },
+        {
+          "path": "app/services/email_intake.py",
+          "sha256_lf": "18070d65f539a561999f578226f707912eaf544c64747e647f40b6cbacb88df9"
+        },
+        {
+          "path": "app/services/email_order_link.py",
+          "sha256_lf": "c75e883e579c8cac4c3a3251278f753dc6f428618b4ff469e84cdb819604e130"
+        },
+        {
+          "path": "app/services/email_pdf_draft.py",
+          "sha256_lf": "ad8a4c6867346e52312bab1a2165bbb87d149dbaefb2893fd18ca1a283af2783"
+        },
+        {
+          "path": "app/services/email_pdf_queue.py",
+          "sha256_lf": "a35d9d82cfa6d9d7b44ff1922bd85ba4e18dd79a831cd488793b14ac72570d4a"
+        },
+        {
+          "path": "app/services/email_sender_filter.py",
+          "sha256_lf": "d4c985f6c212ab54b48af971864c435efbb7e6e74b211e0f7c783c717353566f"
+        },
+        {
+          "path": "app/services/external_legacy_stock.py",
+          "sha256_lf": "fd527d6937aba4284b04b9562c551275cef4d6961917195076e5e747237929b9"
+        },
+        {
+          "path": "app/services/external_packaging_purchase.py",
+          "sha256_lf": "2d14b111fafcfa17af4352b9833b6045437c2fa34ba007f746a93418a03120bd"
+        },
+        {
+          "path": "app/services/external_packaging_purchase_lifecycle.py",
+          "sha256_lf": "b4decc8ab8e31c343424336fb337ef1e9955809d62ce76090970f5a65a47a050"
+        },
+        {
+          "path": "app/services/external_packaging_receiving.py",
+          "sha256_lf": "40a0d9e27ceac734d793c1f409a19e7e7a72323f27b27f832e3a5ae996b0064f"
+        },
+        {
+          "path": "app/services/external_packaging_stock_replenishment.py",
+          "sha256_lf": "b230ed03a9258ce25cd61f91eb6d3fd495102ef2c28daa7d68dfc89fa7363b73"
+        },
+        {
+          "path": "app/services/external_receipt_state.py",
+          "sha256_lf": "799bc449b36a1b17f6b0af57e9b8903bd342f03a7f96b281a49f3fb640e680dc"
+        },
+        {
+          "path": "app/services/factory_maps.py",
+          "sha256_lf": "a35e00c0127f526fdb906c5cabcbfb5422518e47c2be42b5c508494be56d964e"
+        },
+        {
+          "path": "app/services/finished_stock_identity.py",
+          "sha256_lf": "d0f1159e9177277b061f10a31e023b40099a7c2e5e441bff00b2795c0013e6dd"
+        },
+        {
+          "path": "app/services/fixed_shelf.py",
+          "sha256_lf": "dfd6e7a405a47ac449105d8d2f64025acffdd6a947a26d912cad420d4e4699b1"
+        },
+        {
+          "path": "app/services/fixed_shelf_staging.py",
+          "sha256_lf": "e9dca803cd4d9aa114db3d602854d9a883dfe4006301e0ff8c8553f145d4c954"
+        },
+        {
+          "path": "app/services/floor3_locations.py",
+          "sha256_lf": "1846d1aedcf85b6a3dbe3c69b19603d563b954c7c338ebc17a87abca4eff6afe"
+        },
+        {
+          "path": "app/services/flute_mapping.py",
+          "sha256_lf": "bac56be2f637b1611838a0cae756cf2ccf7d85311ac5a02ab0f7929378bcc30c"
+        },
+        {
+          "path": "app/services/fulfillment_reminders.py",
+          "sha256_lf": "bf0eb8b79d0e6f49e83f1be58f1d06c37b88d0d66c4f94a9b9cd9a17c43786db"
+        },
+        {
+          "path": "app/services/graph_delivery_cost.py",
+          "sha256_lf": "effff6570f20c601962f57d3662cf3a61913be40d493270726a05491fc2b32de"
+        },
+        {
+          "path": "app/services/historical_purchase_lookup.py",
+          "sha256_lf": "ee86c2ec9772a6d4a5090c5db4239cc5d8b6bd6cab2a0cf345ca4634ccdca8e6"
+        },
+        {
+          "path": "app/services/historical_sales_contract.py",
+          "sha256_lf": "750ae8d92eb864dfca10f46126aef35b12fcad3fbf292611dfeb788ddb03c735"
+        },
+        {
+          "path": "app/services/incoming_receipts.py",
+          "sha256_lf": "fbbc975b8c780b6538be54e568d6197309a67809b2c7705c1122af8d837869a3"
+        },
+        {
+          "path": "app/services/incomplete_order_chain_audit.py",
+          "sha256_lf": "8e3df7788671e95e55e15e118010f45169971ffddb3c4656cc4f271ee75b6a47"
+        },
+        {
+          "path": "app/services/initial_stocktake.py",
+          "sha256_lf": "3481d0dacf348ead33ce3724fb8c2e9e9bc1f1c296c7c4d91e7a675a3460dee1"
+        },
+        {
+          "path": "app/services/inventory_cost_backfill.py",
+          "sha256_lf": "c4d183688d477a0ab231bfbe53380c25182e53a7c044cbb455f09a18dbfd947d"
+        },
+        {
+          "path": "app/services/inventory_cost_listing.py",
+          "sha256_lf": "0f1f97fde292d88ff75d228769a98320ee6baef6819f07e5954ecbcf962cc222"
+        },
+        {
+          "path": "app/services/inventory_cost_rules.py",
+          "sha256_lf": "44da3dc9a36a8b7ff21d8aa11cafac8bece0d305b4d21775197d7558be9bf4e3"
+        },
+        {
+          "path": "app/services/inventory_cost_snapshot.py",
+          "sha256_lf": "7c4b4a9bf601a9a7944b87e579a9d6c9412a546488e6f55a5f914fc1061f6f8d"
+        },
+        {
+          "path": "app/services/inventory_insights.py",
+          "sha256_lf": "dc5f28f7a2ebf216884df11583d5fdc3bc30c506b4895f5b9536ff148e1737f0"
+        },
+        {
+          "path": "app/services/inventory_onboarding.py",
+          "sha256_lf": "c0b2af007a920edc8223b8819d93fdaafa2ab2cd18073cd1ce63b58da8021dc6"
+        },
+        {
+          "path": "app/services/inventory_onboarding_posting.py",
+          "sha256_lf": "9d0c8083ee44afe868b4077439d4ab6cba4729bd23a64ba706c924a4fddef3c3"
+        },
+        {
+          "path": "app/services/inventory_onboarding_uploads.py",
+          "sha256_lf": "10f9d464a6a0879dc468d088c848cb6277a347125984696514748b82df782f96"
+        },
+        {
+          "path": "app/services/inventory_revaluation_readiness.py",
+          "sha256_lf": "2f366b511669c79e892931bcdaaf94857d412d69e9542ca753d0e426c318c16a"
+        },
+        {
+          "path": "app/services/inventory_valuation.py",
+          "sha256_lf": "730d5b13b90da77168e408fa6ef6b285f60cace52513f1f392d18b2b5b332b2a"
+        },
+        {
+          "path": "app/services/invoice_attachments.py",
+          "sha256_lf": "393827ef1dcdf580d15ef00e53f2a9ce9012c5b2b02fd82986fd77b6b5c78fe8"
+        },
+        {
+          "path": "app/services/invoice_tax_template.py",
+          "sha256_lf": "f03ce2af35b3dabbc5731c10e653a7e53b17c778afadd9fc054b5713b76e3068"
+        },
+        {
+          "path": "app/services/legacy_accompany.py",
+          "sha256_lf": "12dea3cec010185bc7f85968fba7b0302c1f7d58c0b805316170cf393b838784"
+        },
+        {
+          "path": "app/services/legacy_pallet_item_lot_normalization.py",
+          "sha256_lf": "c19d2f33385b6a78063de23e72e00263f6c669245e9457ff55b67b43c6e09d59"
+        },
+        {
+          "path": "app/services/liner_direct_delivery.py",
+          "sha256_lf": "eedeb3929052d44f34d65b048d49dc9aca4dd25686b802121631d2e35155be5c"
+        },
+        {
+          "path": "app/services/liner_finished_turnover.py",
+          "sha256_lf": "b5f38d718c8193299934ac189bfc81b9d4539b3e4bb8f7d4a1030812d2b734f0"
+        },
+        {
+          "path": "app/services/location_candidates.py",
+          "sha256_lf": "ad5da29eb7632c5d872d6b884009e6978e00e9db76d1a5e1c08dad59fe862d9f"
+        },
+        {
+          "path": "app/services/manual_size_product.py",
+          "sha256_lf": "908a35f19f3ed412763d9e96cf5b48702bd4ec4c7c523bfb1cf43c03fa310109"
+        },
+        {
+          "path": "app/services/master_data_versioning.py",
+          "sha256_lf": "4b71c4311f7377a1a8e6e298869bbac1ad7f926975cb802f4750622fa27053dd"
+        },
+        {
+          "path": "app/services/material_candidates.py",
+          "sha256_lf": "46c0c56ac1afbe29f00bd6e53ffdfdb27506417cbd2840c80d1bbc9ce474a95d"
+        },
+        {
+          "path": "app/services/material_cost_lineage.py",
+          "sha256_lf": "350b27110aa8e090f1ecda4aeab88db5b0ace83c67a3a98c1ac132c308fb9458"
+        },
+        {
+          "path": "app/services/material_cost_supplement.py",
+          "sha256_lf": "57ef596658a04be9ade323dade3445ced34faac30cb7f058c62f6dfa31da33dc"
+        },
+        {
+          "path": "app/services/material_mapping.py",
+          "sha256_lf": "646000321ec45cd7174b862e999986d893c96ffd369b1d66e68e72c9527eb25f"
+        },
+        {
+          "path": "app/services/material_price_adjust.py",
+          "sha256_lf": "3cfe88badbaf9134eb733b63bf632edc805376a56c57372f9179036af9d56abd"
+        },
+        {
+          "path": "app/services/material_pricing.py",
+          "sha256_lf": "b1a9eb80380d5bea5e9a1b1f00caf8157bbf25f6b3e0899268e20ffbd2bbfb5c"
+        },
+        {
+          "path": "app/services/material_purchase_contract.py",
+          "sha256_lf": "9c8d8b53d31050602f07f137dab69a05eb820d8201bb635a5719bbd096321446"
+        },
+        {
+          "path": "app/services/mixed_sample_import.py",
+          "sha256_lf": "272536ae429d22f462078e464954a9486fd5738baf7ade9cb5be969554c1a1b1"
+        },
+        {
+          "path": "app/services/mobile_dimension_settings.py",
+          "sha256_lf": "bfa8402073ef71ff3b3f0e05618ee24fb7d398df49de3d32e9cd59891a2aca5a"
+        },
+        {
+          "path": "app/services/mobile_order_dimensions.py",
+          "sha256_lf": "d6c051d289c5fe33eb6ddd55f5b1cfdc4f85adad2a34eef7cb33e4fc4810cf46"
+        },
+        {
+          "path": "app/services/mobile_shelf_labels.py",
+          "sha256_lf": "315d0bdea62f340ce64fd24405109f9be87445ead6793717c87bd7357789a8b2"
+        },
+        {
+          "path": "app/services/mold_archive.py",
+          "sha256_lf": "0d575aa6846e4690cd77ea27606394797f25902c55a1458c6736d35f0450f675"
+        },
+        {
+          "path": "app/services/mold_identity.py",
+          "sha256_lf": "af91861e5bea70f5512ba594df4db1589ced5016ede3965bb4d41966fb72c116"
+        },
+        {
+          "path": "app/services/mold_label_layout.py",
+          "sha256_lf": "cd3aa1fc521a000b4bcecc495ae8b4fe906395802febed71924154e6140046b9"
+        },
+        {
+          "path": "app/services/mold_label_template.py",
+          "sha256_lf": "cfa5b422168ad880a44b58f22d784ba441aba5316a564edb92fd7cede2fb1e4c"
+        },
+        {
+          "path": "app/services/mold_location.py",
+          "sha256_lf": "c1e3a7bdd451e6cd9c1a594a91062e2a9fb892f84e81a5aa3478be87fece41c4"
+        },
+        {
+          "path": "app/services/mold_repair.py",
+          "sha256_lf": "5c53e7902ed743dc6ab7de147f65976b5ec29ce4da48d95e5f07485147ee60f4"
+        },
+        {
+          "path": "app/services/multilevel_bom_body_inventory.py",
+          "sha256_lf": "92ca6ee3c8a1936cec1734e55ebe6be8d8a2eaa6bbd446cd77c2eec3087f8d45"
+        },
+        {
+          "path": "app/services/multilevel_bom_carried_material.py",
+          "sha256_lf": "0102ad6b564a69ea62d63b251a9c2340d9cf2970366e1dfb1b31ae775a422b38"
+        },
+        {
+          "path": "app/services/multilevel_bom_carried_procurement.py",
+          "sha256_lf": "c912a8e3d18042bc72c869e25fa6c4c23dd39c0b439e2723c1745b936cd1c10c"
+        },
+        {
+          "path": "app/services/multilevel_bom_compile.py",
+          "sha256_lf": "b655159c545f29089881c16e4272677c53b946af188d239edbf1bb0c0a42179e"
+        },
+        {
+          "path": "app/services/multilevel_bom_cost_lineage.py",
+          "sha256_lf": "30f7c3fbfd7b4da585e18fc847492ffd687722eb8a91ad979320bfe8fb602c40"
+        },
+        {
+          "path": "app/services/multilevel_bom_cutover.py",
+          "sha256_lf": "dda22c538c7dc5f019aa3eeb4ce72888569fa926695942032f41afc36138d896"
+        },
+        {
+          "path": "app/services/multilevel_bom_cutover_review.py",
+          "sha256_lf": "d349afdde64d692ae29137aaf2db24dc7a1a27c4c6140b001fd5366daef5295a"
+        },
+        {
+          "path": "app/services/multilevel_bom_delivery_boundary.py",
+          "sha256_lf": "5ad0ec05d92f8a3df85ad64a0bce1de3030edc63974819d6033787c16f6e41c8"
+        },
+        {
+          "path": "app/services/multilevel_bom_delivery_history.py",
+          "sha256_lf": "39e1c0f32cc00e910b51e7e891584b0e08719a66f0b7739dab508740eebd2a18"
+        },
+        {
+          "path": "app/services/multilevel_bom_delivery_page.py",
+          "sha256_lf": "61c2fb6a2c0f3248c8b815fc4307b064f6f70c54dbf0a5fe3fe8601b515f9c3a"
+        },
+        {
+          "path": "app/services/multilevel_bom_execution_boundary.py",
+          "sha256_lf": "39a89a1414c313709e680556522fe0eea9b77ebf868d52e29a92bef3fdfb10e1"
+        },
+        {
+          "path": "app/services/multilevel_bom_external_closure.py",
+          "sha256_lf": "46bcd673b7df8d778644b3b6191528b89a90b48b9267b92a36e0d54eecc6c212"
+        },
+        {
+          "path": "app/services/multilevel_bom_external_costs.py",
+          "sha256_lf": "fe0609d90174f39fe90cd5fd6a22aa99f819bc878d1dbe6f9342711ff5931f0e"
+        },
+        {
+          "path": "app/services/multilevel_bom_external_estimate.py",
+          "sha256_lf": "242e072823db5afdf24edc39189e13d235897046051e04b88d3da53f53e1f080"
+        },
+        {
+          "path": "app/services/multilevel_bom_external_freeze.py",
+          "sha256_lf": "08f1ef1400c07b459d33e8e1606ca417eee2e7a54e8c66116cd5508d1af67a23"
+        },
+        {
+          "path": "app/services/multilevel_bom_external_identity.py",
+          "sha256_lf": "5dee32528fc61575a155c064f1af1b1f30729e09fd07e32cc9eec6e7dcd2b137"
+        },
+        {
+          "path": "app/services/multilevel_bom_external_receipts.py",
+          "sha256_lf": "6b6f95233b88418265a25ecef16907625df35384817db6d336167ebedf89f463"
+        },
+        {
+          "path": "app/services/multilevel_bom_external_reversal.py",
+          "sha256_lf": "c3afdc6f76ad4901e75252bf931a82948dc1faec99d42c8ab41a86e73fea05da"
+        },
+        {
+          "path": "app/services/multilevel_bom_fulfillment.py",
+          "sha256_lf": "65afaa0b3efd95330ba079ad4f42f82c7553de404e338605ce91890be5abba29"
+        },
+        {
+          "path": "app/services/multilevel_bom_inventory.py",
+          "sha256_lf": "04511b4dea83ab5eac88da3c3da8185e7f9911aa6fa58accf167676b62c04e11"
+        },
+        {
+          "path": "app/services/multilevel_bom_master.py",
+          "sha256_lf": "ae18555d1fdc69fc26272200b5d91c77d57a2d4f5500b894d686bbfb63c8584b"
+        },
+        {
+          "path": "app/services/multilevel_bom_master_transition.py",
+          "sha256_lf": "4be0a13a1e184828424504d731dbd1541ca8af21c2362919b243beb2760dc583"
+        },
+        {
+          "path": "app/services/multilevel_bom_material_estimate.py",
+          "sha256_lf": "775360cda484f7ece23e743a0fef48ad3432fe1159c7c13b5dac0d278e723155"
+        },
+        {
+          "path": "app/services/multilevel_bom_orders.py",
+          "sha256_lf": "7039201da8fef8363ad8cef5c1d923bdb731a5f4ef3d31ac94d5a4d923f8a1e5"
+        },
+        {
+          "path": "app/services/multilevel_bom_output_history.py",
+          "sha256_lf": "ba0693424aa5aaf22aa8540781a14fb3355442712895618a03be91bfd2700e73"
+        },
+        {
+          "path": "app/services/multilevel_bom_plan.py",
+          "sha256_lf": "55b5aabbaea29fee229f01504f4f0dac96b7a2a1b4203944749fc865d9ec1d40"
+        },
+        {
+          "path": "app/services/multilevel_bom_processing_estimate.py",
+          "sha256_lf": "9dfeb264ee0f4f83d234ac869fd19ebd960792d7c6d6026ae7468f7133757624"
+        },
+        {
+          "path": "app/services/multilevel_bom_procurement_impact.py",
+          "sha256_lf": "b6234922c31d2747fbe2a649ad64d11b750dbffe01b841ae4f2b5399ee0b0e39"
+        },
+        {
+          "path": "app/services/multilevel_bom_production_revision.py",
+          "sha256_lf": "1f4162b13afcfc58341ca0921163e6c4ff93c5efc2b2541cea2d5a07f0bdde58"
+        },
+        {
+          "path": "app/services/multilevel_bom_production_versions.py",
+          "sha256_lf": "70aeda2adb0e6f0ba8c79aec5d395df84673eea01e416fc2f893a1b5e49f028b"
+        },
+        {
+          "path": "app/services/multilevel_bom_purchase_units.py",
+          "sha256_lf": "dc1b1f186493d7c9182f3b8288916dc8c48b12be59d4314560888354f94e6e3f"
+        },
+        {
+          "path": "app/services/multilevel_bom_receipt_history.py",
+          "sha256_lf": "9ee6de8e39e4c14b82eee1e6cfa7f083d4c26552a319bf211b7b701b3f279eee"
+        },
+        {
+          "path": "app/services/multilevel_bom_receipt_projection.py",
+          "sha256_lf": "7424ede735ea0ad6dfe45491ec0596cf61042894af7ae8ab46a70b9a27d5d35e"
+        },
+        {
+          "path": "app/services/multilevel_bom_receipts.py",
+          "sha256_lf": "d93d74e5f118b63a5b2629a2ef058837d4425476e441507f48ca8e043c9f318f"
+        },
+        {
+          "path": "app/services/multilevel_bom_requirements.py",
+          "sha256_lf": "8c2a6f5ec1384a4ef8e5d37ba6c091b2b1b2af6468392f97590a7a20a79c1336"
+        },
+        {
+          "path": "app/services/multilevel_bom_rule_cutover.py",
+          "sha256_lf": "ce23cb50497e64e0fcf2a174f7987ae64c31dbd0d1ff6e96256f0e021ebfeeec"
+        },
+        {
+          "path": "app/services/multilevel_bom_rule_history.py",
+          "sha256_lf": "7a9a29566f3b4d5a04980e0a0a352f97f213fa2c3d5055799e660c8fa05b0052"
+        },
+        {
+          "path": "app/services/multilevel_bom_rule_impact.py",
+          "sha256_lf": "b4cca7f6f3fbdd0564ed02e7dcfc5a3b741e11225380b5f62695ee9521854cfe"
+        },
+        {
+          "path": "app/services/multilevel_bom_rule_revision.py",
+          "sha256_lf": "1bc1e7d77f20411f34b04090b6751ce6e292f88b71021265026261312131c6b3"
+        },
+        {
+          "path": "app/services/multilevel_bom_semi_production.py",
+          "sha256_lf": "6555bd250827fd8fdea5de0f1f06ba5d984e883c56475d31e5b8630d2aba39ba"
+        },
+        {
+          "path": "app/services/multilevel_bom_semi_transfer.py",
+          "sha256_lf": "678bb352d68f5edc8e2c844f045f9e176735a70afd928a9fea6c47e8fbfcfd1b"
+        },
+        {
+          "path": "app/services/multilevel_bom_snapshot.py",
+          "sha256_lf": "7c13e3401fd7febba2b89648ecab38fbd66bef6c60d258977997c031f7b1bdfc"
+        },
+        {
+          "path": "app/services/multilevel_bom_source_handoffs.py",
+          "sha256_lf": "95bd91b6cda1ff52db65f6dec42c83c154f14ea517fca49846c9c63c295e0a3f"
+        },
+        {
+          "path": "app/services/multilevel_bom_stocked_handoff.py",
+          "sha256_lf": "d504d07db707673a9c5e96ee75870dd0d35634ecb31e58d169ea0c6dcfa2f43d"
+        },
+        {
+          "path": "app/services/multilevel_bom_unstarted_cutover.py",
+          "sha256_lf": "35718e39b0465bdbb22feecbf17a4e8651c6109d625ad88737bdc963eee88b96"
+        },
+        {
+          "path": "app/services/order_business_status.py",
+          "sha256_lf": "979c4fc0665c7891dfe079e68974081598b7fe9d2286cf71a6ba8884f4a7574b"
+        },
+        {
+          "path": "app/services/order_cost_readiness.py",
+          "sha256_lf": "62e782cac8e7c362d4aa2266a962b5ed23baf24f6c818d8888efa487c44f12f6"
+        },
+        {
+          "path": "app/services/order_customer_heat.py",
+          "sha256_lf": "8f1520521c23e35b18f8ca2177fe17f5b96bb1e52abf72e7dc36fd26d91a1f7c"
+        },
+        {
+          "path": "app/services/order_document_trace.py",
+          "sha256_lf": "98498cd907307fd2c011b6cde09574a30dfd907f65c929076297ea20a2079b0f"
+        },
+        {
+          "path": "app/services/order_estimated_cost_snapshot.py",
+          "sha256_lf": "2c6ae1edc60206402013002ad569b318d4924499e98f778d00f0e88f07ef0dd4"
+        },
+        {
+          "path": "app/services/order_external_packaging.py",
+          "sha256_lf": "4fd468b217b747d0a4dc3d97abbf71173e68dac02e3dc7ed7a1a5b665a23a70d"
+        },
+        {
+          "path": "app/services/order_import_source.py",
+          "sha256_lf": "83ff273a8fb99800c485fa94451d2c9c18f173aa1488dfe90ba078930609d0c9"
+        },
+        {
+          "path": "app/services/order_material_cost.py",
+          "sha256_lf": "b3666811b9d325db20fa87d4847708d0f715e74590da463e71e9f29f2791d979"
+        },
+        {
+          "path": "app/services/order_material_cost_snapshot.py",
+          "sha256_lf": "12ccedb74da25d893f177662ea489d3a5d632e0e31d8796f7663690963146b1d"
+        },
+        {
+          "path": "app/services/order_number_display.py",
+          "sha256_lf": "9ab3f67c202658f731279b5625ca90e92160ca84f2aa228e981df91e4ac479ce"
+        },
+        {
+          "path": "app/services/order_numbering.py",
+          "sha256_lf": "1dc104fb78134989a16df63e8322ff355b3cf561a84a8ef61affb3dd02ff4b96"
+        },
+        {
+          "path": "app/services/order_pdf_import.py",
+          "sha256_lf": "264faa2a15a7e6634916458c6511f69ed01a836c49fcf42a7db6d4aca943fe77"
+        },
+        {
+          "path": "app/services/order_status_policy.py",
+          "sha256_lf": "9d0043120e4302a592c3ea38e5f749cb35aba72882572b56886a1923e7dce441"
+        },
+        {
+          "path": "app/services/ordered_finished_receipt_return.py",
+          "sha256_lf": "e098007379ef92abc9a5bcfc55bbc67c1867123686b28069bf2858218a6fbc58"
+        },
+        {
+          "path": "app/services/paper_color.py",
+          "sha256_lf": "abe54b5580acc38f692a3761cb824f6ecd21aab270381574f6a4acc9bb030f45"
+        },
+        {
+          "path": "app/services/pdf_customer_templates.py",
+          "sha256_lf": "42d55eb22689a30ebc09e65f4c7e8af03788f8b960f434d8bd6af956e3b628f9"
+        },
+        {
+          "path": "app/services/pdf_ocr.py",
+          "sha256_lf": "8342a0ed43578837d43d29c428f5ee20f0e48f9cb27461d8095f76057ef53ce1"
+        },
+        {
+          "path": "app/services/pdf_parse_pipeline.py",
+          "sha256_lf": "422ad76e5eba7362177f02b9dcf792d7e7a003543c9f082d4d5d60e3936b9a2b"
+        },
+        {
+          "path": "app/services/pdf_preview_redaction.py",
+          "sha256_lf": "000f508f1479e4e17a1f9f23e7a143b4b61a0fa22936d9caa1edc97a621b3f66"
+        },
+        {
+          "path": "app/services/pdf_sat_contract.py",
+          "sha256_lf": "db711f4e0724df4f03f51bd971888b236891512d9f6ccc701ad7a929a59e636d"
+        },
+        {
+          "path": "app/services/pdf_scoring.py",
+          "sha256_lf": "5c4d285e3fc08fbedce1113b7cc431638c1a9d581047f58f031790152d90afd4"
+        },
+        {
+          "path": "app/services/pricing.py",
+          "sha256_lf": "bcf015142fc90c6375098fa1ea6b48093423cb86b644a2b0ab3fcff3a29c898e"
+        },
+        {
+          "path": "app/services/printing_colors.py",
+          "sha256_lf": "f180ec17b984ec7830de2dcad2ab00776d83b04e8097ac343e459fe5348b54a6"
+        },
+        {
+          "path": "app/services/printing_plate_location.py",
+          "sha256_lf": "7e907d4b6cc67e82d3cde48647a32909d7148db63169a410022e43da6a842690"
+        },
+        {
+          "path": "app/services/printing_plate_resin_reuse.py",
+          "sha256_lf": "593762c0c210d4f83d06cd87d574faef8af951e15e19534870b247466454f713"
+        },
+        {
+          "path": "app/services/processed_sheet_matching.py",
+          "sha256_lf": "18bd20f8ecab0e1aa755129a909498a6c7068a6023542f753de299ebc5b64783"
+        },
+        {
+          "path": "app/services/processing_cost.py",
+          "sha256_lf": "46a81203ac909b3838ed72de347e6653f3ebb98f1b8e06b8d95121f618b3e5d0"
+        },
+        {
+          "path": "app/services/product_drawings.py",
+          "sha256_lf": "166bcbc1842ac42fbdee45d9325c8d4400adb26e242e056b506c5f60c450e000"
+        },
+        {
+          "path": "app/services/product_import.py",
+          "sha256_lf": "aa1668d2a0068531e989058cf14fb89d05d04c0566e47ebf69375da3b2c18230"
+        },
+        {
+          "path": "app/services/product_import_workbook.py",
+          "sha256_lf": "9df07edfee804983322067d13b8f28619e6bd9eefb39c1c07f1aaaf003eff8eb"
+        },
+        {
+          "path": "app/services/product_lifecycle.py",
+          "sha256_lf": "9817e59a1e0e0a046ceb80502554b263570fb599217cbeb2d3c37516003490dd"
+        },
+        {
+          "path": "app/services/product_qr.py",
+          "sha256_lf": "245b90e70ae854bc27f3c82df0fb870134809989159f240860ec39872780d81a"
+        },
+        {
+          "path": "app/services/product_readiness.py",
+          "sha256_lf": "c2000d1d20342ec88d89108957b5c2693deae630fa9aa27d58c53f88f8cc3e9e"
+        },
+        {
+          "path": "app/services/product_specification.py",
+          "sha256_lf": "e0f91da68134b6e5ec2cf2e9069e380037f8e2c3a54d88e9aa7dc12049140495"
+        },
+        {
+          "path": "app/services/production_label_operations.py",
+          "sha256_lf": "6beaf98a14df7518d455aa999a909732a90ca094cf3ba978ddfaf8915f0cbeb2"
+        },
+        {
+          "path": "app/services/production_label_strategy.py",
+          "sha256_lf": "6ae733eeb1b3620f30bedd0bdd9463db856a0f2cf20c6580ac78356d2921ba42"
+        },
+        {
+          "path": "app/services/production_packaging_label.py",
+          "sha256_lf": "067286b5306a440bb276bf1a96bebc70fb6a2a688f90e687020b320b4a288ed8"
+        },
+        {
+          "path": "app/services/production_packaging_label_layout.py",
+          "sha256_lf": "ba1bc4119394102b27c4b40a9e164066fc6ff7984f78774cbada0ee16bd2bc36"
+        },
+        {
+          "path": "app/services/production_placement.py",
+          "sha256_lf": "d5ac4b6b0e545c1a6faa4ae1f95810e14d8f79b1188e0d49bafb0901bea129ba"
+        },
+        {
+          "path": "app/services/production_station_routing.py",
+          "sha256_lf": "d6bbb67e4c5cd656b800cd20905bdf77b6496fdb8640b011b5efa0ad06a36bbf"
+        },
+        {
+          "path": "app/services/production_workflow.py",
+          "sha256_lf": "6720ba087477fb309176716e0c7a34dc93a7f1b62597413f1d8cf69097dadff6"
+        },
+        {
+          "path": "app/services/purchase_purpose_allocation.py",
+          "sha256_lf": "a77a47e3342fc1f0a535fbba549fe376c2b47d2ee493018a90c7053df86346c1"
+        },
+        {
+          "path": "app/services/purchase_receipt_facts.py",
+          "sha256_lf": "247b903c9ff02b92c28c9c19f7a455757126dc4b974e180f6ba645bac2576476"
+        },
+        {
+          "path": "app/services/rack_information_labels.py",
+          "sha256_lf": "ab8396f893bdaa11747920ae522b4ed132520ca86895acb81fde7a04b0b8fd89"
+        },
+        {
+          "path": "app/services/raw_purchase_plans.py",
+          "sha256_lf": "ede0be33ca18f9d1cc81421b1a9bccf35825dda8806fd7a8ef37148d2af23a84"
+        },
+        {
+          "path": "app/services/receipt_managed_production.py",
+          "sha256_lf": "7c5bb020bf88ab674686863723d870e44c6f3aabe695c7567fef97f5ec60be91"
+        },
+        {
+          "path": "app/services/receipt_purpose_distribution.py",
+          "sha256_lf": "f1dbeb62b37c6fca4985db323695d08194865f457598385154291c8086bccff7"
+        },
+        {
+          "path": "app/services/receipt_putaway.py",
+          "sha256_lf": "bbd2192b34a02018ccb0b92038d243922d66ee2ec6ada9ee68f1f8a176364624"
+        },
+        {
+          "path": "app/services/replenishment_receipt_progress.py",
+          "sha256_lf": "475b7fa00460c1a9f76897c687122ac454b7d2bcd54a2890a606b1cbcfc91a32"
+        },
+        {
+          "path": "app/services/report_crease.py",
+          "sha256_lf": "7281f735bd411cd857ccdb727b95bee501bd0789e9df681f215b65c39e805c61"
+        },
+        {
+          "path": "app/services/requisition_production_print.py",
+          "sha256_lf": "924480e708df77043d0cd1a92b802486cd987371e7479d1985a1b1afbe86cf0e"
+        },
+        {
+          "path": "app/services/requisition_production_print_batch.py",
+          "sha256_lf": "8ca421de0682407f8b3b9ab090a75955335ed47bbc99d6593fa1234765e569a6"
+        },
+        {
+          "path": "app/services/requisition_quantities.py",
+          "sha256_lf": "571f3eaeb310c43ec76a8bc74665269a2f5a88a03bde15effd08a912f726c01e"
+        },
+        {
+          "path": "app/services/secure_uploads.py",
+          "sha256_lf": "9f70a7f631e192acd655ea0073cd0a68569124d4bcec83fca540248f910c5a40"
+        },
+        {
+          "path": "app/services/semi_finished_inventory.py",
+          "sha256_lf": "3a57e4aa373d2ffceb5040770563cbf8722ada6906f652d2bea01c874f463bfa"
+        },
+        {
+          "path": "app/services/sheet_cut_plan.py",
+          "sha256_lf": "b4ccf60ff5d94036c9f47f67c3e754c596ac5a5fc02e213fd712d15015ea49cc"
+        },
+        {
+          "path": "app/services/sheet_measurement.py",
+          "sha256_lf": "f48951751e845fb683409a6109bf48215b99a3862a46b118c6f07ca67c406ed9"
+        },
+        {
+          "path": "app/services/shelf_lot_history.py",
+          "sha256_lf": "e453ad356a636fa1f6aa087099fb2f63e05b9643ae0ec9df1c82220e36e11001"
+        },
+        {
+          "path": "app/services/statement_pdf.py",
+          "sha256_lf": "ddd6dae5af08ec7d0c35b7d8fd9dbc6278a345f60747907a675a59bfbd572b02"
+        },
+        {
+          "path": "app/services/stock_preparation.py",
+          "sha256_lf": "36594b2fa4e817e6d54bd749a5deedeb37f42f5cec7676911aa721bb400f64dd"
+        },
+        {
+          "path": "app/services/stock_preparation_disposition.py",
+          "sha256_lf": "3884633dd315c6a05f7b6dc512585eaea6f040f8ac830d5693fb693d9b83e8e0"
+        },
+        {
+          "path": "app/services/stock_preparation_groups.py",
+          "sha256_lf": "fde07dd35474b7268b25b2d603012c68b971737c8e3656e4b53475801cbb9c40"
+        },
+        {
+          "path": "app/services/stock_preparation_history.py",
+          "sha256_lf": "3a85a4e38f5f6f17343865dc6e92ebea179717ac9efdbab6dedbe2b789d57c75"
+        },
+        {
+          "path": "app/services/stock_preparation_identity.py",
+          "sha256_lf": "026567b4a43a29e37899871ba967825a7ab6165918ca95c1a8feebb6cd9c3f8a"
+        },
+        {
+          "path": "app/services/stock_replenishment.py",
+          "sha256_lf": "0e9197c2e0b0717d2748e222b847a239772ff837541bcab447c49e0c2f00bc33"
+        },
+        {
+          "path": "app/services/stocktake.py",
+          "sha256_lf": "4ec6da7ade53883f4ce2001bf5889e2aa5a79e3ac50c34a95b55e921841e25e1"
+        },
+        {
+          "path": "app/services/stocktake_spec_search.py",
+          "sha256_lf": "f703153876047c904412d5b2264515682750b3bc19328aa79f31628e397ff31a"
+        },
+        {
+          "path": "app/services/supplier_master.py",
+          "sha256_lf": "7b7da5ef47adbd3206325f4cc0168c21c9a947c4bf613d1b60b94b836cf6a03d"
+        },
+        {
+          "path": "app/services/supplier_material_display.py",
+          "sha256_lf": "2be2b60db1c39a6f9002fb3df9edd31b93210920daf547ba13e428ce05e8e598"
+        },
+        {
+          "path": "app/services/supplier_material_workbook.py",
+          "sha256_lf": "82ba773b4734fc7ea6ce8b9eef1e3114ef162d5794f69cbe82e5fb5dde531938"
+        },
+        {
+          "path": "app/services/supplier_monthly_settlement.py",
+          "sha256_lf": "40c8e180e76608bb748cabc788cf2d8a39c042f555d0d257811db046d331650d"
+        },
+        {
+          "path": "app/services/supplier_purchase_view.py",
+          "sha256_lf": "74247143c8bc4533cc474ef1ed198ac01e5d1270fc8f56bb25a510499370cecc"
+        },
+        {
+          "path": "app/services/supplier_receipt_price_facts.py",
+          "sha256_lf": "46b0682c713716cb24e1ae7b10d031f9369f1502eb5571663e0b38e884a6c619"
+        },
+        {
+          "path": "app/services/supplier_settlement_automation.py",
+          "sha256_lf": "63b8bdd3fc21ff7f70d029d6b08ee348e054bad37aa5fe7b0a9416356dc4c4b8"
+        },
+        {
+          "path": "app/services/template_regex.py",
+          "sha256_lf": "481594870cb93d5180f6050a15219212d56583dbf9a4be32309254ec584d39e9"
+        },
+        {
+          "path": "app/services/tianhua_pre_delivery.py",
+          "sha256_lf": "677fc9e8bc3a94c7ff02913a3553fbeab7340cd8277d8bd6d216f49ef4cdc68d"
+        },
+        {
+          "path": "app/services/ui_layout_settings.py",
+          "sha256_lf": "8eea2a5426428d1bb301b5f88ed66a7ccab05d0c6a4c93c077e6f97d822f0903"
+        },
+        {
+          "path": "app/services/unfinished_components.py",
+          "sha256_lf": "c9d11090ffc0f2ef549aeb5e081f545f646660c96042c80838c5603b2c729361"
+        },
+        {
+          "path": "app/services/unified_procurement.py",
+          "sha256_lf": "72b5ccb952cb1349a32f85e81d496165f3720118791d840d839c7c6584fb0a81"
+        },
+        {
+          "path": "app/services/unordered_finished_delivery.py",
+          "sha256_lf": "7fc4726206ae48067411efce45b1a076317e028810207cc049a34e143433c818"
+        },
+        {
+          "path": "app/services/warehouse_area_activation.py",
+          "sha256_lf": "d5f36837b60d167b4b2856b93db216c8063d49acff90eda08fb3a21b7a10d55b"
+        },
+        {
+          "path": "app/services/warehouse_area_tombstones.py",
+          "sha256_lf": "acc3141a3e7b2c95d0b9e2583545f7ce763121d59c0547c31934443722c03e4c"
+        },
+        {
+          "path": "app/services/warehouse_capacity_forecast.py",
+          "sha256_lf": "a42640f7eb8fb3a130d79a57c04b3785eea8dc8b1a998deb16857f58fb403857"
+        },
+        {
+          "path": "app/services/warehouse_current_map_baseline.py",
+          "sha256_lf": "eb133491160676ceaf77ef314c7a75b14c3dfca7180bb36f0c66b032dc181e4a"
+        },
+        {
+          "path": "app/services/warehouse_delayed_dispatch_map.py",
+          "sha256_lf": "43f3053ebcdc2ae99329cfe26d5dbb1137f521cff3118c246ea6d25d85372dfb"
+        },
+        {
+          "path": "app/services/warehouse_display_units.py",
+          "sha256_lf": "ba0cf55a637acaa33b88e74b197cac60a7ec0801ee5a2fa5ba511d3fc35e77d8"
+        },
+        {
+          "path": "app/services/warehouse_floor1_candidate_planner.py",
+          "sha256_lf": "76eac0ff8c19866c08f123e5d654259061acfeaee68d2c94c9e296ef28a4f849"
+        },
+        {
+          "path": "app/services/warehouse_floor_claim.py",
+          "sha256_lf": "86c499f939287013764020756d89fab4df39a1fdc64fddf091e817ca8c3bf8cc"
+        },
+        {
+          "path": "app/services/warehouse_goods.py",
+          "sha256_lf": "c9b7d2fb479dba2920a27752d46bf07d68046e9ef35612fee4afe59dee142aba"
+        },
+        {
+          "path": "app/services/warehouse_goods_correction.py",
+          "sha256_lf": "43cb2be7b4e25d8b8fd3323c9c3e6f1aec9c1838b154cdfdbacb9e302ffc39c7"
+        },
+        {
+          "path": "app/services/warehouse_ground_map_application.py",
+          "sha256_lf": "2aabf47e48a265b030ca8fd0cbea59316b0f0623baa71a650218107e801f6c80"
+        },
+        {
+          "path": "app/services/warehouse_ground_plan_materialization.py",
+          "sha256_lf": "9620b868e72b7e849946f35a6c859136abfc4d703cb83f82b42bdb002188a0b7"
+        },
+        {
+          "path": "app/services/warehouse_ground_slots.py",
+          "sha256_lf": "61f7ee334834dc7a612a0fb8736f953d3e097af0c321fabfcd788b83936a7b26"
+        },
+        {
+          "path": "app/services/warehouse_inventory.py",
+          "sha256_lf": "52eabf6ff09bf21f33257ddbd3ef28fef3f4447c466dd8a33cd0108138fa68fd"
+        },
+        {
+          "path": "app/services/warehouse_location_address.py",
+          "sha256_lf": "fea61a910a81c8227d38f92dfc8401c0cd2e9ff1e419abb024b8de7e60044a39"
+        },
+        {
+          "path": "app/services/warehouse_location_geometry_draft.py",
+          "sha256_lf": "b187a0f43d9f5defc343500524ec4bd620533518486c919a9bcfb97aa505b56b"
+        },
+        {
+          "path": "app/services/warehouse_location_sequence.py",
+          "sha256_lf": "8844204d28c36a74afd929be03a9a552def2ac134d6a0dece21c280f863b324d"
+        },
+        {
+          "path": "app/services/warehouse_movement_batch.py",
+          "sha256_lf": "9bb9d09a6730bfa4fdba5008a9f961b2f3919074bc3fd779465e872be566dde8"
+        },
+        {
+          "path": "app/services/warehouse_pallet_merge_batch.py",
+          "sha256_lf": "1ad159fa7a86198c8520c6c384cead21ae4095f21b7713b5514d78b1e1b0cf9e"
+        },
+        {
+          "path": "app/services/warehouse_pallet_standard.py",
+          "sha256_lf": "9300c2eae626632dcb32bc6954bc9b3fdf4e66195e437648aa9d6b2fc216099d"
+        },
+        {
+          "path": "app/services/warehouse_pending_receipts.py",
+          "sha256_lf": "eafc8e7bf0aebd70d76e059b0725ca4c92762fc91a6e0cc67d3adb37c7fc1e54"
+        },
+        {
+          "path": "app/services/warehouse_product_search.py",
+          "sha256_lf": "79ecd9daad6a3dd957219a583fe63b15d4839b02133c46207291be164fb0c2de"
+        },
+        {
+          "path": "app/services/warehouse_rack_cells.py",
+          "sha256_lf": "68ec7984178db5602002c5fc8160079b07f051d53521d36195663218ee09c4a4"
+        },
+        {
+          "path": "app/services/warehouse_reading_identity.py",
+          "sha256_lf": "20f494f606446bcc73e68a956ee981c7035aec5f4e3f220b04278a974b3476b8"
+        },
+        {
+          "path": "app/services/warehouse_relocation_pending.py",
+          "sha256_lf": "1c14d8a48f7f1c1c41e60fcc1037e2318c591f86a7f00a745f66157a1e90df9b"
+        },
+        {
+          "path": "app/services/warehouse_search_paging.py",
+          "sha256_lf": "c4fae6b7d56667cc796138961a1e08d36ebbd28a0e9c7481bdf703946362767b"
+        },
+        {
+          "path": "app/services/warehouse_sheet_transfer.py",
+          "sha256_lf": "5a6881e5f4dfa38c8be0bf63861aa93a3b5d2854d20f303942ccd839d5b0f9d3"
+        },
+        {
+          "path": "app/services/warehouse_stocktake_batch.py",
+          "sha256_lf": "252ace1cc7dc14fcc9634ff442a6c3d17b0a417737deef034173fe0d006d6a83"
+        },
+        {
+          "path": "app/services/warehouse_storage_usage.py",
+          "sha256_lf": "1c52b057665f65ef9cbe722e9f72e1b40f7ccd9f652638bc824a6d0dc7a03e5b"
+        },
+        {
+          "path": "app/services/warehouse_twin_dashboard.py",
+          "sha256_lf": "1a116be13ff0e6e56b6b97e0fff3b8f1704301708c3511748ce446b2d0cbc5b3"
+        },
+        {
+          "path": "app/services/warehouse_twin_layout.py",
+          "sha256_lf": "e3d880d5cb1dce6e11961e96c1da031df70e16f34deeecc9a16e5da28b5b5a58"
+        },
+        {
+          "path": "app/services/warehouse_twin_layout_editor.py",
+          "sha256_lf": "c4886592262b22974a4cff72ab118966fad21bf71113d9335026b5a72d543367"
+        },
+        {
+          "path": "app/services/warehouse_twin_production.py",
+          "sha256_lf": "dfc1e9f2099fd29f3bd5fa2725d262a020f818affe2a3df18d5ebace5c07930b"
+        },
+        {
+          "path": "app/version.py",
+          "sha256_lf": "97c86ed4292f1aec736d296dc698523f641623393c6f28fe6a796cfcef610848"
+        },
+        {
+          "path": "app/web_assets.py",
+          "sha256_lf": "abad614cbe86dd251f633c32b0de9a9b455a6925f79c13eef29adf5e2494a30a"
         }
       ]
     },
@@ -17,37 +1674,146 @@
       "name": "tests",
       "files": [
         {
+          "path": "tests/conftest.py",
+          "sha256_lf": "5c1f19176c3f30d2e70971a1e82a2bdfa9a3f62d6c50d2adee43ae9aa4ff6989"
+        },
+        {
+          "path": "tests/test_n028_customer_scopes.py",
+          "sha256_lf": "febad45c766cfbc44ed05ffc58287b1df914110891c40c074284c587f50c6892"
+        },
+        {
+          "path": "tests/test_phase3_api.py",
+          "sha256_lf": "628565b8dd10fe9a1358d4a3a6c6f3e85464b75eff74547570312bf480ef367d"
+        },
+        {
+          "path": "tests/test_phase3_cache_authorization.py",
+          "sha256_lf": "e9b55dd63ff895ab63ef68c2c6d6f8798f45ff9662109ba2503168a088e9ab97"
+        },
+        {
+          "path": "tests/test_phase3_concurrent_transactions.py",
+          "sha256_lf": "39da3941ad43e19dcf2563b633e77def38917cb8da6debd76fcbb9d3d5a51b57"
+        },
+        {
+          "path": "tests/test_phase3_delivery_gate.py",
+          "sha256_lf": "379196c3209945db8d9302f8faf4482e79fb890628dc159b127811336ce801c6"
+        },
+        {
+          "path": "tests/test_phase3_evidence_tools.py",
+          "sha256_lf": "e28b4171f0dac4d06c09181097385f928f6d3629f127779aac6a5c72492027ff"
+        },
+        {
+          "path": "tests/test_phase3_models_migration.py",
+          "sha256_lf": "0745da6e4622e0b2b8dd356144b803a2e4884a96492f8373bdd9ef235f280b0d"
+        },
+        {
+          "path": "tests/test_phase3_postgres_master_api.py",
+          "sha256_lf": "0ee70a419db0dc4658571f63823d9ccae84c0d68889e9c5416412978219d1b11"
+        },
+        {
+          "path": "tests/test_phase3_response_loss_recovery.py",
+          "sha256_lf": "d574891f1291c5982fa4e41738c9f67d9726d71bb01e14cc9dddb241755f3e4d"
+        },
+        {
+          "path": "tests/test_phase3_restricted_api_auth.py",
+          "sha256_lf": "8af0cb2376ae0b71d163ef9f07fcd74c116aa99d5f77f94cba5bf991369f3856"
+        },
+        {
           "path": "tests/test_phase3_scale_reliability.py",
-          "sha256_lf": "548d41c061b32939d6f73ea80accb1b37ff5fdc799924ed7a4045e639c75441c"
+          "sha256_lf": "3928d1ce49f12b6ba58b9519b9c366a64b69d7fa81ea18af380073829dfcae5c"
         }
       ]
     },
     {
-      "name": "documents",
+      "name": "tools",
       "files": [
+        {
+          "path": "scripts/qa/run_pytest_with_artifacts.py",
+          "sha256_lf": "857cc906c907f5a74fd88a46af3bb8e8cb15b67ffa3559465b6aeefdfc8cdeb2"
+        },
+        {
+          "path": "scripts/qa/verify_phase3_delivery.py",
+          "sha256_lf": "a7c42064b999a811bd4e59fc810b84609d813d4bdb67e4211a01b9c4d0e7c6d7"
+        },
+        {
+          "path": "scripts/qa/verify_phase3_manifest.py",
+          "sha256_lf": "bbc539b40ec1cdc0c91d37a084f03224aa8d87420dd849300d000dcbb321521c"
+        }
+      ]
+    },
+    {
+      "name": "docs",
+      "files": [
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/00_复制给Terra的提示词.md",
+          "sha256_lf": "56bf1a05706284f3267a8f48b3c4d2eebfb3074592a03e673f9b3ce0e530725f"
+        },
         {
           "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/01_详细实施方案.md",
           "sha256_lf": "3dbd7b6b1d95c07c230aaaaf46965f4beeea8ad443b4f2f1e796d0cf5cd16810"
         },
         {
           "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/02_任务进度.md",
-          "sha256_lf": "0f2936badc14f343cdcb9d2246a5d8d4fcf579eb64b516c51e633acb69f87ff8"
+          "sha256_lf": "e33fd7eea7678679c6fba12ad66054eae03df4162b4002ac470dba1488c0ef4b"
         },
         {
           "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/03_证据矩阵.md",
-          "sha256_lf": "87073a697b3748b7aa8cff8bcc41ac58b3264de5fc0660cc4a3e88e0edf3113a"
+          "sha256_lf": "c5bfa3be668973ed8db4bad2ecfea48c3ef7ae0f94249e5284107e96d8804461"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/04_Astra第三阶段整改再验收交接.md",
+          "sha256_lf": "0085519e2239e43b51dcacdb21641a61aca01084a5b8fb4fa3786dd7da31324f"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/04_Astra第三阶段验收交接.md",
+          "sha256_lf": "d3dd0ebf4a6a23d00a3d91239324b447d1a5abc6758f845601fe5c955de27778"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/05_运维定位表.md",
+          "sha256_lf": "2c1d0cb40dda3f825f80dce44c76223e95bf7bb2881a98b562cfb00243f98f9e"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/06_当前整改与下一阶段交付.md",
+          "sha256_lf": "cd3fa660caab194bafd3eca02a3f3b26d4194b859eb1503226a30bca944ec8b6"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/P07_测量报告摘要.md",
+          "sha256_lf": "a75a4a8440e6cf48028fb40393573b73327a1546dfa63beb82f826d246bf55ef"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P00.md",
+          "sha256_lf": "178457c52766a4d83ea655d4c9705182ae2383aef60a6dfae1892a78f82ad57b"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P01.md",
+          "sha256_lf": "059f5b91fb44851cb58a7d28d989b3515429baf274a35cc38d20aed2c1673d3e"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P02.md",
+          "sha256_lf": "b2838b8ea271c1f5c859d323a48f522e25cbe91761f786fb36ad0c43514ea509"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P03.md",
+          "sha256_lf": "ee6c5ae8153010748a4445312cc974b78893d9a7fa887b63f33c568bda5a5af1"
         },
         {
           "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P04.md",
-          "sha256_lf": "ea80cf775468dfc4d0f4359f299f912c5220f226a7fe55aab43b4d33ace273bc"
+          "sha256_lf": "9138ca0e762f62c12865b5541dd8b0633b676eedab5b51f5136a1fea5340ee59"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P05.md",
+          "sha256_lf": "afe9d9bfd30e831d277f94629a4db44fd7b3d0c3f13e5f2b536faa366da1ef0a"
         },
         {
           "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P06.md",
-          "sha256_lf": "e9fd8194da2da7880a3b1ee291a402ab55038b82886d40f45184d2d9c8950fcc"
+          "sha256_lf": "1ba76d858d13a95729e1b2559b989d7af3e1a2c4e985c84a745136fe62a7d5e3"
         },
         {
           "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P07_Astra复核整改.md",
-          "sha256_lf": "98be98ab00664d4cfc2af157a5c7cd36f32df8f07d255e57244c14b505cd98a3"
+          "sha256_lf": "5988e399735c72bb03d321d1434edd4388906e4c03d2a14d3886aa4140133696"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P08_证据交付门禁.md",
+          "sha256_lf": "1977f16c1a45720c0b1f338df5089d1efbd0c11e130cfff34611f887b447239c"
         }
       ]
     },
@@ -55,8 +1821,16 @@
       "name": "report_summary",
       "files": [
         {
-          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/P07_测量报告摘要.md",
-          "sha256_lf": "bdfaf5d82c9a154e27f948d1756f57c09dee967d4fe1238e095d9100a17552d4"
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/MANIFEST.json",
+          "sha256_lf": "fa79cdb12e77547b34bc06c9f17d8cc81f252547815e28b89705c219e0eb863e"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/P07_EVIDENCE_INDEX.json",
+          "sha256_lf": "df44dd932112ab2489b51ed7b55d85149813047e38de8d8e1aa9929ea1ec821c"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/P07_当前测量摘要.json",
+          "sha256_lf": "d049abc9d8e916079bffaa393c149f547dbc58cfbbac3b1863047c82444dc2e6"
         }
       ]
     }

@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "manifest": "docs/plans/LEGACY_ERP_PHASE3_20260921/MANIFEST_ASTRA_REWORK.json",
+  "evidence_root_hint": "D:\\tm-worktrees\\erp-phase3-evidence\\P07",
+  "runs": [
+    {
+      "directory": "p07-rereview-integration-01",
+      "nodeids": [
+        "tests/test_phase3_evidence_tools.py::test_manifest_uses_root_and_accepts_lf_equivalence_but_rejects_content_change",
+        "tests/test_phase3_evidence_tools.py::test_manifest_rejects_traversal_self_hash_and_empty_groups",
+        "tests/test_phase3_evidence_tools.py::test_strict_wrapper_confines_write_paths_and_refuses_dotenv",
+        "tests/test_phase3_evidence_tools.py::test_offline_actual_consumers_are_confined_before_requests",
+        "tests/test_phase3_scale_reliability.py::test_order_list_scale_100_1000_5000_has_bounded_queries_and_no_errors",
+        "tests/test_phase3_scale_reliability.py::test_committed_order_change_invalidates_active_badge_projection_cache",
+        "tests/test_phase3_scale_reliability.py::test_sqlite_delete_journal_lock_wait_positive_control",
+        "tests/test_phase3_scale_reliability.py::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[100]",
+        "tests/test_phase3_scale_reliability.py::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[1000]",
+        "tests/test_phase3_scale_reliability.py::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[5000]",
+        "tests/test_phase3_cache_authorization.py::test_warm_projection_separates_customer_scope_and_finance_then_invalidates"
+      ],
+      "bind_current_sources": true
+    },
+    {
+      "directory": "p08-delivery-gate-01",
+      "nodeids": [
+        "tests/test_phase3_delivery_gate.py::test_portable_gate_accepts_complete_evidence",
+        "tests/test_phase3_delivery_gate.py::test_portable_gate_rejects_incomplete_or_changed_evidence[digest]",
+        "tests/test_phase3_delivery_gate.py::test_portable_gate_rejects_incomplete_or_changed_evidence[nonzero]",
+        "tests/test_phase3_delivery_gate.py::test_portable_gate_rejects_incomplete_or_changed_evidence[unfinished]",
+        "tests/test_phase3_delivery_gate.py::test_portable_gate_rejects_incomplete_or_changed_evidence[junit_failure]",
+        "tests/test_phase3_delivery_gate.py::test_portable_gate_rejects_incomplete_or_changed_evidence[missing_nodeid]",
+        "tests/test_phase3_delivery_gate.py::test_portable_gate_rejects_incomplete_or_changed_evidence[source]",
+        "tests/test_phase3_delivery_gate.py::test_portable_gate_rejects_incomplete_or_changed_evidence[outside]",
+        "tests/test_phase3_delivery_gate.py::test_portable_gate_rejects_incomplete_or_changed_evidence[unbound]"
+      ],
+      "bind_current_sources": true
+    }
+  ],
+  "files": [
+    {
+      "path": "p07-rereview-integration-01/result.json",
+      "sha256": "cdd957fb8c0a8a2b4913494894a058ec44a596ed0b4d9e9c7165616c78cd1b0d"
+    },
+    {
+      "path": "p07-rereview-integration-01/pytest.log",
+      "sha256": "197ddde310a7b27b1a9b0ebf27057fa52a5e73d8a062f902daa6109eefbd19f7"
+    },
+    {
+      "path": "p07-rereview-integration-01/pytest.junit.xml",
+      "sha256": "d6ac18a09338ad2db42f0dae10bf37a1d23669f8ac5dcf12d6cc8df9a83d92bd"
+    },
+    {
+      "path": "p07-rereview-integration-01/source-hashes.json",
+      "sha256": "7debeca48c25f98f4bdcd088f4e1fceb4c9e725e4517dd488b782735d52a69a5"
+    },
+    {
+      "path": "p07-rereview-integration-01/measurements/f1-lock-positive-control.json",
+      "sha256": "14e302e6d5b3a8b1517fb0a354c13524c454ab0c632e939c1f9bea8f4e76ef84"
+    },
+    {
+      "path": "p07-rereview-integration-01/measurements/f2-cache-and-status-tier-100.json",
+      "sha256": "74ec5077afd823e136f5c11cc905e524cc318ccef68932fed8db2993b518d919"
+    },
+    {
+      "path": "p07-rereview-integration-01/measurements/f2-cache-and-status-tier-1000.json",
+      "sha256": "55afbb9ba4cc8452a6a16c1175b328740040152f097fc27516b829e892f81365"
+    },
+    {
+      "path": "p07-rereview-integration-01/measurements/f2-cache-and-status-tier-5000.json",
+      "sha256": "dbfc67db244494778b2b704eca12ab55f476cdb8772d1561cfe6eb7bf8e3579a"
+    },
+    {
+      "path": "p07-rereview-integration-01/measurements/isolation-consumers.json",
+      "sha256": "07a4bb4a6c06595b552b0680d158b8d0ea2b6a0db7e9d2dc79b06d66e4c01676"
+    },
+    {
+      "path": "p08-delivery-gate-01/result.json",
+      "sha256": "852b6425917056091746f5a65fe4462c2aade533d9736ef1033d6baa0d901151"
+    },
+    {
+      "path": "p08-delivery-gate-01/pytest.log",
+      "sha256": "12dd35114c2714b801da3ec474dda428a88dca34c7a206aff17108e66f51b12a"
+    },
+    {
+      "path": "p08-delivery-gate-01/pytest.junit.xml",
+      "sha256": "f899727b11ac9410569ae54124ecc61c9e64eb4c7823771c4c3a170829ea6b84"
+    },
+    {
+      "path": "p08-delivery-gate-01/source-hashes.json",
+      "sha256": "ab78b8697e1e14cce9e5ca50317caed7c567f807c97038c23e7c2c573221b43c"
+    },
+    {
+      "path": "p07-rereview-runtime.json",
+      "sha256": "63580007f25d978dfb43b47f908d58ae082f712e2e077300ba4b875afb0cec6f"
+    },
+    {
+      "path": "capture_rereview_runtime.py",
+      "sha256": "b6672f49b15281e6ffd80c28b8e5eefbf0a146570af3cb0ba684659656b5f784"
+    }
+  ]
+}

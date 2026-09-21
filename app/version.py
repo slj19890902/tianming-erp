@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.474"
-APP_VERSION_NAME = "开票税务资料选填规则"
+APP_VERSION = "v0.22.475"
+APP_VERSION_NAME = "订单键盘连续性与交付回归修复"
 APP_BUILD_DATE = "2026-09-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4487,3 +4487,16 @@ APP_CHANGELOG = [*(f"v0.22.473：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["客户及结算对象开票抬头、税号必填；地址、电话、开户行、银行账号选填，不再因四项留空阻止生成开票任务。", "填写的购方资料随任务冻结保存，任务详情提供发票备注复制；税局商品明细Excel不包含购方资料，开具时需填写并选择展示或粘贴备注。"]
 APP_VERIFICATION_STEPS = ["刷新开票税务资料，核对抬头、税号必填和四项选填标识；按真实业务保存。", "打开真实开票任务，核对购方资料及备注复制内容；税局开具前预览票面，确认填写的地址、电话及银行资料展示。"]
 APP_CHANGELOG = [*(f"v0.22.474：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "订单备注改为可换行文本区；客户单号 Enter 继续推进到日期，Escape 只关闭未保存编辑，Ctrl+Enter 保留原有防重保存。",
+    "订单列表列偏好按本机当前账号保存，支持恢复默认；请购余量与待送列表查询继续保留本轮数量和性能修复。",
+    "本版无数据库迁移，不回填或改写既有订单、库存、金额、权限和审计事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新订单录入，填写真实订单时核对备注可以换行、客户单号 Enter 推进焦点；保存结果不确定时按原提示查询，勿重复提交。",
+    "订单列表在管理员与业务员账号分别调整列偏好并恢复默认，核对每个账号的显示独立；不为验收创建模拟订单。",
+    "进入系统备份 → 系统版本，确认版本为 v0.22.475、数据库 revision 仍为 du0920。",
+]
+APP_CHANGELOG = [*(f"v0.22.475：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -1,5 +1,9 @@
 # Codex 项目交接
 
+## 2026-09-21 UNORDERED-PRICE-SUPPLEMENT v0.22.478
+
+- 正式代码2b726d1c，签名包937eb7a2，du0920无迁移；待对账缺价明细支持受控首次销售补价，原回单无需撤销，签收和库存不变。权限/版本/幂等/审计/冻结保护及21项定向验证、隔离副本和发布门禁通过。正式业务未补价，真实价格由用户填写；待人工验收。详见docs/release_reports/UNORDERED_PRICE_SUPPLEMENT_20260921.md及NAS独立回执。
+
 ## 2026-09-21 FINANCE-QUEUE-CUSTOMER-BUGS v0.22.477
 
 - 正式代码71d41c94，签名包3c66da2b，du0920无迁移；修复对账入口串客户、客户组不同阶段账单混显、历史已收清账单误入待对账；缺失售价显示待补价并保留生成拦截。61项不同定向用例、隔离正式副本投影和发布只读检查通过；正式数据未补价/回写。新振XZ-20260819-002仍需实际成交价。详见docs/release_reports/FINANCE_QUEUE_CUSTOMER_BUGS_20260921.md及NAS独立回执，待人工验收。

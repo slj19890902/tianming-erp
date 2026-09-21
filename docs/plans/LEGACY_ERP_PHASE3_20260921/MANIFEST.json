@@ -1,0 +1,52 @@
+{
+  "status": "planning_only_not_executed",
+  "created": "2026-09-21",
+  "historical_reference_commit": "8004bb51c69bc361bd7dd236693ab139accf6d79",
+  "execution_baseline": "resolve origin/factory-current-baseline live during P00",
+  "files": [
+    {
+      "path": "00_复制给Terra的提示词.md",
+      "sha256": "59d5095ff31fc43a920c68cbfc9a857d597c625290ee88b885da6ae516e33661"
+    },
+    {
+      "path": "01_详细实施方案.md",
+      "sha256": "b8665394d0f1424d63d629dff4839304d9aab8af6d6d77944ac689318a40d57b"
+    },
+    {
+      "path": "02_任务进度.md",
+      "sha256": "1bc7faef126bb580c3e27ad23b6b55ff57a28ae9a7d5ce671c367bd4761b5e77"
+    },
+    {
+      "path": "03_证据矩阵.md",
+      "sha256": "f626d5b8c8770e08848c57825691112ce84cb92a274c6da3153042eca9d99b49"
+    },
+    {
+      "path": "tasks/P00.md",
+      "sha256": "25061b758245f746ff4b8cb51c3ffee00aacb192c22fc494ef0a579512963c5c"
+    },
+    {
+      "path": "tasks/P01.md",
+      "sha256": "eaa9e13cfb98b00955cacdf2e46f40b8b814ee4a02e7a8962ec227fa9da0f470"
+    },
+    {
+      "path": "tasks/P02.md",
+      "sha256": "d21663467051bd9e1954b626976f64dbc6e8018f2290f5ca0f008df907d5ea8e"
+    },
+    {
+      "path": "tasks/P03.md",
+      "sha256": "af2bca11222bf09f9dbb333bd297952199eb27266694b1889e28744e2fe27620"
+    },
+    {
+      "path": "tasks/P04.md",
+      "sha256": "21ce06b63e80da61ee93a47c34faa69807dacbbd03a9fa95ada903a16e90ba50"
+    },
+    {
+      "path": "tasks/P05.md",
+      "sha256": "883d844b17646259a01ea7b7a83ac88f0abc73b8caab2946abd9b5604ffe9b82"
+    },
+    {
+      "path": "tasks/P06.md",
+      "sha256": "0e256dbf8d46cb5cda18104a16313a9e8cd96ef3c3b679055f556fda0707e103"
+    }
+  ]
+}

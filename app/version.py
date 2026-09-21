@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.473"
-APP_VERSION_NAME = "开票缺项提示与对账异议更正"
+APP_VERSION = "v0.22.474"
+APP_VERSION_NAME = "开票税务资料选填规则"
 APP_BUILD_DATE = "2026-09-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4482,3 +4482,8 @@ APP_VERIFICATION_STEPS = [
     "只勾选需下月对账的明细移出，其余保留本月；本月重新确认后生成开票任务。不要在正式库创建测试账单。",
 ]
 APP_CHANGELOG = [*(f"v0.22.473：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = ["客户及结算对象开票抬头、税号必填；地址、电话、开户行、银行账号选填，不再因四项留空阻止生成开票任务。", "填写的购方资料随任务冻结保存，任务详情提供发票备注复制；税局商品明细Excel不包含购方资料，开具时需填写并选择展示或粘贴备注。"]
+APP_VERIFICATION_STEPS = ["刷新开票税务资料，核对抬头、税号必填和四项选填标识；按真实业务保存。", "打开真实开票任务，核对购方资料及备注复制内容；税局开具前预览票面，确认填写的地址、电话及银行资料展示。"]
+APP_CHANGELOG = [*(f"v0.22.474：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

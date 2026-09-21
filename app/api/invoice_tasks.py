@@ -301,10 +301,6 @@ def _profile_missing_items(
         for name, value in (
             ("购方抬头", profile.invoice_title),
             ("购方税号", profile.tax_no),
-            ("购方开票地址", profile.invoice_address),
-            ("购方开票电话", profile.invoice_phone),
-            ("购方开户行", profile.bank_name),
-            ("购方银行账号", profile.bank_account),
         ):
             if not _text(value):
                 missing.append(name)
@@ -407,10 +403,6 @@ def _settlement_entity_missing_items(
     for label, value in (
         ("结算对象名称", row.entity_name),
         ("结算对象税号", row.tax_no),
-        ("结算对象开票地址", row.invoice_address),
-        ("结算对象开票电话", row.invoice_phone),
-        ("结算对象开户行", row.bank_name),
-        ("结算对象银行账号", row.bank_account),
     ):
         if not _text(value):
             missing.append(label)
@@ -555,6 +547,8 @@ def create_settlement_entity(
     db: Session = Depends(get_db),
     user: User = Depends(can_profile_manage),
 ) -> dict[str, Any]:
+    if not _text(payload.entity_name) or not _text(payload.tax_no):
+        raise HTTPException(status_code=409, detail="结算对象开票抬头和税号必须填写")
     seller = (
         db.get(InvoiceSellerEntity, payload.default_seller_id)
         if payload.default_seller_id
@@ -605,6 +599,8 @@ def update_settlement_entity(
         raise HTTPException(status_code=404, detail="结算对象不存在")
     if payload.expected_version != row.version:
         raise HTTPException(status_code=409, detail={"message": "结算对象已被修改", "current_version": row.version})
+    if not _text(payload.entity_name) or not _text(payload.tax_no):
+        raise HTTPException(status_code=409, detail="结算对象开票抬头和税号必须填写")
     seller = db.get(InvoiceSellerEntity, payload.default_seller_id) if payload.default_seller_id else None
     if payload.default_seller_id and seller is None:
         raise HTTPException(status_code=409, detail="结算对象默认销方不存在")
@@ -670,6 +666,11 @@ def save_customer_invoice_profile(
     )
     if payload.settlement_entity_id and settlement_entity is None:
         raise HTTPException(status_code=409, detail="结算对象不存在")
+    required_buyer = (("购方抬头", settlement_entity.entity_name if settlement_entity else payload.invoice_title),
+                      ("购方税号", settlement_entity.tax_no if settlement_entity else payload.tax_no))
+    missing_buyer = [label for label, value in required_buyer if not _text(value)]
+    if missing_buyer:
+        raise HTTPException(status_code=409, detail={"message": "开票抬头和税号必须填写", "missing_items": missing_buyer})
     if profile is None:
         profile = CustomerInvoiceProfile(customer_id=customer_id)
         db.add(profile)

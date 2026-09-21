@@ -6368,7 +6368,7 @@
             <div v-else-if="modal.type === 'invoiceTask'">
               <div v-if="invoiceTaskOperationState.detailLoading" class="empty">正在读取任务预览…</div>
               <div v-else-if="invoiceTaskOperationState.detailError" class="empty"><div class="notice danger" style="margin-bottom:10px">任务预览读取失败：{{ invoiceTaskOperationState.detailError }}</div><button class="btn" type="button" @click="retryInvoiceTaskDetail">重新读取</button></div>
-              <template v-else-if="invoiceTaskDetail"><div class="notice"><strong>冻结快照只读：</strong>购方、销方、明细和金额如需变化，必须作废旧任务并基于最新对账版本重新生成。</div><div class="form-grid" style="margin-top:10px"><div class="field"><label>购方</label><div>{{ invoiceTaskDetail.customer_name || '-' }}</div></div><div class="field"><label>销方</label><div>{{ invoiceTaskDetail.seller_name || '-' }}</div></div><div class="field"><label>状态 / 版本</label><div>{{ invoiceTaskStatusText(invoiceTaskDetail.status) }} / v{{ invoiceTaskDetail.version || '-' }}</div></div><div class="field"><label>价税合计</label><div class="sensitive-price">¥ {{ money(invoiceTaskDetail.total_amount) }}</div></div></div><div v-if="(invoiceTaskDetail.missing_items||[]).length" class="notice danger" style="margin-top:10px">缺项：{{ invoiceTaskDetail.missing_items.join('；') }}</div><div v-else class="table-wrap" style="margin-top:10px"><table><thead><tr><th>项目</th><th>税收分类编码</th><th>规格</th><th>数量</th><th class="sensitive-price">金额 / 税率</th></tr></thead><tbody><tr v-for="item in (invoiceTaskDetail.items||[])" :key="item.id || item.sequence"><td>{{ item.project_name || '-' }}</td><td>{{ item.tax_category_code || '-' }}</td><td>{{ item.specification || '-' }}</td><td>{{ item.quantity || '-' }}</td><td class="sensitive-price">¥{{ money(item.amount) }} / {{ item.tax_rate || '-' }}</td></tr></tbody></table></div></template>
+              <template v-else-if="invoiceTaskDetail"><div class="notice"><strong>冻结快照只读：</strong>购方、销方、明细和金额如需变化，必须作废旧任务并基于最新对账版本重新生成。</div><div class="form-grid" style="margin-top:10px"><div class="field"><label>购方</label><div>{{ invoiceTaskDetail.customer_name || '-' }}</div></div><div class="field"><label>销方</label><div>{{ invoiceTaskDetail.seller_name || '-' }}</div></div><div class="field"><label>状态 / 版本</label><div>{{ invoiceTaskStatusText(invoiceTaskDetail.status) }} / v{{ invoiceTaskDetail.version || '-' }}</div></div><div class="field"><label>价税合计</label><div class="sensitive-price">¥ {{ money(invoiceTaskDetail.total_amount) }}</div></div></div><div class="panel" style="margin-top:10px"><strong>购方开票资料（本任务冻结）</strong><div>抬头：{{ invoiceTaskDetail.buyer_snapshot?.invoice_title || '-' }} · 税号：{{ invoiceTaskDetail.buyer_snapshot?.tax_no || '-' }}</div><template v-if="invoiceBuyerRemark(invoiceTaskDetail)"><label>已填写的选填资料／票面备注</label><textarea class="input" rows="4" readonly :value="invoiceBuyerRemark(invoiceTaskDetail)" @focus="$event.target.select()"></textarea><button class="btn small" @click="copyInvoiceBuyerRemark">复制发票备注</button><div class="muted">税局 Excel 仅导入商品明细。请将上述信息填写到税局购方资料并勾选“是否展示”，或粘贴到发票备注；开具前预览核对票面。</div></template><div v-else class="muted">地址、电话、开户行、银行账号未填写，不影响生成开票任务。</div></div><div v-if="(invoiceTaskDetail.missing_items||[]).length" class="notice danger" style="margin-top:10px">缺项：{{ invoiceTaskDetail.missing_items.join('；') }}</div><div v-else class="table-wrap" style="margin-top:10px"><table><thead><tr><th>项目</th><th>税收分类编码</th><th>规格</th><th>数量</th><th class="sensitive-price">金额 / 税率</th></tr></thead><tbody><tr v-for="item in (invoiceTaskDetail.items||[])" :key="item.id || item.sequence"><td>{{ item.project_name || '-' }}</td><td>{{ item.tax_category_code || '-' }}</td><td>{{ item.specification || '-' }}</td><td>{{ item.quantity || '-' }}</td><td class="sensitive-price">¥{{ money(item.amount) }} / {{ item.tax_rate || '-' }}</td></tr></tbody></table></div></template>
               <div v-else class="empty">暂无可显示的任务详情。</div>
             </div>
             <div v-else-if="modal.type === 'invoiceTaskResult'">
@@ -6406,11 +6406,11 @@
                   <div class="field"><label>编号</label><input class="input" v-model.trim="settlementEntityForm.entity_code" /></div>
                   <div class="field"><label>公司名称</label><input class="input" v-model.trim="settlementEntityForm.entity_name" /></div>
                   <div class="field"><label>简称</label><input class="input" v-model.trim="settlementEntityForm.short_name" /></div>
-                  <div class="field"><label>税号</label><input class="input" v-model.trim="settlementEntityForm.tax_no" /></div>
-                  <div class="field"><label>开票地址</label><input class="input" v-model.trim="settlementEntityForm.invoice_address" /></div>
-                  <div class="field"><label>开票电话</label><input class="input" v-model.trim="settlementEntityForm.invoice_phone" /></div>
-                  <div class="field"><label>开户行</label><input class="input" v-model.trim="settlementEntityForm.bank_name" /></div>
-                  <div class="field"><label>银行账号</label><input class="input" v-model.trim="settlementEntityForm.bank_account" /></div>
+                  <div class="field"><label>税号 *</label><input class="input" v-model.trim="settlementEntityForm.tax_no" /></div>
+                  <div class="field"><label>开票地址（选填）</label><input class="input" v-model.trim="settlementEntityForm.invoice_address" /></div>
+                  <div class="field"><label>开票电话（选填）</label><input class="input" v-model.trim="settlementEntityForm.invoice_phone" /></div>
+                  <div class="field"><label>开户行（选填）</label><input class="input" v-model.trim="settlementEntityForm.bank_name" /></div>
+                  <div class="field"><label>银行账号（选填）</label><input class="input" v-model.trim="settlementEntityForm.bank_account" /></div>
                   <div class="field"><label>默认销方</label><select class="select" v-model.number="settlementEntityForm.default_seller_id"><option :value="null">请选择</option><option v-for="seller in invoiceSellers.filter(row=>row.is_enabled!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select></div>
                   <div class="field"><label>结转日</label><input class="input" type="number" min="1" max="28" v-model.number="settlementEntityForm.statement_cycle_start_day" /></div>
                   <div class="field"><label>状态</label><select class="select" v-model="settlementEntityForm.confirmation_status"><option value="pending">待确认</option><option value="confirmed">已确认</option></select></div>
@@ -6466,12 +6466,12 @@
                 <div class="notice">首次设置：先核对下方“默认项目规则”，选择已确认并保存；再选择销方、补齐税务资料，选择已确认并保存税务资料。保存客户基本资料不会代替这两项保存。</div>
                 <div v-if="customerInvoiceProfile.error" class="notice danger">{{ customerInvoiceProfile.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceProfile(customerForm.id)">重新读取税务资料</button></div>
                 <fieldset class="form-grid" style="margin-top:8px" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)">
-                  <div class="field"><label>开票抬头</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_title" /></div>
-                  <div class="field"><label>税号</label><input class="input" v-model.trim="customerInvoiceProfile.tax_no" /></div>
-                  <div class="field"><label>开票地址</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_address" /></div>
-                  <div class="field"><label>开票电话</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_phone" /></div>
-                  <div class="field"><label>开户行</label><input class="input" v-model.trim="customerInvoiceProfile.bank_name" /></div>
-                  <div class="field"><label>银行账号</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div>
+                  <div class="field"><label>开票抬头 *</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_title" /></div>
+                  <div class="field"><label>税号 *</label><input class="input" v-model.trim="customerInvoiceProfile.tax_no" /></div>
+                  <div class="field"><label>开票地址（选填）</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_address" /></div>
+                  <div class="field"><label>开票电话（选填）</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_phone" /></div>
+                  <div class="field"><label>开户行（选填）</label><input class="input" v-model.trim="customerInvoiceProfile.bank_name" /></div>
+                  <div class="field"><label>银行账号（选填）</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div>
                   <div class="field"><label>合作模式</label><div class="toolbar-group" style="flex-wrap:nowrap"><select class="select" style="min-width:0;flex:1 1 auto" v-model.number="customerInvoiceProfile.settlement_entity_id" :disabled="settlementEntityState.loading || !settlementEntityState.loaded"><option :value="null">本客户直接对账开票</option><option v-for="row in settlementEntities.filter(item=>item.is_enabled!==false)" :key="row.id" :value="row.id">归集到 {{ row.entity_name }}</option></select><button class="btn small" type="button" @click="openSettlementEntitiesFromCustomer">维护</button></div><div class="muted">选择合作方后，新对账单按合作方汇总；历史单据不变。</div></div>
                   <div class="field"><label>默认销方</label><div class="toolbar-group" style="flex-wrap:nowrap"><select class="select" style="min-width:0;flex:1 1 auto" v-model.number="customerInvoiceProfile.default_seller_id" :disabled="invoiceSellerState.loading || !invoiceSellerState.loaded || !!customerInvoiceProfile.settlement_entity_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_enabled!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select><button class="btn small" type="button" :disabled="invoiceSellerState.loading" @click="openInvoiceSellersFromCustomer">维护销方</button></div><div v-if="customerInvoiceProfile.settlement_entity_id" class="muted">销方由所选合作结算对象统一决定。</div><div v-else-if="invoiceSellerState.loading" class="muted">正在读取销方…</div><div v-else-if="invoiceSellerState.error" class="danger-text">销方读取失败，请点“维护销方”重试。</div><div v-else-if="invoiceSellerState.loaded && !invoiceSellers.length" class="muted">尚未维护销方主体，请先录入两个公司开票抬头。</div></div>
                   <div class="field"><label>常用箱与订单单价口径</label><select class="select" v-model="customerInvoiceProfile.price_tax_mode"><option value="tax_inclusive">含税价</option><option value="tax_exclusive">未税价</option></select><div class="muted">只改变价格解释和以后生成的订单快照，不换算、不覆盖现有常用箱价格。</div></div>
@@ -6493,7 +6493,7 @@
                   </fieldset>
                   <button class="btn small primary" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceRule">{{ customerInvoiceState.ruleSaving ? '默认规则保存中…' : '保存默认规则' }}</button>
                 </div>
-                <div class="muted" style="margin-top:5px">普通联系人地址、电话不会自动带入开票资料；必须由财务确认。</div>
+                <div class="muted" style="margin-top:5px">开票抬头、税号必填；地址、电话、开户行、银行账号选填。填写后在开票任务中保留并提供票面备注复制；普通联系人资料不会自动带入。</div>
               </section>
               <section class="customer-pricing-preferences">
                 <div class="toolbar" style="margin:0 0 7px"><strong>客户报价偏好</strong><span class="muted">按箱型、层数、楞型和供应商维护已确认材质及含税客户平方价。</span></div>
@@ -24118,6 +24118,25 @@
                 this.financeStatementOperationState.statementId = null;
               }
             }
+          },
+          invoiceBuyerRemark(task) {
+            const buyer=task?.buyer_snapshot || {};
+            return [["购方地址","invoice_address"],["购方电话","invoice_phone"],["购方开户行","bank_name"],["购方银行账号","bank_account"]].filter(([,key])=>String(buyer[key] ?? "").trim()).map(([label,key])=>`${label}：${String(buyer[key]).trim()}`).join("；");
+          },
+          async copyInvoiceBuyerRemark() {
+            const text=this.invoiceBuyerRemark(this.invoiceTaskDetail);
+            if (!text) return false;
+            try {
+              if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+              else {
+                const field=document.createElement("textarea");
+                field.value=text; document.body.appendChild(field); field.select();
+                try { if (!document.execCommand("copy")) throw new Error("copy failed"); }
+                finally { field.remove(); }
+              }
+              this.showToast("发票备注已复制，请在税局填写并预览核对");
+              return true;
+            } catch(error) { this.showToast("自动复制未成功，请选中上方文字按 Ctrl+C 复制",true); return false; }
           },
           async openInvoiceTask(task) {
             const target = {id:Number(task.id), task_number:String(task.task_number || "")};

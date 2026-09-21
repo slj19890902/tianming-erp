@@ -11,7 +11,6 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 
@@ -40,7 +39,9 @@ def _seed(database: Path) -> dict[str, object]:
     from app.models.customer import Customer
     from app.models.material import Material
     from app.models.product import Product
+    from app.models.supplier import Supplier
     from app.models.user import User
+    from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(database)
     try:
@@ -85,7 +86,14 @@ def _seed(database: Path) -> dict[str, object]:
                 quote_price=Decimal("2.50"),
                 is_active=True,
             )
-            session.add_all((admin, sales, customer, material))
+            supplier = Supplier(
+                standard_name="R03 隔离供应商",
+                normalized_name=normalize_supplier_identity("R03 隔离供应商"),
+                display_name="R03 隔离供应商",
+                is_active=True,
+                version=1,
+            )
+            session.add_all((admin, sales, customer, material, supplier))
             session.flush()
             product = Product(
                 customer_id=customer.id,

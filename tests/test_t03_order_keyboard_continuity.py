@@ -22,6 +22,7 @@ def test_order_entry_template_declares_keyboard_path_and_discoverable_save() -> 
         "onOrderEntryKeydown($event)",
         "title=\"保存（Ctrl+Enter）\"",
         'this.modal?.type === "order"',
+        '<label>备注（选填）</label><textarea class="input" rows="3" v-model.trim="orderForm.remark"></textarea>',
     ):
         assert expected in INDEX
 

@@ -8028,7 +8028,7 @@
 	                </template>
 	              </tbody></table>
 	              </div>
-	              <div class="field" style="width:280px;margin:10px 0 0 auto"><label>备注（选填）</label><input class="input" v-model.trim="orderForm.remark" /></div>
+              <div class="field" style="width:280px;margin:10px 0 0 auto"><label>备注（选填）</label><textarea class="input" rows="3" v-model.trim="orderForm.remark"></textarea></div>
 	            </div>
             <div v-else-if="modal.type === 'orderEdit'">
               <div class="form-grid">

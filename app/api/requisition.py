@@ -171,6 +171,7 @@ from app.services.semi_finished_inventory import (
     semi_finished_inventory_candidates,
 )
 from app.services.sheet_cut_plan import rectangular_cut_plan
+from app.services.warehouse_goods import goods_profile
 from app.services.composite_bom_execution import (
     CompositeBOMExecutionError,
     require_positive_integer,
@@ -1522,6 +1523,8 @@ class PendingSafeSemiInventoryBatchItem(BaseModel):
     requested_requirement_quantity: int = Field(gt=0)
     lots: list[PendingSemiInventoryLot] = Field(min_length=1)
     warning_acknowledged_codes: list[str] = Field(default_factory=list)
+    board_length_mm: int | None = Field(default=None, gt=0)
+    board_width_mm: int | None = Field(default=None, gt=0)
 
     @field_validator("component_type")
     @classmethod
@@ -1532,6 +1535,7 @@ class PendingSafeSemiInventoryBatchItem(BaseModel):
 class PendingSafeSemiInventoryBatchPayload(BaseModel):
     items: list[PendingSafeSemiInventoryBatchItem] = Field(min_length=1, max_length=100)
     idempotency_key: str = Field(min_length=1, max_length=60)
+    allocation_mode: Literal["explicit", "pooled"] = "explicit"
 
     @model_validator(mode="after")
     def validate_unique_requirements(self):
@@ -3856,18 +3860,33 @@ def _semi_component_specs_for_requisition(
 def _semi_candidate_dict_for_requisition(
     row: SemiFinishedCandidate,
     projection_context: dict | None = None,
+    expected_layer_count: int | None = None,
 ) -> dict:
     lot = row.lot
     detail = lot.semi_finished_detail
     location = lot.location
     context = projection_context or {}
     cut_plan = row.cut_plan
+    from sqlalchemy.orm import object_session
+    profile = goods_profile(object_session(lot), lot)
+    # A customer's name/signature difference is not a physical incompatibility
+    # when the existing eligibility engine has confirmed explicit shared scope.
+    safe_group = bool(
+        row.selectable and not cut_plan
+        and int(expected_layer_count or 0) > 0
+        and int(detail.layer_count or 0) == int(expected_layer_count)
+        and set(row.signature_differences).issubset({"customer"})
+        and "REVERSE_CREASE_ADMIN_OVERRIDE" not in row.warning_codes
+        and (detail.owner_customer_id is not None or (profile or {}).get("scope") == "general")
+        and ((profile or {}).get("processing") != "printed" or len(profile.get("product_ids", [])) == 1)
+    )
     return {
         "lot_id": lot.id,
         "lot_number": lot.lot_number,
         "version": lot.version,
         "source": row.source,
         "selectable": row.selectable,
+        "safe_group_eligible": safe_group,
         "match_reason": row.match_reason,
         "match_rule_id": row.match_rule_id,
         "available_stock_quantity": row.available_stock_quantity,
@@ -4008,6 +4027,9 @@ def _late_semi_inventory_options(
         options.append(
             {
                 "order_item_id": item.id,
+                "order_created_at": entry["order"].created_at.isoformat() if entry["order"].created_at else "",
+                "board_length_mm": int(length),
+                "board_width_mm": int(width),
                 "order_number": display_order_number(
                     entry["order"], entry.get("display_registry") or {}
                 ),
@@ -4035,6 +4057,7 @@ def _late_semi_inventory_options(
                     _semi_candidate_dict_for_requisition(
                         row,
                         projection_contexts.get(int(row.lot.location.id)),
+                        expected_layer_count=item.layer_count or product.layer_count,
                     )
                     for row in recommended
                 ],
@@ -4042,6 +4065,7 @@ def _late_semi_inventory_options(
                     _semi_candidate_dict_for_requisition(
                         row,
                         projection_contexts.get(int(row.lot.location.id)),
+                        expected_layer_count=item.layer_count or product.layer_count,
                     )
                     for row in review_candidates
                 ],
@@ -17798,7 +17822,9 @@ def _reserve_semi_inventory_from_pending(
         allowed = _allowed_customer_ids(user, db)
         if allowed is not None and any(
             lot.semi_finished_detail is None
-            or lot.semi_finished_detail.owner_customer_id not in allowed
+            or (lot.semi_finished_detail.owner_customer_id not in allowed
+                and not ((goods_profile(db, lot) or {}).get("scope") == "general"
+                         and lot.semi_finished_detail.owner_customer_id is None))
             for lot in inventory_lots
         ):
             raise HTTPException(status_code=403, detail="无客户库存访问权限")
@@ -17964,6 +17990,77 @@ def reserve_semi_inventory_from_pending(
     return _reserve_semi_inventory_from_pending(payload, db, user, commit=True)
 
 
+def _reserve_pooled_semi_inventory(payload, db, user):
+    """Validate the complete reviewed pool before writing, then spend each balance once.
+
+    Expected versions are checked against the original snapshot, not overwritten
+    by the client. Only changes made inside this transaction advance child versions.
+    The existing reservation service owns per-order provenance, CAS and audit.
+    """
+    prepared = []
+    original_versions = {}
+    pool_ids = sorted({lot.lot_id for row in payload.items for lot in row.lots})
+    db.scalars(select(InventoryLot).where(InventoryLot.id.in_(pool_ids))
+               .order_by(InventoryLot.id).with_for_update()).all()
+    for row in sorted(payload.items, key=lambda r: (r.order_item_id, r.component_type)):
+        item, order, customer, product = _ensure_pending_order_item_for_supplier_order(db, row.order_item_id)
+        _require_order_item_customer_access(db, item, user)
+        options = _late_semi_inventory_options(db, {
+            "order_item": item, "order": order, "customer": customer, "product": product,
+        })
+        option = next((o for o in options if o["component_type"] == row.component_type), None)
+        if (not option or row.requested_requirement_quantity != option["remaining_requirement_quantity"]
+                or row.board_length_mm != option["board_length_mm"]
+                or row.board_width_mm != option["board_width_mm"]):
+            raise HTTPException(status_code=409, detail="合并需求或报料尺寸已变化，请刷新后整组抵扣")
+        candidates = {c["lot_id"]: c for c in option["recommended_candidates"] if c["safe_group_eligible"]}
+        if len({lot.lot_id for lot in row.lots}) != len(row.lots):
+            raise HTTPException(status_code=409, detail="同一需求不能重复列入库存批次")
+        selected = []
+        for choice in row.lots:
+            candidate = candidates.get(choice.lot_id)
+            if not candidate or candidate["version"] != choice.expected_version:
+                raise HTTPException(status_code=409, detail="库存资格、数量或版本已变化，请刷新后整组抵扣")
+            if choice.lot_id in original_versions and original_versions[choice.lot_id] != choice.expected_version:
+                raise HTTPException(status_code=409, detail="同一批库存的核对版本不一致")
+            original_versions[choice.lot_id] = choice.expected_version
+            selected.append(candidate)
+        prepared.append((order.created_at, order.id, item.id, row, selected))
+    results = []
+    for _, _, _, row, candidates in sorted(prepared, key=lambda entry: (entry[0], entry[1], entry[2], entry[3].component_type)):
+        lots = [db.get(InventoryLot, c["lot_id"]) for c in candidates]
+        by_id = {c["lot_id"]: c for c in candidates}
+        lots.sort(key=inventory_fifo_sort_key)
+        remaining = row.requested_requirement_quantity
+        allocated = 0
+        # Each child uses one batch so physical yield and remaining balance cannot
+        # be accidentally inherited from another pallet with a different yield.
+        for lot in lots:
+            if remaining <= 0:
+                break
+            db.refresh(lot)
+            capacity = int(lot.quantity_available) * int(by_id[lot.id]["stock_yield_per_sheet"])
+            requested = min(remaining, capacity)
+            if requested <= 0:
+                continue
+            child = PendingSemiInventoryReservationPayload(
+                order_item_id=row.order_item_id, component_type=row.component_type,
+                requested_requirement_quantity=requested,
+                lots=[PendingSemiInventoryLot(lot_id=lot.id, expected_version=lot.version)],
+                warning_acknowledged_codes=by_id[lot.id]["warning_codes"],
+                idempotency_key=f"{payload.idempotency_key}:{row.order_item_id}:{row.component_type}:{lot.id}",
+            )
+            result = _reserve_semi_inventory_from_pending(child, db, user, commit=False)
+            allocated += result["allocated_requirement_quantity"]
+            remaining -= result["allocated_requirement_quantity"]
+        results.append({"order_item_id":row.order_item_id, "component_type":row.component_type,
+                        "allocated_requirement_quantity":allocated, "remaining_requirement_quantity":remaining})
+    return {"items":results,
+            "allocated_requirement_quantity":sum(r["allocated_requirement_quantity"] for r in results),
+            "remaining_requirement_quantity":sum(r["remaining_requirement_quantity"] for r in results),
+            "message":"已按合并总需求抵扣库存，订单按录入先后自动分配；采购只保留缺口。"}
+
+
 @router.post("/semi-inventory/reserve-safe-batch")
 def reserve_safe_semi_inventory_batch(
     payload: PendingSafeSemiInventoryBatchPayload,
@@ -17983,15 +18080,24 @@ def reserve_safe_semi_inventory_batch(
         entity_id = payload.items[0].order_item_id
         receipt = db.scalar(select(OperationLog).where(
             OperationLog.action == "RESERVE_REQUISITION_SAFE_BATCH",
-            OperationLog.entity_id == entity_id,
+            OperationLog.entity_id == entity_id if payload.allocation_mode == "explicit" else True,
             func.json_extract(OperationLog.details, "$.request.idempotency_key") == payload.idempotency_key,
         ).order_by(OperationLog.id.desc()))
         if receipt is not None:
             recorded = json.loads(receipt.details)
             if recorded.get("request") != payload.model_dump() or receipt.user_id != user.id:
                 raise HTTPException(status_code=409, detail="该整组抵扣标识已用于不同的库存选择")
+            for row in payload.items:
+                _require_order_item_customer_access(db, _item_or_404(db, row.order_item_id), user)
             db.rollback()
             return recorded["response"]
+        if payload.allocation_mode == "pooled":
+            response = _reserve_pooled_semi_inventory(payload, db, user)
+            _audit(db, user=user, action="RESERVE_REQUISITION_SAFE_BATCH", entity_id=entity_id,
+                   details={"request": payload.model_dump(), "response": response},
+                   description="合并报料按总需求统一分配跨栈板库存，订单先录先分")
+            db.commit()
+            return response
         seen_lot_ids: set[int] = set()
         results = []
         for row in payload.items:

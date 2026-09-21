@@ -58,7 +58,7 @@ def test_pending_requisition_explains_semi_deduction_and_purchase_shortage() -> 
 
 
 def test_supplier_draft_rechecks_late_semi_inventory_before_purchase() -> None:
-    assert "发现 {{ supplierDraftExactSemiOptions().length }} 组同楞同尺寸可抵扣片料" in INDEX
+    assert "发现同规格可合并抵扣库存" in INDEX
     assert "查询其他尺寸片料" in INDEX
     assert "一键抵扣全部同尺寸安全组" in INDEX
     assert "同规格材质/供应商合并提示" in INDEX

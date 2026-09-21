@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.471"
-APP_VERSION_NAME = "首页空白修复"
+APP_VERSION = "v0.22.472"
+APP_VERSION_NAME = "合并报料总量抵扣"
 APP_BUILD_DATE = "2026-09-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4457,3 +4457,15 @@ APP_CHANGELOG = [*(f"v0.22.470：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["修复送货按钮模板缺少右括号导致整个首页空白的问题，恢复登录页与业务页面渲染。", "增加随包 Vue 完整首页模板编译回归；本版不新增迁移，不修改业务事实。"]
 APP_VERIFICATION_STEPS = ["在原 ERP 页面按 Ctrl+F5，确认显示登录界面或已登录首页。", "登录后打开报料和送货列表，确认页面正常；无需创建测试业务。"]
 APP_CHANGELOG = [*(f"v0.22.471：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "合并报料按同规格、同材质、同楞型合格库存汇总抵扣，跨栈板余量可连续供给多个订单，不再逐订单逐批采用。",
+    "订单按录入先后由后台原子分配，库存不足只保留采购缺口；已印刷库存保留款号限制，异尺寸不进入绿色总按钮。",
+    "修复明确通用库存因客户签名差异无法进入整组按钮的问题；保留数量版本、权限、幂等及审计，本版无迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "强制刷新报料页，勾选同规格的真实待报料订单并合并，确认出现整组一键抵扣及去重后的库存总量。",
+    "点击一次整组抵扣，核对只采购缺口；批次和订单内部自动分配，无需逐一采用。",
+    "全额覆盖应不生成零张采购；库存追溯仍能看到原栈板和对应订单。正式库不创建模拟业务。",
+]
+APP_CHANGELOG = [*(f"v0.22.472：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

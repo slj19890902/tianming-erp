@@ -8993,8 +8993,8 @@
                 <info-note>系统会拦住重复报料和长宽填反；采购总张调整后，先满足本次订单用途，多订部分自动进入该客户通用片料备库。</info-note>
               </div>
               <div v-if="supplierDraftExactSemiOptions().length" style="margin-bottom:10px;padding:10px 12px;border:2px solid #16a34a;border-radius:8px;background:#f0fdf4;color:#166534;white-space:normal">
-                <strong>发现 {{ supplierDraftExactSemiOptions().length }} 组同楞同尺寸可抵扣片料</strong>
-                <div>已自动只查询当前客户适用或明确通用的同楞、同尺寸库存。点击后才预占，采购草稿只保留缺口。</div>
+                <strong>发现同规格可合并抵扣库存</strong>
+                <div>跨货位、跨栈板按合并需求一次抵扣，后台按订单录入先后分配；仅合格同尺寸库存纳入，点击后才预占，采购只保留缺口。</div>
                 <button class="btn small success" type="button" :disabled="requisitionInventoryActionBlocked()" @click="reserveDraftExactSemiInventory()">一键抵扣全部同尺寸安全组</button>
               </div>
               <div v-if="supplierDraftLateFinishedSources().length" style="margin-bottom:10px;padding:10px 12px;border:2px solid #16a34a;border-radius:8px;background:#f0fdf4;color:#166534;white-space:normal">
@@ -9029,6 +9029,7 @@
                           <div class="muted">{{ draftLineSourceSummary(line) }}</div>
                           <button class="btn small" type="button" @click="line._inventory_expanded = !line._inventory_expanded" :aria-expanded="!!line._inventory_expanded">{{ line._inventory_expanded ? '收起库存' : '查看片料库存' }}</button>
                           <div v-if="draftLineLateFinishedSources(line).length" class="status green">客户成品待抵扣</div>
+                          <button v-if="draftLineInventoryPool(line).allocated > 0" class="btn small success" type="button" :disabled="requisitionInventoryActionBlocked()" @click="reserveDraftExactSemiInventory(line)">整组一键抵扣 {{ draftLineInventoryPool(line).allocated }} 片</button>
                         </td>
                         <td>{{ line.material_display || '-' }}</td>
                         <td><strong>订单 {{ line.production_required_qty ?? line.quantity ?? 0 }} 只</strong><div class="muted">每箱 {{ line.source_items?.[0]?.pieces_per_box || 1 }} 片｜{{ line.cutting_mode || '一开一' }}</div><div class="muted">理论 {{ line.theoretical_requisition_qty ?? line.requisition_qty ?? 0 }} 张</div></td>
@@ -9049,6 +9050,16 @@
                             <button class="btn small success" type="button" :disabled="source._late_finished_loading" @click="confirmDraftLateFinishedInventory(source)">{{ source._late_finished_loading ? '正在预占…' : '使用成品，剩余再报' }}</button>
                           </div>
 
+                          <div class="draft-stock-panel" v-if="draftLineInventoryPool(line).lots.length">
+                            <strong>本组库存汇总 · {{ line.report_length_mm }} × {{ line.report_width_mm }} · {{ line.material_display }}</strong>
+                            <p>合并尚需 {{ draftLineInventoryPool(line).demand }} 片 · 合格库存 {{ draftLineInventoryPool(line).stock }} 张 · 可抵扣 {{ draftLineInventoryPool(line).allocated }} 片 · 剩余需求 {{ draftLineInventoryPool(line).shortfall }} 片</p>
+                            <button class="btn success" type="button" :disabled="requisitionInventoryActionBlocked()" @click="reserveDraftExactSemiInventory(line)">按合并总量一键抵扣</button>
+                            <p class="muted">不需要逐订单、逐栈板采用。系统按订单录入先后分配；剩余需求按开料方式计入采购，明确备库数量保留。已印刷库存只用于其适用存货编码；不同组如共用同批库存，最终以后台统一分配后的数量为准。</p>
+                            <details><summary>查看 {{ draftLineInventoryPool(line).lots.length }} 批库存及位置（只读）</summary>
+                              <div v-for="stock in draftLineInventoryPool(line).lots" :key="stock.lot_id">{{ stock.internal_name || '片料' }} · {{ inventoryLocation(stock) }} · 可用 {{ stock.available_stock_quantity }} 张</div>
+                            </details>
+                          </div>
+                          <details><summary>其他尺寸与需核对片料（按适用产品查看）</summary>
                           <section v-for="option in draftLineSemiInventoryOptions(line)" :key="`late-semi-${option.order_item_id}-${option.component_type}`" class="draft-stock-panel">
                             <div class="draft-stock-heading"><div><strong>{{ option.product_code }} · {{ componentLabel(option.component_type) || '片料' }}</strong><div class="muted">{{ option.order_number }} · 尚需 {{ option.remaining_requirement_quantity }} 片 · 已预占 {{ option.reserved_piece_quantity }} 片</div></div>
                               <button class="btn small" type="button" :disabled="option._manual_loading" @click="queryDraftOtherSemiInventory(option)">{{ option._manual_loading ? '正在查询…' : '查询其他尺寸片料' }}</button>
@@ -9067,12 +9078,13 @@
                                   <td><span :class="['status', candidate.selectable === false ? 'orange' : (candidate.match_kind==='other_dimension_cut' ? 'orange' : 'green')]">{{ candidate.selectable === false ? '仅供查看' : (candidate.match_kind==='other_dimension_cut' ? '需确认分切' : '同尺寸可抵扣') }}</span><div v-if="candidate.signature_differences?.length">核对：{{ draftSemiDifferenceLabel(candidate.signature_differences) }}</div><div>{{ candidate.match_reason }}</div><details v-if="candidate.warning_messages?.length"><summary>匹配说明</summary><div v-for="warning in candidate.warning_messages" :key="warning" class="muted">{{ warning }}</div></details>
                                     <div v-if="candidate.warning_codes?.includes('REVERSE_CREASE_ADMIN_OVERRIDE') && (canAdmin || user.role==='boss')"><label><input type="checkbox" v-model="candidate._reverse_crease_override" /> 管理员特批已压线库存反向使用</label><input class="input" maxlength="300" v-model.trim="candidate._reverse_crease_reason" placeholder="必填特批原因（至少4字）" /></div>
                                   </td>
-                                  <td><input class="input" type="number" min="1" step="1" :max="Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" :value="candidate._deduct_quantity ?? Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" @input="candidate._deduct_quantity=$event.target.value" :aria-label="'本批抵扣片数 ' + candidate.internal_name" :disabled="candidate.selectable === false" /><button :class="['btn','small',candidate.match_kind==='other_dimension_cut' ? 'warning' : 'success']" type="button" :disabled="candidate.selectable === false || requisitionInventoryActionBlocked()" @click="confirmDraftSemiInventory(option, candidate)">{{ candidate.match_kind==='other_dimension_cut' ? '确认分切并抵扣' : '采用本批并重算' }}</button></td>
+                                  <td><span v-if="candidate.safe_group_eligible" class="muted">已纳入整组库存，无需逐批采用</span><template v-else><input class="input" type="number" min="1" step="1" :max="Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" :value="candidate._deduct_quantity ?? Math.min(option.remaining_requirement_quantity,candidate.deductible_requirement_quantity)" @input="candidate._deduct_quantity=$event.target.value" :aria-label="'本批抵扣片数 ' + candidate.internal_name" :disabled="candidate.selectable === false" /><button :class="['btn','small',candidate.match_kind==='other_dimension_cut' ? 'warning' : 'success']" type="button" :disabled="candidate.selectable === false || requisitionInventoryActionBlocked()" @click="confirmDraftSemiInventory(option, candidate)">{{ candidate.match_kind==='other_dimension_cut' ? '确认分切并抵扣' : '采用本批并重算' }}</button></template></td>
                                 </tr><tr v-if="!draftSemiInventoryCandidates(option).length"><td colspan="7" class="muted">当前范围未发现同楞同尺寸库存；可主动查询其他尺寸片料，或直接保存本次报料。</td></tr></tbody>
                               </table>
                             </div>
                             <div v-if="option._manual_page" class="draft-stock-heading"><span class="muted">其他查询结果 · 第 {{ option._manual_page }} 页 / 共 {{ Math.max(1, Math.ceil(option._manual_total / 10)) }} 页（客户推荐仍保留）</span><div><button class="btn small" type="button" :disabled="option._manual_loading || option._manual_page <= 1" @click="queryDraftOtherSemiInventory(option,option._manual_page-1)">上一页</button><button class="btn small" type="button" :disabled="option._manual_loading || option._manual_page*10 >= option._manual_total" @click="queryDraftOtherSemiInventory(option,option._manual_page+1)">下一页</button></div></div>
                           </section>
+                          </details>
                           <div v-if="!draftLineSemiInventoryOptions(line).length" class="muted">当前行无待抵扣片料需求。</div>
                         </td>
                       </tr>
@@ -13429,35 +13441,54 @@
               this.draftGroupLines(group).flatMap(line => this.draftLineSemiInventoryOptions(line))
             );
           },
-          supplierDraftExactSemiOptions() {
-            return this.supplierDraftSemiInventoryOptions().filter(option =>
-              (option?.recommended_candidates || []).some(candidate =>
-                candidate?.selectable !== false && candidate?.match_kind === "exact"
-                && !candidate?.requires_requisition_cut_plan
-                && !(candidate?.signature_differences || []).length));
+          draftSafePoolCandidates(option, line) {
+            if (line && (Number(line.report_length_mm) !== Number(option.board_length_mm)
+              || Number(line.report_width_mm) !== Number(option.board_width_mm))) return [];
+            return (option.recommended_candidates || []).filter(c => c.safe_group_eligible === true
+              && c.match_kind === "exact" && !c.requires_requisition_cut_plan && c.selectable !== false);
           },
-          async reserveDraftExactSemiInventory() {
+          supplierDraftExactSemiOptions(line = null) {
+            const lines = line ? [line] : (this.supplierRequisitionDraft?.supplier_groups || []).flatMap(g => this.draftGroupLines(g));
+            return lines.flatMap(l => this.draftLineSemiInventoryOptions(l).filter(o => this.draftSafePoolCandidates(o,l).length));
+          },
+          draftLineInventoryPool(line) {
+            const options = [...this.draftLineSemiInventoryOptions(line)].sort((a,b) =>
+              String(a.order_created_at || '').localeCompare(String(b.order_created_at || '')) || Number(a.order_item_id)-Number(b.order_item_id));
+            const lots = new Map();
+            for (const option of options) for (const c of this.draftSafePoolCandidates(option,line)) lots.set(Number(c.lot_id),c);
+            const balances = new Map([...lots].map(([id,c]) => [id,Number(c.available_stock_quantity || 0)]));
+            let demand = 0, allocated = 0;
+            for (const option of options) {
+              let remaining = Number(option.remaining_requirement_quantity || 0);
+              demand += remaining;
+              for (const c of this.draftSafePoolCandidates(option,line)) {
+                const id=Number(c.lot_id), factor=Number(c.stock_yield_per_sheet || 1);
+                const quantity=Math.min(remaining,(balances.get(id)||0)*factor);
+                balances.set(id,(balances.get(id)||0)-Math.ceil(quantity/factor));
+                allocated+=quantity; remaining-=quantity;
+              }
+            }
+            return {demand,allocated,shortfall:Math.max(0,demand-allocated),
+              stock:[...lots.values()].reduce((n,c)=>n+Number(c.available_stock_quantity||0),0),
+              lots:[...lots.values()]};
+          },
+          async reserveDraftExactSemiInventory(line = null) {
             if (this.requisitionInventoryActionBlocked()) return false;
-            const usedLots = new Set();
+            const lines = line ? [line] : (this.supplierRequisitionDraft?.supplier_groups || []).flatMap(g => this.draftGroupLines(g));
             const items = [];
-            for (const option of this.supplierDraftExactSemiOptions()) {
-              const candidates = (option.recommended_candidates || []).filter(candidate => {
-                const lotId = Number(candidate?.lot_id || 0);
-                if (!lotId || usedLots.has(lotId) || candidate.selectable === false
-                  || candidate.match_kind !== "exact" || candidate.requires_requisition_cut_plan
-                  || (candidate.signature_differences || []).length) return false;
-                usedLots.add(lotId);
-                return true;
-              });
-              const capacity = candidates.reduce((total, candidate) => total + Number(candidate.deductible_requirement_quantity || 0), 0);
-              const requested = Math.min(Number(option.remaining_requirement_quantity || 0), capacity);
-              if (!candidates.length || !Number.isInteger(requested) || requested <= 0) continue;
-              items.push({
-                order_item_id:Number(option.order_item_id), component_type:option.component_type,
+            if (lines.some(currentLine => Number(currentLine.stock_purpose_sheet_qty || 0) > 0
+                && this.draftLineInventoryPool(currentLine).allocated >= this.draftLineInventoryPool(currentLine).demand)) {
+              this.showToast("本组还保留额外备库采购。请先将额外备库转为独立补库草稿，再进行本组全额抵扣；当前录入内容和库存均未改动。", true);
+              return false;
+            }
+            for (const currentLine of lines) for (const option of this.draftLineSemiInventoryOptions(currentLine)) {
+              const candidates=this.draftSafePoolCandidates(option,currentLine);
+              const requested=Number(option.remaining_requirement_quantity || 0);
+              if (!candidates.length || !Number.isInteger(requested) || requested<=0) continue;
+              items.push({order_item_id:Number(option.order_item_id),component_type:option.component_type,
                 requested_requirement_quantity:requested,
-                lots:candidates.map(candidate => ({lot_id:Number(candidate.lot_id), expected_version:Number(candidate.version)})),
-                warning_acknowledged_codes:[...new Set(candidates.flatMap(candidate => candidate.warning_codes || []))],
-              });
+                board_length_mm:Number(currentLine.report_length_mm),board_width_mm:Number(currentLine.report_width_mm),
+                lots:candidates.map(c=>({lot_id:Number(c.lot_id),expected_version:Number(c.version)}))});
             }
             if (!items.length) {
               this.showToast("当前没有可整组抵扣的同楞同尺寸安全库存", true);
@@ -13468,7 +13499,7 @@
             return await this.executeRequisitionInventoryAction({
               action:"draft_semi_batch", context:"supplier_draft", orderItemId:items[0].order_item_id,
               targetKey:`draft-semi-batch:${items.map(item => `${item.order_item_id}:${item.component_type}`).join(',')}`,
-              submit:() => axios.post("/api/requisition/semi-inventory/reserve-safe-batch", {items, idempotency_key:idempotencyKey}, {timeout:20000}),
+              submit:() => axios.post("/api/requisition/semi-inventory/reserve-safe-batch", {items, allocation_mode:"pooled", idempotency_key:idempotencyKey}, {timeout:20000}),
               refresh:async () => {
                 if (this.activePage !== "requisition" || this.modal?.type !== "supplierRequisitionDraft" || this.supplierRequisitionDraft !== expectedDraft) return false;
                 await this.loadRequisition();
@@ -13532,7 +13563,8 @@
             }
             for (const group of nextDraft.supplier_groups || []) {
               for (const line of this.draftGroupLines(group)) {
-                const saved = previous.get(this.supplierDraftEditKey(line));
+                const saved = previous.get(this.supplierDraftEditKey(line)) || [...previous.values()].find(saved =>
+                  saved.line.line_key && saved.line.line_key === line.line_key);
                 if (!saved) continue;
                 group.supplier_name = saved.group.supplier_name;
                 for (const key of ['remark','_expanded','_inventory_expanded']) if (key in saved.line) line[key] = saved.line[key];
@@ -34782,7 +34814,7 @@
               const lateFinishedSources = this.supplierDraftLateFinishedSources();
               const semiOptions = this.supplierDraftSemiInventoryOptions();
               if (lateFinishedSources.length) this.showToast(`发现 ${lateFinishedSources.length} 条后来入库的客户专用成品，请先使用成品再报剩余数量`);
-              else if (semiOptions.length) this.showToast("可展开核对片料库存；未采用的候选不影响保存");
+              else if (semiOptions.length) this.showToast("同规格库存可按合并总量一键抵扣，缺口自动计入采购");
               return true;
             } catch (e) {
               if (this.isCancelledRequest(e) || latestRequestControllers.get(requestKey) !== controller) return false;

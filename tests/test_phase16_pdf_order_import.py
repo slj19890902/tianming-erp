@@ -600,8 +600,11 @@ def _order_import_app(tmp_path: Path):
     from app.core.security import hash_password
     from app.models import Base
     from app.models.customer import Customer
+    from app.models.material import Material
     from app.models.product import Product
+    from app.models.supplier import Supplier
     from app.models.user import User
+    from app.services.supplier_master import normalize_supplier_identity
 
     engine = create_sqlite_engine(tmp_path / "order-import.sqlite3")
     Base.metadata.create_all(engine)
@@ -649,6 +652,25 @@ def _order_import_app(tmp_path: Path):
         )
         session.add(gaotai_customer)
         session.flush()
+        supplier_name = "PDF 测试供应商"
+        session.add(
+            Supplier(
+                standard_name=supplier_name,
+                normalized_name=normalize_supplier_identity(supplier_name),
+                is_active=True,
+            )
+        )
+        session.flush()
+        material = Material(
+            code="PDF-TEST-3B",
+            paper_composition="A=B",
+            supplier_name=supplier_name,
+            layer_count=3,
+            flute_type="B",
+            is_active=True,
+        )
+        session.add(material)
+        session.flush()
         session.add_all(
             [
                 Product(
@@ -657,6 +679,12 @@ def _order_import_app(tmp_path: Path):
                     customer_material_code="21312009",
                     product_name="中性内箱",
                     box_category="normal",
+                    material_id=material.id,
+                    layer_count=3,
+                    flute_type="B",
+                    report_length_mm=800,
+                    report_width_mm=600,
+                    crease_type="净料",
                 ),
                 Product(
                     customer_id=customer.id,
@@ -664,6 +692,12 @@ def _order_import_app(tmp_path: Path):
                     customer_material_code="21308002",
                     product_name="衬板",
                     box_category="normal",
+                    material_id=material.id,
+                    layer_count=3,
+                    flute_type="B",
+                    report_length_mm=800,
+                    report_width_mm=600,
+                    crease_type="净料",
                 ),
                 Product(
                     customer_id=gaotai_customer.id,
@@ -671,6 +705,12 @@ def _order_import_app(tmp_path: Path):
                     customer_material_code="3D90078",
                     product_name="纸箱615*460*375",
                     box_category="normal",
+                    material_id=material.id,
+                    layer_count=3,
+                    flute_type="B",
+                    report_length_mm=800,
+                    report_width_mm=600,
+                    crease_type="净料",
                 ),
                 Product(
                     customer_id=gaotai_customer.id,
@@ -678,6 +718,12 @@ def _order_import_app(tmp_path: Path):
                     customer_material_code="3D90095纸箱460*305*225",
                     product_name="纸箱460*305*225",
                     box_category="normal",
+                    material_id=material.id,
+                    layer_count=3,
+                    flute_type="B",
+                    report_length_mm=800,
+                    report_width_mm=600,
+                    crease_type="净料",
                 ),
                 Product(
                     customer_id=gaotai_customer.id,
@@ -685,6 +731,12 @@ def _order_import_app(tmp_path: Path):
                     customer_material_code="3.D30268",
                     product_name="纸箱190*190*160",
                     box_category="normal",
+                    material_id=material.id,
+                    layer_count=3,
+                    flute_type="B",
+                    report_length_mm=800,
+                    report_width_mm=600,
+                    crease_type="净料",
                 ),
                 Product(
                     customer_id=simair_customer.id,
@@ -696,6 +748,12 @@ def _order_import_app(tmp_path: Path):
                     height_mm=Decimal("24.5"),
                     sale_unit_price=Decimal("18.11"),
                     box_category="normal",
+                    material_id=material.id,
+                    layer_count=3,
+                    flute_type="B",
+                    report_length_mm=800,
+                    report_width_mm=600,
+                    crease_type="净料",
                 ),
                 Product(
                     customer_id=simair_customer.id,
@@ -707,6 +765,12 @@ def _order_import_app(tmp_path: Path):
                     height_mm=Decimal("31"),
                     sale_unit_price=Decimal("16.80"),
                     box_category="normal",
+                    material_id=material.id,
+                    layer_count=3,
+                    flute_type="B",
+                    report_length_mm=800,
+                    report_width_mm=600,
+                    crease_type="净料",
                 ),
             ]
         )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from app.services.external_receipt_state import active_receipt_item
 from app.services.liner_direct_delivery import direct_liner_item_ids, liner_direct_coverage
+from app.services.box_type_rules import box_type_code
 
 import hashlib
 import json
@@ -7760,12 +7761,26 @@ class _PendingDeliveryReadContext:
             for row in rows
             if row._mapping["order_id"] is not None
         }
-        self.order_items = {
-            item.id: item
-            for item in db.scalars(
-                select(OrderItem).where(OrderItem.id.in_(item_ids))
+        order_item_rows = (
+            db.execute(
+                select(
+                    OrderItem,
+                    Product.box_style,
+                    Product.box_category,
+                )
+                .join(Product, Product.id == OrderItem.product_id)
+                .where(OrderItem.id.in_(item_ids))
             ).all()
-        } if item_ids else {}
+            if item_ids
+            else []
+        )
+        self.order_items = {
+            item.id: item for item, _box_style, _box_category in order_item_rows
+        }
+        product_profile_by_item_id = {
+            int(item.id): (str(box_style or ""), str(box_category or ""))
+            for item, box_style, box_category in order_item_rows
+        }
         self.orders = {
             order.id: order
             for order in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
@@ -8001,18 +8016,15 @@ class _PendingDeliveryReadContext:
                     semi_credited_by_requirement.get(requirement_id, 0)
                     + credited
                 )
-        product_styles = {
-            int(product_id): str(box_style or "")
-            for product_id, box_style in db.execute(
-                select(Product.id, Product.box_style).where(
-                    Product.id.in_(
-                        {
-                            int(item.product_id)
-                            for item in self.order_items.values()
-                        }
-                    )
-                )
-            ).all()
+        self.direct_liner_candidate_ids = {
+            item_id
+            for item_id, item in self.order_items.items()
+            if (
+                (profile := product_profile_by_item_id.get(item_id)) is not None
+                and box_type_code(profile[0]) == "liner"
+                and profile[1] != "die_cut"
+                and not item.composite_fulfillment_mode_snapshot
+            )
         }
         requirements_by_item: dict[int, dict[str, OrderItemSemiRequirement]] = {}
         for requirement in semi_requirements:
@@ -8024,7 +8036,7 @@ class _PendingDeliveryReadContext:
             item = self.order_items.get(item_id)
             if item is None:
                 continue
-            box_style = product_styles.get(int(item.product_id), "")
+            box_style = product_profile_by_item_id.get(item_id, ("", ""))[0]
             expected_components = (
                 {"cover", "base"}
                 if "天地盖" in box_style or "A3" in box_style.upper()
@@ -8130,7 +8142,10 @@ class _PendingDeliveryReadContext:
         return bool(order_item and order_item.id in self.fast_item_ids)
 
     def remaining_quantity(self, db: Session, order_item: OrderItem) -> int:
-        if liner_direct_coverage(db, order_item):
+        if (
+            order_item.id in self.direct_liner_candidate_ids
+            and liner_direct_coverage(db, order_item)
+        ):
             return _delivery_remaining_quantity(db, order_item)
         if order_item.id in self.graph_item_ids:
             return max(int(self.composite_available_sets.get(order_item.id, 0)), 0)

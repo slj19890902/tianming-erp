@@ -486,12 +486,18 @@ def test_finished_then_semi_multi_dispatch_cancel_and_desktop_sources(
         for row in requisition_after_first.json()["items"]
     )
     assert printed.status_code == 200
-    forbidden_fragments = ("location", "lot", "source")
-    assert not any(
-        fragment in key.lower()
-        for key in all_keys(printed.json())
-        for fragment in forbidden_fragments
-    )
+    # The print-template contract now carries its own harmless ``source``
+    # metadata.  It must still never expose inventory-trace fields to the
+    # printed delivery payload.
+    print_keys = all_keys(printed.json())
+    assert not {
+        "inventory_sources",
+        "lot_id",
+        "lot_number",
+        "location_id",
+        "location_code",
+        "location_name",
+    } & print_keys
     with factory() as db:
         item = db.get(OrderItem, item_id)
         finished_lot = db.get(InventoryLot, finished_id)
@@ -565,11 +571,15 @@ def test_inventory_sources_exclude_zero_quantity_later_reservations(
         )
         assert second_lot_id not in {row["lot_id"] for row in sources}
     assert printed.status_code == 200
-    assert not any(
-        fragment in key.lower()
-        for key in all_keys(printed.json())
-        for fragment in ("location", "lot", "source")
-    )
+    print_keys = all_keys(printed.json())
+    assert not {
+        "inventory_sources",
+        "lot_id",
+        "lot_number",
+        "location_id",
+        "location_code",
+        "location_name",
+    } & print_keys
 
 
 def test_finished_release_returns_only_unconsumed_and_keeps_consumed_coverage(
@@ -711,7 +721,16 @@ def test_yield_whole_sheet_multi_delivery_cancel_preserves_remaining_need(
             po="B2-YIELD",
             product_id=1,
             quantity=5,
-            semi=[semi_plan(lot_id, version, 5)],
+            semi=[
+                {
+                    **semi_plan(lot_id, version, 5),
+                    "recommendation_source": "manual",
+                    "override": True,
+                    "warning_acknowledged_codes": [
+                        "SEMI_SIGNATURE_OVERRIDE"
+                    ],
+                }
+            ],
         )
         mark_as_legacy_order_without_production_task(factory, item_id)
         first = create_delivery(client, item_id, 1)

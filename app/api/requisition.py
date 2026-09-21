@@ -3649,8 +3649,16 @@ def _current_requisition_requirements(
         ),
         0,
     )
+    # Requisition planning covers future production only.  A dispatched unit
+    # is already a completed business fact, while an active finished-stock
+    # reservation covers part of the remaining units.  Counting either again
+    # recreates a zero-sheet requisition after partial delivery.
+    delivered_qty = min(
+        max(int(item.delivered_quantity or 0), 0),
+        max(int(item.quantity or 0), 0),
+    )
     production_required_qty = max(
-        int(item.quantity or 0) - resolved_reserved_qty,
+        int(item.quantity or 0) - delivered_qty - resolved_reserved_qty,
         0,
     )
     required_piece_qty = _required_piece_qty(

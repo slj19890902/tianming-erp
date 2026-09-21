@@ -1,7 +1,7 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
-  "kind": "continuous_goal_complete_astra_handoff_with_deferred_safety_boundaries",
-  "local_head": "6537ebdeccd6d8b39d36210cc7ffeef245d2a270",
+  "kind": "historical_terra_handoff_rework_in_progress",
+  "local_head": "ff58789ce4550d3d00bb01dbc26d0ffd0db7d495",
   "remote_head_reverified": true,
   "audit_integrity": {
     "files": 66,
@@ -26,11 +26,11 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "995df332f02911d7e4e1f9415ceb5691c5cc34f6d2f9b800820e0a01bf80955a"
+      "sha256": "9e9b43faf36117f6c734e32690004be7aff2082d51cd6d6dee937b88a0ab78d0"
     },
     {
       "path": "04_场景覆盖与验收.md",
-      "sha256": "0c8bd31916a2182ea4e978302fd41bdab6152c879410101255840148630d6dca"
+      "sha256": "d390df4c32d4c0da9c91e069da6e914dd8a0e8505221b3cfb37e579c84aad2fc"
     },
     {
       "path": "05_已确认合同速查.md",
@@ -38,7 +38,7 @@
     },
     {
       "path": "06_Astra最终验收交接.md",
-      "sha256": "02154c6f24350e019281d625370cf0744e8f24f52f4b867ea305a2f402d82f3a"
+      "sha256": "559690c0310ba7b367353a99a8200255351574a459f082d093cef897a2b435ce"
     },
     {
       "path": "20260920-T02-候选实现与隔离迁移验证.md",
@@ -114,7 +114,7 @@
     },
     {
       "path": "tasks/T02.md",
-      "sha256": "fcf7f3b53b2d91d374c2c9b5faf5677ddebd3c0c2314a6b60d94d731e543033c"
+      "sha256": "222f55eec98a0c91d36a0304cd3e3ddb6793953dffdf82637a3358f08cb735f5"
     },
     {
       "path": "tasks/T03.md",
@@ -174,11 +174,11 @@
     },
     {
       "path": "tasks/T17.md",
-      "sha256": "938818d0bd4ab07d4bda2c63cf2d19226bb915d7897227335d74385e4b692d0e"
+      "sha256": "e2583252bac7ce210d84f26dce47898633284ecb7a2cc67e6ba69dd019c3f0b4"
     },
     {
       "path": "tasks/T18.md",
-      "sha256": "7d08b5e19936021e5d19490e57dc1a0704c01eb5eb8390a2c3d5e3190e835cb1"
+      "sha256": "b5bb47b6016c4a8ef21abb78355451e666f8b33debaa24054bf6294fb9fd9967"
     },
     {
       "path": "tasks/T19.md",
@@ -186,7 +186,7 @@
     },
     {
       "path": "tasks/T20.md",
-      "sha256": "41dad69d2e2fbf15bb2fbe6adf92ca5c6fec8d7d6f14c863d1cf33a4b562519a"
+      "sha256": "ef3a0bdfd4c18a35fb02a08c5e4a285b4c61fa2453d356d34a52c928148abca1"
     }
   ],
   "source_fingerprints": [
@@ -241,5 +241,13 @@
     "isolated_pre_migration_backup_sha256": "562b72192ec6fa184668982cac14291b43c21e23c204f59e99deb2fed88fa8c2",
     "formal_database_written_by_this_reverification": false,
     "administrator_acceptance": "pending_real_new_pdf_business_flow"
+  },
+  "astra_rework": {
+    "started_at": "2026-09-21",
+    "status": "in_progress",
+    "review_result": "first_astra_review_not_accepted",
+    "review_report": "20260921-Astra首轮验收意见.md",
+    "scope_note": "Historical audit package, rework plan, source ancestry, and runtime package are distinct evidence objects. The historical package integrity result does not establish R00-R06 completion.",
+    "rework_plan": "../LEGACY_ERP_ASTRA_REWORK_20260921/MANIFEST.json"
   }
 }

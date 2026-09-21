@@ -1,0 +1,33 @@
+{
+  "created": "2026-09-21",
+  "scope": "second_phase_rework_execution_in_progress",
+  "baseline": {
+    "source_head": "ff58789ce4550d3d00bb01dbc26d0ffd0db7d495",
+    "formal_runtime_version": "v0.22.469",
+    "formal_runtime_source": "659696a3a3a4c3201a0c26bfd361e735efc9739d",
+    "formal_runtime_package": "90fb655c163a167bf20c8fcfad97c16c022d7a9e7889092dbc70c4b7818dadb9",
+    "review_status": "first_astra_review_not_accepted"
+  },
+  "files": [
+    {
+      "path": "00_复制给Terra的提示词.md",
+      "sha256": "7da26082101c0cd15d6dda7e02801c93b1e72d0c4ecd7abe84152d4af2860f2c"
+    },
+    {
+      "path": "01_整改实施方案.md",
+      "sha256": "37689e7b5f723f90f2ef9eb4ef5e518c2f6866830a2530c96c0eb4345fab542e"
+    },
+    {
+      "path": "02_整改进度.md",
+      "sha256": "f5d3a98d13e21cd44d8ea6607719a9e3e04b6d25b804001941814dcbf72648b5"
+    },
+    {
+      "path": "R00_证据索引.md",
+      "sha256": "5cb9c2e66b397f7a06b5f70a477f6f3c5c2e9c64b0f51120e4cf841a73e13d2a"
+    },
+    {
+      "path": "tasks/R00.md",
+      "sha256": "dd8ef3a488089ba21873126b8717497de56b83d8f05c625e5394e6190c2a8574"
+    }
+  ]
+}

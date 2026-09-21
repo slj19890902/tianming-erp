@@ -1,15 +1,15 @@
 {
   "created": "2026-09-21",
-  "scope": "second_phase_rework_r03_factory_isolation_ready_browser_auth_pending",
+  "scope": "second_phase_rework_r00_r06_technically_released_pending_astra_acceptance",
   "baseline": {
     "initial_source_head": "ff58789ce4550d3d00bb01dbc26d0ffd0db7d495",
-    "current_formal_baseline": "5c35bdba3ee91ce3471d484ba1a0af91a94dcf64",
-    "formal_runtime_version": "v0.22.474",
-    "formal_runtime_source": "8e0e6e4baf1f62dcb24c183b84a76136d9cd38c4",
-    "formal_runtime_package": "b35b04d34675b1aaf64961d23469adca728c297b115d08387112e733426a842a",
+    "current_formal_baseline": "b944835a83a72bc16839b82f729c0be39aa65d39",
+    "formal_runtime_version": "v0.22.475",
+    "formal_runtime_source": "b944835a83a72bc16839b82f729c0be39aa65d39",
+    "formal_runtime_package": "063d3a9efb6b2f9a99394986600a03c9ab0703ce692e60088e3779677eac2fb4",
     "formal_runtime_revision": "du0920",
-    "review_status": "second_phase_blocked_external_not_ready_for_astra_completion_acceptance",
-    "blocked_reason": "R03 factory-isolated Chrome service is attested and open on loopback; administrator login is required before the remaining real two-account interaction, and R05 release depends on that condition."
+    "review_status": "second_phase_technically_released_pending_astra_acceptance",
+    "blocked_reason": "No mandatory technical blocker remains. Administrator formal-page, physical-paper, phone, and spare-machine checks remain external manual acceptance items."
   },
   "files": [
     {
@@ -22,11 +22,11 @@
     },
     {
       "path": "02_整改进度.md",
-      "sha256": "f2f9fb73a9c827deb1115f49bd84342b47d9f8f026bcc59f0368b56e0ae0c62d"
+      "sha256": "40002331ce8d06a0e00639a64a989bf26e90d11c495c2e713d2074197885ba31"
     },
     {
       "path": "03_Astra二次验收交接.md",
-      "sha256": "afbff4b8bc0cf4c31c169817bce98f357d2cfcc707906656634084d9df6dcfb4"
+      "sha256": "e34e1ee258b369a8f67965362bba8426c67c1d0be260116268933057be3e82de"
     },
     {
       "path": "04_Astra阻塞复核.md",
@@ -34,7 +34,7 @@
     },
     {
       "path": "R00_证据索引.md",
-      "sha256": "471a4e34098c3797a9c7b984fd039e872fcb9dfc7695ede71d2ccea9828a0f57"
+      "sha256": "65ffa1736eea1b97532d1f0cbf068299118c603fd25b624c6fc576aa56c974b9"
     },
     {
       "path": "R01_执行证据.md",
@@ -46,11 +46,11 @@
     },
     {
       "path": "R03_执行证据.md",
-      "sha256": "936ec5b10e53cbfead8255cc1e8e2f552b50db7901a8c7c863f66afe65a67367"
+      "sha256": "7db4f6da4c23b95452cfd9b030dba2fcbc8d51d8a948cdddf1b7b9c2459a1f9f"
     },
     {
       "path": "R03_工厂隔离启动证据.md",
-      "sha256": "6c83e155c3f0f143d625dbea15c9d841d600dbf971f529b678bf668067d76838"
+      "sha256": "5400b73de3f347dbdcdcbf86c5767532f1dd817240fde2668fbcaf5e57d1dff9"
     },
     {
       "path": "R04_执行证据.md",
@@ -58,7 +58,7 @@
     },
     {
       "path": "R05_执行证据.md",
-      "sha256": "9f778d86700ee80e8fd39f0d8cf4b69cf1ac9b0ca5e007468f5cd4e7469218c6"
+      "sha256": "82969129d163c9be26bbd459c1165aa94a0aa668e1576b9167c87fa772b42eac"
     },
     {
       "path": "tasks/R00.md",
@@ -74,7 +74,7 @@
     },
     {
       "path": "tasks/R03.md",
-      "sha256": "a6e02d9c2e9cd01cf99b93140867a4f96f66f8a03823490a6d12d2da0ca10176"
+      "sha256": "1947701af0287f82b9a46c255e81464fc8550766cad8cf3edc7994e5b05cada0"
     },
     {
       "path": "tasks/R04.md",
@@ -82,11 +82,11 @@
     },
     {
       "path": "tasks/R05.md",
-      "sha256": "905e39d7eb51335985787f55bb4de0a7935b2e3aac47a6186ecb11f61a14b1ad"
+      "sha256": "31d20f85af9915343869ce74bb8bbd7b321ce84a604d44f28390aabce31ba5eb"
     },
     {
       "path": "tasks/R06.md",
-      "sha256": "a0ebbca80b0dab112806f59c7510c7fce7bb37789a63866652bec016857340d6"
+      "sha256": "bc3819edf5b0aa2a5f675956a6b2ada5912e55169ce3ef9d8ac6984b7ed6a796"
     }
   ],
   "supporting_code": [
@@ -120,11 +120,27 @@
     },
     {
       "path": "scripts/uat/prepare_r03_factory_uat.py",
-      "sha256": "fe17b7c541cd74e7f379024ec1a20de89ef1ee1a6db4a20f2b63215fd7c4556e"
+      "sha256": "71ca1850b3bffff47fc125a99aaa148e263962fe3fa0ba30e628ad895b6f4723"
     },
     {
       "path": "scripts/windows/start_r03_factory_isolated_uat.ps1",
       "sha256": "529649d6a6900e2b54de1c2a179977d3578ddd2c74499e82446b865307dc47ea"
+    },
+    {
+      "path": "static/index.html",
+      "sha256": "95e479451811c75a8606777c15ec292fb7b3b671980baa301b7c538e3d0dd9c2"
+    },
+    {
+      "path": "app/version.py",
+      "sha256": "1f295cb448032b4a1ba40bef520879517ad0f725381eba38c7ec7e3a16b79053"
+    },
+    {
+      "path": "tests/test_t03_order_keyboard_continuity.py",
+      "sha256": "3084601faf2a8a330cfc29f6a7fb965622445ad33bfd3d5be59ce8829419ee8c"
+    },
+    {
+      "path": "tests/test_t04_order_list_column_preferences.py",
+      "sha256": "84a8c8b083c3edd387af13d878a5df936ac0090737e2e729e8deffe83d85a270"
     }
   ],
   "updated_at": "2026-09-21",

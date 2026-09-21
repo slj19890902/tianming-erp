@@ -1,5 +1,9 @@
 # Codex 项目交接
 
+## 2026-09-21 REQUISITION-GROUP-TOTAL v0.22.472
+
+- 正式82c7e16a，签名包a59a0ff5，du0920无迁移；同规格库存按合并总需求一次分配，跨订单继续使用同批余量。62项定向通过；Chrome合成336需求/300库存生成36张采购；截图隔离副本1881需求/2019库存一次抵扣后余138。NAS完整备份及正式只读门禁通过，待人工验收；备库全覆盖转单、多出片共享边界及2项基线旧断言详见docs/release_reports/REQUISITION_GROUP_TOTAL_20260921.md。
+
 ## 2026-09-21 ERP-BLANK-PAGE v0.22.471
 
 - 正式代码7f01087b，包8baed7be，du0920不迁移；修复首页Vue模板缺括号导致整页空白。14项测试、隔离Chrome登录表单、正式只读健康/模板/资源/数据库检查通过，NAS完整备份已验证，待管理员人工验收。详见docs/release_reports/ERP_BLANK_PAGE_RELEASE_20260921.md及NAS独立回执。

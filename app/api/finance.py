@@ -446,6 +446,9 @@ class ReturnReceiptUpdate(BaseModel):
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     signed_by: str | None = None
     items: list[ReturnReceiptLineCreate]
+    statement_id: int | None = Field(default=None, gt=0)
+    expected_statement_version: int | None = Field(default=None, gt=0)
+    statement_correction_reason: str | None = Field(default=None, min_length=2, max_length=500)
 
     @field_validator("items")
     @classmethod
@@ -645,11 +648,18 @@ class StatementLineRemoval(BaseModel):
         return _validated_month(value, "移入月份")
 
 
+class StatementLineCorrection(BaseModel):
+    model_config = {"extra": "forbid"}
+    statement_item_id: int = Field(gt=0)
+    unit_price: Decimal = Field(ge=0, max_digits=14, decimal_places=4)
+
+
 class StatementDisputeAdjustment(BaseModel):
     expected_version: int = Field(gt=0)
     reason: str = Field(min_length=2, max_length=500)
     remove_lines: list[StatementLineRemoval] = Field(default_factory=list)
     add_return_receipt_item_ids: list[int] = Field(default_factory=list)
+    update_lines: list[StatementLineCorrection] = Field(default_factory=list)
 
     @field_validator("reason")
     @classmethod
@@ -668,8 +678,13 @@ class StatementDisputeAdjustment(BaseModel):
         removal_ids = [item.statement_item_id for item in self.remove_lines]
         if len(removal_ids) != len(set(removal_ids)):
             raise ValueError("移出明细不能重复")
-        if not removal_ids and not self.add_return_receipt_item_ids:
-            raise ValueError("至少选择一条移出或补入明细")
+        correction_ids = [item.statement_item_id for item in self.update_lines]
+        if len(correction_ids) != len(set(correction_ids)):
+            raise ValueError("更正明细不能重复")
+        if set(removal_ids) & set(correction_ids):
+            raise ValueError("同一明细不能同时移出和更正")
+        if not removal_ids and not self.add_return_receipt_item_ids and not correction_ids:
+            raise ValueError("至少选择一条更正、移出或补入明细")
         return self
 
 
@@ -1648,6 +1663,8 @@ def _statement_detail_response(
             StatementItem.source_customer_id,
             source_customer.name.label("source_customer_name"),
             StatementItem.return_receipt_item_id,
+            ReturnReceipt.id.label("return_receipt_id"),
+            Delivery.id.label("delivery_id"),
             ReturnReceipt.actual_received_date,
             Delivery.delivery_date,
             Delivery.delivery_number,
@@ -3454,6 +3471,10 @@ def update_return_receipt(
         else receipt.reconciliation_month
     )
     request_value = payload.model_dump(exclude={"idempotency_key"})
+    # Preserve pre-existing idempotency hashes for ordinary receipt edits.
+    for key in ("statement_id", "expected_statement_version", "statement_correction_reason"):
+        if request_value.get(key) is None:
+            request_value.pop(key, None)
     request_value["reconciliation_month"] = target_month
     request_hash = _finance_request_hash(
         "return_receipt_update",
@@ -3487,12 +3508,29 @@ def update_return_receipt(
         .order_by(ReturnReceiptItem.id)
     ).all()
     receipt_item_ids = [item.id for item in receipt_items]
-    if receipt_item_ids and db.scalar(
-        select(StatementItem.id)
-        .where(StatementItem.return_receipt_item_id.in_(receipt_item_ids))
-        .limit(1)
-    ) is not None:
-        raise HTTPException(status_code=409, detail="回单已进入对账，禁止修改")
+    linked_lines = db.scalars(select(StatementItem).where(
+        StatementItem.return_receipt_item_id.in_(receipt_item_ids)
+    )).all()
+    correction_statement = None
+    if payload.statement_id and not linked_lines:
+        raise HTTPException(status_code=409, detail="回单与对账单关联已变化，请刷新后重试")
+    if linked_lines:
+        if (not payload.statement_id or not payload.expected_statement_version or not payload.expected_version or not payload.idempotency_key
+                or not (payload.statement_correction_reason or "").strip()
+                or {line.statement_id for line in linked_lines} != {payload.statement_id}):
+            raise HTTPException(status_code=409, detail="回单已进入对账，请从对应对账单撤销确认后更正；涉及多张对账单时须先逐张处理")
+        correction_statement = _statement_for_user(db, payload.statement_id, user)
+        if correction_statement.confirmation_status != "draft":
+            raise HTTPException(status_code=409, detail="请先撤销对账确认，再更正回单")
+        _lock_unpaid_statement_for_dispute(db, statement_id=correction_statement.id,
+                                         expected_version=payload.expected_statement_version)
+        if db.scalar(select(Invoice.id).where(Invoice.statement_id == correction_statement.id).limit(1)) is not None or db.scalar(
+            select(FinanceInvoiceTask.id).where(FinanceInvoiceTask.statement_id == correction_statement.id,
+                                               FinanceInvoiceTask.status != "voided").limit(1)
+        ) is not None:
+            raise HTTPException(status_code=409, detail="对账单仍有开票记录或有效开票任务，不能更正回单")
+        if target_month != receipt.reconciliation_month or payload.actual_received_date != receipt.actual_received_date:
+            raise HTTPException(status_code=409, detail="异议数量更正不能同时改变签收日期或对账归属月")
     delivery_items = db.scalars(
         select(DeliveryItem)
         .where(
@@ -3612,6 +3650,29 @@ def update_return_receipt(
         actor=user,
     )
     _refresh_receipt_order_statuses(db, affected_order_ids)
+    if correction_statement is not None:
+        corrected = []
+        for statement_line in linked_lines:
+            receipt_line = db.get(ReturnReceiptItem, statement_line.return_receipt_item_id)
+            if statement_line.price_tax_mode_snapshot not in VALID_PRICE_TAX_MODES or statement_line.tax_rate_snapshot is None:
+                raise HTTPException(status_code=409, detail="对账明细缺少冻结税价口径，不能自动重算")
+            old_quantity = statement_line.actual_received_quantity
+            statement_line.actual_received_quantity = receipt_line.actual_received_quantity
+            quantity = Decimal(receipt_line.actual_received_quantity)
+            amount = (quantity * statement_line.unit_price_snapshot).quantize(MONEY, rounding=ROUND_HALF_UP)
+            statement_line.receivable_amount = (
+                amount + (amount * statement_line.tax_rate_snapshot).quantize(MONEY, rounding=ROUND_HALF_UP)
+                if statement_line.price_tax_mode_snapshot == "tax_exclusive" else amount
+            )
+            statement_line.gross_profit_amount = (quantity * (statement_line.unit_price_snapshot - statement_line.unit_cost_snapshot)).quantize(MONEY, rounding=ROUND_HALF_UP)
+            corrected.append({"statement_item_id": statement_line.id, "before_quantity": old_quantity,
+                              "after_quantity": receipt_line.actual_received_quantity})
+        _recalculate_statement_totals(db, correction_statement)
+        before_version = correction_statement.version
+        correction_statement.version += 1
+        _statement_adjustment_log(db, statement=correction_statement, action="correct_receipt_quantity",
+                                 reason=payload.statement_correction_reason, before_version=before_version,
+                                 details={"receipt_id": receipt.id, "corrected": corrected}, user=user)
     _audit(
         db,
         user=user,
@@ -6623,6 +6684,27 @@ def adjust_statement_dispute(
         cycle_start_day = _statement_cycle_day(db, statement)
         before_version = statement.version
         removed: list[dict] = []
+        corrected: list[dict] = []
+        for correction in payload.update_lines:
+            line = db.scalar(select(StatementItem).where(
+                StatementItem.id == correction.statement_item_id,
+                StatementItem.statement_id == statement.id,
+            ))
+            if line is None or line.return_receipt_item_id is None:
+                raise HTTPException(status_code=400, detail="所选更正明细不属于当前对账单的送货明细")
+            if line.price_tax_mode_snapshot not in VALID_PRICE_TAX_MODES or line.tax_rate_snapshot is None:
+                raise HTTPException(status_code=409, detail="更正明细缺少冻结税价口径，请先核对")
+            before = {"quantity": line.actual_received_quantity, "unit_price": str(line.unit_price_snapshot), "amount": str(line.receivable_amount)}
+            quantity = Decimal(line.actual_received_quantity)
+            line.unit_price_snapshot = correction.unit_price
+            amount = (quantity * correction.unit_price).quantize(MONEY, rounding=ROUND_HALF_UP)
+            line.receivable_amount = (
+                amount + (amount * line.tax_rate_snapshot).quantize(MONEY, rounding=ROUND_HALF_UP)
+                if line.price_tax_mode_snapshot == "tax_exclusive" else amount
+            )
+            line.gross_profit_amount = (quantity * (correction.unit_price - line.unit_cost_snapshot)).quantize(MONEY, rounding=ROUND_HALF_UP)
+            corrected.append({"statement_item_id": line.id, "before": before,
+                              "after": {"quantity": line.actual_received_quantity, "unit_price": str(line.unit_price_snapshot), "amount": str(line.receivable_amount)}})
         removal_map = {
             item.statement_item_id: item.target_month for item in payload.remove_lines
         }
@@ -6743,6 +6825,7 @@ def adjust_statement_dispute(
             before_version=before_version,
             details={
                 "removed": removed,
+                "corrected": corrected,
                 "added_return_receipt_item_ids": added,
                 "voided_invoice_task_ids": voided_tasks,
             },
@@ -6757,6 +6840,7 @@ def adjust_statement_dispute(
             details={
                 "reason": payload.reason,
                 "removed": removed,
+                "corrected": corrected,
                 "added_return_receipt_item_ids": added,
                 "voided_invoice_task_ids": voided_tasks,
                 "before_version": before_version,

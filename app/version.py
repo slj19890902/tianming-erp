@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.476"
-APP_VERSION_NAME = "对账开票收款待办闭环"
+APP_VERSION = "v0.22.477"
+APP_VERSION_NAME = "对账客户定位与待办归属修复"
 APP_BUILD_DATE = "2026-09-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4514,3 +4514,15 @@ APP_VERIFICATION_STEPS = [
     "在真实已开票待收账单确认一笔收款，核对部分收款仍在待收款；收齐且开票完成后到已完成。未实际开票任务可撤销并重新核对，已开票记录不要普通撤销。",
 ]
 APP_CHANGELOG = [*(f"v0.22.476：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "已有对账单直接打开对应账单；新建窗口不再自动替换指定客户，快速切换客户和详情时忽略过期请求。",
+    "待收款等队列仅展示符合条件的账单、金额及操作；已开票收清的历史账单不再因旧确认字段进入待对账，原始确认记录保留。",
+    "未冻结销售单价的送货明细显示待补价并禁止生成，不再将缺失价格显示成零元；不自动补价或修改正式业务数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新客户对账，核对华璟天成8月已完成、9月待收款；分别打开账单，确认客户及账期正确。",
+    "切换待对账和待收款，核对列表、展开账单及翻页后的状态和操作一致。",
+    "查看新振8月XZ-20260819-002，确认1500个纸箱42×37×22显示待补价；按真实成交依据走受控更正，不以零价生成。",
+]
+APP_CHANGELOG = [*(f"v0.22.477：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

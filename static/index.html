@@ -5221,23 +5221,23 @@
                       <td><button class="btn small" @click="toggleFinanceCurrentGroup(row)">{{ financeCurrentExpanded[financeGroupKey(row)] ? '收起' : '展开' }}</button></td>
                       <td><strong>{{ row.customer_name }}</strong><div class="muted">{{ row.statement_count }} 张对账单</div></td>
                       <td>{{ row.statement_month }}<div class="muted">{{ row.period_start }} 至 {{ row.period_end }}</div></td>
-                      <td class="sensitive-price"><strong>¥ {{ money(row.pending_reconciliation_amount) }}</strong><div class="muted">已对账 ¥ {{ money(row.reconciled_receivable_amount) }}</div></td>
+                      <td class="sensitive-price"><strong v-if="row.missing_price_count">金额待核定</strong><strong v-else>¥ {{ money(row.pending_reconciliation_amount) }}</strong><div v-if="row.missing_price_count" class="status orange">{{ row.missing_price_count }} 条明细待补价</div><div class="muted">已对账 ¥ {{ money(row.reconciled_receivable_amount) }}</div></td>
                       <td class="sensitive-price"><strong>¥ {{ money(row.pending_invoice_amount) }}</strong><div class="muted">已开票 ¥ {{ money(row.invoiced_amount) }}</div></td>
                       <td class="sensitive-price"><strong>¥ {{ money(row.settled_amount) }}</strong><div class="muted">待收 ¥ {{ money(row.pending_payment_amount) }}</div></td>
                       <td>
                         <span :class="['status',row.is_completed?'green':(row.dispute_pending_count||row.task_void_pending_count)?'orange':row.primary_action_blocked?'red':'blue']">{{ row.queue_status }}</span>
                         <span v-if="row.status_anomaly_count" class="status red">状态需核对</span>
-                        <button v-if="row.primary_action!=='completed'" class="btn small primary" :disabled="row.primary_action_blocked" @click="runFinancePrimaryAction(row)">{{ financePrimaryActionLabel(row) }}</button><div v-if="row.primary_action_blocked" class="muted">先处理旧对账单</div></td>
+                        <button v-if="row.primary_action!=='completed'" class="btn small primary" @click="runFinancePrimaryAction(row)">{{ financePrimaryActionLabel(row) }}</button><div v-if="row.primary_action_blocked" class="muted">{{ row.missing_price_count ? "缺少单价，点击查看送货明细" : "先处理旧对账单" }}</div></td>
                     </tr>
                     <tr v-if="financeCurrentExpanded[financeGroupKey(row)]"><td colspan="7" style="padding:8px 12px;background:#f8fafc"><div class="workspace-dialog-mask" @click.self="financeCurrentExpanded[financeGroupKey(row)]=false" @keydown.esc.stop="financeCurrentExpanded[financeGroupKey(row)]=false"><section class="workspace-dialog" role="dialog" aria-modal="true" aria-label="客户账单"><div class="toolbar"><strong>{{row.customer_name}} · {{row.statement_month}}</strong><button class="btn small workspace-dialog-close" @click="financeCurrentExpanded[financeGroupKey(row)]=false">关闭</button></div>
-                      <div v-if="!row.statements.length" class="muted">尚未生成对账单，请点击“去对账”。</div>
-                      <div v-else class="table-wrap"><table :data-workspace-list="'finance-detail-0'+':'+row.id"><thead><tr><th>对账单号</th><th class="sensitive-price">对账金额</th><th class="sensitive-price">待开票</th><th>状态</th><th>操作</th></tr></thead><tbody>
-                        <tr v-for="statement in localRows(row.statements,'finance-detail-0'+':'+row.id)" :key="statement.id">
+                      <button v-if="row.pending_reconciliation_count || row.blocked_reconciliation_count" class="btn primary" @click="financeCurrentExpanded[financeGroupKey(row)]=false; openStatement(row.statement_month,row.customer_id)">查看待生成送货明细</button><div v-if="!row.statements.length" class="muted">尚未生成对账单，请点击“去对账”。</div>
+                      <div v-else class="table-wrap"><table :data-workspace-list="'finance-detail-0'+':'+financeGroupKey(row)"><thead><tr><th>对账单号</th><th class="sensitive-price">对账金额</th><th class="sensitive-price">待开票</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                        <tr v-for="statement in localRows(row.statements,'finance-detail-0'+':'+financeGroupKey(row))" :key="statement.id">
                           <td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td>
                           <td><span v-if="statement.dispute_pending" class="status orange">异议待修改</span><span v-else-if="statement.task_void_pending" class="status orange">待修改</span><span v-else-if="statement.invoice_task_pending" class="status blue">开票处理中</span><span v-else-if="statement.invoice_status==='invoiced'" class="status green">已开票</span><status-tag v-else :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div></td>
-                          <td class="toolbar-group"><button v-if="canConfirmStatement && statement.confirmation_status!=='confirmed'" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="exportAndConfirmStatement(statement)">{{ financeStatementOperationState.action==='export_confirm' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '确认中…' : '导出并确认' }}</button><button v-else-if="canGenerateInvoiceTask && statement.confirmation_status==='confirmed' && !statement.invoice_task_pending && Number(statement.pending_invoice_amount)>0" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button v-if="canFinance && Number(statement.pending_payment_action_amount)>0" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementSettlement(statement)">确认收款</button><button class="btn small" @click="exportStatement(statement,'xlsx')">仅导出</button><button class="btn small" @click="openCustomerStatementCheck(statement)">核对客户Excel</button><button class="btn small" @click="exportStatement(statement,'pdf')">PDF</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementDispute(statement)">{{ statement.confirmation_status==='confirmed' ? '客户异议' : '调整' }}</button></td>
+                          <td class="toolbar-group"><button v-if="canConfirmStatement && !statement.financially_completed && statement.confirmation_status!=='confirmed'" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="exportAndConfirmStatement(statement)">{{ financeStatementOperationState.action==='export_confirm' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '确认中…' : '导出并确认' }}</button><button v-else-if="canGenerateInvoiceTask && statement.confirmation_status==='confirmed' && !statement.invoice_task_pending && Number(statement.pending_invoice_amount)>0" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button v-if="canFinance && Number(statement.pending_payment_action_amount)>0" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementSettlement(statement)">确认收款</button><button class="btn small" @click="exportStatement(statement,'xlsx')">仅导出</button><button class="btn small" @click="openCustomerStatementCheck(statement)">核对客户Excel</button><button class="btn small" @click="exportStatement(statement,'pdf')">PDF</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementDispute(statement)">{{ statement.confirmation_status==='confirmed' ? '客户异议' : '调整' }}</button></td>
                         </tr>
-                      </tbody></table></div><local-pager :rows="row.statements" :list-key="'finance-detail-0'+':'+row.id"></local-pager>
+                      </tbody></table></div><local-pager :rows="row.statements" :list-key="'finance-detail-0'+':'+financeGroupKey(row)"></local-pager>
                     </section></div></td></tr>
                   </tbody>
                 </table></div>
@@ -9377,11 +9377,11 @@
                 <template v-for="row in pendingStatements" :key="row.delivery_id">
                   <tr :class="{'statement-delivery-disabled': row.selection_blocked}">
                     <td><input type="checkbox" :disabled="row.selection_blocked" :checked="!!statementForm.selected[row.delivery_id]" @change="toggleStatementDelivery(row, $event.target.checked)" /></td>
-                    <td>{{ row.delivery_date }}</td><td><strong>{{ row.delivery_number }}</strong></td><td>{{ row.item_count }}</td><td>{{ row.total_received_quantity }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable_amount) }}</td>
-                    <td><span v-if="row.selection_blocked" class="status red">异常历史</span><span v-else class="status green">可选择</span><div v-if="row.selection_blocked" class="statement-delivery-exception">{{ row.exception_reason || '该对账组存在历史异常，暂不可选择。' }}</div></td>
+                    <td>{{ row.delivery_date }}</td><td><strong>{{ row.delivery_number }}</strong></td><td>{{ row.item_count }}</td><td>{{ row.total_received_quantity }}</td><td class="sensitive-price"><template v-if="row.missing_price_count">待补价</template><template v-else>¥ {{ money(row.total_receivable_amount) }}</template></td>
+                    <td><span v-if="row.selection_blocked" class="status red">{{ row.missing_price_count ? "待补价" : "异常历史" }}</span><span v-else class="status green">可选择</span><div v-if="row.selection_blocked" class="statement-delivery-exception">{{ row.exception_reason || '该对账组存在历史异常，暂不可选择。' }}</div></td>
                     <td><button class="btn small" @click="toggleStatementDeliveryExpanded(row)">{{ expandedStatementDeliveries[row.delivery_id] ? '收起明细' : '查看明细' }}</button></td>
                   </tr>
-                  <tr v-if="expandedStatementDeliveries[row.delivery_id]" class="statement-delivery-detail-row"><td colspan="8"><div class="statement-delivery-detail"><table><thead><tr><th>产品</th><th>规格</th><th>实收数量</th><th class="sensitive-price">应收金额</th><th>差异原因</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.return_receipt_item_id"><td>{{ item.product_code }} / {{ item.product_name }}</td><td>{{ item.specification || '-' }}</td><td>{{ item.actual_received_quantity }}</td><td class="sensitive-price">¥ {{ money(item.receivable_amount) }}</td><td>{{ item.difference_reason || '-' }}</td></tr><tr v-if="!row.items.length"><td colspan="5" class="empty">暂无产品明细</td></tr></tbody></table></div></td></tr>
+                  <tr v-if="expandedStatementDeliveries[row.delivery_id]" class="statement-delivery-detail-row"><td colspan="8"><div class="statement-delivery-detail"><table><thead><tr><th>产品</th><th>规格</th><th>实收数量</th><th class="sensitive-price">应收金额</th><th>差异原因</th></tr></thead><tbody><tr v-for="item in row.items" :key="item.return_receipt_item_id"><td>{{ item.product_code }} / {{ item.product_name }}</td><td>{{ item.specification || '-' }}</td><td>{{ item.actual_received_quantity }}</td><td class="sensitive-price"><template v-if="item.missing_price">待补价</template><template v-else>¥ {{ money(item.receivable_amount) }}</template></td><td>{{ item.difference_reason || '-' }}</td></tr><tr v-if="!row.items.length"><td colspan="5" class="empty">暂无产品明细</td></tr></tbody></table></div></td></tr>
                 </template>
               </tbody></table>
               <div v-if="pendingStatementCharges.length" style="margin-top:12px"><div class="section-title">已确认客户附加收费</div><table><thead><tr><th>选择</th><th>客户单号</th><th>收费名称</th><th>数量/单位</th><th class="sensitive-price">应收金额</th></tr></thead><tbody><tr v-for="charge in pendingStatementCharges" :key="`statement-charge-${charge.id}`"><td><input type="checkbox" v-model="statementForm.selectedCharges[charge.id]" /></td><td><order-reference :row="charge"></order-reference></td><td>{{ charge.display_name }}<div class="muted">{{ customerChargeTypeText(charge.charge_type) }}</div></td><td>{{ charge.quantity }} {{ charge.unit }}</td><td class="sensitive-price">¥ {{ money(charge.amount) }}</td></tr></tbody></table></div>
@@ -24023,15 +24023,17 @@
           },
           financePrimaryActionLabel(row) {
             if (row.primary_action === "review") return "查看 / 导出对账单";
-            if (row.primary_action_blocked) return "待对账异常";
+            if (row.primary_action_blocked) return row.missing_price_count ? "查看缺价明细" : "查看对账异常";
             if (row.primary_action === "reconcile") return "去对账";
             if (row.primary_action === "invoice") return "查看待开票";
             if (row.primary_action === "invoice_task") return "查看开票任务";
             return "查看待收款";
           },
           async runFinancePrimaryAction(row) {
-            if (row.primary_action === "reconcile" && !row.primary_action_blocked) {
-              return this.openStatement(row.statement_month, row.customer_id);
+            if (row.primary_action === "reconcile") {
+              const drafts = (row.statements || []).filter(statement => statement.confirmation_status !== "confirmed" && !statement.financially_completed);
+              if (drafts.length === 1 && !row.pending_reconciliation_count && !row.blocked_reconciliation_count) return this.openStatementDetail(drafts[0]);
+              if (!drafts.length) return this.openStatement(row.statement_month, row.customer_id);
             }
             if (row.primary_action === "invoice_task") {
               this.financeView = "invoice_tasks";
@@ -24056,7 +24058,7 @@
           async onFinanceMonthChange() {
             await this.reloadFinanceCurrent();
           },
-          financeConfirmationText(statement) { return statement?.confirmation_status === "confirmed" ? `已确认 · v${statement.version || 1}` : (statement?.dispute_pending ? `异议待修改 · v${statement?.version || 1}` : (statement?.task_void_pending ? `待修改 · v${statement?.version || 1}` : `待核对 · v${statement?.version || 1}`)); },
+          financeConfirmationText(statement) { if (statement?.financially_completed && statement?.confirmation_status !== "confirmed") return "已开票并收清 · 历史确认字段未补录"; return statement?.confirmation_status === "confirmed" ? `已确认 · v${statement.version || 1}` : (statement?.dispute_pending ? `异议待修改 · v${statement?.version || 1}` : (statement?.task_void_pending ? `待修改 · v${statement?.version || 1}` : `待核对 · v${statement?.version || 1}`)); },
           invoiceTaskStatusText(status) { return ({draft:"待补资料",ready:"可导出",exported:"已导出待登记",issued:"已开票",failed:"失败",voided:"已作废"})[status] || "待核对"; },
           async loadInvoiceTasks(sessionContext = null) {
             if (!this.canViewInvoiceTasks) return true;
@@ -37152,27 +37154,44 @@
             if (statementMonth && typeof statementMonth !== "string") statementMonth = null;
             this.statementForm = { customer_id:preferredCustomerId ? Number(preferredCustomerId) : null, statement_month:statementMonth || month(), selected:{}, selectedCharges:{}, idempotency_key:null };
             this.expandedStatementDeliveries = {};
+            this.pendingStatements = [];
+            this.pendingStatementCharges = [];
+            this.statementCustomers = [];
             this.statementCyclePeriod = "";
             this.modal = { type:"statement", title:"生成月结对账单" };
+            const form = this.statementForm;
             await this.loadStatementCustomers();
-            await this.loadPendingStatements();
+            if (this.statementForm === form && this.modal.type === "statement") await this.loadPendingStatements();
           },
           async loadStatementCustomers() {
+            const form = this.statementForm;
+            const requestedMonth = form.statement_month;
+            const requestedCustomer = form.customer_id;
+            const requestId = this.statementCustomersRequestId = (this.statementCustomersRequestId || 0) + 1;
             const { data } = await axios.get("/api/finance/statement-customers", {
-              params: { statement_month: this.statementForm.statement_month }
+              params: { statement_month: requestedMonth }
             });
+            if (requestId !== this.statementCustomersRequestId || this.statementForm !== form || form.statement_month !== requestedMonth || form.customer_id !== requestedCustomer || this.modal.type !== "statement") return;
             this.statementCustomers = data.items || [];
-            if (this.statementCustomers.length === 1) {
+            if (!requestedCustomer && this.statementCustomers.length === 1) {
               this.statementForm.customer_id = this.statementCustomers[0].id;
-            } else if (this.statementCustomers.length && !this.statementCustomers.some(row => row.id === this.statementForm.customer_id)) {
+            } else if (requestedCustomer && !this.statementCustomers.some(row => Number(row.id) === Number(requestedCustomer))) {
               this.statementForm.customer_id = null;
+              this.showToast?.("该客户本月已无可新建对账明细，请查看已有对账单。", true);
             }
           },
           async loadPendingStatements() {
+            const form = this.statementForm;
+            const requestedMonth = form.statement_month;
+            const requestedCustomer = form.customer_id;
+            const requestId = this.statementPendingRequestId = (this.statementPendingRequestId || 0) + 1;
+            this.pendingStatements = []; this.pendingStatementCharges = []; this.statementCyclePeriod = "";
+            form.selected = {}; form.selectedCharges = {}; form.idempotency_key = null;
             if (!this.statementForm.customer_id) { this.pendingStatements=[]; this.pendingStatementCharges=[]; this.statementCyclePeriod = ""; this.expandedStatementDeliveries = {}; return; }
             const { data } = await axios.get("/api/finance/pending_statements", {
-              params:{ customer_id:this.statementForm.customer_id, statement_month:this.statementForm.statement_month }
+              params:{ customer_id:requestedCustomer, statement_month:requestedMonth }
             });
+            if (requestId !== this.statementPendingRequestId || this.statementForm !== form || form.statement_month !== requestedMonth || form.customer_id !== requestedCustomer || this.modal.type !== "statement") return;
             const rawDeliveries = Array.isArray(data?.deliveries) ? data.deliveries : this.groupLegacyStatementItems(data?.items || []);
             this.pendingStatements = rawDeliveries.map(row => this.normalizeStatementDelivery(row));
             this.pendingStatementCharges = Array.isArray(data?.customer_charges) ? data.customer_charges : [];
@@ -37214,7 +37233,7 @@
               items,
               item_count: Number(row.item_count ?? items.length),
               total_received_quantity: Number(row.total_received_quantity ?? totalReceived),
-              total_receivable_amount: row.total_receivable_amount ?? totalReceivable,
+              total_receivable_amount: row.missing_price_count ? null : (row.total_receivable_amount ?? totalReceivable),
               selection_blocked: !!row.selection_blocked,
               exception_reason: row.exception_reason || "",
             };
@@ -37224,7 +37243,13 @@
             await this.loadPendingStatements();
           },
           async openStatementDetail(row) {
-            this.statementDetail = (await axios.get(`/api/finance/statements/${row.id}`)).data;
+            const requestId = this.statementDetailRequestId = (this.statementDetailRequestId || 0) + 1;
+            this.statementDetail = null;
+            this.modal = {type:"statementDetail", title:"正在读取对账单…"};
+            const currentModal = this.modal;
+            const {data} = await axios.get(`/api/finance/statements/${Number(row.id)}`);
+            if (requestId !== this.statementDetailRequestId || this.modal !== currentModal) return false;
+            this.statementDetail = data;
             this.modal = { type:"statementDetail", title:`对账单详情 ${this.statementDetail.statement_number}` };
           },
           nextStatementMonth(value) {

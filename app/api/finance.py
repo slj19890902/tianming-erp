@@ -4032,7 +4032,8 @@ def _pending_statement_groups(
             MONEY,
             rounding=ROUND_HALF_UP,
         )
-        data["receivable_amount"] = receivable
+        data["missing_price"] = data["unit_price"] is None
+        data["receivable_amount"] = None if data["missing_price"] else receivable
         data["is_reconciled"] = data["statement_item_id"] is not None
         order = orders.get(data["order_id"])
         display = (
@@ -4067,7 +4068,8 @@ def _pending_statement_groups(
         reconciled_count = sum(1 for row in rows if row["is_reconciled"])
         if reconciled_count == len(rows):
             continue
-        selection_blocked = reconciled_count > 0
+        missing_price_count = sum(1 for row in rows if row["missing_price"])
+        selection_blocked = reconciled_count > 0 or missing_price_count > 0
         delivery.update(
             {
                 "item_count": len(rows),
@@ -4075,12 +4077,16 @@ def _pending_statement_groups(
                 "total_received_quantity": sum(
                     int(row["actual_received_quantity"] or 0) for row in rows
                 ),
-                "total_receivable_amount": sum(
+                "missing_price_count": missing_price_count,
+                "total_receivable_amount": None if missing_price_count else sum(
                     (row["receivable_amount"] for row in rows),
                     Decimal("0"),
                 ).quantize(MONEY, rounding=ROUND_HALF_UP),
                 "selection_blocked": selection_blocked,
                 "exception_reason": (
+                    "缺少冻结销售单价，金额待核定；请核对原送货单，通过受控回单/送货更正流程补齐实际成交价后再对账。"
+                    if missing_price_count
+                    else
                     "该送货单已有部分明细进入其他对账单，请先处理原对账单。"
                     if selection_blocked
                     else None
@@ -4192,6 +4198,7 @@ def pending_statement_customer_summaries(
             func.count(ReturnReceiptItem.id).label("item_count"),
             pending_item_count.label("pending_item_count"),
             func.coalesce(pending_amount, 0).label("pending_amount"),
+            func.sum(case((and_(StatementItem.id.is_(None), effective_unit_price.is_(None)), 1), else_=0)).label("missing_price_count"),
         )
         .select_from(ReturnReceiptItem)
         .join(ReturnReceipt, ReturnReceipt.id == ReturnReceiptItem.return_receipt_id)
@@ -4266,7 +4273,8 @@ def pending_statement_customer_summaries(
                 "delivery_ids": [],
             },
         )
-        if remaining_count < item_count:
+        summary["missing_price_count"] = summary.get("missing_price_count", 0) + int(row["missing_price_count"] or 0)
+        if remaining_count < item_count or row["missing_price_count"]:
             summary["blocked_count"] += 1
         else:
             summary["pending_count"] += 1
@@ -4933,6 +4941,7 @@ def current_customer_months(
             "blocked_reconciliation_count": 0,
             "pending_reconciliation_item_count": 0,
             "pending_reconciliation_amount": Decimal("0.00"),
+            "missing_price_count": 0,
             "pending_confirmation_count": 0,
             "pending_confirmation_amount": Decimal("0.00"),
             "reconciled_receivable_amount": Decimal("0.00"),
@@ -4975,6 +4984,7 @@ def current_customer_months(
             )
             group["pending_reconciliation_count"] += int(pending["pending_count"] or 0)
             group["blocked_reconciliation_count"] += int(pending["blocked_count"] or 0)
+            group["missing_price_count"] += int(pending.get("missing_price_count", 0))
             group["pending_reconciliation_item_count"] += int(
                 pending["pending_item_count"] or 0
             )
@@ -5059,8 +5069,15 @@ def current_customer_months(
                 period_end=period_end,
             ),
         )
-        is_confirmed = statement["confirmation_status"] == "confirmed"
         receivable = _money_value(statement["total_receivable"])
+        # Older settled bills can predate the ERP confirmation field. Preserve
+        # that field, but never send financially completed history back to work.
+        financially_completed = (
+            receivable > 0
+            and _money_value(statement["invoiced_amount"]) >= receivable
+            and _money_value(statement["settled_amount"]) >= receivable
+        )
+        is_confirmed = statement["confirmation_status"] == "confirmed" or financially_completed
         invoiced = _money_value(statement["invoiced_amount"]) if is_confirmed else Decimal("0.00")
         settled = _money_value(statement["settled_amount"]) if is_confirmed else Decimal("0.00")
         confirmed_receivable = receivable if is_confirmed else Decimal("0.00")
@@ -5135,6 +5152,7 @@ def current_customer_months(
                 "pending_payment_action_amount": payment_action_balance,
                 "status": statement["status"],
                 "confirmation_status": statement["confirmation_status"],
+                "financially_completed": financially_completed,
                 "version": int(statement["version"]),
                 "ledger_version": int(statement["ledger_version"]),
                 "dispute_pending": dispute_pending,
@@ -5154,6 +5172,14 @@ def current_customer_months(
             }
         )
 
+    def is_completed_statement(statement: dict) -> bool:
+        return (
+            (statement["confirmation_status"] == "confirmed" or statement["financially_completed"])
+            and statement["pending_invoice_amount"] == 0
+            and statement["pending_payment_amount"] == 0
+            and not statement["invoice_task_pending"]
+        )
+
     all_groups = []
     queue_customer_ids = {key: set() for key in empty_counts}
     for group in grouped.values():
@@ -5170,19 +5196,16 @@ def current_customer_months(
         )
         has_invoice_task = group["invoice_task_pending_count"] > 0
         has_payment = group["pending_payment_action_amount"] > Decimal("0.00")
+        has_completed = any(is_completed_statement(statement) for statement in group["statements"])
         completed = bool(group["statements"]) and not (
             has_reconciliation or has_invoice or has_invoice_task or has_payment
-        ) and all(
-            statement["confirmation_status"] == "confirmed"
-            and statement["pending_invoice_amount"] == Decimal("0.00")
-            and statement["pending_payment_amount"] == Decimal("0.00")
-            for statement in group["statements"]
-        )
+        ) and all(is_completed_statement(statement) for statement in group["statements"])
         group["has_pending_reconciliation"] = has_reconciliation
         group["has_pending_invoice"] = has_invoice
         group["has_pending_invoice_task"] = has_invoice_task
         group["has_pending_payment"] = has_payment
         group["is_completed"] = completed
+        group["has_completed"] = has_completed or completed
         group["queue_status"] = (
             "异议待修改"
             if group["dispute_pending_count"]
@@ -5211,7 +5234,7 @@ def current_customer_months(
             queue_customer_ids["pending_invoice"].add(group["customer_id"])
         if has_payment and count_in_current_customer_scope:
             queue_customer_ids["pending_payment"].add(group["customer_id"])
-        if completed and count_in_current_customer_scope:
+        if group["has_completed"] and count_in_current_customer_scope:
             queue_customer_ids["completed"].add(group["customer_id"])
         if (
             count_in_current_customer_scope
@@ -5232,6 +5255,7 @@ def current_customer_months(
             group["primary_action"] == "reconcile"
             and group["pending_reconciliation_count"] == 0
             and group["blocked_reconciliation_count"] > 0
+            and group["pending_confirmation_count"] == 0
         )
         all_groups.append(group)
 
@@ -5246,7 +5270,7 @@ def current_customer_months(
             return group["has_pending_invoice"]
         if balance_type == "pending_payment":
             return group["has_pending_payment"]
-        return group["is_completed"]
+        return group["has_completed"]
 
     customer_options_by_id = {
         int(group["customer_id"]): str(group["customer_name"])
@@ -5259,6 +5283,33 @@ def current_customer_months(
         )
     ]
     items = [group for group in all_groups if includes_requested_queue(group)]
+    # A customer/month may contain several stages. Show only the bills in the
+    # selected queue; counts above still describe all queues in the same scope.
+    if balance_type is not None:
+        def matches_queue(statement: dict) -> bool:
+            if balance_type == "pending_reconciliation":
+                return statement["confirmation_status"] != "confirmed" and not statement["financially_completed"]
+            if balance_type == "pending_invoice":
+                return statement["pending_invoice_amount"] > 0 and not statement["invoice_task_pending"]
+            if balance_type == "pending_payment":
+                return statement["pending_payment_action_amount"] > 0
+            return is_completed_statement(statement)
+
+        for group in items:
+            group["statements"] = [s for s in group["statements"] if matches_queue(s)]
+            group["statement_count"] = len(group["statements"])
+            for field in ("invoiced_amount", "settled_amount", "pending_invoice_amount", "pending_payment_amount", "pending_payment_action_amount"):
+                group[field] = _money_value(sum((s[field] for s in group["statements"]), Decimal("0")))
+            group["reconciled_receivable_amount"] = _money_value(sum((s["total_receivable"] for s in group["statements"] if s["confirmation_status"] == "confirmed" or s["financially_completed"]), Decimal("0")))
+            if balance_type != "pending_reconciliation":
+                for field in ("pending_reconciliation_count", "blocked_reconciliation_count", "pending_reconciliation_item_count", "missing_price_count", "pending_confirmation_count", "dispute_pending_count", "task_void_pending_count"):
+                    group[field] = 0
+                group["pending_reconciliation_amount"] = Decimal("0.00")
+                group["pending_confirmation_amount"] = Decimal("0.00")
+                group["primary_action_blocked"] = False
+                group["primary_action"] = {"pending_invoice": "invoice", "pending_payment": "payment", "completed": "completed"}[balance_type]
+                group["queue_status"] = ("部分收款" if group["settled_amount"] > 0 else "待收款") if balance_type == "pending_payment" else ("待开票" if balance_type == "pending_invoice" else "已完成")
+                group["is_completed"] = balance_type == "completed"
     items.sort(
         key=lambda row: (
             -int(row["statement_month"][:4]),

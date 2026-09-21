@@ -26,11 +26,11 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "900bebc76f7e3e274c237f1d69a4c5bc10e8e4538f709cb83560b7a090803b1f"
+      "sha256": "a35d5415f10b15fe6cbb248cb2ecdf1f0969d207ed63c0f8fcfdc064b29e167e"
     },
     {
       "path": "04_场景覆盖与验收.md",
-      "sha256": "fbf5a463d4b4c45f3dc2e7c3248597e6e3edfaae7daef91fd86c94fecad4f4aa"
+      "sha256": "1772bff81d3092a881c17adf6ecc1dd1c24a92e7fcf7d93192a84856c374a908"
     },
     {
       "path": "05_已确认合同速查.md",
@@ -38,7 +38,7 @@
     },
     {
       "path": "06_Astra最终验收交接.md",
-      "sha256": "7148972598b7df710af2e1c86b583d91e165da5a4ba7d8bff90b344d77a5eb71"
+      "sha256": "b330116e4f59cfa1969001ecb6d114c90367db926aaa4790c41b4f876b8a5b90"
     },
     {
       "path": "20260920-T02-候选实现与隔离迁移验证.md",
@@ -174,11 +174,11 @@
     },
     {
       "path": "tasks/T17.md",
-      "sha256": "7bf6624356423521dba279ff7dfefd283a60cd0b996c58298fb703640422f994"
+      "sha256": "a67458fb030c2b1486c92dcda2471b2df08eb3795939837e4485d9931aad6f48"
     },
     {
       "path": "tasks/T18.md",
-      "sha256": "6b9a10e06457949e35f9103239af0a028cbdad13a7bc58f4ff0de30abd323f10"
+      "sha256": "4c52e14d655ff46e738f415d023bd23ad767d7c426d6aba767a3810309bfa9bf"
     },
     {
       "path": "tasks/T19.md",
@@ -186,7 +186,7 @@
     },
     {
       "path": "tasks/T20.md",
-      "sha256": "3912359a0d1b947d01fb9a6854ab565253a06ed66fbdff0fff22c6ffe0d3ba4b"
+      "sha256": "a8310428ae65c2af627dc794bd03cea5295092566df9c93fbf6524a8ef582310"
     }
   ],
   "validation_errors": [],
@@ -210,12 +210,16 @@
   },
   "astra_rework": {
     "started_at": "2026-09-21",
-    "status": "nonvisual_remediation_verified_pending_administrator_check",
+    "status": "second_phase_remediation_closed",
     "review_result": "first_astra_review_not_accepted",
     "review_report": "20260921-Astra首轮验收意见.md",
     "scope_note": "Historical audit package, rework plan, source ancestry, and runtime package are distinct evidence objects. The historical package integrity result does not establish R00-R06 completion.",
     "rework_plan": "../LEGACY_ERP_ASTRA_REWORK_20260921/MANIFEST.json",
-    "current_status_entry": "../LEGACY_ERP_ASTRA_REWORK_20260921/05_缺口修补与人工检查.md"
+    "current_status_entry": "../LEGACY_ERP_ASTRA_REWORK_20260921/05_缺口修补与人工检查.md",
+    "administrator_confirmation_scope": [
+      "isolated_real_ime",
+      "restricted_amount_and_column_preferences"
+    ]
   },
   "historical_source_fingerprints": [
     {

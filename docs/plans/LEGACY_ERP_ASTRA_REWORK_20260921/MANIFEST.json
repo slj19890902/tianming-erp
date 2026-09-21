@@ -1,14 +1,14 @@
 {
   "created": "2026-09-21",
-  "scope": "nonvisual_remediation_verified_pending_administrator_check",
+  "scope": "second_phase_remediation_closed_with_administrator_confirmation",
   "baseline": {
     "initial_source_head": "ff58789ce4550d3d00bb01dbc26d0ffd0db7d495",
     "formal_runtime_version": "v0.22.475",
     "formal_runtime_source": "b944835a83a72bc16839b82f729c0be39aa65d39",
     "formal_runtime_package": "063d3a9efb6b2f9a99394986600a03c9ab0703ce692e60088e3779677eac2fb4",
     "formal_runtime_revision": "du0920",
-    "review_status": "pending_administrator_check",
-    "blocked_reason": "IME and restricted-amount UI checks handed to administrator by explicit user instruction; not marked passed.",
+    "review_status": "second_phase_remediation_closed",
+    "blocked_reason": null,
     "reviewed_formal_baseline": "a4ef8f7fba9ce04ecfa448eec1f0e95bd60e5b7e",
     "documentation_revision": "Git commit containing this manifest; resolve via git log"
   },
@@ -23,11 +23,11 @@
     },
     {
       "path": "02_整改进度.md",
-      "sha256": "b54adcbe7c8cee4a9e6e712f66b4d2ec4a4ff1f59f5296dab737fb95e8c0c71a"
+      "sha256": "c540e66bd5a04b34d6dc966b2a7dda69feb03ef4e9582f65592a01be26fc3d1f"
     },
     {
       "path": "03_Astra二次验收交接.md",
-      "sha256": "c88f5ad7b262df60ecb3797a3d392e946a8941083be05c30ecc97aa4fccda060"
+      "sha256": "94b47cfe0f2e35a82b340efce7b9e8a872bf2049653d05a5ca0854c6add3efa4"
     },
     {
       "path": "04_Astra阻塞复核.md",
@@ -35,7 +35,7 @@
     },
     {
       "path": "R00_证据索引.md",
-      "sha256": "a3fc8eb4667f311af065f044d83d20cd678c2cd51e0084feb7fbda491910d0df"
+      "sha256": "6be62266e9207c7a0a82678d32d2555dd7bc62ea9a2aced978b0ebee8855c6f6"
     },
     {
       "path": "R01_执行证据.md",
@@ -47,7 +47,7 @@
     },
     {
       "path": "R03_执行证据.md",
-      "sha256": "741027db6317fad240588c903a6891522716cd71d78fa8c32f21962672133331"
+      "sha256": "346ae3fe1043184dea7f43ac3a4570eed82de43d810073d27ce23dfd58ff60fd"
     },
     {
       "path": "R03_工厂隔离启动证据.md",
@@ -59,7 +59,7 @@
     },
     {
       "path": "R05_执行证据.md",
-      "sha256": "bbe59d968af108f825d9e275feea5e0a6c4396f6babd7c6ec9c59e1cd6117cf7"
+      "sha256": "f65f82d549a0f0e453b91a13d55d03bb1b7004aca59042a95fa5fbbaa3e56005"
     },
     {
       "path": "tasks/R00.md",
@@ -75,7 +75,7 @@
     },
     {
       "path": "tasks/R03.md",
-      "sha256": "4afe75feeb9bb3f25576b818061394e870064d8939f71b50025e89d77389f27a"
+      "sha256": "4cd710bd3dd850f828383aeef5bb043497dce585a4457bc0e5f25d74b8eee652"
     },
     {
       "path": "tasks/R04.md",
@@ -83,15 +83,15 @@
     },
     {
       "path": "tasks/R05.md",
-      "sha256": "3ced8af1664eb9ecbac33b58972868f11620458f9993ed2678cdd373fa3e98d8"
+      "sha256": "8a0ef5b769aabf602f28f0c0300cdb3d115cf8401d343055362303420b78b4af"
     },
     {
       "path": "tasks/R06.md",
-      "sha256": "9f578f883341928a3770e3ab5029af37898866a3f1cd00adf08cff37861b70cc"
+      "sha256": "2f93291865d065fa8f6eb44c42ae06b3084d972bcde556c00f853f81bdb29c61"
     },
     {
       "path": "05_缺口修补与人工检查.md",
-      "sha256": "24462418783597efe70b7e2ba2c0015baa483ae6c0e790df81b6fe00f4e3897e"
+      "sha256": "37a77f52307f8f9e1d30846b6e277a12cf185053a3bafb2b225a8961d1acf292"
     }
   ],
   "supporting_code": [
@@ -152,31 +152,44 @@
   "legacy_status_updates": [
     {
       "path": "../LEGACY_ERP_TERRA_20260920/03_进度与决策.md",
-      "sha256": "900bebc76f7e3e274c237f1d69a4c5bc10e8e4538f709cb83560b7a090803b1f"
+      "sha256": "a35d5415f10b15fe6cbb248cb2ecdf1f0969d207ed63c0f8fcfdc064b29e167e"
     },
     {
       "path": "../LEGACY_ERP_TERRA_20260920/04_场景覆盖与验收.md",
-      "sha256": "fbf5a463d4b4c45f3dc2e7c3248597e6e3edfaae7daef91fd86c94fecad4f4aa"
+      "sha256": "1772bff81d3092a881c17adf6ecc1dd1c24a92e7fcf7d93192a84856c374a908"
     },
     {
       "path": "../LEGACY_ERP_TERRA_20260920/06_Astra最终验收交接.md",
-      "sha256": "7148972598b7df710af2e1c86b583d91e165da5a4ba7d8bff90b344d77a5eb71"
+      "sha256": "b330116e4f59cfa1969001ecb6d114c90367db926aaa4790c41b4f876b8a5b90"
     },
     {
       "path": "../LEGACY_ERP_TERRA_20260920/tasks/T17.md",
-      "sha256": "7bf6624356423521dba279ff7dfefd283a60cd0b996c58298fb703640422f994"
+      "sha256": "a67458fb030c2b1486c92dcda2471b2df08eb3795939837e4485d9931aad6f48"
     },
     {
       "path": "../LEGACY_ERP_TERRA_20260920/tasks/T18.md",
-      "sha256": "6b9a10e06457949e35f9103239af0a028cbdad13a7bc58f4ff0de30abd323f10"
+      "sha256": "4c52e14d655ff46e738f415d023bd23ad767d7c426d6aba767a3810309bfa9bf"
     },
     {
       "path": "../LEGACY_ERP_TERRA_20260920/tasks/T20.md",
-      "sha256": "3912359a0d1b947d01fb9a6854ab565253a06ed66fbdff0fff22c6ffe0d3ba4b"
+      "sha256": "a8310428ae65c2af627dc794bd03cea5295092566df9c93fbf6524a8ef582310"
     },
     {
       "path": "../LEGACY_ERP_TERRA_20260920/MANIFEST.json",
-      "sha256": "12a3bb2bb0329f682f3ea991e132f0aa76e98a4158733d35c7e7d924314df6eb"
+      "sha256": "6a62f39f0fab43d932e1684e75ba79b27d49b2d2448a7cc38e1775d99b1e6c99"
     }
-  ]
+  ],
+  "administrator_confirmation": {
+    "source": "User reply in current conversation: 已验收通过",
+    "scope": [
+      "isolated_real_ime",
+      "restricted_amount_and_column_preferences"
+    ],
+    "does_not_cover": [
+      "physical_paper",
+      "phone",
+      "spare_machine",
+      "other_formal_business_acceptance"
+    ]
+  }
 }

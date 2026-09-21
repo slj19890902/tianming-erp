@@ -11,10 +11,10 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.478"
-APP_VERSION_NAME = "无订单送货首次销售补价"
+APP_VERSION = "v0.22.479"
+APP_VERSION_NAME = "第三阶段可靠性与规模读路径修复"
 APP_BUILD_DATE = "2026-09-21"
-APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
+APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
 _V022124_CHANGES = [
     "待来料按当前有效供应商报料明细逐条展示和收料；天地盖的盖片、底片继续保持各自稳定身份，不再回退成订单级合计数量。",
@@ -4538,3 +4538,14 @@ APP_VERIFICATION_STEPS = [
     "核对金额和数量，确认缺价提示解除后再按实际业务生成对账单；不要用测试价格录入正式记录。",
 ]
 APP_CHANGELOG = [*(f"v0.22.478：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "活动订单大页摘要改为按范围复用只读状态投影，并在每次提交后失效；查询不再随订单行数量逐条读取产品。",
+    "送货单条与列表统一使用规范化库位投影；没有天华草稿备注时不再读取无关备注关联。",
+    "本版无数据库迁移，不改写任何订单、收料、送货、库存、价格、权限、审计或历史事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "本版没有可见页面或业务流程变化，无需新增页面验收；日常使用中若发现订单列表或送货列表异常，保留时间、账号和筛选条件后按运维定位表处理。",
+    "系统版本显示 v0.22.479，数据库 revision 保持 du0920；不得为了验证而创建模拟业务。",
+]
+APP_CHANGELOG = [*(f"v0.22.479：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

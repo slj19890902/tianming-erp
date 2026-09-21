@@ -5791,3 +5791,5 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 - 2026-09-21：v0.22.473 开票缺项提示与对账异议更正已技术发布，代码f429f165、无迁移、du0920。实际回单更正同步本期对账，保留库存/补送及开票收款门禁。备份与只读验收通过，待管理员人工验收；见 docs/release_reports/FINANCE_INVOICE_DISPUTE473_20260921.md 及 NAS 独立回执。
 
 - 2026-09-21：v0.22.474 开票税务资料选填规则已技术发布（8e0e6e4b，du0920，无迁移），待人工验收；见 docs/release_reports/INVOICE_OPTIONAL_FIELDS_20260921_v474.md。
+
+- 2026-09-21：v0.22.476 对账、开票、收款待办闭环已技术发布（443344f3，du0920，无迁移），签名包 733c5b74；队列、导出确认、受控撤销和收款待办均已上线，待管理员人工验收；见 docs/release_reports/FINANCE_RECONCILIATION_INVOICE_PAYMENT_20260921_v476.md 及 NAS 独立回执。

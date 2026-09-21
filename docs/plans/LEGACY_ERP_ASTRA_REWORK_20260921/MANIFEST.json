@@ -1,6 +1,6 @@
 {
   "created": "2026-09-21",
-  "scope": "second_phase_rework_blocked_external",
+  "scope": "second_phase_rework_r03_factory_isolation_ready_browser_auth_pending",
   "baseline": {
     "initial_source_head": "ff58789ce4550d3d00bb01dbc26d0ffd0db7d495",
     "current_formal_baseline": "5c35bdba3ee91ce3471d484ba1a0af91a94dcf64",
@@ -9,7 +9,7 @@
     "formal_runtime_package": "b35b04d34675b1aaf64961d23469adca728c297b115d08387112e733426a842a",
     "formal_runtime_revision": "du0920",
     "review_status": "second_phase_blocked_external_not_ready_for_astra_completion_acceptance",
-    "blocked_reason": "R03 isolated Chrome interaction cannot start on factory host; R05 release is dependent on that required condition."
+    "blocked_reason": "R03 factory-isolated Chrome service is attested and open on loopback; administrator login is required before the remaining real two-account interaction, and R05 release depends on that condition."
   },
   "files": [
     {
@@ -22,15 +22,19 @@
     },
     {
       "path": "02_整改进度.md",
-      "sha256": "bb710ff7760105bf8753ca661d4e473408144431ea8fd3e561171fbd06ec9779"
+      "sha256": "f2f9fb73a9c827deb1115f49bd84342b47d9f8f026bcc59f0368b56e0ae0c62d"
     },
     {
       "path": "03_Astra二次验收交接.md",
-      "sha256": "156619d2643614ed237b77424b04baec381b230b9940bf6665ac912c94b224f8"
+      "sha256": "afbff4b8bc0cf4c31c169817bce98f357d2cfcc707906656634084d9df6dcfb4"
+    },
+    {
+      "path": "04_Astra阻塞复核.md",
+      "sha256": "d48129a9442be67664451d87318e3ede919ac6f4802227efdf99b4f97d503b35"
     },
     {
       "path": "R00_证据索引.md",
-      "sha256": "e1d273fc6e65cafbd4c67b4a7a245fcd7ee48491604a6f63ac2292578b2df195"
+      "sha256": "471a4e34098c3797a9c7b984fd039e872fcb9dfc7695ede71d2ccea9828a0f57"
     },
     {
       "path": "R01_执行证据.md",
@@ -42,7 +46,11 @@
     },
     {
       "path": "R03_执行证据.md",
-      "sha256": "fe25b13ddfe930674decffcba0a8129a892c7421b01f7e569cbd5c614491de25"
+      "sha256": "936ec5b10e53cbfead8255cc1e8e2f552b50db7901a8c7c863f66afe65a67367"
+    },
+    {
+      "path": "R03_工厂隔离启动证据.md",
+      "sha256": "6c83e155c3f0f143d625dbea15c9d841d600dbf971f529b678bf668067d76838"
     },
     {
       "path": "R04_执行证据.md",
@@ -66,7 +74,7 @@
     },
     {
       "path": "tasks/R03.md",
-      "sha256": "6c15398fa7dce1080bdcca678ada3e4fc126c1daae8e36c768d956abb8203547"
+      "sha256": "a6e02d9c2e9cd01cf99b93140867a4f96f66f8a03823490a6d12d2da0ca10176"
     },
     {
       "path": "tasks/R04.md",
@@ -74,11 +82,11 @@
     },
     {
       "path": "tasks/R05.md",
-      "sha256": "df445aac6a1c1a74f9d9876726f19ce6aa1c717b0bc732293886518e5c33ad47"
+      "sha256": "905e39d7eb51335985787f55bb4de0a7935b2e3aac47a6186ecb11f61a14b1ad"
     },
     {
       "path": "tasks/R06.md",
-      "sha256": "1f00b2ae21e10ed8a383c1ed6815d0e9c417d993758485209c5f7f04b68da695"
+      "sha256": "a0ebbca80b0dab112806f59c7510c7fce7bb37789a63866652bec016857340d6"
     }
   ],
   "supporting_code": [
@@ -109,6 +117,14 @@
     {
       "path": "tests/test_semi_finished_delivery_consumption.py",
       "sha256": "f973a0006b32621186d2c71454269f33a9c000be803a7ec821d96ca12fc6e261"
+    },
+    {
+      "path": "scripts/uat/prepare_r03_factory_uat.py",
+      "sha256": "fe17b7c541cd74e7f379024ec1a20de89ef1ee1a6db4a20f2b63215fd7c4556e"
+    },
+    {
+      "path": "scripts/windows/start_r03_factory_isolated_uat.ps1",
+      "sha256": "529649d6a6900e2b54de1c2a179977d3578ddd2c74499e82446b865307dc47ea"
     }
   ],
   "updated_at": "2026-09-21",

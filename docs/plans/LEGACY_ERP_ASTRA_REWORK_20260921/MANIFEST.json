@@ -66,19 +66,19 @@
     },
     {
       "path": "tasks/R03.md",
-      "sha256": "541d60167159ac9b2e6901aa9bc108fa56486c158d6e9a5e5730703ddf5f0f05"
+      "sha256": "6c15398fa7dce1080bdcca678ada3e4fc126c1daae8e36c768d956abb8203547"
     },
     {
       "path": "tasks/R04.md",
-      "sha256": "ef7af8c9858c4e5d7ac85ed7d64ad199c120df83cbd65a0aba93a77ed5f4793e"
+      "sha256": "f3d2c4dd49029fe7f4d046544a8852e64a823aa49fb0bde0aa194f0119db6258"
     },
     {
       "path": "tasks/R05.md",
-      "sha256": "d92ae225bcde07dadf84f04c73de244146d9fc3207d09eee07efc45359342a3d"
+      "sha256": "df445aac6a1c1a74f9d9876726f19ce6aa1c717b0bc732293886518e5c33ad47"
     },
     {
       "path": "tasks/R06.md",
-      "sha256": "740b9b007be1b790b1fbce7d40d2b0fa1e549d8efc2358cfa2152aabb96b6409"
+      "sha256": "fed9eb728f5f5690182ccde38ec29c1120ed7af688fcf7a22ebed98989b6cb23"
     }
   ],
   "supporting_code": [

@@ -1801,6 +1801,11 @@ def _statement_detail_response(
         )
         statement_items.append(data)
     statement_items.sort(key=lambda item: item["statement_item_id"])
+    source_customers = {
+        int(item["source_customer_id"]): str(item["source_customer_name"])
+        for item in statement_items
+        if item.get("source_customer_id") is not None and item.get("source_customer_name")
+    }
     return _redact_statement_costs(
         {
             "id": statement.id,
@@ -1811,6 +1816,10 @@ def _statement_detail_response(
             "source_customer_ids": sorted(
                 _statement_scope_customer_ids(db, statement)
             ),
+            "source_customers": [
+                {"id": customer_id, "name": customer_name}
+                for customer_id, customer_name in sorted(source_customers.items())
+            ],
             "statement_month": statement.statement_month,
             "total_receivable": statement.total_receivable,
             "total_gross_profit": statement.total_gross_profit,
@@ -1847,14 +1856,12 @@ def export_statement_excel(
     if row is None:
         raise HTTPException(status_code=404, detail="对账单不存在")
     statement, customer = row
-    require_customer_access(
-        statement.customer_id,
-        current_user=user,
-        db=db,
-        request=request,
-    )
+    _statement_for_user(db, statement.id, user)
+    source_customer = aliased(Customer)
+    settlement_name = statement.settlement_name_snapshot or customer.name
     lines = db.execute(
         select(
+            source_customer.name.label("source_customer_name"),
             Delivery.delivery_date,
             Delivery.delivery_number,
             func.coalesce(DeliveryItem.customer_po_snapshot, case(
@@ -1901,11 +1908,13 @@ def export_statement_excel(
             Product.id
             == func.coalesce(DeliveryItem.product_id, OrderItem.product_id),
         )
+        .outerjoin(source_customer, source_customer.id == StatementItem.source_customer_id)
         .where(StatementItem.statement_id == statement.id)
         .order_by(Delivery.delivery_date, Delivery.delivery_number)
     ).all()
     charge_lines = db.execute(
         select(
+            source_customer.name.label("source_customer_name"),
             Order.customer_po,
             CustomerCharge.display_name,
             StatementItem.charge_quantity_snapshot,
@@ -1919,6 +1928,7 @@ def export_statement_excel(
             CustomerCharge.id == StatementItem.customer_charge_id,
         )
         .join(Order, Order.id == CustomerCharge.order_id)
+        .outerjoin(source_customer, source_customer.id == StatementItem.source_customer_id)
         .where(StatementItem.statement_id == statement.id)
         .order_by(StatementItem.id)
     ).all()
@@ -1954,7 +1964,7 @@ def export_statement_excel(
     sheet["A1"].alignment = Alignment(horizontal="center")
     sheet.merge_cells(f"A2:{last_col}2")
     sheet["A2"] = (
-        f"客户：{customer.name}    月份：{statement.statement_month}    "
+        f"结算对象：{settlement_name}    月份：{statement.statement_month}    "
         f"对账单号：{statement.statement_number}"
     )
     sheet.merge_cells(f"A3:{last_col}3")
@@ -1998,7 +2008,7 @@ def export_statement_excel(
     for line in lines:
         sheet.append(
             [
-                customer.name,
+                line.source_customer_name or customer.name,
                 line.customer_po,
                 line.snapshot_product_code,
                 line.delivery_date,
@@ -2026,7 +2036,7 @@ def export_statement_excel(
     for line in charge_lines:
         sheet.append(
             [
-                customer.name,
+                line.source_customer_name or customer.name,
                 line.customer_po,
                 "",
                 "",
@@ -2059,10 +2069,49 @@ def export_statement_excel(
         sheet.column_dimensions[chr(64 + index)].width = width
     sheet.freeze_panes = "A6"
 
+    # Consolidated statements are sent to the settlement entity as one file.
+    # Keep a compact reconciliation summary before the source-customer detail
+    # so the partner can see both the total and every child's contribution.
+    if statement.settlement_entity_id is not None:
+        summary = workbook.create_sheet("汇总", 0)
+        summary.merge_cells("A1:C1")
+        summary["A1"] = "合作结算对账汇总"
+        summary["A1"].font = Font(size=16, bold=True)
+        summary["A2"] = "结算对象"
+        summary["B2"] = settlement_name
+        summary["A3"] = "账期"
+        summary["B3"] = statement.statement_month
+        summary["A5"] = "实际客户"
+        summary["B5"] = "金额"
+        summary["C5"] = "说明"
+        for cell in summary[5]:
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="DCE6F1")
+        amounts_by_source: dict[str, Decimal] = {}
+        for line in lines:
+            source_name = str(line.source_customer_name or customer.name)
+            amounts_by_source[source_name] = _money_value(
+                amounts_by_source.get(source_name, Decimal("0.00"))
+                + Decimal(str(line.receivable_amount))
+            )
+        for line in charge_lines:
+            source_name = str(line.source_customer_name or customer.name)
+            amounts_by_source[source_name] = _money_value(
+                amounts_by_source.get(source_name, Decimal("0.00"))
+                + Decimal(str(line.receivable_amount))
+            )
+        for source_name, amount in sorted(amounts_by_source.items()):
+            summary.append([source_name, float(amount), "明细见“月结对账单”"])
+        summary.append(["合计", float(statement.total_receivable), ""])
+        summary.column_dimensions["A"].width = 32
+        summary.column_dimensions["B"].width = 16
+        summary.column_dimensions["C"].width = 28
+        summary.freeze_panes = "A6"
+
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
-    abbr = _customer_abbr(customer.name)
+    abbr = _customer_abbr(settlement_name)
     raw_name = f"{abbr}{statement.statement_month}对账单.xlsx"
     filename = _safe_filename(raw_name)
     encoded = quote(filename, safe="")
@@ -2082,7 +2131,7 @@ def export_statement_excel(
         entity_id=statement.id,
         object_ref=statement.statement_number,
         customer_id=statement.customer_id,
-        customer_name=customer.name,
+        customer_name=settlement_name,
         description="导出月结对账单 Excel",
         details={
             "statement_month": statement.statement_month,
@@ -4993,6 +5042,7 @@ def current_customer_months(
     allowed_balance_types = {
         None,
         "pending_reconciliation",
+        "pending_confirmation",
         "pending_invoice",
         "pending_payment",
         "completed",
@@ -5017,6 +5067,7 @@ def current_customer_months(
     empty_counts = {
         "all_open": 0,
         "pending_reconciliation": 0,
+        "pending_confirmation": 0,
         "pending_invoice": 0,
         "pending_payment": 0,
         "completed": 0,
@@ -5042,6 +5093,86 @@ def current_customer_months(
         else [selected_month]
     )
 
+    # A workbench row represents the party that settles the bill, rather than
+    # the (possibly different) customer on each delivery.  Pending deliveries
+    # use the confirmed master-data relationship; existing statements use their
+    # frozen settlement fields below so later master-data changes cannot
+    # reinterpret history.
+    settlement_rows = db.execute(
+        select(
+            CustomerInvoiceProfile.customer_id,
+            FinanceSettlementEntity.id,
+            FinanceSettlementEntity.entity_name,
+            FinanceSettlementEntity.statement_cycle_start_day,
+        )
+        .join(
+            FinanceSettlementEntity,
+            FinanceSettlementEntity.id == CustomerInvoiceProfile.settlement_entity_id,
+        )
+        .where(
+            CustomerInvoiceProfile.is_enabled.is_(True),
+            CustomerInvoiceProfile.confirmation_status == "confirmed",
+            FinanceSettlementEntity.is_enabled.is_(True),
+            FinanceSettlementEntity.confirmation_status == "confirmed",
+        )
+    ).all()
+    active_settlement_by_customer = {
+        int(customer_id): (int(entity_id), str(entity_name), int(cycle_day))
+        for customer_id, entity_id, entity_name, cycle_day in settlement_rows
+    }
+    members_by_entity: dict[int, set[int]] = {}
+    for customer_id, entity_id, _entity_name, _cycle_day in settlement_rows:
+        members_by_entity.setdefault(int(entity_id), set()).add(int(customer_id))
+
+    # A scoped user may see an individual member but must not receive a
+    # misleading "complete" partner statement.  Such a group remains absent
+    # until all its source customers are within the user's customer scope.
+    permitted_settlement_ids = {
+        entity_id
+        for entity_id, member_ids in members_by_entity.items()
+        if visible_customer_ids is None or member_ids.issubset(visible_customer_ids)
+    }
+
+    def settlement_identity(
+        source_customer_id: int,
+        row_month: str,
+        *,
+        frozen_entity_id: int | None = None,
+        frozen_name: str | None = None,
+        frozen_member_ids: set[int] | None = None,
+    ) -> tuple[tuple[str, int, str], int | None, str, set[int], int]:
+        """Return stable workbench identity and its complete source scope."""
+
+        if frozen_entity_id is not None:
+            member_ids = frozen_member_ids or _statement_scope_customer_ids_by_entity.get(
+                frozen_entity_id, {source_customer_id}
+            )
+            return (
+                ("entity", int(frozen_entity_id), row_month),
+                int(frozen_entity_id),
+                str(frozen_name or active_entity_names.get(frozen_entity_id) or "结算对象"),
+                member_ids,
+                min(member_ids),
+            )
+        active = active_settlement_by_customer.get(source_customer_id)
+        if active is not None and active[0] in permitted_settlement_ids:
+            entity_id, entity_name, _cycle_day = active
+            member_ids = members_by_entity[entity_id]
+            return (("entity", entity_id, row_month), entity_id, entity_name, member_ids, min(member_ids))
+        return (("customer", source_customer_id, row_month), None, "", {source_customer_id}, source_customer_id)
+
+    # Statement snapshots can reference members whose present-day relationship
+    # changed.  Keep each historical statement at its frozen settlement entity
+    # and use its own source-item scope when available.
+    _statement_scope_customer_ids_by_entity: dict[int, set[int]] = {
+        entity_id: set(member_ids)
+        for entity_id, member_ids in members_by_entity.items()
+    }
+    active_entity_names = {
+        entity_id: entity_name
+        for _customer_id, entity_id, entity_name, _cycle_day in settlement_rows
+    }
+
     def new_group(
         *,
         row_customer_id: int,
@@ -5054,6 +5185,10 @@ def current_customer_months(
         return {
             "customer_id": row_customer_id,
             "customer_name": customer_name,
+            "settlement_entity_id": None,
+            "settlement_name": customer_name,
+            "source_customer_ids": {row_customer_id},
+            "source_customers": {row_customer_id: customer_name},
             "statement_month": row_month,
             "statement_cycle_start_day": cycle_day,
             "period_start": period_start,
@@ -5079,7 +5214,7 @@ def current_customer_months(
             "statements": [],
         }
 
-    grouped: dict[tuple[int, str], dict] = {}
+    grouped: dict[tuple[str, int, str], dict] = {}
     for scope_month in scope_months:
         try:
             pending_rows = pending_statement_customer_summaries(
@@ -5091,18 +5226,24 @@ def current_customer_months(
             raise HTTPException(status_code=400, detail=str(error)) from error
         for pending in pending_rows:
             pending_customer_id = int(pending["customer_id"])
-            key = (pending_customer_id, scope_month)
+            key, entity_id, entity_name, member_ids, representative_id = settlement_identity(
+                pending_customer_id, scope_month
+            )
             group = grouped.setdefault(
                 key,
                 new_group(
-                    row_customer_id=pending_customer_id,
-                    customer_name=str(pending["customer_name"]),
+                    row_customer_id=representative_id,
+                    customer_name=(entity_name or str(pending["customer_name"])),
                     row_month=scope_month,
                     cycle_day=int(pending["statement_cycle_start_day"] or 1),
                     period_start=pending["period_start"],
                     period_end=pending["period_end"],
                 ),
             )
+            group["settlement_entity_id"] = entity_id
+            group["settlement_name"] = entity_name or str(pending["customer_name"])
+            group["source_customer_ids"].update(member_ids if entity_id is not None else {pending_customer_id})
+            group["source_customers"][pending_customer_id] = str(pending["customer_name"])
             group["pending_reconciliation_count"] += int(pending["pending_count"] or 0)
             group["blocked_reconciliation_count"] += int(pending["blocked_count"] or 0)
             group["missing_price_count"] += int(pending.get("missing_price_count", 0))
@@ -5118,6 +5259,9 @@ def current_customer_months(
             Statement.id,
             Statement.statement_number,
             Statement.customer_id,
+            Statement.settlement_entity_id,
+            Statement.settlement_name_snapshot,
+            Statement.settlement_customer_ids_snapshot_json,
             Customer.name.label("customer_name"),
             Customer.statement_cycle_start_day,
             Statement.statement_month,
@@ -5141,8 +5285,36 @@ def current_customer_months(
         statement_query = statement_query.where(
             Statement.customer_id.in_(visible_customer_ids)
         )
+        unauthorized_source = (
+            select(StatementItem.id)
+            .where(
+                StatementItem.statement_id == Statement.id,
+                StatementItem.source_customer_id.is_not(None),
+                StatementItem.source_customer_id.not_in(visible_customer_ids),
+            )
+            .exists()
+        )
+        statement_query = statement_query.where(~unauthorized_source)
     statement_rows = db.execute(statement_query).mappings().all()
     statement_ids = [int(row["id"]) for row in statement_rows]
+    statement_source_ids: dict[int, set[int]] = {}
+    statement_source_names: dict[int, dict[int, str]] = {}
+    if statement_ids:
+        for statement_id, source_customer_id, source_customer_name in db.execute(
+            select(
+                StatementItem.statement_id,
+                func.coalesce(StatementItem.source_customer_id, Statement.customer_id),
+                Customer.name,
+            )
+            .join(Statement, Statement.id == StatementItem.statement_id)
+            .join(
+                Customer,
+                Customer.id == func.coalesce(StatementItem.source_customer_id, Statement.customer_id),
+            )
+            .where(StatementItem.statement_id.in_(statement_ids))
+        ).all():
+            statement_source_ids.setdefault(int(statement_id), set()).add(int(source_customer_id))
+            statement_source_names.setdefault(int(statement_id), {})[int(source_customer_id)] = str(source_customer_name)
     adjustment_actions_by_statement: dict[int, set[str]] = {}
     task_statuses_by_statement: dict[int, list[str]] = {}
     if statement_ids:
@@ -5178,17 +5350,47 @@ def current_customer_months(
         row_month = str(statement["statement_month"])
         cycle_day = int(statement["statement_cycle_start_day"] or 1)
         period_start, period_end = _statement_period(row_month, cycle_day)
-        key = (statement_customer_id, row_month)
+        frozen_entity_id = statement["settlement_entity_id"]
+        frozen_member_ids = statement_source_ids.get(int(statement["id"]))
+        if not frozen_member_ids and statement["settlement_customer_ids_snapshot_json"]:
+            try:
+                frozen_member_ids = {
+                    int(value)
+                    for value in json.loads(
+                        statement["settlement_customer_ids_snapshot_json"]
+                    )
+                    if isinstance(value, int) or str(value).isdigit()
+                }
+            except (TypeError, ValueError, json.JSONDecodeError):
+                # Corrupt legacy snapshots fall back to the frozen statement
+                # representative; they must never be reinterpreted from a
+                # customer's present-day cooperation setting.
+                frozen_member_ids = None
+        key, entity_id, entity_name, member_ids, representative_id = settlement_identity(
+            statement_customer_id,
+            row_month,
+            frozen_entity_id=(int(frozen_entity_id) if frozen_entity_id is not None else None),
+            frozen_name=statement["settlement_name_snapshot"],
+            frozen_member_ids=frozen_member_ids,
+        )
         group = grouped.setdefault(
             key,
             new_group(
-                row_customer_id=statement_customer_id,
-                customer_name=str(statement["customer_name"]),
+                row_customer_id=representative_id,
+                customer_name=(entity_name or str(statement["customer_name"])),
                 row_month=row_month,
                 cycle_day=cycle_day,
                 period_start=period_start,
                 period_end=period_end,
             ),
+        )
+        group["settlement_entity_id"] = entity_id
+        group["settlement_name"] = entity_name or str(statement["customer_name"])
+        group["source_customer_ids"].update(member_ids if entity_id is not None else {statement_customer_id})
+        group["source_customers"].update(
+            statement_source_names.get(
+                int(statement["id"]), {statement_customer_id: str(statement["customer_name"])}
+            )
         )
         receivable = _money_value(statement["total_receivable"])
         # Older settled bills can predate the ERP confirmation field. Preserve
@@ -5322,6 +5524,7 @@ def current_customer_months(
             has_reconciliation or has_invoice or has_invoice_task or has_payment
         ) and all(is_completed_statement(statement) for statement in group["statements"])
         group["has_pending_reconciliation"] = has_reconciliation
+        group["has_pending_confirmation"] = group["pending_confirmation_count"] > 0
         group["has_pending_invoice"] = has_invoice
         group["has_pending_invoice_task"] = has_invoice_task
         group["has_pending_payment"] = has_payment
@@ -5347,10 +5550,12 @@ def current_customer_months(
             else "已完成"
         )
         count_in_current_customer_scope = (
-            customer_id is None or int(group["customer_id"]) == customer_id
+            customer_id is None or customer_id in group["source_customer_ids"]
         )
         if has_reconciliation and count_in_current_customer_scope:
             queue_customer_ids["pending_reconciliation"].add(group["customer_id"])
+        if group["has_pending_confirmation"] and count_in_current_customer_scope:
+            queue_customer_ids["pending_confirmation"].add(group["customer_id"])
         if has_invoice and count_in_current_customer_scope:
             queue_customer_ids["pending_invoice"].add(group["customer_id"])
         if has_payment and count_in_current_customer_scope:
@@ -5381,12 +5586,14 @@ def current_customer_months(
         all_groups.append(group)
 
     def includes_requested_queue(group: dict) -> bool:
-        if customer_id is not None and int(group["customer_id"]) != customer_id:
+        if customer_id is not None and customer_id not in group["source_customer_ids"]:
             return False
         if balance_type is None:
             return not group["is_completed"]
         if balance_type == "pending_reconciliation":
             return group["has_pending_reconciliation"]
+        if balance_type == "pending_confirmation":
+            return group["has_pending_confirmation"]
         if balance_type == "pending_invoice":
             return group["has_pending_invoice"]
         if balance_type == "pending_payment":
@@ -5394,8 +5601,9 @@ def current_customer_months(
         return group["has_completed"]
 
     customer_options_by_id = {
-        int(group["customer_id"]): str(group["customer_name"])
+        int(customer_id): str(customer_name)
         for group in all_groups
+        for customer_id, customer_name in group["source_customers"].items()
     }
     customer_options = [
         {"id": source_customer_id, "name": customer_name}
@@ -5404,11 +5612,20 @@ def current_customer_months(
         )
     ]
     items = [group for group in all_groups if includes_requested_queue(group)]
+    for group in all_groups:
+        group["source_customer_ids"] = sorted(group["source_customer_ids"])
+        group["source_customers"] = [
+            {"id": customer_id, "name": customer_name}
+            for customer_id, customer_name in sorted(group["source_customers"].items())
+        ]
+        group["source_customer_count"] = len(group["source_customer_ids"])
     # A customer/month may contain several stages. Show only the bills in the
     # selected queue; counts above still describe all queues in the same scope.
     if balance_type is not None:
         def matches_queue(statement: dict) -> bool:
             if balance_type == "pending_reconciliation":
+                return statement["confirmation_status"] != "confirmed" and not statement["financially_completed"]
+            if balance_type == "pending_confirmation":
                 return statement["confirmation_status"] != "confirmed" and not statement["financially_completed"]
             if balance_type == "pending_invoice":
                 return statement["pending_invoice_amount"] > 0 and not statement["invoice_task_pending"]
@@ -5428,8 +5645,8 @@ def current_customer_months(
                 group["pending_reconciliation_amount"] = Decimal("0.00")
                 group["pending_confirmation_amount"] = Decimal("0.00")
                 group["primary_action_blocked"] = False
-                group["primary_action"] = {"pending_invoice": "invoice", "pending_payment": "payment", "completed": "completed"}[balance_type]
-                group["queue_status"] = ("部分收款" if group["settled_amount"] > 0 else "待收款") if balance_type == "pending_payment" else ("待开票" if balance_type == "pending_invoice" else "已完成")
+                group["primary_action"] = {"pending_confirmation": "reconcile", "pending_invoice": "invoice", "pending_payment": "payment", "completed": "completed"}[balance_type]
+                group["queue_status"] = ("部分收款" if group["settled_amount"] > 0 else "待收款") if balance_type == "pending_payment" else ("待确认" if balance_type == "pending_confirmation" else ("待开票" if balance_type == "pending_invoice" else "已完成"))
                 group["is_completed"] = balance_type == "completed"
     items.sort(
         key=lambda row: (

@@ -5190,7 +5190,7 @@
                   <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
                     <div class="field" style="width:170px"><label>对账月份（可不选）</label><input class="input" type="month" v-model="financeFilters.statement_month" @change="onFinanceMonthChange" /></div>
                     <div class="field" style="width:240px"><label>客户</label><search-select v-model="financeFilters.customer_id" :options="financeCurrentCustomerOptions" label-key="name" value-key="id" placeholder="全部" :allow-empty="true" @change="reloadFinanceCurrent"></search-select></div>
-                    <div class="field" style="width:145px"><label>只看</label><select class="select" v-model="financeFilters.balance_type" @change="reloadFinanceCurrent"><option value="">全部待办</option><option value="pending_reconciliation">待对账</option><option value="pending_invoice">待开票</option><option value="pending_payment">待收款</option><option value="completed">已完成</option></select></div>
+                    <div class="field" style="width:145px"><label>只看</label><select class="select" v-model="financeFilters.balance_type" @change="reloadFinanceCurrent"><option value="">全部待办</option><option value="pending_reconciliation">待对账</option><option value="pending_confirmation">待确认</option><option value="pending_invoice">待开票</option><option value="pending_payment">待收款</option><option value="completed">已完成</option></select></div>
                     <div class="field" style="width:155px"><label>导出排序</label><select class="select" v-model="financeStatementSort"><option value="business">送货日期顺序</option><option value="order_number">订单号从小到大</option></select></div>
                   </div>
                   <div class="toolbar-group">
@@ -5219,7 +5219,7 @@
                   <tbody v-for="row in financeCurrentRows" :key="financeGroupKey(row)">
                     <tr>
                       <td><button class="btn small" @click="toggleFinanceCurrentGroup(row)">{{ financeCurrentExpanded[financeGroupKey(row)] ? '收起' : '展开' }}</button></td>
-                      <td><strong>{{ row.customer_name }}</strong><div class="muted">{{ row.statement_count }} 张对账单</div></td>
+                      <td><strong>{{ row.settlement_name || row.customer_name }}</strong><div v-if="row.settlement_entity_id" class="muted">合作结算 · {{ row.source_customer_count }} 个子客户</div><div v-else class="muted">{{ row.statement_count }} 张对账单</div></td>
                       <td>{{ row.statement_month }}<div class="muted">{{ row.period_start }} 至 {{ row.period_end }}</div></td>
                       <td class="sensitive-price"><strong v-if="row.missing_price_count">金额待核定</strong><strong v-else>¥ {{ money(row.pending_reconciliation_amount) }}</strong><div v-if="row.missing_price_count" class="status orange">{{ row.missing_price_count }} 条明细待补价</div><div class="muted">已对账 ¥ {{ money(row.reconciled_receivable_amount) }}</div></td>
                       <td class="sensitive-price"><strong>¥ {{ money(row.pending_invoice_amount) }}</strong><div class="muted">已开票 ¥ {{ money(row.invoiced_amount) }}</div></td>
@@ -5229,13 +5229,13 @@
                         <span v-if="row.status_anomaly_count" class="status red">状态需核对</span>
                         <button v-if="row.primary_action!=='completed'" class="btn small primary" @click="runFinancePrimaryAction(row)">{{ financePrimaryActionLabel(row) }}</button><div v-if="row.primary_action_blocked" class="muted">{{ row.missing_price_count ? "缺少单价，点击查看送货明细" : "先处理旧对账单" }}</div></td>
                     </tr>
-                    <tr v-if="financeCurrentExpanded[financeGroupKey(row)]"><td colspan="7" style="padding:8px 12px;background:#f8fafc"><div class="workspace-dialog-mask" @click.self="financeCurrentExpanded[financeGroupKey(row)]=false" @keydown.esc.stop="financeCurrentExpanded[financeGroupKey(row)]=false"><section class="workspace-dialog" role="dialog" aria-modal="true" aria-label="客户账单"><div class="toolbar"><strong>{{row.customer_name}} · {{row.statement_month}}</strong><button class="btn small workspace-dialog-close" @click="financeCurrentExpanded[financeGroupKey(row)]=false">关闭</button></div>
+                    <tr v-if="financeCurrentExpanded[financeGroupKey(row)]"><td colspan="7" style="padding:8px 12px;background:#f8fafc"><div class="workspace-dialog-mask" @click.self="financeCurrentExpanded[financeGroupKey(row)]=false" @keydown.esc.stop="financeCurrentExpanded[financeGroupKey(row)]=false"><section class="workspace-dialog" role="dialog" aria-modal="true" aria-label="客户账单"><div class="toolbar"><strong>{{row.settlement_name || row.customer_name}} · {{row.statement_month}}</strong><button class="btn small workspace-dialog-close" @click="financeCurrentExpanded[financeGroupKey(row)]=false">关闭</button></div><div v-if="row.settlement_entity_id" class="notice">统一对账对象：{{ row.settlement_name }}。下列子客户的送货和回单保留原客户身份；请选择一个子客户后再修改其明细。</div><div v-if="row.source_customers?.length" class="toolbar-group" style="margin:8px 0"><span v-for="source in row.source_customers" :key="source.id" class="status blue">{{ source.name }}</span></div>
                       <button v-if="row.pending_reconciliation_count || row.blocked_reconciliation_count" class="btn primary" @click="financeCurrentExpanded[financeGroupKey(row)]=false; openStatement(row.statement_month,row.customer_id)">查看待生成送货明细</button><div v-if="!row.statements.length" class="muted">尚未生成对账单，请点击“去对账”。</div>
                       <div v-else class="table-wrap"><table :data-workspace-list="'finance-detail-0'+':'+financeGroupKey(row)"><thead><tr><th>对账单号</th><th class="sensitive-price">对账金额</th><th class="sensitive-price">待开票</th><th>状态</th><th>操作</th></tr></thead><tbody>
                         <tr v-for="statement in localRows(row.statements,'finance-detail-0'+':'+financeGroupKey(row))" :key="statement.id">
-                          <td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td>
+                          <td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a><div v-if="row.settlement_entity_id" class="muted">{{ statement.customer_name }}</div></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td>
                           <td><span v-if="statement.dispute_pending" class="status orange">异议待修改</span><span v-else-if="statement.task_void_pending" class="status orange">待修改</span><span v-else-if="statement.invoice_task_pending" class="status blue">开票处理中</span><span v-else-if="statement.invoice_status==='invoiced'" class="status green">已开票</span><status-tag v-else :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div></td>
-                          <td class="toolbar-group"><button v-if="canConfirmStatement && !statement.financially_completed && statement.confirmation_status!=='confirmed'" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="exportAndConfirmStatement(statement)">{{ financeStatementOperationState.action==='export_confirm' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '确认中…' : '导出并确认' }}</button><button v-else-if="canGenerateInvoiceTask && statement.confirmation_status==='confirmed' && !statement.invoice_task_pending && Number(statement.pending_invoice_amount)>0" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button v-if="canFinance && Number(statement.pending_payment_action_amount)>0" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementSettlement(statement)">确认收款</button><button class="btn small" @click="exportStatement(statement,'xlsx')">仅导出</button><button class="btn small" @click="openCustomerStatementCheck(statement)">核对客户Excel</button><button class="btn small" @click="exportStatement(statement,'pdf')">PDF</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementDispute(statement)">{{ statement.confirmation_status==='confirmed' ? '客户异议' : '调整' }}</button></td>
+                          <td class="toolbar-group"><button v-if="statement.confirmation_status!=='confirmed'" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="exportStatement(statement,'xlsx')">导出对账单</button><button v-if="canConfirmStatement && canGenerateInvoiceTask && !statement.financially_completed && statement.confirmation_status!=='confirmed'" class="btn small" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statement)">{{ financeStatementOperationState.action==='confirm_download' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '办理中…' : '确认并下载开票文件' }}</button><button v-else-if="canGenerateInvoiceTask && statement.confirmation_status==='confirmed' && !statement.invoice_task_pending && Number(statement.pending_invoice_amount)>0" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button v-if="canFinance && Number(statement.pending_payment_action_amount)>0" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementSettlement(statement)">确认收款</button><button class="btn small" @click="openCustomerStatementCheck(statement)">核对客户Excel</button><button class="btn small" @click="exportStatement(statement,'pdf')">PDF</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementDispute(statement)">{{ statement.confirmation_status==='confirmed' ? '客户异议' : '调整' }}</button></td>
                         </tr>
                       </tbody></table></div><local-pager :rows="row.statements" :list-key="'finance-detail-0'+':'+financeGroupKey(row)"></local-pager>
                     </section></div></td></tr>
@@ -9408,10 +9408,11 @@
                 <button class="btn" @click="exportStatement(statementDetail,'pdf')">导出 PDF</button>
                 <button v-if="canFinance" class="btn" @click="openStatementDispute(statementDetail)">{{ statementDetail.confirmation_status==='confirmed' ? '客户异议' : '调整明细' }}</button>
               </div>
+              <div v-if="statementDetail.source_customers?.length>1" class="toolbar-group" style="margin:10px 0"><span class="muted">子客户明细：</span><button :class="['btn small',{primary:!statementEditSourceCustomerId}]" @click="statementEditSourceCustomerId=null">全部</button><button v-for="source in statementDetail.source_customers" :key="source.id" :class="['btn small',{primary:Number(statementEditSourceCustomerId)===Number(source.id)}]" @click="statementEditSourceCustomerId=source.id">{{ source.name }}</button></div>
               <table>
                 <thead>
                   <tr>
-                    <th>送货日期</th>
+                    <th>实际客户</th><th>送货日期</th>
                     <th>送货单</th>
                     <th>客户单号</th>
                     <th>存货编码</th>
@@ -9422,7 +9423,8 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="item in statementDetail.items" :key="item.statement_item_id">
+                  <tr v-for="item in statementDetail.items.filter(item=>!statementEditSourceCustomerId || Number(item.source_customer_id)===Number(statementEditSourceCustomerId))" :key="item.statement_item_id">
+                    <td>{{ item.source_customer_name || '-' }}</td>
                     <td>{{ item.source_type==='customer_charge' ? '-' : item.delivery_date || item.actual_received_date }}</td>
                     <td>{{ item.delivery_number || '-' }}</td>
                     <td><order-reference :row="item"></order-reference></td>
@@ -9451,10 +9453,11 @@
             <div v-else-if="modal.type === 'statementDispute' && statementDetail">
               <div class="notice">客户异议后可撤销确认，修改本期单价、通过“更正回单数量”纠正实际签收数量，或选择部分明细顺延。回单保存后同步重算本期对账，短收和超收仍须选择处理方式。保存后重新导出核对、再次确认，本月即可开票。已开票或已收款的账单须先走受控处理。</div>
               <div class="form-grid" style="margin-top:10px"><div class="field wide"><label>客户异议原因 *</label><input class="input" v-model.trim="statementDisputeForm.reason" placeholder="例如：双方核对后更正单价，或部分明细下月对账" /></div><div class="field"><label>移至月份</label><input class="input" type="month" v-model="statementDisputeForm.target_month" /></div></div>
+              <div v-if="statementDetail.source_customers?.length>1" class="toolbar-group" style="margin-top:10px"><span class="muted">先选择要修改的子客户：</span><button v-for="source in statementDetail.source_customers" :key="source.id" :class="['btn small',{primary:Number(statementEditSourceCustomerId)===Number(source.id)}]" @click="statementEditSourceCustomerId=source.id">{{ source.name }}</button></div><div v-if="statementDetail.source_customers?.length>1 && !statementEditSourceCustomerId" class="notice warning">请选择一个子客户后再调整，系统不会把多个子客户的可编辑明细混在一起。</div>
               <div class="section-title" style="margin-top:12px">本期明细（勾选才移出，未勾选继续本月对账）</div>
-              <div class="table-wrap"><table><thead><tr><th>选择</th><th>送货单</th><th>客户单号</th><th>存货编码 / 产品</th><th>数量</th><th class="sensitive-price">金额</th></tr></thead><tbody><tr v-for="item in statementDetail.items.filter(row=>row.source_type==='delivery')" :key="`remove-${item.statement_item_id}`"><td><input type="checkbox" v-model="statementDisputeForm.remove[item.statement_item_id]" /></td><td>{{ item.delivery_number }}</td><td><order-reference :row="item"></order-reference></td><td>{{ item.product_code || '-' }} / {{ item.product_name || '-' }}</td><td>{{ item.actual_received_quantity }} <button class="btn small" :disabled="statementDisputeState.saving" @click="openDisputeReceipt(item)">更正回单数量</button></td><td class="sensitive-price"><label>对账单价<input class="input" type="number" min="0" step="0.0001" :disabled="statementDisputeForm.remove[item.statement_item_id]" v-model="statementDisputeForm.edits[item.statement_item_id].unit_price" /></label><span class="muted">原金额 ¥ {{ money(item.receivable_amount) }}</span></td></tr></tbody></table></div>
+              <div class="table-wrap"><table><thead><tr><th>选择</th><th>送货单</th><th>客户单号</th><th>存货编码 / 产品</th><th>数量</th><th class="sensitive-price">金额</th></tr></thead><tbody><tr v-for="item in statementDetail.items.filter(row=>row.source_type==='delivery' && (!statementDetail.source_customers?.length || Number(statementDetail.source_customers.length)<=1 || Number(row.source_customer_id)===Number(statementEditSourceCustomerId)))" :key="`remove-${item.statement_item_id}`"><td><input type="checkbox" v-model="statementDisputeForm.remove[item.statement_item_id]" /></td><td>{{ item.delivery_number }}</td><td><order-reference :row="item"></order-reference></td><td>{{ item.product_code || '-' }} / {{ item.product_name || '-' }}</td><td>{{ item.actual_received_quantity }} <button class="btn small" :disabled="statementDisputeState.saving" @click="openDisputeReceipt(item)">更正回单数量</button></td><td class="sensitive-price"><label>对账单价<input class="input" type="number" min="0" step="0.0001" :disabled="statementDisputeForm.remove[item.statement_item_id]" v-model="statementDisputeForm.edits[item.statement_item_id].unit_price" /></label><span class="muted">原金额 ¥ {{ money(item.receivable_amount) }}</span></td></tr></tbody></table></div>
               <div class="section-title" style="margin-top:12px">补入以前遗漏</div>
-              <div v-if="statementDisputeState.loading" class="empty">正在读取可补入明细…</div><div v-else-if="!statementDisputeCandidates.length" class="empty">没有已回单且尚未进入其他对账单的历史明细。</div><div v-else class="table-wrap"><table><thead><tr><th>选择</th><th>原归属月</th><th>送货单</th><th>客户单号</th><th>存货编码 / 产品</th><th>数量</th></tr></thead><tbody><tr v-for="item in statementDisputeCandidates" :key="`add-${item.return_receipt_item_id}`"><td><input type="checkbox" v-model="statementDisputeForm.add[item.return_receipt_item_id]" /></td><td>{{ item.effective_reconciliation_month }}</td><td>{{ item.delivery_number }}</td><td><order-reference :row="item"></order-reference></td><td>{{ item.product_code || '-' }} / {{ item.product_name || '-' }}</td><td>{{ item.actual_received_quantity }}</td></tr></tbody></table></div>
+              <div v-if="statementDisputeState.loading" class="empty">正在读取可补入明细…</div><div v-else-if="!statementDisputeCandidates.length" class="empty">没有已回单且尚未进入其他对账单的历史明细。</div><div v-else class="table-wrap"><table><thead><tr><th>选择</th><th>原归属月</th><th>送货单</th><th>客户单号</th><th>存货编码 / 产品</th><th>数量</th></tr></thead><tbody><tr v-for="item in statementDisputeCandidates.filter(row=>!statementDetail.source_customers?.length || Number(statementDetail.source_customers.length)<=1 || Number(row.source_customer_id)===Number(statementEditSourceCustomerId))" :key="`add-${item.return_receipt_item_id}`"><td><input type="checkbox" v-model="statementDisputeForm.add[item.return_receipt_item_id]" /></td><td>{{ item.effective_reconciliation_month }}</td><td>{{ item.delivery_number }}</td><td><order-reference :row="item"></order-reference></td><td>{{ item.product_code || '-' }} / {{ item.product_name || '-' }}</td><td>{{ item.actual_received_quantity }}</td></tr></tbody></table></div>
               <div class="toolbar-group" style="justify-content:flex-end;margin-top:12px"><button v-if="statementDetail.confirmation_status==='confirmed'" class="btn" :disabled="statementDisputeState.saving" @click="reopenStatementDispute">仅撤销确认</button><button class="btn primary" :disabled="statementDisputeState.saving" @click="saveStatementDispute">{{ statementDisputeState.saving ? '保存中…' : (statementDetail.confirmation_status==='confirmed' ? '撤销确认并保存调整' : '保存本期调整') }}</button></div>
             </div>
             <div v-else-if="modal.type === 'password'" class="form-grid">
@@ -9789,7 +9792,8 @@
           </div>
           <div v-if="!['product','orderPdfImport'].includes(modal?.type)" class="modal-foot">
             <button v-if="!isForcedPassword && modal?.type!=='statementDetail'" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
-            <button v-if="modal?.type==='statementDetail' && statementDetail?.confirmation_status!=='confirmed' && canConfirmStatement" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="exportAndConfirmStatement(statementDetail)">{{ financeStatementOperationState.action==='export_confirm' ? '导出并确认中…' : '导出并确认' }}</button>
+            <button v-if="modal?.type==='statementDetail' && statementDetail?.confirmation_status!=='confirmed'" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="exportStatement(statementDetail,'xlsx')">导出对账单</button>
+            <button v-if="modal?.type==='statementDetail' && statementDetail?.confirmation_status!=='confirmed' && canConfirmStatement && canGenerateInvoiceTask" class="btn" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statementDetail)">{{ financeStatementOperationState.action==='confirm_download' ? '确认并下载中…' : '确认并下载开票文件' }}</button>
             <button v-else-if="modal?.type==='statementDetail'" class="btn primary" @click="exportStatement(statementDetail,'xlsx')">重新导出 Excel</button>
             <button v-if="modal?.type==='statementSettlement'" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="saveStatementSettlement">{{ financeStatementOperationState.action==='settle' ? '确认中…' : '确认收款' }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
@@ -10611,10 +10615,10 @@
             financeOverview: { trend:[], payable_aging:{}, expense_structure:[], cost_coverage:{covered_lines:0,total_lines:0,coverage_rate:0,covered_revenue:0,material_gross_profit_reference:0,label:"材料毛利参考"}, workbench_summary:{}, cost_pool:{status_totals:{},close_ready:false,blockers:[]}, collection_note:"" },
             financeOverviewState: { loading:false, exporting:false, error:"" }, financeOverviewDetailsVisible:false, financeCostDetailsVisible:false,
             financeStatementSort: "business",
-            financeFilters: { statement_month:"", balance_type:"", customer_id:"" }, financeQueueTabs:[{key:"",countKey:"all_open",label:"全部待办"},{key:"pending_reconciliation",countKey:"pending_reconciliation",label:"待对账"},{key:"pending_invoice",countKey:"pending_invoice",label:"待开票"},{key:"pending_payment",countKey:"pending_payment",label:"待收款"},{key:"completed",countKey:"completed",label:"已完成"}],
-            financeCurrentRows: [], financeCurrentTotal: 0, financeCurrentSummary: {}, financeCurrentCustomerOptions: [], financeCurrentQueueCounts:{all_open:0,pending_reconciliation:0,pending_invoice:0,pending_payment:0,completed:0}, financeCurrentRequestId:0,
+            financeFilters: { statement_month:"", balance_type:"", customer_id:"" }, financeQueueTabs:[{key:"",countKey:"all_open",label:"全部待办"},{key:"pending_reconciliation",countKey:"pending_reconciliation",label:"待对账"},{key:"pending_confirmation",countKey:"pending_confirmation",label:"待确认"},{key:"pending_invoice",countKey:"pending_invoice",label:"待开票"},{key:"pending_payment",countKey:"pending_payment",label:"待收款"},{key:"completed",countKey:"completed",label:"已完成"}],
+            financeCurrentRows: [], financeCurrentTotal: 0, financeCurrentSummary: {}, financeCurrentCustomerOptions: [], financeCurrentQueueCounts:{all_open:0,pending_reconciliation:0,pending_confirmation:0,pending_invoice:0,pending_payment:0,completed:0}, financeCurrentRequestId:0,
             financeCurrentState: { loading:false, error:"", loaded:false }, financeCurrentExpanded: {},
-            financeSettlementForm:{statement:null,amount:"",settlement_date:today(),account:""},
+            financeSettlementForm:{statement:null,amount:"",settlement_date:today(),account:""}, statementEditSourceCustomerId:null,
             financeSettledFilters: { year:month().slice(0,4), statement_month:"", customer_id:"", statement_number:"", invoice_number:"", settlement_date_from:"", settlement_date_to:"" },
             financeSettledRows: [], financeSettledTotal: 0, financeSettledSummary: {},
             financeSettledState: { loading:false, error:"", loaded:false }, financeSettledExpanded: {},
@@ -22769,7 +22773,7 @@
               this.financeCustomersTotal = this.financeCurrentTotal;
               this.financeCurrentSummary = data.summary || {};
               this.financeCurrentCustomerOptions = data.customer_options || [];
-              this.financeCurrentQueueCounts = data.queue_counts || {all_open:0,pending_reconciliation:0,pending_invoice:0,pending_payment:0,completed:0};
+              this.financeCurrentQueueCounts = data.queue_counts || {all_open:0,pending_reconciliation:0,pending_confirmation:0,pending_invoice:0,pending_payment:0,completed:0};
               this.financeCurrentState.loaded = true;
               return true;
             } catch (error) {
@@ -22778,7 +22782,7 @@
               this.financeCustomersTotal = 0;
               this.financeCurrentSummary = {};
               this.financeCurrentCustomerOptions = [];
-              this.financeCurrentQueueCounts = {all_open:0,pending_reconciliation:0,pending_invoice:0,pending_payment:0,completed:0};
+              this.financeCurrentQueueCounts = {all_open:0,pending_reconciliation:0,pending_confirmation:0,pending_invoice:0,pending_payment:0,completed:0};
               this.financeCurrentState.error = this.errorMessage(error);
               return false;
             } finally {
@@ -24011,7 +24015,7 @@
             } catch (error) { this.showToast(this.errorMessage(error), true); }
           },
           financeGroupKey(row) {
-            return `${row.statement_month}:${row.customer_id}`;
+            return `${row.statement_month}:${row.settlement_entity_id || row.customer_id}`;
           },
           financeSettledGroupKey(row) {
             return `${row.year}:${row.statement_month}:${row.customer_id}`;
@@ -24194,6 +24198,48 @@
               if (this.financeStatementOperationState.action === "export_confirm" && Number(this.financeStatementOperationState.statementId) === statementId) {
                 this.financeStatementOperationState.action = "";
                 this.financeStatementOperationState.statementId = null;
+              }
+            }
+          },
+          async confirmAndDownloadStatement(row) {
+            if (this.financeStatementOperationState.action) return false;
+            const statementId=Number(row.id);
+            const expectedVersion=Number(row.version||1);
+            const idempotencyKey=createIdempotencyKey();
+            this.financeStatementOperationState.action="confirm_download";
+            this.financeStatementOperationState.statementId=statementId;
+            try {
+              let confirmedStatement;
+              try {
+                const {data}=await axios.post(`/api/finance/statements/${statementId}/confirm`,{expected_version:expectedVersion});
+                confirmedStatement=data;
+              } catch(error) {
+                this.showToast(`对账确认未完成：${this.errorMessage(error)}。请刷新后核对，勿重复确认。`,true);
+                return false;
+              }
+              let task;
+              try {
+                const {data}=await axios.post(`/api/finance/statements/${statementId}/invoice-tasks`,{expected_version:Number(confirmedStatement?.version||expectedVersion),idempotency_key:idempotencyKey});
+                task=data;
+              } catch(error) {
+                this.showToast(`对账已确认，但开票任务未生成：${this.errorMessage(error)}。请刷新后重试生成，不要重复确认。`,true);
+                await this.loadFinance();
+                return false;
+              }
+              const confirmed=await this.confirmInvoiceTask(task);
+              if (!confirmed) {
+                this.showToast("对账已确认且开票任务已生成；请在开票办理中确认任务后下载。",true);
+                await this.loadFinance();
+                return false;
+              }
+              const downloaded=await this.downloadInvoiceTaxTemplate(confirmed);
+              if (downloaded) this.showToast("已下载开票文件，待在税局实际开具后登记结果");
+              await this.loadFinance();
+              return downloaded;
+            } finally {
+              if (this.financeStatementOperationState.action==="confirm_download" && Number(this.financeStatementOperationState.statementId)===statementId) {
+                this.financeStatementOperationState.action="";
+                this.financeStatementOperationState.statementId=null;
               }
             }
           },
@@ -37297,6 +37343,7 @@
             const {data} = await axios.get(`/api/finance/statements/${Number(row.id)}`);
             if (requestId !== this.statementDetailRequestId || this.modal !== currentModal) return false;
             this.statementDetail = data;
+            this.statementEditSourceCustomerId = null;
             this.modal = { type:"statementDetail", title:`对账单详情 ${this.statementDetail.statement_number}` };
           },
           nextStatementMonth(value) {
@@ -37308,6 +37355,7 @@
           async openStatementDispute(row) {
             const detail = this.statementDetail?.id === row.id ? this.statementDetail : (await axios.get(`/api/finance/statements/${row.id}`)).data;
             this.statementDetail = detail;
+            this.statementEditSourceCustomerId = null;
             this.statementDisputeForm={reason:"",target_month:this.nextStatementMonth(detail.statement_month),remove:{},add:{},edits:Object.fromEntries((detail.items||[]).filter(item=>item.source_type==='delivery').map(item=>[item.statement_item_id,{unit_price:String(item.unit_price_snapshot)}]))};
             this.statementDisputeCandidates=[];
             this.statementDisputeState={loading:true,saving:false,error:""};
@@ -37349,10 +37397,14 @@
           async saveStatementDispute() {
             if (this.statementDisputeState.saving || !this.statementDetail) return false;
             const reason=String(this.statementDisputeForm.reason||"").trim();
-            const removeIds=Object.keys(this.statementDisputeForm.remove||{}).filter(key=>this.statementDisputeForm.remove[key]).map(Number);
-            const addIds=Object.keys(this.statementDisputeForm.add||{}).filter(key=>this.statementDisputeForm.add[key]).map(Number);
+            const sourceCustomers=this.statementDetail.source_customers||[];
+            if (sourceCustomers.length>1 && !this.statementEditSourceCustomerId) { this.showToast("请先选择一个要修改的子客户",true); return false; }
+            const selectedSourceId=Number(this.statementEditSourceCustomerId||0);
+            const belongsToSelectedSource=item=>!selectedSourceId || Number(item.source_customer_id)===selectedSourceId;
+            const removeIds=Object.keys(this.statementDisputeForm.remove||{}).filter(key=>this.statementDisputeForm.remove[key]).map(Number).filter(id=>(this.statementDetail.items||[]).some(item=>Number(item.statement_item_id)===id && belongsToSelectedSource(item)));
+            const addIds=Object.keys(this.statementDisputeForm.add||{}).filter(key=>this.statementDisputeForm.add[key]).map(Number).filter(id=>(this.statementDisputeCandidates||[]).some(item=>Number(item.return_receipt_item_id)===id && belongsToSelectedSource(item)));
             if (!reason) { this.showToast("请填写客户异议原因",true); return false; }
-            const updates=(this.statementDetail.items||[]).filter(item=>item.source_type==='delivery' && !removeIds.includes(Number(item.statement_item_id))).filter(item=>Number(this.statementDisputeForm.edits[item.statement_item_id]?.unit_price)!==Number(item.unit_price_snapshot)).map(item=>({statement_item_id:Number(item.statement_item_id),unit_price:this.statementDisputeForm.edits[item.statement_item_id].unit_price}));
+            const updates=(this.statementDetail.items||[]).filter(item=>item.source_type==='delivery' && belongsToSelectedSource(item) && !removeIds.includes(Number(item.statement_item_id))).filter(item=>Number(this.statementDisputeForm.edits[item.statement_item_id]?.unit_price)!==Number(item.unit_price_snapshot)).map(item=>({statement_item_id:Number(item.statement_item_id),unit_price:this.statementDisputeForm.edits[item.statement_item_id].unit_price}));
             if (updates.some(item=>String(item.unit_price).trim()==="" || !Number.isFinite(Number(item.unit_price)) || Number(item.unit_price)<0)) { this.showToast("请填写有效的对账单价",true); return false; }
             if (!removeIds.length && !addIds.length && !updates.length) { this.showToast("请修改单价、选择移出或补入明细；也可以仅撤销确认",true); return false; }
             if (removeIds.length && !this.statementDisputeForm.target_month) { this.showToast("请选择移入月份",true); return false; }

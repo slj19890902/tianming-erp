@@ -2,6 +2,9 @@ from decimal import Decimal
 import json
 from pathlib import Path
 import subprocess
+from io import BytesIO
+
+from openpyxl import load_workbook
 
 from fastapi.testclient import TestClient
 from test_phase8_finance import finance_api_app, _login, _receipt_payload
@@ -71,6 +74,85 @@ def test_missing_price_is_not_zero_or_selectable(finance_api_app):
         assert summary['missing_price_count'] == 1
         rejected = client.post('/api/finance/statements', json={'customer_id':1,'statement_month':'2026-06','delivery_ids':[1]})
         assert rejected.status_code == 409
+
+
+def test_workbench_groups_partner_members_by_settlement_entity(finance_api_app):
+    from app.models.customer import Customer
+    from app.models.finance import Statement
+    from app.models.invoice_task import CustomerInvoiceProfile, FinanceSettlementEntity
+
+    app, factory = finance_api_app
+    with factory() as db:
+        child = Customer(customer_number=2, customer_code='CHILD-2', name='合作子客户二')
+        db.add(child)
+        db.flush()
+        entity = FinanceSettlementEntity(
+            entity_code='PARTNER-1', entity_name='天美德风',
+            confirmation_status='confirmed', is_enabled=True,
+        )
+        db.add(entity)
+        db.flush()
+        for customer_id in (1, child.id):
+            db.add(CustomerInvoiceProfile(
+                customer_id=customer_id, invoice_title='天美德风', tax_no='91320000TEST00001',
+                settlement_entity_id=entity.id, confirmation_status='confirmed', is_enabled=True,
+            ))
+        db.add_all([
+            Statement(statement_number='PARTNER-DRAFT', customer_id=1, settlement_entity_id=entity.id,
+                      settlement_name_snapshot='天美德风', settlement_customer_ids_snapshot_json='[1,2]',
+                      statement_month='2026-08', total_receivable=Decimal('100'), total_gross_profit=0,
+                      invoiced_amount=0, settled_amount=0, status='unsettled', confirmation_status='draft', created_by=1),
+            Statement(statement_number='PARTNER-INVOICE', customer_id=child.id, settlement_entity_id=entity.id,
+                      settlement_name_snapshot='天美德风', settlement_customer_ids_snapshot_json='[1,2]',
+                      statement_month='2026-08', total_receivable=Decimal('200'), total_gross_profit=0,
+                      invoiced_amount=0, settled_amount=0, status='unsettled', confirmation_status='confirmed', created_by=1),
+        ])
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, 'finance')
+        for queue, expected_number in [('pending_reconciliation', 'PARTNER-DRAFT'), ('pending_invoice', 'PARTNER-INVOICE')]:
+            response = client.get('/api/finance/current-customer-months', params={'all_open': True, 'balance_type': queue})
+            assert response.status_code == 200, response.text
+            rows = [row for row in response.json()['items'] if row['settlement_name'] == '天美德风']
+            assert len(rows) == 1
+            row = rows[0]
+            assert row['settlement_entity_id']
+            assert row['source_customer_count'] == 2
+            assert {item['name'] for item in row['source_customers']} == {'苏州思迈尔包装有限公司', '合作子客户二'}
+            assert [statement['statement_number'] for statement in row['statements']] == [expected_number]
+
+
+def test_partner_statement_export_has_summary_sheet(finance_api_app):
+    from app.models.finance import Statement
+    from app.models.invoice_task import FinanceSettlementEntity
+
+    app, factory = finance_api_app
+    with factory() as db:
+        entity = FinanceSettlementEntity(
+            entity_code='PARTNER-EXPORT', entity_name='天美德风',
+            confirmation_status='confirmed', is_enabled=True,
+        )
+        db.add(entity)
+        db.flush()
+        statement = Statement(
+            statement_number='PARTNER-EXPORT-001', customer_id=1,
+            settlement_entity_id=entity.id, settlement_name_snapshot='天美德风',
+            settlement_customer_ids_snapshot_json='[1]', statement_month='2026-08',
+            total_receivable=Decimal('0'), total_gross_profit=0,
+            invoiced_amount=0, settled_amount=0, status='unsettled',
+            confirmation_status='draft', created_by=1,
+        )
+        db.add(statement)
+        db.commit()
+        statement_id = statement.id
+    with TestClient(app) as client:
+        _login(client, 'finance')
+        response = client.get(f'/api/finance/statements/{statement_id}/export')
+        assert response.status_code == 200, response.text
+        workbook = load_workbook(BytesIO(response.content))
+        assert workbook.sheetnames[:2] == ['汇总', '月结对账单']
+        assert workbook['汇总']['B2'].value == '天美德风'
 
 
 def test_explicit_customer_cannot_be_replaced_and_existing_bill_opens_detail(tmp_path):

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Generator
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 import json
 import math
@@ -43,6 +43,11 @@ from app.models.supplier_requisition_order import (
     SupplierRequisitionOrderItem,
 )
 from app.models.user import User
+from app.models.warehouse_inventory import (
+    InventoryLot,
+    InventoryReservation,
+    WarehouseLocation,
+)
 from app.services.requisition_quantities import DEFAULT_CUTTING_MODE
 
 
@@ -106,6 +111,7 @@ def _phase3_scale_app(
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     customer_ids: dict[int, int] = {}
     orders_by_tier: dict[int, list[Order]] = {}
+    locations_by_tier: dict[int, int] = {}
     with factory() as db:
         material = Material(
             code="P04-SCALE-MATERIAL",
@@ -122,6 +128,16 @@ def _phase3_scale_app(
             db.add(customer)
             db.flush()
             customer_ids[tier] = int(customer.id)
+            location = WarehouseLocation(
+                location_code=f"P04-{tier}-LOC",
+                location_name=f"P04 synthetic {tier} location",
+                warehouse_type="finished",
+                address_kind="legacy",
+                address_version=1,
+            )
+            db.add(location)
+            db.flush()
+            locations_by_tier[tier] = int(location.id)
             product = Product(
                 customer_id=customer.id,
                 product_code=f"P04-SCALE-{tier}",
@@ -266,6 +282,39 @@ def _phase3_scale_app(
                         delivery_id=delivery.id,
                         order_item_id=item.id,
                         delivered_quantity=5,
+                    )
+                )
+                lot = InventoryLot(
+                    lot_number=f"P04-LOT-{tier}-{index:05d}",
+                    inventory_type="finished",
+                    warehouse_location_id=locations_by_tier[tier],
+                    quantity_available=5,
+                    quantity_reserved=5,
+                    quantity_consumed=0,
+                    quantity_damaged=0,
+                    quantity_scrapped=0,
+                    unit="boxes",
+                    status="active",
+                    source_type="manual",
+                    stock_date=date(2026, 9, 3),
+                    stock_date_accuracy="exact",
+                    last_movement_at=datetime(2026, 9, 3, 8, 0),
+                    version=1,
+                )
+                db.add(lot)
+                db.flush()
+                db.add(
+                    InventoryReservation(
+                        reservation_number=f"P04-RSV-{tier}-{index:05d}",
+                        inventory_lot_id=lot.id,
+                        reservation_type="finished_order",
+                        order_id=order.id,
+                        order_item_id=item.id,
+                        reserved_stock_quantity=5,
+                        credited_requirement_quantity=5,
+                        status="active",
+                        reservation_group_key=f"p04-rsv-{tier}-{index:05d}",
+                        idempotency_key=f"p04-rsv-{tier}-{index:05d}",
                     )
                 )
         db.commit()
@@ -767,7 +816,7 @@ def test_order_projection_cold_hot_post_commit_and_status_change_are_distinguish
                     "posted_incoming": "one quarter",
                     "completed_production_and_partial_dispatch": "one quarter",
                 },
-                "inventory_boundary": "no inventory lots/reservations; this fixture measures the order-status projection tables only",
+                "inventory_distribution": "one quarter has finished lots and active finished-order reservations",
             },
             "samples_per_mode": 5,
             "measurements": metrics,

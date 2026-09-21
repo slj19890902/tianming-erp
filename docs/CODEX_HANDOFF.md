@@ -5789,3 +5789,5 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 技术发布完成，待管理员人工验收；代码 d01b1de1，签名包 3d08c0b0，dt0920 无迁移。订单/PDF 仅直接抵扣无需分切的库存，需分切片料移至合并报料确认方案后预占。详见 docs/release_reports/ORDER_REQUISITION_STAGED_DEDUCTION_RELEASE_20260920.md。
 
 - 2026-09-21：v0.22.473 开票缺项提示与对账异议更正已技术发布，代码f429f165、无迁移、du0920。实际回单更正同步本期对账，保留库存/补送及开票收款门禁。备份与只读验收通过，待管理员人工验收；见 docs/release_reports/FINANCE_INVOICE_DISPUTE473_20260921.md 及 NAS 独立回执。
+
+- 2026-09-21：v0.22.474 开票税务资料选填规则已技术发布（8e0e6e4b，du0920，无迁移），待人工验收；见 docs/release_reports/INVOICE_OPTIONAL_FIELDS_20260921_v474.md。

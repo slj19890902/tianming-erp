@@ -67,4 +67,3 @@ def test_grouped_buyer_uses_same_optional_field_rules(fin001_app):
         detail = client.get(f"/api/finance/invoice-tasks/{task.json()['id']}").json()
         assert detail['buyer_snapshot']['invoice_title'] == '合作结算抬头'
         assert detail['buyer_snapshot']['invoice_address'] is None
-

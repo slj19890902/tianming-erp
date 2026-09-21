@@ -149,6 +149,71 @@ def _prepare_exported_task(
     return task.json()
 
 
+def test_fin001_void_unissued_task_returns_statement_to_controlled_modify_queue(
+    fin001_app,
+) -> None:
+    from app.models.finance import Statement, StatementAdjustment
+    from app.models.invoice_task import FinanceInvoiceTask
+
+    app, factory = fin001_app
+    with TestClient(app) as client:
+        _login(client)
+        task = _prepare_exported_task(
+            client, idempotency_key="fin001-void-reopen-0001"
+        )
+        response = client.post(
+            f"/api/finance/invoice-tasks/{task['id']}/void",
+            json={"expected_version": task["version"]},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "voided"
+    assert response.json()["reopened_statement"] is True
+    with factory() as db:
+        statement = db.get(Statement, 1)
+        current_task = db.get(FinanceInvoiceTask, task["id"])
+        adjustment = db.scalar(
+            select(StatementAdjustment).where(
+                StatementAdjustment.statement_id == 1,
+                StatementAdjustment.action == "void_invoice_task_for_modify",
+            )
+        )
+        assert statement is not None
+        assert current_task is not None
+        assert statement.confirmation_status == "draft"
+        assert statement.version == 3
+        assert current_task.status == "voided"
+        assert adjustment is not None
+        assert "旧税局导入文件不可继续使用" in adjustment.reason
+
+
+def test_fin001_void_issued_task_remains_blocked(fin001_app) -> None:
+    app, _factory = fin001_app
+    with TestClient(app) as client:
+        _login(client)
+        task = _prepare_exported_task(
+            client, idempotency_key="fin001-void-issued-0001"
+        )
+        issued = client.post(
+            f"/api/finance/invoice-tasks/{task['id']}/result",
+            json={
+                "status": "issued",
+                "invoice_number": "FIN001-VOID-BLOCK",
+                "invoice_date": "2026-08-08",
+                "expected_version": task["version"],
+                "expected_ledger_version": task["ledger_version"],
+            },
+        )
+        rejected = client.post(
+            f"/api/finance/invoice-tasks/{task['id']}/void",
+            json={"expected_version": issued.json()["version"]},
+        )
+
+    assert issued.status_code == 200, issued.text
+    assert rejected.status_code == 409
+    assert "不能" in str(rejected.json()["detail"])
+
+
 def test_fin002a_default_rule_contract_uses_pcs_and_full_tax_code(fin001_app) -> None:
     app, _factory = fin001_app
     with TestClient(app) as client:

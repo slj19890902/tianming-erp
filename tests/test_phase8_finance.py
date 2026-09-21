@@ -1542,6 +1542,130 @@ def test_current_finance_returns_month_customer_options_without_extra_request(
     }
 
 
+def test_current_finance_all_open_queues_are_stable_and_customer_deduplicated(
+    finance_api_app,
+) -> None:
+    from app.models.customer import Customer
+    from app.models.finance import Statement
+
+    app, session_factory = finance_api_app
+    with TestClient(app) as client:
+        _login(client, "finance")
+        with session_factory() as session:
+            pending_invoice_customer = Customer(
+                customer_number=2,
+                customer_code="QUEUE-INVOICE",
+                name="待开票客户",
+                payment_term_days=30,
+                credit_limit=Decimal("100000"),
+            )
+            pending_payment_customer = Customer(
+                customer_number=3,
+                customer_code="QUEUE-PAYMENT",
+                name="待收款客户",
+                payment_term_days=30,
+                credit_limit=Decimal("100000"),
+            )
+            completed_customer = Customer(
+                customer_number=4,
+                customer_code="QUEUE-DONE",
+                name="已完成客户",
+                payment_term_days=30,
+                credit_limit=Decimal("100000"),
+            )
+            session.add_all(
+                [pending_invoice_customer, pending_payment_customer, completed_customer]
+            )
+            session.flush()
+            session.add_all(
+                [
+                    Statement(
+                        statement_number="ST-QUEUE-INV-1",
+                        customer_id=pending_invoice_customer.id,
+                        statement_month="2026-06",
+                        total_receivable=Decimal("100.00"),
+                        total_gross_profit=Decimal("0.00"),
+                        invoiced_amount=Decimal("0.00"),
+                        settled_amount=Decimal("0.00"),
+                        status="unsettled",
+                        confirmation_status="confirmed",
+                        created_by=1,
+                    ),
+                    Statement(
+                        statement_number="ST-QUEUE-INV-2",
+                        customer_id=pending_invoice_customer.id,
+                        statement_month="2026-07",
+                        total_receivable=Decimal("50.00"),
+                        total_gross_profit=Decimal("0.00"),
+                        invoiced_amount=Decimal("0.00"),
+                        settled_amount=Decimal("0.00"),
+                        status="unsettled",
+                        confirmation_status="confirmed",
+                        created_by=1,
+                    ),
+                    Statement(
+                        statement_number="ST-QUEUE-PAY",
+                        customer_id=pending_payment_customer.id,
+                        statement_month="2026-07",
+                        total_receivable=Decimal("100.00"),
+                        total_gross_profit=Decimal("0.00"),
+                        invoiced_amount=Decimal("100.00"),
+                        settled_amount=Decimal("40.00"),
+                        status="unsettled",
+                        confirmation_status="confirmed",
+                        created_by=1,
+                    ),
+                    Statement(
+                        statement_number="ST-QUEUE-DONE",
+                        customer_id=completed_customer.id,
+                        statement_month="2026-06",
+                        total_receivable=Decimal("90.00"),
+                        total_gross_profit=Decimal("0.00"),
+                        invoiced_amount=Decimal("90.00"),
+                        settled_amount=Decimal("90.00"),
+                        status="settled",
+                        confirmation_status="confirmed",
+                        created_by=1,
+                    ),
+                ]
+            )
+            session.commit()
+            pending_payment_customer_id = pending_payment_customer.id
+
+        all_open = client.get(
+            "/api/finance/current-customer-months",
+            params={"all_open": "true", "page": 1, "page_size": 1},
+        )
+        pending_payment = client.get(
+            "/api/finance/current-customer-months",
+            params={
+                "all_open": "true",
+                "balance_type": "pending_payment",
+                "customer_id": pending_payment_customer_id,
+            },
+        )
+
+    assert all_open.status_code == 200, all_open.text
+    body = all_open.json()
+    assert body["all_open"] is True
+    assert body["total"] == 3
+    assert body["queue_counts"] == {
+        "all_open": 2,
+        "pending_reconciliation": 0,
+        "pending_invoice": 1,
+        "pending_payment": 1,
+        "completed": 1,
+    }
+    assert len(body["items"]) == 1
+    assert pending_payment.status_code == 200, pending_payment.text
+    payment_body = pending_payment.json()
+    assert payment_body["total"] == 1
+    assert payment_body["items"][0]["customer_id"] == pending_payment_customer_id
+    assert payment_body["items"][0]["queue_status"] == "部分收款"
+    assert payment_body["queue_counts"]["pending_payment"] == 1
+    assert payment_body["queue_counts"]["pending_invoice"] == 0
+
+
 def test_current_finance_prioritizes_pending_reconciliation(finance_api_app) -> None:
     app, _ = finance_api_app
     with TestClient(app) as client:

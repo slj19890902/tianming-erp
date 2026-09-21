@@ -4775,21 +4775,85 @@ def monthly_yearly_finance_report(
     }
 
 
+def _workbench_candidate_months(
+    db: Session,
+    *,
+    visible_customer_ids: set[int] | None,
+) -> list[str]:
+    """Find every month that can still have a finance action.
+
+    We deliberately derive the month set from immutable delivery/receipt facts
+    and existing statements.  A customer with a non-calendar settlement cycle
+    can therefore still surface an older pending receipt without inventing a
+    second reconciliation ledger.
+    """
+
+    months = {beijing_today().strftime("%Y-%m")}
+    statement_months = select(Statement.statement_month).where(
+        Statement.confirmation_status != "cancelled"
+    )
+    if visible_customer_ids is not None:
+        statement_months = statement_months.where(
+            Statement.customer_id.in_(visible_customer_ids)
+        )
+    months.update(str(value) for value in db.scalars(statement_months).all())
+
+    receipt_dates = (
+        select(Delivery.delivery_date)
+        .select_from(ReturnReceiptItem)
+        .join(ReturnReceipt, ReturnReceipt.id == ReturnReceiptItem.return_receipt_id)
+        .join(DeliveryItem, DeliveryItem.id == ReturnReceiptItem.delivery_item_id)
+        .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+        .outerjoin(
+            StatementItem,
+            StatementItem.return_receipt_item_id == ReturnReceiptItem.id,
+        )
+        .where(ReturnReceipt.status == "confirmed", StatementItem.id.is_(None))
+    )
+    if visible_customer_ids is not None:
+        receipt_dates = receipt_dates.where(Delivery.customer_id.in_(visible_customer_ids))
+    for delivery_date in set(db.scalars(receipt_dates).all()):
+        months.add(delivery_date.strftime("%Y-%m"))
+        previous_month_end = delivery_date.replace(day=1) - timedelta(days=1)
+        months.add(previous_month_end.strftime("%Y-%m"))
+
+    charge_months = (
+        select(CustomerCharge.reconciliation_month)
+        .outerjoin(
+            StatementItem,
+            StatementItem.customer_charge_id == CustomerCharge.id,
+        )
+        .where(
+            CustomerCharge.status == "confirmed",
+            CustomerCharge.reconciliation_month.is_not(None),
+            StatementItem.id.is_(None),
+        )
+    )
+    if visible_customer_ids is not None:
+        charge_months = charge_months.where(
+            CustomerCharge.customer_id.in_(visible_customer_ids)
+        )
+    months.update(str(value) for value in db.scalars(charge_months).all() if value)
+    return sorted(month for month in months if re.fullmatch(r"\d{4}-\d{2}", month))
+
+
 @router.get("/current-customer-months")
 def current_customer_months(
     statement_month: str | None = None,
     balance_type: str | None = None,
     customer_id: int | None = None,
+    all_open: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
-    """Return the current finance workbench grouped by customer and month.
+    """Return a stable, customer-month finance workbench.
 
-    A customer can have several statements in the same month.  The grouping is
-    therefore performed before pagination and uses the stable customer id, not
-    the display name or the possibly stale statement status.
+    `all_open` is opt-in for callers that want the workbench's all-month queue;
+    the existing single-month API remains compatible with dashboard callers.
+    Each row has a stable month/customer key and queue counts are calculated
+    before pagination, so an action cannot leave a stale row on another page.
     """
 
     selected_month = statement_month or beijing_today().strftime("%Y-%m")
@@ -4802,6 +4866,7 @@ def current_customer_months(
         "pending_reconciliation",
         "pending_invoice",
         "pending_payment",
+        "completed",
     }
     if balance_type not in allowed_balance_types:
         raise HTTPException(status_code=400, detail="未知的财务待办筛选")
@@ -4809,34 +4874,113 @@ def current_customer_months(
     visible_customer_ids = _visible_customer_ids(user, db)
     if customer_id is not None:
         require_customer_access(customer_id, user, db)
+
+    empty_summary = {
+        "customer_count": 0,
+        "pending_reconciliation_amount": Decimal("0.00"),
+        "reconciled_receivable_amount": Decimal("0.00"),
+        "pending_invoice_amount": Decimal("0.00"),
+        "invoiced_amount": Decimal("0.00"),
+        "pending_payment_amount": Decimal("0.00"),
+        "pending_payment_action_amount": Decimal("0.00"),
+        "settled_amount": Decimal("0.00"),
+    }
+    empty_counts = {
+        "all_open": 0,
+        "pending_reconciliation": 0,
+        "pending_invoice": 0,
+        "pending_payment": 0,
+        "completed": 0,
+    }
     if visible_customer_ids is not None and not visible_customer_ids:
         return {
             "statement_month": selected_month,
+            "all_open": all_open and statement_month is None,
+            "scope_months": [],
             "as_of": beijing_today(),
             "total": 0,
             "page": page,
             "page_size": page_size,
-            "summary": {
-                "customer_count": 0,
-                "pending_reconciliation_amount": Decimal("0.00"),
-                "reconciled_receivable_amount": Decimal("0.00"),
-                "pending_invoice_amount": Decimal("0.00"),
-                "invoiced_amount": Decimal("0.00"),
-                "pending_payment_amount": Decimal("0.00"),
-                "settled_amount": Decimal("0.00"),
-            },
+            "summary": empty_summary,
+            "queue_counts": empty_counts,
             "customer_options": [],
             "items": [],
         }
 
-    try:
-        pending_rows = pending_statement_customer_summaries(
-            db,
-            statement_month=selected_month,
-            visible_customer_ids=visible_customer_ids,
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+    scope_months = (
+        _workbench_candidate_months(db, visible_customer_ids=visible_customer_ids)
+        if all_open and statement_month is None
+        else [selected_month]
+    )
+
+    def new_group(
+        *,
+        row_customer_id: int,
+        customer_name: str,
+        row_month: str,
+        cycle_day: int,
+        period_start: date,
+        period_end: date,
+    ) -> dict:
+        return {
+            "customer_id": row_customer_id,
+            "customer_name": customer_name,
+            "statement_month": row_month,
+            "statement_cycle_start_day": cycle_day,
+            "period_start": period_start,
+            "period_end": period_end,
+            "pending_reconciliation_count": 0,
+            "blocked_reconciliation_count": 0,
+            "pending_reconciliation_item_count": 0,
+            "pending_reconciliation_amount": Decimal("0.00"),
+            "pending_confirmation_count": 0,
+            "pending_confirmation_amount": Decimal("0.00"),
+            "reconciled_receivable_amount": Decimal("0.00"),
+            "invoiced_amount": Decimal("0.00"),
+            "settled_amount": Decimal("0.00"),
+            "pending_invoice_amount": Decimal("0.00"),
+            "pending_payment_amount": Decimal("0.00"),
+            "pending_payment_action_amount": Decimal("0.00"),
+            "statement_count": 0,
+            "status_anomaly_count": 0,
+            "invoice_task_pending_count": 0,
+            "dispute_pending_count": 0,
+            "task_void_pending_count": 0,
+            "statements": [],
+        }
+
+    grouped: dict[tuple[int, str], dict] = {}
+    for scope_month in scope_months:
+        try:
+            pending_rows = pending_statement_customer_summaries(
+                db,
+                statement_month=scope_month,
+                visible_customer_ids=visible_customer_ids,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        for pending in pending_rows:
+            pending_customer_id = int(pending["customer_id"])
+            key = (pending_customer_id, scope_month)
+            group = grouped.setdefault(
+                key,
+                new_group(
+                    row_customer_id=pending_customer_id,
+                    customer_name=str(pending["customer_name"]),
+                    row_month=scope_month,
+                    cycle_day=int(pending["statement_cycle_start_day"] or 1),
+                    period_start=pending["period_start"],
+                    period_end=pending["period_end"],
+                ),
+            )
+            group["pending_reconciliation_count"] += int(pending["pending_count"] or 0)
+            group["blocked_reconciliation_count"] += int(pending["blocked_count"] or 0)
+            group["pending_reconciliation_item_count"] += int(
+                pending["pending_item_count"] or 0
+            )
+            group["pending_reconciliation_amount"] = _money_value(
+                group["pending_reconciliation_amount"] + _money_value(pending["amount"])
+            )
 
     statement_query = (
         select(
@@ -4856,104 +5000,125 @@ def current_customer_months(
             Statement.created_at,
         )
         .join(Customer, Customer.id == Statement.customer_id)
-        .where(Statement.statement_month == selected_month)
-        .order_by(Customer.name, Customer.id, Statement.id.desc())
+        .where(
+            Statement.statement_month.in_(scope_months),
+            Statement.confirmation_status != "cancelled",
+        )
+        .order_by(Statement.statement_month.desc(), Customer.name, Customer.id, Statement.id.desc())
     )
     if visible_customer_ids is not None:
         statement_query = statement_query.where(
             Statement.customer_id.in_(visible_customer_ids)
         )
     statement_rows = db.execute(statement_query).mappings().all()
-
-    grouped: dict[int, dict] = {}
-    for pending in pending_rows:
-        pending_customer_id = int(pending["customer_id"])
-        grouped[pending_customer_id] = {
-            "customer_id": pending_customer_id,
-            "customer_name": pending["customer_name"],
-            "statement_month": selected_month,
-            "statement_cycle_start_day": int(
-                pending["statement_cycle_start_day"] or 1
-            ),
-            "period_start": pending["period_start"],
-            "period_end": pending["period_end"],
-            "pending_reconciliation_count": int(pending["pending_count"] or 0),
-            "blocked_reconciliation_count": int(pending["blocked_count"] or 0),
-            "pending_reconciliation_item_count": int(
-                pending["pending_item_count"] or 0
-            ),
-            "pending_reconciliation_amount": _money_value(pending["amount"]),
-            "reconciled_receivable_amount": Decimal("0.00"),
-            "invoiced_amount": Decimal("0.00"),
-            "settled_amount": Decimal("0.00"),
-            "pending_invoice_amount": Decimal("0.00"),
-            "pending_payment_amount": Decimal("0.00"),
-            "statement_count": 0,
-            "status_anomaly_count": 0,
-            "statements": [],
-        }
+    statement_ids = [int(row["id"]) for row in statement_rows]
+    adjustment_actions_by_statement: dict[int, set[str]] = {}
+    task_statuses_by_statement: dict[int, list[str]] = {}
+    if statement_ids:
+        for adjustment_statement_id, adjustment_action in db.execute(
+            select(StatementAdjustment.statement_id, StatementAdjustment.action).where(
+                StatementAdjustment.statement_id.in_(statement_ids),
+                StatementAdjustment.action.in_(
+                    (
+                        "reopen_for_dispute",
+                        "resolve_dispute",
+                        "adjust_dispute_lines",
+                        "void_invoice_task_for_modify",
+                    )
+                ),
+            )
+        ).all():
+            adjustment_actions_by_statement.setdefault(
+                int(adjustment_statement_id), set()
+            ).add(str(adjustment_action))
+        for task_statement_id, task_version, task_status in db.execute(
+            select(
+                FinanceInvoiceTask.statement_id,
+                FinanceInvoiceTask.statement_version,
+                FinanceInvoiceTask.status,
+            ).where(FinanceInvoiceTask.statement_id.in_(statement_ids))
+        ).all():
+            task_statuses_by_statement.setdefault(int(task_statement_id), []).append(
+                f"{int(task_version)}:{task_status}"
+            )
 
     for statement in statement_rows:
         statement_customer_id = int(statement["customer_id"])
+        row_month = str(statement["statement_month"])
         cycle_day = int(statement["statement_cycle_start_day"] or 1)
-        period_start, period_end = _statement_period(selected_month, cycle_day)
+        period_start, period_end = _statement_period(row_month, cycle_day)
+        key = (statement_customer_id, row_month)
         group = grouped.setdefault(
-            statement_customer_id,
-            {
-                "customer_id": statement_customer_id,
-                "customer_name": statement["customer_name"],
-                "statement_month": selected_month,
-                "statement_cycle_start_day": cycle_day,
-                "period_start": period_start,
-                "period_end": period_end,
-                "pending_reconciliation_count": 0,
-                "blocked_reconciliation_count": 0,
-                "pending_reconciliation_item_count": 0,
-                "pending_reconciliation_amount": Decimal("0.00"),
-                "reconciled_receivable_amount": Decimal("0.00"),
-                "invoiced_amount": Decimal("0.00"),
-                "settled_amount": Decimal("0.00"),
-                "pending_invoice_amount": Decimal("0.00"),
-                "pending_payment_amount": Decimal("0.00"),
-                "statement_count": 0,
-                "status_anomaly_count": 0,
-                "statements": [],
-            },
+            key,
+            new_group(
+                row_customer_id=statement_customer_id,
+                customer_name=str(statement["customer_name"]),
+                row_month=row_month,
+                cycle_day=cycle_day,
+                period_start=period_start,
+                period_end=period_end,
+            ),
         )
         is_confirmed = statement["confirmation_status"] == "confirmed"
         receivable = _money_value(statement["total_receivable"])
-        if not is_confirmed:
-            group["pending_confirmation_count"] = group.get("pending_confirmation_count", 0) + 1
-            group["pending_confirmation_amount"] = _money_value(
-                group.get("pending_confirmation_amount", Decimal("0.00")) + receivable
-            )
         invoiced = _money_value(statement["invoiced_amount"]) if is_confirmed else Decimal("0.00")
         settled = _money_value(statement["settled_amount"]) if is_confirmed else Decimal("0.00")
         confirmed_receivable = receivable if is_confirmed else Decimal("0.00")
-        invoice_balance = max(receivable - invoiced, Decimal("0.00"))
-        payment_balance = max(receivable - settled, Decimal("0.00"))
+        invoice_balance = max(receivable - invoiced, Decimal("0.00")) if is_confirmed else Decimal("0.00")
+        payment_balance = max(receivable - settled, Decimal("0.00")) if is_confirmed else Decimal("0.00")
+        payment_action_balance = (
+            max(min(invoiced, receivable) - settled, Decimal("0.00"))
+            if is_confirmed
+            else Decimal("0.00")
+        )
+        encoded_task_statuses = task_statuses_by_statement.get(int(statement["id"]), [])
+        task_statuses = [
+            value.split(":", 1)[1]
+            for value in encoded_task_statuses
+            if value.split(":", 1)[0] == str(int(statement["version"]))
+        ]
+        invoice_task_pending = any(
+            task_status in {"draft", "ready", "exported", "failed"}
+            for task_status in task_statuses
+        )
+        adjustment_actions = adjustment_actions_by_statement.get(
+            int(statement["id"]), set()
+        )
+        dispute_pending = not is_confirmed and bool(
+            adjustment_actions
+            & {"reopen_for_dispute", "resolve_dispute", "adjust_dispute_lines"}
+        )
+        task_void_pending = not is_confirmed and (
+            "void_invoice_task_for_modify" in adjustment_actions
+        )
         if not is_confirmed:
-            invoice_balance = Decimal("0.00")
-            payment_balance = Decimal("0.00")
+            group["pending_confirmation_count"] += 1
+            group["pending_confirmation_amount"] = _money_value(
+                group["pending_confirmation_amount"] + receivable
+            )
+        if dispute_pending:
+            group["dispute_pending_count"] += 1
+        if task_void_pending:
+            group["task_void_pending_count"] += 1
+        if invoice_task_pending:
+            group["invoice_task_pending_count"] += 1
         status_is_settled = statement["status"] == "settled"
-        balance_is_settled = payment_balance == Decimal("0.00")
-        if is_confirmed and status_is_settled != balance_is_settled:
+        if is_confirmed and status_is_settled != (payment_balance == Decimal("0.00")):
             group["status_anomaly_count"] += 1
         group["statement_count"] += 1
         group["reconciled_receivable_amount"] = _money_value(
             group["reconciled_receivable_amount"] + confirmed_receivable
         )
-        group["invoiced_amount"] = _money_value(
-            group["invoiced_amount"] + invoiced
-        )
-        group["settled_amount"] = _money_value(
-            group["settled_amount"] + settled
-        )
+        group["invoiced_amount"] = _money_value(group["invoiced_amount"] + invoiced)
+        group["settled_amount"] = _money_value(group["settled_amount"] + settled)
         group["pending_invoice_amount"] = _money_value(
             group["pending_invoice_amount"] + invoice_balance
         )
         group["pending_payment_amount"] = _money_value(
             group["pending_payment_amount"] + payment_balance
+        )
+        group["pending_payment_action_amount"] = _money_value(
+            group["pending_payment_action_amount"] + payment_action_balance
         )
         group["statements"].append(
             {
@@ -4961,22 +5126,26 @@ def current_customer_months(
                 "statement_number": statement["statement_number"],
                 "customer_id": statement_customer_id,
                 "customer_name": statement["customer_name"],
-                "statement_month": statement["statement_month"],
+                "statement_month": row_month,
                 "total_receivable": receivable,
                 "invoiced_amount": invoiced,
                 "settled_amount": settled,
                 "pending_invoice_amount": invoice_balance,
                 "pending_payment_amount": payment_balance,
+                "pending_payment_action_amount": payment_action_balance,
                 "status": statement["status"],
                 "confirmation_status": statement["confirmation_status"],
                 "version": int(statement["version"]),
                 "ledger_version": int(statement["ledger_version"]),
+                "dispute_pending": dispute_pending,
+                "task_void_pending": task_void_pending,
+                "invoice_task_pending": invoice_task_pending,
+                "invoice_task_statuses": task_statuses,
                 "invoice_status": (
                     "not_ready"
                     if not is_confirmed
                     else "invoiced"
-                    if receivable > Decimal("0.00")
-                    and invoice_balance == Decimal("0.00")
+                    if receivable > Decimal("0.00") and invoice_balance == Decimal("0.00")
                     else "partial"
                     if invoiced > Decimal("0.00")
                     else "pending"
@@ -4985,73 +5154,115 @@ def current_customer_months(
             }
         )
 
-    eligible_items: list[dict] = []
+    all_groups = []
+    queue_customer_ids = {key: set() for key in empty_counts}
     for group in grouped.values():
-        group.setdefault("pending_confirmation_count", 0)
-        group.setdefault("pending_confirmation_amount", Decimal("0.00"))
-        has_confirmation = group["pending_confirmation_count"] > 0
         has_reconciliation = (
             group["pending_reconciliation_count"]
             + group["blocked_reconciliation_count"]
+            + group["pending_confirmation_count"]
             > 0
         )
-        has_invoice = group["pending_invoice_amount"] > 0
-        has_payment = group["pending_payment_amount"] > 0
-        if not (has_confirmation or has_reconciliation or has_invoice or has_payment):
-            continue
-        if has_confirmation:
-            primary_action = "review"
-        elif has_reconciliation:
-            primary_action = "reconcile"
+        has_invoice = any(
+            statement["pending_invoice_amount"] > Decimal("0.00")
+            and not statement["invoice_task_pending"]
+            for statement in group["statements"]
+        )
+        has_invoice_task = group["invoice_task_pending_count"] > 0
+        has_payment = group["pending_payment_action_amount"] > Decimal("0.00")
+        completed = bool(group["statements"]) and not (
+            has_reconciliation or has_invoice or has_invoice_task or has_payment
+        ) and all(
+            statement["confirmation_status"] == "confirmed"
+            and statement["pending_invoice_amount"] == Decimal("0.00")
+            and statement["pending_payment_amount"] == Decimal("0.00")
+            for statement in group["statements"]
+        )
+        group["has_pending_reconciliation"] = has_reconciliation
+        group["has_pending_invoice"] = has_invoice
+        group["has_pending_invoice_task"] = has_invoice_task
+        group["has_pending_payment"] = has_payment
+        group["is_completed"] = completed
+        group["queue_status"] = (
+            "异议待修改"
+            if group["dispute_pending_count"]
+            else "待修改"
+            if group["task_void_pending_count"]
+            else "待核对"
+            if group["pending_confirmation_count"]
+            else "待对账"
+            if group["pending_reconciliation_count"] or group["blocked_reconciliation_count"]
+            else "待开票"
+            if has_invoice
+            else "开票处理中"
+            if has_invoice_task
+            else "部分收款"
+            if has_payment and group["settled_amount"] > Decimal("0.00")
+            else "待收款"
+            if has_payment
+            else "已完成"
+        )
+        count_in_current_customer_scope = (
+            customer_id is None or int(group["customer_id"]) == customer_id
+        )
+        if has_reconciliation and count_in_current_customer_scope:
+            queue_customer_ids["pending_reconciliation"].add(group["customer_id"])
+        if has_invoice and count_in_current_customer_scope:
+            queue_customer_ids["pending_invoice"].add(group["customer_id"])
+        if has_payment and count_in_current_customer_scope:
+            queue_customer_ids["pending_payment"].add(group["customer_id"])
+        if completed and count_in_current_customer_scope:
+            queue_customer_ids["completed"].add(group["customer_id"])
+        if (
+            count_in_current_customer_scope
+            and (has_reconciliation or has_invoice or has_invoice_task or has_payment)
+        ):
+            queue_customer_ids["all_open"].add(group["customer_id"])
+        if has_reconciliation:
+            group["primary_action"] = "reconcile"
         elif has_invoice:
-            primary_action = "invoice"
+            group["primary_action"] = "invoice"
+        elif has_invoice_task:
+            group["primary_action"] = "invoice_task"
+        elif has_payment:
+            group["primary_action"] = "payment"
         else:
-            primary_action = "payment"
-        group["primary_action"] = primary_action
+            group["primary_action"] = "completed"
         group["primary_action_blocked"] = bool(
-            primary_action == "reconcile"
+            group["primary_action"] == "reconcile"
             and group["pending_reconciliation_count"] == 0
             and group["blocked_reconciliation_count"] > 0
         )
-        eligible_items.append(group)
+        all_groups.append(group)
 
+    def includes_requested_queue(group: dict) -> bool:
+        if customer_id is not None and int(group["customer_id"]) != customer_id:
+            return False
+        if balance_type is None:
+            return not group["is_completed"]
+        if balance_type == "pending_reconciliation":
+            return group["has_pending_reconciliation"]
+        if balance_type == "pending_invoice":
+            return group["has_pending_invoice"]
+        if balance_type == "pending_payment":
+            return group["has_pending_payment"]
+        return group["is_completed"]
+
+    customer_options_by_id = {
+        int(group["customer_id"]): str(group["customer_name"])
+        for group in all_groups
+    }
     customer_options = [
-        {"id": int(row["customer_id"]), "name": str(row["customer_name"])}
-        for row in sorted(
-            eligible_items,
-            key=lambda row: (str(row["customer_name"]), int(row["customer_id"])),
+        {"id": source_customer_id, "name": customer_name}
+        for source_customer_id, customer_name in sorted(
+            customer_options_by_id.items(), key=lambda item: (item[1], item[0])
         )
     ]
-    items = [
-        row
-        for row in eligible_items
-        if (customer_id is None or int(row["customer_id"]) == customer_id)
-        and (
-            balance_type is None
-            or (
-                balance_type == "pending_reconciliation"
-                and (
-                    row["pending_reconciliation_count"]
-                    + row["blocked_reconciliation_count"]
-                    + row["pending_confirmation_count"]
-                    > 0
-                )
-            )
-            or (
-                balance_type == "pending_invoice"
-                and row["pending_invoice_amount"] > 0
-            )
-            or (
-                balance_type == "pending_payment"
-                and row["pending_payment_amount"] > 0
-            )
-        )
-    ]
-
-    action_rank = {"review": 0, "reconcile": 1, "invoice": 2, "payment": 3}
+    items = [group for group in all_groups if includes_requested_queue(group)]
     items.sort(
         key=lambda row: (
-            action_rank[row["primary_action"]],
+            -int(row["statement_month"][:4]),
+            -int(row["statement_month"][5:]),
             str(row["customer_name"]),
             int(row["customer_id"]),
         )
@@ -5060,31 +5271,22 @@ def current_customer_months(
     summary = {
         "customer_count": total,
         "pending_reconciliation_amount": _money_value(
-            sum(
-                (row["pending_reconciliation_amount"] for row in items),
-                Decimal("0.00"),
-            )
+            sum((row["pending_reconciliation_amount"] for row in items), Decimal("0.00"))
         ),
         "reconciled_receivable_amount": _money_value(
-            sum(
-                (row["reconciled_receivable_amount"] for row in items),
-                Decimal("0.00"),
-            )
+            sum((row["reconciled_receivable_amount"] for row in items), Decimal("0.00"))
         ),
         "pending_invoice_amount": _money_value(
-            sum(
-                (row["pending_invoice_amount"] for row in items),
-                Decimal("0.00"),
-            )
+            sum((row["pending_invoice_amount"] for row in items), Decimal("0.00"))
         ),
         "invoiced_amount": _money_value(
             sum((row["invoiced_amount"] for row in items), Decimal("0.00"))
         ),
         "pending_payment_amount": _money_value(
-            sum(
-                (row["pending_payment_amount"] for row in items),
-                Decimal("0.00"),
-            )
+            sum((row["pending_payment_amount"] for row in items), Decimal("0.00"))
+        ),
+        "pending_payment_action_amount": _money_value(
+            sum((row["pending_payment_action_amount"] for row in items), Decimal("0.00"))
         ),
         "settled_amount": _money_value(
             sum((row["settled_amount"] for row in items), Decimal("0.00"))
@@ -5092,12 +5294,15 @@ def current_customer_months(
     }
     start = (page - 1) * page_size
     return {
-        "statement_month": selected_month,
+        "statement_month": selected_month if not all_open or statement_month else None,
+        "all_open": all_open and statement_month is None,
+        "scope_months": scope_months,
         "as_of": beijing_today(),
         "total": total,
         "page": page,
         "page_size": page_size,
         "summary": summary,
+        "queue_counts": {key: len(value) for key, value in queue_customer_ids.items()},
         "customer_options": customer_options,
         "items": items[start : start + page_size],
     }

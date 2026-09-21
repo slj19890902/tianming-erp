@@ -36,7 +36,7 @@ def test_confirm_and_generate_invoice_task_are_single_flight_and_freeze_payload(
         "async confirmFinanceStatement(row) {", "async generateInvoiceTask(row) {"
     )
     generate_body = _method_body(
-        "async generateInvoiceTask(row) {", "async openInvoiceTask(task) {"
+        "async generateInvoiceTask(row) {", "async exportAndConfirmStatement(row) {"
     )
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
@@ -115,6 +115,52 @@ vm.generateInvoiceTask = new AsyncFunction("row", {json.dumps(generate_body, ens
     target.write_text(script, encoding="utf-8")
     result = subprocess.run(
         [node, str(target)], capture_output=True, text=True, encoding="utf-8"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_export_and_confirm_never_confirms_after_export_failure(tmp_path: Path) -> None:
+    export_confirm_body = _method_body(
+        "async exportAndConfirmStatement(row) {", "invoiceBuyerRemark(task) {"
+    )
+    script = f"""
+const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
+const pending = [];
+globalThis.axios = {{ post(url, payload) {{ return new Promise((resolve, reject) => pending.push({{url, payload, resolve, reject}})); }} }};
+const messages = [];
+const vm = {{
+  financeStatementOperationState:{{action:"",statementId:null}},
+  exportSucceeded:false,
+  async exportStatement() {{ return this.exportSucceeded; }},
+  async loadFinance() {{ return true; }},
+  errorMessage(error) {{ return error?.message || String(error); }},
+  showToast(message, danger=false) {{ messages.push({{message,danger}}); }},
+}};
+vm.exportAndConfirmStatement = new AsyncFunction("row", {json.dumps(export_confirm_body, ensure_ascii=False)}).bind(vm);
+(async () => {{
+  const row = {{id:31,version:4}};
+  if (await vm.exportAndConfirmStatement(row) !== false || pending.length !== 0) throw new Error("export failure still confirmed the statement");
+  if (vm.financeStatementOperationState.action) throw new Error("export failure did not release the action lock");
+  vm.exportSucceeded = true;
+  const failedConfirmation = vm.exportAndConfirmStatement(row);
+  await Promise.resolve();
+  if (pending.length !== 1 || pending[0].url !== "/api/finance/statements/31/confirm" || pending[0].payload.expected_version !== 4) throw new Error("confirmation was not sent only after successful export");
+  pending[0].reject(new Error("版本冲突"));
+  if (await failedConfirmation !== false || vm.financeStatementOperationState.action) throw new Error("failed confirmation did not release the action lock");
+  if (!messages.some(row => row.danger && row.message.includes("已导出，但确认未完成"))) throw new Error("confirmation retry guidance is missing");
+  const succeeded = vm.exportAndConfirmStatement(row);
+  await Promise.resolve();
+  pending[1].resolve({{data:{{ok:true}}}});
+  if (await succeeded !== true || vm.financeStatementOperationState.action) throw new Error("successful export confirmation did not finish");
+}})().catch(error => {{ console.error(error); process.exit(1); }});
+"""
+    target = tmp_path / "finance-export-confirm-actions.js"
+    target.write_text(script, encoding="utf-8")
+    result = subprocess.run(
+        [shutil.which("node") or "node", str(target)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
     )
     assert result.returncode == 0, result.stderr
 

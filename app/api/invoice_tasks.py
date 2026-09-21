@@ -38,7 +38,9 @@ from app.models.finance import (
     FinanceManualMutation,
     Invoice,
     ReturnReceiptItem,
+    SettlementRecord,
     Statement,
+    StatementAdjustment,
     StatementItem,
 )
 from app.models.invoice_task import (
@@ -1988,6 +1990,36 @@ def void_invoice_task(
         if task.status == "voided":
             return _task_response(db, task)
 
+        statement = db.get(Statement, task.statement_id)
+        if statement is None:
+            raise HTTPException(status_code=404, detail="关联对账单不存在")
+        if statement.version != task.statement_version:
+            raise HTTPException(
+                status_code=409,
+                detail="对账单已经调整，请刷新后按当前账单处理开票任务",
+            )
+        if statement.settled_amount > 0 or db.scalar(
+            select(SettlementRecord.id)
+            .where(SettlementRecord.statement_id == statement.id)
+            .limit(1)
+        ) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="该对账单已有收款事实，不能直接撤销开票任务后修改账单",
+            )
+        if db.scalar(
+            select(Invoice.id)
+            .where(
+                Invoice.statement_id == statement.id,
+                Invoice.invoice_status == "issued",
+            )
+            .limit(1)
+        ) is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="该对账单已登记实际开票，不能普通撤销；请按红冲/重开流程处理。",
+            )
+
         updated = db.execute(
             text(
                 """
@@ -2033,13 +2065,75 @@ def void_invoice_task(
             resource="FinanceInvoiceTask",
             entity_id=task.id,
             customer=customer,
-            details={"task_number": task.task_number},
+            details={
+                "task_number": task.task_number,
+                "statement_id": statement.id,
+                "old_tax_template_must_not_be_used": True,
+            },
             description="作废冻结开票任务",
         )
+        db.expire_all()
+        active_task_count = db.scalar(
+            select(FinanceInvoiceTask.id)
+            .where(
+                FinanceInvoiceTask.statement_id == statement.id,
+                FinanceInvoiceTask.status.not_in(("voided", "issued")),
+            )
+            .limit(1)
+        )
+        reopened_statement = False
+        if active_task_count is None:
+            statement = db.get(Statement, statement.id)
+            assert statement is not None
+            if statement.version != task.statement_version:
+                raise HTTPException(
+                    status_code=409,
+                    detail="对账单版本已变化，请刷新后重试",
+                )
+            before_version = statement.version
+            statement.confirmation_status = "draft"
+            statement.confirmed_by = None
+            statement.confirmed_at = None
+            statement.version += 1
+            db.add(
+                StatementAdjustment(
+                    statement_id=statement.id,
+                    action="void_invoice_task_for_modify",
+                    reason="撤销未实际开票任务，旧税局导入文件不可继续使用",
+                    before_version=before_version,
+                    after_version=statement.version,
+                    details_json=json.dumps(
+                        {
+                            "voided_invoice_task_id": task.id,
+                            "voided_invoice_task_number": task.task_number,
+                            "old_tax_template_must_not_be_used": True,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    created_by=user.id,
+                )
+            )
+            _audit(
+                db,
+                user=user,
+                action="RETURN_TASK_TO_MODIFY",
+                resource="Statement",
+                entity_id=statement.id,
+                customer=customer,
+                details={
+                    "task_number": task.task_number,
+                    "before_version": before_version,
+                    "after_version": statement.version,
+                },
+                description="撤销未开票任务并退回对账修改",
+            )
+            reopened_statement = True
         db.expire_all()
         current_task = db.get(FinanceInvoiceTask, task.id)
         assert current_task is not None
         response = _task_response(db, current_task)
+        response["reopened_statement"] = reopened_statement
         db.commit()
         return response
     except HTTPException:

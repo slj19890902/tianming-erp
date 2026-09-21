@@ -8,28 +8,30 @@ INDEX = (
 
 def test_finance_defaults_to_customer_month_current_workbench() -> None:
     assert 'financeView: "overview"' in INDEX
-    assert 'financeFilters: { statement_month:month(), balance_type:"", customer_id:"" }' in INDEX
+    assert 'financeFilters: { statement_month:"", balance_type:"", customer_id:"" }' in INDEX
+    assert 'financeQueueTabs:[{key:"",countKey:"all_open",label:"全部待办"}' in INDEX
     assert 'axios.get("/api/finance/current-customer-months"' in INDEX
-    assert "statement_month:this.financeFilters.statement_month || month()" in INDEX
-    assert "balance_type:this.financeFilters.balance_type || undefined" in INDEX
-    assert "customer_id:this.financeFilters.customer_id || undefined" in INDEX
+    assert "statement_month:rawFinanceFilters.statement_month || undefined" in INDEX
+    assert "all_open:!rawFinanceFilters.statement_month" in INDEX
+    assert "balance_type:rawFinanceFilters.balance_type || undefined" in INDEX
+    assert "customer_id:rawFinanceFilters.customer_id || undefined" in INDEX
     assert "经营概览" in INDEX and "客户对账" in INDEX
     assert "financeCurrentState: { loading:false, error:\"\", loaded:false }" in INDEX
     assert "财务待办加载失败" in INDEX
-    assert "本月没有需要处理的对账或开票" in INDEX
+    assert "当前筛选没有需要处理的客户账单" in INDEX
 
 
 def test_finance_customer_month_rows_expand_existing_statement_actions() -> None:
     assert "financeGroupKey(row)" in INDEX
     assert "`${row.statement_month}:${row.customer_id}`" in INDEX
-    assert 'v-for="statement in row.statements"' in INDEX
+    assert "v-for=\"statement in localRows(row.statements" in INDEX
     assert '@click="openStatementDetail(statement)"' in INDEX
-    assert '@click="confirmFinanceStatement(statement)"' in INDEX
+    assert '@click="exportAndConfirmStatement(statement)"' in INDEX
     assert '@click="generateInvoiceTask(statement)"' in INDEX
     assert "@click=\"exportStatement(statement,'xlsx')\"" in INDEX
     assert "@click=\"exportStatement(statement,'pdf')\"" in INDEX
     assert '@click="openStatementDispute(statement)"' in INDEX
-    assert "@click=\"setFinanceView('invoice_tasks')\">开票任务" in INDEX
+    assert "setFinanceView('invoice_tasks')" in INDEX
     assert 'axios.get("/api/finance/statements"' in INDEX
     assert 'axios.get("/api/finance/invoice-tasks"' in INDEX
 

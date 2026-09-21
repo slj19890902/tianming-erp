@@ -20,13 +20,11 @@ def test_active_finance_buttons_use_statement_task_flow_without_receipt_action()
         INDEX.index("<template v-if=\"financeView==='current'\"") :
         INDEX.index("<template v-else-if=\"financeView==='reports'\"")
     ]
-    assert "financeStatementOperationState.action==='confirm'" in finance
+    assert "financeStatementOperationState.action==='export_confirm'" in finance
     assert "financeStatementOperationState.action==='generate'" in finance
-    for label in ("确认中…", "生成中…", "客户异议", "Excel", "PDF"):
+    for label in ("导出并确认", "生成中…", "客户异议", "仅导出", "PDF", "确认收款"):
         assert label in finance
-    assert "登记中…" not in finance
-    assert "核销中…" not in finance
-    assert "收款核销" not in finance
+    assert "确认收款" in finance
 
 
 def test_cancel_register_and_settle_are_single_flight_and_freeze_payload(tmp_path: Path) -> None:

@@ -128,7 +128,7 @@ vm.retryInvoiceTaskDetail = new AsyncFunction({json.dumps(retry_body, ensure_asc
 
 def test_invoice_task_confirm_and_result_save_are_single_flight(tmp_path: Path) -> None:
     confirm_body = _method_body(
-        "async confirmInvoiceTask(task) {", "downloadInvoiceTaxTemplate(task) {"
+        "async confirmInvoiceTask(task) {", "async downloadInvoiceTaxTemplate(task) {"
     )
     save_body = _method_body(
         "async saveInvoiceTaskResult() {", "uploadInvoiceTaskPdf(task) {"

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.475"
-APP_VERSION_NAME = "订单键盘连续性与交付回归修复"
+APP_VERSION = "v0.22.476"
+APP_VERSION_NAME = "对账开票收款待办闭环"
 APP_BUILD_DATE = "2026-09-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4500,3 +4500,17 @@ APP_VERIFICATION_STEPS = [
     "进入系统备份 → 系统版本，确认版本为 v0.22.475、数据库 revision 仍为 du0920。",
 ]
 APP_CHANGELOG = [*(f"v0.22.475：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "客户对账按客户与账期稳定分页，提供全部待办、待对账、待开票、待收款和已完成入口；角标按权限和查询范围内的去重客户统计，确认、翻页和刷新不会再混入旧筛选结果。",
+    "对账单详情保留右上角关闭，右下角改为先导出 Excel 再确认；导出失败不确认，确认失败保留安全重试，确认后转入待开票。",
+    "开票任务改为蓝色确认并下载税局 Excel、下载、登记结果和后置预览；下载不代表实际开票。未实际开票任务可受控撤销并退回待修改，已开票或已收款继续拒绝普通回退。",
+    "待收款复用既有收款流水：可填写本次金额、日期及账户或备注，支持部分收款；已开票且收齐后进入已完成。客户税务资料仍仅要求抬头和税号，四项联系及银行信息选填并随任务冻结。",
+]
+APP_VERIFICATION_STEPS = [
+    "在客户对账打开全部待办，切换待对账、待开票、待收款和已完成；核对角标、账期、翻页及刷新保持一致。",
+    "打开真实待核对账单，使用导出并确认；确认后到待开票生成任务，确认并下载税局 Excel，实际开具后再登记结果。",
+    "在真实已开票待收账单确认一笔收款，核对部分收款仍在待收款；收齐且开票完成后到已完成。未实际开票任务可撤销并重新核对，已开票记录不要普通撤销。",
+]
+APP_CHANGELOG = [*(f"v0.22.476：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

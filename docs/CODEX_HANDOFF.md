@@ -1,5 +1,9 @@
 # Codex 项目交接
 
+## 2026-09-21 ERP-BLANK-PAGE v0.22.471
+
+- 正式代码7f01087b，包8baed7be，du0920不迁移；修复首页Vue模板缺括号导致整页空白。14项测试、隔离Chrome登录表单、正式只读健康/模板/资源/数据库检查通过，NAS完整备份已验证，待管理员人工验收。详见docs/release_reports/ERP_BLANK_PAGE_RELEASE_20260921.md及NAS独立回执。
+
 ## 2026-09-16 SHEET-MEASUREMENT-MATCH v0.22.449
 
 - 运行f539d8d0，包07b26d08，唯一head sc0916无DDL；净片后加工、10mm测量待核、W/Y白纸、压线A1可裁及切换批次旧筛选修复。33项定向、签名自检、NAS完整备份、健康/两端资源/正式只读样本通过；无历史业务改写，保留v448。5批模切缺具体用途需现场确认，北K21301853宽差1mm仅待核。见docs/release_reports/SHEET_MEASUREMENT_MATCH_20260916.md及NAS同任务v449回执，待管理员人工验收。

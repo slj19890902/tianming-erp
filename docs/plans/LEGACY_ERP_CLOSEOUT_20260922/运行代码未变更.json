@@ -1,0 +1,28 @@
+{
+  "base": "ae3d1b4f782003d9a2a7a63150c5be955579c438",
+  "candidate": "af13d56da14786a67acfa719c5e18cf707881d72",
+  "changed_tracked_paths": [
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/02_任务进度.md",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/03_证据矩阵.md",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/04_Astra第三阶段整改再验收交接.md",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/06_当前整改与下一阶段交付.md",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/MANIFEST_ASTRA_REWORK.json",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/P07_EVIDENCE_INDEX.json",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/P07_当前测量摘要.json",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/P07_测量报告摘要.md",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P02.md",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P04.md",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P06.md",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P07_Astra复核整改.md",
+    "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P08_证据交付门禁.md",
+    "scripts/qa/run_pytest_with_artifacts.py",
+    "scripts/qa/verify_phase3_delivery.py",
+    "scripts/qa/verify_phase3_manifest.py",
+    "tests/test_phase3_cache_authorization.py",
+    "tests/test_phase3_delivery_gate.py",
+    "tests/test_phase3_evidence_tools.py",
+    "tests/test_phase3_scale_reliability.py"
+  ],
+  "runtime_changes": [],
+  "verification": "git diff --name-only -z base candidate; only docs/tests/scripts/qa; initial human-quoted path parsing rejected non-ASCII paths, corrected to NUL-separated bytes"
+}

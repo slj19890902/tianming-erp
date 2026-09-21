@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "hash_rule": "SHA-256 of file bytes with CRLF normalized to LF",
+  "source_commit": "af13d56da14786a67acfa719c5e18cf707881d72",
+  "source_commit_scope": "test execution source; final document SHA is external receipt",
+  "manifest_excluded_from_hashed_universe": true,
+  "groups": [
+    {
+      "name": "docs",
+      "files": [
+        {
+          "path": "docs/CODEX_HANDOFF.md",
+          "sha256_lf": "232d1856217adedce586b9fc1b86407c85c765dc7965f148582619cb5491da60"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_CLOSEOUT_20260922/01_整体交付结论.md",
+          "sha256_lf": "cd4ddee53f118636deb715a0a50aae44f8fcbd9c3e8e07a9bc5b9f05d8ebf40b"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_CLOSEOUT_20260922/02_审计与场景映射.md",
+          "sha256_lf": "ca0b241d47a938bd4b72738888261d19ad12ed9082cfc7356212adb0d7cc65af"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_CLOSEOUT_20260922/C00_整体收尾.md",
+          "sha256_lf": "c5f1ba8694eff7838827bebf278b25d3aa105553ea7f60c6dd25c10dba6552a8"
+        }
+      ]
+    },
+    {
+      "name": "report_summary",
+      "files": [
+        {
+          "path": "docs/plans/LEGACY_ERP_CLOSEOUT_20260922/历史执行证据.json",
+          "sha256_lf": "93c4246668d9fc4df62a8172d1f3edb49953c3e3edd66c98dace85bb3cb88c0c"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_CLOSEOUT_20260922/本轮执行证据.json",
+          "sha256_lf": "e6ae08144c323b2d4b4589169b4d14705fbcc751cb6faf9bd28db94147449045"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_CLOSEOUT_20260922/运行代码未变更.json",
+          "sha256_lf": "55af7408a6b000ef2a62cc851978d78708faf19802b2b1a06b89493c36516b91"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_CLOSEOUT_20260922/运行只读核验.json",
+          "sha256_lf": "a82eb826f222960d3f0517a4864d35945077b51f68ec7bec1e59e9cbec641946"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "observed_utc": "2026-09-21T23:38:39.986296+00:00",
+  "package_sha256": "a2d0f1108cd8e7d8143f529bc14c8a7f7094a5c6e9f8986f9e527e2b0d123212",
+  "version": "v0.22.480",
+  "source": "ae3d1b4f782003d9a2a7a63150c5be955579c438",
+  "revision": [
+    [
+      "du0920"
+    ]
+  ],
+  "integrity": [
+    [
+      "ok"
+    ]
+  ],
+  "foreign_key_error_count": 0,
+  "health": [
+    {
+      "url": "http://127.0.0.1:18000/api/health",
+      "status": 200
+    },
+    {
+      "url": "http://192.168.3.80:8000/api/health",
+      "status": 200
+    },
+    {
+      "url": "http://172.16.1.26:8000/api/health",
+      "status": 200
+    }
+  ],
+  "mode": "read-only; no production business row selection or writes"
+}

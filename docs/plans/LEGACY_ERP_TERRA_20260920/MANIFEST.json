@@ -1,6 +1,6 @@
 {
   "created_at": "2026-09-20T09:00:18.204545Z",
-  "kind": "historical_terra_handoff_rework_in_progress",
+  "kind": "historical_handoff_with_current_rework_status",
   "local_head": "ff58789ce4550d3d00bb01dbc26d0ffd0db7d495",
   "remote_head_reverified": true,
   "audit_integrity": {
@@ -26,11 +26,11 @@
     },
     {
       "path": "03_进度与决策.md",
-      "sha256": "9e9b43faf36117f6c734e32690004be7aff2082d51cd6d6dee937b88a0ab78d0"
+      "sha256": "900bebc76f7e3e274c237f1d69a4c5bc10e8e4538f709cb83560b7a090803b1f"
     },
     {
       "path": "04_场景覆盖与验收.md",
-      "sha256": "ce8d0f0c702ce563e2e99181444e323a0633ecd9d7223c9ccb57212d05751f2e"
+      "sha256": "fbf5a463d4b4c45f3dc2e7c3248597e6e3edfaae7daef91fd86c94fecad4f4aa"
     },
     {
       "path": "05_已确认合同速查.md",
@@ -38,7 +38,7 @@
     },
     {
       "path": "06_Astra最终验收交接.md",
-      "sha256": "559690c0310ba7b367353a99a8200255351574a459f082d093cef897a2b435ce"
+      "sha256": "7148972598b7df710af2e1c86b583d91e165da5a4ba7d8bff90b344d77a5eb71"
     },
     {
       "path": "20260920-T02-候选实现与隔离迁移验证.md",
@@ -174,11 +174,11 @@
     },
     {
       "path": "tasks/T17.md",
-      "sha256": "e2583252bac7ce210d84f26dce47898633284ecb7a2cc67e6ba69dd019c3f0b4"
+      "sha256": "7bf6624356423521dba279ff7dfefd283a60cd0b996c58298fb703640422f994"
     },
     {
       "path": "tasks/T18.md",
-      "sha256": "b5bb47b6016c4a8ef21abb78355451e666f8b33debaa24054bf6294fb9fd9967"
+      "sha256": "6b9a10e06457949e35f9103239af0a028cbdad13a7bc58f4ff0de30abd323f10"
     },
     {
       "path": "tasks/T19.md",
@@ -186,10 +186,38 @@
     },
     {
       "path": "tasks/T20.md",
-      "sha256": "ef3a0bdfd4c18a35fb02a08c5e4a285b4c61fa2453d356d34a52c928148abca1"
+      "sha256": "3912359a0d1b947d01fb9a6854ab565253a06ed66fbdff0fff22c6ffe0d3ba4b"
     }
   ],
-  "source_fingerprints": [
+  "validation_errors": [],
+  "environment_recovery": {
+    "checked_at": "2026-09-20T15:25:06.4752275+08:00",
+    "remote_head": "e365c9aaf1e44d614b8f97e648d40ebd22351603",
+    "result": "host ls-remote twice and fetch passed; sandbox context mismatch",
+    "scope": "environment_only_not_T02_implementation"
+  },
+  "t02_candidate": {
+    "status": "released_pending_external_acceptance",
+    "implementation_commit": "f49346376bbe33c384f92776087a648382ab3f10",
+    "formal_source_commit": "659696a3a3a4c3201a0c26bfd361e735efc9739d",
+    "formal_package": "90fb655c163a167bf20c8fcfad97c16c022d7a9e7889092dbc70c4b7818dadb9",
+    "formal_revision": "du0920",
+    "focused_tests": "7 passed in 13.53s",
+    "isolated_working_database_sha256": "52c3ac173b44fedfa75f3b5d8adce5190ff18e4227bfaca6bc3a6b784b7a54a5",
+    "isolated_pre_migration_backup_sha256": "562b72192ec6fa184668982cac14291b43c21e23c204f59e99deb2fed88fa8c2",
+    "formal_database_written_by_this_reverification": false,
+    "administrator_acceptance": "pending_real_new_pdf_business_flow"
+  },
+  "astra_rework": {
+    "started_at": "2026-09-21",
+    "status": "nonvisual_remediation_verified_pending_administrator_check",
+    "review_result": "first_astra_review_not_accepted",
+    "review_report": "20260921-Astra首轮验收意见.md",
+    "scope_note": "Historical audit package, rework plan, source ancestry, and runtime package are distinct evidence objects. The historical package integrity result does not establish R00-R06 completion.",
+    "rework_plan": "../LEGACY_ERP_ASTRA_REWORK_20260921/MANIFEST.json",
+    "current_status_entry": "../LEGACY_ERP_ASTRA_REWORK_20260921/05_缺口修补与人工检查.md"
+  },
+  "historical_source_fingerprints": [
     {
       "path": "docs/CODEX_START.md",
       "sha256": "56c6cb6584e492df7cc3d07834094bce5094bb08f5d2881b86431d6c65f33a6e"
@@ -223,31 +251,39 @@
       "sha256": "79c5ac65cd502050804e049e1b11ad11e79f0b5110deae097469c1f5e4594c74"
     }
   ],
-  "validation_errors": [],
-  "environment_recovery": {
-    "checked_at": "2026-09-20T15:25:06.4752275+08:00",
-    "remote_head": "e365c9aaf1e44d614b8f97e648d40ebd22351603",
-    "result": "host ls-remote twice and fetch passed; sandbox context mismatch",
-    "scope": "environment_only_not_T02_implementation"
-  },
-  "t02_candidate": {
-    "status": "released_pending_external_acceptance",
-    "implementation_commit": "f49346376bbe33c384f92776087a648382ab3f10",
-    "formal_source_commit": "659696a3a3a4c3201a0c26bfd361e735efc9739d",
-    "formal_package": "90fb655c163a167bf20c8fcfad97c16c022d7a9e7889092dbc70c4b7818dadb9",
-    "formal_revision": "du0920",
-    "focused_tests": "7 passed in 13.53s",
-    "isolated_working_database_sha256": "52c3ac173b44fedfa75f3b5d8adce5190ff18e4227bfaca6bc3a6b784b7a54a5",
-    "isolated_pre_migration_backup_sha256": "562b72192ec6fa184668982cac14291b43c21e23c204f59e99deb2fed88fa8c2",
-    "formal_database_written_by_this_reverification": false,
-    "administrator_acceptance": "pending_real_new_pdf_business_flow"
-  },
-  "astra_rework": {
-    "started_at": "2026-09-21",
-    "status": "in_progress",
-    "review_result": "first_astra_review_not_accepted",
-    "review_report": "20260921-Astra首轮验收意见.md",
-    "scope_note": "Historical audit package, rework plan, source ancestry, and runtime package are distinct evidence objects. The historical package integrity result does not establish R00-R06 completion.",
-    "rework_plan": "../LEGACY_ERP_ASTRA_REWORK_20260921/MANIFEST.json"
-  }
+  "historical_source_fingerprints_note": "Preserved historical snapshot; not asserted to match current working tree.",
+  "source_fingerprints": [
+    {
+      "path": "docs/CODEX_START.md",
+      "sha256": "56c6cb6584e492df7cc3d07834094bce5094bb08f5d2881b86431d6c65f33a6e"
+    },
+    {
+      "path": "docs/CODEX_EXECUTION_CHARTER.md",
+      "sha256": "155ceabd9ef271049a68e9c545a207b840694d4bb958062543ab92921be91a50"
+    },
+    {
+      "path": "docs/TIANMING_ERP_MASTER_REQUIREMENTS.md",
+      "sha256": "213c26908dd8cce4463a34e30381d24affba738a359114fe0e943adb2cf023c0"
+    },
+    {
+      "path": "docs/release_reports/A0004_R2_ORDER_EXECUTION_STATUS_RELEASE_20260920.md",
+      "sha256": "86210ddf3d0495a5af1ff87422708d0f0f01b41b75ded07d7ad20e035f79bfc5"
+    },
+    {
+      "path": "docs/release_reports/A0008_R2_DELIVERY_TEMPLATE_DESIGNER_RELEASE_20260920.md",
+      "sha256": "78323a0bb47fb0bd1b172222a2ec4862f43d78a95b08ceeefc6f41c546c95b5b"
+    },
+    {
+      "path": "app/core/database.py",
+      "sha256": "06cbafea5ace493c72fd567508f6d36f77ac17062f416a7cc1dd8cf59e768c6a"
+    },
+    {
+      "path": "app/api/orders.py",
+      "sha256": "76bc780f0bec581683af7215882c4d14e6fb070856637730a331f8ffc7a1bf44"
+    },
+    {
+      "path": "app/version.py",
+      "sha256": "1f295cb448032b4a1ba40bef520879517ad0f725381eba38c7ec7e3a16b79053"
+    }
+  ]
 }

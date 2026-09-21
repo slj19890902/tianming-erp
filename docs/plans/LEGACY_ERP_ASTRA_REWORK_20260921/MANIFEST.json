@@ -19,7 +19,7 @@
     },
     {
       "path": "02_整改进度.md",
-      "sha256": "f5d3a98d13e21cd44d8ea6607719a9e3e04b6d25b804001941814dcbf72648b5"
+      "sha256": "1741749a0ee9296cf234d50f1b9cb35f38469ed415351af621a9aec053dd0b00"
     },
     {
       "path": "R00_证据索引.md",
@@ -28,6 +28,20 @@
     {
       "path": "tasks/R00.md",
       "sha256": "dd8ef3a488089ba21873126b8717497de56b83d8f05c625e5394e6190c2a8574"
+    },
+    {
+      "path": "R01_执行证据.md",
+      "sha256": "abb6e4777dc99a0e5635f67c4d76401fda3fe2dfe7524661641771393d35e41e"
+    },
+    {
+      "path": "tasks/R01.md",
+      "sha256": "179a4e616d55624c2643259baacc87125bf3d160f32629da5a65d7b8288e67ad"
+    }
+  ],
+  "supporting_code": [
+    {
+      "path": "scripts/qa/run_pytest_with_artifacts.py",
+      "sha256": "d8826f9a355850a91654a7fb36e37934271f7e8ba53f50ce58f29ceadd54970d"
     }
   ]
 }

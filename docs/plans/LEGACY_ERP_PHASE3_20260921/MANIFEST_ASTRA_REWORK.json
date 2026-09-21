@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "hash_rule": "SHA-256 of file bytes with CRLF normalized to LF",
+  "source_commit": "2fe7b573e40b2e07f3c87478fb210bb2a98940cf",
+  "manifest_excluded_from_hashed_universe": true,
+  "groups": [
+    {
+      "name": "code",
+      "files": [
+        {
+          "path": "scripts/qa/verify_phase3_manifest.py",
+          "sha256_lf": "2ce7074833276f23b130a0e28e2d29865bf6b984ac0aec77558e9b1c79870944"
+        }
+      ]
+    },
+    {
+      "name": "tests",
+      "files": [
+        {
+          "path": "tests/test_phase3_scale_reliability.py",
+          "sha256_lf": "8f9c3e26977db1d8d6f1501143a3c5158a826b8ff9bd206684f9f6239aa1fc9a"
+        }
+      ]
+    },
+    {
+      "name": "documents",
+      "files": [
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/01_详细实施方案.md",
+          "sha256_lf": "3dbd7b6b1d95c07c230aaaaf46965f4beeea8ad443b4f2f1e796d0cf5cd16810"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/02_任务进度.md",
+          "sha256_lf": "0f2936badc14f343cdcb9d2246a5d8d4fcf579eb64b516c51e633acb69f87ff8"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/03_证据矩阵.md",
+          "sha256_lf": "87073a697b3748b7aa8cff8bcc41ac58b3264de5fc0660cc4a3e88e0edf3113a"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P04.md",
+          "sha256_lf": "ea80cf775468dfc4d0f4359f299f912c5220f226a7fe55aab43b4d33ace273bc"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P06.md",
+          "sha256_lf": "e9fd8194da2da7880a3b1ee291a402ab55038b82886d40f45184d2d9c8950fcc"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/tasks/P07_Astra复核整改.md",
+          "sha256_lf": "98be98ab00664d4cfc2af157a5c7cd36f32df8f07d255e57244c14b505cd98a3"
+        }
+      ]
+    },
+    {
+      "name": "report_summary",
+      "files": [
+        {
+          "path": "docs/plans/LEGACY_ERP_PHASE3_20260921/P07_测量报告摘要.md",
+          "sha256_lf": "bdfaf5d82c9a154e27f948d1756f57c09dee967d4fe1238e095d9100a17552d4"
+        }
+      ]
+    }
+  ]
+}

@@ -1,59 +1,141 @@
 {
   "created": "2026-09-21",
-  "scope": "second_phase_rework_execution_in_progress",
+  "scope": "second_phase_rework_blocked_external",
   "baseline": {
-    "source_head": "ff58789ce4550d3d00bb01dbc26d0ffd0db7d495",
-    "formal_runtime_version": "v0.22.469",
-    "formal_runtime_source": "659696a3a3a4c3201a0c26bfd361e735efc9739d",
-    "formal_runtime_package": "90fb655c163a167bf20c8fcfad97c16c022d7a9e7889092dbc70c4b7818dadb9",
-    "review_status": "first_astra_review_not_accepted"
+    "initial_source_head": "ff58789ce4550d3d00bb01dbc26d0ffd0db7d495",
+    "current_formal_baseline": "5c35bdba3ee91ce3471d484ba1a0af91a94dcf64",
+    "formal_runtime_version": "v0.22.474",
+    "formal_runtime_source": "8e0e6e4baf1f62dcb24c183b84a76136d9cd38c4",
+    "formal_runtime_package": "b35b04d34675b1aaf64961d23469adca728c297b115d08387112e733426a842a",
+    "formal_runtime_revision": "du0920",
+    "review_status": "second_phase_blocked_external_not_ready_for_astra_completion_acceptance",
+    "blocked_reason": "R03 isolated Chrome interaction cannot start on factory host; R05 release is dependent on that required condition."
   },
   "files": [
     {
       "path": "00_复制给Terra的提示词.md",
-      "sha256": "7da26082101c0cd15d6dda7e02801c93b1e72d0c4ecd7abe84152d4af2860f2c"
+      "sha256": "08702167a8d2c265cbfdda0dcf2f4fe4fe347924ce7f8f97adf07c5a32e34114"
     },
     {
       "path": "01_整改实施方案.md",
-      "sha256": "37689e7b5f723f90f2ef9eb4ef5e518c2f6866830a2530c96c0eb4345fab542e"
+      "sha256": "3f78c0d7e34ec54301b26b0839d619fa9c5dae6e583b9b6225aa7d2f0a3d5394"
     },
     {
       "path": "02_整改进度.md",
-      "sha256": "bbc75bab9cffbb3ce17838739b340281f74bf550dd94a1d7eb50f06f19f1886f"
+      "sha256": "301bbf03d9c1190f139c9d06a5711e373c2dc77ba616b24c1173da3490267373"
+    },
+    {
+      "path": "03_Astra二次验收交接.md",
+      "sha256": "ce27b070bcf8886268d88693ca1788a58242aff6516b4654e7ccf16c0930c56c"
     },
     {
       "path": "R00_证据索引.md",
-      "sha256": "30307dbca516bd863e9b1909ba03744a3842b25b1f4f01b455e2d8e6faed8479"
-    },
-    {
-      "path": "tasks/R00.md",
-      "sha256": "dd8ef3a488089ba21873126b8717497de56b83d8f05c625e5394e6190c2a8574"
+      "sha256": "e1d273fc6e65cafbd4c67b4a7a245fcd7ee48491604a6f63ac2292578b2df195"
     },
     {
       "path": "R01_执行证据.md",
-      "sha256": "abb6e4777dc99a0e5635f67c4d76401fda3fe2dfe7524661641771393d35e41e"
-    },
-    {
-      "path": "tasks/R01.md",
-      "sha256": "179a4e616d55624c2643259baacc87125bf3d160f32629da5a65d7b8288e67ad"
+      "sha256": "5b6737c7dc6fcdd33ddcbc1a1e5ef41c4c5a710d01bf6442f22b193028e29ff2"
     },
     {
       "path": "R02_执行证据.md",
-      "sha256": "c3d0b0faa3b2020c28cce50689beac131a3282221ca31910c0348a3f406b91e9"
+      "sha256": "83c7bd0eab55bad6ecae67690cfa7181d47f22c2180b14f51387f4417b21a974"
+    },
+    {
+      "path": "R03_执行证据.md",
+      "sha256": "fe25b13ddfe930674decffcba0a8129a892c7421b01f7e569cbd5c614491de25"
+    },
+    {
+      "path": "R04_执行证据.md",
+      "sha256": "7ec723b4c6aac87934eeaef78c21f2e770b6c822c9a8ee7d5ea9d8d02a4bb9ac"
+    },
+    {
+      "path": "R05_执行证据.md",
+      "sha256": "9f778d86700ee80e8fd39f0d8cf4b69cf1ac9b0ca5e007468f5cd4e7469218c6"
+    },
+    {
+      "path": "tasks/R00.md",
+      "sha256": "44f9147fa4f4bb3d0f850e80af2e2761a3ac14c1f9fb8c3f4fc6afdeca05ffe8"
+    },
+    {
+      "path": "tasks/R01.md",
+      "sha256": "c73b46d03966bb9da485da88065b4ab800babcb92ad3e55b0ba7e622425ff9ac"
     },
     {
       "path": "tasks/R02.md",
-      "sha256": "4ab2302c71464e1718e33d0c1b27045fe8bdf5eddcbfb717ce7080b9e7f52f8c"
+      "sha256": "6d74305c7b26bca10f05f910c976e96724bb318ae7e1db7baff9fa6aba33570d"
+    },
+    {
+      "path": "tasks/R03.md",
+      "sha256": "541d60167159ac9b2e6901aa9bc108fa56486c158d6e9a5e5730703ddf5f0f05"
+    },
+    {
+      "path": "tasks/R04.md",
+      "sha256": "ef7af8c9858c4e5d7ac85ed7d64ad199c120df83cbd65a0aba93a77ed5f4793e"
+    },
+    {
+      "path": "tasks/R05.md",
+      "sha256": "d92ae225bcde07dadf84f04c73de244146d9fc3207d09eee07efc45359342a3d"
+    },
+    {
+      "path": "tasks/R06.md",
+      "sha256": "740b9b007be1b790b1fbce7d40d2b0fa1e549d8efc2358cfa2152aabb96b6409"
     }
   ],
   "supporting_code": [
     {
       "path": "scripts/qa/run_pytest_with_artifacts.py",
-      "sha256": "d8826f9a355850a91654a7fb36e37934271f7e8ba53f50ce58f29ceadd54970d"
+      "sha256": "e4eb7658e7f4c6cf77e65bd3604fbf88ab5e94f840ba399f0078ff545aa10c40"
     },
     {
       "path": "tests/test_r02_same_source_end_to_end.py",
-      "sha256": "7b1518d1ac8a3daee3a7156084ea6870c2e0220fad3638b460df17c0a5f26cf8"
+      "sha256": "5be9927d298e55a9c77d9992a9494732cc7a6261105d3ca5010e0f6a20053df6"
+    },
+    {
+      "path": "app/api/deliveries.py",
+      "sha256": "dc42a828e732d994eb954e74f56a70687788a574b6fd1a709e132f9da7c74a00"
+    },
+    {
+      "path": "app/api/requisition.py",
+      "sha256": "424a66a50c80119feb8931cd44d429a205a35957c7bcab7b71c47a51094602ba"
+    },
+    {
+      "path": "tests/test_frontend_performance_p1.py",
+      "sha256": "a786b21707d3ef89fd7c8b2c528785b45b954c5d2326e5c9188f97eebe8d9049"
+    },
+    {
+      "path": "tests/test_phase16_pdf_order_import.py",
+      "sha256": "e88e0d2e9beacb195991f940253092d0d4eb16ce08cd48ab487a426d8dabb688"
+    },
+    {
+      "path": "tests/test_semi_finished_delivery_consumption.py",
+      "sha256": "f973a0006b32621186d2c71454269f33a9c000be803a7ec821d96ca12fc6e261"
+    }
+  ],
+  "updated_at": "2026-09-21",
+  "legacy_status_updates": [
+    {
+      "path": "../LEGACY_ERP_TERRA_20260920/03_进度与决策.md",
+      "sha256": "49e0b876abe8206eb9852ea9daf0344e31a31359150a3b8f376bba007334fa09"
+    },
+    {
+      "path": "../LEGACY_ERP_TERRA_20260920/04_场景覆盖与验收.md",
+      "sha256": "08c82a02fe64ef0bb4153701afff1c64a2f6aeb0002da682dd40282cf0568690"
+    },
+    {
+      "path": "../LEGACY_ERP_TERRA_20260920/06_Astra最终验收交接.md",
+      "sha256": "3f3f09e9c829c16bc02f7e3bc1c9d042404c607bc43369812355f9d4c7177216"
+    },
+    {
+      "path": "../LEGACY_ERP_TERRA_20260920/tasks/T17.md",
+      "sha256": "fa63bb72e242469c1c93ddc1c33a346a9dcea542736f754dda37594f5ae8dac3"
+    },
+    {
+      "path": "../LEGACY_ERP_TERRA_20260920/tasks/T18.md",
+      "sha256": "56ff0866ed98f1461bb74385c35bf6806f49dc1fe0222dc12c6987647ad17a20"
+    },
+    {
+      "path": "../LEGACY_ERP_TERRA_20260920/tasks/T20.md",
+      "sha256": "b31e421cbb2cc0dbc676921f92330467f6b6b2505032505d751ee3cf893e52fc"
     }
   ]
 }

@@ -19,7 +19,10 @@ from pathlib import Path
 import sqlite3
 from statistics import median
 from threading import Event, Lock, RLock, Thread
-from time import monotonic, sleep
+from time import perf_counter as monotonic, sleep
+from contextvars import ContextVar
+import platform
+import shutil
 
 import pytest
 from fastapi import FastAPI
@@ -56,6 +59,7 @@ SAMPLES_PER_MODE = 30
 WARM_REQUESTS = 5
 PAGE_SIZE = 50
 LOCK_POSITIVE_CONTROL_HOLD_SECONDS = 0.2
+_REQUEST_MEASUREMENT = ContextVar("p07_request_measurement", default=None)
 
 
 class _TimedRLock:
@@ -68,7 +72,11 @@ class _TimedRLock:
     def acquire(self, *args, **kwargs) -> bool:
         started = monotonic()
         acquired = self._lock.acquire(*args, **kwargs)
-        self.wait_samples_ms.append(round((monotonic() - started) * 1000, 3))
+        elapsed = round((monotonic() - started) * 1000, 3)
+        self.wait_samples_ms.append(elapsed)
+        measurement = _REQUEST_MEASUREMENT.get()
+        if measurement is not None:
+            measurement["mutex"].append(elapsed)
         return acquired
 
     def release(self) -> None:
@@ -558,7 +566,23 @@ def test_sqlite_delete_journal_lock_wait_positive_control(tmp_path: Path) -> Non
     holder.execute("CREATE TABLE probe (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
     holder.execute("INSERT INTO probe(id, value) VALUES (1, 'before')")
     holder.commit()
+    # Prepare the exact same statement before holding the schema lock, and
+    # preserve an ordinary no-holder control separately from the positive run.
+    started = monotonic()
+    waiter.execute("UPDATE probe SET value = 'waiter' WHERE id = 1")
+    waiter.commit()
+    ordinary_ms = (monotonic() - started) * 1000
+    sql_entered = Event()
+    timeline = {}
+
+    def trace(statement):
+        if statement.startswith("UPDATE probe"):
+            timeline["waiter_sql_entered"] = monotonic()
+            sql_entered.set()
+
+    waiter.set_trace_callback(trace)
     holder.execute("BEGIN EXCLUSIVE")
+    timeline["holder_exclusive_acquired"] = monotonic()
     holder.execute("UPDATE probe SET value = 'holder' WHERE id = 1")
 
     waiter_started = Event()
@@ -571,6 +595,7 @@ def test_sqlite_delete_journal_lock_wait_positive_control(tmp_path: Path) -> Non
         try:
             waiter.execute("UPDATE probe SET value = 'waiter' WHERE id = 1")
             waiter.commit()
+            timeline["waiter_commit_returned"] = monotonic()
             observation["result"] = "committed"
         except sqlite3.OperationalError as exc:
             observation["result"] = "sqlite_operational_error"
@@ -584,12 +609,15 @@ def test_sqlite_delete_journal_lock_wait_positive_control(tmp_path: Path) -> Non
     worker = Thread(target=contend_for_write, name="p07-sqlite-lock-waiter")
     worker.start()
     assert waiter_started.wait(timeout=2)
+    assert sql_entered.wait(timeout=2)
     sleep(LOCK_POSITIVE_CONTROL_HOLD_SECONDS)
     # The second connection must still be pending before the holder releases;
     # otherwise the test would not be a lock-wait positive control.
     assert not waiter_finished.is_set()
     released_at = monotonic()
+    timeline["holder_release_started"] = released_at
     holder.commit()
+    timeline["holder_release_returned"] = monotonic()
     assert waiter_finished.wait(timeout=5)
     worker.join(timeout=1)
     holder.close()
@@ -606,6 +634,11 @@ def test_sqlite_delete_journal_lock_wait_positive_control(tmp_path: Path) -> Non
         "controlled_hold_ms": LOCK_POSITIVE_CONTROL_HOLD_SECONDS * 1000,
         "release_monotonic": released_at,
         "waiter": observation,
+        "timeline_perf_counter_seconds": timeline,
+        "known_blocked_window_ms": (released_at - timeline["waiter_sql_entered"]) * 1000,
+        "ordinary_no_holder_sql_and_commit_ms": ordinary_ms,
+        "ordinary_internal_busy_wait_ms": None,
+        "measurement_limit": "Known exclusive-lock window is observed; sqlite3 exposes no internal busy-handler duration. Ordinary elapsed is not busy wait.",
         "database_lock_wait_observed": waited_ms >= LOCK_POSITIVE_CONTROL_HOLD_SECONDS * 500,
         "application_mutex_wait_ms": None,
         "request_total_elapsed_ms": None,
@@ -624,19 +657,26 @@ def _measure_request(
     *,
     expected_unfinished_total: int,
 ) -> dict[str, object]:
-    sql_samples_ms: list[float] = []
+    measurement = {"sql": [], "mutex": []}
+    sql_samples_ms = measurement["sql"]
 
     def sql_started(_connection, _cursor, _statement, _parameters, context, _many):
         context._p07_started = monotonic()
 
     def sql_finished(_connection, _cursor, _statement, _parameters, context, _many):
         started = getattr(context, "_p07_started", None)
-        if started is not None:
-            sql_samples_ms.append(round((monotonic() - started) * 1000, 3))
+        current = _REQUEST_MEASUREMENT.get()
+        if started is not None and current is not None:
+            current["sql"].append(round((monotonic() - started) * 1000, 3))
 
-    lock_count_before = len(timed_lock.wait_samples_ms)
-    event.listen(engine, "before_cursor_execute", sql_started)
-    event.listen(engine, "after_cursor_execute", sql_finished)
+    # Install once before parallel execution. ContextVars propagate through
+    # TestClient/AnyIO into the request worker; SQL from other requests/writers
+    # cannot contaminate this request's counts.
+    if not getattr(engine, "_p07_observer_installed", False):
+        event.listen(engine, "before_cursor_execute", sql_started)
+        event.listen(engine, "after_cursor_execute", sql_finished)
+        engine._p07_observer_installed = True
+    token = _REQUEST_MEASUREMENT.set(measurement)
     try:
         payload, request_elapsed_ms = _request_payload(
             app,
@@ -644,9 +684,8 @@ def _measure_request(
             expected_unfinished_total=expected_unfinished_total,
         )
     finally:
-        event.remove(engine, "before_cursor_execute", sql_started)
-        event.remove(engine, "after_cursor_execute", sql_finished)
-    lock_samples = timed_lock.wait_samples_ms[lock_count_before:]
+        _REQUEST_MEASUREMENT.reset(token)
+    lock_samples = measurement["mutex"]
     return {
         "request_total_elapsed_ms": round(request_elapsed_ms, 3),
         "sql_execution_total_ms": round(sum(sql_samples_ms), 3),
@@ -656,10 +695,13 @@ def _measure_request(
         "application_mutex_wait_max_ms": round(max(lock_samples, default=0), 3),
         # Python's sqlite DB-API exposes no busy-handler duration.  These
         # normal, uncontended samples therefore record it as unobservable;
-        # F1's independent-connection positive control proves the detector.
+        # F1 proves only its controlled exclusive-lock window, not internal
+        # busy-handler duration for these ordinary request samples.
         "database_lock_wait_ms": None,
         "database_lock_wait_observable": False,
         "status": int(payload["total"]),
+        "http_status": 200,
+        "business_statuses": {str(item["id"]): item["business_status"] for item in payload["items"]},
         "unfinished_total": int(payload["unfinished_total"]),
         "item_ids": [int(item["id"]) for item in payload["items"]],
     }
@@ -701,15 +743,21 @@ def test_order_projection_cold_hot_post_commit_and_status_change_are_distinguish
     customer_id = customer_ids[tier]
     expected_total = tier
 
-    def sample(mode: str, *, commit_before_read: bool = False) -> dict[str, object]:
+    mutation_sequence = 0
+
+    def prepare(mode: str) -> None:
+        nonlocal mutation_sequence
         if mode == "cold":
             status_service._clear_active_status_badge_cache()
-        if commit_before_read:
+        if mode == "post_commit":
+            mutation_sequence += 1
             with Session(engine) as session:
                 order = session.scalar(select(Order).where(Order.customer_id == customer_id).limit(1))
                 assert order is not None
-                order.remark = f"P07 synthetic cache invalidation {tier}-{mode}"
+                order.remark = f"P07 synthetic cache invalidation {tier}-{mode}-{mutation_sequence}"
                 session.commit()
+
+    def sample() -> dict[str, object]:
         return _measure_request(
             app,
             engine,
@@ -719,13 +767,30 @@ def test_order_projection_cold_hot_post_commit_and_status_change_are_distinguish
         )
 
     try:
-        metrics = {
-            mode: [
-                sample(mode, commit_before_read=(mode == "post_commit"))
-                for _ in range(5)
-            ]
-            for mode in ("cold", "hot", "post_commit")
-        }
+        for _ in range(WARM_REQUESTS):
+            sample()
+        metrics = {}
+        concurrent_metrics = {}
+        for concurrency in (1, 3, 5):
+            for mode in ("cold", "hot", "post_commit"):
+                samples = []
+                for batch in range(SAMPLES_PER_MODE // concurrency):
+                    assert shutil.disk_usage(tmp_path).free >= 10 * 1024 ** 3, "stop: less than 10 GiB free"
+                    assert Path(engine.url.database).stat().st_size < 512 * 1024 ** 2, "stop: fixture exceeded 512 MiB"
+                    prepare(mode)
+                    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                        futures = [pool.submit(sample) for _ in range(concurrency)]
+                        samples.extend(f.result(timeout=30) for f in futures)
+                assert len(samples) == SAMPLES_PER_MODE
+                concurrent_metrics[f"{mode}-concurrency-{concurrency}"] = {
+                    "samples": samples, "summary": _measurement_summary(samples),
+                    "errors": [], "concurrency": concurrency,
+                    "cache_semantics": "shared process cache; invalidate once BEFORE each cold/post-commit batch, so only the first cache entrant rebuilds",
+                }
+                if concurrency == 1:
+                    metrics[mode] = samples
+                _write_astra_measurement(f"f2-progress-tier-{tier}.json", {
+                    "status": "in_progress", "completed_groups": concurrent_metrics})
 
         # Hold a real transaction open after its write is flushed, then start
         # the reader.  This records overlapping independent sessions without
@@ -734,28 +799,52 @@ def test_order_projection_cold_hot_post_commit_and_status_change_are_distinguish
         writer_flushed = Event()
         reader_started = Event()
         overlap: dict[str, object] = {}
+        target_index = max(i for i in range(tier) if i % 12 == 6)
+        with Session(engine) as session:
+            target_order = session.scalar(select(Order).order_by(Order.id).offset(target_index).limit(1))
+            transition_id = int(target_order.id)
+            receipt_id = session.scalar(select(IncomingReceiptItem.receipt_id)
+                                       .join(OrderItem, IncomingReceiptItem.order_item_id == OrderItem.id)
+                                       .where(OrderItem.order_id == transition_id))
+            target_order.status = "pending_production"
+            target_order_number = target_order.order_number
+            session.commit()
+        assert receipt_id is not None
+        overlap["before"] = sample()
+
+        def reader_sql_entered(_connection, _cursor, statement, _parameters, _context, _many):
+            if writer_flushed.is_set() and _REQUEST_MEASUREMENT.get() is not None and statement.lstrip().upper().startswith("SELECT"):
+                if not reader_started.is_set():
+                    overlap["reader_sql_entered_at"] = monotonic()
+                    reader_started.set()
+
+        event.listen(engine, "before_cursor_execute", reader_sql_entered)
 
         def overlapping_writer() -> None:
             started = monotonic()
             with Session(engine) as session:
-                order = session.scalar(
-                    select(Order).where(Order.customer_id == customer_id).limit(1)
-                )
-                assert order is not None
-                order.remark = f"P07 controlled read-write overlap {tier}"
+                receipt = session.get(IncomingReceipt, receipt_id)
+                assert receipt is not None and receipt.status == "posted"
+                receipt.status = "reversed"
+                for line in session.scalars(select(IncomingReceiptItem).where(IncomingReceiptItem.receipt_id == receipt_id)):
+                    line.status = "reversed"
                 session.flush()
+                overlap["writer_flushed_at"] = monotonic()
                 writer_flushed.set()
                 assert reader_started.wait(timeout=2)
                 sleep(0.05)
+                overlap["writer_commit_started_at"] = monotonic()
                 session.commit()
+                overlap["writer_commit_returned_at"] = monotonic()
             overlap["writer_transaction_elapsed_ms"] = round(
                 (monotonic() - started) * 1000, 3
             )
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             writer = pool.submit(overlapping_writer)
-            assert writer_flushed.wait(timeout=2)
-            reader_started.set()
+            if not writer_flushed.wait(timeout=2):
+                writer.result(timeout=2)  # preserve the actual writer failure
+                pytest.fail("writer did not flush")
             overlap["reader"] = _measure_request(
                 app,
                 engine,
@@ -764,6 +853,7 @@ def test_order_projection_cold_hot_post_commit_and_status_change_are_distinguish
                 expected_unfinished_total=expected_total,
             )
             writer.result(timeout=5)
+        event.remove(engine, "before_cursor_execute", reader_sql_entered)
         overlap["post_commit_reader"] = _measure_request(
             app,
             engine,
@@ -771,6 +861,17 @@ def test_order_projection_cold_hot_post_commit_and_status_change_are_distinguish
             timed_lock,
             expected_unfinished_total=expected_total,
         )
+        assert overlap["writer_flushed_at"] < overlap["reader_sql_entered_at"] < overlap["writer_commit_started_at"]
+        assert overlap["before"]["business_statuses"][str(transition_id)] == "pending_production"
+        assert overlap["post_commit_reader"]["business_statuses"][str(transition_id)] == "pending_incoming"
+        with TestClient(app) as client:
+            for state, should_contain in (("pending_incoming", True), ("pending_production", False)):
+                response = client.get("/api/orders", params={"scope": "active", "detail_level": "summary",
+                    "customer_id": customer_id, "status": state, "page_size": 50,
+                    "order_number": target_order_number})
+                assert response.status_code == 200, response.text
+                assert (transition_id in [row["id"] for row in response.json()["items"]]) == should_contain
+                overlap[f"filter_{state}"] = response.json()
 
         # A committed status change must invalidate the projection.  The active
         # list and global badge must both stop counting the changed order.
@@ -798,7 +899,16 @@ def test_order_projection_cold_hot_post_commit_and_status_change_are_distinguish
         assert after["unfinished_total"] == expected_total - 1
         assert target_id not in after["item_ids"]
 
+        with engine.connect() as connection:
+            integrity = connection.exec_driver_sql("PRAGMA integrity_check").scalar_one()
+            foreign_keys = connection.exec_driver_sql("PRAGMA foreign_key_check").all()
+            row_counts = {name: connection.exec_driver_sql(f'SELECT count(*) FROM "{name}"').scalar_one()
+                          for name in Base.metadata.tables}
+        assert integrity == "ok" and not foreign_keys
+
         payload = {
+            "status": "verified",
+            "database_checks": {"integrity": integrity, "foreign_key_violations": len(foreign_keys), "row_counts": row_counts},
             "fixture": {
                 "database": "fresh per-tier disposable SQLite file",
                 "total_orders": tier,
@@ -818,7 +928,12 @@ def test_order_projection_cold_hot_post_commit_and_status_change_are_distinguish
                 },
                 "inventory_distribution": "one quarter has finished lots and active finished-order reservations",
             },
-            "samples_per_mode": 5,
+            "samples_per_mode_and_concurrency": SAMPLES_PER_MODE,
+            "warmup_requests": WARM_REQUESTS,
+            "concurrent_measurements": concurrent_metrics,
+            "environment": {"python": platform.python_version(), "platform": platform.platform(),
+                            "cpu": platform.processor(), "cpu_count": os.cpu_count(),
+                            "sqlite": sqlite3.sqlite_version, "database_path": str(engine.url.database)},
             "measurements": metrics,
             "summaries": {
                 mode: _measurement_summary(samples)

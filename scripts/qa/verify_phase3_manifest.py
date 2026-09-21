@@ -18,10 +18,17 @@ def normalized_lf_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
-def load_paths(paths: list[str]) -> list[dict[str, str]]:
+def confined_path(root: Path, relative: str) -> Path:
+    candidate = (root / relative).resolve()
+    if Path(relative).is_absolute() or not candidate.is_relative_to(root.resolve()):
+        raise ValueError(f"manifest path escapes root: {relative}")
+    return candidate
+
+
+def load_paths(root: Path, paths: list[str]) -> list[dict[str, str]]:
     entries = []
     for raw_path in sorted(set(paths)):
-        path = Path(raw_path)
+        path = confined_path(root, raw_path)
         if not path.is_file():
             raise SystemExit(f"manifest source file is missing: {raw_path}")
         entries.append({"path": raw_path.replace("\\", "/"), "sha256_lf": normalized_lf_sha256(path)})
@@ -32,13 +39,25 @@ def verify(root: Path, manifest_path: Path) -> int:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest_relative = manifest_path.resolve().relative_to(root.resolve()).as_posix()
     failures: list[str] = []
+    seen = set()
+    if not manifest["groups"]:
+        failures.append("manifest groups must not be empty")
     for group in manifest["groups"]:
+        if not group["files"]:
+            failures.append(f"empty group: {group['name']}")
         for entry in group["files"]:
             relative = entry["path"]
+            if relative in seen:
+                failures.append(f"duplicate path: {relative}")
+            seen.add(relative)
             if relative == manifest_relative:
                 failures.append("manifest must not hash itself")
                 continue
-            candidate = root / relative
+            try:
+                candidate = confined_path(root, relative)
+            except ValueError as error:
+                failures.append(str(error))
+                continue
             actual = normalized_lf_sha256(candidate) if candidate.is_file() else None
             if actual != entry["sha256_lf"]:
                 failures.append(f"{relative}: expected {entry['sha256_lf']}, actual {actual}")
@@ -62,19 +81,19 @@ def main() -> int:
     if args.verify == args.write:
         parser.error("choose exactly one of --verify or --write")
     root = args.root.resolve()
-    manifest_path = args.manifest.resolve()
+    manifest_path = (root / args.manifest).resolve()
     if args.verify:
         return verify(root, manifest_path)
     if not args.source_commit or not args.group or not args.path:
         parser.error("--write requires --source-commit, --group and --path")
     manifest_relative = manifest_path.relative_to(root).as_posix()
-    if manifest_relative in {Path(value).as_posix() for value in args.path}:
-        parser.error("manifest cannot include itself")
     groups: dict[str, list[str]] = {name: [] for name in args.group}
     for value in args.path:
         name, separator, relative = value.partition(":")
         if not separator or name not in groups or not relative:
             parser.error("each --path must be GROUP:relative/path")
+        if confined_path(root, relative) == manifest_path:
+            parser.error("manifest cannot include itself")
         groups[name].append(relative)
     payload = {
         "schema_version": 2,
@@ -82,7 +101,7 @@ def main() -> int:
         "source_commit": args.source_commit,
         "manifest_excluded_from_hashed_universe": True,
         "groups": [
-            {"name": name, "files": load_paths(paths)}
+            {"name": name, "files": load_paths(root, paths)}
             for name, paths in groups.items()
         ],
     }

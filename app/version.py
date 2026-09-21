@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.472"
-APP_VERSION_NAME = "合并报料总量抵扣"
+APP_VERSION = "v0.22.473"
+APP_VERSION_NAME = "开票缺项提示与对账异议更正"
 APP_BUILD_DATE = "2026-09-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -4469,3 +4469,16 @@ APP_VERIFICATION_STEPS = [
     "全额覆盖应不生成零张采购；库存追溯仍能看到原栈板和对应订单。正式库不创建模拟业务。",
 ]
 APP_CHANGELOG = [*(f"v0.22.472：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "开票及税务保存失败明确列出具体缺项；提示先确认默认项目规则，保存失败保留输入。",
+    "客户异议可仅撤销确认、在原月更正单价，或将指定明细顺延；其余明细仍可本月确认开票。",
+    "异议中可更正实际签收回单并同步重算对账，保留短收、超收、库存、补送、权限、版本、幂等与审计门禁；已开票或收款记录继续受控。",
+]
+APP_VERIFICATION_STEPS = [
+    "核对客户身份，先保存已确认的默认项目规则，再保存已确认税务资料；若仍不能开票，按显示的具体缺项处理。",
+    "在真实待更正对账单打开客户异议，填原因后改单价或更正回单数量，核对重算金额并重新导出、确认。",
+    "只勾选需下月对账的明细移出，其余保留本月；本月重新确认后生成开票任务。不要在正式库创建测试账单。",
+]
+APP_CHANGELOG = [*(f"v0.22.473：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

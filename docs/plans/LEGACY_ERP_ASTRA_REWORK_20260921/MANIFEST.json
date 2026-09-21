@@ -22,11 +22,11 @@
     },
     {
       "path": "02_整改进度.md",
-      "sha256": "301bbf03d9c1190f139c9d06a5711e373c2dc77ba616b24c1173da3490267373"
+      "sha256": "bb710ff7760105bf8753ca661d4e473408144431ea8fd3e561171fbd06ec9779"
     },
     {
       "path": "03_Astra二次验收交接.md",
-      "sha256": "ce27b070bcf8886268d88693ca1788a58242aff6516b4654e7ccf16c0930c56c"
+      "sha256": "156619d2643614ed237b77424b04baec381b230b9940bf6665ac912c94b224f8"
     },
     {
       "path": "R00_证据索引.md",
@@ -78,7 +78,7 @@
     },
     {
       "path": "tasks/R06.md",
-      "sha256": "fed9eb728f5f5690182ccde38ec29c1120ed7af688fcf7a22ebed98989b6cb23"
+      "sha256": "1f00b2ae21e10ed8a383c1ed6815d0e9c417d993758485209c5f7f04b68da695"
     }
   ],
   "supporting_code": [

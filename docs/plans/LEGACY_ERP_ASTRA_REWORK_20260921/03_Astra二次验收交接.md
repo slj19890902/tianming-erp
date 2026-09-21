@@ -16,7 +16,7 @@
 
 - 正式基线：`origin/factory-current-baseline@5c35bdba3ee91ce3471d484ba1a0af91a94dcf64`；当前运行包 `b35b04d34675b1aaf64961d23469adca728c297b115d08387112e733426a842a`，版本 `v0.22.474`、源码 `8e0e6e4baf1f62dcb24c183b84a76136d9cd38c4`、revision `du0920`。
 - 正式只读核验：健康 HTTP 200 / `ok=true`；SQLite `integrity_check=ok`、外键违规 0、revision `du0920`。本轮没有写正式库、迁移、备份、停服、重启或发布。
-- 候选分支：`codex/legacy-erp-astra-rework-r00`。它在 v0.22.474 基线之上包含 R03 请购计算与待送查询修复，以及本目录的完整证据。候选推送不等同正式合并或运行包更新。
+- 候选分支：`origin/codex/legacy-erp-astra-rework-r00`。它在 v0.22.474 基线之上包含 R03 请购计算与待送查询修复，以及本目录的完整证据。候选推送不等同正式合并或运行包更新。
 
 ## 阻塞事实与恢复步骤
 

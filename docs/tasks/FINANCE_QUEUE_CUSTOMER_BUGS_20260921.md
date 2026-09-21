@@ -1,5 +1,7 @@
 # FINANCE_QUEUE_CUSTOMER_BUGS_20260921
 
+状态：v0.22.477技术发布完成，待管理员人工验收。详情见docs/release_reports/FINANCE_QUEUE_CUSTOMER_BUGS_20260921.md。
+
 范围：修复客户对账入口串客户、账单阶段混显、缺失冻结价格被显示为零。
 
 正式基线：8038e2a1（v0.22.476），独立分支 codex/finance-queue-customer-bugs-20260921。

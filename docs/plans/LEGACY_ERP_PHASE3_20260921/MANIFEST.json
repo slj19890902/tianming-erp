@@ -14,11 +14,11 @@
     },
     {
       "path": "02_任务进度.md",
-      "sha256": "31185700995a07f6226396eaa6dd5f5f062c8ea132640d773ac2673eb2cd3712"
+      "sha256": "a301bad459cdb60424c25e34e872fc61477adf8f274f3bdc93d4a2d48551fee0"
     },
     {
       "path": "03_证据矩阵.md",
-      "sha256": "e0b9fcf902eb1dd15a97e03f111f9a5b217ab50ebf0c7c92a623f66ee57e5814"
+      "sha256": "fd31200475f353feda07e46d1e05c32ccd7a7349636a234fd3a948e2f8c70840"
     },
     {
       "path": "tasks/P00.md",
@@ -30,7 +30,7 @@
     },
     {
       "path": "tasks/P02.md",
-      "sha256": "d21663467051bd9e1954b626976f64dbc6e8018f2290f5ca0f008df907d5ea8e"
+      "sha256": "52ee1ed9a1cf33e1cb27ea33bb18af9adedaebd9d76c07370c933d2f4cad65ba"
     },
     {
       "path": "tasks/P03.md",

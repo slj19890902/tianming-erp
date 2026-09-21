@@ -2,11 +2,17 @@
 
 from pathlib import Path
 import re
+import subprocess
 
 
 INDEX = (
     Path(__file__).resolve().parents[1] / "static" / "index.html"
 ).read_text(encoding="utf-8")
+
+
+def test_complete_vue_template_compiles_with_shipped_runtime() -> None:
+    root = Path(__file__).resolve().parents[1]
+    subprocess.run(["node", str(root / "tests/check_index_vue_template.cjs")], cwd=root, check=True, capture_output=True, text=True)
 
 
 def test_visible_vue_expressions_do_not_contain_raw_less_than_signs() -> None:

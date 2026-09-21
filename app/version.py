@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.470"
-APP_VERSION_NAME = "仪表盘来料查询规模修复"
-APP_BUILD_DATE = "2026-09-20"
+APP_VERSION = "v0.22.471"
+APP_VERSION_NAME = "首页空白修复"
+APP_BUILD_DATE = "2026-09-21"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -4453,3 +4453,7 @@ APP_VERIFICATION_STEPS = [
     "在有多条待入库明细时刷新首页，确认页面正常显示；不要为验收创建模拟订单或收料。",
 ]
 APP_CHANGELOG = [*(f"v0.22.470：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["修复送货按钮模板缺少右括号导致整个首页空白的问题，恢复登录页与业务页面渲染。", "增加随包 Vue 完整首页模板编译回归；本版不新增迁移，不修改业务事实。"]
+APP_VERIFICATION_STEPS = ["在原 ERP 页面按 Ctrl+F5，确认显示登录界面或已登录首页。", "登录后打开报料和送货列表，确认页面正常；无需创建测试业务。"]
+APP_CHANGELOG = [*(f"v0.22.471：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

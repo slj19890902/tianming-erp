@@ -1,5 +1,5 @@
 {
-  "status": "in_progress",
+  "status": "completed",
   "created": "2026-09-21",
   "historical_reference_commit": "8004bb51c69bc361bd7dd236693ab139accf6d79",
   "execution_baseline": "origin/factory-current-baseline@8038e2a1236faab3e11db8df196b534901fe0421 (verified during P00)",
@@ -14,43 +14,51 @@
     },
     {
       "path": "02_任务进度.md",
-      "sha256": "a18b6049533fc26850a2d3dd557f68ce5ca5adb6c32134264f15b7a44a1cd18f"
+      "sha256": "a9f9bc34a1c5e9528a32be2b158835fb182a5b2f57d9c68de9e9c09270c9fb2d"
     },
     {
       "path": "03_证据矩阵.md",
-      "sha256": "88f013cb7efbbe00c1a2a070005b059b3dc4cd0e12939d2435c21856ec5961b9"
+      "sha256": "c8b2d08909f2de43d3c55421d4ad72e4c420beb61e2e4bb7f0e3fce7cc9897b8"
     },
     {
       "path": "05_运维定位表.md",
-      "sha256": "2c1d0cb40dda3f825f80dce44c76223e95bf7bb2881a98b562cfb00243f98f9e"
+      "sha256": "d59e746fbdec4bfe81f3d813a357f78724067827a1993b382eb7b9316d869675"
     },
     {
       "path": "tasks/P00.md",
-      "sha256": "fbd1451ec2ac4e4151c8b0fcc2716415768e9feca515f239d45f731af03c66fc"
+      "sha256": "073aa789a2ddccc0c2b2ec08ab67e3bc057cf3d4366997dc2b8e25b643aa26cb"
     },
     {
       "path": "tasks/P01.md",
-      "sha256": "d127bb4833687189354311039d4bab39d388973c925f0f7a6f9f378918f6cffe"
+      "sha256": "b272f29be31b926d83de296c55513055a9198d60ee92f7257e64cccb488f1b9e"
     },
     {
       "path": "tasks/P02.md",
-      "sha256": "52ee1ed9a1cf33e1cb27ea33bb18af9adedaebd9d76c07370c933d2f4cad65ba"
+      "sha256": "58996e311b8058ff448302a8c5ebafe0a36ff69c822a964c0dd5537d867be39f"
     },
     {
       "path": "tasks/P03.md",
-      "sha256": "73e3f9b1ff454e303bbaac827c79f1c10ebf5c158a6adbff7cb497918c27fac1"
+      "sha256": "a28600f7483a852a85b9f76baddd6d9e04c8cb1f6d664adf0a1695319277eb26"
     },
     {
       "path": "tasks/P04.md",
-      "sha256": "a511d4b66d49cea85015ec3717a732f3c4232b94cc5b274bf853701b16c1700a"
+      "sha256": "a3400401bed9b6c349b78c4a06da360598d1a81de842f57f65ff91fb03c685d0"
     },
     {
       "path": "tasks/P05.md",
-      "sha256": "c0f6e9c439cdadd8e1f7092217299d1de669b135c63c73873e9cd5fc66e3d898"
+      "sha256": "1856062f06a8d35b45e5087b4682c47a184aeace823c4004d467d5bf0698bc4a"
     },
     {
       "path": "tasks/P06.md",
-      "sha256": "0e256dbf8d46cb5cda18104a16313a9e8cd96ef3c3b679055f556fda0707e103"
+      "sha256": "e9fd8194da2da7880a3b1ee291a402ab55038b82886d40f45184d2d9c8950fcc"
+    },
+    {
+      "path": "04_Astra第三阶段验收交接.md",
+      "sha256": "d3dd0ebf4a6a23d00a3d91239324b447d1a5abc6758f845601fe5c955de27778"
     }
-  ]
+  ],
+  "final_source_sha": "b007abd41fd73666d77789b250b448cc41a8cec1",
+  "final_runtime_package_sha256": "a66d0d2489c34f425b712fb68d6fdddcb09761846b4869229c73efd5690a1d86",
+  "final_runtime_version": "v0.22.479 / du0920",
+  "final_nas_backup_sha256": "d8938d52b377cebada6a5a3f8282ded09b8337d49ceb4ad4eda990cf9654e86a"
 }

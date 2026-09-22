@@ -147,7 +147,7 @@ def test_save_modal_routes_new_order_outcome_without_losing_existing_errors() ->
     body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
     assert 'if (this.modal?.type === "order" && (this.orderCreateSaveState.saving' in body
     assert "const createdOrder = await this.saveNewOrder(orderPayload);" in body
-    assert "if (createdOrder?._in_flight || createdOrder?._cancelled) return false;" in body
+    assert "if (createdOrder?._in_flight || createdOrder?._cancelled || createdOrder?._stale_session) return false;" in body
     assert "if (!error?._orderCreateOutcomeUncertain)" in body
     assert "this.applyOrderRequisitionFailure(error, message);" in body
     assert "if (error?._orderCreateOutcomeUncertain)" in body

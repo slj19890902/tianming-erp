@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.492"
-APP_VERSION_NAME = "入库资料成本检查与手机待认领成品"
+APP_VERSION = "v0.22.493"
+APP_VERSION_NAME = "同客户继续录单"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4716,3 +4716,14 @@ APP_VERIFICATION_STEPS = [
     "核对片料面积乘供应商平方价及外购生产库存成本，确认旧批次不随主数据改价。",
 ]
 APP_CHANGELOG = [*(f"v0.22.492：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "手工订单保存成功后可点“同客户继续录单”，重新核验客户可用性后打开新草稿，减少重复选客户。",
+    "只保留客户，客户单号、数量、价格、备注及图纸凭证重新填写；普通新建和PDF导入保持原路径。",
+    "账号变化及过期请求不会把旧客户资料带入新草稿，保存结果不明仍按原请求核对。",
+]
+APP_VERIFICATION_STEPS = [
+    "日常保存一张真实手工订单后，点“同客户继续录单”，核对客户保留、客户单号和明细交易值为空。",
+    "关闭该新草稿，核对没有新增订单；普通“新建订单”仍需重新选择客户。",
+]
+APP_CHANGELOG = [*(f"v0.22.493：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

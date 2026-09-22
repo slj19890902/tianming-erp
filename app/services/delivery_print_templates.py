@@ -12,6 +12,9 @@ from app.models.delivery_print_template import DeliveryPrintTemplateRevision
 
 
 CATALOG_VERSION = "delivery-print-v1"
+# v1 kept CSS pixel reference values in the legacy `font_size_pt` JSON key.
+# Do not convert/rewrite frozen layouts; the renderer scales original typography.
+# Customer delivery-print-v2 uses actual point sizes in its separate catalog.
 ELEMENTS = (
     ("company_header", "公司抬头", 21.0),
     ("document_title", "单据标题", 18.0),

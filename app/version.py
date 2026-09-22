@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.489"
-APP_VERSION_NAME = "三客户常用箱与送货单兼容升级"
+APP_VERSION = "v0.22.490"
+APP_VERSION_NAME = "恢复旧送货单字号与版式预览"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4682,3 +4682,15 @@ APP_VERIFICATION_STEPS = [
     "重印一张原客户历史送货单，核对旧版式、原客户单号与数量保持；未核对的来源差异先留待完善。",
 ]
 APP_CHANGELOG = [*(f"v0.22.489：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复旧送货模板把像素字号误作磅值、地址电话被放大为公司抬头字号的问题，恢复原有字号层次与分页容量。",
+    "恢复公司名称、送货单标题、地址电话的原顺序；管理员设计预览与打印使用一致的字号及毫米偏移。",
+    "管理员可在系统备份→设计送货单版式调整默认或客户模板，保存草稿后发布；新配置仅用于之后新建单据，历史冻结资料保持。",
+]
+APP_VERIFICATION_STEPS = [
+    "关闭原打印页，重新打开TH-20260922-003，核对18条明细、总数量2759、默认241×139.5毫米版式为2页，PCS不拆行。",
+    "管理员打开系统备份→设计送货单版式，核对通用模板公司字号21、地址保持较小，草稿预览和发布范围提示明确。",
+    "在EPSON SK820使用原241×139.5毫米纸打印一张，人工核对字号、边距、表头与续页。",
+]
+APP_CHANGELOG = [*(f"v0.22.490：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

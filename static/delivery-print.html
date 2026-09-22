@@ -90,7 +90,7 @@
       min-width: 0;
     }
     .page-number {
-      font-size: 11px;
+      font-size: calc(11px * var(--layout-font-scale, 1));
       font-weight: 700;
       text-align: left;
       white-space: nowrap;
@@ -99,27 +99,27 @@
       margin: 0;
       text-align: center;
       font-family: "SimSun", serif;
-      font-size: 21px;
+      font-size: calc(21px * var(--layout-font-scale, 1));
       letter-spacing: 2px;
     }
     .document-title {
       margin: 2px 0 4px;
       text-align: center;
       font-family: "SimSun", serif;
-      font-size: 18px;
+      font-size: calc(18px * var(--layout-font-scale, 1));
       letter-spacing: 7px;
     }
     .factory-address {
       padding-bottom: 2px;
       text-align: center;
-      font-size: 11px;
+      font-size: calc(11px * var(--layout-font-scale, 1));
     }
     .meta {
       display: grid;
       grid-template-columns: 1.35fr 1fr;
       gap: 2px 18px;
       padding: 2px 0 4px;
-      font-size: 12px;
+      font-size: calc(12px * var(--layout-font-scale, 1));
       line-height: 1.35;
     }
     .meta-row {
@@ -135,7 +135,7 @@
       width: 100%;
       border-collapse: collapse;
       table-layout: fixed;
-      font-size: 13px;
+      font-size: calc(13px * var(--layout-font-scale, 1));
     }
     th, td {
       border: 1px solid #111;
@@ -147,28 +147,28 @@
       line-height: 1.25;
     }
     th { font-weight: 700; }
-    .product-code { font-size: 12px; }
+    .product-code { font-size: calc(12px * var(--layout-font-scale, 1)); }
     .sequence { width: 4%; }
     .customer-order-cell { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
-    .customer-order-text { display: inline-block; white-space: nowrap; color: #000; background: transparent; font-size: 13px; }
+    .customer-order-text { display: inline-block; white-space: nowrap; color: #000; background: transparent; font-size: calc(13px * var(--layout-font-scale, 1)); }
     .item-quantity { text-align: right; white-space: nowrap; }
     .product-name { text-align: left; overflow-wrap: anywhere; }
-    .product-name.long-name { font-size: 12px; line-height: 1.18; }
-    .product-specification { color: #222; font-size: 13px; line-height: 1.2; }
-    .item-remark { font-size: 12px; }
+    .product-name.long-name { font-size: calc(12px * var(--layout-font-scale, 1)); line-height: 1.18; }
+    .product-specification { color: #222; font-size: calc(13px * var(--layout-font-scale, 1)); line-height: 1.2; }
+    .item-remark { font-size: calc(12px * var(--layout-font-scale, 1)); }
     .component-line td { background: #fff; }
     .component-line .product-name { padding-left: 10px; }
-    .component-marker { font-size: 10px; font-weight: 700; white-space: nowrap; }
+    .component-marker { font-size: calc(10px * var(--layout-font-scale, 1)); font-weight: 700; white-space: nowrap; }
     .total {
       padding: 3px 2px 2px;
       text-align: right;
-      font-size: 13px;
+      font-size: calc(13px * var(--layout-font-scale, 1));
       font-weight: 700;
     }
     .remark-notes {
       margin-top: 2px;
       padding: 2px 0;
-      font-size: 12px;
+      font-size: calc(12px * var(--layout-font-scale, 1));
       line-height: 1.3;
       overflow-wrap: anywhere;
     }
@@ -183,7 +183,7 @@
       gap: 18px;
       align-items: end;
       padding-top: 4px;
-      font-size: 11px;
+      font-size: calc(11px * var(--layout-font-scale, 1));
     }
     .signature-line {
       display: inline-block;
@@ -199,7 +199,7 @@
       gap: 6mm;
       align-items: end;
       margin-top: 3px;
-      font-size: 10px;
+      font-size: calc(10px * var(--layout-font-scale, 1));
     }
     .footer-detail {
       min-width: 0;
@@ -266,11 +266,9 @@
   <template id="sheetTemplate">
   <main class="sheet">
     <div class="print-safe-area">
-    <div data-layout-element="company_header">
-      <h1 data-field="senderCompanyName" class="company">苏州天明包装有限公司</h1>
-      <div data-field="senderContact" class="factory-address">地址：苏州市吴中区临湖镇浦庄大道工业区　电话：0512-66530018</div>
-    </div>
+    <h1 data-layout-element="company_header" data-field="senderCompanyName" class="company">苏州天明包装有限公司</h1>
     <h2 data-layout-element="document_title" class="document-title">送货单</h2>
+    <div data-layout-element="company_header" data-field="senderContact" class="factory-address">地址：苏州市吴中区临湖镇浦庄大道工业区　电话：0512-66530018</div>
 
     <section data-layout-element="customer_meta" class="meta">
       <div class="meta-row"><span>客户名称：</span><span data-field="customerName" class="meta-value"></span></div>
@@ -441,10 +439,11 @@
         const setting = elements.get(node.dataset.layoutElement);
         if (!setting) throw new Error("送货单冻结模板缺少必需版式元素。");
         node.style.transform = `translate(${Number(setting.x_mm) || 0}mm, ${Number(setting.y_mm) || 0}mm)`;
-        node.style.fontSize = `${Number(setting.font_size_pt) || 11}pt`;
-        node.querySelectorAll("*").forEach((child) => {
-          child.style.fontSize = "inherit";
-        });
+        // v1 persisted CSS pixel sizes under a legacy _pt key. Preserve the
+        // frozen values and each child style's original size hierarchy.
+        const baseSizes = { company_header: 21, document_title: 18, customer_meta: 12, item_table: 13, summary_notes: 12, signature_footer: 11 };
+        const base = baseSizes[node.dataset.layoutElement];
+        node.style.setProperty("--layout-font-scale", (Number(setting.font_size_pt) || base) / base);
         node.hidden = setting.visible === false;
       });
       const widths = layout.column_widths || {};
@@ -528,11 +527,12 @@
 
     function fitCustomerOrderNumbers(root = document) {
       root.querySelectorAll('.customer-order-text').forEach((text) => {
-        text.style.fontSize = '13px';
+        text.style.removeProperty('font-size');
+        const baseSize = parseFloat(getComputedStyle(text).fontSize) || 13;
         const cell = text.parentElement;
         const style = getComputedStyle(cell);
         const available = cell.clientWidth - parseFloat(style.paddingLeft || 0) - parseFloat(style.paddingRight || 0) - 1;
-        text.style.fontSize = `${orderNumberFontSize(text.getBoundingClientRect().width, available)}px`;
+        text.style.fontSize = `${orderNumberFontSize(text.getBoundingClientRect().width, available, baseSize)}px`;
       });
     }
 

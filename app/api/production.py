@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
+from io import BytesIO
+import qrcode
 from datetime import date
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -23,6 +27,7 @@ from app.models.customer import Customer
 from app.models.order import Order, OrderItem
 from app.models.production import ProductionCompletion, ProductionTask
 from app.models.user import User
+from app.models.audit import OperationLog
 from app.models.warehouse_inventory import (
     InventoryLot,
     InventoryPallet,
@@ -64,6 +69,96 @@ can_read = PermissionChecker("orders.view")
 can_complete = PermissionChecker("orders.status")
 admin_only = RoleChecker(["admin"])
 actual_quantity_operator = RoleChecker(["admin", "boss"])
+
+
+class MaterialListRequest(BaseModel):
+    task_ids: list[int] = Field(min_length=1, max_length=200)
+
+
+def _material_list_ref(task_ids):
+    return 'production-materials:' + hashlib.sha256(','.join(map(str, sorted(set(task_ids)))).encode()).hexdigest()
+
+
+def _material_list(db, user, payload, request=None):
+    task_ids = sorted(set(payload.task_ids))
+    _require_task_customer_access(db, task_ids=task_ids, user=user)
+    rows = list_production_tasks(db, allowed_customer_ids=_allowed_customer_ids(user, db),
+                                 status=PENDING, task_ids=task_ids)
+    if {r['id'] for r in rows} != set(task_ids):
+        raise HTTPException(409, '所选任务已变化，请刷新待生产后重新选择')
+    groups = {}
+    tasks = []
+    for row in rows:
+        task = {key: row.get(key) for key in ('id', 'order_number', 'customer_po', 'customer_name',
+                'product_code', 'product_name', 'planned_output_quantity', 'output_unit',
+                'material_received_quantity', 'finished_coverage_snapshot', 'cut_contract')}
+        tasks.append(task)
+        if request is not None:
+            url = str(request.base_url).rstrip('/') + f'/mobile/?task_id={row["id"]}#production'
+            buffer = BytesIO()
+            qrcode.make(url).save(buffer, format='PNG')
+            task.update(task_url=url, task_qr='data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode('ascii'))
+        for source in row.get('customer_board_preparation_sources', []):
+            key = (source['inventory_lot_id'], source['location_id'])
+            if key not in groups:
+                groups[key] = dict(source, remaining_sheet_quantity=0, allocations=[])
+            group = groups[key]
+            group['remaining_sheet_quantity'] += source['remaining_sheet_quantity']
+            group['allocations'].append(dict({k:v for k,v in task.items() if k not in {'task_qr', 'task_url'}}, quantity=source['remaining_sheet_quantity'],
+                covered_pieces=source['remaining_product_quantity'], consumed=source['consumed_sheet_quantity']))
+    print_count = db.scalar(select(func.count(OperationLog.id)).where(
+        OperationLog.object_ref == _material_list_ref(task_ids),
+        OperationLog.action_code == 'production.material_list.print'))
+    return dict(tasks=tasks, sources=list(groups.values()), print_count=int(print_count or 0))
+
+
+@router.post('/material-list')
+def get_material_list(payload: MaterialListRequest, request: Request, user: User = Depends(can_read), db: Session = Depends(get_db)):
+    return _material_list(db, user, payload, request)
+
+
+@router.post('/material-list/print')
+def print_material_list(payload: MaterialListRequest, request: Request, user: User = Depends(can_read), db: Session = Depends(get_db)):
+    result = _material_list(db, user, payload, request)
+    append_audit_event(db, event_category='business', result='success', source='web', module_code='production',
+        action_code='production.material_list.print', legacy_action='PRINT_PRODUCTION_MATERIAL_LIST',
+        resource='ProductionTask', actor=user, description='打印计划取用清单（不扣库存）',
+        object_ref=_material_list_ref(payload.task_ids),
+        details={'task_ids': sorted(set(payload.task_ids)), 'sources': result['sources']})
+    db.commit()
+    result['print_count'] += 1
+    return result
+
+
+class OutputPreviewRequest(BaseModel):
+    task_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+    input_quantity: int = Field(ge=0)
+    output_quantity: int = Field(ge=0)
+
+
+@router.post('/output-preview')
+def preview_output(payload: OutputPreviewRequest, user: User = Depends(can_read), db: Session = Depends(get_db)):
+    _require_task_customer_access(db, task_ids=[payload.task_id], user=user)
+    rows = list_production_tasks(db, allowed_customer_ids=_allowed_customer_ids(user, db),
+        status=PENDING, task_ids=[payload.task_id])
+    if not rows or rows[0]['version'] != payload.expected_version:
+        raise HTTPException(409, '生产任务已变化，请刷新后重新登记')
+    row = rows[0]
+    from app.services.production_workflow import production_output_quantity
+    theoretical = production_output_quantity(payload.input_quantity, row['output_factor'], row['pieces_per_box'])
+    if row.get('cut_contract'):
+        contract = row['cut_contract']
+        if payload.input_quantity != contract['input_quantity']:
+            raise HTTPException(409, '本批已冻结分切方案，须按整批投入数量登记')
+        theoretical = contract['planned_output']
+    covered = min(payload.output_quantity, row['order_coverage_remaining'])
+    return dict(theoretical_quantity=theoretical, order_quantity=covered,
+        surplus_quantity=payload.output_quantity-covered,
+        defective_quantity=max(theoretical-payload.output_quantity, 0),
+        input_quantity=payload.input_quantity, output_quantity=payload.output_quantity,
+        allowed=bool(row.get('completion_actionable', True) and 0 < payload.input_quantity <= row['available_material_input_quantity']
+                     and 0 < payload.output_quantity <= theoretical))
 
 
 class CompletionBatchItem(BaseModel):
@@ -306,6 +401,7 @@ def _append_production_completion_audit(
 
 @router.get("/tasks")
 def get_production_tasks(
+    q: str = Query(default='', max_length=150),
     task_status: Literal[
         "waiting_material", "pending", "completed", "not_required"
     ]
@@ -321,6 +417,7 @@ def get_production_tasks(
                 db,
                 allowed_customer_ids=allowed_customer_ids,
                 status=task_status,
+                q=q,
             )
         return {
             "items": annotate_production_reminders(
@@ -337,6 +434,7 @@ def get_production_tasks(
             status=task_status,
             page=resolved_page,
             page_size=resolved_page_size,
+            q=q,
         )
     return {
         "items": annotate_production_reminders(
@@ -347,6 +445,7 @@ def get_production_tasks(
             db,
             allowed_customer_ids=allowed_customer_ids,
             status=task_status,
+            q=q,
         ),
         "page": resolved_page,
         "page_size": resolved_page_size,
@@ -447,6 +546,8 @@ def post_production_task_label_plan_refresh(
 @router.get("/completions")
 def get_production_completions(
     include_stock: bool = Query(default=False),
+    record_type: Literal['manual', 'receipt_auto', 'stock_preparation', 'stock_assembly', 'bom_assembly'] | None = None,
+    operator_name: str | None = Query(default=None, max_length=100),
     customer_id: int | None = Query(default=None, gt=0),
     order_keyword: str | None = Query(default=None, max_length=150),
     product_code: str | None = Query(default=None, max_length=150),
@@ -476,6 +577,8 @@ def get_production_completions(
             completed_date_to,
             completion_status,
             placement_pending,
+            record_type,
+            operator_name,
         )
     ):
         return {
@@ -505,6 +608,8 @@ def get_production_completions(
         placement_pending=placement_pending,
         page=resolved_page,
         page_size=resolved_page_size,
+        record_type=record_type,
+        operator_name=operator_name,
     )
     return {
         "items": items,
@@ -524,6 +629,7 @@ def get_temporary_locations(
 
 @router.get("/placement-stock")
 def get_placement_stock(
+    placement_state: Literal['pending', 'placed', 'all'] = 'pending',
     page: int = Query(default=1, ge=1), page_size: int = Query(default=20, ge=1, le=200),
     customer_id: int | None = Query(default=None, gt=0),
     order_keyword: str | None = Query(default=None, max_length=150),
@@ -535,7 +641,7 @@ def get_placement_stock(
     from app.services.production_placement import page as placement_page
     items,total=placement_page(db,allowed_customer_ids=_allowed_customer_ids(user,db),page=page,page_size=page_size,
         customer_id=customer_id,order_keyword=order_keyword,product_code=product_code,product_name=product_name,
-        completed_date_from=completed_date_from,completed_date_to=completed_date_to)
+        completed_date_from=completed_date_from,completed_date_to=completed_date_to,placement_state=placement_state)
     return dict(items=items,total=total,page=page,page_size=page_size)
 
 

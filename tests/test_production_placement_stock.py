@@ -82,3 +82,17 @@ def test_reserved_move_replay_stale_scope_and_audit_rollback(routing_app,monkeyp
         with routing_app.state.factory() as db:
             moved=db.get(InventoryLot,r.json()['target_lot_id'])
             assert moved.warehouse_location_id==target and moved.quantity_reserved==1000
+        pending = c.get('/api/production/placement-stock', params={'placement_state':'pending'}).json()
+        placed = c.get('/api/production/placement-stock', params={'placement_state':'placed'}).json()
+        all_stock = c.get('/api/production/placement-stock', params={'placement_state':'all'}).json()
+        assert all_stock['total'] == pending['total'] + placed['total']
+        # This fixture moves within one staging area, so it remains pending.
+        assert next(row for row in pending['items'] if row['inventory_lot_id'] == r.json()['target_lot_id'])['placement_pending']
+        with routing_app.state.factory() as db:
+            for staging in db.scalars(select(ReceiptStagingArea)):
+                db.delete(staging)
+            db.commit()
+        placed = c.get('/api/production/placement-stock', params={'placement_state':'placed'}).json()
+        target_row = next(row for row in placed['items'] if row['inventory_lot_id'] == r.json()['target_lot_id'])
+        assert not target_row['placement_pending'] and not target_row['can_place']
+        assert target_row['reserved_quantity'] == 1000

@@ -4,6 +4,7 @@ from sqlalchemy import select
 from app.models.multilevel_bom import BomAssembly, BomAssemblyInput
 from app.models.order import Order, OrderItem
 from app.models.customer import Customer
+from app.models.user import User
 from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
 from app.core.time_contract import utc_naive_to_api, utc_naive_to_beijing_date
 from app.services.location_candidates import load_warehouse_location_projection_contexts, warehouse_location_projection
@@ -19,6 +20,7 @@ def history(db, scope, **filters):
     if filters.get('customer_id'):
         query = query.where(Order.customer_id == filters['customer_id'])
     assemblies = list(db.execute(query))
+    users = {u.id: u.real_name for u in db.scalars(select(User))}
     ids = [a.id for a, _, _ in assemblies]
     inputs = defaultdict(list)
     for entry in db.scalars(select(BomAssemblyInput).where(BomAssemblyInput.conversion_id.in_(ids))):
@@ -76,6 +78,7 @@ def history(db, scope, **filters):
             customer_name=customer.name, customer_short_name=customer.chinese_short_name or customer.name,
             product_code=detail.inventory_code_snapshot, product_name=detail.product_name_snapshot,
             completed_at=utc_naive_to_api(a.created_at), actual_output_quantity=a.quantity,
+            completed_by_name=users.get(a.created_by),
             planned_output_quantity=a.quantity, output_unit=lot.unit, assembly_inputs=source_rows,
             current_inventory_quantity=sum(l.quantity_available+l.quantity_reserved+l.quantity_damaged for l in current),
             current_inventory_status='located' if locations else 'drained',

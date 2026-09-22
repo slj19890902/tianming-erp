@@ -135,6 +135,14 @@ def workspace_rows(db, rows, state):
     """One pending row per task/group, one arrangement row per unambiguous kit."""
     grouped = groups(db,rows)
     result = []
+    if state == 'waiting':
+        return [dict(row, entry_type='receipt') for row in rows if row['status'] == 'waiting']
+    if state == 'materials':
+        # Keep unassembled components and raw/semi remnants accessible. Finished
+        # lots have their own all-source live inventory view.
+        return [r for r in workspace_rows(db, rows, 'stock') if r['entry_type'] != 'assembled_stock'
+                and (r['entry_type'] == 'group_stock' or r.get('physical', 0)
+                     or any(j.get('output_kind') == 'semi' and j.get('output_remaining', 0) for j in r.get('jobs', [])))]
     if state == 'pending':
         for group in grouped['groups']:
             if group['status']=='pending':
@@ -172,7 +180,7 @@ def workspace_rows(db, rows, state):
             continue
         result.append(dict(key='kit:'+str(group['recipe']['parent_id']),entry_type='kit',plan=group,children=children))
         hidden.update(r['key'] for r in children)
-    result.extend(dict(row,entry_type='receipt',kit_options=[g for g in candidates if any(c['product_id']==row['product_id'] for c in g['recipe']['children'])]) for row in rows if row['key'] not in hidden and row['status'] in {'arrange','waiting'} and (row['available']>0 or row['status']=='waiting'))
+    result.extend(dict(row,entry_type='receipt',kit_options=[g for g in candidates if any(c['product_id']==row['product_id'] for c in g['recipe']['children'])]) for row in rows if row['key'] not in hidden and row['status'] in ({'arrange'} if state == 'arrange' else {'arrange','waiting'}) and (row['available']>0 or row['status']=='waiting'))
     return result
 
 

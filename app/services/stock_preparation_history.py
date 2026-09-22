@@ -9,6 +9,7 @@ from app.services import stock_preparation as prep
 from app.services.stock_preparation_groups import encode
 from app.core.time_contract import utc_naive_to_api, utc_now_naive, utc_naive_to_beijing_date, BEIJING_UTC_OFFSET
 from app.services.audit_log import append_audit_event
+from app.models.user import User
 
 
 def completed_groups(db, scope=None):
@@ -59,10 +60,13 @@ def reverse_block(db, jobs):
 
 def rows(db, scope=None, **filters):
     events = {}
+    operators = {}
+    users = {u.id: u.real_name for u in db.scalars(select(User))}
     for command in db.scalars(select(Command).order_by(Command.created_at, Command.operation_key)):
         request = json.loads(command.request_json)
         if request.get('action') == 'complete' and request.get('job_id'):
             events[request['job_id']] = command.created_at
+            operators[request['job_id']] = command.actor_id
     result = []
     for key, jobs in completed_groups(db, scope).items():
         snapshot = json.loads(jobs[0].product_snapshot)
@@ -100,6 +104,7 @@ def rows(db, scope=None, **filters):
             customer_short_name=(item.customer.chinese_short_name or item.customer.name) if item.customer else '通用备料',
             customer_order_number='半成品加工' if all(d['output_kind']=='semi' for d in details) else '备库生产', order_number=item.order.order_number,
             product_code=recipe['code'], product_name=recipe['name'], completed_at=utc_naive_to_api(completed_at),
+            completed_by_name=' / '.join(dict.fromkeys(users.get(operators.get(j.id)) or '未登记' for j in jobs)),
             actual_output_quantity=quantity, planned_output_quantity=group['sets'] if group else jobs[0].expected_output,
             output_unit='套' if group else '只', current_warehouse_location_name=' / '.join(locations),
             current_inventory_status='located' if locations else 'empty', can_adjust_actual_quantity=False,
@@ -115,6 +120,7 @@ def rows(db, scope=None, **filters):
         if any(str(filters.get(k) or '').strip().casefold() not in recipe[field].casefold() for k,field in [('product_code','code'),('product_name','name')]):continue
         block=unassemble_block(db,a)
         result.append(dict(id='assembly:'+a['key'],origin='stock_assembly',assembly=a,preparation_key=a['group_key'],status=state,
+            completed_by_name=users.get(db.get(Command, a['key']).actor_id),
             customer_name=recipe['customer_name'],customer_short_name=recipe['customer_name'],customer_order_number='成套入库',
             product_code=recipe['code'],product_name=recipe['name'],completed_at=a['completed_at'],actual_output_quantity=a['sets'],planned_output_quantity=a['sets'],
             output_unit='套',current_warehouse_location_name=a['location'],current_inventory_status='located',can_revert=not block,reversal_block=block,
@@ -124,12 +130,20 @@ def rows(db, scope=None, **filters):
 
 def combined_page(db, *, allowed_customer_ids, page, page_size, **filters):
     from app.services.production_workflow import _completion_rows, list_production_completions
+    record_type = filters.pop('record_type', None)
+    operator_name = str(filters.pop('operator_name', None) or '').strip().casefold()
     stock = [] if filters.get('placement_pending') else rows(db, allowed_customer_ids, **filters)
-    order_keys = _completion_rows(db, allowed_customer_ids=allowed_customer_ids, keys_only=True, **filters)
+    order_keys = _completion_rows(db, allowed_customer_ids=allowed_customer_ids, keys_only=True,
+        record_type=record_type, operator_name=operator_name, **filters)
     consumed = {}
     if not filters.get('placement_pending'):
         from app.services.bom_assembly_history import history
         assembly, consumed = history(db, allowed_customer_ids, **filters)
+        if record_type and record_type != 'bom_assembly' or operator_name:
+            # Only fold source processing rows when their matching assembly is visible.
+            assembly = [r for r in assembly if (not record_type or r['origin'] == record_type)
+                        and operator_name in str(r.get('completed_by_name') or '').casefold()]
+            consumed = {}
         stock += assembly
         # Fold fully consumed processing records only when their assembly is
         # included in this result. Product/date filters still expose originals.
@@ -139,6 +153,8 @@ def combined_page(db, *, allowed_customer_ids, page, page_size, **filters):
                 ProductionCompletion.status == 'posted', InventoryLot.id.in_(consumed),
                 InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged == 0)))
         order_keys = [(id, at) for id, at in order_keys if id not in folded]
+    stock = [r for r in stock if (not record_type or r['origin'] == record_type)
+             and operator_name in str(r.get('completed_by_name') or '').casefold()]
     keys = [(utc_naive_to_api(at), 'order:'+str(id), id, None) for id,at in order_keys]
     keys += [(r['completed_at'], r['id'], None, r) for r in stock]
     keys.sort(key=lambda k:(datetime.fromisoformat(k[0].replace('Z','+00:00')),k[2] or 0,k[1]), reverse=True)

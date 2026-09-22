@@ -7061,7 +7061,7 @@ def _collect_unordered_finished_lines(
                 detail=f"第 {index} 条产品不属于当前客户",
             )
         submitted_unit_price = (
-            Decimal(str(line.unit_price)).quantize(Decimal("0.0001"))
+            Decimal(str(line.unit_price)).quantize(Decimal("0.000001"))
             if line.unit_price is not None
             else None
         )
@@ -7140,7 +7140,7 @@ def _collect_unordered_finished_lines(
                         "product_default"
                         if product.sale_unit_price is not None
                         and Decimal(str(product.sale_unit_price)).quantize(
-                            Decimal("0.0001")
+                            Decimal("0.000001")
                         )
                         == unit_price
                         else "manual"
@@ -11144,6 +11144,8 @@ def update_delivery_customer_po(
 @router.get("/{delivery_id}/print")
 def get_delivery_print_data(
     delivery_id: int,
+    show_prices: bool | None = None,
+    order_context: str | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
@@ -11313,7 +11315,7 @@ def get_delivery_print_data(
                 ),
             }
         )
-    return {
+    result = {
         "id": delivery.id,
         "delivery_number": delivery.delivery_number,
         "delivery_date": delivery.delivery_date,
@@ -11400,3 +11402,47 @@ def get_delivery_print_data(
         },
         "items": print_items,
     }
+
+    from app.services.customer_delivery_print import enrich_customer_print
+    return enrich_customer_print(db, delivery, result, user, show_prices=show_prices, order_context=order_context)
+
+
+class CustomerPrintRequest(BaseModel):
+    idempotency_key: str = Field(min_length=16, max_length=120)
+    document_hash: str = Field(pattern=r'^[a-f0-9]{64}$')
+    show_prices: bool
+    order_context: Literal['', '海外订单'] = ''
+
+
+@router.post('/{delivery_id}/customer-print-events')
+def record_customer_print_request(delivery_id: int, payload: CustomerPrintRequest,
+                                  db: Session = Depends(get_db), user: User = Depends(can_read)):
+    _delivery_for_user(db, delivery_id, user)
+    action = 'delivery.customer_print_requested'
+    request_hash = hashlib.sha256(json.dumps({'delivery_id': delivery_id, **payload.model_dump(exclude={'idempotency_key'})},
+                                            sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    replay, _ = _delivery_idempotency_replay(db, idempotency_key=payload.idempotency_key,
+        request_hash=request_hash, action=action, actor=user)
+    if replay is not None:
+        return replay
+    current = get_delivery_print_data(delivery_id, db=db, user=user,
+                                     show_prices=payload.show_prices, order_context=payload.order_context)
+    if current.get('document_hash') != payload.document_hash:
+        raise HTTPException(409, '送货单内容已变化，请重新读取后打印')
+    response = {'delivery_id': delivery_id, 'document_hash': payload.document_hash,
+        'show_prices': current['price_display']['shown'], 'order_context': current['order_context'],
+        'template_hash': current['print_template']['layout_hash'], 'status': 'print_requested'}
+    _write_audit(db, user=user, action=action, resource='Delivery', entity_id=delivery_id,
+        details=response, description='登记客户送货单打印请求及本次价格模式（不代表实体打印完成）')
+    _record_delivery_idempotency(db, idempotency_key=payload.idempotency_key, request_hash=request_hash,
+        action=action, actor=user, delivery_id=delivery_id, response=response)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        replay, _ = _delivery_idempotency_replay(db, idempotency_key=payload.idempotency_key,
+            request_hash=request_hash, action=action, actor=user)
+        if replay is None:
+            raise
+        return replay
+    return response

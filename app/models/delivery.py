@@ -269,12 +269,13 @@ class DeliveryItem(Base):
         nullable=True,
     )
     customer_po_snapshot: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    customer_document_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     product_code_snapshot: Mapped[str | None] = mapped_column(String(150), nullable=True)
     product_name_snapshot: Mapped[str | None] = mapped_column(String(250), nullable=True)
     specification_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
     unit_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
     unit_price_snapshot: Mapped[Decimal | None] = mapped_column(
-        Numeric(12, 4), nullable=True
+        Numeric(18, 6), nullable=True
     )
     price_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     sales_contract_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -397,3 +398,9 @@ class DeliveryPickTaskItem(Base):
     task: Mapped["DeliveryPickTask"] = relationship(back_populates="items")
     delivery_item: Mapped["DeliveryItem"] = relationship()
     order_item: Mapped["OrderItem"] = relationship()
+
+
+# Capture customer identity for every creation path, including imports and revisions.
+from sqlalchemy import event as _document_event
+from app.services.customer_document_fields import freeze_delivery_document as _freeze_document
+_document_event.listen(DeliveryItem, "before_insert", _freeze_document)

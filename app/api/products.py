@@ -483,6 +483,11 @@ class ProductPayload(BaseModel):
     product_code: str = Field(min_length=1, max_length=150)
     customer_material_code: str = Field(min_length=1, max_length=150)
     product_name: str = Field(min_length=1, max_length=250)
+    customer_drawing_number: str | None = Field(default=None, max_length=150)
+    customer_category: str | None = Field(default=None, max_length=100)
+    customer_model: str | None = Field(default=None, max_length=500)
+    customer_product_name: str | None = Field(default=None, max_length=500)
+    customer_drawing_display: str | None = Field(default=None, max_length=250)
     material_id: int | None = None
     mold_tool_id: int | None = None
     legacy_material_text: str | None = None
@@ -1305,6 +1310,12 @@ def _product_write_data(payload: ProductPayload, user: User) -> dict:
     """
     data = payload.model_dump(include=set(ProductPayload.model_fields))
     data.pop("external_supply", None)
+    from app.services.customer_document_fields import FIELDS
+    for field in FIELDS:
+        if field not in payload.model_fields_set:
+            data.pop(field, None)
+        elif data[field] is not None:
+            data[field] = data[field].strip()
     for field in (
         "external_packaging_default_order_quantity_basis",
         "external_packaging_default_purchase_quantity_basis",
@@ -1407,8 +1418,11 @@ def _product_or_404(db: Session, product_id: int) -> Product:
 
 
 def _response(product: Product, user: User) -> dict:
+    from app.services.customer_document_fields import document_snapshot, source_candidates
     data = {
         **_product_payload_snapshot(product),
+        "customer_document": document_snapshot(product),
+        "customer_document_candidates": source_candidates(product),
         "id": product.id,
         "manual_modified": product.manual_modified,
         "manual_modified_at": (
@@ -1496,11 +1510,13 @@ def _response(product: Product, user: User) -> dict:
 def _summary_response(product: Product, user: User) -> dict:
     """Return only fields used by the paginated common-box list."""
     material = product.material
+    from app.services.customer_document_fields import document_snapshot
     data = {
         "id": product.id,
         "customer_id": product.customer_id,
         "product_code": product.product_code,
         "customer_material_code": product.customer_material_code,
+        "customer_document": document_snapshot(product),
         "product_name": product.product_name,
         "supply_mode": product.supply_mode,
         "external_packaging_category_code": product.external_packaging_category_code,
@@ -1966,13 +1982,22 @@ def list_products(
         query = query.where(Product.is_active.is_(True))
     if selection_context == "order":
         query = query.where(order_selectable_product_condition())
+    from app.services.customer_document_fields import review_entries
     for token in keyword.split():
         pattern = f"%{token}%"
+        reviewed_matches = [and_(Product.customer_id == entry['customer_id'], Product.customer_material_code == entry['code'])
+                            for entry in review_entries() if token.casefold() in str(entry['value']).casefold()]
         query = query.where(
             or_(
                 Product.product_code.like(pattern),
                 Product.customer_material_code.like(pattern),
                 Product.product_name.like(pattern),
+                Product.customer_drawing_number.like(pattern),
+                and_(Product.remark.like("%【基础资料原始行20260810】%"), Product.remark.like(pattern)),
+                or_(False, *reviewed_matches),
+                Product.customer_category.like(pattern),
+                Product.customer_model.like(pattern),
+                Product.customer_product_name.like(pattern),
                 Product.legacy_material_text.like(pattern),
                 Material.code.like(pattern),
                 Material.paper_composition.like(pattern),

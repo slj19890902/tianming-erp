@@ -67,6 +67,11 @@ _CUSTOMER_FIELDS = (
     "is_active",
 )
 _PRODUCT_FIELDS = (
+    "customer_drawing_number",
+    "customer_category",
+    "customer_model",
+    "customer_product_name",
+    "customer_drawing_display",
     "customer_id",
     "product_code",
     "customer_material_code",

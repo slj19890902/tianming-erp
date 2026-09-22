@@ -331,6 +331,8 @@
   </template>
   <div id="sheets" class="sheets" hidden></div>
 
+  <link rel="stylesheet" href="/customer-delivery-print.css">
+  <script src="/customer-delivery-print.js"></script>
   <script>
     const escapeHtml = (value) => String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -535,6 +537,7 @@
     }
 
     function renderDelivery(data) {
+      if (data.print_template?.layout?.catalog_version === "delivery-print-v2") return CustomerDeliveryPrint.render(data, document.getElementById("sheets"));
       const container = document.getElementById("sheets");
       const normalizedItems = normalizeDeliveryPrintItems(data);
       const entries = normalizedItems.map((item, index) => ({ item, index }));
@@ -615,7 +618,12 @@
     }
 
     async function requestDeliveryPrint(id, signal) {
-      const response = await fetch(`/api/deliveries/${id}/print`, {
+      const params = new URLSearchParams(window.location.search);
+      const mode = params.get("show_prices"), context = params.get("order_context");
+      const query = new URLSearchParams();
+      if (mode !== null) query.set("show_prices", mode);
+      if (context !== null) query.set("order_context", context);
+      const response = await fetch(`/api/deliveries/${id}/print?${query}`, {
         credentials: "same-origin",
         signal,
       });
@@ -688,6 +696,7 @@
       try {
         const data = await requestDeliveryPrint(id, controller.signal);
         if (generation !== loadGeneration || controller.signal.aborted) return false;
+        CustomerDeliveryPrint.controls(data, loadDelivery);
         renderDelivery(data);
         showReady();
         return true;
@@ -732,10 +741,15 @@
       printOpenChannel.postMessage({ type: "ready" });
     }
 
-    printButton.addEventListener("click", () => {
+    printButton.addEventListener("click", async () => {
       if (!printButton.disabled) {
-        fitCustomerOrderNumbers();
-        window.print();
+        printButton.disabled = true;
+        try {
+          await CustomerDeliveryPrint.recordPrint();
+          fitCustomerOrderNumbers();
+          window.print();
+        } catch (error) { showError(error.message); }
+        finally { printButton.disabled = false; }
       }
     });
     window.addEventListener('beforeprint', () => fitCustomerOrderNumbers());

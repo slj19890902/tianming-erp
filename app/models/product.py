@@ -127,6 +127,11 @@ class Product(Base):
     product_code: Mapped[str] = mapped_column(String(150), nullable=False)
     customer_material_code: Mapped[str] = mapped_column(String(150), nullable=False)
     product_name: Mapped[str] = mapped_column(String(250), nullable=False)
+    customer_drawing_number: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    customer_category: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    customer_model: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    customer_product_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    customer_drawing_display: Mapped[str | None] = mapped_column(String(250), nullable=True)
     material_id: Mapped[int | None] = mapped_column(
         ForeignKey("materials.id", ondelete="SET NULL"),
         nullable=True,
@@ -202,11 +207,11 @@ class Product(Base):
     production_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     unit: Mapped[str] = mapped_column(String(20), default="只", nullable=False)
     sale_unit_price: Mapped[Decimal | None] = mapped_column(
-        Numeric(12, 4),
+        Numeric(18, 6),
         nullable=True,
     )
     sale_unit_price_no_tax: Mapped[Decimal | None] = mapped_column(
-        Numeric(12, 4),
+        Numeric(18, 6),
         nullable=True,
     )
     cost_unit_price: Mapped[Decimal | None] = mapped_column(

@@ -90,6 +90,12 @@ def _number(value: Any, *, label: str, minimum: float, maximum: float) -> float:
 
 
 def normalize_layout(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict) and value.get("catalog_version") == "delivery-print-v2":
+        from app.services.customer_delivery_templates import normalize_layout as normalize_v2
+        try:
+            return normalize_v2(value)
+        except ValueError as error:
+            raise DeliveryPrintTemplateError(str(error)) from error
     if not isinstance(value, dict) or value.get("catalog_version") != CATALOG_VERSION:
         raise DeliveryPrintTemplateError("送货模板字段目录版本无效")
     raw_elements = value.get("elements")
@@ -247,6 +253,7 @@ def decode_snapshot(
 
 
 def admin_state(db: Session, customer_id: int | None) -> dict:
+    from app.services.customer_delivery_templates import PRESETS, preset_layout
     key = profile_key(customer_id)
     released = _latest(db, key, "release")
     draft = _latest(db, key, "draft")
@@ -265,6 +272,9 @@ def admin_state(db: Session, customer_id: int | None) -> dict:
         "profile_key": key,
         "customer_id": customer_id,
         "catalog": field_catalog(),
+        "presets": PRESETS,
+        "legacy_layout": default_layout(),
+        "preset_layouts": {key: preset_layout(key) for key in PRESETS},
         "published": published,
         "draft": (
             _envelope(draft, key=key)
@@ -300,6 +310,8 @@ def save_draft(
 ) -> dict:
     key = profile_key(customer_id)
     normalized = normalize_layout(layout)
+    if customer_id is None and normalized["catalog_version"] == "delivery-print-v2":
+        raise DeliveryPrintTemplateError("客户专用版式必须选择客户")
     request = _request_hash({"kind": "save_draft", "key": key, "layout": normalized,
                              "expected": expected_release_version})
     replay = _replay(db, operation_key, request)
@@ -314,7 +326,7 @@ def save_draft(
     row = DeliveryPrintTemplateRevision(
         profile_key=key, customer_id=customer_id, stream="draft",
         version=(previous.version + 1 if previous else 1),
-        catalog_version=CATALOG_VERSION, payload_json=encoded,
+        catalog_version=normalized['catalog_version'], payload_json=encoded,
         payload_hash=payload_hash(encoded), base_release_version=current_version,
         operation_kind="save_draft", operation_key=operation_key,
         request_hash=request, created_by=actor_id,
@@ -349,7 +361,7 @@ def publish_draft(
         raise DeliveryPrintTemplateConflict("草稿已过期，请重新保存")
     row = DeliveryPrintTemplateRevision(
         profile_key=key, customer_id=customer_id, stream="release",
-        version=current_version + 1, catalog_version=CATALOG_VERSION,
+        version=current_version + 1, catalog_version=draft.catalog_version,
         payload_json=draft.payload_json, payload_hash=draft.payload_hash,
         base_release_version=current_version, operation_kind="publish",
         operation_key=operation_key, request_hash=request, created_by=actor_id,
@@ -384,7 +396,7 @@ def rollback_release(
         raise DeliveryPrintTemplateError("回滚目标版本不存在")
     row = DeliveryPrintTemplateRevision(
         profile_key=key, customer_id=customer_id, stream="release",
-        version=current_version + 1, catalog_version=CATALOG_VERSION,
+        version=current_version + 1, catalog_version=source.catalog_version,
         payload_json=source.payload_json, payload_hash=source.payload_hash,
         base_release_version=current_version, operation_kind="rollback",
         operation_key=operation_key, request_hash=request,

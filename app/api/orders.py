@@ -7404,7 +7404,7 @@ def _create_order_impl(
                     (
                         resolved_products[index].id,
                         validated_quantities[index],
-                        str(Decimal(str(item.unit_price)).quantize(Decimal("0.0001"))),
+                        str(Decimal(str(item.unit_price)).quantize(Decimal("0.000001"))),
                         (
                             resolved_product_specification(
                                 item.specification,
@@ -7422,7 +7422,7 @@ def _create_order_impl(
                         (
                             item.product_id,
                             item.quantity,
-                            str(Decimal(str(item.unit_price)).quantize(Decimal("0.0001"))),
+                            str(Decimal(str(item.unit_price)).quantize(Decimal("0.000001"))),
                             (item.snapshot_spec or "").strip(),
                             str(item.external_packaging_order_quantity_basis_snapshot or ""),
                             str(item.external_packaging_purchase_quantity_basis_snapshot or ""),

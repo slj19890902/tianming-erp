@@ -417,6 +417,10 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    for customer_print_asset in ('customer-delivery-print.js', 'customer-delivery-print.css'):
+        asset_path = Path(__file__).resolve().parents[1] / 'static' / customer_print_asset
+        application.add_api_route('/' + customer_print_asset, _conditional_file_endpoint(asset_path),
+                                  methods=['GET'], include_in_schema=False)
     if not any(
         route.path == "/delivery-print-designer.html"
         for route in application.routes

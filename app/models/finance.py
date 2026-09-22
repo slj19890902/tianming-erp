@@ -431,7 +431,7 @@ class StatementItem(Base):
         String(200), nullable=True
     )
     unit_price_snapshot: Mapped[Decimal] = mapped_column(
-        Numeric(12, 4),
+        Numeric(18, 6),
         nullable=False,
     )
     unit_cost_snapshot: Mapped[Decimal] = mapped_column(

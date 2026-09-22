@@ -3715,7 +3715,7 @@
                   <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
                   <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="runExplicitPageListLoad('products')">重试</button></div>
                   <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="false">客户料号</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="false">{{ plainProductText(row.customer_material_code) }}</td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div><div v-if="row.customer_document?.customer_product_name">用途：{{ row.customer_document.customer_product_name }}</div><span v-if="row.customer_document?.missing_labels?.length" class="status orange">{{ row.customer_document.missing_labels.join('、') }}待核对</span><span v-else class="status green">送货资料已具备</span></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <data-panel v-else-if="productTab === 'suppliers'" :empty="false">
@@ -6697,7 +6697,7 @@
               <div class="product-form-row product-core-row">
                 <div class="field"><label>客户</label><search-select v-model="productForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索客户" @change="onProductExternalCustomerChange"></search-select></div>
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="productForm.product_code" /></div>
-                <input type="hidden" v-model.trim="productForm.customer_material_code" />
+                <div class="field"><label>客户料号（品目号／物料代号）</label><input class="input" v-model.trim="productForm.customer_material_code" /></div>
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
                 <div class="field"><label>箱型</label>
                   <select class="select" v-model="productForm.box_style" @change="onProductBoxStyleChange">
@@ -6709,6 +6709,18 @@
                 </div>
                 <div v-if="!['其他','BOM组合'].includes(productForm.box_style)" class="field product-supply-compact"><label>结构</label><select class="select" v-model="productForm.supply_mode"><option value="corrugated_production">纸板生产</option><option value="mixed_bom">纸板＋外购组件</option></select></div>
               </div>
+              <details class="panel" style="grid-column:1/-1;padding:10px" :open="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">
+                <summary>客户送货资料 · 图号／类别／使用型番</summary>
+                <p class="muted">客户类别用于送货单；上方箱型用于生产。图号为文字编号，图片附件仍在“图片/图纸”维护。留空未维护时显示原资料参考值；点击清空后可明确不显示。</p>
+                <div class="product-form-row" style="display:grid;grid-template-columns:repeat(3,minmax(150px,1fr));gap:10px">
+                  <div class="field" v-for="entry in [['customer_drawing_number','客户图号'],['customer_category','客户类别'],['customer_model','使用型番'],['customer_product_name','客户品名／用途'],['customer_drawing_display','图号栏显示文字']]" :key="entry[0]">
+                    <label>{{ entry[1] }}</label><input class="input" v-model="productForm[entry[0]]" :placeholder="productForm.customer_document?.[entry[0]] || '未维护'" :maxlength="entry[0]==='customer_category' ? 100 : entry[0]==='customer_drawing_number' ? 150 : entry[0]==='customer_drawing_display' ? 250 : 500" />
+                    <div v-if="productForm.customer_document_candidates?.values?.[entry[0]]?.length" class="muted">原资料：{{ productForm.customer_document_candidates.values[entry[0]].join(' ／ ') }}<button type="button" class="btn small" v-if="productForm.customer_document_candidates.values[entry[0]].length===1" @click="productForm[entry[0]]=productForm.customer_document_candidates.values[entry[0]][0]">采用</button></div>
+                    <button type="button" class="btn small" @click="productForm[entry[0]]=''">明确留空</button>
+                  </div>
+                </div>
+                <p v-if="productForm.customer_document?.conflicts?.length" class="notice">原资料含不同版本，请根据客户确认的图纸维护；系统不会自动选择其中一个版本。</p><div class="muted" v-if="productForm.customer_document_candidates?.sources?.length">参考来源：{{ [...new Set(productForm.customer_document_candidates.sources.map(s=>(s.file || '基础资料原始行')+' · '+s.sheet+' 第'+s.row+'行'))].join('；') }}</div>
+              </details>
               <div class="muted" style="font-size:12px;margin:4px 0">直接外购成品：选“其他”并绑定供应商产品；外购彩印纸板、本厂模切粘合：选实际箱型＋“纸板生产”，填写本厂加工资料。</div>
 
               <div v-if="productForm.supply_mode==='external_purchase'" class="panel" style="margin:10px 0;border-color:#f59e0b">
@@ -10288,6 +10300,7 @@
       const blankProduct = () => ({
         id: null, version: null, customer_id: null, product_code: "", customer_material_code: "",
         product_name: "", material_id: null, legacy_material_text: null,
+        customer_drawing_number:null, customer_category:null, customer_model:null, customer_product_name:null, customer_drawing_display:null,
         length_mm: null, width_mm: null, height_mm: null, box_category: "normal",
         box_style: "", print_content: "无印刷", printing_colors:"",
         _printing_situation: "无印刷", _printing_colors: [], _printing_colors_original_count: 0, _printing_colors_touched: false,
@@ -28634,6 +28647,8 @@
             return {
               customer_id: f.customer_id, product_code: f.product_code,
               customer_material_code: f.customer_material_code, product_name: f.product_name,
+              customer_drawing_number:f.customer_drawing_number, customer_category:f.customer_category, customer_model:f.customer_model,
+              customer_product_name:f.customer_product_name, customer_drawing_display:f.customer_drawing_display,
               material_id: f.material_id, box_category: f.box_category, box_style: f.box_style,
               supply_mode: f.supply_mode,
               external_packaging_category_code: f.external_packaging_category_code,

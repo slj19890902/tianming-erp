@@ -1,0 +1,248 @@
+{
+  "scope": "2026-09-22 approved customer source review; candidates only, never database backfill",
+  "entries": [
+    {
+      "customer_id": 137,
+      "code": "80010677",
+      "field": "customer_drawing_number",
+      "value": "0632304",
+      "file": "20260922天明订单.xlsx",
+      "sheet": "包装箱格式 (1)",
+      "row": 31
+    },
+    {
+      "customer_id": 137,
+      "code": "80010651",
+      "field": "customer_drawing_number",
+      "value": "0632244",
+      "file": "20260922天明订单.xlsx",
+      "sheet": "包装箱格式 (1)",
+      "row": 34
+    },
+    {
+      "customer_id": 137,
+      "code": "80012632",
+      "field": "customer_drawing_number",
+      "value": "9620185-1",
+      "file": "20260922天明订单.xlsx",
+      "sheet": "包装箱格式 (1)",
+      "row": 39
+    },
+    {
+      "customer_id": 137,
+      "code": "80012633",
+      "field": "customer_drawing_number",
+      "value": "9631394-1",
+      "file": "20260922天明订单.xlsx",
+      "sheet": "包装箱格式 (1)",
+      "row": 40
+    },
+    {
+      "customer_id": 137,
+      "code": "80012634",
+      "field": "customer_drawing_number",
+      "value": "9631395-1",
+      "file": "20260922天明订单.xlsx",
+      "sheet": "包装箱格式 (1)",
+      "row": 41
+    },
+    {
+      "customer_id": 137,
+      "code": "80011965",
+      "field": "customer_drawing_number",
+      "value": "0632515",
+      "file": "20260922天明订单.xlsx",
+      "sheet": "包装箱格式 (1)",
+      "row": 44
+    },
+    {
+      "customer_id": 137,
+      "code": "80010631",
+      "field": "customer_drawing_number",
+      "value": "0632094",
+      "file": "20260922天明订单.xlsx",
+      "sheet": "包装箱格式 (1)",
+      "row": 45
+    },
+    {
+      "customer_id": 137,
+      "code": "80010555",
+      "field": "customer_drawing_number",
+      "value": "0631965",
+      "file": "捷太格特送货单20260922.xls",
+      "sheet": "送货单样本",
+      "row": 5
+    },
+    {
+      "customer_id": 137,
+      "code": "80010631",
+      "field": "customer_drawing_number",
+      "value": "0632094",
+      "file": "捷太格特送货单20260922.xls",
+      "sheet": "送货单样本",
+      "row": 8
+    },
+    {
+      "customer_id": 137,
+      "code": "80010651",
+      "field": "customer_drawing_number",
+      "value": "0632244",
+      "file": "捷太格特送货单20260922.xls",
+      "sheet": "送货单样本",
+      "row": 10
+    },
+    {
+      "customer_id": 137,
+      "code": "80010677",
+      "field": "customer_drawing_number",
+      "value": "0632304",
+      "file": "捷太格特送货单20260922.xls",
+      "sheet": "送货单样本",
+      "row": 11
+    },
+    {
+      "customer_id": 137,
+      "code": "80012131",
+      "field": "customer_drawing_number",
+      "value": "衬板",
+      "file": "捷太格特送货单20260922.xls",
+      "sheet": "送货单样本",
+      "row": 18
+    },
+    {
+      "customer_id": 137,
+      "code": "80012643",
+      "field": "customer_drawing_number",
+      "value": "9734410-1",
+      "file": "捷太格特送货单20260922.xls",
+      "sheet": "送货单样本",
+      "row": 28
+    },
+    {
+      "customer_id": 137,
+      "code": "82021318",
+      "field": "customer_drawing_number",
+      "value": "9631396",
+      "file": "捷太格特送货单20260922.xls",
+      "sheet": "送货单样本",
+      "row": 39
+    },
+    {
+      "customer_id": 138,
+      "code": "80010629",
+      "field": "customer_drawing_number",
+      "value": "7932562-1",
+      "file": "光洋送货单20260922.xls",
+      "sheet": "送货单",
+      "row": 3
+    },
+    {
+      "customer_id": 138,
+      "code": "80011965",
+      "field": "customer_drawing_number",
+      "value": "0632515",
+      "file": "光洋送货单20260922.xls",
+      "sheet": "送货单",
+      "row": 16
+    },
+    {
+      "customer_id": 138,
+      "code": "80012131",
+      "field": "customer_drawing_number",
+      "value": "衬板",
+      "file": "光洋送货单20260922.xls",
+      "sheet": "送货单",
+      "row": 17
+    },
+    {
+      "customer_id": 138,
+      "code": "80010636",
+      "field": "customer_drawing_number",
+      "value": "0632132",
+      "file": "光洋送货单20260922.xls",
+      "sheet": "送货单",
+      "row": 18
+    },
+    {
+      "customer_id": 138,
+      "code": "80012060",
+      "field": "customer_drawing_number",
+      "value": "0632316-1",
+      "file": "光洋送货单20260922.xls",
+      "sheet": "送货单",
+      "row": 22
+    },
+    {
+      "customer_id": 138,
+      "code": "80010631",
+      "field": "customer_drawing_number",
+      "value": "0632094",
+      "file": "光洋送货单20260915.xls",
+      "sheet": "送货单",
+      "row": 12
+    },
+    {
+      "customer_id": 138,
+      "code": "80010651",
+      "field": "customer_drawing_number",
+      "value": "0632244",
+      "file": "光洋送货单20260915.xls",
+      "sheet": "送货单",
+      "row": 16
+    },
+    {
+      "customer_id": 137,
+      "code": "80010631",
+      "field": "customer_drawing_number",
+      "value": "0632094",
+      "file": "捷太格特送货单20260915.xls",
+      "sheet": "送货单样本",
+      "row": 5
+    },
+    {
+      "customer_id": 137,
+      "code": "80010651",
+      "field": "customer_drawing_number",
+      "value": "0632244",
+      "file": "捷太格特送货单20260915.xls",
+      "sheet": "送货单样本",
+      "row": 7
+    },
+    {
+      "customer_id": 137,
+      "code": "80010677",
+      "field": "customer_drawing_number",
+      "value": "0632304",
+      "file": "捷太格特送货单20260915.xls",
+      "sheet": "送货单样本",
+      "row": 8
+    },
+    {
+      "customer_id": 137,
+      "code": "80012131",
+      "field": "customer_drawing_number",
+      "value": "衬板",
+      "file": "捷太格特送货单20260915.xls",
+      "sheet": "送货单样本",
+      "row": 16
+    },
+    {
+      "customer_id": 137,
+      "code": "82021171",
+      "field": "customer_drawing_number",
+      "value": "7934114",
+      "file": "捷太格特送货单20260915.xls",
+      "sheet": "送货单样本",
+      "row": 35
+    },
+    {
+      "customer_id": 137,
+      "code": "82021318",
+      "field": "customer_drawing_number",
+      "value": "9631396",
+      "file": "捷太格特送货单20260915.xls",
+      "sheet": "送货单样本",
+      "row": 36
+    }
+  ]
+}

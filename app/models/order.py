@@ -268,7 +268,8 @@ class OrderItem(Base):
         default=False,
         nullable=False,
     )
-    unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    customer_document_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     sales_unit_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
     price_tax_mode_snapshot: Mapped[str | None] = mapped_column(
@@ -472,3 +473,9 @@ class OrderItemNumberSequence(Base):
         onupdate=func.current_timestamp(),
         nullable=False,
     )
+
+
+# Capture customer identity for every creation path, including imports and revisions.
+from sqlalchemy import event as _document_event
+from app.services.customer_document_fields import freeze_order_document as _freeze_document
+_document_event.listen(OrderItem, "before_insert", _freeze_document)

@@ -59,12 +59,12 @@ def test_signature_fields_share_one_row_in_requested_order() -> None:
 def test_print_fonts_are_one_step_larger_without_adding_a_blank_page() -> None:
     source = _source()
 
-    assert "font-size: 21px" in _css_block(source, ".company")
-    assert "font-size: 18px" in _css_block(source, ".document-title")
-    assert "font-size: 12px" in _css_block(source, ".meta")
-    assert "font-size: 13px" in _css_block(source, "table")
-    assert "font-size: 13px" in _css_block(source, ".total")
-    assert "font-size: 11px" in _css_block(source, ".signatures")
+    assert "font-size: calc(21px * var(--layout-font-scale, 1))" in _css_block(source, ".company")
+    assert "font-size: calc(18px * var(--layout-font-scale, 1))" in _css_block(source, ".document-title")
+    assert "font-size: calc(12px * var(--layout-font-scale, 1))" in _css_block(source, ".meta")
+    assert "font-size: calc(13px * var(--layout-font-scale, 1))" in _css_block(source, "table")
+    assert "font-size: calc(13px * var(--layout-font-scale, 1))" in _css_block(source, ".total")
+    assert "font-size: calc(11px * var(--layout-font-scale, 1))" in _css_block(source, ".signatures")
 
     assert "height: calc(var(--paper-height) - 0.5mm)" in source
     assert "page-break-inside: avoid" in source

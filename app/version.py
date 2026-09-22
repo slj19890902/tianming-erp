@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.488"
+APP_VERSION = "v0.22.489"
 APP_VERSION_NAME = "三客户常用箱与送货单兼容升级"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
@@ -4659,6 +4659,18 @@ APP_CHANGELOG = [*(f"v0.22.487：本次更新｜{item}" for item in APP_CHANGES)
 
 
 APP_CHANGES = [
+    "修复成品归位后完工历史误显示暂无当前库存：按真实完工来源追踪移库后批次，保留原始完工位置和操作身份。",
+    "生产记录逐处显示当前库存位置与数量，支持部分移库、连续移库和冻结实存；订单送完后的剩余成品仍显示位置。",
+    "待归位显示已登记的逻辑暂存位置；有实存但位置异常时明确提示核对，不再冒充无库存。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新4.生产→生产记录，查刚归位的产品，核对当前位置、余量与成品与归位中的同批货一致。",
+    "查看分放多处或订单已送完仍有余货的记录，逐处核对数量；有效位置可点击打开对应仓库批次。",
+]
+APP_CHANGELOG = [*(f"v0.22.488：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
     "常用箱新增客户图号、类别、使用型番、客户品名与图号栏文字，支持来源核对、搜索及版本保存；客户料号与生产箱型保持独立。",
     "研光、光洋、驿力采用独立Excel兼容送货版式，按241×139.5毫米连续纸完整分页；海外单仍属于研光同客户同地址。",
     "可按权限选择有价或无价打印，单价内部保留六位小数，打印请求保存价格模式；历史送货模板和已冻结资料保持。",
@@ -4669,4 +4681,4 @@ APP_VERIFICATION_STEPS = [
     "打开对应新送货单，切换有价／无价并核对研光海外标识、光洋列序、驿力逐行订单号码；使用241×139.5毫米纸实打检查续页。",
     "重印一张原客户历史送货单，核对旧版式、原客户单号与数量保持；未核对的来源差异先留待完善。",
 ]
-APP_CHANGELOG = [*(f"v0.22.488：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.489：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

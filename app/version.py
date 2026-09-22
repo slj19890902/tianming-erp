@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.487"
-APP_VERSION_NAME = "待收款跨月与客户全程追溯"
+APP_VERSION = "v0.22.488"
+APP_VERSION_NAME = "完工库存归位追踪修复"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4656,3 +4656,15 @@ APP_VERIFICATION_STEPS = [
     "点击对账单号，核对真实发票号、开票日期及每次收款流水；只有真实到账后才确认收款。",
 ]
 APP_CHANGELOG = [*(f"v0.22.487：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "修复成品归位后完工历史误显示暂无当前库存：按真实完工来源追踪移库后批次，保留原始完工位置和操作身份。",
+    "生产记录逐处显示当前库存位置与数量，支持部分移库、连续移库和冻结实存；订单送完后的剩余成品仍显示位置。",
+    "待归位显示已登记的逻辑暂存位置；有实存但位置异常时明确提示核对，不再冒充无库存。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新4.生产→生产记录，查刚归位的产品，核对当前位置、余量与成品与归位中的同批货一致。",
+    "查看分放多处或订单已送完仍有余货的记录，逐处核对数量；有效位置可点击打开对应仓库批次。",
+]
+APP_CHANGELOG = [*(f"v0.22.488：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

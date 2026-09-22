@@ -15,6 +15,21 @@ from tests.test_p1_81_receipt_purpose_flow import (
 )
 
 
+def test_registered_pending_stock_has_a_readable_location_without_a_physical_pallet():
+    from app.services.production_inventory_locations import current_inventory
+    location = WarehouseLocation(id=100, location_code='RECOUNT-PENDING', source_version='RECOUNT_PENDING',
+        location_name='一楼成品待送区（待归位）', is_active=True, is_temporary=True,
+        placement_status='unplaced', warehouse_type='shared', address_kind='legacy')
+    lot = InventoryLot(id=20, version=1, warehouse_location_id=100, status='active',
+        quantity_available=5, quantity_reserved=4, quantity_damaged=0)
+    row = current_inventory([lot], {100: location}, {})
+    assert row['current_inventory_quantity'] == 9
+    assert row['current_inventory_status'] == 'located'
+    assert row['current_warehouse_location_id'] == 100
+    assert '待归位' in row['current_warehouse_location_name']
+    assert row['current_warehouse_location_map_issue']  # Logical staging is not a placed map slot.
+
+
 def seed_history(app, factory):
     app.include_router(router, prefix='/api/production')
     _seed_material_and_staging(factory)

@@ -42,6 +42,8 @@ def _empty_metrics() -> dict[str, Any]:
         "unknown_unit_quantity": 0,
         "sales_amount": None,
         "known_sales_amount": "0.00",
+        "known_sales_lines": 0,
+        "known_cost_lines": 0,
         "actual_material_cost": "0.00",
         "supplemental_material_cost": "0.00",
         "material_cost": None,
@@ -229,7 +231,8 @@ def _metrics(lines: list[dict[str, Any]]) -> dict[str, Any]:
         if sales["financial_reasons"]:
             sales_gaps += 1
         if sales["unit"]:
-            quantities[sales["unit"]] += sales["quantity"]
+            display_unit = {"boxes": "只", "sheets": "张"}.get(sales["unit"], sales["unit"])
+            quantities[display_unit] += sales["quantity"]
         else:
             unknown_quantity += sales["quantity"]
         cost = line["cost"]
@@ -256,6 +259,8 @@ def _metrics(lines: list[dict[str, Any]]) -> dict[str, Any]:
         "unknown_unit_quantity": unknown_quantity,
         "sales_amount": _amount(sales_total) if complete_sales else None,
         "known_sales_amount": _amount(known_sales),
+        "known_sales_lines": sum(line["sales"]["amount"] is not None for line in lines),
+        "known_cost_lines": sum(bool(line["cost"].get("management_cost_complete")) for line in lines),
         "actual_material_cost": _amount(actual_cost),
         "supplemental_material_cost": _amount(supplemental_cost),
         "material_cost": _amount(actual_cost + supplemental_cost) if complete_cost else None,
@@ -285,6 +290,8 @@ def build_customer_delivery_margin(
     visible_customer_ids: set[int] | None = None,
     page: int = 1,
     page_size: int = 50,
+    gap_page: int = 1,
+    gap_page_size: int = 20,
 ) -> dict[str, Any]:
     end_exclusive = date_to + timedelta(days=1)
     predicates = [
@@ -418,21 +425,34 @@ def build_customer_delivery_margin(
         },
         "daily": daily,
         "gaps": {
+            "page": gap_page, "page_size": gap_page_size,
             "reference_lines": reference_lines,
             "historical_cost_reason_counts": dict(sorted(historical_reason_counts.items())),
             "total_lines": len(gap_lines), "reason_counts": dict(sorted(reason_counts.items())),
             "examples": [
                 {
                     "customer_id": int(entry["line"]["delivery"].customer_id),
+                    "customer_name": entry["line"]["customer"].name,
+                    "delivery_date": entry["line"]["delivery"].delivery_date.isoformat(),
+                    "order_id": entry["line"]["order_item"].order_id if entry["line"]["order_item"] else None,
+                    "order_item_id": entry["line"]["item"].order_item_id,
                     "delivery_id": int(entry["line"]["delivery"].id),
                     "delivery_item_id": int(entry["line"]["item"].id),
                     "delivery_number": entry["line"]["delivery"].delivery_number,
                     "product_code": entry['line']['item'].product_code_snapshot or (entry['line']['order_item'].snapshot_product_code if entry['line']['order_item'] else None),
                     "customer_po": entry['line']['item'].customer_po_snapshot,
                     "reason_codes": entry["reason_codes"],
+                    "required_information": [
+                        message for code, message in (
+                            ("missing_sales_price", "补录本次成交单价；无订单送货可从客户对账的缺价明细补录"),
+                            ("missing_sales_tax_basis", "核对原成交价含税/未税及税率，不能用当前客户设置改写旧单"),
+                            ("missing_sales_unit", "核对原销售单位及一套包含的件数；新单从常用箱销售单位自动冻结"),
+                            ("management_cost_incomplete", "核对来源批次的材料/展开尺寸/采购价；旧库存可维护已确认入库成本，后续出库复用")
+                        ) if code in entry["reason_codes"]
+                    ],
                 }
-                for entry in gap_lines[:20]
+                for entry in gap_lines[(gap_page-1)*gap_page_size:gap_page*gap_page_size]
             ],
-            "examples_truncated": len(gap_lines) > 20,
+            "examples_truncated": len(gap_lines) > gap_page*gap_page_size,
         },
     }

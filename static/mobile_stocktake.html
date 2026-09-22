@@ -53,7 +53,7 @@
 <link rel="stylesheet" crossorigin href="/factory-twin-assets/assets/WarehouseGoods-B9Nmi-cf.css">
 <link rel="stylesheet" crossorigin href="/factory-twin-assets/assets/mobileGoods-CfVBtpRG.css">
 <!-- mobile-goods-assets:end -->
-</head>
+<script src="/static/ui/entry-product-editor.js?v=484"></script></head>
 <body>
   <header><div><h1>手机盘点</h1></div><a class="header-link" href="/mobile/#warehouse">仓库地图</a></header>
   <main>
@@ -88,7 +88,7 @@
             <div class="field"><label>实际尺寸（毫米，选填）</label><input id="inboundLength" type="number" min="1" step="1" placeholder="长"><input id="inboundWidth" type="number" min="1" step="1" placeholder="宽"><input id="inboundHeight" type="number" min="1" step="1" placeholder="高"></div>
             <button id="inboundCreateProduct" class="btn" type="button">保存产品并选用</button>
           </details>
-          <div id="inboundContext" class="notice" aria-live="polite">请选择客户、产品</div>
+          <button id="inboundEditProduct" class="btn" type="button">编辑常用箱材质 / 规格</button><div id="inboundEntryCost" class="muted" aria-live="polite"></div><div id="inboundContext" class="notice" aria-live="polite">请选择客户、产品</div>
           <label id="inboundExistingLabel" class="hidden"><input id="inboundExistingAcknowledged" type="checkbox" style="width:auto;min-height:24px"> 确认新增实物，非已登记库存移位</label>
           <div class="field"><label for="inboundStage">实物状态</label><select id="inboundStage"><option value="complete">完整成品 / 独立子件</option><option value="body">仅本体，尚未装入子件</option></select><small>完整成品不重复扣子件；仅本体用于后续组装。</small></div>
           <div class="inbound-pair"><div class="field"><label for="inboundQuantity">新增数量（只）</label><input id="inboundQuantity" type="number" min="1" step="1" inputmode="numeric"></div>

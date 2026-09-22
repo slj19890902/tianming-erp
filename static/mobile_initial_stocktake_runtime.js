@@ -130,6 +130,7 @@ async function refreshInboundContext() {
     const data = await api(`/api/warehouse/twin-operations/initial-stock-context?${params}`);
     if (generation !== inbound.generation) return;
     inbound.context = data;
+    refreshInboundEntryCost();
     $("inboundContext").textContent = data.can_add
       ? `已登记 ${data.existing_quantity} 只 · ${data.existing_location_count} 个货位`
       : data.block_reason;
@@ -304,3 +305,17 @@ document.querySelectorAll("[data-goods-type]").forEach(button=>button.onclick=()
   }
   updateSubmitState();
 });
+
+async function refreshInboundEntryCost(){
+  const id=Number($("inboundProduct").value), generation=inbound.generation;
+  $("inboundEntryCost").textContent='';
+  if(!id||inbound.stockLot||state.user?.role!=='admin')return;
+  try{const text=await TMEntryProduct.preview(id,$("inboundStage").value);if(generation===inbound.generation&&id===Number($("inboundProduct").value))$("inboundEntryCost").textContent=text;}catch(error){if(generation===inbound.generation)$("inboundEntryCost").textContent='成本预览：'+error.message;}
+}
+$("inboundEditProduct").onclick=async()=>{
+  if(inbound.busy||inbound.attempt||state.locked||state.user?.role!=='admin')return;
+  if(inbound.stockLot){showMessage('已有库存沿用入库时的资料及成本；本入口用于新实物入仓。');return;}
+  const productId=Number($("inboundProduct").value);
+  try{const saved=await TMEntryProduct.open({productId,stockStage:$("inboundStage").value});if(saved&&productId===Number($("inboundProduct").value)){await refreshInboundContext();}}catch(error){showMessage(error.message);}
+};
+$("inboundStage").addEventListener('change',refreshInboundEntryCost);

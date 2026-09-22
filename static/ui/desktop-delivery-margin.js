@@ -47,7 +47,11 @@
     if (Number(metrics?.management_cost_gap_lines || 0) > 0) parts.push(`成本待补 ${Number(metrics.management_cost_gap_lines)} 行`);
     return parts.length ? parts.join("；") : "—";
   }
-  function costPart(metrics, key) { return metrics?.[key] === null || metrics?.[key] === undefined || metrics?.[key] === "" ? "待补" : money(metrics[key]); }
+  function costPart(metrics, key) {
+    if (key === 'supplemental_material_cost' && number(metrics?.[key]) === 0) return '未采用参考补充';
+    if (key === 'actual_material_cost' && number(metrics?.[key]) === 0 && Number(metrics?.actual_cost_gap_lines || 0) > 0) return '实际成本未齐';
+    return metrics?.[key] === null || metrics?.[key] === undefined || metrics?.[key] === "" ? "待补" : money(metrics[key]);
+  }
   function defaultDates() {
     const parts = new Intl.DateTimeFormat("en-CA", {timeZone:"Asia/Shanghai", year:"numeric", month:"2-digit", day:"2-digit"}).formatToParts(new Date());
     const date = Object.fromEntries(parts.filter(item => item.type !== "literal").map(item => [item.type, item.value]));
@@ -61,7 +65,9 @@
   }
   function metricValue(metrics, full, known) {
     if (metrics?.[full] !== null && metrics?.[full] !== undefined && metrics?.[full] !== "") return {value:money(metrics[full]), partial:false};
-    if (metrics?.[known] !== null && metrics?.[known] !== undefined && metrics?.[known] !== "") return {value:`${money(metrics[known])}（部分）`, partial:true};
+    const countKey = full === 'sales_amount' ? 'known_sales_lines' : 'known_cost_lines';
+    if (Number(metrics?.[countKey]) === 0 || (metrics?.[countKey] === undefined && number(metrics?.[known]) === 0)) return {value:'资料待补', partial:true};
+    if (metrics?.[known] !== null && metrics?.[known] !== undefined && metrics?.[known] !== "") return {value:`${money(metrics[known])}（已知部分）`, partial:true};
     return {value:"待补", partial:false};
   }
 
@@ -164,10 +170,24 @@
       const examples = Array.isArray(gaps?.examples) ? gaps.examples : [];
       if (examples.length) {
         const list = el("ul");
-        examples.forEach(item => list.append(el("li", "", `${item?.customer_po || item?.delivery_number || "单号待补"} · ${item?.product_code || "编码待补"} · ${gapText(item)}`)));
+        examples.forEach(item => {
+          const row=el('li','',`${item?.customer_name || ''} · ${item?.delivery_number || '单号待补'} · ${item?.product_code || '编码待补'} · ${gapText(item)}`);
+          row.append(el('div','muted',(item.required_information || []).join('；')));
+          if (config.onOpenGap) {const button=el('button','btn small',item.order_id ? '查看来源订单' : '查看送货明细');button.addEventListener('click',()=>config.onOpenGap(item));row.append(button);}
+          list.append(row);
+        });
         details.append(list);
       } else details.append(el("p", "empty", "当前没有缺口示例。"));
-      if (gaps?.examples_truncated === true) details.append(el("p", "muted", "仅展示前20条示例，覆盖率以完整汇总为准。"));
+      const gapPage=Number(gaps?.page || 1), pages=Math.max(1,Math.ceil(Number(gaps?.total_lines || 0)/Number(gaps?.page_size || 20)));
+      if (pages>1) {
+        details.open=true;
+        const controls=el('div','toolbar-group');
+        const prev=el('button','btn small','上一页'), next=el('button','btn small','下一页');
+        prev.disabled=gapPage<=1;next.disabled=gapPage>=pages;
+        prev.addEventListener('click',()=>{state.gapPage=gapPage-1;load(state.page);});
+        next.addEventListener('click',()=>{state.gapPage=gapPage+1;load(state.page);});
+        controls.append(prev,el('span','muted',`缺口第 ${gapPage} / ${pages} 页 · 共 ${gaps.total_lines} 行`),next);details.append(controls);
+      }
       refs.gaps.append(details);
     }
     function renderPayload(payload) {
@@ -202,7 +222,7 @@
       state.controller?.abort(); const controller = new AbortController(); state.controller = controller; const generation = ++state.generation;
       state.page = Math.max(1, Number(page) || 1); state.loading = true; state.error = ""; refs.apply.disabled = true; refs.retry.hidden = true; showState("正在读取送货材料毛利…", "blue");
       try {
-        const params = {page:state.page, page_size:state.pageSize, date_from:state.filters.dateFrom, date_to:state.filters.dateTo}; if (state.filters.customerId) params.customer_id = state.filters.customerId;
+        const params = {page:state.page, page_size:state.pageSize, gap_page:state.gapPage || 1, date_from:state.filters.dateFrom, date_to:state.filters.dateTo}; if (state.filters.customerId) params.customer_id = state.filters.customerId;
         const payload = await apiGet(MARGIN_PATH, {params, signal:controller.signal});
         if (state.disposed || controller.signal.aborted || generation !== state.generation) return false;
         state.payload = payload || {}; state.loaded = true; refs.state.hidden = true; renderPayload(state.payload); return true;
@@ -216,9 +236,9 @@
         if (!state.disposed && generation === state.generation) { state.loading = false; refs.apply.disabled = false; }
       }
     }
-    const onCustomerChange = () => { if (!state.disposed) { state.filters.customerId = refs.customer.value; load(1); } };
+    const onCustomerChange = () => { if (!state.disposed) { state.gapPage=1;state.filters.customerId = refs.customer.value; load(1); } };
     const onCustomerSearch = () => { if (!state.disposed) { clearTimeout(state.optionsTimer); state.optionsTimer = setTimeout(() => loadCustomerOptions(refs.customerSearch.value || ""), 180); } };
-    const applyFilters = () => { if (!state.disposed) { state.filters.dateFrom = refs.from.value; state.filters.dateTo = refs.to.value; state.filters.customerId = refs.customer.value; load(1); } };
+    const applyFilters = () => { if (!state.disposed) { state.gapPage=1;state.filters.dateFrom = refs.from.value; state.filters.dateTo = refs.to.value; state.filters.customerId = refs.customer.value; load(1); } };
     const onPrevious = () => { if (!state.disposed && state.page > 1) load(state.page - 1); };
     const onNext = () => { const pages = Math.max(1, Math.ceil(state.total / state.pageSize)); if (!state.disposed && state.page < pages) load(state.page + 1); };
     const onRetry = () => load(state.page);

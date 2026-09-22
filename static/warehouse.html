@@ -151,7 +151,7 @@
     .floor3-plan-hotspot.selected,.floor3-area-entry.selected { background:#e9d5ff; border-color:#9333ea; }
     .floor3-plan-hotspot.matched,.floor3-plan-hotspot.selected.matched,.floor3-area-entry.matched { background:#bbf7d0; border-color:#15803d; }
   </style>
-<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script><script src="/static/ui/entry-product-editor.js?v=484"></script></head>
 <body>
   <header>
     <div><h1>仓库库存管理</h1><span class="muted desktop-note">成品入仓、三楼货位与库存流水联动</span></div>
@@ -318,7 +318,7 @@
         <div class="grid">
           <div class="field"><label>客户</label><select id="fgCustomer" required></select></div>
           <div class="field" style="grid-column:span 2"><label>输入存货编码 / 产品名称</label><input id="fgProductKeyword" maxlength="150" autocomplete="off" placeholder="输入后自动显示匹配候选"></div>
-          <div class="field" style="grid-column:span 2"><label>已选择常用箱 / 产品</label><input id="fgProduct" type="hidden"><div id="fgProductSelected" class="muted">尚未选择（必须点击下方候选）</div></div>
+          <div class="field" style="grid-column:span 2"><label>已选择常用箱 / 产品</label><input id="fgProduct" type="hidden"><div id="fgProductSelected" class="muted">尚未选择（必须点击下方候选）</div><button class="btn admin-only" type="button" onclick="editFinishedEntryProduct()">编辑材质 / 规格</button><div id="fgEntryCost" class="muted" aria-live="polite"></div></div>
           <div class="field" style="grid-column:1/-1"><label>匹配候选</label><div id="fgProductCandidates" class="floor3-candidates"><span class="muted">请先选择客户，再输入存货编码或产品名称</span></div></div>
           <div class="field"><label>实际成品数量（个）</label><input id="fgQuantity" type="number" min="1" required></div>
           <div class="field"><label>先选楼层</label><select id="fgFloor" required></select></div>
@@ -1587,7 +1587,7 @@
       return state.customersPromise;
     }
     function clearFinishedProductSelection(message="尚未选择（必须点击下方候选）"){
-      $("fgProduct").value="";$("fgProductSelected").textContent=message;
+      $("fgProduct").value="";$("fgProductSelected").textContent=message;$("fgEntryCost").textContent="";
     }
     function resetFinishedProductSearch(){
       clearTimeout(state.finishedProductSearchTimer);state.finishedProductSearchRequestId+=1;state.finishedProductCandidates=[];$("fgProductKeyword").value="";clearFinishedProductSelection();
@@ -1602,7 +1602,7 @@
     }
     function selectFinishedProductCandidate(index){
       const item=state.finishedProductCandidates[index];if(!item)return;const productId=Number(item.product_id??item.id),code=item.product_code||item.customer_material_code||item.inventory_code||productId,name=item.product_name||item.name||"未命名产品",spec=item.specification||"";
-      $("fgProduct").value=productId;$("fgProductSelected").textContent=`已选择：${code} · ${name}${spec?" · "+spec:""}`;renderFinishedProductCandidates();$("fgQuantity").focus();
+      $("fgProduct").value=productId;$("fgProductSelected").textContent=`已选择：${code} · ${name}${spec?" · "+spec:""}`;renderFinishedProductCandidates();refreshFinishedEntryCost(productId);$("fgQuantity").focus();
     }
     function scheduleFinishedProductSearch(){
       clearTimeout(state.finishedProductSearchTimer);state.finishedProductSearchRequestId+=1;state.finishedProductCandidates=[];clearFinishedProductSelection();
@@ -1750,6 +1750,15 @@
       const flutes=layer==="3"?["A","B","E"]:layer==="5"?["AB","BE"]:["AAA","ABC"];
       const placeholder=layer==="7"?'<option value="">请选择楞型</option>':"";
       $("siFlute").innerHTML=placeholder+flutes.map(x=>`<option>${x}</option>`).join("");
+    }
+    async function refreshFinishedEntryCost(productId){
+      if(!['admin','boss'].includes(state.user?.role))return;
+      try{const text=await TMEntryProduct.preview(Number(productId));if(Number($("fgProduct").value)===Number(productId))$("fgEntryCost").textContent=text;}catch(error){if(Number($("fgProduct").value)===Number(productId))$("fgEntryCost").textContent='成本预览：'+error.message;}
+    }
+    async function editFinishedEntryProduct(){
+      if(state.readOnly||state.user?.role!=='admin'||state.operationPending.size)return;
+      const productId=Number($("fgProduct").value);
+      try{const saved=await TMEntryProduct.open({productId});if(saved&&Number($("fgProduct").value)===productId){$("fgProductSelected").textContent=`已选择：${saved.product_code} · ${saved.product_name} · ${[saved.length_mm,saved.width_mm,saved.height_mm].filter(Boolean).join('×')} mm`;await refreshFinishedEntryCost(productId);}}catch(error){toast(error.message,true);}
     }
     async function saveFinished(e){
       e.preventDefault();const customerId=Number($("fgCustomer").value),productId=Number($("fgProduct").value),locationId=Number($("fgLocation").value),quantity=Number($("fgQuantity").value);

@@ -9,7 +9,7 @@ const html = fs.readFileSync(path.join(rootPath, "static/index.html"), "utf8");
 
 test("desktop margin module keeps contract markers and does not borrow report pages as customer directory", () => {
   assert.match(html, /desktop-delivery-margin\.css\?v=20260913-desktopmargin001/);
-  assert.match(html, /desktop-delivery-margin\.js\?v=20260915-costcontract428/);
+  assert.match(html, /desktop-delivery-margin\.js\?v=20260922-finance-history/);
   assert.match(html, /id="desktopDeliveryMarginRoot"/);
   assert.match(html, /canViewDeliveryMargin/);
   assert.match(html, /回单确认销售额（原口径）/);

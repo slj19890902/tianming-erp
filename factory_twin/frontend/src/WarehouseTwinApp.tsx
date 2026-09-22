@@ -1,3 +1,4 @@
+import { EntryProductButton } from "./EntryProductButton";
 import { OrderReference } from './OrderReference';
 import { WarehouseGoods } from "./WarehouseGoods";
 import { WarehouseDimensionSearch, type DimensionStock } from "./WarehouseDimensionSearch";
@@ -1960,6 +1961,7 @@ export function WarehouseTwinApp() {
   const [stocktakeProductQuery, setStocktakeProductQuery] = useState("");
   const [stocktakeProductCandidates, setStocktakeProductCandidates] = useState<ProductCandidate[]>([]);
   const [stocktakeProductId, setStocktakeProductId] = useState("");
+  const [entryProductRevision,setEntryProductRevision]=useState(0);
   useEffect(() => { setStocktakeStage("complete"); }, [stocktakeProductId]);
   const [stocktakeAddQuantity, setStocktakeAddQuantity] = useState("");
   const [stocktakeSupplementConfirmed, setStocktakeSupplementConfirmed] = useState(false);
@@ -3607,7 +3609,7 @@ export function WarehouseTwinApp() {
         .catch((reason: Error) => active && setWarehouseOperationMessage(reason.message));
     }, 300);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [stocktakeProductQuery, stocktakeCustomerId, canStocktake, mapMode, moveAction, viewMode, selectedLocation?.location_id, selectedLocationCanReceiveStocktakeProduct]);
+  }, [entryProductRevision, stocktakeProductQuery, stocktakeCustomerId, canStocktake, mapMode, moveAction, viewMode, selectedLocation?.location_id, selectedLocationCanReceiveStocktakeProduct]);
 
   useEffect(() => {
     if (!canExecuteWarehouse || mapMode !== "move" || moveAction !== "ground" || viewMode !== "2d" || groundOperation !== "inbound") {
@@ -6890,6 +6892,7 @@ export function WarehouseTwinApp() {
               {stocktakeCustomerId !== "all" && stocktakeMissingOpen && <div className="twin-stocktake-missing"><b>仓库暂无库存</b><StocktakeProductChoices key={`无库存-${stocktakeCustomerId}-${stocktakeProductQuery}-${stocktakeInventoryType}`} items={stocktakeMissingProducts} selectedId={stocktakeProductId} onSelect={(id) => { setStocktakeProductId(id); setStocktakeSupplementConfirmed(false); setRecountLotId(null); }} />{!stocktakeMissingProducts.length && <small>无匹配产品，请调整筛选</small>}</div>}
             </div>
             {selectedStocktakeProduct && <small className="twin-formal-selected">{selectedStocktakeProduct.customer_name} / {selectedStocktakeProduct.product_code || selectedStocktakeProduct.customer_material_code || "编码待补充"} / {selectedStocktakeProduct.product_name}</small>}
+            {canEditLocations && selectedStocktakeProduct && stocktakeInventoryType === "finished" && <EntryProductButton key={stocktakeProductId} productId={Number(stocktakeProductId)} stockStage={stocktakeStage} onSaved={()=>setEntryProductRevision(v=>v+1)}/>}
             {selectedStocktakeProduct && <div className="twin-stocktake-existing-panel">
               <div className="twin-formal-operation-title"><b>其他位置库存</b><span>{stocktakeOutsideAreaAvailable} {inventoryUnitLabel(stocktakeInventoryType === "finished" ? "boxes" : "sheets")} 在其他区域可用</span></div>
               {stocktakeOutsideAreaLocations.length ? <div className="twin-stocktake-existing-list">{stocktakeOutsideAreaLocations.map((match) => <article key={`stocktake-existing-${match.lot_id}`}>

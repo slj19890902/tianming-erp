@@ -707,6 +707,8 @@ def customer_delivery_margin(
     date_to: date | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=100),
+    gap_page: int = Query(default=1, ge=1),
+    gap_page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(_customer_delivery_margin_access),
 ) -> dict:
@@ -736,6 +738,8 @@ def customer_delivery_margin(
         visible_customer_ids=visible_customer_ids,
         page=page,
         page_size=page_size,
+        gap_page=gap_page,
+        gap_page_size=gap_page_size,
     )
     payload["as_of"] = datetime.now(_BEIJING).replace(microsecond=0).isoformat()
     return payload

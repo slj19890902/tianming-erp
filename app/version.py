@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.483"
-APP_VERSION_NAME = "合作客户独立对账与合并开票修复"
+APP_VERSION = "v0.22.484"
+APP_VERSION_NAME = "对账开票历史与入仓资料成本闭环"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4602,3 +4602,17 @@ APP_VERIFICATION_STEPS = [
     "按真实回款分别核对账单余额；需要改单价时先受控撤销尚未实际开票的合并任务，再单独发起对应子客户异议。",
 ]
 APP_CHANGELOG = [*(f"v0.22.483：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "客户对账增加已对账历史查询，已结清单独表示开票与收款全部完成。",
+    "开票办理默认全部客户；查找可按客户或合作公司、账期或实际开票月份筛选，并展示真实发票号码、日期及关联账单。",
+    "首页区分资料待补与已知部分金额，缺口可逐页查询并定位原单；历史销售单位、含税口径及参考成本仅按本次授权审计补齐。",
+    "手机和电脑成品入仓可编辑常用箱材质、成品及展开尺寸，复用版本确认与权限；当前成本预览和本批入仓冻结保持一致。",
+]
+APP_VERIFICATION_STEPS = [
+    "客户对账选择已对账并查询本月，核对已确认客户；开票办理默认全部，再点击查找按客户及月份查真实发票。",
+    "首页分别查看八、九月，核对销售金额、单位和材料成本，展开参考成本说明；不把参考成本当成实际采购应付。",
+    "按真实入仓需要，在手机或电脑选择产品，编辑材质/规格保存后核对成本及原数量、库位，再按实物入仓。",
+]
+APP_CHANGELOG = [*(f"v0.22.484：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

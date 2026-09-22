@@ -1,4 +1,5 @@
 from uuid import uuid4
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -54,8 +55,21 @@ class Adopt(Lots):
 
 @router.get("/materials")
 def materials(db: Session = Depends(get_db), user=Depends(cost_reader)):
-    return [dict(id=m.id, code=m.code, supplier_name=m.supplier_name)
+    return [dict(id=m.id, code=m.code, supplier_name=m.supplier_name,
+                 layer_count=m.layer_count, flute_type=m.flute_type)
         for m in db.scalars(select(Material).where(Material.is_active.is_(True), Material.purchase_currency == "CNY").order_by(Material.code, Material.id))]
+
+
+@router.get("/{product_id}/entry-preview")
+def entry_preview(product_id: int, stock_stage: Literal["complete", "body"] = "complete",
+                  db: Session = Depends(get_db), user=Depends(cost_reader)):
+    from app.services.inventory_valuation import resolve_product_cost
+    product = product_for(db, user, product_id)
+    result = resolve_product_cost(db, product, stock_stage=stock_stage)
+    return dict(product_id=product.id, product_version=product.version,
+        unit_cost=result.estimate.unit_cost if result.estimate else None,
+        evidence=result.estimate.detail if result.estimate else None, missing=result.missing,
+        note="当前资料计算；保存入库时重新核对并冻结本批成本，不改已入库批次")
 
 
 @router.get("/{product_id}")

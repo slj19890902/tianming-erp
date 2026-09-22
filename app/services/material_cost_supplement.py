@@ -225,7 +225,37 @@ def freeze_inventory_entry_cost(db, *, allocation, lot, operator_id, source_kind
     return row
 
 
-def preview(db: Session, months):
+def _approved_current_reference(db, gap, expected_version):
+    """Explicit, per-delivery approval of today's recipe, never historical fact."""
+    from app.models.product import Product
+    from app.services.inventory_valuation import _resolve_product_cost
+    item = gap["item"]
+    source = gap.get("source") or {}
+    lot = source.get("lot")
+    order = db.get(OrderItem, item.order_item_id) if item.order_item_id else None
+    product_id = item.product_id or (order.product_id if order else None)
+    product = db.get(Product, product_id) if product_id else None
+    if (gap["reason"] not in REASONS or gap["quantity"] <= 0 or not product
+            or product.deleted_at is not None or product.version != expected_version
+            or product.is_composite or product.is_virtual_composite_parent
+            or source.get("kind") in {"subkit", "bom_direct_completion"}):
+        return None, "授权产品版本或成本来源不适用，请重新核对"
+    if ((order and order.product_id != product.id)
+            or (lot and (not lot.finished_detail or lot.finished_detail.product_id != product.id))):
+        return None, "产品、原订单或批次身份不一致"
+    # Material evidence only: the sale-price fallback is deliberately not used.
+    result = _resolve_product_cost(db, product)
+    if not result.estimate:
+        return None, "；".join(result.missing)
+    return dict(reference_kind="approved_current_product_material_reference",
+        unit_cost=result.estimate.unit_cost, evidence=dict(
+            authorization="逐条授权采用当前已编辑常用箱资料作历史参考成本",
+            product_id=product.id, product_version=product.version,
+            estimate=result.estimate.detail,
+            scope="事后参考材料成本，不改原订单、采购、库存及历史冻结资料")), None
+
+
+def preview(db: Session, months, *, approved_current_products=None):
     from app.services.material_cost_lineage import material_cost_coverage_report
     proposals, missing = [], []
     existing = {r.target_fingerprint: r for r in db.scalars(select(Supplement))}
@@ -244,6 +274,9 @@ def preview(db: Session, months):
                     missing.append(dict(**identity, reason="已有不可变补充记录与当前数量不符，需另行受控更正"))
                 continue
             ref, error = _reference(db, gap)
+            if error and str(gap["item"].id) in (approved_current_products or {}):
+                ref, error = _approved_current_reference(db, gap,
+                    approved_current_products[str(gap["item"].id)])
             if error:
                 missing.append(dict(**identity, reason=error))
                 continue
@@ -253,12 +286,15 @@ def preview(db: Session, months):
                                   evidence=json.loads(canonical(ref["evidence"]))))
     payload = dict(algorithm=ALGORITHM, months=sorted(set(months)), proposals=proposals,
                    missing=missing, already_approved=already)
+    if approved_current_products:
+        payload["approved_current_products"] = approved_current_products
     payload["preview_fingerprint"] = fingerprint(payload)
     payload["proposed_amount"] = str(sum((Decimal(p["unit_cost"])*p["quantity_limit"] for p in proposals), Decimal(0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     return payload
 
 
-def adopt(db: Session, *, months, user, expected_preview: str, batch_id: str, reason: str):
+def adopt(db: Session, *, months, user, expected_preview: str, batch_id: str, reason: str,
+          approved_current_products=None):
     """Caller owns BEGIN IMMEDIATE and commit; audit and rows share transaction."""
     if not user or not user.is_active or user.role != "admin":
         raise PermissionError("仅管理员可执行已授权的历史成本补齐")
@@ -267,10 +303,12 @@ def adopt(db: Session, *, months, user, expected_preview: str, batch_id: str, re
     prior = db.scalar(select(OperationLog).where(OperationLog.resource == "material_cost_supplement", OperationLog.batch_id == batch_id))
     if prior:
         data = json.loads(prior.details)
-        if data["preview_fingerprint"] != expected_preview or data["months"] != sorted(set(months)) or data["reason"] != reason:
+        if (data["preview_fingerprint"] != expected_preview or data["months"] != sorted(set(months))
+                or data["reason"] != reason
+                or data.get("approved_current_products", {}) != (approved_current_products or {})):
             raise ValueError("同一补齐批次不能使用不同预览")
         return {**data, "replayed": True}
-    plan = preview(db, months)
+    plan = preview(db, months, approved_current_products=approved_current_products) if approved_current_products else preview(db, months)
     if plan["preview_fingerprint"] != expected_preview:
         raise ValueError("来源或价格已变化，请重新预览，未写入任何补充成本")
     for p in plan["proposals"]:
@@ -284,6 +322,8 @@ def adopt(db: Session, *, months, user, expected_preview: str, batch_id: str, re
                           batch_id=batch_id, reason=reason, created_by=user.id))
     result = dict(preview_fingerprint=expected_preview, months=plan["months"], count=len(plan["proposals"]),
                   amount=plan["proposed_amount"], missing_count=len(plan["missing"]), batch_id=batch_id, reason=reason, replayed=False)
+    if approved_current_products:
+        result["approved_current_products"] = approved_current_products
     append_audit_event(db, actor=user, event_category="business", result="success", source="script",
                        module_code="finance.cost", action_code="historical_material_supplement",
                        resource="material_cost_supplement", batch_id=batch_id,

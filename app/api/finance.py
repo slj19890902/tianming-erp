@@ -5043,6 +5043,7 @@ def current_customer_months(
         raise HTTPException(status_code=400, detail=str(error)) from error
     allowed_balance_types = {
         None,
+        "reconciled",
         "pending_reconciliation",
         "pending_confirmation",
         "pending_invoice",
@@ -5068,6 +5069,7 @@ def current_customer_months(
     }
     empty_counts = {
         "all_open": 0,
+        "reconciled": 0,
         "pending_reconciliation": 0,
         "pending_confirmation": 0,
         "pending_invoice": 0,
@@ -5275,6 +5277,7 @@ def current_customer_months(
             Statement.version,
             Statement.ledger_version,
             Statement.created_at,
+            Statement.confirmed_at,
         )
         .join(Customer, Customer.id == Statement.customer_id)
         .where(
@@ -5484,6 +5487,7 @@ def current_customer_months(
                 "task_void_pending": task_void_pending,
                 "invoice_task_pending": invoice_task_pending,
                 "invoice_task_statuses": task_statuses,
+                "confirmed_at": statement["confirmed_at"],
                 "invoice_status": (
                     "not_ready"
                     if not is_confirmed
@@ -5508,6 +5512,7 @@ def current_customer_months(
     all_groups = []
     queue_customer_ids = {key: set() for key in empty_counts}
     for group in grouped.values():
+        group["has_reconciled"] = any(s["confirmation_status"] == "confirmed" for s in group["statements"])
         has_reconciliation = (
             group["pending_reconciliation_count"]
             + group["blocked_reconciliation_count"]
@@ -5564,6 +5569,8 @@ def current_customer_months(
             queue_customer_ids["pending_payment"].add(group["customer_id"])
         if group["has_completed"] and count_in_current_customer_scope:
             queue_customer_ids["completed"].add(group["customer_id"])
+        if group["has_reconciled"] and count_in_current_customer_scope:
+            queue_customer_ids["reconciled"].add(group["customer_id"])
         if (
             count_in_current_customer_scope
             and (has_reconciliation or has_invoice or has_invoice_task or has_payment)
@@ -5592,6 +5599,8 @@ def current_customer_months(
             return False
         if balance_type is None:
             return not group["is_completed"]
+        if balance_type == "reconciled":
+            return group["has_reconciled"]
         if balance_type == "pending_reconciliation":
             return group["has_pending_reconciliation"]
         if balance_type == "pending_confirmation":
@@ -5625,6 +5634,8 @@ def current_customer_months(
     # selected queue; counts above still describe all queues in the same scope.
     if balance_type is not None:
         def matches_queue(statement: dict) -> bool:
+            if balance_type == "reconciled":
+                return statement["confirmation_status"] == "confirmed"
             if balance_type == "pending_reconciliation":
                 return statement["confirmation_status"] != "confirmed" and not statement["financially_completed"]
             if balance_type == "pending_confirmation":
@@ -5647,9 +5658,11 @@ def current_customer_months(
                 group["pending_reconciliation_amount"] = Decimal("0.00")
                 group["pending_confirmation_amount"] = Decimal("0.00")
                 group["primary_action_blocked"] = False
-                group["primary_action"] = {"pending_confirmation": "reconcile", "pending_invoice": "invoice", "pending_payment": "payment", "completed": "completed"}[balance_type]
+                group["primary_action"] = {"pending_confirmation": "reconcile", "pending_invoice": "invoice", "pending_payment": "payment", "completed": "completed", "reconciled": "history"}[balance_type]
                 group["queue_status"] = ("部分收款" if group["settled_amount"] > 0 else "待收款") if balance_type == "pending_payment" else ("待确认" if balance_type == "pending_confirmation" else ("待开票" if balance_type == "pending_invoice" else "已完成"))
                 group["is_completed"] = balance_type == "completed"
+                if balance_type == "reconciled":
+                    group["queue_status"] = "已对账"
     items.sort(
         key=lambda row: (
             -int(row["statement_month"][:4]),

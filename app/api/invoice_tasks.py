@@ -1530,9 +1530,18 @@ def list_invoice_tasks(
     customer_id: int | None = Query(default=None, ge=1),
     statement_month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
     status: str | None = Query(default=None),
+    customer_keyword: str | None = Query(default=None, max_length=120),
+    month_from: str | None = Query(default=None),
+    month_to: str | None = Query(default=None),
+    date_basis: str = Query(default="statement"),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict[str, list[dict[str, Any]]]:
+    from app.services.finance_history_query import validate_range, matches
+    validate_range(month_from, month_to, date_basis)
+    keyword = (customer_keyword or "").strip()
+    if statement_month:
+        validate_range(statement_month, statement_month, "statement")
     query = select(FinanceInvoiceTask).order_by(FinanceInvoiceTask.id.desc())
     if customer_id is not None:
         require_customer_access(customer_id, user, db)
@@ -1542,7 +1551,7 @@ def list_invoice_tasks(
     elif not has_unrestricted_customer_access(user, db):
         scopes = customer_scope_ids(user, db)
         if not scopes:
-            return {"items": []}
+            return {"items": [], "invoice_records": []}
         query = query.where(FinanceInvoiceTask.customer_id.in_(scopes))
     if status:
         query = query.where(FinanceInvoiceTask.status == status)
@@ -1557,8 +1566,47 @@ def list_invoice_tasks(
             if error.status_code != 403:
                 raise
             continue
-        visible.append(_task_response(db, task))
-    return {"items": visible}
+        statements = [db.get(Statement, s.statement_id) for s in task_shares(db, task)]
+        invoice = db.scalar(select(Invoice).where(Invoice.invoice_task_id == task.id))
+        if not matches(db, statements, customer_id=customer_id, keyword=keyword,
+                       start=month_from, end=month_to, basis=date_basis,
+                       invoice_date=invoice.invoice_date if invoice else None):
+            continue
+        response = _task_response(db, task)
+        response.update(invoice_number=invoice.invoice_number if invoice else None,
+                        invoice_date=invoice.invoice_date if invoice else None)
+        visible.append(response)
+    # Actual invoice history also includes records entered before task workflows.
+    # One physical invoice is listed once; merged statement shares remain visible.
+    records = []
+    for invoice in db.scalars(select(Invoice).order_by(Invoice.invoice_date.desc(), Invoice.id.desc())):
+        try:
+            task = _task_for_user(db, invoice.invoice_task_id, user) if invoice.invoice_task_id else None
+            statements = [_statement_for_user(db, s.statement_id, user) for s in task_shares(db, task)] if task else [_statement_for_user(db, invoice.statement_id, user)]
+        except HTTPException as error:
+            if error.status_code != 403:
+                raise
+            continue
+        if status:
+            if status in {"issued", "voided"}:
+                if invoice.invoice_status != status:
+                    continue
+            elif task is None or task.status != status:
+                continue
+        if statement_month and not any(s.statement_month == statement_month for s in statements):
+            continue
+        if not matches(db, statements, customer_id=customer_id, keyword=keyword,
+                       start=month_from, end=month_to, basis=date_basis, invoice_date=invoice.invoice_date):
+            continue
+        anchor = statements[0]
+        records.append({"id": invoice.id, "invoice_number": invoice.invoice_number,
+                        "invoice_status": invoice.invoice_status,
+                        "invoice_date": invoice.invoice_date, "invoice_amount": invoice.invoice_amount,
+                        "customer_name": anchor.settlement_name_snapshot or db.get(Customer, anchor.customer_id).name,
+                        "statements": [{"id": s.id, "statement_number": s.statement_number,
+                                        "statement_month": s.statement_month,
+                                        "customer_name": db.get(Customer, s.customer_id).name} for s in statements]})
+    return {"items": visible, "invoice_records": records}
 
 
 @router.get("/invoice-tasks/{task_id}")

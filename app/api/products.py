@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import mimetypes
 from datetime import datetime, timedelta
@@ -56,6 +57,7 @@ from app.services.flute_mapping import (
 )
 from app.services.product_drawings import (
     DrawingValidationError,
+    drawing_purpose,
     remove_drawing_files,
     save_product_drawing_files,
 )
@@ -114,6 +116,8 @@ from app.services.requisition_quantities import DEFAULT_CUTTING_MODE
 
 
 router = APIRouter()
+from app.api.drawing_design import router as managed_drawing_router  # noqa: E402
+router.include_router(managed_drawing_router)
 box_type_rules_router = APIRouter()
 can_read = PermissionChecker("products.view")
 can_create = PermissionChecker("products.create")
@@ -482,9 +486,9 @@ class ProductPayload(BaseModel):
     material_id: int | None = None
     mold_tool_id: int | None = None
     legacy_material_text: str | None = None
-    length_mm: int | None = Field(default=None, gt=0)
-    width_mm: int | None = Field(default=None, gt=0)
-    height_mm: int | None = Field(default=None, gt=0)
+    length_mm: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    width_mm: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    height_mm: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
     box_category: str = Field(pattern="^(normal|die_cut)$")
     box_style: str | None = None
     supply_mode: Literal["corrugated_production", "external_purchase", "mixed_bom"] = "corrugated_production"
@@ -651,6 +655,7 @@ class ProductDrawingResponse(BaseModel):
     image_path: str
     thumbnail_path: str
     uploaded_at: datetime
+    purpose: Literal["engineering", "print_artwork"] = "engineering"
 
 
 def _drawing_content_url(drawing: ProductDrawing, *, thumbnail: bool = False) -> str:
@@ -668,6 +673,7 @@ def _drawing_response(drawing: ProductDrawing) -> dict:
         "image_path": _drawing_content_url(drawing),
         "thumbnail_path": _drawing_content_url(drawing, thumbnail=True),
         "uploaded_at": utc_naive_to_api(drawing.uploaded_at),
+        "purpose": drawing_purpose(drawing),
     }
 
 
@@ -2196,14 +2202,18 @@ async def _create_drawing_version(
     file: UploadFile,
     db: Session,
     user: User,
+    *, preserve_original: bool = False,
 ) -> ProductDrawing:
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
+    if preserve_original and not os.getenv("ERP_FILE_STORAGE_DIR"):
+        raise HTTPException(503, "图纸存储根未显式配置，禁止上传印刷原件")
     try:
         upload = await read_validated_upload(file, DRAWING_POLICY)
         saved = save_product_drawing_files(
             product_id=product.id,
             upload=upload,
+            preserve_original=preserve_original,
         )
     except (DrawingValidationError, UploadValidationError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -2231,10 +2241,33 @@ async def _create_drawing_version(
         db.commit()
     except SQLAlchemyError:
         db.rollback()
+        if preserve_original:
+            # A COMMIT response can fail after the row became durable. Never
+            # delete an original referenced by a committed attachment record.
+            try:
+                with Session(bind=db.get_bind()) as verification:
+                    durable = verification.scalar(select(ProductDrawing.id).where(
+                        ProductDrawing.product_id == product.id,
+                        ProductDrawing.image_path == saved.image_path))
+            except SQLAlchemyError:
+                raise HTTPException(503, "原件提交结果待核对，文件已保留，尚不能确认上传成功")
+            if durable is not None:
+                return db.get(ProductDrawing, durable)
         remove_drawing_files(saved.image_path, saved.thumbnail_path)
         raise
     db.refresh(drawing)
     return drawing
+
+
+@router.post("/{product_id}/managed-drawing/assets", status_code=status.HTTP_201_CREATED)
+async def upload_drawing_v2_original(
+    product_id: int, file: UploadFile = File(...),
+    db: Session = Depends(get_db), user: User = Depends(can_write),
+) -> dict:
+    from app.services.drawing_switch import require_drawing_v2_write
+    require_drawing_v2_write()
+    drawing = await _create_drawing_version(product_id, file, db, user, preserve_original=True)
+    return _drawing_response(drawing)
 
 
 @router.post("/{product_id}/drawings", status_code=status.HTTP_201_CREATED)

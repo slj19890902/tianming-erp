@@ -40,6 +40,9 @@ from app.models.stock_replenishment import (
 )
 from app.models.warehouse_inventory import InventoryLot, InventoryPalletItem
 from app.services.box_type_rules import box_type_code, canonical_box_style
+from app.services.drawing_binding import bound_task_release
+from app.services.drawing_snapshots import release_paper_snapshot
+from app.services.product_drawings import engineering_drawing_condition
 from app.services.order_number_display import build_display_registry, display_order_number
 from app.services.fulfillment_reminders import (
     matching_production_reminders,
@@ -391,7 +394,7 @@ def build_supplier_requisition_production_package(
     if product_ids:
         for drawing in db.scalars(
             select(ProductDrawing)
-            .where(ProductDrawing.product_id.in_(product_ids))
+            .where(ProductDrawing.product_id.in_(product_ids), engineering_drawing_condition())
             .order_by(
                 ProductDrawing.product_id,
                 ProductDrawing.uploaded_at.desc(),
@@ -586,6 +589,9 @@ def build_supplier_requisition_production_package(
         if task is not None and product is not None:
             task_label_products[int(task.id)] = product
         product_drawing = latest_drawings.get(int(item.product_id or 0))
+        managed_release = bound_task_release(db, int(task.id)) if task is not None else None
+        managed_manifest, managed_drawing = (release_paper_snapshot(managed_release)
+                                               if managed_release else (None, None))
         box_style = (
             component_snapshot.snapshot_component_box_style
             if component_snapshot is not None
@@ -608,7 +614,10 @@ def build_supplier_requisition_production_package(
             if product is not None
             else None
         )
-        current_mold = molds.get(int(mold_id or 0))
+        if managed_release is not None:
+            mold_id = managed_release.mold_tool_id
+        current_mold = molds.get(int(mold_id or 0)) or (db.get(MoldTool, mold_id) if mold_id else None)
+        managed_mold = (managed_manifest or {}).get("mold_snapshot") or {}
         drawing_reference = (
             component_snapshot.snapshot_die_cut_path
             if component_snapshot is not None
@@ -779,8 +788,10 @@ def build_supplier_requisition_production_package(
             "drawing_url": drawing_url,
             "drawing_kind": drawing_kind,
             "drawing_source": drawing_source,
+            "managed_drawing": managed_drawing,
             "mold_tool_id": int(mold_id) if mold_id is not None else None,
             "mold_code": (
+                managed_mold.get("code") if managed_release else
                 component_snapshot.snapshot_mold_tool_code
                 if component_snapshot is not None
                 else current_mold.mold_code
@@ -788,6 +799,7 @@ def build_supplier_requisition_production_package(
                 else None
             ),
             "mold_name": (
+                managed_mold.get("name") if managed_release else
                 component_snapshot.snapshot_mold_tool_name
                 if component_snapshot is not None
                 else current_mold.mold_name
@@ -811,6 +823,7 @@ def build_supplier_requisition_production_package(
                 bool(current_mold.is_active) if current_mold is not None else None
             ),
             "mold_binding_basis": (
+                "drawing_release" if managed_release else
                 "bom_order_snapshot"
                 if component_snapshot is not None
                 and component_snapshot.snapshot_mold_tool_id is not None
@@ -1040,6 +1053,8 @@ def build_supplier_requisition_production_package(
             ),
             None,
         )
+        card["managed_drawings"] = [component["managed_drawing"] for component in card["components"]
+                                     if component.get("managed_drawing")]
         per_bundle = card.get("production_label_units_per_bundle")
         card["estimated_bundle_count"] = (
             math.ceil(card["planned_finished_quantity"] / per_bundle)

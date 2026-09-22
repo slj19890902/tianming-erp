@@ -58,6 +58,9 @@ from app.models.product_bom import (  # noqa: E402,F401
     SalesOrderItemBomDemandAdjustment,
 )
 from app.models.product_drawing import ProductDrawing  # noqa: E402,F401
+from app.models.drawing_design import (  # noqa: E402,F401
+    DrawingDesign, DrawingNumberSequence, DrawingRelease, ProductionTaskDrawing, ProductionTaskDrawingAdoption,
+)
 from app.models.historical_requisition import (  # noqa: E402,F401
     HistoricalRequisitionMap,
 )

@@ -240,6 +240,8 @@ from app.services.report_crease import crease_width_error, product_crease_width_
 from app.services.supplier_master import SupplierLookupError, resolve_supplier
 from app.services.product_drawings import (
     DrawingValidationError,
+    default_product_drawing,
+    engineering_drawing_condition,
     remove_drawing_files,
     save_product_drawing_files,
 )
@@ -2570,7 +2572,7 @@ def _order_response(
                 "snapshot_flap_mm": item.snapshot_flap_mm,
                 # v0.19.2-B: 常用箱图纸（展开明细/详情图纸 fallback 用）
                 "product_drawing_file": (
-                    _product_drawing_url(item.product.drawings[0])
+                    _product_drawing_url(default_product_drawing(item.product.drawings))
                     if item.product_id
                     and item.product is not None
                     and item.product.drawings
@@ -7172,6 +7174,13 @@ def _create_order_impl(
             ).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
             total += subtotal
             item_sequence = reserve_next_item_sequence(db, order.id)
+            # This is a separate pass: virtual parents skip material validation,
+            # and a previous row's PDF match must never choose this row's source.
+            is_pdf_matched_product = bool(
+                payload.pdf_import_confirmation is not None
+                and item_payload.product_id is not None
+                and not item_payload.is_new_product
+            )
             initial_material_code = (
                 (
                     selected_material.code
@@ -7457,10 +7466,10 @@ def _create_order_impl(
                     request=request,
                 )
                 if created_item.supply_mode_snapshot != "external_purchase":
-                    create_or_refresh_production_task(db, created_item.id)
+                    create_or_refresh_production_task(db, created_item.id, source_is_new=True)
                 continue
             if created_item.supply_mode_snapshot != "external_purchase":
-                create_or_refresh_production_task(db, created_item.id)
+                create_or_refresh_production_task(db, created_item.id, source_is_new=True)
         # v0.19.2-B: 图纸保存到常用箱
         for i, item in enumerate(created_items):
             opt = payload.items[i].drawing_save_option if i < len(payload.items) else None
@@ -7468,7 +7477,8 @@ def _create_order_impl(
                 from app.models.product_drawing import ProductDrawing
                 if opt == "overwrite_product":
                     from sqlalchemy import delete as _del
-                    db.execute(_del(ProductDrawing).where(ProductDrawing.product_id == item.product_id))
+                    db.execute(_del(ProductDrawing).where(ProductDrawing.product_id == item.product_id,
+                                                         engineering_drawing_condition()))
                 db.add(ProductDrawing(
                     product_id=item.product_id,
                     image_path=item.drawing_file,

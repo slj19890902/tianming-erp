@@ -850,6 +850,7 @@ def _refresh_composite_production_tasks(
     item: OrderItem,
     *,
     create_if_missing: bool,
+    source_is_new: bool = False,
 ) -> list[ProductionTask]:
     """Refresh every BOM snapshot independently, in component piece units.
 
@@ -911,6 +912,8 @@ def _refresh_composite_production_tasks(
             )
             db.add(task)
             db.flush()
+            from app.services.drawing_binding import bind_new_task_drawing
+            bind_new_task_drawing(db, task, component_product, source_is_new=source_is_new)
 
         # A completion is immutable.  Its task stays completed even if the
         # parent material flag later changes during a separate correction.
@@ -996,6 +999,7 @@ def refresh_production_task(
     order_item_id: int,
     *,
     create_if_missing: bool = False,
+    source_is_new: bool = False,
 ) -> ProductionTask | None:
     item = db.get(OrderItem, order_item_id)
     if item is None:
@@ -1012,6 +1016,7 @@ def refresh_production_task(
             db,
             item,
             create_if_missing=create_if_missing,
+            source_is_new=source_is_new,
         )
         refresh_order_production_status(db, item.order_id)
         return tasks[0] if tasks else None
@@ -1054,6 +1059,8 @@ def refresh_production_task(
         )
         db.add(task)
         db.flush()
+        from app.services.drawing_binding import bind_new_task_drawing
+        bind_new_task_drawing(db, task, product, source_is_new=source_is_new)
 
     if task.status == COMPLETED or has_production_completion_facts(db, [item.id]):
         return task
@@ -1142,8 +1149,11 @@ def refresh_production_task(
 def create_or_refresh_production_task(
     db: Session,
     order_item_id: int,
+    *,
+    source_is_new: bool = False,
 ) -> ProductionTask | None:
-    return refresh_production_task(db, order_item_id, create_if_missing=True)
+    return refresh_production_task(db, order_item_id, create_if_missing=True,
+                                   source_is_new=source_is_new)
 
 
 def refresh_existing_production_task(
@@ -4702,6 +4712,8 @@ def _ensure_receipt_auto_main_task(
     )
     db.add(task)
     db.flush()
+    from app.services.drawing_binding import bind_new_task_drawing
+    bind_new_task_drawing(db, task, product)
     return task
 
 

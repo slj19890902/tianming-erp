@@ -41,6 +41,20 @@
     .headline-metric strong.fit-long { font-size:9.2pt; letter-spacing:-.12mm; }
     .headline-metric strong.fit-very-long { white-space:normal; font-size:8pt; line-height:1.08; }
     .product-strip { display:grid; grid-template-columns:1.25fr .9fr .55fr; gap:2mm; padding:1.2mm 0 1.4mm; border-bottom:.28mm solid #888; }
+    .drawing-strip { display:flex; gap:2mm; max-height:22mm; overflow:hidden; border-bottom:.28mm solid #888; padding:1mm 0; }
+    .drawing-strip img { width:28mm; height:19mm; flex:none; object-fit:contain; }
+    .drawing-strip .print-main img { width:55mm; }
+    .drawing-strip .structure-mini img { width:18mm; }
+    .drawing-strip .drawing-print { flex:1; font-size:7pt; overflow:hidden; }
+    .drawing-appendix { padding:12mm; height:auto; min-height:297mm; overflow:visible; }
+    .drawing-appendix table { width:100%; table-layout:fixed; border-collapse:collapse; font-size:10pt; line-height:1.4; }
+    .drawing-appendix thead { display:table-header-group; }
+    .drawing-appendix th { text-align:left; font-weight:normal; padding-bottom:3mm; }
+    .drawing-appendix h2 { margin:0 0 2mm; font-size:14pt; }
+    .drawing-appendix th,.drawing-appendix td { overflow-wrap:anywhere; white-space:pre-wrap; }
+    .drawing-appendix tr { break-inside:avoid; page-break-inside:avoid; }
+    .drawing-appendix td { padding:2mm 0; border-bottom:.2mm solid #aaa; }
+    .drawing-appendix img { display:block; width:100%; height:180mm; object-fit:contain; }
     .order-facts { display:grid; grid-template-columns:1.45fr repeat(4,minmax(0,.72fr)); gap:1mm; margin:1mm 0; }
     .order-fact { min-width:0; padding:.7mm 1mm; border:.28mm solid #777; border-radius:1.2mm; }
     .order-fact span { display:block; color:#444; font-size:6.3pt; }
@@ -194,6 +208,9 @@
       .toolbar,.message { display:none !important; }
       .pages { display:block; padding:0; }
       .page { box-shadow:none; margin:0; }
+      .drawing-appendix { min-height:0; }
+      body.print-blocked .pages { display:none !important; }
+      body.print-blocked .message { display:block !important; }
     }
   </style>
 </head>
@@ -502,8 +519,64 @@
       }
 
       function drawingReferenceText(card) {
+        if (card && card.managed_drawings && card.managed_drawings.length) return card.managed_drawings.map(d => `${d.number} ${d.revision}`).join(" / ");
         const drawing = card && card.structure_reference;
         return drawing && (drawing.name || drawing.url) ? "有图纸，扫码查看" : "未登记";
+      }
+
+      function drawingSvg(drawing, withPrint = false) {
+        const uri = drawing?.svg_urls?.[withPrint ? 'print' : 'structure'];
+        if (!/^data:image\/svg\+xml;base64,[A-Za-z0-9+/=]+$/.test(uri || '')) return '';
+        return `<img src="${uri}" alt="${escapeHtml(drawing.number)} 同版展开图"/>`;
+      }
+
+      function drawingStripHtml(card) {
+        const drawings = card.managed_drawings || [];
+        if (!drawings.length) return "";
+        return `<div class="drawing-strip internal-only">${drawings.map(d => (d.print_objects || []).length
+          ? `<div class="print-main">${drawingSvg(d, true)}<small>印刷 ${escapeHtml(d.number)} ${escapeHtml(d.revision)}</small></div><div class="structure-mini">${drawingSvg(d, false)}<small>结构</small></div>`
+          : `<div>${drawingSvg(d, false)}<small>结构 ${escapeHtml(d.number)} ${escapeHtml(d.revision)}</small></div>`).join("")}<div class="drawing-print">${drawings.some(d => (d.print_objects || []).length) ? "印刷图文的完整尺寸与定位见同版附页" : "无印刷内容；结构尺寸见同版附页"}</div></div>`;
+      }
+
+      function drawingAppendixHtml(card, drawing) {
+        const taskIds = [...new Set((card.components || []).filter(component => component.managed_drawing?.release_id === drawing.release_id)
+          .map(component => component.production_task_id).filter(Boolean))];
+        const identity = `任务 ${taskIds.join('、') || card.production_task_id || '-'}｜产品 ${card.product_code || '-'}｜来源 ${card.source_identity || card.supplier_order_item_id || '-'}`;
+        const rows = [
+          `总展开 ${drawing.geometry.width_mm} × ${drawing.geometry.height_mm} mm；黑实线切断，蓝虚线压折。图示按比例适配纸张，请以尺寸标注核对。`,
+          ...Object.entries(drawing.geometry.dimensions || {}).map(([name, value]) => `${name}：${value} mm`),
+          ...(drawing.print_objects || []).map((object, index) => `印刷 ${index + 1}｜${object.kind === 'image' ? '图片' : object.text || ''}｜${object.width_mm} × ${object.height_mm} mm｜面板 ${object.panel_id}｜距边 ${object.x_mm}, ${object.y_mm} mm｜方向 ${object.rotation_deg || 0}°`),
+        ];
+        if (!(drawing.print_objects || []).length) rows.push('无印刷内容；本页以结构尺寸为主。');
+        return `<article class="page drawing-appendix internal-only"><table><thead><tr><th><h2>图纸同版附页｜${escapeHtml(drawing.number)} ${escapeHtml(drawing.revision)}</h2>${escapeHtml(identity)}</th></tr></thead><tbody><tr><td>${drawingSvg(drawing, true)}</td></tr>${rows.map(row => `<tr><td>${escapeHtml(row)}</td></tr>`).join('')}</tbody></table></article>`;
+      }
+
+      function assertDrawingAppendicesFit() {
+        for (const page of pagesHost.querySelectorAll('.drawing-appendix')) {
+          // The customer delivery mode intentionally hides internal drawings.
+          if (!page.getClientRects().length) continue;
+          const image = page.querySelector('img');
+          if (!image || !image.complete || !image.naturalWidth) throw new Error('同版附页图示未完整加载，已停止打印，请重新加载');
+          const headerHeight = page.querySelector('thead').getBoundingClientRect().height;
+          const availableHeight = page.clientWidth * (297 - 24) / 210;
+          if (page.scrollWidth > page.clientWidth + 1 || Array.from(page.querySelectorAll('th,td')).some(cell => cell.scrollWidth > cell.clientWidth + 1)
+            || Array.from(page.querySelectorAll('tbody tr')).some(row => row.getBoundingClientRect().height + headerHeight > availableHeight + 1)) {
+            throw new Error('同版附页内容超过单页容量，已停止打印，请核对图号或印刷内容后重试');
+          }
+        }
+      }
+
+      function checkDrawingPrintReadiness() {
+        try {
+          assertDrawingAppendicesFit();
+          return true;
+        } catch (error) {
+          printButton.disabled = true;
+          message.hidden = false;
+          message.className = 'message error';
+          message.textContent = error.message;
+          return false;
+        }
       }
 
       function orderFactsHtml(card, fitLevel = "normal") {
@@ -610,7 +683,8 @@
             <div class="headline-metric code-metric"><span>存货编码</span>${headlineValueHtml(card.product_code, "code", fitLevel)}</div>
             <div class="headline-metric name-metric"><span>产品名称</span>${headlineValueHtml(card.product_name, "name", fitLevel)}</div>
           </div>
-          <div class="product-strip"><div><span class="field-label">成品内尺寸</span><span class="field-value production-key-value">${escapeHtml(compact ? paperText(finishedSize(card), 36) : finishedSize(card))}</span></div><div><span class="field-label">图纸</span><span class="field-value">${escapeHtml(drawingReferenceText(card))}</span></div><div><span class="field-label">交期</span><span class="field-value">${escapeHtml(compact ? paperList((card.delivery_dates || []).map(dateText), 20, fitLevel) : textList((card.delivery_dates || []).map(dateText)))}</span></div></div>
+          <div class="product-strip"><div><span class="field-label">${(card.managed_drawings || []).some(d => d.geometry?.template === 'custom_21301634_v1') ? '板面长宽 / 模切后箱高' : '成品内尺寸'}</span><span class="field-value production-key-value">${escapeHtml(compact ? paperText(finishedSize(card), 36) : finishedSize(card))}</span></div><div><span class="field-label">图纸</span><span class="field-value">${escapeHtml(drawingReferenceText(card))}</span></div><div><span class="field-label">交期</span><span class="field-value">${escapeHtml(compact ? paperList((card.delivery_dates || []).map(dateText), 20, fitLevel) : textList((card.delivery_dates || []).map(dateText)))}</span></div></div>
+          ${drawingStripHtml(card)}
           ${orderFactsHtml(card, fitLevel)}
           ${receiptFactsHtml(card, fitLevel)}
           ${processHtml(card, fitLevel)}
@@ -672,6 +746,16 @@
         if (images.some((image) => !image.complete || !image.naturalWidth)) throw new Error("产品二维码图片尚未完整加载，请重试");
       }
 
+      async function waitForDrawingImages() {
+        if (document.fonts?.ready) await document.fonts.ready;
+        await Promise.all(Array.from(pagesHost.querySelectorAll('.drawing-appendix img')).map(image => image.decode
+          ? image.decode()
+          : image.complete && image.naturalWidth > 0 ? Promise.resolve() : new Promise((resolve, reject) => {
+              image.addEventListener('load', resolve, {once:true});
+              image.addEventListener('error', () => reject(new Error('同版附页图示加载失败，请重新加载')), {once:true});
+            })));
+      }
+
       function capacityOverflowSource(card) {
         const sections = Array.from(card.querySelectorAll("[data-capacity-label]"));
         if (!sections.length) return "未识别的超长内容";
@@ -699,7 +783,7 @@
           const topKey = cardKey(layout.top, cardIndex++);
           const bottomKey = layout.bottom ? cardKey(layout.bottom, cardIndex++) : "";
           return `<article class="page batch-page" data-page="${index + 1}">${cardHtml(layout.top, packageData, ultraKeys.has(topKey) ? "ultra" : "normal", topKey)}${cardHtml(layout.bottom, packageData, ultraKeys.has(bottomKey) ? "ultra" : "normal", bottomKey)}</article>`;
-        }).join("");
+        }).join("") + (packageData.cards || []).flatMap(card => (card.managed_drawings || []).map(drawing => drawingAppendixHtml(card, drawing))).join("");
         return layouts;
       }
 
@@ -712,6 +796,7 @@
       }
 
       async function render(packageData) {
+        printButton.disabled = true;
         let layouts = renderPages(packageData);
         applyProductionLabelActions(packageData);
         await waitForProductQrImages();
@@ -739,6 +824,9 @@
           }
           toolbarNote.textContent += ` · 已自动紧凑 ${ultraKeys.size} 项`;
         }
+        await waitForDrawingImages();
+        assertDrawingAppendicesFit();
+        if ((packageData.cards || []).some(card => (card.managed_drawings || []).length)) toolbarNote.textContent += ' · 另有同版附页，按内容续页';
         message.hidden = true;
         printButton.disabled = !layouts.length || packageData.printable === false;
       }
@@ -781,14 +869,25 @@
         } catch (error) {
           if (error && error.name === "AbortError") return;
           if (generation !== loadGeneration) return;
+          printButton.disabled = true;
+          message.hidden = false;
           message.className = "message error";
           message.textContent = error instanceof TypeError ? "无法连接 ERP 服务，请检查网络后重试" : error && error.message ? error.message : "连接 ERP 失败，请重试";
         }
       }
 
       retryButton.addEventListener("click", loadPackage);
-      printButton.addEventListener("click", () => { if (loadedPackage) window.print(); });
-      modeButton.addEventListener("click", () => { customerSafe = !customerSafe; applyMode(); });
+      printButton.addEventListener("click", () => { if (loadedPackage && !printButton.disabled && checkDrawingPrintReadiness()) window.print(); });
+      window.addEventListener('beforeprint', () => {
+        const ready = loadedPackage && !printButton.disabled && checkDrawingPrintReadiness();
+        document.body.classList.toggle('print-blocked', !ready);
+        if (!ready) {
+          message.hidden = false;
+          if (!message.textContent || message.className !== 'message error') message.textContent = '任务单尚未完成加载或排版核验，已停止打印，请返回页面重试';
+        }
+      });
+      window.addEventListener('afterprint', () => document.body.classList.remove('print-blocked'));
+      modeButton.addEventListener("click", () => { customerSafe = !customerSafe; applyMode(); checkDrawingPrintReadiness(); });
       labelButton.addEventListener("click", () => {
         const supplierOrderId = Number(loadedPackage && loadedPackage.supplier_order_id);
         if (loadedPackage && !batchMode && !receiptBatchMode && Number.isInteger(supplierOrderId) && supplierOrderId > 0) {

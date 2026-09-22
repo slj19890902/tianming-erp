@@ -393,11 +393,11 @@ def test_n034_order_responses_bulk_attach_snapshots_and_phase_a_has_no_fact_writ
     assert create_order_source.index(
         "create_order_item_bom_snapshots("
     ) < create_order_source.index(
-        "create_or_refresh_production_task(db, created_item.id)"
+        "create_or_refresh_production_task(db, created_item.id, source_is_new=True)"
     )
     assert (
         'if created_item.supply_mode_snapshot != "external_purchase":\n'
-        "                    create_or_refresh_production_task(db, created_item.id)\n"
+        "                    create_or_refresh_production_task(db, created_item.id, source_is_new=True)\n"
         "                continue"
         in create_order_source
     )

@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from io import BytesIO
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
+from app.models.product_drawing import ProductDrawing
 
 from app.services.secure_uploads import (
     ValidatedUpload,
@@ -12,6 +13,21 @@ from app.services.secure_uploads import (
 )
 
 PDF_CONTENT_TYPE = "application/pdf"
+PRINT_ARTWORK_PREFIX = "private:drawing_originals/"
+
+
+def drawing_purpose(drawing: ProductDrawing) -> str:
+    return "print_artwork" if drawing.image_path.startswith(PRINT_ARTWORK_PREFIX) else "engineering"
+
+
+def engineering_drawing_condition():
+    """The source category is server-assigned; client filenames cannot set it."""
+    return ~ProductDrawing.image_path.startswith(PRINT_ARTWORK_PREFIX, autoescape=True)
+
+
+def default_product_drawing(drawings) -> ProductDrawing | None:
+    """Select from the existing newest-first relationship, preserving its order."""
+    return next((drawing for drawing in drawings if drawing_purpose(drawing) == "engineering"), None)
 
 
 class DrawingValidationError(ValueError):
@@ -40,14 +56,39 @@ def save_product_drawing_files(
     *,
     product_id: int,
     upload: ValidatedUpload,
+    preserve_original: bool = False,
 ) -> SavedDrawing:
     del product_id  # Random server-side names deliberately contain no business identifier.
+    if preserve_original and upload.content_type not in {"image/png", "image/jpeg", "image/webp"}:
+        raise DrawingValidationError("印刷素材仅支持PNG/JPEG/WebP；结构PDF请使用原图纸附件入口")
     if upload.content_type == PDF_CONTENT_TYPE:
         saved = store_private_upload(upload, category="drawings")
         return SavedDrawing(
             image_path=saved.reference,
             thumbnail_path=saved.reference,
         )
+    if preserve_original:
+        # V2 artwork keeps the exact upload, including alpha and resolution.
+        # Legacy attachments are neither rewritten nor migrated.
+        try:
+            with Image.open(BytesIO(upload.content)) as source:
+                if source.width * source.height > 25_000_000 or len(upload.content) > 5_000_000:
+                    raise DrawingValidationError("印刷原件不能超过5MB或2500万像素")
+                source.load()
+                thumb = ImageOps.exif_transpose(source).convert("RGBA")
+                thumb.thumbnail((480, 480), Image.Resampling.LANCZOS)
+                buffer = BytesIO()
+                thumb.save(buffer, "WEBP", lossless=True)
+        except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+            raise DrawingValidationError("印刷原件无法安全解码") from error
+        saved = store_private_upload(upload, category="drawing_originals")
+        try:
+            thumbnail = store_private_upload(upload, category="drawing_thumbnails",
+                content=buffer.getvalue(), extension=".webp", content_type="image/webp")
+        except Exception:
+            remove_stored_reference(saved.reference)
+            raise
+        return SavedDrawing(image_path=saved.reference, thumbnail_path=thumbnail.reference)
     validate_product_drawing_upload(upload)
     try:
         image = Image.open(BytesIO(upload.content))

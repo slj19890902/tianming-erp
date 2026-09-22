@@ -2561,6 +2561,9 @@
       .ui-large .production-table .select { min-height:32px; height:32px; padding:3px 6px; font-size:14px; }
       .production-history-table th,
       .production-history-table td { padding:5px 6px; line-height:1.2; vertical-align:middle; }
+      .production-history-table .history-stock-place { white-space:normal; overflow-wrap:anywhere; }
+      .production-history-table .history-stock-place .history-link { white-space:normal; }
+      .production-history-table .history-stock-issue { display:block; color:#92400e; font-size:12px; }
       .production-history-table .history-two-lines { display:grid; gap:2px; min-width:0; }
       .production-history-table .history-line {
         min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -5011,7 +5014,25 @@
                     <td><div class="history-two-lines"><strong class="history-line" :title="row.customer_name || ''">{{ row.customer_short_name || '中文简称未填写' }}</strong><span :class="row.customer_order_number ? 'customer-po' : 'customer-po-missing'" :title="row.customer_order_number || ''">{{ row.customer_order_number || '客户订单号未填写' }}</span></div></td>
                     <td><div class="history-two-lines" :title="productionProductTitle(row)"><strong class="history-line"><span v-if="row.origin==='bom_assembly'">成套｜</span><span v-else-if="row.is_component_task">组件｜</span>{{ row.product_code || '-' }}</strong><span class="history-line">{{ row.product_name || '-' }}</span></div><details v-if="row.assembly_inputs?.length"><summary>组套来源</summary><div v-for="part in row.assembly_inputs" :key="part.lot_id" style="white-space:normal">{{part.product_name}} · 投入{{part.quantity}} · 余{{part.remaining_quantity}}<small class="muted" style="display:block">{{part.lot_number}}</small></div></details></td>
                     <td><div class="history-two-lines"><div class="history-line"><template v-if="row._actual_editing"><div class="history-inline-edit"><span>实际</span><input class="input" type="number" min="1" step="1" v-model.number="row._actual_draft" :disabled="productionBusy" @keydown.enter.prevent="modifyProductionActualQuantity(row)" @keydown.esc.prevent="cancelProductionActualQuantityEdit(row)"><button class="btn small success" :disabled="productionBusy" @click="modifyProductionActualQuantity(row)">保存</button><button class="btn small" :disabled="productionBusy" @click="cancelProductionActualQuantityEdit(row)">取消</button></div></template><template v-else><strong>实际 {{ row.actual_output_quantity ?? row.quantity ?? 0 }}{{row.output_unit||''}}</strong><button v-if="['admin','boss'].includes(user?.role) && !row.is_fully_delivered && row.can_adjust_actual_quantity" class="btn small warning" :disabled="productionBusy" @click="beginProductionActualQuantityEdit(row)">修改</button></template></div><span class="history-line muted">理论 {{ row.planned_output_quantity ?? 0 }}{{row.output_unit||''}}</span></div></td>
-                    <td><div class="history-two-lines"><span v-if="row.status==='reversed'" class="history-line status orange">已撤销</span><span v-else-if="row.is_fully_delivered" class="history-line history-delivered">已送完</span><button v-else-if="productionCurrentLocationClickable(row)" class="history-link" type="button" :title="row.current_warehouse_location_name || ''" @click="openProductionInventory(row)">{{ row.current_warehouse_location_name || '位置名称待完善' }}</button><strong v-else-if="row.current_inventory_status==='located'" class="history-line">{{ row.current_warehouse_location_name || '位置名称待完善' }}</strong><span v-else class="history-line muted">{{ row.inventory_usage_label || '暂无当前库存' }}</span><span v-if="row.inventory_usage_label && row.current_inventory_quantity>0" class="history-line muted">{{row.inventory_usage_label}} {{row.current_inventory_quantity}}</span><span v-if="row.status==='reversed'" class="history-line muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</span><span v-else-if="!row.is_fully_delivered && (row.current_warehouse_location_map_issue || row.current_location_issue)" class="history-line status orange" :title="row.current_warehouse_location_map_issue || row.current_location_issue">{{ row.current_warehouse_location_map_issue || row.current_location_issue }}</span></div></td>
+                    <td><div class="history-two-lines">
+                      <template v-if="row.status==='reversed'"><span class="history-line status orange">已撤销</span><span class="history-line muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</span></template>
+                      <template v-else>
+                        <template v-if="row.current_inventory_locations?.length">
+                          <div v-for="place in row.current_inventory_locations" :key="place.inventory_lot_id" class="history-stock-place">
+                            <button v-if="productionCurrentLocationClickable(place)" class="history-link" type="button" :title="place.current_warehouse_location_name || ''" @click="openProductionInventory(place)">{{ place.current_warehouse_location_name }}</button>
+                            <strong v-else>{{ place.current_warehouse_location_name || '位置待核对' }}</strong>
+                            <span class="muted"> · {{ place.current_inventory_quantity }}{{row.output_unit || '个'}}</span>
+                            <span v-if="place.current_location_issue || place.current_warehouse_location_map_issue" class="history-stock-issue">{{ place.current_location_issue || place.current_warehouse_location_map_issue }}</span>
+                          </div>
+                        </template>
+                        <button v-else-if="productionCurrentLocationClickable(row)" class="history-link" type="button" :title="row.current_warehouse_location_name || ''" @click="openProductionInventory(row)">{{ row.current_warehouse_location_name || '位置名称待完善' }}</button>
+                        <strong v-else-if="row.current_inventory_status==='located'" class="history-line">{{ row.current_warehouse_location_name || '位置名称待完善' }}</strong>
+                        <span v-else class="history-line muted">{{ row.current_inventory_quantity>0 ? '有库存，位置待核对' : row.inventory_usage_label || '暂无当前库存' }}</span>
+                        <span v-if="row.inventory_usage_label && row.current_inventory_quantity>0" class="history-line muted">{{row.inventory_usage_label}} {{row.current_inventory_quantity}}</span>
+                        <span v-if="row.is_fully_delivered" class="history-line history-delivered">订单已送完<span v-if="row.current_inventory_quantity>0"> · 仍有余货</span></span>
+                        <span v-if="!row.current_inventory_locations?.length && (row.current_warehouse_location_map_issue || row.current_location_issue)" class="history-line status orange" :title="row.current_warehouse_location_map_issue || row.current_location_issue">{{ row.current_warehouse_location_map_issue || row.current_location_issue }}</span>
+                      </template>
+                    </div></td>
                     <td class="production-history-actions"><button v-if="row.task_id" type="button" class="btn small" :disabled="productionBusy" @click="openProductionDrawingAdoption({...row,id:row.task_id})">图纸记录</button><button v-if="['stock_preparation','stock_assembly'].includes(row.origin)" class="btn small" :disabled="productionBusy" @click="row.origin==='stock_assembly'?openStockDialog({entry_type:'assembled_stock',assembly:row.assembly}):openPreparationHistory(row)">记录</button><info-note v-if="['stock_preparation','stock_assembly'].includes(row.origin) && row.reversal_block">{{row.reversal_block}}</info-note><button v-if="user?.role==='admin' && !row.is_fully_delivered && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销</button><span v-else class="muted">-</span></td>
                   </tr></tbody>
                   </table>
@@ -21110,7 +21131,8 @@
             const params = new URLSearchParams({ tab:"locations", view:"2d" });
             const currentLocationId = row.current_warehouse_location_id;
             params.set("location_id", String(currentLocationId));
-            if (row?.inventory_lot_id) params.set("lot_id", String(row.inventory_lot_id));
+            const currentLotId = row.current_inventory_lot_id || row.inventory_lot_id;
+            if (currentLotId) params.set("lot_id", String(currentLotId));
             window.open(`/warehouse.html?${params.toString()}`, "_blank", "noopener");
           },
           productionCurrentLocationClickable(row) {
@@ -21118,10 +21140,9 @@
               row
               && this.pageAllowed("warehouse")
               && row.status !== "reversed"
-              && row.is_fully_delivered !== true
               && row.current_inventory_status === "located"
               && Number(row.current_warehouse_location_id) > 0
-              && Number(row.inventory_lot_id) > 0
+              && Number(row.current_inventory_lot_id || row.inventory_lot_id) > 0
               && !row.current_warehouse_location_map_issue
             );
           },

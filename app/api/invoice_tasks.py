@@ -36,6 +36,7 @@ from app.models.customer_charge import CustomerCharge
 from app.models.delivery import DeliveryItem
 from app.models.finance import (
     FinanceManualMutation,
+    FinanceIdempotencyRecord,
     Invoice,
     ReturnReceiptItem,
     SettlementRecord,
@@ -1573,11 +1574,14 @@ def list_invoice_tasks(
                        invoice_date=invoice.invoice_date if invoice else None):
             continue
         response = _task_response(db, task)
-        response.update(invoice_number=invoice.invoice_number if invoice else None,
+        response.update(invoice_id=invoice.id if invoice else None,
+                        invoice_number=invoice.invoice_number if invoice else None,
                         invoice_date=invoice.invoice_date if invoice else None)
         visible.append(response)
     # Actual invoice history also includes records entered before task workflows.
     # One physical invoice is listed once; merged statement shares remain visible.
+    reversal_records = {r.resource_id: json.loads(r.response_json) for r in db.scalars(
+        select(FinanceIdempotencyRecord).where(FinanceIdempotencyRecord.action == "void_issued_invoice"))}
     records = []
     for invoice in db.scalars(select(Invoice).order_by(Invoice.invoice_date.desc(), Invoice.id.desc())):
         try:
@@ -1601,6 +1605,7 @@ def list_invoice_tasks(
         anchor = statements[0]
         records.append({"id": invoice.id, "invoice_number": invoice.invoice_number,
                         "invoice_status": invoice.invoice_status,
+                        "reversal": reversal_records.get(invoice.id),
                         "invoice_date": invoice.invoice_date, "invoice_amount": invoice.invoice_amount,
                         "customer_name": anchor.settlement_name_snapshot or db.get(Customer, anchor.customer_id).name,
                         "statements": [{"id": s.id, "statement_number": s.statement_number,
@@ -2330,3 +2335,7 @@ def create_partner_invoice_task(statement_id: int, payload: PartnerMergePayload,
     db: Session = Depends(get_db), user: User = Depends(can_generate)):
     from app.api.partner_invoice import merge_partner_tasks
     return merge_partner_tasks(statement_id, payload, db, user)
+
+
+from app.api.invoice_reversals import router as invoice_reversal_router
+router.include_router(invoice_reversal_router)

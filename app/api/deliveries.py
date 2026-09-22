@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from app.services.reconciliation_cycle import default_receipt_month, cycle_days_for_customers, month_for_date
 from app.services.external_receipt_state import active_receipt_item
 from app.services.liner_direct_delivery import direct_liner_item_ids, liner_direct_coverage
 from app.services.box_type_rules import box_type_code
@@ -4693,6 +4695,7 @@ def _delivery_list_page_context(db: Session, delivery_ids: list[int]) -> dict:
     context = {
         "deliveries": deliveries,
         "customers": customers,
+        "reconciliation_cycles": cycle_days_for_customers(db, customers),
         "receipts": receipts,
         "receipt_item_quantities_by_delivery_item": (
             receipt_item_quantities_by_delivery_item
@@ -4971,6 +4974,7 @@ def _delivery_list_summary_context(db: Session, delivery_ids: list[int]) -> dict
     return {
         "deliveries": deliveries,
         "customers": customers,
+        "reconciliation_cycles": cycle_days_for_customers(db, customers),
         "receipts": receipts,
         "item_counts": item_counts,
         "delivered_quantities": delivered_quantities,
@@ -5250,10 +5254,7 @@ def _delivery_summary_response(delivery_id: int, *, context: dict) -> dict:
             else None
         ),
         "version": int(delivery.version or 1),
-        "suggested_reconciliation_month": _suggested_reconciliation_month(
-            delivery.delivery_date,
-            customer.statement_cycle_start_day if customer else 1,
-        ),
+        "suggested_reconciliation_month": month_for_date(delivery.delivery_date, context["reconciliation_cycles"].get(delivery.customer_id, 1)),
         "vehicle_number": delivery.vehicle_number,
         "source_mode": delivery.source_mode,
         "status": delivery.status,
@@ -5638,10 +5639,7 @@ def _delivery_response(
             else None
         ),
         "version": int(delivery.version or 1),
-        "suggested_reconciliation_month": _suggested_reconciliation_month(
-            delivery.delivery_date,
-            customer.statement_cycle_start_day if customer else 1,
-        ),
+        "suggested_reconciliation_month": default_receipt_month(db, delivery),
         "vehicle_number": delivery.vehicle_number,
         "source_mode": delivery.source_mode,
         "status": delivery.status,

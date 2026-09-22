@@ -159,3 +159,5 @@
  .finance-list-heading { gap:4px 8px; }
  .finance-list-heading .muted { flex:1 1 100%; order:1; }
 }
+
+@media(min-width:1000px){.finance-task-nav{grid-template-columns:repeat(6,minmax(0,1fr));}}

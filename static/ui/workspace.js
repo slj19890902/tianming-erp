@@ -37,7 +37,7 @@
           if (this.activePage === 'incoming') return;
           // Invoice tasks and expenses paginate locally. Measuring their stacked
           // tables must never overwrite the server-paged customer list's size.
-          if (this.activePage === 'finance' && !['current','settled_history','statements'].includes(this.financeView)) return;
+          if (this.activePage === 'finance' && !['current','collections','settled_history','statements'].includes(this.financeView)) return;
           if (this.activePage === 'production' && this.productionTab === 'pending') return;
           if (this.$parent || this.modal || document.querySelector('.workspace-dialog') || window.innerWidth < 1000 || !panel?.closest?.('.main')) return;
           const tables = [...document.querySelectorAll('.main .panel table')].filter(t => t.getBoundingClientRect().height > 0 && !t.closest('.modal') && !t.dataset.workspaceList);
@@ -48,7 +48,7 @@
           const records = rows.filter(r => r.cells.length > 1);
           if (!records.length) return;
           const currentKey = key(this);
-          const financeCustomers = this.activePage === 'finance' && ['current','settled_history'].includes(this.financeView);
+          const financeCustomers = this.activePage === 'finance' && ['current','collections','settled_history'].includes(this.financeView);
           if (financeCustomers && this.workspaceCapacities[currentKey]) return;
           // Order contents can have different heights on each page. Freeze the
           // measured capacity for this viewport/mode so paging cannot trigger

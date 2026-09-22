@@ -52,6 +52,9 @@ def test_delivery_list_page_context_avoids_per_delivery_base_queries(n029_delive
             engine,
             lambda: client.get("/api/deliveries?page=1&page_size=1").raise_for_status(),
         )
+        summary = client.get("/api/deliveries?page=1&page_size=3&view=summary")
+        assert summary.status_code == 200, summary.text
+        assert all(row["suggested_reconciliation_month"] for row in summary.json()["items"])
         many_response = client.get("/api/deliveries?page=1&page_size=3")
         assert many_response.status_code == 200, many_response.text
         many_page = _select_count(

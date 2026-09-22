@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.494"
-APP_VERSION_NAME = "客户对账列表与分页优化"
+APP_VERSION = "v0.22.495"
+APP_VERSION_NAME = "对账截止日与开票收款分流"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4739,3 +4739,17 @@ APP_VERIFICATION_STEPS = [
     "查找一位客户并切换账期或已对账，核对历史记录与金额仍可追溯。",
 ]
 APP_CHANGELOG = [*(f"v0.22.494：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "新回单按客户或合作公司的结转日建议对账月份，下期未生成业务不挤入本期待对账；仍可手动选择月份生成。",
+    "收款办理独立展示已开票未收清账单，保留以前月份余额及历史追溯，客户对账不再混入待收款入口。",
+    "新增实际发票作废／全额红冲／误登记结果登记，保留原记录并按关联金额受控退回；已有收款不得直接回退。",
+    "对账旧版本可作废留档并继续新草稿修改，保留送货关联和单一应收；无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新客户对账，核对天华三张9月22日回单归属10月，9月待对账不再因此出现；手动选10月可查看明细。",
+    "打开收款办理，选择9月核对包含8月未收款，改选8月不含9月；客户对账和历史查询仍可追溯。",
+    "需要纠错时，在发票更多登记真实作废／红冲结果，核对原记录保留、符合条件账单退回待修改；勿为测试虚构实际处理。",
+]
+APP_CHANGELOG = [*(f"v0.22.495：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

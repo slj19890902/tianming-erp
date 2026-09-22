@@ -15,6 +15,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.services.invoice_statement_scope import StatementInvoice, task_statement_filter, task_statement_rows
+from app.services.reconciliation_cycle import default_receipt_month
 from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased
@@ -1835,6 +1836,10 @@ def _statement_detail_response(
             "ledger_version": statement.ledger_version,
             "status_label": "已结清" if statement.status == "settled" else "未结清",
             "item_count": len(statement_items),
+            "voided_versions": [{"version": log.before_version, "reason": log.reason,
+                "created_at": log.created_at, "snapshot": _redact_statement_costs(json.loads(log.details_json).get("snapshot", {}), user)}
+                for log in db.scalars(select(StatementAdjustment).where(StatementAdjustment.statement_id == statement.id,
+                    StatementAdjustment.action == "invalidate_statement_version").order_by(StatementAdjustment.id.desc()))],
             "invoice_count": len(invoices),
             "settlement_count": len(settlements),
             "items": statement_items,
@@ -3234,14 +3239,17 @@ def create_return_receipt(
 ) -> dict:
     del _period_permission
     del _write_guard
-    _delivery_for_user(db, payload.delivery_id, user)
-    # Refreshed clients always submit a finance idempotency key.  Calls from an
-    # older cached bundle without that contract keep the legacy NULL grouping
-    # instead of being silently moved to the server's current month during a
-    # rolling deployment.
-    reconciliation_month = payload.reconciliation_month or (
-        _current_reconciliation_month() if payload.idempotency_key else None
-    )
+    delivery_for_month = _delivery_for_user(db, payload.delivery_id, user)
+    reconciliation_month = payload.reconciliation_month
+    if reconciliation_month is None and payload.idempotency_key:
+        prior_request = db.scalar(select(FinanceIdempotencyRecord).where(
+            FinanceIdempotencyRecord.idempotency_key == payload.idempotency_key))
+        # A safe retry retains the original result even after a month or master
+        # setting changes. The hash/actor/action check below still rejects reuse.
+        reconciliation_month = (json.loads(prior_request.response_json).get("reconciliation_month")
+            if prior_request is not None else default_receipt_month(db, delivery_for_month))
+    # Old cached callers without an idempotency contract keep legacy NULL;
+    # existing receipt months are never reinterpreted by this default.
     request_value = payload.model_dump(exclude={"idempotency_key"})
     request_value["reconciliation_month"] = reconciliation_month
     request_hash = _finance_request_hash("return_receipt_create", request_value)
@@ -4998,6 +5006,16 @@ def _workbench_candidate_months(
         months.add(delivery_date.strftime("%Y-%m"))
         previous_month_end = delivery_date.replace(day=1) - timedelta(days=1)
         months.add(previous_month_end.strftime("%Y-%m"))
+        months.add(_shift_month(delivery_date.strftime("%Y-%m"), 1))
+    receipt_months = (select(ReturnReceipt.reconciliation_month, ReturnReceiptItem.reconciliation_month_override)
+        .join(ReturnReceiptItem, ReturnReceiptItem.return_receipt_id == ReturnReceipt.id)
+        .join(Delivery, Delivery.id == ReturnReceipt.delivery_id)
+        .where(ReturnReceipt.status == "confirmed"))
+    if visible_customer_ids is not None:
+        receipt_months = receipt_months.where(Delivery.customer_id.in_(visible_customer_ids))
+    for base_month, override_month in db.execute(receipt_months):
+        if override_month or base_month:
+            months.add(override_month or base_month)
 
     charge_months = (
         select(CustomerCharge.reconciliation_month)
@@ -5026,6 +5044,7 @@ def current_customer_months(
     customer_id: int | None = None,
     all_open: bool = Query(default=False),
     through_month: bool = Query(default=False),
+    workspace: str = Query(default="all", pattern="^(all|reconciliation|collections)$"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -5231,7 +5250,12 @@ def current_customer_months(
         }
 
     grouped: dict[tuple[str, int, str], dict] = {}
-    for scope_month in scope_months:
+    for scope_month in ([] if workspace == "collections" else scope_months):
+        # Automatic queues show work due this month or earlier. Explicit month
+        # selection and full customer/history lookup can still prepare next month.
+        if (statement_month is None and not history_lookup and balance_type != "all"
+                and scope_month > selected_month):
+            continue
         try:
             pending_rows = pending_statement_customer_summaries(
                 db,
@@ -5312,6 +5336,8 @@ def current_customer_months(
             .exists()
         )
         statement_query = statement_query.where(~unauthorized_source)
+    if workspace == "collections":
+        statement_query = statement_query.where(Statement.invoiced_amount > 0)
     statement_rows = db.execute(statement_query).mappings().all()
     statement_ids = [int(row["id"]) for row in statement_rows]
     statement_source_ids: dict[int, set[int]] = {}
@@ -5344,6 +5370,8 @@ def current_customer_months(
                         "resolve_dispute",
                         "adjust_dispute_lines",
                         "void_invoice_task_for_modify",
+                        "void_issued_invoice_for_modify",
+                        "invalidate_statement_version",
                     )
                 ),
             )
@@ -5446,7 +5474,7 @@ def current_customer_months(
             & {"reopen_for_dispute", "resolve_dispute", "adjust_dispute_lines"}
         )
         task_void_pending = not is_confirmed and (
-            "void_invoice_task_for_modify" in adjustment_actions
+            bool(adjustment_actions & {"void_invoice_task_for_modify", "void_issued_invoice_for_modify", "invalidate_statement_version"})
         )
         if not is_confirmed:
             group["pending_confirmation_count"] += 1
@@ -5569,7 +5597,8 @@ def current_customer_months(
             else "已完成"
         )
         count_in_current_customer_scope = (
-            customer_id is None or customer_id in group["source_customer_ids"]
+            (customer_id is None or customer_id in group["source_customer_ids"])
+            and (workspace != "collections" or group["invoiced_amount"] > 0)
         )
         settlement_key = ("entity", group["settlement_entity_id"]) if group["settlement_entity_id"] else ("customer", group["customer_id"])
         if count_in_current_customer_scope:
@@ -5588,7 +5617,8 @@ def current_customer_months(
             queue_customer_ids["reconciled"].add(settlement_key)
         if (
             count_in_current_customer_scope
-            and (has_reconciliation or has_invoice or has_invoice_task or has_payment)
+            and (has_reconciliation or has_invoice or has_invoice_task
+                 or (has_payment and workspace != "reconciliation"))
         ):
             queue_customer_ids["all_open"].add(settlement_key)
         if has_reconciliation:
@@ -5612,7 +5642,11 @@ def current_customer_months(
     def includes_requested_queue(group: dict) -> bool:
         if customer_id is not None and customer_id not in group["source_customer_ids"]:
             return False
+        if workspace == "collections" and not (group["invoiced_amount"] > 0):
+            return False
         if balance_type in (None, "all"):
+            if workspace == "reconciliation" and balance_type is None and customer_id is None:
+                return group["has_pending_reconciliation"] or group["has_pending_invoice"] or group["has_pending_invoice_task"]
             return balance_type == "all" or customer_id is not None or not group["is_completed"]
         if balance_type == "reconciled":
             return group["has_reconciled"]
@@ -5647,8 +5681,12 @@ def current_customer_months(
         group["source_customer_count"] = len(group["source_customer_ids"])
     # A customer/month may contain several stages. Show only the bills in the
     # selected queue; counts above still describe all queues in the same scope.
-    if balance_type not in (None, "all"):
+    reconciliation_open = workspace == "reconciliation" and balance_type is None and customer_id is None
+    if balance_type not in (None, "all") or reconciliation_open:
         def matches_queue(statement: dict) -> bool:
+            if reconciliation_open:
+                return (statement["confirmation_status"] != "confirmed" and not statement["financially_completed"]
+                        or statement["pending_invoice_amount"] > 0 or statement["invoice_task_pending"])
             if balance_type == "reconciled":
                 return statement["confirmation_status"] == "confirmed"
             if balance_type == "pending_reconciliation":
@@ -5667,7 +5705,7 @@ def current_customer_months(
             for field in ("invoiced_amount", "settled_amount", "pending_invoice_amount", "pending_payment_amount", "pending_payment_action_amount"):
                 group[field] = _money_value(sum((s[field] for s in group["statements"]), Decimal("0")))
             group["reconciled_receivable_amount"] = _money_value(sum((s["total_receivable"] for s in group["statements"] if s["confirmation_status"] == "confirmed" or s["financially_completed"]), Decimal("0")))
-            if balance_type != "pending_reconciliation":
+            if balance_type != "pending_reconciliation" and not reconciliation_open:
                 for field in ("pending_reconciliation_count", "blocked_reconciliation_count", "pending_reconciliation_item_count", "missing_price_count", "pending_confirmation_count", "dispute_pending_count", "task_void_pending_count"):
                     group[field] = 0
                 group["pending_reconciliation_amount"] = Decimal("0.00")

@@ -49,12 +49,12 @@ def test_order_success_guide_is_permission_scoped_and_keeps_copy_short() -> None
 
 def test_manual_and_pdf_order_success_share_one_next_step_guide() -> None:
     manual = _block("async saveNewOrder(orderPayload) {", "async saveCurrentOrderItem(")
-    pdf = _block("async saveConfirmedImportDrafts() {", "async openOrderEditor(group) {")
+    pdf = _block("async saveConfirmedImportDrafts(targetDraft=null) {", "async openOrderEditor(group) {")
 
-    assert 'this.showOrderNextStepGuide({orderNo,count:1,source:"manual"})' in manual
+    assert 'this.showOrderNextStepGuide({orderNo,count:1,source:"manual",customerId:payload.customer_id})' in manual
     assert 'this.showOrderNextStepGuide({count:succeeded.length,source:"pdf"})' in pdf
     assert "if (succeeded.length)" in pdf
-    assert 'draft._save_status = "failed"' in pdf
+    assert 'draft._save_status = unknown ? "unknown" : "failed"' in pdf
     assert "remainingFailed.length" in pdf
 
 
@@ -80,7 +80,7 @@ const sandbox = {
   axios:{defaults:{},interceptors:{response:{use(){}}}},
   Vue:{createApp(definition){sandbox.definition=definition;return {component(){return this},mount(){return this}}}},
   localStorage:{getItem(){return ""},setItem(){},removeItem(){}},
-  window:{},console,URLSearchParams,setTimeout,clearTimeout,
+  window:{},TMOrderReference:{component:{}},console,URLSearchParams,setTimeout,clearTimeout,
 };
 vm.createContext(sandbox);
 vm.runInContext(source,sandbox);

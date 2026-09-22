@@ -42,7 +42,7 @@ def test_order_create_ui_has_dedicated_state_button_and_close_guards() -> None:
     assert "modal?.type==='order' && orderCreateSaveState.saving" in INDEX
     assert "订单正在保存，请勿重复点击" in INDEX
     assert "该订单已经保存，请刷新订单列表核对" in INDEX
-    open_body = _method_body("async openOrder() {", "resetOrderCommonBoxPicker() {")
+    open_body = _method_body("async openOrder({customerId=null}={}) {", "resetOrderCommonBoxPicker() {")
     assert "this.orderCreateSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};" in open_body
 
 

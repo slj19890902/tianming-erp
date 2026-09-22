@@ -3238,6 +3238,7 @@
               <div class="order-next-step-actions">
                 <button v-if="canRequisition && pageAllowed('requisition')" type="button" class="btn primary" @click="goToRequisitionFromOrderGuide">下一步：去报料</button>
                 <span v-else class="muted">请交给有报料权限的账号继续</span>
+                <button v-if="canContinueSameCustomerOrder" type="button" class="btn" @click="continueSameCustomerOrder">同客户继续录单</button>
                 <button v-if="canCreateOrders" type="button" class="btn" @click="continueCreateOrderFromGuide">继续录订单</button>
                 <button type="button" class="btn" @click="dismissOrderNextStepGuide">关闭</button>
               </div>
@@ -10940,6 +10941,12 @@
             const pageKey = this.activePage === "orders_legacy" ? "orders" : this.activePage;
             return this.businessFlowSteps.find(step => step.page === pageKey) || null;
           },
+          canContinueSameCustomerOrder() {
+            const guide = this.orderNextStepGuide;
+            return !!(this.canCreateOrders && guide?.visible && guide.source === "manual"
+              && guide.customerId && guide.actorId === this.user?.id
+              && guide.authGeneration === this.authGeneration);
+          },
           orderNextStepGuideTitle() {
             const count = Number(this.orderNextStepGuide?.count || 0);
             const orderNo = String(this.orderNextStepGuide?.orderNo || "").trim();
@@ -16230,12 +16237,15 @@
             await this.go(page);
             return true;
           },
-          showOrderNextStepGuide({orderNo="",count=1,source="manual"}={}) {
+          showOrderNextStepGuide({orderNo="",count=1,source="manual",customerId=null}={}) {
             this.orderNextStepGuide = {
               visible:true,
               orderNo:String(orderNo || "").trim(),
               count:Math.max(1,Number(count || 1)),
               source:String(source || "manual"),
+              customerId:source === "manual" ? customerId : null,
+              actorId:this.user?.id,
+              authGeneration:this.authGeneration,
             };
           },
           dismissOrderNextStepGuide() {
@@ -16244,6 +16254,12 @@
           async continueCreateOrderFromGuide() {
             this.dismissOrderNextStepGuide();
             if (this.canCreateOrders) await this.openOrder();
+          },
+          async continueSameCustomerOrder() {
+            if (!this.canContinueSameCustomerOrder || this.modal?.type) return false;
+            const customerId = this.orderNextStepGuide.customerId;
+            this.dismissOrderNextStepGuide();
+            await this.openOrder({customerId});
           },
           async goToRequisitionFromOrderGuide() {
             if (!this.canRequisition || !this.pageAllowed("requisition")) {
@@ -25840,6 +25856,10 @@
             }
           },
           async loadCustomerQuotePreferences(customerId=this.customerForm?.id) {
+            const generation = this.authGeneration, actorId = this.user?.id;
+            const form = this.orderForm, orderCustomerId = form?.customer_id;
+            const isCurrent = () => generation === this.authGeneration && actorId === this.user?.id
+              && form === this.orderForm && orderCustomerId === this.orderForm?.customer_id;
             this.customerQuotePreferences = [];
             if (!customerId) return;
             this.customerQuotePreferenceLoading = true;
@@ -25848,11 +25868,11 @@
                 `/api/master/customers/${customerId}/quote-preferences`,
                 { params:{ include_inactive:true } },
               );
-              this.customerQuotePreferences = Array.isArray(data?.items) ? data.items : [];
+              if (isCurrent()) this.customerQuotePreferences = Array.isArray(data?.items) ? data.items : [];
             } catch (error) {
-              this.showToast(`客户报价偏好读取失败：${this.errorMessage(error)}`, true);
+              if (isCurrent()) this.showToast(`客户报价偏好读取失败：${this.errorMessage(error)}`, true);
             } finally {
-              this.customerQuotePreferenceLoading = false;
+              if (isCurrent()) this.customerQuotePreferenceLoading = false;
             }
           },
           async loadOrderCustomerOptions() {
@@ -31691,20 +31711,42 @@
 	            draft._reminder_visible = false;
 	            return true;
 	          },
-	          async openOrder() {
+	          async openOrder({customerId=null}={}) {
+	            if (customerId && !this.hasPermission("customers.view")) return false;
+	            const generation = this.authGeneration, actorId = this.user?.id;
+	            const sessionIsCurrent = () => generation === this.authGeneration && actorId === this.user?.id;
 	            const modalOpener = this.rememberModalOpener();
-	            if (!this.customerOptions.length) await this.loadCustomerOptions();
+	            if (customerId || !this.customerOptions.length) {
+	              try {
+	                const loaded = await this.loadCustomerOptions(!!customerId);
+	                if (loaded === false) return false;
+	              } catch (error) {
+	                if (sessionIsCurrent()) this.showToast(this.errorMessage(error), true);
+	                return false;
+	              }
+	            }
+	            if (!sessionIsCurrent() || !this.canCreateOrders || this.modal?.type) return false;
+	            const customer = customerId && this.customerOptions.find(row => Number(row.id) === Number(customerId) && row.is_active !== false);
+	            if (customerId && !customer) {
+	              this.showToast("原客户当前不可选择，请重新新建订单选择客户", true);
+	              return false;
+	            }
 	            this.orderCreateSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
 	            this.resetOrderReminderState();
 	            this.orderForm = { customer_id:null, customer_po:"", order_date:today(), delivery_date:plusDays(7), requisition_strategy:"normal", remark:"", items:[] };
+	            if (customer) this.orderForm.customer_id = customer.id;
 	            this.resetOrderRequisitionPreview();
 	            this.orderNumberPreview = "";
 	            this.orderProductOptions = {};
 	            this.resetOrderCommonBoxPicker();
 	            this.modal = { type:"order", title:"新建多明细订单" };
-	            this.addOrderItem();
+	            this.addOrderItem(true,!customer);
 	            this.refreshOrderNumberPreview();
 	            this.$nextTick(() => this.focusAccessibleModal(modalOpener));
+	            if (customer) {
+	              try { await this.handleOrderCustomerChange(); }
+	              catch (error) { if (sessionIsCurrent()) this.showToast(this.errorMessage(error), true); }
+	            }
 	          },
 	          resetOrderCommonBoxPicker() {
 	            this.orderCommonBoxPicker = {
@@ -32889,6 +32931,10 @@
             }
           },
 	          async handleOrderCustomerChange() {
+	            const form = this.orderForm, customerId = form.customer_id;
+	            const generation = this.authGeneration, actorId = this.user?.id;
+	            const isCurrent = () => form === this.orderForm && customerId === form.customer_id
+	              && generation === this.authGeneration && actorId === this.user?.id;
 	            const pendingPickerCount = this.orderCommonBoxSelectedCount();
 	            if (pendingPickerCount) {
 	              this.resetOrderCommonBoxPicker();
@@ -32896,6 +32942,7 @@
 	            }
 	            if (!this.orderForm.items.length) this.addOrderItem();
               await this.loadCustomerQuotePreferences(this.orderForm.customer_id);
+            if (!isCurrent()) return;
             this.orderProductOptions = {};
             for (let index=0; index<this.orderForm.items.length; index+=1) {
               const item=this.orderForm.items[index];
@@ -32919,11 +32966,14 @@
                 continue;
               }
               await this.searchOrderProducts(index, item.product_code || item.product_name || item.specification || "");
+              if (!isCurrent()) return;
             }
             this.refreshOrderNumberPreview();
             await this.loadOrderRemindersForCustomer(this.orderForm.customer_id);
           },
           async refreshOrderNumberPreview() {
+            const form = this.orderForm, customerId = form.customer_id;
+            const generation = this.authGeneration, actorId = this.user?.id;
             if (!this.orderForm.customer_id) {
               this.orderNumberPreview = "";
               return;
@@ -32934,6 +32984,7 @@
                 order_date: this.orderForm.order_date || today(),
               }
             });
+            if (form !== this.orderForm || customerId !== form.customer_id || generation !== this.authGeneration || actorId !== this.user?.id) return;
             this.orderNumberPreview = data.order_number || "";
           },
           itemOrderNumberPreview(index) {
@@ -33452,11 +33503,15 @@
             return payload;
           },
 	          async searchOrderProducts(index, keyword) {
+	            const form = this.orderForm, customerId = form.customer_id, line = form.items[index];
+	            const generation = this.authGeneration, actorId = this.user?.id;
 	            if (!this.orderForm.customer_id) {
 	              this.orderProductOptions[index] = [];
 	              return;
 	            }
 	            const { data } = await axios.get("/api/master/products", { params:{ customer_id:this.orderForm.customer_id, keyword, page_size:50, selection_context:"order" } });
+	            if (form !== this.orderForm || customerId !== form.customer_id || line !== form.items[index]
+	              || generation !== this.authGeneration || actorId !== this.user?.id) return;
 	            this.orderProductOptions[index] = data.items.map(p => ({
 	              ...p,
 	              _compact_label:[p.product_code, p.product_name].filter(Boolean).join("｜") || "未命名常用箱",
@@ -38147,6 +38202,8 @@
           async saveNewOrder(orderPayload) {
             const state = this.orderCreateSaveState || {};
             if (state.saving || state.committed) return {_in_flight:true};
+            const generation = this.authGeneration, actorId = this.user?.id;
+            const sessionIsCurrent = () => generation === this.authGeneration && actorId === this.user?.id;
             const payload = JSON.parse(JSON.stringify(orderPayload));
             this.orderForm._create_key ||= createIdempotencyKey();
             payload.idempotency_key = this.orderForm._create_key;
@@ -38157,9 +38214,11 @@
                 product_ids:(payload.items || []).map(item => item.product_id),
               });
             } catch (error) {
+              if (!sessionIsCurrent()) return {_stale_session:true};
               this.orderCreateSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
               throw error;
             }
+            if (!sessionIsCurrent()) return {_stale_session:true};
             if (!repairConfirmation.confirmed) {
               this.orderCreateSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
               return {_cancelled:true};
@@ -38169,6 +38228,7 @@
             try {
               ({data} = await axios.post("/api/orders", payload));
             } catch (error) {
+              if (!sessionIsCurrent()) return {_stale_session:true};
               if (!error?.response) {
                 this.orderCreateSaveState = {saving:false,committed:false,outcomeUncertain:true,result:null};
                 error._orderCreateOutcomeUncertain = true;
@@ -38177,6 +38237,7 @@
               }
               throw error;
             }
+            if (!sessionIsCurrent()) return {_stale_session:true};
             this.orderCreateSaveState = {
               saving:false,
               committed:true,
@@ -38185,6 +38246,7 @@
             };
             this.closeModal();
             const results = await Promise.allSettled([this.loadOrders(), this.loadKpi()]);
+            if (!sessionIsCurrent()) return {_stale_session:true};
             const errors = results
               .filter(result => result.status === "rejected")
               .map(result => this.errorMessage(result.reason));
@@ -38195,7 +38257,7 @@
             } else {
               this.showToast(`${label} 已保存`);
             }
-            this.showOrderNextStepGuide({orderNo,count:1,source:"manual"});
+            this.showOrderNextStepGuide({orderNo,count:1,source:"manual",customerId:payload.customer_id});
             return {...(data || {}), _refresh_failed:errors.length > 0};
           },
           async saveCurrentOrderItem(orderItemId, orderItemPayload) {
@@ -38679,7 +38741,7 @@
                 };
                 try {
                   const createdOrder = await this.saveNewOrder(orderPayload);
-                  if (createdOrder?._in_flight || createdOrder?._cancelled) return false;
+                  if (createdOrder?._in_flight || createdOrder?._cancelled || createdOrder?._stale_session) return false;
                   return true;
                 } catch (error) {
                   if (!error?._orderCreateOutcomeUncertain) {

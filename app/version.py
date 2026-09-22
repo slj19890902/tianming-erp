@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.480"
-APP_VERSION_NAME = "合作结算工作台与对账开票收款收敛"
-APP_BUILD_DATE = "2026-09-21"
+APP_VERSION = "v0.22.481"
+APP_VERSION_NAME = "报料六列简化与库存抵扣后保留备料"
+APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
 _V022124_CHANGES = [
@@ -4563,3 +4563,17 @@ APP_VERIFICATION_STEPS = [
     "税局实际开具后登记真实发票号、日期和金额；再按合作公司或普通客户的真实回款确认收款。部分开票或部分收款应继续留在对应待办。不要为验收创建或修改模拟正式业务。",
 ]
 APP_CHANGELOG = [*(f"v0.22.480：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "合并报料精简为长宽、压线、材质楞型、库存抵扣、本次报料和备注六列；长宽默认只读，来源与开料设置按需展开。",
+    "只修改本次报料数量，系统自动分配订单用途与材料备库；少报部分继续待报料，多报部分保留为材料备库。",
+    "整组库存全额抵扣后，已填写的额外材料采购及备注仍保留；预占、采购与收料继续校验真实数量、来源、权限、版本和幂等。",
+    "迁移 dv0922 仅允许零订单需求的显式备料用途快照；保留历史业务事实、约束及不可变触发器。",
+]
+APP_VERIFICATION_STEPS = [
+    "合并报料，核对六列内容、压线和长宽；展开来源与高级调整查看计算明细。",
+    "根据真实业务采用库存并修改本次报料数量，核对少报提示与额外备料提示，备注应保持。",
+    "核对供应商采购单数量；全额抵扣无额外备料时不生成零张采购，有明确备料时仅采购备料数量。",
+]
+APP_CHANGELOG = [*(f"v0.22.481：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -27,5 +27,32 @@ const ctx={...sandbox.definition.methods,supplierRequisitionDraft:{supplier_grou
   ctx.restoreSupplierDraftEdits(ctx.supplierRequisitionDraft,fresh);
   assert.equal(fresh.supplier_groups[0].lines[0].remark,'保留备注');
   assert.equal(fresh.supplier_groups[0].lines[0].purchase_total_sheet_qty,41);
+  const amount={authoritative_order_sheet_qty:700,requisition_qty:700};
+  ctx.initializePurchasePurposeLine(amount);
+  amount.purchase_total_sheet_qty=750;ctx.onPurchasePurposeTotalChanged(amount);
+  assert.equal(amount.order_purpose_sheet_qty,700);assert.equal(amount.stock_purpose_sheet_qty,50);
+  assert.equal(ctx.draftPurchaseQuantityHint(amount),'多备 50 张材料');
+  amount.purchase_total_sheet_qty=650;ctx.onPurchasePurposeTotalChanged(amount);
+  assert.equal(amount.order_purpose_sheet_qty,650);assert.equal(amount.stock_purpose_sheet_qty,0);
+  assert.equal(ctx.draftPurchaseQuantityHint(amount),'尚有 50 张待报料');
+  const cutting={remaining_required_piece_qty:100,cutting_mode:'1',requisition_qty:100};
+  ctx.initializePurchasePurposeLine(cutting);cutting.purchase_total_sheet_qty=110;
+  ctx.onPurchasePurposeTotalChanged(cutting);
+  ctx.changeSupplierDraftCuttingMode(cutting,'2');
+  assert.equal(cutting.purchase_total_sheet_qty,60);assert.equal(cutting.stock_purpose_sheet_qty,10);
+  // Full coverage removes the orders from pending, but must retain explicit extra material and notes.
+  ctx.supplierRequisitionSelections=[{type:'order_item',order_item_id:7},{type:'order_item',order_item_id:8}];
+  ctx.requisitionPending=[];ctx.modal={type:'supplierRequisitionDraft'};
+  sandbox.axios.post=async(url,request)=>{
+    assert.equal(request.selections.length,2);
+    assert.ok(request.selections.every(row=>row.retain_stock_purchase));
+    return {data:{supplier_groups:[{lines:[{line_key:'physical',source_items:line.source_items,
+      authoritative_order_sheet_qty:0,order_purpose_sheet_qty:0,stock_purpose_sheet_qty:0,
+      purchase_total_sheet_qty:0,retain_stock_purchase:true}]}]}};
+  };
+  await ctx.refreshSupplierRequisitionDraftAfterInventoryReservation();
+  const retained=ctx.supplierRequisitionDraft.supplier_groups[0].lines[0];
+  assert.equal(retained.purchase_total_sheet_qty,5);assert.equal(retained.order_purpose_sheet_qty,0);
+  assert.equal(retained.remark,'保留备注');assert.ok(ctx.modal);
   console.log('PASS pooled total, shared pallets, shortage, exact-only, single request and surviving draft edits');
 })().catch(e=>{console.error(e);process.exit(1)});

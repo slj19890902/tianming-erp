@@ -267,7 +267,7 @@ class PurchasePurposeSourceSnapshot(Base):
             "AND group_effective_piece_qty_snapshot >= 0 "
             "AND group_effective_piece_qty_snapshot >= "
             "source_effective_piece_qty_snapshot "
-            "AND group_authoritative_order_sheet_qty_snapshot > 0 "
+            "AND group_authoritative_order_sheet_qty_snapshot >= 0 "
             "AND group_authoritative_order_sheet_qty_snapshot * "
             "yield_per_sheet_snapshot >= group_effective_piece_qty_snapshot",
             name="ck_purchase_purpose_source_snapshots_group_conversion",

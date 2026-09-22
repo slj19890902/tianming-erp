@@ -65,9 +65,11 @@ def test_supplier_draft_renders_units_and_sends_complete_purpose_contract() -> N
         "supplierRequisitionSelectionSignature(selections) {",
     )
     for text in (
-        "订单生产用途",
-        "客户通用片料备库",
-        "采购总张",
+        "订单用途（自动）",
+        "材料备库（自动）",
+        "本次报料（张）",
+        "报料长 × 宽（mm）",
+        "压线（mm）",
         "张",
     ):
         assert text in modal

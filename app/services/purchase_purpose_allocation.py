@@ -255,7 +255,7 @@ def allocate_purchase_purpose(
     if authoritative_order_sheet_qty_override is None:
         authoritative = minimum_authoritative
     else:
-        authoritative = _require_positive_int(
+        authoritative = _require_nonnegative_int(
             authoritative_order_sheet_qty_override,
             "权威订单用途张数",
         )

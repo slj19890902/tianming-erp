@@ -2144,7 +2144,10 @@
       .merge-size-input { width: 76px !important; min-width: 76px !important; padding-left: 8px; padding-right: 8px; }
       .supplier-requisition-draft .draft-purchase-scroll,
       .supplier-requisition-draft .draft-stock-scroll { overflow-x:auto; max-width:100%; }
-      .supplier-requisition-draft .draft-purchase-table { table-layout:auto; min-width:1160px; width:100%; font-size:12px; }
+      .supplier-requisition-draft .draft-purchase-table { table-layout:auto; min-width:820px; width:100%; font-size:14px; }
+      .supplier-requisition-draft .draft-board-size { display:block; font-size:17px; white-space:nowrap; margin-bottom:8px; }
+      .supplier-requisition-draft .draft-purchase-quantity { width:110px; font-size:18px; font-weight:600; }
+      .supplier-requisition-draft .draft-advanced-grid { display:flex; gap:24px; flex-wrap:wrap; padding:12px 0; }
       .supplier-requisition-draft .draft-purchase-table > tbody > tr > td { vertical-align:top; white-space:normal; }
       .supplier-requisition-draft .draft-purchase-table > thead > tr > th { white-space:normal; min-width:76px; }
       .supplier-requisition-draft .draft-inventory-detail > td { background:#f4f7fb; padding:12px; }
@@ -8996,7 +8999,7 @@
               </div>
               <div v-if="supplierDraftExactSemiOptions().length" style="margin-bottom:10px;padding:10px 12px;border:2px solid #16a34a;border-radius:8px;background:#f0fdf4;color:#166534;white-space:normal">
                 <strong>发现同规格可合并抵扣库存</strong>
-                <div>跨货位、跨栈板按合并需求一次抵扣，后台按订单录入先后分配；仅合格同尺寸库存纳入，点击后才预占，采购只保留缺口。</div>
+                <div>点击确认后使用库存，自动减少报料数量。</div>
                 <button class="btn small success" type="button" :disabled="requisitionInventoryActionBlocked()" @click="reserveDraftExactSemiInventory()">一键抵扣全部同尺寸安全组</button>
               </div>
               <div v-if="supplierDraftLateFinishedSources().length" style="margin-bottom:10px;padding:10px 12px;border:2px solid #16a34a;border-radius:8px;background:#f0fdf4;color:#166534;white-space:normal">
@@ -9021,31 +9024,31 @@
                 </table>
                 <div class="field" style="width:320px"><label>供应商</label><select class="select" v-model="group.supplier_name" @focus="ensureRequisitionMaterials()"><option value="">请选择供应商</option><option v-if="group.supplier_name && !materialSupplierSelectOptions.includes(group.supplier_name)" :value="group.supplier_name">{{ supplierDisplayName(group.supplier_name) }}</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select></div>
                 <div class="draft-purchase-scroll"><table class="draft-purchase-table">
-                  <thead><tr><th>采购规格</th><th>来源概览</th><th>材质</th><th>需求换算</th><th>报料长</th><th>报料宽</th><th>开料方式</th><th>库存抵扣</th><th>采购总张数</th><th>订单生产用途张</th><th>客户通用片料备库张</th><th>备注</th></tr></thead>
+                  <thead><tr><th>报料长 × 宽（mm）</th><th>压线（mm）</th><th>材质／楞型</th><th>库存抵扣</th><th>本次报料（张）</th><th>备注</th></tr></thead>
                   <tbody>
                     <template v-for="line in draftGroupLines(group)" :key="line.line_key || line.source_type + '-' + line.report_length_mm + '-' + line.report_width_mm">
                       <tr>
-                        <td><span :class="['status', line.source_type==='merge_group' ? 'blue' : 'green']">{{ line.source_type === 'merge_group' ? '合并组' : (line.source_type === 'mixed' ? '混合来源' : '普通行') }}</span><br>{{ line.report_length_mm }} × {{ line.report_width_mm }}</td>
-                        <td>
-                          <button class="btn small" type="button" @click="line._expanded = !line._expanded">{{ line._expanded ? '收起来源' : '展开来源' }}</button>
-                          <div class="muted">{{ draftLineSourceSummary(line) }}</div>
-                          <button class="btn small" type="button" @click="line._inventory_expanded = !line._inventory_expanded" :aria-expanded="!!line._inventory_expanded">{{ line._inventory_expanded ? '收起库存' : '查看片料库存' }}</button>
-                          <div v-if="draftLineLateFinishedSources(line).length" class="status green">客户成品待抵扣</div>
-                          <button v-if="draftLineInventoryPool(line).allocated > 0" class="btn small success" type="button" :disabled="requisitionInventoryActionBlocked()" @click="reserveDraftExactSemiInventory(line)">整组一键抵扣 {{ draftLineInventoryPool(line).allocated }} 片</button>
+                        <td><strong class="draft-board-size">{{ line.report_length_mm }} × {{ line.report_width_mm }}</strong>
+                          <button class="btn small" type="button" @click="line._expanded = !line._expanded" :aria-expanded="!!line._expanded">{{ line._expanded ? '收起明细' : '来源与高级调整' }}</button>
+                          <div v-if="cuttingModeFactor(line.cutting_mode)>1" class="muted">{{ line.cutting_mode }}</div>
                         </td>
-                        <td>{{ line.material_display || '-' }}</td>
-                        <td><strong>订单 {{ line.production_required_qty ?? line.quantity ?? 0 }} 只</strong><div class="muted">每箱 {{ line.source_items?.[0]?.pieces_per_box || 1 }} 片｜{{ line.cutting_mode || '一开一' }}</div><div class="muted">理论 {{ line.theoretical_requisition_qty ?? line.requisition_qty ?? 0 }} 张</div></td>
-                        <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_length_mm" @input="line.dimension_override_acknowledged=false" /><div v-if="supplierDraftLineIsSwapped(line)" class="status red" style="white-space:normal;margin-top:4px">疑似长宽填反</div></td>
-                        <td><input class="input merge-size-input" type="number" min="1" v-model.number="line.report_width_mm" @input="line.dimension_override_acknowledged=false" /><div v-if="supplierDraftLineIsSwapped(line)" class="muted" style="white-space:normal">推荐 {{ supplierDraftExpectedLength(line) }}×{{ supplierDraftExpectedWidth(line) }}</div><label v-if="supplierDraftLineIsSwapped(line) && (canAdmin || user.role==='boss')" style="display:block;margin-top:4px"><input type="checkbox" v-model="line.dimension_override_acknowledged" /> 按人工尺寸继续</label></td>
-                        <td><div class="inline-input"><span>一开</span><input class="input merge-cutter-select" type="number" min="1" step="1" :value="cuttingModeFactor(line.cutting_mode)" @change="line.cutting_mode=normalizeCuttingMode($event.target.value);recalculateSupplierDraftLine(line)" /></div><div v-if="isMergedRequisitionCuttingLine(line) && line._cutting_plan_error" class="status red" style="white-space:normal">{{ line._cutting_plan_error }}</div><div v-else-if="isMergedRequisitionCuttingLine(line)" class="muted" style="white-space:normal">{{ mergedRequisitionCuttingPlanSummary(line) }}</div></td>
-                        <td><div>成品 {{ line.finished_inventory_reserved_qty ?? line.inventory_deducted_qty ?? 0 }} 只</div><div>片料 {{ line.semi_finished_reserved_piece_qty || 0 }} 片</div><div class="muted">已报 {{ line.already_requisitioned_qty || 0 }} 张</div></td>
-                        <td><input class="input merge-size-input" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @input="onPurchasePurposeTotalChanged(line)" /><input type="hidden" v-model.number="line.requisition_qty" aria-hidden="true" @input="line.quantity_override_acknowledged=false" /><div class="muted">供应商采购总量</div></td>
-                        <td><input class="input merge-size-input" type="number" min="0" step="1" v-model.number="line.order_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div class="muted">本行订单上限 {{ purchasePurposeAuthoritativeOrderQty(line) }} 张</div></td>
-                        <td><input class="input merge-size-input" type="number" min="0" step="1" v-model.number="line.stock_purpose_sheet_qty" @input="onPurchasePurposePartChanged(line)" /><div v-if="purchasePurposeValidationError(line)" class="status red" style="white-space:normal;margin-top:4px">{{ purchasePurposeValidationError(line) }}</div><div v-else-if="Number(line.stock_purpose_sheet_qty || 0)>0" class="status blue" style="white-space:normal;margin-top:4px">多订 {{ line.stock_purpose_sheet_qty }} 张，收料后进入该客户通用片料备库</div></td>
-                        <td><input class="input merge-remark-input" v-model.trim="line.remark" /></td>
+                        <td>{{ draftCreaseLabel(line) }}</td>
+                        <td><strong>{{ line.material_display || '-' }}</strong></td>
+                        <td>
+                          <div v-if="Number(line.semi_finished_reserved_piece_qty)>0">已抵 {{ line.semi_finished_reserved_piece_qty }} 片</div>
+                          <div v-if="Number(line.finished_inventory_reserved_qty || line.inventory_deducted_qty)>0">成品已抵 {{ line.finished_inventory_reserved_qty || line.inventory_deducted_qty }} 只</div>
+                          <button v-if="draftLineInventoryPool(line).allocated > 0" class="btn small success" type="button" :disabled="requisitionInventoryActionBlocked()" @click="reserveDraftExactSemiInventory(line)">一键抵扣 {{ draftLineInventoryPool(line).allocated }} 片</button>
+                          <div v-else-if="!Number(line.semi_finished_reserved_piece_qty)" class="muted">暂无可自动抵扣库存</div>
+                          <button class="btn small" type="button" @click="line._inventory_expanded = !line._inventory_expanded" :aria-expanded="!!line._inventory_expanded">{{ line._inventory_expanded ? '收起库存' : '查看库存／其他尺寸' }}</button>
+                        </td>
+                        <td><input class="input draft-purchase-quantity" aria-label="本次报料张数" type="number" min="1" step="1" v-model.number="line.purchase_total_sheet_qty" @input="onPurchasePurposeTotalChanged(line)" />
+                          <div class="muted">{{ draftPurchaseQuantityHint(line) }}</div>
+                          <div v-if="purchasePurposeValidationError(line)" class="status red" style="white-space:normal">{{ purchasePurposeValidationError(line) }}</div>
+                        </td>
+                        <td><input class="input merge-remark-input" aria-label="报料备注" v-model.trim="line.remark" /></td>
                       </tr>
                       <tr v-if="line._inventory_expanded || draftLineLateFinishedSources(line).length" class="draft-inventory-detail">
-                        <td colspan="12">
+                        <td colspan="6">
                           <div v-for="source in draftLineLateFinishedSources(line)" :key="`late-finished-${source.order_item_id}`" style="margin-top:6px;padding:6px;border:1px solid #16a34a;border-radius:6px;background:#f0fdf4;white-space:normal">
                             <strong>后来可用客户专用成品 {{ source.late_finished_inventory.reservable_quantity }} 个</strong>
                             <div class="muted">{{ source.order_number }}｜{{ source.product_code }}｜{{ (source.late_finished_inventory.locations || []).map(location => `${inventoryLocation(location)} ${location.available_quantity || 0}`).join('；') }}</div>
@@ -9091,7 +9094,14 @@
                         </td>
                       </tr>
                       <tr v-if="line._expanded" class="order-detail-row">
-                        <td colspan="12">
+                        <td colspan="6">
+                          <div class="draft-advanced-grid">
+                            <div><strong>需求换算</strong><strong>订单 {{ line.production_required_qty ?? line.quantity ?? 0 }} 只</strong><div class="muted">每箱 {{ line.source_items?.[0]?.pieces_per_box || 1 }} 片｜{{ line.cutting_mode || '一开一' }}</div><div class="muted">理论 {{ line.theoretical_requisition_qty ?? line.requisition_qty ?? 0 }} 张</div></div>
+                            <div><strong>开料方式</strong><div class="inline-input"><span>一开</span><input class="input merge-cutter-select" type="number" min="1" step="1" :value="cuttingModeFactor(line.cutting_mode)" @change="changeSupplierDraftCuttingMode(line,$event.target.value)" /></div><div v-if="isMergedRequisitionCuttingLine(line) && line._cutting_plan_error" class="status red" style="white-space:normal">{{ line._cutting_plan_error }}</div><div v-else-if="isMergedRequisitionCuttingLine(line)" class="muted" style="white-space:normal">{{ mergedRequisitionCuttingPlanSummary(line) }}</div></div>
+                            <div><strong>订单用途（自动）</strong><div>{{ line.order_purpose_sheet_qty }} 张</div></div>
+                            <div><strong>材料备库（自动）</strong><div>{{ line.stock_purpose_sheet_qty }} 张</div></div>
+                          </div>
+                          <details v-if="canAdmin || user.role==='boss'"><summary>调整采购规格</summary><p class="muted">调整后重新核对压线和库存；已预占库存不会随尺寸修改而变更。</p><div class="draft-advanced-grid"><label>报料长（mm）<input class="input merge-size-input" type="number" min="1" v-model.number="line.report_length_mm" :disabled="Number(line.semi_finished_reserved_piece_qty)>0 || Number(line.finished_inventory_reserved_qty)>0" @input="onDraftDimensionsChanged(line)" /><div v-if="supplierDraftLineIsSwapped(line)" class="status red" style="white-space:normal;margin-top:4px">疑似长宽填反</div></label><label>报料宽（mm）<input class="input merge-size-input" type="number" min="1" v-model.number="line.report_width_mm" :disabled="Number(line.semi_finished_reserved_piece_qty)>0 || Number(line.finished_inventory_reserved_qty)>0" @input="onDraftDimensionsChanged(line)" /><div v-if="supplierDraftLineIsSwapped(line)" class="muted" style="white-space:normal">推荐 {{ supplierDraftExpectedLength(line) }}×{{ supplierDraftExpectedWidth(line) }}</div><label v-if="supplierDraftLineIsSwapped(line) && (canAdmin || user.role==='boss')" style="display:block;margin-top:4px"><input type="checkbox" v-model="line.dimension_override_acknowledged" /> 按人工尺寸继续</label></label></div></details>
                           <div class="muted" style="white-space:normal">
                             <div v-for="(source,sourceIndex) in line.source_items || []" :key="source.order_item_id">{{ source.order_number }}｜{{ source.customer_name }}｜{{ source.product_code }}｜{{ source.product_name }} × {{ source.requisition_qty || source.source_quantity || source.quantity }}｜订单用途 {{ purchasePurposeSourceOrderQuantities(line)[sourceIndex] ?? 0 }} 张</div>
                           </div>
@@ -13493,15 +13503,29 @@
               stock:[...lots.values()].reduce((n,c)=>n+Number(c.available_stock_quantity||0),0),
               lots:[...lots.values()]};
           },
+          draftCreaseLabel(line) {
+            if (line.crease_type === '压线') {
+              const segments=[line.crease_left_mm,line.crease_middle_mm,line.crease_right_mm];
+              return segments.every(v=>v!==null && v!==undefined && Number(v)>0) ? segments.join(' × ') : '压线资料待核对';
+            }
+            return line.crease_type || '未登记';
+          },
+          draftPurchaseQuantityHint(line) {
+            const need=this.purchasePurposeAuthoritativeOrderQty(line), total=this.purchasePurposeInteger(line.purchase_total_sheet_qty);
+            if (total===null) return '请输入整数张数';
+            if (total<need) return `尚有 ${need-total} 张待报料`;
+            if (total>need) return `多备 ${total-need} 张材料`;
+            return `建议报料 ${need} 张`;
+          },
+          onDraftDimensionsChanged(line) {
+            line.dimension_override_acknowledged=false;
+            line._dimensions_changed=true;
+            line._inventory_expanded=false;
+          },
           async reserveDraftExactSemiInventory(line = null) {
             if (this.requisitionInventoryActionBlocked()) return false;
             const lines = line ? [line] : (this.supplierRequisitionDraft?.supplier_groups || []).flatMap(g => this.draftGroupLines(g));
             const items = [];
-            if (lines.some(currentLine => Number(currentLine.stock_purpose_sheet_qty || 0) > 0
-                && this.draftLineInventoryPool(currentLine).allocated >= this.draftLineInventoryPool(currentLine).demand)) {
-              this.showToast("本组还保留额外备库采购。请先将额外备库转为独立补库草稿，再进行本组全额抵扣；当前录入内容和库存均未改动。", true);
-              return false;
-            }
             for (const currentLine of lines) for (const option of this.draftLineSemiInventoryOptions(currentLine)) {
               const candidates=this.draftSafePoolCandidates(option,currentLine);
               const requested=Number(option.remaining_requirement_quantity || 0);
@@ -13588,7 +13612,7 @@
                   saved.line.line_key && saved.line.line_key === line.line_key);
                 if (!saved) continue;
                 group.supplier_name = saved.group.supplier_name;
-                for (const key of ['remark','_expanded','_inventory_expanded']) if (key in saved.line) line[key] = saved.line[key];
+                for (const key of ['remark','_expanded','_inventory_expanded','_dimensions_changed']) if (key in saved.line) line[key] = saved.line[key];
                 // Keep edits visible; existing dimension/cutting validation must still pass.
                 const previousCuttingMode = line.cutting_mode || '一开一';
                 for (const key of ['report_length_mm','report_width_mm','cutting_mode']) if (key in saved.line) line[key] = saved.line[key];
@@ -13604,6 +13628,11 @@
                 }
               }
             }
+            for (const group of nextDraft.supplier_groups || []) {
+              group.lines = this.draftGroupLines(group).filter(line => !line.retain_stock_purchase || Number(line.purchase_total_sheet_qty)>0);
+              group.items = group.lines;
+            }
+            nextDraft.supplier_groups = (nextDraft.supplier_groups || []).filter(group => group.lines.length || group.stock_sources?.length || group.bom_lines?.length);
             return nextDraft;
           },
           async refreshSupplierRequisitionDraftAfterInventoryReservation() {
@@ -13620,7 +13649,10 @@
             };
             const pendingItemIds = new Set((this.requisitionPending || []).filter(row => !row.is_merge_group).map(row => Number(row.item_id || row.order_item_id || row.id)));
             const pendingGroupIds = new Set((this.requisitionPending || []).filter(row => row.is_merge_group).map(row => Number(row.merge_group_id || row.id)));
-            this.supplierRequisitionSelections = this.supplierRequisitionSelections.filter(selection => selection.type === "merge_group" ? pendingGroupIds.has(Number(selection.merge_group_id)) : pendingItemIds.has(Number(selection.order_item_id)));
+            const retainedSources = (previousDraft.supplier_groups || []).flatMap(g => this.draftGroupLines(g)).filter(l => Number(l.stock_purpose_sheet_qty)>0).flatMap(l => l.source_items || []);
+            this.supplierRequisitionSelections = this.supplierRequisitionSelections.map(selection => ({...selection,
+              retain_stock_purchase:retainedSources.some(source => selection.type === "merge_group" ? Number(source.merge_group_id)===Number(selection.merge_group_id) : Number(source.order_item_id)===Number(selection.order_item_id))
+            })).filter(selection => selection.retain_stock_purchase || (selection.type === "merge_group" ? pendingGroupIds.has(Number(selection.merge_group_id)) : pendingItemIds.has(Number(selection.order_item_id))));
             if (!this.supplierRequisitionSelections.length) {
               if (extras.length) { this.supplierRequisitionDraft=keepExtras({supplier_groups:[]}); return; }
               this.modal = null;
@@ -13641,7 +13673,7 @@
               this.supplierRequisitionDraft = this.restoreSupplierDraftEdits(previousDraft, this.initializeSupplierPurchasePurposeDraft(data));
             } catch (error) {
               const detail = error.response?.data?.detail || "";
-              if (!extras.length && error.response?.status === 409 && /全额抵扣/.test(detail)) {
+              if (!extras.length && !retainedSources.length && error.response?.status === 409 && /全额抵扣/.test(detail)) {
                 this.modal = null;
                 this.supplierRequisitionDraft = { supplier_groups:[] };
                 this.supplierRequisitionSelections = [];
@@ -13725,13 +13757,6 @@
             const requested = Number(selectedCandidate?._deduct_quantity ?? maximum);
             if (!Number.isInteger(requested) || requested <= 0 || requested > maximum) {
               this.showToast(`抵扣片数须为 1～${maximum} 的整数，请核对数量`, true);
-              return false;
-            }
-            const hasExtraStock = (this.supplierRequisitionDraft?.supplier_groups || []).some(group => this.draftGroupLines(group).some(line =>
-              Number(line.stock_purpose_sheet_qty || 0) > 0 && (line.source_items || []).some(source =>
-                Number(source.order_item_id) === orderItemId && (source.component_type || 'whole') === (componentType || 'whole'))));
-            if (hasExtraStock && requested >= Number(option.remaining_requirement_quantity || 0)) {
-              this.showToast("本行还填写了额外备库数量。全额抵扣会移出订单报料，请先将额外备库转为独立补库报料，再采用全额库存；当前内容和库存均未改动", true);
               return false;
             }
             const warningCodes = [...new Set(candidates.flatMap(candidate => candidate.warning_codes || []))];
@@ -34246,7 +34271,7 @@
             if (!Number.isFinite(originalWidth) || originalWidth <= 0) {
               return {valid:false, error:"缺少原始单片报料宽，请刷新后重试"};
             }
-            if (!Number.isSafeInteger(effectiveDemandPieceQty) || effectiveDemandPieceQty <= 0) {
+            if (!Number.isSafeInteger(effectiveDemandPieceQty) || effectiveDemandPieceQty < 0 || (effectiveDemandPieceQty === 0 && !line.retain_stock_purchase)) {
               return {valid:false, error:"缺少当前有效需求片数，请刷新后重试"};
             }
             const requisitionQty = Math.ceil(effectiveDemandPieceQty / cuttingFactor);
@@ -34268,7 +34293,7 @@
             return Number(line?.original_report_length_mm) > 0
               && Number(line?.original_report_width_mm) > 0
               && Number.isSafeInteger(Number(line?.effective_demand_piece_qty))
-              && Number(line?.effective_demand_piece_qty) > 0
+              && (Number(line?.effective_demand_piece_qty) > 0 || (line?.retain_stock_purchase && Number(line?.effective_demand_piece_qty) === 0))
               && !!String(line?.cutting_plan_fingerprint || "").trim();
           },
           applyMergedRequisitionCuttingPlan(line, rawMode = null) {
@@ -34297,6 +34322,14 @@
           isMergedRequisitionCuttingLine(line) {
             return line?.source_type === "merge_group"
               || (line?.source_items || []).some(source => source?.source_type === "merge_group_item" || source?.merge_group_id);
+          },
+          changeSupplierDraftCuttingMode(line, value) {
+            const extra=Math.max(Number(line.stock_purpose_sheet_qty)||0,0);
+            line.cutting_mode=this.normalizeCuttingMode(value);
+            if (!this.recalculateSupplierDraftLine(line)) return false;
+            line.purchase_total_sheet_qty=this.purchasePurposeAuthoritativeOrderQty(line)+extra;
+            this.onPurchasePurposeTotalChanged(line);
+            return true;
           },
           recalculateSupplierDraftLine(line) {
             if (!this.isMergedRequisitionCuttingLine(line)) {
@@ -34826,6 +34859,7 @@
                     : (line.source_items || []).map(source => Number(source.order_purpose_sheet_qty ?? source.requisition_qty ?? 0));
                   return {
                     line_key: line.line_key || null,
+                    retain_stock_purchase:!!line.retain_stock_purchase,
                     source_type: line.source_type || null,
                     report_length_mm: line.report_length_mm,
                     report_width_mm: line.report_width_mm,

@@ -1383,6 +1383,7 @@ class MergeGroupUpdatePayload(BaseModel):
 
 
 class PendingSupplierOrderSelection(BaseModel):
+    retain_stock_purchase: bool = False
     type: str
     order_item_id: int | None = None
     merge_group_id: int | None = None
@@ -1772,6 +1773,7 @@ class PendingSupplierOrderDraftSourceItem(BaseModel):
 
 
 class PendingSupplierOrderDraftLine(BaseModel):
+    retain_stock_purchase: bool = False
     line_key: str | None = None
     source_type: str | None = None
     report_length_mm: Decimal = Field(gt=0)
@@ -1794,8 +1796,8 @@ class PendingSupplierOrderDraftLine(BaseModel):
     )
     original_report_length_mm: Decimal | None = Field(default=None, gt=0)
     original_report_width_mm: Decimal | None = Field(default=None, gt=0)
-    effective_demand_piece_qty: int | None = Field(default=None, gt=0)
-    theoretical_output_piece_qty: int | None = Field(default=None, gt=0)
+    effective_demand_piece_qty: int | None = Field(default=None, ge=0)
+    theoretical_output_piece_qty: int | None = Field(default=None, ge=0)
     remainder_piece_qty: int | None = Field(default=None, ge=0)
     remark: str | None = None
     source_items: list[PendingSupplierOrderDraftSourceItem] = Field(min_length=1)
@@ -1842,6 +1844,9 @@ def _pending_supplier_group_request_hash(
     if group._request_hash_override:
         return group._request_hash_override
     canonical = group.model_dump(mode="json", exclude_none=False)
+    for line in canonical.get("lines") or []:
+        if not line.get("retain_stock_purchase"):
+            line.pop("retain_stock_purchase", None)
     # Preserve the already-issued ordinary request contract byte for byte.
     for field in ("stock_sources", "bom_items"):
         if not canonical.get(field):
@@ -5629,6 +5634,7 @@ def _merge_group_cutting_plan(
     db: Session,
     *,
     cutting_mode: str | None = None,
+    retain_stock_purchase: bool = False,
 ) -> dict:
     """Return one authoritative aggregate plan for a pending merge group."""
     rows = _merge_group_rows(db, group.id)
@@ -5778,7 +5784,7 @@ def _merge_group_cutting_plan(
     remaining_effective_demand = max(
         effective_demand - active_covered_pieces, 0
     )
-    if remaining_effective_demand <= 0:
+    if remaining_effective_demand <= 0 and not retain_stock_purchase:
         raise HTTPException(
             status_code=409,
             detail="合并报料组当前已无有效剩余需求，请刷新列表后重试",
@@ -7680,7 +7686,7 @@ def _pending_selection_preview_groups(
             production_required_qty = int(
                 requirements["production_required_qty"]
             )
-            if production_required_qty == 0:
+            if production_required_qty == 0 and not selection.retain_stock_purchase:
                 raise HTTPException(
                     status_code=409,
                     detail="该订单明细已由成品库存全额抵扣，无需生成供应商报料单",
@@ -7695,7 +7701,7 @@ def _pending_selection_preview_groups(
                 component_type = str(
                     component_requirements_row.get("component_type") or "whole"
                 ).strip().lower()
-                if not _requires_supplier_purchase(component_requirements_row):
+                if not _requires_supplier_purchase(component_requirements_row) and not selection.retain_stock_purchase:
                     continue
                 active_requisition = (
                     ordinary_active_facts.get(item.id)
@@ -7721,7 +7727,7 @@ def _pending_selection_preview_groups(
                     - int(active_requisition["quantity"]),
                     0,
                 )
-                if remaining_requisition_qty <= 0:
+                if remaining_requisition_qty <= 0 and not selection.retain_stock_purchase:
                     duplicate_facts.extend(active_requisition.get("orders") or [])
                     continue
                 is_base = component_type == "base"
@@ -7834,7 +7840,7 @@ def _pending_selection_preview_groups(
         supplier_name = (selection.supplier_name or group.supplier_name or "").strip()
         requested_mode = selection.cutting_mode or rows[0][0].special_process
         cutting_plan = _merge_group_cutting_plan(
-            group, db, cutting_mode=requested_mode
+            group, db, cutting_mode=requested_mode, retain_stock_purchase=selection.retain_stock_purchase
         )
         plan_members = {
             int(member["req_item"].id): member
@@ -7856,16 +7862,16 @@ def _pending_selection_preview_groups(
             material = db.get(Material, order_item.material_id) if order_item.material_id else None
             member_plan = plan_members[int(req_item.id)]
             requirements = member_plan["requirements"]
-            if bool(requirements["fully_covered_by_finished_inventory"]):
+            if bool(requirements["fully_covered_by_finished_inventory"]) and not selection.retain_stock_purchase:
                 continue
-            if not _requires_supplier_purchase(requirements):
+            if not _requires_supplier_purchase(requirements) and not selection.retain_stock_purchase:
                 continue
             active_requisition = member_plan["active_requisition"]
             theoretical_requisition_qty = int(
                 member_plan["allocated_requisition_qty"]
             )
             remaining_requisition_qty = theoretical_requisition_qty
-            if remaining_requisition_qty <= 0:
+            if remaining_requisition_qty <= 0 and not selection.retain_stock_purchase:
                 continue
             recommended_len, recommended_width = _recommended_supplier_dimensions(
                 order_item,
@@ -7940,6 +7946,13 @@ def _pending_selection_preview_groups(
     supplier_groups = []
     for supplier_name, entries in grouped.items():
         lines = _aggregate_entries_to_purchase_lines(supplier_name, entries)
+        retained_ids = {v.order_item_id for v in payload.selections if v.retain_stock_purchase and v.type == "order_item"}
+        retained_groups = {v.merge_group_id for v in payload.selections if v.retain_stock_purchase and v.type == "merge_group"}
+        for line in lines:
+            line["retain_stock_purchase"] = any(
+                source.get("order_item_id") in retained_ids or source.get("merge_group_id") in retained_groups
+                for source in line["source_items"]
+            )
         supplier_groups.append(
             {
                 "supplier_name": supplier_name,
@@ -8236,6 +8249,7 @@ def _draft_group_entries_by_purchase_lines(
                     merge_group,
                     db,
                     cutting_mode=draft_line.cutting_mode,
+                    retain_stock_purchase=draft_line.retain_stock_purchase,
                 )
                 if {
                     int(ref["req_item"].id) for ref in source_refs
@@ -8362,7 +8376,13 @@ def _draft_group_entries_by_purchase_lines(
                     remaining_line_total,
                     source_effective_remaining_pieces,
                 )
-            if remaining_line_total <= 0:
+            retained_inventory_stock = (
+                draft_line.retain_stock_purchase
+                and draft_line.order_purpose_sheet_qty == 0
+                and int(draft_line.stock_purpose_sheet_qty or 0) > 0
+                and all(int(row["remaining_required_piece_qty"]) == 0 for row in current_requirements)
+            )
+            if remaining_line_total <= 0 and not retained_inventory_stock:
                 combined_orders = [
                     row
                     for active in active_requisitions
@@ -8701,12 +8721,16 @@ def _draft_group_entries_by_purchase_lines(
                 production_required_qty = int(
                     requirements["production_required_qty"]
                 )
-                if production_required_qty <= 0:
+                retained_source_stock = (
+                    draft_line.retain_stock_purchase and allocated_order_purpose == 0
+                    and int(requirements["remaining_required_piece_qty"]) == 0
+                )
+                if production_required_qty <= 0 and not retained_source_stock:
                     raise HTTPException(
                         status_code=409,
                         detail="该订单明细已由成品库存全额抵扣，无需生成供应商报料单",
                     )
-                if not _requires_supplier_purchase(requirements):
+                if not _requires_supplier_purchase(requirements) and not retained_source_stock:
                     raise HTTPException(
                         status_code=409,
                         detail="该订单明细已由半成品库存全额抵扣，无需生成供应商报料单，请刷新待报料列表。",

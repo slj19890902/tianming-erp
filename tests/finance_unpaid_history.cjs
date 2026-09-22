@@ -12,7 +12,7 @@ const detail=new AsyncFunction('row',body('async openStatementDetail(row) {','ne
  assert.equal(reloaded,1);assert.equal(ctx.financeFilters.balance_type,'all');assert.equal(ctx.financeFilters.statement_month,'');
  const pending=[];
  global.axios={get:(url,config)=>new Promise(resolve=>pending.push({url,config,resolve}))};
- Object.assign(ctx,{authGeneration:1,user:{id:1},financeView:'current',financeCurrentState:{},financeCurrentRequestId:0,pages:{financeCurrent:1},pageSize:10,errorMessage:String});
+ Object.assign(ctx,{authGeneration:1,user:{id:1},financeView:'current',financeCurrentState:{},financeCurrentRequestId:0,pages:{financeCurrent:1},pageSize:10,syncDesktopListPageSize(){this.pageSize=10;},errorMessage:String});
  const first=load.call(ctx);
  ctx.financeFilters={customer_id:'',statement_month:'2026-08',balance_type:'pending_payment'};
  const second=load.call(ctx);

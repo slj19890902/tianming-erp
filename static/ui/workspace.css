@@ -129,3 +129,33 @@
 .stock-production-dialog .compact-input{display:inline-block;width:110px;max-width:110px;margin:0 6px;}
 .stock-production-dialog>label{display:flex;align-items:center;gap:8px;margin:10px 0;}
 .stock-production-dialog>label>.select{max-width:260px;}
+
+/* Customer finance gives the first screen to records, with one set of filters. */
+.finance-customer-filters { margin-bottom:8px; }
+.finance-customer-query { align-items:flex-end; gap:8px; flex-wrap:wrap; padding:10px 12px; }
+.finance-query-fields { display:flex; align-items:flex-end; gap:8px; flex-wrap:wrap; min-width:0; }
+.finance-query-fields .field { margin:0; }
+.finance-month-field { width:175px; }
+.finance-customer-field { width:240px; }
+.finance-sort-field { width:160px; }
+.finance-query-actions { margin-left:auto; flex-wrap:wrap; }
+.finance-queue-summary { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 16px; padding:8px 12px; border-top:1px solid #e0e7f0; }
+.finance-queue-tabs { flex-wrap:wrap; gap:6px; }
+.finance-queue-tabs .status { margin-left:4px; }
+.finance-amount-summary { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:13px; color:#52667c; }
+.finance-amount-summary > span { white-space:nowrap; }
+.finance-amount-summary strong { color:#233b56; font-weight:600; }
+.finance-list-heading { display:flex; align-items:center; flex-wrap:wrap; gap:6px 12px; padding:7px 12px; border-bottom:1px solid #dce4ee; }
+.finance-list-heading .info-note { margin-left:auto; }
+@media(min-width:1000px){
+ .finance-task-link { min-height:38px; padding:6px 10px; }
+ .finance-task-nav { margin-bottom:8px; }
+ .finance-customer-filters .toolbar { margin-bottom:0; }
+}
+@media(max-width:700px){
+ .finance-query-fields { width:100%; }
+ .finance-query-fields .field { flex:1 1 140px; min-width:0; }
+ .finance-query-actions { margin-left:0; width:100%; }
+ .finance-list-heading { gap:4px 8px; }
+ .finance-list-heading .muted { flex:1 1 100%; order:1; }
+}

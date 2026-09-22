@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.493"
-APP_VERSION_NAME = "同客户继续录单"
+APP_VERSION = "v0.22.494"
+APP_VERSION_NAME = "客户对账列表与分页优化"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4727,3 +4727,15 @@ APP_VERIFICATION_STEPS = [
     "关闭该新草稿，核对没有新增订单；普通“新建订单”仍需重新选择客户。",
 ]
 APP_CHANGELOG = [*(f"v0.22.493：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复开票办理切回客户对账后每页仅一位客户；待对账、待收款及历史队列恢复本页容量，翻页和详情不再压缩条数。",
+    "移除财务重复标题与对账教程，合并状态筛选和金额汇总，把首屏空间留给客户列表。",
+    "保留客户搜索、跨月追溯、计数和金额规则；本版无数据库迁移，不改正式对账、开票或收款事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新后进入客户对账的待对账和待收款，核对同屏可显示多位客户，数量与分页相符。",
+    "进入开票办理再回到客户对账，翻页并打开、关闭客户详情，核对每页条数和所在页保持稳定。",
+    "查找一位客户并切换账期或已对账，核对历史记录与金额仍可追溯。",
+]
+APP_CHANGELOG = [*(f"v0.22.494：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

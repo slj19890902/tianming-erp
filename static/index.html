@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260913-desktopmargin001" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <script src="/static/ui/order-context.js?v=217850427bf4"></script>
-    <script src="/static/ui/workspace.js?v=20260914-incoming395"></script>
+    <script src="/static/ui/workspace.js?v=0edab763b1ef"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
     <link rel="stylesheet" href="/static/ui/workflow-continuity.css?v=431e9b0f41d3" />
     <script src="/static/ui/pdf-workspace.js?v=20260916-ranking444"></script>
@@ -3136,7 +3136,7 @@
 </style>
     <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260911-1">
     <link rel="stylesheet" href="/static/product-editor-compact.css?v=20260913-bomui002" />
-    <link rel="stylesheet" href="/static/ui/workspace.css?v=20260915-pdf419" />
+    <link rel="stylesheet" href="/static/ui/workspace.css?v=de0640752662" />
     <link rel="stylesheet" href="/static/ui/order-reference.css?v=423" />
     <script src="/static/ui/order-reference.js?v=423"></script>
   </head>
@@ -5167,7 +5167,6 @@
             </template>
 
             <template v-else-if="activePage === 'finance'">
-              <div class="page-head finance-page-head"><div><h2>财务办理</h2><div class="muted">先选要办的事，再选月份和单位；保存草稿不等于确认账单或实际付款。</div></div></div>
               <nav class="finance-task-nav" aria-label="财务办理事项">
                 <span class="finance-nav-item"><button class="finance-task-link finance-tone-slate" :aria-pressed="financeView==='overview'" @click="setFinanceView('overview')"><strong>经营概览</strong></button><info-note>看待办与管理月报</info-note></span>
                 <span class="finance-nav-item"><button class="finance-task-link finance-tone-blue" :aria-pressed="financeView==='current'" @click="setFinanceView('current')"><strong>客户对账</strong></button><info-note>核对送货、生成账单</info-note></span>
@@ -5228,34 +5227,37 @@
                 </template>
               </template>
               <template v-if="financeView==='current'">
-              <div class="finance-step-guide finance-tone-blue"><strong>客户对账怎么做</strong><span>1 选月份和客户</span><span>2 点“去对账”核对回单数量</span><span>3 确认账单后再办理开票</span></div>
-              <div class="panel finance-filter-panel" style="margin-bottom:10px">
-                <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
-                  <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-                    <div class="field" style="width:170px"><label>账期截至（可不选）</label><input class="input" type="month" v-model="financeFilters.statement_month" @change="onFinanceMonthChange" /></div>
-                    <div class="field" style="width:240px"><label>客户</label><search-select v-model="financeFilters.customer_id" :options="financeCurrentCustomerOptions" label-key="name" value-key="id" placeholder="查找客户（含已结清）" :allow-empty="true" @change="onFinanceCustomerChange"></search-select></div>
-                    <div class="field" style="width:145px"><label>只看</label><select class="select" v-model="financeFilters.balance_type" @change="reloadFinanceCurrent"><option value="">全部待办</option><option value="all">全部记录</option><option value="pending_reconciliation">待对账</option><option value="pending_confirmation">待确认</option><option value="pending_invoice">待开票</option><option value="pending_payment">待收款</option><option value="reconciled">已对账</option><option value="completed">已结清</option></select></div>
-                    <div class="field" style="width:155px"><label>导出排序</label><select class="select" v-model="financeStatementSort"><option value="business">送货日期顺序</option><option value="order_number">订单号从小到大</option></select></div>
+              <div class="panel finance-filter-panel finance-customer-filters">
+                <div class="toolbar finance-customer-query">
+                  <div class="finance-query-fields">
+                    <div class="field finance-month-field"><label>账期截至（可不选）</label><input class="input" type="month" v-model="financeFilters.statement_month" @change="onFinanceMonthChange" /></div>
+                    <div class="field finance-customer-field"><label>客户</label><search-select v-model="financeFilters.customer_id" :options="financeCurrentCustomerOptions" label-key="name" value-key="id" placeholder="查找客户（含已结清）" :allow-empty="true" @change="onFinanceCustomerChange"></search-select></div>
+                    <div class="field finance-sort-field"><label>导出排序</label><select class="select" v-model="financeStatementSort"><option value="business">送货日期顺序</option><option value="order_number">订单号从小到大</option></select></div>
                   </div>
-                  <div class="toolbar-group">
+                  <div class="toolbar-group finance-query-actions">
+                    <button v-if="financeFilters.balance_type || financeFilters.customer_id" class="btn" @click="clearFinanceDashboardFilter">查看全部待办</button>
                     <button v-if="canFinance" class="btn primary" @click="openStatement(financeFilters.statement_month || month())">生成月结对账单</button>
                     <button class="btn" :disabled="financeCurrentState.loading" @click="loadFinance">{{ financeCurrentState.loading ? '读取中…' : '刷新' }}</button>
                   </div>
                 </div>
-                <nav class="toolbar-group" aria-label="客户对账待办" style="margin-top:10px;flex-wrap:wrap">
-                  <button v-for="queue in financeQueueTabs" :key="queue.key" :class="['btn small',{primary:financeFilters.balance_type===queue.key}]" :aria-pressed="financeFilters.balance_type===queue.key" @click="selectFinanceQueue(queue.key)">{{ queue.label }} <span v-if="Number(financeCurrentQueueCounts[queue.countKey]||0)>0" class="status blue" style="margin-left:4px">{{ financeCurrentQueueCounts[queue.countKey] }}</span></button>
-                </nav>
-                <div v-if="financeFilters.balance_type || financeFilters.customer_id" class="status blue" style="margin-top:8px;display:inline-flex;gap:8px;align-items:center">
-                  已筛选 {{ financeCurrentTotal }} 个结算对象账期
-                  <button class="btn small" @click="clearFinanceDashboardFilter">查看全部待办</button>
-                </div>
-                <div v-if="financeCurrentState.loaded && !financeCurrentState.error" class="muted" style="margin-top:8px">
-                  {{ financeFilters.statement_month ? '截至 '+financeFilters.statement_month+'（含以前账期）' : (['all','reconciled','completed'].includes(financeFilters.balance_type) ? '全部历史账期' : '全部未完成账期') }}：{{ financeCurrentSummary.customer_count || 0 }} 个客户月份 · 待对账 ¥{{ money(financeCurrentSummary.pending_reconciliation_amount) }} · 待开票 ¥{{ money(financeCurrentSummary.pending_invoice_amount) }} · 已开票待收 ¥{{ money(financeCurrentSummary.pending_payment_action_amount) }}
+                <div class="finance-queue-summary">
+                  <nav class="toolbar-group finance-queue-tabs" aria-label="客户对账待办">
+                    <button v-for="queue in financeQueueTabs" :key="queue.key" :class="['btn small',{primary:financeFilters.balance_type===queue.key}]" :aria-pressed="financeFilters.balance_type===queue.key" @click="selectFinanceQueue(queue.key)">{{ queue.label }} <span v-if="Number(financeCurrentQueueCounts[queue.countKey]||0)>0" class="status blue">{{ financeCurrentQueueCounts[queue.countKey] }}</span></button>
+                  </nav>
+                  <div v-if="financeCurrentState.loaded && !financeCurrentState.error" class="finance-amount-summary sensitive-price" aria-label="当前范围金额汇总">
+                    <span>待对账 <strong>¥{{ money(financeCurrentSummary.pending_reconciliation_amount) }}</strong></span>
+                    <span>待开票 <strong>¥{{ money(financeCurrentSummary.pending_invoice_amount) }}</strong></span>
+                    <span>已开票待收 <strong>¥{{ money(financeCurrentSummary.pending_payment_action_amount) }}</strong></span>
+                  </div>
                 </div>
               </div>
               <div v-if="financeCurrentState.error" class="notice warning" style="margin-bottom:10px">财务待办加载失败：{{ financeCurrentState.error }}</div>
-              <div class="panel">
-                <div class="section-title">客户对账与历史</div><div class="muted" style="margin-bottom:8px">待收款累计显示所选账期及以前已开票未收清的账单，不包含以后账期。查找客户自动显示全部账期、全部状态；可再筛选。角标按结算对象去重计数。</div>
+              <div class="panel finance-customer-list">
+                <div class="finance-list-heading">
+                  <strong>客户对账与历史</strong>
+                  <span class="muted">{{ financeFilters.statement_month ? '截至 '+financeFilters.statement_month+'（含以前账期）' : (['all','reconciled','completed'].includes(financeFilters.balance_type) ? '全部历史账期' : '全部未完成账期') }} · {{ financeCurrentTotal }} 个结算对象账期</span>
+                  <info-note label="账期和计数说明">待收款累计显示所选账期及以前已开票未收清的账单，不包含以后账期。查找客户自动显示全部账期、全部状态；可再筛选。角标按结算对象去重计数。</info-note>
+                </div>
                 <div v-if="financeCurrentState.loading" class="empty">正在读取财务待办…</div>
                 <div v-else-if="financeCurrentState.error" class="empty">请检查连接后重新刷新。</div>
                 <div v-else-if="financeCurrentState.loaded && !financeCurrentRows.length" class="empty">当前筛选没有客户账单；可切换“全部记录”或清空截至账期查看历史。</div>
@@ -23009,6 +23011,9 @@
               this.invoicesTotal = Number(invoices.data.total || 0);
               return true;
             }
+            // Restore this workbench's capacity before requesting a page. Other
+            // finance views must not leave their page size on customer queues.
+            this.syncDesktopListPageSize(this.uiMode);
             this.financeCurrentState.loading = true;
             this.financeCurrentState.error = "";
             this.financeCurrentState.loaded = false;
@@ -23017,13 +23022,14 @@
             this.financeCurrentRequestId = financeCurrentRequestId;
             const rawFinanceFilters = {...this.financeFilters};
             const requestedFinancePage = Number(this.pages.financeCurrent || 1);
+            const requestedFinancePageSize = this.pageSize;
             const financeCurrentRequestIsCurrent = () => (
               sessionIsCurrent() && Number(this.financeCurrentRequestId) === financeCurrentRequestId
             );
             try {
               const { data } = await axios.get("/api/finance/current-customer-months", { params: {
                 page:requestedFinancePage,
-                page_size:this.pageSize,
+                page_size:requestedFinancePageSize,
                 statement_month:rawFinanceFilters.statement_month || undefined,
                 all_open:!rawFinanceFilters.statement_month,
                 through_month:!!rawFinanceFilters.statement_month,
@@ -23032,7 +23038,7 @@
               } });
               if (!financeCurrentRequestIsCurrent()) return false;
               const total = Number(data.total || 0);
-              const lastPage = Math.max(1, Math.ceil(total / this.pageSize));
+              const lastPage = Math.max(1, Math.ceil(total / requestedFinancePageSize));
               if (requestedFinancePage > lastPage) {
                 this.pages.financeCurrent = lastPage;
                 return this.loadFinance();

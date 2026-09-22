@@ -147,6 +147,7 @@ from app.services.order_business_status import (
     BUSINESS_STATUS_ORDER,
     DERIVED_BUSINESS_STATUSES,
     build_order_business_statuses,
+    order_status_projection_load_options,
 )
 from app.services.order_status_policy import (
     ALL_ORDER_STATUSES,
@@ -324,22 +325,7 @@ def _include_order_list_unfinished_total() -> bool:
 def _business_status_projection_load_options() -> list:
     """Load exactly the fields consumed by the read-only status projection."""
 
-    return [
-        load_only(Order.id, Order.status),
-        selectinload(Order.items).load_only(
-            OrderItem.id,
-            OrderItem.order_id,
-            OrderItem.product_id,
-            OrderItem.item_sequence,
-            OrderItem.quantity,
-            OrderItem.delivered_quantity,
-            OrderItem.material_status,
-            OrderItem.requisition_status,
-            OrderItem.supply_mode_snapshot,
-            OrderItem.is_force_closed,
-            OrderItem.composite_fulfillment_mode_snapshot,
-        ),
-    ]
+    return order_status_projection_load_options()
 
 
 def _can_view_order_sales_amount(user: User) -> bool:
@@ -3023,31 +3009,11 @@ def list_orders(
     }
     if needs_business_projection:
         candidate_ids = list(db.scalars(ids_query).all())
-        # The menu badge is global within the caller's customer scope.  A
-        # filtered active list used to calculate its overlapping status
-        # projection once for the page and once again for the badge.  Build
-        # the global read-only projection once and reuse its overlapping rows.
-        has_active_list_filter = bool(
-            requested_customer_ids
-            or search_keyword
-            or (order_number and order_number.strip())
-            or (customer_name and customer_name.strip())
-            or order_date is not None
-            or date_from is not None
-            or date_to is not None
-            or order_date_from is not None
-            or order_date_to is not None
-            or delivery_date_from is not None
-            or delivery_date_to is not None
-            or (customer_po and customer_po.strip())
-            or (product_code and product_code.strip())
-            or (product_name and product_name.strip())
-            or (specification and specification.strip())
-        )
+        # Both filtered and unfiltered active lists use the same authoritative
+        # scope/finance snapshot. Filtering must not decide cache eligibility.
         if (
             include_unfinished_total
             and resolved_scope == "active"
-            and has_active_list_filter
             and not derived_status_filter
             and not raw_status_filters
         ):
@@ -3080,7 +3046,7 @@ def list_orders(
                 candidate_orders.extend(
                     db.scalars(
                         select(Order)
-                        .options(selectinload(Order.items))
+                        .options(*order_status_projection_load_options(include_order_summary=True))
                         .where(Order.id.in_(missing_candidate_ids))
                     ).all()
                 )
@@ -3088,7 +3054,7 @@ def list_orders(
             candidate_orders = list(
                 db.scalars(
                     select(Order)
-                    .options(selectinload(Order.items))
+                    .options(*order_status_projection_load_options(include_order_summary=True))
                     .where(Order.id.in_(candidate_ids))
                 ).all()
             )

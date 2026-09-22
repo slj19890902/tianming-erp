@@ -7,7 +7,7 @@ from decimal import Decimal
 from threading import RLock
 from typing import Iterable, Sequence
 
-from sqlalchemy import event, func, or_, select
+from sqlalchemy import Row, event, func, or_, select
 from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.models.delivery import Delivery, DeliveryItem
@@ -108,6 +108,60 @@ def _clear_active_status_badge_cache(*_args) -> None:
 event.listen(Session, "after_commit", _clear_active_status_badge_cache)
 
 
+def order_status_projection_load_options(*, include_order_summary: bool = False) -> list:
+    """Keep bulk state reads independent of wide transaction detail snapshots.
+
+    Summary rendering consumes the order header and the same quantity fields.
+    Full detail requests load their page separately; no facts are discarded.
+    """
+    options = [
+        selectinload(Order.items).load_only(
+            OrderItem.id,
+            OrderItem.order_id,
+            OrderItem.product_id,
+            OrderItem.item_sequence,
+            OrderItem.quantity,
+            OrderItem.delivered_quantity,
+            OrderItem.material_status,
+            OrderItem.requisition_status,
+            OrderItem.supply_mode_snapshot,
+            OrderItem.is_force_closed,
+            OrderItem.composite_fulfillment_mode_snapshot,
+        ),
+    ]
+    if not include_order_summary:
+        options.insert(0, load_only(Order.id, Order.status))
+    return options
+
+
+@dataclass(frozen=True, slots=True)
+class _OrderStatusReadRow:
+    """A disposable input to the existing status rules, never a write model."""
+
+    id: int
+    status: str
+    items: tuple[Row, ...]
+
+
+def _status_read_rows(db: Session, headers: Sequence[Row]) -> list[_OrderStatusReadRow]:
+    items_by_order: dict[int, list[Row]] = defaultdict(list)
+    for chunk in _chunks([int(row.id) for row in headers]):
+        for item in db.execute(
+            select(
+                OrderItem.id, OrderItem.order_id, OrderItem.product_id,
+                OrderItem.item_sequence, OrderItem.quantity, OrderItem.delivered_quantity,
+                OrderItem.material_status, OrderItem.requisition_status,
+                OrderItem.supply_mode_snapshot, OrderItem.is_force_closed,
+                OrderItem.composite_fulfillment_mode_snapshot,
+            ).where(OrderItem.order_id.in_(chunk)).order_by(OrderItem.id)
+        ):
+            items_by_order[int(item.order_id)].append(item)
+    return [
+        _OrderStatusReadRow(int(row.id), row.status, tuple(items_by_order[int(row.id)]))
+        for row in headers
+    ]
+
+
 def active_order_status_badge_snapshot(
     db: Session,
     *,
@@ -119,8 +173,8 @@ def active_order_status_badge_snapshot(
     The projection remains a presentation cache only.  It is keyed by database,
     customer scope and finance visibility, is never used by a write path, and
     is cleared after every SQLAlchemy commit before the next reader can reuse
-    it.  The third return value marks a cache hit; ORM rows are intentionally
-    returned only on the miss because they belong to the caller's Session.
+    it. The third return value marks a cache hit. Bulk inputs are read-only
+    SQL rows; the caller loads ORM detail for its visible page separately.
     """
 
     database_key = str(db.get_bind().url)
@@ -136,24 +190,15 @@ def active_order_status_badge_snapshot(
             _ACTIVE_STATUS_BADGE_CACHE.move_to_end(key)
             return cached, {}, True
 
-        query = select(Order.id).where(
+        query = select(Order.id, Order.status).where(
             Order.status.notin_(MANAGEMENT_TERMINAL_ORDER_STATUSES),
             Order.items.any(),
         )
         if scoped_customer_ids is not None:
             query = query.where(Order.customer_id.in_(scoped_customer_ids))
-        order_ids = tuple(int(order_id) for order_id in db.scalars(query).all())
-        orders = (
-            list(
-                db.scalars(
-                    select(Order)
-                    .options(selectinload(Order.items))
-                    .where(Order.id.in_(order_ids))
-                ).all()
-            )
-            if order_ids
-            else []
-        )
+        headers = db.execute(query).all()
+        order_ids = tuple(int(row.id) for row in headers)
+        orders = _status_read_rows(db, headers)
         snapshot = ActiveOrderStatusBadgeSnapshot(
             order_ids=order_ids,
             projections=build_order_business_statuses(
@@ -166,7 +211,7 @@ def active_order_status_badge_snapshot(
         _ACTIVE_STATUS_BADGE_CACHE.move_to_end(key)
         while len(_ACTIVE_STATUS_BADGE_CACHE) > _ACTIVE_STATUS_BADGE_CACHE_LIMIT:
             _ACTIVE_STATUS_BADGE_CACHE.popitem(last=False)
-        return snapshot, {int(order.id): order for order in orders}, False
+        return snapshot, {}, False
 
 
 def status_label(status: str) -> str:
@@ -206,7 +251,7 @@ def _evidence(basis: str, label: str, **extra) -> dict:
 
 def build_order_business_statuses(
     db: Session,
-    orders: Sequence[Order],
+    orders: Sequence[Order | _OrderStatusReadRow],
     *,
     include_delivery: bool = True,
     include_finance: bool = True,

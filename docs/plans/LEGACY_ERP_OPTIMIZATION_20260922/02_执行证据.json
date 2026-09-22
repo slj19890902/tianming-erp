@@ -1,0 +1,458 @@
+{
+  "q01-before": {
+    "directory": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before",
+    "exit_code": 1,
+    "ended_at": "2026-09-22T04:57:01.921036Z",
+    "command": [
+      "D:\\tm-worktrees\\.venvs\\erp-astra-rework-r01-py312\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "--junitxml=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest.junit.xml",
+      "--basetemp=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\cases",
+      "-q",
+      "tests/test_audit_order_projection_optimization.py"
+    ],
+    "source_tree_sha256": "4697019767993cb5d593c99de0dc97a424e12046514e44529c267b23cc726d56",
+    "source_head": "b466ad6212d427a71c66000ab3e74b5af19d1478",
+    "source_binding": "actual tracked working-tree file hashes; HEAD alone does not identify uncommitted implementation",
+    "isolated_paths": {
+      "ERP_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\carton_erp.sqlite3",
+      "ERP_LOG_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\log_dir",
+      "ERP_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\backups",
+      "ERP_FILE_STORAGE_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\private_upload_dir",
+      "ERP_UPLOAD_TEMP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\upload_temp_dir",
+      "ERP_INVOICE_EXPORT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\invoice_export_dir",
+      "ERP_INVOICE_ATTACHMENT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\invoice_attachment_dir",
+      "ERP_PDF_TRAINING_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\pdf_training_dir",
+      "ERP_TWIN_LAYOUT_RUNTIME_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\layout_runtime_file",
+      "ERP_TWIN_LAYOUT_DRAFT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\layout_draft_file",
+      "ERP_TWIN_LAYOUT_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\layout_backup_dir",
+      "ERP_LEGACY_UPLOAD_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\legacy_upload_dir",
+      "ERP_DELIVERY_PRINT_SETTINGS_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\delivery_print_settings_file",
+      "ERP_FACTORY_TWIN_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\factory_twin_database",
+      "ERP_SECRET_KEY_FILE": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\session_secret.key",
+      "ERP_UAT_ATTESTATION_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\attestation_file",
+      "ERP_UAT_LEASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\lease_file",
+      "ERP_UAT_PID_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\pid_file",
+      "ERP_UAT_STDOUT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\stdout_log",
+      "ERP_UAT_STDERR_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before\\pytest-isolated\\stderr_log"
+    },
+    "files": {
+      "result.json": "dd63a3f5ef1bfb74471b6b0c5566263a463d2b74b8b340d69414964316c49371",
+      "pytest.log": "5293f8c65aebf2094afc36df8c6d69612d6a2b98afa1092eb0b2a5ce545635c3",
+      "pytest.junit.xml": "fccebb33e53f3cae83779b39ecb3595a8898e0aa7a957d5798d4633cd219f342",
+      "source-hashes.json": "3b7459e525f0d820eb27aac84e91a5672b6c1f5002e295136c8f7e48737bbe4f",
+      "measurements/order-projection-5000.json": "6a9236db9fbc066c1edf32c37642795179840da315ddcb57ea9ee9a1e2885c44"
+    },
+    "cases": [
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_unfiltered_active_list_reuses_same_scoped_snapshot",
+        "status": "failed"
+      },
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "passed"
+      }
+    ]
+  },
+  "q01-before-wide": {
+    "directory": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide",
+    "exit_code": 1,
+    "ended_at": "2026-09-22T04:57:47.005691Z",
+    "command": [
+      "D:\\tm-worktrees\\.venvs\\erp-astra-rework-r01-py312\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "--junitxml=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest.junit.xml",
+      "--basetemp=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\cases",
+      "-q",
+      "tests/test_audit_order_projection_optimization.py::test_cold_projection_avoids_loading_non_page_order_item_details"
+    ],
+    "source_tree_sha256": "c7fe86573610980a275fa703dca4b6804d6651a83c882e7c183019054171437d",
+    "source_head": "b466ad6212d427a71c66000ab3e74b5af19d1478",
+    "source_binding": "actual tracked working-tree file hashes; HEAD alone does not identify uncommitted implementation",
+    "isolated_paths": {
+      "ERP_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\carton_erp.sqlite3",
+      "ERP_LOG_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\log_dir",
+      "ERP_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\backups",
+      "ERP_FILE_STORAGE_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\private_upload_dir",
+      "ERP_UPLOAD_TEMP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\upload_temp_dir",
+      "ERP_INVOICE_EXPORT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\invoice_export_dir",
+      "ERP_INVOICE_ATTACHMENT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\invoice_attachment_dir",
+      "ERP_PDF_TRAINING_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\pdf_training_dir",
+      "ERP_TWIN_LAYOUT_RUNTIME_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\layout_runtime_file",
+      "ERP_TWIN_LAYOUT_DRAFT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\layout_draft_file",
+      "ERP_TWIN_LAYOUT_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\layout_backup_dir",
+      "ERP_LEGACY_UPLOAD_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\legacy_upload_dir",
+      "ERP_DELIVERY_PRINT_SETTINGS_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\delivery_print_settings_file",
+      "ERP_FACTORY_TWIN_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\factory_twin_database",
+      "ERP_SECRET_KEY_FILE": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\session_secret.key",
+      "ERP_UAT_ATTESTATION_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\attestation_file",
+      "ERP_UAT_LEASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\lease_file",
+      "ERP_UAT_PID_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\pid_file",
+      "ERP_UAT_STDOUT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\stdout_log",
+      "ERP_UAT_STDERR_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-before-wide\\pytest-isolated\\stderr_log"
+    },
+    "files": {
+      "result.json": "681bfb2db5041dc76673d55f09480bde16a9b6d0fd0ccf1b2757e90269951e43",
+      "pytest.log": "956b755ea47bc2ad6218f8fdc8551bb44502e88c0abf132f9345dde70acc11cf",
+      "pytest.junit.xml": "5c44224a83a564b234d24aef5ff2ca29b60f9f77cebca9da0be925a96f5e9649",
+      "source-hashes.json": "2a76cf1bbfcb0ca7915b8ebca5fc8d8136d75beefc3a1d69fcce82fb1ffdbb68",
+      "measurements/order-projection-5000.json": "9789a5a4e2f114add89859685de4d0c4d02a126264f2d2f7578ef3856919c538"
+    },
+    "cases": [
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "failed"
+      }
+    ]
+  },
+  "q01-after": {
+    "directory": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after",
+    "exit_code": 0,
+    "ended_at": "2026-09-22T04:58:58.231219Z",
+    "command": [
+      "D:\\tm-worktrees\\.venvs\\erp-astra-rework-r01-py312\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "--junitxml=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest.junit.xml",
+      "--basetemp=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\cases",
+      "-q",
+      "tests/test_audit_order_projection_optimization.py",
+      "tests/test_phase3_cache_authorization.py"
+    ],
+    "source_tree_sha256": "7a5354e5f0585bc176acc76c7414c02395e5c6f4d39f4308fea274b5a41d8fab",
+    "source_head": "b466ad6212d427a71c66000ab3e74b5af19d1478",
+    "source_binding": "actual tracked working-tree file hashes; HEAD alone does not identify uncommitted implementation",
+    "isolated_paths": {
+      "ERP_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\carton_erp.sqlite3",
+      "ERP_LOG_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\log_dir",
+      "ERP_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\backups",
+      "ERP_FILE_STORAGE_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\private_upload_dir",
+      "ERP_UPLOAD_TEMP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\upload_temp_dir",
+      "ERP_INVOICE_EXPORT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\invoice_export_dir",
+      "ERP_INVOICE_ATTACHMENT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\invoice_attachment_dir",
+      "ERP_PDF_TRAINING_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\pdf_training_dir",
+      "ERP_TWIN_LAYOUT_RUNTIME_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\layout_runtime_file",
+      "ERP_TWIN_LAYOUT_DRAFT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\layout_draft_file",
+      "ERP_TWIN_LAYOUT_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\layout_backup_dir",
+      "ERP_LEGACY_UPLOAD_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\legacy_upload_dir",
+      "ERP_DELIVERY_PRINT_SETTINGS_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\delivery_print_settings_file",
+      "ERP_FACTORY_TWIN_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\factory_twin_database",
+      "ERP_SECRET_KEY_FILE": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\session_secret.key",
+      "ERP_UAT_ATTESTATION_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\attestation_file",
+      "ERP_UAT_LEASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\lease_file",
+      "ERP_UAT_PID_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\pid_file",
+      "ERP_UAT_STDOUT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\stdout_log",
+      "ERP_UAT_STDERR_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-after\\pytest-isolated\\stderr_log"
+    },
+    "files": {
+      "result.json": "96856cee800d93b03a67accf4eaa8b1fdb889789c9153ec03073d0a500ec6c6f",
+      "pytest.log": "f4087ee8276e15115c25ff0f2adfc2821a31c195ac519af0543450c9f5a70b40",
+      "pytest.junit.xml": "734b14e3dd78dfaa556d8f5d3eb918a2c48ce7cfdd2d49d77546730f2d94ae39",
+      "source-hashes.json": "a01a57f350bbe12a2f4502c04fc8e39584e1da8388e60b317ddfb83a329bffaa",
+      "measurements/order-projection-5000.json": "3c597090cee6d57d8b8f113d500ca463a83ce25452bf0c31aff7f1496a7f597d"
+    },
+    "cases": [
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_unfiltered_active_list_reuses_same_scoped_snapshot",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_phase3_cache_authorization::test_warm_projection_separates_customer_scope_and_finance_then_invalidates",
+        "status": "passed"
+      }
+    ]
+  },
+  "q01-profile": {
+    "directory": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile",
+    "exit_code": 0,
+    "ended_at": "2026-09-22T05:00:18.001627Z",
+    "command": [
+      "D:\\tm-worktrees\\.venvs\\erp-astra-rework-r01-py312\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "--junitxml=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest.junit.xml",
+      "--basetemp=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\cases",
+      "-q",
+      "tests/test_audit_order_projection_optimization.py::test_cold_projection_avoids_loading_non_page_order_item_details"
+    ],
+    "source_tree_sha256": "b8f6cec17fbd90fad7e1a9ecbb59c7c38e179d9df47678dbe8d1c057446deaec",
+    "source_head": "b466ad6212d427a71c66000ab3e74b5af19d1478",
+    "source_binding": "actual tracked working-tree file hashes; HEAD alone does not identify uncommitted implementation",
+    "isolated_paths": {
+      "ERP_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\carton_erp.sqlite3",
+      "ERP_LOG_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\log_dir",
+      "ERP_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\backups",
+      "ERP_FILE_STORAGE_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\private_upload_dir",
+      "ERP_UPLOAD_TEMP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\upload_temp_dir",
+      "ERP_INVOICE_EXPORT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\invoice_export_dir",
+      "ERP_INVOICE_ATTACHMENT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\invoice_attachment_dir",
+      "ERP_PDF_TRAINING_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\pdf_training_dir",
+      "ERP_TWIN_LAYOUT_RUNTIME_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\layout_runtime_file",
+      "ERP_TWIN_LAYOUT_DRAFT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\layout_draft_file",
+      "ERP_TWIN_LAYOUT_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\layout_backup_dir",
+      "ERP_LEGACY_UPLOAD_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\legacy_upload_dir",
+      "ERP_DELIVERY_PRINT_SETTINGS_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\delivery_print_settings_file",
+      "ERP_FACTORY_TWIN_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\factory_twin_database",
+      "ERP_SECRET_KEY_FILE": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\session_secret.key",
+      "ERP_UAT_ATTESTATION_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\attestation_file",
+      "ERP_UAT_LEASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\lease_file",
+      "ERP_UAT_PID_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\pid_file",
+      "ERP_UAT_STDOUT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\stdout_log",
+      "ERP_UAT_STDERR_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-profile\\pytest-isolated\\stderr_log"
+    },
+    "files": {
+      "result.json": "f7f72af90ae26e01bb66e3e46dc87aecf2690740aa9960f0708bed14b564335c",
+      "pytest.log": "d2383e6cafb2ccfb20cf572664ae4b641d10115fc9d7454393c75f327f385f29",
+      "pytest.junit.xml": "22dd4f653ee14666fbc22b1d30ba510a021ee1e9830199bb027491c103efe7b5",
+      "source-hashes.json": "981f0108cee8084b6584b02faee57fe1f0e2a7c720c4e2d058b2d5951c8601ac",
+      "measurements/order-projection-5000.json": "c8cd7d601745cb320d93b9067f90496e4f28f8febfdb199342e3016d9346fd15"
+    },
+    "cases": [
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "passed"
+      }
+    ]
+  },
+  "q01-rows": {
+    "directory": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows",
+    "exit_code": 0,
+    "ended_at": "2026-09-22T05:02:37.213503Z",
+    "command": [
+      "D:\\tm-worktrees\\.venvs\\erp-astra-rework-r01-py312\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "--junitxml=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest.junit.xml",
+      "--basetemp=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\cases",
+      "-q",
+      "tests/test_audit_order_projection_optimization.py",
+      "tests/test_p1_09c_order_full_list_query_scaling.py",
+      "tests/test_p0_order_business_status.py",
+      "tests/test_phase3_cache_authorization.py"
+    ],
+    "source_tree_sha256": "620ee62af2aeac4a2423144906d9c69229d3f36ecd9f0343237afb68d2a0a9b8",
+    "source_head": "b466ad6212d427a71c66000ab3e74b5af19d1478",
+    "source_binding": "actual tracked working-tree file hashes; HEAD alone does not identify uncommitted implementation",
+    "isolated_paths": {
+      "ERP_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\carton_erp.sqlite3",
+      "ERP_LOG_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\log_dir",
+      "ERP_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\backups",
+      "ERP_FILE_STORAGE_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\private_upload_dir",
+      "ERP_UPLOAD_TEMP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\upload_temp_dir",
+      "ERP_INVOICE_EXPORT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\invoice_export_dir",
+      "ERP_INVOICE_ATTACHMENT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\invoice_attachment_dir",
+      "ERP_PDF_TRAINING_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\pdf_training_dir",
+      "ERP_TWIN_LAYOUT_RUNTIME_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\layout_runtime_file",
+      "ERP_TWIN_LAYOUT_DRAFT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\layout_draft_file",
+      "ERP_TWIN_LAYOUT_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\layout_backup_dir",
+      "ERP_LEGACY_UPLOAD_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\legacy_upload_dir",
+      "ERP_DELIVERY_PRINT_SETTINGS_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\delivery_print_settings_file",
+      "ERP_FACTORY_TWIN_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\factory_twin_database",
+      "ERP_SECRET_KEY_FILE": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\session_secret.key",
+      "ERP_UAT_ATTESTATION_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\attestation_file",
+      "ERP_UAT_LEASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\lease_file",
+      "ERP_UAT_PID_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\pid_file",
+      "ERP_UAT_STDOUT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\stdout_log",
+      "ERP_UAT_STDERR_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-rows\\pytest-isolated\\stderr_log"
+    },
+    "files": {
+      "result.json": "3cdc5ac6298fa0e29e410738fa63bfe305edfca89a06ec3de2ee6100ba099d3a",
+      "pytest.log": "0bc6b75f125013535c6d6139de3fce4266b3c4a4f3e4c93c9b13f831fe7ea853",
+      "pytest.junit.xml": "8664a091c2a599d6b1e33ad2030ff35849e29ef3e3d04168e1767784ab80750a",
+      "source-hashes.json": "aa27ae3ecfb15eebb29c1a0ca00c569bc951eff74683ad8dd14b6f35cd22348d",
+      "measurements/order-projection-5000.json": "e09d89bd37de3fd61b219af673af36627958252fed7000744975a45e5082c70c"
+    },
+    "cases": [
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_unfiltered_active_list_reuses_same_scoped_snapshot",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_full_list_page_context_is_byte_equivalent_to_single_order_path[admin]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_full_list_page_context_is_byte_equivalent_to_single_order_path[workshop]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_full_list_select_count_is_bounded_by_page_queries",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_group_detail_batch_context_is_byte_equivalent_to_legacy_fallbacks",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_group_detail_select_count_does_not_scale_per_order",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_single_detail_select_count_does_not_scale_per_item",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_active_summary_reuses_candidate_order_rows",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p0_order_business_status::test_line_status_progresses_only_on_formal_business_facts",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p0_order_business_status::test_full_semi_finished_reservation_is_pending_production_not_pending_material",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p0_order_business_status::test_partial_incoming_awaiting_supplier_remains_pending_incoming",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p0_order_business_status::test_zero_short_receipt_can_close_delivery_obligation_and_reach_finance",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p0_order_business_status::test_mixed_order_keeps_earliest_blocker_and_compact_delivery_progress",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p0_order_business_status::test_composite_item_requires_all_required_components_before_pending_delivery",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p0_order_business_status::test_orders_api_filter_detail_and_dashboard_share_projection",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p0_order_business_status::test_business_view_and_unfinished_badge_use_derived_status_before_paging",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p0_order_business_status::test_pending_confirmation_is_in_daily_view_and_unfinished_badge",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p0_order_business_status::test_dashboard_keeps_future_due_accept_short_line_in_finance_chain",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_p0_order_business_status::test_dashboard_only_account_cannot_read_order_status_counts",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_phase3_cache_authorization::test_warm_projection_separates_customer_scope_and_finance_then_invalidates",
+        "status": "passed"
+      }
+    ]
+  },
+  "q01-final": {
+    "directory": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final",
+    "exit_code": 0,
+    "ended_at": "2026-09-22T05:07:09.047319Z",
+    "command": [
+      "D:\\tm-worktrees\\.venvs\\erp-astra-rework-r01-py312\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "--junitxml=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest.junit.xml",
+      "--basetemp=D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\cases",
+      "-q",
+      "tests/test_audit_order_projection_optimization.py",
+      "tests/test_phase3_scale_reliability.py"
+    ],
+    "source_tree_sha256": "8318c98712fe83469a9bf407b1ff4ddfc6719cf889b42c7f1a173397aefc36ca",
+    "source_head": "b466ad6212d427a71c66000ab3e74b5af19d1478",
+    "source_binding": "actual tracked working-tree file hashes; HEAD alone does not identify uncommitted implementation",
+    "isolated_paths": {
+      "ERP_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\carton_erp.sqlite3",
+      "ERP_LOG_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\log_dir",
+      "ERP_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\backups",
+      "ERP_FILE_STORAGE_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\private_upload_dir",
+      "ERP_UPLOAD_TEMP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\upload_temp_dir",
+      "ERP_INVOICE_EXPORT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\invoice_export_dir",
+      "ERP_INVOICE_ATTACHMENT_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\invoice_attachment_dir",
+      "ERP_PDF_TRAINING_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\pdf_training_dir",
+      "ERP_TWIN_LAYOUT_RUNTIME_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\layout_runtime_file",
+      "ERP_TWIN_LAYOUT_DRAFT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\layout_draft_file",
+      "ERP_TWIN_LAYOUT_BACKUP_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\layout_backup_dir",
+      "ERP_LEGACY_UPLOAD_DIR": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\legacy_upload_dir",
+      "ERP_DELIVERY_PRINT_SETTINGS_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\delivery_print_settings_file",
+      "ERP_FACTORY_TWIN_DATABASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\factory_twin_database",
+      "ERP_SECRET_KEY_FILE": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\session_secret.key",
+      "ERP_UAT_ATTESTATION_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\attestation_file",
+      "ERP_UAT_LEASE_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\lease_file",
+      "ERP_UAT_PID_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\pid_file",
+      "ERP_UAT_STDOUT_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\stdout_log",
+      "ERP_UAT_STDERR_PATH": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\q01-final\\pytest-isolated\\stderr_log"
+    },
+    "files": {
+      "result.json": "aae0777ced6b9ea6de1d642eb46f850934470e3c53bf8af32d7a4a800dece5af",
+      "pytest.log": "5242a31d959ae45c4f2bd72bcad4c58cae6c348a0f0d46d06b580a234564af1d",
+      "pytest.junit.xml": "081da4d08564abd56d6ab5673b6d4ed9d799e47126ec14325acee1d6dded4774",
+      "source-hashes.json": "0f1b14ce914d1137b95f6f27e2c5b98b6ffc1c6478c0d9ae1450b9270b8458a9",
+      "measurements/f1-lock-positive-control.json": "99204bb4bc1c514a265843fa34017d6e87a0dcba44b73ab1367ba2f39f109bf0",
+      "measurements/f2-cache-and-status-tier-100.json": "23885b21d0c4ded1e298cb9bfcff5b9347861c3a1d67774f371d6127aff74cf8",
+      "measurements/f2-cache-and-status-tier-1000.json": "14ef8e9a2fdecd2313ed6b7fe323d1af8535016f0b9beb60ed64eee59ec6b4ef",
+      "measurements/f2-cache-and-status-tier-5000.json": "49f48d7165deb69ab255158cd70610505f0707b8f34218bbaebeaddb1fff366c",
+      "measurements/f2-progress-tier-100.json": "4e7dfb7853dfd81bcb6e38e06a8dcf1caf85cd0954ef484a7aa769a3a330a551",
+      "measurements/f2-progress-tier-1000.json": "745f6f475cf044c7aae8287f06a05b345ffea2fdaec40b366319ef2c8fd81b81",
+      "measurements/f2-progress-tier-5000.json": "3ee1d9b69d92627596883e487d41125b9bfd84f29f5ac34de69f4cd59854306c",
+      "measurements/order-projection-5000.json": "8ccc27453e3a9bb293fc973ae38ae2039cae02759fbd8af8799bfcc7ed808459"
+    },
+    "cases": [
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_unfiltered_active_list_reuses_same_scoped_snapshot",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_lightweight_status_inputs_preserve_direct_liner_eligibility[\\u886c\\u677f-5]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_lightweight_status_inputs_preserve_direct_liner_eligibility[\\u666e\\u901a\\u7bb1-5]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_audit_order_projection_optimization::test_lightweight_status_inputs_preserve_direct_liner_eligibility[\\u886c\\u677f-3]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_phase3_scale_reliability::test_order_list_scale_100_1000_5000_has_bounded_queries_and_no_errors",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_phase3_scale_reliability::test_committed_order_change_invalidates_active_badge_projection_cache",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_phase3_scale_reliability::test_sqlite_delete_journal_lock_wait_positive_control",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_phase3_scale_reliability::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[100]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_phase3_scale_reliability::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[1000]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "tests.test_phase3_scale_reliability::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[5000]",
+        "status": "passed"
+      }
+    ]
+  }
+}

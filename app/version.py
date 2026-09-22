@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.481"
-APP_VERSION_NAME = "报料六列简化与库存抵扣后保留备料"
+APP_VERSION = "v0.22.482"
+APP_VERSION_NAME = "审计优化：订单列表读取与状态计算提速"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4577,3 +4577,15 @@ APP_VERIFICATION_STEPS = [
     "核对供应商采购单数量；全额抵扣无额外备料时不生成零张采购，有明确备料时仅采购备料数量。",
 ]
 APP_CHANGELOG = [*(f"v0.22.481：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "订单列表首次打开和保存后刷新改用轻量只读状态数据，完整明细按当前页读取，减少大批订单的重复对象加载。",
+    "全部客户与带筛选的订单列表共用按账号客户范围、财务可见性隔离的状态缓存；每次提交后仍立即失效，数量、状态和权限判断保持一致。",
+    "本版不改变页面布局、报料流程或历史业务事实，无数据库迁移，保留 dv0922 与现有回滚保护。",
+]
+APP_VERIFICATION_STEPS = [
+    "本版无可见页面改动，无需新增页面验收；日常打开订单列表、切换客户或保存后刷新即可观察响应。",
+    "系统版本为 v0.22.482，数据库 revision 保持 dv0922；不为验收创建模拟正式业务。",
+]
+APP_CHANGELOG = [*(f"v0.22.482：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

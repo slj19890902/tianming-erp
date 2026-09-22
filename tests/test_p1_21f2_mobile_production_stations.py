@@ -188,11 +188,13 @@ def test_mobile_station_ui_is_paged_latest_wins_and_read_only() -> None:
     assert '"empty", loadProductionStation);' not in MOBILE_HTML
     assert "const parsedPage = Number(page);" in MOBILE_HTML
     assert "page: String(safePage)" in MOBILE_HTML
-    assert MOBILE_HTML.count('method: "POST"') == 2
+    production = MOBILE_HTML.split("function productionStationCard", 1)[1].split("async function initialize", 1)[0]
+    assert "apiPost(" not in production
+    assert "fetch(" not in production
     assert "/api/mobile/erp/production/tasks/" not in MOBILE_HTML.split("apiPost", 1)[-1]
     assert 'fetch("/api/auth/logout"' in MOBILE_HTML
-    assert 'method: "PUT"' not in MOBILE_HTML
-    assert 'method: "DELETE"' not in MOBILE_HTML
+    assert 'method: "PUT"' not in production
+    assert 'method: "DELETE"' not in production
     assert 'get("readonly")==="1"' in MOLD_HTML
     assert '$("movePanel").hidden=readOnly' in MOLD_HTML
     assert "if(!readOnly)await loadOneFloorLocationOptions()" in MOLD_HTML

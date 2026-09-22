@@ -3,3 +3,4 @@
 .production-desk-filters{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.production-desk-filters>.input{width:320px;max-width:40vw;flex:0 1 320px}.production-desk-table .production-material-line{font-size:13px}.production-desk-table td{padding:8px 10px!important}.ui-large .production-desk-table .production-material-line{font-size:17px}
 
 .production-task-qr{width:76px;height:76px;float:right;margin:0 0 6px 14px}.production-desk-dialog .material-order{min-height:90px;break-inside:avoid;overflow:auto}.production-desk-dialog :focus-visible{outline:3px solid #286af5;outline-offset:2px}
+.production-desk-dialog{max-height:calc(100vh - 48px);overflow-y:auto;overscroll-behavior:contain}.production-desk-dialog>.toolbar{position:sticky;top:-18px;z-index:2;background:#fff}.production-desk-dialog>.toolbar h3{margin-right:12px}@media print{body.printing-material-list .production-material-print>.toolbar{position:static}}

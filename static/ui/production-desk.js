@@ -1,9 +1,10 @@
 (function(global){
  'use strict';
  global.ERPProductionDesk={install(app){app.mixin({
-  data(){return this.$parent?{}:{productionQuery:'',productionMaterialsSelected:{},productionMaterials:null,productionEntry:null,productionPlacementState:'all',productionMaterialsBusy:false};},
-  watch:{authGeneration(){this.productionMaterials=null;this.productionEntry=null;this.productionMaterialsSelected={};this.productionQuery='';}},
+  data(){return this.$parent?{}:{productionQuery:'',productionMaterialsSelected:{},productionMaterials:null,productionEntry:null,productionPlacementState:'all',productionPlacementPendingTotal:0,productionMaterialsBusy:false};},
+  watch:{authGeneration(){this.productionMaterials=null;this.productionEntry=null;this.productionMaterialsSelected={};this.productionQuery='';this.productionPlacementPendingTotal=0;}},
   methods:{
+   selectedProductionMaterialIds(){return Object.entries(this.productionMaterialsSelected).filter(([,v])=>v).map(([id])=>Number(id));},
    materialSources(row){return row.customer_board_preparation_sources||[];},
    materialSpec(s){return [s.board_length_mm&&s.board_width_mm?`${s.board_length_mm} × ${s.board_width_mm} mm`:'尺寸待核',s.flute_type||'楞型待核'].join(' · ');},
    materialMap(s){return '/warehouse.html?'+new URLSearchParams({readonly:'1',source:'order-context',tab:'map',floor:String(s.warehouse_floor)+'F',mode:'lookup',view:'2d',location_id:String(s.location_id),lot_id:String(s.inventory_lot_id)});},

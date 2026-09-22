@@ -589,6 +589,8 @@ def _production_station_task_payloads(
 
         common = {
             "task_id": int(task["id"]),
+            "material_sources": _safe_production_task(task, drawing_path=None)['material_sources'],
+            "output_unit": task.get('output_unit') or ('片' if task.get('is_component_task') else '只'),
             "task_version": int(task.get("version") or 1),
             "customer_name": task.get("customer_name"),
             "order_number": task.get("order_number"),

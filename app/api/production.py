@@ -642,7 +642,8 @@ def get_placement_stock(
     items,total=placement_page(db,allowed_customer_ids=_allowed_customer_ids(user,db),page=page,page_size=page_size,
         customer_id=customer_id,order_keyword=order_keyword,product_code=product_code,product_name=product_name,
         completed_date_from=completed_date_from,completed_date_to=completed_date_to,placement_state=placement_state)
-    return dict(items=items,total=total,page=page,page_size=page_size)
+    pending_total=placement_page(db,allowed_customer_ids=_allowed_customer_ids(user,db),placement_state='pending',count_only=True)
+    return dict(items=items,total=total,pending_total=pending_total,page=page,page_size=page_size)
 
 
 class PlacementStockRequest(BaseModel):

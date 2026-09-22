@@ -15,7 +15,7 @@ from app.services.warehouse_location_address import employee_location_name
 
 def page(db, *, allowed_customer_ids, page=1, page_size=20, customer_id=None,
          order_keyword=None, product_code=None, product_name=None,
-         completed_date_from=None, completed_date_to=None, placement_state='pending'):
+         completed_date_from=None, completed_date_to=None, placement_state='pending', count_only=False):
     physical = InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged
     staging = exists(select(ReceiptStagingArea.area_id).join(WarehouseArea,
         WarehouseArea.id == ReceiptStagingArea.area_id).join(WarehouseFloor,
@@ -52,6 +52,8 @@ def page(db, *, allowed_customer_ids, page=1, page_size=20, customer_id=None,
             InventoryReservation.inventory_lot_id==InventoryLot.id,
             or_(Order.customer_po.contains(term),Order.order_number.contains(term),OrderItem.item_order_number.contains(term)))))
     total=db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    if count_only:
+        return int(total)
     rows=db.execute(query.order_by(InventoryLot.stock_date.desc(),InventoryLot.id.desc()).offset((page-1)*page_size).limit(page_size)).all()
     result=[]
     for lot,detail,customer,product,location in rows:

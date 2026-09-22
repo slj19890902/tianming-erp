@@ -1732,6 +1732,7 @@ def _statement_detail_response(
             StatementInvoice.invoice_number,
             StatementInvoice.invoice_date,
             StatementInvoice.invoice_amount,
+            StatementInvoice.invoice_status,
         ).where(StatementInvoice.statement_id == statement.id)
     ).all()
     settlements = db.execute(
@@ -1829,6 +1830,7 @@ def _statement_detail_response(
             "settled_amount": statement.settled_amount,
             "status": statement.status,
             "confirmation_status": statement.confirmation_status,
+            "confirmed_at": statement.confirmed_at,
             "version": statement.version,
             "ledger_version": statement.ledger_version,
             "status_label": "已结清" if statement.status == "settled" else "未结清",
@@ -5023,6 +5025,7 @@ def current_customer_months(
     balance_type: str | None = None,
     customer_id: int | None = None,
     all_open: bool = Query(default=False),
+    through_month: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -5043,6 +5046,7 @@ def current_customer_months(
         raise HTTPException(status_code=400, detail=str(error)) from error
     allowed_balance_types = {
         None,
+        "all",
         "reconciled",
         "pending_reconciliation",
         "pending_confirmation",
@@ -5068,6 +5072,7 @@ def current_customer_months(
         "settled_amount": Decimal("0.00"),
     }
     empty_counts = {
+        "all": 0,
         "all_open": 0,
         "reconciled": 0,
         "pending_reconciliation": 0,
@@ -5091,11 +5096,18 @@ def current_customer_months(
             "items": [],
         }
 
+    # Workbench months are a cutoff when explicitly requested. Receivables
+    # always carry prior unpaid bills forward; ordinary monthly report callers
+    # retain their exact-month contract. Customer lookup includes closed history.
+    use_cutoff = bool(statement_month and (through_month is True or balance_type == "pending_payment"))
+    history_lookup = customer_id is not None and balance_type in (None, "all")
     scope_months = (
         _workbench_candidate_months(db, visible_customer_ids=visible_customer_ids)
-        if all_open and statement_month is None
+        if use_cutoff or ((all_open or history_lookup) and statement_month is None)
         else [selected_month]
     )
+    if use_cutoff:
+        scope_months = [value for value in scope_months if value <= selected_month]
 
     # A workbench row represents the party that settles the bill, rather than
     # the (possibly different) customer on each delivery.  Pending deliveries
@@ -5125,8 +5137,8 @@ def current_customer_months(
         for customer_id, entity_id, entity_name, cycle_day in settlement_rows
     }
     members_by_entity: dict[int, set[int]] = {}
-    for customer_id, entity_id, _entity_name, _cycle_day in settlement_rows:
-        members_by_entity.setdefault(int(entity_id), set()).add(int(customer_id))
+    for member_customer_id, entity_id, _entity_name, _cycle_day in settlement_rows:
+        members_by_entity.setdefault(int(entity_id), set()).add(int(member_customer_id))
 
     # A scoped user may see an individual member but must not receive a
     # misleading "complete" partner statement.  Such a group remains absent
@@ -5559,23 +5571,26 @@ def current_customer_months(
         count_in_current_customer_scope = (
             customer_id is None or customer_id in group["source_customer_ids"]
         )
+        settlement_key = ("entity", group["settlement_entity_id"]) if group["settlement_entity_id"] else ("customer", group["customer_id"])
+        if count_in_current_customer_scope:
+            queue_customer_ids["all"].add(settlement_key)
         if has_reconciliation and count_in_current_customer_scope:
-            queue_customer_ids["pending_reconciliation"].add(group["customer_id"])
+            queue_customer_ids["pending_reconciliation"].add(settlement_key)
         if group["has_pending_confirmation"] and count_in_current_customer_scope:
-            queue_customer_ids["pending_confirmation"].add(group["customer_id"])
+            queue_customer_ids["pending_confirmation"].add(settlement_key)
         if has_invoice and count_in_current_customer_scope:
-            queue_customer_ids["pending_invoice"].add(group["customer_id"])
+            queue_customer_ids["pending_invoice"].add(settlement_key)
         if has_payment and count_in_current_customer_scope:
-            queue_customer_ids["pending_payment"].add(group["customer_id"])
+            queue_customer_ids["pending_payment"].add(settlement_key)
         if group["has_completed"] and count_in_current_customer_scope:
-            queue_customer_ids["completed"].add(group["customer_id"])
+            queue_customer_ids["completed"].add(settlement_key)
         if group["has_reconciled"] and count_in_current_customer_scope:
-            queue_customer_ids["reconciled"].add(group["customer_id"])
+            queue_customer_ids["reconciled"].add(settlement_key)
         if (
             count_in_current_customer_scope
             and (has_reconciliation or has_invoice or has_invoice_task or has_payment)
         ):
-            queue_customer_ids["all_open"].add(group["customer_id"])
+            queue_customer_ids["all_open"].add(settlement_key)
         if has_reconciliation:
             group["primary_action"] = "reconcile"
         elif has_invoice:
@@ -5597,8 +5612,8 @@ def current_customer_months(
     def includes_requested_queue(group: dict) -> bool:
         if customer_id is not None and customer_id not in group["source_customer_ids"]:
             return False
-        if balance_type is None:
-            return not group["is_completed"]
+        if balance_type in (None, "all"):
+            return balance_type == "all" or customer_id is not None or not group["is_completed"]
         if balance_type == "reconciled":
             return group["has_reconciled"]
         if balance_type == "pending_reconciliation":
@@ -5611,11 +5626,11 @@ def current_customer_months(
             return group["has_pending_payment"]
         return group["has_completed"]
 
-    customer_options_by_id = {
-        int(customer_id): str(customer_name)
-        for group in all_groups
-        for customer_id, customer_name in group["source_customers"].items()
-    }
+    # Keep search available even when the selected month/queue has no bills.
+    option_query = select(Customer.id, Customer.name)
+    if visible_customer_ids is not None:
+        option_query = option_query.where(Customer.id.in_(visible_customer_ids))
+    customer_options_by_id = dict(db.execute(option_query).all())
     customer_options = [
         {"id": source_customer_id, "name": customer_name}
         for source_customer_id, customer_name in sorted(
@@ -5632,7 +5647,7 @@ def current_customer_months(
         group["source_customer_count"] = len(group["source_customer_ids"])
     # A customer/month may contain several stages. Show only the bills in the
     # selected queue; counts above still describe all queues in the same scope.
-    if balance_type is not None:
+    if balance_type not in (None, "all"):
         def matches_queue(statement: dict) -> bool:
             if balance_type == "reconciled":
                 return statement["confirmation_status"] == "confirmed"
@@ -5701,6 +5716,7 @@ def current_customer_months(
         "statement_month": selected_month if not all_open or statement_month else None,
         "all_open": all_open and statement_month is None,
         "scope_months": scope_months,
+        "month_scope": "through" if use_cutoff else "exact" if statement_month else "all",
         "as_of": beijing_today(),
         "total": total,
         "page": page,

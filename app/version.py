@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.486"
-APP_VERSION_NAME = "图纸V2三类模板与任务固定版"
+APP_VERSION = "v0.22.487"
+APP_VERSION_NAME = "待收款跨月与客户全程追溯"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4643,3 +4643,16 @@ APP_VERIFICATION_STEPS = [
     "按真实新任务核对纸单图示、同版附页及模具位置；历史任务重印保持原图版，未下发任务仅在明确采用后换版。",
 ]
 APP_CHANGELOG = [*(f"v0.22.486：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "修复合作成员循环覆盖客户筛选，导致普通已开票未收款客户漏显示的问题。",
+    "财务工作台按截至账期累计待办，待收款包含以前未收清账单，不包含以后账期。",
+    "查找客户自动显示全部账期和全部状态；账单详情展示真实发票号码、日期、分配金额和每次收款流水。",
+]
+APP_VERIFICATION_STEPS = [
+    "客户对账选择待收款、截至九月，核对已开票未收款客户；切换截至八月，不应包含九月账单。",
+    "查找一个已有历史结清账单的客户，确认自动显示全部记录及账期，展开核对对账、开票、收款金额。",
+    "点击对账单号，核对真实发票号、开票日期及每次收款流水；只有真实到账后才确认收款。",
+]
+APP_CHANGELOG = [*(f"v0.22.487：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

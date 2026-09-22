@@ -2,7 +2,7 @@
  'use strict';
  global.ERPProductionDesk={install(app){app.mixin({
   data(){return this.$parent?{}:{productionQuery:'',productionMaterialsSelected:{},productionMaterials:null,productionEntry:null,productionPlacementState:'all',productionPlacementPendingTotal:0,productionMaterialsBusy:false};},
-  watch:{authGeneration(){this.productionMaterials=null;this.productionEntry=null;this.productionMaterialsSelected={};this.productionQuery='';this.productionPlacementPendingTotal=0;}},
+  watch:{authGeneration(){this.productionMaterials=null;this.productionEntry=null;this.productionMaterialsSelected={};this.productionQuery='';this.productionPlacementPendingTotal=0;this.productionMaterialsBusy=false;}},
   methods:{
    selectedProductionMaterialIds(){return Object.entries(this.productionMaterialsSelected).filter(([,v])=>v).map(([id])=>Number(id));},
    materialSources(row){return row.customer_board_preparation_sources||[];},

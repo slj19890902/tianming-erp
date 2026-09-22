@@ -4,3 +4,10 @@
 
 .production-task-qr{width:76px;height:76px;float:right;margin:0 0 6px 14px}.production-desk-dialog .material-order{min-height:90px;break-inside:avoid;overflow:auto}.production-desk-dialog :focus-visible{outline:3px solid #286af5;outline-offset:2px}
 .production-desk-dialog{max-height:calc(100vh - 48px);overflow-y:auto;overscroll-behavior:contain}.production-desk-dialog>.toolbar{position:sticky;top:-18px;z-index:2;background:#fff}.production-desk-dialog>.toolbar h3{margin-right:12px}@media print{body.printing-material-list .production-material-print>.toolbar{position:static}}
+
+@media print{
+ body.printing-material-list #app *:not(.production-material-print):not(.production-material-print *):not(:has(.production-material-print)){display:none!important}
+ body.printing-material-list #app,body.printing-material-list #app :has(.production-material-print){display:block!important;position:static!important;height:auto!important;min-height:0!important;overflow:visible!important;padding:0!important;margin:0!important}
+ body.printing-material-list .production-material-print{position:static!important;max-height:none!important;overflow:visible!important;padding:0!important}
+ body.printing-material-list .production-material-print .material-order{overflow:visible}
+}

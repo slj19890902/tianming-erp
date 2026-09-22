@@ -1751,6 +1751,7 @@ function StocktakeProductChoices({ items, selectedId, onSelect }: { items: Produ
 export function WarehouseTwinApp() {
   const query = useMemo(() => new URLSearchParams(window.location.search), []);
   const embedded = query.get("embedded") === "1";
+  const productionMapContext = query.get("production_return") === "1" && embedded && ["production-map", "production-location-picker"].includes(query.get("source") || "");
   const productionLocationPicker = query.get("source") === "production-location-picker" && query.get("readonly") === "1";
   const traceReadOnly = query.get("readonly") === "1" && (query.get("source") === "order_trace" || ["order-context", "pdf-order", "production-location-picker"].includes(query.get("source") || ""));
   const [floorCode, setFloorCode] = useState<WarehouseOperationalFloorCode>(() => {
@@ -1933,6 +1934,7 @@ export function WarehouseTwinApp() {
   const [moveBatchIdempotencyKey, setMoveBatchIdempotencyKey] = useState(() => operationKey("warehouse-move-batch"));
   const [moveBatchBusy, setMoveBatchBusy] = useState(false);
   const moveSubmitLock = useRef(false);
+  const [productionMoveUncertain, setProductionMoveUncertain] = useState(false);
   const [moveAction, setMoveAction] = useState<"relocate" | "merge" | "stocktake" | "ground">(
     query.get("action") === "stocktake" ? "stocktake" : "relocate"
   );
@@ -2038,12 +2040,12 @@ export function WarehouseTwinApp() {
     refreshDashboard().catch((reason: Error) => setError(reason.message));
     requestJson<AuthResponse>("/api/auth/me")
       .then((value) => {
-        setCanEditLocations(!traceReadOnly && value.user.role === "admin");
+        setCanEditLocations(!productionMapContext && !traceReadOnly && value.user.role === "admin");
         setCanViewInventoryCost(["admin", "boss"].includes(value.user.role));
         setCanExecuteWarehouse(!traceReadOnly && value.permissions.includes("warehouse.execute"));
-        setCanStocktake(!traceReadOnly && value.permissions.includes("warehouse.stocktake.submit"));
-        setCanCorrectInventory(!traceReadOnly && value.user.role === "admin" && value.permissions.includes("warehouse.correct"));
-        setCanViewProductionProjection(value.permissions.includes("warehouse.view"));
+        setCanStocktake(!productionMapContext && !traceReadOnly && value.permissions.includes("warehouse.stocktake.submit"));
+        setCanCorrectInventory(!productionMapContext && !traceReadOnly && value.user.role === "admin" && value.permissions.includes("warehouse.correct"));
+        setCanViewProductionProjection(!productionMapContext && value.permissions.includes("warehouse.view"));
         setUiMode(value.user.ui_mode === "large" ? "large" : "standard");
       })
       .catch(() => {
@@ -2053,7 +2055,7 @@ export function WarehouseTwinApp() {
         setCanStocktake(false);
         setCanViewProductionProjection(false);
       });
-  }, [refreshDashboard, traceReadOnly]);
+  }, [refreshDashboard, traceReadOnly, productionMapContext]);
 
   useEffect(() => {
     if (viewMode === "25d") {
@@ -3514,8 +3516,8 @@ export function WarehouseTwinApp() {
       (item) => item.location_id === pendingLocationId && item.floor_code === floorCode
     );
     if (!location) {
-      if (traceReadOnly) {
-        setTraceDeepLinkMessage("无法定位：指定库位不存在、已停用，或当前账号无权查看。请返回订单追溯刷新后重试。");
+      if (traceReadOnly || productionMapContext) {
+        setTraceDeepLinkMessage("无法定位：指定库位不存在、已停用，或当前账号无权查看。请返回来源页面刷新后重试。");
       }
       setPendingLocationId(null);
       setPendingLotId(null);
@@ -3542,6 +3544,7 @@ export function WarehouseTwinApp() {
       const targetLot = selectedLocationItems.find((item) => item.lot_id === pendingLotId);
       if (targetLot && inventoryHasPhysicalQuantity(targetLot)) {
         setTraceFocusedLotId(pendingLotId);
+        if (productionMapContext) setSearchPanelOpen(false);
         setLocationItemsExpanded(true);
         setSidebarLabelLotId(pendingLotId);
         const hit = { ...targetLot, floor_code:floorCode, location_id:location.location_id,
@@ -3553,15 +3556,15 @@ export function WarehouseTwinApp() {
         setTraceDeepLinkMessage(
           `黄色标记为当前货位 · ${employeeLocationName(location)} · ${targetLot.inventory_code || targetLot.product_name || "当前产品"} · ${formatNumber(inventoryLabelQuantity(targetLot))} ${inventoryUnitLabel(targetLot.unit)}`
         );
-      } else if (traceReadOnly) {
-        setTraceDeepLinkMessage("已定位原库位，但指定成品批次已移位、清零，或当前账号无权查看。请返回订单追溯刷新后重试。");
+      } else if (traceReadOnly || productionMapContext) {
+        setTraceDeepLinkMessage("已定位原库位，但指定成品批次已移位、清零，或当前账号无权查看。请返回来源页面刷新后重试。");
       }
-    } else if (traceReadOnly) {
+    } else if (traceReadOnly || productionMapContext) {
       setTraceDeepLinkMessage(`已定位 ${employeeLocationName(location)}；当前页面只读，不会改变库存。`);
     }
     setPendingLocationId(null);
     setPendingLotId(null);
-  }, [pendingLocationId, pendingLotId, pendingRackSearchLocationId, focusedSearchItem, floorCode, visualLocations, dashboard, layout, loading, selected, selectedLocationItems, traceReadOnly]);
+  }, [pendingLocationId, pendingLotId, pendingRackSearchLocationId, focusedSearchItem, floorCode, visualLocations, dashboard, layout, loading, selected, selectedLocationItems, traceReadOnly, productionMapContext]);
 
   useEffect(() => {
     if (!traceReadOnly || !error) return;
@@ -3935,7 +3938,7 @@ export function WarehouseTwinApp() {
   };
 
   const queueMoveDraft = (source: WarehouseMoveSource, target: DashboardLocation, quantityOverride?: number, submitNow = false) => {
-    if (moveSubmitLock.current || moveBatchBusy) return false;
+    if (moveSubmitLock.current || moveBatchBusy || (productionMapContext && productionMoveUncertain)) return false;
     if (source.operation === "pallet_move" && (target.occupancy_status !== "empty" || target.map_rack_id || target.address_kind === "rack_slot")) {
       setWarehouseOperationMessage("整栈板只能移到空的地面货位；移入有货位置请选单个产品。");
       return false;
@@ -4012,12 +4015,14 @@ export function WarehouseTwinApp() {
   };
 
   const removeMoveDraft = (clientItemId: string) => {
+    if (productionMapContext && (productionMoveUncertain || moveSubmitLock.current)) return;
     setMoveDrafts((current) => current.filter((item) => item.client_item_id !== clientItemId));
     setMoveBatchIdempotencyKey(operationKey("warehouse-move-batch"));
     setWarehouseOperationMessage("已撤销该条页面草稿，正式库存未改变。");
   };
 
   const clearMoveDrafts = () => {
+    if (productionMapContext && (productionMoveUncertain || moveSubmitLock.current)) return;
     setMoveDrafts([]);
     setMoveBatchIdempotencyKey(operationKey("warehouse-move-batch"));
     setWarehouseOperationMessage("已清空页面草稿，正式库存未改变。");
@@ -4112,6 +4117,7 @@ export function WarehouseTwinApp() {
         buildMoveBatchPayload(key, drafts)
       );
       moveAcknowledged = true;
+      setProductionMoveUncertain(false);
       setMoveDrafts([]);
       setMoveSource(null);
       setMoveQuantity("");
@@ -4120,6 +4126,8 @@ export function WarehouseTwinApp() {
       await refreshDashboard();
       setWarehouseOperationMessage(drafts.length === 1 ? "移动完成；地图已刷新。" : "整批移货完成；地图已刷新。");
     } catch (reason) {
+      const status = (reason as Error & {status?: number}).status;
+      if (!moveAcknowledged && (!status || status >= 500)) setProductionMoveUncertain(true);
       setWarehouseOperationMessage(moveAcknowledged
         ? `移货已完成，但地图刷新失败：${(reason as Error).message}。当前画面尚未核验，请刷新页面；不要重复提交移货。`
         : `整批提交失败：${(reason as Error).message}。页面草稿与本次幂等键已保留，可核对后重试。`);
@@ -6250,6 +6258,36 @@ export function WarehouseTwinApp() {
     return () => window.removeEventListener("message", receiveShellCommand);
   }, [embedded, floorCode, locationPointEditAreaCode, mapMode, moveSource]);
 
+  useEffect(() => {
+    if (productionMapContext && productionLocationPicker) window.parent.postMessage({
+      type:"erp-production-location-preview", token:query.get("picker_token"), location_id:selectedLocation?.location_id || null,
+    }, window.location.origin);
+  }, [productionMapContext, productionLocationPicker, selectedLocation?.location_id, query]);
+
+  const returnToProduction = () => {
+    if (!productionMapContext) return;
+    if (moveSubmitLock.current || moveBatchBusy || spatialEditBusy) {
+      setWarehouseOperationMessage("正在处理移货，请等待结果后再返回生产页面。");
+      return;
+    }
+    if (productionMoveUncertain) {
+      setWarehouseOperationMessage("移货结果尚未确定，请用当前保留的移货记录重试核对，再返回生产页面。");
+      return;
+    }
+    if (moveDrafts.length && !window.confirm("还有未完成的移货记录。返回将关闭这些记录；请先核对提交结果。确认返回生产页面？")) return;
+    window.parent.postMessage({type:"erp-production-map-return", token:query.get("picker_token")}, window.location.origin);
+  };
+  useEffect(() => {
+    if (!productionMapContext) return;
+    window.parent.postMessage({type:"erp-production-map-ready", token:query.get("picker_token")}, window.location.origin);
+    const receiveReturn = (event: MessageEvent) => {
+      if (event.origin === window.location.origin && event.source === window.parent
+        && event.data?.type === "erp-production-map-return-request" && event.data.token === query.get("picker_token")) returnToProduction();
+    };
+    window.addEventListener("message", receiveReturn);
+    return () => window.removeEventListener("message", receiveReturn);
+  }, [productionMapContext, moveBatchBusy, spatialEditBusy, moveDrafts, productionMoveUncertain, query]);
+
   return <main className={`warehouse-twin-shell ${embedded ? "embedded-shell" : ""} ${uiMode === "large" ? "large-text" : ""} ${mapMode === "move" ? "move-mode" : ""}`}>
     {objectActions && <div ref={objectActionsRef} className="twin-object-actions-menu" role="menu" aria-label="所选对象操作" style={{ left: objectActions.clientX, top: objectActions.clientY }} onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); closeObjectActions(); return; }
@@ -6274,7 +6312,7 @@ export function WarehouseTwinApp() {
       </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><span>{selectedAreaVisibleAreaMm2 ? `${(selectedAreaVisibleAreaMm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorCode === "4F" ? floor4CalibrationMode ? `${floorTitle} · 正在重新校正货梯位置与朝向` : floor4CalibrationApplied ? `${floorTitle} · 已与 3F 货梯对齐` : `${floorTitle} · 扫描规划 / 待现场标定，尚未启用正式作业` : `${floorTitle} · 正式仓库作业层`}</p></div>
       <div className="twin-command-status"><span className="live">{traceReadOnly ? (query.get("source") === "order_trace" ? "订单追溯 · 只读定位" : "订单库存 · 只读定位") : mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : layoutMapToolsOpen ? "区域规划 · 调整地图" : advancedAreaMaintenanceOpen ? "区域规划 · 整理货位/货架" : "区域规划 · 核对区域" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
       <nav className="twin-command-links" aria-label="仓库账目">
-        {!traceReadOnly && <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>}
+        {!productionMapContext && !traceReadOnly && <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>}
       </nav>
     </header>
 
@@ -6288,13 +6326,21 @@ export function WarehouseTwinApp() {
         <button type="button" disabled={mapMode !== "lookup" || spatialEditBusy} aria-expanded={searchPanelOpen && detailSearchOpen} onClick={() => {setSearchPanelOpen(true);setDetailSearchOpen(value => !searchPanelOpen || !value);}}>详细查找</button>
         <button type="button" aria-expanded={searchPanelOpen && !detailSearchOpen} onClick={() => {setDetailSearchOpen(false);setSearchPanelOpen(value => detailSearchOpen || !value);}}>{searchPanelOpen && !detailSearchOpen ? "收起结果" : "查找"}</button>
       </div>
-      {!traceReadOnly && <nav className="twin-top-ledger" aria-label="库存账目"><a href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a></nav>}
+      {!productionMapContext && !traceReadOnly && <nav className="twin-top-ledger" aria-label="库存账目"><a href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a></nav>}
       <div className="twin-operation-modes" role="tablist" aria-label="仓库地图操作模式">
+        {productionMapContext && !productionLocationPicker && canExecuteWarehouse && selectedLocation && traceFocusedLotId && <button type="button" disabled={moveBatchBusy || spatialEditBusy || !selectedLocationItems.some(item => item.lot_id === traceFocusedLotId && item.version && movableLotQuantity(item) > 0)} onClick={async () => {
+          const item = selectedLocationItems.find(item => item.lot_id === traceFocusedLotId);
+          if (item && await enterWarehouseMoveMode()) {
+            setMoveAction("relocate"); setRackFocusId(null);
+            chooseMoveSource(lotMoveSource(selectedLocation, item));
+          }
+        }}>移动当前产品</button>}
+
         {mapMode === "planning" && keyboardLocationEditActive && <button type="button" disabled={locationEditBusy || activeLocationDraftCount > 0} onClick={() => { setKeyboardLocationEditActive(false); locationNudgeRef.current = null; setLocationEditMessage("货位调整已完成；当前显示已应用位置。"); }}>完成货位调整</button>}
         {mapMode !== "lookup" && <button type="button" onClick={returnToLookupMode}>结束操作</button>}
         {!traceReadOnly && canExecuteWarehouse && <button type="button" className={mapMode === "move" && moveAction === "relocate" ? "active" : ""} disabled={spatialEditBusy} onClick={async () => {if(await enterWarehouseMoveMode()) setMoveAction("relocate");}}>移货</button>}
         {!traceReadOnly && canStocktake && <button type="button" className={mapMode === "move" && moveAction === "stocktake" ? "active" : ""} disabled={spatialEditBusy} onClick={async () => {if(await enterWarehouseMoveMode()) {setMoveAction("stocktake");setMoveSource(null);}}}>盘点</button>}
-        <details className="twin-workspace-more"><summary>更多</summary><div>
+        {!productionMapContext && <details className="twin-workspace-more"><summary>更多</summary><div>
           {!traceReadOnly && canEditLocations && <button type="button" disabled={spatialEditBusy} onClick={toggleLayoutEditor}>{locationEditMode ? "结束区域规划" : "区域规划"}</button>}
           {!traceReadOnly && canExecuteWarehouse && P1_49C_ENABLED && <button type="button" disabled={spatialEditBusy} onClick={openAutomaticMerge}>合并同款栈板</button>}
           {!traceReadOnly && canExecuteWarehouse && <button type="button" disabled={spatialEditBusy} onClick={async () => {if(await enterWarehouseMoveMode()) {setMoveAction("ground");setMoveSource(null);setGroundStorageMessage("请选择区域，办理特殊地堆入库或大件转位。");}}}>特殊地堆 / 大件存放</button>}
@@ -6302,7 +6348,7 @@ export function WarehouseTwinApp() {
           <button type="button" onClick={() => setLayerPanelOpen(value => !value)}>图层</button>
           <button type="button" disabled={locationEditMode || mapMode === "move"} onClick={() => setViewMode(value => value === "2d" ? "25d" : "2d")}>{viewMode === "2d" ? "等距视图" : "二维地图"}</button>
           <button type="button" onClick={() => {setCameraPreset("fit");setViewResetToken(value => value+1);}}>全图复位</button>
-        </div></details>
+        </div></details>}
         {canEditLocations && mapMode === "planning" && locationEditMode && <button type="button" className={layoutMapToolsOpen ? "active" : ""} disabled={spatialEditBusy || Boolean(locationPointEditAreaCode) || activeLocationDraftCount > 0} title={locationPointEditAreaCode || activeLocationDraftCount > 0 ? "请先保存或取消货位点位调整" : ""} onClick={() => {
           if (activeLocationDraftCount > 0) {
             setLocationEditMessage("有未保存的货位位置，请先保存或取消后再调整地图。");
@@ -6335,11 +6381,11 @@ export function WarehouseTwinApp() {
         </>}
         {!traceReadOnly && canEditLocations && staleLayoutDraft && <button type="button" className="warning" disabled={spatialEditBusy} onClick={rebuildStaleLayoutDraft}>放弃旧草稿并重新规划</button>}
       </div>
-      {traceReadOnly && <div className={`twin-deeplink-message ${traceDeepLinkMessage.includes("无法") || traceDeepLinkMessage.includes("已移位") ? "error" : ""}`} role="status" aria-live="polite">{productionLocationPicker ? (selectedLocation ? `已选：${employeeLocationName(selectedLocation)} · 点击确定带回生产安排` : "点击地面货位或货架层格，再确定位置") : traceDeepLinkMessage}</div>}
+      {(traceReadOnly || productionMapContext) && <div className={`twin-deeplink-message ${traceDeepLinkMessage.includes("无法") || traceDeepLinkMessage.includes("已移位") ? "error" : ""}`} role="status" aria-live="polite">{productionLocationPicker ? (selectedLocation ? `已选：${employeeLocationName(selectedLocation)} · ${productionMapContext ? "点击确定此货位后核对并归位" : "点击确定带回生产安排"}` : "点击地面货位或货架层格，再确定位置") : traceDeepLinkMessage}</div>}
       {(canExecuteWarehouse || canStocktake) && mapMode === "move" && <div className="twin-toolbar-move-actions" role="tablist" aria-label="仓库地图操作类型">
         {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "relocate"} className={moveAction === "relocate" ? "active" : ""} onClick={() => { setMoveAction("relocate"); setWarehouseOperationMessage(moveDrafts.length ? `已切回移动位置；保留 ${moveDrafts.length} 条移货草稿。` : "已切回移动位置。"); }}>移动位置</button>}
-        {canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "ground"} className={moveAction === "ground" ? "active" : ""} onClick={() => { setMoveAction("ground"); setMoveSource(null); setGroundStorageMessage("先选择楼层和地堆区域，再选择入库产品或转位批次。"); }}>地图存放</button>}
-        {P1_49C_ENABLED && canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "merge"} className={moveAction === "merge" ? "active" : ""} onClick={openAutomaticMerge}>合并栈板</button>}
+        {!productionMapContext && canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "ground"} className={moveAction === "ground" ? "active" : ""} onClick={() => { setMoveAction("ground"); setMoveSource(null); setGroundStorageMessage("先选择楼层和地堆区域，再选择入库产品或转位批次。"); }}>地图存放</button>}
+        {!productionMapContext && P1_49C_ENABLED && canExecuteWarehouse && <button type="button" role="tab" aria-selected={moveAction === "merge"} className={moveAction === "merge" ? "active" : ""} onClick={openAutomaticMerge}>合并栈板</button>}
         {canStocktake && <button type="button" role="tab" aria-selected={moveAction === "stocktake"} className={moveAction === "stocktake" ? "active" : ""} onClick={() => { setMoveAction("stocktake"); setMoveSource(null); setWarehouseOperationMessage(stocktakeDrafts.length ? `已切到盘点调整；保留 ${stocktakeDrafts.length} 条草稿。` : "请选择正式货位进行盘点调整。"); }}>盘点调整</button>}
       </div>}
       <div className="twin-toolbar-view-tools" role="group" aria-label="地图显示工具">
@@ -6514,7 +6560,7 @@ export function WarehouseTwinApp() {
           response={moldRackResponse}
           loading={moldRackLoading}
           error={moldRackError}
-          canMoveMolds={mapMode === "move" && canExecuteWarehouse}
+          canMoveMolds={!productionMapContext && mapMode === "move" && canExecuteWarehouse}
           rackIndex={focusedRackIndex}
           rackCount={focusedAreaRacks.length || 1}
           onPrevious={() => switchFocusedRack(-1)}
@@ -6769,7 +6815,7 @@ export function WarehouseTwinApp() {
         </section>}
         {selectedLocation && <section className="twin-location-card twin-stocktake-compact">
           {productionLocationPicker && <button type="button" className="warehouse-label-add" disabled={loading || Boolean(locationDrafts[selectedLocation.location_id]) || selectedLocation.position_status !== "mapped"} onClick={() => {
-            window.parent.postMessage({type:"erp-production-location",token:query.get("picker_token"),location_id:selectedLocation.location_id},window.location.origin);
+            window.parent.postMessage({type:"erp-production-location",token:query.get("picker_token"),location_id:selectedLocation.location_id,layout_version:selectedLocation.map_position?.version},window.location.origin);
           }}>确定此货位</button>}
           {!productionLocationPicker && createElement("warehouse-costs", {"location-id": String(selectedLocation.location_id), "revision": String(loading)})}
           <div className="twin-location-card-title"><div><b>{employeeLocationName(selectedLocation)}</b></div><em className={selectedLocation.occupancy_status}>{selectedLocation.occupancy_status === "occupied" ? "有货" : "空位"}</em>

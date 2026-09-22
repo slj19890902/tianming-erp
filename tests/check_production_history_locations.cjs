@@ -9,7 +9,7 @@ function method(name) {
 }
 let opened;
 const window = {open: url => { opened = url; }};
-const context = {pageAllowed: () => true, showToast: () => { throw Error('Unexpected denial'); }};
+const context = {showProductionMap: row => { opened = '/warehouse.html?' + new URLSearchParams({lot_id:row.current_inventory_lot_id || row.inventory_lot_id,location_id:row.current_warehouse_location_id}); },pageAllowed: () => true, showToast: () => { throw Error('Unexpected denial'); }};
 context.productionCurrentLocationClickable = method('productionCurrentLocationClickable');
 const open = method('openProductionInventory');
 const row = {status:'posted', is_fully_delivered:true, current_inventory_status:'located',

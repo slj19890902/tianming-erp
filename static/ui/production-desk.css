@@ -11,3 +11,5 @@
  body.printing-material-list .production-material-print{position:static!important;max-height:none!important;overflow:visible!important;padding:0!important}
  body.printing-material-list .production-material-print .material-order{overflow:visible}
 }
+
+.production-map-mask{position:fixed;inset:0;z-index:1600;background:#f5f7fb;display:flex;flex-direction:column}.production-map-mask>header,.production-map-mask>footer{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 20px;background:white;border-bottom:1px solid #dbe3ed;flex-shrink:0}.production-map-mask>footer{border-top:1px solid #dbe3ed}.production-map-mask>iframe{width:100%;flex:1;min-height:0;border:0}.production-map-mask>p{margin:8px 20px}.production-map-mask>header strong{font-size:18px}.production-map-mask>footer strong{color:#174ea6}.production-placement-table .production-location-picker>.primary{grid-column:1/-1}

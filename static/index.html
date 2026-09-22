@@ -7100,7 +7100,7 @@
               </div>
 
               <div class="product-form-row product-final-row">
-                <div v-if="canViewSalesAmounts" class="field sensitive-price product-inline-price"><label>{{ productForm.supply_mode==='external_purchase' ? `${commonBoxPriceLabel(productForm.customer_id)} / ${productForm.external_packaging_purchase_unit || '采购单位'}` : commonBoxPriceLabel(productForm.customer_id) }}</label><input class="input" type="number" min="0" step="0.0001" v-model="productForm.sale_unit_price" /></div>
+                <div v-if="canViewSalesAmounts" class="field sensitive-price product-inline-price"><label>{{ productForm.supply_mode==='external_purchase' ? `${commonBoxPriceLabel(productForm.customer_id)} / ${productForm.external_packaging_purchase_unit || '采购单位'}` : commonBoxPriceLabel(productForm.customer_id) }}</label><input class="input" type="number" min="0" step="0.000001" v-model="productForm.sale_unit_price" /></div>
                 <div class="field"><label>图纸</label>
                   <input class="input" type="file" accept="image/png,image/jpeg,image/webp,application/pdf,.pdf" @change="drawingFile=$event.target.files[0] || null" />
                 </div>
@@ -12585,6 +12585,8 @@
                 label:"常用箱", api:"products", formKey:"productForm", collection:"products",
                 fields:[
                   ["customer_id","客户"], ["product_code","存货编码"], ["customer_material_code","客户料号"],
+                  ["customer_drawing_number","客户图号"], ["customer_category","客户类别"], ["customer_model","使用型番"],
+                  ["customer_product_name","客户品名／用途"], ["customer_drawing_display","图号栏显示文字"],
                   ["product_name","产品名称"], ["box_style","箱型"], ["supply_mode","供货方式"],
                   ["external_packaging_category_code","外购包材类别"],
                   ["external_packaging_specification_summary","外购客户规格"],
@@ -12641,6 +12643,7 @@
             this.masterChangeConfirm = blankMasterChangeConfirm();
           },
           masterComparableValue(entity, field, value) {
+            if (entity === "product" && ["customer_drawing_number","customer_category","customer_model","customer_product_name","customer_drawing_display"].includes(field)) return value == null ? null : String(value).trim();
             if (Array.isArray(value)) return value.map(item => String(item || "").trim()).filter(Boolean).sort();
             if (value === null || value === undefined || value === "") return "";
             if (typeof value === "boolean") return value;
@@ -12668,6 +12671,7 @@
             return String(value).trim();
           },
           masterDisplayValue(entity, field, value) {
+            if (entity === "product" && ["customer_drawing_number","customer_category","customer_model","customer_product_name","customer_drawing_display"].includes(field) && (value == null || value === "")) return value == null ? "未维护（保留来源参考）" : "已明确留空";
             if (value === null || value === undefined || value === "") return "（空）";
             if (Array.isArray(value)) return value.length ? value.join("、") : "（空）";
             if (typeof value === "object") return JSON.stringify(value);

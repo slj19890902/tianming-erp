@@ -222,3 +222,22 @@ def test_five_decimal_sale_survives_delivery_receipt_and_statement(n029_delivery
             row=db.query(StatementItem).filter_by(statement_id=statement.json()['id']).one()
             assert row.unit_price_snapshot==Decimal('2.14642')
             assert row.receivable_amount==Decimal('107.32')
+
+
+def test_customer_field_editor_detects_explicit_blank_and_keeps_text_identifiers(tmp_path):
+    import shutil,subprocess
+    from pathlib import Path
+    source=(Path(__file__).resolve().parents[1]/'static/index.html').read_text(encoding='utf-8')
+    def body(signature,next_signature):
+        return source.split(signature,1)[1].split(next_signature,1)[0].rsplit('}',1)[0]
+    config=body('masterEntityConfig(entity) {','masterFieldLabel(entity, field) {')
+    comparable=body('masterComparableValue(entity, field, value) {','masterDisplayValue(entity, field, value) {')
+    script='const assert=require("assert");\n'
+    script+='const config=new Function("entity",'+json.dumps(config)+');\n'
+    script+='const compare=new Function("entity","field","value",'+json.dumps(comparable)+');\n'
+    script+='assert(config("product").fields.some(([key])=>key==="customer_drawing_number"));\n'
+    script+='assert.notStrictEqual(compare("product","customer_drawing_number",null),compare("product","customer_drawing_number",""));\n'
+    script+='assert.strictEqual(compare("product","customer_drawing_number","0631965-1"),"0631965-1");'
+    path=tmp_path/'customer-editor.cjs';path.write_text(script,encoding='utf-8')
+    result=subprocess.run([shutil.which('node'),str(path)],capture_output=True,text=True,encoding='utf-8')
+    assert result.returncode==0,result.stdout+result.stderr

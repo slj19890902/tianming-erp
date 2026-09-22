@@ -4980,7 +4980,7 @@
 	                  <thead><tr><th v-if="canProductionExecute" style="width:58px"><input type="checkbox" :checked="allProductionSelected" :disabled="productionBusy" @change="toggleAllProduction($event.target.checked)" /> 全选</th><th style="width:13%">订单 / 客户</th><th style="width:21%">存货编码 / 产品</th><th style="width:16%">数量情况</th><th style="width:19%">本次生产</th><th style="width:11%">订单 / 多出</th><th v-if="canProductionExecute" class="production-destination-column">完工去向</th></tr></thead>
 	                  <tbody><tr v-for="row in productionPending" :key="row.id" :class="{'requisition-selected': productionSelected[row.id]}">
 	                    <td v-if="canProductionExecute"><input v-if="row.completion_actionable !== false && productionUsesBatchConfirmation(row)" type="checkbox" :checked="!!productionSelected[row.id]" :disabled="productionBusy || !canConfirmProductionRow(row)" @change="onProductionSelectionChange(row,$event.target.checked)" /><span v-else class="muted">{{ row.completion_actionable === false ? '自动' : (row._direct_submitting ? '处理中' : '-') }}</span></td>
-	                    <td style="white-space:normal"><order-reference :row="row"></order-reference><br><span class="muted">{{ row.customer_name || '-' }}</span></td>
+	                    <td style="white-space:normal"><order-reference :row="row"></order-reference><br><span class="muted">{{ row.customer_name || '-' }}</span><div><button type="button" class="btn small" :disabled="productionBusy" @click="openProductionDrawingAdoption(row)">图纸版本</button></div></td>
                     <td style="white-space:normal"><div class="production-product-summary" :title="productionProductTitle(row)"><div class="production-product-line"><span v-if="row.is_component_task" class="status blue">组件</span><strong>{{ row.product_code || '-' }}</strong><span>｜{{ row.product_name || '-' }}</span></div><div :class="productionPrintingSetup(row)?'production-printing-setup':'production-product-meta'">{{ productionPrintingSetup(row) || (row.specification || '-') }}<span v-if="!productionPrintingSetup(row) && productionBoardPreparationSummary(row)">｜{{ productionBoardPreparationSummary(row) }}</span></div><div v-if="row.is_component_task && row.composite_parent" class="status blue" style="display:block;margin-top:5px;white-space:normal">组合父件 {{ row.composite_parent.product_code || '-' }}｜{{ row.composite_parent.product_name || '-' }}；同组：{{ (row.composite_siblings || []).filter(item => !item.is_current).map(item => `${item.product_code || '-'} ${item.product_name || '-'}`).join('、') || '无其他子件' }}</div><div :class="productionLabelPlanClass(row)" style="display:block;margin-top:5px">{{ productionLabelPlanText(row) }}</div><div v-if="row.fulfillment_reminders?.length" class="status orange" style="display:block;margin-top:6px;white-space:normal"><strong>客户回单交代</strong><div v-for="reminder in row.fulfillment_reminders" :key="reminder.id" style="overflow-wrap:anywhere">{{ reminder.content }}<span class="muted">｜{{ reminder.scope_type==='product' ? (reminder.product_code || '指定常用箱') : '该客户' }}｜{{ reminder.source_delivery_number || '-' }}</span></div></div></div></td>
 	                    <td style="white-space:normal"><div class="production-quantity-summary"><div>订单 <strong>{{ row.order_quantity ?? 0 }}</strong>{{ productionOutputUnit(row) }}｜已到纸板 <strong>{{ row.material_received_quantity ?? 0 }}</strong>张</div><div>本次做 <strong>{{ row.planned_output_quantity ?? 0 }}</strong>{{ productionOutputUnit(row) }}<span v-if="productionCuttingModeLabel(row)" class="muted">｜{{ productionCuttingModeLabel(row) }}</span></div><div v-if="row.receipt_purpose_managed" class="status blue" style="display:block;margin-top:5px">已自动形成 {{ row.actual_output_quantity ?? 0 }}{{ productionOutputUnit(row) }}</div></div></td>
 	                    <td style="white-space:normal"><div v-if="row?.completion_actionable === false" class="status blue" style="display:block;white-space:normal">{{ row.completion_block_message || '该任务由收料用途自动推进，不能手工重复完工。' }}</div><template v-else><div class="production-input-line"><label class="muted">用纸板</label><input class="input" type="number" min="1" v-model.number="row.actual_input_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">张</span></div><div class="production-input-line"><label class="muted">做成品</label><input class="input" type="number" min="1" v-model.number="row.actual_output_quantity" @input="syncProductionQuantities(row)" /><span class="production-input-unit">{{ productionOutputUnit(row) }}｜损耗 {{ productionDefectiveQuantity(row) }}</span></div></template></td>
@@ -5001,7 +5001,7 @@
                     <td><div class="history-two-lines" :title="productionProductTitle(row)"><strong class="history-line"><span v-if="row.origin==='bom_assembly'">成套｜</span><span v-else-if="row.is_component_task">组件｜</span>{{ row.product_code || '-' }}</strong><span class="history-line">{{ row.product_name || '-' }}</span></div><details v-if="row.assembly_inputs?.length"><summary>组套来源</summary><div v-for="part in row.assembly_inputs" :key="part.lot_id" style="white-space:normal">{{part.product_name}} · 投入{{part.quantity}} · 余{{part.remaining_quantity}}<small class="muted" style="display:block">{{part.lot_number}}</small></div></details></td>
                     <td><div class="history-two-lines"><div class="history-line"><template v-if="row._actual_editing"><div class="history-inline-edit"><span>实际</span><input class="input" type="number" min="1" step="1" v-model.number="row._actual_draft" :disabled="productionBusy" @keydown.enter.prevent="modifyProductionActualQuantity(row)" @keydown.esc.prevent="cancelProductionActualQuantityEdit(row)"><button class="btn small success" :disabled="productionBusy" @click="modifyProductionActualQuantity(row)">保存</button><button class="btn small" :disabled="productionBusy" @click="cancelProductionActualQuantityEdit(row)">取消</button></div></template><template v-else><strong>实际 {{ row.actual_output_quantity ?? row.quantity ?? 0 }}{{row.output_unit||''}}</strong><button v-if="['admin','boss'].includes(user?.role) && !row.is_fully_delivered && row.can_adjust_actual_quantity" class="btn small warning" :disabled="productionBusy" @click="beginProductionActualQuantityEdit(row)">修改</button></template></div><span class="history-line muted">理论 {{ row.planned_output_quantity ?? 0 }}{{row.output_unit||''}}</span></div></td>
                     <td><div class="history-two-lines"><span v-if="row.status==='reversed'" class="history-line status orange">已撤销</span><span v-else-if="row.is_fully_delivered" class="history-line history-delivered">已送完</span><button v-else-if="productionCurrentLocationClickable(row)" class="history-link" type="button" :title="row.current_warehouse_location_name || ''" @click="openProductionInventory(row)">{{ row.current_warehouse_location_name || '位置名称待完善' }}</button><strong v-else-if="row.current_inventory_status==='located'" class="history-line">{{ row.current_warehouse_location_name || '位置名称待完善' }}</strong><span v-else class="history-line muted">{{ row.inventory_usage_label || '暂无当前库存' }}</span><span v-if="row.inventory_usage_label && row.current_inventory_quantity>0" class="history-line muted">{{row.inventory_usage_label}} {{row.current_inventory_quantity}}</span><span v-if="row.status==='reversed'" class="history-line muted">{{ row.reversal_reason || '管理员撤销生产确认' }}</span><span v-else-if="!row.is_fully_delivered && (row.current_warehouse_location_map_issue || row.current_location_issue)" class="history-line status orange" :title="row.current_warehouse_location_map_issue || row.current_location_issue">{{ row.current_warehouse_location_map_issue || row.current_location_issue }}</span></div></td>
-                    <td class="production-history-actions"><button v-if="['stock_preparation','stock_assembly'].includes(row.origin)" class="btn small" :disabled="productionBusy" @click="row.origin==='stock_assembly'?openStockDialog({entry_type:'assembled_stock',assembly:row.assembly}):openPreparationHistory(row)">记录</button><info-note v-if="['stock_preparation','stock_assembly'].includes(row.origin) && row.reversal_block">{{row.reversal_block}}</info-note><button v-if="user?.role==='admin' && !row.is_fully_delivered && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销</button><span v-else class="muted">-</span></td>
+                    <td class="production-history-actions"><button v-if="row.task_id" type="button" class="btn small" :disabled="productionBusy" @click="openProductionDrawingAdoption({...row,id:row.task_id})">图纸记录</button><button v-if="['stock_preparation','stock_assembly'].includes(row.origin)" class="btn small" :disabled="productionBusy" @click="row.origin==='stock_assembly'?openStockDialog({entry_type:'assembled_stock',assembly:row.assembly}):openPreparationHistory(row)">记录</button><info-note v-if="['stock_preparation','stock_assembly'].includes(row.origin) && row.reversal_block">{{row.reversal_block}}</info-note><button v-if="user?.role==='admin' && !row.is_fully_delivered && row.can_revert" class="btn small danger" :disabled="productionBusy" @click="revertProductionCompletion(row)">撤销</button><span v-else class="muted">-</span></td>
                   </tr></tbody>
                   </table>
                 </data-panel>
@@ -6751,9 +6751,9 @@
               </div>
 
               <div v-if="productForm.supply_mode!=='external_purchase' && productForm.box_style!=='BOM组合'" class="product-form-row product-size-report-row" :class="productSizeReportRowClass(productForm.box_style)">
-                <div v-if="productRequiresDimension(productForm.box_style,'length_mm')" class="field product-dimension-field"><label>长(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.length_mm" /></div>
-                <div v-if="productRequiresDimension(productForm.box_style,'width_mm')" class="field product-dimension-field"><label>宽(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.width_mm" /></div>
-                <div v-if="productRequiresDimension(productForm.box_style,'height_mm')" class="field product-dimension-field"><label>高(mm)</label><input class="input" type="number" min="0" step="1" v-model.number="productForm.height_mm" /></div>
+                <div v-if="productRequiresDimension(productForm.box_style,'length_mm')" class="field product-dimension-field"><label>长(mm)</label><input class="input" type="number" min="0" step="0.01" v-model.number="productForm.length_mm" /></div>
+                <div v-if="productRequiresDimension(productForm.box_style,'width_mm')" class="field product-dimension-field"><label>宽(mm)</label><input class="input" type="number" min="0" step="0.01" v-model.number="productForm.width_mm" /></div>
+                <div v-if="productRequiresDimension(productForm.box_style,'height_mm')" class="field product-dimension-field"><label>高(mm)</label><input class="input" type="number" min="0" step="0.01" v-model.number="productForm.height_mm" /></div>
                 <div class="field product-splice-field" v-if="usesProductSplice(productForm.box_style)"><label>拼箱方式</label>
                   <select class="select" v-model="productForm.splice_mode">
                     <option v-for="mode in productSupportedSpliceModes(productForm.box_style)" :key="mode" :value="mode">{{ mode === 'double' ? '双拼' : '单拼' }}</option>
@@ -7111,6 +7111,32 @@
                   <div v-if="receiptStorage.message" role="status">{{ receiptStorage.message }}</div>
                 </div>
               </details>
+              <section v-if="productForm.id" class="panel" style="margin:10px 0">
+                <fieldset :disabled="drawingV2.busy || drawingV2.reading" style="border:0;padding:0">
+                <h4>图纸 V2｜结构与发布</h4>
+                <p class="muted">结构尺寸在本常用箱页维护；保存产品后再保存图纸草稿。发布版固定供新任务使用。</p>
+                <p class="muted">结构尺寸修改后，请核对现有模具是否仍适用；刀高、桥位等由刀模师傅确认。</p>
+                <button type="button" class="btn small" @click="loadDrawingV2">读取图纸</button>
+                <div v-if="drawingV2.error" class="notice warning">{{ drawingV2.error }}</div><div v-if="drawingV2.publication_outdated" class="notice warning">图纸规则已更新，请保存草稿并核对预览后发布新版；旧任务继续使用原版。</div>
+                <div v-if="drawingV2.geometry_error" class="notice warning">工程资料待补：{{ drawingV2.geometry_error }}。草稿已保留，不能发布。</div>
+                <div v-if="drawingV2.editing_enabled===false" class="notice warning">图纸V2新建、编辑及采用已停用；历史发布版仍可查看和重印</div>
+                <fieldset :disabled="drawingV2.editing_enabled===false || !canEditProducts" style="border:0;padding:0">
+                <div class="field"><label>结构模板</label><select class="select" v-model="drawingV2.template_key" @change="changeDrawingV2Template" :disabled="!canEditProducts"><option value="liner_v1">衬板</option><option value="slotted_v1">开槽箱</option><option value="custom_21301634_v1">客户定制系列</option></select></div>
+                <div v-for="field in drawingV2Fields()" :key="field.key" class="field" style="display:inline-block;width:145px;margin:3px"><label>{{ field.label }} (mm)</label><input class="input" type="number" min="0.01" step="0.01" v-model="drawingV2.parameters[field.key]" :disabled="!canEditProducts" /></div>
+                <p v-if="drawingV2.template_key==='custom_21301634_v1'" class="muted">中间板面取产品长宽；摇盖初值为产品宽的一半，左右折边初值取模切后箱高。另一向箱高单独填写，例如26/28中的28；侧翼宽度按实际填写。所有分段可修改，不按纸厚自动补差。<button v-if="canEditProducts" type="button" class="btn small" @click="suggestDrawingV2Parameters">按长宽高补齐初值（保留已填）</button></p>
+                <p v-if="drawingV2.template_key==='slotted_v1'" class="muted">仅适用于单片 A1/0201 开槽箱；槽宽按实际填写，净展开与报料口径独立。<button v-if="canEditProducts" type="button" class="btn small" @click="suggestDrawingV2Parameters">按产品尺寸补齐初值（保留已填）</button></p>
+                <div class="field"><label>客户图号（可空）</label><input class="input" v-model="drawingV2.customer_number" :disabled="!canEditProducts" /></div>
+                <div class="field"><label>客户原版次（如有则原样填写，可独立于图号）</label><input class="input" v-model="drawingV2.customer_revision" :disabled="!canEditProducts" /></div>
+                <div class="field"><label>纸厚 mm</label><input class="input" type="number" min="0.01" step="0.01" v-model="drawingV2.thickness_mm" :disabled="!canEditProducts" /></div>
+                <div class="field"><label>纸厚来源</label><input class="input" v-model.trim="drawingV2.thickness_source" :disabled="!canEditProducts" /></div>
+                <label><input type="checkbox" v-model="drawingV2.thickness_approximate" :disabled="!canEditProducts" />约数</label>
+                <div><button v-if="canEditProducts" type="button" class="btn" @click="saveDrawingV2">保存图纸草稿</button><button v-if="drawingV2.version" type="button" class="btn" @click="drawingV2.printEditorOpen=!drawingV2.printEditorOpen">编辑关联印刷</button><button v-if="canEditProducts && drawingV2.version" :disabled="!drawingV2.geometry_ready" type="button" class="btn primary" @click="publishDrawingV2">发布图纸</button></div>
+                <div v-if="drawingV2.printEditorOpen"><h4>关联印刷编辑器</h4><p class="muted">上传 PNG/JPEG/WebP 印刷原件，或选择现有附件。新原件保留透明度与原始字节；旧附件可能已压缩。尺寸按所选图片范围填写，距边按旋转后的外框计算；白底不会自动识别为留白。文字使用系统固定字体，宽高按整段可见字形范围填写；客户指定字样请使用已确认的原件图片。</p><label class="btn small">上传印刷原件<input type="file" accept=".png,.jpg,.jpeg,.webp" @change="uploadDrawingV2Original($event)" style="display:none" /></label><div v-for="(obj,i) in drawingV2.print_objects" :key="i" class="product-form-row"><select class="select" v-model="obj.kind"><option value="text">文字</option><option value="image">图片/Logo</option></select><textarea v-if="obj.kind==='text'" class="input" v-model="obj.text" rows="2" maxlength="200" placeholder="文字内容（可换行）"></textarea><select v-else class="select" v-model.number="obj.source_drawing_id" @change="inspectDrawingV2Asset(obj)"><option :value="null">选择图片附件</option><option v-for="drawing in (productForm.drawings || []).filter(x=>/\.(png|jpe?g|webp)$/i.test(x.image_path || ''))" :key="drawing.id" :value="drawing.id">{{ drawingDisplayName(drawing) }}</option></select><template v-if="obj.kind==='image'"><select class="select" v-model="obj.image_bounds" @change="changeDrawingV2ImageBounds(obj)"><option value="canvas">整张图片画布（含留白）</option><option value="alpha">去掉透明留白</option></select><button type="button" class="btn small" @click="inspectDrawingV2Asset(obj)">查看图片范围</button><span v-if="obj._asset_info" class="muted">画布 {{ obj._asset_info.canvas_pixels.join('×') }} px；透明范围 {{ obj._asset_info.alpha_bounds_pixels.join(',') }}。{{ obj._asset_info.original_preserved ? '本次上传原件已保留' : '现有附件，原始精度待核对' }}</span><label><input type="checkbox" v-model="obj.size_confirmed" />已核对所选范围的实际印刷宽高（照片须有尺度依据）</label></template><select class="select" v-model="obj.panel_id"><option v-if="!drawingV2PanelOptions().some(p=>p.id===obj.panel_id)" :value="obj.panel_id" disabled>请重新指定面板</option><option v-for="panel in drawingV2PanelOptions()" :key="panel.id" :value="panel.id">{{ drawingV2PanelName(panel.id) }}<template v-if="panel.width">（{{ panel.width }}×{{ panel.height }}mm）</template></option></select><select class="select" v-model="obj.display_unit"><option value="mm">mm</option><option value="cm">cm</option></select><input class="input" type="number" step="0.01" :value="drawingV2Display(obj,'width_mm')" @input="drawingV2Input(obj,'width_mm',$event.target.value)" :placeholder="'宽 '+(obj.display_unit || 'mm')"/><input class="input" type="number" step="0.01" :value="drawingV2Display(obj,'height_mm')" @input="drawingV2Input(obj,'height_mm',$event.target.value)" :placeholder="'高 '+(obj.display_unit || 'mm')"/><input class="input" type="number" step="0.01" :value="drawingV2Display(obj,'x_mm')" @input="drawingV2Input(obj,'x_mm',$event.target.value)" :placeholder="'距左 '+(obj.display_unit || 'mm')"/><input class="input" type="number" step="0.01" :value="drawingV2Display(obj,'y_mm')" @input="drawingV2Input(obj,'y_mm',$event.target.value)" :placeholder="'距上 '+(obj.display_unit || 'mm')"/><input class="input" type="number" step="1" v-model="obj.rotation_deg" placeholder="方向 °"/><button class="btn small danger" @click="drawingV2.print_objects.splice(i,1)">删除</button></div><button class="btn small" @click="drawingV2.print_objects.push({kind:'text',text:'',panel_id:(drawingV2PanelOptions()[0]?.id || 'center'),display_unit:'mm',x_mm:0,y_mm:0,width_mm:10,height_mm:10,rotation_deg:0})">添加印刷对象</button><button class="btn" @click="saveDrawingV2">保存印刷</button></div>
+                </fieldset>
+                <div v-if="drawingV2.version && drawingV2.geometry_ready"><img :src="`/api/master/products/${productForm.id}/managed-drawing/preview.svg?v=${drawingV2.version}`" alt="图纸草稿预览" style="max-width:100%;max-height:260px" /></div>
+                <div v-for="release in drawingV2.releases" :key="release.id"><a :href="`/api/master/products/${productForm.id}/managed-drawing/releases/${release.id}/file`" target="_blank">{{ release.number }} {{ release.revision }}｜工程 PDF</a></div>
+                </fieldset>
+              </section>
               <details class="product-secondary-disclosure" :open="productForm.box_style==='BOM组合'">
               <summary>组合 BOM</summary>
               <div v-if="bomEditor.enabled && bomEditor.inventory_mode==='assembled' && canManageFinanceCosts" style="margin:8px 0">
@@ -9389,6 +9415,26 @@
                 <div class="muted" style="margin-top:6px">24 小时内有效，仅可操作当前天华草稿。</div>
               </div>
             </div>
+            <div v-else-if="modal.type === 'productionDrawingAdoption'">
+              <p>任务 #{{ productionDrawingAdoption.taskId }}｜{{ productionDrawingAdoption.title }}</p>
+              <p>任务按明确采用的发布版生产；常用箱的新草稿和新附件不会自动替换这里的版本。</p>
+              <div v-if="productionDrawingAdoption.error" class="notice warning" style="white-space:normal">{{ productionDrawingAdoption.error }}</div>
+              <div v-if="productionDrawingAdoption.loading" class="muted">正在读取任务图纸版本…</div>
+              <template v-else-if="productionDrawingAdoption.data">
+                <p><strong>当前采用：</strong>{{ productionDrawingReleaseText(productionDrawingAdoption.data.current_release) }}</p>
+                <div v-if="!productionDrawingAdoption.data.can_adopt" class="notice warning">{{ productionDrawingAdoption.data.block_reason || '当前任务不能改用图纸版本' }}</div>
+                <fieldset :disabled="productionDrawingAdoption.busy || !!productionDrawingAdoption.pending || !canProductionExecute || !productionDrawingAdoption.data.can_adopt" style="border:0;padding:0">
+                  <div class="field"><label>明确选择要采用的发布版</label><select class="select" v-model.number="productionDrawingAdoption.releaseId" @change="productionDrawingAdoption.confirmed=false"><option :value="null">请选择发布版本</option><option v-for="release in productionDrawingAdoption.data.candidates" :key="release.id" :value="release.id">{{ productionDrawingReleaseText(release) }}</option></select></div>
+                  <label style="display:block;margin:12px 0"><input type="checkbox" v-model="productionDrawingAdoption.confirmed" /> {{ productionDrawingAdoption.data.confirmation_text }}</label>
+                </fieldset>
+                <p v-if="productionDrawingAdoption.pending" class="notice warning">上次请求结果尚未确认：目标发布版本 #{{ productionDrawingAdoption.pending.payload.release_id }}，原任务版本 {{ productionDrawingAdoption.pending.payload.expected_task_version }}。将使用相同请求核对并重试，确认前不能换选版本。</p>
+                <div class="toolbar"><button v-if="canProductionExecute" type="button" class="btn primary" :disabled="productionDrawingAdoption.busy || (!productionDrawingAdoption.pending && (!productionDrawingAdoption.data.can_adopt || !productionDrawingAdoption.releaseId || !productionDrawingAdoption.confirmed))" @click="saveProductionDrawingAdoption">{{ productionDrawingAdoption.busy ? '正在核对…' : (productionDrawingAdoption.pending ? '核对并重试同一请求' : '确认采用所选发布版') }}</button><button type="button" class="btn" :disabled="productionDrawingAdoption.busy" @click="loadProductionDrawingAdoption">重新读取</button></div>
+                <h4>采用记录</h4>
+                <p v-if="!(productionDrawingAdoption.data.history || []).length" class="muted">暂无人工采用记录</p>
+                <div v-for="entry in productionDrawingAdoption.data.history" :key="entry.id" style="margin-bottom:8px;overflow-wrap:anywhere">{{ productionDrawingHistoryText(entry) }}</div>
+              </template>
+            </div>
+
             <div v-else-if="modal.type === 'productionLabelMaintenance'">
               <div class="status blue" style="display:block;white-space:normal;margin-bottom:10px">这里只维护任务冻结的包装标签计划，不提供完工输入。生产数量、材料状态、库存和送货不会因这里的操作改变。</div>
               <section v-if="productionPendingLabelMaintenanceRows().length" style="margin-bottom:16px">
@@ -10613,6 +10659,7 @@
             productionPlacementFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionActualAdjustmentAttempts: {}, productionLabelRefreshAttempts: {},
             receiptStorage: {product_id:null,locations:[],loading:false,saving:false,message:'',floor:null,area_id:null,location_id:null,version:0},
+            productionDrawingAdoption: {taskId:null,loading:false,busy:false,error:'',data:null,releaseId:null,confirmed:false,pending:null}, productionDrawingAdoptionAttempts: {},
             productFormSnapshot: null, productBomSnapshot: null,
             productEditReturnContext: null,
             productMaterialContext: { product_id:null, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" },
@@ -10784,6 +10831,7 @@
             customerFinishedStorageDraft: {floor_id:null,area_id:null},
             customerQuotePreferenceOptionsLoading: false, customerQuotePreferenceOptionsError: "",
             customerQuotePreferenceDraft: { box_type:"", layer_count:null, flute_type:"", supplier_name:"", material_id:null, tax_included_square_price:"", is_active:true }, productForm: blankProduct(),
+            drawingV2: {template_key:'liner_v1',parameters:{},print_objects:[],paper_color:'white',thickness_mm:null,thickness_source:'',thickness_approximate:false,customer_number:'',customer_revision:'',version:null,releases:[],printEditorOpen:false,error:''},
             quickStockPolicyForm: { id:null, product_id:null, customer_name:"", product_code:"", product_name:"", available_quantity:0, allocatable_available_quantity:0, reserved_quantity:0, warning_quantity:0, target_quantity:1 },
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), requisition_strategy:"normal", remark: "", items: [] },
@@ -12836,7 +12884,6 @@
             delete payload.manual_modified_at;
             if (!payload.customer_material_code) payload.customer_material_code = payload.product_code;
             [
-              "length_mm", "width_mm", "height_mm",
               "pieces_per_box", "flap_mm",
               "report_length_mm", "report_width_mm",
               "crease_left_mm", "crease_middle_mm", "crease_right_mm",
@@ -12849,6 +12896,7 @@
               }
             });
             [
+              "length_mm", "width_mm", "height_mm",
               "plate_alignment_value_mm", "plate_mount_value_mm",
               "machine_set_length_mm", "machine_set_width_mm", "machine_set_height_mm",
             ].forEach(key => {
@@ -13415,8 +13463,11 @@
             return `${layer ? layer + "层" : "?"} / ${flute || "?"}`;
           },
           // 产品列表「图纸」单元格：有图纸/无图纸
+          engineeringDrawings(drawings) {
+            return (Array.isArray(drawings) ? drawings : []).filter(drawing => drawing && drawing.purpose !== 'print_artwork');
+          },
           productDrawingText(row) {
-            const has = (row.drawings && row.drawings.length) || row.current_drawing_version || row.drawing_version;
+            const has = this.engineeringDrawings(row.drawings).length || row.current_drawing_version || row.drawing_version;
             return has ? "有图纸" : "无图纸";
           },
           plainProductText(value) { return String(value || "-").trim() || "-"; },
@@ -15941,6 +15992,8 @@
             this.productionWaitingLabelError = "";
             this.productionLabelMaintenanceScrollY = 0;
             this.productionLabelRefreshAttempts = {};
+            this.productionDrawingAdoption = {taskId:null,loading:false,busy:false,error:'',data:null,releaseId:null,confirmed:false,pending:null};
+            this.productionDrawingAdoptionAttempts = {};
             this.pages.productionWaitingLabels = 1;
             for (const timer of searchDebounceTimers.values()) clearTimeout(timer);
             searchDebounceTimers.clear();
@@ -19978,6 +20031,80 @@
             ]);
             return historyResult;
           },
+          // BEGIN DRAWING_ADOPTION_METHODS
+          productionDrawingReleaseText(release) {
+            return release ? `${release.number}｜版次 ${release.revision}｜发布版本 #${release.id}` : '沿用旧附件（尚未接管）';
+          },
+          productionDrawingHistoryText(entry) {
+            const releases = this.productionDrawingAdoption.data?.candidates || [];
+            const describe = id => id ? this.productionDrawingReleaseText(releases.find(row => Number(row.id) === Number(id)) || {id,number:'图纸',revision:'见原发布记录'}) : '旧附件';
+            return `${this.formatDateTime(entry.adopted_at)}｜操作人 #${entry.adopted_by ?? '-'}｜${describe(entry.old_release_id)} → ${describe(entry.new_release_id)}｜任务版本 ${entry.expected_task_version} → ${entry.resulting_task_version}`;
+          },
+          async openProductionDrawingAdoption(row) {
+            const taskId = Number(row?.id);
+            if (!Number.isInteger(taskId) || taskId <= 0 || this.productionBusy) return false;
+            const pending = this.productionDrawingAdoptionAttempts[taskId] || null;
+            this.productionDrawingAdoption = {taskId,title:`${row.item_order_number || row.order_number || ''} ${row.product_code || ''}`,loading:false,busy:false,error:'',data:null,releaseId:null,confirmed:false,pending};
+            this.modal = {type:'productionDrawingAdoption',title:'任务图纸版本 / 采用记录'};
+            return this.loadProductionDrawingAdoption();
+          },
+          async loadProductionDrawingAdoption({internal=false} = {}) {
+            const d = this.productionDrawingAdoption, auth = this.authGeneration, actor = this.user?.id;
+            if (!d.taskId || (d.busy && !internal)) return false;
+            const sequence = (d.loadSequence || 0)+1;
+            d.loadSequence=sequence; d.loading=true; d.error='';
+            if (!d.pending) { d.releaseId=null; d.confirmed=false; }
+            const current = () => this.productionDrawingAdoption === d && this.modal?.type === 'productionDrawingAdoption' && this.authGeneration === auth && this.user?.id === actor && d.loadSequence === sequence;
+            try {
+              const {data} = await axios.get(`/api/production/tasks/${d.taskId}/drawing-adoptions`);
+              if (!current()) return false;
+              if (Number(data.task_id) !== d.taskId || !Number.isInteger(Number(data.task_version)) || Number(data.task_version) <= 0) throw new Error('任务版本返回不完整，请重新读取');
+              d.data=data;
+              return true;
+            } catch(error) { if (current()) { d.error=this.errorMessage(error); d.data=null; } return false; }
+            finally { if (current()) d.loading=false; }
+          },
+          async saveProductionDrawingAdoption() {
+            const d=this.productionDrawingAdoption, auth=this.authGeneration, actor=this.user?.id;
+            if (!this.canProductionExecute || d.busy || d.loading || !d.data) return false;
+            if (!d.pending) {
+              const releaseId=Number(d.releaseId);
+              if (!d.data.can_adopt || !d.confirmed || !Number.isInteger(releaseId) || releaseId<=0 || !(d.data.candidates || []).some(row=>Number(row.id)===releaseId)) { d.error='请明确选择发布版本并勾选尚未下发确认'; return false; }
+              if (Number(d.data.current_release?.id)===releaseId) { d.error='任务已采用该发布版，请选择其他版本'; return false; }
+              d.pending={payload:{release_id:releaseId,expected_task_version:Number(d.data.task_version),idempotency_key:createIdempotencyKey(),confirmed_not_issued:true}};
+              this.productionDrawingAdoptionAttempts[d.taskId]=d.pending;
+            }
+            const attempt=d.pending;
+            d.busy=true; d.error='';
+            const current = () => this.productionDrawingAdoption===d && this.modal?.type==='productionDrawingAdoption' && this.authGeneration===auth && this.user?.id===actor;
+            try {
+              const {data}=await axios.post(`/api/production/tasks/${d.taskId}/drawing-adoptions`,JSON.parse(JSON.stringify(attempt.payload)));
+              if (this.authGeneration!==auth || this.user?.id!==actor) return false;
+              delete this.productionDrawingAdoptionAttempts[d.taskId];
+              if (!current()) return true;
+              d.pending=null; d.releaseId=null; d.confirmed=false;
+              const refreshed=await this.loadProductionDrawingAdoption({internal:true});
+              // Only the API-confirmed metadata version changes locally; production inputs stay intact.
+              for (const rows of [this.productionPending || [], this.productionWaitingLabels || []]) {
+                const row=rows.find(item=>Number(item.id)===d.taskId);
+                if (row && Number(row.version)===Number(attempt.payload.expected_task_version)) row.version=Number(data.task_version);
+              }
+              this.showToast(refreshed ? (data.replayed ? '已核对原请求；任务图纸版本已采用' : '任务已明确采用所选发布版') : '图纸版本已采用，记录读取失败，请重新读取',!refreshed);
+              return true;
+            } catch(error) {
+              if (!current()) return false;
+              const status=Number(error?.response?.status || 0);
+              const sameRequest=error?.response?.headers?.['x-drawing-adoption-retry']==='same-request';
+              if (status>=400 && status<500 && !sameRequest) {
+                delete this.productionDrawingAdoptionAttempts[d.taskId];
+                d.pending=null; d.releaseId=null; d.confirmed=false;
+                if (status===409) await this.loadProductionDrawingAdoption({internal:true});
+              }
+              d.error=this.errorMessage(error)+(status===409 && !sameRequest ? '；已重新读取，请重新选择并核对确认。' : (d.pending ? '；请求结果未确认，请核对并重试同一请求。' : ''));
+              return false;
+            } finally { d.busy=false; }
+          },
+          // END DRAWING_ADOPTION_METHODS
           async openProductionLabelMaintenance() {
             if (!this.productionLabelMaintenanceEntryVisible()) return false;
             this.productionLabelMaintenanceScrollY = Number(window.scrollY || document.documentElement?.scrollTop || 0);
@@ -27599,6 +27726,143 @@
               this.externalComponentEditor.saving = false;
             }
           },
+          async uploadDrawingV2Original(event) {
+            const file=event.target.files?.[0], d=this.drawingV2, productId=this.productForm.id;
+            if (!this.canEditProducts || d.editing_enabled===false) return;
+            if (!file || d.busy || d.reading) return;
+            d.busy=true;
+            try {
+              const form=new FormData(); form.append('file',file);
+              const {data}=await axios.post(`/api/master/products/${productId}/managed-drawing/assets`,form);
+              if (this.productForm.id!==productId || this.drawingV2!==d) return;
+              this.productForm.drawings=[data,...(this.productForm.drawings || [])];
+              d.error='原件已上传，请选择图片并核对实际印刷尺寸。';
+            } catch(error) { if (this.drawingV2===d) d.error=this.errorMessage(error); }
+            finally { d.busy=false; event.target.value=''; }
+          },
+          async inspectDrawingV2Asset(obj) {
+            obj.size_confirmed=false;
+            const d=this.drawingV2, productId=this.productForm.id, sourceId=obj.source_drawing_id;
+            if (!sourceId) return;
+            try {
+              const {data}=await axios.get(`/api/master/products/${productId}/managed-drawing/assets/${sourceId}`);
+              if (this.drawingV2!==d || this.productForm.id!==productId || obj.source_drawing_id!==sourceId) return;
+              obj._asset_info=data;
+              if (!obj.image_bounds) obj.image_bounds='canvas';
+              this.changeDrawingV2ImageBounds(obj);
+            } catch(error) { if (this.drawingV2===d) d.error=this.errorMessage(error); }
+          },
+          changeDrawingV2ImageBounds(obj) {
+            obj.size_confirmed=false;
+            const info=obj._asset_info;
+            if (!info || !Number(obj.width_mm)) return;
+            const b=info.alpha_bounds_pixels;
+            const [w,h]=obj.image_bounds==='alpha' ? [b[2]-b[0],b[3]-b[1]] : info.canvas_pixels;
+            obj.height_mm=Math.round(Number(obj.width_mm)*h/w*100)/100;
+          },
+          async changeDrawingV2Template() {
+            const d=this.drawingV2;
+            d.geometry_ready=false;
+            d.geometry_error='模板已变更，请重新核对结构尺寸及印刷面板后保存';
+            d.panels=[];
+            await this.suggestDrawingV2Parameters();
+          },
+          drawingV2PanelOptions() {
+            const d=this.drawingV2;
+            const ids=({liner_v1:['face'],slotted_v1:['panel_1','panel_2','panel_3','panel_4'],custom_21301634_v1:['center','top','bottom']})[d.template_key] || [];
+            return ids.map(id=>(d.panels || []).find(p=>p.id===id) || {id});
+          },
+          drawingV2PanelName(id) {
+            return ({center:'中间板面',face:'衬板',top:'上盖',bottom:'下盖',panel_1:'第1面',panel_2:'第2面',panel_3:'第3面',panel_4:'第4面'})[id] || id;
+          },
+          drawingV2Display(obj,key) {
+            return obj[key] == null ? '' : Number(obj[key]) / (obj.display_unit === 'cm' ? 10 : 1);
+          },
+          drawingV2Input(obj,key,value) {
+            if (key==='width_mm' || key==='height_mm') obj.size_confirmed=false;
+            obj[key] = value === '' ? null : Number((Number(value) * (obj.display_unit === 'cm' ? 10 : 1)).toFixed(2));
+          },
+          async suggestDrawingV2Parameters() {
+            const d = this.drawingV2, productId = this.productForm.id;
+            const templateKey=d.template_key;
+            if (!['custom_21301634_v1','slotted_v1'].includes(templateKey) || !productId || d.busy || d.editing_enabled===false) return;
+            if (JSON.stringify(this._productFormSaveFields()) !== this.productFormSnapshot) { d.error='请先保存产品长宽高，再计算分段初值'; return; }
+            d.busy=true;
+            try {
+              const {data} = await axios.get(`/api/master/products/${productId}/managed-drawing/parameter-suggestions`, {params:{template_key:templateKey}});
+              if (this.productForm.id !== productId || this.drawingV2 !== d || d.template_key!==templateKey) return;
+              if (Number(data.product_version) !== Number(this.productForm.version)) throw new Error('产品已变化，请重新打开常用箱');
+              for (const [key,value] of Object.entries(data.parameters)) {
+                if (d.parameters[key] == null || d.parameters[key] === '') d.parameters[key]=value;
+              }
+              d.error='';
+            } catch (error) { if (this.drawingV2 === d) d.error=this.errorMessage(error); }
+            finally { d.busy=false; }
+          },
+          drawingV2Fields() {
+            const fields = {
+              liner_v1: [],
+              custom_21301634_v1: [['top_cover_mm','上盖'],['bottom_cover_mm','下盖'],['top_fold_mm','另一向箱高（上）'],['bottom_fold_mm','另一向箱高（下）'],['left_fold_mm','箱高折边（左）'],['right_fold_mm','箱高折边（右）'],['left_wing_mm','左侧翼宽'],['right_wing_mm','右侧翼宽']],
+              slotted_v1: [['panel_1_mm','第1面'],['panel_2_mm','第2面'],['panel_3_mm','第3面'],['panel_4_mm','第4面'],['body_height_mm','箱身'],['top_flap_mm','上盖片'],['bottom_flap_mm','下盖片'],['glue_flap_mm','接头'],['slot_width_mm','槽宽']],
+            };
+            return (fields[this.drawingV2.template_key] || []).map(([key,label]) => ({key,label}));
+          },
+          async loadDrawingV2({internal=false} = {}) {
+            if (!this.productForm.id) return;
+            const productId = this.productForm.id, context = this.drawingV2;
+            if (context.busy && !internal) return false;
+            const sequence = context.loadSequence = (context.loadSequence || 0) + 1;
+            const signature = this.drawingV2Signature();
+            context.reading=true;
+            try {
+              const result = (await axios.get(`/api/master/products/${productId}/managed-drawing`)).data;
+              if (this.productForm.id !== productId || this.drawingV2 !== context || sequence !== context.loadSequence || signature !== this.drawingV2Signature()) return false;
+              if (result.draft) Object.assign(context,result.draft,{print_objects:result.draft.print_objects.map(o=>({...o,display_unit:'mm'})),releases:result.releases || [],error:''});
+              else Object.assign(context,{version:null,releases:result.releases || [],error:''});
+              Object.assign(context,{editing_enabled:result.editing_enabled!==false,publication_outdated:!!result.publication_outdated,geometry_ready:!!result.geometry_ready,geometry_error:result.geometry_error || '',panels:result.panels || []});
+              context.savedSignature = this.drawingV2Signature();
+              context.pendingSave = null;
+              context.pendingPublish = null;
+              return true;
+            } catch (error) { if (this.drawingV2 === context && sequence === context.loadSequence) context.error = this.errorMessage(error); return false; }
+            finally { if (sequence === context.loadSequence) context.reading=false; }
+          },
+          drawingV2Signature() {
+            const d = this.drawingV2;
+            return JSON.stringify({template_key:d.template_key,parameters:d.parameters,print_objects:d.print_objects.map(({display_unit,_asset_info,...obj})=>obj),paper_color:d.paper_color,thickness_mm:d.thickness_mm,thickness_source:d.thickness_source,thickness_approximate:d.thickness_approximate,customer_number:d.customer_number,customer_revision:d.customer_revision});
+          },
+          async saveDrawingV2() {
+            const d = this.drawingV2, productId = this.productForm.id;
+            if (!this.canEditProducts || d.busy || d.reading || d.editing_enabled===false) return;
+            if (JSON.stringify(this._productFormSaveFields()) !== this.productFormSnapshot) { d.error='请先保存上方常用箱资料，再保存图纸'; return; }
+            d.busy = true;
+            try {
+              const signature = this.drawingV2Signature();
+              if (d.pendingSave && d.pendingSave.signature !== signature) throw new Error('上次保存结果尚未确认，请先读取图纸核对再修改');
+              if (!d.pendingSave) d.pendingSave = {signature,payload:JSON.parse(JSON.stringify({idempotency_key:createIdempotencyKey(),expected_product_version:this.productForm.version,expected_design_version:d.version || null,template_key:d.template_key,parameters:Object.fromEntries(this.drawingV2Fields().map(f => [f.key,d.parameters[f.key] === '' ? null : d.parameters[f.key]])),print_objects:d.print_objects,paper_color:d.paper_color,thickness_mm:d.thickness_mm || null,thickness_source:d.thickness_source || null,thickness_approximate:d.thickness_approximate,customer_number:d.customer_number || null,customer_revision:d.customer_revision || null}))};
+              await axios.put(`/api/master/products/${productId}/managed-drawing`,d.pendingSave.payload);
+              d.pendingSave = null;
+              if (this.productForm.id !== productId || this.drawingV2 !== d) return;
+              if (!await this.loadDrawingV2({internal:true})) return;
+              this.showToast('图纸草稿已保存');
+            } catch (error) { if (error.response?.status >= 400 && error.response?.status < 500) d.pendingSave=null; d.error = this.errorMessage(error); }
+            finally { d.busy=false; }
+          },
+          async publishDrawingV2() {
+            const d = this.drawingV2, productId = this.productForm.id;
+            if (!this.canEditProducts || !d.version || d.busy || d.reading || d.editing_enabled===false) return;
+            if (this.drawingV2Signature() !== d.savedSignature || JSON.stringify(this._productFormSaveFields()) !== this.productFormSnapshot) { d.error='存在未保存的产品或图纸修改，请先保存并核对预览'; return; }
+            d.busy = true;
+            try {
+              if (!d.pendingPublish) d.pendingPublish = {expected_product_version:this.productForm.version,expected_design_version:d.version,idempotency_key:createIdempotencyKey()};
+              await axios.post(`/api/master/products/${productId}/managed-drawing/releases`,d.pendingPublish);
+              d.pendingPublish = null;
+              if (this.productForm.id !== productId || this.drawingV2 !== d) return;
+              if (!await this.loadDrawingV2({internal:true})) return;
+              this.showToast('图纸已发布');
+            } catch (error) { d.error = this.errorMessage(error); }
+            finally { d.busy=false; }
+          },
           async openProduct(row=null) {
             const requestKey = "product:editor";
             const controller = this.beginLatestRequest(requestKey);
@@ -27619,6 +27883,7 @@
                   drawings: [],
                 }
               );
+              this.drawingV2 = {template_key:'liner_v1',parameters:{},print_objects:[],paper_color:'white',thickness_mm:null,thickness_source:'',thickness_approximate:false,customer_number:'',customer_revision:'',version:null,releases:[],printEditorOpen:false,error:''};
               const openedId = Number(this.productForm.id || 0) || null;
               this.productMaterialContext = { product_id:openedId, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" };
               this.productMaterialActiveTab = "candidates";
@@ -27673,7 +27938,7 @@
             if (!productId) return;
             try {
               const { data } = await axios.get(`/api/master/products/${productId}`);
-              const drawing = data?.drawings?.[0];
+              const drawing = this.engineeringDrawings(data?.drawings)[0];
               if (!drawing?.image_path) {
                 this.showToast("该常用箱还没有产品图片或图纸", true);
                 return;
@@ -27908,8 +28173,13 @@
             }
           },
           normalizeProductDimensions(form) {
+            ["length_mm", "width_mm", "height_mm"].forEach(key => {
+              if (form[key] === null || form[key] === undefined || form[key] === "") return;
+              const value = Number(form[key]);
+              if (Number.isFinite(value)) form[key] = value;
+            });
             [
-              "length_mm", "width_mm", "height_mm", "flap_mm",
+              "flap_mm",
               "report_length_mm", "report_width_mm",
               "crease_left_mm", "crease_middle_mm", "crease_right_mm",
               "base_report_length_mm", "base_report_width_mm",
@@ -28328,8 +28598,9 @@
           },
           drawingDisplayName(drawing) {
             const stored = String(drawing?.file_name || drawing?.image_path || "").split("/").pop();
-            try { return decodeURIComponent(stored || "图纸文件"); }
-            catch (_) { return stored || "图纸文件"; }
+            const prefix = drawing?.purpose === 'print_artwork' ? '印刷原件｜' : '';
+            try { return prefix + decodeURIComponent(stored || "图纸文件"); }
+            catch (_) { return prefix + (stored || "图纸文件"); }
           },
           _productFormSaveFields() {
             const f = this.productForm;
@@ -30244,9 +30515,9 @@
           async requestBoxTypeRecommendation(form) {
             const payload = {
               box_style: this.normalizeBoxTypeDisplay(form.box_style),
-              length_mm: this.normalizeMmInteger(form.length_mm),
-              width_mm: this.normalizeMmInteger(form.width_mm),
-              height_mm: this.normalizeMmInteger(form.height_mm),
+              length_mm: form.length_mm === '' ? null : form.length_mm,
+              width_mm: form.width_mm === '' ? null : form.width_mm,
+              height_mm: form.height_mm === '' ? null : form.height_mm,
               splice_mode: form.splice_mode || "single",
               flap_mm: this.usesProductTongue(form.box_style)
                 ? this.normalizeMmInteger(form.flap_mm)
@@ -32086,7 +32357,7 @@
                 this.refreshPdfMaterialComparison(item, data);
                 item.product_manual_modified = !!data.manual_modified;
                 item.product_manual_modified_at = data.manual_modified_at || null;
-                item.product_drawing_file = data.drawings?.[0]?.image_path || null;
+                item.product_drawing_file = this.engineeringDrawings(data.drawings)[0]?.image_path || null;
                 item.supply_mode = data.supply_mode || "corrugated_production";
                 item.external_packaging_order_quantity_basis = data.external_packaging_default_order_quantity_basis ?? null;
                 item.external_packaging_purchase_quantity_basis = data.external_packaging_default_purchase_quantity_basis ?? null;
@@ -32977,7 +33248,7 @@
               _manual_modified: !!product.manual_modified, flute_type: product.flute_type || null,
               layer_count: product.layer_count || null, _material_code: product.material_code || "",
               _material_supplier_name: product.material_supplier_name || "", _material_weight: product.material_weight || "",
-              _product_drawings: product.drawings || [], drawing_file: null, temp_drawing_token: null,
+              _product_drawings: this.engineeringDrawings(product.drawings), drawing_file: null, temp_drawing_token: null,
               temp_drawing_preview_url: null, drawing_save_option: "order_only",
               client_line_id: createIdempotencyKey(), _inventory: this.newOrderInventoryState(),
               _inventory_product: product,
@@ -33157,7 +33428,7 @@
             item._material_code = data.material_code || "";
             item._material_supplier_name = data.material_supplier_name || "";
             item._material_weight = data.material_weight || "";
-            item._product_drawings = data.drawings || [];
+            item._product_drawings = this.engineeringDrawings(data.drawings);
             item._inventory_product = data;
             item.composite_fulfillment_mode_snapshot = data.is_composite
               ? (data.composite_fulfillment_mode || "component_delivery")
@@ -33211,7 +33482,7 @@
 	          previewOrderItemDrawing(item) {
 	            const path = item?.temp_drawing_preview_url
 	              || item?.drawing_file
-	              || item?._product_drawings?.[0]?.image_path
+	              || this.engineeringDrawings(item?._product_drawings)[0]?.image_path
 	              || "";
 	            this.previewDrawingFile(path);
 	          },
@@ -34006,7 +34277,7 @@
                 production_process:product.production_process || "",
                 print_content:product.print_content || "无印刷",
                 product_remark:product.remark || "",
-                drawing_file:itemSnapshot.drawing_file || itemSnapshot.product_drawing_file || product.drawings?.[0]?.image_path || null,
+                drawing_file:itemSnapshot.drawing_file || itemSnapshot.product_drawing_file || this.engineeringDrawings(product.drawings)[0]?.image_path || null,
                 product_version:product.version || null,
                 sync_product:false,
                 _product_error:"",

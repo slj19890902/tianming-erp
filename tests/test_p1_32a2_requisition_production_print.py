@@ -12,6 +12,75 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 
+@pytest.mark.parametrize('template', ['liner_v1', 'slotted_v1', 'custom_21301634_v1'])
+def test_managed_drawing_paper_keeps_bound_release(production_print_app, tmp_path, monkeypatch, template):
+    from app.api.drawing_design import DesignWrite, PublishWrite, PrintObject, save_design, publish_design
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+    from app.models.user import User
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+    from app.services.drawing_binding import bind_new_task_drawing
+    from app.services.requisition_production_print import build_supplier_requisition_production_package
+    monkeypatch.setenv('ERP_FILE_STORAGE_DIR', str(tmp_path / 'drawing-files'))
+    params = {'liner_v1': {}, 'slotted_v1': dict(panel_1_mm=300,panel_2_mm=200,panel_3_mm=300,
+              panel_4_mm=200,body_height_mm=400,top_flap_mm=100,bottom_flap_mm=100,glue_flap_mm=30,slot_width_mm=5),
+              'custom_21301634_v1': dict(top_cover_mm=308,bottom_cover_mm=308,top_fold_mm=28,bottom_fold_mm=28,
+              left_fold_mm=25,right_fold_mm=25,left_wing_mm=40,right_wing_mm=40)}[template]
+    panel = {'liner_v1': 'face', 'slotted_v1': 'panel_1', 'custom_21301634_v1': 'center'}[template]
+    with production_print_app['session_factory']() as db:
+        product = db.get(Product, production_print_app['product_id'])
+        if template == 'slotted_v1':
+            product.box_style, product.splice_mode, product.pieces_per_box = 'A1/0201', 'single', 1
+        user = db.scalar(select(User).where(User.role == 'admin'))
+        draft = DesignWrite(expected_product_version=product.version, template_key=template,
+                            parameters=params, thickness_mm=3, thickness_source='合成验证')
+        save_design(product.id, draft, db, user)
+        first = publish_design(product.id, PublishWrite(expected_product_version=product.version,
+                               expected_design_version=1, idempotency_key='paper-no-print-release'), db, user)
+        tasks = db.scalars(select(ProductionTask).order_by(ProductionTask.id)).all()
+        from app.models.order import OrderItem
+        # These synthetic tasks explicitly use the common product drawing.
+        # Order-only exceptions are covered separately and must never be masked.
+        for task in tasks[:2]:
+            db.get(OrderItem, task.order_item_id).drawing_file = None
+        db.flush()
+        bind_new_task_drawing(db, tasks[0], product, source_is_new=True)
+        db.commit()
+        draft.expected_design_version = 1
+        draft.print_objects = [PrintObject(kind='text', text='独立印刷', panel_id=panel,
+                                           x_mm=5,y_mm=5,width_mm=50,height_mm=20)]
+        save_design(product.id, draft, db, user)
+        second = publish_design(product.id, PublishWrite(expected_product_version=product.version,
+                                expected_design_version=2, idempotency_key='paper-with-print-release'), db, user)
+        bind_new_task_drawing(db, tasks[1], product, source_is_new=True)
+        db.commit()
+        supplier = db.get(SupplierRequisitionOrder, production_print_app['supplier_order_id'])
+        package = build_supplier_requisition_production_package(db, supplier)
+        drawings = [d for card in package['cards'] for d in card['managed_drawings']]
+        by_id = {d['release_id']: d for d in drawings}
+        assert not by_id[first['id']]['print_objects']
+        assert by_id[second['id']]['print_objects'][0]['text'] == '独立印刷'
+        assert by_id[first['id']]['svg_urls']['structure'].startswith('data:image/svg+xml;base64,')
+        assert by_id[first['id']]['svg_urls']['structure'] == by_id[first['id']]['svg_urls']['print']
+        assert by_id[second['id']]['svg_urls']['structure'] != by_id[second['id']]['svg_urls']['print']
+        from app.api.mobile_erp import mobile_production_task_drawing
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as not_ready:
+            mobile_production_task_drawing(tasks[0].id, db, user)
+        assert not_ready.value.status_code == 404  # Existing waiting-material gate remains.
+        tasks[0].status = 'pending'  # Isolated fixture now represents a ready task.
+        tasks[0].planned_quantity = 200
+        db.commit()
+        mobile_before = mobile_production_task_drawing(tasks[0].id, db, user)
+        assert Path(mobile_before.path).is_file()
+        product.length_mm = 888
+        db.commit()
+        reprint = build_supplier_requisition_production_package(db, supplier)
+        again = [d for card in reprint['cards'] for d in card['managed_drawings']]
+        assert again == drawings
+        assert mobile_production_task_drawing(tasks[0].id, db, user).path == mobile_before.path
+
+
 @pytest.fixture()
 def production_print_app(tmp_path: Path):
     import app.models  # noqa: F401

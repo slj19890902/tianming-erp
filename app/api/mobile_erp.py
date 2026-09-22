@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+import json
 import mimetypes
 from pathlib import PurePath
 import re
@@ -56,6 +57,7 @@ from app.services.production_workflow import (
     list_production_station_task_ids,
 )
 from app.services.box_type_rules import box_type_code
+from app.services.product_drawings import default_product_drawing, engineering_drawing_condition
 from app.services.order_status_policy import ORDER_ITEM_ACTIVE_ORDER_STATUSES
 from app.services.printing_colors import parse_printing_colors
 from app.services.product_specification import (
@@ -337,9 +339,23 @@ def _task_status_text(status: str) -> str:
     }.get(status, status or "状态未知")
 
 
-def _safe_production_task(task: dict, *, drawing_path: str | None) -> dict:
+def _safe_production_task(db: Session, task: dict, *, drawing_path: str | None, user: User) -> dict:
     """Expose workshop facts only; supplier material codes and prices stay private."""
 
+    from app.services.drawing_binding import bound_task_release
+    release = bound_task_release(db, int(task["id"]))
+    if release is not None:
+        drawing_path = (
+            f"/api/mobile/erp/production/tasks/{task['id']}/drawing"
+            if task.get("status") == "pending" and (
+                has_permission(user, "production.printing.view")
+                or has_permission(user, "production.die_cut.view")
+            ) else None
+        )
+        mold = db.get(MoldTool, release.mold_tool_id) if release.mold_tool_id else None
+        released_mold = json.loads(release.manifest_json).get("mold_snapshot") or {}
+        task = {**task, "mold_name": released_mold.get("name"),
+                "mold_location": mold.rack_location if mold else None}
     planned_output = max(int(task.get("planned_output_quantity") or 0), 0)
     receipt_purpose_managed = task.get("receipt_purpose_managed") is True
     parent_order_quantity = max(
@@ -476,7 +492,7 @@ def _production_station_task_payloads(
     if product_ids:
         for drawing in db.scalars(
             select(ProductDrawing)
-            .where(ProductDrawing.product_id.in_(product_ids))
+            .where(ProductDrawing.product_id.in_(product_ids), engineering_drawing_condition())
             .order_by(
                 ProductDrawing.product_id,
                 ProductDrawing.uploaded_at.desc(),
@@ -485,6 +501,8 @@ def _production_station_task_payloads(
         ).all():
             drawings.setdefault(int(drawing.product_id), drawing)
 
+    from app.services.drawing_binding import bound_task_release
+    releases = {int(task["id"]): bound_task_release(db, int(task["id"])) for task in tasks}
     mold_ids: set[int] = set()
     for task in tasks:
         product = products.get(int(task.get("product_id") or 0))
@@ -496,6 +514,9 @@ def _production_station_task_payloads(
             if product is not None
             else None
         )
+        release = releases[int(task["id"])]
+        if release is not None:
+            mold_id = release.mold_tool_id
         if mold_id is not None:
             mold_ids.add(int(mold_id))
     molds = (
@@ -519,8 +540,13 @@ def _production_station_task_payloads(
             if product is not None
             else None
         )
+        release = releases[int(task["id"])]
+        if release is not None:
+            mold_id = release.mold_tool_id
         mold = molds.get(int(mold_id or 0))
+        released_mold = (json.loads(release.manifest_json).get("mold_snapshot") or {}) if release else {}
         mold_code = (
+            released_mold.get("code") if release else
             component.snapshot_mold_tool_code
             if component is not None
             else mold.mold_code
@@ -528,6 +554,7 @@ def _production_station_task_payloads(
             else None
         )
         mold_name = (
+            released_mold.get("name") if release else
             mold.mold_name
             if mold is not None
             else component.snapshot_mold_tool_name
@@ -551,7 +578,9 @@ def _production_station_task_payloads(
                 drawing_reference = component.snapshot_die_cut_path
                 suffix = _drawing_suffix(drawing_reference)
                 drawing_kind = "pdf" if suffix == ".pdf" else "image"
-        if drawing_reference:
+        if release is not None:
+            drawing_kind = "pdf"
+        if drawing_reference or release is not None:
             drawing_url = f"/api/mobile/erp/production/tasks/{task['id']}/drawing"
 
         if component is not None:
@@ -1395,7 +1424,7 @@ def pending_incoming_production_detail(
         "stock_replenishment_item_id": route.get("stock_replenishment_item_id"),
         "incoming_item": incoming_item,
         "production_tasks": [
-            _safe_production_task(task, drawing_path=incoming_item.get("drawing_path"))
+            _safe_production_task(db, task, drawing_path=incoming_item.get("drawing_path"), user=user)
             for task in task_rows
         ],
         "message": (
@@ -1470,6 +1499,18 @@ def mobile_production_task_drawing(
     )
     if len(visible_rows) != 1:
         raise HTTPException(status_code=404, detail="生产任务不存在、已完成或无权查看")
+    from app.services.drawing_binding import bound_task_release
+    import hashlib
+    release = bound_task_release(db, task_id)
+    if release is not None:
+        import os
+        if not os.getenv("ERP_FILE_STORAGE_DIR"):
+            raise HTTPException(status_code=503, detail="图纸存储根未显式配置")
+        path = resolve_stored_reference(release.pdf_reference)
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != release.pdf_sha256:
+            raise HTTPException(status_code=503, detail="发布图纸缺失或校验失败")
+        return FileResponse(path, media_type="application/pdf",
+                            headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
     task_row = visible_rows[0]
     task = db.get(ProductionTask, task_id)
     item = db.get(OrderItem, int(task_row["order_item_id"]))
@@ -1487,7 +1528,7 @@ def mobile_production_task_drawing(
     else:
         drawing = db.scalar(
             select(ProductDrawing)
-            .where(ProductDrawing.product_id == int(task_row["product_id"]))
+            .where(ProductDrawing.product_id == int(task_row["product_id"]), engineering_drawing_condition())
             .order_by(ProductDrawing.uploaded_at.desc(), ProductDrawing.id.desc())
             .limit(1)
         ) if task_row.get("product_id") is not None else None
@@ -1653,8 +1694,10 @@ def recent_production_materials(
                 "drawing_is_pdf": row.get("drawing_is_pdf") is True,
                 "production_tasks": [
                     _safe_production_task(
+                        db,
                         task,
                         drawing_path=row.get("drawing_path"),
+                        user=user,
                     )
                     for task in linked_tasks
                 ],
@@ -1708,7 +1751,7 @@ def lookup_pending_production_tasks(
     items = []
     for lookup_row in lookup_rows:
         task = tasks_by_id[lookup_row["task_id"]]
-        safe_task = _safe_production_task(task, drawing_path=None)
+        safe_task = _safe_production_task(db, task, drawing_path=None, user=user)
         safe_task.update(
             {
                 "customer_name": task.get("customer_name"),
@@ -1875,7 +1918,7 @@ def product_production_overview(
     printing_location_allowed = has_permission(
         user, "warehouse.view"
     ) or has_permission(user, "production.printing.view")
-    latest_drawing = product.drawings[0] if product.drawings else None
+    latest_drawing = default_product_drawing(product.drawings)
     material_code = (
         product.default_material_code
         or (product.material.code if product.material is not None else None)
@@ -1988,11 +2031,8 @@ def product_production_drawing(
         product_id=product_id,
         visible_customer_ids=_visible_customer_ids(user, db),
     )
-    reference = (
-        product.drawings[0].image_path
-        if product.drawings
-        else product.die_cut_path
-    )
+    latest_drawing = default_product_drawing(product.drawings)
+    reference = latest_drawing.image_path if latest_drawing else product.die_cut_path
     if not reference:
         raise HTTPException(status_code=404, detail="当前产品没有可查看的图纸")
     try:

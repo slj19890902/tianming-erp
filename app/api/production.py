@@ -60,6 +60,8 @@ from app.services.warehouse_inventory import WarehouseInventoryError
 
 
 router = APIRouter()
+from app.api.drawing_adoption import router as drawing_adoption_router  # noqa: E402
+router.include_router(drawing_adoption_router)
 can_read = PermissionChecker("orders.view")
 can_complete = PermissionChecker("orders.status")
 admin_only = RoleChecker(["admin"])

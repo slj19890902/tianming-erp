@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.484"
-APP_VERSION_NAME = "对账开票历史与入仓资料成本闭环"
+APP_VERSION = "v0.22.485"
+APP_VERSION_NAME = "图纸V2三类模板与任务固定版"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4616,3 +4616,16 @@ APP_VERIFICATION_STEPS = [
     "按真实入仓需要，在手机或电脑选择产品，编辑材质/规格保存后核对成本及原数量、库位，再按实物入仓。",
 ]
 APP_CHANGELOG = [*(f"v0.22.484：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "常用箱接入衬板、单片开槽箱与21301634定制系列，共用真实毫米结构及尺寸，定制款支持双高度、摇盖和侧翼独立修正。",
+    "关联印刷编辑支持原件、文字、厘米毫米、方向及定位；有印刷纸单突出图文并保留结构缩略与同版附页。",
+    "图纸首次发布分配图号，新任务固定发布版，历史任务与重印不跟随后续附件变化；旧附件和单模具信息继续兼容。",
+    "新增dx0922图纸草稿、序号、不可变发布及任务绑定表，保留原产品、数量、权限与历史业务事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "常用箱打开衬板、开槽箱或定制款，填写真实结构分段并核对小数与预览；缺失槽宽等资料先补齐，不沿用UAT数值。",
+    "从常用箱打开关联印刷，核对Logo原件比例和实际尺寸、面板与距边后发布；查看工程PDF与结构缩略。",
+    "按真实新任务核对纸单图示、同版附页及模具位置；历史任务重印保持原图版，未下发任务仅在明确采用后换版。",
+]
+APP_CHANGELOG = [*(f"v0.22.485：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

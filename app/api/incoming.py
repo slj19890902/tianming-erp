@@ -49,6 +49,7 @@ from app.models.purchase_receipt import (
 )
 from app.models.order import Order, OrderItem
 from app.models.product_drawing import ProductDrawing
+from app.services.product_drawings import engineering_drawing_condition
 from app.models.product import Product
 from app.models.product_bom import (
     RequisitionItemBomSource,
@@ -111,7 +112,11 @@ from app.services.order_status_policy import (
 from app.services.audit_log import append_audit_event
 from app.services.requisition_production_print import (
     build_receipt_production_print_package,
+    _printing_snapshot,
 )
+from app.services.drawing_binding import bound_task_release
+from app.services.drawing_snapshots import release_paper_snapshot
+from app.services.mold_location import describe_mold_location
 from app.services.requisition_production_print_batch import production_print_batch_pages
 from app.services.supplier_material_display import (
     clean_supplier_flute_type,
@@ -2542,7 +2547,7 @@ def _rows(
     if product_ids:
         drawings = db.scalars(
             select(ProductDrawing)
-            .where(ProductDrawing.product_id.in_(product_ids))
+            .where(ProductDrawing.product_id.in_(product_ids), engineering_drawing_condition())
             .order_by(
                 ProductDrawing.product_id,
                 ProductDrawing.uploaded_at.desc(),
@@ -3468,7 +3473,7 @@ def _receipt_fact_rows(
         if drawing_reference is None and product is not None:
             drawing = db.scalar(
                 select(ProductDrawing)
-                .where(ProductDrawing.product_id == product.id)
+                .where(ProductDrawing.product_id == product.id, engineering_drawing_condition())
                 .order_by(ProductDrawing.uploaded_at.desc(), ProductDrawing.id.desc())
             )
             drawing_reference = drawing.image_path if drawing else None
@@ -3768,7 +3773,9 @@ def _production_card_steps(notes: str | None) -> list[str]:
     return steps
 
 
-def _legacy_receipt_production_package(card: dict) -> dict:
+def _legacy_receipt_production_package(card: dict, *, managed_drawing: dict | None = None,
+                                       printing_snapshot: dict | None = None,
+                                       mold_fields: dict | None = None) -> dict:
     """Keep old receipt facts printable through the unified task-card layout."""
 
     output_factor = max(int(card.get("output_factor") or 1), 1)
@@ -3885,6 +3892,15 @@ def _legacy_receipt_production_package(card: dict) -> dict:
         ),
         "fulfillment_reminders": [],
     }
+    if managed_drawing is not None:
+        # Legacy receipt provenance and quantity math stay unchanged. Explicit
+        # adoption affects only the figure version for this exact task.
+        component['managed_drawing'] = managed_drawing
+        component.update(printing_snapshot or {})
+        component.update(mold_fields or {})
+        unified_card['managed_drawings'] = [managed_drawing]
+        unified_card['printing_colors'] = component.get('printing_colors') or []
+        unified_card['paper_version_key'] += f":drawing:{managed_drawing['release_id']}"
     paper_fingerprint = hashlib.sha256(
         json.dumps(
             {
@@ -4134,7 +4150,23 @@ def incoming_production_card(
     }
     package = build_receipt_production_print_package(db, fact)
     if package is None:
-        package = _legacy_receipt_production_package(legacy_card)
+        release = bound_task_release(db, task.id) if task is not None else None
+        if release is None:
+            package = _legacy_receipt_production_package(legacy_card)
+        else:
+            from app.models.mold_tool import MoldTool
+            manifest, drawing = release_paper_snapshot(release)
+            mold = db.get(MoldTool, release.mold_tool_id) if release.mold_tool_id else None
+            frozen = manifest.get('mold_snapshot') or {}
+            package = _legacy_receipt_production_package(legacy_card,
+                managed_drawing=drawing, printing_snapshot=_printing_snapshot(task),
+                mold_fields={'mold_tool_id': release.mold_tool_id,
+                    'mold_code': frozen.get('code'), 'mold_name': frozen.get('name'),
+                    'mold_location': mold.rack_location if mold else None,
+                    'mold_location_display': describe_mold_location(mold.rack_location)['prompt'] if mold else None,
+                    'mold_location_version': mold.location_version if mold else None,
+                    'mold_is_active': mold.is_active if mold else None,
+                    'mold_binding_basis': 'drawing_release'})
     return {**legacy_card, **package}
 
 

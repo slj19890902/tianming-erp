@@ -12553,6 +12553,7 @@ def _add_material_requisition_purpose_snapshot(
     component_type: str,
     semi_reserved_piece_qty: int,
     source_bom_requisition_source_id: int | None = None,
+    pieces_per_finished: int | None = None,
 ) -> None:
     db.add(
         PurchasePurposeSourceSnapshot(
@@ -12571,8 +12572,10 @@ def _add_material_requisition_purpose_snapshot(
             customer_name_snapshot=customer.name,
             component_type=component_type,
             source_finished_qty_snapshot=int(order_item.quantity or 0),
-            pieces_per_finished_snapshot=max(
-                int(batch_item.pieces_per_box or 1), 1
+            pieces_per_finished_snapshot=(
+                pieces_per_finished
+                if pieces_per_finished is not None
+                else max(int(batch_item.pieces_per_box or 1), 1)
             ),
             source_required_piece_qty_snapshot=int(
                 batch_item.required_piece_qty or 0
@@ -13233,6 +13236,9 @@ def _create_batch_locked(
                             ]
                         ),
                         source_bom_requisition_source_id=bom_source.id,
+                        # The frozen BOM source already includes each component's
+                        # physical sheet count; do not multiply it a second time.
+                        pieces_per_finished=int(bom_source.quantity_per_set),
                     )
                 db.flush()
                 item.inventory_deducted_qty = 0

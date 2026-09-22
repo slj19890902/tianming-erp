@@ -21,6 +21,7 @@ from app.api.materials import _parse_layer_weights
 from app.services.pricing import PricingError, calculate_price
 from app.services.product_readiness import material_comparison, product_readiness
 from app.services.product_specification import product_dimension_specification
+from app.services.product_drawings import default_product_drawing
 from app.services.composite_bom import order_selectable_product_condition
 from app.services.template_regex import safe_regex_finditer, safe_regex_search
 
@@ -2909,9 +2910,9 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
                     }
             except (ValueError, TypeError):
                 pass
-        # 常用箱图纸 URL（第一张，供草稿页显示）
-        if selected is not None and selected.drawings:
-            item["product_drawing_file"] = selected.drawings[0].image_path
+        # Only engineering attachments participate in this legacy default.
+        drawing = default_product_drawing(selected.drawings) if selected is not None else None
+        item["product_drawing_file"] = drawing.image_path if drawing is not None else None
         matched_items.append(item)
     # 合并相同存货编码（同单价/同交期/同常用箱）
     merged_items = matched_items if draft.get("customer_type") in {"simair", "sat_contract"} else _merge_same_product_code(matched_items)

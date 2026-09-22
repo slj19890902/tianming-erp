@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select, update, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -115,10 +115,11 @@ class SheetEntry(BaseModel):
         if self.layer_count == 1:
             if self.flute_type != "NONE":
                 raise ValueError("单层原纸请选择无楞")
-            if not self.supplier_id or self.sheet_unit_cost is None:
-                raise ValueError("单层原纸请填写供应商及含税到库单价（元/张）")
             if self.facts.verified_material_id:
-                raise ValueError("单层原纸按张计价，请勿绑定瓦楞材质报价")
+                if self.supplier_id is not None or self.sheet_unit_cost is not None:
+                    raise ValueError("请选择供应商平方报价或实际按张单价之一，不能混用")
+            elif not self.supplier_id or self.sheet_unit_cost is None:
+                raise ValueError("单层原纸请选择已报价供应商材质，或填写实际供应商及含税每张单价")
         elif self.flute_type == "NONE" or self.supplier_id is not None or self.sheet_unit_cost is not None:
             raise ValueError("按张原纸报价仅适用于单层无楞原纸")
         return self
@@ -241,7 +242,7 @@ def options(q: str = "", db: Session = Depends(get_db), user: User = Depends(can
         customers = customers.where(Customer.id.in_(scope))
         products = products.where(Product.customer_id.in_(scope))
     # The picker searches in the browser; complete authorized options avoid a silent 50-row cutoff.
-    return dict(customers=[dict(id=c.id, name=c.chinese_short_name or c.name, full_name=c.name, code=c.customer_code) for c in db.scalars(customers.order_by(Customer.id))],
+    return dict(actor_id=user.id, customers=[dict(id=c.id, name=c.chinese_short_name or c.name, full_name=c.name, code=c.customer_code) for c in db.scalars(customers.order_by(Customer.id))],
         products=[dict(id=p.id, customer_id=p.customer_id, name=p.product_name, code=p.product_code,
             mold_tool_id=p.mold_tool_id, box_style=p.box_style,
             is_liner=bool((rule:=get_box_type_rule(p.box_style)) and rule.code=="liner"),
@@ -268,7 +269,9 @@ def material_price(material_id: int, flute_type: str = "", length_mm: int = 0, w
     estimate = estimate_semi_finished_cost(db, material_id=material.id, material_code=material.code,
         supplier_name=material.supplier_name, layer_count=material.layer_count, flute_type=flute_type,
         board_length_mm=length_mm, board_width_mm=width_mm) if length_mm > 0 and width_mm > 0 else None
-    return dict(square_price=str(result.get("effective_price") or "0"), unit=material.price_unit,
+    if not result.get('effective_price') or Decimal(str(result['effective_price'])) <= 0:
+        raise HTTPException(422, '供应商材质缺有效报价，请点击下方材质/报价维护，保存后返回继续录入')
+    return dict(square_price=str(result['effective_price']), unit=material.price_unit,
         currency=material.purchase_currency, tax_included=material.purchase_tax_included,
         face_paper=material_face(db, material), unit_price=str(estimate.unit_cost) if estimate else None,
         total_price=str(estimate.unit_cost * quantity) if estimate and quantity > 0 else None)
@@ -282,7 +285,7 @@ def get_goods(lot_id: int, db: Session = Depends(get_db), user: User = Depends(c
         detail = lot.finished_detail
         profile = profile or GoodsFacts(scope="general" if detail.is_general else "customers",
             customer_ids=[] if detail.is_general else [detail.owner_customer_id],
-            product_ids=[detail.product_id], processing="cut", display_name=detail.product_name_snapshot or "",
+            product_ids=[detail.product_id] if detail.product_id else [], processing="cut", display_name=detail.product_name_snapshot or "",
             note=lot.remarks or "").model_dump()
         profile.setdefault("source_customer_id", detail.owner_customer_id)
         profile.setdefault("source_customer_name", detail.owner_customer_name_snapshot)
@@ -343,7 +346,14 @@ def update_goods(lot_id: int, payload: GoodsUpdate, db: Session = Depends(get_db
             from app.services.bom_inventory_contract import is_body_lot
             old_basis = json.loads(detail.physical_basis_json or "null")
             new_basis = json.loads(product_basis(finished_product))
-            if is_body_lot(lot) or not old_basis or {k:v for k,v in old_basis.items() if k!="product_id"}!={k:v for k,v in new_basis.items() if k!="product_id"}:
+            if detail.product_id is None:
+                from app.services.bom_inventory_contract import product_has_assembly
+                from app.services.unassigned_finished_entry import claim_matches
+                if (not claim_matches(detail, finished_product) or product_has_assembly(db, finished_product.id)
+                        or payload.correction_quantity not in (None, lot.quantity_available)
+                        or lot.quantity_consumed or lot.quantity_scrapped or lot.quantity_damaged):
+                    raise HTTPException(409, "待认领成品须整批核实相同尺寸、箱型、单位和材质后关联；不允许将估算实物冒认为不同产品或组合套装")
+            elif is_body_lot(lot) or not old_basis or {k:v for k,v in old_basis.items() if k!="product_id"}!={k:v for k,v in new_basis.items() if k!="product_id"}:
                 raise HTTPException(409, "客户产品变更必须有完全相同的冻结实物规格和工艺依据，请先核实身份")
     else:
         raw = detail.sheet_type == "raw_board"
@@ -401,6 +411,7 @@ def update_goods(lot_id: int, payload: GoodsUpdate, db: Session = Depends(get_db
             lot = split_for_correction(db, lot, take, user, payload.idempotency_key)
         if finished_product:
             detail = lot.finished_detail
+            claiming = detail.product_id is None
             if detail.product_id != finished_product.id:
                 from app.services.finished_stock_identity import product_basis
                 detail.physical_basis_json = product_basis(finished_product)
@@ -423,6 +434,15 @@ def update_goods(lot_id: int, payload: GoodsUpdate, db: Session = Depends(get_db
                 lot.pallet_item.product_id=detail.product_id
                 lot.pallet_item.inventory_code=detail.inventory_code_snapshot
                 lot.pallet_item.product_name=detail.product_name_snapshot
+                if claiming:
+                    lot.pallet_item.match_status = 'matched'
+                    from app.models.warehouse_inventory import WarehouseGroundOccupancy
+                    db.execute(update(WarehouseGroundOccupancy).where(
+                        WarehouseGroundOccupancy.pallet_id==pallet.id,
+                        WarehouseGroundOccupancy.status=='active',
+                        WarehouseGroundOccupancy.product_id.is_(None)).values(
+                            product_id=finished_product.id, customer_id=finished_product.customer_id,
+                            version=WarehouseGroundOccupancy.version+1))
         elif lot.pallet_item:
             from app.models.warehouse_inventory import InventoryPallet
             pallet = lot.pallet_item.pallet
@@ -465,7 +485,7 @@ def create_sheet(payload: SheetEntry, db: Session = Depends(get_db), user: User 
         raise HTTPException(422, "层数与材质主数据不一致")
     supplier = None
     direct_estimate = None
-    if payload.layer_count == 1:
+    if payload.layer_count == 1 and payload.sheet_unit_cost is not None:
         supplier = db.get(Supplier, payload.supplier_id)
         if supplier is None or not supplier.is_active:
             raise HTTPException(422, "原纸供应商不存在或已停用，请重新选择")
@@ -525,6 +545,65 @@ def create_sheet(payload: SheetEntry, db: Session = Depends(get_db), user: User 
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(409, "请求已处理或库存已变化，请刷新核对") from error
+    except Exception:
+        db.rollback()
+        raise
+
+
+class UnassignedFinishedEntry(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    location_id: int = Field(gt=0)
+    expected_layout_version: int = Field(gt=0)
+    quantity: int = Field(gt=0, le=10000000)
+    stock_date: date
+    name: str = Field(min_length=1, max_length=200)
+    length_mm: int = Field(gt=0, le=20000)
+    width_mm: int = Field(gt=0, le=20000)
+    height_mm: int = Field(gt=0, le=20000)
+    box_style: Literal['A1', '其他'] = 'A1'
+    report_length_mm: int | None = Field(default=None, gt=0, le=20000)
+    report_width_mm: int | None = Field(default=None, gt=0, le=20000)
+    splice_mode: Literal['single', 'double'] = 'single'
+    flap_mm: int = Field(default=30, gt=0, le=200)
+    material_id: int = Field(gt=0)
+    material_confidence: Literal['estimated','confirmed'] = 'estimated'
+    dimension_source: Literal['tape','label'] = 'tape'
+    note: str = Field(default='', max_length=1000)
+    fingerprint: str = ''
+    idempotency_key: str = Field(min_length=10, max_length=100)
+
+
+@router.post('/finished-unassigned/preview', dependencies=[Depends(PermissionChecker('warehouse.correct'))])
+def preview_unassigned(payload: UnassignedFinishedEntry, db: Session = Depends(get_db), user: User = Depends(admin_only)):
+    unrestricted(user, db)
+    from app.services.unassigned_finished_entry import preview
+    try:
+        return preview(db, payload)[1]
+    except WarehouseInventoryError as error:
+        raise HTTPException(error.status_code, str(error)) from error
+
+
+@router.post('/finished-unassigned', dependencies=[Depends(PermissionChecker('warehouse.correct'))])
+def create_unassigned(payload: UnassignedFinishedEntry, db: Session = Depends(get_db), user: User = Depends(admin_only)):
+    unrestricted(user, db)
+    digest = request_hash(user, 'finished-unassigned', payload)
+    previous = replay(db, payload.idempotency_key, digest)
+    if previous:
+        return previous
+    from app.services.unassigned_finished_entry import create
+    try:
+        lot = create(db, payload, user)
+        facts = GoodsFacts(scope='general', display_name=payload.name, processing='cut',
+            material_code=lot.finished_detail.material_code_snapshot,
+            verified_material_id=payload.material_id, material_confidence=payload.material_confidence,
+            dimension_source=payload.dimension_source, note=payload.note)
+        return record(db, user, lot, facts, payload.idempotency_key, digest, None, 'CREATE')
+    except (WarehouseInventoryError, WarehouseStocktakeBatchError) as error:
+        db.rollback()
+        raise HTTPException(error.status_code, str(error)) from error
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(409, '请求或货位已变化，请核对原请求结果后重试') from error
     except Exception:
         db.rollback()
         raise

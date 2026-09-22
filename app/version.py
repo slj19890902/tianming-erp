@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.491"
-APP_VERSION_NAME = "生产成品地图定位移库与归位"
+APP_VERSION = "v0.22.492"
+APP_VERSION_NAME = "入库资料成本检查与手机待认领成品"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4703,3 +4703,16 @@ APP_CHANGES = [
     "移库继续核对权限、批次与布局版本，结果不明时保留原凭证重试；保留 v490 原始送货单字体修复。",
 ]
 APP_CHANGELOG = [*(f"v0.22.491：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "手机与电脑入库核对单位、尺寸及供应商材料成本，缺资料可完善常用箱或报价后返回继续；新库存不以售价掩盖材料缺口。",
+    "新增客户待认领成品盘点：A1实测长宽高计算报料尺寸，人工选材质冻结参考成本，不虚构客户或订单。",
+    "补齐外购、原片及生产组套成本来源展示和事务检查，保留原始单位、价格、税口径及历史冻结事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机已知产品入仓补齐常用箱资料后返回，核对真实数量、库位及成本再保存。",
+    "客户未知A1实物盘点核对计算报料尺寸和参考成本，入库后刷新核对只登记一笔且保留待认领身份。",
+    "核对片料面积乘供应商平方价及外购生产库存成本，确认旧批次不随主数据改价。",
+]
+APP_CHANGELOG = [*(f"v0.22.492：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

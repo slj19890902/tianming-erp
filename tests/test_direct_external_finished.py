@@ -55,6 +55,15 @@ def test_direct_receipt_posts_real_finished_and_idempotent(routing_app):
         lot = db.scalar(select(InventoryLot).where(InventoryLot.source_ref_type == 'direct_external_receipt'))
         assert lot.finished_detail.product_id == item.product_id
         assert lot.quantity_reserved == 1000 and lot.quantity_available == 0
+        from app.services.inventory_valuation import cost_payload
+        cost = cost_payload(lot, db)
+        assert Decimal(cost['unit_cost']) == lot.estimated_unit_cost_snapshot
+        assert cost['display_unit'] == item.product.unit
+        from app.core.inventory_entry_guard import validate_entries
+        db.info['new_inventory_entry_ids'] = {lot.id}
+        validate_entries(db)
+        from app.models.user import User
+        operator_id = db.scalar(select(User.id).where(User.username == 'p1-40a-admin'))
         assert db.scalar(select(func.count()).select_from(ProductionTask)) == 0
         assert _delivery_remaining_quantity(db, item) == 1000
         from datetime import date
@@ -68,13 +77,13 @@ def test_direct_receipt_posts_real_finished_and_idempotent(routing_app):
         db.add(line)
         db.flush()
         consume_delivery_item_inventory(db, delivery_item_id=line.id, delivered_quantity_after_dispatch=1000,
-            operator_id=None, operation_key='direct-dispatch')
+            operator_id=operator_id, operation_key='direct-dispatch')
         item.delivered_quantity = 1000
         db.flush()
         db.refresh(lot)
         assert lot.quantity_consumed == 1000 and lot.quantity_reserved == 0
         reverse_delivery_item_inventory(db, delivery_item_id=line.id, delivered_quantity_after_cancel=800,
-            operator_id=None, operation_key='direct-revise')
+            operator_id=operator_id, operation_key='direct-revise')
         item.delivered_quantity = 800
         db.flush()
         db.refresh(lot)

@@ -65,8 +65,10 @@ def entry_preview(product_id: int, stock_stage: Literal["complete", "body"] = "c
                   db: Session = Depends(get_db), user=Depends(cost_reader)):
     from app.services.inventory_valuation import resolve_product_cost
     product = product_for(db, user, product_id)
-    result = resolve_product_cost(db, product, stock_stage=stock_stage)
+    result = resolve_product_cost(db, product, stock_stage=stock_stage, for_entry=True)
     return dict(product_id=product.id, product_version=product.version,
+        ready=bool(result.estimate), display_unit=product.unit,
+        repair_product_id=product.id, repair_material_id=product.material_id,
         unit_cost=result.estimate.unit_cost if result.estimate else None,
         evidence=result.estimate.detail if result.estimate else None, missing=result.missing,
         note="当前资料计算；保存入库时重新核对并冻结本批成本，不改已入库批次")

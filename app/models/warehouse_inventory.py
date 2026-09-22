@@ -960,6 +960,7 @@ class WarehouseGroundOccupancy(Base):
 
     __tablename__ = "warehouse_ground_occupancies"
     __table_args__ = (
+        CheckConstraint("(customer_id IS NULL) = (product_id IS NULL)", name="ck_ground_identity_pair"),
         CheckConstraint(
             "status IN ('active','released')",
             name="ck_warehouse_ground_occupancies_status",
@@ -990,11 +991,11 @@ class WarehouseGroundOccupancy(Base):
     primary_location_id: Mapped[int] = mapped_column(
         ForeignKey("warehouse_locations.id", ondelete="RESTRICT"), nullable=False
     )
-    customer_id: Mapped[int] = mapped_column(
-        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
+    customer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers.id", ondelete="RESTRICT"), nullable=True
     )
-    product_id: Mapped[int] = mapped_column(
-        ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
+    product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"), nullable=True
     )
     footprint_kind: Mapped[str] = mapped_column(String(20), nullable=False)
     capacity_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1275,6 +1276,7 @@ class InventoryLot(Base):
 class FinishedGoodsInventoryDetail(Base):
     __tablename__ = "finished_goods_inventory_details"
     __table_args__ = (
+        CheckConstraint("product_id IS NOT NULL OR (is_general = 1 AND owner_customer_id IS NULL AND coalesce(length_mm,0)>0 AND coalesce(width_mm,0)>0 AND coalesce(height_mm,0)>0 AND physical_basis_json IS NOT NULL AND material_code_snapshot IS NOT NULL)", name="ck_finished_unassigned_facts"),
         CheckConstraint(
             "is_general = 1 OR owner_customer_id IS NOT NULL",
             name="ck_finished_inventory_owner",
@@ -1295,8 +1297,8 @@ class FinishedGoodsInventoryDetail(Base):
         String(200), nullable=True
     )
     is_general: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    product_id: Mapped[int] = mapped_column(
-        ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
+    product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id", ondelete="RESTRICT"), nullable=True
     )
     inventory_code_snapshot: Mapped[str] = mapped_column(String(150), nullable=False)
     product_name_snapshot: Mapped[str] = mapped_column(String(250), nullable=False)
@@ -1310,7 +1312,7 @@ class FinishedGoodsInventoryDetail(Base):
 
     lot: Mapped["InventoryLot"] = relationship(back_populates="finished_detail")
     customer: Mapped["Customer | None"] = relationship()
-    product: Mapped["Product"] = relationship()
+    product: Mapped["Product | None"] = relationship()
 
 
 class SemiFinishedInventoryDetail(Base):

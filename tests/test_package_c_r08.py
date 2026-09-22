@@ -25,6 +25,7 @@ def raw_payload(client):
 
 
 def test_raw_45_plan_preserves_20_cover_20_base_and_no_inventory_before_receipt(requisition_app):
+    from decimal import Decimal
     from app.models.order import OrderItem
     from app.models.warehouse_inventory import InventoryLot,InventoryReservation
     from app.models.supplier_requisition_order import SupplierRequisitionOrderItem
@@ -58,6 +59,11 @@ def test_raw_45_plan_preserves_20_cover_20_base_and_no_inventory_before_receipt(
             lot=db.scalar(select(InventoryLot))
             assert lot.inventory_type=='semi_finished'
             assert (lot.quantity_available,lot.quantity_reserved,lot.quantity_consumed)==(5,40,0)
+            from app.core.inventory_entry_guard import validate_entries
+            from app.services.inventory_valuation import cost_payload
+            db.info['new_inventory_entry_ids']={lot.id}
+            validate_entries(db)
+            assert Decimal(cost_payload(lot,db)['unit_cost']) == lot.estimated_unit_cost_snapshot
             reservations=list(db.scalars(select(InventoryReservation)))
             assert len(reservations)==2 and sum(r.credited_requirement_quantity for r in reservations)==40
             from app.services.receipt_managed_production import receipt_purpose_summaries_by_order_item_ids
@@ -88,6 +94,9 @@ def test_raw_45_plan_preserves_20_cover_20_base_and_no_inventory_before_receipt(
             assert summary['manual_processing_output_qty']==20
             from app.services.multilevel_bom_cost_lineage import graph_material_sources
             assert finished.cost_snapshot_source=='component_processing_actual'
+            db.info['new_inventory_entry_ids']={finished.id}
+            validate_entries(db)
+            assert Decimal(cost_payload(finished,db)['unit_cost']) == finished.estimated_unit_cost_snapshot
             evidence=graph_material_sources(db,finished)
             assert len(evidence)==2 and all(r['raw_receipt_allocation_id'] for r in evidence)
         undone=client.post(f"/api/orders/items/1/component-processing/{saved.json()['completion_id']}/revert")

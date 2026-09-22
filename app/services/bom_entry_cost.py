@@ -36,7 +36,7 @@ def assembly_standard(db, product_id):
         profile_id=profile.id if profile else None, profile_version=profile.version if profile else None)
 
 
-def assembled_entry_cost(db, product):
+def assembled_entry_cost(db, product, *, for_entry=False):
     from app.models.order import OrderItem
     from app.models.product import Product
     from app.services.multilevel_bom_compile import compile_master_order_bom
@@ -61,7 +61,7 @@ def assembled_entry_cost(db, product):
             if node.source != 'assembled':
                 output = resolve_bom_sheet_yield(snapshots[pid], strict=True)
                 result = resolve_product_cost(db, master, main_only=True,
-                    physical_yield=output.yield_per_sheet, assembled_body_only=True)
+                    physical_yield=output.yield_per_sheet, assembled_body_only=True, for_entry=for_entry)
                 if not result.estimate:
                     raise ValueError(f'{master.product_name}：' + '；'.join(result.missing))
                 material += result.estimate.unit_cost

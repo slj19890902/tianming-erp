@@ -153,12 +153,23 @@ def _authorized_product_recipe(db, product):
 
 
 def resolve_product_cost(db: Session, product: Product, visited=None, *, main_only=False,
-                         physical_yield=None, assembled_body_only=False, stock_stage='complete') -> CostResolution:
+                         physical_yield=None, assembled_body_only=False, stock_stage='complete', for_entry=False) -> CostResolution:
     from app.services.inventory_cost_rules import resolve_rule, estimate_rule
+    if for_entry:
+        if not str(product.unit or '').strip():
+            return CostResolution(None, ['请在常用箱补销售/实物单位'])
+        if not product.is_composite and product.supply_mode != 'external_purchase' and not (
+                (positive(product.length_mm) and positive(product.width_mm)) or
+                (positive(product.report_length_mm) and positive(product.report_width_mm))):
+            return CostResolution(None, ['请在常用箱补实物尺寸或报料长宽（毫米）'])
     from app.services.bom_inventory_contract import product_has_assembly
     # A whole-kit reference override is not evidence of the bare body's cost.
     bare_body = (stock_stage == 'body' or assembled_body_only) and product_has_assembly(db, product.id)
     explicit = None if bare_body else resolve_rule(db, product)
+    # Historical fixed/sale references remain readable, but new physical entries
+    # must use the material recipe (external purchases keep their own contract).
+    if for_entry and explicit is not None and explicit.estimate and (explicit.estimate.detail.get('cost_rule') or {}).get('mode') in {'sale', 'fixed'}:
+        explicit = None
     if explicit is not None:
         return explicit
     from app.models.multilevel_bom import ProductBomProfile
@@ -167,11 +178,11 @@ def resolve_product_cost(db: Session, product: Product, visited=None, *, main_on
     if profile and not assembled_body_only and stock_stage == 'complete' and (
             profile.source == 'assembled' or product_has_assembly(db, product.id)):
         from app.services.bom_entry_cost import assembled_entry_cost
-        return assembled_entry_cost(db, product)
-    result = _resolve_product_cost(db, product, visited, main_only=main_only or stock_stage == 'body', physical_yield=physical_yield)
+        return assembled_entry_cost(db, product, for_entry=for_entry)
+    result = _resolve_product_cost(db, product, visited, main_only=main_only or stock_stage == 'body', physical_yield=physical_yield, for_entry=for_entry)
     # A kit sale price cannot be copied to a separately stored physical component.
     # Kits need an explicit allocation rule; a zero/unknown sale is never a price.
-    if not result.estimate and not product.is_composite and positive(product.sale_unit_price):
+    if not for_entry and not result.estimate and not product.is_composite and positive(product.sale_unit_price):
         fallback = estimate_rule(db, product, dict(mode="sale", temporary=True,
             basis="老板确认：材料/采购成本资料不足时，以本产品有效售价暂作成本",
             evidence={"missing_material_inputs": result.missing}))
@@ -179,7 +190,7 @@ def resolve_product_cost(db: Session, product: Product, visited=None, *, main_on
     return result
 
 
-def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_only=False, physical_yield=None) -> CostResolution:
+def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_only=False, physical_yield=None, for_entry=False) -> CostResolution:
     visited = set(visited or ())
     if product.id in visited:
         return CostResolution(None, ["组合产品存在循环关系"])
@@ -191,7 +202,7 @@ def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_o
     if product.is_composite and not main_only:
         if not components:
             return CostResolution(None, ["组合产品未维护完整部件清单"])
-        main = resolve_product_cost(db, product, visited - {product.id}, main_only=True)
+        main = resolve_product_cost(db, product, visited - {product.id}, main_only=True, for_entry=for_entry)
         parts, missing, total = [], ["主片：" + m for m in main.missing], Decimal(0)
         if main.estimate:
             total += main.estimate.unit_cost
@@ -199,7 +210,7 @@ def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_o
                 "unit_cost": str(main.estimate.unit_cost), "evidence": main.estimate.detail})
         for component in components:
             child = db.get(Product, component.component_product_id)
-            result = resolve_product_cost(db, child, visited) if child else CostResolution(None, ["部件产品不存在"])
+            result = resolve_product_cost(db, child, visited, for_entry=for_entry) if child else CostResolution(None, ["部件产品不存在"])
             if not result.estimate:
                 missing.extend(f"部件{component.internal_component_code}：{m}" for m in result.missing)
                 continue
@@ -215,7 +226,7 @@ def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_o
                 "formula": "主片材料成本 + 各部件材料单价 × 每套部件数量", "components": parts}), [])
     material, mapping_evidence = _material_for_product(db, product)
     missing = []
-    if material is None:
+    if material is None or not material.is_active:
         missing.append("请在常用箱绑定已报价的供应商材质")
     elif material.purchase_currency != "CNY":
         missing.append("供应商材质必须维护人民币价格")
@@ -246,7 +257,7 @@ def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_o
     if view.report_length_mm == 1 and view.report_width_mm == 1:
         missing.append("纸板尺寸1×1为占位资料，请填写实际展开尺寸")
     if missing:
-        return _authorized_product_recipe(db, product) or CostResolution(None, missing)
+        return (None if for_entry else _authorized_product_recipe(db, product)) or CostResolution(None, missing)
     estimate = estimate_finished_product_cost(db, product=view)
     if estimate is None or estimate.unit_cost <= 0:
         return CostResolution(None, ["供应商平方价、价格单位或天地盖底片尺寸不完整"])
@@ -311,7 +322,7 @@ def resolve_lot_cost(db, lot) -> CostResolution:
 
 def frozen_cost(lot, db=None, visited=None):
     """Read only the entry snapshot, never today's price or a currency conversion."""
-    if db is not None and lot.cost_snapshot_source in {'stock_preparation','bom_assembly','stock_preparation_assembly','sheet_cut_production'}:
+    if db is not None and lot.cost_snapshot_source in {'stock_preparation','bom_assembly','subkit_conversion','stock_preparation_assembly','sheet_cut_production'}:
         from app.services.derived_inventory_cost import derived_cost
         return derived_cost(db,lot,set(visited or ()))
     unit = positive(lot.estimated_unit_cost_snapshot)
@@ -321,7 +332,16 @@ def frozen_cost(lot, db=None, visited=None):
         return None, {}
     if not isinstance(detail, dict):
         return None, {}
+    from app.services.entry_source_valuation import SOURCES, source_entry_cost
+    if lot.cost_snapshot_source in SOURCES:
+        return source_entry_cost(db, lot, detail, set(visited or ()))
     currency = detail.get("currency")
+    if not currency and db is not None and lot.cost_snapshot_source == 'purchase_receipt_actual' and detail.get('purchase_receipt_fact_id'):
+        from app.models.purchase_receipt import PurchaseReceiptFact
+        fact = db.get(PurchaseReceiptFact, detail['purchase_receipt_fact_id'])
+        if fact:
+            currency = fact.currency
+            detail = dict(detail, currency=currency)
     if not currency and detail.get("price_unit") in {"元/㎡", "元/平方米", "元/m2", "元/平方"}:
         currency = "CNY"
     visited = set(visited or ())
@@ -355,12 +375,14 @@ def frozen_cost(lot, db=None, visited=None):
 
 
 def cost_payload(lot, db=None):
+    from app.services.warehouse_display_units import lot_display_unit
     unit, detail = frozen_cost(lot, db)
     quantity = lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged
     labour = detail.get('standard_labour_unit_cost') if unit is not None else None
     total_unit = unit + Decimal(labour) if labour is not None else None
+    display_unit = detail.get('product_unit') or lot_display_unit(lot)
     return {"lot_id": lot.id, "unit_cost": str(unit) if unit else None,
-        "display_unit": detail.get('product_unit') or ('张' if lot.unit == 'sheets' else '只'),
+        "display_unit": {'sheets': '张', 'boxes': '只', 'pieces': '片'}.get(display_unit, display_unit),
         "standard_labour_unit_cost": labour,
         "standard_total_unit_cost": str(total_unit) if total_unit is not None else None,
         "standard_total_value": str((total_unit * quantity).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)) if total_unit is not None else None,
@@ -376,10 +398,12 @@ def cost_payload(lot, db=None):
 
 
 def freeze_entry_cost(db, lot, product=None, *, stock_stage='complete'):
-    result = resolve_product_cost(db, product, main_only=True, stock_stage=stock_stage) if product else resolve_lot_cost(db, lot)
+    result = resolve_product_cost(db, product, main_only=(stock_stage=='body'), stock_stage=stock_stage, for_entry=True) if product else resolve_lot_cost(db, lot)
     if not result.estimate:
         from app.services.warehouse_inventory import WarehouseInventoryError
         raise WarehouseInventoryError("未能确定入库成本：" + "；".join(result.missing), 422)
+    if product:
+        result.estimate.detail['product_unit'] = product.unit
     apply_cost_snapshot(lot, result.estimate)
     return result.estimate
 

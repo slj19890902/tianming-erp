@@ -25,13 +25,13 @@ class ReceiptPriceGuardSession(Session):
 
     def bulk_save_objects(self, objects, *args, **kwargs):
         objects = list(objects)
-        if any(inspect(row).mapper.local_table.name in _GUARDED_TABLES for row in objects):
+        if any(inspect(row).mapper.local_table.name in (_GUARDED_TABLES | {"inventory_lots"}) for row in objects):
             _reject("实收及冻结价不能使用不跟踪事务的 bulk_save_objects")
         return super().bulk_save_objects(objects, *args, **kwargs)
 
     def bulk_insert_mappings(self, mapper, *args, **kwargs):
-        if inspect(mapper).local_table.name in _GUARDED_TABLES:
-            _reject("实收及冻结价不能使用不跟踪事务的 bulk_insert_mappings")
+        if inspect(mapper).local_table.name in (_GUARDED_TABLES | {"inventory_lots"}):
+            _reject("实收、入库及冻结价不能使用不跟踪事务的 bulk_insert_mappings")
         return super().bulk_insert_mappings(mapper, *args, **kwargs)
 
     def bulk_update_mappings(self, mapper, *args, **kwargs):

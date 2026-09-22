@@ -1,5 +1,6 @@
 import { EntryProductButton } from "./EntryProductButton";
 import { OrderReference } from './OrderReference';
+import { UnassignedFinishedEntry } from "./UnassignedFinishedEntry";
 import { WarehouseGoods } from "./WarehouseGoods";
 import { WarehouseDimensionSearch, type DimensionStock } from "./WarehouseDimensionSearch";
 import { ActualStocktakeDialog } from "./ActualStocktakeDialog";
@@ -6911,6 +6912,7 @@ export function WarehouseTwinApp() {
               <button type="button" className={stocktakeInventoryType === "raw_material" ? "active" : ""} title={selectedLocationSemiFinishedAddBlockReason || ""} onClick={() => { setStocktakeInventoryType("raw_material"); setStocktakeCustomerId("all"); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }}>原材料</button>
             </div>
             {selectedLocationAddBlockReason && <p className="twin-stocktake-block-reason">{selectedLocationAddBlockReason} 请核对货位是否启用且已发布。</p>}
+            {stocktakeInventoryType === "finished" && canCorrectInventory && !traceReadOnly && <details><summary>客户未知 · 按实物尺寸登记成品</summary><UnassignedFinishedEntry key={selectedLocation.location_id} locationId={selectedLocation.location_id} layoutVersion={Number(selectedLocation.map_position?.version)} canSave={canEditLocations && canCorrectInventory && !traceReadOnly} onSaved={refreshDashboard} /></details>}
             {stocktakeInventoryType !== "finished" && <WarehouseGoods key={`${selectedLocation.location_id}-${stocktakeInventoryType}`} locationId={selectedLocation.location_id} layoutVersion={Number(selectedLocation.map_position?.version)} raw={stocktakeInventoryType === "raw_material"} canSave={canEditLocations && canCorrectInventory && !traceReadOnly} onSaved={async () => { await refreshDashboard(); setStocktakeInventoryType("finished"); }} />}
             {["finished"].includes(stocktakeInventoryType) && <>
             <div className="twin-stocktake-search-row"><label><span>查找客户</span><input value={stocktakeCustomerQuery} onChange={(event) => { setStocktakeCustomerQuery(event.target.value); setStocktakeCustomerId(event.target.value.trim() ? "" : "all"); setStocktakeProductId(""); setStocktakeSupplementConfirmed(false); }} placeholder="默认全部客户；知道客户时输入名称或简称" /></label>

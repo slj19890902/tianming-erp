@@ -232,6 +232,7 @@ def on_receipt(db,receipt,lot,price,actor):
     total=(sheet_cost*receipt.received_quantity).quantize(Decimal('.0001'),rounding=ROUND_HALF_UP)
     lot.estimated_unit_cost_snapshot=sheet_cost.quantize(Decimal('.0001'),rounding=ROUND_HALF_UP)
     lot.cost_snapshot_source='raw_purchase_receipt'
+    lot.cost_snapshot_at=utc_now_naive()
     lot.cost_snapshot_detail_json=encoded(dict(raw_purchase_plan_id=plan.id,supplier_receipt_price_fact_id=price.id,
         total_cost=str(total),quantity=receipt.received_quantity,currency=price.currency,price_unit=price.price_unit,unit_price=str(price.unit_price)))
     available=receipt.received_quantity;offset=0

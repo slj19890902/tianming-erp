@@ -19,6 +19,7 @@
     <link rel="stylesheet" href="/static/ui/production-desk.css?v=20260922-map-return">
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
     <script src="/static/ui/desktop-delivery-margin.js?v=20260922-finance-history"></script>
+    <script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script>
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
     <script src="/static/assets/phone-display.js?v=b9c44d142168"></script>
@@ -10159,6 +10160,7 @@
         (response) => response,
         (error) => {
           const status = error?.response?.status;
+          window.TMEntryProduct?.offerRepair(error?.response?.data?.detail);
           if (status === 401 && window.erpAuthRequired) {
             if (!window.erpCheckingSession) window.erpAuthRequired();
           }

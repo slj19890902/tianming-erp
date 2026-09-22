@@ -151,7 +151,7 @@
     .floor3-plan-hotspot.selected,.floor3-area-entry.selected { background:#e9d5ff; border-color:#9333ea; }
     .floor3-plan-hotspot.matched,.floor3-plan-hotspot.selected.matched,.floor3-area-entry.matched { background:#bbf7d0; border-color:#15803d; }
   </style>
-<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script><script src="/static/ui/entry-product-editor.js?v=484"></script></head>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script><script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script></head>
 <body>
   <header>
     <div><h1>仓库库存管理</h1><span class="muted desktop-note">成品入仓、三楼货位与库存流水联动</span></div>
@@ -334,7 +334,7 @@
       </form>
 
       <form id="semiForm" class="panel hidden operate-only">
-        <h2>手工半成品入库</h2>
+        <h2>手工半成品入库</h2><p><a href="/?page=products&subpage=materials" target="_blank" rel="noopener">补充供应商材质 / 报价</a> · 保留本页尺寸、数量和库位，补完后直接重新保存。</p>
         <p class="muted">按实际物理张/片记录。未分切大张按实际长宽和张数入库；本阶段不做一开几换算，也不旋转尺寸匹配。</p>
         <div class="grid">
           <div class="field"><label>材质代码</label><input id="siMaterial" required></div>

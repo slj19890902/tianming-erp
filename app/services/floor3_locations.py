@@ -966,7 +966,7 @@ def _build_item(
                 1,
             ),
             "unit": inventory_lot.unit,
-            "match_status": "matched",
+            "match_status": "matched" if product_id is not None else "pending",
         }
     product_id = item.get("product_id")
     customer_id = item.get("customer_id")

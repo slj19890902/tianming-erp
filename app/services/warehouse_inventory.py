@@ -702,10 +702,10 @@ def _ensure_finished_projection_postcondition(
     detail = lot.finished_detail
     if detail is None:
         raise WarehouseInventoryError("成品库存缺少产品明细，不能建立地堆占用", 409)
-    occupancy_customer_id = detail.owner_customer_id or db.scalar(
-        select(Product.customer_id).where(Product.id == int(detail.product_id))
-    )
-    if occupancy_customer_id is None:
+    occupancy_customer_id = detail.owner_customer_id or (db.scalar(
+        select(Product.customer_id).where(Product.id == detail.product_id)
+    ) if detail.product_id else None)
+    if occupancy_customer_id is None and detail.product_id is not None:
         raise WarehouseInventoryError("成品库存缺少客户归属，不能建立地堆占用", 409)
     occupancy_capacity = (
         int(ground_capacity_quantity)
@@ -717,8 +717,8 @@ def _ensure_finished_projection_postcondition(
     occupancy = WarehouseGroundOccupancy(
         pallet_id=int(current_pallet.id),
         primary_location_id=int(location.id),
-        customer_id=int(occupancy_customer_id),
-        product_id=int(detail.product_id),
+        customer_id=occupancy_customer_id,
+        product_id=detail.product_id,
         footprint_kind="double" if len(occupancy_location_ids) == 2 else "single",
         capacity_quantity=occupancy_capacity,
         status="active",
@@ -1729,6 +1729,22 @@ def _location(
     return location
 
 
+def _entry_signature(**facts):
+    return sha256(json.dumps(facts, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+
+
+def _check_entry_replay(lot, signature):
+    prior = json.loads(lot.cost_snapshot_detail_json or '{}').get('entry_request_hash')
+    if prior and prior != signature:
+        raise WarehouseInventoryError('同一入库请求的客户、产品、数量、尺寸或库位已变化，请核对原记录', 409)
+
+
+def _remember_entry_request(lot, signature):
+    detail = json.loads(lot.cost_snapshot_detail_json or '{}')
+    detail['entry_request_hash'] = signature
+    lot.cost_snapshot_detail_json = json.dumps(detail, ensure_ascii=False, sort_keys=True)
+
+
 def _idempotent_lot(db: Session, key: str | None) -> InventoryLot | None:
     if not key:
         return None
@@ -2657,8 +2673,12 @@ def manual_finished_in(
     stock_stage: str = 'complete',
     frozen_body: bool = False,
 ) -> InventoryLot:
+    signature = _entry_signature(customer_id=customer_id, product_id=product_id, location_id=location_id,
+        quantity=quantity, stock_date=stock_date, source_type=source_type, is_general=is_general,
+        source_ref_type=source_ref_type, source_ref_id=source_ref_id, stock_stage=stock_stage, operator_id=operator_id)
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
+        _check_entry_replay(existing, signature)
         from app.services.bom_inventory_contract import is_body_lot
         if (stock_stage == 'body') != is_body_lot(existing):
             raise WarehouseInventoryError('同一入库请求的组装状态已变化，请核对原入库记录', 409)
@@ -2751,7 +2771,7 @@ def manual_finished_in(
         remarks=remarks,
         created_by=operator_id,
     )
-    freeze_cost = source_type == "stocktake" or (stock_stage == 'body' and not frozen_body)
+    freeze_cost = source_ref_type is None or source_type in {'stocktake', 'manual'} or (stock_stage == 'body' and not frozen_body)
     if freeze_cost:
         from app.services.inventory_valuation import freeze_entry_cost
         freeze_entry_cost(db, lot, product, stock_stage=stock_stage)
@@ -2765,6 +2785,8 @@ def manual_finished_in(
         ) if not freeze_cost else None,
         captured_at=now,
     )
+    if freeze_cost:
+        _remember_entry_request(lot, signature)
     db.add(lot)
     db.flush()
     from app.services.finished_stock_identity import product_basis, order_product_basis
@@ -4601,8 +4623,14 @@ def manual_semi_finished_in(
     capture_material_cost: bool = True,
     entry_cost_estimate: InventoryCostEstimate | None = None,
 ) -> InventoryLot:
+    signature = _entry_signature(customer_id=customer_id, location_id=location_id, quantity=quantity,
+        stock_date=stock_date, source_type=source_type, material_id=material_id, material_code=material_code,
+        board_length_mm=board_length_mm, board_width_mm=board_width_mm, layer_count=layer_count, flute_type=flute_type,
+        component_type=component_type, pieces_per_box=pieces_per_box, stock_yield_per_sheet=stock_yield_per_sheet,
+        supplier_name=supplier_name, sheet_type=sheet_type, operator_id=operator_id)
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
+        _check_entry_replay(existing, signature)
         return existing
     if quantity <= 0 or board_length_mm <= 0 or board_width_mm <= 0:
         raise WarehouseInventoryError("数量和纸板长宽必须大于0")
@@ -4720,9 +4748,11 @@ def manual_semi_finished_in(
     )
     if entry_cost_estimate is not None:
         apply_cost_snapshot(lot, entry_cost_estimate, captured_at=now)
-    elif source_type == "stocktake":
+    elif source_ref_type is None or source_type in {"stocktake", "manual", "transfer"}:
         from app.services.inventory_valuation import freeze_entry_cost
         freeze_entry_cost(db, lot)
+    if source_type in {'stocktake','manual','transfer'}:
+        _remember_entry_request(lot, signature)
     _movement(
         db,
         lot=lot,
@@ -5162,6 +5192,8 @@ def edit_finished_lot(
         or lot.finished_detail is None
     ):
         raise WarehouseInventoryError("成品库存批次不存在", 404)
+    if lot.finished_detail.product_id is None:
+        raise WarehouseInventoryError('客户待认领成品请在地图的“修正资料”中核实并关联产品，不能直接换成其他产品', 409)
     if lot.version != expected_version:
         raise WarehouseInventoryError(
             "库存已被其他人修改，请刷新后重试", 409

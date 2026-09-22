@@ -81,12 +81,21 @@ def derived_cost(db, lot, visited):
             if abs(calculated-total)>Decimal('.01') or abs(total/qty-Decimal(str(lot.estimated_unit_cost_snapshot)))>Decimal('.0001'):
                 return None, {'validation_issue':'备库组套成本不守恒'}
             return total/qty,dict(**{k:detail[k] for k in ('assembly_standard','standard_labour_unit_cost','standard_labour_missing','product_unit') if k in detail},currency='CNY',cost_label='备库组套继承成本',quantity=qty,total_cost=str(total),inputs=evidence,basis='inherited_entry_cost_not_new_purchase')
-        if lot.cost_snapshot_source=='bom_assembly':
-            from app.models.multilevel_bom import BomAssembly, BomAssemblyInput
-            assembly=db.get(BomAssembly,lot.source_ref_id)
-            if not assembly or assembly.status!='posted' or assembly.quantity<=0 or not lot.finished_detail or assembly.output_product_id!=lot.finished_detail.product_id:
+        if lot.cost_snapshot_source in {'bom_assembly', 'subkit_conversion'}:
+            if lot.cost_snapshot_source == 'bom_assembly':
+                from app.models.multilevel_bom import BomAssembly as Assembly, BomAssemblyInput as AssemblyInput
+            else:
+                from app.models.bom_subkit import SubkitConversion as Assembly, SubkitConversionInput as AssemblyInput
+            assembly=db.get(Assembly,lot.source_ref_id)
+            if lot.cost_snapshot_source == 'subkit_conversion' and assembly:
+                from app.models.bom_subkit import OrderSubkit
+                group = db.get(OrderSubkit, assembly.order_item_id)
+                product_id = group.kit_product_id if group else None
+            else:
+                product_id = assembly.output_product_id if assembly else None
+            if not assembly or assembly.status!='posted' or assembly.quantity<=0 or not lot.finished_detail or product_id!=lot.finished_detail.product_id:
                 return None, {'validation_issue':'组套来源身份不完整'}
-            inputs=list(db.scalars(select(BomAssemblyInput).where(BomAssemblyInput.conversion_id==assembly.id)))
+            inputs=list(db.scalars(select(AssemblyInput).where(AssemblyInput.conversion_id==assembly.id)))
             if not inputs or sum((r.total_cost for r in inputs),Decimal(0))!=assembly.total_cost:
                 return None, {'validation_issue':'组套投入成本合计不一致'}
             evidence=[]

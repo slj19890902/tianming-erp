@@ -20,7 +20,7 @@
   function costText(data) {
     if(data.unit_cost==null)return '成本资料待补：'+(data.missing||[]).join('；');
     const e=data.evidence||{};
-    return `${e.cost_label||'材料参考成本'}：¥${data.unit_cost} / 件。${data.note}`;
+    return `${e.cost_label||'材料参考成本'}：¥${data.unit_cost} / ${data.display_unit||'件'}。${data.note}`;
   }
   let opened=false;
   async function open({productId, stockStage='complete'}) {
@@ -49,7 +49,11 @@
       materials.forEach(m=>material.append(new Option(`${m.supplier_name} · ${m.code}`,m.id)));
       if(product.material_id&&!materials.some(m=>m.id===product.material_id))material.append(new Option('当前材质已停用或非人民币报价',product.material_id));
       material.value=product.material_id||'';
-      const inputs={};Object.entries(fields).forEach(([key,label])=>{
+      const inputs={};
+      for(const [key,label,values] of [['unit','实物 / 销售单位',['只','张','片','套','根','个']],['box_style','箱型',['A1','A3','衬板','其他']]]){
+        const input=field(label,el('select'));[...new Set(['',...values,product[key]||''])].forEach(v=>input.append(new Option(v||'请选择',v)));input.value=product[key]||'';inputs[key]=input;
+      }
+      Object.entries(fields).forEach(([key,label])=>{
         const input=field(label,el('input'));input.type='number';input.min='1';input.step='1';input.value=product[key]??'';inputs[key]=input;
       });
       const flute=field('楞型',el('select'));
@@ -60,6 +64,23 @@
       for(const [key,label,values] of [['splice_mode','拼片方式',['single','double']],['default_cutting_mode','每张开料方式',['一开一','一开二','一开三','一开四']],['crease_type','主片压线',['','毛片','净料','压线','其他']],['base_crease_type','底片压线',['','毛片','净料','压线','其他']]]){
         const input=field(label,el('select'));const options=[...new Set([...values,product[key]??''])];options.forEach(v=>input.append(new Option(v==='single'?'单片':v==='double'?'双片':v||'未设置',v)));input.value=product[key]??'';inputs[key]=input;
       }
+      const quoteLink=el('a','打开供应商材质 / 报价维护（保留本页）');quoteLink.href='/?page=products&subpage=materials';quoteLink.target='_blank';quoteLink.rel='noopener';grid.append(quoteLink);
+      const reload=el('button','补完报价后重新检查');reload.type='button';grid.append(reload);
+      reload.onclick=async()=>{if(busy)return;busy=true;try{
+        const rows=await api('/api/warehouse/cost-rules/materials'), selected=material.value;
+        materials.splice(0,materials.length,...rows);material.replaceChildren(new Option('请选择有效供应商材质',''));
+        rows.forEach(m=>material.append(new Option(`${m.supplier_name} · ${m.code}`,m.id)));material.value=selected;
+        status.textContent=costText(await api(costPath(productId,stockStage)));
+      }catch(e){status.textContent=e.message;}finally{busy=false;}};
+      const calculate=el('button','按箱型计算报料尺寸');calculate.type='button';grid.append(calculate);
+      calculate.onclick=async()=>{if(busy)return;busy=true;try{
+        const r=await api('/api/master/products/box-type-recommendation','POST',{
+          box_style:inputs.box_style.value,length_mm:Number(inputs.length_mm.value)||null,width_mm:Number(inputs.width_mm.value)||null,
+          height_mm:Number(inputs.height_mm.value)||null,splice_mode:inputs.splice_mode.value||'single',flap_mm:product.flap_mm||30,crease_type:inputs.crease_type.value||null});
+        if(!r.auto_calculated){status.textContent=r.message||'此箱型需填写实际报料长宽';return;}
+        ['report_length_mm','report_width_mm','base_report_length_mm','base_report_width_mm'].forEach(k=>{if(r[k]!=null)inputs[k].value=r[k];});
+        status.textContent='报料尺寸已计算，请核对后保存到常用箱。';
+      }catch(e){status.textContent=e.message;}finally{busy=false;}};
       const reason=field('修改说明',el('input'));reason.value='入仓前核对常用箱材质及规格';reason.required=true;
       try{status.textContent=costText(await api(costPath(productId,stockStage)));}catch(e){status.textContent='成本预览读取失败：'+e.message;}
       busy=false;save.disabled=false;
@@ -91,5 +112,15 @@
     }catch(e){status.textContent=e.message;busy=false;save.hidden=true;}
     return done;
   }
-  window.TMEntryProduct={open,preview:async(id,stage)=>costText(await api(costPath(id,stage)))};
+  function offerRepair(detail){
+    if(detail?.code!=='INVENTORY_ENTRY_INCOMPLETE')return;
+    document.getElementById('entry-repair-notice')?.remove();
+    const notice=el('aside');notice.id='entry-repair-notice';notice.setAttribute('role','alert');
+    notice.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;max-width:min(420px,90vw);background:white;border:1px solid #d5a530;border-radius:12px;padding:16px;box-shadow:0 6px 24px #0002';
+    const message=el('p',detail.message+'。原录入内容保留，完善资料后回到原表单重新保存。');notice.append(message);
+    if(detail.product_id){const button=el('button','完善常用箱资料');button.type='button';button.onclick=async()=>{button.disabled=true;try{await open({productId:detail.product_id});}catch(e){message.textContent=e.message;}finally{button.disabled=false;}};notice.append(button);}
+    const link=el('a','维护供应商报价');link.href='/?page=products&subpage=materials';link.target='_blank';link.rel='noopener';link.style.margin='0 12px';notice.append(link);
+    const close=el('button','关闭提示');close.type='button';close.onclick=()=>notice.remove();notice.append(close);document.body.append(notice);
+  }
+  window.TMEntryProduct={open,offerRepair,preview:async(id,stage)=>costText(await api(costPath(id,stage)))};
 })();

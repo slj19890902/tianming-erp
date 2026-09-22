@@ -11,7 +11,7 @@ def test_initial_ui_keeps_retry_payload_and_rejects_stale_search():
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const nodes = new Map();
-const $ = id => { if (!nodes.has(id)) nodes.set(id, {replaceChildren(){},value:'', checked:false, disabled:false, classList:{add(){},remove(){},toggle(){}}}); return nodes.get(id); };
+const $ = id => { if (!nodes.has(id)) nodes.set(id, {replaceChildren(){},addEventListener(){},value:'', checked:false, disabled:false, classList:{add(){},remove(){},toggle(){}}}); return nodes.get(id); };
 const state = {user:{id:1,role:'admin'}, selectedLocation:{id:2,layout_version:1}, lots:[], locked:false};
 let mode='race', calls=[], deferred=[];
 const context = {console, URLSearchParams, Intl, Date, JSON, Number, $, state, h: x => String(x),

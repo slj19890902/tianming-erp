@@ -40,12 +40,16 @@ def test_fractional_cost_conserves_purchase_line_across_receipts(purchase_app, _
         assert second.status_code == 200, second.text
         with purchase_app.state.session_factory() as db:
             lots = [l for l in own_output_lots(db, item_id) if l.source_ref_type == 'bom_external_receipt']
-            assert sorted(l.quantity_available + l.quantity_consumed for l in lots) == [3,18]
+            assert sorted(l.quantity_available + l.quantity_reserved + l.quantity_consumed for l in lots) == [3,18]
             costs = [receipt_output_cost(db, l.source_ref_id) for l in lots]
             assert sum((Decimal(c['capitalized_material_cost']) for c in costs), Decimal(0)) == Decimal('0.1600')
             assert all(c['tax_included'] == (tax_mode == 'tax_inclusive') for c in costs)
             assert all(c['currency'] == 'CNY' and Decimal(c['tax_rate']) == Decimal('0.13') for c in costs)
             for lot, detail in zip(lots, costs):
+                from app.services.inventory_valuation import cost_payload
+                view = cost_payload(lot, db)
+                assert Decimal(view['unit_cost']) == lot.estimated_unit_cost_snapshot
+                assert view['display_unit'] == detail['stock_unit']
                 total = Decimal(detail['capitalized_material_cost'])
                 assert source_cost(db, lot, lot.quantity_available)[0] == cost_slice(
                     total, detail['quantity'], lot.quantity_consumed, lot.quantity_available)

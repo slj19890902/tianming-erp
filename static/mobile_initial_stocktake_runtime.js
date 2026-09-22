@@ -159,10 +159,11 @@ async function createInboundProduct() {
     $("inboundProduct").innerHTML = `<option value="${Number(product.id)}">${h(code)} · ${h(name)}</option>`;
     $("inboundNewProduct").open = false;
     $("inboundProductQuery").value = code;
-    showMessage("产品已保存，请填写实际数量后保存入库", "success");
+    showMessage("产品已保存，请补齐材质、单位及报料资料后继续入库", "success");
   } catch (error) { showMessage(`${error.message}。若网络中断，请先搜索此编码核对是否已建成。`); }
   finally { setInboundBusy(false); }
   await refreshInboundContext();
+  if(Number($("inboundProduct").value))$("inboundEditProduct").click();
 }
 
 async function saveInitialInbound() {
@@ -301,7 +302,7 @@ document.querySelectorAll("[data-goods-type]").forEach(button=>button.onclick=()
   $("sheetGoods").replaceChildren();
   if(inbound.type!=="finished"){
     if(!window.mountMobileGoods){$("sheetGoods").textContent="表单正在加载，请稍后重新选择";return;}
-    inbound.unmountSheet=window.mountMobileGoods($("sheetGoods"),{...window.mobileGoodsConfig(),onBusyChange:window.mobileGoodsBusy,onSaved:window.mobileGoodsSaved});
+    inbound.unmountSheet=window.mountMobileGoods($("sheetGoods"),{...window.mobileGoodsConfig(),unassigned:inbound.type==="unassigned",onBusyChange:window.mobileGoodsBusy,onSaved:window.mobileGoodsSaved});
   }
   updateSubmitState();
 });

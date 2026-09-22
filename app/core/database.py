@@ -12,6 +12,7 @@ from time import perf_counter
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from app.core.receipt_price_guard import ReceiptPriceGuardSession
+from app.core import inventory_entry_guard  # register new-entry transaction checks
 
 from app.core.backup_retention import auto_cleanup_regular_backups
 from app.core.config import Settings, load_settings, normalize_path, settings

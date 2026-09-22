@@ -7,6 +7,7 @@ from decimal import Decimal
 from threading import RLock
 from typing import Iterable, Sequence
 
+from app.services.invoice_statement_scope import StatementInvoice
 from sqlalchemy import Row, event, func, or_, select
 from sqlalchemy.orm import Session, load_only, selectinload
 
@@ -657,11 +658,11 @@ def build_order_business_statuses(
             )
         for statement_id, amount in db.execute(
             select(
-                Invoice.statement_id,
-                func.coalesce(func.sum(Invoice.invoice_amount), 0),
+                StatementInvoice.statement_id,
+                func.coalesce(func.sum(StatementInvoice.invoice_amount), 0),
             )
-            .where(Invoice.statement_id.in_(statement_chunk))
-            .group_by(Invoice.statement_id)
+            .where(StatementInvoice.statement_id.in_(statement_chunk))
+            .group_by(StatementInvoice.statement_id)
         ):
             invoice_totals[int(statement_id)] = Decimal(str(amount or 0))
         for statement_id, amount in db.execute(

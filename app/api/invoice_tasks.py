@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import and_, or_, select, text
+from sqlalchemy import and_, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -50,6 +50,7 @@ from app.models.invoice_task import (
     FinanceInvoiceAttachment,
     FinanceInvoiceTask,
     FinanceInvoiceTaskItem,
+    FinanceInvoiceTaskStatement,
     FinanceSettlementEntity,
     InvoiceSellerEntity,
 )
@@ -68,6 +69,7 @@ from app.services.invoice_tax_template import (
 )
 from app.services.product_specification import resolved_product_specification
 from app.services.customer_price_tax import VALID_PRICE_TAX_MODES
+from app.services.invoice_statement_scope import task_shares, task_statement_filter, StatementInvoice
 
 
 router = APIRouter()
@@ -173,6 +175,7 @@ class TaskResultPayload(VersionPayload):
     invoice_date: date | None = None
     failure_reason: str | None = Field(default=None, max_length=1000)
     expected_ledger_version: int | None = Field(default=None, ge=1)
+    expected_ledger_versions: dict[int, int] | None = None
 
     @field_validator("invoice_number", "failure_reason")
     @classmethod
@@ -262,7 +265,8 @@ def _task_for_user(db: Session, task_id: int, user: User) -> FinanceInvoiceTask:
     task = db.get(FinanceInvoiceTask, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="开票任务不存在")
-    _statement_for_user(db, task.statement_id, user)
+    for share in task_shares(db, task):
+        _statement_for_user(db, share.statement_id, user)
     return task
 
 
@@ -1125,6 +1129,15 @@ def _task_response(db: Session, task: FinanceInvoiceTask) -> dict[str, Any]:
         "id": task.id,
         "task_number": task.task_number,
         "statement_id": task.statement_id,
+        "settlement_entity_id": statement.settlement_entity_id if statement else None,
+        "source_statements": [
+            {"statement_id": s.statement_id, "statement_version": s.statement_version,
+             "statement_number": db.get(Statement, s.statement_id).statement_number,
+             "customer_name": db.get(Customer, db.get(Statement, s.statement_id).customer_id).name,
+             "ledger_version": db.get(Statement, s.statement_id).ledger_version,
+             "total_amount": s.total_amount}
+            for s in task_shares(db, task)
+        ],
         "statement_month": statement.statement_month if statement else None,
         "statement_version": task.statement_version,
         "ledger_version": statement.ledger_version if statement else None,
@@ -1164,6 +1177,7 @@ def _invoice_task_result_request_hash(
             "failure_reason": payload.failure_reason,
             "expected_version": payload.expected_version,
             "expected_ledger_version": payload.expected_ledger_version,
+            **({"expected_ledger_versions": payload.expected_ledger_versions} if payload.expected_ledger_versions is not None else {}),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -1313,12 +1327,26 @@ def create_invoice_task(
     db: Session = Depends(get_db),
     user: User = Depends(can_generate),
 ) -> dict[str, Any]:
+    return _create_invoice_task(statement_id, payload, db, user)
+
+
+def _create_invoice_task(statement_id, payload, db, user, *, commit=True):
     statement = _statement_for_user(db, statement_id, user)
+    db.execute(update(Statement).where(Statement.id == statement_id).values(version=Statement.version))
+    db.expire_all()
     customer = db.get(Customer, statement.customer_id)
     if statement.confirmation_status != "confirmed":
         raise HTTPException(status_code=409, detail="请先核对并确认对账单，再生成开票任务")
     if statement.version != payload.expected_version:
         raise HTTPException(status_code=409, detail={"message": "对账单版本已变化，请刷新后重试", "current_version": statement.version})
+    consolidated = db.scalar(select(FinanceInvoiceTask).join(FinanceInvoiceTaskStatement,
+        FinanceInvoiceTaskStatement.task_id == FinanceInvoiceTask.id).where(
+        FinanceInvoiceTaskStatement.statement_id == statement.id,
+        FinanceInvoiceTask.status != "voided").order_by(FinanceInvoiceTask.id.desc()).limit(1))
+    if consolidated is not None:
+        _task_for_user(db, consolidated.id, user)
+        _ensure_task_source_current(db, consolidated)
+        return _task_response(db, consolidated)
     request_idempotency_base = hashlib.sha256(
         f"{user.id}\0{payload.idempotency_key.strip()}".encode("utf-8")
     ).hexdigest().upper()
@@ -1412,8 +1440,11 @@ def create_invoice_task(
     total = sum((line["total_amount"] for line in lines), Decimal("0")).quantize(MONEY)
     net = sum((line["net_amount"] for line in lines), Decimal("0")).quantize(MONEY)
     tax = sum((line["tax_amount"] for line in lines), Decimal("0")).quantize(MONEY)
+    task_number = f"IT-{statement.statement_number}-V{statement.version}"
+    if db.scalar(select(FinanceInvoiceTask.id).where(FinanceInvoiceTask.task_number == task_number)) is not None:
+        task_number = f"{task_number[:48]}-R{request_idempotency_base[:8]}"
     task = FinanceInvoiceTask(
-        task_number=f"IT-{statement.statement_number}-V{statement.version}",
+        task_number=task_number,
         statement_id=statement.id,
         statement_version=statement.version,
         customer_id=statement.customer_id,
@@ -1467,7 +1498,8 @@ def create_invoice_task(
                     profile.default_seller_id = seller.id
                     profile.version += 1
         _audit(db, user=user, action="CREATE_INVOICE_TASK", resource="FinanceInvoiceTask", entity_id=task.id, customer=customer, details={"statement_id": statement.id, "statement_version": statement.version, "seller_id": seller.id, "task_number": task.task_number, "total_amount": total, "line_count": len(lines), "request_idempotency_key": payload.idempotency_key}, description="生成冻结开票任务")
-        db.commit()
+        if commit:
+            db.commit()
     except IntegrityError as error:
         db.rollback()
         existing = db.scalar(
@@ -1504,7 +1536,9 @@ def list_invoice_tasks(
     query = select(FinanceInvoiceTask).order_by(FinanceInvoiceTask.id.desc())
     if customer_id is not None:
         require_customer_access(customer_id, user, db)
-        query = query.where(FinanceInvoiceTask.customer_id == customer_id)
+        query = query.where(or_(FinanceInvoiceTask.customer_id == customer_id,
+            FinanceInvoiceTask.id.in_(select(FinanceInvoiceTaskStatement.task_id).join(Statement,
+                Statement.id == FinanceInvoiceTaskStatement.statement_id).where(Statement.customer_id == customer_id))))
     elif not has_unrestricted_customer_access(user, db):
         scopes = customer_scope_ids(user, db)
         if not scopes:
@@ -1515,7 +1549,16 @@ def list_invoice_tasks(
     tasks = db.scalars(query).all()
     if statement_month:
         tasks = [task for task in tasks if (statement := db.get(Statement, task.statement_id)) and statement.statement_month == statement_month]
-    return {"items": [_task_response(db, task) for task in tasks]}
+    visible = []
+    for task in tasks:
+        try:
+            _task_for_user(db, task.id, user)
+        except HTTPException as error:
+            if error.status_code != 403:
+                raise
+            continue
+        visible.append(_task_response(db, task))
+    return {"items": visible}
 
 
 @router.get("/invoice-tasks/{task_id}")
@@ -1558,10 +1601,11 @@ def get_invoice_task(
 
 
 def _ensure_task_source_current(db: Session, task: FinanceInvoiceTask) -> None:
-    statement = db.get(Statement, task.statement_id)
     seller = db.get(InvoiceSellerEntity, task.seller_entity_id)
-    if statement is None or seller is None or statement.confirmation_status != "confirmed" or statement.version != task.statement_version:
-        raise HTTPException(status_code=409, detail="对账来源已变化或未确认；请作废旧任务后重新生成")
+    for share in task_shares(db, task):
+        statement = db.get(Statement, share.statement_id)
+        if statement is None or seller is None or statement.confirmation_status != "confirmed" or statement.version != share.statement_version:
+            raise HTTPException(status_code=409, detail="对账来源已变化或未确认；请作废旧任务后重新生成")
 
 
 def _raise_invoice_task_ledger_conflict(
@@ -1674,34 +1718,38 @@ def _register_issued_invoice_task_result(
             )
         _ensure_task_source_current(db, task)
 
-        updated_statement = db.execute(
-            text(
-                """
-                UPDATE finance_statements
-                SET invoiced_amount = invoiced_amount + :amount,
-                    ledger_version = ledger_version + 1
-                WHERE id = :statement_id
-                  AND confirmation_status = 'confirmed'
-                  AND version = :statement_version
-                  AND ledger_version = :expected_ledger_version
-                  AND invoiced_amount + :amount <= total_receivable
-                RETURNING id, total_receivable, invoiced_amount, settled_amount,
-                          status, confirmation_status, version, ledger_version
-                """
-            ),
-            {
-                "statement_id": task.statement_id,
-                "statement_version": task.statement_version,
-                "expected_ledger_version": payload.expected_ledger_version,
-                "amount": str(task.total_amount),
-            },
-        ).mappings().one_or_none()
-        if updated_statement is None:
-            _raise_invoice_task_ledger_conflict(
-                db,
-                task=task,
-                expected_ledger_version=payload.expected_ledger_version,
-            )
+        shares = task_shares(db, task)
+        if len(shares) > 1 and (payload.expected_ledger_versions is None or
+            set(payload.expected_ledger_versions) != {s.statement_id for s in shares}):
+            raise HTTPException(422, "合并开票必须提供全部来源账单的财务流水版本")
+        for share in shares:
+            expected_ledger = (payload.expected_ledger_versions or {}).get(share.statement_id, payload.expected_ledger_version)
+            updated_statement = db.execute(
+                text(
+                    """
+                    UPDATE finance_statements
+                    SET invoiced_amount = invoiced_amount + :amount,
+                        ledger_version = ledger_version + 1
+                    WHERE id = :statement_id
+                      AND confirmation_status = 'confirmed'
+                      AND version = :statement_version
+                      AND ledger_version = :expected_ledger_version
+                      AND invoiced_amount + :amount <= total_receivable
+                    RETURNING id, total_receivable, invoiced_amount, settled_amount,
+                              status, confirmation_status, version, ledger_version
+                    """
+                ),
+                {
+                    "statement_id": share.statement_id,
+                    "statement_version": share.statement_version,
+                    "expected_ledger_version": expected_ledger,
+                    "amount": str(share.total_amount),
+                },
+            ).mappings().one_or_none()
+            if updated_statement is None:
+                if len(shares) > 1:
+                    raise HTTPException(409, f"来源账单 {share.statement_id} 版本、状态或开票余额已变化，请刷新；本次未登记任何账单")
+                _raise_invoice_task_ledger_conflict(db, task=task, expected_ledger_version=expected_ledger)
 
         updated_task = db.execute(
             text(
@@ -1763,6 +1811,7 @@ def _register_issued_invoice_task_result(
                 "task_number": task.task_number,
                 "invoice_number": invoice.invoice_number,
                 "invoice_amount": task.total_amount,
+                "statement_shares": [{"statement_id": s.statement_id, "amount": str(s.total_amount)} for s in shares],
                 "expected_ledger_version": payload.expected_ledger_version,
                 "statement_version": updated_statement["version"],
                 "ledger_version": updated_statement["ledger_version"],
@@ -1804,6 +1853,8 @@ def confirm_invoice_task(
     user: User = Depends(can_generate),
 ) -> dict[str, Any]:
     task = _task_for_user(db, task_id, user)
+    db.execute(update(FinanceInvoiceTask).where(FinanceInvoiceTask.id == task_id).values(version=FinanceInvoiceTask.version))
+    db.expire_all()
     customer = db.get(Customer, task.customer_id)
     if task.version != payload.expected_version:
         raise HTTPException(status_code=409, detail={"message": "任务版本已变化，请刷新后重试", "current_version": task.version})
@@ -1836,10 +1887,14 @@ def download_tax_template(
     user: User = Depends(can_generate),
 ) -> FileResponse:
     task = _task_for_user(db, task_id, user)
+    db.execute(update(FinanceInvoiceTask).where(FinanceInvoiceTask.id == task_id).values(version=FinanceInvoiceTask.version))
+    db.expire_all()
     customer = db.get(Customer, task.customer_id)
     if task.status not in {"ready", "exported"}:
         raise HTTPException(status_code=409, detail="请先确认开票任务，再下载税局 Excel")
     _ensure_task_source_current(db, task)
+    from app.api.partner_invoice import ensure_complete_partner_download
+    ensure_complete_partner_download(db, task, user)
     items = db.scalars(select(FinanceInvoiceTaskItem).where(FinanceInvoiceTaskItem.task_id == task.id).order_by(FinanceInvoiceTaskItem.sequence_no)).all()
     export_dir = _invoice_export_dir()
     statement = db.get(Statement, task.statement_id)
@@ -1905,8 +1960,8 @@ def register_invoice_task_result(
             )
         if not payload.failure_reason:
             raise HTTPException(status_code=422, detail="请填写税局导入或开具失败原因")
-        if task.status == "issued":
-            raise HTTPException(status_code=409, detail="已开票任务不能登记为失败")
+        if task.status in {"issued", "voided"}:
+            raise HTTPException(status_code=409, detail="已开票或已撤销任务不能登记为失败")
         updated = db.execute(
             text(
                 """
@@ -1915,7 +1970,7 @@ def register_invoice_task_result(
                     failure_reason = :failure_reason,
                     version = version + 1
                 WHERE id = :task_id
-                  AND status != 'issued'
+                  AND status NOT IN ('issued', 'voided')
                   AND version = :expected_version
                 RETURNING id, version
                 """
@@ -1975,6 +2030,9 @@ def void_invoice_task(
     user: User = Depends(can_generate),
 ) -> dict[str, Any]:
     task = _task_for_user(db, task_id, user)
+    if len(task_shares(db, task)) > 1:
+        from app.api.partner_invoice import void_merged_task
+        return void_merged_task(db, task, payload, user)
     customer = db.get(Customer, task.customer_id)
     try:
         if task.version != payload.expected_version:
@@ -2206,3 +2264,21 @@ def download_invoice_pdf(
     if not path.is_file():
         raise HTTPException(status_code=404, detail="发票附件文件不存在")
     return FileResponse(path, media_type="application/pdf", filename=attachment.original_name)
+
+
+class PartnerMergePayload(BaseModel):
+    scope_hash: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=8, max_length=160)
+
+
+@router.get("/statements/{statement_id}/partner-invoice-preview")
+def preview_partner_invoice(statement_id: int, db: Session = Depends(get_db), user: User = Depends(can_read)):
+    from app.api.partner_invoice import partner_preview
+    return partner_preview(statement_id, db, user)
+
+
+@router.post("/statements/{statement_id}/partner-invoice-tasks", status_code=201)
+def create_partner_invoice_task(statement_id: int, payload: PartnerMergePayload,
+    db: Session = Depends(get_db), user: User = Depends(can_generate)):
+    from app.api.partner_invoice import merge_partner_tasks
+    return merge_partner_tasks(statement_id, payload, db, user)

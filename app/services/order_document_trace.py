@@ -6,6 +6,7 @@ import re
 from typing import Any
 from urllib.parse import urlencode
 
+from app.services.invoice_statement_scope import StatementInvoice
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -1066,9 +1067,9 @@ def build_order_item_document_trace(
 
         if statement_ids:
             invoices = db.scalars(
-                select(Invoice)
-                .where(Invoice.statement_id.in_(statement_ids))
-                .order_by(Invoice.created_at, Invoice.id)
+                select(StatementInvoice)
+                .where(StatementInvoice.statement_id.in_(statement_ids))
+                .order_by(StatementInvoice.created_at, StatementInvoice.id)
             ).all()
             for invoice in invoices:
                 add_event(

@@ -310,6 +310,22 @@ class FinanceInvoiceTask(Base):
     )
 
 
+class FinanceInvoiceTaskStatement(Base):
+    """Frozen shares of one real invoice task across independent statements."""
+    __tablename__ = "finance_invoice_task_statements"
+    __table_args__ = (
+        CheckConstraint("statement_version >= 1 AND total_amount > 0", name="ck_invoice_task_statement_values"),
+        CheckConstraint("abs(net_amount + tax_amount - total_amount) < 0.005", name="ck_invoice_task_statement_balance"),
+        Index("ix_invoice_task_statements_statement", "statement_id"),
+    )
+    task_id: Mapped[int] = mapped_column(ForeignKey("finance_invoice_tasks.id", ondelete="RESTRICT"), primary_key=True)
+    statement_id: Mapped[int] = mapped_column(ForeignKey("finance_statements.id", ondelete="RESTRICT"), primary_key=True)
+    statement_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    net_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    tax_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+
+
 class FinanceInvoiceTaskItem(Base):
     __tablename__ = "finance_invoice_task_items"
     __table_args__ = (

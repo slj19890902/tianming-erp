@@ -128,7 +128,7 @@ vm.retryInvoiceTaskDetail = new AsyncFunction({json.dumps(retry_body, ensure_asc
 
 def test_invoice_task_confirm_and_result_save_are_single_flight(tmp_path: Path) -> None:
     confirm_body = _method_body(
-        "async confirmInvoiceTask(task) {", "async downloadInvoiceTaxTemplate(task) {"
+        "async confirmInvoiceTask(task) {", "async openPartnerInvoiceMerge(statementId) {"
     )
     save_body = _method_body(
         "async saveInvoiceTaskResult() {", "uploadInvoiceTaskPdf(task) {"
@@ -147,6 +147,7 @@ const vm = {{
   invoiceTaskOperationState:{{detailLoading:false,detailError:"",detailTaskId:null,detailTaskNumber:"",confirmingTaskId:null,resultSaving:false}},
   invoiceTaskResult:{{task_id:20,status:"issued",invoice_number:"INV-001",invoice_date:"2026-08-05",failure_reason:"",expected_version:7,expected_ledger_version:4}},
   async loadInvoiceTasks() {{ return true; }},
+  async loadFinance() {{ return true; }},
   closeModal() {{ this.modal = null; }},
   errorMessage(error) {{ return error?.message || String(error); }},
   showToast(message, danger=false) {{ messages.push({{message,danger}}); }}

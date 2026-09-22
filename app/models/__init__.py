@@ -214,6 +214,7 @@ from app.models.invoice_task import (  # noqa: E402,F401
     FinanceInvoiceAttachment,
     FinanceInvoiceTask,
     FinanceInvoiceTaskItem,
+    FinanceInvoiceTaskStatement,
     InvoiceSellerEntity,
 )
 from app.models.company_config import CompanyConfig  # noqa: E402,F401

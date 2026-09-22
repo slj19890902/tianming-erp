@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, Field, field_validator, model_validator
+from app.services.invoice_statement_scope import StatementInvoice, task_statement_filter, task_statement_rows
 from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased
@@ -47,6 +48,7 @@ from app.models.finance_payable import FinancePayable
 from app.models.invoice_task import (
     CustomerInvoiceProfile,
     FinanceInvoiceTask,
+    FinanceInvoiceTaskStatement,
     FinanceSettlementEntity,
 )
 from app.models.supplier import Supplier
@@ -1726,11 +1728,11 @@ def _statement_detail_response(
     ).all()
     invoices = db.execute(
         select(
-            Invoice.id,
-            Invoice.invoice_number,
-            Invoice.invoice_date,
-            Invoice.invoice_amount,
-        ).where(Invoice.statement_id == statement.id)
+            StatementInvoice.id,
+            StatementInvoice.invoice_number,
+            StatementInvoice.invoice_date,
+            StatementInvoice.invoice_amount,
+        ).where(StatementInvoice.statement_id == statement.id)
     ).all()
     settlements = db.execute(
         select(
@@ -2504,19 +2506,19 @@ def list_invoices(
 ) -> dict:
     query = (
         select(
-            Invoice,
+            StatementInvoice,
             Statement.statement_number,
             Customer.name.label("customer_name"),
         )
-        .join(Statement, Statement.id == Invoice.statement_id)
+        .join(Statement, Statement.id == StatementInvoice.statement_id)
         .join(Customer, Customer.id == Statement.customer_id)
-        .order_by(Invoice.invoice_date.desc(), Invoice.id.desc())
+        .order_by(StatementInvoice.invoice_date.desc(), StatementInvoice.id.desc())
     )
     if statement_id is not None:
         statement = db.get(Statement, statement_id)
         if statement is not None:
             require_customer_access(statement.customer_id, user, db)
-        query = query.where(Invoice.statement_id == statement_id)
+        query = query.where(StatementInvoice.statement_id == statement_id)
     else:
         visible_customer_ids = _visible_customer_ids(user, db)
         if visible_customer_ids is not None:
@@ -3573,8 +3575,8 @@ def update_return_receipt(
             raise HTTPException(status_code=409, detail="请先撤销对账确认，再更正回单")
         _lock_unpaid_statement_for_dispute(db, statement_id=correction_statement.id,
                                          expected_version=payload.expected_statement_version)
-        if db.scalar(select(Invoice.id).where(Invoice.statement_id == correction_statement.id).limit(1)) is not None or db.scalar(
-            select(FinanceInvoiceTask.id).where(FinanceInvoiceTask.statement_id == correction_statement.id,
+        if db.scalar(select(StatementInvoice.id).where(StatementInvoice.statement_id == correction_statement.id).limit(1)) is not None or db.scalar(
+            select(FinanceInvoiceTask.id).where(task_statement_filter(correction_statement.id),
                                                FinanceInvoiceTask.status != "voided").limit(1)
         ) is not None:
             raise HTTPException(status_code=409, detail="对账单仍有开票记录或有效开票任务，不能更正回单")
@@ -5336,10 +5338,10 @@ def current_customer_months(
             ).add(str(adjustment_action))
         for task_statement_id, task_version, task_status in db.execute(
             select(
-                FinanceInvoiceTask.statement_id,
-                FinanceInvoiceTask.statement_version,
-                FinanceInvoiceTask.status,
-            ).where(FinanceInvoiceTask.statement_id.in_(statement_ids))
+                task_statement_rows.c.statement_id,
+                task_statement_rows.c.statement_version,
+                task_statement_rows.c.status,
+            ).where(task_statement_rows.c.statement_id.in_(statement_ids))
         ).all():
             task_statuses_by_statement.setdefault(int(task_statement_id), []).append(
                 f"{int(task_version)}:{task_status}"
@@ -5857,15 +5859,15 @@ def settled_customer_months(
     if invoice_keyword:
         invoiced_statement = aliased(Statement)
         group_query = group_query.where(
-            select(Invoice.id)
+            select(StatementInvoice.id)
             .join(
                 invoiced_statement,
-                Invoice.statement_id == invoiced_statement.id,
+                StatementInvoice.statement_id == invoiced_statement.id,
             )
             .where(
                 invoiced_statement.customer_id == Statement.customer_id,
                 invoiced_statement.statement_month == Statement.statement_month,
-                Invoice.invoice_number.contains(
+                StatementInvoice.invoice_number.contains(
                     invoice_keyword,
                     autoescape=True,
                 ),
@@ -5992,14 +5994,14 @@ def settled_customer_months(
         statement_ids = [int(row["id"]) for row in statement_rows]
         invoice_rows = db.execute(
             select(
-                Invoice.id,
-                Invoice.statement_id,
-                Invoice.invoice_number,
-                Invoice.invoice_date,
-                Invoice.invoice_amount,
+                StatementInvoice.id,
+                StatementInvoice.statement_id,
+                StatementInvoice.invoice_number,
+                StatementInvoice.invoice_date,
+                StatementInvoice.invoice_amount,
             )
-            .where(Invoice.statement_id.in_(statement_ids))
-            .order_by(Invoice.invoice_date, Invoice.id)
+            .where(StatementInvoice.statement_id.in_(statement_ids))
+            .order_by(StatementInvoice.invoice_date, StatementInvoice.id)
         ).mappings().all()
         settlement_rows = db.execute(
             select(
@@ -7038,6 +7040,11 @@ def _lock_unpaid_statement_for_dispute(
                 "message": "对账单已有收款记录、收款金额或版本已变化，不能直接重开或调整；请刷新核对，并先按受控流程处理收款。",
             },
         )
+    if db.scalar(select(FinanceInvoiceTask.id).join(FinanceInvoiceTaskStatement,
+        FinanceInvoiceTaskStatement.task_id == FinanceInvoiceTask.id).where(
+        FinanceInvoiceTaskStatement.statement_id == statement_id,
+        FinanceInvoiceTask.status != "voided").limit(1)) is not None:
+        raise HTTPException(409, "该客户账单已纳入合作公司合并开票；请先在开票任务中受控撤销合并任务，再单独修改该客户。已实际开票不可普通撤销。")
 
 
 @router.post("/statements/{statement_id}/reopen")
@@ -7061,14 +7068,14 @@ def reopen_statement_for_dispute(
             db, statement_id=statement.id, expected_version=payload.expected_version
         )
         issued_invoice = db.scalar(
-            select(Invoice.id).where(
-                Invoice.statement_id == statement.id,
-                Invoice.invoice_status == "issued",
+            select(StatementInvoice.id).where(
+                StatementInvoice.statement_id == statement.id,
+                StatementInvoice.invoice_status == "issued",
             ).limit(1)
         )
         tasks = db.scalars(
             select(FinanceInvoiceTask).where(
-                FinanceInvoiceTask.statement_id == statement.id,
+                task_statement_filter(statement.id),
                 FinanceInvoiceTask.status != "voided",
             )
         ).all()
@@ -7245,14 +7252,14 @@ def adjust_statement_dispute(
             raise HTTPException(status_code=409, detail="当前对账状态不能调整异议明细")
         tasks = db.scalars(
             select(FinanceInvoiceTask).where(
-                FinanceInvoiceTask.statement_id == statement.id,
+                task_statement_filter(statement.id),
                 FinanceInvoiceTask.status != "voided",
             )
         ).all()
         issued_invoice = db.scalar(
-            select(Invoice.id).where(
-                Invoice.statement_id == statement.id,
-                Invoice.invoice_status == "issued",
+            select(StatementInvoice.id).where(
+                StatementInvoice.statement_id == statement.id,
+                StatementInvoice.invoice_status == "issued",
             ).limit(1)
         )
         if issued_invoice is not None or any(task.status == "issued" for task in tasks):
@@ -7464,7 +7471,7 @@ def update_statement(
                 detail="对账单已确认；如需修改来源，请先作废对应开票任务并重新核对。",
             )
         if db.scalar(
-            select(Invoice.id).where(Invoice.statement_id == statement.id).limit(1)
+            select(StatementInvoice.id).where(StatementInvoice.statement_id == statement.id).limit(1)
         ) is not None:
             raise HTTPException(
                 status_code=409,
@@ -7583,7 +7590,7 @@ def cancel_statement(
                 detail="对账单已确认；如需取消，请先作废对应开票任务并重新核对。",
             )
         if db.scalar(
-            select(Invoice.id).where(Invoice.statement_id == statement.id).limit(1)
+            select(StatementInvoice.id).where(StatementInvoice.statement_id == statement.id).limit(1)
         ) is not None:
             raise HTTPException(
                 status_code=409,
@@ -7883,10 +7890,10 @@ def finance_overview(
     for row_month, amount in statement_rows:
         trend[row_month]["confirmed_statement_amount"] += Decimal(str(amount))
     invoice_query = (
-        select(Statement.statement_month, Invoice.invoice_amount)
-        .join(Statement, Statement.id == Invoice.statement_id)
+        select(Statement.statement_month, StatementInvoice.invoice_amount)
+        .join(Statement, Statement.id == StatementInvoice.statement_id)
         .where(
-            Invoice.invoice_status == "issued",
+            StatementInvoice.invoice_status == "issued",
             Statement.confirmation_status == "confirmed",
             Statement.statement_month.in_(months),
         )

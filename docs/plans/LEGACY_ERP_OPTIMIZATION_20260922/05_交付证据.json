@@ -1,0 +1,120 @@
+{
+  "recorded_at": "2026-09-22T13:31:47.949322+08:00",
+  "status": "released_verified",
+  "version": "v0.22.482",
+  "release_source_commit": "93c824c6de5dd9720aebd7cc08f7c5e8f28ce1fc",
+  "release_package_sha256": "4211e64101e657d9d3e51b04e4740823c1a146d83a745ebd906e1e3024e2c003",
+  "database_revision": "dv0922",
+  "migration_performed": false,
+  "verified_backup": true,
+  "backup_path": "Z:\\sata1-18015598002\\BoxERP\\backups\\20260922-131729-3dba2f55.tmbackup",
+  "backup_sha256": "32a8d1b16d857a180f62b7efae83f9d3f82e7a24c9fa8908cb39543bb136aa89",
+  "database_integrity": "ok",
+  "foreign_key_violations": 0,
+  "changed_table_counts": {},
+  "rollback_package": "ee7476e7b59d8a354451587cdf068b28a8a34b33deebf4ad96ded22da85df7ef",
+  "rollback_compatible": true,
+  "health": [
+    {
+      "url": "http://127.0.0.1:18000/api/health",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "url": "http://192.168.3.80:8000/api/health",
+      "status": 200,
+      "ok": true
+    },
+    {
+      "url": "http://172.16.1.26:8000/api/health",
+      "status": 200,
+      "ok": true
+    }
+  ],
+  "unauthenticated_orders_status": 401,
+  "runtime_assets": {
+    "app/api/orders.py": "1a25a95f20fb6f58dff0d07352e8900d17934bf00acb7c8f0b9b7ed97c9c9b6f",
+    "app/services/order_business_status.py": "1ea3303f07737167ed283e2521e694c9c914bd085e3804171334ef97007da563",
+    "app/version.py": "99f0cdda4b409dfd31dc0573b44d990d9e32dc3011dd78648d85cd63dd856f9a",
+    "static/index.html": "987b581435fb895069514524bc11d55b8461842b672dcb4b2d4e032b8f5df6f3"
+  },
+  "source_binding": {
+    "q01-rows": {
+      "app/api/orders.py": "1a25a95f20fb6f58dff0d07352e8900d17934bf00acb7c8f0b9b7ed97c9c9b6f",
+      "app/services/order_business_status.py": "1ea3303f07737167ed283e2521e694c9c914bd085e3804171334ef97007da563"
+    },
+    "q01-final": {
+      "app/api/orders.py": "1a25a95f20fb6f58dff0d07352e8900d17934bf00acb7c8f0b9b7ed97c9c9b6f",
+      "app/services/order_business_status.py": "1ea3303f07737167ed283e2521e694c9c914bd085e3804171334ef97007da563"
+    }
+  },
+  "runtime_identity": {
+    "package": "ee7476e7b59d8a354451587cdf068b28a8a34b33deebf4ad96ded22da85df7ef",
+    "runtime_files_verified": 28822,
+    "runtime_source": "signed current v481 runtime; failed first attempt used an incomplete historical build venv; no published package from failed attempt"
+  },
+  "nas_evidence_root": "Z:\\sata1-18015598002\\天明ERP知识库\\04_开发记录\\任务回执\\20260922-旧审计整体优化-v482-证据包",
+  "raw_pytest_artifacts_verified": 37,
+  "release_artifacts": [
+    {
+      "nas_relative": "release/build-result.json",
+      "sha256": "55a910c723fa3dd9b068754f710c51d99b57d4b3ed543a4f21b1e9fcbd90fa56"
+    },
+    {
+      "nas_relative": "release/formal-check.json",
+      "sha256": "f7c7d968e71d0366945f51817619b5a426eedea8e2c27103b79ebce837e115ca"
+    },
+    {
+      "nas_relative": "release/health-check.json",
+      "sha256": "7bfa640786b9b52d71da06f8da118998bfd4d1125ae66c25c6eeeb835aada4f8"
+    },
+    {
+      "nas_relative": "release/release-public.pem",
+      "sha256": "ce14118c44f5b84d45cc84cecbb8b70a6319ea2323b084577299a91b843c0cb2"
+    },
+    {
+      "nas_relative": "release/runtime-verification.json",
+      "sha256": "a2f40ab608ca8812ba28d66bb8fe4a02e1914478496225aeea846071d8a14381"
+    },
+    {
+      "nas_relative": "release/deploy_v482.py",
+      "sha256": "19536f07d8e66ddf6dc4eb005a30e1755c0f3dd1f481bbf7ec048118d91612d0"
+    },
+    {
+      "nas_relative": "release/collect_v482_formal.py",
+      "sha256": "3ef0344fa9ace9f5dc7defa479e195ecf1af15b0be3f34f83cbb13c409dd3906"
+    },
+    {
+      "nas_relative": "release/verify_v482.py",
+      "sha256": "e8452d24518a17db21ee6b76b9c85f04e63afd093dc7cf347d9b1b81d55e4339"
+    },
+    {
+      "nas_relative": "release/verified-backup-receipt.json",
+      "sha256": "0e795ef9bea0d5be023277d1970af0bcb0a605bc62db6bacf6553d04a76c67cf"
+    }
+  ],
+  "report_collection": {
+    "interpreter": "D:/tm-worktrees/.venvs/erp-astra-rework-r01-py312/Scripts/python.exe",
+    "original_deploy_script": {
+      "path": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\deploy_v482.py",
+      "exit_code": 1,
+      "details": {
+        "original_deploy_script_exit_code": 1,
+        "error": "AttributeError: 'tuple' object has no attribute 'cwd'",
+        "stage": "after Manager.update returned and backup/current/previous/revision assertions passed",
+        "action": "Read-only recollection; did not rerun update, backup, migration or service restart.",
+        "scope": "One-off external reporting script, not shipped application or updater."
+      }
+    },
+    "read_only_recollection": {
+      "path": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\collect_v482_formal.py",
+      "exit_code": 0
+    },
+    "read_only_health_check": {
+      "path": "D:\\tm-worktrees\\erp-audit-optimization-evidence\\verify_v482.py",
+      "exit_code": 0,
+      "earlier_attempt_error": "Loopback root redirects to HTTPS by design; corrected probe to the existing configured LAN HTTP origin. No security or service configuration changed."
+    }
+  },
+  "document_commit": "Recorded in the final independent NAS receipt and archive-verification.json; not the runtime source commit."
+}

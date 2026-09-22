@@ -1,0 +1,109 @@
+{
+  "schema_version": 2,
+  "hash_rule": "SHA-256 of file bytes with CRLF normalized to LF",
+  "source_commit": "93c824c6de5dd9720aebd7cc08f7c5e8f28ce1fc",
+  "manifest_excluded_from_hashed_universe": true,
+  "groups": [
+    {
+      "name": "application_code",
+      "files": [
+        {
+          "path": "app/api/orders.py",
+          "sha256_lf": "1a25a95f20fb6f58dff0d07352e8900d17934bf00acb7c8f0b9b7ed97c9c9b6f"
+        },
+        {
+          "path": "app/services/order_business_status.py",
+          "sha256_lf": "1ea3303f07737167ed283e2521e694c9c914bd085e3804171334ef97007da563"
+        },
+        {
+          "path": "app/version.py",
+          "sha256_lf": "99f0cdda4b409dfd31dc0573b44d990d9e32dc3011dd78648d85cd63dd856f9a"
+        }
+      ]
+    },
+    {
+      "name": "tests",
+      "files": [
+        {
+          "path": "tests/test_audit_order_projection_optimization.py",
+          "sha256_lf": "e552c4bf576e62b9bcc46a5f4a01e593834a9fe217627cc27914b33b60683312"
+        },
+        {
+          "path": "tests/test_p0_order_business_status.py",
+          "sha256_lf": "edb86f1e21539c8467cebba89a0d56f46a1d0aeae20440029add3a0e035d05c1"
+        },
+        {
+          "path": "tests/test_p1_09c_order_full_list_query_scaling.py",
+          "sha256_lf": "d3335188a364ed62983755385381844cb649ebb45c4f98064fc89219127cfb1e"
+        },
+        {
+          "path": "tests/test_phase3_cache_authorization.py",
+          "sha256_lf": "e9b55dd63ff895ab63ef68c2c6d6f8798f45ff9662109ba2503168a088e9ab97"
+        },
+        {
+          "path": "tests/test_phase3_scale_reliability.py",
+          "sha256_lf": "3928d1ce49f12b6ba58b9519b9c366a64b69d7fa81ea18af380073829dfcae5c"
+        },
+        {
+          "path": "tests/test_semi_finished_order_reservation.py",
+          "sha256_lf": "922674c43d1c4eea871c17a89c8f38019506d89adb0709238db860d4f800b78f"
+        }
+      ]
+    },
+    {
+      "name": "documents",
+      "files": [
+        {
+          "path": "docs/CODEX_HANDOFF.md",
+          "sha256_lf": "4b5b3454814dfe51bef75851a748aea326e770e6409a64044f957a91e65d7686"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_OPTIMIZATION_20260922/00_目标与执行卡.md",
+          "sha256_lf": "0366f9d1f3b0312b515156d0b14d4a74686537d2593b98e293ddb79147a6c13b"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_OPTIMIZATION_20260922/01_整体对照与优化取舍.md",
+          "sha256_lf": "72c34d66feae4ef960f4fb4d29e69f7683c389ef0bf52c39b1c64211ac98f56f"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_OPTIMIZATION_20260922/04_整体优化交付.md",
+          "sha256_lf": "e14237b5ca12e4ebe102103faa881636ef93bc2ae74abfa701155d7d0c47db49"
+        }
+      ]
+    },
+    {
+      "name": "report_summary",
+      "files": [
+        {
+          "path": "docs/plans/LEGACY_ERP_OPTIMIZATION_20260922/02_执行证据.json",
+          "sha256_lf": "c6f581ed6ef2184e8cb45bdecd596f838f045100750e60e773f549f0fd3ee825"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_OPTIMIZATION_20260922/03_测量摘要.json",
+          "sha256_lf": "c36c84b7fe24f31a3b0b4e9f890fd94d7b9bda5bc9b01a6ef747be3687f8bad4"
+        },
+        {
+          "path": "docs/plans/LEGACY_ERP_OPTIMIZATION_20260922/05_交付证据.json",
+          "sha256_lf": "154450bcc106104266c0e301ce118614a8d173d8e6e333161c1e0b0379674b04"
+        },
+        {
+          "path": "docs/release_reports/AUDIT_OPTIMIZATION_20260922.md",
+          "sha256_lf": "98fe34fccb9b298d6a3142e66fa3ce68b4521e58690512ab7196713801339654"
+        }
+      ]
+    },
+    {
+      "name": "verification_tools",
+      "files": [
+        {
+          "path": "scripts/qa/run_pytest_with_artifacts.py",
+          "sha256_lf": "857cc906c907f5a74fd88a46af3bb8e8cb15b67ffa3559465b6aeefdfc8cdeb2"
+        },
+        {
+          "path": "scripts/qa/verify_phase3_manifest.py",
+          "sha256_lf": "bbc539b40ec1cdc0c91d37a084f03224aa8d87420dd849300d000dcbb321521c"
+        }
+      ]
+    }
+  ]
+}

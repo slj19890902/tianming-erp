@@ -46,12 +46,14 @@
     },
     "cases": [
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_unfiltered_active_list_reuses_same_scoped_snapshot",
-        "status": "failed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_unfiltered_active_list_reuses_same_scoped_snapshot",
+        "status": "failed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       },
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
-        "status": "passed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "passed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       }
     ]
   },
@@ -102,8 +104,9 @@
     },
     "cases": [
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
-        "status": "failed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "failed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       }
     ]
   },
@@ -155,16 +158,19 @@
     },
     "cases": [
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_unfiltered_active_list_reuses_same_scoped_snapshot",
-        "status": "passed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_unfiltered_active_list_reuses_same_scoped_snapshot",
+        "status": "passed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       },
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
-        "status": "passed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "passed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       },
       {
-        "nodeid": "tests.test_phase3_cache_authorization::test_warm_projection_separates_customer_scope_and_finance_then_invalidates",
-        "status": "passed"
+        "nodeid": "tests/test_phase3_cache_authorization.py::test_warm_projection_separates_customer_scope_and_finance_then_invalidates",
+        "status": "passed",
+        "junit_classname": "tests.test_phase3_cache_authorization"
       }
     ]
   },
@@ -215,8 +221,9 @@
     },
     "cases": [
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
-        "status": "passed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "passed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       }
     ]
   },
@@ -270,88 +277,109 @@
     },
     "cases": [
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_unfiltered_active_list_reuses_same_scoped_snapshot",
-        "status": "passed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_unfiltered_active_list_reuses_same_scoped_snapshot",
+        "status": "passed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       },
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
-        "status": "passed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "passed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       },
       {
-        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_full_list_page_context_is_byte_equivalent_to_single_order_path[admin]",
-        "status": "passed"
+        "nodeid": "tests/test_p1_09c_order_full_list_query_scaling.py::test_full_list_page_context_is_byte_equivalent_to_single_order_path[admin]",
+        "status": "passed",
+        "junit_classname": "tests.test_p1_09c_order_full_list_query_scaling"
       },
       {
-        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_full_list_page_context_is_byte_equivalent_to_single_order_path[workshop]",
-        "status": "passed"
+        "nodeid": "tests/test_p1_09c_order_full_list_query_scaling.py::test_full_list_page_context_is_byte_equivalent_to_single_order_path[workshop]",
+        "status": "passed",
+        "junit_classname": "tests.test_p1_09c_order_full_list_query_scaling"
       },
       {
-        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_full_list_select_count_is_bounded_by_page_queries",
-        "status": "passed"
+        "nodeid": "tests/test_p1_09c_order_full_list_query_scaling.py::test_full_list_select_count_is_bounded_by_page_queries",
+        "status": "passed",
+        "junit_classname": "tests.test_p1_09c_order_full_list_query_scaling"
       },
       {
-        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_group_detail_batch_context_is_byte_equivalent_to_legacy_fallbacks",
-        "status": "passed"
+        "nodeid": "tests/test_p1_09c_order_full_list_query_scaling.py::test_group_detail_batch_context_is_byte_equivalent_to_legacy_fallbacks",
+        "status": "passed",
+        "junit_classname": "tests.test_p1_09c_order_full_list_query_scaling"
       },
       {
-        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_group_detail_select_count_does_not_scale_per_order",
-        "status": "passed"
+        "nodeid": "tests/test_p1_09c_order_full_list_query_scaling.py::test_group_detail_select_count_does_not_scale_per_order",
+        "status": "passed",
+        "junit_classname": "tests.test_p1_09c_order_full_list_query_scaling"
       },
       {
-        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_single_detail_select_count_does_not_scale_per_item",
-        "status": "passed"
+        "nodeid": "tests/test_p1_09c_order_full_list_query_scaling.py::test_single_detail_select_count_does_not_scale_per_item",
+        "status": "passed",
+        "junit_classname": "tests.test_p1_09c_order_full_list_query_scaling"
       },
       {
-        "nodeid": "tests.test_p1_09c_order_full_list_query_scaling::test_active_summary_reuses_candidate_order_rows",
-        "status": "passed"
+        "nodeid": "tests/test_p1_09c_order_full_list_query_scaling.py::test_active_summary_reuses_candidate_order_rows",
+        "status": "passed",
+        "junit_classname": "tests.test_p1_09c_order_full_list_query_scaling"
       },
       {
-        "nodeid": "tests.test_p0_order_business_status::test_line_status_progresses_only_on_formal_business_facts",
-        "status": "passed"
+        "nodeid": "tests/test_p0_order_business_status.py::test_line_status_progresses_only_on_formal_business_facts",
+        "status": "passed",
+        "junit_classname": "tests.test_p0_order_business_status"
       },
       {
-        "nodeid": "tests.test_p0_order_business_status::test_full_semi_finished_reservation_is_pending_production_not_pending_material",
-        "status": "passed"
+        "nodeid": "tests/test_p0_order_business_status.py::test_full_semi_finished_reservation_is_pending_production_not_pending_material",
+        "status": "passed",
+        "junit_classname": "tests.test_p0_order_business_status"
       },
       {
-        "nodeid": "tests.test_p0_order_business_status::test_partial_incoming_awaiting_supplier_remains_pending_incoming",
-        "status": "passed"
+        "nodeid": "tests/test_p0_order_business_status.py::test_partial_incoming_awaiting_supplier_remains_pending_incoming",
+        "status": "passed",
+        "junit_classname": "tests.test_p0_order_business_status"
       },
       {
-        "nodeid": "tests.test_p0_order_business_status::test_zero_short_receipt_can_close_delivery_obligation_and_reach_finance",
-        "status": "passed"
+        "nodeid": "tests/test_p0_order_business_status.py::test_zero_short_receipt_can_close_delivery_obligation_and_reach_finance",
+        "status": "passed",
+        "junit_classname": "tests.test_p0_order_business_status"
       },
       {
-        "nodeid": "tests.test_p0_order_business_status::test_mixed_order_keeps_earliest_blocker_and_compact_delivery_progress",
-        "status": "passed"
+        "nodeid": "tests/test_p0_order_business_status.py::test_mixed_order_keeps_earliest_blocker_and_compact_delivery_progress",
+        "status": "passed",
+        "junit_classname": "tests.test_p0_order_business_status"
       },
       {
-        "nodeid": "tests.test_p0_order_business_status::test_composite_item_requires_all_required_components_before_pending_delivery",
-        "status": "passed"
+        "nodeid": "tests/test_p0_order_business_status.py::test_composite_item_requires_all_required_components_before_pending_delivery",
+        "status": "passed",
+        "junit_classname": "tests.test_p0_order_business_status"
       },
       {
-        "nodeid": "tests.test_p0_order_business_status::test_orders_api_filter_detail_and_dashboard_share_projection",
-        "status": "passed"
+        "nodeid": "tests/test_p0_order_business_status.py::test_orders_api_filter_detail_and_dashboard_share_projection",
+        "status": "passed",
+        "junit_classname": "tests.test_p0_order_business_status"
       },
       {
-        "nodeid": "tests.test_p0_order_business_status::test_business_view_and_unfinished_badge_use_derived_status_before_paging",
-        "status": "passed"
+        "nodeid": "tests/test_p0_order_business_status.py::test_business_view_and_unfinished_badge_use_derived_status_before_paging",
+        "status": "passed",
+        "junit_classname": "tests.test_p0_order_business_status"
       },
       {
-        "nodeid": "tests.test_p0_order_business_status::test_pending_confirmation_is_in_daily_view_and_unfinished_badge",
-        "status": "passed"
+        "nodeid": "tests/test_p0_order_business_status.py::test_pending_confirmation_is_in_daily_view_and_unfinished_badge",
+        "status": "passed",
+        "junit_classname": "tests.test_p0_order_business_status"
       },
       {
-        "nodeid": "tests.test_p0_order_business_status::test_dashboard_keeps_future_due_accept_short_line_in_finance_chain",
-        "status": "passed"
+        "nodeid": "tests/test_p0_order_business_status.py::test_dashboard_keeps_future_due_accept_short_line_in_finance_chain",
+        "status": "passed",
+        "junit_classname": "tests.test_p0_order_business_status"
       },
       {
-        "nodeid": "tests.test_p0_order_business_status::test_dashboard_only_account_cannot_read_order_status_counts",
-        "status": "passed"
+        "nodeid": "tests/test_p0_order_business_status.py::test_dashboard_only_account_cannot_read_order_status_counts",
+        "status": "passed",
+        "junit_classname": "tests.test_p0_order_business_status"
       },
       {
-        "nodeid": "tests.test_phase3_cache_authorization::test_warm_projection_separates_customer_scope_and_finance_then_invalidates",
-        "status": "passed"
+        "nodeid": "tests/test_phase3_cache_authorization.py::test_warm_projection_separates_customer_scope_and_finance_then_invalidates",
+        "status": "passed",
+        "junit_classname": "tests.test_phase3_cache_authorization"
       }
     ]
   },
@@ -410,48 +438,59 @@
     },
     "cases": [
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_unfiltered_active_list_reuses_same_scoped_snapshot",
-        "status": "passed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_unfiltered_active_list_reuses_same_scoped_snapshot",
+        "status": "passed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       },
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_cold_projection_avoids_loading_non_page_order_item_details",
-        "status": "passed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_cold_projection_avoids_loading_non_page_order_item_details",
+        "status": "passed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       },
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_lightweight_status_inputs_preserve_direct_liner_eligibility[\\u886c\\u677f-5]",
-        "status": "passed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_lightweight_status_inputs_preserve_direct_liner_eligibility[\\u886c\\u677f-5]",
+        "status": "passed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       },
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_lightweight_status_inputs_preserve_direct_liner_eligibility[\\u666e\\u901a\\u7bb1-5]",
-        "status": "passed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_lightweight_status_inputs_preserve_direct_liner_eligibility[\\u666e\\u901a\\u7bb1-5]",
+        "status": "passed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       },
       {
-        "nodeid": "tests.test_audit_order_projection_optimization::test_lightweight_status_inputs_preserve_direct_liner_eligibility[\\u886c\\u677f-3]",
-        "status": "passed"
+        "nodeid": "tests/test_audit_order_projection_optimization.py::test_lightweight_status_inputs_preserve_direct_liner_eligibility[\\u886c\\u677f-3]",
+        "status": "passed",
+        "junit_classname": "tests.test_audit_order_projection_optimization"
       },
       {
-        "nodeid": "tests.test_phase3_scale_reliability::test_order_list_scale_100_1000_5000_has_bounded_queries_and_no_errors",
-        "status": "passed"
+        "nodeid": "tests/test_phase3_scale_reliability.py::test_order_list_scale_100_1000_5000_has_bounded_queries_and_no_errors",
+        "status": "passed",
+        "junit_classname": "tests.test_phase3_scale_reliability"
       },
       {
-        "nodeid": "tests.test_phase3_scale_reliability::test_committed_order_change_invalidates_active_badge_projection_cache",
-        "status": "passed"
+        "nodeid": "tests/test_phase3_scale_reliability.py::test_committed_order_change_invalidates_active_badge_projection_cache",
+        "status": "passed",
+        "junit_classname": "tests.test_phase3_scale_reliability"
       },
       {
-        "nodeid": "tests.test_phase3_scale_reliability::test_sqlite_delete_journal_lock_wait_positive_control",
-        "status": "passed"
+        "nodeid": "tests/test_phase3_scale_reliability.py::test_sqlite_delete_journal_lock_wait_positive_control",
+        "status": "passed",
+        "junit_classname": "tests.test_phase3_scale_reliability"
       },
       {
-        "nodeid": "tests.test_phase3_scale_reliability::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[100]",
-        "status": "passed"
+        "nodeid": "tests/test_phase3_scale_reliability.py::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[100]",
+        "status": "passed",
+        "junit_classname": "tests.test_phase3_scale_reliability"
       },
       {
-        "nodeid": "tests.test_phase3_scale_reliability::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[1000]",
-        "status": "passed"
+        "nodeid": "tests/test_phase3_scale_reliability.py::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[1000]",
+        "status": "passed",
+        "junit_classname": "tests.test_phase3_scale_reliability"
       },
       {
-        "nodeid": "tests.test_phase3_scale_reliability::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[5000]",
-        "status": "passed"
+        "nodeid": "tests/test_phase3_scale_reliability.py::test_order_projection_cold_hot_post_commit_and_status_change_are_distinguished[5000]",
+        "status": "passed",
+        "junit_classname": "tests.test_phase3_scale_reliability"
       }
     ]
   }

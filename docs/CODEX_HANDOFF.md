@@ -5823,3 +5823,8 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 - 2026-09-21：v0.22.474 开票税务资料选填规则已技术发布（8e0e6e4b，du0920，无迁移），待人工验收；见 docs/release_reports/INVOICE_OPTIONAL_FIELDS_20260921_v474.md。
 
 - 2026-09-21：v0.22.476 对账、开票、收款待办闭环已技术发布（443344f3，du0920，无迁移），签名包 733c5b74；队列、导出确认、受控撤销和收款待办均已上线，待管理员人工验收；见 docs/release_reports/FINANCE_RECONCILIATION_INVOICE_PAYMENT_20260921_v476.md 及 NAS 独立回执。
+
+
+### 2026-09-22 · 生产工作台 v0.22.485
+
+正式运行 v0.22.485（源码4e58aa02，签名包fdd3b2f0），承接v484财务与入仓资料变更；数据库仍dw0922，无迁移或业务事实回填。生产数量/用料、五入口、明确产出、合并清单、手机资料已升级。备份与技术验收通过，待管理员人工页面/打印/手机验收。详情：`docs/release_reports/PRODUCTION_WORKSPACE_20260922.md`；NAS独立回执：`04_开发记录/任务回执/20260922-PRODUCTION-WORKSPACE-v485-正式发布`。

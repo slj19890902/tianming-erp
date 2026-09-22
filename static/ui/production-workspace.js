@@ -29,7 +29,7 @@
   app.mixin({
    mounted(){if(!this.$parent)global.addEventListener('message',this.acceptStockLocation);},
    beforeUnmount(){if(!this.$parent)global.removeEventListener('message',this.acceptStockLocation);},
-   data(){return this.$parent?{}:{stockPrepDialog:null,stockLocations:[],stockLocationsLoading:false,stockLocationsError:'',stockPrepPendingCount:0,productionPendingSource:'stock',stockDialogSequence:0,stockLocationMap:null};},
+   data(){return this.$parent?{}:{stockPrepDialog:null,stockLocations:[],stockLocationsLoading:false,stockLocationsError:'',stockPrepPendingCount:0,productionPendingSource:'orders',stockDialogSequence:0,stockLocationMap:null};},
    methods:{
     async ensureStockLocations({force=false}={}){
      if(this.stockLocationsLoading)return false;if(!force&&this.stockLocations.length)return true;
@@ -82,7 +82,7 @@
      if(!location){d.error='此货位当前不可存放，请重新选位';this.closeStockLocationMap();return;}
      if(picker.target)picker.target._location=Number(location.id);else d.location=Number(location.id);this.closeStockLocationMap();
     },
-    async selectStockProductionTab(tab){this.productionTab=tab;this.stockPrepState=tab==='pending'?'pending':tab==='stock'?'stock':'';await this.loadStockPreparation(1);if(tab==='pending'){await this.loadProductionPage(1);this.productionPendingSource=this.stockPrepPendingCount?'stock':this.productionPendingTotal?'orders':'stock';}},
+    async selectStockProductionTab(tab){this.productionTab=tab;this.stockPrepState=tab==='pending'?'pending':tab==='stock'?'materials':'arrange';await this.loadStockPreparation(1);if(tab==='pending'){await this.loadProductionPage(1);if(!['orders','stock','all'].includes(this.productionPendingSource))this.productionPendingSource='orders';}},
     async loadStockWorkspace(page=1){const sequence=++this.stockPrepSequence,auth=this.authGeneration;this.stockPrepBusy=true;this.stockPrepRows=[];this.stockPrepError='';this.stockPrepPage=page;
      try {const {data}=await axios.get('/api/production/stock-preparation',{params:{workspace:true,q:this.stockPrepQuery,state:this.stockPrepState,page,page_size:this.screenPageSize(12)}});
       if(sequence!==this.stockPrepSequence||auth!==this.authGeneration)return;

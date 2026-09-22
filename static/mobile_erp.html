@@ -2504,7 +2504,9 @@
             stationFact("压线", [task.crease_type, ...(task.crease_values_mm || [])].filter(Boolean).join(" / ") || "未填写")
           );
         }
+        facts.append(stationFact("计划加工", `${task.planned_output_quantity || 0}${task.output_unit || "只"}`));
         card.append(facts);
+        appendProductionMaterials(card,task);
         if (!dieCut) {
           productionPrintingSnapshotLines(task).forEach(line => card.append(node("p", "fact-line", line)));
           if (task.cutting_mode) card.append(node("p", "fact-line", `开料方式：${task.cutting_mode}`));
@@ -2590,6 +2592,12 @@
         loadProductionStation(1);
       }
 
+      function appendProductionMaterials(card,task) {
+        for (const source of task.material_sources || []) {
+          card.append(node('p','fact-line', `${source.material_kind} · ${source.display_name} · 计划取用 ${source.remaining_sheet_quantity} ${source.unit || '张'}\n${source.location_name || '位置待核'}\n${source.board_length_mm || '?'} × ${source.board_width_mm || '?'} mm · ${source.flute_type || '楞型待核'} · 加工登记 ${source.recorded_processing || '未登记'}`));
+        }
+      }
+
       function productionTaskCard(task) {
         const card = node("div", "task-card");
         const title = `${task.product_code || "无存货编码"}｜${task.product_name || "未填写产品名称"}`;
@@ -2601,8 +2609,8 @@
         ].filter(Boolean).join("｜") || "规格资料未填写"));
         const metrics = node("div", "task-grid");
         const facts = [
-          ["订单要做", task.order_quantity, "只"],
-          [task.receipt_purpose_managed ? "已自动形成" : "现在可生产", task.receipt_purpose_managed ? task.actual_output_quantity : task.current_producible_quantity, "只"],
+          ["订单需求", task.order_quantity, task.output_unit || "只"],
+          [task.receipt_purpose_managed ? "已自动形成" : "计划加工", task.receipt_purpose_managed ? task.actual_output_quantity : task.current_producible_quantity, task.output_unit || "只"],
           ["纸板已收", task.received_material_quantity, "张"],
           ["任务状态", task.status_text, ""],
         ];
@@ -2612,6 +2620,7 @@
           metrics.append(fact);
         });
         card.append(metrics);
+        appendProductionMaterials(card,task);
         if (task.receipt_purpose_managed && task.completion_block_message) {
           card.append(node("p", "fact-line", task.completion_block_message));
         }
@@ -2883,6 +2892,10 @@
             : (state.allowedPages.has(restoredPage) ? restoredPage : "home");
           setPage(firstPage, {incomingPerformanceStarted: requestedIncoming});
           const launchParams = new URLSearchParams(window.location.search);
+          if (firstPage === "production" && /^[1-9]\d*$/.test(launchParams.get("task_id") || "")) {
+            byId("productionLookupInput").value = "TMPT:" + launchParams.get("task_id");
+            await runProductionLookup();
+          }
           if (firstPage === "warehouse" && launchParams.get("warehouse_map") === "1") {
             await openWarehouseMap({
               floorCode: launchParams.get("floor_code") || undefined,

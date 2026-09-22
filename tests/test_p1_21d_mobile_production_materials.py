@@ -334,17 +334,19 @@ def test_mobile_production_ui_is_strictly_read_only_and_preserves_context() -> N
         "近 3 天生产状态",
         "生产",
         "材料未齐",
-        "现在可生产",
+        "计划加工",
         "查看图纸",
         "返回生产资料",
         "本页只能查看",
     ):
         assert text in MOBILE_HTML
     assert "Production cards and scroll position remain untouched" in MOBILE_HTML
-    assert MOBILE_HTML.count('method: "POST"') == 2
+    production = MOBILE_HTML.split("function productionStationCard", 1)[1].split("async function initialize", 1)[0]
+    assert "apiPost(" not in production
+    assert "fetch(" not in production
     assert 'fetch("/api/auth/logout"' in MOBILE_HTML
-    assert 'method: "PUT"' not in MOBILE_HTML
-    assert 'method: "DELETE"' not in MOBILE_HTML
+    assert 'method: "PUT"' not in production
+    assert 'method: "DELETE"' not in production
 
 
 def test_completed_received_task_remains_visible_as_waiting_delivery(

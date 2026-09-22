@@ -339,6 +339,14 @@ def _task_status_text(status: str) -> str:
     }.get(status, status or "状态未知")
 
 
+def _safe_production_material_sources(task: dict) -> list[dict]:
+    return [{key: source.get(key) for key in (
+        'display_name', 'material_kind', 'board_length_mm', 'board_width_mm', 'flute_type',
+        'location_name', 'remaining_sheet_quantity', 'remaining_product_quantity',
+        'consumed_sheet_quantity', 'unit', 'recorded_processing', 'has_cut_plan',
+    )} for source in task.get('customer_board_preparation_sources', [])]
+
+
 def _safe_production_task(db: Session, task: dict, *, drawing_path: str | None, user: User) -> dict:
     """Expose workshop facts only; supplier material codes and prices stay private."""
 
@@ -387,6 +395,8 @@ def _safe_production_task(db: Session, task: dict, *, drawing_path: str | None, 
         "order_quantity": task.get("ordered_quantity"),
         "received_material_quantity": task.get("material_received_quantity"),
         "current_producible_quantity": planned_output,
+        "output_unit": task.get('output_unit') or ('片' if task.get('is_component_task') else '只'),
+        "material_sources": _safe_production_material_sources(task),
         "planned_output_quantity": planned_output,
         "actual_output_quantity": max(
             int(task.get("actual_output_quantity") or 0),
@@ -612,6 +622,8 @@ def _production_station_task_payloads(
 
         common = {
             "task_id": int(task["id"]),
+            "material_sources": _safe_production_material_sources(task),
+            "output_unit": task.get('output_unit') or ('片' if task.get('is_component_task') else '只'),
             "task_version": int(task.get("version") or 1),
             "customer_name": task.get("customer_name"),
             "order_number": task.get("order_number"),

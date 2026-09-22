@@ -35,6 +35,7 @@
         },
         async measureWorkspace(panel) {
           if (this.activePage === 'incoming') return;
+          if (this.activePage === 'production' && this.productionTab === 'pending') return;
           if (this.$parent || this.modal || document.querySelector('.workspace-dialog') || window.innerWidth < 1000 || !panel?.closest?.('.main')) return;
           const tables = [...document.querySelectorAll('.main .panel table')].filter(t => t.getBoundingClientRect().height > 0 && !t.closest('.modal') && !t.dataset.workspaceList);
           const table = panel.querySelector('table');

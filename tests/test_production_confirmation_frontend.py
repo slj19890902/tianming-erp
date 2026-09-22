@@ -21,8 +21,9 @@ def test_legacy_direct_destination_returns_to_finished_history() -> None:
         re.DOTALL,
     )
     assert ensure_mode is not None
-    assert 'if (row.completion_mode !== "direct") return;' in ensure_mode.group(1)
-    assert "await this.confirmProductionDirectRow(row);" in ensure_mode.group(1)
+    assert "confirmProductionDirectRow" not in ensure_mode.group(1)
+    assert "axios.post" not in ensure_mode.group(1)
+    assert '@click="registerProductionOutput(row)"' in INDEX
 
     direct_submit = re.search(
         r"async confirmProductionDirectRow\(row\) \{(.*?)\n\s+\},\n"
@@ -62,9 +63,9 @@ def test_stock_location_only_selects_locally_then_customer_groups_are_posted() -
     assert "全部入库：选好库位，再点顶部“批量确认入库”" not in INDEX
     assert "合格品全部入库" in INDEX
     assert "`批量确认入库（${productionSelectedCount()}）`" not in INDEX
-    assert "确认入库（' + productionSelectedCount() + '）" in INDEX
-    assert '@click="batchConfirmProduction"' in INDEX
-    assert 'productionBusy || !productionSelectedCount()' in INDEX
+    assert '登记产出并入库' in INDEX
+    assert '@click="registerProductionOutput(row)"' in INDEX
+    assert 'productionBusy||!canConfirmProductionRow(row)' in INDEX
     assert "待送成品归位" in INDEX
     assert '@change="onProductionLocationSelection(row)"' in INDEX
     assert "确认入库位置" not in INDEX

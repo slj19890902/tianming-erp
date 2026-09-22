@@ -3511,13 +3511,7 @@ def complete_production_batch(
                 component_input,
             )
         if allowed_input_now <= 0:
-            allowed_input_now = int(task.material_input_quantity or 0)
-        if allowed_input_now <= 0:
-            allowed_input_now = production_input_quantity(
-                max(int(task.planned_quantity or 0), 0),
-                factor,
-                pieces_per_box,
-            )
+            allowed_input_now = _planned_material_input(task, allowed_input_now, factor, pieces_per_box)
             received_now = max(received_now, allowed_input_now)
         from app.services.cut_production_contract import completion_contract
         cut_contract = completion_contract(db, task, item, int(task.planned_quantity or 0))
@@ -3617,23 +3611,9 @@ def complete_production_batch(
                         "组件成品库存抵扣已变化，请刷新生产任务后重试",
                         409,
                     )
-        prior_order_coverage = int(task.finished_coverage_snapshot or 0) + int(
-            db.scalar(
-                select(
-                    func.coalesce(
-                        func.sum(ProductionCompletion.order_reserved_quantity),
-                        0,
-                    )
-                ).where(
-                    ProductionCompletion.task_id == task.id,
-                    ProductionCompletion.status == "posted",
-                )
-            )
-            or 0
-        )
         order_coverage = min(
             actual_output,
-            max(coverage_target_quantity - prior_order_coverage, 0),
+            _production_order_remaining(db, task, coverage_target_quantity),
         )
         if command.disposition == "stock":
             direct_ground_target = None
@@ -5598,6 +5578,7 @@ def _filtered_task_query(
     *,
     allowed_customer_ids: set[int] | None,
     status: str | None,
+    q: str = "",
 ):
     main_task = aliased(ProductionTask)
     main_task_exists = exists().where(
@@ -5616,6 +5597,13 @@ def _filtered_task_query(
             ~main_task_exists,
         ),
     )
+    if q.strip():
+        term = q.strip()
+        query = query.where(or_(*(column.contains(term, autoescape=True) for column in (
+            Order.customer_po, Order.order_number, Customer.name,
+            Product.product_name, Product.product_code, Product.customer_material_code,
+            OrderItem.snapshot_product_code, OrderItem.snapshot_product_name,
+        ))))
     if status:
         query = query.where(_effective_task_status_condition(status))
     if status == PENDING:
@@ -5847,6 +5835,19 @@ def _task_product_snapshot(
     }
 
 
+def _production_order_remaining(db, task, target):
+    posted_coverage = db.scalar(select(func.coalesce(func.sum(ProductionCompletion.order_reserved_quantity), 0)).where(
+        ProductionCompletion.task_id == task.id, ProductionCompletion.status == 'posted')) or 0
+    return max(int(target) - int(task.finished_coverage_snapshot or 0) - int(posted_coverage), 0)
+
+
+def _planned_material_input(task, allowed_input, factor, pieces_per_box):
+    """Same fallback as completion; a read projection never repairs stored facts."""
+    return max(int(allowed_input or 0), int(task.material_input_quantity or 0)) or production_input_quantity(
+        max(int(task.planned_quantity or 0), 0), factor, pieces_per_box
+    )
+
+
 def _active_customer_board_preparation_sources(
     db: Session,
     *,
@@ -5930,6 +5931,10 @@ def _active_customer_board_preparation_sources(
             area=area,
             floor=floor,
         )
+        from app.services.warehouse_goods import goods_profile
+        profile = goods_profile(db, lot) or {}
+        processing = {'raw': '原板 / 未加工', 'cut': '已裁切', 'die_cut': '已模切',
+                      'printed': '已印刷', 'creased': '已压线', 'dedicated_component': '专用子件'}.get(profile.get('processing'), '未登记')
         result.append(
             {
                 "reservation_id": reservation.id,
@@ -5938,6 +5943,18 @@ def _active_customer_board_preparation_sources(
                 "source_ref_type": lot.source_ref_type,
                 "source_ref_id": lot.source_ref_id,
                 "location_code": location.location_code,
+                "location_id": location.id,
+                "warehouse_floor": location.warehouse_floor,
+                "material_kind": "原材料" if detail.sheet_type == "raw_board" else "半成品 / 净片",
+                "recorded_processing": processing,
+                "sheet_type": detail.sheet_type,
+                "board_length_mm": detail.board_length_mm,
+                "board_width_mm": detail.board_width_mm,
+                "flute_type": detail.flute_type,
+                "unit": {"sheets": "张", "pieces": "片", "sets": "套"}.get(lot.unit, lot.unit or "张"),
+                "consumed_sheet_quantity": int(reservation.consumed_stock_quantity or 0),
+                "lot_status": lot.status,
+                "has_cut_plan": bool(reservation.cut_plan_json),
                 "location_name": readable_location_name,
                 "current_address_name": readable_location_name,
                 "employee_location_name": readable_location_name,
@@ -5947,10 +5964,7 @@ def _active_customer_board_preparation_sources(
                     reservation.yield_factor or detail.stock_yield_per_sheet or 1
                 ),
                 "display_name": (
-                    detail.internal_name
-                    or "客户通用纸板备料"
-                    if detail.customer_generic_eligible
-                    else "客户专用纸板备料"
+                    detail.internal_name or ("客户通用纸板备料" if detail.customer_generic_eligible else "客户专用纸板备料")
                 ),
             }
         )
@@ -6083,7 +6097,7 @@ def _ordinary_pending_task_fast_payload(
     target_quantity = int(item.quantity or 0)
     factor = cutting_output_factor(item.special_process)
     pieces_per_box = production_pieces_per_box(item)
-    material_input = max(int(task.material_input_quantity or 0), 0)
+    material_input = _planned_material_input(task, 0, factor, pieces_per_box)
     finished_coverage = int(task.finished_coverage_snapshot or 0)
     return {
         "id": task.id,
@@ -6094,6 +6108,10 @@ def _ordinary_pending_task_fast_payload(
         "item_order_number": item.item_order_number,
         "customer_id": order.customer_id,
         "customer_name": customer.name,
+        "delivery_date": order.delivery_date,
+        "output_unit": product.unit or "个",
+        "posted_output_quantity": 0,
+        "order_coverage_remaining": max(target_quantity - finished_coverage, 0),
         **_item_product_snapshot(item, product),
         **_task_printing_snapshot(task),
         "is_component_task": False,
@@ -6250,11 +6268,13 @@ def list_production_tasks(
     page: int | None = None,
     page_size: int | None = None,
     task_ids: Sequence[int] | None = None,
+    q: str = "",
 ) -> list[dict]:
     query = _filtered_task_query(
         db,
         allowed_customer_ids=allowed_customer_ids,
         status=status,
+        q=q,
     ).order_by(Order.delivery_date, Order.id, OrderItem.id, ProductionTask.id)
     if task_ids is not None:
         normalized_task_ids = [int(task_id) for task_id in task_ids]
@@ -6351,10 +6371,7 @@ def list_production_tasks(
             )
             or 0
         )
-        material_input = max(
-            allowed_input_now,
-            int(task.material_input_quantity or 0),
-        )
+        material_input = _planned_material_input(task, allowed_input_now, factor, pieces_per_box)
         available_input = max(material_input - posted_input, 0)
         result.append({
             "id": task.id,
@@ -6365,6 +6382,10 @@ def list_production_tasks(
             "item_order_number": item.item_order_number,
             "customer_id": order.customer_id,
             "customer_name": customer.name,
+            "delivery_date": order.delivery_date,
+            "output_unit": "片" if is_component_task else (product.unit or "个"),
+            "posted_output_quantity": posted_output,
+            "order_coverage_remaining": _production_order_remaining(db, task, target_quantity) if posted_output else max(target_quantity - int(task.finished_coverage_snapshot or 0), 0),
             **_task_product_snapshot(
                 db,
                 task=task,
@@ -6678,6 +6699,10 @@ def find_pending_production_task_lookup_rows(
         Customer.name.ilike(pattern, escape="\\"),
         component_match,
     )
+    if normalized.startswith('TMPT:'):
+        # A task QR resolves one immutable task identity, never a similar product code.
+        identifier = normalized.removeprefix('TMPT:')
+        match_condition = ProductionTask.id == (int(identifier) if identifier.isdecimal() else -1)
     exact_rank = case(
         (func.lower(cast(ProductionTask.id, String)) == lowered, 0),
         (func.lower(parent_code) == lowered, 0),
@@ -6725,12 +6750,14 @@ def count_production_tasks(
     *,
     allowed_customer_ids: set[int] | None,
     status: str | None = None,
+    q: str = "",
 ) -> int:
     task_ids = (
         _filtered_task_query(
             db,
             allowed_customer_ids=allowed_customer_ids,
             status=status,
+            q=q,
         )
         .with_only_columns(ProductionTask.id)
         .order_by(None)
@@ -6755,6 +6782,8 @@ def _completion_rows(
     page: int | None = None,
     page_size: int | None = None,
     keys_only: bool = False,
+    record_type: str | None = None,
+    operator_name: str | None = None,
 ):
     query = (
         select(
@@ -6782,6 +6811,10 @@ def _completion_rows(
         query = query.where(Order.customer_id.in_(allowed_customer_ids))
     if completion_ids is not None:
         query = query.where(ProductionCompletion.id.in_(completion_ids))
+    if record_type:
+        query = query.where(ProductionCompletion.origin == record_type)
+    if operator_name and operator_name.strip():
+        query = query.where(User.real_name.contains(operator_name.strip(), autoescape=True))
     if customer_id is not None:
         query = query.where(Order.customer_id == customer_id)
     if normalized_keyword := (order_keyword or "").strip():
@@ -7271,6 +7304,7 @@ def _production_completion_dicts(db: Session, rows: Sequence[tuple]) -> list[dic
                     else None
                 ),
                 "remarks": completion.remarks,
+                "origin": completion.origin,
                 "completed_by": completion.completed_by,
                 "completed_by_name": user.real_name if user is not None else None,
                 "completed_at": (
@@ -7339,6 +7373,8 @@ def list_production_completions_page(
     placement_pending: bool = False,
     page: int = 1,
     page_size: int = 50,
+    record_type: str | None = None,
+    operator_name: str | None = None,
 ) -> tuple[list[dict], int]:
     """Return a stable, customer-scoped page for the production history list."""
 
@@ -7354,6 +7390,12 @@ def list_production_completions_page(
         status=status,
         placement_pending=placement_pending,
     )
+    if record_type or operator_name:
+        total = len(_completion_rows(db, allowed_customer_ids=allowed_customer_ids,
+            customer_id=customer_id, order_keyword=order_keyword, product_code=product_code,
+            product_name=product_name, completed_date_from=completed_date_from,
+            completed_date_to=completed_date_to, status=status, placement_pending=placement_pending,
+            record_type=record_type, operator_name=operator_name, keys_only=True))
     rows = _completion_rows(
         db,
         allowed_customer_ids=allowed_customer_ids,
@@ -7367,6 +7409,8 @@ def list_production_completions_page(
         placement_pending=placement_pending,
         page=page,
         page_size=page_size,
+        record_type=record_type,
+        operator_name=operator_name,
     )
     return _production_completion_dicts(db, rows), total
 

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.490"
-APP_VERSION_NAME = "恢复旧送货单字号与版式预览"
+APP_VERSION = "v0.22.491"
+APP_VERSION_NAME = "生产成品地图定位移库与归位"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4694,3 +4694,12 @@ APP_VERIFICATION_STEPS = [
     "在EPSON SK820使用原241×139.5毫米纸打印一张，人工核对字号、边距、表头与续页。",
 ]
 APP_CHANGELOG = [*(f"v0.22.490：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "完工历史和待送成品归位的当前位置可在生产页内打开仓库地图，定位当前真实批次、楼层和货架层格。",
+    "地图支持直接移动当前产品；返回原生产页面保留页签、筛选及页码，并刷新库存位置。",
+    "待归位成品可在地图选择地面货位或货架层格，核对目标和数量后确认归位；取消不写库存。",
+    "移库继续核对权限、批次与布局版本，结果不明时保留原凭证重试；保留 v490 原始送货单字体修复。",
+]
+APP_CHANGELOG = [*(f"v0.22.491：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

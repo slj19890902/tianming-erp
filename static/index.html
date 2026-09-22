@@ -5202,9 +5202,9 @@
               <div class="panel finance-filter-panel" style="margin-bottom:10px">
                 <div class="toolbar" style="align-items:flex-end;gap:8px;flex-wrap:wrap">
                   <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-                    <div class="field" style="width:170px"><label>对账月份（可不选）</label><input class="input" type="month" v-model="financeFilters.statement_month" @change="onFinanceMonthChange" /></div>
-                    <div class="field" style="width:240px"><label>客户</label><search-select v-model="financeFilters.customer_id" :options="financeCurrentCustomerOptions" label-key="name" value-key="id" placeholder="全部" :allow-empty="true" @change="reloadFinanceCurrent"></search-select></div>
-                    <div class="field" style="width:145px"><label>只看</label><select class="select" v-model="financeFilters.balance_type" @change="reloadFinanceCurrent"><option value="">全部待办</option><option value="pending_reconciliation">待对账</option><option value="pending_confirmation">待确认</option><option value="pending_invoice">待开票</option><option value="pending_payment">待收款</option><option value="reconciled">已对账</option><option value="completed">已结清</option></select></div>
+                    <div class="field" style="width:170px"><label>账期截至（可不选）</label><input class="input" type="month" v-model="financeFilters.statement_month" @change="onFinanceMonthChange" /></div>
+                    <div class="field" style="width:240px"><label>客户</label><search-select v-model="financeFilters.customer_id" :options="financeCurrentCustomerOptions" label-key="name" value-key="id" placeholder="查找客户（含已结清）" :allow-empty="true" @change="onFinanceCustomerChange"></search-select></div>
+                    <div class="field" style="width:145px"><label>只看</label><select class="select" v-model="financeFilters.balance_type" @change="reloadFinanceCurrent"><option value="">全部待办</option><option value="all">全部记录</option><option value="pending_reconciliation">待对账</option><option value="pending_confirmation">待确认</option><option value="pending_invoice">待开票</option><option value="pending_payment">待收款</option><option value="reconciled">已对账</option><option value="completed">已结清</option></select></div>
                     <div class="field" style="width:155px"><label>导出排序</label><select class="select" v-model="financeStatementSort"><option value="business">送货日期顺序</option><option value="order_number">订单号从小到大</option></select></div>
                   </div>
                   <div class="toolbar-group">
@@ -5216,19 +5216,19 @@
                   <button v-for="queue in financeQueueTabs" :key="queue.key" :class="['btn small',{primary:financeFilters.balance_type===queue.key}]" :aria-pressed="financeFilters.balance_type===queue.key" @click="selectFinanceQueue(queue.key)">{{ queue.label }} <span v-if="Number(financeCurrentQueueCounts[queue.countKey]||0)>0" class="status blue" style="margin-left:4px">{{ financeCurrentQueueCounts[queue.countKey] }}</span></button>
                 </nav>
                 <div v-if="financeFilters.balance_type || financeFilters.customer_id" class="status blue" style="margin-top:8px;display:inline-flex;gap:8px;align-items:center">
-                  已筛选 {{ financeCurrentTotal }} 位客户
+                  已筛选 {{ financeCurrentTotal }} 个结算对象账期
                   <button class="btn small" @click="clearFinanceDashboardFilter">查看全部待办</button>
                 </div>
                 <div v-if="financeCurrentState.loaded && !financeCurrentState.error" class="muted" style="margin-top:8px">
-                  {{ financeFilters.statement_month || (['reconciled','completed'].includes(financeFilters.balance_type) ? '全部历史账期' : '全部未完成账期') }}：{{ financeCurrentSummary.customer_count || 0 }} 个客户月份 · 待对账 ¥{{ money(financeCurrentSummary.pending_reconciliation_amount) }} · 待开票 ¥{{ money(financeCurrentSummary.pending_invoice_amount) }} · 已开票待收 ¥{{ money(financeCurrentSummary.pending_payment_action_amount) }}
+                  {{ financeFilters.statement_month ? '截至 '+financeFilters.statement_month+'（含以前账期）' : (['all','reconciled','completed'].includes(financeFilters.balance_type) ? '全部历史账期' : '全部未完成账期') }}：{{ financeCurrentSummary.customer_count || 0 }} 个客户月份 · 待对账 ¥{{ money(financeCurrentSummary.pending_reconciliation_amount) }} · 待开票 ¥{{ money(financeCurrentSummary.pending_invoice_amount) }} · 已开票待收 ¥{{ money(financeCurrentSummary.pending_payment_action_amount) }}
                 </div>
               </div>
               <div v-if="financeCurrentState.error" class="notice warning" style="margin-bottom:10px">财务待办加载失败：{{ financeCurrentState.error }}</div>
               <div class="panel">
-                <div class="section-title">客户对账与历史</div><div class="muted" style="margin-bottom:8px">已对账可查询确认后的账单、开票和收款进度；已结清表示开票及收款全部完成。按所选账期查询。</div>
+                <div class="section-title">客户对账与历史</div><div class="muted" style="margin-bottom:8px">待收款累计显示所选账期及以前已开票未收清的账单，不包含以后账期。查找客户自动显示全部账期、全部状态；可再筛选。角标按结算对象去重计数。</div>
                 <div v-if="financeCurrentState.loading" class="empty">正在读取财务待办…</div>
                 <div v-else-if="financeCurrentState.error" class="empty">请检查连接后重新刷新。</div>
-                <div v-else-if="financeCurrentState.loaded && !financeCurrentRows.length" class="empty">当前筛选没有需要处理的客户账单。</div>
+                <div v-else-if="financeCurrentState.loaded && !financeCurrentRows.length" class="empty">当前筛选没有客户账单；可切换“全部记录”或清空截至账期查看历史。</div>
                 <div v-else class="table-wrap"><table class="finance-current-table"><thead><tr><th style="width:56px"></th><th style="width:17%">客户</th><th style="width:15%">月份 / 实际周期</th><th class="sensitive-price" style="width:15%">待对账 / 已对账</th><th class="sensitive-price" style="width:15%">待开票 / 已开票</th><th class="sensitive-price" style="width:14%">已收 / 待收</th><th style="width:13%">状态 / 下一步</th></tr></thead>
                   <tbody v-for="row in financeCurrentRows" :key="financeGroupKey(row)">
                     <tr>
@@ -5248,7 +5248,7 @@
                       <div v-else class="table-wrap"><table :data-workspace-list="'finance-detail-0'+':'+financeGroupKey(row)"><thead><tr><th>对账单号</th><th class="sensitive-price">对账金额</th><th class="sensitive-price">待开票</th><th>状态</th><th>操作</th></tr></thead><tbody>
                         <tr v-for="statement in localRows(row.statements,'finance-detail-0'+':'+financeGroupKey(row))" :key="statement.id">
                           <td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a><div v-if="row.settlement_entity_id" class="muted">{{ statement.customer_name }}</div></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td>
-                          <td><span v-if="statement.dispute_pending" class="status orange">异议待修改</span><span v-else-if="statement.task_void_pending" class="status orange">待修改</span><span v-else-if="statement.invoice_task_pending" class="status blue">开票处理中</span><span v-else-if="statement.invoice_status==='invoiced'" class="status green">已开票</span><status-tag v-else :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div></td>
+                          <td><span v-if="statement.dispute_pending" class="status orange">异议待修改</span><span v-else-if="statement.task_void_pending" class="status orange">待修改</span><span v-else-if="statement.invoice_task_pending" class="status blue">开票处理中</span><span v-else-if="statement.invoice_status==='invoiced'" class="status green">已开票</span><status-tag v-else :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div><div class="muted">已开票 ¥{{ money(statement.invoiced_amount) }} · 已收 ¥{{ money(statement.settled_amount) }} · 未收 ¥{{ money(statement.pending_payment_amount) }}</div></td>
                           <td class="toolbar-group"><button v-if="statement.confirmation_status!=='confirmed'" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="exportStatement(statement,'xlsx')">导出对账单</button><button v-if="canConfirmStatement && canGenerateInvoiceTask && !statement.financially_completed && statement.confirmation_status!=='confirmed'" class="btn small" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statement)">{{ financeStatementOperationState.action==='confirm_download' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '办理中…' : '确认并下载开票文件' }}</button><button v-else-if="canGenerateInvoiceTask && statement.confirmation_status==='confirmed' && !statement.invoice_task_pending && Number(statement.pending_invoice_amount)>0" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button v-if="canFinance && Number(statement.pending_payment_action_amount)>0" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementSettlement(statement)">确认收款</button><button class="btn small" @click="openCustomerStatementCheck(statement)">核对客户Excel</button><button class="btn small" @click="exportStatement(statement,'pdf')">PDF</button><button v-if="canFinance" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementDispute(statement)">{{ statement.confirmation_status==='confirmed' ? '客户异议' : '调整' }}</button></td>
                         </tr>
                       </tbody></table></div><local-pager :rows="row.statements" :list-key="'finance-detail-0'+':'+financeGroupKey(row)"></local-pager>
@@ -9492,9 +9492,10 @@
                 <div class="field"><label>对账单号</label><div><strong>{{ statementDetail.statement_number }}</strong></div></div>
                 <div class="field"><label>客户</label><div>{{ statementDetail.customer_name }}</div></div>
                 <div class="field"><label>对账月份</label><div>{{ statementDetail.statement_month }}</div></div>
-                <div class="field"><label>状态</label><div><status-tag :value="statementDetail.status"></status-tag></div></div>
+                <div class="field"><label>对账确认</label><div>{{ financeConfirmationText(statementDetail) }}</div><div class="muted">{{ statementDetail.confirmed_at || "未记录确认时间" }}</div></div>
                 <div class="field sensitive-price"><label>对账金额</label><div>¥ {{ money(statementDetail.total_receivable) }}</div></div>
                 <div class="field sensitive-price"><label>已开票</label><div>¥ {{ money(statementDetail.invoiced_amount) }}</div></div>
+                <div class="field sensitive-price"><label>已收 / 未收</label><div>¥ {{ money(statementDetail.settled_amount) }} / ¥ {{ money(Math.max(0,Number(statementDetail.total_receivable)-Number(statementDetail.settled_amount))) }}</div></div>
               </div>
               <div class="toolbar-group" style="margin:10px 0">
                 <button class="btn" @click="exportStatement(statementDetail,'xlsx')">仅导出 Excel</button>
@@ -9529,6 +9530,11 @@
                   </tr>
                 </tbody>
               </table>
+              <details style="margin-top:12px" open><summary>开票与收款追溯</summary>
+                <div class="muted" style="margin:8px 0">发票登记和收款分别记录；合并开票显示分配到本账单的金额。</div>
+                <table><thead><tr><th>发票号</th><th>开票日期</th><th>本账单开票金额</th><th>状态</th></tr></thead><tbody><tr v-for="invoice in statementDetail.invoices || []" :key="invoice.id"><td>{{ invoice.invoice_number }}</td><td>{{ invoice.invoice_date }}</td><td class="sensitive-price">¥ {{ money(invoice.invoice_amount) }}</td><td>{{ invoice.invoice_status==='voided' ? '已作废' : '已开票' }}</td></tr><tr v-if="!statementDetail.invoices?.length"><td colspan="4" class="muted">暂无实际开票登记</td></tr></tbody></table>
+                <table style="margin-top:8px"><thead><tr><th>收款日期</th><th>本次收款金额</th><th>账户 / 备注</th></tr></thead><tbody><tr v-for="receipt in statementDetail.settlements || []" :key="receipt.id"><td>{{ receipt.settlement_date }}</td><td class="sensitive-price">¥ {{ money(receipt.settled_amount) }}</td><td>{{ receipt.account || '-' }}</td></tr><tr v-if="!statementDetail.settlements?.length"><td colspan="3" class="muted">暂无收款记录</td></tr></tbody></table>
+              </details>
               <div v-if="statementDetail.invoices?.length" class="status blue" style="margin-top:10px">已有 {{ statementDetail.invoice_count }} 条开票记录；已正式开票时系统会禁止直接改历史。</div>
             </div>
             <div v-else-if="modal.type === 'statementSettlement' && financeSettlementForm.statement">
@@ -10710,7 +10716,7 @@
             financeOverview: { trend:[], payable_aging:{}, expense_structure:[], cost_coverage:{covered_lines:0,total_lines:0,coverage_rate:0,covered_revenue:0,material_gross_profit_reference:0,label:"材料毛利参考"}, workbench_summary:{}, cost_pool:{status_totals:{},close_ready:false,blockers:[]}, collection_note:"" },
             financeOverviewState: { loading:false, exporting:false, error:"" }, financeOverviewDetailsVisible:false, financeCostDetailsVisible:false,
             financeStatementSort: "business",
-            financeFilters: { statement_month:"", balance_type:"", customer_id:"" }, financeQueueTabs:[{key:"",countKey:"all_open",label:"全部待办"},{key:"pending_reconciliation",countKey:"pending_reconciliation",label:"待对账"},{key:"pending_confirmation",countKey:"pending_confirmation",label:"待确认"},{key:"pending_invoice",countKey:"pending_invoice",label:"待开票"},{key:"pending_payment",countKey:"pending_payment",label:"待收款"},{key:"reconciled",countKey:"reconciled",label:"已对账"},{key:"completed",countKey:"completed",label:"已结清"}],
+            financeFilters: { statement_month:"", balance_type:"", customer_id:"" }, financeQueueTabs:[{key:"",countKey:"all_open",label:"全部待办"},{key:"all",countKey:"all",label:"全部记录"},{key:"pending_reconciliation",countKey:"pending_reconciliation",label:"待对账"},{key:"pending_confirmation",countKey:"pending_confirmation",label:"待确认"},{key:"pending_invoice",countKey:"pending_invoice",label:"待开票"},{key:"pending_payment",countKey:"pending_payment",label:"待收款"},{key:"reconciled",countKey:"reconciled",label:"已对账"},{key:"completed",countKey:"completed",label:"已结清"}],
             financeCurrentRows: [], financeCurrentTotal: 0, financeCurrentSummary: {}, financeCurrentCustomerOptions: [], financeCurrentQueueCounts:{all_open:0,pending_reconciliation:0,pending_confirmation:0,pending_invoice:0,pending_payment:0,completed:0}, financeCurrentRequestId:0,
             financeCurrentState: { loading:false, error:"", loaded:false }, financeCurrentExpanded: {},
             financeSettlementForm:{statement:null,amount:"",settlement_date:today(),account:""}, statementEditSourceCustomerId:null,
@@ -22956,6 +22962,7 @@
                 page_size:this.pageSize,
                 statement_month:rawFinanceFilters.statement_month || undefined,
                 all_open:!rawFinanceFilters.statement_month,
+                through_month:!!rawFinanceFilters.statement_month,
                 balance_type:rawFinanceFilters.balance_type || undefined,
                 customer_id:rawFinanceFilters.customer_id || undefined,
               } });
@@ -24265,6 +24272,13 @@
             this.financeCurrentExpanded = {};
             this.invalidatePageCache("finance");
             await this.loadFinance();
+          },
+          async onFinanceCustomerChange() {
+            if (this.financeFilters.customer_id) {
+              this.financeFilters.balance_type = "all";
+              this.financeFilters.statement_month = "";
+            }
+            return this.reloadFinanceCurrent();
           },
           async onFinanceMonthChange() {
             await this.reloadFinanceCurrent();

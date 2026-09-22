@@ -13,7 +13,7 @@ from app.models.customer import Customer
 from app.models.finance import Statement, StatementItem, SettlementRecord
 from app.models.invoice_task import FinanceInvoiceTask as Task, FinanceInvoiceTaskItem as Item, FinanceInvoiceTaskStatement as Share
 from app.models.user import User
-from app.services.invoice_statement_scope import task_shares, task_statement_filter, StatementInvoice
+from app.services.invoice_statement_scope import task_shares, task_statement_filter
 
 MergePayload = api.PartnerMergePayload
 
@@ -84,7 +84,8 @@ def _same_buyer(task):
 
 def merge_partner_tasks(statement_id: int, payload: MergePayload,
     db: Session, user: User):
-    api._statement_for_user(db, statement_id, user)
+    # Denied member access must be detected before taking a business write lock.
+    _partner_preview(db, statement_id, user)
     prefix = "partner:" + hashlib.sha256(f"{user.id}\0{payload.idempotency_key}".encode()).hexdigest() + ":"
     key = prefix + api._snapshot_hash({"statement": statement_id, "scope": payload.scope_hash})
     try:

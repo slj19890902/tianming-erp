@@ -306,6 +306,7 @@ def test_all_member_permissions_and_frozen_membership_are_required(fin001_app):
         _login(client)
         prepare_partner(client,factory)
         task=merge(client).json()
+        scope=client.get('/api/finance/statements/1/partner-invoice-preview').json()['scope_hash']
         with factory() as db:
             # Changing today's cooperation setting must not reinterpret existing bills.
             db.scalar(select(CustomerInvoiceProfile).where(CustomerInvoiceProfile.customer_id==2)).settlement_entity_id=None
@@ -314,6 +315,8 @@ def test_all_member_permissions_and_frozen_membership_are_required(fin001_app):
             db.add(UserCustomerScope(user_id=user.id,customer_id=1))
             db.commit()
         assert client.get('/api/finance/statements/1/partner-invoice-preview').status_code==403
+        assert client.post('/api/finance/statements/1/partner-invoice-tasks',json={
+            'scope_hash':scope,'idempotency_key':'forbidden-partial-scope'}).status_code==403
         assert client.get(f"/api/finance/invoice-tasks/{task['id']}").status_code==403
         assert all(t['id']!=task['id'] for t in client.get('/api/finance/invoice-tasks').json()['items'])
         _login(client,'fin001-admin')

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.482"
-APP_VERSION_NAME = "审计优化：订单列表读取与状态计算提速"
+APP_VERSION = "v0.22.483"
+APP_VERSION_NAME = "合作客户独立对账与合并开票修复"
 APP_BUILD_DATE = "2026-09-22"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4589,3 +4589,16 @@ APP_VERIFICATION_STEPS = [
     "系统版本为 v0.22.482，数据库 revision 保持 dv0922；不为验收创建模拟正式业务。",
 ]
 APP_CHANGELOG = [*(f"v0.22.482：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "合作公司的同账期独立对账单可合并下载开票文件，下载前列明全部子客户、账单与金额，避免只导出一家客户。",
+    "合并任务登记一个真实发票号，按冻结金额分别计入各账单；重复提交、版本冲突、缺少成员权限及不兼容税务资料均受保护。",
+    "原单独开票任务和导出记录保留，合并后旧文件不可继续使用；未实际开票的合并任务可受控撤销，再单独修改有异议客户。",
+    "新增不可变开票任务账单关联表，不回填或修改正式客户、对账单、价格、发票与收款事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新开票任务，点击天美德风的合并下载开票文件；核对八方电气和聚晟达两张账单、价税合计15720.18元及32条明细，停用旧单独文件。",
+    "税局实际开具后，在合并任务登记一个真实发票号；核对两张账单都显示该发票号且金额各自正确。",
+    "按真实回款分别核对账单余额；需要改单价时先受控撤销尚未实际开票的合并任务，再单独发起对应子客户异议。",
+]
+APP_CHANGELOG = [*(f"v0.22.483：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

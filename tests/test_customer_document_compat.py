@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from test_n029_production_integration import n029_delivery_app, _login, _prepare_103_finished_stock
+from test_a0008_delivery_print_template_designer import template_app
 
 
 def test_source_candidates_preserve_identifiers_and_do_not_guess_conflicts():
@@ -39,6 +40,60 @@ def test_v1_is_unchanged_and_three_v2_presets_round_trip():
         assert layout['catalog_version']=='delivery-print-v2'
     assert preset_layout('yl')['show_prices'] is False
     with pytest.raises(ValueError): preset_layout('unknown')
+
+
+def test_v2_template_can_be_saved_published_and_rolled_back_through_http(template_app):
+    from fastapi.testclient import TestClient
+    from app.services.customer_delivery_templates import preset_layout
+    from test_a0008_delivery_print_template_designer import _login as login
+    app,_=template_app
+    with TestClient(app) as client:
+        login(client,'admin')
+        for version,preset in enumerate(('yke','kew','yl')):
+            body={'customer_id':1,'expected_release_version':version,'operation_key':f'v2-draft-{preset}', 'layout':preset_layout(preset)}
+            saved=client.put('/api/system/delivery-print-templates/admin/draft',json=body)
+            assert saved.status_code==200,saved.text
+            published=client.post('/api/system/delivery-print-templates/admin/publish',json={
+                'customer_id':1,'expected_release_version':version,'draft_version':saved.json()['version'],'operation_key':f'v2-publish-{preset}'})
+            assert published.status_code==200,published.text
+            assert published.json()['layout']==preset_layout(preset)
+        rollback=client.post('/api/system/delivery-print-templates/admin/rollback',json={
+            'customer_id':1,'source_version':1,'expected_release_version':3,'operation_key':'v2-rollback-yke'})
+        assert rollback.status_code==200,rollback.text
+        assert rollback.json()['layout']['preset']=='yke'
+        bad=client.put('/api/system/delivery-print-templates/admin/draft',json={**body,'customer_id':None,'expected_release_version':0,'operation_key':'v2-global-forbidden'})
+        assert bad.status_code==422,bad.text
+
+
+def test_common_box_customer_fields_save_read_search_and_old_payload_compatibility(template_app):
+    from fastapi.testclient import TestClient
+    from app.api.products import router,ProductPayload,_product_write_data
+    from app.models.user import User
+    from test_a0008_delivery_print_template_designer import _login as login
+    app,factory=template_app
+    app.include_router(router,prefix='/api/products')
+    payload={'customer_id':1,'product_code':'INTERNAL-001','customer_material_code':'00012139','product_name':'内部纸箱名',
+        'customer_drawing_number':'0631965-1','customer_category':'AT','customer_model':'TRD-N',
+        'customer_product_name':'客户用途','sale_unit_price':'2.14642','box_category':'normal'}
+    with TestClient(app) as client:
+        login(client,'admin')
+        response=client.post('/api/products',json=payload)
+        assert response.status_code==201,response.text
+        product=response.json()
+        assert product['customer_document']['customer_drawing_number']=='0631965-1'
+        assert product['customer_document']['customer_material_code']=='00012139'
+        detail=client.get(f'/api/products/{product["id"]}')
+        assert detail.status_code==200,detail.text
+        assert detail.json()['customer_category']=='AT'
+        search=client.get('/api/products?customer_id=1&keyword=0631965-1&response_mode=summary')
+        assert search.status_code==200,search.text
+        assert [row['id'] for row in search.json()['items']]==[product['id']]
+    with factory() as db:
+        actor=db.query(User).filter_by(username='admin').one()
+        old=ProductPayload(**{key:value for key,value in payload.items() if key not in ('customer_drawing_number','customer_category','customer_model','customer_product_name')})
+        write=_product_write_data(old,actor)
+        assert 'customer_drawing_number' not in write
+        assert 'customer_category' not in write
 
 
 def test_customer_print_freezes_identity_price_and_keeps_legacy(n029_delivery_app):
@@ -131,3 +186,39 @@ def test_no_price_permission_is_server_enforced_and_components_not_double_counte
     assert not result['customer_document_rows'][1]['pricing_included']
     assert 'total_amount' not in result
     assert 'unit_price' not in result['customer_document_rows'][0]
+
+
+def test_five_decimal_sale_survives_delivery_receipt_and_statement(n029_delivery_app):
+    from datetime import date
+    from decimal import Decimal
+    from fastapi.testclient import TestClient
+    from app.models.order import OrderItem
+    from app.models.customer import Customer
+    from app.models.finance import StatementItem
+    from app.models.product import Product
+    app,factory,ids=n029_delivery_app
+    _prepare_103_finished_stock(factory,ids)
+    with factory() as db:
+        item=db.get(OrderItem,ids['task_completed'])
+        item.unit_price=Decimal('2.14642')
+        db.get(Product,item.product_id).sale_unit_price=Decimal('2.14642')
+        db.get(Customer,ids['customer']).statement_cycle_start_day=1
+        db.commit();db.refresh(item)
+        assert item.unit_price==Decimal('2.14642')
+    with TestClient(app) as client:
+        _login(client)
+        created=client.post('/api/deliveries',json={'customer_id':ids['customer'],
+            'items':[{'order_item_id':ids['task_completed'],'delivered_quantity':50}]})
+        assert created.status_code==201,created.text
+        did=created.json()['id'];line_id=created.json()['items'][0]['id']
+        response=client.put(f'/api/deliveries/{did}/dispatch');assert response.status_code==200,response.text
+        receipt=client.post('/api/finance/return_receipts',json={'delivery_id':did,'actual_received_date':date.today().isoformat(),
+            'items':[{'delivery_item_id':line_id,'actual_received_quantity':50}]})
+        assert receipt.status_code==201,receipt.text
+        statement=client.post('/api/finance/statements',json={'customer_id':ids['customer'],
+            'statement_month':date.today().strftime('%Y-%m'),'delivery_ids':[did]})
+        assert statement.status_code==201,statement.text
+        with factory() as db:
+            row=db.query(StatementItem).filter_by(statement_id=statement.json()['id']).one()
+            assert row.unit_price_snapshot==Decimal('2.14642')
+            assert row.receivable_amount==Decimal('107.32')

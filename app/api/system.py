@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 import jwt
@@ -132,11 +132,27 @@ class DeliveryPrintTemplatePayload(BaseModel):
     show_remarks: bool = True
 
 
+class CustomerDeliveryTemplatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    catalog_version: Literal['delivery-print-v2']
+    preset: Literal['yke', 'kew', 'yl']
+    columns: list[dict] = Field(min_length=2, max_length=15)
+    font_size_pt: float = Field(default=10, ge=9, le=14)
+    show_prices: bool = True
+    show_headers: bool = True
+    show_remarks: bool = True
+    price_decimals: int = Field(default=3, ge=0, le=6)
+    amount_decimals: int = Field(default=2, ge=2, le=6)
+    order_context: Literal['', '海外订单'] = ''
+    paper_width_mm: Literal[241.0] = 241.0
+    paper_height_mm: Literal[139.5] = 139.5
+
+
 class DeliveryPrintTemplateDraftRequest(BaseModel):
     customer_id: int | None = Field(default=None, gt=0)
     expected_release_version: int = Field(ge=0)
     operation_key: str = Field(min_length=8, max_length=120)
-    layout: DeliveryPrintTemplatePayload
+    layout: DeliveryPrintTemplatePayload | CustomerDeliveryTemplatePayload
 
 
 class DeliveryPrintTemplatePublishRequest(BaseModel):

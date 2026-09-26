@@ -19,3 +19,6 @@
 N04证据核验allowlist增加tests/test_p1_09c_74_requisition_preview_guard.py：原测试通过邻接函数名截取取消方法，现中间新增原片采购方法，导致SyntaxError而非运行断言失败。修正测试提取边界，保留原旧响应/改变选集/离页/只预览断言，不为此改应用逻辑。
 
 交付allowlist：app/version.py、docs/release_reports/AUDIT_CLOSEOUT_20260926.md及docs/CODEX_HANDOFF.md简短正式基线索引。两个功能闭环和N04证据修正完成后一次整合发布，无迁移。N02模板及A0001—A0016原技术交付作为已有证据保留，不无故全量回归；外部真实样张/操作记录/实纸/备用机不伪填通过。
+
+
+当前结论：本卡技术交付已发布v0.22.497（源码e3fa7e87），无迁移/业务数据改写；管理员页面未代验。31项整合集合及并行财务合并后32项受影响集合均exit0，完整门禁及NAS证据见docs/release_reports/AUDIT_CLOSEOUT_20260926.md。

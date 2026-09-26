@@ -17,25 +17,29 @@ def is_telescoping_lid_box(box_style: str | None) -> bool:
     return "A3" in value or "天地盖" in str(box_style or "")
 
 
-def _order_save_missing(product: object, missing: list[tuple[str, str]]) -> list[str]:
+def _bom_profile(product: object, profiles: dict | None):
+    if profiles is not None:
+        return profiles.get(_value(product, "id"))
+    from sqlalchemy import inspect
+    from sqlalchemy.orm import object_session
+    from app.models.multilevel_bom import ProductBomProfile
+    session = object_session(product) if inspect(product, raiseerr=False) is not None else None
+    return session.get(ProductBomProfile, product.id) if session is not None and _value(product, "id") else None
+
+
+def _order_save_missing(product: object, missing: list[tuple[str, str]], profiles: dict | None) -> list[str]:
     if _value(product, "is_virtual_composite_parent") or _value(product, "supply_mode") == "external_purchase":
         return []
     # An assembled parent has no own board; existing BOM validation handles its graph.
-    from sqlalchemy import inspect
-    from sqlalchemy.orm import object_session
-    if inspect(product, raiseerr=False) is not None:
-        session = object_session(product)
-        if session is not None and _value(product, "id"):
-            from app.models.multilevel_bom import ProductBomProfile
-            profile = session.get(ProductBomProfile, product.id)
-            if profile is not None and profile.source == "assembled":
-                return []
+    profile = _bom_profile(product, profiles)
+    if profile is not None and profile.source == "assembled":
+        return []
     required = {"material", "material_code", "supplier", "report_length_mm", "report_width_mm",
                 "base_report_length_mm", "base_report_width_mm"}
     return [label for field, label in missing if field in required]
 
 
-def product_readiness(product: object) -> dict[str, object]:
+def product_readiness(product: object, *, bom_profiles: dict | None = None) -> dict[str, object]:
     """Return a display-only readiness result for a common-box master record.
 
     This deliberately ignores ``manual_modified``: edit history is not proof that
@@ -48,11 +52,7 @@ def product_readiness(product: object) -> dict[str, object]:
         missing.append(("product_name", "产品名称未填写"))
 
     if _value(product, "box_style") == "BOM组合":
-        from sqlalchemy import inspect
-        from sqlalchemy.orm import object_session
-        from app.models.multilevel_bom import ProductBomProfile
-        session = object_session(product) if inspect(product, raiseerr=False) is not None else None
-        profile = session.get(ProductBomProfile, product.id) if session else None
+        profile = _bom_profile(product, bom_profiles)
         if not profile or profile.source != "assembled" or profile.delivery_mode != "parent" or not _value(product, "is_composite"):
             missing.append(("bom_components", "组套配方尚未保存"))
         return {
@@ -160,7 +160,7 @@ def product_readiness(product: object) -> dict[str, object]:
     labels = [label for _field, label in missing]
     return {
         "ready": not missing,
-        "order_save_missing_labels": _order_save_missing(product, missing),
+        "order_save_missing_labels": _order_save_missing(product, missing, bom_profiles),
         "status": "资料已完善" if not missing else "待完善",
         "missing_fields": fields,
         "missing_labels": labels,

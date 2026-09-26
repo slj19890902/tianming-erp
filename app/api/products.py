@@ -1417,7 +1417,7 @@ def _product_or_404(db: Session, product_id: int) -> Product:
     return product
 
 
-def _response(product: Product, user: User) -> dict:
+def _response(product: Product, user: User, *, bom_profiles: dict | None = None) -> dict:
     from app.services.customer_document_fields import document_snapshot, source_candidates
     data = {
         **_product_payload_snapshot(product),
@@ -1463,7 +1463,7 @@ def _response(product: Product, user: User) -> dict:
         data["material_supplier_name"] = None
         data["material_weight"] = None
         data["material_flute_type"] = None
-    data["readiness"] = product_readiness(product)
+    data["readiness"] = product_readiness(product, bom_profiles=bom_profiles)
     if product.mold_tool is not None:
         data["mold_tool"] = {
             "id": product.mold_tool.id,
@@ -1507,7 +1507,7 @@ def _response(product: Product, user: User) -> dict:
     return data
 
 
-def _summary_response(product: Product, user: User) -> dict:
+def _summary_response(product: Product, user: User, *, bom_profiles: dict | None = None) -> dict:
     """Return only fields used by the paginated common-box list."""
     material = product.material
     from app.services.customer_document_fields import document_snapshot
@@ -1547,7 +1547,7 @@ def _summary_response(product: Product, user: User) -> dict:
             getattr(product, "composite_fulfillment_mode", "component_delivery")
             or "component_delivery"
         ),
-        "readiness": product_readiness(product),
+        "readiness": product_readiness(product, bom_profiles=bom_profiles),
     }
     if user.role == "workshop":
         data.pop("sale_unit_price", None)
@@ -1961,6 +1961,7 @@ def list_products(
     selection_context: Literal["master_data", "order"] = Query(
         default="master_data"
     ),
+    sort_by: Literal["code", "newest"] = Query(default="code"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -1970,7 +1971,10 @@ def list_products(
         select(Product)
         .outerjoin(Material, Material.id == Product.material_id)
         .where(Product.deleted_at.is_(None))
-        .order_by(Product.customer_id, Product.product_code)
+    )
+    query = query.order_by(
+        *( (Product.created_at.desc(), Product.id.desc()) if sort_by == "newest"
+           else (Product.customer_id, Product.product_code, Product.id) )
     )
     scoped_ids = customer_scope_ids(user, db)
     if not has_unrestricted_customer_access(user, db):
@@ -2049,20 +2053,25 @@ def list_products(
                 selectinload(Product.mold_tool),
             ]
         )
-    items = db.scalars(
-        query.options(*load_options)
+    from app.models.multilevel_bom import ProductBomProfile
+    rows = db.execute(
+        query.add_columns(ProductBomProfile)
+        .outerjoin(ProductBomProfile, ProductBomProfile.product_id == Product.id)
+        .options(*load_options)
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
+    items = [product for product, _profile in rows]
+    bom_profiles = {product.id: profile for product, profile in rows}
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
         "total_pages": (total + page_size - 1) // page_size if total else 0,
         "items": [
-            _summary_response(item, user)
+            _summary_response(item, user, bom_profiles=bom_profiles)
             if is_summary
-            else _response(item, user)
+            else _response(item, user, bom_profiles=bom_profiles)
             for item in items
         ],
     }

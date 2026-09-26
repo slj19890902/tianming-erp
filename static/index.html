@@ -1083,7 +1083,7 @@
       .order-common-box-modal { width: min(1220px, 96vw); max-height: 92vh; overflow: hidden; }
       .order-common-box-body { padding: 14px 16px; overflow-y: auto; max-height: calc(92vh - 126px); }
       .order-common-box-filters {
-        display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+        display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto auto;
         gap: 8px; align-items: end; margin-bottom: 10px;
       }
       .order-common-box-filters .field { min-width: 0; margin-bottom: 0; }
@@ -10014,7 +10014,9 @@
               <div class="field"><label>存货编码</label><input class="input" v-model.trim="orderCommonBoxPicker.filters.product_code" placeholder="输入编码" @keyup.enter="searchOrderCommonBoxes" /></div>
               <div class="field"><label>产品名称</label><input class="input" v-model.trim="orderCommonBoxPicker.filters.product_name" placeholder="输入名称" @keyup.enter="searchOrderCommonBoxes" /></div>
               <div class="field"><label>规格mm</label><input class="input" v-model.trim="orderCommonBoxPicker.filters.spec" placeholder="如 470×600×300" @keyup.enter="searchOrderCommonBoxes" /></div>
+              <div class="field"><label>排序</label><select class="input" v-model="orderCommonBoxPicker.sort_by" @change="searchOrderCommonBoxes"><option value="newest">最近新增优先</option><option value="code">存货编码顺序</option></select></div>
               <button class="btn primary" type="button" :disabled="orderCommonBoxPicker.loading" @click="searchOrderCommonBoxes">{{ orderCommonBoxPicker.loading ? "查询中…" : "查询" }}</button>
+              <button class="btn" type="button" @click="clearOrderCommonBoxFilters">清空条件</button>
             </div>
             <div v-if="orderCommonBoxPicker.error" class="notice danger" style="margin-bottom:10px">{{ orderCommonBoxPicker.error }}</div>
             <div class="order-common-box-table-wrap">
@@ -10048,7 +10050,7 @@
             <div class="order-common-box-summary">
               <div class="toolbar-group">
                 <strong>已选 {{ orderCommonBoxSelectedCount() }} 款</strong>
-                <span class="muted">共 {{ orderCommonBoxPicker.total }} 款；切换筛选不会丢失勾选。</span>
+                <span class="muted">共 {{ orderCommonBoxPicker.total }} 款，每页 {{ orderCommonBoxPicker.page_size }} 款；切换筛选不会丢失勾选，排序和翻页也保留。</span>
               </div>
               <div class="toolbar-group">
                 <button class="btn small" type="button" :disabled="orderCommonBoxPicker.page <= 1 || orderCommonBoxPicker.loading" @click="loadOrderCommonBoxes(orderCommonBoxPicker.page-1)">上一页</button>
@@ -10756,6 +10758,7 @@
             bomEditor: blankBomEditor(),
             orderProductOptions: {},
             orderCommonBoxPicker: {
+              sort_by:"newest",
               visible:false, loading:false, importing:false, error:"",
               filters:{ product_code:"", product_name:"", spec:"" },
               items:[], total:0, page:1, pages:0, page_size:50,
@@ -31847,6 +31850,7 @@
 	          },
 	          resetOrderCommonBoxPicker() {
 	            this.orderCommonBoxPicker = {
+	              sort_by:"newest",
 	              visible:false, loading:false, importing:false, error:"",
 	              filters:{ product_code:"", product_name:"", spec:"" },
 	              items:[], total:0, page:1, pages:0, page_size:50,
@@ -31870,10 +31874,18 @@
 	          async searchOrderCommonBoxes() {
 	            await this.loadOrderCommonBoxes(1);
 	          },
+	          async clearOrderCommonBoxFilters() {
+	            this.orderCommonBoxPicker.filters = {product_code:"",product_name:"",spec:""};
+	            await this.loadOrderCommonBoxes(1);
+	          },
 	          async loadOrderCommonBoxes(page=1) {
 	            if (!this.orderForm.customer_id) return;
+	            const picker = this.orderCommonBoxPicker, customerId = this.orderForm.customer_id;
+	            const generation = this.authGeneration, actorId = this.user?.id;
 	            const requestId = Number(this.orderCommonBoxPicker.request_id || 0) + 1;
 	            this.orderCommonBoxPicker.request_id = requestId;
+	            const isCurrent = () => picker === this.orderCommonBoxPicker && requestId === picker.request_id
+	              && customerId === this.orderForm.customer_id && generation === this.authGeneration && actorId === this.user?.id;
 	            this.orderCommonBoxPicker.loading = true;
 	            this.orderCommonBoxPicker.error = "";
 	            try {
@@ -31884,10 +31896,11 @@
 	                  product_name:this.orderCommonBoxPicker.filters.product_name || "",
 	                  spec:this.orderCommonBoxPicker.filters.spec || "",
 	                  selection_context:"order",
+	                  sort_by:picker.sort_by || "newest",
 	                  page, page_size:this.orderCommonBoxPicker.page_size,
 	                },
 	              });
-	              if (requestId !== this.orderCommonBoxPicker.request_id) return;
+	              if (!isCurrent()) return;
 	              this.orderCommonBoxPicker.items = data.items || [];
 	              this.orderCommonBoxPicker.total = Number(data.total || 0);
 	              this.orderCommonBoxPicker.page = Number(data.page || page);
@@ -31897,13 +31910,13 @@
 	                if (selected) selected.product = row;
 	              }
 	            } catch (error) {
-	              if (requestId !== this.orderCommonBoxPicker.request_id) return;
+	              if (!isCurrent()) return;
 	              this.orderCommonBoxPicker.items = [];
 	              this.orderCommonBoxPicker.total = 0;
 	              this.orderCommonBoxPicker.pages = 0;
 	              this.orderCommonBoxPicker.error = this.errorMessage(error);
 	            } finally {
-	              if (requestId === this.orderCommonBoxPicker.request_id) this.orderCommonBoxPicker.loading = false;
+	              if (isCurrent()) this.orderCommonBoxPicker.loading = false;
 	            }
 	          },
 	          isOrderCommonBoxSelected(productId) {

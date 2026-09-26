@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.502"
-APP_VERSION_NAME = "成本依据整行展示修复"
+APP_VERSION = "v0.22.503"
+APP_VERSION_NAME = "旧箱型确定项归并"
 APP_BUILD_DATE = "2026-09-26"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4821,3 +4821,15 @@ APP_CHANGELOG = [*(f"v0.22.501：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["修复成本提醒进入订单详情后，成本、毛利和BOM依据挤在产品名称列导致行高异常的问题；依据独立占产品下方整行，保留定位及返回位置。"]
 APP_VERIFICATION_STEPS = ["刷新订单成本提醒，点击查看成本依据，核对产品名称列只显示名称，成本和BOM依据在该产品下方横向展开。", "核对另一条产品及返回成本提醒后的筛选页码；无成本权限账号不显示成本依据。"]
 APP_CHANGELOG = [*(f"v0.22.502：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "将21个结构依据明确的旧箱型名称归入系统现有10类规范箱型；旧名称继续作为可识别别名，不新增平行分类。",
+    "普通钉箱、粘箱、单瓦箱、七层箱等沿用A1规则并保留产品原工艺字段；天地盖整套、盖、底以及围板、满摇盖、半截箱、七层板、飞机盒、模切小箱和异型箱分别沿用对应现有公式。",
+    "归并只影响后续箱型识别与新估算，不批量改写产品、订单、成本快照或历史事实；无法由结构确认的名称继续标记待确认。",
+]
+APP_VERIFICATION_STEPS = [
+    "在常用箱或订单预览抽查WC五层钉箱、SCX单瓦箱、TDG天地盖、TDGG天地盖盖、TDGD天地盖底和FJH飞机盒，确认显示现有规范箱型建议及对应公式。",
+    "抽查原产品的钉／粘、层数、单双拼、BOM、模具和图纸仍保持；已保存订单及历史成本快照不得随本次发布改写。",
+    "核对归并预览中1395条确定项和525条待确认项；待确认项不得按名称猜测写入。进入系统版本确认v0.22.503且数据库revision仍为ea0926。",
+]
+APP_CHANGELOG = [*(f"v0.22.503：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

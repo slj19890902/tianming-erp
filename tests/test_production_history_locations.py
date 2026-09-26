@@ -48,6 +48,12 @@ def seed_history(app, factory):
         loc = db.get(WarehouseLocation, lot.warehouse_location_id)
         area = db.scalar(select(WarehouseArea).where(WarehouseArea.area_code == loc.area_code))
         db.add(ReceiptStagingArea(area_id=area.id))
+        from app.models.material import Material
+        from app.models.product import Product
+        product = db.get(Product, item.product_id)
+        db.get(Material, product.material_id).price_unit = 'm2'
+        product.report_length_mm, product.report_width_mm = 1000, 600
+        db.flush()
         extra = manual_finished_in(db, customer_id=item.order.customer_id, product_id=item.product_id,
             location_id=loc.id, quantity=50, stock_date=date.today(), source_type='purchase_reserve',
             remarks='other source fixture', operator_id=1, idempotency_key='history-unrelated',

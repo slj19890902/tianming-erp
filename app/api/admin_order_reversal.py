@@ -15,7 +15,7 @@ can_dispose = PermissionChecker('orders.delete')
 class Preview(BaseModel):
     model_config = ConfigDict(extra='forbid')
     order_ids: list[int] = Field(min_length=1, max_length=50)
-    mode: Literal['withdraw','keep_stock','delete_trial']
+    mode: Literal['withdraw','keep_stock','delete_trial','cancel_stock','delete_order']
 
     @field_validator('order_ids')
     @classmethod

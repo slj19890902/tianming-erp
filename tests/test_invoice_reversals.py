@@ -53,6 +53,59 @@ def test_reversal_retains_invoice_and_snapshots_reopens_once(fin001_app):
         assert db.scalar(select(StatementAdjustment).where(StatementAdjustment.action=='void_issued_invoice_for_modify')) is not None
 
 
+def test_voided_invoice_history_does_not_block_cancelling_statement(fin001_app, monkeypatch):
+    from app.models.finance import Invoice, Statement
+    app, factory = fin001_app
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location('archive_migration', Path(__file__).parents[1] / 'alembic/versions/ea0926_cancelled_statement_invoice_archives.py')
+    migration = importlib.util.module_from_spec(spec); spec.loader.exec_module(migration)
+    with factory() as db:
+        for sql in migration.TRIGGERS.values():
+            db.connection().exec_driver_sql(sql)
+        db.commit()
+    with TestClient(app) as client:
+        _login(client)
+        invoice_id = issue(client)
+        result = client.post(f'/api/finance/invoices/{invoice_id}/void', json=payload(client, invoice_id))
+        assert result.status_code == 200, result.text
+        result = client.post('/api/finance/statements/1/cancel')
+        assert result.status_code == 200, result.text
+        detail = client.get('/api/finance/statements/1').json()
+        assert detail['confirmation_status'] == 'cancelled'
+        assert detail['voided_versions'][0]['snapshot']['items']
+        assert detail['invoices'][0]['invoice_status'] == 'voided'
+        result = client.post('/api/finance/return_receipts/1/cancel')
+        assert result.status_code == 200, result.text
+        from app.api.deliveries import router as delivery_router
+        app.include_router(delivery_router, prefix='/api/deliveries')
+        _login(client, 'fin001-admin')
+        result = client.put('/api/deliveries/1/cancel')
+        assert result.status_code == 200, result.text
+        result = client.delete('/api/deliveries/1')
+        assert result.status_code == 200, result.text
+        assert result.json()['voided'] is True
+    with factory() as db:
+        assert db.get(Invoice, invoice_id).invoice_status == 'voided'
+        assert db.get(Statement, 1).confirmation_status == 'cancelled'
+        from app.models.invoice_task import FinanceInvoiceTaskItem
+        from app.models.finance import StatementAdjustment, StatementItem
+        import json
+        line = db.scalar(select(FinanceInvoiceTaskItem))
+        assert line.statement_item_id is None and line.archived_statement_item_id
+        history = db.get(StatementAdjustment, line.archived_adjustment_id)
+        rows = json.loads(history.details_json)['source_items']
+        assert rows[0]['id'] == line.archived_statement_item_id
+        assert db.scalar(select(StatementItem)) is None
+        with monkeypatch.context() as patch:
+            patch.setattr(migration.op, 'get_bind', lambda: db.connection())
+            with pytest.raises(RuntimeError, match='refuse destructive downgrade'):
+                migration.downgrade()
+        with pytest.raises(Exception, match='immutable'):
+            db.connection().exec_driver_sql('UPDATE finance_statement_adjustments SET reason=reason WHERE id=?', (history.id,))
+        db.rollback()
+
+
 @pytest.mark.parametrize('blocker',['paid','stale','unconfirmed','unauthorized'])
 def test_reversal_protects_payment_version_confirmation_and_permission(fin001_app, blocker):
     from app.models.finance import Statement, Invoice

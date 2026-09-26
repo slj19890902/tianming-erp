@@ -189,6 +189,19 @@ def test_cost_review_reuses_health_boundaries_and_stays_read_only(
         assert limited.json()["returned_items"] == 2
         assert limited.json()["truncated"] is True
 
+        paged = client.get("/api/orders/cost-review", params={"page":2,"page_size":2}).json()
+        assert [row["health_code"] for row in paged["items"]] == ["review","sale_missing"]
+        assert paged["page_count"] == 2 and paged["all_items"] == 4
+        assert paged["truncated"] is False
+        selected = client.get("/api/orders/cost-review", params={"health":"sale_missing","page_size":1}).json()
+        assert selected["total_items"] == 1 and selected["all_items"] == 4
+        assert selected["items"][0]["health_code"] == "sale_missing"
+        assert "15" in selected["threshold_label"] and "25" in selected["threshold_label"]
+        assert client.get("/api/orders/cost-review",params={"keyword":"VERY-LOW","page_size":1}).json()["total_items"] == 1
+        assert client.get("/api/orders/cost-review",params={"keyword":"%","page_size":1}).json()["total_items"] == 0
+        assert client.get("/api/orders/cost-review",params={"health":"healthy"}).status_code == 422
+        assert client.get("/api/orders/cost-review",params={"page":999,"page_size":2}).json()["page"] == 2
+
         _login(client, "sales")
         forbidden = client.get("/api/orders/cost-review")
         assert forbidden.status_code == 403
@@ -216,14 +229,14 @@ def test_cost_review_reuses_health_boundaries_and_stays_read_only(
 
 def test_cost_review_ui_is_one_lazy_read_only_cost_check_panel() -> None:
     for text in (
-        "成本与利润提醒",
+        "预计成本与毛利提醒",
         "待补资料",
         "利润复核",
         "仅供内部复核，不是实际利润",
         'axios.get("/api/orders/cost-review"',
     ):
         assert text in INDEX
-    assert INDEX.count('@click="openCostGaps">成本与利润提醒</button>') == 1
+    assert INDEX.count('@click="openCostGaps">预计成本与毛利提醒</button>') == 1
     assert "Promise.all([" in INDEX
     assert "switchCostPanel('review')" in INDEX
     assert "loadCostReview" in INDEX

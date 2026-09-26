@@ -624,3 +624,28 @@ def test_customer_scope_denied_has_no_receipt(routing_app):
         assert response.status_code == 403, response.text
     with routing_app.state.factory() as db:
         assert db.scalar(select(func.count()).select_from(ExternalPackagingReceipt)) == 0
+
+
+def test_external_receipt_reverses_split_locations(routing_app):
+    from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
+    from app.models.external_packaging_purchase import ExternalPackagingReceipt
+    from app.services.warehouse_inventory import transfer_finished_lot_between_locations
+    with TestClient(routing_app) as client:
+        oid, pid, line = prepare(routing_app, client)
+        first = receive(client, pid, line, 1000)
+        assert first.status_code == 200, first.text
+        with routing_app.state.factory() as db:
+            lot = db.scalar(select(InventoryLot))
+            target = db.scalar(select(WarehouseLocation).where(WarehouseLocation.area_code == 'FIN-001',
+                WarehouseLocation.id != lot.warehouse_location_id).order_by(WarehouseLocation.id))
+            transfer_finished_lot_between_locations(db, lot_id=lot.id, expected_version=lot.version,
+                quantity=400, location_id=target.id, operator_id=1, idempotency_key='external-split-move',
+                expected_target_layout_version=target.floor3_layout.version)
+            rid = db.scalar(select(ExternalPackagingReceipt.id))
+            db.commit()
+        payload = dict(idempotency_key='external-split-reverse', reason='隔离分货位撤销', confirmed=True)
+        result = client.post(f'/api/external-packaging-receipts/{rid}/reverse', json=payload)
+        assert result.status_code == 200, result.text
+    with routing_app.state.factory() as db:
+        lots = list(db.scalars(select(InventoryLot)))
+        assert len(lots) == 2 and sum(l.quantity_available+l.quantity_reserved for l in lots) == 0

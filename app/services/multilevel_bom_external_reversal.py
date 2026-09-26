@@ -45,9 +45,21 @@ def _reverse_output(db, row, *, order_item_id, user, direct=False):
         if lots:
             raise SubkitError('无整件实收却有库存，不能撤销')
         return
-    if len(lots) != 1:
-        raise SubkitError('实收库存已拆分或身份不完整，请先还原后续操作')
-    lot = lots[0]
+    if not lots:
+        raise SubkitError('实收库存身份不完整，请先核对来源')
+    # A transfer retains the same receipt provenance; prove its complete family.
+    from app.services.production_reversal_transfers import transfer_family, reverse_transferred_completion
+    from app.models.warehouse_inventory import InventoryLotTransfer
+    child_ids = set(db.scalars(select(InventoryLotTransfer.target_lot_id).where(
+        InventoryLotTransfer.target_lot_id.in_([lot.id for lot in lots]),
+        InventoryLotTransfer.source_lot_id != InventoryLotTransfer.target_lot_id)))
+    roots = [lot for lot in lots if lot.id not in child_ids]
+    if len(roots) != 1:
+        raise SubkitError('实收库存来源链不完整，不能按数量猜测撤销')
+    lot = roots[0]
+    family_ids, transfers = transfer_family(db, [lot.id])
+    if family_ids != {entry.id for entry in lots}:
+        raise SubkitError('实收移库批次来源不一致')
     if direct:
         item = db.get(OrderItem, order_item_id)
         order = db.get(Order, item.order_id)
@@ -59,6 +71,17 @@ def _reverse_output(db, row, *, order_item_id, user, direct=False):
             raise SubkitError('外购成品收料库存身份不一致')
     else:
         validated_external_lot_detail(db, lot)
+    if transfers:
+        from types import SimpleNamespace
+        from app.services.production_workflow import ProductionWorkflowError
+        output = SimpleNamespace(id=row.id, inventory_lot_id=lot.id,
+            stock_quantity=row.converted_finished_quantity, order_item_id=order_item_id)
+        try:
+            reverse_transferred_completion(db, completion=output, operator_id=user.id,
+                reason='撤销外购实收', source_ref_type=source)
+        except ProductionWorkflowError as error:
+            raise SubkitError(str(error)) from error
+        return
     reservation = db.scalar(select(InventoryReservation).where(
         InventoryReservation.idempotency_key == (f'direct-external-reserve:{row.id}' if direct
             else f'bom-external-pick:{row.receipt_id}:{lot.id}')))

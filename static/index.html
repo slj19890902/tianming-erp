@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>天明包装ERP</title>
     <link rel="icon" type="image/x-icon" href="/static/assets/logo.ico" />
-    <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260913-desktopmargin001" />
+    <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260926-cost-column" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <script src="/static/ui/order-context.js?v=217850427bf4"></script>
     <script src="/static/ui/workspace.js?v=5b8c66172ec5"></script>
@@ -18,7 +18,7 @@
     <script src="/static/ui/production-desk.js?v=20260922"></script>
     <link rel="stylesheet" href="/static/ui/production-desk.css?v=20260922-map-return">
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
-    <script src="/static/ui/desktop-delivery-margin.js?v=20260922-finance-history"></script>
+    <script src="/static/ui/desktop-delivery-margin.js?v=20260926-dashboard-cost"></script>
     <script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script>
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
@@ -3299,12 +3299,6 @@
             <template v-if="activePage === 'dashboard'">
               <div class="page-head"><div><h2>首页仪表盘</h2><p>一打开就能看到今天最该处理的订单、报料、送货、回单和对账事项。</p><span v-if="overview.as_of" class="muted">统计截至 {{ formatDateTime(overview.as_of) }} · 对账月份 {{ overview.statement_month }}</span></div></div>
               <div v-if="overviewLoading" class="status blue" style="margin-bottom: 12px;">首页数据加载中……</div>
-              <section v-if="hasPermission('deliveries.view')" class="panel" style="border-left:5px solid #d97706;margin-bottom:12px" aria-label="持续待补送提醒">
-                <div class="toolbar"><strong>持续待补送 · 按最早交期排列</strong><button class="btn" @click="openDeliveryBacklogs">查看全部与历史</button></div>
-                <div v-if="deliveryBacklogs.error" class="status orange">{{ deliveryBacklogs.error }} <button class="btn small" @click="loadDeliveryBacklogs(1)">重试</button></div>
-                <div v-for="row in deliveryBacklogs.items.slice(0,5)" :key="row.id" style="padding:6px 0">{{ row.customer_name }} · {{ row.stock_code }} {{ row.product_name }}：待补 <strong>{{ row.remaining_quantity }}</strong>，可补送 {{ row.ready_quantity }} · 交期 {{ row.due_date || '未登记' }} · {{ row.reason }}</div>
-                <div v-if="!deliveryBacklogs.items.length && !deliveryBacklogs.error" class="muted">{{ deliveryBacklogs.loading ? '正在查询待补送…' : '暂无登记中的待补送' }}</div>
-              </section>
               <div v-if="overviewError" class="status red" style="margin-bottom: 12px;">首页数据加载失败：{{ overviewError }}</div>
               <div v-if="dashboardCards.length" class="dashboard-cards">
                 <div v-for="card in dashboardCards" :key="card.key" class="card dashboard-card" @click="openDashboardTarget(card)">
@@ -3312,7 +3306,7 @@
                   <div class="dashboard-card-value">
                     <span class="dashboard-card-count">{{ card.count || 0 }}</span>
                     <span class="dashboard-card-unit">{{ card.count_unit || "项" }}</span>
-                    <span v-if="card.amount !== undefined && card.amount !== null" class="dashboard-card-amount"> / ￥ {{ money(card.amount) }}</span>
+                    <span v-if="card.amount !== undefined && card.amount !== null" class="dashboard-card-amount">金额 ￥ {{ money(card.amount) }}</span>
                   </div>
                   <div class="card-hint">{{ card.description }}</div>
                   <div v-if="card.key==='pending_material' && dashboardRequisitionHoldSummary.total" class="dashboard-hold-summary" @click.stop="openWaitingRequisitionFromDashboard">
@@ -3324,34 +3318,46 @@
                 </div>
               </div>
               <div v-else class="empty" style="margin-top: 8px;">当前没有可显示的总览数据。</div>
-              <section v-if="canViewDeliveryMargin" id="desktopDeliveryMarginSection" class="dashboard-delivery-margin-shell">
-                <div id="desktopDeliveryMarginRoot" class="panel">
-                  <div class="dashboard-delivery-margin-head">
-                    <div><h3>客户送货材料毛利</h3><p class="muted">按真实送货明细统计；这是送货材料毛利，不是净利。</p></div>
-                    <span class="dashboard-delivery-margin-basis">日期：送货日期 · 含税人民币 · 已覆盖明细与参考补充分开</span>
-                  </div>
-                  <div class="dashboard-delivery-margin-filters" aria-label="客户送货材料毛利筛选">
-                    <label>客户搜索<input id="desktopDeliveryMarginCustomerSearch" type="search" placeholder="搜索授权客户" aria-label="搜索授权客户" /></label>
-                    <label>客户<select id="desktopDeliveryMarginCustomer" aria-label="客户"><option value="">全部授权客户</option></select></label>
-                    <label>开始日期<input id="desktopDeliveryMarginDateFrom" type="date" aria-label="开始日期" /></label>
-                    <label>结束日期<input id="desktopDeliveryMarginDateTo" type="date" aria-label="结束日期" /></label>
-                    <button id="desktopDeliveryMarginApply" class="btn small primary" type="button">查询</button>
-                    <button id="desktopDeliveryMarginRetry" class="btn small" type="button" hidden>重试</button>
-                    <span id="desktopDeliveryMarginCustomerNote" class="muted" hidden></span>
-                  </div>
-                  <div id="desktopDeliveryMarginState" class="status blue" hidden></div>
-                  <div id="desktopDeliveryMarginSummary" class="dashboard-delivery-margin-summary" hidden></div>
-                  <div class="dashboard-delivery-margin-charts">
-                    <div class="panel"><div class="section-title">销售额 vs 材料成本</div><div id="desktopDeliveryMarginBarChart" aria-label="销售额与材料成本柱图"></div></div>
-                    <div class="panel"><div class="section-title">每日材料毛利率趋势</div><div id="desktopDeliveryMarginTrend" aria-label="每日材料毛利率趋势"></div></div>
-                  </div>
-                  <div class="panel dashboard-delivery-margin-customers"><div class="section-title">客户明细</div><div id="desktopDeliveryMarginCustomers" aria-label="客户材料毛利表"></div><div class="dashboard-delivery-margin-pager"><span id="desktopDeliveryMarginPage">第 1 / 1 页</span><button id="desktopDeliveryMarginPrev" class="btn small" type="button">上一页</button><button id="desktopDeliveryMarginNext" class="btn small" type="button">下一页</button></div></div>
-                  <div id="desktopDeliveryMarginGaps" class="dashboard-delivery-margin-gaps"></div>
-                </div>
+              <section v-if="hasPermission('deliveries.view')" class="panel dashboard-backlog" :class="{'is-empty':!deliveryBacklogs.items.length && !deliveryBacklogs.loading && !deliveryBacklogs.error}" aria-label="持续待补送提醒">
+                <div class="toolbar"><strong>持续待补送 · 按最早交期排列</strong><button class="btn" @click="openDeliveryBacklogs">查看全部与历史</button></div>
+                <div v-if="deliveryBacklogs.error" class="status orange">{{ deliveryBacklogs.error }} <button class="btn small" @click="loadDeliveryBacklogs(1)">重试</button></div>
+                <div v-for="row in deliveryBacklogs.items.slice(0,5)" :key="row.id" style="padding:6px 0">{{ row.customer_name }} · {{ row.stock_code }} {{ row.product_name }}：待补 <strong>{{ row.remaining_quantity }}</strong>，可补送 {{ row.ready_quantity }} · 交期 {{ row.due_date || '未登记' }} · {{ row.reason }}</div>
+                <div v-if="!deliveryBacklogs.items.length && !deliveryBacklogs.error" class="muted">{{ deliveryBacklogs.loading ? '正在查询待补送…' : '暂无登记中的待补送' }}</div>
               </section>
+              <div class="dashboard-block">
+                <div class="section-title">今日日常待办</div>
+                <div class="section-body">
+                  <div v-if="overview.todos && overview.todos.length" class="todo-list">
+                    <div v-for="todo in overview.todos" :key="`${todo.type}-${todo.customer_name}-${todo.month || ''}-${todo.first_order_no || ''}`" class="todo-item">
+                      <div class="todo-main">
+                        <div class="todo-meta">
+                          <span class="todo-type">{{ todo.type }}</span>
+                          <div class="todo-title">{{ todo.customer_name }}</div>
+                        </div>
+                        <div class="todo-detail" v-if="todo.month">
+                          {{ todo.month }}
+                          <span v-if="todo.count"> / 共 {{ todo.count }} 条</span>
+                          <span v-if="todo.amount !== undefined"> / {{ money(todo.amount) }}</span>
+                        </div>
+                        <div class="todo-detail" v-else>
+                          <span v-if="todo.count">共 {{ todo.count }} 条</span>
+                          <span v-if="todo.first_order_no"> / 最早单号 {{ todo.first_order_no }}</span>
+                          <span v-if="todo.first_item_no"> / {{ todo.first_item_no }}</span>
+                        </div>
+                      </div>
+                      <div class="todo-message">{{ todo.message }}</div>
+                      <div class="toolbar-group">
+                        <button class="btn small" @click="openDashboardTarget(todo)">{{ todo.action_text || "查看对应页面" }}</button>
+                      </div>
+                    </div>
+                    <div v-if="overview.remaining_todo_count" class="todo-more">还有 {{ overview.remaining_todo_count }} 项待办，请进入对应页面查看。</div>
+                  </div>
+                  <div v-else class="empty">当前没有紧急待办。</div>
+                </div>
+              </div>
               <div class="dashboard-detail-summary">
-                <span>详细待办：低库存 {{ overview.low_stock_warnings?.length || 0 }} 款 · 今日日常待办 {{ overview.todos?.length || 0 }} 项</span>
-                <button class="btn small" type="button" :aria-expanded="dashboardDetailsVisible" @click="dashboardDetailsVisible=!dashboardDetailsVisible">{{ dashboardDetailsVisible ? '收起首页明细' : '展开首页明细' }}</button>
+                <span>库存与业务摘要：低库存 {{ overview.low_stock_warnings?.length || 0 }} 款 · 今日日常待办 {{ overview.todos?.length || 0 }} 项</span>
+                <button class="btn small" type="button" :aria-expanded="dashboardDetailsVisible" @click="dashboardDetailsVisible=!dashboardDetailsVisible">{{ dashboardDetailsVisible ? '收起库存与摘要' : '展开库存与摘要' }}</button>
               </div>
               <div v-if="dashboardDetailsVisible" class="dashboard-detail-stack">
               <div v-if="overview.low_stock_warnings && overview.low_stock_warnings.length" class="dashboard-block">
@@ -3393,37 +3399,6 @@
                   </div>
                 </div>
               </div>
-              <div class="dashboard-block">
-                <div class="section-title">今日日常待办</div>
-                <div class="section-body">
-                  <div v-if="overview.todos && overview.todos.length" class="todo-list">
-                    <div v-for="todo in overview.todos" :key="`${todo.type}-${todo.customer_name}-${todo.month || ''}-${todo.first_order_no || ''}`" class="todo-item">
-                      <div class="todo-main">
-                        <div class="todo-meta">
-                          <span class="todo-type">{{ todo.type }}</span>
-                          <div class="todo-title">{{ todo.customer_name }}</div>
-                        </div>
-                        <div class="todo-detail" v-if="todo.month">
-                          {{ todo.month }}
-                          <span v-if="todo.count"> / 共 {{ todo.count }} 条</span>
-                          <span v-if="todo.amount !== undefined"> / {{ money(todo.amount) }}</span>
-                        </div>
-                        <div class="todo-detail" v-else>
-                          <span v-if="todo.count">共 {{ todo.count }} 条</span>
-                          <span v-if="todo.first_order_no"> / 最早单号 {{ todo.first_order_no }}</span>
-                          <span v-if="todo.first_item_no"> / {{ todo.first_item_no }}</span>
-                        </div>
-                      </div>
-                      <div class="todo-message">{{ todo.message }}</div>
-                      <div class="toolbar-group">
-                        <button class="btn small" @click="openDashboardTarget(todo)">{{ todo.action_text || "查看对应页面" }}</button>
-                      </div>
-                    </div>
-                    <div v-if="overview.remaining_todo_count" class="todo-more">还有 {{ overview.remaining_todo_count }} 项待办，请进入对应页面查看。</div>
-                  </div>
-                  <div v-else class="empty">当前没有紧急待办。</div>
-                </div>
-              </div>
               <div class="section-grid">
                 <div class="panel"><div class="section-title">快捷入口</div><div class="section-body toolbar-group">
                   <template v-for="action in dashboardQuickActions" :key="action.key">
@@ -3441,6 +3416,34 @@
                 </div></div>
               </div>
               </div>
+              <section v-if="canViewDeliveryMargin" id="desktopDeliveryMarginSection" class="dashboard-delivery-margin-shell">
+                <div id="desktopDeliveryMarginRoot" class="panel">
+                  <div class="dashboard-delivery-margin-head">
+                    <div><h3>客户送货材料毛利</h3><p class="muted">按真实送货明细统计；这是送货材料毛利，不是净利。</p></div>
+                    <span class="dashboard-delivery-margin-basis">日期：送货日期 · 含税人民币 · 已覆盖明细与参考补充分开</span>
+                  </div>
+                  <div class="dashboard-delivery-margin-filters" aria-label="客户送货材料毛利筛选">
+                    <div class="margin-customer-picker"><label for="desktopDeliveryMarginCustomerSearch">客户</label><input id="desktopDeliveryMarginCustomerSearch" type="search" placeholder="全部授权客户 · 输入名称搜索" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="desktopDeliveryMarginCustomerList" autocomplete="off" /><select id="desktopDeliveryMarginCustomer" hidden aria-hidden="true" tabindex="-1"><option value="">全部授权客户</option></select><div id="desktopDeliveryMarginCustomerList" class="margin-customer-options" role="listbox" aria-label="授权客户搜索结果" hidden></div></div>
+                    <label>开始日期<input id="desktopDeliveryMarginDateFrom" type="date" aria-label="开始日期" /></label>
+                    <label>结束日期<input id="desktopDeliveryMarginDateTo" type="date" aria-label="结束日期" /></label>
+                    <div id="desktopDeliveryMarginDatePresets" class="toolbar-group" aria-label="送货日期快捷范围"></div>
+                    <button id="desktopDeliveryMarginApply" class="btn small primary" type="button">查询</button>
+                    <button id="desktopDeliveryMarginRetry" class="btn small" type="button" hidden>重试</button>
+                    <span id="desktopDeliveryMarginCustomerNote" class="muted" hidden></span>
+                  </div>
+                  <p id="desktopDeliveryMarginApplied" class="margin-applied" aria-live="polite">筛选仅影响送货毛利，首页待办按各自业务口径统计。</p>
+                  <div id="desktopDeliveryMarginState" class="status blue" hidden></div>
+                  <div id="desktopDeliveryMarginSummary" class="dashboard-delivery-margin-summary" hidden></div>
+                  <details class="dashboard-analysis-details"><summary>展开毛利趋势与客户明细</summary>
+                  <div class="dashboard-delivery-margin-charts">
+                    <div class="panel"><div class="section-title">销售额 vs 材料成本</div><div id="desktopDeliveryMarginBarChart" aria-label="销售额与材料成本柱图"></div></div>
+                    <div class="panel"><div class="section-title">每日材料毛利率趋势</div><div id="desktopDeliveryMarginTrend" aria-label="每日材料毛利率趋势"></div></div>
+                  </div>
+                  <div class="panel dashboard-delivery-margin-customers"><div class="section-title">客户明细</div><div id="desktopDeliveryMarginCustomers" aria-label="客户材料毛利表"></div><div class="dashboard-delivery-margin-pager"><span id="desktopDeliveryMarginPage">第 1 / 1 页</span><button id="desktopDeliveryMarginPrev" class="btn small" type="button">上一页</button><button id="desktopDeliveryMarginNext" class="btn small" type="button">下一页</button></div></div>
+                  </details>
+                  <div id="desktopDeliveryMarginGaps" class="dashboard-delivery-margin-gaps"></div>
+                </div>
+              </section>
             </template>
             <template v-else-if="activePage === 'customers'">
               <page-head title="客户管理" desc="维护客户编号、账期、信用额度、联系人和开票资料。"></page-head>
@@ -4117,7 +4120,7 @@
                       </template>
                     </div>
                     <div class="toolbar-group">
-                      <button v-if="orderWorkspace === 'queue' && canViewCosts" ref="costGapTrigger" class="btn" @click="openCostGaps">成本与利润提醒</button>
+                      <button v-if="orderWorkspace === 'queue' && canViewCosts" ref="costGapTrigger" class="btn" @click="openCostGaps">预计成本与毛利提醒</button>
                       <button v-if="orderWorkspace === 'queue'" class="btn" :aria-expanded="orderListColumnPanelOpen" @click="orderListColumnPanelOpen=!orderListColumnPanelOpen">列表列</button>
                       <button class="btn" @click="refreshCurrentOrderWorkspace()">刷新</button>
                     </div>
@@ -5079,7 +5082,7 @@
                 <div class="field delivery-detailed-customer-filter"><label>客户</label><search-select v-model="deliveryListFilters.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="全部客户" :allow-empty="true" @change="pages.deliveries=1; loadDeliveries()"></search-select></div>
                 <input class="input delivery-date-input" type="date" v-model="deliveryListFilters.date_from" aria-label="送货开始日期" @change="pages.deliveries=1; loadDeliveries()" />
                 <input class="input delivery-date-input" type="date" v-model="deliveryListFilters.date_to" aria-label="送货结束日期" @change="pages.deliveries=1; loadDeliveries()" />
-                <select class="select delivery-status-select" v-model="deliveryListFilters.status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部送货状态</option><option value="pending">草稿</option><option value="dispatched">已发货</option><option value="voided">已作废</option></select>
+                <select class="select delivery-status-select" v-model="deliveryListFilters.status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部送货状态</option><option value="pending">草稿</option><option value="dispatched">已发货</option><option value="voided">已删除（留痕）</option></select>
                 <select class="select delivery-status-select" v-model="deliveryListFilters.return_status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部回单状态</option><option value="waiting_receipt">待回单</option><option value="confirmed">回单已确认</option><option value="cancelled">回单已取消</option></select>
                 <div class="field"><label>客户订单号</label><input class="input" v-model.trim="deliveryDetailedFilters.customer_po" placeholder="输入客户订单号" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="deliveryDetailedFilters.product_code" placeholder="输入存货编码" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
@@ -5104,7 +5107,7 @@
                     <td>{{ row.delivery_date }}<div v-if="row.is_historical_backfill" class="status blue" style="margin-top:4px">历史补录</div><div v-if="row.created_at" class="muted">ERP录入 {{ formatDateTime(row.created_at) }}</div></td>
                     <td>{{ row.vehicle_number || "-" }}</td>
                     <td>{{ deliveryDisplayQuantity(row) }}</td>
-                    <td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
+                    <td><span v-if="row.status==='voided'" class="status gray">已删除（留痕）</span><status-tag v-else :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
                     <td><button class="btn small delivery-list-detail-toggle" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${row.item_count ?? (row.items || []).length}）` }}</button></td>
                     <td class="delivery-list-actions"><div class="delivery-row-actions-inner">
@@ -5535,7 +5538,7 @@
                     <div v-if="canFinance" class="finance-cost-grid" style="margin-top:10px"><div class="field"><label>承兑号码</label><input class="input" v-model.trim="financeAcceptanceForm.bill_number" /></div><div class="field"><label>客户</label><select class="select" v-model.number="financeAcceptanceForm.customer_id"><option :value="null">请选择</option><option v-for="item in simpleFinanceMeta.customers" :key="item.id" :value="item.id">{{ item.short_name }}</option></select></div><div class="field"><label>票面金额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeAcceptanceForm.amount" /></div><div class="field"><label>收到日期</label><input class="input" type="date" v-model="financeAcceptanceForm.received_date" /></div><div class="field"><label>到期日期</label><input class="input" type="date" v-model="financeAcceptanceForm.maturity_date" /></div><div class="field"><label>备注</label><input class="input" v-model.trim="financeAcceptanceForm.note" /></div><div class="field"><label>&nbsp;</label><button class="btn primary" :disabled="simpleFinanceState.saving" @click="saveFinanceAcceptance">登记在手承兑</button></div></div>
                     <div class="table-wrap"><table :data-workspace-list="'finance-detail-7'"><thead><tr><th>客户 / 承兑号</th><th>金额</th><th>收到 / 到期</th><th>状态</th><th>供应商月结 / 操作</th></tr></thead><tbody><tr v-for="row in localRows(financeAcceptances,'finance-detail-7')" :key="row.id"><td><strong>{{ row.customer_name }}</strong><div class="muted">{{ row.bill_number }}</div></td><td class="sensitive-price">¥ {{ money(row.amount) }}</td><td>{{ row.received_date }} / {{ row.maturity_date }}</td><td><span :class="['status',row.status==='held'?'orange':row.status==='endorsed'?'blue':row.status==='matured'?'green':'gray']">{{ row.status_label }}</span><div v-if="row.supplier_name" class="muted">{{ row.supplier_name }}</div></td><td><div v-if="row.status==='held'" class="toolbar-group"><select class="select" style="max-width:310px" v-model.number="row._statementId"><option :value="null">选择供应商月结</option><option v-for="item in simpleFinanceMeta.supplier_statements" :key="item.id" :value="item.id" :disabled="Number(row.amount)>Number(item.available_payment_amount)">{{ item.supplier_name }} · {{ item.statement_number }} · 可抵付 {{ money(item.available_payment_amount) }}{{ Number(row.amount)>Number(item.available_payment_amount) ? '（余额不足）' : '' }}</option></select><button v-if="canFinance" class="btn small primary" :disabled="!!simpleFinanceState.action" @click="endorseFinanceAcceptance(row)">背书抵付</button><button v-if="canFinance" class="btn small" :disabled="!!simpleFinanceState.action" @click="transitionFinanceAcceptance(row,'matured')">到期</button><button v-if="canFinance" class="btn small danger" :disabled="!!simpleFinanceState.action" @click="transitionFinanceAcceptance(row,'returned')">退回</button></div><span v-else class="muted">{{ row.supplier_statement_id ? `已关联月结 #${row.supplier_statement_id}` : '-' }}</span></td></tr><tr v-if="!financeAcceptances.length"><td colspan="5" class="empty">尚无承兑记录。</td></tr></tbody></table></div><local-pager :rows="financeAcceptances" :list-key="'finance-detail-7'"></local-pager>
                   </div>
-                <div v-if="financeExpensePane==='list'" class="toolbar-group"><select class="select" v-model="financeCostFilters.status" @change="reloadFinanceCosts"><option value="">全部状态</option><option value="draft">草稿</option><option value="confirmed">已确认</option><option value="voided">已作废</option></select><select class="select" v-model="financeCostFilters.category" @change="reloadFinanceCosts"><option value="">全部类别</option><option v-for="item in financeCostMeta.categories" :key="item.value" :value="item.value">{{item.label}}</option></select><button class="btn small" @click="loadFinanceCosts">查询</button></div></div>
+                <div v-if="financeExpensePane==='list'" class="toolbar-group"><select class="select" v-model="financeCostFilters.status" @change="reloadFinanceCosts"><option value="">全部状态</option><option value="draft">草稿</option><option value="confirmed">已确认</option><option value="voided">已删除（留痕）</option></select><select class="select" v-model="financeCostFilters.category" @change="reloadFinanceCosts"><option value="">全部类别</option><option v-for="item in financeCostMeta.categories" :key="item.value" :value="item.value">{{item.label}}</option></select><button class="btn small" @click="loadFinanceCosts">查询</button></div></div>
                 <div v-show="financeExpensePane==='review'" v-if="canViewFinanceCosts"  class="panel finance-filter-panel" style="margin-bottom:10px">
 
                   <div style="margin-top:10px">
@@ -5550,7 +5553,7 @@
                   </div>
                   <div class="finance-cost-grid">
                     <div class="field"><label>月份</label><input class="input" type="month" v-model="financeCostMonth" @change="onFinanceCostMonthChange" /></div>
-                    <div class="field"><label>状态</label><select class="select" v-model="financeCostFilters.status" @change="reloadFinanceCosts"><option value="">全部</option><option value="draft">草稿</option><option value="confirmed">已确认</option><option value="voided">已作废</option></select></div>
+                    <div class="field"><label>状态</label><select class="select" v-model="financeCostFilters.status" @change="reloadFinanceCosts"><option value="">全部</option><option value="draft">草稿</option><option value="confirmed">已确认</option><option value="voided">已删除（留痕）</option></select></div>
                     <div class="field"><label>类别</label><select class="select" v-model="financeCostFilters.category" @change="reloadFinanceCosts"><option value="">全部</option><option v-for="item in financeCostMeta.categories" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
                     <div class="field"><label>成本中心</label><select class="select" v-model.number="financeCostFilters.center_id" @change="reloadFinanceCosts"><option value="">全部</option><option v-for="item in financeCostMeta.centers" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
                   </div>
@@ -6395,7 +6398,7 @@
 
       <div v-if="modal" class="modal-mask" @click.self="onModalMaskClick">
         <div ref="businessModal" class="modal" :class="{'order-entry-modal': modal.type === 'order', 'order-entry-large': modal.type === 'order' && isLargeUi, 'pdf-order-import-modal': modal.type === 'orderPdfImport', 'product-editor-modal': modal.type === 'product', 'product-editor-large': modal.type === 'product' && isLargeUi}" :role="isAccessibleBusinessDialog ? 'dialog' : null" :aria-modal="isAccessibleBusinessDialog ? 'true' : null" :aria-labelledby="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null" :aria-describedby="isAccessibleReadOnlyOrderDialog ? 'erp-order-detail-description' : null" :tabindex="isAccessibleBusinessDialog ? -1 : null" @keydown="onModalKeydown($event); onOrderEntryKeydown($event)">
-          <div class="modal-head"><strong :id="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null">{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small high-frequency-action" @click="closeModal">{{ modal.type==='product' && productEditReturnContext && productEditReturnContext.source!=='bom' ? '返回订单' : workflowReturnLabel }}</button></div>
+          <div class="modal-head"><strong :id="isAccessibleBusinessDialog ? 'erp-business-dialog-title' : null">{{ modal.title }}</strong><button v-if="!isForcedPassword" class="btn small high-frequency-action" @click="closeModal">{{ modal.type==='orderDetail' && costPanelReturnContext ? '返回成本提醒' : modal.type==='product' && productEditReturnContext && productEditReturnContext.source!=='bom' ? '返回订单' : workflowReturnLabel }}</button></div>
           <div v-if="workflowStatus" class="workflow-status" :data-tone="workflowStatus.tone" role="status" aria-live="polite">
             <strong>{{ workflowStatus.label }}</strong><span>{{ workflowStatus.detail }}</span>
             <span v-if="workflowSourceHint" class="workflow-source-hint">{{ workflowSourceHint }}</span>
@@ -8180,9 +8183,9 @@
                   <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
                     <button v-if="canRollbackOrders" class="btn small danger" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="canAdmin ? previewAdminOrderAction('withdraw') : dangerRollbackOrderGroup()">撤回</button>
                     <button v-if="canStatusOrders" class="btn small" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="dangerChangeOrderGroupStatus('closed')">结档</button>
-                    <button v-if="canStatusOrders" class="btn small danger" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="canAdmin ? previewAdminOrderAction('keep_stock') : dangerChangeOrderGroupStatus('cancelled')">{{ canAdmin ? '作废留库' : '作废' }}</button>
+                    <button v-if="canStatusOrders" class="btn small danger" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="canAdmin ? previewAdminOrderAction('cancel_stock') : dangerChangeOrderGroupStatus('cancelled')">{{ canAdmin ? '作废并撤库存' : '作废' }}</button>
                     <button v-if="canStatusOrders && !canAdmin" class="btn small danger" :disabled="orderGroupSaveState.saving" @click="dangerChangeOrderGroupStatus('dead')">死单</button>
-                    <button v-if="canDeleteOrders" class="btn small danger" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="canAdmin ? previewAdminOrderAction('delete_trial') : dangerDeleteOrderGroup()">{{ canAdmin ? '删除试验单' : '删除' }}</button>
+                    <button v-if="canDeleteOrders" class="btn small danger" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="canAdmin ? previewAdminOrderAction('delete_order') : dangerDeleteOrderGroup()">{{ canAdmin ? '删除订单（留痕）' : '删除' }}</button>
                     <button type="button" class="btn small" aria-label="操作说明" :aria-expanded="adminOrderActionHelp" @click="adminOrderActionHelp=!adminOrderActionHelp">！</button>
                   </div>
                   <div v-if="adminOrderActionHelp" style="margin-top:8px;line-height:1.7">
@@ -8495,92 +8498,35 @@
               <div class="field"><label>其他一次性费用</label><input class="input" type="number" min="0" step="0.01" v-model.number="estimatedCostForm.other_fee" /></div>
               <div class="field wide notice warning">预计成本，非实际成本。税率参考 13%，沿用材料价原口径，不重复加税；费用只影响当前订单快照。</div>
             </div>
-            <div v-else-if="modal.type === 'costGaps'" class="cost-sensitive">
-              <div class="notice" style="margin-bottom:10px"><strong>最简单的用法：</strong>员工先看“待补资料”，补供应商价格、报料尺寸等基础资料；老板再看“利润复核”，只处理预计亏损或利润偏低的订单。</div>
-              <div class="muted" style="margin:-4px 0 10px">这里只列需要处理的订单，不是全部订单成本清单；预计正常的订单只计数量，不逐行显示。</div>
-              <div class="tabs" style="margin-bottom:10px">
-                <button :class="['tab',{active:costPanelTab==='gaps'}]" @click="switchCostPanel('gaps')">待补资料 {{ costGapState.total_items || 0 }}</button>
-                <button :class="['tab',{active:costPanelTab==='review'}]" @click="switchCostPanel('review')">利润复核 {{ costReviewState.loaded ? costReviewState.total_items : '' }}</button>
+            <div v-else-if="modal.type === 'costGaps'" class="cost-sensitive cost-reminder-panel">
+              <p class="cost-basis"><strong>冻结预计成本 · 非实际利润</strong><span>仅供内部复核，不是实际利润；只列需要处理的订单明细，正常明细仅汇总。</span></p>
+              <div class="tabs cost-panel-tabs" role="tablist" aria-label="成本提醒分类">
+                <button id="cost-gap-tab" role="tab" :aria-selected="costPanelTab==='gaps'" aria-controls="cost-reminder-results" :class="['tab',{active:costPanelTab==='gaps'}]" @click="switchCostPanel('gaps')">待补资料 {{ costGapState.loading ? '…' : (costGapState.all_items ?? costGapState.total_items) }} 条</button>
+                <button id="cost-review-tab" role="tab" :aria-selected="costPanelTab==='review'" aria-controls="cost-reminder-results" :class="['tab',{active:costPanelTab==='review'}]" @click="switchCostPanel('review')">利润复核 {{ costReviewState.loading ? '…' : (costReviewState.all_items ?? costReviewState.total_items) }} 条</button>
               </div>
-              <template v-if="costPanelTab==='gaps'">
-                <div class="notice">{{ costGapState.scope_label || '成本资料缺口：仅统计已有预计成本快照的当前订单；旧订单不回填' }}</div>
-                <div v-if="costGapState.loading" class="empty">正在读取成本缺口…</div>
-                <div v-else-if="costGapState.error" class="empty">
-                  <div class="notice danger">读取失败：{{ costGapState.error }}</div>
-                  <button class="btn" style="margin-top:8px" @click="loadCostGaps">重新加载</button>
-                </div>
+              <form class="cost-panel-search" @submit.prevent="loadActiveCostPanel(1)"><label for="cost-panel-keyword">客户 / 客户单号</label><input id="cost-panel-keyword" class="input" v-model="costPanelState.keyword" maxlength="120" placeholder="输入名称或客户单号" /><button class="btn primary" type="submit" :disabled="costPanelState.loading">查询</button><button class="btn" type="button" @click="resetCostPanelSearch">重置</button></form>
+              <div class="cost-gap-summary" v-if="costPanelTab==='gaps'">
+                <button :class="['btn','small',{primary:costGapState.filter==='all'}]" @click="filterCostPanel('all')">全部 {{ costGapState.all_items || 0 }}</button>
+                <button v-for="category in costGapState.categories" :key="category.code" :class="['btn','small',{primary:costGapState.filter===category.code}]" @click="filterCostPanel(category.code)">{{ category.label }} {{ category.count }}</button>
+              </div>
+              <div class="cost-gap-summary" v-else>
+                <button :class="['btn','small',{primary:costReviewState.filter==='all'}]" @click="filterCostPanel('all')">全部待复核 {{ costReviewState.all_items || 0 }}</button>
+                <template v-for="item in costReviewState.summary" :key="item.code"><span v-if="item.code==='healthy'" class="cost-healthy-summary">{{ item.label }} {{ item.count }}（仅汇总）</span><button v-else :class="['btn','small',{primary:costReviewState.filter===item.code}]" @click="filterCostPanel(item.code)">{{ item.label }} {{ item.count }}</button></template>
+              </div>
+              <details class="cost-panel-rules"><summary>统计范围与判断规则</summary><p>{{ costPanelState.scope_label || '仅统计已有预计成本快照的当前订单；旧订单不回填' }}</p><p v-if="costPanelTab==='review'">{{ costReviewState.threshold_label }}</p><p>补齐主档资料不自动改写旧订单快照；应在具体明细中核对成本依据，再按原有业务流程处理。</p></details>
+              <div id="cost-reminder-results" role="tabpanel" :aria-labelledby="costPanelTab==='gaps' ? 'cost-gap-tab' : 'cost-review-tab'" :aria-busy="costPanelState.loading">
+                <div v-if="costPanelState.loading" class="empty" role="status">正在读取{{ costPanelTab==='gaps' ? '成本缺口' : '利润复核清单' }}…</div>
+                <div v-else-if="costPanelState.error" class="empty"><div class="notice danger" role="alert">读取失败：{{ costPanelState.error }}</div><button class="btn" @click="loadActiveCostPanel(costPanelState.page)">重新加载</button></div>
                 <template v-else>
-                  <div class="cost-gap-summary">
-                    <button :class="['btn','small',{primary:costGapState.filter==='all'}]" @click="costGapState.filter='all'">全部 {{ costGapState.total_items }}</button>
-                    <button v-for="category in costGapState.categories" :key="category.code" :class="['btn','small',{primary:costGapState.filter===category.code}]" @click="costGapState.filter=category.code">{{ category.label }} {{ category.count }}</button>
+                  <p class="muted cost-applied">当前搜索：{{ costPanelState.applied_keyword || '全部授权客户' }} · 按订单明细计数；分类数量可能重叠。</p>
+                  <div v-if="!costPanelState.items.length" class="empty"><strong>{{ costPanelState.filter!=='all' || costPanelState.applied_keyword ? '当前筛选没有待处理明细。' : costPanelTab==='review' && costReviewState.evaluated_items ? '已检查的明细全部预计正常，无需处理。' : costPanelTab==='gaps' ? '目前没有需要补资料的新订单。' : '目前还没有可检查的新订单。' }}</strong><p class="muted">旧订单不会自动补算；正常明细只计数量，不逐行显示。</p><button v-if="costPanelState.filter!=='all' || costPanelState.applied_keyword" class="btn small" @click="resetCostPanelSearch">清除筛选</button><button v-else-if="costPanelTab==='gaps'" class="btn small" @click="switchCostPanel('review')">查看利润复核</button></div>
+                  <div v-else class="table-wrap cost-panel-table-wrap">
+                    <table v-if="costPanelTab==='gaps'" class="cost-gap-table cost-readiness-table"><colgroup><col style="width:23%"/><col style="width:5%"/><col style="width:12%"/><col style="width:19%"/><col style="width:29%"/><col style="width:12%"/></colgroup><thead><tr><th>客户 / 客户单号</th><th>序号</th><th>存货编码</th><th>产品名称</th><th>需要补齐</th><th>操作</th></tr></thead><tbody><tr v-for="row in costGapVisibleItems()" :key="row.item_id"><td><strong>{{ row.customer_name || '-' }}</strong><div :class="row.customer_po ? 'customer-po-primary' : 'muted'">{{ row.customer_po || '未填写客户单号' }}</div></td><td>{{ row.item_sequence || '-' }}</td><td>{{ row.product_code || '-' }}</td><td>{{ row.product_name || '-' }}</td><td><span v-for="category in row.categories" :key="category.code" class="status orange">{{ category.label }}</span><div class="cost-gap-detail">{{ (row.missing_details || []).join('；') }}</div></td><td><button :id="'cost-reminder-'+row.item_id" class="btn small" @click="openCostGapOrder(row)">定位待补明细</button></td></tr></tbody></table>
+                    <table v-else class="cost-gap-table cost-review-table"><colgroup><col style="width:21%"/><col style="width:5%"/><col style="width:19%"/><col style="width:10%"/><col style="width:10%"/><col style="width:12%"/><col style="width:12%"/><col style="width:11%"/></colgroup><thead><tr><th>客户 / 客户单号</th><th>序号</th><th>存货编码 / 产品</th><th class="cost-number">订单金额</th><th class="cost-number">预计成本</th><th class="cost-number">预计毛利 / 率</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in costReviewState.items" :key="row.item_id"><td><strong>{{ row.customer_name || '-' }}</strong><div :class="row.customer_po ? 'customer-po-primary' : 'muted'">{{ row.customer_po || '未填写客户单号' }}</div></td><td>{{ row.item_sequence || '-' }}</td><td><strong>{{ row.product_code || '-' }}</strong><div class="muted">{{ row.product_name || '-' }}</div></td><td class="cost-number">¥ {{ money(row.sale_amount) }}</td><td class="cost-number">¥ {{ money(row.estimated_order_total_cost) }}</td><td :class="['cost-number','cost-risk-value','risk-'+row.health_code]"><template v-if="row.estimated_gross_profit != null"><strong>¥ {{ money(row.estimated_gross_profit) }}</strong><div>{{ row.estimated_margin_rate != null ? (Number(row.estimated_margin_rate)*100).toFixed(2)+'%' : '待核对' }}</div></template><span v-else>待完善</span></td><td><span :class="['status',row.health_tone]">{{ row.health_label }}</span></td><td><button :id="'cost-reminder-'+row.item_id" class="btn small" @click="openCostGapOrder(row)">查看成本依据</button></td></tr></tbody></table>
                   </div>
-                  <div v-if="!costGapVisibleItems().length" class="empty">
-                    <template v-if="costGapState.filter==='all' && Number(costGapState.total_items || 0)===0">
-                      <strong>目前没有需要补资料的新订单。</strong>
-                      <info-note>这不是成本功能失效：旧订单不会自动补算；成本功能发布后新建或编辑、并成功冻结成本的订单才会进入检查。</info-note>
-                      <button class="btn small primary" style="margin-top:10px" @click="switchCostPanel('review')">查看利润复核</button>
-                    </template>
-                    <template v-else>
-                      <strong>这个分类没有待处理订单。</strong>
-                      <div><button class="btn small" style="margin-top:10px" @click="costGapState.filter='all'">返回全部</button></div>
-                    </template>
-                  </div>
-                  <div v-else class="table-wrap">
-                    <table class="cost-gap-table">
-                      <thead><tr><th>客户 / 客户单号</th><th>序号</th><th>存货编码</th><th>产品名称</th><th>需要补齐</th><th>操作</th></tr></thead>
-                      <tbody><tr v-for="row in costGapVisibleItems()" :key="row.item_id">
-                        <td><strong>{{ row.customer_name || '-' }}</strong><div class="muted">{{ row.customer_po || '未填写客户单号' }}</div></td>
-                        <td>{{ row.item_sequence || '-' }}</td>
-                        <td>{{ row.product_code || '-' }}</td>
-                        <td>{{ row.product_name || '-' }}</td>
-                        <td><span v-for="category in row.categories" :key="category.code" class="status orange" style="margin:0 4px 3px 0">{{ category.label }}</span><div class="cost-gap-detail">{{ (row.missing_details || []).join('；') }}</div></td>
-                        <td><button class="btn small primary" @click="openCostGapOrder(row)">查看订单</button></td>
-                      </tr></tbody>
-                    </table>
-                  </div>
-                  <div v-if="costGapState.truncated" class="notice warning" style="margin-top:10px">缺口较多，当前先显示 {{ costGapState.returned_items }} 条；可先按上方类别处理。</div>
+                  <div class="cost-panel-pager" v-if="costPanelState.total_items"><span>当前 {{ (costPanelState.page-1)*costPanelState.page_size+1 }}～{{ (costPanelState.page-1)*costPanelState.page_size+costPanelState.items.length }} 条 / 共 {{ costPanelState.total_items }} 条</span><label>每页 <select v-model.number="costPanelState.page_size" @change="loadActiveCostPanel(1)"><option :value="10">10</option><option :value="20">20</option><option :value="50">50</option></select></label><button class="btn small" :disabled="costPanelState.page<=1" @click="loadActiveCostPanel(costPanelState.page-1)">上一页</button><span>{{ costPanelState.page }} / {{ costPanelState.page_count }}</span><button class="btn small" :disabled="costPanelState.page>=costPanelState.page_count" @click="loadActiveCostPanel(costPanelState.page+1)">下一页</button></div>
                 </template>
-              </template>
-              <template v-else>
-                <div class="notice warning">{{ costReviewState.scope_label || '当前订单冻结预计成本，仅供内部复核，不是实际利润' }}</div>
-                <div v-if="costReviewState.loading" class="empty">正在读取利润复核清单…</div>
-                <div v-else-if="costReviewState.error" class="empty">
-                  <div class="notice danger">读取失败：{{ costReviewState.error }}</div>
-                  <button class="btn" style="margin-top:8px" @click="loadCostReview">重新加载</button>
-                </div>
-                <template v-else>
-                  <div class="cost-gap-summary">
-                    <span v-for="item in costReviewState.summary" :key="item.code" :class="['status',item.tone]">{{ item.label }} {{ item.count }}</span>
-                  </div>
-                  <div v-if="!costReviewState.items.length" class="empty">
-                    <template v-if="Number(costReviewState.evaluated_items || 0)>0">
-                      <strong>已检查 {{ costReviewState.evaluated_items }} 条，全部预计正常，无需处理。</strong>
-                      <div class="muted" style="margin-top:6px">正常订单只显示在上方汇总里，不会铺满复核清单。</div>
-                    </template>
-                    <template v-else>
-                      <strong>目前还没有可检查的新订单。</strong>
-                      <div class="muted" style="margin-top:6px">旧订单不会自动补算；从成本功能发布后新建或编辑、并成功冻结预计成本的订单开始统计。</div>
-                      <div class="muted" style="margin-top:4px">查看单张订单：回到订单列表，打开“查看详情”，再看该明细的成本说明。</div>
-                    </template>
-                  </div>
-                  <div v-else class="table-wrap">
-                    <table class="cost-gap-table">
-                      <thead><tr><th>客户 / 客户单号</th><th>序号</th><th>存货编码 / 产品</th><th>订单金额</th><th>预计成本</th><th>预计毛利</th><th>状态</th><th>操作</th></tr></thead>
-                      <tbody><tr v-for="row in costReviewState.items" :key="row.item_id">
-                        <td><strong>{{ row.customer_name || '-' }}</strong><div class="muted">{{ row.customer_po || '未填写客户单号' }}</div></td>
-                        <td>{{ row.item_sequence || '-' }}</td>
-                        <td><strong>{{ row.product_code || '-' }}</strong><div class="muted">{{ row.product_name || '-' }}</div></td>
-                        <td>¥ {{ money(row.sale_amount) }}</td>
-                        <td>¥ {{ money(row.estimated_order_total_cost) }}</td>
-                        <td><template v-if="row.estimated_gross_profit !== null">¥ {{ money(row.estimated_gross_profit) }}<div class="muted">{{ (Number(row.estimated_margin_rate) * 100).toFixed(1) }}%</div></template><span v-else>-</span></td>
-                        <td><span :class="['status',row.health_tone]">{{ row.health_label }}</span></td>
-                        <td><button class="btn small primary" @click="openCostGapOrder(row)">查看订单</button></td>
-                      </tr></tbody>
-                    </table>
-                  </div>
-                  <div v-if="costReviewState.truncated" class="notice warning" style="margin-top:10px">需要复核的明细较多，当前先显示 {{ costReviewState.returned_items }} 条。</div>
-                </template>
-              </template>
+              </div>
             </div>
             <div v-else-if="modal.type === 'bomCutover' && bomCutover">
               <label>切换场景 <select v-model="bomCutover.mode" :disabled="bomCutover.loading || !!bomCutover.pending" @change="openReservedKitCutover({id:bomCutover.orderId},{id:bomCutover.itemId},bomCutover.mode)"><option value="reserved">旧单全预占子件</option><option value="stocked">已收齐库存交接</option><option value="purchase">保留未收外购交接</option><option value="material">保留纸板在制交接</option><option value="unstarted">尚未开始的订单</option></select></label>
@@ -8692,6 +8638,7 @@
               <p v-for="row in semiProduction.completions" :key="row.id">完工 #{{ row.id }} · 产品 {{ row.product_id }} · 数量 {{ row.quantity }} · {{ row.status === 'reversed' ? '已撤销' : '已确认' }} <button v-if="row.status === 'posted'" class="btn small" :disabled="semiProduction.loading || !!semiProduction.pending" @click="reverseSemiProduction(row.id)">撤销本次生产</button></p>
             </div>
             <div v-else-if="modal.type === 'orderDetail' && orderDetail">
+              <p v-if="costPanelReturnContext" class="cost-basis">已定位提醒对应明细并展开成本依据。处理完成后点“返回成本提醒”，保留原筛选和页码。</p>
               <p id="erp-order-detail-description" class="muted" style="margin:0 0 12px">只读查看订单事实；按 Esc 可关闭，Tab 只在本对话框内移动。</p>
               <div class="form-grid">
                 <div class="field"><label class="sys-num">系统单号</label><div class="sys-num">{{ orderDetail.order_number }}</div></div>
@@ -8705,7 +8652,7 @@
                 <div class="field wide"><label>备注</label><div>{{ orderDetail.remark || "-" }}</div></div>
               </div>
               <div class="section-title">只读订单详情</div>
-              <table><thead><tr>
+              <div class="table-wrap order-read-detail-wrap"><table class="order-read-detail-table"><thead><tr>
                 <th>明细系统单号</th><th>存货编码</th><th>产品名称</th><th>规格mm</th>
                 <th>材质</th><th>生产说明</th><th>订单数量</th><th>成品抵扣</th><th>需生产</th>
                 <th>报料尺寸</th><th>压线</th>
@@ -8713,26 +8660,13 @@
                 <th v-if="canViewSalesAmounts" class="sensitive-price">金额</th>
                 <th>图纸</th>
               </tr></thead>
-              <tbody><tr v-for="item in orderDetail.items" :key="item.id">
+              <tbody><template v-for="item in orderDetail.items" :key="item.id"><tr :id="'cost-review-item-'+item.id" :class="{'cost-review-focus':Number(item.id)===costReviewFocusItemId}" tabindex="-1">
                 <td class="sys-num" style="font-size:12px">{{ item.item_order_number || "-" }}<div style="margin-top:4px"><status-tag :value="itemBusinessStatusKey(item)"></status-tag></div><div v-if="item.requisition_hold?.status === 'active'" class="status orange" style="margin-top:4px">{{ item.requisition_hold.label || '等候中' }}</div><div v-if="Number(item.business_delivered_quantity || 0) > 0" class="order-delivery-compact">已送 {{ item.business_delivered_quantity }}/{{ item.quantity }}</div></td>
                 <td>{{ item.snapshot_product_code }}<div v-if="canAdmin && hasBomComponents(item) && Number(item.quantity)>Number(item.business_delivered_quantity || item.delivered_quantity || 0)"><button class="btn small" type="button" @click="openReservedKitCutover(orderDetail,item)">切换未完成BOM</button><button class="btn small" type="button" @click="openSemiProduction(item)">半成品生产</button></div><button v-if="canAdmin" class="btn small" type="button" @click="openSemiProduction(item,'component-processing')">专用部件/原片加工</button></td>
                 <td :title="item.snapshot_product_name" style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:normal">
                   {{ item.snapshot_product_name }}
                   <div v-if="item.combination_role==='priced_component'" class="status blue" style="margin-top:3px">{{ combinationGroupLabel(item) }}</div>
-                  <div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div>
-                  <div v-if="canViewCosts" class="material-cost-compact cost-sensitive">
-                    <strong>{{ item.estimated_total_cost_status === 'calculated' ? `预计总成本 ¥ ${money(item.estimated_order_total_cost)}` : (item.estimated_total_cost_status_label || '预计总成本待完善') }}</strong>
-                    <div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin:3px 0">{{ item.estimated_cost_health_label }}<span v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined"> · 预计毛利率 {{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</span></div>
-                    <div class="muted">{{ item.estimated_cost_health_basis_label || '按订单录入售价试算，预计而非实际利润' }}</div>
-                    <div class="muted">预计成本，非实际成本 · V{{ item.estimated_total_cost_snapshot_version || '-' }}</div>
-                    <div v-if="item.material_gross_profit !== null && item.material_gross_profit !== undefined" class="material-margin-summary">
-                      材料成本 ¥{{ money(item.estimated_material_total_cost) }} · 销售 ¥{{ money(item.material_sales_amount) }} · 材料毛利 ¥{{ money(item.material_gross_profit) }}
-                      <span v-if="item.material_gross_margin !== null"> · {{ (Number(item.material_gross_margin) * 100).toFixed(1) }}%</span>
-                      <div class="muted">{{ item.material_gross_scope_label }}</div>
-                    </div>
-                    <button v-if="item.estimated_total_cost_snapshot_version" class="btn small" type="button" @click="openEstimatedCost(orderDetail,item)">调整预计成本</button>
-                    <details><summary>查看材料成本依据与预计总成本</summary><div><strong>{{ orderMaterialCostSummary(item) }}</strong> · {{ item.material_cost_history_label }}</div><div class="muted">{{ item.material_cost_scope_label || '材料成本（未计生产损耗和加工费）' }}</div><div v-for="(component,index) in item.material_cost_components || []" :key="`${item.id}-cost-${index}`">{{ orderMaterialCostComponentText(component) }}</div><div v-if="item.estimated_cost_breakdown">损耗材料 ¥ {{ money(item.estimated_cost_breakdown.loss_material_total_cost) }} · 加工 {{ orderProcessingCostText(item.estimated_cost_breakdown.processing_total_cost) }} · 加工单价 {{ orderProcessingCostText(item.estimated_cost_breakdown.processing_unit_cost) }} · 一次性费用 ¥ {{ money(item.estimated_cost_breakdown.one_time_fee_total) }}</div><div v-for="missing in item.material_cost_missing_items || []" :key="missing" class="missing">材料待补：{{ missing }}</div><div v-for="missing in item.estimated_cost_missing_items || []" :key="`estimated-${missing}`" class="missing">成本待补：{{ missing }}</div><div class="muted">损耗 {{ Number(item.estimated_loss_rate || 0) * 100 }}% · {{ item.estimated_total_cost_scope_label || '预计成本，非实际成本' }}</div></details>
-                  </div>
+
                 </td>
                 <td>{{ orderSpecificationText(item.snapshot_spec) }}</td>
                 <td style="white-space:normal;word-break:break-all;font-size:12px;max-width:160px">{{ orderItemMaterialText(item) }}</td>
@@ -8753,7 +8687,22 @@
                   </template>
                   <span v-else class="muted">-</span>
                 </td>
-              </tr></tbody></table>
+              </tr><tr v-if="canViewCosts || hasBomComponents(item)" class="order-read-basis-row" :class="{'cost-review-focus':Number(item.id)===costReviewFocusItemId}"><td :colspan="canViewSalesAmounts ? 14 : 12"><div class="order-read-basis" :aria-label="'明细 '+(item.snapshot_product_code || item.item_order_number)+' 的依据'">
+                  <div v-if="hasBomComponents(item)" class="bom-preview-box"><div class="bom-preview-title">内部 BOM 预览（客户订单仍为一个父产品 / 套）</div><div class="bom-preview-list"><div v-for="component in item.bom_components" :key="component.id || component.component_product_id || component.internal_code" class="bom-preview-item">{{ bomPreviewComponentLabel(component) }}</div></div></div>
+                  <div v-if="canViewCosts" class="material-cost-compact cost-sensitive">
+                    <strong>{{ item.estimated_total_cost_status === 'calculated' ? `预计总成本 ¥ ${money(item.estimated_order_total_cost)}` : (item.estimated_total_cost_status_label || '预计总成本待完善') }}</strong>
+                    <div v-if="item.estimated_cost_health_label" :class="['status',item.estimated_cost_health_tone]" style="margin:3px 0">{{ item.estimated_cost_health_label }}<span v-if="item.estimated_margin_rate !== null && item.estimated_margin_rate !== undefined"> · 预计毛利率 {{ (Number(item.estimated_margin_rate) * 100).toFixed(1) }}%</span></div>
+                    <div class="muted">{{ item.estimated_cost_health_basis_label || '按订单录入售价试算，预计而非实际利润' }}</div>
+                    <div class="muted">预计成本，非实际成本 · V{{ item.estimated_total_cost_snapshot_version || '-' }}</div>
+                    <div v-if="item.material_gross_profit !== null && item.material_gross_profit !== undefined" class="material-margin-summary">
+                      材料成本 ¥{{ money(item.estimated_material_total_cost) }} · 销售 ¥{{ money(item.material_sales_amount) }} · 材料毛利 ¥{{ money(item.material_gross_profit) }}
+                      <span v-if="item.material_gross_margin !== null"> · {{ (Number(item.material_gross_margin) * 100).toFixed(1) }}%</span>
+                      <div class="muted">{{ item.material_gross_scope_label }}</div>
+                    </div>
+                    <button v-if="item.estimated_total_cost_snapshot_version" class="btn small" type="button" @click="openEstimatedCost(orderDetail,item)">调整预计成本</button>
+                    <details :open="Number(item.id)===costReviewFocusItemId"><summary>查看材料成本依据与预计总成本</summary><div><strong>{{ orderMaterialCostSummary(item) }}</strong> · {{ item.material_cost_history_label }}</div><div class="muted">{{ item.material_cost_scope_label || '材料成本（未计生产损耗和加工费）' }}</div><div v-for="(component,index) in item.material_cost_components || []" :key="`${item.id}-cost-${index}`">{{ orderMaterialCostComponentText(component) }}</div><div v-if="item.estimated_cost_breakdown">损耗材料 ¥ {{ money(item.estimated_cost_breakdown.loss_material_total_cost) }} · 加工 {{ orderProcessingCostText(item.estimated_cost_breakdown.processing_total_cost) }} · 加工单价 {{ orderProcessingCostText(item.estimated_cost_breakdown.processing_unit_cost) }} · 一次性费用 ¥ {{ money(item.estimated_cost_breakdown.one_time_fee_total) }}</div><div v-for="missing in item.material_cost_missing_items || []" :key="missing" class="missing">材料待补：{{ missing }}</div><div v-for="missing in item.estimated_cost_missing_items || []" :key="`estimated-${missing}`" class="missing">成本待补：{{ missing }}</div><div class="muted">损耗 {{ Number(item.estimated_loss_rate || 0) * 100 }}% · {{ item.estimated_total_cost_scope_label || '预计成本，非实际成本' }}</div></details>
+                  </div>
+                </div></td></tr></template></tbody></table></div>
               <div v-if="hasPermission('finance.view')" class="panel" style="margin-top:14px">
                 <div class="toolbar" style="margin-bottom:8px">
                   <div><strong>客户附加收费</strong><div class="muted">模具费、制版费等独立应收；不改变产品售价、送货数量、库存或供应商成本。</div></div>
@@ -9611,7 +9560,7 @@
               <details style="margin-top:12px" open><summary>开票与收款追溯</summary>
                 <div class="muted" style="margin:8px 0">发票登记和收款分别记录；合并开票显示分配到本账单的金额。</div>
                 <table><thead><tr><th>发票号</th><th>开票日期</th><th>本账单开票金额</th><th>状态</th></tr></thead><tbody><tr v-for="invoice in statementDetail.invoices || []" :key="invoice.id"><td>{{ invoice.invoice_number }}</td><td>{{ invoice.invoice_date }}</td><td class="sensitive-price">¥ {{ money(invoice.invoice_amount) }}</td><td>{{ invoice.invoice_status==='voided' ? '已作废' : '已开票' }}</td></tr><tr v-if="!statementDetail.invoices?.length"><td colspan="4" class="muted">暂无实际开票登记</td></tr></tbody></table>
-                <table style="margin-top:8px"><thead><tr><th>收款日期</th><th>本次收款金额</th><th>账户 / 备注</th></tr></thead><tbody><tr v-for="receipt in statementDetail.settlements || []" :key="receipt.id"><td>{{ receipt.settlement_date }}</td><td class="sensitive-price">¥ {{ money(receipt.settled_amount) }}</td><td>{{ receipt.account || '-' }}</td></tr><tr v-if="!statementDetail.settlements?.length"><td colspan="3" class="muted">暂无收款记录</td></tr></tbody></table>
+                <table style="margin-top:8px"><thead><tr><th>收款日期</th><th>本次收款金额</th><th>账户 / 备注</th></tr></thead><tbody><tr v-for="receipt in statementDetail.settlements || []" :key="receipt.id"><td>{{ receipt.settlement_date }}</td><td class="sensitive-price">¥ {{ money(receipt.settled_amount) }}</td><td>{{ receipt.account || '-' }} <button v-if="canAdmin" class="btn small danger" :disabled="adminSettlementReversal.busy" @click="reverseStatementSettlement(receipt)">撤销收款登记</button></td></tr><tr v-if="!statementDetail.settlements?.length"><td colspan="3" class="muted">暂无收款记录</td></tr></tbody></table><details v-if="statementDetail.reversed_settlements?.length"><summary>已撤销收款历史</summary><div v-for="record in statementDetail.reversed_settlements" :key="record.id">{{ record.settlement_date }} · ¥ {{ money(record.settled_amount) }} · {{ record.account || '-' }} · 已撤销 {{ formatDateTime(record.reversed_at) }}</div></details>
               </details>
               <div v-if="statementDetail.invoices?.length" class="status blue" style="margin-top:10px">已有 {{ statementDetail.invoice_count }} 条开票记录；已正式开票时系统会禁止直接改历史。</div>
             </div>
@@ -10780,8 +10729,9 @@
             requisitionForm: { supplier_name: "", items: [] },
             receiptForm: { items: [], reminder_drafts:[] }, receiptMonthOptions:{previous:"",current:month(),next:""}, orderItemForm: {}, estimatedCostForm:{},
             costPanelTab:"gaps",
-            costGapState:{loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
-            costReviewState:{loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
+            costPanelReturnContext:null, costReviewFocusItemId:0,
+            costGapState:{page:1,page_size:20,page_count:1,all_items:0,keyword:"",applied_keyword:"",requestId:0,loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
+            costReviewState:{page:1,page_size:20,page_count:1,all_items:0,keyword:"",applied_keyword:"",filter:"all",requestId:0,loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]},
             bomCutover:null,
             rawPurchase:null,
             semiProduction:null,
@@ -10908,6 +10858,7 @@
             showOrderItemDanger: false,
             showOrderEditDanger: false,
             adminOrderActionHelp:false,
+            adminSettlementReversal:{busy:false,attempt:null},
             adminOrderAction:{busy:false,plan:null,error:'',key:'',trialConfirmed:false,submitted:null},
             orderItemOrder: null,
             productBoxStyleOptions: [
@@ -11400,6 +11351,7 @@
             if (this.activePage === "system") return this.systemSection !== "basic";
             return false;
           },
+          costPanelState() { return this.costPanelTab === "gaps" ? this.costGapState : this.costReviewState; },
           dashboardCards() {
             const cards = Array.isArray(this.overview?.cards) ? [...this.overview.cards] : [];
             const capacity = this.warehouseCapacitySummary;
@@ -11777,7 +11729,7 @@
             return ["orderDetail", "orderGroupDetail"].includes(this.modal?.type);
           },
           isAccessibleBusinessDialog() {
-            return this.isAccessibleReadOnlyOrderDialog || this.modal?.type === "order" || modalA11ySessionActive;
+            return this.isAccessibleReadOnlyOrderDialog || ["order", "costGaps"].includes(this.modal?.type) || modalA11ySessionActive;
           },
           canSaveModal() {
             if (!this.modal) return false;
@@ -19591,6 +19543,15 @@
                 return false;
               }
               const next = {...this.reportedItemVoidAttempts}; delete next[key]; this.reportedItemVoidAttempts = next;
+              const reversal = error.response?.data?.detail;
+              if (this.canAdmin && reversal?.code === 'PROCUREMENT_ORDER_REVERSAL_REQUIRED' && reversal.order_group) {
+                this.showToast('该采购需要关联撤回，正在打开订单影响预览；尚未执行撤销');
+                if (await this.openOrderEditor(reversal.order_group)) {
+                  this.showOrderEditDanger = true;
+                  await this.previewAdminOrderAction('withdraw');
+                }
+                return false;
+              }
               this.showToast(`撤销本明细失败：${this.errorMessage(error)}`,true);
               await this.loadReportedDocuments();
               return false;
@@ -34036,83 +33997,83 @@
               if (latestRequestControllers.get(requestKey) === controller) this.finishLatestRequest(requestKey, controller);
             }
           },
+          newCostPanelState() {
+            return {page:1,page_size:20,page_count:1,all_items:0,keyword:"",applied_keyword:"",requestId:0,filter:"all",loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,categories:[],summary:[],items:[]};
+          },
           async openCostGaps() {
-            if (!this.canViewCosts) {
-              this.showToast("当前账号没有查看成本资料的权限", true);
-              return false;
-            }
+            if (!this.canViewCosts) { this.showToast("当前账号没有查看成本资料的权限", true); return false; }
+            const opener = this.rememberModalOpener();
+            this.costPanelReturnContext = null; this.costReviewFocusItemId = 0;
             this.costPanelTab = "gaps";
-            this.costGapState.filter = "all";
-            this.costReviewState = {loading:false,loaded:false,error:"",scope_label:"",evaluated_items:0,total_items:0,returned_items:0,truncated:false,summary:[],items:[]};
-            this.modal = {type:"costGaps", title:"成本与利润提醒"};
-            const [gapsReady, reviewReady] = await Promise.all([
-              this.loadCostGaps(),
-              this.loadCostReview(),
-            ]);
-            if (reviewReady && (!gapsReady || Number(this.costGapState.total_items || 0) === 0)) {
-              this.costPanelTab = "review";
-            }
+            this.costGapState = this.newCostPanelState(); this.costReviewState = this.newCostPanelState();
+            const gaps = this.costGapState, review = this.costReviewState;
+            this.modal = {type:"costGaps", title:"预计成本与毛利提醒"};
+            this.focusAccessibleModal(opener);
+            const [gapsReady, reviewReady] = await Promise.all([this.loadCostGaps(), this.loadCostReview()]);
+            if (this.modal?.type === "costGaps" && this.costGapState === gaps && this.costReviewState === review && !gaps.touched && !review.touched && reviewReady && (!gapsReady || Number(gaps.total_items) === 0)) this.costPanelTab = "review";
             return gapsReady || reviewReady;
           },
-          async loadCostGaps() {
-            this.costGapState.loading = true;
-            this.costGapState.error = "";
+          loadCostGaps(page=1) {
+            return this.loadCostPanelPage("gaps", page, options => axios.get("/api/orders/cost-readiness", options));
+          },
+          loadCostReview(page=1) {
+            return this.loadCostPanelPage("review", page, options => axios.get("/api/orders/cost-review", options));
+          },
+          async loadCostPanelPage(kind, page, request) {
+            const key = kind === "gaps" ? "costGapState" : "costReviewState";
+            const state = this[key], auth = this.authGeneration;
+            const generation = ++state.requestId;
+            const keyword = String(state.keyword || "").trim();
+            const params = {page:Math.max(1,Number(page)||1),page_size:state.page_size,keyword};
+            params[kind === "gaps" ? "category" : "health"] = state.filter || "all";
+            state.loading = true; state.error = ""; state.items = [];
+            const current = () => this[key] === state && state.requestId === generation && this.authGeneration === auth && this.canViewCosts;
             try {
-              const {data} = await axios.get("/api/orders/cost-readiness", {params:{limit:200}});
-              this.costGapState = {
-                ...this.costGapState,
-                ...data,
-                loading:false,
-                error:"",
-                categories:data.categories || [],
-                items:data.items || [],
-              };
+              const {data} = await request({params});
+              if (!current()) return false;
+              Object.assign(state,data,{keyword:state.keyword,applied_keyword:keyword,loading:false,loaded:true,error:"",items:data.items || []});
               return true;
             } catch(error) {
-              this.costGapState.loading = false;
-              this.costGapState.error = this.errorMessage(error);
+              if (!current()) return false;
+              state.loading = false; state.loaded = false; state.items = []; state.error = this.errorMessage(error);
               return false;
             }
           },
-          costGapVisibleItems() {
-            const rows = this.costGapState.items || [];
-            if (this.costGapState.filter === "all") return rows;
-            return rows.filter(row => (row.category_codes || []).includes(this.costGapState.filter));
-          },
-          async switchCostPanel(tab) {
+          costGapVisibleItems() { return this.costGapState.items || []; },
+          switchCostPanel(tab) {
             this.costPanelTab = tab === "review" ? "review" : "gaps";
-            if (this.costPanelTab === "review" && !this.costReviewState.loaded && !this.costReviewState.loading) {
-              return this.loadCostReview();
-            }
+            this.costGapState.touched = this.costReviewState.touched = true;
+            const state = this.costPanelState;
+            if (!state.loaded && !state.loading) return this.loadActiveCostPanel(state.page);
+          },
+          loadActiveCostPanel(page=1) {
+            return this.costPanelTab === "gaps" ? this.loadCostGaps(page) : this.loadCostReview(page);
+          },
+          filterCostPanel(code) { this.costPanelState.filter = code; this.costPanelState.touched = true; return this.loadActiveCostPanel(1); },
+          resetCostPanelSearch() { this.costPanelState.keyword = ""; return this.filterCostPanel("all"); },
+          async openCostGapOrder(row) {
+            const context = {auth:this.authGeneration, tab:this.costPanelTab, itemId:Number(row.item_id), orderId:Number(row.order_id), scrollTop:document.querySelector(".modal-mask")?.scrollTop || 0};
+            const ready = await this.openOrderDetail({id:row.order_id},{keepModalA11ySession:true,returnFocusFallback:this.$refs.costGapTrigger || null});
+            if (!ready || context.auth !== this.authGeneration || this.modal?.type !== "orderDetail" || Number(this.orderDetail?.id) !== context.orderId) return false;
+            this.costPanelReturnContext = context; this.costReviewFocusItemId = context.itemId;
+            await this.$nextTick();
+            const target = document.getElementById(`cost-review-item-${context.itemId}`);
+            target?.scrollIntoView({block:"center"}); target?.focus({preventScroll:true});
             return true;
           },
-          async loadCostReview() {
-            this.costReviewState.loading = true;
-            this.costReviewState.error = "";
-            try {
-              const {data} = await axios.get("/api/orders/cost-review", {params:{limit:200}});
-              this.costReviewState = {
-                ...this.costReviewState,
-                ...data,
-                loading:false,
-                loaded:true,
-                error:"",
-                summary:data.summary || [],
-                items:data.items || [],
-              };
-              return true;
-            } catch(error) {
-              this.costReviewState.loading = false;
-              this.costReviewState.loaded = false;
-              this.costReviewState.error = this.errorMessage(error);
-              return false;
-            }
-          },
-          openCostGapOrder(row) {
-            return this.openOrderDetail(
-              {id:row?.order_id},
-              {returnFocusFallback:this.$refs.costGapTrigger || null},
-            );
+          async returnToCostPanel() {
+            const context = this.costPanelReturnContext;
+            if (!context || context.auth !== this.authGeneration || !this.canViewCosts) {this.costPanelReturnContext = null; return false;}
+            this.cancelOrderReadDetailRequests();
+            this.costPanelReturnContext = null; this.costReviewFocusItemId = 0;
+            this.costPanelTab = context.tab; this.modal = {type:"costGaps",title:"预计成本与毛利提醒"};
+            this.orderDetail = null;
+            await this.loadActiveCostPanel(this.costPanelState.page);
+            if (context.auth !== this.authGeneration || this.modal?.type !== "costGaps") return false;
+            await this.$nextTick();
+            const mask = document.querySelector(".modal-mask"); if (mask) mask.scrollTop = context.scrollTop;
+            (document.getElementById(`cost-reminder-${context.itemId}`) || document.getElementById(context.tab === "gaps" ? "cost-gap-tab" : "cost-review-tab"))?.focus({preventScroll:true});
+            return true;
           },
           customerChargeTypeText(value) {
             return {mold:"模具费",printing_plate:"制版费",sample:"打样费",setup:"开机费",freight:"运费",other:"其他"}[value] || value || "其他";
@@ -34304,6 +34265,7 @@
             } finally {state.loading=false;}
           },
           async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {
+            this.costPanelReturnContext = null; this.costReviewFocusItemId = 0;
             const requestKey = "orders:read-detail-modal";
             const orderId = Number(row?.id || 0);
             if (!orderId) {
@@ -38211,6 +38173,34 @@
             await this.loadFinance();
             this.statementDetail = null;
           },
+          async reverseStatementSettlement(receipt) {
+            const state = this.adminSettlementReversal;
+            if (state.busy || !this.canAdmin || !this.statementDetail) return false;
+            const statementId = Number(this.statementDetail.id);
+            if (state.attempt && (state.attempt.statementId !== statementId || state.attempt.receiptId !== Number(receipt.id))) {
+              this.showToast('请先重试核对上一笔收款撤销结果',true); return false;
+            }
+            if (!state.attempt) {
+              if (!confirm(`确认撤销这笔收款登记 ¥ ${this.money(receipt.settled_amount)}？账单核销金额将退回，原记录保留在撤销历史。`)) return false;
+              state.attempt = {statementId,receiptId:Number(receipt.id),payload:{
+                expected_version:this.statementDetail.version,expected_ledger_version:this.statementDetail.ledger_version,
+                idempotency_key:createIdempotencyKey()}};
+            }
+            const attempt = state.attempt;
+            state.busy = true;
+            try {
+              await axios.post(`/api/finance/statements/${attempt.statementId}/settlements/${attempt.receiptId}/reverse`,attempt.payload);
+              state.attempt = null;
+              this.showToast('收款登记已撤销，历史保留');
+              try { await this.openStatementDetail({id:attempt.statementId}); await this.loadFinance(); }
+              catch(error) { this.showToast('撤销已完成，列表刷新失败，请刷新核对',true); }
+              return true;
+            } catch(error) {
+              if (error.response && Number(error.response.status) < 500) state.attempt = null;
+              this.showToast(state.attempt ? '撤销结果待核对，请再次点击同一笔重试' : this.errorMessage(error),true);
+              return false;
+            } finally { state.busy = false; }
+          },
           async cancelStatement(row) {
             if (this.financeStatementOperationState.action) return false;
             if (!confirm(`确定取消该对账单吗？取消后相关送货明细可重新生成对账单。`)) return false;
@@ -38241,6 +38231,8 @@
             }
           },
 	          closeModal() {
+            if (this.modal?.type === "orderDetail" && this.costPanelReturnContext?.auth === this.authGeneration && this.canViewCosts) { this.returnToCostPanel(); return; }
+            if (this.modal?.type === "costGaps") { this.costGapState.requestId++; this.costReviewState.requestId++; this.costPanelReturnContext = null; this.costReviewFocusItemId = 0; }
             if(this.modal?.type === "statementMerge" && this.statementMerge.saving) return;
 	            if (this.isForcedPassword) return;
               if (this.modal?.type === "product" && this.productEditReturnContext && this.masterSavePending) {
@@ -39737,7 +39729,7 @@
               this.showToast("送货单不存在，无法删除", true);
               return false;
             }
-            if (!confirm(`确认移除这张送货单吗？\n客户：${customerName}\n送货单：${deliveryNumber}\n未发生发货的草稿将直接删除；已有发货、回单或库存历史的单据将作废归档，不会再次改变库存或订单已送数量。`)) return false;
+            if (!confirm(`确认移除这张送货单吗？\n客户：${customerName}\n送货单：${deliveryNumber}\n送货单将标记为已删除，明细、发货、回单、库存流水和审计记录均保留，可在历史中查看。此操作不会再次改变库存或订单已送数量。`)) return false;
             this.deliveryOperationState = {action:"delete",deliveryId,deliveryNumber};
             try {
               let response;
@@ -39748,13 +39740,13 @@
                 return false;
               }
               const successMessage = response.data?.voided
-                ? "该送货单已有发货或库存历史，已作废归档；库存流水和审计记录均已保留"
+                ? "送货单已删除并留痕，可在“已删除”列表查看；库存流水和审计记录均已保留"
                 : "已删除未发货送货草稿";
               this.invalidateDeliveryListDetail(deliveryId);
               try {
                 await Promise.all([this.loadDeliveries(), this.loadKpi()]);
               } catch (error) {
-                const disposition = response.data?.voided ? "已经作废归档" : "已经删除";
+                const disposition = response.data?.voided ? "已删除并保留历史" : "已经删除";
                 this.showToast(`送货单 ${deliveryNumber} ${disposition}，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复操作。`, true);
                 return true;
               }

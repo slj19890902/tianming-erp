@@ -159,6 +159,14 @@ def test_cost_readiness_is_read_only_current_and_permissioned(
         assert limited.json()["returned_items"] == 1
         assert limited.json()["truncated"] is True
 
+        paged = client.get("/api/orders/cost-readiness",params={"page":2,"page_size":1,"category":"report_dimensions"}).json()
+        assert paged["page"] == 2 and paged["total_items"] == 2
+        assert paged["items"][0]["item_id"] != body["items"][0]["item_id"]
+        assert not paged["truncated"]
+        assert client.get("/api/orders/cost-readiness",params={"keyword":"ACTIVE-2","page_size":1}).json()["total_items"] == 1
+        assert client.get("/api/orders/cost-readiness",params={"keyword":"%","page_size":1}).json()["total_items"] == 0
+        assert client.get("/api/orders/cost-readiness",params={"category":"made_up"}).status_code == 422
+
         _login(client, "sales")
         forbidden = client.get("/api/orders/cost-readiness")
         assert forbidden.status_code == 403
@@ -187,10 +195,10 @@ def test_cost_readiness_is_read_only_current_and_permissioned(
 def test_cost_gap_ui_is_lazy_compact_and_has_no_write_action() -> None:
     for text in (
         "成本缺口",
-        "成本资料缺口",
+        "冻结预计成本",
         "仅统计已有预计成本快照的当前订单；旧订单不回填",
         "需要补齐",
-        "查看订单",
+        "定位待补明细",
         'axios.get("/api/orders/cost-readiness"',
     ):
         assert text in INDEX
@@ -198,6 +206,6 @@ def test_cost_gap_ui_is_lazy_compact_and_has_no_write_action() -> None:
         'v-if="orderWorkspace === \'queue\' && canViewCosts" '
         'ref="costGapTrigger" class="btn" @click="openCostGaps"'
     ) in INDEX
-    assert "成本与利润提醒" in INDEX
+    assert "预计成本与毛利提醒" in INDEX
     assert "/api/orders/cost-readiness" in INDEX
     assert "openCostGapOrder" in INDEX

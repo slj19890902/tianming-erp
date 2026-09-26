@@ -2618,3 +2618,11 @@ body.warehouse-twin-page {
   .twin-workspace.rack-focused.context-open .twin-rack-stage { flex: 1; }
 }
 .twin-location-item.order-location-current { border:2px solid #e4a11b; background:#fff4ce; }
+
+/* Product selection reveals physical totals without conflating sales orders. */
+.product-quantity-summary { gap: 8px; padding: 12px; border-radius: 8px; }
+.product-quantity-summary b { font-size: 17px; }
+.product-quantity-summary span, .product-quantity-summary details { font-size: 13px; line-height: 1.5; }
+.product-quantity-summary small { font-size: 12px; }
+.product-quantity-summary details button { display: block; width: 100%; text-align: left; margin-top: 6px; padding: 8px; background: white; border: 1px solid #99c9c3; border-radius: 5px; }
+.product-location-quantity { padding: 4px 8px; background: #dbeafe; color: #1e40af; font-size: 13px; font-weight: 700; }

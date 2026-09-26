@@ -276,7 +276,8 @@ def assemble_subkit_inventory(
         return conversion
 
 
-def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False, ignored_reserve_id=None):
+def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False, ignored_reserve_id=None,
+                                      proven_transfer_movement_ids=frozenset()):
     """Allow unwinding only after every assembly/delivery use is reversed.
 
     Equal balances alone are not proof: moves, counts or arbitrary adjustments
@@ -289,12 +290,16 @@ def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False
     if not movements or output.version != len(movements):
         return False
     later = movements[1:]
+    if proven_transfer_movement_ids:
+        later = [m for m in later if m.id not in proven_transfer_movement_ids]
     if ignored_reserve_id is not None:
         later = [m for m in later if m.id != ignored_reserve_id]
         if not later:
             return True
     if allow_initial_reserve and later and later[0].movement_type == "reserve":
         later = later[1:]
+    if proven_transfer_movement_ids and not later:
+        return True
     # A cancelled delivery is an auditable use/reversal pair, not an untouched
     # lot. Accept only fully reversed allocations with matching real lineage.
     # Equal final balances (or merely status='reversed') are insufficient.
@@ -376,7 +381,21 @@ def reverse_subkit_conversion(db: Session, *, conversion_id: int, operator_id: i
             raise SubkitError("组套记录不存在", 404)
         if conversion.status == "reversed":
             return
+        transferred = None
         if conversion.output_lot_id:
+            output = db.get(InventoryLot, conversion.output_lot_id)
+            if output is not None and output.inventory_type == 'finished':
+                from types import SimpleNamespace
+                from app.services.production_reversal_transfers import reverse_transferred_completion
+                from app.services.production_workflow import ProductionWorkflowError
+                try:
+                    transferred = reverse_transferred_completion(db, completion=SimpleNamespace(
+                        id=conversion.id, inventory_lot_id=output.id, stock_quantity=conversion.quantity,
+                        order_item_id=conversion.order_item_id), operator_id=operator_id,
+                        reason='撤销组套入库', source_ref_type='bom_assembly' if graph_assembly else 'subkit_conversion')
+                except ProductionWorkflowError as error:
+                    raise SubkitError(str(error)) from error
+        if conversion.output_lot_id and transferred is None:
             output = db.get(InventoryLot, conversion.output_lot_id)
             released_auto_reserve = False
             if graph_assembly and output is not None:

@@ -10583,116 +10583,84 @@ def delete_delivery(
                 else "送货草稿被删除"
             ),
         )
-        if facts["has_history"]:
-            voided_at = _utc_now()
-            voided = db.execute(
-                update(Delivery)
-                .where(
-                    Delivery.id == delivery_id,
-                    Delivery.status == "pending",
-                )
-                .values(
-                    status="voided",
-                    voided_by=user.id,
-                    voided_at=voided_at,
-                    ever_dispatched_at=func.coalesce(
-                        Delivery.ever_dispatched_at,
-                        facts["history_at"],
-                    ),
-                    printed_by=None,
-                    printed_at=None,
-                )
+        # All deleted documents retain their lines, snapshots and audit.
+        voided_at = _utc_now()
+        voided = db.execute(
+            update(Delivery)
+            .where(
+                Delivery.id == delivery_id,
+                Delivery.status == "pending",
             )
-            if voided.rowcount != 1:
-                current_status = db.scalar(
-                    select(Delivery.status).where(Delivery.id == delivery_id)
-                )
-                if current_status == "voided":
-                    db.rollback()
-                    return {
-                        "deleted": False,
-                        "voided": True,
-                        "disposition": "voided",
-                        "id": delivery_id,
-                    }
-                raise HTTPException(
-                    status_code=409,
-                    detail="送货单状态已变化，请刷新后重试",
-                )
-            _write_audit(
-                db,
-                user=user,
-                action=(
-                    "VOID_AFTER_CANCEL"
-                    if has_delivery_history
-                    else "VOID_WITH_LABEL_HISTORY"
+            .values(
+                status="voided",
+                voided_by=user.id,
+                voided_at=voided_at,
+                ever_dispatched_at=func.coalesce(
+                    Delivery.ever_dispatched_at,
+                    facts["history_at"],
                 ),
-                resource="Delivery",
-                entity_id=delivery.id,
-                details={
-                    "delivery_number": delivery.delivery_number,
-                    "total_quantity": delivery.total_quantity,
-                    "inventory_allocation_count": len(
-                        facts["inventory_allocations"]
-                    ),
-                    "component_allocation_count": len(
-                        facts["component_allocations"]
-                    ),
-                    "unordered_allocation_count": len(
-                        facts["unordered_allocations"]
-                    ),
-                    "return_receipt_status": (
-                        receipt.status if receipt is not None else None
-                    ),
-                    "label_job_at": (
-                        utc_naive_to_api(facts["label_job_at"])
-                        if facts["label_job_at"] is not None
-                        else None
-                    ),
-                },
-                description=(
-                    "作废已取消发货的送货单并保留库存及审计记录"
-                    if has_delivery_history
-                    else "作废已有产品标签历史的待发货送货单并保留审计记录"
-                ),
+                printed_by=None,
+                printed_at=None,
             )
-            db.commit()
-            return {
-                "deleted": False,
-                "voided": True,
-                "disposition": "voided",
-                "id": delivery_id,
-            }
+        )
+        if voided.rowcount != 1:
+            current_status = db.scalar(
+                select(Delivery.status).where(Delivery.id == delivery_id)
+            )
+            if current_status == "voided":
+                db.rollback()
+                return {
+                    "deleted": False,
+                    "voided": True,
+                    "disposition": "voided",
+                    "id": delivery_id,
+                }
+            raise HTTPException(
+                status_code=409,
+                detail="送货单状态已变化，请刷新后重试",
+            )
         _write_audit(
             db,
             user=user,
-            action="DELETE",
+            action=(
+                "VOID_AFTER_CANCEL"
+                if has_delivery_history
+                else "DELETE_RETAIN_HISTORY"
+            ),
             resource="Delivery",
             entity_id=delivery.id,
             details={
                 "delivery_number": delivery.delivery_number,
                 "total_quantity": delivery.total_quantity,
+                "inventory_allocation_count": len(
+                    facts["inventory_allocations"]
+                ),
+                "component_allocation_count": len(
+                    facts["component_allocations"]
+                ),
+                "unordered_allocation_count": len(
+                    facts["unordered_allocations"]
+                ),
+                "return_receipt_status": (
+                    receipt.status if receipt is not None else None
+                ),
+                "label_job_at": (
+                    utc_naive_to_api(facts["label_job_at"])
+                    if facts["label_job_at"] is not None
+                    else None
+                ),
             },
-            description="删除待发货送货单",
+            description=(
+                "删除已取消发货的送货单，保留历史、库存流水及审计记录"
+                if has_delivery_history
+                else "删除送货草稿并保留完整历史与审计记录"
+            ),
         )
-        if delivery.source_mode in {"unordered_finished", "mixed"}:
-            delivery_item_ids = select(DeliveryItem.id).where(
-                DeliveryItem.delivery_id == delivery.id,
-                DeliveryItem.is_current.is_(True),
-            )
-            db.execute(
-                delete(UnorderedFinishedDeliveryAllocation).where(
-                    UnorderedFinishedDeliveryAllocation.delivery_item_id.in_(
-                        delivery_item_ids
-                    )
-                )
-            )
-        db.delete(delivery)
         db.commit()
         return {
-            "deleted": True,
-            "voided": False,
-            "disposition": "deleted",
+            "deleted": False,
+            "voided": True,
+            "disposition": "voided",
             "id": delivery_id,
         }
     except HTTPException:

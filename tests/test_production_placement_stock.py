@@ -23,6 +23,16 @@ def seed(app):
         loc=db.get(WarehouseLocation,lot.warehouse_location_id)
         area=db.scalar(select(WarehouseArea).where(WarehouseArea.area_code==loc.area_code))
         db.add(ReceiptStagingArea(area_id=area.id))
+        from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
+        purchase = db.scalar(select(ExternalPackagingPurchaseItem).where(ExternalPackagingPurchaseItem.id == line))
+        purchase.customer_product_id_snapshot = item.product_id
+        purchase.currency = 'CNY'
+        purchase.unit_price = lot.estimated_unit_cost_snapshot
+        purchase.purchase_quantity_basis_snapshot = 1
+        purchase.order_quantity_basis_snapshot = 1
+        purchase.tax_mode = 'tax_inclusive'
+        purchase.tax_rate = 0.13
+        db.flush()
         ids=[lot.id]
         for n in range(8):
             extra=manual_finished_in(db,customer_id=app.state.fixture['customer_a'],product_id=item.product_id,

@@ -3013,6 +3013,7 @@ def mark_order_duplicate(db: Session, draft: dict) -> dict:
     result = {**draft, "lines_signature": signature}
     for key in ("duplicate_status", "duplicate_reason", "duplicate_order_id", "duplicate_order_number"):
         result.pop(key, None)
+    result.pop("cancelled_related_orders", None)
     if not customer_id or not customer_po:
         return result
     orders = db.scalars(
@@ -3020,13 +3021,16 @@ def mark_order_duplicate(db: Session, draft: dict) -> dict:
         .where(Order.customer_id == customer_id, Order.customer_po == customer_po)
         .options(joinedload(Order.items))
     ).unique().all()
+    result["cancelled_related_orders"] = [
+        {"id": row.id, "order_number": row.order_number, "status": row.status}
+        for row in orders if row.status == "cancelled"
+    ]
+    orders = [row for row in orders if row.status != "cancelled"]
     if orders:
         order = orders[0]
         result.update(
             duplicate_status="existing_po_found",
             duplicate_reason=(
-                f"客户单号 {customer_po} 的原订单 {order.order_number} 已取消，历史和下游事实仍保留。本次 PDF 来源经确认后会建立独立订单，不会覆盖或续写原单。"
-                if order.status == "cancelled" else
                 f"该客户单号已有 ERP 订单 {order.order_number}。如本次 PDF 是新的真实来源，确认后会建立独立订单并归入同一客户单号组；原订单不会被覆盖。"
             ),
             duplicate_order_id=order.id,

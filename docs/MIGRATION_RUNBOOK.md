@@ -1,6 +1,6 @@
 # 瑞达历史数据迁移运行手册
 
-## 2026-09-26 双数量 ea0926 隔离演练
+## 2026-09-26 双数量 eb0926dq 隔离演练
 
 使用 `scripts/validation/rehearse_delivery_quantity_migration.py`，显式提供离线审计副本、预期SHA256和一个不存在的输出目录。脚本仅复制源，在复制品执行 dz0922→ea0926→dz0922→ea0926；每条Alembic命令带 expected_database_path 隔离断言。逐表比较原字段和索引/触发器，校验完整性/FK、旧分母默认1、旧快照NULL，以及0/负数/NULL分母拒绝。三个独立复制品分别加入快照、预占分母、分配分母事实，验证降级拒绝且文件字节哈希不变。原离线文件哈希须保持。不得对正式库套用测试修改；存在新业务事实后保留数据库向前修复。当前仅验证留存审计副本，未执行正式迁移。
 
@@ -836,3 +836,12 @@ dv0922 → dw0922 只新增不可变 finance_invoice_task_statements 关联表�
 ### ea0926 补库需求快照补充（2026-09-26，候选未发布）
 同一未发布迁移新增stock_replenishment_order_items.quantity_contract_json nullable Text。旧行NULL保持原客户计划语义；新外购物理补库草稿冻结实物数量、客户/产品、单位、比例及送货/预警来源。存在非NULL需求快照时禁止有损降级，拒绝时数据库字节不变。
 最新隔离往返演练：D:/.codex/workspace_artifacts/delivery_physical_20260926/migration-ea0926-run3/evidence.json。304原业务表逐行原字段与1026索引/触发器保持，upgrade/downgrade/upgrade通过，4类数据保护拒绝通过，integrity ok/FK0。源仍为留存审计副本，不是新鲜正式备份；正式发布门禁未执行。
+
+## 2026-09-26 管理员回退与开票来源归档 ea0926
+
+dz0922 → ea0926 为开票任务明细增加归档对账调整外键及原明细编号；有效来源与归档来源必须二选一。只有已作废任务、真实原明细和完整取消对账快照匹配时允许归档，归档快照禁止改写。升级不回填、删除或修改原业务事实；SQLite重建保留原触发器、索引及外键。已出现归档事实时降级在DDL前拒绝，禁止清空事实绕过；有新事实后采用向前修复，不用旧库覆盖。正式副本升降升已核对304张原业务表与683个原索引/触发器、integrity ok/FK0；正式发布仍须Manager停服时点NAS备份、签名包隔离演练与事实比对。具体发布状态见 WAREHOUSE_QUANTITY_REVERSAL_20260926 独立回执。
+
+## 2026-09-26 与正式v503基线整合
+正式ea0926是管理员回退与开票来源归档，保持原文件及身份。本任务未发布双数量迁移更名eb0926dq，前驱改正式ea0926；禁止stamp已有副本或重写正式迁移。此前migration-ea0926-run3仅为旧候选证据，新链须在正式v503隔离副本重新升降升及校验全部原事实，未验证前不得发布。
+
+新版ea0926→eb0926dq已在v503新鲜只读副本完成升降升：304原业务表原字段及1029索引/触发器保持，四种有损降级拒绝均未写入，完整性ok/FK0。证据D:/.codex/workspace_artifacts/delivery_physical_20260926/migration-eb0926dq-run1/evidence.json；正式发布仍须新的Manager时点备份。

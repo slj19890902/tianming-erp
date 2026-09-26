@@ -2045,6 +2045,7 @@ def build_inventory_code_search_results(
     as_of: date,
     location_projection_contexts: dict[int, dict] | None = None,
 ) -> dict:
+    from app.services.warehouse_product_quantities import product_search_identity
     results = []
     floor_counts: dict[str, dict] = {}
     for row in lots:
@@ -2078,6 +2079,7 @@ def build_inventory_code_search_results(
             position_status, map_position = "unplaced", None
         result = {
             **payload,
+            "product_identity_key": product_search_identity(row),
             "floor_code": floor_code,
             "pending_relocation": pending_relocation,
             "area_code": location.area_code if location else None,

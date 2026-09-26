@@ -57,6 +57,7 @@ interface Props {
   productionProjections?: ProductionTaskProjection[];
   highlightFeatureIds?: string[];
   highlightedPalletIds?: string[];
+  productQuantityLabels?: Record<string, string>;
   selectedAreaFeatureId?: string;
   sourcePalletIds?: string[];
   mergeTargetPalletId?: string;
@@ -113,6 +114,7 @@ interface CanvasRuntime {
   selectionHighlight: THREE.Group;
   searchHighlight: THREE.Group;
   resultHighlight: THREE.Group;
+  productQuantityGroup: THREE.Group;
   focusFrame: number | null;
   requestRender: () => void;
   viewMode: ViewMode;
@@ -138,12 +140,33 @@ function clearHighlightGroup(group: THREE.Group) {
   for (const child of [...group.children]) {
     group.remove(child);
     child.traverse((object) => {
+      if (object instanceof THREE.Sprite) {
+        object.material.map?.dispose();
+        object.material.dispose();
+        return;
+      }
       if (!(object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.LineSegments)) return;
       object.geometry.dispose();
       const materials = Array.isArray(object.material) ? object.material : [object.material];
       materials.forEach((material) => material.dispose());
     });
   }
+}
+
+function syncProductQuantities(runtime: CanvasRuntime, labels?: Record<string, string>) {
+  clearHighlightGroup(runtime.productQuantityGroup);
+  for (const [id, text] of Object.entries(labels || {})) {
+    const node = runtime.entityNodes.get(`pallet:${id}`);
+    if (!node) continue;
+    const box = new THREE.Box3().setFromObject(node);
+    if (box.isEmpty()) continue;
+    const label = textSprite(text, '#1d4ed8', 1800, 340, true);
+    label.position.copy(box.getCenter(new THREE.Vector3()));
+    label.position.y = box.max.y + 220;
+    label.renderOrder = 150;
+    runtime.productQuantityGroup.add(label);
+  }
+  runtime.requestRender();
 }
 
 function addEntityHighlight(group: THREE.Group, object: THREE.Object3D, color: number, paddingMm: number, order = 100) {
@@ -445,6 +468,7 @@ export function EditorCanvas({
   productionProjections = [],
   highlightFeatureIds = [],
   highlightedPalletIds = [],
+  productQuantityLabels,
   selectedAreaFeatureId,
   sourcePalletIds = [],
   mergeTargetPalletId,
@@ -1603,7 +1627,8 @@ export function EditorCanvas({
     const selectionHighlight = new THREE.Group();
     const searchHighlight = new THREE.Group();
     const resultHighlight = new THREE.Group();
-    scene.add(selectionHighlight, searchHighlight, resultHighlight);
+    const productQuantityGroup = new THREE.Group();
+    scene.add(selectionHighlight, searchHighlight, resultHighlight, productQuantityGroup);
     const runtime: CanvasRuntime = {
       scene,
       camera,
@@ -1612,12 +1637,14 @@ export function EditorCanvas({
       selectionHighlight,
       searchHighlight,
       resultHighlight,
+      productQuantityGroup,
       focusFrame: null,
       requestRender,
       viewMode,
       layoutId: layout.id
     };
     runtimeRef.current = runtime;
+    syncProductQuantities(runtime, productQuantityLabels);
     syncEntityHighlights(runtime, selectedRef.current, focusTargetRef.current, moveStatesRef.current);
     syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates, selectedAreaFeatureId, sourcePalletIds);
     if (focusTargetRef.current) {
@@ -1706,6 +1733,9 @@ export function EditorCanvas({
   }, [highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates, selectedAreaFeatureId, sourcePalletIds]);
 
   const realEastCompass = usesRealEastCompass(layout);
+  useEffect(() => {
+    if (runtimeRef.current) syncProductQuantities(runtimeRef.current, productQuantityLabels);
+  }, [productQuantityLabels]);
   const floor4CalibratingCompass = layout.floor_code.toUpperCase() === "4F" && calibrationMode;
   const compassCode = floor4CalibratingCompass ? "3F" : realEastCompass ? "E" : "N";
   const compassLabel = floor4CalibratingCompass ? "对齐3F" : realEastCompass ? "现实东向" : "图纸北向";

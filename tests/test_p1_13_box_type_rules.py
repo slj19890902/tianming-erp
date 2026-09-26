@@ -61,6 +61,99 @@ def test_registry_has_stable_codes_and_explicit_historical_aliases() -> None:
     assert box_type_code("A356客户自定义") is None
 
 
+@pytest.mark.parametrize(
+    ("legacy_name", "expected_code", "expected_display_name"),
+    [
+        ("WC 五层钉箱", "a1_0201", "A1/0201 普通开槽箱"),
+        ("WCZX 五层粘箱", "a1_0201", "A1/0201 普通开槽箱"),
+        ("SCX 单瓦箱", "a1_0201", "A1/0201 普通开槽箱"),
+        ("QCX 七层纸箱", "a1_0201", "A1/0201 普通开槽箱"),
+        ("001 思展钉箱", "a1_0201", "A1/0201 普通开槽箱"),
+        ("008 外箱无钉", "a1_0201", "A1/0201 普通开槽箱"),
+        ("006 华元外箱", "a1_0201", "A1/0201 普通开槽箱"),
+        ("WZX 外纸箱", "a1_0201", "A1/0201 普通开槽箱"),
+        ("NZX 内纸箱", "a1_0201", "A1/0201 普通开槽箱"),
+        ("THWX 腾华外箱", "a1_0201", "A1/0201 普通开槽箱"),
+        ("TDG 天地盖", "a3_set", "A3 天地盖"),
+        ("TDGG 天地盖盖", "top_cover", "独立天盖"),
+        ("TDGD 天地盖底", "bottom_base", "独立底"),
+        ("WB 围板", "surround_panel", "围板"),
+        ("MYG 满摇盖", "full_flap_carton", "满摇盖纸箱"),
+        ("010 单瓦满摇盖", "full_flap_carton", "满摇盖纸箱"),
+        ("BJX 半截箱", "half_slotted_carton", "半开槽箱"),
+        ("QCB 七层板", "liner", "衬板"),
+        ("FJH 飞机盒", "die_cut_inner_box", "模切内盒"),
+        ("MQXX 模切小箱", "die_cut_inner_box", "模切内盒"),
+        ("YXX 异型箱", "irregular", "异形箱"),
+    ],
+)
+def test_confirmed_legacy_box_names_resolve_to_existing_types(
+    legacy_name: str,
+    expected_code: str,
+    expected_display_name: str,
+) -> None:
+    assert box_type_code(legacy_name) == expected_code
+    assert canonical_box_style(legacy_name) == expected_display_name
+
+
+@pytest.mark.parametrize(
+    "ambiguous_name",
+    [
+        "NH 天华内盒1",
+        "THNH1 腾华内盒1",
+        "CTSNH 抽屉式内盒",
+        "HP01 恒鹏模切1",
+        "WGX 无盖箱",
+        "WDX 无底箱",
+    ],
+)
+def test_ambiguous_legacy_names_remain_unclassified(ambiguous_name: str) -> None:
+    assert box_type_code(ambiguous_name) is None
+
+
+def test_registry_aliases_are_unique_after_normalization() -> None:
+    seen: dict[str, str] = {}
+    for rule in BOX_TYPE_RULES:
+        for alias in (rule.code, rule.display_name, *rule.aliases):
+            key = "".join(alias.strip().upper().split())
+            assert key not in seen or seen[key] == rule.code
+            seen[key] = rule.code
+
+
+@pytest.mark.parametrize(
+    ("legacy_name", "canonical_name"),
+    [
+        ("WC 五层钉箱", "A1/0201 普通开槽箱"),
+        ("TDG 天地盖", "A3 天地盖"),
+        ("TDGG 天地盖盖", "独立天盖"),
+        ("TDGD 天地盖底", "独立底"),
+        ("WB 围板", "围板"),
+        ("MYG 满摇盖", "满摇盖纸箱"),
+        ("BJX 半截箱", "半开槽箱"),
+        ("QCB 七层板", "衬板"),
+        ("FJH 飞机盒", "模切内盒"),
+        ("YXX 异型箱", "异形箱"),
+    ],
+)
+def test_confirmed_legacy_alias_uses_exact_existing_formula_contract(
+    legacy_name: str,
+    canonical_name: str,
+) -> None:
+    values = {
+        "length_mm": 400,
+        "width_mm": 300,
+        "height_mm": 200,
+        "splice_mode": "single",
+        "flap_mm": 30,
+        "crease_type": "净料" if canonical_name == "衬板" else None,
+    }
+
+    legacy = recommend_box_type(box_style=legacy_name, **values)
+    canonical = recommend_box_type(box_style=canonical_name, **values)
+
+    assert legacy == canonical
+
+
 def test_die_cut_inner_box_and_irregular_box_require_three_dimensions() -> None:
     rules = {rule.code: rule for rule in BOX_TYPE_RULES}
     expected = ("length_mm", "width_mm", "height_mm")

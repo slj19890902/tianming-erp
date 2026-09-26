@@ -1,4 +1,4 @@
-"""Rehearse ea0926 on disposable copies of an explicitly hashed offline source."""
+"""Rehearse eb0926dq on disposable copies of an explicitly hashed offline source."""
 from __future__ import annotations
 
 import argparse
@@ -81,11 +81,11 @@ def main():
     config = Config(str(ROOT / 'alembic.ini'))
     config.set_main_option('script_location', str(ROOT / 'alembic'))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ['ea0926']
-    assert script.get_revision('ea0926').down_revision == 'dz0922'
+    assert script.get_heads() == ['eb0926dq']
+    assert script.get_revision('eb0926dq').down_revision == 'ea0926'
     columns = original_columns(source)
     baseline = evidence(source, columns)
-    assert baseline['revision'] == [('dz0922',)]
+    assert baseline['revision'] == [('ea0926',)]
     output.mkdir(parents=True)
     (output / 'original-facts.json').write_text(
         json.dumps(baseline, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -93,7 +93,7 @@ def main():
     shutil.copy2(source, database)
     assert digest(database) == digest(source)
     checkpoints = []
-    for direction, target in [('upgrade', 'ea0926'), ('downgrade', 'dz0922'), ('upgrade', 'ea0926')]:
+    for direction, target in [('upgrade', 'eb0926dq'), ('downgrade', 'ea0926'), ('upgrade', 'eb0926dq')]:
         result = migrate(database, direction, target, output)
         (output / f'{len(checkpoints)}-{direction}.log').write_text(result.stdout + result.stderr, encoding='utf-8')
         assert result.returncode == 0, result.stderr
@@ -127,7 +127,7 @@ def main():
         with sqlite3.connect(candidate) as db:
             db.execute(f'UPDATE {table} SET {field}=? WHERE id=(SELECT id FROM {table} LIMIT 1)', (value,))
         before = digest(candidate)
-        result = migrate(candidate, 'downgrade', 'dz0922', output)
+        result = migrate(candidate, 'downgrade', 'ea0926', output)
         (output / f'guard-{table}.log').write_text(result.stdout + result.stderr, encoding='utf-8')
         assert result.returncode != 0 and '禁止有损降级' in result.stderr
         assert digest(candidate) == before, 'Refused downgrade changed the database'

@@ -25,6 +25,7 @@ from app.models.warehouse_inventory import InventoryLot, InventoryMovement, Fini
 from app.services.delivery_quantities import product_basis, physical_stock_basis, require_physical_stock
 from app.services.historical_quantity_ledger import post_audited_quantity_batch
 from app.services.warehouse_inventory import _balances
+from app.services.warehouse_display_units import lot_display_unit
 from scripts.validation.rehearse_customer_diecut_molds import fingerprints
 from scripts.validation.rehearse_delivery_quantity_migration import migrate, readonly
 
@@ -88,9 +89,12 @@ def rehearse(source, output, plan_path):
     plan = json.loads(plan_path.read_text(encoding='utf-8'))
     assert plan['status'] == 'preview_only_not_authorized_to_apply'
     validate_source(target, plan)
-    result = migrate(target, 'upgrade', 'ea0926', output)
+    result = migrate(target, 'upgrade', 'eb0926dq', output)
     (output / 'migration.log').write_text(result.stdout + result.stderr, encoding='utf-8')
     assert result.returncode == 0, result.stderr
+    with readonly(target) as check:
+        assert check.execute('SELECT version_num FROM alembic_version').fetchall() == [('eb0926dq',)]
+        assert 'quantity_contract_json' in {r[1] for r in check.execute('PRAGMA table_info(sales_delivery_items)')}
     before_tables = fingerprints(target)
     engine = create_sqlite_engine(target)
     with Session(engine) as db:
@@ -143,11 +147,14 @@ def rehearse(source, output, plan_path):
                 assert lot.id in plan['untouched_move_in_lot_ids']
                 assert lot.estimated_unit_cost_snapshot == Decimal('7.71')
                 assert _balances(lot) == {k: row['quantity_' + k] for k in _balances(lot)}
-            lot.unit = '片'
+            # boxes/sheets is the existing internal storage classification;
+            # the verified quantity marker supplies the employee physical unit.
             detail.physical_basis_json = physical_stock_basis(detail.physical_basis_json, basis)
             lot.version += 1
             require_physical_stock(lot, basis, require_marker=True)
+            assert lot_display_unit(lot) == '片'
             changes.append({**change, 'after_unit': lot.unit,
+                            'display_unit': lot_display_unit(lot),
                             'after_cost': str(lot.estimated_unit_cost_snapshot), 'balances': _balances(lot)})
         # Cost, quantity basis activation and ledger writes are one transaction.
         db.add(OperationLog(user_id=actor_id, action='historical_quantity_rehearsal',

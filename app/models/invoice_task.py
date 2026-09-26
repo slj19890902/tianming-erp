@@ -342,6 +342,11 @@ class FinanceInvoiceTaskItem(Base):
             "(source_type = 'customer_charge' AND customer_charge_id IS NOT NULL))",
             name="ck_finance_invoice_task_items_charge_source",
         ),
+        CheckConstraint(
+            "(statement_item_id IS NOT NULL AND archived_statement_item_id IS NULL AND archived_adjustment_id IS NULL) OR "
+            "(statement_item_id IS NULL AND archived_statement_item_id IS NOT NULL AND archived_statement_item_id > 0 AND archived_adjustment_id IS NOT NULL)",
+            name="ck_invoice_task_items_live_or_archived_source",
+        ),
         Index("ix_finance_invoice_task_items_task", "task_id"),
     )
 
@@ -350,8 +355,12 @@ class FinanceInvoiceTaskItem(Base):
         ForeignKey("finance_invoice_tasks.id", ondelete="CASCADE"), nullable=False
     )
     sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
-    statement_item_id: Mapped[int] = mapped_column(
-        ForeignKey("finance_statement_items.id", ondelete="RESTRICT"), nullable=False
+    statement_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_statement_items.id", ondelete="RESTRICT"), nullable=True
+    )
+    archived_statement_item_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    archived_adjustment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("finance_statement_adjustments.id", ondelete="RESTRICT"), nullable=True
     )
     source_type: Mapped[str] = mapped_column(
         String(30), default="delivery", server_default="delivery", nullable=False

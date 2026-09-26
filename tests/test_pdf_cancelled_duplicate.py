@@ -12,9 +12,11 @@ def test_cancelled_order_is_preserved_and_reported_as_related(mobile_portal_app)
         order.status = 'cancelled'
         db.flush()
         result = mark_order_duplicate(db, draft)
-        assert result['duplicate_status'] == 'existing_po_found'
-        assert '已取消' in result['duplicate_reason']
-        assert '不会覆盖或续写原单' in result['duplicate_reason']
+        assert not result.get('duplicate_status')
+        assert result['cancelled_related_orders'] == [
+            {'id': order.id, 'order_number': order.order_number, 'status': 'cancelled'}
+        ]
+        assert db.get(Order, order.id) is order
         db.delete(order)
         db.flush()
         assert not mark_order_duplicate(db, result).get('duplicate_status')

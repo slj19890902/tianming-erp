@@ -43,7 +43,7 @@ def legacy_shipment(app, factory):
         before = _balances(lot)
         first = dict(kind='inbound_basis', quantity=200, source_movement_id=inbound.id,
             lot_id=lot_id, customer_id=customer, product_id=product,
-            before=before, expected_version=lot.version)
+            before=before, expected_version=lot.version, physical_unit='片')
         second = dict(first, kind='outbound_basis', quantity=100, source_movement_id=outbound.id,
             before=dict(before, available=before['available'] + 200), expected_version=lot.version + 1)
     return lot_id, delivery_id, [first, second], original
@@ -63,6 +63,7 @@ def test_separate_corrections_replay_across_sessions_and_keep_history(unordered_
         assert not any(r['created'] for r in replay)
         lot = db.get(InventoryLot, lot_id)
         assert (lot.quantity_available, lot.quantity_consumed) == (200, 200)
+        assert {db.get(InventoryMovement, r['movement_id']).unit for r in result} == {'片'}
         for movement_id, values in original.items():
             row = db.get(InventoryMovement, movement_id)
             assert {c.name: getattr(row, c.name) for c in row.__table__.columns} == values

@@ -4588,6 +4588,12 @@ def _reverse_completion_finished_lot(
     lot = db.get(InventoryLot, lot_id)
     if lot is None:
         raise ProductionWorkflowError("生产完工成品库存批次不存在", 409)
+    if lot.inventory_type == 'finished':
+        from app.services.production_reversal_transfers import reverse_transferred_completion
+        transferred = reverse_transferred_completion(db, completion=completion,
+            operator_id=operator_id, reason=reason)
+        if transferred is not None:
+            return transferred
     is_body = lot.inventory_type == "assembly_body"
     if is_body:
         from app.services.multilevel_bom_body_inventory import stock_product_identity
@@ -4641,7 +4647,10 @@ def _reverse_completion_finished_lot(
         )
 
     graph_restored = False
-    if lot.cost_snapshot_detail_json and "bom_material_product_id" in json.loads(lot.cost_snapshot_detail_json):
+    if any(not safe_completion_movement(row) for row in movements):
+        # Ordinary receipt-derived finished goods have the same auditable
+        # delivery consume/reverse pairs as BOM output. Check the complete
+        # lineage; merely reaching the original balance is not sufficient.
         from app.services.bom_subkit_inventory import _only_reversed_graph_consumptions
         graph_restored = _only_reversed_graph_consumptions(db, lot, allow_initial_reserve=True)
     if not movements or (not graph_restored and any(not safe_completion_movement(row) for row in movements)):

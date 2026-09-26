@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.495"
-APP_VERSION_NAME = "对账截止日与开票收款分流"
-APP_BUILD_DATE = "2026-09-22"
+APP_VERSION = "v0.22.496"
+APP_VERSION_NAME = "常用箱查找与历史订单选款"
+APP_BUILD_DATE = "2026-09-26"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
 _V022124_CHANGES = [
@@ -4753,3 +4753,14 @@ APP_VERIFICATION_STEPS = [
     "需要纠错时，在发票更多登记真实作废／红冲结果，核对原记录保留、符合条件账单退回待修改；勿为测试虚构实际处理。",
 ]
 APP_CHANGELOG = [*(f"v0.22.495：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "新建订单导入常用箱默认最近新增优先，可切换编码顺序或清空查询条件；排序、筛选和翻页保留已选数量。",
+    "订单详情新增按此单选款，只提供该旧单对应的当前可用常用箱，旧PO、数量、成交价、交期和备注不复制。",
+    "常用箱列表随当前页读取BOM资料状态，消除逐款重复查询；保留权限、客户范围和原保存资格。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新后在苏宇新建订单点导入常用箱，核对SY00001—SY00003在最近新增列表靠前；切换编码顺序或清空条件后仍能找到。",
+    "在旧单只读详情点按此单选款，核对新草稿仅沿用客户，选择当前款式后重新核对数量及价格；取消不得产生新订单。",
+]
+APP_CHANGELOG = [*(f"v0.22.496：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

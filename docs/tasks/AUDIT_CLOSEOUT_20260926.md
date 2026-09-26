@@ -15,3 +15,7 @@
 测试使用本轮独立合成环境，复用已验证解释器但不复用其他任务数据库/进程；最短受影响测试，保留日志/JUnit/退出码。按既有授权完整门禁交付；阶段结束写NAS独立回执。
 
 第一闭环追加实际发现：既有精确产品列表性能测试复现全量20款28次SQL（小样本9次），摘要2款8次超过原6次预算。来源为product_readiness逐款session.get(ProductBomProfile)，无配置也逐款查询。实际allowlist增加app/services/product_readiness.py及相应等价测试。只在列表当前页一次JOIN读取配置，显式传入读取结果，其他调用维持原契约；不改变SQL预算、BOM规则、保存资格或正式数据。
+
+N04证据核验allowlist增加tests/test_p1_09c_74_requisition_preview_guard.py：原测试通过邻接函数名截取取消方法，现中间新增原片采购方法，导致SyntaxError而非运行断言失败。修正测试提取边界，保留原旧响应/改变选集/离页/只预览断言，不为此改应用逻辑。
+
+交付allowlist：app/version.py、docs/release_reports/AUDIT_CLOSEOUT_20260926.md及docs/CODEX_HANDOFF.md简短正式基线索引。两个功能闭环和N04证据修正完成后一次整合发布，无迁移。N02模板及A0001—A0016原技术交付作为已有证据保留，不无故全量回归；外部真实样张/操作记录/实纸/备用机不伪填通过。

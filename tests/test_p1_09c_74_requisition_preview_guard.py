@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -13,7 +14,10 @@ INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 def _method_body(signature: str, next_signature: str) -> str:
     assert signature in INDEX, f"missing Vue method: {signature}"
     assert next_signature in INDEX, f"missing Vue method boundary: {next_signature}"
-    return INDEX.split(signature, 1)[1].split(next_signature, 1)[0].rsplit("}", 1)[0]
+    tail = INDEX.split(signature, 1)[1]
+    following = re.search(r"(?m)^          (?:async )?\w+\([^\n]*\) \{", tail)
+    assert following, f"missing following method for {signature}"
+    return tail[:following.start()].rsplit("}", 1)[0]
 
 
 def _run_node(source: str, tmp_path: Path, name: str) -> None:
@@ -74,7 +78,7 @@ def test_latest_requisition_preview_response_wins(tmp_path: Path) -> None:
     )
     cancel = _method_body(
         "cancelSupplierRequisitionPreview() {",
-        "async openSupplierRequisitionDraft(rows = null) {",
+        "async openRawPurchase(history=false) {",
     )
     opened = _method_body(
         "async openSupplierRequisitionDraft(rows = null) {",
@@ -105,7 +109,7 @@ def test_changed_selection_blocks_old_preview_without_opening(tmp_path: Path) ->
     )
     cancel = _method_body(
         "cancelSupplierRequisitionPreview() {",
-        "async openSupplierRequisitionDraft(rows = null) {",
+        "async openRawPurchase(history=false) {",
     )
     opened = _method_body(
         "async openSupplierRequisitionDraft(rows = null) {",
@@ -132,7 +136,7 @@ def test_stale_error_and_leave_page_cannot_open_preview(tmp_path: Path) -> None:
     )
     cancel = _method_body(
         "cancelSupplierRequisitionPreview() {",
-        "async openSupplierRequisitionDraft(rows = null) {",
+        "async openRawPurchase(history=false) {",
     )
     opened = _method_body(
         "async openSupplierRequisitionDraft(rows = null) {",

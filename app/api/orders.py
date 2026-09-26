@@ -1467,6 +1467,23 @@ def _apply_order_reservation_plans(
         plan = item_payload.reservation_plan
         if plan is None:
             continue
+        from app.services.delivery_quantities import order_basis, product_basis, finished_reservation_plan, QuantityContractError
+        from app.services.direct_external_finished import eligible
+        try:
+            quantity_basis = (order_basis(item, order.customer_id) if eligible(db, item)
+                              else product_basis(resolved_products[index]))
+        except QuantityContractError as error:
+            raise WarehouseInventoryError(str(error), 409) from error
+        selected = []
+        for entry in plan.finished:
+            lot, _version = _plan_current_version(db, lot_id=entry.lot_id,
+                expected_version=entry.expected_version, states=states)
+            selected.append((lot.id, lot.quantity_available, entry.requested_qty))
+        try:
+            allocations = finished_reservation_plan(quantity_basis,
+                max(item.quantity - active_finished_reserved_qty(db, item.id), 0), selected)
+        except QuantityContractError as error:
+            raise WarehouseInventoryError(str(error), 409) from error
         for plan_index, entry in enumerate(plan.finished, start=1):
             lot, current_version = _plan_current_version(
                 db,
@@ -1474,14 +1491,9 @@ def _apply_order_reservation_plans(
                 expected_version=entry.expected_version,
                 states=states,
             )
-            remaining_boxes = max(
-                item.quantity - active_finished_reserved_qty(db, item.id), 0
-            )
-            allocated_boxes = min(
-                entry.requested_qty,
-                remaining_boxes,
-                lot.quantity_available,
-            )
+            _physical_quantity, allocated_boxes = allocations[plan_index - 1]
+            if allocated_boxes.denominator == 1:
+                allocated_boxes = int(allocated_boxes)
             if allocated_boxes <= 0:
                 continue
             reserve_finished_inventory(
@@ -4001,37 +4013,54 @@ def preview_order_inventory_draft(
             customer_id=payload.customer_id,
             product_id=product.id,
         )
-        candidate_available_quantity = sum(
+        from app.services.delivery_quantities import (
+            product_basis, require_physical_stock, available_customer_quantity,
+            physical_for, finished_reservation_plan, QuantityContractError,
+        )
+        try:
+            quantity_basis = product_basis(product)
+        except QuantityContractError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        verified_candidates = []
+        for lot in candidates:
+            try:
+                require_physical_stock(lot, quantity_basis)
+            except QuantityContractError:
+                continue
+            verified_candidates.append(lot)
+        candidates = verified_candidates
+        candidate_available_quantity = available_customer_quantity(quantity_basis, sum(
             max(
                 int(lot.quantity_available or 0)
                 - used_stock_by_lot.get(lot.id, 0),
                 0,
             )
             for lot in candidates
-        )
-        remaining_boxes = order_quantity
-        planned_finished_quantity = 0
+        ))
+        selected_lots = []
+        selected_entries = []
         for entry in draft_item.reservation_plan.finished:
-            if remaining_boxes <= 0:
-                break
             lot = db.get(InventoryLot, entry.lot_id)
             if lot is None:
                 continue
+            try:
+                require_physical_stock(lot, quantity_basis)
+            except QuantityContractError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             used_quantity = used_stock_by_lot.get(lot.id, 0)
             available_quantity = max(
                 int(lot.quantity_available or 0) - used_quantity,
                 0,
             )
-            allocated_quantity = min(
-                int(entry.requested_qty),
-                remaining_boxes,
-                available_quantity,
-            )
-            if allocated_quantity <= 0:
-                continue
-            used_stock_by_lot[lot.id] = used_quantity + allocated_quantity
-            planned_finished_quantity += allocated_quantity
-            remaining_boxes -= allocated_quantity
+            selected_lots.append(lot)
+            selected_entries.append((lot.id, available_quantity, entry.requested_qty))
+        try:
+            allocations = finished_reservation_plan(quantity_basis, order_quantity, selected_entries)
+        except QuantityContractError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        planned_finished_quantity = int(sum(credit for _physical, credit in allocations))
+        for lot, (physical_quantity, _credit) in zip(selected_lots, allocations, strict=True):
+            used_stock_by_lot[lot.id] = used_stock_by_lot.get(lot.id, 0) + physical_quantity
 
         production_required_quantity = max(
             order_quantity - planned_finished_quantity,

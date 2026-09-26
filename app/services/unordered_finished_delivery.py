@@ -8,6 +8,10 @@ from sqlalchemy.orm import Session
 
 from app.core.time_contract import beijing_now_naive, utc_now_naive
 from app.models.delivery import Delivery, DeliveryItem
+from app.services.delivery_quantities import (
+    QuantityContractError, for_item, item_physical_quantity, require_physical_stock,
+)
+from app.services.historical_quantity_ledger import corrected_allocation_physical_quantity
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     InventoryLocationMovement,
@@ -271,10 +275,15 @@ def dispatch_unordered_finished_inventory(
             )
             .order_by(UnorderedFinishedDeliveryAllocation.id)
         ).all()
+        try:
+            quantity_basis = for_item(delivery_item)
+            required_physical = item_physical_quantity(delivery_item)
+        except QuantityContractError as error:
+            raise WarehouseInventoryError(str(error), 409) from error
         if not allocations or sum(
             int(row.planned_quantity or 0) for row in allocations
-        ) != int(delivery_item.delivered_quantity or 0):
-            raise WarehouseInventoryError("无订单成品库存分配与送货数量不一致", 409)
+        ) != required_physical:
+            raise WarehouseInventoryError("无订单成品库存分配与应拿实物数量不一致", 409)
         for allocation in allocations:
             if (
                 allocation.status != "planned"
@@ -289,6 +298,11 @@ def dispatch_unordered_finished_inventory(
                 delivery_item=delivery_item,
                 allocation=allocation,
             )
+            if quantity_basis is not None:
+                try:
+                    require_physical_stock(lot, quantity_basis)
+                except QuantityContractError as error:
+                    raise WarehouseInventoryError(str(error), 409) from error
             quantity = int(allocation.planned_quantity)
             if (
                 lot.status != "active"
@@ -409,6 +423,7 @@ def _restore_allocation_quantity(
     )
     if quantity <= 0 or quantity > remaining:
         raise WarehouseInventoryError("库存冲回数量超过本次送货原批次余额", 409)
+    physical_quantity = corrected_allocation_physical_quantity(db, allocation, quantity)
     location_id = db.scalar(
         select(InventoryLot.warehouse_location_id).where(
             InventoryLot.id == allocation.inventory_lot_id
@@ -423,7 +438,7 @@ def _restore_allocation_quantity(
         delivery_item=delivery_item,
         allocation=allocation,
     )
-    if int(lot.quantity_consumed or 0) < quantity:
+    if int(lot.quantity_consumed or 0) < physical_quantity:
         raise WarehouseInventoryError(
             f"批次 {lot.lot_number} 累计出库数量异常，禁止冲回",
             409,
@@ -436,11 +451,11 @@ def _restore_allocation_quantity(
         .where(
             InventoryLot.id == lot.id,
             InventoryLot.version == version,
-            InventoryLot.quantity_consumed >= quantity,
+            InventoryLot.quantity_consumed >= physical_quantity,
         )
         .values(
-            quantity_available=InventoryLot.quantity_available + quantity,
-            quantity_consumed=InventoryLot.quantity_consumed - quantity,
+            quantity_available=InventoryLot.quantity_available + physical_quantity,
+            quantity_consumed=InventoryLot.quantity_consumed - physical_quantity,
             version=InventoryLot.version + 1,
             last_movement_at=now,
         )
@@ -459,7 +474,7 @@ def _restore_allocation_quantity(
         db,
         lot=lot,
         movement_type="reverse_consume",
-        quantity=quantity,
+        quantity=physical_quantity,
         before=before,
         operator_id=operator_id,
         reason=reason,
@@ -552,6 +567,10 @@ def restore_unordered_finished_receipt_shortage(
     )
     if shortage <= 0:
         return
+    try:
+        shortage = item_physical_quantity(delivery_item, shortage)
+    except QuantityContractError as error:
+        raise WarehouseInventoryError(str(error), 409) from error
     allocations = db.scalars(
         select(UnorderedFinishedDeliveryAllocation)
         .where(
@@ -632,7 +651,15 @@ def reconsume_unordered_finished_receipt_returns(
             delivery_item=delivery_item,
             allocation=allocation,
         )
-        quantity = int(reversal.reversal_quantity)
+        allocation_quantity = int(reversal.reversal_quantity)
+        restored_movement = db.get(InventoryMovement, reversal.inventory_movement_id)
+        if (restored_movement is None or restored_movement.movement_type != 'reverse_consume'
+                or restored_movement.inventory_lot_id != lot.id
+                or restored_movement.related_delivery_id != delivery.id
+                or restored_movement.quantity != corrected_allocation_physical_quantity(
+                    db, allocation, allocation_quantity)):
+            raise WarehouseInventoryError('回单实物冲回流水不一致，禁止再次扣库', 409)
+        quantity = int(restored_movement.quantity)
         later_consume = db.scalar(
             select(InventoryMovement.id)
             .where(
@@ -702,7 +729,7 @@ def reconsume_unordered_finished_receipt_returns(
             operator_id=operator_id,
         )
         allocation.restored_quantity = max(
-            int(allocation.restored_quantity or 0) - quantity,
+            int(allocation.restored_quantity or 0) - allocation_quantity,
             0,
         )
         allocation.status = (

@@ -133,6 +133,7 @@ def prepare_external_stock_purchase(
     product: Product,
     finished_quantity: int,
     purchase_quantity_override: Any | None = None,
+    physical_contract: dict | None = None,
 ) -> dict[str, Any]:
     if product.supply_mode != "external_purchase":
         raise ExternalPurchaseContractError("当前常用箱不是纯外购产品")
@@ -168,6 +169,13 @@ def prepare_external_stock_purchase(
         product.external_packaging_default_purchase_quantity_basis,
         label="供应商采购数量基数",
     )
+    if physical_contract is not None:
+        if (physical_contract['product_id'] != product.id
+                or physical_contract['customer_id'] != product.customer_id
+                or physical_contract['physical_unit'] != purchase_unit):
+            raise ExternalPurchaseContractError('补库实物单位或产品身份已变化，请先核对草稿', status_code=409)
+        order_basis = Decimal(physical_contract['customer_basis'])
+        purchase_basis = Decimal(physical_contract['physical_basis'])
     recommended_purchase_quantity = (
         Decimal(finished_quantity) * purchase_basis / order_basis
     )
@@ -191,7 +199,7 @@ def prepare_external_stock_purchase(
             rounding=ROUND_FLOOR
         )
     )
-    if converted_finished_quantity <= 0:
+    if converted_finished_quantity <= 0 and physical_contract is None:
         raise ExternalPurchaseContractError(
             "供应商采购数量按常用箱比例不足 1 个成品，请增加采购数量"
         )
@@ -440,6 +448,13 @@ def create_external_stock_replenishment_purchase(
     order.items = [item]
     db.add(order)
     db.flush()
+
+    return _post_external_stock_purchase(db, order=order, item=item, prepared=prepared,
+        idempotency_key=idempotency_key, fingerprint=fingerprint, user=user)
+
+
+def _post_external_stock_purchase(db, *, order, item, prepared, idempotency_key, fingerprint, user):
+    product = prepared['product']
 
     batch = ExternalPackagingPurchaseBatch(
         sales_order_id=None,

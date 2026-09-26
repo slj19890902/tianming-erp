@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
 from pathlib import Path
+from uuid import uuid4
 from threading import Barrier
 
 import pytest
@@ -513,6 +514,25 @@ def _login(client: TestClient) -> None:
     assert response.status_code == 200
 
 
+def _confirm_replenishment_purchase(client, order):
+    """Exercise the current draft -> supplier purchase -> receipt contract."""
+    item_ids = {item['id'] for item in order['items']}
+    pending = client.get('/api/requisition/pending')
+    assert pending.status_code == 200, pending.text
+    rows = [row for row in pending.json()['items'] if row.get('stock_replenishment_item_id') in item_ids]
+    assert {row['stock_replenishment_item_id'] for row in rows} == item_ids
+    groups = {}
+    for row in rows:
+        groups.setdefault(row['supplier_name'], []).append({
+            'stock_replenishment_item_id': row['stock_replenishment_item_id'],
+            'source_fingerprint': row['source_fingerprint']})
+    purchased = client.post('/api/requisition/supplier-orders/from-pending-selection', json={
+        'supplier_groups': [{'supplier_name': name, 'request_key': str(uuid4()), 'stock_sources': sources}
+                            for name, sources in groups.items()]})
+    assert purchased.status_code == 201, purchased.text
+    return purchased.json()
+
+
 def _semi_policy_payload() -> dict:
     return {
         "policy_name": "天华共享纸板 1865x830",
@@ -633,6 +653,7 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
         ignored_unplaced_item = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "customer_request",
                 "stock_now": False,
                 "items": [
@@ -678,6 +699,7 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
         ignored_v11_item = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "customer_request",
                 "stock_now": False,
                 "items": [
@@ -713,6 +735,7 @@ def test_historical_replenishment_requires_priced_receipt_instead_of_direct_stoc
         retired_create = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "manual_history",
                 "supplier_name": "佳丰",
                 "customer_id": 1,
@@ -738,6 +761,7 @@ def test_historical_replenishment_requires_priced_receipt_instead_of_direct_stoc
         direct_stock = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "customer_request",
                 "supplier_name": "佳丰",
                 "customer_id": 1,
@@ -869,6 +893,7 @@ def test_stock_warning_finished_replenishment_cannot_write_inventory_directly(
         order_response = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "stock_warning",
                 "stock_now": True,
                 "items": [
@@ -918,6 +943,7 @@ def test_common_box_and_material_master_prefill_traceable_semi_stock(
         created = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "customer_request",
                 "supplier_name": "佳丰",
                 "stock_now": False,
@@ -950,11 +976,12 @@ def test_common_box_and_material_master_prefill_traceable_semi_stock(
         assert item["reference_product_id"] == 1
         assert item["material_id"] == 1
         assert item["material_code"] == "A416D"
-        assert created_payload["status"] == "confirmed"
+        assert created_payload["status"] == "draft"
         stocked = client.post(
             f"/api/requisition/stock-replenishment/orders/{created_payload['id']}/stock"
         )
         assert stocked.status_code == 409, stocked.text
+        _confirm_replenishment_purchase(client, created_payload)
         pending = client.get("/api/incoming/pending")
         assert pending.status_code == 200, pending.text
         received = client.put(
@@ -984,6 +1011,7 @@ def test_non_liner_replenishment_cannot_create_finished_inventory_directly(
         response = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "customer_request",
                 "stock_now": False,
                 "items": [
@@ -1013,11 +1041,13 @@ def test_liner_replenishment_receives_directly_into_floor3_temporary_turnover(
         )
         assert products.status_code == 200, products.text
         liner = products.json()["items"][0]
+
         assert liner["box_type_code"] == "liner"
 
         created = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "customer_request",
                 "supplier_name": "佳丰",
                 "stock_now": False,
@@ -1039,6 +1069,7 @@ def test_liner_replenishment_receives_directly_into_floor3_temporary_turnover(
         # The already-created internal replenishment line is the stable routing
         # fact. A later common-box master change must not divert it into the
         # external-packaging receipt path.
+        _confirm_replenishment_purchase(client, created.json())
         from app.models.product import Product
 
         with session_factory() as session:
@@ -1244,6 +1275,21 @@ def test_liner_stock_warning_can_create_draft_and_receive_as_finished(
         assert products.status_code == 200, products.text
         liner = products.json()["items"][0]
 
+        policy_response = client.post('/api/requisition/stock-policies', json={
+            'policy_name': '衬板待补覆盖', 'target_inventory_type': 'finished',
+            'product_id': liner['id'], 'warning_quantity': 5, 'target_quantity': 9,
+            'default_location_id': 1,
+        })
+        assert policy_response.status_code == 201, policy_response.text
+        policy_id = policy_response.json()['id']
+
+        def assert_no_repeat_requisition():
+            response = client.get('/api/requisition/stock-policies')
+            assert response.status_code == 200, response.text
+            policy = next(row for row in response.json()['items'] if row['id'] == policy_id)
+            assert policy['suggested_new_requisition_finished_quantity'] == 0
+            assert policy['suggested_new_requisition_sheet_quantity'] == 0
+
         created = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
@@ -1266,6 +1312,25 @@ def test_liner_stock_warning_can_create_draft_and_receive_as_finished(
         assert item["target_inventory_type"] == "finished"
         assert item["product_id"] == liner["id"]
 
+        from app.services.stock_replenishment import customer_board_preparation_coverage
+        from app.models.product import Product
+        with session_factory() as session:
+            coverage = customer_board_preparation_coverage(session, product=session.get(Product, liner['id']))
+            from app.models.stock_replenishment import StockReplenishmentOrderItem
+            stored = session.get(StockReplenishmentOrderItem, item['id'])
+            assert coverage['pending_board_preparation_auto_cover_capacity'] == 9
+            stored.order.status = 'voided'
+            session.flush()
+            assert customer_board_preparation_coverage(session, product=session.get(Product, liner['id']))['pending_board_preparation_auto_cover_capacity'] == 0
+            session.rollback()
+            assert coverage['incoming_board_preparation_auto_cover_capacity'] == 0
+        assert_no_repeat_requisition()
+        _confirm_replenishment_purchase(client, created.json())
+        with session_factory() as session:
+            coverage = customer_board_preparation_coverage(session, product=session.get(Product, liner['id']))
+            assert coverage['pending_board_preparation_auto_cover_capacity'] == 0
+            assert coverage['incoming_board_preparation_auto_cover_capacity'] == 9
+        assert_no_repeat_requisition()
         received = client.put(
             f"/api/incoming/receive/sr{item['id']}",
             json={
@@ -1274,6 +1339,11 @@ def test_liner_stock_warning_can_create_draft_and_receive_as_finished(
             },
         )
         assert received.status_code == 200, received.text
+
+        with session_factory() as session:
+            coverage = customer_board_preparation_coverage(session, product=session.get(Product, liner['id']))
+            assert coverage['pending_board_preparation_auto_cover_capacity'] == 0
+            assert coverage['incoming_board_preparation_auto_cover_capacity'] == 0
 
     from app.models.warehouse_inventory import (
         FinishedGoodsInventoryDetail,
@@ -1330,6 +1400,7 @@ def test_liner_replenishment_skips_occupied_f34_anchor_in_order(
         created = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "customer_request",
                 "supplier_name": "佳丰",
                 "stock_now": False,
@@ -1343,6 +1414,8 @@ def test_liner_replenishment_skips_occupied_f34_anchor_in_order(
                 ],
             },
         )
+        assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item = created.json()["items"][0]
         received = client.put(
             f"/api/incoming/receive/sr{item['id']}",
@@ -1403,6 +1476,7 @@ def test_liner_replenishment_uses_f12_after_all_f34_anchors_are_occupied(
         created = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "customer_request",
                 "supplier_name": "佳丰",
                 "stock_now": False,
@@ -1416,6 +1490,8 @@ def test_liner_replenishment_uses_f12_after_all_f34_anchors_are_occupied(
                 ],
             },
         )
+        assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item = created.json()["items"][0]
         received = client.put(
             f"/api/incoming/receive/sr{item['id']}",
@@ -1481,6 +1557,7 @@ def test_liner_replenishment_fails_atomically_when_f34_and_f12_are_full(
         created = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "customer_request",
                 "supplier_name": "佳丰",
                 "stock_now": False,
@@ -1494,6 +1571,8 @@ def test_liner_replenishment_fails_atomically_when_f34_and_f12_are_full(
                 ],
             },
         )
+        assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item = created.json()["items"][0]
         received = client.put(
             f"/api/incoming/receive/sr{item['id']}",
@@ -1534,13 +1613,15 @@ def test_replenishment_rejects_incomplete_or_mismatched_crease(
         _login(client)
         incomplete = client.post(
             "/api/requisition/stock-replenishment/orders",
-            json={"source_type": "customer_request", "stock_now": False, "items": [base]},
+            json={"idempotency_key": str(uuid4()),
+                  "source_type": "customer_request", "stock_now": False, "items": [base]},
         )
         assert incomplete.status_code == 422
 
         mismatched = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "customer_request",
                 "stock_now": False,
                 "items": [{**base, "crease_right_mm": 330}],
@@ -1559,6 +1640,7 @@ def test_replenishment_order_can_save_multiple_lines_before_stocking(
         response = client.post(
             "/api/requisition/stock-replenishment/orders",
             json={
+                "idempotency_key": str(uuid4()),
                 "source_type": "customer_request",
                 "supplier_name": "佳丰",
                 "stock_now": False,
@@ -1592,22 +1674,26 @@ def test_replenishment_order_can_save_multiple_lines_before_stocking(
         )
         assert response.status_code == 201, response.text
         order = response.json()
-        assert order["status"] == "confirmed"
+        assert order["status"] == "draft"
         assert order["total_quantity"] == 80
         assert len(order["items"]) == 2
         printable = client.get(
             f"/api/requisition/stock-replenishment/orders/{order['id']}/print"
         )
-        assert printable.status_code == 200
-        assert len(printable.json()["items"]) == 2
+        assert printable.status_code == 409
+        purchase = _confirm_replenishment_purchase(client, order)['created_orders'][0]
+        printed = client.get(purchase['pdf_url'])
+        assert printed.status_code == 200 and printed.content.startswith(b'%PDF'), printed.text
+        detail = client.get(f"/api/requisition/supplier-orders/{purchase['supplier_order_id']}")
+        assert detail.status_code == 200 and len(detail.json()['items']) == 2
         reported = client.get("/api/requisition/reported-documents")
         assert reported.status_code == 200
         row = next(
             item
             for item in reported.json()["items"]
-            if item["document_number"] == order["order_number"]
+            if item["source_type"] == "supplier_order"
         )
-        assert row["source_type"] == "stock_replenishment"
+        assert row["source_type"] == "supplier_order"
         assert row["incoming_status"] == "待入库"
         assert row["requisition_qty"] == 80
 
@@ -1686,6 +1772,8 @@ def test_manual_replenishment_unique_conflict_returns_concurrent_draft(
         )
         if has_replenishment and not injected:
             injected = True
+            contender = next(row for row in request_session.new if isinstance(row, StockReplenishmentOrder))
+            from app.models.stock_replenishment import StockReplenishmentOrderItem
             with session_factory() as concurrent:
                 concurrent.add(
                     StockReplenishmentOrder(
@@ -1693,9 +1781,14 @@ def test_manual_replenishment_unique_conflict_returns_concurrent_draft(
                         supplier_name="苏州佳丰",
                         customer_id=1,
                         source_type="customer_request",
-                        status="confirmed",
+                        status="draft",
+                        request_hash=contender.request_hash,
                         created_by=1,
-                        confirmed_by=1,
+                        items=[StockReplenishmentOrderItem(**{
+                            column.name: getattr(item, column.name)
+                            for column in StockReplenishmentOrderItem.__table__.columns
+                            if column.name not in ('id', 'replenishment_order_id') and getattr(item, column.name) is not None
+                        }) for item in contender.items],
                     )
                 )
                 concurrent.commit()
@@ -1756,6 +1849,7 @@ def test_manual_replenishment_unique_conflict_returns_concurrent_draft(
 
 def _customer_replenishment_payload(quantity: int = 30) -> dict:
     return {
+        "idempotency_key": str(uuid4()),
         "source_type": "customer_request",
         "supplier_name": "苏州佳丰",
         "customer_id": 1,
@@ -1836,6 +1930,7 @@ def test_replenishment_auto_stages_material_without_location_choice(
             json=payload,
         )
         assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item_id = created.json()["items"][0]["id"]
 
         pending = client.get("/api/incoming/pending")
@@ -1904,6 +1999,7 @@ def test_replenishment_missing_price_rolls_back_every_fact_and_same_key_can_retr
             json=_customer_replenishment_payload(quantity=11),
         )
         assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item_id = created.json()["items"][0]["id"]
 
         with session_factory() as session:
@@ -1998,6 +2094,7 @@ def test_replenishment_rejects_floor3_left_marker_until_map_is_published(
             json=_customer_replenishment_payload(quantity=10),
         )
         assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item_id = created.json()["items"][0]["id"]
         received = client.put(
             f"/api/incoming/receive/sr{item_id}",
@@ -2055,6 +2152,7 @@ def test_replenishment_does_not_broaden_transition_to_other_unplaced_markers(
             json=_customer_replenishment_payload(quantity=10),
         )
         assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item_id = created.json()["items"][0]["id"]
         received = client.put(
             f"/api/incoming/receive/sr{item_id}",
@@ -2161,6 +2259,7 @@ def test_replenishment_receive_fails_closed_without_floor3_left_staging(
             json=_customer_replenishment_payload(quantity=10),
         )
         assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item_id = created.json()["items"][0]["id"]
         received = client.put(
             f"/api/incoming/receive/sr{item_id}",
@@ -2301,6 +2400,7 @@ def test_replenishment_never_falls_back_to_published_floor1_raw_material_area(
             json=_customer_replenishment_payload(quantity=10),
         )
         assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item_id = created.json()["items"][0]["id"]
         received = client.put(
             f"/api/incoming/receive/sr{item_id}",
@@ -2420,6 +2520,7 @@ def test_replenishment_uses_current_published_floor3_raw_material_rack(
             json=_customer_replenishment_payload(quantity=10),
         )
         assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item_id = created.json()["items"][0]["id"]
         received = client.put(
             f"/api/incoming/receive/sr{item_id}",
@@ -2567,6 +2668,7 @@ def test_replenishment_does_not_repair_or_use_floor1_legacy_ground_plan(
             json=_customer_replenishment_payload(quantity=10),
         )
         assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item_id = created.json()["items"][0]["id"]
         received = client.put(
             f"/api/incoming/receive/sr{item_id}",
@@ -2632,6 +2734,7 @@ def test_replenishment_does_not_use_raw_area_without_published_ground_slot(
             json=_customer_replenishment_payload(quantity=10),
         )
         assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         item_id = created.json()["items"][0]["id"]
         received = client.put(
             f"/api/incoming/receive/sr{item_id}",
@@ -2667,7 +2770,8 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
             json=_customer_replenishment_payload(),
         )
         assert created.status_code == 201, created.text
-        order = created.json()
+        purchase = _confirm_replenishment_purchase(client, created.json())['created_orders'][0]
+        order = next(row for row in client.get('/api/requisition/stock-replenishment/orders').json()['items'] if row['id'] == created.json()['id'])
         item = order["items"][0]
         expected_requisition_date = (
             datetime.fromisoformat(order["confirmed_at"].replace("Z", "+00:00"))
@@ -2680,22 +2784,22 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         reported_row = next(
             row
             for row in reported.json()["items"]
-            if row["document_number"] == order["order_number"]
+            if row["document_number"] == purchase['supplier_order_number']
         )
         assert reported_row["incoming_status"] == "待入库"
-        assert reported_row["can_void"] is True
+        assert reported_row["source_type"] == "supplier_order"
         reported_items = client.get(
             "/api/requisition/reported-items",
-            params={"source_type": "stock_replenishment", "status": "active"},
+            params={"source_type": "supplier_order", "status": "active"},
         )
         assert reported_items.status_code == 200, reported_items.text
         reported_item = next(
             row
             for row in reported_items.json()["items"]
-            if row["document_number"] == order["order_number"]
+            if row["document_number"] == purchase['supplier_order_number']
         )
         assert reported_item["status"] == "active"
-        assert reported_item["stock_replenishment_can_void"] is True
+        assert reported_item["can_view_supplier_order"] is True
 
         pending = client.get("/api/incoming/pending")
         assert pending.status_code == 200, pending.text
@@ -2750,17 +2854,17 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         after_row = next(
             row
             for row in after_reported
-            if row["document_number"] == order["order_number"]
+            if row["document_number"] == purchase['supplier_order_number']
         )
         assert after_row["incoming_status"] == "已入库"
-        assert after_row["can_void"] is False
+        assert after_row["source_type"] == "supplier_order"
         received_reported_items = client.get(
             "/api/requisition/reported-items",
-            params={"source_type": "stock_replenishment", "status": "active"},
+            params={"source_type": "supplier_order", "status": "active"},
         )
         assert received_reported_items.status_code == 200
         assert any(
-            row["document_number"] == order["order_number"]
+            row["document_number"] == purchase['supplier_order_number']
             and row["status"] == "active"
             and row["stock_replenishment_can_void"] is False
             for row in received_reported_items.json()["items"]
@@ -2783,8 +2887,13 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
             json=_customer_replenishment_payload(quantity=20),
         )
         assert second.status_code == 201, second.text
+        second_purchase = _confirm_replenishment_purchase(client, second.json())['created_orders'][0]
         second_order = second.json()
         second_item_id = second_order["items"][0]["id"]
+        blocked_source_void = client.put(f"/api/requisition/stock-replenishment/orders/{second_order['id']}/void")
+        assert blocked_source_void.status_code == 409
+        purchase_void = client.put(f"/api/requisition/supplier-orders/{second_purchase['supplier_order_id']}/void")
+        assert purchase_void.status_code == 200, purchase_void.text
         voided = client.put(
             f"/api/requisition/stock-replenishment/orders/{second_order['id']}/void"
         )
@@ -2792,11 +2901,11 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         assert voided.json()["status"] == "voided"
         voided_reported_items = client.get(
             "/api/requisition/reported-items",
-            params={"source_type": "stock_replenishment", "status": "voided"},
+            params={"source_type": "supplier_order", "status": "voided"},
         )
         assert voided_reported_items.status_code == 200
         assert any(
-            row["document_number"] == second_order["order_number"]
+            row["document_number"] == second_purchase['supplier_order_number']
             and row["status"] == "voided"
             and row["stock_replenishment_can_void"] is False
             for row in voided_reported_items.json()["items"]
@@ -2847,6 +2956,48 @@ def test_replenishment_stays_reported_routes_to_incoming_and_voids_only_before_r
         )
 
 
+@pytest.mark.parametrize("accept_short", [False, True])
+def test_unified_stock_purchase_reported_receipt_progress_and_reversal_gate(
+    stock_replenishment_app, accept_short,
+) -> None:
+    app, _ = stock_replenishment_app
+    with TestClient(app) as client:
+        _login(client)
+        created = client.post('/api/requisition/stock-replenishment/orders',
+                              json=_customer_replenishment_payload(quantity=30))
+        assert created.status_code == 201, created.text
+        order = created.json()
+        purchase = _confirm_replenishment_purchase(client, order)['created_orders'][0]
+
+        def reported_status():
+            response = client.get('/api/requisition/reported-documents')
+            assert response.status_code == 200, response.text
+            return next(row['incoming_status'] for row in response.json()['items']
+                        if row['document_number'] == purchase['supplier_order_number'])
+
+        assert reported_status() == '待入库'
+        received = client.put(f"/api/incoming/receive/sr{order['items'][0]['id']}",
+                              json={'received_quantity': 10, 'resolution_action': 'await_supplier',
+                                    'idempotency_key': str(uuid4())})
+        assert received.status_code == 200, received.text
+        assert reported_status() == '部分入库'
+        receipt_ids = [received.json()['receipt_item_id']]
+        if accept_short:
+            closed = client.put(f'/api/incoming/receipt-items/{receipt_ids[0]}/accept-short', json={})
+            assert closed.status_code == 200, closed.text
+        else:
+            rest = client.put(f"/api/incoming/receive/sr{order['items'][0]['id']}",
+                              json={'received_quantity': 20, 'idempotency_key': str(uuid4())})
+            assert rest.status_code == 200, rest.text
+            receipt_ids.append(rest.json()['receipt_item_id'])
+        assert reported_status() == '已入库'
+        for receipt_id in reversed(receipt_ids):
+            reverted = client.put(f'/api/incoming/receipt-items/{receipt_id}/revert', json={})
+            assert reverted.status_code == 409, reverted.text
+            assert '受控库存调整' in reverted.json()['detail']
+        assert reported_status() == '已入库'
+
+
 def test_repeated_replenishment_void_is_idempotent_with_one_audit_log(
     stock_replenishment_app,
 ) -> None:
@@ -2895,6 +3046,7 @@ def test_concurrent_voids_and_receipt_leave_one_legal_final_state(
             json=_customer_replenishment_payload(quantity=20),
         )
         assert created.status_code == 201, created.text
+        _confirm_replenishment_purchase(client, created.json())
         order = created.json()
         item_id = order["items"][0]["id"]
 

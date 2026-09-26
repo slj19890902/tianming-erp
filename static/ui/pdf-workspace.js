@@ -46,7 +46,7 @@
    pdfMaterialCandidates(item,component,kind){return this.semiStockCandidates(item,component).filter(r=>this.pdfMaterialKind(r)===kind);},
    pdfCandidateExact(candidate){return !(candidate.signature_differences||[]).length && !(candidate.warning_codes||[]).length && candidate.source!=='manual' && !this.inventoryCandidateNeedsManualConfirmation(candidate);},
    pdfMaterialButton(item,kind){const rows=this.inventoryComponents(item).flatMap(c=>this.pdfMaterialCandidates(item,c,kind));return rows.some(c=>this.pdfCandidateExact(c))?{tone:'success',text:'完全符合'}:rows.length?{tone:'warning',text:'需核对适配'}:{tone:'',text:'无可用'};},
-   pdfFinishedUse(item,candidate){return (item._inventory?.finished?.allocations||[]).filter(a=>a.candidate.lot_id===candidate.lot_id).reduce((sum,a)=>sum+Number(a.requested_qty||0),0);},
+   pdfFinishedUse(item,candidate){return (item._inventory?.finished?.allocations||[]).filter(a=>a.candidate.lot_id===candidate.lot_id).reduce((sum,a)=>sum+Number(a.stock_quantity??a.requested_qty??0),0);},
    pdfCandidateCrease(c){const type=c.crease_type || ({raw_board:'毛片',net_sheet:'净料',creased_sheet:'压线'})[c.sheet_type] || '待核对';return type==='压线'?type+' '+[c.crease_left_mm,c.crease_middle_mm,c.crease_right_mm].map(v=>v??'?').join('+'):type;},
   }
  });}

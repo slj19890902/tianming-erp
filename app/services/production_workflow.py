@@ -1276,11 +1276,13 @@ def remaining_finished_order_credit_by_item_ids(
     )
     if not normalized_ids:
         return {}
-    return {
-        int(order_item_id): max(int(quantity or 0), 0)
-        for order_item_id, quantity in db.execute(
+    from fractions import Fraction
+
+    credits: dict[int, Fraction] = {}
+    for order_item_id, denominator, quantity in db.execute(
             select(
                 InventoryReservation.order_item_id,
+                InventoryReservation.requirement_quantity_denominator,
                 func.coalesce(
                     func.sum(remaining_finished_order_credit_expression()),
                     0,
@@ -1292,9 +1294,17 @@ def remaining_finished_order_credit_by_item_ids(
                 InventoryReservation.sales_order_item_bom_component_id.is_(None),
                 InventoryReservation.status != "cancelled",
             )
-            .group_by(InventoryReservation.order_item_id)
-        ).all()
-    }
+            .group_by(
+                InventoryReservation.order_item_id,
+                InventoryReservation.requirement_quantity_denominator,
+            )
+        ).all():
+        item_id = int(order_item_id)
+        credits[item_id] = credits.get(item_id, Fraction(0)) + Fraction(
+            int(quantity or 0), int(denominator)
+        )
+    # Sum exact fractions across source lots before counting complete customer units.
+    return {item_id: int(quantity) for item_id, quantity in credits.items()}
 
 
 def receipt_auto_deliverable_quantity_by_item_ids(
@@ -2916,6 +2926,8 @@ def _reserve_component_completion_lot(
     reserve_quantity: int | None = None,
     reservation_number_prefix: str = "CPRS",
     movement_reason: str = "复合 BOM 组件生产完工自动预占",
+    credited_quantity: int | None = None,
+    requirement_quantity_denominator: int = 1,
 ) -> InventoryReservation:
     """Reserve a just-created completion/assembly/external lot for its BOM snapshot.
 
@@ -2934,6 +2946,8 @@ def _reserve_component_completion_lot(
             existing.order_item_id != item.id
             or existing.inventory_lot_id != lot.id
             or existing.sales_order_item_bom_component_id != snapshot_id
+            or existing.requirement_quantity_denominator != requirement_quantity_denominator
+            or (credited_quantity is not None and existing.credited_requirement_quantity != credited_quantity)
         ):
             raise ProductionWorkflowError("组件完工库存预占幂等标识冲突", 409)
         return existing
@@ -2974,7 +2988,8 @@ def _reserve_component_completion_lot(
         order_item_id=item.id,
         sales_order_item_bom_component_id=snapshot_id,
         reserved_stock_quantity=quantity,
-        credited_requirement_quantity=quantity,
+        credited_requirement_quantity=quantity if credited_quantity is None else credited_quantity,
+        requirement_quantity_denominator=requirement_quantity_denominator,
         yield_factor=1,
         status="active",
         warning_codes="[]",

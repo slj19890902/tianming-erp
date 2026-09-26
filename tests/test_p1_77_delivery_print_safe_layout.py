@@ -55,9 +55,9 @@ def test_name_and_spec_are_real_columns_with_larger_detail_text() -> None:
     assert "<th>产品名称</th>" in header
     assert "<th>规格（mm）</th>" in header
     assert "产品名称 / 规格" not in header
-    assert "font-size: 13px" in _css("table")
-    assert "font-size: 12px" in _css(".product-code")
-    assert "font-size: 12px" in _css(".product-name.long-name")
+    assert "font-size: calc(13px * var(--layout-font-scale, 1))" in _css("table")
+    assert "font-size: calc(12px * var(--layout-font-scale, 1))" in _css(".product-code")
+    assert "font-size: calc(12px * var(--layout-font-scale, 1))" in _css(".product-name.long-name")
     assert 'class="product-specification"' in PAGE
     assert 'class="product-spec"' not in PAGE
     assert '<col style="width:24%">' in PAGE

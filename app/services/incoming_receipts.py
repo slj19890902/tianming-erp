@@ -196,6 +196,10 @@ def _stock_target(
     if row is None:
         raise IncomingReceiptError("补库来料明细不存在", 404)
     item, order = row
+    if not allow_closed and order.status not in {"confirmed", "partially_stocked"}:
+        raise IncomingReceiptError(
+            "该补库明细当前不可收货，可能已入库或已作废", 409
+        )
     if not allow_closed and order.request_hash:
         from app.services.unified_procurement import active_stock_purchase_clause
         active_purchase = db.scalar(select(StockReplenishmentOrderItem.id)
@@ -203,10 +207,6 @@ def _stock_target(
             .where(StockReplenishmentOrderItem.id == item.id, active_stock_purchase_clause()))
         if active_purchase is None:
             raise IncomingReceiptError("该补库需求尚未生成有效采购单，不能收货", 409)
-    if not allow_closed and order.status not in {"confirmed", "partially_stocked"}:
-        raise IncomingReceiptError(
-            "该补库明细当前不可收货，可能已入库或已作废", 409
-        )
     if not allow_closed and int(item.stocked_quantity or 0) >= int(item.quantity or 0):
         raise IncomingReceiptError("该补库明细已经全部入库", 409)
     if claim_for_receipt and (

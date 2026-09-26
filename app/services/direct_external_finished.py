@@ -68,12 +68,17 @@ def conversions(db, normalized, *, customer_id):
 
 
 def post(db, *, purchase, receipt, customer_id, operator_id):
-    return _post_quantity(db, purchase=purchase, receipt=receipt, customer_id=customer_id,
-                          operator_id=operator_id, quantity=int(receipt.converted_finished_quantity))
+    from app.services.external_physical_receipt import received_pieces
+    from app.services.delivery_quantities import QuantityContractError
+    try:
+        return _post_quantity(db, purchase=purchase, receipt=receipt, customer_id=customer_id,
+                              operator_id=operator_id, quantity=received_pieces(receipt), physical_entry=True)
+    except QuantityContractError as error:
+        raise ExternalPurchaseContractError(str(error), status_code=409) from error
 
 
 def _post_quantity(db, *, purchase, receipt, customer_id, operator_id, quantity,
-                   location_id=None, layout_version=None):
+                   location_id=None, layout_version=None, physical_entry=False):
     from app.core.time_contract import beijing_today, utc_now_naive
     from app.services.production_workflow import _receipt_auto_finished_ground_target, _reserve_component_completion_lot
     from app.services.warehouse_inventory import manual_finished_in
@@ -84,7 +89,9 @@ def _post_quantity(db, *, purchase, receipt, customer_id, operator_id, quantity,
     from app.models.product import Product
     from app.services.finished_stock_identity import _document, FIELDS
     product = db.get(Product, item.product_id)
-    unit = product.unit or '只'
+    from app.services.delivery_quantities import order_basis, requirement_amount
+    quantity_basis = order_basis(item, customer_id) if physical_entry else None
+    unit = quantity_basis['customer_unit'] if quantity_basis else product.unit or '只'
     basis = _document(item.product_id, unit, item.snapshot_spec,
         item.snapshot_material, item.flute_type,
         {**{key:getattr(item, key, None) for key in FIELDS},
@@ -124,15 +131,26 @@ def _post_quantity(db, *, purchase, receipt, customer_id, operator_id, quantity,
         product_id=item.product_id, customer_id=customer_id,
         stock_unit=unit,
         frozen_specification=item.external_packaging_specification_json_snapshot), ensure_ascii=False)
+    if physical_entry:
+        from app.services.external_physical_receipt import freeze_purchase_piece_cost
+        freeze_purchase_piece_cost(lot, purchase=purchase, receipt=receipt,
+            customer_id=customer_id, product_id=item.product_id)
     credited = int(item.delivered_quantity or 0)
     for r in db.scalars(select(InventoryReservation).where(InventoryReservation.order_item_id == item.id,
             InventoryReservation.reservation_type == 'finished_order',
             InventoryReservation.sales_order_item_bom_component_id.is_(None), InventoryReservation.status != 'cancelled')):
-        credited += max(0, int(r.reserved_stock_quantity) - int(r.released_stock_quantity or 0) - int(r.consumed_stock_quantity or 0))
-    reserve = min(quantity, max(0, int(item.quantity) - credited))
+        credited += max(0, requirement_amount(r, 'credited_requirement_quantity')
+            - requirement_amount(r, 'released_requirement_quantity')
+            - requirement_amount(r, 'consumed_requirement_quantity'))
+    remaining = max(0, int(item.quantity) - credited)
+    reserve = min(quantity, int(remaining * Fraction(quantity_basis['physical_basis'], quantity_basis['customer_basis']))
+                  if quantity_basis else int(remaining))
     if reserve:
         _reserve_component_completion_lot(db, completion=receipt, order=order, item=item,
-            snapshot_id=None, lot=lot, operator_id=operator_id, reserve_quantity=reserve,
+            snapshot_id=None, lot=lot, operator_id=operator_id,
+            reserve_quantity=reserve,
+            credited_quantity=reserve * quantity_basis['customer_basis'] if quantity_basis else reserve,
+            requirement_quantity_denominator=quantity_basis['physical_basis'] if quantity_basis else 1,
             idempotency_key=f'direct-external-reserve:{receipt.id}', reservation_number_prefix='DER',
             movement_reason='外购成品订单预占')
     db.flush()
@@ -140,11 +158,41 @@ def _post_quantity(db, *, purchase, receipt, customer_id, operator_id, quantity,
 
 
 def managed(db, item):
-    """Only receipts posted by this path switch historical delivery accounting."""
+    """Use physical accounting for receipt-backed or explicitly verified adopted stock."""
     if item.supply_mode_snapshot != 'external_purchase':
         return False
-    return db.scalar(select(InventoryLot.id).join(ExternalPackagingReceiptItem,
+    if db.scalar(select(InventoryLot.id).join(ExternalPackagingReceiptItem,
         ExternalPackagingReceiptItem.id == InventoryLot.source_ref_id).join(ExternalPackagingPurchaseItem,
         ExternalPackagingPurchaseItem.id == ExternalPackagingReceiptItem.purchase_item_id
     ).where(InventoryLot.source_ref_type == SOURCE,
-        ExternalPackagingPurchaseItem.sales_order_item_id == item.id).limit(1)) is not None
+        ExternalPackagingPurchaseItem.sales_order_item_id == item.id).limit(1)) is not None:
+        return True
+    if not eligible(db, item):
+        return False
+    from app.services.delivery_quantities import order_basis, require_physical_stock, requirement_amount, QuantityContractError
+    order = db.get(Order, item.order_id)
+    if order is None:
+        return False
+    from sqlalchemy.orm import joinedload
+    reservations = list(db.execute(select(InventoryReservation, InventoryLot)
+        .outerjoin(InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id)
+        .options(joinedload(InventoryLot.finished_detail)).where(
+        InventoryReservation.order_item_id == item.id,
+        InventoryReservation.reservation_type == 'finished_order',
+        InventoryReservation.status != 'cancelled',
+        InventoryReservation.reserved_stock_quantity > InventoryReservation.released_stock_quantity)))
+    if not reservations:
+        return False
+    try:
+        basis = order_basis(item, order.customer_id)
+        for reservation, lot in reservations:
+            require_physical_stock(lot, basis, require_marker=True)
+            if (lot.inventory_type != 'finished' or lot.finished_detail.product_id != item.product_id
+                    or lot.finished_detail.is_general
+                    or lot.finished_detail.owner_customer_id != order.customer_id
+                    or requirement_amount(reservation, 'credited_requirement_quantity')
+                    != Fraction(reservation.reserved_stock_quantity * basis['customer_basis'], basis['physical_basis'])):
+                return False
+    except QuantityContractError:
+        return False
+    return True

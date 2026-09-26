@@ -15,6 +15,9 @@ from app.services.processed_sheet_matching import processed_match
 from app.services.sheet_measurement import crease_geometry
 
 from app.models.delivery import DeliveryItem
+from app.services.delivery_quantities import (
+    reservation_physical_quantity, allocation_physical_quantity, requirement_amount,
+)
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_bom import SalesOrderItemBomComponent
@@ -1673,19 +1676,19 @@ def finished_order_source_coverage(
     counted here.
     """
 
-    return sum(
-        int(reservation.consumed_stock_quantity or 0)
+    return int(sum(
+        requirement_amount(reservation, 'consumed_requirement_quantity')
         + max(
-            int(reservation.credited_requirement_quantity or 0)
-            - int(reservation.consumed_requirement_quantity or 0)
-            - int(reservation.released_requirement_quantity or 0),
+            requirement_amount(reservation, 'credited_requirement_quantity')
+            - requirement_amount(reservation, 'consumed_requirement_quantity')
+            - requirement_amount(reservation, 'released_requirement_quantity'),
             0,
         )
         for reservation in reservations
         if reservation.reservation_type == "finished_order"
         and reservation.sales_order_item_bom_component_id is None
         and reservation.status != "cancelled"
-    )
+    ))
 
 
 def active_semi_coverage_by_order_item(
@@ -1834,7 +1837,7 @@ def consume_delivery_item_inventory(
         )
     ).all()
     current_finished = sum(
-        int(reservation.consumed_stock_quantity or 0)
+        requirement_amount(reservation, 'consumed_requirement_quantity')
         for reservation in finished_reservations
     )
     # This dispatch allocator needs cumulative finished-source coverage, not
@@ -1848,9 +1851,9 @@ def consume_delivery_item_inventory(
         if remaining_finished <= 0:
             break
         available = (
-            int(reservation.reserved_stock_quantity)
-            - int(reservation.consumed_stock_quantity or 0)
-            - int(reservation.released_stock_quantity or 0)
+            requirement_amount(reservation, 'credited_requirement_quantity')
+            - requirement_amount(reservation, 'consumed_requirement_quantity')
+            - requirement_amount(reservation, 'released_requirement_quantity')
         )
         quantity = min(available, remaining_finished)
         if quantity <= 0:
@@ -1861,7 +1864,7 @@ def consume_delivery_item_inventory(
         consume_finished_reservation(
             db,
             reservation_id=reservation.id,
-            stock_quantity=quantity,
+            stock_quantity=reservation_physical_quantity(reservation, quantity),
             expected_version=lot.version,
             operator_id=operator_id,
             idempotency_key=f"{operation_key}-f-{reservation.id}",
@@ -1872,16 +1875,16 @@ def consume_delivery_item_inventory(
         raise WarehouseInventoryError("成品库存预占余额不足，无法完成发货", 409)
 
     target_surplus = max(target_delivered - ordered_quantity, 0)
-    current_surplus = int(
-        db.scalar(
-            select(func.coalesce(func.sum(InventoryReservation.consumed_stock_quantity), 0))
+    current_surplus = sum(
+        requirement_amount(row, 'consumed_requirement_quantity')
+        for row in db.scalars(
+            select(InventoryReservation)
             .where(
                 InventoryReservation.order_item_id == item.id,
                 InventoryReservation.reservation_type == "finished_surplus_delivery",
                 InventoryReservation.status != "cancelled",
             )
         )
-        or 0
     )
     remaining_surplus = max(target_surplus - current_surplus, 0)
     if remaining_surplus > 0:
@@ -1905,9 +1908,9 @@ def consume_delivery_item_inventory(
         if remaining_surplus <= 0:
             break
         available = (
-            int(reservation.reserved_stock_quantity)
-            - int(reservation.consumed_stock_quantity or 0)
-            - int(reservation.released_stock_quantity or 0)
+            requirement_amount(reservation, 'credited_requirement_quantity')
+            - requirement_amount(reservation, 'consumed_requirement_quantity')
+            - requirement_amount(reservation, 'released_requirement_quantity')
         )
         quantity = min(available, remaining_surplus)
         if quantity <= 0:
@@ -1918,7 +1921,7 @@ def consume_delivery_item_inventory(
         consume_finished_reservation(
             db,
             reservation_id=reservation.id,
-            stock_quantity=quantity,
+            stock_quantity=reservation_physical_quantity(reservation, quantity),
             expected_version=lot.version,
             operator_id=operator_id,
             idempotency_key=f"{operation_key}-o-{reservation.id}",
@@ -2065,7 +2068,7 @@ def reverse_delivery_item_inventory(
         )
     ).all()
     current_finished = sum(
-        int(reservation.consumed_stock_quantity or 0)
+        requirement_amount(reservation, 'consumed_requirement_quantity')
         for reservation in finished_reservations
     )
     # Keep cancellation symmetric with dispatch: delivered quantity can include
@@ -2083,8 +2086,8 @@ def reverse_delivery_item_inventory(
         if excess_finished <= 0:
             break
         active_stock = (
-            int(allocation.consumed_stock_quantity)
-            - int(allocation.reversed_stock_quantity or 0)
+            requirement_amount(allocation, 'credited_requirement_quantity')
+            - requirement_amount(allocation, 'reversed_requirement_quantity')
         )
         quantity = min(active_stock, excess_finished)
         if quantity <= 0:
@@ -2096,7 +2099,7 @@ def reverse_delivery_item_inventory(
         reverse_finished_consumption(
             db,
             reservation_id=reservation.id,
-            stock_quantity=quantity,
+            stock_quantity=allocation_physical_quantity(allocation, quantity),
             expected_version=lot.version,
             operator_id=operator_id,
             idempotency_key=f"{operation_key}-f-{allocation.id}",
@@ -2107,16 +2110,16 @@ def reverse_delivery_item_inventory(
         raise WarehouseInventoryError("成品送货消耗记录不足，无法取消发货", 409)
 
     target_surplus = max(target_delivered - ordered_quantity, 0)
-    current_surplus = int(
-        db.scalar(
-            select(func.coalesce(func.sum(InventoryReservation.consumed_stock_quantity), 0))
+    current_surplus = sum(
+        requirement_amount(row, 'consumed_requirement_quantity')
+        for row in db.scalars(
+            select(InventoryReservation)
             .where(
                 InventoryReservation.order_item_id == item.id,
                 InventoryReservation.reservation_type == "finished_surplus_delivery",
                 InventoryReservation.status != "cancelled",
             )
         )
-        or 0
     )
     excess_surplus = max(current_surplus - target_surplus, 0)
     for allocation in _active_delivery_allocations(
@@ -2128,8 +2131,8 @@ def reverse_delivery_item_inventory(
         if excess_surplus <= 0:
             break
         active_stock = (
-            int(allocation.consumed_stock_quantity)
-            - int(allocation.reversed_stock_quantity or 0)
+            requirement_amount(allocation, 'credited_requirement_quantity')
+            - requirement_amount(allocation, 'reversed_requirement_quantity')
         )
         quantity = min(active_stock, excess_surplus)
         if quantity <= 0:
@@ -2141,7 +2144,7 @@ def reverse_delivery_item_inventory(
         reverse_finished_consumption(
             db,
             reservation_id=reservation.id,
-            stock_quantity=quantity,
+            stock_quantity=allocation_physical_quantity(allocation, quantity),
             expected_version=lot.version,
             operator_id=operator_id,
             idempotency_key=f"{operation_key}-o-{allocation.id}",
@@ -2154,7 +2157,7 @@ def reverse_delivery_item_inventory(
         release_finished_surplus_delivery_reservation(
             db,
             reservation_id=reservation.id,
-            stock_quantity=quantity,
+            stock_quantity=allocation_physical_quantity(allocation, quantity),
             expected_version=int(refreshed_lot.version),
             operator_id=operator_id,
             idempotency_key=f"{operation_key}-o-release-{allocation.id}",

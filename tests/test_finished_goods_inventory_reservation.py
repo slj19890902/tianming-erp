@@ -69,6 +69,12 @@ def reservation_db(tmp_path: Path):
         )
         db.add_all([admin, customer, other_customer, supplier])
         db.flush()
+        from app.models.material import Material
+        material = Material(code='A416D', supplier_name=supplier.standard_name,
+            quote_price=Decimal('2.00'), price_unit='元/㎡', purchase_currency='CNY',
+            purchase_tax_included=True, layer_count=5, flute_type='BE', is_active=True)
+        db.add(material)
+        db.flush()
         product = Product(
             customer_id=customer.id,
             product_code="FG-P001",
@@ -80,6 +86,9 @@ def reservation_db(tmp_path: Path):
             height_mm=100,
             default_material_code="A416D",
             flute_type="BE",
+            material_id=material.id,
+            report_length_mm=800, report_width_mm=200,
+            base_report_length_mm=800, base_report_width_mm=200,
         )
         other_product = Product(
             customer_id=customer.id,
@@ -87,6 +96,9 @@ def reservation_db(tmp_path: Path):
             customer_material_code="FG-M002",
             product_name="其他产品",
             box_category="normal",
+            material_id=material.id,
+            report_length_mm=800, report_width_mm=200,
+            base_report_length_mm=800, base_report_width_mm=200,
         )
         location = WarehouseLocation(
             location_code="FG-01",

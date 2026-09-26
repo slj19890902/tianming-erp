@@ -379,6 +379,39 @@ def test_double_splice_deducts_odd_remaining_piece_before_rounding(tmp_path, mon
         assert service.stock_policy_dict(db, policy)["suggested_new_requisition_sheet_quantity"] == 281
 
 
+def test_pending_paperboard_draft_covers_odd_piece_without_becoming_inventory(tmp_path):
+    from app.models.product import Product
+    from app.models.user import User
+    from app.models.stock_replenishment import InventoryStockPolicy, StockReplenishmentOrder
+    from app.services.stock_replenishment import stock_policy_dict
+    from app.api.requisition import stock_policy_replenishment_draft, _build_replenishment_item, StockReplenishmentItemPayload
+    _engine, factory, ids = _factory(tmp_path)
+    with factory() as db:
+        product = db.get(Product, ids['product_a'])
+        product.pieces_per_box = 2
+        product.splice_mode = 'double'
+        product.default_cutting_mode = '一开一'
+        policy = db.get(InventoryStockPolicy, ids['policy_a'])
+        policy.target_quantity = 221
+        db.flush()
+        plan = stock_policy_replenishment_draft(policy.id, db, db.get(User, ids['admin']))
+        item = _build_replenishment_item(db,
+            StockReplenishmentItemPayload(**{**plan['items'][0], 'quantity': 1}), source_type='stock_warning')
+        order = StockReplenishmentOrder(order_number='SW-ODD-BOARD', request_hash='a' * 64,
+            supplier_name=plan['supplier_name'], customer_id=product.customer_id,
+            source_type='stock_warning', status='draft', items=[item])
+        db.add(order)
+        db.flush()
+        summary = stock_policy_dict(db, policy)
+        assert summary['available_quantity'] == 80
+        assert summary['incoming_board_preparation_sheet_quantity'] == 0
+        assert summary['pending_board_preparation_sheet_quantity'] == 1
+        assert summary['suggested_new_requisition_sheet_quantity'] == 281
+        order.status = 'voided'
+        db.flush()
+        assert stock_policy_dict(db, policy)['suggested_new_requisition_sheet_quantity'] == 282
+
+
 @pytest.mark.parametrize("pieces,yield_count,covered,expected", [(2,1,0,846),(2,4,1,212),(1,4,0,106)])
 def test_bom_child_demand_uses_child_pieces_and_actual_sheet_yield(monkeypatch, pieces, yield_count, covered, expected):
     from types import SimpleNamespace as N
@@ -449,6 +482,27 @@ def test_finished_stock_warning_uses_current_warehouse_total_and_valid_floor3(
         reserved_lot.quantity_reserved -= 1
         db.flush()
         assert stock_policy_dict(db, policy)["warning_triggered"] is False
+
+
+@pytest.mark.parametrize('threshold,active,expected', [
+    (79, True, False), (80, True, True), (81, True, True), (80, False, False),
+])
+def test_stock_warning_includes_exact_threshold_in_both_projections(tmp_path, threshold, active, expected):
+    from app.models.stock_replenishment import InventoryStockPolicy
+    from app.models.product import Product
+    from app.services.stock_replenishment import stock_policy_dict
+    from app.api.requisition import _finished_stock_policy_quick_summary
+    _engine, factory, ids = _factory(tmp_path)
+    with factory() as db:
+        policy = db.get(InventoryStockPolicy, ids['policy_a'])
+        product = db.get(Product, ids['product_a'])
+        policy.warning_quantity = threshold
+        policy.active = active
+        db.flush()
+        full = stock_policy_dict(db, policy)
+        quick = _finished_stock_policy_quick_summary(db, product=product, policy=policy)
+        assert full['available_quantity'] == quick['available_quantity'] == 80
+        assert full['warning_triggered'] is quick['warning_triggered'] is expected
 
 
 def test_finished_stock_warning_aggregates_same_customer_inventory_code(
@@ -926,6 +980,12 @@ def test_virtual_composite_stock_warning_drafts_required_bom_boards(
         )
         assert saved.status_code == 201, saved.text
         assert saved.json()["status"] == "draft"
+        with factory() as db:
+            pending_summary = stock_policy_dict(db, db.get(InventoryStockPolicy, policy_id))
+            assert pending_summary['pending_board_preparation_sheet_quantity'] == 875
+            assert pending_summary['incoming_board_preparation_sheet_quantity'] == 0
+            assert pending_summary['suggested_new_requisition_sheet_quantity'] == 0
+            assert pending_summary['replenishment_state'] == 'pending_requisition'
         selected_ids = {line['id'] for line in saved.json()['items']}
         sources = [row for row in client.get('/api/requisition/pending').json()['items']
                    if row.get('stock_replenishment_item_id') in selected_ids]
@@ -1802,6 +1862,8 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
             if row["order_item_id"] == order_item_id
         )
         assert task["status"] == "pending"
+        with factory() as db:
+            source_location_id = db.get(InventoryLot, stocked_item["inventory_lot"]["id"]).warehouse_location_id
         assert task["customer_board_preparation_sources"] == [
             {
                 "reservation_id": task["customer_board_preparation_sources"][0][
@@ -1813,6 +1875,18 @@ def test_warning_draft_prefills_customer_board_preparation_and_never_adds_finish
                 ],
                 "source_ref_type": "stock_replenishment_receipt",
                 "source_ref_id": received.json()["receipt_item_id"],
+                "location_id": source_location_id,
+                "warehouse_floor": 3,
+                "material_kind": "半成品 / 净片",
+                "recorded_processing": "未登记",
+                "sheet_type": "net_sheet",
+                "board_length_mm": 600,
+                "board_width_mm": 470,
+                "flute_type": "B",
+                "unit": "张",
+                "consumed_sheet_quantity": 0,
+                "lot_status": "active",
+                "has_cut_plan": False,
                     "location_code": "F3-RAW-001-UAT",
                     "location_name": "Floor 3 left raw-material staging",
                     "current_address_name": "Floor 3 left raw-material staging",
@@ -2276,7 +2350,7 @@ def test_frontend_exposes_read_only_alert_and_two_number_setup() -> None:
     assert "prompt(" not in late_finished_method
     draft_finished_method = source.split(
         "async confirmDraftLateFinishedInventory(source)"
-    )[1].split("async confirmDraftSemiInventory(option)")[0]
+    )[1].split("async confirmDraftSemiInventory(", 1)[0]
     assert "confirm(" not in draft_finished_method
     assert "prompt(" not in draft_finished_method
     assert "refreshSupplierRequisitionDraftAfterInventoryReservation()" in (

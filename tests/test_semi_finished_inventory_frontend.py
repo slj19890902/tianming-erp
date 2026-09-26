@@ -53,7 +53,8 @@ def test_quantity_input_debounces_inventory_candidate_refresh() -> None:
 def test_pending_requisition_explains_semi_deduction_and_purchase_shortage() -> None:
     assert "需求 / 客户备料 / 采购" in INDEX
     assert "客户备料已预占：{{ row.semi_finished_reserved_piece_qty || 0 }} 个" in INDEX
-    assert "仍需生产：{{ row.remaining_required_piece_qty || 0 }} 个" in INDEX
+    assert "仍需生产：{{ row.remaining_required_piece_qty || 0 }} {{ row.source_type==='stock_replenishment' ? '片' : '个' }}" in INDEX
+    assert "外购，无需生产" in INDEX
     assert "本次只需报：{{ row.requisition_qty || 0 }} 张" in INDEX
 
 
@@ -475,7 +476,7 @@ def test_pdf_direct_save_carries_the_same_reservation_plan() -> None:
     end = INDEX.index("openOrderEditor(group)", start)
     source = INDEX[start:end]
     assert "inventoryDecisionRequired(item)" in source
-    assert "client_line_id: item.client_line_id || createIdempotencyKey()" in source
+    assert "client_line_id: (item.client_line_id ||= createIdempotencyKey())" in source
     assert "reservation_plan: this.buildReservationPlan(item)" in source
 
 

@@ -88,6 +88,15 @@ from app.models.warehouse_inventory import (
     WarehouseLocation,
 )
 from app.services.order_number_display import display_order_number
+from app.services.delivery_quantities import (
+    QuantityContractError, customer_for as quantity_customer_for,
+    encode as encode_quantity_contract, for_item as quantity_contract_for_item,
+    decode as decode_quantity_contract,
+    product_basis as product_quantity_basis, available_customer_quantity,
+    require_physical_stock,
+    item_physical_quantity, physical_unit as delivery_physical_unit,
+    requirement_amount, requirement_projection, finished_pick_plan, covered_requirement_display,
+)
 from app.services.audit_log import append_audit_event
 from app.services.fulfillment_reminders import list_delivery_reminders
 from app.services.delivery_print_templates import (
@@ -949,8 +958,10 @@ def _validate_delivery_source_contract(
                 raise ValueError("同一库存批次不能在一张送货单中重复使用")
             seen_lots.add(allocation.inventory_lot_id)
             allocated += allocation.quantity
-        if allocated != line.delivered_quantity:
-            raise ValueError(f"第 {index} 条送货数量必须等于批次分配数量")
+        if line.delivered_quantity <= 0:
+            raise ValueError(f"第 {index} 条客户送货数量必须大于零")
+        # Conversion is validated against the server-side product/frozen
+        # contract in _collect_unordered_finished_lines, after identity checks.
     if source_mode == "mixed" and source_types != {"order", "unordered_finished"}:
         raise ValueError("混合送货必须同时包含订单待送和无订单成品库存")
 
@@ -1207,7 +1218,7 @@ def _pick_unordered_location_plan(
                 "specification": item.specification_snapshot,
                 "pick_quantity": quantity,
                 "requirement_quantity": quantity,
-                "unit": "个",
+                "unit": delivery_physical_unit(delivery_item),
                 "location_id": location["location_id"],
                 "location_code": allocation.warehouse_location_code_snapshot
                 or location["location_code"],
@@ -1464,12 +1475,16 @@ def _pick_item_location_plan(
         else None
     )
     planned_quantity = max(int(item.original_quantity or 0), 0)
+    quantity_contract = quantity_contract_for_item(delivery_item) if delivery_item is not None else None
+    customer_planned_quantity = (
+        quantity_contract['customer_quantity'] if quantity_contract else planned_quantity
+    )
     no_sources = (read_context is not None and not composite_hint
                   and order_item.id not in read_context['inventory_source_order_item_ids'])
     raw_sources = [] if no_sources else _inventory_sources_for_order_item(
         db,
         order_item=order_item,
-        planned_delivery_quantity=planned_quantity,
+        planned_delivery_quantity=customer_planned_quantity,
         delivery_item_id=item.delivery_item_id,
         dispatched=False,
         composite_hint=composite_hint,
@@ -1502,6 +1517,8 @@ def _pick_item_location_plan(
                    if order_item.supply_mode_snapshot == 'external_purchase'
                    and order_item.external_packaging_quantity_per_finished_unit_snapshot in (None, 1)
                    else None)
+    if quantity_contract:
+        parent_unit = quantity_contract['physical_unit']
 
     seen_reservations: set[int] = set()
     for source in raw_sources:
@@ -1519,7 +1536,8 @@ def _pick_item_location_plan(
             continue
         stock_quantity = max(int(source.get("quantity_to_pick_stock") or 0), 0)
         requirement_quantity = max(
-            int(source.get("quantity_to_pick_requirement") or 0),
+            (source.get("quantity_to_pick_requirement") or 0) if quantity_contract
+            else int(source.get("quantity_to_pick_requirement") or 0),
             0,
         )
         display_quantity = stock_quantity or requirement_quantity
@@ -1539,7 +1557,7 @@ def _pick_item_location_plan(
             if snapshot_id in graph_root_ids:
                 finished_covered += requirement_quantity
         elif source_type == "finished" or liner_direct:
-            finished_covered += requirement_quantity
+            finished_covered += stock_quantity if quantity_contract else requirement_quantity
         location = _pick_source_location(
             db,
             source=source,
@@ -1573,6 +1591,8 @@ def _pick_item_location_plan(
                 ),
                 "pick_quantity": display_quantity,
                 "requirement_quantity": requirement_quantity,
+                "requirement_numerator": source.get("requirement_numerator"),
+                "requirement_denominator": source.get("requirement_denominator"),
                 "unit": _pick_quantity_unit(component or {'unit': parent_unit}, liner_direct=liner_direct),
                 "location_id": None if is_direct else location["location_id"],
                 "location_code": None if is_direct else location["location_code"],
@@ -2973,10 +2993,8 @@ def _inventory_sources_for_order_item(
                 int(allocation.consumed_stock_quantity)
                 - int(allocation.reversed_stock_quantity or 0)
             )
-            credit = (
-                int(allocation.credited_requirement_quantity)
-                - int(allocation.reversed_requirement_quantity or 0)
-            )
+            credit = (requirement_amount(allocation, 'credited_requirement_quantity')
+                - requirement_amount(allocation, 'reversed_requirement_quantity'))
             previous_stock, previous_credit = allocated_by_reservation.get(
                 allocation.reservation_id, (0, 0)
             )
@@ -2997,47 +3015,23 @@ def _inventory_sources_for_order_item(
         )
         finished_coverage = finished_order_source_coverage(reservations)
         finished_target = min(target_order_delivered, finished_coverage)
-        finished_current = sum(
-            int(row.consumed_stock_quantity or 0)
-            for row in reservations
-            if row.reservation_type == "finished_order"
-        )
-        finished_need = max(finished_target - finished_current, 0)
-        for reservation in reservations:
-            available_stock = (
-                int(reservation.reserved_stock_quantity)
-                - int(reservation.consumed_stock_quantity or 0)
-                - int(reservation.released_stock_quantity or 0)
-            )
-            if reservation.reservation_type == "finished_order":
-                stock = min(available_stock, finished_need)
-                planned_stock[reservation.id] = (stock, stock)
-                finished_need -= stock
+        planned_stock.update(finished_pick_plan(reservations, finished_target))
 
         target_surplus = max(
             target_delivered - int(order_item.quantity or 0), 0
         )
         consumed_surplus = sum(
-            int(row.consumed_stock_quantity or 0)
+            requirement_amount(row, 'consumed_requirement_quantity')
             for row in reservations
             if row.reservation_type == "finished_surplus_delivery"
         )
         remaining_unreserved_surplus = max(
             target_surplus - consumed_surplus, 0
         )
-        for reservation in reservations:
-            if reservation.reservation_type != "finished_surplus_delivery":
-                continue
-            available_stock = (
-                int(reservation.reserved_stock_quantity)
-                - int(reservation.consumed_stock_quantity or 0)
-                - int(reservation.released_stock_quantity or 0)
-            )
-            stock = min(available_stock, remaining_unreserved_surplus)
-            if stock <= 0:
-                continue
-            planned_stock[reservation.id] = (stock, stock)
-            remaining_unreserved_surplus -= stock
+        surplus_plan = finished_pick_plan(reservations, target_surplus,
+            reservation_type='finished_surplus_delivery')
+        planned_stock.update(surplus_plan)
+        remaining_unreserved_surplus -= sum(credit for stock, credit in surplus_plan.values())
 
         semi_boxes = max(target_order_delivered - finished_coverage, 0)
         for requirement in requirements.values():
@@ -3170,13 +3164,9 @@ def _inventory_sources_for_order_item(
                     - int(reservation.released_stock_quantity or 0),
                     0,
                 ),
-                "covered_requirement_quantity": max(
-                    int(reservation.credited_requirement_quantity or 0)
-                    - int(reservation.released_requirement_quantity or 0),
-                    0,
-                ),
+                "covered_requirement_quantity": covered_requirement_display(reservation),
                 "quantity_to_pick_stock": pick_stock,
-                "quantity_to_pick_requirement": pick_credit,
+                **requirement_projection(pick_credit),
             }
         )
     if not dispatched and remaining_unreserved_surplus > 0:
@@ -3317,6 +3307,7 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
                     "current_product_fulfillment_mode"
                 ),
                 DeliveryItem.unit_snapshot,
+                DeliveryItem.quantity_contract_json,
                 OrderItem.snapshot_production_notes.label("production_notes"),
         )
         .outerjoin(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
@@ -4005,7 +3996,7 @@ def _delivery_list_standard_inventory_sources(
     reservations = [
         row
         for row in context["reservations_by_order_item"].get(order_item.id, [])
-        if row.reservation_type in {"finished_order", "semi_order"}
+        if row.reservation_type in {"finished_order", "finished_surplus_delivery", "semi_order"}
         and (
             row.reservation_type != "finished_order"
             or row.sales_order_item_bom_component_id is None
@@ -4034,9 +4025,8 @@ def _delivery_list_standard_inventory_sources(
         stock = int(allocation.consumed_stock_quantity or 0) - int(
             allocation.reversed_stock_quantity or 0
         )
-        credit = int(allocation.credited_requirement_quantity or 0) - int(
-            allocation.reversed_requirement_quantity or 0
-        )
+        credit = (requirement_amount(allocation, 'credited_requirement_quantity')
+            - requirement_amount(allocation, 'reversed_requirement_quantity'))
         previous_stock, previous_credit = allocated_by_reservation.get(
             int(allocation.reservation_id),
             (0, 0),
@@ -4058,22 +4048,12 @@ def _delivery_list_standard_inventory_sources(
             0,
         )
         finished_target = min(target_delivered, finished_coverage)
-        finished_current = sum(
-            int(row.consumed_stock_quantity or 0)
-            for row in reservations
-            if row.reservation_type == "finished_order"
-        )
-        finished_need = max(finished_target - finished_current, 0)
-        for reservation in reservations:
-            available_stock = (
-                int(reservation.reserved_stock_quantity or 0)
-                - int(reservation.consumed_stock_quantity or 0)
-                - int(reservation.released_stock_quantity or 0)
-            )
-            if reservation.reservation_type == "finished_order":
-                stock = min(available_stock, finished_need)
-                planned_stock[int(reservation.id)] = (stock, stock)
-                finished_need -= stock
+        planned_stock.update(finished_pick_plan(reservations, finished_target))
+
+        target_surplus = max(int(order_item.delivered_quantity or 0)
+            + max(int(planned_delivery_quantity or 0), 0) - int(order_item.quantity or 0), 0)
+        planned_stock.update(finished_pick_plan(reservations, target_surplus,
+            reservation_type='finished_surplus_delivery'))
 
         semi_boxes = max(target_delivered - finished_coverage, 0)
         for requirement in requirements.values():
@@ -4118,7 +4098,7 @@ def _delivery_list_standard_inventory_sources(
         lot, location, location_metadata = _delivery_list_location_payload(
             context,
             reservation,
-            finished=reservation.reservation_type == "finished_order",
+            finished=reservation.reservation_type in {"finished_order", "finished_surplus_delivery"},
         )
         if lot is None:
             continue
@@ -4134,7 +4114,7 @@ def _delivery_list_standard_inventory_sources(
             {
                 "source_type": (
                     "finished"
-                    if reservation.reservation_type == "finished_order"
+                    if reservation.reservation_type in {"finished_order", "finished_surplus_delivery"}
                     else "semi_finished"
                 ),
                 "reservation_id": reservation.id,
@@ -4154,13 +4134,9 @@ def _delivery_list_standard_inventory_sources(
                     - int(reservation.released_stock_quantity or 0),
                     0,
                 ),
-                "covered_requirement_quantity": max(
-                    int(reservation.credited_requirement_quantity or 0)
-                    - int(reservation.released_requirement_quantity or 0),
-                    0,
-                ),
+                "covered_requirement_quantity": covered_requirement_display(reservation),
                 "quantity_to_pick_stock": pick_stock,
-                "quantity_to_pick_requirement": pick_credit,
+                **requirement_projection(pick_credit),
             }
         )
     return items
@@ -5509,23 +5485,24 @@ def _delivery_response(
                 )
             )
         )
+        quantity_contract = decode_quantity_contract(mapping.get("quantity_contract_json"))
         actual_goods_lines = (
             [
                 {
                     "line_type": "parent",
-                    "order_item_id": None,
+                    "order_item_id": mapping["order_item_id"],
                     "component_snapshot_id": None,
                     "product_code": mapping["product_code"],
                     "product_name": mapping["product_name"],
                     "specification": mapping["specification"],
-                    "unit": mapping.get("unit_snapshot") or "PCS",
-                    "quantity": int(mapping["delivered_quantity"] or 0),
+                    "unit": quantity_contract['physical_unit'] if quantity_contract else mapping.get("unit_snapshot") or "PCS",
+                    "quantity": quantity_contract['physical_quantity'] if quantity_contract else int(mapping["delivered_quantity"] or 0),
                     "pricing_included": True,
                     "independent_return_receipt": True,
                     "independent_statement": True,
                 }
             ]
-            if is_unordered
+            if is_unordered or quantity_contract is not None
             else _delivery_document_goods_lines(
                 order_item_id=mapping["order_item_id"],
                 product_code=mapping["product_code"],
@@ -5592,6 +5569,7 @@ def _delivery_response(
                 ),
                 **kit_metadata,
                 "actual_goods_lines": actual_goods_lines,
+                "quantity_contract": quantity_contract,
                 "actual_goods_quantity": actual_goods_quantity,
                 "requires_return_location": bool(
                     not is_unordered
@@ -5955,7 +5933,7 @@ def _build_pick_task(
                 task_id=task.id,
                 delivery_item_id=line.id,
                 order_item_id=line.order_item_id,
-                original_quantity=int(line.delivered_quantity),
+                original_quantity=item_physical_quantity(line),
                 picked_quantity=0,
                 status="pending",
                 product_code_snapshot=(
@@ -6643,6 +6621,13 @@ def update_delivery_pick_task_item(
         if requested not in {None, 0}:
             raise HTTPException(status_code=400, detail="无货状态的拿货数量必须为0")
         quantity = 0
+    delivery_line = db.get(DeliveryItem, item.delivery_item_id)
+    try:
+        basis = quantity_contract_for_item(delivery_line) if delivery_line else None
+        if basis:
+            quantity_customer_for(basis, quantity)
+    except QuantityContractError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     _confirm_shelf_staging(db, task, [(item, quantity, payload.staging_target)], payload.print_version, user)
     item.status = payload.pick_status
     item.picked_quantity = quantity
@@ -6730,7 +6715,7 @@ def apply_delivery_pick_task(
                 delivery_item is None
                 or delivery_item.delivery_id != delivery.id
                 or delivery_item.order_item_id != item.order_item_id
-                or int(delivery_item.delivered_quantity) != int(item.original_quantity)
+                or item_physical_quantity(delivery_item) != int(item.original_quantity)
             ):
                 raise HTTPException(status_code=409, detail="送货草稿已变更，请重新创建拿货任务")
             applied_changes.append(
@@ -6780,7 +6765,18 @@ def apply_delivery_pick_task(
                         kept = min(planned, remaining)
                         allocation.planned_quantity = kept
                         remaining -= kept
-                delivery_item.delivered_quantity = int(item.picked_quantity)
+                try:
+                    quantity_contract = quantity_contract_for_item(delivery_item)
+                    customer_quantity = (
+                        quantity_customer_for(quantity_contract, int(item.picked_quantity))
+                        if quantity_contract else int(item.picked_quantity)
+                    )
+                    if quantity_contract:
+                        delivery_item.quantity_contract_json = encode_quantity_contract(
+                            quantity_contract, customer_quantity)
+                    delivery_item.delivered_quantity = customer_quantity
+                except QuantityContractError as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
         db.flush()
         delivery.total_quantity = int(
             db.scalar(
@@ -6903,6 +6899,17 @@ def _collect_delivery_lines(
                 ),
             )
         production_managed = _has_production_task(db, order_item.id)
+        from app.services.direct_external_finished import eligible, managed
+        direct_receipt_managed = eligible(db, order_item) and managed(db, order_item)
+        if direct_receipt_managed:
+            direct_receipt_managed = not db.scalar(
+                select(SalesOrderItemExternalComponent.id).where(
+                    SalesOrderItemExternalComponent.sales_order_item_id == order_item.id,
+                    SalesOrderItemExternalComponent.is_required.is_(True),
+                    current_external_component_predicate(),
+                    func.coalesce(SalesOrderItemExternalComponent.source_kind, "") != "direct_product",
+                ).limit(1)
+            )
         has_external_components = bool(
             db.scalar(
                 select(SalesOrderItemExternalComponent.id)
@@ -6915,7 +6922,7 @@ def _collect_delivery_lines(
                 .limit(1)
             )
         )
-        if has_external_components and not _external_packaging_received(
+        if has_external_components and not direct_receipt_managed and not _external_packaging_received(
             db, order_item.id
         ):
             raise HTTPException(
@@ -6977,6 +6984,7 @@ def _collect_delivery_lines(
                     and _external_packaging_received(db, order_item.id)
                 )
                 and not full_inventory_coverage
+                and not direct_receipt_managed
                 and _received_telescoping_capacity(db, order_item.id) is None
             )
             or order_item.is_force_closed
@@ -7039,7 +7047,9 @@ def _collect_unordered_finished_lines(
     *,
     customer_id: int,
     lines: list[DeliveryLineCreate],
+    delivery_id: int | None = None,
 ) -> tuple[list[dict], int]:
+    from app.services.delivery_quantities import capture, decode, require_physical_stock, QuantityContractError
     built: list[dict] = []
     total_quantity = 0
     for index, line in enumerate(lines, start=1):
@@ -7058,6 +7068,23 @@ def _collect_unordered_finished_lines(
                 status_code=409,
                 detail=f"第 {index} 条产品不属于当前客户",
             )
+        previous = None
+        if delivery_id is not None:
+            previous = db.scalar(select(DeliveryItem.quantity_contract_json).where(
+                DeliveryItem.delivery_id == delivery_id,
+                DeliveryItem.source_type == 'unordered_finished',
+                DeliveryItem.product_id == product.id,
+            ).order_by(DeliveryItem.id.desc()).limit(1))
+        try:
+            quantity_contract = capture(product, line.delivered_quantity, previous)
+            quantity_basis = decode(quantity_contract)
+            if sum(row.quantity for row in line.allocations) != quantity_basis['physical_quantity']:
+                raise QuantityContractError(
+                    f"第 {index} 条客户送货 {line.delivered_quantity}{quantity_basis['customer_unit']}，"
+                    f"必须分配实物 {quantity_basis['physical_quantity']}{quantity_basis['physical_unit']}"
+                )
+        except QuantityContractError as error:
+            raise HTTPException(422, str(error)) from error
         submitted_unit_price = (
             Decimal(str(line.unit_price)).quantize(Decimal("0.000001"))
             if line.unit_price is not None
@@ -7101,6 +7128,10 @@ def _collect_unordered_finished_lines(
                     detail=f"第 {index} 条所选成品库存批次不存在",
                 )
             lot, detail, location = row
+            try:
+                require_physical_stock(lot, quantity_basis)
+            except QuantityContractError as error:
+                raise HTTPException(409, str(error)) from error
             if (
                 lot.inventory_type != "finished"
                 or lot.status != "active"
@@ -7129,6 +7160,7 @@ def _collect_unordered_finished_lines(
         built.append(
             {
                 "product": product,
+                "quantity_contract_json": quantity_contract,
                 "line": line,
                 "unit_price": unit_price,
                 "price_source": (
@@ -7232,8 +7264,9 @@ def _store_unordered_finished_items(
     for entry in built:
         product: Product = entry["product"]
         line: DeliveryLineCreate = entry["line"]
+        customer_unit = decode_quantity_contract(entry['quantity_contract_json'])['customer_unit']
         try:
-            contract = sales_contract(unit=product.unit,price=entry['unit_price'],
+            contract = sales_contract(unit=customer_unit,price=entry['unit_price'],
                 tax_mode=terms.price_tax_mode,tax_rate=terms.tax_rate,
                 source={'kind':'unordered_delivery_creation','profile_id':terms.profile_id,'profile_version':terms.profile_version}) if entry['unit_price'] is not None else None
         except ValueError as error:
@@ -7247,9 +7280,10 @@ def _store_unordered_finished_items(
             product_code_snapshot=product.product_code,
             product_name_snapshot=product.product_name,
             specification_snapshot=_product_specification(product),
-            unit_snapshot=product.unit or "只",
+            unit_snapshot=customer_unit,
             unit_price_snapshot=entry["unit_price"],
             sales_contract_json=contract,
+            quantity_contract_json=entry['quantity_contract_json'],
             price_source=entry["price_source"],
             delivered_quantity=int(line.delivered_quantity),
             ordered_quantity_snapshot=0,
@@ -7558,6 +7592,13 @@ def unordered_finished_candidates(
     items: list[dict] = []
     for lot, detail, product, location in rows:
         pallet = lot.pallet_item.pallet if lot.pallet_item else None
+        basis, quantity_issue, available_customer = None, None, 0
+        try:
+            basis = product_quantity_basis(product)
+            require_physical_stock(lot, basis)
+            available_customer = available_customer_quantity(basis, lot.quantity_available)
+        except QuantityContractError as error:
+            quantity_issue = str(error)
         items.append(
             {
                 "inventory_lot_id": lot.id,
@@ -7576,6 +7617,9 @@ def unordered_finished_candidates(
                 "customer_id": customer_id,
                 "is_general": False,
                 "available_quantity": int(lot.quantity_available or 0),
+                "available_customer_quantity": available_customer,
+                "quantity_contract": basis,
+                "quantity_issue": quantity_issue,
                 "unit_price": (
                     str(product.sale_unit_price)
                     if product.sale_unit_price is not None
@@ -8941,7 +8985,7 @@ def create_delivery(
                     delivery_id=delivery.id,
                     source_type="order",
                     order_item_id=order_item.id,
-                    **build_order_delivery_snapshot(db, order_item),
+                    **build_order_delivery_snapshot(db, order_item, line.delivered_quantity),
                     customer_po_snapshot=line.customer_po,
                     delivered_quantity=line.delivered_quantity,
                     ordered_quantity_snapshot=int(order_item.quantity or 0),
@@ -9649,6 +9693,7 @@ def _update_delivery(
                 db,
                 customer_id=delivery.customer_id,
                 lines=unordered_payload_lines,
+                delivery_id=delivery.id,
             )
             unordered_quantity = total_quantity
             _enforce_unordered_finished_order_priority(
@@ -9703,7 +9748,7 @@ def _update_delivery(
                     delivery_id=delivery.id,
                     source_type="order",
                     order_item_id=order_item.id,
-                    **build_order_delivery_snapshot(db, order_item),
+                    **build_order_delivery_snapshot(db, order_item, line.delivered_quantity),
                     customer_po_snapshot=line.customer_po,
                     delivered_quantity=line.delivered_quantity,
                     ordered_quantity_snapshot=int(order_item.quantity or 0),
@@ -11076,6 +11121,129 @@ def get_delivery(
     return _delivery_response(db, delivery_id)
 
 
+@router.get("/{delivery_id}/stock-warnings")
+def get_delivery_stock_warnings(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    delivery = _delivery_for_user(db, delivery_id, user)
+    if not has_permission(user, 'warehouse.view'):
+        raise HTTPException(status_code=403, detail='无库存查看权限')
+    from app.services.stock_replenishment import delivery_stock_warning_rows, StockReplenishmentError
+    try:
+        rows = delivery_stock_warning_rows(db, delivery)
+        if has_permission(user, 'requisition.execute'):
+            from app.services.stock_warning_drafts import paperboard_warning_plan
+            for row in rows:
+                if 'suggested_physical_quantity' in row:
+                    continue
+                try:
+                    plan, plan_hash = paperboard_warning_plan(db, policy_id=row['id'], user=user)
+                    row.update(plan_hash=plan_hash, proposed_items=[{
+                        'product_code': item.get('product_code'), 'product_name': item.get('product_name'),
+                        'quantity': item['quantity'], 'target_inventory_type': item['target_inventory_type'],
+                    } for item in plan['items']])
+                except StockReplenishmentError as error:
+                    row['blocked_reason'] = str(error)
+    except StockReplenishmentError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    return {'delivery_id': delivery.id, 'items': rows}
+
+
+class DeliveryWarningDemand(BaseModel):
+    policy_id: int = Field(gt=0)
+    physical_quantity: int | None = Field(default=None, gt=0, le=2147483647, strict=True)
+    plan_hash: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
+
+
+class DeliveryWarningConfirm(BaseModel):
+    items: list[DeliveryWarningDemand] = Field(min_length=1, max_length=100)
+
+
+@router.post("/{delivery_id}/stock-warnings/confirm")
+def confirm_delivery_stock_warnings(
+    delivery_id: int, payload: DeliveryWarningConfirm,
+    db: Session = Depends(get_db), user: User = Depends(can_operate),
+) -> dict:
+    delivery = _delivery_for_user(db, delivery_id, user)
+    if not has_permission(user, 'warehouse.view') or not has_permission(user, 'requisition.execute'):
+        raise HTTPException(status_code=403, detail='生成补库草稿需要库存查看和报料操作权限')
+    from app.models.stock_replenishment import InventoryStockPolicy, StockReplenishmentOrder
+    from app.services.stock_replenishment import delivery_stock_warning_rows, StockReplenishmentError
+    from app.services.stock_warning_drafts import (
+        create_external_warning_draft, warning_origin_number,
+        paperboard_warning_plan, create_paperboard_warning_draft,
+    )
+    from app.services.delivery_quantities import QuantityContractError
+    ids = [item.policy_id for item in payload.items]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(status_code=422, detail='不能重复选择同一库存预警')
+    try:
+        # Dispatch cancellation and stock-policy edits must not race this decision.
+        claimed = db.execute(update(Delivery).where(Delivery.id == delivery.id,
+            Delivery.status == 'dispatched').values(status='dispatched')).rowcount
+        if claimed != 1 or delivery.is_historical_backfill:
+            raise StockReplenishmentError('送货单尚未实际发货或已经取消，请刷新', 409)
+        for policy_id in sorted(ids):
+            locked = db.execute(update(InventoryStockPolicy).where(
+                InventoryStockPolicy.id == policy_id,
+                InventoryStockPolicy.customer_id == delivery.customer_id,
+                InventoryStockPolicy.active.is_(True),
+            ).values(active=True)).rowcount
+            if locked != 1:
+                raise StockReplenishmentError('库存预警已停用或不属于本客户，请刷新', 409)
+        db.expire_all()
+        delivery = db.get(Delivery, delivery_id)
+        products = list(db.scalars(select(InventoryStockPolicy.product_id).where(InventoryStockPolicy.id.in_(ids))))
+        if len(set(products)) != len(products):
+            raise StockReplenishmentError('同一产品存在重复库存预警，请先核对策略', 409)
+        current = {row['id']: row for row in delivery_stock_warning_rows(db, delivery)}
+        results = []
+        for demand in payload.items:
+            existing = db.scalar(select(StockReplenishmentOrder).where(
+                StockReplenishmentOrder.order_number == warning_origin_number(delivery_id, demand.policy_id)))
+            if existing is not None:
+                if existing.customer_id != delivery.customer_id or not existing.items:
+                    raise StockReplenishmentError('原补库来源记录不一致', 409)
+                physical = any(item.quantity_contract_json is not None for item in existing.items)
+                if ((physical and (len(existing.items) != 1 or existing.items[0].quantity != demand.physical_quantity))
+                        or (not physical and existing.request_hash != demand.plan_hash)):
+                    raise StockReplenishmentError('本次提交与已生成补库需求不同，请刷新', 409)
+                order, created = existing, False
+            else:
+                row = current.get(demand.policy_id)
+                if row is None:
+                    raise StockReplenishmentError('该产品未触发补库预警，请刷新', 409)
+                policy = db.get(InventoryStockPolicy, demand.policy_id)
+                if 'suggested_physical_quantity' in row:
+                    if row['suggested_physical_quantity'] != demand.physical_quantity:
+                        raise StockReplenishmentError('库存或待补数量已变化，请刷新预警后确认', 409)
+                    order, created = create_external_warning_draft(db, policy=policy, delivery=delivery,
+                        physical_quantity=demand.physical_quantity, operator_id=user.id)
+                else:
+                    plan, plan_hash = paperboard_warning_plan(db, policy_id=policy.id, user=user)
+                    if plan_hash != demand.plan_hash:
+                        raise StockReplenishmentError('报料方案已变化，请刷新预警后确认', 409)
+                    order, created = create_paperboard_warning_draft(db, policy=policy, delivery=delivery,
+                        plan=plan, plan_hash=plan_hash, operator_id=user.id)
+                if created:
+                    append_audit_event(db, actor=user, event_category='business', result='success',
+                        source='web', module_code='requisition', action_code='create_delivery_warning_draft',
+                        resource='stock_replenishment', entity_type='stock_replenishment_order',
+                        entity_id=order.id, object_ref=order.order_number, customer_id=delivery.customer_id,
+                        description='实际发货后确认生成待报料草稿',
+                        details={'delivery_id': delivery_id, 'policy_id': demand.policy_id,
+                                 'physical_quantity': demand.physical_quantity, 'plan_hash': demand.plan_hash})
+            results.append({'id': order.id, 'order_number': order.order_number, 'status': order.status,
+                            'policy_id': demand.policy_id, 'created': created})
+        db.commit()
+        return {'delivery_id': delivery_id, 'orders': results}
+    except (StockReplenishmentError, QuantityContractError) as error:
+        db.rollback()
+        raise HTTPException(status_code=getattr(error, 'status_code', 409), detail=str(error)) from error
+
+
 @router.put("/{delivery_id}/customer-po")
 def update_delivery_customer_po(
     delivery_id: int,
@@ -11193,6 +11361,7 @@ def get_delivery_print_data(
                 "current_product_fulfillment_mode"
             ),
             DeliveryItem.unit_snapshot,
+            DeliveryItem.quantity_contract_json,
             DeliveryItem.delivered_quantity.label("quantity"),
             DeliveryItem.ordered_quantity_snapshot,
             DeliveryItem.over_delivery_quantity,
@@ -11252,23 +11421,24 @@ def get_delivery_print_data(
             dispatched=delivery.status == "dispatched",
             current_product_fulfillment_mode=row.current_product_fulfillment_mode,
         )
+        quantity_contract = decode_quantity_contract(row.quantity_contract_json)
         actual_goods_lines = (
             [
                 {
                     "line_type": "parent",
-                    "order_item_id": None,
+                    "order_item_id": row.order_item_id,
                     "component_snapshot_id": None,
                     "product_code": product_code,
                     "product_name": product_name,
                     "specification": specification,
-                    "unit": row.unit_snapshot or "PCS",
-                    "quantity": int(row.quantity or 0),
+                    "unit": quantity_contract['physical_unit'] if quantity_contract else row.unit_snapshot or "PCS",
+                    "quantity": quantity_contract['physical_quantity'] if quantity_contract else int(row.quantity or 0),
                     "pricing_included": True,
                     "independent_return_receipt": True,
                     "independent_statement": True,
                 }
             ]
-            if is_unordered
+            if is_unordered or quantity_contract is not None
             else _delivery_document_goods_lines(
                 order_item_id=row.order_item_id,
                 product_code=_print_product_code(product_code),

@@ -33,7 +33,15 @@ def _reverse_output(db, row, *, order_item_id, user, direct=False):
     source = 'direct_external_receipt' if direct else 'bom_external_receipt'
     lots = list(db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type == source,
         InventoryLot.source_ref_id == row.id)))
-    if not row.converted_finished_quantity:
+    quantity = int(row.converted_finished_quantity or 0)
+    if direct and len(lots) == 1:
+        cost = json.loads(lots[0].cost_snapshot_detail_json or '{}')
+        if cost.get('quantity_basis') == 'physical':
+            from app.services.external_physical_receipt import received_pieces
+            quantity = received_pieces(row)
+            if cost.get('received_physical_quantity') != quantity:
+                raise SubkitError('实物入库数量快照与原实收不一致')
+    if not quantity:
         if lots:
             raise SubkitError('无整件实收却有库存，不能撤销')
         return
@@ -78,17 +86,17 @@ def _reverse_output(db, row, *, order_item_id, user, direct=False):
             allow_downstream=True, allow_production_reversal=True)
         db.refresh(lot)
         released = True
-    if (lot.status != 'active' or lot.quantity_available != row.converted_finished_quantity
+    if (lot.status != 'active' or lot.quantity_available != quantity
             or lot.quantity_reserved or lot.quantity_consumed or lot.quantity_damaged or lot.quantity_scrapped
             or (lot.version != 1 and not released and not _only_reversed_graph_consumptions(db, lot))):
         raise SubkitError('外购库存已移库、盘点或使用，请先还原后续操作')
     before = _balances(lot)
     result = db.execute(update(InventoryLot).where(InventoryLot.id == lot.id, InventoryLot.version == lot.version).values(
-        quantity_available=0, quantity_consumed=row.converted_finished_quantity, status='closed', version=lot.version+1))
+        quantity_available=0, quantity_consumed=quantity, status='closed', version=lot.version+1))
     if result.rowcount != 1:
         raise SubkitError('外购库存已变化，请刷新重试')
     db.refresh(lot)
-    _movement(db, lot=lot, movement_type='consume', quantity=row.converted_finished_quantity, before=before,
+    _movement(db, lot=lot, movement_type='consume', quantity=quantity, before=before,
         operator_id=user.id, reason='撤销外购实收库存', idempotency_key=f'bom-external-reverse:{row.id}')
 
 

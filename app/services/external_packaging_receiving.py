@@ -826,9 +826,11 @@ def record_external_purchase_receipt(
             except (BomPlanError, ProductionWorkflowError, WarehouseInventoryError) as error:
                 raise ExternalPurchaseContractError(str(error), status_code=409) from error
         if replenishment_order is not None and stock_item is not None:
-            if converted_quantity > 0:
+            if quantity > 0:
+                from app.services.stock_warning_drafts import physical_demand_contract
+                demand_contract = physical_demand_contract(stock_item)
                 planned_quantity = min(
-                    converted_quantity,
+                    int(quantity) if demand_contract is not None else converted_quantity,
                     max(
                         int(stock_item.quantity or 0)
                         - int(stock_item.stocked_quantity or 0),
@@ -844,7 +846,7 @@ def record_external_purchase_receipt(
                         operator_id=user.id,
                         receipt_item_id=receipt_item.id,
                         source_ref_type="external_packaging_receipt_item",
-                        actual_inventory_quantity=converted_quantity,
+                        actual_inventory_quantity=quantity,
                     )
                 except StockReplenishmentError as error:
                     raise ExternalPurchaseContractError(

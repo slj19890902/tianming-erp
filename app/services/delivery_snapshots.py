@@ -57,6 +57,7 @@ def statement_sales_terms(item, price, mode, rate):
 def build_order_delivery_snapshot(
     db: Session,
     order_item: OrderItem,
+    customer_quantity: int | None = None,
 ) -> dict[str, str | None]:
     """Freeze customer-facing product facts when a delivery line is created."""
 
@@ -82,7 +83,17 @@ def build_order_delivery_snapshot(
     except ValueError as error:
         from fastapi import HTTPException
         raise HTTPException(422, f'存货编码 {order_item.snapshot_product_code}：{error}') from error
+    quantity_values = {}
+    if customer_quantity is not None:
+        from app.services.direct_external_finished import eligible
+        if eligible(db, order_item):
+            from app.models.order import Order
+            from app.services.delivery_quantities import order_basis, encode
+            order = db.get(Order, order_item.order_id)
+            quantity_values['quantity_contract_json'] = encode(
+                order_basis(order_item, order.customer_id), customer_quantity)
     return {
+        **quantity_values,
         'unit_snapshot':unit,
         'sales_contract_json':contract,
         "product_code_snapshot": (

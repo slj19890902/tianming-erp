@@ -809,6 +809,12 @@ def test_602_pick_plan_dispatch_and_cancel_preserve_all_physical_stock(
         assert completed.status_code == 200, completed.text
         dispatched = client.put(f"/api/deliveries/{delivery_id}/dispatch")
         assert dispatched.status_code == 200, dispatched.text
+        listed = client.get('/api/deliveries?page=1&page_size=10')
+        assert listed.status_code == 200, listed.text
+        listed_delivery = next(row for row in listed.json()['items'] if row['id'] == delivery_id)
+        sources = listed_delivery['items'][0]['inventory_sources']
+        assert sum(row['quantity_to_pick_stock'] for row in sources) == 602
+        assert all(row['source_type'] == 'finished' for row in sources)
         cancelled = client.put(f"/api/deliveries/{delivery_id}/cancel")
         assert cancelled.status_code == 200, cancelled.text
 

@@ -280,6 +280,23 @@ def _seed(app: FastAPI, factory) -> UnorderedFinishedSeed:
         ordered = db.scalar(select(Product).where(Product.product_code == "P115B-ORDERED"))
         other = db.scalar(select(Product).where(Product.product_code == "P115B-BOX-B"))
         assert customer_a and customer_b and priced and no_price and ordered and other
+        # Current entry contracts require a real costing basis. Populate the
+        # isolated fixture rather than bypassing the production entry guard.
+        from app.models.material import Material
+        from app.models.supplier import Supplier
+        db.add(Supplier(standard_name='测试纸板厂', normalized_name='测试纸板厂',
+                        business_code='P115B-COST', normalized_business_code='P115B-COST'))
+        material = Material(code='P115B-COST', supplier_name='测试纸板厂',
+            quote_price=Decimal('2'), price_unit='元/㎡', purchase_currency='CNY',
+            purchase_tax_included=True, layer_count=3)
+        db.add(material)
+        db.flush()
+        for product in (priced, no_price, ordered, other):
+            product.material_id = material.id
+            product.report_length_mm = 800
+            product.report_width_mm = 180
+            product.pieces_per_box = 1
+        db.commit()
         customer_a_id, customer_b_id = customer_a.id, customer_b.id
         priced_id, no_price_id, ordered_id, other_id = (
             priced.id,
@@ -865,13 +882,13 @@ def test_draft_is_unordered_only_and_freezes_price_without_order_side_effects(
         stored = db.get(DeliveryItem, line["id"])
         assert stored is not None
         assert stored.order_item_id is None
-        assert str(stored.unit_price_snapshot) == "3.6000"
+        assert stored.unit_price_snapshot == Decimal("3.6000")
         product = db.get(Product, seed.priced_product_id)
         assert product is not None
         product.sale_unit_price = Decimal("9.9900")
         db.commit()
         db.expire_all()
-        assert str(db.get(DeliveryItem, line["id"]).unit_price_snapshot) == "3.6000"
+        assert db.get(DeliveryItem, line["id"]).unit_price_snapshot == Decimal("3.6000")
     assert _stock_snapshot(factory, seed) == before
 
 
@@ -1524,7 +1541,7 @@ def test_statement_uses_signed_quantity_and_frozen_price_without_order_item(
         assert statement_item is not None and delivery_item is not None
         assert delivery_item.order_item_id is None
         assert statement_item.actual_received_quantity == 8
-        assert str(statement_item.unit_price_snapshot) == "3.6000"
+        assert statement_item.unit_price_snapshot == Decimal("3.6000")
         assert _as_money(statement_item.receivable_amount) == Decimal("28.80")
 
     with TestClient(app) as client:

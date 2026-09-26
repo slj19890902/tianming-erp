@@ -3833,6 +3833,24 @@ def test_receipt_auto_reserves_only_order_quantity_not_already_covered(
             assert order is not None and location is not None
             item.delivered_quantity = 5
             order.status = "partially_delivered"
+            # This independent manual stock needs a valid entry-cost source;
+            # the frozen purchase receipt below keeps its own per-sheet price.
+            from app.models.material import Material
+            from app.models.product import Product
+            stock_material = Material(
+                code="P1102-STOCK-COST", supplier_name="测试库存供应商",
+                quote_price=Decimal("2.00"), price_unit="元/㎡",
+                purchase_currency="CNY", purchase_tax_included=True,
+                layer_count=5, flute_type="AB", is_active=True,
+            )
+            session.add(stock_material)
+            session.flush()
+            product = session.get(Product, item.product_id)
+            product.material_id = stock_material.id
+            product.report_length_mm = 1200
+            product.report_width_mm = 1000
+            product.base_report_length_mm = 1200
+            product.base_report_width_mm = 1000
             existing_lot = manual_finished_in(
                 session,
                 customer_id=order.customer_id,

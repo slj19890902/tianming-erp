@@ -11,6 +11,9 @@ def lot_display_unit(lot):
     import json
     try:
         basis = json.loads(lot.finished_detail.physical_basis_json or '{}') if lot.finished_detail else {}
+        quantity_basis = basis.get('quantity_basis') or {}
+        if quantity_basis.get('ledger') == 'physical' and quantity_basis.get('physical_unit'):
+            return quantity_basis['physical_unit']
         if basis.get('unit'):
             return basis['unit']
     except (ValueError, TypeError):

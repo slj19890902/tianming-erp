@@ -73,6 +73,18 @@ def snapshot_basis(snapshot, unit):
          "mold_tool_id": snapshot.snapshot_mold_tool_id, "die_cut_path": snapshot.snapshot_die_cut_path})
 
 
+def matches_stock_identity(actual, expected):
+    """Quantity ledger metadata is validated separately from the frozen SKU identity."""
+    if expected is None:
+        return True
+    try:
+        value = json.loads(actual or '{}')
+        value.pop('quantity_basis', None)
+        return value == json.loads(expected)
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
 def order_product_basis(db, order_item_id, product_id):
     from app.services.multilevel_bom_orders import read_compiled_order_bom
     compiled = read_compiled_order_bom(db, order_item_id)

@@ -2888,6 +2888,14 @@ def _reservation_dict(
     *,
     include_sensitive_details: bool = True,
 ) -> dict:
+    from app.services.delivery_quantities import requirement_amount, requirement_denominator
+    denominator = requirement_denominator(row)
+    requirement_fields = {}
+    for field in ('credited_requirement_quantity', 'consumed_requirement_quantity', 'released_requirement_quantity'):
+        raw = getattr(row, field)
+        value = requirement_amount(row, field)
+        requirement_fields[field] = None if raw is None else (int(value) if value.denominator == 1 else float(value))
+        requirement_fields[field + '_numerator'] = raw
     item = db.get(OrderItem, row.order_item_id) if row.order_item_id else None
     order = db.get(Order, row.order_id) if row.order_id else None
     lot = db.get(InventoryLot, row.inventory_lot_id)
@@ -2912,11 +2920,10 @@ def _reservation_dict(
         "customer_name": customer.name if customer else None,
         "product_name": item.snapshot_product_name if item else None,
         "reserved_stock_quantity": row.reserved_stock_quantity,
-        "credited_requirement_quantity": row.credited_requirement_quantity,
+        **requirement_fields,
+        "requirement_quantity_denominator": denominator,
         "consumed_stock_quantity": row.consumed_stock_quantity,
         "released_stock_quantity": row.released_stock_quantity,
-        "consumed_requirement_quantity": row.consumed_requirement_quantity,
-        "released_requirement_quantity": row.released_requirement_quantity,
         "remaining_reserved_stock_quantity": (
             row.reserved_stock_quantity
             - row.consumed_stock_quantity
@@ -3070,6 +3077,7 @@ def finished_candidates(
 ) -> dict:
     _require_order_item_customer_access(db, order_item_id, user)
     try:
+        from app.services.warehouse_inventory import finished_stock_customer_capacity
         item = db.get(OrderItem, order_item_id)
         if item is None:
             raise WarehouseInventoryError("订单明细不存在", 404)
@@ -3127,6 +3135,7 @@ def finished_candidates(
                         f"{employee_names[int(lot.location.id)]}"
                     ),
                     "quantity_available": lot.quantity_available,
+                    "customer_quantity_available": finished_stock_customer_capacity(db, item, lot),
                     "stock_date": lot.stock_date,
                     "stock_date_accuracy": lot.stock_date_accuracy,
                     "last_movement_at": utc_naive_to_api(lot.last_movement_at),
@@ -3510,6 +3519,19 @@ def finished_product_candidates(
             product_id=product_id,
         )
         rows = _visible_finished_candidate_lots(rows, user, db)
+        from app.services.delivery_quantities import product_basis, require_physical_stock, available_customer_quantity, QuantityContractError
+        try:
+            basis = product_basis(db.get(Product, product_id))
+        except QuantityContractError as error:
+            raise WarehouseInventoryError(str(error), 409) from error
+        verified = []
+        for lot in rows:
+            try:
+                require_physical_stock(lot, basis)
+            except QuantityContractError:
+                continue
+            verified.append(lot)
+        rows = verified
         projection_contexts = load_warehouse_location_projection_contexts(
             db,
             [lot.location for lot in rows if lot.location is not None],
@@ -3524,6 +3546,8 @@ def finished_product_candidates(
                     "version": lot.version,
                     "is_general": lot.finished_detail.is_general,
                     "quantity_available": lot.quantity_available,
+                    "customer_quantity_available": available_customer_quantity(basis, lot.quantity_available),
+                    "quantity_contract": basis,
                     "warehouse_location": _location_dict(
                         lot.location,
                         (

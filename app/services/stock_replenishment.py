@@ -58,6 +58,90 @@ from app.services.semi_finished_inventory import (
 )
 
 
+def external_stock_incoming_physical_quantity(db: Session, policy) -> int:
+    """Outstanding purchased pieces, never the legacy customer-unit plan progress.
+
+    Purchase and effective receipt facts own this projection. Changing a common
+    box ratio cannot change it, and a loose received piece still reduces it.
+    """
+    from decimal import Decimal
+    from app.models.external_packaging_purchase import ExternalPackagingPurchaseCancellation
+    from app.services.external_packaging_receiving import _received_totals
+
+    purchases = list(db.scalars(select(ExternalPackagingPurchaseItem)
+        .join(StockReplenishmentOrderItem,
+              StockReplenishmentOrderItem.id == ExternalPackagingPurchaseItem.stock_replenishment_item_id)
+        .join(StockReplenishmentOrder,
+              StockReplenishmentOrder.id == StockReplenishmentOrderItem.replenishment_order_id)
+        .where(
+            StockReplenishmentOrder.status != 'voided',
+            StockReplenishmentOrder.customer_id == policy.customer_id,
+            StockReplenishmentOrderItem.target_inventory_type == 'finished',
+            StockReplenishmentOrderItem.product_id == policy.product_id,
+            ExternalPackagingPurchaseItem.customer_product_id_snapshot == policy.product_id,
+            ~select(ExternalPackagingPurchaseCancellation.id).where(
+                ExternalPackagingPurchaseCancellation.purchase_order_id
+                == ExternalPackagingPurchaseItem.purchase_order_id).exists(),
+        )))
+    received = _received_totals(db, {item.id for item in purchases})
+    total = Decimal(0)
+    for item in purchases:
+        remaining = max(Decimal(item.purchase_quantity) - received.get(item.id, Decimal(0)), Decimal(0))
+        if remaining != remaining.to_integral_value():
+            raise StockReplenishmentError('外购在途数量不是完整实物片数，请核对采购计量单位', 409)
+        total += remaining
+    return int(total)
+
+
+def delivery_stock_warning_rows(db: Session, delivery) -> list[dict]:
+    """Read warnings only for finished products actually consumed by this delivery."""
+    if delivery.status != 'dispatched' or delivery.is_historical_backfill:
+        return []
+    from app.models.warehouse_inventory import InventoryMovement
+    net_consumed = func.sum(case(
+        (InventoryMovement.movement_type == 'consume', InventoryMovement.quantity),
+        (InventoryMovement.movement_type == 'reverse_consume', -InventoryMovement.quantity),
+        else_=0,
+    ))
+    product_ids = list(db.scalars(select(FinishedGoodsInventoryDetail.product_id)
+        .join(InventoryMovement, InventoryMovement.inventory_lot_id == FinishedGoodsInventoryDetail.inventory_lot_id)
+        .where(InventoryMovement.related_delivery_id == delivery.id)
+        .group_by(FinishedGoodsInventoryDetail.product_id).having(net_consumed > 0)))
+    if not product_ids:
+        return []
+    policies = db.scalars(select(InventoryStockPolicy).where(
+        InventoryStockPolicy.product_id.in_(product_ids),
+        InventoryStockPolicy.customer_id == delivery.customer_id,
+        InventoryStockPolicy.target_inventory_type == 'finished',
+        InventoryStockPolicy.active.is_(True),
+    ).order_by(InventoryStockPolicy.id))
+    rows = []
+    for policy in policies:
+        summary = stock_policy_dict(db, policy)
+        if summary['warning_triggered']:
+            # No prices, supplier contracts, or other customers' policy data.
+            row = {key: summary[key] for key in (
+                'id', 'product_id', 'product_code', 'product_name', 'customer_id',
+                'available_quantity', 'warning_quantity', 'target_quantity',
+            )}
+            product = policy.product
+            if (product.supply_mode == 'external_purchase' and not product.is_composite
+                    and product.external_packaging_category_code != 'coated_board'):
+                incoming = external_stock_incoming_physical_quantity(db, policy)
+                from app.services.stock_warning_drafts import pending_physical_warning_quantity
+                pending = pending_physical_warning_quantity(db,
+                    customer_id=policy.customer_id, product_id=policy.product_id)
+                row.update(
+                    physical_unit=product.external_packaging_purchase_unit,
+                    incoming_physical_quantity=incoming,
+                    pending_physical_quantity=pending,
+                    suggested_physical_quantity=max(
+                        summary['target_quantity'] - summary['available_quantity'] - incoming - pending, 0),
+                )
+            rows.append(row)
+    return rows
+
+
 class StockReplenishmentError(ValueError):
     def __init__(self, message: str, status_code: int = 400) -> None:
         super().__init__(message)
@@ -741,6 +825,8 @@ def customer_board_preparation_coverage(
     )
     if composite is not None:
         empty = {
+            "pending_board_preparation_sheet_quantity": 0,
+            "pending_board_preparation_auto_cover_capacity": 0,
             "customer_board_preparation_available_sheet_quantity": 0,
             "customer_board_preparation_finished_capacity": 0,
             "customer_board_preparation_auto_cover_capacity": 0,
@@ -769,6 +855,13 @@ def customer_board_preparation_coverage(
             )
 
         return {
+            "pending_board_preparation_sheet_quantity": sum(
+                int(coverage["pending_board_preparation_sheet_quantity"])
+                for _row, coverage in component_coverages
+            ),
+            "pending_board_preparation_auto_cover_capacity": complete_set_capacity(
+                "pending_board_preparation_auto_cover_capacity"
+            ),
             "customer_board_preparation_available_sheet_quantity": sum(
                 int(coverage["customer_board_preparation_available_sheet_quantity"])
                 for _row, coverage in component_coverages
@@ -866,6 +959,51 @@ def customer_board_preparation_coverage(
         output_per_sheet=effective_output_per_sheet,
     )
     incoming_sheets = 0
+    pending_sheets = 0
+    pending_pieces = 0
+    def is_owned_finished_liner(item):
+        return (
+            box_type_code(product.box_style) == 'liner'
+            and item.target_inventory_type == 'finished'
+            and item.procurement_route_snapshot == 'paperboard'
+            and item.product_id == product.id
+            and item.customer_id == product.customer_id
+        )
+
+    def covered_pieces(item, quantity):
+        # Direct finished receipts count finished units, not uncut sheets.
+        return quantity * (
+            max(int(defaults['pieces_per_box']), 1)
+            if is_owned_finished_liner(item)
+            else int(item.stock_yield_per_sheet or 1)
+        )
+
+    coverage_target = StockReplenishmentOrderItem.target_inventory_type == 'semi_finished'
+    if box_type_code(product.box_style) == 'liner':
+        # Paperboard liners are received directly as finished stock.  Keep
+        # coverage tied to this product and the frozen paperboard route;
+        # external-packaging purchases have their own physical coverage.
+        coverage_target = or_(coverage_target, and_(
+            StockReplenishmentOrderItem.target_inventory_type == 'finished',
+            StockReplenishmentOrderItem.procurement_route_snapshot == 'paperboard',
+            StockReplenishmentOrderItem.product_id == product.id,
+        ))
+    if signature is not None:
+        pending_items = db.scalars(select(StockReplenishmentOrderItem)
+            .join(StockReplenishmentOrder,
+                  StockReplenishmentOrder.id == StockReplenishmentOrderItem.replenishment_order_id)
+            .where(StockReplenishmentOrder.status == 'draft',
+                   StockReplenishmentOrder.source_type == 'stock_warning',
+                   StockReplenishmentOrder.request_hash.is_not(None),
+                   coverage_target,
+                   StockReplenishmentOrderItem.procurement_route_snapshot == 'paperboard',
+                   StockReplenishmentOrderItem.customer_id == product.customer_id,
+                   StockReplenishmentOrderItem.reference_product_id == product.id))
+        for item in pending_items:
+            if is_owned_finished_liner(item) or _replenishment_item_signature(item) == signature:
+                remaining = max(int(item.quantity) - int(item.stocked_quantity), 0)
+                pending_sheets += remaining
+                pending_pieces += covered_pieces(item, remaining)
     incoming_finished_capacity = 0
     incoming_auto_cover_capacity = 0
     from app.services.replenishment_receipt_progress import short_closed_clause
@@ -884,8 +1022,7 @@ def customer_board_preparation_coverage(
                 StockReplenishmentOrder.status.in_(
                     ("confirmed", "partially_stocked")
                 ),
-                StockReplenishmentOrderItem.target_inventory_type
-                == "semi_finished",
+                coverage_target,
                 StockReplenishmentOrderItem.quantity
                 > StockReplenishmentOrderItem.stocked_quantity,
                 StockReplenishmentOrderItem.customer_id
@@ -898,14 +1035,14 @@ def customer_board_preparation_coverage(
             )
         ).all()
         for item in incoming_items:
-            if _replenishment_item_signature(item) != signature:
+            if not is_owned_finished_liner(item) and _replenishment_item_signature(item) != signature:
                 continue
             outstanding = max(
                 int(item.quantity or 0) - int(item.stocked_quantity or 0),
                 0,
             )
             incoming_sheets += outstanding
-            capacity = outstanding * int(item.stock_yield_per_sheet or 1)
+            capacity = covered_pieces(item, outstanding)
             incoming_finished_capacity += capacity
             # One incoming quantity has one owning replenishment line.  A
             # compatible-product binding permits future use, but must not make
@@ -929,6 +1066,9 @@ def customer_board_preparation_coverage(
         ),
         "available_auto_cover_piece_quantity": available_auto_cover_capacity,
         "incoming_auto_cover_piece_quantity": incoming_auto_cover_capacity,
+        "pending_board_preparation_sheet_quantity": pending_sheets,
+        "pending_board_preparation_auto_cover_capacity": pending_pieces // max(int(defaults['pieces_per_box']), 1),
+        "pending_auto_cover_piece_quantity": pending_pieces,
     }
 
 
@@ -1003,6 +1143,7 @@ def virtual_composite_replenishment_demand_plan(
         covered_pieces = (
             int(coverage["customer_board_preparation_auto_cover_capacity"])
             + int(coverage["incoming_board_preparation_auto_cover_capacity"])
+            + int(coverage.get("pending_board_preparation_auto_cover_capacity", 0))
             # Complete free sets already reduced the parent's shortfall. Only
             # unmatched surplus pieces may reduce this remaining demand again.
             + max(free_coverage["pieces"].get(component.id, 0)
@@ -1015,7 +1156,8 @@ def virtual_composite_replenishment_demand_plan(
                            - free_coverage["sets"] * quantity_per_set, 0)
         required_board_pieces = max((required_pieces - free_surplus) * pieces_per_unit
             - int(coverage.get("available_auto_cover_piece_quantity", 0))
-            - int(coverage.get("incoming_auto_cover_piece_quantity", 0)), 0)
+            - int(coverage.get("incoming_auto_cover_piece_quantity", 0))
+            - int(coverage.get("pending_auto_cover_piece_quantity", 0)), 0)
         net_sheets = (required_board_pieces + output_per_sheet - 1) // output_per_sheet
         spare_sheets = (
             int(relation.spare_sheet_quantity or 0) if net_sheets > 0 else 0
@@ -1120,6 +1262,10 @@ def stock_policy_dict(
                         ("confirmed", "partially_stocked")
                     ),
                     StockReplenishmentOrderItem.stock_policy_id == policy.id,
+                    or_(
+                        StockReplenishmentOrderItem.procurement_route_snapshot.is_(None),
+                        StockReplenishmentOrderItem.procurement_route_snapshot != 'paperboard',
+                    ),
                     StockReplenishmentOrderItem.target_inventory_type
                     == "finished",
                     StockReplenishmentOrderItem.quantity
@@ -1133,7 +1279,8 @@ def stock_policy_dict(
         suggested_finished_quantity
         - int(board_coverage["customer_board_preparation_auto_cover_capacity"])
         - int(board_coverage["incoming_board_preparation_auto_cover_capacity"])
-        - external_purchase_incoming_quantity,
+        - external_purchase_incoming_quantity
+        - int(board_coverage.get('pending_board_preparation_auto_cover_capacity', 0)),
         0,
     )
     composite_plan = (
@@ -1165,12 +1312,15 @@ def stock_policy_dict(
             pieces_per_box = output_per_sheet = 1
         required_pieces = max((suggested_finished_quantity - external_purchase_incoming_quantity) * pieces_per_box
             - int(board_coverage.get("available_auto_cover_piece_quantity", 0))
-            - int(board_coverage.get("incoming_auto_cover_piece_quantity", 0)), 0)
+            - int(board_coverage.get("incoming_auto_cover_piece_quantity", 0))
+            - int(board_coverage.get("pending_auto_cover_piece_quantity", 0)), 0)
         suggested_new_requisition_sheet_quantity = (required_pieces + output_per_sheet - 1) // output_per_sheet
         suggested_new_requisition_finished_quantity = (required_pieces + pieces_per_box - 1) // pieces_per_box
     replenishment_state = (
         "purchase_needed"
         if suggested_new_requisition_sheet_quantity > 0
+        else "pending_requisition"
+        if board_coverage.get("pending_board_preparation_sheet_quantity", 0) > 0
         else "already_ordered"
         if external_purchase_incoming_quantity > 0
         else "board_preparation_ready"
@@ -1219,7 +1369,7 @@ def stock_policy_dict(
         "physical_unconsumed_quantity": finished_summary.get(
             "physical_unconsumed_quantity"
         ),
-        "warning_triggered": bool(policy.active and available < warning),
+        "warning_triggered": bool(policy.active and available <= warning),
         "suggested_replenishment_quantity": suggested_finished_quantity,
         **board_coverage,
         "suggested_new_requisition_finished_quantity": (
@@ -1338,6 +1488,8 @@ def replenishment_item_dict(
     projection_context: dict | None = None,
     db: Session | None = None,
 ) -> dict:
+    from app.services.stock_warning_drafts import physical_demand_contract
+    quantity_contract = physical_demand_contract(item)
     location = item.location
     lot = item.inventory_lot
     location_context = projection_context or {}
@@ -1357,6 +1509,7 @@ def replenishment_item_dict(
     return {
         "id": item.id,
         "stock_policy_id": item.stock_policy_id,
+        "quantity_contract": quantity_contract,
         "target_inventory_type": item.target_inventory_type,
         "product_id": item.product_id,
         "reference_product_id": item.reference_product_id,
@@ -1458,6 +1611,7 @@ def replenishment_order_dict(
     return {
         "id": order.id,
         "order_number": order.order_number,
+        "request_hash": order.request_hash,
         "supplier_name": order.supplier_name,
         "customer_id": order.customer_id,
         "customer_name": order.customer.name if order.customer else None,
@@ -1516,7 +1670,23 @@ def receive_replenishment_item(
     )
     if inventory_quantity <= 0 or quantity < 0:
         raise StockReplenishmentError("本次实收数量必须大于0。")
-    if inventory_quantity < quantity:
+    physical_receipt = physical_purchase = None
+    if source_ref_type == 'external_packaging_receipt_item':
+        from app.models.external_packaging_purchase import ExternalPackagingReceiptItem
+        from app.services.external_physical_receipt import received_pieces
+        from app.services.delivery_quantities import QuantityContractError
+        physical_receipt = db.get(ExternalPackagingReceiptItem, receipt_item_id)
+        physical_purchase = db.get(ExternalPackagingPurchaseItem, physical_receipt.purchase_item_id) if physical_receipt else None
+        if (physical_purchase is None or physical_purchase.stock_replenishment_item_id != item.id
+                or physical_purchase.customer_product_id_snapshot != item.product_id
+                or item.target_inventory_type != 'finished'):
+            raise StockReplenishmentError('外购实收入库的客户产品或补库来源不一致。', 409)
+        try:
+            if inventory_quantity != received_pieces(physical_receipt):
+                raise QuantityContractError('外购库存必须按本次实际收到的实物片数入账')
+        except QuantityContractError as error:
+            raise StockReplenishmentError(str(error), 409) from error
+    if inventory_quantity < quantity and physical_receipt is None:
         raise StockReplenishmentError("实际入库数量不能小于计划到货数量。")
     if quantity > remaining:
         raise StockReplenishmentError(
@@ -1712,6 +1882,14 @@ def receive_replenishment_item(
                     else "自动入位" if receipt_target else "补库收料入库"),
                 **common,
             )
+            if physical_receipt is not None:
+                from app.services.external_physical_receipt import freeze_purchase_piece_cost
+                try:
+                    freeze_purchase_piece_cost(lot, purchase=physical_purchase,
+                        receipt=physical_receipt, customer_id=item.customer_id or product.customer_id,
+                        product_id=product.id)
+                except QuantityContractError as error:
+                    raise StockReplenishmentError(str(error), 409) from error
         elif item.target_inventory_type == "semi_finished":
             required = (
                 item.material_code_snapshot,

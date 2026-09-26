@@ -14480,7 +14480,7 @@ def _finished_stock_policy_quick_summary(
         "warning_quantity": warning,
         "target_quantity": target,
         **quantities,
-        "warning_triggered": bool(policy and available < warning),
+        "warning_triggered": bool(policy and policy.active and available <= warning),
         "suggested_replenishment_quantity": (
             max(target - available, 0) if policy else 0
         ),
@@ -16152,6 +16152,58 @@ def get_stock_replenishment_production_print_package(
             },
         )
     return package
+
+
+class PhysicalWarningPurchaseConfirm(BaseModel):
+    expected_request_hash: str = Field(min_length=64, max_length=64)
+    expected_quote_hash: str = Field(min_length=64, max_length=64)
+
+
+@router.get("/stock-replenishment/orders/{order_id}/external-purchase-preview")
+def preview_physical_warning_purchase(order_id: int, db: Session = Depends(get_db),
+                                     user: User = Depends(can_operate)) -> dict:
+    if user.role != 'admin' or not has_permission(user, 'cost.view'):
+        raise HTTPException(status_code=403, detail='外购补库采购仅管理员可确认。')
+    order = db.scalar(_replenishment_order_query().where(StockReplenishmentOrder.id == order_id))
+    if order is None:
+        raise HTTPException(status_code=404, detail='库存补库单不存在。')
+    _require_stock_replenishment_order_access(db, order, user, relationships_loaded=True)
+    from app.services.stock_warning_drafts import warning_purchase_preview
+    try:
+        return warning_purchase_preview(db, order=order)
+    except (StockReplenishmentError, ExternalPurchaseContractError) as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@router.post("/stock-replenishment/orders/{order_id}/external-purchase")
+def confirm_physical_warning_purchase(
+    order_id: int, payload: PhysicalWarningPurchaseConfirm,
+    db: Session = Depends(get_db), user: User = Depends(can_operate),
+) -> dict:
+    if user.role != 'admin' or not has_permission(user, 'cost.view'):
+        raise HTTPException(status_code=403, detail='外购补库采购仅管理员可确认。')
+    order = db.scalar(_replenishment_order_query().where(StockReplenishmentOrder.id == order_id))
+    if order is None:
+        raise HTTPException(status_code=404, detail='库存补库单不存在。')
+    _require_stock_replenishment_order_access(db, order, user, relationships_loaded=True)
+    if order.request_hash != payload.expected_request_hash:
+        raise HTTPException(status_code=409, detail='补库草稿已变化，请刷新后再确认。')
+    from app.services.stock_warning_drafts import confirm_external_warning_draft
+    try:
+        order, created = confirm_external_warning_draft(db, order=order, operator=user,
+            expected_quote_hash=payload.expected_quote_hash)
+        if created:
+            append_audit_event(db, actor=user, event_category='business', result='success',
+                source='web', module_code='requisition', action_code='confirm_physical_warning_purchase',
+                resource='stock_replenishment', entity_type='stock_replenishment_order',
+                entity_id=order.id, object_ref=order.order_number, customer_id=order.customer_id,
+                description='按已保存实物需求确认外购补库采购',
+                details={'request_hash': order.request_hash, 'physical_quantity': order.items[0].quantity})
+        db.commit()
+        return {**_replenishment_order_response(db, order), 'created': created}
+    except (StockReplenishmentError, ExternalPurchaseContractError) as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
 
 @router.post("/stock-replenishment/orders/{order_id}/stock")
@@ -19144,7 +19196,8 @@ def list_reported_customer_options(
 
 def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
     """Build scope-safe filter projections without full response decoration."""
-    from app.services.unified_procurement import internal_material_batch_clause, supplier_line_customer_expression, typed_purchase_snapshots
+    from app.services.unified_procurement import internal_material_batch_clause, supplier_line_customer_expression
+    from app.models.procurement_source import ProcurementSourceLink
 
     documents: list[dict] = []
     allowed_customer_ids = _allowed_customer_ids(user, db)
@@ -19193,7 +19246,7 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
         )
     ).mappings().all()
     supplier_ids = [int(row["document_id"]) for row in supplier_headers]
-    typed_snapshots = typed_purchase_snapshots(db, supplier_ids)
+    typed_snapshots = {}
     supplier_items_by_order: dict[int, list] = {}
     if supplier_ids:
         supplier_item_rows = db.execute(
@@ -19231,12 +19284,15 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                 SupplierRequisitionOrderItem.version.label("item_version"),
                 SupplierRequisitionOrderItem.voided_at.label("item_voided_at"),
                 supplier_line_customer_expression().label("customer_id"),
+                ProcurementSourceLink.source_snapshot_json.label("typed_snapshot_json"),
             )
             .outerjoin(
                 OrderItem,
                 OrderItem.id == SupplierRequisitionOrderItem.order_item_id,
             )
             .outerjoin(Order, Order.id == OrderItem.order_id)
+            .outerjoin(ProcurementSourceLink,
+                       ProcurementSourceLink.supplier_item_id == SupplierRequisitionOrderItem.id)
             .outerjoin(
                 supplier_item_material,
                 supplier_item_material.id
@@ -19268,6 +19324,8 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
             )
         }
         for item in supplier_item_rows:
+            if item['typed_snapshot_json'] is not None:
+                typed_snapshots[int(item['item_id'])] = json.loads(item['typed_snapshot_json'])
             supplier_items_by_order.setdefault(
                 int(item["supplier_order_id"]), []
             ).append(item)
@@ -19497,6 +19555,11 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
             customer_ids.update(policy_customer_ids)
         return next(iter(customer_ids)) if len(customer_ids) == 1 else None
 
+    stock_progresses = receipt_progress_map(db, [
+        SimpleNamespace(id=item['item_id'], quantity=item['quantity'],
+                        stocked_quantity=item['stocked_quantity'])
+        for projected in stock_items_by_order.values() for item in projected
+    ])
     for header in stock_headers:
         document_id = int(header["document_id"])
         projected_items = stock_items_by_order.get(document_id, [])
@@ -19516,12 +19579,8 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
             ):
                 continue
         lines = []
-        from types import SimpleNamespace
-        progresses = receipt_progress_map(db, [SimpleNamespace(
-            id=item['item_id'], quantity=item['quantity'], stocked_quantity=item['stocked_quantity']
-        ) for item in projected_items])
         for item in projected_items:
-            actual_progress = progresses[item['item_id']]
+            actual_progress = stock_progresses[item['item_id']]
             item_customer_name = (
                 item["item_customer_name"]
                 if item["resolved_item_customer_id"] is not None
@@ -19804,6 +19863,11 @@ def _load_reported_document_candidate_page_facts(
     candidates: list[dict],
 ) -> None:
     """Load qualification facts that are needed only for visible legacy rows."""
+    from app.services.unified_procurement import supplier_incoming_statuses
+    incoming = supplier_incoming_statuses(db, [row['id'] for row in candidates if row['source_type'] == 'supplier_order'])
+    for candidate in candidates:
+        if candidate['source_type'] == 'supplier_order':
+            candidate['_incoming_status'] = incoming.get(candidate['id'], '待入库')
 
     requisition_item_ids = {
         int(line["_item_id"])
@@ -19930,7 +19994,7 @@ def _decorate_reported_document_candidates(candidates: list[dict]) -> list[dict]
                         "supplier_name": candidate.get("supplier_name"),
                         "status": candidate["status"],
                         "incoming_status": (
-                            "已作废" if candidate["status"] == "voided" else "待入库"
+                            "已作废" if candidate["status"] == "voided" else candidate.get('_incoming_status', "待入库")
                         ),
                         "created_at": candidate.get("created_at"),
                         "item_count": len(candidate_lines),
@@ -20252,6 +20316,8 @@ def _build_reported_documents(
     supplier_customer_ids: dict[int, set[int]] = {}
     supplier_item_customer_ids: dict[int, int] = {}
     supplier_order_ids = [order.id for order in supplier_orders if order.items]
+    from app.services.unified_procurement import supplier_incoming_statuses
+    supplier_receipt_statuses = supplier_incoming_statuses(db, supplier_order_ids)
     typed_snapshots = typed_purchase_snapshots(db, supplier_order_ids)
     supplier_source_order_item_ids = {
         int(item.order_item_id)
@@ -20370,7 +20436,7 @@ def _build_reported_documents(
                 "document_number": order.order_number,
                 "supplier_name": order.supplier_name,
                 "status": order.status,
-                "incoming_status": "已作废" if order.status == "voided" else "待入库",
+                "incoming_status": supplier_receipt_statuses.get(order.id, '待入库'),
                 "created_at": order.created_at,
                 "item_count": len(order.items),
                 "order_numbers": order_numbers,

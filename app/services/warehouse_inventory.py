@@ -15,6 +15,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.time_contract import beijing_now_naive, beijing_today, utc_now_naive
 from app.models.customer import Customer
 from app.models.delivery import DeliveryItem
+from app.services.delivery_quantities import (
+    QuantityContractError, reservation_requirement_numerator, customer_for as quantity_customer_for,
+    requirement_amount, requirement_denominator,
+)
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
@@ -2377,8 +2381,12 @@ def _transfer_finished_lot_location(
                 take = min(take, reserved_plan.get(reservation.id, 0))
             if take <= 0:
                 continue
+            try:
+                requirement_take = reservation_requirement_numerator(reservation, take)
+            except QuantityContractError as error:
+                raise WarehouseInventoryError(str(error), 409) from error
             reservation.released_stock_quantity += take
-            reservation.released_requirement_quantity += take
+            reservation.released_requirement_quantity += requirement_take
             reservation.released_by = operator_id
             reservation.released_at = now
             reservation.release_reason = "库存批次移动拆分"
@@ -2402,7 +2410,8 @@ def _transfer_finished_lot_location(
                     semi_requirement_id=reservation.semi_requirement_id,
                     match_rule_id=reservation.match_rule_id,
                     reserved_stock_quantity=take,
-                    credited_requirement_quantity=take,
+                    credited_requirement_quantity=requirement_take,
+                    requirement_quantity_denominator=requirement_denominator(reservation),
                     yield_factor=reservation.yield_factor,
                     status="active",
                     warning_codes=reservation.warning_codes,
@@ -2868,14 +2877,14 @@ def active_finished_reserved_qty(db: Session, order_item_id: int) -> int:
     ).all()
     remaining_reserved = sum(
         max(
-            int(row.credited_requirement_quantity or 0)
-            - int(row.consumed_requirement_quantity or 0)
-            - int(row.released_requirement_quantity or 0),
+            requirement_amount(row, 'credited_requirement_quantity')
+            - requirement_amount(row, 'consumed_requirement_quantity')
+            - requirement_amount(row, 'released_requirement_quantity'),
             0,
         )
         for row in rows
     )
-    return max(delivered_quantity, 0) + remaining_reserved
+    return max(delivered_quantity, 0) + int(remaining_reserved)
 
 
 def active_finished_reservations_by_item_ids(
@@ -2904,12 +2913,12 @@ def active_finished_reservations_by_item_ids(
         if row.order_item_id is None:
             continue
         result[row.order_item_id] = result.get(row.order_item_id, 0) + max(
-            int(row.credited_requirement_quantity or 0)
-            - int(row.consumed_requirement_quantity or 0)
-            - int(row.released_requirement_quantity or 0),
+            requirement_amount(row, 'credited_requirement_quantity')
+            - requirement_amount(row, 'consumed_requirement_quantity')
+            - requirement_amount(row, 'released_requirement_quantity'),
             0,
         )
-    return result
+    return {key: int(value) for key, value in result.items()}
 
 
 def requisition_finished_inventory_coverage_by_item_ids(
@@ -2968,11 +2977,11 @@ def requisition_finished_inventory_coverage_by_item_ids(
         ):
             continue
         result[order_item_id] = result.get(order_item_id, 0) + max(
-            int(reservation.credited_requirement_quantity or 0)
-            - int(reservation.released_requirement_quantity or 0),
+            requirement_amount(reservation, 'credited_requirement_quantity')
+            - requirement_amount(reservation, 'released_requirement_quantity'),
             0,
         )
-    return result
+    return {key: int(value) for key, value in result.items()}
 
 
 def requisition_finished_inventory_coverage_qty(
@@ -2998,14 +3007,14 @@ def active_finished_component_reserved_qty(db: Session, snapshot_id: int) -> int
             InventoryReservation.status != "cancelled",
         )
     ).all()
-    return sum(
+    return int(sum(
         max(
-            int(row.credited_requirement_quantity or 0)
-            - int(row.released_requirement_quantity or 0),
+            requirement_amount(row, 'credited_requirement_quantity')
+            - requirement_amount(row, 'released_requirement_quantity'),
             0,
         )
         for row in rows
-    )
+    ))
 
 
 def component_effective_required_piece_qty(
@@ -3343,8 +3352,24 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
     from app.services.finished_stock_identity import order_product_basis
     expected = order_product_basis(db, item.id, item.product_id)
     from app.services.bom_inventory_contract import is_body_lot
-    return [lot for lot in rows if not is_body_lot(lot)
-            and (expected is None or lot.finished_detail.physical_basis_json == expected)]
+    from app.services.finished_stock_identity import matches_stock_identity
+    from app.services.direct_external_finished import eligible
+    from app.services.delivery_quantities import order_basis, require_physical_stock
+    try:
+        basis = order_basis(item, order.customer_id) if eligible(db, item) else None
+    except QuantityContractError as error:
+        raise WarehouseInventoryError(str(error), 409) from error
+    candidates = []
+    for lot in rows:
+        if is_body_lot(lot) or not matches_stock_identity(lot.finished_detail.physical_basis_json, expected):
+            continue
+        try:
+            if basis:
+                require_physical_stock(lot, basis)
+        except QuantityContractError:
+            continue
+        candidates.append(lot)
+    return candidates
 
 
 def finished_inventory_candidates_for_product(
@@ -3402,6 +3427,21 @@ def has_unconsumed_inventory_reservations(
     )
 
 
+def finished_stock_customer_capacity(db: Session, item: OrderItem, lot: InventoryLot) -> int:
+    """Whole customer units covered by real available pieces; odd pieces remain stock."""
+    from app.services.direct_external_finished import eligible
+    from app.services.delivery_quantities import order_basis, require_physical_stock, available_customer_quantity
+    if not eligible(db, item):
+        return int(lot.quantity_available)
+    order = db.get(Order, item.order_id)
+    try:
+        basis = order_basis(item, order.customer_id)
+        require_physical_stock(lot, basis)
+        return available_customer_quantity(basis, lot.quantity_available)
+    except QuantityContractError as error:
+        raise WarehouseInventoryError(str(error), 409) from error
+
+
 def reserve_finished_inventory(
     db: Session,
     *,
@@ -3422,6 +3462,8 @@ def reserve_finished_inventory(
         if (
             existing.order_item_id != order_item_id
             or existing.inventory_lot_id != inventory_lot_id
+            or existing.reservation_type != 'finished_order'
+            or requirement_amount(existing, 'credited_requirement_quantity') != quantity
         ):
             raise WarehouseInventoryError("该请求标识已用于其他库存预占", 409)
         return existing
@@ -3504,7 +3546,22 @@ def reserve_finished_inventory(
         raise WarehouseInventoryError("库存产品与订单产品不一致")
     from app.services.finished_stock_identity import order_product_basis
     expected_basis = order_product_basis(db, item.id, item.product_id)
-    if expected_basis is not None and detail.physical_basis_json != expected_basis:
+    from app.services.direct_external_finished import eligible
+    from app.services.delivery_quantities import order_basis, physical_for, require_physical_stock
+    try:
+        quantity_basis = order_basis(item, order.customer_id) if eligible(db, item) else None
+        from fractions import Fraction
+        from app.services.delivery_quantities import physical_for_fractional_credit
+        stock_quantity = (physical_for_fractional_credit(quantity_basis, quantity)
+                          if quantity_basis and isinstance(quantity, Fraction) else
+                          physical_for(quantity_basis, quantity) if quantity_basis else quantity)
+        if quantity_basis:
+            require_physical_stock(lot, quantity_basis)
+        from app.services.finished_stock_identity import matches_stock_identity
+        identity_matches = matches_stock_identity(detail.physical_basis_json, expected_basis)
+    except (QuantityContractError, ValueError, TypeError) as error:
+        raise WarehouseInventoryError(str(error), 409) from error
+    if not identity_matches:
         raise WarehouseInventoryError("库存缺少匹配的冻结规格、单位或工艺依据，请先核实该批次身份", 409)
     if not detail.is_general and detail.owner_customer_id != order.customer_id:
         raise WarehouseInventoryError("客户专用库存不能用于其他客户订单")
@@ -3521,7 +3578,7 @@ def reserve_finished_inventory(
         )
     if lot.version != expected_version:
         raise WarehouseInventoryError("库存已被其他人修改，请刷新候选后重试", 409)
-    if quantity > lot.quantity_available:
+    if stock_quantity > lot.quantity_available:
         raise WarehouseInventoryError("抵扣数量不能超过库存可用数量", 409)
     before = _balances(lot)
     now = utc_now_naive()
@@ -3532,11 +3589,11 @@ def reserve_finished_inventory(
             InventoryLot.version == expected_version,
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
-            InventoryLot.quantity_available >= quantity,
+            InventoryLot.quantity_available >= stock_quantity,
         )
         .values(
-            quantity_available=InventoryLot.quantity_available - quantity,
-            quantity_reserved=InventoryLot.quantity_reserved + quantity,
+            quantity_available=InventoryLot.quantity_available - stock_quantity,
+            quantity_reserved=InventoryLot.quantity_reserved + stock_quantity,
             version=InventoryLot.version + 1,
             last_movement_at=now,
         )
@@ -3549,8 +3606,9 @@ def reserve_finished_inventory(
         reservation_type="finished_order",
         order_id=order.id,
         order_item_id=item.id,
-        reserved_stock_quantity=quantity,
-        credited_requirement_quantity=quantity,
+        reserved_stock_quantity=stock_quantity,
+        credited_requirement_quantity=stock_quantity * quantity_basis['customer_basis'] if quantity_basis else quantity,
+        requirement_quantity_denominator=quantity_basis['physical_basis'] if quantity_basis else 1,
         yield_factor=1,
         status="active",
         warning_codes=json.dumps(warning_codes, ensure_ascii=False),
@@ -3568,7 +3626,7 @@ def reserve_finished_inventory(
         db,
         lot=lot,
         movement_type="reserve",
-        quantity=quantity,
+        quantity=stock_quantity,
         before=before,
         operator_id=operator_id,
         reason="成品库存抵扣订单",
@@ -3749,7 +3807,7 @@ def reserve_finished_surplus_for_delivery(
         .order_by(InventoryReservation.id)
     ).all()
     if repeated:
-        if sum(int(row.reserved_stock_quantity) for row in repeated) != quantity:
+        if sum(requirement_amount(row, 'credited_requirement_quantity') for row in repeated) != quantity:
             raise WarehouseInventoryError("超量送货库存幂等内容不一致", 409)
         return list(repeated)
     row = db.execute(
@@ -3760,6 +3818,13 @@ def reserve_finished_surplus_for_delivery(
     if row is None:
         raise WarehouseInventoryError("订单明细不存在", 404)
     item, order = row
+    from app.services.direct_external_finished import eligible
+    from app.services.delivery_quantities import order_basis, physical_for, require_physical_stock
+    try:
+        quantity_basis = order_basis(item, order.customer_id) if eligible(db, item) else None
+        physical_quantity = physical_for(quantity_basis, quantity) if quantity_basis else quantity
+    except QuantityContractError as error:
+        raise WarehouseInventoryError(str(error), 409) from error
     lots = db.scalars(
         select(InventoryLot)
         .join(
@@ -3770,8 +3835,15 @@ def reserve_finished_surplus_for_delivery(
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
-            InventoryLot.source_type.in_(
-                ("production_surplus", "production_completion", "transfer")
+            or_(
+                InventoryLot.source_type.in_(
+                    ("production_surplus", "production_completion", "transfer")
+                ),
+                and_(
+                    InventoryLot.source_type == "purchase_reserve",
+                    InventoryLot.source_ref_type == "direct_external_receipt",
+                    quantity_basis is not None,
+                ),
             ),
             FinishedGoodsInventoryDetail.product_id == item.product_id,
             FinishedGoodsInventoryDetail.is_general.is_(False),
@@ -3796,7 +3868,7 @@ def reserve_finished_surplus_for_delivery(
             *inventory_fifo_order_columns(),
         )
     ).all()
-    remaining = quantity
+    remaining = physical_quantity
     reservations: list[InventoryReservation] = []
     now = utc_now_naive()
     for lot in lots:
@@ -3805,6 +3877,11 @@ def reserve_finished_surplus_for_delivery(
             continue
         if remaining <= 0:
             break
+        if quantity_basis:
+            try:
+                require_physical_stock(lot, quantity_basis)
+            except QuantityContractError as error:
+                raise WarehouseInventoryError(str(error), 409) from error
         take = min(int(lot.quantity_available or 0), remaining)
         if take <= 0:
             continue
@@ -3833,7 +3910,8 @@ def reserve_finished_surplus_for_delivery(
             order_id=order.id,
             order_item_id=item.id,
             reserved_stock_quantity=take,
-            credited_requirement_quantity=take,
+            credited_requirement_quantity=take * quantity_basis['customer_basis'] if quantity_basis else take,
+            requirement_quantity_denominator=quantity_basis['physical_basis'] if quantity_basis else 1,
             yield_factor=1,
             status="active",
             warning_codes="[]",
@@ -4144,6 +4222,10 @@ def consume_finished_reservation(
         )
         if stock_quantity > remaining:
             raise WarehouseInventoryError("消耗数量不能超过未消耗成品预占余额", 409)
+        try:
+            requirement_quantity = reservation_requirement_numerator(reservation, stock_quantity)
+        except QuantityContractError as error:
+            raise WarehouseInventoryError(str(error), 409) from error
         delivery_item = db.get(DeliveryItem, delivery_item_id)
         if delivery_item is None:
             raise WarehouseInventoryError("送货明细不存在", 404)
@@ -4185,7 +4267,7 @@ def consume_finished_reservation(
         if result.rowcount != 1:
             raise WarehouseInventoryError("成品库存数量或版本已变化，请重试", 409)
         reservation.consumed_stock_quantity += stock_quantity
-        reservation.consumed_requirement_quantity += stock_quantity
+        reservation.consumed_requirement_quantity += requirement_quantity
         reservation.consumed_by = operator_id
         reservation.consumed_at = now
         reservation.status = _finished_reservation_status(reservation)
@@ -4213,7 +4295,8 @@ def consume_finished_reservation(
             reservation_id=reservation.id,
             consume_movement_id=movement.id,
             consumed_stock_quantity=stock_quantity,
-            credited_requirement_quantity=stock_quantity,
+            credited_requirement_quantity=requirement_quantity,
+            requirement_quantity_denominator=requirement_denominator(reservation),
             reversed_stock_quantity=0,
             reversed_requirement_quantity=0,
             status="active",
@@ -4283,6 +4366,12 @@ def reverse_finished_consumption(
             raise WarehouseInventoryError("逆转数量不能超过该送货成品分配余额", 409)
         if stock_quantity > int(reservation.consumed_stock_quantity or 0):
             raise WarehouseInventoryError("逆转数量不能超过累计成品消耗", 409)
+        try:
+            requirement_quantity = quantity_customer_for(dict(
+                customer_basis=allocation.credited_requirement_quantity,
+                physical_basis=allocation.consumed_stock_quantity), stock_quantity)
+        except QuantityContractError as error:
+            raise WarehouseInventoryError(str(error), 409) from error
         lot = db.get(InventoryLot, reservation.inventory_lot_id)
         if lot is None or lot.version != expected_version:
             raise WarehouseInventoryError("成品库存版本已变化，请重试", 409)
@@ -4307,13 +4396,13 @@ def reverse_finished_consumption(
         if result.rowcount != 1:
             raise WarehouseInventoryError("成品库存数量或版本已变化，请重试", 409)
         reservation.consumed_stock_quantity -= stock_quantity
-        reservation.consumed_requirement_quantity -= stock_quantity
+        reservation.consumed_requirement_quantity -= requirement_quantity
         if reservation.consumed_stock_quantity == 0:
             reservation.consumed_by = None
             reservation.consumed_at = None
         reservation.status = _finished_reservation_status(reservation)
         allocation.reversed_stock_quantity += stock_quantity
-        allocation.reversed_requirement_quantity += stock_quantity
+        allocation.reversed_requirement_quantity += requirement_quantity
         allocation.reversed_by = operator_id
         allocation.reversed_at = now
         allocation.status = (
@@ -4428,7 +4517,10 @@ def release_finished_reservation(
     if result.rowcount != 1:
         raise WarehouseInventoryError("库存数量已变化，请刷新后重试", 409)
     reservation.released_stock_quantity += quantity
-    reservation.released_requirement_quantity += quantity
+    reservation.released_requirement_quantity = (
+        int(reservation.reserved_stock_quantity if reservation.credited_requirement_quantity is None
+            else reservation.credited_requirement_quantity)
+        - int(reservation.consumed_requirement_quantity or 0))
     reservation.status = _finished_reservation_status(reservation)
     reservation.released_by = operator_id
     reservation.released_at = now
@@ -4520,7 +4612,11 @@ def release_finished_surplus_delivery_reservation(
     if updated.rowcount != 1:
         raise WarehouseInventoryError("余货库存数量已变化，请刷新后重试", 409)
     reservation.released_stock_quantity += stock_quantity
-    reservation.released_requirement_quantity += stock_quantity
+    try:
+        requirement_quantity = reservation_requirement_numerator(reservation, stock_quantity)
+    except QuantityContractError as error:
+        raise WarehouseInventoryError(str(error), 409) from error
+    reservation.released_requirement_quantity += requirement_quantity
     reservation.released_by = operator_id
     reservation.released_at = now
     reservation.release_reason = "撤销送货，释放本次超量送货余货"

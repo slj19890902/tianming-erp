@@ -74,7 +74,11 @@ def validate_entries(session):
                     external_spec = json.loads(external_spec)
                 except (ValueError, TypeError):
                     external_spec = None
-            has_external_spec = lot.cost_snapshot_source == 'direct_external_receipt' and isinstance(external_spec, dict) and bool(external_spec)
+            external_source = lot.cost_snapshot_source == 'direct_external_receipt' or (
+                lot.cost_snapshot_source == 'purchase_receipt_actual'
+                and lot.source_ref_type in {'external_packaging_receipt_item', 'direct_external_receipt'}
+                and cost_detail.get('external_receipt_item_id') == lot.source_ref_id)
+            has_external_spec = external_source and isinstance(external_spec, dict) and bool(external_spec)
             if not basis.get('spec') and not (detail.length_mm and detail.width_mm) and not has_sheet and not has_external_spec:
                 missing.append('实物规格')
         elif lot.semi_finished_detail:

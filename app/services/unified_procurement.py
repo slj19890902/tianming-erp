@@ -59,6 +59,42 @@ def internal_material_batch_clause():
             RequisitionItem.requisition_id == Requisition.id).exists()
 
 
+def supplier_incoming_statuses(db, order_ids):
+    """Project effective receipt facts through the existing typed source links."""
+    if not order_ids:
+        return {}
+    from sqlalchemy import and_, case, func, or_
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+    order, line, link, fact = (SupplierRequisitionOrder, SupplierRequisitionOrderItem,
+                               ProcurementSourceLink, IncomingReceiptItem)
+    # Each supplier line has at most one typed source link. OR matching counts a
+    # receipt once even when both its direct and source identities match.
+    rows = db.execute(select(
+        order.id, order.status, line.id, line.requisition_qty,
+        func.coalesce(func.sum(fact.received_quantity), 0),
+        func.max(case((and_(fact.resolution_action == 'accept_short',
+                            fact.resolution_status == 'resolved'), 1), else_=0)),
+    ).select_from(order).outerjoin(line, and_(line.supplier_order_id == order.id, line.status == 'active'))
+      .outerjoin(link, and_(link.supplier_item_id == line.id, link.status == 'active'))
+      .outerjoin(fact, and_(fact.status == 'posted', or_(
+          fact.supplier_order_item_id == line.id,
+          fact.stock_replenishment_item_id == link.stock_replenishment_item_id,
+          fact.requisition_item_id == link.material_requisition_item_id)))
+      .where(order.id.in_(order_ids))
+      .group_by(order.id, order.status, line.id, line.requisition_qty))
+    progress = {}
+    for order_id, status, line_id, quantity, received, closed in rows:
+        state = progress.setdefault(order_id, {'status': status, 'complete': [], 'received': False})
+        if line_id is not None:
+            state['complete'].append(bool(closed or received >= quantity))
+            state['received'] |= received > 0
+    return {order_id: ('已作废' if state['status'] == 'voided' else
+                      '已入库' if state['complete'] and all(state['complete']) else
+                      '部分入库' if state['received'] else '待入库')
+            for order_id, state in progress.items()}
+
+
 def decorate_incoming_purchase_numbers(db, rows):
     """Keep the r/sr receipt identity, expose the actual unified supplier PO."""
     from app.models.supplier_requisition_order import SupplierRequisitionOrder
@@ -97,7 +133,9 @@ def stock_snapshot(item, order):
         "crease_middle_mm", "crease_right_mm", "sheet_type", "component_type",
         "pieces_per_box", "stock_yield_per_sheet", "quantity", "procurement_route_snapshot",
     )
-    return {**{key: getattr(item, key) for key in fields},
+    quantity_contract = ({'quantity_contract_json': item.quantity_contract_json}
+                        if item.quantity_contract_json is not None else {})
+    return {**{key: getattr(item, key) for key in fields}, **quantity_contract,
             "source_type": order.source_type, "source_number": order.order_number,
             "source_customer_id": item.customer_id or order.customer_id,
             "supplier_name": order.supplier_name}
@@ -120,10 +158,16 @@ def typed_purchase_snapshots(db, supplier_order_ids):
 
 def pending_stock_rows(db, user):
     from app.api.requisition import _require_stock_replenishment_order_access
+    from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem, ExternalPackagingPurchaseCancellation
     rows = db.execute(select(StockReplenishmentOrderItem, StockReplenishmentOrder)
         .join(StockReplenishmentOrder, StockReplenishmentOrder.id == StockReplenishmentOrderItem.replenishment_order_id)
         .where(StockReplenishmentOrder.status.in_(("draft", "confirmed", "partially_stocked")),
                StockReplenishmentOrder.request_hash.is_not(None),
+               ~select(ExternalPackagingPurchaseItem.id).where(
+                   ExternalPackagingPurchaseItem.stock_replenishment_item_id == StockReplenishmentOrderItem.id,
+                   ~select(ExternalPackagingPurchaseCancellation.id).where(
+                       ExternalPackagingPurchaseCancellation.purchase_order_id == ExternalPackagingPurchaseItem.purchase_order_id
+                   ).exists()).exists(),
                ~select(ProcurementSourceLink.id).where(
                    ProcurementSourceLink.stock_replenishment_item_id == StockReplenishmentOrderItem.id,
                    ProcurementSourceLink.status == "active").exists())
@@ -157,6 +201,14 @@ def pending_stock_rows(db, user):
             "supplier_name": order.supplier_name, "snapshot_supplier_name": order.supplier_name,
             "source_snapshot": snapshot, "requisition_status": "未报料",
         })
+        if item.quantity_contract_json is not None:
+            from app.services.stock_warning_drafts import physical_demand_contract
+            contract = physical_demand_contract(item)
+            result[-1].update(procurement_mode='external_purchase',
+                quantity_basis='physical', unit=contract['physical_unit'],
+                external_purchase_quantity=str(item.quantity),
+                external_purchase_unit=contract['physical_unit'],
+                quantity_contract=contract)
     return result
 
 

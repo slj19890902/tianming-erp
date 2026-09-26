@@ -20,6 +20,9 @@ _LEADING_CHINESE_LABEL_PATTERN = re.compile(
 _MOLD_LABEL_ALLOWED_PATTERN = re.compile(
     r"^[\u3400-\u9fffA-Za-z0-9\s*×/._\-()（）]+$"
 )
+_MOLD_SHORT_NAME_ALLOWED_PATTERN = re.compile(
+    r"^[\u3400-\u9fff\u0370-\u03ffA-Za-z0-9\s*×/._\-()（）,，]+$"
+)
 
 
 class MoldIdentityError(ValueError):
@@ -51,7 +54,9 @@ def normalize_mold_chinese_short_name(value: str | None) -> str | None:
         return None
     if len(short_name) > 100:
         raise MoldIdentityError("模具中文简写不能超过 100 个字符")
-    if _MOLD_LABEL_ALLOWED_PATTERN.fullmatch(short_name) is None:
+    # Customer model names contain Greek series letters and comma-separated
+    # variants. Preserve those names without relaxing the inventory-code label.
+    if _MOLD_SHORT_NAME_ALLOWED_PATTERN.fullmatch(short_name) is None:
         raise MoldIdentityError("模具中文简写包含不支持的字符")
     return short_name
 

@@ -1708,6 +1708,11 @@ class InventoryReservation(Base):
     )
     reserved_stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     credited_requirement_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Requirement quantities are exact integer numerators. Legacy rows use 1;
+    # split receipts can represent e.g. 2/3 customer units without rounding stock.
+    requirement_quantity_denominator: Mapped[int] = mapped_column(
+        Integer, CheckConstraint('requirement_quantity_denominator > 0', name='ck_reservation_requirement_denominator'),
+        default=1, server_default='1', nullable=False)
     yield_factor: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cut_plan_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     consumed_stock_quantity: Mapped[int] = mapped_column(
@@ -2085,6 +2090,9 @@ class DeliveryInventoryAllocation(Base):
     )
     consumed_stock_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     credited_requirement_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    requirement_quantity_denominator: Mapped[int] = mapped_column(
+        Integer, CheckConstraint('requirement_quantity_denominator > 0', name='ck_delivery_allocation_requirement_denominator'),
+        default=1, server_default='1', nullable=False)
     reversed_stock_quantity: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False
     )

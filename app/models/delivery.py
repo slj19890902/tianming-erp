@@ -270,6 +270,7 @@ class DeliveryItem(Base):
     )
     customer_po_snapshot: Mapped[str | None] = mapped_column(String(200), nullable=True)
     customer_document_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quantity_contract_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     product_code_snapshot: Mapped[str | None] = mapped_column(String(150), nullable=True)
     product_name_snapshot: Mapped[str | None] = mapped_column(String(250), nullable=True)
     specification_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -251,6 +251,8 @@ class StockReplenishmentOrderItem(Base):
         Integer, default=1, nullable=False
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    # NULL preserves the original customer-plan quantity on legacy external orders.
+    quantity_contract_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     stocked_quantity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     location_id: Mapped[int | None] = mapped_column(
         ForeignKey("warehouse_locations.id", ondelete="SET NULL"), nullable=True

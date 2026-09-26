@@ -21,6 +21,13 @@ PARENT_REVISION = "jh67v8x9z56"
 TARGET_REVISION = "ji68v8x9z57"
 
 
+def _physical_incoming(app, policy_id):
+    from app.models.stock_replenishment import InventoryStockPolicy
+    from app.services.stock_replenishment import external_stock_incoming_physical_quantity
+    with app.state.factory() as db:
+        return external_stock_incoming_physical_quantity(db, db.get(InventoryStockPolicy, policy_id))
+
+
 @pytest.fixture()
 def external_stock_app(p1_40a_app: FastAPI) -> FastAPI:
     from app.api.external_packaging_purchases import router as purchase_router
@@ -194,6 +201,7 @@ def test_external_warning_confirm_creates_no_sales_order_and_is_idempotent(
         )
         assert repeated.status_code == 201, repeated.text
         assert repeated.json()["id"] == body["id"]
+        assert _physical_incoming(external_stock_app, policy_id) == 8000
 
     with external_stock_app.state.factory() as db:
         assert int(db.scalar(select(func.count(Order.id))) or 0) == 0
@@ -349,7 +357,10 @@ def test_external_warning_replay_uses_frozen_purchase_after_supplier_changes(
         supplier.is_active = False
         supplier.version += 1
         policy.active = False
+        policy.product.external_packaging_default_purchase_quantity_basis = Decimal('7')
         db.commit()
+
+    assert _physical_incoming(external_stock_app, policy_id) == 8000
 
     replay_date = date.today() + timedelta(days=1)
     monkeypatch.setattr(requisition_api, "beijing_today", lambda: replay_date)
@@ -637,7 +648,14 @@ def test_external_stock_over_receipt_preserves_extra_finished_and_loose_units(
         assert stock_item.stocked_quantity == 2000
         assert int(receipt_item.converted_finished_quantity) == 2021
         assert Decimal(receipt_item.loose_remainder_quantity_after) == Decimal("1")
-        assert lot.quantity_available == 2021
+        assert lot.quantity_available == 4043
+        from app.services.warehouse_display_units import lot_display_unit
+        from app.services.inventory_valuation import frozen_cost
+        assert lot_display_unit(lot) == '片'
+        unit_cost, cost = frozen_cost(lot, db)
+        assert unit_cost == Decimal('8.5000')
+        assert cost['received_physical_quantity'] == 4043
+        assert Decimal(cost['capitalized_material_cost']) == Decimal('34365.50')
         assert int(db.scalar(select(func.count(ExternalPackagingReceipt.id))) or 0) == 1
         assert int(db.scalar(select(func.count(InventoryLot.id))) or 0) == 1
 
@@ -685,7 +703,7 @@ def test_external_warning_purchase_confirmation_requires_admin_cost_authority(
         assert "仅管理员可确认" in denied.json()["detail"]
 
 
-def test_external_stock_partial_receipts_keep_loose_units_until_ratio_is_complete(
+def test_external_stock_partial_receipts_store_each_piece_before_customer_unit_is_complete(
     external_stock_app: FastAPI,
 ) -> None:
     from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
@@ -760,6 +778,7 @@ def test_external_stock_partial_receipts_keep_loose_units_until_ratio_is_complet
         first_line = first.json()["receipt"]["items"][0]
         assert first_line["converted_finished_quantity"] == 0
         assert first_line["loose_remainder_quantity_after"] == "1"
+        assert _physical_incoming(external_stock_app, policy_id) == 7999
 
         with external_stock_app.state.factory() as db:
             assert int(
@@ -769,7 +788,7 @@ def test_external_stock_partial_receipts_keep_loose_units_until_ratio_is_complet
                     )
                 )
                 or 0
-            ) == 0
+            ) == 1
             stock_item = db.scalar(select(StockReplenishmentOrderItem))
             assert stock_item is not None
             assert stock_item.stocked_quantity == 0
@@ -790,6 +809,7 @@ def test_external_stock_partial_receipts_keep_loose_units_until_ratio_is_complet
         second_line = second.json()["receipt"]["items"][0]
         assert second_line["converted_finished_quantity"] == 1
         assert second_line["loose_remainder_quantity_after"] == "0"
+        assert _physical_incoming(external_stock_app, policy_id) == 7998
         repeated = client.post(
             f"/api/external-packaging-purchases/{purchase_order_id}/receipts",
             json={
@@ -849,6 +869,14 @@ def test_external_stock_partial_receipts_keep_loose_units_until_ratio_is_complet
         assert stock_item is not None and purchase_item is not None and lot is not None
         assert stock_item.stocked_quantity == 1
         assert lot.quantity_available == 1
+        lots = list(db.scalars(select(InventoryLot).join(FinishedGoodsInventoryDetail).where(
+            FinishedGoodsInventoryDetail.product_id == product_id)))
+        assert len(lots) == 2
+        assert sum(row.quantity_available for row in lots) == 2
+        from app.models.external_packaging_purchase import ExternalPackagingReceiptItem
+        receipt_ids = set(db.scalars(select(ExternalPackagingReceiptItem.id).where(
+            ExternalPackagingReceiptItem.purchase_item_id == purchase_item.id)))
+        assert {row.source_ref_id for row in lots} == receipt_ids
 
 
 def test_unreceived_external_stock_purchase_can_cancel_and_reopen_warning(
@@ -898,6 +926,7 @@ def test_unreceived_external_stock_purchase_can_cancel_and_reopen_warning(
         )
         assert row["lifecycle_status"] == "cancelled"
         assert row["purchase_orders"][0]["lifecycle_status"] == "cancelled"
+        assert _physical_incoming(external_stock_app, policy_id) == 0
 
 
 def test_p1_140_migration_is_linear_and_round_trips_isolated_sqlite(

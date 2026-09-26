@@ -50,6 +50,7 @@ from app.models.invoice_task import (
     CustomerInvoiceProfile,
     FinanceInvoiceTask,
     FinanceInvoiceTaskStatement,
+    FinanceInvoiceTaskItem,
     FinanceSettlementEntity,
 )
 from app.models.supplier import Supplier
@@ -1857,12 +1858,16 @@ def _statement_detail_response(
             "voided_versions": [{"version": log.before_version, "reason": log.reason,
                 "created_at": log.created_at, "snapshot": _redact_statement_costs(json.loads(log.details_json).get("snapshot", {}), user)}
                 for log in db.scalars(select(StatementAdjustment).where(StatementAdjustment.statement_id == statement.id,
-                    StatementAdjustment.action.in_(("invalidate_statement_version", "merge_statements"))).order_by(StatementAdjustment.id.desc()))],
+                    StatementAdjustment.action.in_(("invalidate_statement_version", "merge_statements", "cancel_statement"))).order_by(StatementAdjustment.id.desc()))],
             "invoice_count": len(invoices),
             "settlement_count": len(settlements),
             "items": statement_items,
             "invoices": [dict(row._mapping) for row in invoices],
             "settlements": [dict(row._mapping) for row in settlements],
+            "reversed_settlements": [dict(json.loads(log.details)['before'], reversed_at=log.created_at,
+                reversed_by=log.user_id) for log in db.scalars(select(OperationLog).where(
+                    OperationLog.action_code == 'finance.reverse_settlement',
+                    OperationLog.entity_id == statement.id).order_by(OperationLog.id.desc()))],
         },
         user,
     )
@@ -6958,6 +6963,61 @@ def settle_statement(
         raise
 
 
+class SettlementReversal(LedgerMutationVersionPayload):
+    idempotency_key: str = Field(pattern=r'^[A-Za-z0-9_-]{8,100}$')
+
+
+@router.post('/statements/{statement_id}/settlements/{settlement_id}/reverse')
+def reverse_settlement_record(statement_id: int, settlement_id: int, payload: SettlementReversal,
+    db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
+    if user.role != 'admin':
+        raise HTTPException(403, '仅管理员可撤销收款登记')
+    try:
+        statement = _statement_for_user(db, statement_id, user)
+        # Obtain the write lock before inspecting replay or financial balances.
+        db.execute(update(Statement).where(Statement.id == statement.id)
+            .values(ledger_version=Statement.ledger_version))
+        db.refresh(statement)
+        ref = 'settlement-reversal:' + payload.idempotency_key
+        request_hash = _finance_manual_request_hash(dict(statement_id=statement_id,
+            settlement_id=settlement_id, **payload.model_dump()))
+        replay = db.scalar(select(OperationLog).where(
+            OperationLog.action_code == 'finance.reverse_settlement', OperationLog.object_ref == ref))
+        if replay:
+            fact = json.loads(replay.details)
+            if replay.user_id != user.id or fact['request_hash'] != request_hash:
+                raise HTTPException(409, '该操作编号已用于其他收款撤销，请刷新核对')
+            db.rollback()
+            return fact['response']
+        if statement.version != payload.expected_version or statement.ledger_version != payload.expected_ledger_version:
+            raise HTTPException(409, '账单或收款已变化，请刷新后再撤销')
+        row = db.get(SettlementRecord, settlement_id)
+        if row is None or row.statement_id != statement.id:
+            raise HTTPException(409, '该收款登记不存在或已经撤销，请刷新查看历史')
+        total = db.scalar(select(func.coalesce(func.sum(SettlementRecord.settled_amount), 0))
+            .where(SettlementRecord.statement_id == statement.id))
+        if total != statement.settled_amount or statement.settled_amount < row.settled_amount:
+            raise HTTPException(409, '收款流水与账单金额不一致，请先核对账务')
+        before = {column.key: getattr(row, column.key) for column in SettlementRecord.__table__.columns}
+        statement.settled_amount -= row.settled_amount
+        statement.status = 'unsettled'
+        statement.ledger_version += 1
+        response = dict(ok=True, statement_id=statement.id, settlement_id=row.id,
+            ledger_version=statement.ledger_version, message='收款登记已撤销，历史保留')
+        append_audit_event(db, actor=user, event_category='business', result='success', source='web',
+            module_code='finance', action_code='finance.reverse_settlement', resource='Statement',
+            entity_type='statement', entity_id=statement.id, object_ref=ref, customer_id=statement.customer_id,
+            description='管理员撤销收款登记并保留完整历史',
+            details=jsonable_encoder(dict(request_hash=request_hash, before=before,
+                response=response, settled_amount_after=statement.settled_amount)))
+        db.delete(row)
+        db.commit()
+        return response
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.post("/return_receipts/{receipt_id}/cancel")
 def cancel_return_receipt(
     receipt_id: int,
@@ -7092,9 +7152,8 @@ def _statement_adjustment_log(
     before_version: int,
     details: dict,
     user: User,
-) -> None:
-    db.add(
-        StatementAdjustment(
+) -> StatementAdjustment:
+    adjustment = StatementAdjustment(
             statement_id=statement.id,
             action=action,
             reason=reason,
@@ -7105,7 +7164,8 @@ def _statement_adjustment_log(
             ),
             created_by=user.id,
         )
-    )
+    db.add(adjustment)
+    return adjustment
 
 
 def _lock_unpaid_statement_for_dispute(
@@ -7680,18 +7740,16 @@ def cancel_statement(
 ) -> dict:
     try:
         statement = _statement_for_user(db, statement_id, user)
-        if statement.confirmation_status == "cancelled" or db.scalar(select(StatementAdjustment.id).where(
-            StatementAdjustment.action == "merge_statements",
-            func.json_extract(StatementAdjustment.details_json, "$.merged_statement_id") == statement.id
-        ).limit(1)) is not None:
-            raise HTTPException(409, "合并相关对账单须保留历史，请使用客户异议或作废当前版本进行受控调整")
+        if statement.confirmation_status == "cancelled":
+            return {"status": "cancelled", "statement_id": statement_id}
         if statement.confirmation_status == "confirmed":
             raise HTTPException(
                 status_code=409,
                 detail="对账单已确认；如需取消，请先作废对应开票任务并重新核对。",
             )
         if db.scalar(
-            select(StatementInvoice.id).where(StatementInvoice.statement_id == statement.id).limit(1)
+            select(StatementInvoice.id).where(StatementInvoice.statement_id == statement.id,
+                StatementInvoice.invoice_status == "issued").limit(1)
         ) is not None:
             raise HTTPException(
                 status_code=409,
@@ -7706,9 +7764,34 @@ def cancel_statement(
                 status_code=409,
                 detail="该对账单已有收款记录，请先撤销收款后再取消对账单。",
             )
+        _lock_unpaid_statement_for_dispute(db, statement_id=statement.id, expected_version=statement.version)
+        if db.scalar(select(FinanceInvoiceTask.id).where(task_statement_filter(statement.id),
+            FinanceInvoiceTask.status != "voided").limit(1)) is not None:
+            raise HTTPException(409, "请先撤销该对账单的开票任务，再取消对账单。")
         before = _statement_detail_response(db, statement.id, user)
+        before_version = statement.version
+        statement.confirmation_status = "cancelled"
+        statement.version += 1
+        source_items = list(db.scalars(select(StatementItem).where(StatementItem.statement_id == statement.id)))
+        adjustment = _statement_adjustment_log(db, statement=statement, action="cancel_statement",
+            reason="取消对账单并保留历史", before_version=before_version,
+            details={"snapshot": before, "source_items": [
+                {column.name: getattr(item, column.name) for column in StatementItem.__table__.columns}
+                for item in source_items]}, user=user)
+        db.flush()
+        task_items = list(db.scalars(select(FinanceInvoiceTaskItem).where(
+            FinanceInvoiceTaskItem.statement_item_id.in_([item.id for item in source_items]))))
+        for item in task_items:
+            task = db.get(FinanceInvoiceTask, item.task_id)
+            if task is None or task.status != "voided":
+                raise HTTPException(409, "仍有有效开票明细引用本对账单，请先作废任务")
+            item.archived_statement_item_id = item.statement_item_id
+            item.archived_adjustment_id = adjustment.id
+            item.statement_item_id = None
+        db.flush()
+        # Release effective receipt/charge claims. The complete historical
+        # document and its invoice references survive in the retained version.
         db.execute(delete(StatementItem).where(StatementItem.statement_id == statement.id))
-        db.execute(delete(Statement).where(Statement.id == statement.id))
         _audit(
             db,
             user=user,

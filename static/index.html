@@ -5079,7 +5079,7 @@
                 <div class="field delivery-detailed-customer-filter"><label>客户</label><search-select v-model="deliveryListFilters.customer_id" :options="customerOptions" label-key="name" value-key="id" placeholder="全部客户" :allow-empty="true" @change="pages.deliveries=1; loadDeliveries()"></search-select></div>
                 <input class="input delivery-date-input" type="date" v-model="deliveryListFilters.date_from" aria-label="送货开始日期" @change="pages.deliveries=1; loadDeliveries()" />
                 <input class="input delivery-date-input" type="date" v-model="deliveryListFilters.date_to" aria-label="送货结束日期" @change="pages.deliveries=1; loadDeliveries()" />
-                <select class="select delivery-status-select" v-model="deliveryListFilters.status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部送货状态</option><option value="pending">草稿</option><option value="dispatched">已发货</option><option value="voided">已作废</option></select>
+                <select class="select delivery-status-select" v-model="deliveryListFilters.status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部送货状态</option><option value="pending">草稿</option><option value="dispatched">已发货</option><option value="voided">已删除（留痕）</option></select>
                 <select class="select delivery-status-select" v-model="deliveryListFilters.return_status" @change="pages.deliveries=1; loadDeliveries()"><option value="">全部回单状态</option><option value="waiting_receipt">待回单</option><option value="confirmed">回单已确认</option><option value="cancelled">回单已取消</option></select>
                 <div class="field"><label>客户订单号</label><input class="input" v-model.trim="deliveryDetailedFilters.customer_po" placeholder="输入客户订单号" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
                 <div class="field"><label>存货编码</label><input class="input" v-model.trim="deliveryDetailedFilters.product_code" placeholder="输入存货编码" @keyup.enter.prevent="applyDeliveryDetailedFilters" /></div>
@@ -5104,7 +5104,7 @@
                     <td>{{ row.delivery_date }}<div v-if="row.is_historical_backfill" class="status blue" style="margin-top:4px">历史补录</div><div v-if="row.created_at" class="muted">ERP录入 {{ formatDateTime(row.created_at) }}</div></td>
                     <td>{{ row.vehicle_number || "-" }}</td>
                     <td>{{ deliveryDisplayQuantity(row) }}</td>
-                    <td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
+                    <td><span v-if="row.status==='voided'" class="status gray">已删除（留痕）</span><status-tag v-else :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
                     <td><button class="btn small delivery-list-detail-toggle" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${row.item_count ?? (row.items || []).length}）` }}</button></td>
                     <td class="delivery-list-actions"><div class="delivery-row-actions-inner">
@@ -5535,7 +5535,7 @@
                     <div v-if="canFinance" class="finance-cost-grid" style="margin-top:10px"><div class="field"><label>承兑号码</label><input class="input" v-model.trim="financeAcceptanceForm.bill_number" /></div><div class="field"><label>客户</label><select class="select" v-model.number="financeAcceptanceForm.customer_id"><option :value="null">请选择</option><option v-for="item in simpleFinanceMeta.customers" :key="item.id" :value="item.id">{{ item.short_name }}</option></select></div><div class="field"><label>票面金额</label><input class="input" type="number" min="0.01" step="0.01" v-model="financeAcceptanceForm.amount" /></div><div class="field"><label>收到日期</label><input class="input" type="date" v-model="financeAcceptanceForm.received_date" /></div><div class="field"><label>到期日期</label><input class="input" type="date" v-model="financeAcceptanceForm.maturity_date" /></div><div class="field"><label>备注</label><input class="input" v-model.trim="financeAcceptanceForm.note" /></div><div class="field"><label>&nbsp;</label><button class="btn primary" :disabled="simpleFinanceState.saving" @click="saveFinanceAcceptance">登记在手承兑</button></div></div>
                     <div class="table-wrap"><table :data-workspace-list="'finance-detail-7'"><thead><tr><th>客户 / 承兑号</th><th>金额</th><th>收到 / 到期</th><th>状态</th><th>供应商月结 / 操作</th></tr></thead><tbody><tr v-for="row in localRows(financeAcceptances,'finance-detail-7')" :key="row.id"><td><strong>{{ row.customer_name }}</strong><div class="muted">{{ row.bill_number }}</div></td><td class="sensitive-price">¥ {{ money(row.amount) }}</td><td>{{ row.received_date }} / {{ row.maturity_date }}</td><td><span :class="['status',row.status==='held'?'orange':row.status==='endorsed'?'blue':row.status==='matured'?'green':'gray']">{{ row.status_label }}</span><div v-if="row.supplier_name" class="muted">{{ row.supplier_name }}</div></td><td><div v-if="row.status==='held'" class="toolbar-group"><select class="select" style="max-width:310px" v-model.number="row._statementId"><option :value="null">选择供应商月结</option><option v-for="item in simpleFinanceMeta.supplier_statements" :key="item.id" :value="item.id" :disabled="Number(row.amount)>Number(item.available_payment_amount)">{{ item.supplier_name }} · {{ item.statement_number }} · 可抵付 {{ money(item.available_payment_amount) }}{{ Number(row.amount)>Number(item.available_payment_amount) ? '（余额不足）' : '' }}</option></select><button v-if="canFinance" class="btn small primary" :disabled="!!simpleFinanceState.action" @click="endorseFinanceAcceptance(row)">背书抵付</button><button v-if="canFinance" class="btn small" :disabled="!!simpleFinanceState.action" @click="transitionFinanceAcceptance(row,'matured')">到期</button><button v-if="canFinance" class="btn small danger" :disabled="!!simpleFinanceState.action" @click="transitionFinanceAcceptance(row,'returned')">退回</button></div><span v-else class="muted">{{ row.supplier_statement_id ? `已关联月结 #${row.supplier_statement_id}` : '-' }}</span></td></tr><tr v-if="!financeAcceptances.length"><td colspan="5" class="empty">尚无承兑记录。</td></tr></tbody></table></div><local-pager :rows="financeAcceptances" :list-key="'finance-detail-7'"></local-pager>
                   </div>
-                <div v-if="financeExpensePane==='list'" class="toolbar-group"><select class="select" v-model="financeCostFilters.status" @change="reloadFinanceCosts"><option value="">全部状态</option><option value="draft">草稿</option><option value="confirmed">已确认</option><option value="voided">已作废</option></select><select class="select" v-model="financeCostFilters.category" @change="reloadFinanceCosts"><option value="">全部类别</option><option v-for="item in financeCostMeta.categories" :key="item.value" :value="item.value">{{item.label}}</option></select><button class="btn small" @click="loadFinanceCosts">查询</button></div></div>
+                <div v-if="financeExpensePane==='list'" class="toolbar-group"><select class="select" v-model="financeCostFilters.status" @change="reloadFinanceCosts"><option value="">全部状态</option><option value="draft">草稿</option><option value="confirmed">已确认</option><option value="voided">已删除（留痕）</option></select><select class="select" v-model="financeCostFilters.category" @change="reloadFinanceCosts"><option value="">全部类别</option><option v-for="item in financeCostMeta.categories" :key="item.value" :value="item.value">{{item.label}}</option></select><button class="btn small" @click="loadFinanceCosts">查询</button></div></div>
                 <div v-show="financeExpensePane==='review'" v-if="canViewFinanceCosts"  class="panel finance-filter-panel" style="margin-bottom:10px">
 
                   <div style="margin-top:10px">
@@ -5550,7 +5550,7 @@
                   </div>
                   <div class="finance-cost-grid">
                     <div class="field"><label>月份</label><input class="input" type="month" v-model="financeCostMonth" @change="onFinanceCostMonthChange" /></div>
-                    <div class="field"><label>状态</label><select class="select" v-model="financeCostFilters.status" @change="reloadFinanceCosts"><option value="">全部</option><option value="draft">草稿</option><option value="confirmed">已确认</option><option value="voided">已作废</option></select></div>
+                    <div class="field"><label>状态</label><select class="select" v-model="financeCostFilters.status" @change="reloadFinanceCosts"><option value="">全部</option><option value="draft">草稿</option><option value="confirmed">已确认</option><option value="voided">已删除（留痕）</option></select></div>
                     <div class="field"><label>类别</label><select class="select" v-model="financeCostFilters.category" @change="reloadFinanceCosts"><option value="">全部</option><option v-for="item in financeCostMeta.categories" :key="item.value" :value="item.value">{{ item.label }}</option></select></div>
                     <div class="field"><label>成本中心</label><select class="select" v-model.number="financeCostFilters.center_id" @change="reloadFinanceCosts"><option value="">全部</option><option v-for="item in financeCostMeta.centers" :key="item.id" :value="item.id">{{ item.name }}</option></select></div>
                   </div>
@@ -8180,9 +8180,9 @@
                   <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
                     <button v-if="canRollbackOrders" class="btn small danger" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="canAdmin ? previewAdminOrderAction('withdraw') : dangerRollbackOrderGroup()">撤回</button>
                     <button v-if="canStatusOrders" class="btn small" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="dangerChangeOrderGroupStatus('closed')">结档</button>
-                    <button v-if="canStatusOrders" class="btn small danger" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="canAdmin ? previewAdminOrderAction('keep_stock') : dangerChangeOrderGroupStatus('cancelled')">{{ canAdmin ? '作废留库' : '作废' }}</button>
+                    <button v-if="canStatusOrders" class="btn small danger" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="canAdmin ? previewAdminOrderAction('cancel_stock') : dangerChangeOrderGroupStatus('cancelled')">{{ canAdmin ? '作废并撤库存' : '作废' }}</button>
                     <button v-if="canStatusOrders && !canAdmin" class="btn small danger" :disabled="orderGroupSaveState.saving" @click="dangerChangeOrderGroupStatus('dead')">死单</button>
-                    <button v-if="canDeleteOrders" class="btn small danger" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="canAdmin ? previewAdminOrderAction('delete_trial') : dangerDeleteOrderGroup()">{{ canAdmin ? '删除试验单' : '删除' }}</button>
+                    <button v-if="canDeleteOrders" class="btn small danger" :disabled="orderGroupSaveState.saving || adminOrderAction.busy" @click="canAdmin ? previewAdminOrderAction('delete_order') : dangerDeleteOrderGroup()">{{ canAdmin ? '删除订单（留痕）' : '删除' }}</button>
                     <button type="button" class="btn small" aria-label="操作说明" :aria-expanded="adminOrderActionHelp" @click="adminOrderActionHelp=!adminOrderActionHelp">！</button>
                   </div>
                   <div v-if="adminOrderActionHelp" style="margin-top:8px;line-height:1.7">
@@ -9611,7 +9611,7 @@
               <details style="margin-top:12px" open><summary>开票与收款追溯</summary>
                 <div class="muted" style="margin:8px 0">发票登记和收款分别记录；合并开票显示分配到本账单的金额。</div>
                 <table><thead><tr><th>发票号</th><th>开票日期</th><th>本账单开票金额</th><th>状态</th></tr></thead><tbody><tr v-for="invoice in statementDetail.invoices || []" :key="invoice.id"><td>{{ invoice.invoice_number }}</td><td>{{ invoice.invoice_date }}</td><td class="sensitive-price">¥ {{ money(invoice.invoice_amount) }}</td><td>{{ invoice.invoice_status==='voided' ? '已作废' : '已开票' }}</td></tr><tr v-if="!statementDetail.invoices?.length"><td colspan="4" class="muted">暂无实际开票登记</td></tr></tbody></table>
-                <table style="margin-top:8px"><thead><tr><th>收款日期</th><th>本次收款金额</th><th>账户 / 备注</th></tr></thead><tbody><tr v-for="receipt in statementDetail.settlements || []" :key="receipt.id"><td>{{ receipt.settlement_date }}</td><td class="sensitive-price">¥ {{ money(receipt.settled_amount) }}</td><td>{{ receipt.account || '-' }}</td></tr><tr v-if="!statementDetail.settlements?.length"><td colspan="3" class="muted">暂无收款记录</td></tr></tbody></table>
+                <table style="margin-top:8px"><thead><tr><th>收款日期</th><th>本次收款金额</th><th>账户 / 备注</th></tr></thead><tbody><tr v-for="receipt in statementDetail.settlements || []" :key="receipt.id"><td>{{ receipt.settlement_date }}</td><td class="sensitive-price">¥ {{ money(receipt.settled_amount) }}</td><td>{{ receipt.account || '-' }} <button v-if="canAdmin" class="btn small danger" :disabled="adminSettlementReversal.busy" @click="reverseStatementSettlement(receipt)">撤销收款登记</button></td></tr><tr v-if="!statementDetail.settlements?.length"><td colspan="3" class="muted">暂无收款记录</td></tr></tbody></table><details v-if="statementDetail.reversed_settlements?.length"><summary>已撤销收款历史</summary><div v-for="record in statementDetail.reversed_settlements" :key="record.id">{{ record.settlement_date }} · ¥ {{ money(record.settled_amount) }} · {{ record.account || '-' }} · 已撤销 {{ formatDateTime(record.reversed_at) }}</div></details>
               </details>
               <div v-if="statementDetail.invoices?.length" class="status blue" style="margin-top:10px">已有 {{ statementDetail.invoice_count }} 条开票记录；已正式开票时系统会禁止直接改历史。</div>
             </div>
@@ -10908,6 +10908,7 @@
             showOrderItemDanger: false,
             showOrderEditDanger: false,
             adminOrderActionHelp:false,
+            adminSettlementReversal:{busy:false,attempt:null},
             adminOrderAction:{busy:false,plan:null,error:'',key:'',trialConfirmed:false,submitted:null},
             orderItemOrder: null,
             productBoxStyleOptions: [
@@ -19549,6 +19550,15 @@
                 return false;
               }
               const next = {...this.reportedItemVoidAttempts}; delete next[key]; this.reportedItemVoidAttempts = next;
+              const reversal = error.response?.data?.detail;
+              if (this.canAdmin && reversal?.code === 'PROCUREMENT_ORDER_REVERSAL_REQUIRED' && reversal.order_group) {
+                this.showToast('该采购需要关联撤回，正在打开订单影响预览；尚未执行撤销');
+                if (await this.openOrderEditor(reversal.order_group)) {
+                  this.showOrderEditDanger = true;
+                  await this.previewAdminOrderAction('withdraw');
+                }
+                return false;
+              }
               this.showToast(`撤销本明细失败：${this.errorMessage(error)}`,true);
               await this.loadReportedDocuments();
               return false;
@@ -38152,6 +38162,34 @@
             await this.loadFinance();
             this.statementDetail = null;
           },
+          async reverseStatementSettlement(receipt) {
+            const state = this.adminSettlementReversal;
+            if (state.busy || !this.canAdmin || !this.statementDetail) return false;
+            const statementId = Number(this.statementDetail.id);
+            if (state.attempt && (state.attempt.statementId !== statementId || state.attempt.receiptId !== Number(receipt.id))) {
+              this.showToast('请先重试核对上一笔收款撤销结果',true); return false;
+            }
+            if (!state.attempt) {
+              if (!confirm(`确认撤销这笔收款登记 ¥ ${this.money(receipt.settled_amount)}？账单核销金额将退回，原记录保留在撤销历史。`)) return false;
+              state.attempt = {statementId,receiptId:Number(receipt.id),payload:{
+                expected_version:this.statementDetail.version,expected_ledger_version:this.statementDetail.ledger_version,
+                idempotency_key:createIdempotencyKey()}};
+            }
+            const attempt = state.attempt;
+            state.busy = true;
+            try {
+              await axios.post(`/api/finance/statements/${attempt.statementId}/settlements/${attempt.receiptId}/reverse`,attempt.payload);
+              state.attempt = null;
+              this.showToast('收款登记已撤销，历史保留');
+              try { await this.openStatementDetail({id:attempt.statementId}); await this.loadFinance(); }
+              catch(error) { this.showToast('撤销已完成，列表刷新失败，请刷新核对',true); }
+              return true;
+            } catch(error) {
+              if (error.response && Number(error.response.status) < 500) state.attempt = null;
+              this.showToast(state.attempt ? '撤销结果待核对，请再次点击同一笔重试' : this.errorMessage(error),true);
+              return false;
+            } finally { state.busy = false; }
+          },
           async cancelStatement(row) {
             if (this.financeStatementOperationState.action) return false;
             if (!confirm(`确定取消该对账单吗？取消后相关送货明细可重新生成对账单。`)) return false;
@@ -39622,7 +39660,7 @@
               this.showToast("送货单不存在，无法删除", true);
               return false;
             }
-            if (!confirm(`确认移除这张送货单吗？\n客户：${customerName}\n送货单：${deliveryNumber}\n未发生发货的草稿将直接删除；已有发货、回单或库存历史的单据将作废归档，不会再次改变库存或订单已送数量。`)) return false;
+            if (!confirm(`确认移除这张送货单吗？\n客户：${customerName}\n送货单：${deliveryNumber}\n送货单将标记为已删除，明细、发货、回单、库存流水和审计记录均保留，可在历史中查看。此操作不会再次改变库存或订单已送数量。`)) return false;
             this.deliveryOperationState = {action:"delete",deliveryId,deliveryNumber};
             try {
               let response;
@@ -39633,13 +39671,13 @@
                 return false;
               }
               const successMessage = response.data?.voided
-                ? "该送货单已有发货或库存历史，已作废归档；库存流水和审计记录均已保留"
+                ? "送货单已删除并留痕，可在“已删除”列表查看；库存流水和审计记录均已保留"
                 : "已删除未发货送货草稿";
               this.invalidateDeliveryListDetail(deliveryId);
               try {
                 await Promise.all([this.loadDeliveries(), this.loadKpi()]);
               } catch (error) {
-                const disposition = response.data?.voided ? "已经作废归档" : "已经删除";
+                const disposition = response.data?.voided ? "已删除并保留历史" : "已经删除";
                 this.showToast(`送货单 ${deliveryNumber} ${disposition}，但页面刷新失败：${this.errorMessage(error)}。请点刷新，不要重复操作。`, true);
                 return true;
               }

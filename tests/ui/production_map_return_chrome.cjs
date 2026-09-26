@@ -13,6 +13,7 @@ const dashboard={generated_at:'2026-09-12T15:00:00+08:00',read_only:true,standar
 const html=fs.readFileSync(root+'/static/index.html','utf8').replace('        async mounted() {','        async fixtureDisabledMounted() {').replace('app.mount("#app");','window.erpFixture=app.mount("#app");');
 const requests=[];const posts=[];const placement={id:'lot:18',inventory_lot_id:18,inventory_version:4,warehouse_location_id:92,warehouse_location_name:'三楼 A2货架 2层1格',product_code:'P007',product_name:'隔离测试纸箱',quantity:29,movable_quantity:29,can_place:true,output_unit:'个',receipt_placement:{label:'待归位',color:'orange'}};
 const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://localhost');requests.push([req.method,u.pathname]);
+ if(u.pathname.startsWith('/api/warehouse/goods/')){res.statusCode=503;res.setHeader('Content-Type','application/json');return res.end(JSON.stringify({detail:'隔离数量验证未加载库存资料编辑器'}));}
  if(u.pathname.startsWith('/api/')){res.setHeader('Content-Type','application/json');let body={items:[],total:0,counts:{},permissions:[]};
   if(req.method==='POST'){let chunks='';req.on('data',b=>chunks+=b);req.on('end',()=>{posts.push({url:u.pathname,payload:JSON.parse(chunks)});if(u.pathname.endsWith('/move-batches')&&posts.filter(p=>p.url.endsWith('/move-batches')).length===1){res.statusCode=503;res.end(JSON.stringify({detail:'模拟响应中断'}));}else{res.end(JSON.stringify({ok:true}));}});return;}
   if(u.pathname==='/api/warehouse/lots/18')body={id:18,quantity_available:29,quantity_reserved:0,quantity_damaged:0,location:{id:92,warehouse_floor:3}};
@@ -23,6 +24,7 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://local
   if(u.pathname==='/api/warehouse/location-candidates')body={items:dashboard.locations.map(l=>({id:l.location_id,location_code:l.location_code,location_name:l.location_name,warehouse_floor:3,floor_code:'3F',area_code:'A',storage_type:'rack',is_empty:l.location_id===93}))};
   if(u.pathname==='/api/auth/me')body={user:{id:1,role:'admin',ui_mode:'standard'},permissions:['warehouse.view','warehouse.execute','warehouse.correct','warehouse.stocktake.submit']};
   if(u.pathname==='/api/warehouse/twin-dashboard/overview')body=dashboard;
+  if(u.pathname==='/api/warehouse/twin-operations/product-quantities/18')body={items:[],total_quantity:29,reserved_quantity:0,order_totals:[],orders:[]};
   if(u.pathname.startsWith('/api/warehouse/twin-layout/floors/'))body=layout;
   if(u.pathname==='/api/orders/cost-preview')body={cost_status:'calculated',estimated_cost:'1.2'};
   return res.end(JSON.stringify(body));
@@ -33,7 +35,7 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://local
  res.setHeader('Content-Type',file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':file.endsWith('.html')?'text/html; charset=utf-8':file.endsWith('.svg')?'image/svg+xml':'application/octet-stream');res.end(fs.readFileSync(file));
 });
 (async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await chromium.launch({channel:'chrome',headless:true});const errors=[];
- try{const page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>errors.push(e.message));await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>!!window.erpFixture);
+ try{const page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>errors.push(e.stack || e.message));await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>!!window.erpFixture);
  await page.evaluate(p=>{const a=window.erpFixture;a.user={id:1,role:'admin',permissions:['*']};a.hasPermission=()=>true;a.pageAllowed=()=>true;a.activePage='production';a.productionTab='history';a.authGeneration=1;a.pages.productionHistory=2;a.productionHistoryFilters.product_code='P007';a.productionHistory=[{...p,status:'posted',origin:'manual',current_inventory_quantity:29,current_inventory_locations:[{inventory_lot_id:18,current_inventory_status:'located',current_warehouse_location_id:92,current_warehouse_location_name:p.warehouse_location_name,current_inventory_quantity:29}]}];},placement);
  await page.waitForTimeout(800);await page.waitForFunction(()=>!window.erpFixture.productionHistoryLoading);await page.evaluate(async()=>{const a=window.erpFixture;await a.loadProductionHistory();a.productionHistoryTotal=100;a.pages.productionHistory=2;await a.$nextTick();});
  await page.getByRole('button',{name:placement.warehouse_location_name,exact:true}).click();
@@ -60,6 +62,21 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://local
  await frame.getByRole('button',{name:'清空列表',exact:true}).click();await frame.getByRole('button',{name:'提交 1 条移货',exact:true}).click();await frame.getByText('移动完成；地图已刷新。',{exact:true}).waitFor();
  assert.equal(posts.length,3);assert.deepEqual(posts[1],posts[2],'uncertain retry preserves the exact idempotent payload');assert.equal(posts[1].payload.items[0].lot_id,18);assert.equal(posts[1].payload.items[0].target_location_id,93);
  await page.locator('.production-map-mask>header').getByRole('button',{name:'返回原生产页面',exact:true}).click();await page.waitForFunction(()=>!window.erpFixture.productionMap);assert.equal(await page.evaluate(()=>window.erpFixture.productionTab),'placement');assert.equal(await page.evaluate(()=>window.erpFixture.pages.productionPlacement),2);
+ const quantityPage=await browser.newPage({viewport:{width:1440,height:900}});quantityPage.on('pageerror',e=>errors.push(e.stack || e.message));
+ const searchItem={...lot,product_identity_key:'quantity-test',quantity:120,available_quantity:80,reserved_quantity:40,location_id:92,location_name:'三楼 A2货架 2层1格',floor_code:'3F',area_code:'A',position_status:'mapped',pallet_id:null};
+ let quantityReads=0;
+ await quantityPage.route('**/api/warehouse/twin-operations/locate?**',route=>route.fulfill({json:{items:[searchItem],resources:[],floor_summaries:[],result_count:1,inventory_result_count:1,pagination:{has_more:true,next_after_lot_id:18,counts_scope:'page'}}}));
+ await quantityPage.route('**/api/warehouse/twin-operations/product-quantities/18',route=>{quantityReads++;return route.fulfill({json:{items:[searchItem,{...searchItem,lot_id:19,location_id:93,location_name:'三楼 A2货架 2层2格',quantity:80,available_quantity:20,reserved_quantity:60}],total_quantity:200,reserved_quantity:100,order_totals:[{unit:'个',ordered_quantity:100,delivered_quantity:0,remaining_quantity:100}],orders:[{order_item_id:1,order_number:'YL-TEST',unit:'个',ordered_quantity:100,remaining_quantity:100}]}});});
+ await quantityPage.goto('http://127.0.0.1:'+server.address().port+'/warehouse.html');
+ await quantityPage.getByRole('textbox',{name:'全仓查货',exact:true}).fill('P007');
+ const productButton=quantityPage.locator('.twin-search-result-list button').filter({hasText:'P007'}).first();
+ await productButton.waitFor();assert.equal(quantityReads,0,'Searching alone must not enable quantity overlays');
+ await productButton.click();const summary=quantityPage.getByRole('region',{name:'所选产品全仓数量'});
+ await summary.getByText(/全仓实存 200/).waitFor();await summary.getByText(/有效订单订购 100/).waitFor();
+ assert.equal(await quantityPage.getByLabel('所选产品货位数量').count(),2);await summary.locator('summary').filter({hasText:'各栈板'}).click();assert.equal(await summary.getByRole('button').count(),2);
+ await quantityPage.screenshot({path:out+'/product-actual-200-order-100.png'});
+ await quantityPage.getByRole('textbox',{name:'全仓查货',exact:true}).fill('');await summary.waitFor({state:'detached'});assert.equal(await quantityPage.getByLabel('所选产品货位数量').count(),0);
+ assert.deepEqual(errors,[]);await quantityPage.close();
  fs.writeFileSync(out+'/result.json',JSON.stringify({ok:true,errors,posts,requests},null,2));console.log('PASS Chrome: rack focus, move source, preserved history context, map selection, cancellation, one placement, map move and uncertain same-key retry with CAS/layout/idempotency');
  }catch(e){const p=browser.contexts()[0]?.pages()[0];if(p)await p.screenshot({path:out+'/failure.png'});fs.writeFileSync(out+'/error.json',JSON.stringify({message:e.message,errors,posts,requests},null,2));throw e;}finally{await browser.close();server.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

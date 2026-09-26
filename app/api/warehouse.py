@@ -16733,6 +16733,14 @@ def locate_warehouse_twin_objects(
     }
 
 
+@router.get('/twin-operations/product-quantities/{lot_id}')
+def get_selected_product_quantities(lot_id: int, db: Session = Depends(get_db),
+    user: User = Depends(_can_locate_twin)) -> dict:
+    from app.services.warehouse_product_quantities import selected_product_quantities
+    return selected_product_quantities(db, seed_lot_id=lot_id,
+        visible_customer_ids=_twin_locator_visible_customer_ids(db, user))
+
+
 @router.get("/space/floors")
 def list_warehouse_floors(
     include_archived: bool = Query(default=False),

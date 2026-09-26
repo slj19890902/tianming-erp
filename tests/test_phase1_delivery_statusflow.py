@@ -239,7 +239,7 @@ def _make_return_receipt(session_factory, delivery_id: int, *, with_statement: b
         session.add(receipt)
         session.flush()
         lines = session.scalars(
-            select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)
+            select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id, DeliveryItem.is_current.is_(True))
         ).all()
         receipt_items = []
         for line in lines:
@@ -330,7 +330,7 @@ def test_edit_pending_updates_fields_and_keeps_number(delivery_api_app) -> None:
         assert session.get(OrderItem, 1).delivered_quantity == 20
         assert session.get(OrderItem, 2).delivered_quantity == 0
         line_items = session.scalars(
-            select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id)
+            select(DeliveryItem).where(DeliveryItem.delivery_id == delivery_id, DeliveryItem.is_current.is_(True))
         ).all()
         assert len(line_items) == 2
 
@@ -404,7 +404,7 @@ def test_edit_and_dispatch_keep_lines_and_quantities_consistent(
         delivery = session.get(Delivery, delivery_id)
         lines = session.scalars(
             select(DeliveryItem).where(
-                DeliveryItem.delivery_id == delivery_id
+                DeliveryItem.delivery_id == delivery_id, DeliveryItem.is_current.is_(True)
             )
         ).all()
         line_quantities = {
@@ -441,16 +441,16 @@ def test_delete_pending_does_not_touch_order_quantity(delivery_api_app) -> None:
 
     assert deleted.status_code in (200, 204), deleted.text
     assert deleted.json() == {
-        "deleted": True,
-        "voided": False,
-        "disposition": "deleted",
+        "deleted": False,
+        "voided": True,
+        "disposition": "voided",
         "id": delivery_id,
     }
     assert repeated.status_code == 200, repeated.text
     assert repeated.json() == deleted.json()
     with session_factory() as session:
-        assert session.get(Delivery, delivery_id) is None
-        assert session.scalar(select(func.count()).select_from(Delivery)) == 0
+        assert session.get(Delivery, delivery_id).status == 'voided'
+        assert session.scalar(select(func.count()).select_from(Delivery)) == 1
         assert session.get(OrderItem, 1).delivered_quantity == 20
         assert session.get(OrderItem, 2).delivered_quantity == 0
 
@@ -536,7 +536,7 @@ def test_delete_after_cancel_voids_without_changing_order_quantity(
         ) == 1
 
 
-def test_delete_unknown_restrict_reference_returns_chinese_conflict(
+def test_soft_delete_retains_unknown_restrict_reference(
     delivery_api_app,
 ) -> None:
     from app.models.audit import OperationLog
@@ -573,18 +573,18 @@ def test_delete_unknown_restrict_reference_returns_chinese_conflict(
             session.commit()
         removed = client.delete(f"/api/deliveries/{delivery_id}")
 
-    assert removed.status_code == 409, removed.text
-    assert "关联业务记录" in removed.json()["detail"]
-    assert "不能物理删除" in removed.json()["detail"]
+    assert removed.status_code == 200, removed.text
+    assert removed.json()['voided'] is True
     with session_factory() as session:
-        assert session.get(Delivery, delivery_id) is not None
+        assert session.get(Delivery, delivery_id).status == 'voided'
+        assert session.scalar(text('SELECT delivery_id FROM delivery_delete_test_blockers WHERE id=1')) == delivery_id
         assert session.scalar(
             select(func.count(OperationLog.id)).where(
                 OperationLog.resource == "Delivery",
                 OperationLog.entity_id == delivery_id,
-                OperationLog.action.in_(("DELETE", "VOID_AFTER_CANCEL")),
+                OperationLog.action.in_(("DELETE_RETAIN_HISTORY", "VOID_AFTER_CANCEL")),
             )
-        ) == 0
+        ) == 1
 
 
 def test_delete_requires_operate_role(delivery_api_app) -> None:
@@ -945,7 +945,7 @@ def test_delivery_frontend_exposes_guarded_status_actions() -> None:
     assert '@click="cancelDelivery(row)"' in index
     assert "canDelivery && row.status==='pending'" in index
     assert "canDelivery && row.status==='dispatched'" in index
-    assert "未发生发货的草稿将直接删除" in index
+    assert "送货单将标记为已删除" in index
     assert "库存流水和审计记录均已保留" in index
     assert "仅删除送货单本身" not in index
 
@@ -1028,4 +1028,4 @@ def test_edit_and_delete_audit_logged(delivery_api_app) -> None:
                 )
             ).all()
         )
-    assert {"UPDATE", "DELETE"} <= actions
+    assert {"UPDATE", "DELETE_RETAIN_HISTORY"} <= actions

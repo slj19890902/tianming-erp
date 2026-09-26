@@ -23335,8 +23335,6 @@ def void_supplier_requisition_item(
                 )
             )
             from app.models.procurement_source import ProcurementSourceLink
-            if db.scalar(select(ProcurementSourceLink.id).where(ProcurementSourceLink.supplier_item_id == item.id)):
-                raise HTTPException(409, "统一采购来源请通过整单撤销入口处理，不能仅删除采购明细")
             if existing_key_item is not None:
                 if (
                     existing_key_item.id != item.id
@@ -23349,6 +23347,21 @@ def void_supplier_requisition_item(
                         detail="该幂等键已用于另一笔撤销或请求内容不一致",
                     )
                 return _supplier_requisition_item_void_response(db, item, order)
+            link = db.scalar(select(ProcurementSourceLink).where(
+                ProcurementSourceLink.supplier_item_id == item.id,
+                ProcurementSourceLink.status == 'active'))
+            if link is not None:
+                source = db.get(RequisitionItem, link.material_requisition_item_id) if link.material_requisition_item_id else None
+                sales_item = db.get(OrderItem, source.order_item_id) if source else None
+                sales_order = db.get(Order, sales_item.order_id) if sales_item else None
+                from app.api.orders import _order_group_key
+                raise HTTPException(409, {
+                    'code': 'PROCUREMENT_ORDER_REVERSAL_REQUIRED',
+                    'message': '该明细属于统一采购，需按订单完整撤回来源与库存绑定。请预览关联撤回；其他订单的采购行会保留。' if sales_order else '该明细属于补库统一采购，请打开采购单查看范围并整单撤销。',
+                    'order_group': dict(key=_order_group_key(sales_order), customer_id=sales_order.customer_id,
+                        customer_po=sales_order.customer_po, orders=[dict(id=sales_order.id)]) if sales_order else None,
+                    'supplier_order_id': order.id,
+                })
             if item.status != "active":
                 raise HTTPException(status_code=409, detail="该报料明细已经撤销")
             if item.version != payload.expected_version:

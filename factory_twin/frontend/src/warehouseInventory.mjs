@@ -152,6 +152,7 @@ export function searchHighlightAreaCodes(items, floorCode) {
 }
 
 export function warehouseSearchProductKey(item) {
+  if (item.product_identity_key) return item.product_identity_key;
   const customerIdentity = item.customer_id
     ? `customer:${item.customer_id}`
     : `customer-name:${item.customer_name || ""}`;

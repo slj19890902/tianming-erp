@@ -7418,6 +7418,10 @@ def _create_order_impl(
                     for index, item in enumerate(payload.items, start=1)
                 )
                 for existing_order in related_orders:
+                    # Historical cancelled orders remain traceable, but do not
+                    # prevent a new effective order for the same source.
+                    if existing_order.status == "cancelled":
+                        continue
                     existing_signature = sorted(
                         (
                             item.product_id,

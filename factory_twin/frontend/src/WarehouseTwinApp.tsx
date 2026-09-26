@@ -208,6 +208,7 @@ interface AreaDistribution {
 }
 
 interface InventoryItem {
+  product_identity_key?: string;
   location_id?: number | null;
   box_style?: string | null;
   is_bom_component?: boolean | null;
@@ -444,6 +445,8 @@ interface StandardPalletContract {
 }
 
 interface SearchItem extends InventoryItem {
+  pallet_id?: number | null;
+  pallet_code?: string | null;
   floor_code: string;
   area_code: string | null;
   location_id: number | null;
@@ -485,6 +488,14 @@ interface SearchProductGroup {
   floor_summaries: Array<{ floor_code: string; quantity: number; location_count: number }>;
   location_summaries: Array<{ key: string; floor_code: string; area_code: string | null; location_id: number | null; location_name: string; position_status: string; quantity: number }>;
   items: SearchItem[];
+}
+
+interface ProductQuantities extends SearchResponse {
+  product_identity_key: string;
+  total_quantity: number;
+  reserved_quantity: number;
+  order_totals: Array<{unit: string; ordered_quantity: number; delivered_quantity: number; remaining_quantity: number}>;
+  orders: Array<{order_item_id: number; order_number: string; unit: string; ordered_quantity: number; remaining_quantity: number}>;
 }
 
 interface LocateResource {
@@ -1514,6 +1525,7 @@ function WarehouseRackElevation({
   canChooseProducts,
   locationPicker = false,
   highlightedLotIds = [],
+  productQuantityLabels = {},
   searchLocationId,
   searchLotId,
   rackIndex,
@@ -1533,6 +1545,7 @@ function WarehouseRackElevation({
   canChooseProducts: boolean;
   locationPicker?: boolean;
   highlightedLotIds?: number[];
+  productQuantityLabels?: Record<string, string>;
   searchLocationId?: number | null;
   searchLotId?: number | null;
   rackIndex: number;
@@ -1675,6 +1688,7 @@ function WarehouseRackElevation({
                   >＋ 添加货物</button>}
                   <span className="shelf-cell-status" title={cellSummary}>{identityConflict ? "货位身份冲突" : cellItems.length ? cellSummary : location ? "正式空货位" : "未建正式货位"}</span>
                   {location && !identityConflict && <button className="shelf-position-print" type="button" title="打印货位标签" onClick={() => window.open(`/static/shelf-label.html?location_id=${location.location_id}`, '_blank', 'noopener')}>打印货位</button>}</div>
+                  {location && productQuantityLabels[`erp-location-${location.location_id}`] && <div className="product-location-quantity" aria-label="所选产品货位数量">{productQuantityLabels[`erp-location-${location.location_id}`]}</div>}
                   {cellItems.length ? <div className="shelf-product-cards">
                     {groupShelfProducts(cellItems).map(group => <article className={`shelf-product-card${group.items.some(item => searchLotIds.has(item.lot_id)) ? " search-product-hit" : ""}`} key={group.key}>
                       <div className="shelf-product-summary" title={`${warehouseCardCustomer(group.item)} · ${group.item.product_name || ""} · ${group.item.specification || ""}`}><span className="shelf-product-customer">{warehouseCardCustomer(group.item)}</span><span className="shelf-product-name">{group.item.product_name || "产品名称待补充"}</span><span className="shelf-specification">{group.item.inventory_type === "semi_finished" ? "" : group.item.specification || ""}</span><button type="button" className="shelf-product-details-toggle" title={`${group.items.length}个批次，查看入出库明细`} aria-expanded={Boolean(expandedProductGroups[group.key])} onClick={() => setExpandedProductGroups(current => ({ ...current, [group.key]: !current[group.key] }))}>{expandedProductGroups[group.key] ? "收起" : "明细"}·{group.items.length}</button></div>
@@ -1795,6 +1809,8 @@ export function WarehouseTwinApp() {
   const searchAbortRef = useRef<AbortController | null>(null);
   const [focusedSearchItem, setFocusedSearchItem] = useState<SearchItem | null>(null);
   const [focusedSearchProductKey, setFocusedSearchProductKey] = useState<string | null>(null);
+  const [productQuantities, setProductQuantities] = useState<{key: string; data: ProductQuantities} | null>(null);
+  const [productQuantitiesError, setProductQuantitiesError] = useState("");
   const [focusedResource, setFocusedResource] = useState<LocateResource | null>(null);
   const [cameraFocusTarget, setCameraFocusTarget] = useState<CanvasFocusTarget | null>(null);
   const cameraFocusSequenceRef = useRef(0);
@@ -2168,6 +2184,8 @@ export function WarehouseTwinApp() {
     setCatalogMoreLoading(false);
     catalogMoreBusyRef.current = false;
     if (!searchPanelOpen) return;
+    setFocusedSearchProductKey(null);
+    setFocusedSearchItem(null);
     setSearchResponse(null);
     if (keyword.length < 2) {
       setSearchResponse(null);
@@ -2750,10 +2768,38 @@ export function WarehouseTwinApp() {
   const pendingProductExists = pendingRelocationItems.some((item) => (stocktakeCustomerId === "all" || String(item.customer_id) === stocktakeCustomerId) && String(item.product_id) === stocktakeProductId);
   const unlocatedFinishedItems = (dashboard?.unlocated_inventory || []).filter((item) => !item.pending_relocation && inventoryHasPhysicalQuantity(item));
   const unlocatedFinishedCount = unlocatedFinishedItems.length;
-  const focusedSearchProduct = useMemo(
+  const loadedSearchProduct = useMemo(
     () => searchProductGroups.find((item) => item.key === focusedSearchProductKey) || null,
     [searchProductGroups, focusedSearchProductKey]
   );
+  const quantitySeedId = loadedSearchProduct?.items[0]?.lot_id || (focusedSearchProductKey ? focusedSearchItem?.lot_id : null);
+  useEffect(() => {
+    setProductQuantities(null);
+    setProductQuantitiesError("");
+    if (!focusedSearchProductKey || !quantitySeedId) return;
+    const controller = new AbortController();
+    requestJson<ProductQuantities>(`/api/warehouse/twin-operations/product-quantities/${quantitySeedId}`, controller.signal)
+      .then((data) => { if (!controller.signal.aborted) setProductQuantities({key: focusedSearchProductKey, data}); })
+      .catch((error) => { if (!controller.signal.aborted) setProductQuantitiesError(error instanceof Error ? error.message : "全仓数量读取失败"); });
+    return () => controller.abort();
+  }, [focusedSearchProductKey, quantitySeedId, dashboard]);
+  const selectedQuantities = productQuantities?.key === focusedSearchProductKey ? productQuantities.data : null;
+  const focusedSearchProduct = useMemo(() => {
+    if (!selectedQuantities) return loadedSearchProduct;
+    const group = groupSearchProducts(selectedQuantities.items)[0];
+    return group ? {...group, key: focusedSearchProductKey!} : null;
+  }, [selectedQuantities, loadedSearchProduct, focusedSearchProductKey]);
+  const productQuantityLabels = useMemo(() => {
+    const rows: Record<string, {quantity: number; reserved: number; unit: string}> = {};
+    for (const item of selectedQuantities?.items || []) {
+      if (item.floor_code !== floorCode || !item.location_id || item.position_status !== 'mapped') continue;
+      const key = `erp-location-${item.location_id}`;
+      const row = rows[key] ||= {quantity: 0, reserved: 0, unit: inventoryUnitLabel(item.unit)};
+      row.quantity += inventoryPhysicalQuantity(item);
+      row.reserved += Number(item.reserved_quantity || 0);
+    }
+    return Object.fromEntries(Object.entries(rows).map(([key, row]) => [key, `实存 ${formatNumber(row.quantity)}${row.unit} · 占用 ${formatNumber(row.reserved)}`]));
+  }, [selectedQuantities, floorCode]);
   const rackSearchLotIds = useMemo(() => focusedSearchProductKey
     ? (focusedSearchProduct?.items || (focusedSearchItem ? [focusedSearchItem] : [])).map((item) => item.lot_id)
     : [], [focusedSearchProductKey, focusedSearchProduct, focusedSearchItem]);
@@ -4467,6 +4513,7 @@ export function WarehouseTwinApp() {
     if (!target) return;
     setFocusedSearchProductKey(group.key);
     focusSearchItem(target);
+    setSearchPanelOpen(true);
   };
 
   const focusSearchFloor = (group: SearchProductGroup, targetFloorCode: string) => {
@@ -4476,6 +4523,7 @@ export function WarehouseTwinApp() {
     if (!target) return;
     setFocusedSearchProductKey(group.key);
     focusSearchItem(target);
+    setSearchPanelOpen(true);
   };
 
   const focusSearchLocation = (
@@ -4492,6 +4540,7 @@ export function WarehouseTwinApp() {
     if (!target) return;
     setFocusedSearchProductKey(group.key);
     focusSearchItem(target);
+    setSearchPanelOpen(true);
   };
 
   const focusLocateResource = (resource: LocateResource) => {
@@ -6467,7 +6516,25 @@ export function WarehouseTwinApp() {
           {searchType === "finished" && !!searchResponse?.pending_receipts?.length && <section className="twin-search-result-list"><b>已发出 · 待回单（不计入在厂实存）</b>{searchResponse.pending_receipts.map(row => <article key={row.delivery_item_id}><b>{row.inventory_code} · {row.customer_name}</b><div>{row.product_name} {row.specification}</div><strong>{formatNumber(row.quantity)} {inventoryUnitLabel(row.unit)}</strong><div>{row.location_name} · {row.delivery_number}</div></article>)}</section>}
           {searchType === "finished" && catalogError && <div className="twin-search-error"><b>产品资料读取失败</b><span>{catalogError}</span><button type="button" onClick={() => setSearchRetryToken(value => value + 1)}>重试</button></div>}
           {searchType === "finished" && !!catalogSearch?.items.length && <section className="twin-search-result-list"><b>ERP产品资料 · 暂无库存</b>{catalogSearch.items.map(row => <article key={row.product_id}><b>{row.inventory_code} · {row.customer_name}</b><div>{row.product_name} {row.specification}</div><small>暂无库存{!row.is_active ? " · 产品已停用" : ""}</small></article>)}{catalogSearch.has_more && <button type="button" disabled={catalogMoreLoading} onClick={loadMoreCatalogResults}>{catalogMoreLoading ? "正在加载…" : "继续加载产品资料"}</button>}</section>}
-          {focusedSearchProduct && <div className="twin-search-focus-note product-focus"><b>{searchResponse?.pagination?.has_more ? "已加载的真实位置已选中" : "全部真实位置已选中"}</b><span>{focusedSearchProduct.customer_name} · {focusedSearchProduct.inventory_code} · {searchResponse?.pagination?.has_more ? "已加载" : "共"} {formatNumber(focusedSearchProduct.total_quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {focusedSearchProduct.location_count} 个位置</span><div className="twin-search-floor-actions">{focusedSearchProduct.floor_summaries.map((floor) => <button type="button" key={floor.floor_code} disabled={!isWarehouseOperationalFloorCode(floor.floor_code)} className={floorCode === floor.floor_code ? "active" : ""} onClick={() => focusSearchFloor(focusedSearchProduct, floor.floor_code)}>{floor.floor_code === "UNLOCATED" ? "待归位" : floor.floor_code} · {formatNumber(floor.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {floor.location_count}处</button>)}</div><div className="twin-search-location-list">{focusedSearchProduct.location_summaries.map((location) => <button type="button" key={location.key} disabled={!isWarehouseOperationalFloorCode(location.floor_code)} onClick={() => focusSearchLocation(focusedSearchProduct, location)}><b>{location.floor_code === "UNLOCATED" ? "待归位" : location.floor_code}</b><span>{location.location_name || "位置名称待完善"}</span><em>{formatNumber(location.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {location.position_status === "mapped" ? "地图可定位" : "真实文字位置"}</em></button>)}</div></div>}
+          {focusedSearchProductKey && <section className="twin-search-focus-note product-quantity-summary" aria-label="所选产品全仓数量">
+            {!selectedQuantities && <span>{productQuantitiesError || "正在核对该产品全仓数量…"}</span>}
+            {selectedQuantities && <>
+              <b>全仓实存 {formatNumber(selectedQuantities.total_quantity)} {inventoryUnitLabel(focusedSearchProduct?.unit || "boxes")}</b>
+              <span>库存已占用 {formatNumber(selectedQuantities.reserved_quantity)} {inventoryUnitLabel(focusedSearchProduct?.unit || "boxes")}</span>
+              {selectedQuantities.order_totals.map((row) => <span key={row.unit}>有效订单订购 {formatNumber(row.ordered_quantity)} {row.unit} · 已送 {formatNumber(row.delivered_quantity)} · 未送 {formatNumber(row.remaining_quantity)}</span>)}
+              {!selectedQuantities.order_totals.length && <span>当前没有该产品的有效未结订单</span>}
+              <small>全仓包含其他楼层及待归位库存；订单数与实存数量分别统计。</small>
+              <details><summary>客户订单数量</summary>{selectedQuantities.orders.map((row) => <div key={row.order_item_id}>{row.order_number} · 订购 {row.ordered_quantity} {row.unit} · 未送 {row.remaining_quantity} {row.unit}</div>)}</details>
+              <details><summary>各栈板／货位明细</summary>{Object.values(selectedQuantities.items.reduce<Record<string, {item: SearchItem; quantity: number; reserved: number}>>((groups, item) => {
+                const key = `${item.location_id || 'unlocated'}:${item.pallet_id || 'loose'}`;
+                const group = groups[key] ||= {item, quantity: 0, reserved: 0};
+                group.quantity += inventoryPhysicalQuantity(item); group.reserved += Number(item.reserved_quantity || 0); return groups;
+              }, {})).map(({item, quantity, reserved}) => <button type="button" key={`${item.location_id}:${item.pallet_id}`} onClick={() => focusSearchItem(item)}>
+                {item.location_name} · {item.pallet_code || '未绑栈板'} · 实存 {formatNumber(quantity)} {inventoryUnitLabel(item.unit)} · 已占用 {formatNumber(reserved)}
+              </button>)}</details>
+            </>}
+          </section>}
+          {focusedSearchProduct && <div className="twin-search-focus-note product-focus"><b>{!selectedQuantities && searchResponse?.pagination?.has_more ? "已加载的真实位置已选中" : "全部真实位置已选中"}</b><span>{focusedSearchProduct.customer_name} · {focusedSearchProduct.inventory_code} · {selectedQuantities ? "全仓" : "已加载"} {formatNumber(focusedSearchProduct.total_quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {focusedSearchProduct.location_count} 个位置</span><div className="twin-search-floor-actions">{focusedSearchProduct.floor_summaries.map((floor) => <button type="button" key={floor.floor_code} disabled={!isWarehouseOperationalFloorCode(floor.floor_code)} className={floorCode === floor.floor_code ? "active" : ""} onClick={() => focusSearchFloor(focusedSearchProduct, floor.floor_code)}>{floor.floor_code === "UNLOCATED" ? "待归位" : floor.floor_code} · {formatNumber(floor.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {floor.location_count}处</button>)}</div><div className="twin-search-location-list">{focusedSearchProduct.location_summaries.map((location) => <button type="button" key={location.key} disabled={!isWarehouseOperationalFloorCode(location.floor_code)} onClick={() => focusSearchLocation(focusedSearchProduct, location)}><b>{location.floor_code === "UNLOCATED" ? "待归位" : location.floor_code}</b><span>{location.location_name || "位置名称待完善"}</span><em>{formatNumber(location.quantity)} {inventoryUnitLabel(focusedSearchProduct.unit)} · {location.position_status === "mapped" ? "地图可定位" : "真实文字位置"}</em></button>)}</div></div>}
           {focusedResource && <div className="twin-search-focus-note"><b>{focusedResource.map_status === "mapped" ? "地图定位指引" : "文字定位指引"}</b><span>{focusedResource.prompt}</span></div>}
         </section>
         </div>
@@ -6520,6 +6587,7 @@ export function WarehouseTwinApp() {
           productionProjections={productionProjection?.items || EMPTY_PRODUCTION_PROJECTIONS}
           highlightFeatureIds={searchHighlightFeatureIds}
           highlightedPalletIds={mapHighlightPalletIds}
+          productQuantityLabels={productQuantityLabels}
           sourcePalletIds={mergeHighlightPalletIds}
           selectedAreaFeatureId={selectedAreaFeature?.id}
           moveLocationStates={mapMoveStates}
@@ -6569,6 +6637,7 @@ export function WarehouseTwinApp() {
           onMoldMoved={(message) => { setMoldRackRefreshToken((value) => value + 1); setWarehouseOperationMessage(message); }}
           onClose={() => setRackFocusId(null)}
         /> : focusedRack && <WarehouseRackElevation
+          productQuantityLabels={productQuantityLabels}
           rack={focusedRack}
           area={focusedRackAreaCode ? areaStats.get(focusedRackAreaCode) : undefined}
           locations={focusedRackLocations}

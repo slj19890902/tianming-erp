@@ -276,7 +276,8 @@ def assemble_subkit_inventory(
         return conversion
 
 
-def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False, ignored_reserve_id=None):
+def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False, ignored_reserve_id=None,
+                                      proven_transfer_movement_ids=frozenset()):
     """Allow unwinding only after every assembly/delivery use is reversed.
 
     Equal balances alone are not proof: moves, counts or arbitrary adjustments
@@ -289,12 +290,16 @@ def _only_reversed_graph_consumptions(db, output, *, allow_initial_reserve=False
     if not movements or output.version != len(movements):
         return False
     later = movements[1:]
+    if proven_transfer_movement_ids:
+        later = [m for m in later if m.id not in proven_transfer_movement_ids]
     if ignored_reserve_id is not None:
         later = [m for m in later if m.id != ignored_reserve_id]
         if not later:
             return True
     if allow_initial_reserve and later and later[0].movement_type == "reserve":
         later = later[1:]
+    if proven_transfer_movement_ids and not later:
+        return True
     # A cancelled delivery is an auditable use/reversal pair, not an untouched
     # lot. Accept only fully reversed allocations with matching real lineage.
     # Equal final balances (or merely status='reversed') are insufficient.

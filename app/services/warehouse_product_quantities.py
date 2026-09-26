@@ -15,7 +15,7 @@ def product_search_identity(lot):
     from app.services.warehouse_twin_dashboard import _lot_business_fields
     from app.services.warehouse_display_units import lot_display_unit
     fields = _lot_business_fields(lot)
-    identity = [fields.get('customer_id'), fields.get('product_id'), lot.inventory_type, lot.unit, lot_display_unit(lot)]
+    identity = [fields.get('customer_id'), fields.get('product_id'), lot.inventory_type, lot.unit, lot_display_unit(lot), fields.get('inventory_stage')]
     if not fields.get('product_id'):
         identity += [fields.get(k) for k in ('inventory_code', 'product_name', 'specification')]
     detail = lot.semi_finished_detail

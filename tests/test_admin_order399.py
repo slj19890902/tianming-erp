@@ -124,6 +124,12 @@ def test_shared_purchase_only_voids_target_order_lines(composite_requisition_app
                 order_item_id=item.id, quantity=5, requisition_qty=5)
             db.add(line); db.commit()
             line_id, header_id = line.id, header.id
+            own_id, own_version = own_line.id, own_line.version
+        routed = client.put(f'/api/requisition/supplier-order-items/{own_id}/void', json={
+            'expected_version':own_version, 'idempotency_key':'unified-route-preview', 'confirmed':True})
+        assert routed.status_code == 409, routed.text
+        assert routed.json()['detail']['code'] == 'PROCUREMENT_ORDER_REVERSAL_REQUIRED'
+        assert routed.json()['detail']['order_group']['orders'] == [{'id':1}]
         body = dict(order_ids=[1], mode='withdraw')
         plan = client.post('/api/orders/admin-disposition/preview', json=body).json()
         assert not plan['blockers'], plan
@@ -178,3 +184,29 @@ def test_group_rollback_and_changed_stock(composite_requisition_app,_p181_publis
         with factory() as db:
             assert all(r.status=='posted' for r in db.scalars(select(IncomingReceiptItem)))
             assert db.get(Order,2).status!='cancelled'
+
+
+def test_assembly_order_reversal_after_split_storage(composite_requisition_app, _p181_published_map_identity):
+    from app.models.warehouse_inventory import WarehouseLocation
+    from app.services.warehouse_inventory import transfer_finished_lot_between_locations
+    app, factory = composite_requisition_app
+    with TestClient(app) as client:
+        _login(client); seed(client, factory)
+        with factory() as db:
+            output = db.scalar(select(InventoryLot).where(InventoryLot.source_ref_type == 'bom_assembly',
+                InventoryLot.inventory_type == 'finished', InventoryLot.quantity_reserved > 0))
+            target = db.scalar(select(WarehouseLocation).where(WarehouseLocation.area_code == 'FIN-001',
+                WarehouseLocation.id != output.warehouse_location_id).order_by(WarehouseLocation.id.desc()))
+            transfer_finished_lot_between_locations(db, lot_id=output.id, expected_version=output.version,
+                quantity=4, location_id=target.id, operator_id=1, idempotency_key='bom-split-reversal',
+                expected_target_layout_version=target.floor3_layout.version)
+            db.commit()
+        body = dict(order_ids=[1], mode='withdraw')
+        plan = client.post('/api/orders/admin-disposition/preview', json=body).json()
+        assert not plan['blockers'], plan
+        result = client.post('/api/orders/admin-disposition/execute', json={**body,
+            'reviewed_hash':plan['reviewed_hash'], 'operation_key':'bom-split-order-withdraw'})
+        assert result.status_code == 200, result.text
+        with factory() as db:
+            assert all(row.quantity_available+row.quantity_reserved == 0 for row in db.scalars(select(InventoryLot)))
+            assert db.get(OrderItem, 1).requisition_status == '未报料'

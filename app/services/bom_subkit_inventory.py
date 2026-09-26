@@ -381,7 +381,21 @@ def reverse_subkit_conversion(db: Session, *, conversion_id: int, operator_id: i
             raise SubkitError("组套记录不存在", 404)
         if conversion.status == "reversed":
             return
+        transferred = None
         if conversion.output_lot_id:
+            output = db.get(InventoryLot, conversion.output_lot_id)
+            if output is not None and output.inventory_type == 'finished':
+                from types import SimpleNamespace
+                from app.services.production_reversal_transfers import reverse_transferred_completion
+                from app.services.production_workflow import ProductionWorkflowError
+                try:
+                    transferred = reverse_transferred_completion(db, completion=SimpleNamespace(
+                        id=conversion.id, inventory_lot_id=output.id, stock_quantity=conversion.quantity,
+                        order_item_id=conversion.order_item_id), operator_id=operator_id,
+                        reason='撤销组套入库', source_ref_type='bom_assembly' if graph_assembly else 'subkit_conversion')
+                except ProductionWorkflowError as error:
+                    raise SubkitError(str(error)) from error
+        if conversion.output_lot_id and transferred is None:
             output = db.get(InventoryLot, conversion.output_lot_id)
             released_auto_reserve = False
             if graph_assembly and output is not None:

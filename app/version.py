@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.499"
-APP_VERSION_NAME = "送货打印兼容与失败重试"
+APP_VERSION = "v0.22.500"
+APP_VERSION_NAME = "仓库实存订单分显与管理员回退留痕"
 APP_BUILD_DATE = "2026-09-26"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4791,3 +4791,16 @@ APP_CHANGELOG = [*(f"v0.22.498：本次更新｜{item}" for item in APP_CHANGES)
 
 APP_CHANGES = ["补齐送货打印兼容操作键的正式资源路由，避免脚本404；HTTP确认打印与版式设计共享兼容实现。"]
 APP_CHANGELOG = [*(f"v0.22.499：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "仓库选中具体产品后，分别显示全仓实存、有效订单订购和未送数量，以及各栈板货位分数；清除选择即隐藏地图数量。",
+    "管理员按有效依赖逐级撤销：发票、收款、对账、回单、发货、收料、生产和报料；本单采购库存撤销，原库存只解除绑定。",
+    "删除送货单保留明细及历史；作废订单不再阻止PDF重新识别建单。统一采购撤销可进入关联订单预览。",
+]
+APP_VERIFICATION_STEPS = [
+    "仓库搜索并点击一个产品，核对全仓实存、订单数量、货位分数；切换产品和清空搜索，核对标记同步变化。",
+    "管理员先撤销下游有效单据，再在订单关联处理预览撤回未报料或删除留痕，核对采购库存与原库存解除绑定的区别。",
+    "在已删除送货单历史核对明细；重新识别已作废订单PDF，核对可建新单且旧历史仍保留。",
+]
+APP_CHANGELOG = [*(f"v0.22.500：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

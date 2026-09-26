@@ -8417,6 +8417,7 @@
             </div>
             <div v-else-if="modal.type === 'orderGroupDetail' && orderGroupDetail">
               <p id="erp-order-detail-description" class="muted" style="margin:0 0 12px">只读查看订单事实；按 Esc 可关闭，Tab 只在本对话框内移动。</p>
+              <div v-if="canCreateOrders" class="toolbar-group" style="margin-bottom:12px"><button type="button" class="btn" :disabled="!!orderHistoryOpening" @click="openOrderFromHistory(orderDetail.id)">按此单选款</button><span class="muted">建立新草稿，选择当前常用箱；数量和价格重新核对。</span></div>
               <div class="form-grid">
                 <div class="field"><label>客户</label><div>{{ orderGroupDetail.customer_name }}</div></div>
                 <div class="field"><label>客户单号</label><order-reference :row="orderGroupDetail"></order-reference></div>
@@ -10019,6 +10020,7 @@
               <button class="btn" type="button" @click="clearOrderCommonBoxFilters">清空条件</button>
             </div>
             <div v-if="orderCommonBoxPicker.error" class="notice danger" style="margin-bottom:10px">{{ orderCommonBoxPicker.error }}</div>
+            <div v-if="orderCommonBoxPicker.source_order_id" class="notice" style="margin-bottom:10px">按历史订单 {{ orderCommonBoxPicker.source_order_number }} 选款：原单 {{ orderCommonBoxPicker.source_product_total }} 款，当前筛选 {{ orderCommonBoxPicker.total }} 款。停用、删除或不再适合独立下单的款不列出；旧数量、成交价、交期和PO不沿用。<button type="button" class="btn small" @click="showAllOrderCommonBoxes">查看客户全部常用箱</button></div>
             <div class="order-common-box-table-wrap">
               <table class="order-common-box-table">
                 <thead><tr>
@@ -10537,6 +10539,7 @@
             uiLayoutEffective:null, uiLayoutAdminBusy:"", uiLayoutAdminPreview:false, uiLayoutAdminDirty:false, uiLayoutAdminLoadGeneration:0,
             uiLayoutAdmin:{role_code:"admin",display_mode:"standard",catalog:null,draft:{version:0,base_release_version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},published:{version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},history:[],can_rollback:false},
             orderNextStepGuide: {visible:false, orderNo:"", count:0, source:""},
+            orderHistoryOpening:null,
             requisitionNextStepGuide: {visible:false, documentNo:"", count:0, source:""},
             incomingNextStepGuide: {visible:false, count:0, pendingBalance:false},
             productionNextStepGuide: {visible:false, mode:"", count:0, locations:""},
@@ -15853,6 +15856,7 @@
             }
           },
           resetPagePerformanceState() {
+            this.orderHistoryOpening = null;
             this.loginAttemptSequence += 1;
             this.pageLoadSequence += 1;
             this.dashboardDetailsVisible = false;
@@ -31857,6 +31861,35 @@
 	              selected:{}, selection_sequence:0, request_id:(this.orderCommonBoxPicker?.request_id || 0) + 1,
 	            };
 	          },
+	          async openOrderFromHistory(orderId) {
+	            if (!this.canCreateOrders || this.modal?.type !== "orderDetail" || this.orderHistoryOpening) return false;
+	            const attempt = {generation:this.authGeneration,actorId:this.user?.id,modal:this.modal};
+	            this.orderHistoryOpening = attempt;
+	            const sessionIsCurrent = () => attempt.generation === this.authGeneration && attempt.actorId === this.user?.id;
+	            try {
+	              const {data} = await axios.get(`/api/orders/${Number(orderId)}`);
+	              if (!sessionIsCurrent() || this.modal !== attempt.modal || !this.canCreateOrders) return false;
+	              this.closeModal();
+	              await this.openOrder({customerId:data.customer_id});
+	              if (!sessionIsCurrent() || this.modal?.type !== "order" || Number(this.orderForm.customer_id) !== Number(data.customer_id)) return false;
+	              this.resetOrderCommonBoxPicker();
+	              Object.assign(this.orderCommonBoxPicker, {
+	                visible:true,source_order_id:data.id,source_order_number:data.order_number,
+	                source_product_total:new Set((data.items || []).map(row => row.product_id).filter(Boolean)).size,
+	              });
+	              await this.loadOrderCommonBoxes(1);
+	              return true;
+	            } catch (error) {
+	              if (sessionIsCurrent()) this.showToast(this.errorMessage(error), true);
+	              return false;
+	            } finally {
+	              if (this.orderHistoryOpening === attempt) this.orderHistoryOpening = null;
+	            }
+	          },
+	          async showAllOrderCommonBoxes() {
+	            this.orderCommonBoxPicker.source_order_id = null;
+	            await this.loadOrderCommonBoxes(1);
+	          },
 	          async openOrderCommonBoxPicker() {
 	            if (!this.orderForm.customer_id) {
 	              this.showToast("请先选择客户", true);
@@ -31897,6 +31930,7 @@
 	                  spec:this.orderCommonBoxPicker.filters.spec || "",
 	                  selection_context:"order",
 	                  sort_by:picker.sort_by || "newest",
+	                  source_order_id:picker.source_order_id || undefined,
 	                  page, page_size:this.orderCommonBoxPicker.page_size,
 	                },
 	              });

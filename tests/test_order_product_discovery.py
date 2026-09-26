@@ -50,3 +50,28 @@ def test_product_picker_methods_and_template():
     result = subprocess.run([shutil.which('node'), str(root/'tests/order_product_discovery.cjs'), str(root)],
                             capture_output=True, text=True, encoding='utf-8', errors='replace')
     assert result.returncode == 0, result.stdout+result.stderr
+
+
+def test_batched_readiness_matches_single_product_for_present_and_absent_bom(tmp_path):
+    from app.api.products import list_products
+    from app.models.product import Product
+    from app.models.multilevel_bom import ProductBomProfile
+    from app.models.user import User
+    from app.services.product_readiness import product_readiness
+    from sqlalchemy import select
+    engine, factory, user_id = _fixture(tmp_path, visible_count=3)
+    try:
+        with factory() as db:
+            user=db.get(User,user_id)
+            products=db.scalars(select(Product).where(Product.product_code!='P1-09C-P-HIDDEN').order_by(Product.id)).all()
+            products[0].box_style='BOM组合';products[0].is_composite=True
+            products[1].box_style='BOM组合';products[1].is_composite=True
+            db.add(ProductBomProfile(product_id=products[0].id,source='assembled',material_mode='expand_children',delivery_mode='parent'))
+            db.commit()
+            expected={p.id:product_readiness(p) for p in products}
+            assert expected[products[0].id]['ready']
+            assert not expected[products[1].id]['ready']
+            for mode in ('full','summary'):
+                response=list_products(db=db,user=user,page=1,page_size=50,response_mode=mode)
+                assert {p['id']:p['readiness'] for p in response['items']}==expected
+    finally:engine.dispose()

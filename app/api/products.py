@@ -1962,6 +1962,7 @@ def list_products(
         default="master_data"
     ),
     sort_by: Literal["code", "newest"] = Query(default="code"),
+    source_order_id: int | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -1982,6 +1983,20 @@ def list_products(
     if customer_id is not None:
         require_customer_access(customer_id, current_user=user, db=db)
         query = query.where(Product.customer_id == customer_id)
+    if source_order_id is not None:
+        from app.models.order import Order, OrderItem
+        if not has_permission(user, "orders.view"):
+            raise HTTPException(status_code=403, detail="没有查看来源订单的权限")
+        source_order = db.get(Order, source_order_id)
+        if source_order is None:
+            raise HTTPException(status_code=404, detail="来源订单不存在")
+        require_customer_access(source_order.customer_id, current_user=user, db=db)
+        if customer_id is not None and customer_id != source_order.customer_id:
+            raise HTTPException(status_code=400, detail="来源订单与新单客户不一致")
+        query = query.where(
+            Product.customer_id == source_order.customer_id,
+            Product.id.in_(select(OrderItem.product_id).where(OrderItem.order_id == source_order_id)),
+        )
     if not include_inactive:
         query = query.where(Product.is_active.is_(True))
     if selection_context == "order":

@@ -100,3 +100,14 @@
 .cost-panel-tabs .tab.active { border-bottom-color:var(--primary); color:var(--primary); font-weight:600; }
 .cost-panel-tabs .tab:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
 .cost-reminder-panel .customer-po-primary { display:table; }
+
+/* Order detail cost evidence occupies the complete product row, never the name cell. */
+.modal .order-read-detail-wrap { overflow-x:auto; max-height:none; }
+.modal .order-read-detail-table { min-width:1100px; }
+.modal .order-read-detail-table > tbody > tr > td { vertical-align:top; }
+.modal .order-read-detail-table .order-read-basis-row > td { padding:8px 12px 14px; background:#f8fafc; }
+.order-read-basis .material-cost-compact { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; margin:0; padding:10px 12px; font-size:13px; line-height:1.5; }
+.order-read-basis .material-cost-compact > details,.order-read-basis .material-margin-summary { flex-basis:100%; min-width:0; }
+.order-read-basis .material-cost-compact > details > div { margin-top:5px; }
+.order-read-basis .bom-preview-box { margin:0 0 8px; }
+.order-read-basis .bom-preview-list { display:flex; flex-wrap:wrap; gap:8px 20px; }

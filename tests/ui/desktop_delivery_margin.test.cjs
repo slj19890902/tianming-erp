@@ -8,7 +8,7 @@ const source = fs.readFileSync(path.join(rootPath, "static/ui/desktop-delivery-m
 const html = fs.readFileSync(path.join(rootPath, "static/index.html"), "utf8");
 
 test("desktop margin module keeps contract markers and does not borrow report pages as customer directory", () => {
-  assert.match(html, /desktop-delivery-margin\.css\?v=20260926-dashboard-cost/);
+  assert.match(html, /desktop-delivery-margin\.css\?v=20260926-cost-column/);
   assert.match(html, /desktop-delivery-margin\.js\?v=20260926-dashboard-cost/);
   assert.match(html, /id="desktopDeliveryMarginRoot"/);
   assert.match(html, /canViewDeliveryMargin/);

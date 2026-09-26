@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.501"
-APP_VERSION_NAME = "首页与成本提醒排版优化"
+APP_VERSION = "v0.22.502"
+APP_VERSION_NAME = "成本依据整行展示修复"
 APP_BUILD_DATE = "2026-09-26"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4817,3 +4817,7 @@ APP_VERIFICATION_STEPS = [
     "从提醒查看成本依据，核对定位到对应明细且成本依据展开；返回后筛选、页码与滚动位置保持。",
 ]
 APP_CHANGELOG = [*(f"v0.22.501：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["修复成本提醒进入订单详情后，成本、毛利和BOM依据挤在产品名称列导致行高异常的问题；依据独立占产品下方整行，保留定位及返回位置。"]
+APP_VERIFICATION_STEPS = ["刷新订单成本提醒，点击查看成本依据，核对产品名称列只显示名称，成本和BOM依据在该产品下方横向展开。", "核对另一条产品及返回成本提醒后的筛选页码；无成本权限账号不显示成本依据。"]
+APP_CHANGELOG = [*(f"v0.22.502：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

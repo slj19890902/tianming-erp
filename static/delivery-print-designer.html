@@ -38,9 +38,9 @@
   <div class="layout-element footer" data-id="signature_footer"><div class="sign"><span>送货人：</span><span>收货单位(签章)：____________</span></div><small data-preview-page>1/1页　开单时间：2026-09-20 10:00　白联存档　红联客户　黄联回单</small></div>
 </div></div></main></div>
 <link rel="stylesheet" href="/customer-delivery-print.css"><script src="/customer-delivery-print.js"></script>
-<script>
+<script src="/operation-key.js"></script><script>
 const $=id=>document.getElementById(id),labels={company_header:"公司抬头",document_title:"单据标题",customer_meta:"客户与单号",item_table:"送货明细",summary_notes:"合计与备注",signature_footer:"签字与页脚"},columnLabels={sequence:"序号",customer_po:"客户单号",product_code:"款号",product_name:"产品名称",specification:"规格",unit:"单位",quantity:"数量",remarks:"备注"};let state=null,layout=null,drag=null;
-const key=()=>crypto.randomUUID().replaceAll("-","");
+const key=()=>TmOperationKey.create().replaceAll("-","");
 async function request(url,options={}){const r=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json"},...options});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.detail||`HTTP ${r.status}`);return data}
 function status(text,error=false){$("status").textContent=text;$("status").classList.toggle("error",error)}
 function currentCustomer(){const value=$("customer").value;return value?Number(value):null}

@@ -14850,7 +14850,8 @@ def stock_policy_replenishment_draft(
         }
     if product is None or product.deleted_at is not None or not product.is_active:
         raise HTTPException(status_code=409, detail="库存预警关联的常用箱不可用。")
-    if product.supply_mode == "external_purchase":
+    if (product.supply_mode == "external_purchase" and not product.is_composite
+            and product.external_packaging_category_code != "coated_board"):
         finished_quantity = int(
             summary.get("suggested_new_requisition_finished_quantity", 0) or 0
         )

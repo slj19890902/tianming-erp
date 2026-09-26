@@ -117,7 +117,8 @@ def test_concurrent_warning_confirmation_does_not_double_cover(unordered_finishe
         assert db.scalar(select(func.sum(StockReplenishmentOrderItem.quantity))) == 201
 
 
-def test_paperboard_dispatch_warning_freezes_complete_plan(unordered_finished_delivery_app):
+@pytest.mark.parametrize('coated_board', [False, True])
+def test_paperboard_dispatch_warning_freezes_complete_plan(unordered_finished_delivery_app, coated_board):
     from app.models.product import Product
     from app.models.stock_replenishment import InventoryStockPolicy, StockReplenishmentOrder
     app, factory = unordered_finished_delivery_app
@@ -128,6 +129,18 @@ def test_paperboard_dispatch_warning_freezes_complete_plan(unordered_finished_de
         product.flute_type = 'B'
         product.crease_type = '净料'
         product.default_cutting_mode = '一开二'
+        if coated_board:
+            material = product.material
+            product.supply_mode = 'external_purchase'
+            product.external_packaging_category_code = 'coated_board'
+            product.external_packaging_specification_json = '{}'
+            product.external_packaging_specification_summary = '灰底白卡原料'
+            product.external_packaging_candidate_snapshot_json = '[]'
+            product.external_packaging_purchase_unit = '片'
+            product.external_packaging_default_order_quantity_basis = 1
+            product.external_packaging_default_purchase_quantity_basis = 1
+            product.layer_count = material.layer_count = 1
+            product.flute_type = material.flute_type = 'NONE'
         policy = InventoryStockPolicy(policy_name='纸板补库', target_inventory_type='finished',
             customer_id=customer_id, product_id=product_id, warning_quantity=150, target_quantity=250)
         db.add(policy)
@@ -162,6 +175,10 @@ def test_paperboard_dispatch_warning_freezes_complete_plan(unordered_finished_de
         assert order.status == 'draft' and len(order.items) == 1
         assert order.items[0].quantity == 50 and order.items[0].report_width_mm == 190
         assert order.items[0].quantity_contract_json is None
+        assert order.items[0].target_inventory_type == 'semi_finished'
+        assert order.items[0].procurement_route_snapshot == 'paperboard'
+        if coated_board:
+            assert order.items[0].layer_count == 1 and order.items[0].flute_type == 'NONE'
 
 
 def test_dispatch_warning_confirmation_rechecks_gap_and_pending_drafts(unordered_finished_delivery_app):

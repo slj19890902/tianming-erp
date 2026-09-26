@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.498"
+APP_VERSION = "v0.22.499"
 APP_VERSION_NAME = "送货打印兼容与失败重试"
 APP_BUILD_DATE = "2026-09-26"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
@@ -4788,3 +4788,6 @@ APP_VERIFICATION_STEPS = [
     "核对原纸型与客户数量保持不变；补打后库存不重复扣减。双数量和历史校正属于后续独立升级。",
 ]
 APP_CHANGELOG = [*(f"v0.22.498：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["补齐送货打印兼容操作键的正式资源路由，避免脚本404；HTTP确认打印与版式设计共享兼容实现。"]
+APP_CHANGELOG = [*(f"v0.22.499：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>天明包装ERP</title>
     <link rel="icon" type="image/x-icon" href="/static/assets/logo.ico" />
-    <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260913-desktopmargin001" />
+    <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260926-dashboard-cost" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <script src="/static/ui/order-context.js?v=217850427bf4"></script>
     <script src="/static/ui/workspace.js?v=5b8c66172ec5"></script>
@@ -18,7 +18,7 @@
     <script src="/static/ui/production-desk.js?v=20260922"></script>
     <link rel="stylesheet" href="/static/ui/production-desk.css?v=20260922-map-return">
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
-    <script src="/static/ui/desktop-delivery-margin.js?v=20260922-finance-history"></script>
+    <script src="/static/ui/desktop-delivery-margin.js?v=20260926-dashboard-cost"></script>
     <script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script>
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
@@ -3299,12 +3299,6 @@
             <template v-if="activePage === 'dashboard'">
               <div class="page-head"><div><h2>首页仪表盘</h2><p>一打开就能看到今天最该处理的订单、报料、送货、回单和对账事项。</p><span v-if="overview.as_of" class="muted">统计截至 {{ formatDateTime(overview.as_of) }} · 对账月份 {{ overview.statement_month }}</span></div></div>
               <div v-if="overviewLoading" class="status blue" style="margin-bottom: 12px;">首页数据加载中……</div>
-              <section v-if="hasPermission('deliveries.view')" class="panel" style="border-left:5px solid #d97706;margin-bottom:12px" aria-label="持续待补送提醒">
-                <div class="toolbar"><strong>持续待补送 · 按最早交期排列</strong><button class="btn" @click="openDeliveryBacklogs">查看全部与历史</button></div>
-                <div v-if="deliveryBacklogs.error" class="status orange">{{ deliveryBacklogs.error }} <button class="btn small" @click="loadDeliveryBacklogs(1)">重试</button></div>
-                <div v-for="row in deliveryBacklogs.items.slice(0,5)" :key="row.id" style="padding:6px 0">{{ row.customer_name }} · {{ row.stock_code }} {{ row.product_name }}：待补 <strong>{{ row.remaining_quantity }}</strong>，可补送 {{ row.ready_quantity }} · 交期 {{ row.due_date || '未登记' }} · {{ row.reason }}</div>
-                <div v-if="!deliveryBacklogs.items.length && !deliveryBacklogs.error" class="muted">{{ deliveryBacklogs.loading ? '正在查询待补送…' : '暂无登记中的待补送' }}</div>
-              </section>
               <div v-if="overviewError" class="status red" style="margin-bottom: 12px;">首页数据加载失败：{{ overviewError }}</div>
               <div v-if="dashboardCards.length" class="dashboard-cards">
                 <div v-for="card in dashboardCards" :key="card.key" class="card dashboard-card" @click="openDashboardTarget(card)">
@@ -3312,7 +3306,7 @@
                   <div class="dashboard-card-value">
                     <span class="dashboard-card-count">{{ card.count || 0 }}</span>
                     <span class="dashboard-card-unit">{{ card.count_unit || "项" }}</span>
-                    <span v-if="card.amount !== undefined && card.amount !== null" class="dashboard-card-amount"> / ￥ {{ money(card.amount) }}</span>
+                    <span v-if="card.amount !== undefined && card.amount !== null" class="dashboard-card-amount">金额 ￥ {{ money(card.amount) }}</span>
                   </div>
                   <div class="card-hint">{{ card.description }}</div>
                   <div v-if="card.key==='pending_material' && dashboardRequisitionHoldSummary.total" class="dashboard-hold-summary" @click.stop="openWaitingRequisitionFromDashboard">
@@ -3324,34 +3318,46 @@
                 </div>
               </div>
               <div v-else class="empty" style="margin-top: 8px;">当前没有可显示的总览数据。</div>
-              <section v-if="canViewDeliveryMargin" id="desktopDeliveryMarginSection" class="dashboard-delivery-margin-shell">
-                <div id="desktopDeliveryMarginRoot" class="panel">
-                  <div class="dashboard-delivery-margin-head">
-                    <div><h3>客户送货材料毛利</h3><p class="muted">按真实送货明细统计；这是送货材料毛利，不是净利。</p></div>
-                    <span class="dashboard-delivery-margin-basis">日期：送货日期 · 含税人民币 · 已覆盖明细与参考补充分开</span>
-                  </div>
-                  <div class="dashboard-delivery-margin-filters" aria-label="客户送货材料毛利筛选">
-                    <label>客户搜索<input id="desktopDeliveryMarginCustomerSearch" type="search" placeholder="搜索授权客户" aria-label="搜索授权客户" /></label>
-                    <label>客户<select id="desktopDeliveryMarginCustomer" aria-label="客户"><option value="">全部授权客户</option></select></label>
-                    <label>开始日期<input id="desktopDeliveryMarginDateFrom" type="date" aria-label="开始日期" /></label>
-                    <label>结束日期<input id="desktopDeliveryMarginDateTo" type="date" aria-label="结束日期" /></label>
-                    <button id="desktopDeliveryMarginApply" class="btn small primary" type="button">查询</button>
-                    <button id="desktopDeliveryMarginRetry" class="btn small" type="button" hidden>重试</button>
-                    <span id="desktopDeliveryMarginCustomerNote" class="muted" hidden></span>
-                  </div>
-                  <div id="desktopDeliveryMarginState" class="status blue" hidden></div>
-                  <div id="desktopDeliveryMarginSummary" class="dashboard-delivery-margin-summary" hidden></div>
-                  <div class="dashboard-delivery-margin-charts">
-                    <div class="panel"><div class="section-title">销售额 vs 材料成本</div><div id="desktopDeliveryMarginBarChart" aria-label="销售额与材料成本柱图"></div></div>
-                    <div class="panel"><div class="section-title">每日材料毛利率趋势</div><div id="desktopDeliveryMarginTrend" aria-label="每日材料毛利率趋势"></div></div>
-                  </div>
-                  <div class="panel dashboard-delivery-margin-customers"><div class="section-title">客户明细</div><div id="desktopDeliveryMarginCustomers" aria-label="客户材料毛利表"></div><div class="dashboard-delivery-margin-pager"><span id="desktopDeliveryMarginPage">第 1 / 1 页</span><button id="desktopDeliveryMarginPrev" class="btn small" type="button">上一页</button><button id="desktopDeliveryMarginNext" class="btn small" type="button">下一页</button></div></div>
-                  <div id="desktopDeliveryMarginGaps" class="dashboard-delivery-margin-gaps"></div>
-                </div>
+              <section v-if="hasPermission('deliveries.view')" class="panel dashboard-backlog" :class="{'is-empty':!deliveryBacklogs.items.length && !deliveryBacklogs.loading && !deliveryBacklogs.error}" aria-label="持续待补送提醒">
+                <div class="toolbar"><strong>持续待补送 · 按最早交期排列</strong><button class="btn" @click="openDeliveryBacklogs">查看全部与历史</button></div>
+                <div v-if="deliveryBacklogs.error" class="status orange">{{ deliveryBacklogs.error }} <button class="btn small" @click="loadDeliveryBacklogs(1)">重试</button></div>
+                <div v-for="row in deliveryBacklogs.items.slice(0,5)" :key="row.id" style="padding:6px 0">{{ row.customer_name }} · {{ row.stock_code }} {{ row.product_name }}：待补 <strong>{{ row.remaining_quantity }}</strong>，可补送 {{ row.ready_quantity }} · 交期 {{ row.due_date || '未登记' }} · {{ row.reason }}</div>
+                <div v-if="!deliveryBacklogs.items.length && !deliveryBacklogs.error" class="muted">{{ deliveryBacklogs.loading ? '正在查询待补送…' : '暂无登记中的待补送' }}</div>
               </section>
+              <div class="dashboard-block">
+                <div class="section-title">今日日常待办</div>
+                <div class="section-body">
+                  <div v-if="overview.todos && overview.todos.length" class="todo-list">
+                    <div v-for="todo in overview.todos" :key="`${todo.type}-${todo.customer_name}-${todo.month || ''}-${todo.first_order_no || ''}`" class="todo-item">
+                      <div class="todo-main">
+                        <div class="todo-meta">
+                          <span class="todo-type">{{ todo.type }}</span>
+                          <div class="todo-title">{{ todo.customer_name }}</div>
+                        </div>
+                        <div class="todo-detail" v-if="todo.month">
+                          {{ todo.month }}
+                          <span v-if="todo.count"> / 共 {{ todo.count }} 条</span>
+                          <span v-if="todo.amount !== undefined"> / {{ money(todo.amount) }}</span>
+                        </div>
+                        <div class="todo-detail" v-else>
+                          <span v-if="todo.count">共 {{ todo.count }} 条</span>
+                          <span v-if="todo.first_order_no"> / 最早单号 {{ todo.first_order_no }}</span>
+                          <span v-if="todo.first_item_no"> / {{ todo.first_item_no }}</span>
+                        </div>
+                      </div>
+                      <div class="todo-message">{{ todo.message }}</div>
+                      <div class="toolbar-group">
+                        <button class="btn small" @click="openDashboardTarget(todo)">{{ todo.action_text || "查看对应页面" }}</button>
+                      </div>
+                    </div>
+                    <div v-if="overview.remaining_todo_count" class="todo-more">还有 {{ overview.remaining_todo_count }} 项待办，请进入对应页面查看。</div>
+                  </div>
+                  <div v-else class="empty">当前没有紧急待办。</div>
+                </div>
+              </div>
               <div class="dashboard-detail-summary">
-                <span>详细待办：低库存 {{ overview.low_stock_warnings?.length || 0 }} 款 · 今日日常待办 {{ overview.todos?.length || 0 }} 项</span>
-                <button class="btn small" type="button" :aria-expanded="dashboardDetailsVisible" @click="dashboardDetailsVisible=!dashboardDetailsVisible">{{ dashboardDetailsVisible ? '收起首页明细' : '展开首页明细' }}</button>
+                <span>库存与业务摘要：低库存 {{ overview.low_stock_warnings?.length || 0 }} 款 · 今日日常待办 {{ overview.todos?.length || 0 }} 项</span>
+                <button class="btn small" type="button" :aria-expanded="dashboardDetailsVisible" @click="dashboardDetailsVisible=!dashboardDetailsVisible">{{ dashboardDetailsVisible ? '收起库存与摘要' : '展开库存与摘要' }}</button>
               </div>
               <div v-if="dashboardDetailsVisible" class="dashboard-detail-stack">
               <div v-if="overview.low_stock_warnings && overview.low_stock_warnings.length" class="dashboard-block">
@@ -3393,37 +3399,6 @@
                   </div>
                 </div>
               </div>
-              <div class="dashboard-block">
-                <div class="section-title">今日日常待办</div>
-                <div class="section-body">
-                  <div v-if="overview.todos && overview.todos.length" class="todo-list">
-                    <div v-for="todo in overview.todos" :key="`${todo.type}-${todo.customer_name}-${todo.month || ''}-${todo.first_order_no || ''}`" class="todo-item">
-                      <div class="todo-main">
-                        <div class="todo-meta">
-                          <span class="todo-type">{{ todo.type }}</span>
-                          <div class="todo-title">{{ todo.customer_name }}</div>
-                        </div>
-                        <div class="todo-detail" v-if="todo.month">
-                          {{ todo.month }}
-                          <span v-if="todo.count"> / 共 {{ todo.count }} 条</span>
-                          <span v-if="todo.amount !== undefined"> / {{ money(todo.amount) }}</span>
-                        </div>
-                        <div class="todo-detail" v-else>
-                          <span v-if="todo.count">共 {{ todo.count }} 条</span>
-                          <span v-if="todo.first_order_no"> / 最早单号 {{ todo.first_order_no }}</span>
-                          <span v-if="todo.first_item_no"> / {{ todo.first_item_no }}</span>
-                        </div>
-                      </div>
-                      <div class="todo-message">{{ todo.message }}</div>
-                      <div class="toolbar-group">
-                        <button class="btn small" @click="openDashboardTarget(todo)">{{ todo.action_text || "查看对应页面" }}</button>
-                      </div>
-                    </div>
-                    <div v-if="overview.remaining_todo_count" class="todo-more">还有 {{ overview.remaining_todo_count }} 项待办，请进入对应页面查看。</div>
-                  </div>
-                  <div v-else class="empty">当前没有紧急待办。</div>
-                </div>
-              </div>
               <div class="section-grid">
                 <div class="panel"><div class="section-title">快捷入口</div><div class="section-body toolbar-group">
                   <template v-for="action in dashboardQuickActions" :key="action.key">
@@ -3441,6 +3416,34 @@
                 </div></div>
               </div>
               </div>
+              <section v-if="canViewDeliveryMargin" id="desktopDeliveryMarginSection" class="dashboard-delivery-margin-shell">
+                <div id="desktopDeliveryMarginRoot" class="panel">
+                  <div class="dashboard-delivery-margin-head">
+                    <div><h3>客户送货材料毛利</h3><p class="muted">按真实送货明细统计；这是送货材料毛利，不是净利。</p></div>
+                    <span class="dashboard-delivery-margin-basis">日期：送货日期 · 含税人民币 · 已覆盖明细与参考补充分开</span>
+                  </div>
+                  <div class="dashboard-delivery-margin-filters" aria-label="客户送货材料毛利筛选">
+                    <div class="margin-customer-picker"><label for="desktopDeliveryMarginCustomerSearch">客户</label><input id="desktopDeliveryMarginCustomerSearch" type="search" placeholder="全部授权客户 · 输入名称搜索" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="desktopDeliveryMarginCustomerList" autocomplete="off" /><select id="desktopDeliveryMarginCustomer" hidden aria-hidden="true" tabindex="-1"><option value="">全部授权客户</option></select><div id="desktopDeliveryMarginCustomerList" class="margin-customer-options" role="listbox" aria-label="授权客户搜索结果" hidden></div></div>
+                    <label>开始日期<input id="desktopDeliveryMarginDateFrom" type="date" aria-label="开始日期" /></label>
+                    <label>结束日期<input id="desktopDeliveryMarginDateTo" type="date" aria-label="结束日期" /></label>
+                    <div id="desktopDeliveryMarginDatePresets" class="toolbar-group" aria-label="送货日期快捷范围"></div>
+                    <button id="desktopDeliveryMarginApply" class="btn small primary" type="button">查询</button>
+                    <button id="desktopDeliveryMarginRetry" class="btn small" type="button" hidden>重试</button>
+                    <span id="desktopDeliveryMarginCustomerNote" class="muted" hidden></span>
+                  </div>
+                  <p id="desktopDeliveryMarginApplied" class="margin-applied" aria-live="polite">筛选仅影响送货毛利，首页待办按各自业务口径统计。</p>
+                  <div id="desktopDeliveryMarginState" class="status blue" hidden></div>
+                  <div id="desktopDeliveryMarginSummary" class="dashboard-delivery-margin-summary" hidden></div>
+                  <details class="dashboard-analysis-details"><summary>展开毛利趋势与客户明细</summary>
+                  <div class="dashboard-delivery-margin-charts">
+                    <div class="panel"><div class="section-title">销售额 vs 材料成本</div><div id="desktopDeliveryMarginBarChart" aria-label="销售额与材料成本柱图"></div></div>
+                    <div class="panel"><div class="section-title">每日材料毛利率趋势</div><div id="desktopDeliveryMarginTrend" aria-label="每日材料毛利率趋势"></div></div>
+                  </div>
+                  <div class="panel dashboard-delivery-margin-customers"><div class="section-title">客户明细</div><div id="desktopDeliveryMarginCustomers" aria-label="客户材料毛利表"></div><div class="dashboard-delivery-margin-pager"><span id="desktopDeliveryMarginPage">第 1 / 1 页</span><button id="desktopDeliveryMarginPrev" class="btn small" type="button">上一页</button><button id="desktopDeliveryMarginNext" class="btn small" type="button">下一页</button></div></div>
+                  </details>
+                  <div id="desktopDeliveryMarginGaps" class="dashboard-delivery-margin-gaps"></div>
+                </div>
+              </section>
             </template>
             <template v-else-if="activePage === 'customers'">
               <page-head title="客户管理" desc="维护客户编号、账期、信用额度、联系人和开票资料。"></page-head>

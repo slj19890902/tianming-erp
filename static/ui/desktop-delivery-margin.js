@@ -57,6 +57,16 @@
     const date = Object.fromEntries(parts.filter(item => item.type !== "literal").map(item => [item.type, item.value]));
     return {from:`${date.year}-${date.month}-01`, to:`${date.year}-${date.month}-${date.day}`};
   }
+  function datePreset(kind, today = defaultDates().to) {
+    const day = new Date(`${today}T00:00:00Z`);
+    const iso = value => value.toISOString().slice(0, 10);
+    if (kind === "previous") {
+      const end = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), 0));
+      return {from:iso(new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1))), to:iso(end)};
+    }
+    if (kind === "30days") { day.setUTCDate(day.getUTCDate() - 29); return {from:iso(day), to:today}; }
+    return {from:today.slice(0, 7) + "-01", to:today};
+  }
   function quantityText(metrics) {
     const parts = (Array.isArray(metrics?.quantities) ? metrics.quantities : []).map(item => `${item?.quantity ?? "待补"} ${item?.unit || "单位待完善"}`.trim());
     const unknown = number(metrics?.unknown_unit_quantity);
@@ -80,12 +90,37 @@
       state:find("desktopDeliveryMarginState"), summary:find("desktopDeliveryMarginSummary"), chart:find("desktopDeliveryMarginBarChart"), trend:find("desktopDeliveryMarginTrend"), customers:find("desktopDeliveryMarginCustomers"), gaps:find("desktopDeliveryMarginGaps"), customer:find("desktopDeliveryMarginCustomer"), customerSearch:find("desktopDeliveryMarginCustomerSearch"), from:find("desktopDeliveryMarginDateFrom"), to:find("desktopDeliveryMarginDateTo"), apply:find("desktopDeliveryMarginApply"), retry:find("desktopDeliveryMarginRetry"), previous:find("desktopDeliveryMarginPrev"), next:find("desktopDeliveryMarginNext"), page:find("desktopDeliveryMarginPage"), note:find("desktopDeliveryMarginCustomerNote"), root,
     };
     if (Object.values(refs).some(value => !value)) return null;
+    const picker = find("desktopDeliveryMarginCustomerList");
+    const applied = find("desktopDeliveryMarginApplied");
+    const presets = find("desktopDeliveryMarginDatePresets");
     const dates = defaultDates();
     const identityKey = String(config.identityKey || "desktop-margin-default");
     const saved = savedStates.get(identityKey) || {};
     const state = {filters:{customerId:"", dateFrom:dates.from, dateTo:dates.to, ...(saved.filters || {})}, page:Number(saved.page || 1), pageSize:25, total:0, loading:false, loaded:false, payload:null, error:"", optionsError:"", generation:0, controller:null, optionsController:null, optionsTimer:null, disposed:false, customerOptions:saved.selectedCustomer ? [saved.selectedCustomer] : []};
     const apiGet = config.apiGet || ((path, request = {}) => global.axios.get(path, request).then(response => response.data));
     const allowed = () => config.isAllowed ? config.isAllowed() !== false : config.shell?.delivery_margin_allowed !== false;
+    let pickerOptions = [], activeOption = -1;
+    const selectedName = () => state.customerOptions.find(item => String(item.id ?? item.customer_id) === String(state.filters.customerId))?.name || "全部授权客户";
+    const closePicker = () => { if (picker) picker.hidden = true; refs.customerSearch.setAttribute("aria-expanded", "false"); };
+    const chooseCustomer = item => {
+      state.filters.customerId = item ? String(item.id ?? item.customer_id) : "";
+      refs.customer.value = state.filters.customerId;
+      refs.customerSearch.value = item ? (item.name ?? item.customer_name) : "";
+      state.customerQueryDirty = false; state.gapPage = 1; closePicker(); load(1);
+    };
+    const renderOptions = () => {
+      if (!picker) return;
+      const keyword = refs.customerSearch.value.trim().toLowerCase();
+      pickerOptions = [null, ...state.customerOptions.filter(item => String(item.name ?? item.customer_name ?? "").toLowerCase().includes(keyword))];
+      picker.replaceChildren(); activeOption = -1;
+      pickerOptions.slice(0, 51).forEach((item,index) => {
+        const option = el("button", "margin-customer-option", item ? (item.name ?? item.customer_name) : "全部授权客户");
+        option.type = "button"; option.id = `margin-customer-${index}`;
+        option.setAttribute("role", "option"); option.setAttribute("aria-selected", String(String(item?.id ?? item?.customer_id ?? "") === String(state.filters.customerId)));
+        option.addEventListener("click", () => chooseCustomer(item)); picker.append(option);
+      });
+      picker.hidden = false; refs.customerSearch.setAttribute("aria-expanded", "true");
+    };
     const mergeOptions = options => {
       const map = new Map(state.customerOptions.map(item => [String(item.id ?? item.customer_id), item]));
       (Array.isArray(options) ? options : []).forEach(item => { const id = item?.id ?? item?.customer_id; if (id !== null && id !== undefined && id !== "") map.set(String(id), item); });
@@ -97,6 +132,7 @@
         refs.customer.append(option);
       });
       refs.customer.value = state.filters.customerId || "";
+      if (picker && !picker.hidden) renderOptions();
     };
     const clearResults = () => {
       state.payload = null; state.total = 0; state.loaded = false;
@@ -130,17 +166,32 @@
       refs.trend.replaceChildren();
       const rows = Array.isArray(daily) ? daily : [];
       if (!rows.length) { refs.trend.append(el("p", "empty", "暂无每日送货，趋势暂无数据。")); return; }
-      rows.forEach(item => {
+      let trendPage = 0;
+      const scale = Math.max(1, ...rows.map(item => Math.abs(number(item?.metrics?.material_margin_rate) || 0)));
+      const paintTrend = () => {
+      refs.trend.replaceChildren();
+      const plot = el("div", "margin-trend-plot");
+      rows.slice(trendPage * 7, trendPage * 7 + 7).forEach(item => {
         const metricsForDay = item?.metrics || {};
         const row = el("div", "dashboard-delivery-margin-trend-row");
         const bar = el("i", `dashboard-delivery-margin-trend-bar${number(metricsForDay.material_margin) < 0 ? " negative" : ""}`);
-        const value = number(metricsForDay.material_margin_rate);
+        const value = number(metricsForDay.sales_amount) === 0 ? null : number(metricsForDay.material_margin_rate);
         bar.hidden = value === null;
-        bar.style.width = value === null ? "0%" : `${Math.min(100, Math.abs(value) * 100)}%`;
-        row.append(el("span", "", item?.date || "日期待补"), bar, el("b", "", marginRate(metricsForDay)));
-        refs.trend.append(row);
+        bar.style.width = value === null ? "0%" : `${Math.abs(value) / scale * 50}%`;
+        bar.style[value < 0 ? "right" : "left"] = "50%";
+        const track = el("div", "margin-trend-axis"); track.append(bar);
+        row.append(el("span", "", item?.date || "日期待补"), track, el("b", value < 0 ? "negative" : "", value === null ? "待补 / 无比率" : marginRate(metricsForDay)));
+        plot.append(row);
       });
-      refs.trend.append(el("p", "muted dashboard-delivery-margin-chart-note", "每日比率按当日销售额计算；销售额为零显示横线。"));
+      refs.trend.append(plot);
+      const controls = el("div", "dashboard-delivery-margin-pager");
+      const prev = el("button", "btn small", "前7天"), next = el("button", "btn small", "后7天");
+      prev.type = next.type = "button"; prev.disabled = trendPage === 0; next.disabled = (trendPage + 1) * 7 >= rows.length;
+      prev.addEventListener("click", () => {trendPage--; paintTrend();}); next.addEventListener("click", () => {trendPage++; paintTrend();});
+      controls.append(prev, el("span", "", `第 ${trendPage + 1} / ${Math.ceil(rows.length / 7)} 页`), next);
+      refs.trend.append(controls, el("p", "muted dashboard-delivery-margin-chart-note", "中线为0%；左侧亏损，右侧盈利；各页使用同一刻度。缺资料或销售额为零不绘条。"));
+      };
+      paintTrend();
     }
     function renderCustomers(payload) {
       refs.customers.replaceChildren();
@@ -194,13 +245,13 @@
       const metrics = payload?.summary || {};
       refs.summary.replaceChildren(); refs.summary.hidden = false;
       const sales = metricValue(metrics, "sales_amount", "known_sales_amount"); const cost = metricValue(metrics, "material_cost", "known_material_cost");
-      renderCard("送货行", String(Number(metrics.delivery_line_count || 0)), "已覆盖明细");
-      renderCard("送货数量", quantityText(metrics), "计价销售行；单位未知单列");
       renderCard("含税销售额", sales.value, metrics.sales_amount === null || metrics.sales_amount === undefined ? `已知部分 ${money(metrics.known_sales_amount)}` : "完整", sales.partial);
       renderCard("材料成本（实际＋参考）", cost.value, `实际：${costPart(metrics, "actual_material_cost")} · 参考：${costPart(metrics, "supplemental_material_cost")} · 待补 ${Number(metrics.management_cost_gap_lines || 0)} 行`, cost.partial);
-      renderCard("材料毛利", money(metrics.material_margin), metrics.status === "complete_with_reference" ? "含已批准参考补充" : statusText(metrics.status), false);
+      renderCard("材料毛利", money(metrics.material_margin), `${statusText(metrics.status)} · 覆盖率 ${coverage(metrics.coverage_rate)}`, false);
       renderCard("材料毛利率", marginRate(metrics), "销售额为零显示横线");
-      renderCard("覆盖率", coverage(metrics.coverage_rate), `${Number(metrics.comparable_lines || 0)} / ${Number(metrics.delivery_line_count || 0)} 行可比`);
+      const context = el("div", "margin-context", `送货 ${Number(metrics.delivery_line_count || 0)} 行 · ${quantityText(metrics)} · ${Number(metrics.comparable_lines || 0)} / ${Number(metrics.delivery_line_count || 0)} 行可比 · 覆盖率 ${coverage(metrics.coverage_rate)} · ${statusText(metrics.status)}`);
+      refs.summary.append(context);
+      if (applied) applied.textContent = `当前：${selectedName()} · 送货日期 ${state.filters.dateFrom} 至 ${state.filters.dateTo} · 刷新 ${new Date().toLocaleTimeString("zh-CN", {timeZone:"Asia/Shanghai"})}。仅影响送货毛利，首页待办口径独立。`;
       renderCharts(metrics, payload?.daily); renderCustomers(payload); renderGaps(payload?.gaps || {});
       state.total = Number(payload?.customers?.total || 0); state.pageSize = Number(payload?.customers?.page_size || state.pageSize);
       const pages = Math.max(1, Math.ceil(state.total / state.pageSize)); refs.page.textContent = `第 ${Math.min(state.page, pages)} / ${pages} 页`; refs.previous.disabled = state.page <= 1; refs.next.disabled = state.page >= pages || !state.total;
@@ -237,12 +288,31 @@
       }
     }
     const onCustomerChange = () => { if (!state.disposed) { state.gapPage=1;state.filters.customerId = refs.customer.value; load(1); } };
-    const onCustomerSearch = () => { if (!state.disposed) { clearTimeout(state.optionsTimer); state.optionsTimer = setTimeout(() => loadCustomerOptions(refs.customerSearch.value || ""), 180); } };
-    const applyFilters = () => { if (!state.disposed) { state.gapPage=1;state.filters.dateFrom = refs.from.value; state.filters.dateTo = refs.to.value; state.filters.customerId = refs.customer.value; load(1); } };
+    const onCustomerSearch = () => { if (!state.disposed) { state.customerQueryDirty = true; renderOptions(); clearTimeout(state.optionsTimer); state.optionsTimer = setTimeout(() => loadCustomerOptions(refs.customerSearch.value || ""), 180); } };
+    const applyFilters = () => { if (!state.disposed) { if (picker && state.customerQueryDirty) { showState("请从搜索结果中选择客户，或选择全部授权客户", "orange"); renderOptions(); return; } closePicker(); state.gapPage=1;state.filters.dateFrom = refs.from.value; state.filters.dateTo = refs.to.value; state.filters.customerId = refs.customer.value; load(1); } };
+    const onPickerKey = event => {
+      if (!picker) return;
+      if (event.key === "Escape") {closePicker(); return;}
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault(); if (picker.hidden) renderOptions();
+        activeOption = Math.max(0, Math.min(Math.min(pickerOptions.length,51)-1, activeOption + (event.key === "ArrowDown" ? 1 : -1)));
+        Array.from(picker.children).forEach((node,i) => node.setAttribute("aria-selected", String(i === activeOption)));
+        refs.customerSearch.setAttribute("aria-activedescendant", `margin-customer-${activeOption}`);
+      } else if (event.key === "Enter" && !picker.hidden && activeOption >= 0) {event.preventDefault(); chooseCustomer(pickerOptions[activeOption]);}
+    };
     const onPrevious = () => { if (!state.disposed && state.page > 1) load(state.page - 1); };
     const onNext = () => { const pages = Math.max(1, Math.ceil(state.total / state.pageSize)); if (!state.disposed && state.page < pages) load(state.page + 1); };
     const onRetry = () => load(state.page);
     refs.from.value = state.filters.dateFrom; refs.to.value = state.filters.dateTo; refs.note.hidden = true; mergeOptions(config.customerOptions || []);
+    refs.customerSearch.value = state.filters.customerId ? selectedName() : "";
+    refs.customerSearch.addEventListener("focus", renderOptions); refs.customerSearch.addEventListener("keydown", onPickerKey);
+    if (presets) {
+      presets.replaceChildren();
+      [["month","本月"],["previous","上月"],["30days","近30天"]].forEach(([kind,label]) => {
+        const button = el("button", "btn small", label); button.type = "button";
+        button.addEventListener("click", () => {const range = datePreset(kind); refs.from.value = range.from; refs.to.value = range.to; applyFilters();}); presets.append(button);
+      });
+    }
     refs.customer.addEventListener("change", onCustomerChange); refs.customerSearch.addEventListener("input", onCustomerSearch); refs.apply.addEventListener("click", applyFilters); refs.retry.addEventListener("click", onRetry); refs.previous.addEventListener("click", onPrevious); refs.next.addEventListener("click", onNext);
     function onPageChange(page) {
       if (page !== "dashboard") { state.controller?.abort(); state.optionsController?.abort(); state.controller = null; state.optionsController = null; state.generation += 1; state.loaded = false; state.loading = false; refs.apply.disabled = false; clearResults(); return; }
@@ -251,6 +321,8 @@
     function updateCustomerOptions(options) { mergeOptions(options || []); }
     function detach({preserve=false} = {}) {
       state.disposed = true; state.controller?.abort(); state.optionsController?.abort(); clearTimeout(state.optionsTimer); state.generation += 1;
+      refs.customerSearch.removeEventListener("focus", renderOptions); refs.customerSearch.removeEventListener("keydown", onPickerKey); closePicker();
+      picker?.replaceChildren(); presets?.replaceChildren(); if (applied) applied.textContent = "";
       refs.customer.removeEventListener("change", onCustomerChange); refs.customerSearch.removeEventListener("input", onCustomerSearch); refs.apply.removeEventListener("click", applyFilters); refs.retry.removeEventListener("click", onRetry); refs.previous.removeEventListener("click", onPrevious); refs.next.removeEventListener("click", onNext);
       if (preserve) {
         const selected = state.customerOptions.find(item => String(item.id ?? item.customer_id) === String(state.filters.customerId));
@@ -266,7 +338,7 @@
     loadCustomerOptions(); load(state.page);
     return mounted;
   }
-  const api = {mount:create, create, destroy:() => { if (mounted) mounted.destroy(); else savedStates.clear(); }, leave:() => mounted?.leave?.(), onPageChange:page => mounted?.onPageChange?.(page), updateCustomerOptions:options => mounted?.updateCustomerOptions?.(options), defaultDates, money, rate, marginRate, coverage};
+  const api = {mount:create, create, destroy:() => { if (mounted) mounted.destroy(); else savedStates.clear(); }, leave:() => mounted?.leave?.(), onPageChange:page => mounted?.onPageChange?.(page), updateCustomerOptions:options => mounted?.updateCustomerOptions?.(options), defaultDates, datePreset, money, rate, marginRate, coverage};
   global.TmDesktopDeliveryMargin = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window === "undefined" ? globalThis : window);

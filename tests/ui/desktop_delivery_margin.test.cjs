@@ -8,8 +8,8 @@ const source = fs.readFileSync(path.join(rootPath, "static/ui/desktop-delivery-m
 const html = fs.readFileSync(path.join(rootPath, "static/index.html"), "utf8");
 
 test("desktop margin module keeps contract markers and does not borrow report pages as customer directory", () => {
-  assert.match(html, /desktop-delivery-margin\.css\?v=20260913-desktopmargin001/);
-  assert.match(html, /desktop-delivery-margin\.js\?v=20260922-finance-history/);
+  assert.match(html, /desktop-delivery-margin\.css\?v=20260926-dashboard-cost/);
+  assert.match(html, /desktop-delivery-margin\.js\?v=20260926-dashboard-cost/);
   assert.match(html, /id="desktopDeliveryMarginRoot"/);
   assert.match(html, /canViewDeliveryMargin/);
   assert.match(html, /回单确认销售额（原口径）/);
@@ -41,7 +41,7 @@ test("desktop margin permission, lifecycle, stale response and customer search f
     removeEventListener(name, handler) { this.listeners[name] = (this.listeners[name] || []).filter(item => item !== handler); }
     querySelector(selector) { return this._map?.[selector.replace(/^#/, "")] || null; }
   }
-  const ids = ["desktopDeliveryMarginState", "desktopDeliveryMarginSummary", "desktopDeliveryMarginBarChart", "desktopDeliveryMarginTrend", "desktopDeliveryMarginCustomers", "desktopDeliveryMarginGaps", "desktopDeliveryMarginCustomer", "desktopDeliveryMarginCustomerSearch", "desktopDeliveryMarginCustomerNote", "desktopDeliveryMarginDateFrom", "desktopDeliveryMarginDateTo", "desktopDeliveryMarginApply", "desktopDeliveryMarginRetry", "desktopDeliveryMarginPrev", "desktopDeliveryMarginNext", "desktopDeliveryMarginPage"];
+  const ids = ["desktopDeliveryMarginCustomerList", "desktopDeliveryMarginApplied", "desktopDeliveryMarginDatePresets", "desktopDeliveryMarginState", "desktopDeliveryMarginSummary", "desktopDeliveryMarginBarChart", "desktopDeliveryMarginTrend", "desktopDeliveryMarginCustomers", "desktopDeliveryMarginGaps", "desktopDeliveryMarginCustomer", "desktopDeliveryMarginCustomerSearch", "desktopDeliveryMarginCustomerNote", "desktopDeliveryMarginDateFrom", "desktopDeliveryMarginDateTo", "desktopDeliveryMarginApply", "desktopDeliveryMarginRetry", "desktopDeliveryMarginPrev", "desktopDeliveryMarginNext", "desktopDeliveryMarginPage"];
   const elements = Object.fromEntries(ids.map(id => [id, new FakeElement()]));
   const section = new FakeElement("section");
   const root = new FakeElement("div"); root._map = elements;
@@ -79,6 +79,11 @@ test("desktop margin permission, lifecycle, stale response and customer search f
   elements.desktopDeliveryMarginCustomerSearch.listeners.input[0]();
   await new Promise(resolve => setTimeout(resolve, 220));
   assert.equal(optionsUrls.at(-1).keyword, "远端");
+  const remoteOption=elements.desktopDeliveryMarginCustomerList.children.find(node=>node.textContent === "远端客户");
+  assert.ok(remoteOption,"search renders authorized options in the single picker");
+  remoteOption.listeners.click[0]();
+  assert.equal(controller.state.filters.customerId,"99");
+  assert.equal(elements.desktopDeliveryMarginCustomerList.hidden,true);
   elements.desktopDeliveryMarginCustomer.value = "99";
   controller.state.filters.customerId = "99";
   controller.state.page = 3;
@@ -106,8 +111,37 @@ test("desktop margin permission, lifecycle, stale response and customer search f
   assert.match(textOf(elements2.desktopDeliveryMarginSummary), /实际：¥12\.00/);
   assert.match(textOf(elements2.desktopDeliveryMarginSummary), /参考：¥3\.00/);
   assert.match(textOf(elements2.desktopDeliveryMarginCustomers), /销售缺口 1 行；成本待补 1 行/);
+  const plotLoad = fresh.load(1);
+  pending.at(-1).resolve({summary:{delivery_line_count:3, coverage_rate:"0.5", status:"partial"}, customers:{items:[],total:0}, daily:[
+    {date:"2026-09-01",metrics:{sales_amount:"10",material_margin_rate:"-0.4",material_margin:"-4"}},
+    {date:"2026-09-02",metrics:{sales_amount:"10",material_margin_rate:"0.2",material_margin:"2"}},
+    {date:"2026-09-03",metrics:{sales_amount:null,material_margin_rate:null}},
+    ...Array.from({length:6},(_,i)=>({date:`2026-09-${String(i+4).padStart(2,"0")}`,metrics:{sales_amount:10,material_margin_rate:0.1}}))
+  ],gaps:{}});
+  await plotLoad;
+  const plot = elements2.desktopDeliveryMarginTrend.children[0];
+  assert.equal(plot.children.length,7,"fixed-height trend paginates days");
+  const loss = plot.children[0].children[1].children[0];
+  const profit = plot.children[1].children[1].children[0];
+  assert.equal(loss.style.right,"50%","loss points left from the common zero axis");
+  assert.equal(profit.style.left,"50%","profit points right");
+  assert.equal(loss.style.width,"20%");
+  assert.equal(profit.style.width,"10%");
+  assert.equal(plot.children[2].children[1].children[0].hidden,true,"missing rate does not become zero");
+  elements2.desktopDeliveryMarginTrend.children[1].children[2].listeners.click[0]();
+  assert.equal(elements2.desktopDeliveryMarginTrend.children[0].children.length,2);
+  assert.equal(elements2.desktopDeliveryMarginSummary.children.length,5,"four primary metrics plus one context row");
+  assert.match(textOf(elements2.desktopDeliveryMarginSummary),/覆盖率 50.00%/);
   fresh.destroy();
   delete global.document;
+});
+
+test("date presets use calendar boundaries including leap year and year rollover", () => {
+  const margin = require(path.join(rootPath,"static/ui/desktop-delivery-margin.js"));
+  assert.deepEqual(margin.datePreset("previous","2026-01-15"),{from:"2025-12-01",to:"2025-12-31"});
+  assert.deepEqual(margin.datePreset("previous","2024-03-15"),{from:"2024-02-01",to:"2024-02-29"});
+  assert.deepEqual(margin.datePreset("30days","2026-01-15"),{from:"2025-12-17",to:"2026-01-15"});
+  assert.deepEqual(margin.datePreset("month","2026-09-26"),{from:"2026-09-01",to:"2026-09-26"});
 });
 
 test("desktop sync leaves same identity for DOM remount and destroys only on identity change", () => {

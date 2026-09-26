@@ -631,14 +631,20 @@ class StatementUpdate(BaseModel):
         return value
 
 
+def _dispute_reason(value: str) -> str:
+    if not isinstance(value, str) or not 2 <= len(value.strip()) <= 500:
+        raise ValueError('客户异议原因需填写 2～500 个字，例如：单价有误')
+    return value.strip()
+
+
 class StatementReopen(BaseModel):
     expected_version: int = Field(gt=0)
     reason: str = Field(min_length=2, max_length=500)
 
-    @field_validator("reason")
+    @field_validator("reason", mode="before")
     @classmethod
     def normalize_reason(cls, value: str) -> str:
-        return value.strip()
+        return _dispute_reason(value)
 
 
 class StatementLineRemoval(BaseModel):
@@ -664,10 +670,10 @@ class StatementDisputeAdjustment(BaseModel):
     add_return_receipt_item_ids: list[int] = Field(default_factory=list)
     update_lines: list[StatementLineCorrection] = Field(default_factory=list)
 
-    @field_validator("reason")
+    @field_validator("reason", mode="before")
     @classmethod
     def normalize_reason(cls, value: str) -> str:
-        return value.strip()
+        return _dispute_reason(value)
 
     @field_validator("add_return_receipt_item_ids")
     @classmethod
@@ -1810,9 +1816,21 @@ def _statement_detail_response(
         for item in statement_items
         if item.get("source_customer_id") is not None and item.get("source_customer_name")
     }
+    merge_history = db.scalars(select(StatementAdjustment).where(
+        StatementAdjustment.statement_id == statement.id,
+        StatementAdjustment.action == "merge_statements")).first()
+    merged_into = json.loads(merge_history.details_json).get("merged_statement_id") if merge_history else None
+    merge_sources = db.scalars(select(StatementAdjustment).where(
+        StatementAdjustment.action == "merge_statements",
+        func.json_extract(StatementAdjustment.details_json, "$.merged_statement_id") == statement.id
+    ).order_by(StatementAdjustment.statement_id)).all()
     return _redact_statement_costs(
         {
             "id": statement.id,
+            "merged_into_statement_id": merged_into,
+            "merge_sources": [{"id": log.statement_id,
+                "statement_number": json.loads(log.details_json)["snapshot"]["statement_number"]}
+                for log in merge_sources],
             "statement_number": statement.statement_number,
             "customer_id": statement.customer_id,
             "customer_name": statement.settlement_name_snapshot or customer_name,
@@ -1839,7 +1857,7 @@ def _statement_detail_response(
             "voided_versions": [{"version": log.before_version, "reason": log.reason,
                 "created_at": log.created_at, "snapshot": _redact_statement_costs(json.loads(log.details_json).get("snapshot", {}), user)}
                 for log in db.scalars(select(StatementAdjustment).where(StatementAdjustment.statement_id == statement.id,
-                    StatementAdjustment.action == "invalidate_statement_version").order_by(StatementAdjustment.id.desc()))],
+                    StatementAdjustment.action.in_(("invalidate_statement_version", "merge_statements"))).order_by(StatementAdjustment.id.desc()))],
             "invoice_count": len(invoices),
             "settlement_count": len(settlements),
             "items": statement_items,
@@ -1866,6 +1884,8 @@ def export_statement_excel(
         raise HTTPException(status_code=404, detail="对账单不存在")
     statement, customer = row
     _statement_for_user(db, statement.id, user)
+    if statement.confirmation_status == "cancelled":
+        raise HTTPException(409, "原对账单已停用，请从详情查看合并后的对账单；原版保留在历史记录")
     source_customer = aliased(Customer)
     settlement_name = statement.settlement_name_snapshot or customer.name
     lines = db.execute(
@@ -2344,6 +2364,14 @@ def _statement_export_context(
         raise HTTPException(status_code=404, detail="对账单不存在")
     statement, customer = result
     _statement_for_user(db, statement.id, user)
+    if statement.confirmation_status == "cancelled":
+        raise HTTPException(409, "原对账单已停用，请从详情查看合并后的对账单；原版保留在历史记录")
+    # A merged statement always exports one delivery-date ordered document.
+    if db.scalar(select(StatementAdjustment.id).where(
+        StatementAdjustment.action == "merge_statements",
+        func.json_extract(StatementAdjustment.details_json, "$.merged_statement_id") == statement.id
+    ).limit(1)) is not None:
+        sort_by = "business"
     return statement, customer, _customer_statement_export_data(
         db, statement=statement, customer=customer, sort_by=sort_by
     )
@@ -7090,6 +7118,7 @@ def _lock_unpaid_statement_for_dispute(
         .where(
             Statement.id == statement_id,
             Statement.version == expected_version,
+            Statement.confirmation_status != "cancelled",
             Statement.settled_amount == 0,
             ~select(SettlementRecord.id)
             .where(SettlementRecord.statement_id == Statement.id)
@@ -7532,7 +7561,7 @@ def update_statement(
 ) -> dict:
     try:
         statement = _statement_for_user(db, statement_id, user)
-        if statement.confirmation_status == "confirmed":
+        if statement.confirmation_status in ("confirmed", "cancelled"):
             raise HTTPException(
                 status_code=409,
                 detail="对账单已确认；如需修改来源，请先作废对应开票任务并重新核对。",
@@ -7651,6 +7680,11 @@ def cancel_statement(
 ) -> dict:
     try:
         statement = _statement_for_user(db, statement_id, user)
+        if statement.confirmation_status == "cancelled" or db.scalar(select(StatementAdjustment.id).where(
+            StatementAdjustment.action == "merge_statements",
+            func.json_extract(StatementAdjustment.details_json, "$.merged_statement_id") == statement.id
+        ).limit(1)) is not None:
+            raise HTTPException(409, "合并相关对账单须保留历史，请使用客户异议或作废当前版本进行受控调整")
         if statement.confirmation_status == "confirmed":
             raise HTTPException(
                 status_code=409,
@@ -8036,3 +8070,7 @@ def finance_overview(
         "cost_coverage": cost_coverage,
         "collection_note": "客户收款不在 ERP 内核销；已开票金额仅代表开票事实。",
     }
+
+
+from app.api.statement_merge import router as statement_merge_router
+router.include_router(statement_merge_router)

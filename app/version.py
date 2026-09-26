@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.496"
+APP_VERSION = "v0.22.497"
 APP_VERSION_NAME = "常用箱查找与历史订单选款"
 APP_BUILD_DATE = "2026-09-26"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
@@ -4754,6 +4754,19 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.495：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
+
+APP_CHANGES = [
+    "客户异议原因统一校验2至500字，明确中文提示并保留已填写单价，不再直接显示英文长度错误。",
+    "同客户同账期的多份对账单可手动合并，按送货日期导出完整对账单，确认后从合并账单统一开票。",
+    "原单据保留历史快照与新单关联，已有开票、收款或有效任务受控阻止合并，重复提交不重复应收。",
+]
+APP_VERIFICATION_STEPS = [
+    "日常修改对账单价时，异议原因填写“单价有误”，核对可保存；填写一个字时明确提示需2至500字。",
+    "打开需合并的客户对账单，点“合并对账单”，选同账期其他账单，核对总额后合并导出及送货日期顺序。",
+    "核对合并来源可追溯；客户认可后确认并下载开票文件，核对全部明细在同一任务中，再登记真实开票结果。",
+]
+APP_CHANGELOG = [*(f"v0.22.496：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
 APP_CHANGES = [
     "新建订单导入常用箱默认最近新增优先，可切换编码顺序或清空查询条件；排序、筛选和翻页保留已选数量。",
     "订单详情新增按此单选款，只提供该旧单对应的当前可用常用箱，旧PO、数量、成交价、交期和备注不复制。",
@@ -4763,4 +4776,4 @@ APP_VERIFICATION_STEPS = [
     "刷新后在苏宇新建订单点导入常用箱，核对SY00001—SY00003在最近新增列表靠前；切换编码顺序或清空条件后仍能找到。",
     "在旧单只读详情点按此单选款，核对新草稿仅沿用客户，选择当前款式后重新核对数量及价格；取消不得产生新订单。",
 ]
-APP_CHANGELOG = [*(f"v0.22.496：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.497：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

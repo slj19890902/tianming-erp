@@ -10,6 +10,30 @@ from test_p1_130_statement_invoice_finance import p1_130_app, _login
 from test_fin001_invoice_tasks import fin001_app, _login as invoice_login, _complete_invoice_profile
 
 
+@pytest.mark.parametrize('endpoint', ['adjust-dispute', 'reopen'])
+def test_dispute_reason_validation_is_actionable_and_does_not_mutate(p1_130_app, endpoint):
+    from app.models.finance import Statement, StatementItem, StatementAdjustment
+
+    app, factory = p1_130_app
+    with TestClient(app) as client:
+        _login(client)
+        assert client.post('/api/finance/statements/1/confirm', json={'expected_version': 1}).status_code == 200
+        for reason in ['改', '', ' \n ', '  改  ', '改' * 501]:
+            payload = {'expected_version': 2, 'reason': reason}
+            if endpoint == 'adjust-dispute':
+                payload['update_lines'] = [{'statement_item_id': 1, 'unit_price': '12.50'}]
+            response = client.post(f'/api/finance/statements/1/{endpoint}', json=payload)
+            assert response.status_code == 422, response.text
+            errors = response.json()['detail']
+            assert errors[0]['loc'] == ['body', 'reason']
+            assert '客户异议原因需填写 2～500 个字' in errors[0]['msg'], response.text
+            with factory() as db:
+                assert db.get(Statement, 1).confirmation_status == 'confirmed'
+                assert db.get(Statement, 1).version == 2
+                assert db.get(StatementItem, 1).unit_price_snapshot == Decimal('10.00')
+                assert db.scalar(select(StatementAdjustment)) is None
+
+
 def test_same_month_price_correction_reopens_and_preserves_source(p1_130_app):
     from app.models.finance import StatementItem, ReturnReceiptItem
     from app.models.order import OrderItem
@@ -18,7 +42,7 @@ def test_same_month_price_correction_reopens_and_preserves_source(p1_130_app):
     with TestClient(app) as client:
         _login(client)
         assert client.post('/api/finance/statements/1/confirm', json={'expected_version': 1}).status_code == 200
-        payload = {'expected_version': 2, 'reason': '双方核对更正单价',
+        payload = {'expected_version': 2, 'reason': '  改价  ',
                    'update_lines': [{'statement_item_id': 1, 'unit_price': '12.50'}]}
         response = client.post('/api/finance/statements/1/adjust-dispute', json=payload)
         assert response.status_code == 200, response.text

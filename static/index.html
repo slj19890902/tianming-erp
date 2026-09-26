@@ -9553,6 +9553,13 @@
               <div v-if="statementForm.customer_id && !pendingStatements.length && !pendingStatementCharges.length" class="empty">该客户当前月份暂无可生成对账单的送货明细或附加收费。</div>
               <div v-else-if="!statementForm.customer_id && statementCustomers.length" class="empty">请先选择客户，再查看可对账明细。</div>
             </div>
+            <div v-else-if="modal.type === 'statementMerge'">
+              <div class="notice">选择同客户、同账期的对账单合并。合并后按送货日期导出一份完整对账单，重新核对确认后统一开票。原单据保留历史，原下载文件停用。</div>
+              <div v-if="statementMerge.loading" class="muted">正在读取可合并账单…</div>
+              <div v-if="statementMerge.error" class="danger-text" role="alert">{{ statementMerge.error }}</div>
+              <table v-if="!statementMerge.loading"><thead><tr><th>选择</th><th>对账单</th><th>账期</th><th>金额</th><th>状态 / 说明</th></tr></thead><tbody><tr v-for="row in statementMerge.items" :key="row.id"><td><input type="checkbox" v-model="statementMerge.selected[row.id]" :disabled="!!row.blocker || statementMerge.saving || !!statementMerge.payload || row.id===statementMerge.anchorId" /></td><td>{{ row.statement_number }}</td><td>{{ row.statement_month }}</td><td>¥ {{ money(row.total_receivable) }}</td><td>{{ row.blocker || (row.confirmation_status==='confirmed' ? '已确认，合并后重新核对' : '待核对') }}</td></tr></tbody></table>
+              <div class="toolbar-group" style="margin-top:12px"><strong>已选 {{ statementMerge.items.filter(row=>statementMerge.selected[row.id]).length }} 份，合计 ¥ {{ money(statementMerge.items.filter(row=>statementMerge.selected[row.id]).reduce((total,row)=>total+Number(row.total_receivable),0)) }}</strong><button class="btn primary" :disabled="statementMerge.loading || statementMerge.saving || statementMerge.items.filter(row=>statementMerge.selected[row.id]).length<2" @click="saveStatementMerge">{{ statementMerge.saving ? '处理中…' : (statementMerge.payload ? '重试合并并导出' : '合并并导出对账单') }}</button><button class="btn" :disabled="statementMerge.loading || statementMerge.saving" @click="openStatementMerge({id:statementMerge.anchorId})">刷新范围</button></div>
+            </div>
             <div v-else-if="modal.type === 'statementDetail' && statementDetail">
               <div class="form-grid">
                 <div class="field"><label>对账单号</label><div><strong>{{ statementDetail.statement_number }}</strong></div></div>
@@ -9563,7 +9570,10 @@
                 <div class="field sensitive-price"><label>已开票</label><div>¥ {{ money(statementDetail.invoiced_amount) }}</div></div>
                 <div class="field sensitive-price"><label>已收 / 未收</label><div>¥ {{ money(statementDetail.settled_amount) }} / ¥ {{ money(Math.max(0,Number(statementDetail.total_receivable)-Number(statementDetail.settled_amount))) }}</div></div>
               </div>
-              <div class="toolbar-group" style="margin:10px 0">
+              <div v-if="statementDetail.merged_into_statement_id" class="notice">本单已合并，原下载文件已停用。<button class="btn small primary" @click="openStatementDetail({id:statementDetail.merged_into_statement_id})">查看合并后的对账单</button></div>
+              <div v-if="statementDetail.merge_sources?.length" class="muted">合并来源：<button v-for="source in statementDetail.merge_sources" :key="source.id" class="btn small" @click="openStatementDetail(source)">{{ source.statement_number }}</button>；导出按送货日期排序。</div>
+              <div v-if="statementDetail.confirmation_status!=='cancelled'" class="toolbar-group" style="margin:10px 0">
+                <button v-if="canFinance" class="btn" @click="openStatementMerge(statementDetail)">合并对账单</button>
                 <button class="btn" @click="exportStatement(statementDetail,'xlsx')">仅导出 Excel</button>
                 <button class="btn" @click="exportStatement(statementDetail,'pdf')">导出 PDF</button>
                 <workspace-fold v-if="canFinance" title="更多"><template #summary>更多</template><button class="btn small danger" @click="openStatementInvalidate(statementDetail)">作废当前对账版本</button></workspace-fold>
@@ -9619,7 +9629,7 @@
             </div>
             <div v-else-if="modal.type === 'statementDispute' && statementDetail">
               <div class="notice">客户异议后可撤销确认，修改本期单价、通过“更正回单数量”纠正实际签收数量，或选择部分明细顺延。回单保存后同步重算本期对账，短收和超收仍须选择处理方式。保存后重新导出核对、再次确认，本月即可开票。已开票或已收款的账单须先走受控处理。</div>
-              <div class="form-grid" style="margin-top:10px"><div class="field wide"><label>客户异议原因 *</label><input class="input" v-model.trim="statementDisputeForm.reason" placeholder="例如：双方核对后更正单价，或部分明细下月对账" /></div><div class="field"><label>移至月份</label><input class="input" type="month" v-model="statementDisputeForm.target_month" /></div></div>
+              <div class="form-grid" style="margin-top:10px"><div class="field wide"><label for="statement-dispute-reason">客户异议原因 *（2～500 个字）</label><input id="statement-dispute-reason" ref="statementDisputeReason" class="input" v-model.trim="statementDisputeForm.reason" aria-describedby="statement-dispute-reason-help" placeholder="例如：单价有误，双方核对后更正" /><small id="statement-dispute-reason-help" class="muted">请说明本次修改原因；前后空格不计入字数。</small></div><div class="field"><label>移至月份</label><input class="input" type="month" v-model="statementDisputeForm.target_month" /></div></div>
               <div v-if="statementDetail.source_customers?.length>1" class="toolbar-group" style="margin-top:10px"><span class="muted">先选择要修改的子客户：</span><button v-for="source in statementDetail.source_customers" :key="source.id" :class="['btn small',{primary:Number(statementEditSourceCustomerId)===Number(source.id)}]" @click="statementEditSourceCustomerId=source.id">{{ source.name }}</button></div><div v-if="statementDetail.source_customers?.length>1 && !statementEditSourceCustomerId" class="notice warning">请选择一个子客户后再调整，系统不会把多个子客户的可编辑明细混在一起。</div>
               <div class="section-title" style="margin-top:12px">本期明细（勾选才移出，未勾选继续本月对账）</div>
               <div class="table-wrap"><table><thead><tr><th>选择</th><th>送货单</th><th>客户单号</th><th>存货编码 / 产品</th><th>数量</th><th class="sensitive-price">金额</th></tr></thead><tbody><tr v-for="item in statementDetail.items.filter(row=>row.source_type==='delivery' && (!statementDetail.source_customers?.length || Number(statementDetail.source_customers.length)<=1 || Number(row.source_customer_id)===Number(statementEditSourceCustomerId)))" :key="`remove-${item.statement_item_id}`"><td><input type="checkbox" v-model="statementDisputeForm.remove[item.statement_item_id]" /></td><td>{{ item.delivery_number }}</td><td><order-reference :row="item"></order-reference></td><td>{{ item.product_code || '-' }} / {{ item.product_name || '-' }}</td><td>{{ item.actual_received_quantity }} <button class="btn small" :disabled="statementDisputeState.saving" @click="openDisputeReceipt(item)">更正回单数量</button></td><td class="sensitive-price"><label>对账单价<input class="input" type="number" min="0" step="0.0001" :disabled="statementDisputeForm.remove[item.statement_item_id]" v-model="statementDisputeForm.edits[item.statement_item_id].unit_price" /></label><span class="muted">原金额 ¥ {{ money(item.receivable_amount) }}</span></td></tr></tbody></table></div>
@@ -9959,9 +9969,9 @@
           </div>
           <div v-if="!['product','orderPdfImport'].includes(modal?.type)" class="modal-foot">
             <button v-if="!isForcedPassword && modal?.type!=='statementDetail'" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
-            <button v-if="modal?.type==='statementDetail' && statementDetail?.confirmation_status!=='confirmed'" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="exportStatement(statementDetail,'xlsx')">导出对账单</button>
-            <button v-if="modal?.type==='statementDetail' && statementDetail?.confirmation_status!=='confirmed' && canConfirmStatement && canGenerateInvoiceTask" class="btn" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statementDetail)">{{ financeStatementOperationState.action==='confirm_download' ? '确认并下载中…' : '确认并下载开票文件' }}</button>
-            <button v-else-if="modal?.type==='statementDetail'" class="btn primary" @click="exportStatement(statementDetail,'xlsx')">重新导出 Excel</button>
+            <button v-if="modal?.type==='statementDetail' && !['confirmed','cancelled'].includes(statementDetail?.confirmation_status)" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="exportStatement(statementDetail,'xlsx')">导出对账单</button>
+            <button v-if="modal?.type==='statementDetail' && !['confirmed','cancelled'].includes(statementDetail?.confirmation_status) && canConfirmStatement && canGenerateInvoiceTask" class="btn" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statementDetail)">{{ financeStatementOperationState.action==='confirm_download' ? '确认并下载中…' : '确认并下载开票文件' }}</button>
+            <button v-else-if="modal?.type==='statementDetail' && statementDetail?.confirmation_status!=='cancelled'" class="btn primary" @click="exportStatement(statementDetail,'xlsx')">重新导出 Excel</button>
             <button v-if="modal?.type==='statementSettlement'" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="saveStatementSettlement">{{ financeStatementOperationState.action==='settle' ? '确认中…' : '确认收款' }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="pdfImportSelectionBusy || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
@@ -10838,6 +10848,7 @@
             financeAcceptanceForm:{bill_number:"",customer_id:null,amount:"",received_date:today(),maturity_date:"",note:""},
             financePayables: [], financePayableSuppliers: [], financePayableState:{loading:false,saving:false,error:""},
             financePayableForm:{supplier_id:null,counterparty_name:"",category:"material",document_number:"",document_date:today(),due_date:"",amount:"",note:""},
+            statementMerge:{items:[],selected:{},loading:false,saving:false,error:"",payload:null},
             statementDisputeForm:{reason:"",target_month:"",remove:{},add:{},edits:{}}, statementDisputeCandidates:[], statementDisputeState:{loading:false,saving:false,error:""},
             statementsTotal: 0, financeCustomersTotal: 0, invoicesTotal: 0, pageSize: DESKTOP_LIST_PAGE_SIZE_STANDARD,
             pages: { customers: 1, productCustomers: 1, products: 1, suppliers: 1, materials: 1, orders: 1, customerHeat: 1, requisitionPending: 1, requisitionHolds: 1, requisitionReported: 1, externalPurchaseRouting: 1, externalPurchaseHistory: 1, incomingPending: 1, incomingReceived: 1, externalIncoming: 1, incomingHistory: 1, productionPending: 1, productionWaitingLabels: 1, productionHistory: 1, productionPlacement: 1, deliveries: 1, statements: 1, invoices: 1, financeCurrent: 1, financeSettled: 1, financeCosts: 1 },
@@ -24776,6 +24787,43 @@
             } catch(error) {state.error=this.errorMessage(error);return false;}
             finally {state.saving=false;}
           },
+          async openStatementMerge(row) {
+            if(this.statementMerge.saving) return false;
+            this.statementMerge={anchorId:Number(row.id),items:[],selected:{},loading:true,saving:false,error:"",payload:null,result:null,generation:this.authGeneration};
+            const state=this.statementMerge;
+            this.modal={type:"statementMerge",title:"合并同客户对账单"};
+            try {
+              const {data}=await axios.get(`/api/finance/statements/${state.anchorId}/merge-candidates`);
+              if(this.statementMerge!==state || state.generation!==this.authGeneration || this.modal?.type!=="statementMerge") return false;
+              state.items=data.items||[];
+              this.modal.title=`合并对账单 · ${data.customer_name || ""} · ${data.statement_month || ""}`;
+              for(const item of state.items) state.selected[item.id]=item.id===state.anchorId && !item.blocker;
+              if(state.items.length<2) state.error="当前客户本账期没有其他可合并的对账单";
+              return true;
+            } catch(error) {if(this.statementMerge===state) state.error=this.errorMessage(error);return false;}
+            finally {state.loading=false;}
+          },
+          async saveStatementMerge() {
+            const state=this.statementMerge;
+            if(state.saving || state.loading || state.generation!==this.authGeneration) return false;
+            const rows=state.items.filter(row=>state.selected[row.id] && !row.blocker);
+            if(rows.length<2 || !rows.some(row=>row.id===state.anchorId)) {state.error="请选择当前账单和至少一份同客户账单";return false;}
+            if(!state.payload) {
+              if(!confirm(`合并这 ${rows.length} 份对账单？原单据及旧下载文件将停用，新账单须重新核对确认后开票。`)) return false;
+              state.payload={sources:rows.map(row=>({statement_id:row.id,expected_version:row.version,expected_ledger_version:row.ledger_version})),idempotency_key:createIdempotencyKey()};
+            }
+            state.saving=true;state.error="";
+            try {
+              if(!state.result) state.result=(await axios.post(`/api/finance/statements/${state.anchorId}/merge`,state.payload)).data;
+              if(state.generation!==this.authGeneration) return false;
+              await this.openStatementDetail(state.result);
+              const exported=await this.exportStatement(state.result,"xlsx",{announce:false});
+              this.showToast(exported ? "已合并并导出完整对账单；核对确认后从新账单统一开票" : "合并已保存，导出失败；请在新账单重新导出，无需再次合并",!exported);
+              try {await this.loadFinance();} catch(error) {this.showToast("合并已保存，列表刷新失败，请刷新查询，不要重复合并",true);}
+              return true;
+            } catch(error) {state.error=(state.result?"合并已保存，重新打开或重试即可，不会重复合并：":"")+this.errorMessage(error);this.showToast(state.error,true);return false;}
+            finally {state.saving=false;}
+          },
           openStatementInvalidate(row) {
             this.statementInvalidateForm={statement_id:row.id,statement_number:row.statement_number,expected_version:row.version,expected_ledger_version:row.ledger_version,reason:"",idempotency_key:createIdempotencyKey(),generation:this.authGeneration};
             this.modal={type:"statementInvalidate",title:"作废对账版本"};
@@ -38032,7 +38080,7 @@
           async openDisputeReceipt(item) {
             if (this.statementDisputeState.saving || !this.statementDetail) return false;
             const reason=String(this.statementDisputeForm.reason||"").trim();
-            if (reason.length<2) { this.showToast("请先填写客户异议原因",true); return false; }
+            if (Array.from(reason).length<2 || Array.from(reason).length>500) { this.showToast("客户异议原因需填写 2～500 个字，例如：单价有误",true); this.$refs?.statementDisputeReason?.focus(); return false; }
             if ((this.statementDetail.items||[]).some(row=>row.source_type==='delivery' && Number(this.statementDisputeForm.edits[row.statement_item_id]?.unit_price)!==Number(row.unit_price_snapshot)) || Object.values(this.statementDisputeForm.remove||{}).some(Boolean) || Object.values(this.statementDisputeForm.add||{}).some(Boolean)) {
               this.showToast("请先保存当前单价或移出补入调整，再更正回单数量",true); return false;
             }
@@ -38046,7 +38094,7 @@
           async reopenStatementDispute() {
             if (this.statementDisputeState.saving || !this.statementDetail) return false;
             const reason=String(this.statementDisputeForm.reason||"").trim();
-            if (reason.length<2) { this.showToast("请填写客户异议原因",true); return false; }
+            if (Array.from(reason).length<2 || Array.from(reason).length>500) { this.showToast("客户异议原因需填写 2～500 个字，例如：单价有误",true); this.$refs?.statementDisputeReason?.focus(); return false; }
             if (!confirm("仅撤销对账确认？未开具的旧开票任务将作废，对账月份和明细保持不变。")) return false;
             this.statementDisputeState.saving=true;
             try {
@@ -38066,7 +38114,7 @@
             const belongsToSelectedSource=item=>!selectedSourceId || Number(item.source_customer_id)===selectedSourceId;
             const removeIds=Object.keys(this.statementDisputeForm.remove||{}).filter(key=>this.statementDisputeForm.remove[key]).map(Number).filter(id=>(this.statementDetail.items||[]).some(item=>Number(item.statement_item_id)===id && belongsToSelectedSource(item)));
             const addIds=Object.keys(this.statementDisputeForm.add||{}).filter(key=>this.statementDisputeForm.add[key]).map(Number).filter(id=>(this.statementDisputeCandidates||[]).some(item=>Number(item.return_receipt_item_id)===id && belongsToSelectedSource(item)));
-            if (!reason) { this.showToast("请填写客户异议原因",true); return false; }
+            if (Array.from(reason).length<2 || Array.from(reason).length>500) { this.showToast("客户异议原因需填写 2～500 个字，例如：单价有误",true); this.$refs?.statementDisputeReason?.focus(); return false; }
             const updates=(this.statementDetail.items||[]).filter(item=>item.source_type==='delivery' && belongsToSelectedSource(item) && !removeIds.includes(Number(item.statement_item_id))).filter(item=>Number(this.statementDisputeForm.edits[item.statement_item_id]?.unit_price)!==Number(item.unit_price_snapshot)).map(item=>({statement_item_id:Number(item.statement_item_id),unit_price:this.statementDisputeForm.edits[item.statement_item_id].unit_price}));
             if (updates.some(item=>String(item.unit_price).trim()==="" || !Number.isFinite(Number(item.unit_price)) || Number(item.unit_price)<0)) { this.showToast("请填写有效的对账单价",true); return false; }
             if (!removeIds.length && !addIds.length && !updates.length) { this.showToast("请修改单价、选择移出或补入明细；也可以仅撤销确认",true); return false; }
@@ -38134,6 +38182,7 @@
             }
           },
 	          closeModal() {
+            if(this.modal?.type === "statementMerge" && this.statementMerge.saving) return;
 	            if (this.isForcedPassword) return;
               if (this.modal?.type === "product" && this.productEditReturnContext && this.masterSavePending) {
                 this.showToast("常用箱正在保存，请稍候", true);

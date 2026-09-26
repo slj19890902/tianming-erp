@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import and_, or_, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -33,7 +33,7 @@ from app.api.deps import (
 from app.core.config import PROJECT_ROOT, load_settings
 from app.models.customer import Customer
 from app.models.customer_charge import CustomerCharge
-from app.models.delivery import DeliveryItem
+from app.models.delivery import Delivery, DeliveryItem
 from app.models.finance import (
     FinanceManualMutation,
     FinanceIdempotencyRecord,
@@ -798,6 +798,11 @@ def _task_rows(
         CustomerCharge | None,
     ]
 ]:
+    merged = db.scalar(select(StatementAdjustment.id).where(
+        StatementAdjustment.action == 'merge_statements',
+        func.json_extract(StatementAdjustment.details_json, '$.merged_statement_id') == statement_id
+    ).limit(1)) is not None
+    ordering = (Delivery.delivery_date.is_(None), Delivery.delivery_date, Delivery.delivery_number, StatementItem.id) if merged else (StatementItem.id,)
     return list(
         db.execute(
             select(StatementItem, DeliveryItem, OrderItem, Product, CustomerCharge)
@@ -810,13 +815,14 @@ def _task_rows(
                 ReturnReceiptItem.delivery_item_id == DeliveryItem.id,
             )
             .outerjoin(OrderItem, DeliveryItem.order_item_id == OrderItem.id)
+            .outerjoin(Delivery, Delivery.id == DeliveryItem.delivery_id)
             .outerjoin(Product, Product.id == DeliveryItem.product_id)
             .outerjoin(
                 CustomerCharge,
                 StatementItem.customer_charge_id == CustomerCharge.id,
             )
             .where(StatementItem.statement_id == statement_id)
-            .order_by(StatementItem.id)
+            .order_by(*ordering)
         ).all()
     )
 
@@ -1293,6 +1299,10 @@ def confirm_statement_for_invoice(
     user: User = Depends(can_confirm_statement),
 ) -> dict[str, Any]:
     statement = _statement_for_user(db, statement_id, user)
+    # Serialize confirmation with merge/dispute so a stale read cannot revive
+    # a source statement that was replaced while this request was waiting.
+    db.execute(update(Statement).where(Statement.id == statement_id).values(version=Statement.version))
+    db.expire_all()
     customer = db.get(Customer, statement.customer_id)
     if statement.version != payload.expected_version:
         raise HTTPException(status_code=409, detail={"message": "对账单版本已变化，请刷新后重试", "current_version": statement.version})

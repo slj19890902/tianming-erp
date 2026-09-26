@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.500"
-APP_VERSION_NAME = "仓库实存订单分显与管理员回退留痕"
+APP_VERSION = "v0.22.501"
+APP_VERSION_NAME = "首页与成本提醒排版优化"
 APP_BUILD_DATE = "2026-09-26"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4804,3 +4804,16 @@ APP_VERIFICATION_STEPS = [
     "在已删除送货单历史核对明细；重新识别已作废订单PDF，核对可建新单且旧历史仍保留。",
 ]
 APP_CHANGELOG = [*(f"v0.22.500：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "首页优先展示经营卡片与待办，材料毛利按四项主指标展示，新增快捷日期、客户搜索及正负值趋势。",
+    "订单预计成本提醒精简说明、优化列宽与风险数字，支持全范围搜索、分类、分页和精确定位成本明细。",
+    "查看成本依据后返回保留筛选、页码和位置；不改变成本快照、风险阈值、权限及客户范围，无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新首页，核对卡片与待办顺序，搜索客户并切换本月、上月、近30天，展开趋势查看正负毛利及缺口。",
+    "订单中打开预计成本与毛利提醒，搜索客户单号、切换分类并翻页，核对金额对齐、风险颜色和非实际利润提示。",
+    "从提醒查看成本依据，核对定位到对应明细且成本依据展开；返回后筛选、页码与滚动位置保持。",
+]
+APP_CHANGELOG = [*(f"v0.22.501：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -129,6 +129,8 @@ from app.services.order_material_cost_snapshot import (
     serialize_order_item_material_cost_snapshot,
 )
 from app.services.order_estimated_cost_snapshot import (
+    VERY_LOW_MARGIN_RATE,
+    REVIEW_MARGIN_RATE,
     classify_estimated_cost_health,
     freeze_order_item_estimated_cost,
     get_latest_order_item_estimated_cost_snapshot,
@@ -3282,6 +3284,10 @@ def list_orders(
 @router.get("/cost-readiness")
 def list_order_cost_readiness(
     limit: int = Query(default=100, ge=1, le=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=100),
+    keyword: str = Query(default="", max_length=120),
+    category: str = Query(default="all", max_length=40),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
     _cost_user: User = Depends(can_view_cost),
@@ -3341,6 +3347,11 @@ def list_order_cost_readiness(
     if not has_unrestricted_customer_access(user, db):
         query = query.where(Order.customer_id.in_(customer_scope_ids(user, db)))
 
+    if category != "all" and category not in {item["code"] for item in COST_GAP_CATEGORIES}:
+        raise HTTPException(status_code=422, detail="未知成本缺口分类")
+    keyword = keyword.strip()
+    if keyword:
+        query = query.where(or_(Customer.name.contains(keyword, autoescape=True), Order.customer_po.contains(keyword, autoescape=True)))
     candidates = list(db.execute(query).all())
     order_ids = {int(row[2].id) for row in candidates}
     orders = (
@@ -3376,8 +3387,8 @@ def list_order_cost_readiness(
             continue
         missing_items = load_cost_missing_items(snapshot.missing_items_json)
         categories = classify_cost_gaps(missing_items)
-        for category in categories:
-            category_counts[category["code"]] += 1
+        for gap_category in categories:
+            category_counts[gap_category["code"]] += 1
         items.append(
             {
                 "order_id": int(order.id),
@@ -3399,13 +3410,25 @@ def list_order_cost_readiness(
             }
         )
 
+    all_items = len(items)
+    if category != "all":
+        items = [item for item in items if category in item["category_codes"]]
     total_items = len(items)
-    visible_items = items[:limit]
+    size = page_size or limit
+    pages = max(1, (total_items + size - 1) // size)
+    page = min(page, pages)
+    visible_items = items[(page - 1) * size:page * size]
     return {
         "scope_label": "仅统计已有预计成本快照的当前订单；旧订单不回填",
         "total_items": total_items,
+        "all_items": all_items,
+        "page": page,
+        "page_size": size,
+        "page_count": pages,
+        "keyword": keyword,
+        "category": category,
         "returned_items": len(visible_items),
-        "truncated": total_items > len(visible_items),
+        "truncated": page_size is None and total_items > len(visible_items),
         "categories": [
             {**category, "count": category_counts[category["code"]]}
             for category in COST_GAP_CATEGORIES
@@ -3418,6 +3441,10 @@ def list_order_cost_readiness(
 @router.get("/cost-review")
 def list_order_cost_review(
     limit: int = Query(default=100, ge=1, le=200),
+    page: int = Query(default=1, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=100),
+    keyword: str = Query(default="", max_length=120),
+    health: str = Query(default="all", pattern="^(all|estimated_loss|very_low|review|sale_missing)$"),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
     _cost_user: User = Depends(can_view_cost),
@@ -3477,6 +3504,9 @@ def list_order_cost_review(
     if not has_unrestricted_customer_access(user, db):
         query = query.where(Order.customer_id.in_(customer_scope_ids(user, db)))
 
+    keyword = keyword.strip()
+    if keyword:
+        query = query.where(or_(Customer.name.contains(keyword, autoescape=True), Order.customer_po.contains(keyword, autoescape=True)))
     candidates = list(db.execute(query).all())
     order_ids = {int(row[2].id) for row in candidates}
     orders = (
@@ -3523,8 +3553,8 @@ def list_order_cost_review(
         )
         if snapshot.order_item_reference_snapshot != expected_reference:
             continue
-        health = classify_estimated_cost_health(snapshot, item.subtotal)
-        health_code = str(health["estimated_cost_health_code"])
+        row_health = classify_estimated_cost_health(snapshot, item.subtotal)
+        health_code = str(row_health["estimated_cost_health_code"])
         if health_code not in summary_counts:
             continue
         summary_counts[health_code] += 1
@@ -3545,25 +3575,38 @@ def list_order_cost_review(
                 "estimated_order_total_cost": str(
                     snapshot.estimated_order_total_cost
                 ),
-                "estimated_gross_profit": health["estimated_gross_profit"],
-                "estimated_margin_rate": health["estimated_margin_rate"],
+                "estimated_gross_profit": row_health["estimated_gross_profit"],
+                "estimated_margin_rate": row_health["estimated_margin_rate"],
                 "health_code": health_code,
-                "health_label": health["estimated_cost_health_label"],
-                "health_tone": health["estimated_cost_health_tone"],
-                "health_version": health["estimated_cost_health_version"],
+                "health_label": row_health["estimated_cost_health_label"],
+                "health_tone": row_health["estimated_cost_health_tone"],
+                "health_version": row_health["estimated_cost_health_version"],
             }
         )
 
     # Python sorting is stable, preserving newest-order-first within one level.
     items.sort(key=lambda row: severity[str(row["health_code"])])
+    all_items = len(items)
+    if health != "all":
+        items = [item for item in items if item["health_code"] == health]
     total_items = len(items)
-    visible_items = items[:limit]
+    size = page_size or limit
+    pages = max(1, (total_items + size - 1) // size)
+    page = min(page, pages)
+    visible_items = items[(page - 1) * size:page * size]
     return {
         "scope_label": "当前订单冻结预计成本，仅供内部复核，不是实际利润",
         "evaluated_items": sum(summary_counts.values()),
         "total_items": total_items,
+        "all_items": all_items,
+        "page": page,
+        "page_size": size,
+        "page_count": pages,
+        "keyword": keyword,
+        "health": health,
+        "threshold_label": f"预计亏损：毛利＜0；利润空间很低：毛利率＜{VERY_LOW_MARGIN_RATE * 100:g}%；建议复核：毛利率{VERY_LOW_MARGIN_RATE * 100:g}%～＜{REVIEW_MARGIN_RATE * 100:g}%。仅提醒，不阻止订单保存。",
         "returned_items": len(visible_items),
-        "truncated": total_items > len(visible_items),
+        "truncated": page_size is None and total_items > len(visible_items),
         "summary": [
             {
                 "code": code,

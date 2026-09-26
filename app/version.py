@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.497"
-APP_VERSION_NAME = "常用箱查找与历史订单选款"
+APP_VERSION = "v0.22.498"
+APP_VERSION_NAME = "送货打印兼容与失败重试"
 APP_BUILD_DATE = "2026-09-26"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4777,3 +4777,14 @@ APP_VERIFICATION_STEPS = [
     "在旧单只读详情点按此单选款，核对新草稿仅沿用客户，选择当前款式后重新核对数量及价格；取消不得产生新订单。",
 ]
 APP_CHANGELOG = [*(f"v0.22.497：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复局域网HTTP打开三客户送货单后，确认打印提示crypto.randomUUID不可用的问题。",
+    "打印登记响应丢失或失败后重试沿用同一凭证，连续点击合并处理；补打不重复发货扣库。",
+    "管理员送货版式设计页使用相同兼容操作键，现有模板、纸型与历史客户数量保持不变。",
+]
+APP_VERIFICATION_STEPS = [
+    "重新打开一张已发货的研光、光洋或驿力送货单，点击确认打印，核对能够打开系统打印窗口。",
+    "核对原纸型与客户数量保持不变；补打后库存不重复扣减。双数量和历史校正属于后续独立升级。",
+]
+APP_CHANGELOG = [*(f"v0.22.498：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

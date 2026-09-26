@@ -77,7 +77,8 @@ global.document={{
   querySelector:selector=>selector.includes("paperGuide")?nodes.paperGuide:null,
   documentElement:{{style:{{setProperty(){{}}}},dataset:{{}}}},
 }};
-global.window={{location:{{search:"?id=7&defer=1"}},print:()=>{{throw new Error("must not print during test")}}}};
+global.window={{addEventListener(){{}},location:{{search:"?id=7&defer=1"}},print:()=>{{throw new Error("must not print during test")}}}};
+global.CustomerDeliveryPrint={{controls(){{}}}};
 global.TmTime={{formatBeijingDateTime:value=>String(value)}};
 global.BroadcastChannel=undefined;
 const responses=[
@@ -122,9 +123,10 @@ const channels=[];
 global.BroadcastChannel=class{{constructor(name){{this.name=name;channels.push(this)}}postMessage(message){{this.last=message}}close(){{this.closed=true}}}};
 global.AbortController=class{{constructor(){{this.signal={{aborted:false}}}}abort(){{this.signal.aborted=true}}}};
 global.document={{getElementById:id=>nodes[id],querySelector:()=>nodes.paperGuide,documentElement:{{style:{{setProperty(){{}}}},dataset:{{}}}}}};
+global.CustomerDeliveryPrint={{controls(){{}}}};
 global.TmTime={{formatBeijingDateTime:value=>String(value)}};
 let fetchCount=0;global.fetch=async()=>{{fetchCount+=1;throw new Error("must not fetch")}};
-global.window={{location:{{search:"?id=abc&defer=1&open_token=uat"}},print(){{}}}};
+global.window={{addEventListener(){{}},location:{{search:"?id=abc&defer=1&open_token=uat"}},print(){{}}}};
 vm.runInThisContext({json.dumps(script, ensure_ascii=False)});
 (async()=>{{
   await loadDelivery();
@@ -152,8 +154,9 @@ function node(id){{return {{id,textContent:"",innerHTML:"",disabled:false,hidden
 const ids=["printButton","retryButton","loadState","errorBox","sheets","paperGuide"];
 const nodes=Object.fromEntries(ids.map(id=>[id,node(id)]));
 global.document={{getElementById:id=>nodes[id],querySelector:()=>nodes.paperGuide,documentElement:{{style:{{setProperty(){{}}}},dataset:{{}}}}}};
-global.window={{location:{{search:"?id=7&defer=1"}},print(){{}}}};
+global.window={{addEventListener(){{}},location:{{search:"?id=7&defer=1"}},print(){{}}}};
 global.BroadcastChannel=undefined;
+global.CustomerDeliveryPrint={{controls(){{}}}};
 global.TmTime={{formatBeijingDateTime:value=>String(value)}};
 let resolveFirst;
 const first=new Promise(resolve=>{{resolveFirst=resolve}});

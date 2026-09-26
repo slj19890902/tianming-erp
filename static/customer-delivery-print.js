@@ -152,14 +152,27 @@
     if (!data.price_display.shown) warnings.push('无价版已隐藏单价和所有金额，请同时核对手工备注中是否包含价格文字。');
     if (warnings.length) {const warning=node('div',warnings.join('；'),'cd-warning no-print');warning.id='customerPrintWarnings';document.querySelector('.toolbar').after(warning);}
   }
-  async function recordPrint() {
+  const pendingPrints = new Map();
+  function recordPrint() {
     const data = global.customerPrintData;
     if (data?.print_template?.layout?.catalog_version !== 'delivery-print-v2') return;
-    const body = {idempotency_key:crypto.randomUUID(), document_hash:data.document_hash,
-      show_prices:data.price_display.shown, order_context:data.order_context};
-    const response = await fetch(`/api/deliveries/${data.id}/customer-print-events`, {
-      method:'POST', credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if (!response.ok) {const error=await response.json().catch(()=>({}));throw new Error(error.detail||`打印登记失败 HTTP ${response.status}`);}
+    const identity = JSON.stringify([data.id, data.document_hash, data.price_display.shown, data.order_context]);
+    let attempt = pendingPrints.get(identity);
+    if (!attempt) {
+      attempt = {body: {idempotency_key:global.TmOperationKey.create(), document_hash:data.document_hash,
+        show_prices:data.price_display.shown, order_context:data.order_context}, promise:null};
+      pendingPrints.set(identity, attempt);
+    }
+    if (attempt.promise) return attempt.promise;
+    // A lost response may already have committed. Retry that exact request/key;
+    // a different document or price mode must never reuse its operation key.
+    attempt.promise = (async () => {
+      const response = await fetch(`/api/deliveries/${data.id}/customer-print-events`, {
+        method:'POST', credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(attempt.body)});
+      if (!response.ok) {const error=await response.json().catch(()=>({}));throw new Error(error.detail||`打印登记失败 HTTP ${response.status}`);}
+      pendingPrints.delete(identity);
+    })().finally(() => { attempt.promise = null; });
+    return attempt.promise;
   }
   global.CustomerDeliveryPrint = { render, controls, visibleColumns, decimal, paginate, recordPrint };
   if (typeof module !== 'undefined') module.exports = global.CustomerDeliveryPrint;

@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.504"
-APP_VERSION_NAME = "送货双数量与发货补库"
-APP_BUILD_DATE = "2026-09-26"
+APP_VERSION = "v0.22.505"
+APP_VERSION_NAME = "模具标签编号顺序打印"
+APP_BUILD_DATE = "2026-09-27"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
 _V022124_CHANGES = [
@@ -4846,3 +4846,14 @@ APP_VERIFICATION_STEPS = [
     "打开原客户及研光、光洋、YL送货打印，核对原版式、241×139.5毫米纸张及显示/隐藏价格；进入系统版本确认v0.22.504、数据库eb0926dq。",
 ]
 APP_CHANGELOG = [*(f"v0.22.504：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "批量模具标签默认按标签名称或存货编码中的数字自然顺序排列，2在10之前、00006在00012之前；同款多份标签连续打印。",
+    "保留选择顺序、标签名称和货架位置排序选项，单张打印、标签版式、纸型、客户权限和原打印记录保持不变。",
+    "本次无数据库迁移，不自动执行历史库存校正。",
+]
+APP_VERIFICATION_STEPS = [
+    "在模具库乱序选择00012、00114、00006后打开批量标签，核对默认依次为00006、00012、00114；份数改为2后每款连续两张。",
+    "核对40×30和40×80纸型及原标签内容，选择顺序和货位排序仍可切换；系统版本为v0.22.505。",
+]
+APP_CHANGELOG = [*(f"v0.22.505：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

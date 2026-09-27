@@ -400,6 +400,13 @@ def create_excel_batch(
         bound=db.get(OrderItem,value.get("order_item_id")) if value.get("order_item_id") else None
         pending_processing=remaining if bound is not None and bound.material_status=="received" else 0
         remaining-=pending_processing
+        effective_inbound=(
+            remaining
+            if bound is not None
+            and bound.requisition_status in {"已报料", "供应商已排单", "外购包材已采购"}
+            else 0
+        )
+        remaining-=effective_inbound
         payload = {
             "drawing_number": source.drawing_number,
             "category": source.category,
@@ -412,7 +419,7 @@ def create_excel_batch(
             "shortage_diagnostic":{
                 "finished_available":finished,
                 "pending_processing":pending_processing,
-                "effective_inbound":0,
+                "effective_inbound":effective_inbound,
                 "new_purchase_shortage":remaining,
                 "pending_review":bool(len(candidates)!=1),
                 "generic_material_auto_applied":False,

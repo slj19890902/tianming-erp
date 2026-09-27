@@ -125,7 +125,11 @@ def _batch_response(db: Session, batch: TianhuaPreDeliveryImportBatch) -> dict:
             fulfillment_status, fulfillment_label = "pending_production", "有半成品，待加工"
         elif task is not None and task.status in {"pending", "in_progress"}:
             fulfillment_status, fulfillment_label = "pending_production", "待生产"
-        elif order_item.material_status in {"reported", "ordered", "partially_received"}:
+        elif order_item.requisition_status in {
+            "已报料",
+            "供应商已排单",
+            "外购包材已采购",
+        }:
             fulfillment_status, fulfillment_label = "incoming", "材料在途/待收料"
         elif order_item.material_status == "received":
             fulfillment_status, fulfillment_label = "pending_production", "材料已收，待生产"

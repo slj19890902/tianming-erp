@@ -73,6 +73,29 @@ def _payload(
     }
 
 
+def test_imported_order_without_customer_po_uses_stable_source_identity(b1_app) -> None:
+    app, factory = b1_app
+    _ready_product(factory)
+    payload = _payload(
+        app,
+        "e" * 64,
+        "t02-missing-customer-po",
+        customer_po=None,
+    )
+
+    with TestClient(app) as client:
+        login(client, "sales")
+        response = client.post("/api/orders", json=payload)
+
+    assert response.status_code == 201, response.text
+    with factory() as db:
+        order = db.scalar(select(Order))
+        source = db.scalar(select(OrderImportSource))
+        assert order is not None and order.customer_po is None
+        assert source is not None and source.order_id == order.id
+        assert source.source_hash == "e" * 64
+
+
 def test_different_trusted_sources_with_same_po_create_independent_orders_and_lines(
     b1_app,
 ) -> None:
@@ -135,6 +158,8 @@ def test_different_trusted_sources_with_same_po_create_independent_orders_and_li
                 {
                     "source_position": 1,
                     "source_page": 2,
+                    "source_sheet": None,
+                    "source_row": None,
                     "source_line_label": "17",
                     "order_item_id": lines[-1].order_item_id,
                     "manual_revision": False,

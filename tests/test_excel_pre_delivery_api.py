@@ -86,7 +86,8 @@ def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_p
                 delivered_quantity=0,
                 unit_price=Decimal("0"),
                 subtotal=Decimal("0"),
-                material_status="received",
+                material_status="pending",
+                requisition_status="已报料",
                 snapshot_product_name="测试纸箱",
                 snapshot_product_code="80010631",
             )
@@ -121,9 +122,12 @@ def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_p
     assert body["source_type"] == "excel_upload"
     assert body["total_rows"] == 1
     assert body["items"][0]["stock_code"] == "80010631"
-    assert body["items"][0]["fulfillment_status"] == "pending_production"
+    assert body["items"][0]["fulfillment_status"] == "incoming"
     assert body["items"][0]["finished_available_qty"] == 0
     assert body["items"][0]["shortage_qty"] == 600
+    diagnostic = body["items"][0]["source_payload"]["shortage_diagnostic"]
+    assert diagnostic["effective_inbound"] == 600
+    assert diagnostic["new_purchase_shortage"] == 0
     with factory() as db:
         assert db.query(TianhuaPreDeliveryImportBatch).count() == 1
         assert db.query(Delivery).count() == 0

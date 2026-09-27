@@ -6,6 +6,7 @@ import argparse
 import json
 import sqlite3
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -144,7 +145,10 @@ def _classify(row: dict[str, object], names_by_code: dict[str, str]) -> dict[str
     if not style:
         result.update(status="missing", target_code=None, target_name=None, basis="箱型为空，必须逐产品核对")
     elif style in NOT_BOX_ITEMS:
-        result.update(status="not_box", target_code=None, target_name=None, basis=NOT_BOX_ITEMS[style])
+        from app.services.legacy_product_classification import classification
+        target = classification(SimpleNamespace(box_style=style))
+        result.update(status="not_box", target_code=target["category_code"], target_name=target["label"],
+                      basis="老板2026-09-27确认；外购采购资料仍需按真实来源完善；费用项目不进入产品箱型")
     elif style in SYSTEM_SPECIAL:
         result.update(status="system_special", target_code=None, target_name=None, basis=SYSTEM_SPECIAL[style])
     elif style in CONFIRMED_LEGACY_NAMES:
@@ -154,6 +158,9 @@ def _classify(row: dict[str, object], names_by_code: dict[str, str]) -> dict[str
             target_name=canonical_box_style(style),
             basis=CONFIRMED_LEGACY_NAMES[style],
         )
+    elif style in PENDING_RECOMMENDATIONS and code is not None:
+        result.update(status="confirmed_legacy", target_code=code, target_name=names_by_code[code],
+                      basis="老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸")
     elif code is not None:
         result.update(
             status="existing_recognized",
@@ -215,15 +222,15 @@ def _markdown(payload: dict[str, object]) -> str:
     lines.extend(
         [
             "",
-            "## 当前待老板确认的归类原则",
+            "## 已确认归类及剩余资料",
             "",
-            "待确认项保持旧名称和未识别状态，不触发新公式或加工费。确定项不依赖这些问题，继续进入后续开发。",
+            "2026-09-27老板已明确归类并采纳其余推荐，不再重复询问分类方案。",
             "",
-            "1. “内盒1／内盒无钉／客户内盒”是否可以统一视为普通开槽箱，还是其中有模切或天地盖结构。",
-            "2. “无盖箱／无底箱”是否均采用现有半开槽箱公式。",
-            "3. “恒鹏模切1/2、井字架、格挡2”应归刀卡、隔板还是 BOM 组合件。",
-            "4. “抽屉式内盒、鞋盒、白卡内盒”是否统一按模切内盒，还是需要区分天地盖／套盒。",
-            "5. 其余客户式模切名称需用图纸确认属于模切内盒或异形箱。",
+            "1. 天华内盒1、腾华内盒1、抽屉式内盒归异形箱；简包归刀卡；AB白卡归模切内盒。",
+            "2. 护角、EPE、蜂窝板归现有外购类别；未绑定供应商的产品明确提示待完善，禁止猜填采购合同。",
+            "3. 模具费为费用项目，不在产品箱型目录和新订单产品选择器中提供。",
+            "4. 其他旧名称按已确认推荐识别；原始别名及历史快照保留，旧名可搜索。",
+            "5. 箱型空白、BOM专用语义保持；本轮不据分类重算物理尺寸、采购张数或历史金额。",
             "",
         ]
     )

@@ -3995,6 +3995,10 @@ def preview_order_inventory_draft(
                 status_code=409,
                 detail=f"第{index}条明细产品不属于所选客户",
             )
+        from app.services.legacy_product_classification import new_order_issue
+        classification_issue = new_order_issue(product)
+        if classification_issue:
+            raise HTTPException(422, f"第{index}条明细：{classification_issue}")
         products.append(product)
         if is_composite_product(product):
             if draft_item.reservation_plan.finished or draft_item.reservation_plan.semi:
@@ -7284,6 +7288,10 @@ def _create_order_impl(
                     raise HTTPException(
                         status_code=400, detail=f"第{index}条明细产品不属于当前客户"
                     )
+                from app.services.legacy_product_classification import new_order_issue
+                classification_issue = new_order_issue(product)
+                if classification_issue:
+                    raise HTTPException(422, f"第{index}条明细：{classification_issue}")
             else:
                 spec = (item_payload.specification or "").strip() or None
                 length_mm, width_mm, height_mm = parse_dimensions(spec)

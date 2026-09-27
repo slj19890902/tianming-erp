@@ -1418,9 +1418,11 @@ def _product_or_404(db: Session, product_id: int) -> Product:
 
 
 def _response(product: Product, user: User, *, bom_profiles: dict | None = None) -> dict:
+    from app.services.legacy_product_classification import classification
     from app.services.customer_document_fields import document_snapshot, source_candidates
     data = {
         **_product_payload_snapshot(product),
+        "classification": classification(product),
         "customer_document": document_snapshot(product),
         "customer_document_candidates": source_candidates(product),
         "id": product.id,
@@ -1510,9 +1512,11 @@ def _response(product: Product, user: User, *, bom_profiles: dict | None = None)
 def _summary_response(product: Product, user: User, *, bom_profiles: dict | None = None) -> dict:
     """Return only fields used by the paginated common-box list."""
     material = product.material
+    from app.services.legacy_product_classification import classification
     from app.services.customer_document_fields import document_snapshot
     data = {
         "id": product.id,
+        "classification": classification(product),
         "customer_id": product.customer_id,
         "product_code": product.product_code,
         "customer_material_code": product.customer_material_code,
@@ -2002,6 +2006,7 @@ def list_products(
     if selection_context == "order":
         query = query.where(order_selectable_product_condition())
     from app.services.customer_document_fields import review_entries
+    from app.services.legacy_product_classification import box_style_search_values, external_category_search_values
     for token in keyword.split():
         pattern = f"%{token}%"
         reviewed_matches = [and_(Product.customer_id == entry['customer_id'], Product.customer_material_code == entry['code'])
@@ -2011,6 +2016,9 @@ def list_products(
                 Product.product_code.like(pattern),
                 Product.customer_material_code.like(pattern),
                 Product.product_name.like(pattern),
+                Product.box_style.like(pattern),
+                Product.box_style.in_(box_style_search_values(token)),
+                Product.external_packaging_category_code.in_(external_category_search_values(token)),
                 Product.customer_drawing_number.like(pattern),
                 and_(Product.remark.like("%【基础资料原始行20260810】%"), Product.remark.like(pattern)),
                 or_(False, *reviewed_matches),

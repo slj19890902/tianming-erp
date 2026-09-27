@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.505"
-APP_VERSION_NAME = "模具标签编号顺序打印"
+APP_VERSION = "v0.22.506"
+APP_VERSION_NAME = "箱型确认归并与外购分类"
 APP_BUILD_DATE = "2026-09-27"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4857,3 +4857,15 @@ APP_VERIFICATION_STEPS = [
     "核对40×30和40×80纸型及原标签内容，选择顺序和货位排序仍可切换；系统版本为v0.22.505。",
 ]
 APP_CHANGELOG = [*(f"v0.22.505：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "按已确认方案归并余下26种旧箱型：天华内盒1、腾华内盒1、抽屉式内盒归异形箱，简包归刀卡，AB白卡归模切内盒，其余沿用已确认推荐。",
+    "常用箱列表增加规范分类，旧名和规范名均可搜索；护角、EPE、蜂窝板显示现有外购类别，编辑带出对应类别，缺少采购资料时明确待完善。",
+    "模具费标记费用项目并从新订单产品选择中排除；外购资料未完善时阻止按纸箱新下单，加工预览明确缺项。原产品及历史快照不批量改写，无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "常用箱搜索NH 天华内盒1、JB 简包、SC AB白卡，核对分类分别为异形箱、刀卡、模切内盒；用规范名再搜索，仍能找到原产品。",
+    "打开护角、EPE或蜂窝板编辑，核对其他外购产品及对应类别，未绑定供应商时显示待完善；不要为验收填造采购资料。",
+    "新订单选择器不提供模具费；查看既有订单确认历史快照保持。系统版本v0.22.506，数据库eb0926dq。",
+]
+APP_CHANGELOG = [*(f"v0.22.506：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

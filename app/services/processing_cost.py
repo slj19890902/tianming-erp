@@ -489,6 +489,14 @@ def estimate_standard_processing_cost(
     if total_worker_days is not None and total_worker_days > 0 and worker_day_cost is None:
         missing.append("平均生产月薪待维护")
     missing = list(dict.fromkeys(missing))
+    # A current master preview cannot price a confirmed external/expense item
+    # as corrugated labour. Explicit order snapshots retain their old contract.
+    if supply_mode is None:
+        from app.services.legacy_product_classification import new_order_issue
+        issue = new_order_issue(product)
+        if issue:
+            missing.append(issue)
+            total_worker_days = None
     complete = not missing and total_worker_days is not None
     processing_cost = (
         (total_worker_days * worker_day_cost).quantize(MONEY, rounding=ROUND_HALF_UP)

@@ -81,6 +81,11 @@ BOX_TYPE_RULES: tuple[BoxTypeRule, ...] = (
             "WZX 外纸箱",
             "NZX 内纸箱",
             "THWX 腾华外箱",
+            "007 华元内盒",
+            "009 内盒无钉",
+            "004 豪迪纸箱",
+            "005 粘合成型",
+            "THYW 天华压外",
         ),
         required_dimensions=("length_mm", "width_mm", "height_mm"),
         formula_version="tm_a1_20260729_v1",
@@ -94,7 +99,7 @@ BOX_TYPE_RULES: tuple[BoxTypeRule, ...] = (
     BoxTypeRule(
         code="a3_set",
         display_name="A3 天地盖",
-        aliases=("A3", "天地盖", "A3天地盖", "A3 天地盖", "TDG 天地盖"),
+        aliases=("A3", "天地盖", "A3天地盖", "A3 天地盖", "TDG 天地盖", "013 半截天地盖"),
         required_dimensions=("length_mm", "width_mm", "height_mm"),
         formula_version="tm_a3_set_legacy_v1",
         is_component=False,
@@ -107,7 +112,7 @@ BOX_TYPE_RULES: tuple[BoxTypeRule, ...] = (
     BoxTypeRule(
         code="top_cover",
         display_name="独立天盖",
-        aliases=("天盖", "独立天盖", "TDGG 天地盖盖"),
+        aliases=("天盖", "独立天盖", "TDGG 天地盖盖", "模切盖 模切盖"),
         required_dimensions=("length_mm", "width_mm", "height_mm"),
         formula_version=None,
         is_component=True,
@@ -166,7 +171,7 @@ BOX_TYPE_RULES: tuple[BoxTypeRule, ...] = (
     BoxTypeRule(
         code="half_slotted_carton",
         display_name="半开槽箱",
-        aliases=("半开槽", "半开槽箱", "BJX 半截箱"),
+        aliases=("半开槽", "半开槽箱", "BJX 半截箱", "WGX 无盖箱", "WDX 无底箱"),
         required_dimensions=("length_mm", "width_mm", "height_mm"),
         formula_version="tm_half_slotted_20260801_v2",
         is_component=False,
@@ -192,7 +197,7 @@ BOX_TYPE_RULES: tuple[BoxTypeRule, ...] = (
     BoxTypeRule(
         code="divider",
         display_name="隔板",
-        aliases=("隔板",),
+        aliases=("隔板", "GD2 格挡2", "016 井字架"),
         required_dimensions=("length_mm", "width_mm"),
         formula_version=None,
         is_component=True,
@@ -205,7 +210,7 @@ BOX_TYPE_RULES: tuple[BoxTypeRule, ...] = (
     BoxTypeRule(
         code="die_cut_partition",
         display_name="刀卡",
-        aliases=("刀卡",),
+        aliases=("刀卡", "JB 简包", "HP01 恒鹏模切1", "HP02 恒鹏模切2"),
         required_dimensions=("length_mm", "width_mm"),
         formula_version=None,
         is_component=True,
@@ -218,7 +223,9 @@ BOX_TYPE_RULES: tuple[BoxTypeRule, ...] = (
     BoxTypeRule(
         code="die_cut_inner_box",
         display_name="模切内盒",
-        aliases=("模切内盒", "平卡", "FJH 飞机盒", "MQXX 模切小箱"),
+        aliases=("模切内盒", "平卡", "FJH 飞机盒", "MQXX 模切小箱",
+                 "SC AB白卡", "XH 鞋盒", "015 白卡内盒", "003 思展模切",
+                 "011 佩特罗模", "014 恒鹏模切3", "LXBG 模切日本黄", "SAT 驶安特模", "TBM 天宝模"),
         required_dimensions=("length_mm", "width_mm", "height_mm"),
         formula_version=None,
         is_component=False,
@@ -231,7 +238,7 @@ BOX_TYPE_RULES: tuple[BoxTypeRule, ...] = (
     BoxTypeRule(
         code="irregular",
         display_name="异形箱",
-        aliases=("异形", "异形箱", "YXX 异型箱"),
+        aliases=("异形", "异形箱", "YXX 异型箱", "NH 天华内盒1", "THNH1 腾华内盒1", "CTSNH 抽屉式内盒"),
         required_dimensions=("length_mm", "width_mm", "height_mm"),
         formula_version=None,
         is_component=False,

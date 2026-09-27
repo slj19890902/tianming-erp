@@ -19,7 +19,7 @@ import json
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.models.audit import OperationLog
@@ -186,9 +186,10 @@ def order_selectable_product_condition():
             != func.lower(func.trim(Product.product_code)),
         )
     )
-    return or_(
-        ~active_parent_relation,
-        distinct_code_relation,
+    from app.services.legacy_product_classification import EXPENSE_ALIASES
+    return and_(
+        or_(Product.box_style.is_(None), Product.box_style.notin_(EXPENSE_ALIASES)),
+        or_(~active_parent_relation, distinct_code_relation),
     )
 
 

@@ -216,7 +216,7 @@ def test_board_dimensions_render_as_integer_mm_in_daily_pages() -> None:
 
 def test_order_page_has_pdf_recognition_entry_and_draft_modal() -> None:
     orders = _orders_section()
-    assert "识别PDF订单" in orders
+    assert "导入订单" in orders
     assert "openOrderPdfImport" in INDEX
     assert "modal.type === 'orderPdfImport'" in INDEX
     assert "上传客户采购订单 PDF" in INDEX
@@ -233,7 +233,7 @@ def test_order_import_uses_independent_batch_drafts_and_preserves_customer_chang
     assert "orderImportBatch" in INDEX
     assert "orderImportDrafts" in INDEX
     assert "multiple" in INDEX
-    assert "/api/orders/pdf-preview-batch" in INDEX
+    assert "/api/orders/import-preview-batch" in INDEX
     assert "/api/orders/draft-rematch" in INDEX
     snippet = INDEX.split("async handleOrderCustomerChange() {", 1)[1].split(
         "async refreshOrderNumberPreview", 1

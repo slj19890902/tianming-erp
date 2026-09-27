@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 from types import SimpleNamespace
+import re
+from urllib.parse import urlencode
 from fastapi import Request
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
 
@@ -12,6 +14,7 @@ def function(name):
     node=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name==name)
     code=ast.Module(body=[node],type_ignores=[])
     ns=dict(Request=Request,Path=Path,FileResponse=FileResponse,RedirectResponse=RedirectResponse,HTMLResponse=HTMLResponse,
+            re=re,urlencode=urlencode,
             __file__=str(ROOT/"app/main.py"),warehouse_twin_path=ROOT/"static/factory-twin-assets/warehouse-twin.html")
     exec(compile(ast.fix_missing_locations(code),"<entry>","exec"),ns)
     return ns[name]
@@ -37,6 +40,16 @@ def test_old_phone_position_qr_redirect_but_desktop_editor_stays():
         assert response.status_code==expected
         if expected==307:
             assert response.headers["location"]=="/static/shelf-scan.html?location_id=1884"
+
+
+def test_old_phone_rack_qr_redirects_but_desktop_map_stays():
+    entry=function("warehouse_entry")
+    mobile=SimpleNamespace(query_params=dict(floor="3F",rack_id="rack-A"),headers={"user-agent":"iPhone MicroMessenger"},url=SimpleNamespace(hostname="localhost"))
+    response=entry(mobile)
+    assert response.status_code==302
+    assert response.headers["location"]=="/scan/rack?floor=3F&rack_id=rack-A"
+    desktop=SimpleNamespace(query_params=dict(floor="3F",rack_id="rack-A"),headers={"user-agent":"Windows desktop"},url=SimpleNamespace(hostname="localhost"))
+    assert entry(desktop).status_code==200
 
 
 def test_camera_shell_has_user_gesture_and_local_decoder():

@@ -26,7 +26,8 @@ def test_readable_address_hides_internal_identity():
         "三楼 北货架G1", "02层-01格", "三楼 北货架G1 -02层-01格")
     with pytest.raises(HTTPException):
         readable_address(dict(display_path="3F-EDIT-076-A-2-1"))
-    assert mobile_url("https://example.com/", 10, "abc") == "https://example.com/q/10/abc"
+    key = "a" * 24
+    assert mobile_url("https://example.com/", 10, key) == f"https://example.com/q/10/{key}"
 
 
 def test_identity_keeps_customer_spec_unit_and_product_separate():
@@ -123,7 +124,33 @@ def test_whole_rack_qr_opens_rack_not_single_cell(monkeypatch):
     monkeypatch.setattr(api,'_mobile_shelf_location',lambda *args:(row,{'rack_key':'stable','rack_label':'A架'}))
     result=api.mobile_shelf_label(1,Response(),lot_id=None,db=None,user=None)
     parsed=urlsplit(result['rack_lookup_url'])
-    assert parsed.path=='/warehouse.html'
+    assert parsed.path=='/scan/rack'
     assert parse_qs(parsed.query)=={'floor':['3F'],'rack_id':['rack-ABC']}
     assert result['rack_qr_data_url'].startswith('data:image/png;base64,')
     assert result['qr_data_url']!=result['rack_qr_data_url']
+
+
+def test_mobile_rack_and_lot_entries_preserve_desktop_map():
+    from app.main import app
+
+    with TestClient(app) as client:
+        rack = client.get('/scan/rack?floor=3F&rack_id=rack-A', follow_redirects=False)
+        assert rack.status_code == 307
+        assert rack.headers['location'] == '/mobile/?mobile_page=warehouse&warehouse_map=1&floor_code=3F&rack_id=rack-A#warehouse'
+        lot = client.get('/I/123', follow_redirects=False)
+        assert lot.status_code == 307
+        assert lot.headers['location'] == '/mobile/?mobile_page=warehouse&warehouse_map=1&lot_id=123#warehouse'
+        old_mobile = client.get(
+            '/warehouse.html?floor=3F&rack_id=rack-A',
+            headers={'user-agent': 'Mozilla/5.0 iPhone MicroMessenger'},
+            follow_redirects=False,
+        )
+        assert old_mobile.status_code == 302
+        assert old_mobile.headers['location'] == '/scan/rack?floor=3F&rack_id=rack-A'
+        old_desktop = client.get(
+            '/warehouse.html?floor=3F&rack_id=rack-A',
+            headers={'user-agent': 'Mozilla/5.0 Windows NT 10.0'},
+            follow_redirects=False,
+        )
+        assert old_desktop.status_code == 200
+        assert client.get('/scan/rack?floor=3F&rack_id=../../bad', follow_redirects=False).status_code == 400

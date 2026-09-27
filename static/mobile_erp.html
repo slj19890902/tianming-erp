@@ -746,8 +746,7 @@
           window.TmMobileDeliveryMargin?.destroy?.();
           clearMobilePortalState();
           const loginParams = new URLSearchParams({
-            redirect: "/mobile/",
-            mobile_page: state.activePage || safeRequestedPage() || "home",
+            redirect: `${window.location.pathname}${window.location.search}${window.location.hash}`,
           });
           window.location.replace(`/?${loginParams.toString()}`);
           throw new Error("登录已失效，正在返回登录页");
@@ -1525,11 +1524,42 @@
           }
         }
         let resolvedPreferred = preferred;
-        if (preferred.locationId && (!preferred.floorCode || !preferred.areaCode)) {
+        if (preferred.lotId && !preferred.locationId) {
           try {
-            const identity = await apiGet(`/api/mobile/erp/warehouse/map/locations/${encodeURIComponent(preferred.locationId)}`);
+            const identity = await apiGet(`/api/mobile/erp/warehouse/map/lots/${encodeURIComponent(preferred.lotId)}`);
             resolvedPreferred = {
               ...preferred,
+              floorCode: identity.floor_code,
+              areaCode: identity.area_code,
+              locationId: identity.location_id,
+              rackId: identity.rack_id || preferred.rackId,
+            };
+          } catch (error) {
+            showStatus("warehouseMapState", error.message || "目标库存批次不存在或当前账号无权查看", "error", () => openWarehouseMap(preferred));
+            return;
+          }
+        }
+        if (resolvedPreferred.rackId && (!resolvedPreferred.floorCode || !resolvedPreferred.areaCode)) {
+          try {
+            const floorCode = resolvedPreferred.floorCode || preferred.floorCode;
+            if (!floorCode) throw new Error("货架二维码缺少楼层身份");
+            const identity = await apiGet(`/api/mobile/erp/warehouse/map/racks/${encodeURIComponent(floorCode)}/${encodeURIComponent(resolvedPreferred.rackId)}`);
+            resolvedPreferred = {
+              ...resolvedPreferred,
+              floorCode: identity.floor_code,
+              areaCode: identity.area_code,
+              rackId: identity.rack_id,
+            };
+          } catch (error) {
+            showStatus("warehouseMapState", error.message || "目标货架不存在或尚未启用", "error", () => openWarehouseMap(preferred));
+            return;
+          }
+        }
+        if (resolvedPreferred.locationId && (!resolvedPreferred.floorCode || !resolvedPreferred.areaCode)) {
+          try {
+            const identity = await apiGet(`/api/mobile/erp/warehouse/map/locations/${encodeURIComponent(resolvedPreferred.locationId)}`);
+            resolvedPreferred = {
+              ...resolvedPreferred,
               floorCode: identity.floor_code,
               areaCode: identity.area_code,
             };
@@ -1555,6 +1585,7 @@
         state.warehouseMapArea = resolvedPreferred.areaCode ? area?.area_code || "" : "";
         state.warehouseMapGroup = "";
         state.warehouseMapFocusLocationId = Number(resolvedPreferred.locationId || 0) || null;
+        state.warehouseSelectedRack = resolvedPreferred.rackId || null;
         state.warehouseSearchLocationId = state.warehouseMapFocusLocationId;
         state.warehouseSearchLotId = resolvedPreferred.lotId || null;
         state.warehouseMapSource = null;
@@ -2902,6 +2933,7 @@
               areaCode: launchParams.get("area_code") || undefined,
               locationId: Number(launchParams.get("location_id") || 0) || undefined,
               lotId: Number(launchParams.get("lot_id") || 0) || undefined,
+              rackId: launchParams.get("rack_id") || undefined,
             });
           }
           if (firstPage === "lookup" && state.lookupQuery) runUnifiedSearch(state.lookupPage);

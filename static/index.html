@@ -15663,16 +15663,23 @@
             return "";
           },
           loginRedirectPath() {
-            const target = new URLSearchParams(window.location.search).get("redirect") || "";
-            if (["/incoming.html", "/warehouse.html"].includes(target)) return target;
-            if (["/mobile/", "/mobile/erp.html"].includes(target)) {
-              const mobilePage = new URLSearchParams(window.location.search).get("mobile_page") || "";
-              const safeMobilePage = mobilePage === "search" ? "warehouse" : mobilePage;
-              return ["home", "lookup", "incoming", "warehouse", "production", "pre_delivery"].includes(safeMobilePage)
-                ? `${target}#${safeMobilePage}`
-                : target;
-            }
-            return "";
+            const rawTarget = new URLSearchParams(window.location.search).get("redirect")
+              || new URLSearchParams(window.location.search).get("next") || "";
+            if (!rawTarget.startsWith("/") || rawTarget.startsWith("//")) return "";
+            let target;
+            try { target = new URL(rawTarget, window.location.origin); } catch (_error) { return ""; }
+            if (target.origin !== window.location.origin) return "";
+            const allowed = [
+              /^\/mobile\/(?:erp\.html)?$/,
+              /^\/(?:P|M|I)\/[1-9]\d*\/?$/,
+              /^\/q\/[1-9]\d*(?:\/[a-f0-9]{24})?\/?$/,
+              /^\/scan\/rack$/,
+              /^\/mobile\/(?:tianhua-pick|delivery-pick\.html)$/,
+              /^\/(?:incoming|warehouse)\.html$/,
+            ];
+            return allowed.some(pattern => pattern.test(target.pathname))
+              ? `${target.pathname}${target.search}${target.hash}`
+              : "";
           },
           initialPageFromLocation() {
             const pages = new Set(["dashboard","customers","contracts","quotations","products","orders","orders_legacy","requisition","incoming","production","warehouse","deliveries","finance","system"]);

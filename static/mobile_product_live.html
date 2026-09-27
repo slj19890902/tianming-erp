@@ -19,7 +19,7 @@
     const h=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char]);
     const parts=location.pathname.split("/").filter(Boolean);
     const productId=parts[0]==="P"&&/^\d+$/.test(parts[1]||"")&&Number(parts[1])>0?Number(parts[1]):null;
-    function loginNext(){location.href=`/?next=${encodeURIComponent(location.pathname)}`}
+    function loginNext(){location.href=`/?redirect=${encodeURIComponent(location.pathname+location.search+location.hash)}`}
     async function api(url){let response;try{response=await fetch(url,{credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}})}catch{throw new Error("连接 ERP 失败，请检查网络后重试")}let body={};try{body=await response.json()}catch{}if(response.status===401){loginNext();throw new Error("登录已失效")}if(!response.ok)throw new Error(typeof body.detail==="string"?body.detail:`读取失败（HTTP ${response.status}）`);return body}
     function shown(value){return value===null||value===undefined||value===""?"待完善":value}
     function field(key,value){return `<div class="field"><span class="key">${h(key)}</span><span class="value">${h(shown(value))}</span></div>`}

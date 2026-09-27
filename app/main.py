@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from ipaddress import ip_address
 import os
 from pathlib import Path
+import re
 import sqlite3
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -533,6 +534,45 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    if not any(route.path == "/I/{lot_id}" for route in application.routes):
+        def inventory_lot_mobile_entry(lot_id: int):
+            if lot_id <= 0:
+                return JSONResponse(status_code=404, content={"detail": "库存批次不存在"})
+            query = urlencode({
+                "mobile_page": "warehouse",
+                "warehouse_map": "1",
+                "lot_id": lot_id,
+            })
+            return RedirectResponse(
+                f"/mobile/?{query}#warehouse",
+                status_code=307,
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            )
+        application.add_api_route(
+            "/I/{lot_id}", inventory_lot_mobile_entry, methods=["GET"], include_in_schema=False
+        )
+    if not any(route.path == "/scan/rack" for route in application.routes):
+        def rack_mobile_entry(request: Request):
+            floor_code = str(request.query_params.get("floor") or "").strip().upper()
+            rack_id = str(request.query_params.get("rack_id") or "").strip()
+            if not re.fullmatch(r"\d{1,2}F", floor_code) or not re.fullmatch(
+                r"[A-Za-z0-9._:-]{1,80}", rack_id
+            ):
+                return JSONResponse(status_code=400, content={"detail": "货架二维码无效"})
+            query = urlencode({
+                "mobile_page": "warehouse",
+                "warehouse_map": "1",
+                "floor_code": floor_code,
+                "rack_id": rack_id,
+            })
+            return RedirectResponse(
+                f"/mobile/?{query}#warehouse",
+                status_code=307,
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            )
+        application.add_api_route(
+            "/scan/rack", rack_mobile_entry, methods=["GET"], include_in_schema=False
+        )
     if not any(route.path == "/mobile/stocktake.html" for route in application.routes):
         mobile_stocktake_path = (
             Path(__file__).resolve().parents[1]
@@ -668,10 +708,20 @@ def create_app() -> FastAPI:
         )
         def warehouse_entry(request: Request):
             location_id = request.query_params.get("location_id", "")
+            mobile_scan = any(marker in request.headers.get("user-agent", "").lower()
+                              for marker in ("iphone", "ipad", "android", "mobile", "micromessenger"))
+            floor_code = str(request.query_params.get("floor") or "").strip().upper()
+            rack_id = str(request.query_params.get("rack_id") or "").strip()
+            if (mobile_scan and re.fullmatch(r"\d{1,2}F", floor_code)
+                    and re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", rack_id)):
+                return RedirectResponse(
+                    "/scan/rack?" + urlencode({"floor": floor_code, "rack_id": rack_id}),
+                    status_code=302,
+                    headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+                )
             if (request.query_params.get("tab") == "locations"
                     and location_id.isascii() and location_id.isdigit() and int(location_id) > 0
-                    and any(marker in request.headers.get("user-agent", "").lower()
-                            for marker in ("iphone", "ipad", "android", "mobile"))):
+                    and mobile_scan):
                 from app.services.mobile_shelf_labels import legacy_scan_redirect
                 target = legacy_scan_redirect(request.url.hostname, int(location_id), request.query_params.get("product"))
                 if target:

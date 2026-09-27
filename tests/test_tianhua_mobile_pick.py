@@ -58,10 +58,7 @@ def test_mobile_pick_api_syncs_pending_delivery_without_dispatch(tmp_path, monke
             service.RecognizedRow(2, "21302001 400", "21302001", 400),
         ],
     )
-    monkeypatch.setattr(
-        "app.api.tianhua_pre_delivery._lan_ip",
-        lambda: "192.168.1.88",
-    )
+    monkeypatch.setenv("ERP_MOBILE_QR_ORIGIN", "http://192.168.1.88:8000")
 
     engine = create_sqlite_engine(tmp_path / "mobile.sqlite3")
     Base.metadata.create_all(engine)

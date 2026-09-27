@@ -13,7 +13,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1958,7 +1958,17 @@ def customer_management_page() -> FileResponse:
 
 
 @app.get("/incoming.html")
-def incoming_management_page() -> FileResponse:
+def incoming_management_page(request: Request):
+    mobile_user_agent = request.headers.get("user-agent", "").lower()
+    if (
+        request.query_params.get("embedded") != "1"
+        and any(marker in mobile_user_agent for marker in ("iphone", "ipad", "android", "mobile", "micromessenger"))
+    ):
+        return RedirectResponse(
+            "/mobile/?mobile_page=incoming#incoming",
+            status_code=302,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
     return FileResponse(
         static_dir() / "incoming.html",
         headers={

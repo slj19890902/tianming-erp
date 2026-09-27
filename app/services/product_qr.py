@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import base64
 from io import BytesIO
-from urllib.parse import urlsplit, urlunsplit
 
 import qrcode
 
 from app.core.config import load_settings
+from app.services.mobile_qr import product_mobile_url
 
 
 def product_live_url(product_id: int) -> str:
@@ -15,16 +15,7 @@ def product_live_url(product_id: int) -> str:
     normalized_id = int(product_id)
     if normalized_id <= 0:
         raise ValueError("正式产品编号必须为正整数")
-    configured = urlsplit(load_settings().browser_url)
-    return urlunsplit(
-        (
-            configured.scheme,
-            configured.netloc,
-            f"/P/{normalized_id}",
-            "",
-            "",
-        )
-    )
+    return product_mobile_url(normalized_id, origin=load_settings().browser_url)
 
 
 def product_qr_payload(product_id: int) -> dict[str, object]:

@@ -2813,14 +2813,14 @@ def test_incoming_quantity_can_be_changed_when_receiving(requisition_app) -> Non
         assert requisition_item.requisition_qty == original_requisition_qty
 
 
-def test_mobile_entry_returns_lan_url_and_qr_code(requisition_app) -> None:
+def test_mobile_entry_returns_configured_mobile_url_and_qr_code(requisition_app) -> None:
     app, _ = requisition_app
     with TestClient(app) as client:
         _login(client, "workshop")
         response = client.get("/api/incoming/mobile-entry")
 
     assert response.status_code == 200
-    assert response.json()["url"].endswith(":8000/incoming.html")
+    assert response.json()["url"].endswith("/mobile/?mobile_page=incoming#incoming")
     assert response.json()["qr_data_url"].startswith("data:image/png;base64,")
 
 

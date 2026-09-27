@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import json
-import base64
 import hashlib
-from io import BytesIO
-import qrcode
 from datetime import date
 from typing import Annotated, Literal
 
@@ -62,6 +59,7 @@ from app.services.production_label_operations import (
 )
 from app.services.fulfillment_reminders import annotate_production_reminders
 from app.services.warehouse_inventory import WarehouseInventoryError
+from app.services.mobile_qr import production_task_mobile_url, qr_data_url
 
 
 router = APIRouter()
@@ -96,10 +94,8 @@ def _material_list(db, user, payload, request=None):
                 'material_received_quantity', 'finished_coverage_snapshot', 'cut_contract')}
         tasks.append(task)
         if request is not None:
-            url = str(request.base_url).rstrip('/') + f'/mobile/?task_id={row["id"]}#production'
-            buffer = BytesIO()
-            qrcode.make(url).save(buffer, format='PNG')
-            task.update(task_url=url, task_qr='data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode('ascii'))
+            url = production_task_mobile_url(row["id"])
+            task.update(task_url=url, task_qr=qr_data_url(url))
         for source in row.get('customer_board_preparation_sources', []):
             key = (source['inventory_lot_id'], source['location_id'])
             if key not in groups:

@@ -3427,6 +3427,84 @@ def mobile_warehouse_map_location_identity(
     }
 
 
+@router.get("/warehouse/map/racks/{floor_code}/{rack_id}")
+def mobile_warehouse_map_rack_identity(
+    floor_code: str,
+    rack_id: str,
+    response: Response,
+    db: Session = Depends(get_db),
+    _user: User = Depends(can_read_inventory),
+) -> dict:
+    """Resolve one persistent map-rack identity without trusting a display name."""
+
+    _no_store(response)
+    normalized_floor = str(floor_code or "").strip().upper()
+    normalized_rack = str(rack_id or "").strip()
+    if not re.fullmatch(r"\d{1,2}F", normalized_floor) or not re.fullmatch(
+        r"[A-Za-z0-9._:-]{1,80}", normalized_rack
+    ):
+        raise HTTPException(status_code=422, detail="货架二维码身份无效")
+    matching = [
+        row
+        for row in list_operational_locations(db)
+        if _mobile_floor_code(row) == normalized_floor
+        and str(row.location.map_rack_id or "") == normalized_rack
+    ]
+    if not matching:
+        raise HTTPException(status_code=404, detail="仓库货架不存在或尚未启用")
+    area_codes = {
+        str(row.location.area_code or "").strip().upper() for row in matching
+    }
+    if len(area_codes) != 1:
+        raise HTTPException(status_code=409, detail="货架空间身份冲突，请管理员核对地图")
+    first = matching[0]
+    return {
+        "floor_code": normalized_floor,
+        "area_code": next(iter(area_codes)),
+        "rack_id": normalized_rack,
+        "rack_display_name": first.location.rack_display_name or first.location.rack_code,
+        "location_id": int(first.location.id),
+        "location_count": len(matching),
+    }
+
+
+@router.get("/warehouse/map/lots/{lot_id}")
+def mobile_warehouse_map_lot_identity(
+    lot_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_inventory),
+) -> dict:
+    """Resolve a visible inventory lot to its current physical location."""
+
+    _no_store(response)
+    lot = _require_mobile_lot(
+        db,
+        lot_id=lot_id,
+        visible_customer_ids=_visible_customer_ids(user, db),
+    )
+    location = lot.location
+    if location is None or not _mobile_location_is_published(db, location):
+        raise HTTPException(status_code=409, detail="当前库存批次尚未绑定已发布货位")
+    row = next(
+        (
+            item
+            for item in list_operational_locations(db)
+            if int(item.location.id) == int(location.id)
+        ),
+        None,
+    )
+    if row is None:
+        raise HTTPException(status_code=409, detail="当前库存批次货位尚未启用")
+    return {
+        "lot_id": int(lot.id),
+        "location_id": int(location.id),
+        "floor_code": _mobile_floor_code(row),
+        "area_code": str(location.area_code or "").strip().upper(),
+        "rack_id": location.map_rack_id,
+    }
+
+
 @router.get("/warehouse/map/floors/{floor_code}")
 def mobile_warehouse_map_area(
     floor_code: str,

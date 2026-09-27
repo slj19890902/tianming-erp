@@ -394,6 +394,8 @@ def mobile_erp_app(tmp_path, monkeypatch: pytest.MonkeyPatch):
             "product": product.id,
             "product_two": product_two.id,
             "other_product": other_product.id,
+            "mapped_location": mapped_location.id,
+            "finished_lot": finished_one.id,
         }
 
     app = FastAPI()

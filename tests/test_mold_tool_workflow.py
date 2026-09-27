@@ -916,9 +916,7 @@ def test_workshop_can_open_structured_location_label_and_qr(
         label = client.get(f"/api/warehouse/molds/{mold_id}/label")
         assert label.status_code == 200, label.text
         data = label.json()
-        assert data["lookup_url"] == (
-            browser_url.rstrip('/').upper() + f"/M/{mold_id}"
-        )
+        assert data["lookup_url"] == browser_url.rstrip('/') + f"/M/{mold_id}"
         assert label.headers["cache-control"] == "private, no-store, max-age=0"
         assert data["qr_data_url"].startswith("data:image/png;base64,")
         from PIL import Image

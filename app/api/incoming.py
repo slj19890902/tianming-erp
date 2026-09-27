@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import json
-import socket
 from datetime import date, datetime, timedelta
-from io import BytesIO
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
 
-import qrcode
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, field_validator
@@ -50,6 +46,7 @@ from app.models.purchase_receipt import (
 from app.models.order import Order, OrderItem
 from app.models.product_drawing import ProductDrawing
 from app.services.product_drawings import engineering_drawing_condition
+from app.services.mobile_qr import incoming_mobile_url, qr_data_url
 from app.models.product import Product
 from app.models.product_bom import (
     RequisitionItemBomSource,
@@ -4457,29 +4454,13 @@ def history_received_items(
     }
 
 
-def _lan_ip() -> str:
-    connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        connection.connect(("8.8.8.8", 80))
-        return connection.getsockname()[0]
-    except OSError:
-        return socket.gethostbyname(socket.gethostname())
-    finally:
-        connection.close()
-
-
 @router.get("/mobile-entry")
 def mobile_entry(
     request: Request,
     _user: User = Depends(can_read),
 ) -> dict:
-    port = request.url.port or 8000
-    url = f"http://{_lan_ip()}:{port}/incoming.html"
-    image = qrcode.make(url)
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return {"url": url, "qr_data_url": f"data:image/png;base64,{encoded}"}
+    url = incoming_mobile_url()
+    return {"url": url, "qr_data_url": qr_data_url(url)}
 
 
 _COST_RESPONSE_KEYS = {

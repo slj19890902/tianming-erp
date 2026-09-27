@@ -1,9 +1,5 @@
-import base64
-import socket
 from datetime import date, datetime, timedelta, timezone
-from io import BytesIO
 
-import qrcode
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -26,6 +22,7 @@ from app.services.tianhua_pre_delivery import STATUS_LABELS, batch_dict, create_
 from app.services.delivery_numbering import DeliveryNumberingError
 from app.services.secure_uploads import IMAGE_POLICY, UploadValidationError, read_validated_upload
 from app.services.product_specification import resolved_product_specification
+from app.services.mobile_qr import mobile_absolute_url, qr_data_url
 
 router=APIRouter()
 mobile_router=APIRouter()
@@ -148,17 +145,6 @@ def update_draft(batch_id:int,payload:DraftRequest,db:Session=Depends(get_db),us
     return _save(batch_id,payload,db,user,True)
 
 
-def _lan_ip() -> str:
-    connection=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-    try:
-        connection.connect(("8.8.8.8",80))
-        return connection.getsockname()[0]
-    except OSError:
-        return socket.gethostbyname(socket.gethostname())
-    finally:
-        connection.close()
-
-
 def _token_scope(token:str,db:Session) -> tuple[TianhuaPreDeliveryImportBatch,TianhuaPreDeliveryDraft]:
     try:
         batch_id,draft_id=decode_tianhua_pick_token(token)
@@ -249,12 +235,8 @@ def create_mobile_token(batch_id:int,request:Request,db:Session=Depends(get_db),
         db.rollback()
         raise HTTPException(status_code=409,detail=str(e)) from e
     token,expires=create_tianhua_pick_token(batch.id,draft.id)
-    port=request.url.port or 8000
-    url=f"http://{_lan_ip()}:{port}/mobile/tianhua-pick?token={token}"
-    image=qrcode.make(url)
-    buffer=BytesIO()
-    image.save(buffer,format="PNG")
-    return {"token":token,"url":url,"expires_at":utc_naive_to_api(expires.astimezone(timezone.utc).replace(tzinfo=None)),"qr_data_url":f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('ascii')}"}
+    url=mobile_absolute_url("/mobile/tianhua-pick",query={"token":token})
+    return {"token":token,"url":url,"expires_at":utc_naive_to_api(expires.astimezone(timezone.utc).replace(tzinfo=None)),"qr_data_url":qr_data_url(url)}
 
 
 @mobile_router.get("/tianhua-pick")

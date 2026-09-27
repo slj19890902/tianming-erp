@@ -4,9 +4,10 @@ from app.services.mobile_shelf_labels import mobile_url, legacy_scan_redirect, s
 
 
 def test_origin_opt_in(monkeypatch):
+    monkeypatch.delenv('ERP_MOBILE_QR_ORIGIN', raising=False)
     monkeypatch.delenv('ERP_SHELF_LABEL_ORIGIN', raising=False)
     assert mobile_url('https://example.com/', 1203) == 'https://example.com/q/1203'
-    assert legacy_scan_redirect('tianmingerp0909.share.zrok.io', 1203) is None
+    assert legacy_scan_redirect('tianmingerp0909.share.zrok.io', 1203).endswith('/q/1203')
 
 
 def test_new_label_and_old_redirect_keep_identity(monkeypatch):

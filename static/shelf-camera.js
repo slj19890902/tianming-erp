@@ -32,6 +32,54 @@ function moldIdentity(text) {
   } catch (_) { /* Only recognized ERP identities are accepted. */ }
   return null;
 }
+function erpMobileRoute(text) {
+  try {
+    const url = new URL(text, location.origin);
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return null;
+    const hosts = new Set([location.hostname, 'tianmingerp0909.share.zrok.io', '192.168.3.80', '172.16.1.26']);
+    if (!hosts.has(url.hostname)) return null;
+    let match = url.pathname.match(/^\/P\/([1-9]\d*)\/?$/);
+    if (match) return `/P/${match[1]}`;
+    match = url.pathname.match(/^\/I\/([1-9]\d*)\/?$/);
+    if (match) return `/I/${match[1]}`;
+    match = url.pathname.match(/^\/sp\/([1-9]\d*)\/([1-9]\d*)\/([1-9]\d*)\/([1-9]\d*)\/?$/);
+    if (match) return match[0];
+    if (url.pathname === '/static/finished-goods-label.html') {
+      const lotId = url.searchParams.get('lot_id');
+      if (/^[1-9]\d*$/.test(lotId || '')) return `/I/${lotId}`;
+    }
+    if (url.pathname === '/scan/rack' || url.pathname === '/warehouse.html') {
+      const floor = (url.searchParams.get('floor') || '').toUpperCase();
+      const rackId = url.searchParams.get('rack_id') || '';
+      if (/^\d{1,2}F$/.test(floor) && /^[A-Za-z0-9._:-]{1,80}$/.test(rackId)) {
+        return `/scan/rack?floor=${encodeURIComponent(floor)}&rack_id=${encodeURIComponent(rackId)}`;
+      }
+    }
+    if (url.pathname === '/incoming.html') return '/mobile/?mobile_page=incoming#incoming';
+    if (['/mobile/', '/mobile/erp.html'].includes(url.pathname)) {
+      const page = url.searchParams.get('mobile_page') || (url.searchParams.get('task_id') ? 'production' : 'home');
+      if (!['home','lookup','incoming','warehouse','production','pre_delivery'].includes(page)) return null;
+      const output = new URLSearchParams({mobile_page: page});
+      for (const [name, pattern] of [
+        ['task_id', /^[1-9]\d*$/], ['location_id', /^[1-9]\d*$/], ['lot_id', /^[1-9]\d*$/],
+        ['floor_code', /^\d{1,2}F$/], ['rack_id', /^[A-Za-z0-9._:-]{1,80}$/], ['warehouse_map', /^1$/]
+      ]) {
+        const value = url.searchParams.get(name);
+        if (value && pattern.test(value)) output.set(name, value);
+      }
+      return `/mobile/?${output.toString()}#${page}`;
+    }
+    if (url.pathname === '/mobile/delivery-pick.html') {
+      const taskId = url.searchParams.get('task_id');
+      return taskId && /^[1-9]\d*$/.test(taskId) ? `/mobile/delivery-pick.html?task_id=${taskId}` : '/mobile/delivery-pick.html';
+    }
+    if (url.pathname === '/mobile/tianhua-pick') {
+      const token = url.searchParams.get('token') || '';
+      if (/^[A-Za-z0-9._~-]{16,2048}$/.test(token)) return `/mobile/tianhua-pick?token=${encodeURIComponent(token)}`;
+    }
+  } catch (_) { /* Only recognized ERP identities are accepted. */ }
+  return null;
+}
 let cameraStream = null, cameraEpoch = 0, cameraTimer = null, decoderPromise = null;
 function decoderReady() {
   if (typeof window.jsQR === 'function') return Promise.resolve();
@@ -64,7 +112,14 @@ async function acceptShelf(text) {
     return true;
   }
   const target = shelfIdentity(text);
-  if (!target) { $('cameraStatus').textContent='请扫描本 ERP 的货位或模具二维码'; return false; }
+  if (!target) {
+    const route = erpMobileRoute(text);
+    if (!route) { $('cameraStatus').textContent='请扫描本 ERP 的手机业务二维码'; return false; }
+    stopCamera();
+    $('cameraStatus').textContent = '已识别，正在打开对应手机页面';
+    location.assign(route);
+    return true;
+  }
   stopCamera();
   id = target.id; product = target.product;
   $('cameraStatus').textContent = '已识别，正在读取货位库存';
@@ -84,8 +139,8 @@ function scanFrame(epoch) {
       context.drawImage(video,0,0,canvas.width,canvas.height);
       const pixels=context.getImageData(0,0,canvas.width,canvas.height);
       const result=window.jsQR(pixels.data,pixels.width,pixels.height,{inversionAttempts:'attemptBoth'});
-      if (result && (shelfIdentity(result.data) || moldIdentity(result.data))) { void acceptShelf(result.data); return; }
-      if (result) $('cameraStatus').textContent='未识别为本 ERP 的货位或模具二维码，请核对标签';
+      if (result && (shelfIdentity(result.data) || moldIdentity(result.data) || erpMobileRoute(result.data))) { void acceptShelf(result.data); return; }
+      if (result) $('cameraStatus').textContent='未识别为本 ERP 的手机业务二维码，请核对标签';
     }
     cameraTimer=setTimeout(()=>scanFrame(epoch),180);
   } catch (_) {stopCamera(); $('cameraStatus').textContent='摄像头画面读取失败，请重新开启';}

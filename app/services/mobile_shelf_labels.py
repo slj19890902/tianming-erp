@@ -1,12 +1,9 @@
 """Read-only label identities. QR identities never grant access or reserve stock."""
 import hashlib
 import json
-import os
 import re
-from ipaddress import ip_address, ip_network
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 
@@ -66,29 +63,16 @@ def readable_address(label):
 
 
 def mobile_url(browser_url, location_id, key=None):
-    browser_url = shelf_label_origin() or browser_url
-    origin = urlsplit(browser_url)
-    if origin.scheme not in ("https", "http") or not origin.netloc:
-        raise HTTPException(409, "请配置手机访问地址")
-    return f"{origin.scheme}://{origin.netloc}/q/{location_id}" + (f"/{key}" if key else "")
+    from app.services.mobile_qr import location_mobile_url
+
+    return location_mobile_url(location_id, key, origin=browser_url)
 
 
 def shelf_label_origin():
-    """Opt-in factory QR origin; never change the global remote ERP entrance."""
-    value = os.getenv("ERP_SHELF_LABEL_ORIGIN", "").strip().rstrip("/")
-    if not value:
-        return ""
-    try:
-        parsed = urlsplit(value)
-        address = ip_address(parsed.hostname or "")
-        if (parsed.scheme != "http" or not parsed.port or parsed.username is not None
-                or parsed.password is not None or parsed.path or parsed.query or parsed.fragment
-                or not any(address in ip_network(net) for net in
-                           ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))):
-            raise ValueError()
-    except ValueError:
-        raise HTTPException(409, "货架扫码地址必须是明确的内网 HTTP IP 和端口")
-    return value
+    """Backward-compatible alias for the unified mobile QR origin."""
+    from app.services.mobile_qr import mobile_qr_origin
+
+    return mobile_qr_origin()
 
 
 def legacy_scan_redirect(hostname, location_id, key=None):

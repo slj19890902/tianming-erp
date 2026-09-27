@@ -42,7 +42,7 @@
       return text?text.split("/")[0].trim():"";
     }
 
-    function loginNext(){location.href=`/?next=${encodeURIComponent(location.pathname+location.search)}`}
+    function loginNext(){location.href=`/?redirect=${encodeURIComponent(location.pathname+location.search+location.hash)}`}
     async function api(url,options={}){
       let response;
       try{

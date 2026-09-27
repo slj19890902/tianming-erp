@@ -45,7 +45,7 @@ def test_material_list_is_scoped_grouped_readonly_and_print_audited(production_a
         assert printed.json()['print_count'] == 1
         reopened = client.post('/api/production/material-list', json={'task_ids':selected}).json()
         assert reopened['print_count'] == 1
-        assert all('/mobile/?task_id=' in t['task_url'] and t['task_url'].endswith('#production') for t in reopened['tasks'])
+        assert all('/mobile/?mobile_page=production&task_id=' in t['task_url'] and t['task_url'].endswith('#production') for t in reopened['tasks'])
         search = client.get('/api/production/tasks', params={'status':'pending', 'q':'nothing-matches', 'page':1})
         assert search.status_code == 200 and search.json()['total'] == 0
         _login(client, 'n029-scoped')

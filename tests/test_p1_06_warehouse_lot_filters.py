@@ -172,7 +172,7 @@ def test_finished_goods_label_is_read_only_version_bound_and_customer_scoped(
         assert body["detail"]["inventory_code"] == "TH-22000008"
         assert body["location"]["location_code"] == "F1-L01"
         assert body["qr_data_url"].startswith("data:image/png;base64,")
-        assert f'version={active["version"]}' in body["lookup_url"]
+        assert body["lookup_url"].endswith(f'/I/{active["id"]}')
 
         repeated = client.get(
             f'/api/warehouse/lots/{active["id"]}/label',

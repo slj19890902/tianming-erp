@@ -53,6 +53,14 @@
     const params = new URLSearchParams(location.search);
     const lotId = params.get("lot_id");
     const expectedVersion = params.get("version");
+    const redirectingToMobile = (
+      params.get("view") === "validate"
+      && /^[1-9]\d*$/.test(lotId || "")
+      && /iphone|ipad|android|mobile|micromessenger/i.test(navigator.userAgent)
+    );
+    if (redirectingToMobile) {
+      location.replace(`/I/${encodeURIComponent(lotId)}`);
+    }
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
     const formatDateTime = value => {
       const date = value ? new Date(value) : new Date();
@@ -96,7 +104,7 @@
       } catch (error) { state.textContent = error.message || "标签读取失败"; state.classList.add("error"); }
     }
     document.getElementById("printButton").addEventListener("click", () => window.print());
-    boot();
+    if (!redirectingToMobile) boot();
   </script>
 </body>
 </html>

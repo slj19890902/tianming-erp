@@ -135,6 +135,60 @@ def _assert_no_financial_projection(value) -> None:
             _assert_no_financial_projection(child)
 
 
+def test_qr_map_identities_are_permissioned_read_only_and_use_current_location(
+    mobile_portal_app,
+) -> None:
+    from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
+
+    app, ids, factory = mobile_portal_app
+    with factory() as db:
+        location = db.get(WarehouseLocation, ids["mapped_location"])
+        location.map_rack_id = "rack-mobile-A"
+        location.rack_display_name = "A架"
+        db.commit()
+        before = (
+            db.get(InventoryLot, ids["finished_lot"]).warehouse_location_id,
+            db.get(InventoryLot, ids["finished_lot"]).quantity_available,
+            db.get(InventoryLot, ids["finished_lot"]).quantity_reserved,
+        )
+
+    with TestClient(app) as client:
+        assert client.get(
+            f'/api/mobile/erp/warehouse/map/lots/{ids["finished_lot"]}'
+        ).status_code == 401
+        _login(client, "mobile-admin")
+        lot = client.get(
+            f'/api/mobile/erp/warehouse/map/lots/{ids["finished_lot"]}'
+        )
+        assert lot.status_code == 200, lot.text
+        assert lot.json() == {
+            "lot_id": ids["finished_lot"],
+            "location_id": ids["mapped_location"],
+            "floor_code": "3F",
+            "area_code": "C1",
+            "rack_id": "rack-mobile-A",
+        }
+        rack = client.get(
+            "/api/mobile/erp/warehouse/map/racks/3F/rack-mobile-A"
+        )
+        assert rack.status_code == 200, rack.text
+        assert rack.json()["location_id"] == ids["mapped_location"]
+        assert rack.json()["rack_display_name"] == "A架"
+        assert rack.headers["cache-control"] == "private, no-store"
+
+    with TestClient(app) as client:
+        _login(client, "mobile-picker")
+        assert client.get(
+            f'/api/mobile/erp/warehouse/map/lots/{ids["finished_lot"]}'
+        ).status_code == 403
+
+    with factory() as db:
+        after = (
+            db.get(InventoryLot, ids["finished_lot"]).warehouse_location_id,
+            db.get(InventoryLot, ids["finished_lot"]).quantity_available,
+            db.get(InventoryLot, ids["finished_lot"]).quantity_reserved,
+        )
+        assert after == before
 def test_shell_and_unified_search_are_permission_derived_and_scope_safe(
     mobile_portal_app,
 ) -> None:

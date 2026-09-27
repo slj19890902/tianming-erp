@@ -7,12 +7,10 @@ import hashlib
 from io import BytesIO
 import json
 import re
-import socket
 import sqlite3
 from threading import Lock
 from collections.abc import Mapping
 from typing import Annotated, Literal
-from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import qrcode
@@ -21,6 +19,14 @@ from sqlalchemy import String, cast, and_, case, func, inspect, or_, select, tex
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload, object_session
 from app.services.warehouse_goods import goods_profile
+from app.services.mobile_qr import (
+    location_mobile_url,
+    lot_mobile_url,
+    mobile_absolute_url,
+    mold_mobile_url,
+    qr_data_url,
+    rack_mobile_url,
+)
 
 from app.api.deps import (
     PermissionChecker,
@@ -17266,7 +17272,6 @@ def _location_label_dict(
     row: WarehouseLocation,
     request: Request,
     projection_context: Mapping[str, object],
-    lan_ip: str | None = None,
 ) -> dict:
     _require_printable_location_label(row, projection_context)
     floor = projection_context.get("floor")
@@ -17288,14 +17293,7 @@ def _location_label_dict(
         floor=floor,
         area_sequence=projection_context.get("area_sequence"),
     )
-    port = request.url.port or 8000
-    lookup_url = (
-        f"http://{lan_ip or _lan_ip()}:{port}/warehouse.html"
-        f"?tab=locations&location_id={row.id}"
-    )
-    image = qrcode.make(lookup_url)
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
+    lookup_url = location_mobile_url(row.id, origin=load_settings().browser_url)
     print_address_code = row.location_code
     if (
         row.address_kind == "rack_slot"
@@ -17319,10 +17317,7 @@ def _location_label_dict(
         "print_address_code": print_address_code,
         "layout_version": row.floor3_layout.version if row.floor3_layout else None,
         "lookup_url": lookup_url,
-        "qr_data_url": (
-            "data:image/png;base64,"
-            + base64.b64encode(buffer.getvalue()).decode("ascii")
-        ),
+        "qr_data_url": qr_data_url(lookup_url),
     }
 
 
@@ -17610,25 +17605,22 @@ def _shelf_label_content(db: Session, row: WarehouseLocation, user: User) -> dic
 
 
 def _with_shelf_label(db, row, user, label, *, information_only=False):
-    from urllib.parse import urlsplit
     if information_only:
         from app.services.rack_information_labels import rack_information_contents
         contents = rack_information_contents(db, row.id, lambda customer_id: require_customer_access(customer_id, user, db))
         from app.services.mobile_shelf_labels import mobile_url
         url = mobile_url(load_settings().browser_url, row.id)
-        buffer = BytesIO()
-        qrcode.make(url).save(buffer, format='PNG')
-        label.update(shelf_contents=contents, lookup_url=url, qr_data_url='data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode('ascii'), information_only=True)
+        label.update(shelf_contents=contents, lookup_url=url, qr_data_url=qr_data_url(url), information_only=True)
         return label
     content = _shelf_label_content(db, row, user)
     label['shelf_content'] = content
     if content and not content.get('restricted'):
         # Printed labels must remain reachable after an alternate-port preview.
-        origin = urlsplit(load_settings().browser_url)
-        url = f'{origin.scheme}://{origin.netloc}/sp/{row.id}/{content["product_id"]}/{content["version"]}/{row.address_version}'
-        buffer = BytesIO()
-        qrcode.make(url).save(buffer, format='PNG')
-        label.update(lookup_url=url, qr_data_url='data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode('ascii'))
+        url = mobile_absolute_url(
+            f'/sp/{row.id}/{content["product_id"]}/{content["version"]}/{row.address_version}',
+            origin=load_settings().browser_url,
+        )
+        label.update(lookup_url=url, qr_data_url=qr_data_url(url))
     return label
 
 
@@ -17668,14 +17660,12 @@ def get_location_labels(
             row,
             projection_contexts.get(int(row.id), {}),
         )
-    lan_ip = _lan_ip()
     return {
         "items": [
             _with_shelf_label(db, row, _user, _location_label_dict(
                 row,
                 request,
                 projection_contexts.get(int(row.id), {}),
-                lan_ip,
             ), information_only=content == "shelf-information")
             for row in ordered_rows
         ],
@@ -17751,17 +17741,11 @@ def mobile_shelf_label(location_id: int, response: Response, lot_id: int | None 
         key = product_key(lot)
         result["product"] = fields
     url = mobile_url(load_settings().browser_url, row.id, key)
-    buffer = BytesIO()
-    qrcode.make(url).save(buffer, format="PNG")
-    result.update(lookup_url=url, qr_data_url="data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii"))
+    result.update(lookup_url=url, qr_data_url=qr_data_url(url))
     if result.get("rack_key") and row.map_rack_id:
-        origin = urlsplit(url)
-        rack_query = urlencode({"floor": f"{row.warehouse_floor}F", "rack_id": row.map_rack_id})
-        rack_url = urlunsplit((origin.scheme, origin.netloc, "/warehouse.html", rack_query, ""))
-        rack_buffer = BytesIO()
-        qrcode.make(rack_url).save(rack_buffer, format="PNG")
+        rack_url = rack_mobile_url(f"{row.warehouse_floor}F", row.map_rack_id, origin=load_settings().browser_url)
         result.update(rack_lookup_url=rack_url,
-                      rack_qr_data_url="data:image/png;base64," + base64.b64encode(rack_buffer.getvalue()).decode("ascii"))
+                      rack_qr_data_url=qr_data_url(rack_url))
     response.headers["Cache-Control"] = "no-store"
     return result
 
@@ -20207,29 +20191,7 @@ def confirm_mold_location_movement(
 def _mold_live_url(mold_id: int) -> str:
     """Build the permanent label URL from the configured ERP browser origin."""
 
-    configured = urlsplit(load_settings().browser_url)
-    return urlunsplit(
-        (
-            configured.scheme.upper(),
-            configured.netloc.upper(),
-            f"/M/{int(mold_id)}",
-            "",
-            "",
-        )
-    )
-
-
-def _lan_ip() -> str:
-    """Retain the legacy helper for non-mold labels and test compatibility."""
-
-    connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        connection.connect(("8.8.8.8", 80))
-        return connection.getsockname()[0]
-    except OSError:
-        return socket.gethostbyname(socket.gethostname())
-    finally:
-        connection.close()
+    return mold_mobile_url(mold_id, origin=load_settings().browser_url)
 
 
 def _label_customer(row: MoldTool, products: list[Product]) -> tuple[str, str | None]:
@@ -24173,14 +24135,7 @@ def get_finished_goods_label(
         "transfer": "移库转入",
         "delivery_return": "送货退回",
     }
-    port = request.url.port or 8000
-    lookup_url = (
-        f"http://{_lan_ip()}:{port}/static/finished-goods-label.html"
-        f"?lot_id={row.id}&version={row.version}&view=validate"
-    )
-    image = qrcode.make(lookup_url)
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
+    lookup_url = lot_mobile_url(row.id, origin=load_settings().browser_url)
     projection_context = load_warehouse_location_projection_contexts(
         db, [row.location]
     ).get(int(row.warehouse_location_id or 0), {})
@@ -24198,10 +24153,7 @@ def get_finished_goods_label(
             "label": source_labels.get(row.source_type, "库存来源"),
         },
         "lookup_url": lookup_url,
-        "qr_data_url": (
-            "data:image/png;base64,"
-            + base64.b64encode(buffer.getvalue()).decode("ascii")
-        ),
+        "qr_data_url": qr_data_url(lookup_url),
     }
 
 

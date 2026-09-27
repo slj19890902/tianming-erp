@@ -4278,9 +4278,7 @@ def test_p1_34b1_location_labels_are_mapped_read_only_and_fail_closed(
         assert single.json()["area_master_name"] == "A1成品存放区"
         assert single.json()["position_status"] == "mapped"
         assert single.json()["layout_version"] == 3
-        assert single.json()["lookup_url"].endswith(
-            f"/warehouse.html?tab=locations&location_id={mapped_id}"
-        )
+        assert single.json()["lookup_url"].endswith(f"/q/{mapped_id}")
         assert single.json()["qr_data_url"].startswith("data:image/png;base64,")
 
         batch = client.get(

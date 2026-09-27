@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.506"
-APP_VERSION_NAME = "箱型确认归并与外购分类"
+APP_VERSION = "v0.22.507"
+APP_VERSION_NAME = "停用产品实体模具标签兼容"
 APP_BUILD_DATE = "2026-09-27"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4869,3 +4869,14 @@ APP_VERIFICATION_STEPS = [
     "新订单选择器不提供模具费；查看既有订单确认历史快照保持。系统版本v0.22.506，数据库eb0926dq。",
 ]
 APP_CHANGELOG = [*(f"v0.22.506：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "产品停用后，已登记且未停用或封存的实体模具仍可打印标签；保留产品停用状态，不影响生产选款规则。",
+    "仅使用未删除产品的既有模具关联及正式客户身份；已删除、身份未完善、客户越权和封存限制继续有效。",
+    "保留此前箱型归并、外购分类与数字顺序打印功能；本次无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "打开已补登记的停用产品模具，核对40×30和40×80标签的存货编码、中文简写与R04位置；产品仍保持停用。",
+    "批量预览按数字顺序排列，共用模具只保留一个本体；检查系统版本v0.22.507。",
+]
+APP_CHANGELOG = [*(f"v0.22.507：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

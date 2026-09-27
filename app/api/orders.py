@@ -7371,6 +7371,11 @@ def _create_order_impl(
         customer_po = (payload.customer_po or "").strip() or None
 
         if payload.pdf_import_confirmation is not None:
+            if customer_po is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="未识别到客户订单号；请对照原订单填写客户订单号后再保存。",
+                )
             _set_order_save_stage(observability, "validate_pdf_master")
             from app.services.product_readiness import product_readiness
             master_issues = []

@@ -73,7 +73,7 @@ def _payload(
     }
 
 
-def test_imported_order_without_customer_po_is_rejected_before_creation(b1_app) -> None:
+def test_imported_order_without_customer_po_uses_stable_source_identity(b1_app) -> None:
     app, factory = b1_app
     _ready_product(factory)
     payload = _payload(
@@ -87,11 +87,13 @@ def test_imported_order_without_customer_po_is_rejected_before_creation(b1_app) 
         login(client, "sales")
         response = client.post("/api/orders", json=payload)
 
-    assert response.status_code == 400, response.text
-    assert "未识别到客户订单号" in response.json()["detail"]
+    assert response.status_code == 201, response.text
     with factory() as db:
-        assert db.scalar(select(func.count()).select_from(Order)) == 0
-        assert db.scalar(select(func.count()).select_from(OrderImportSource)) == 0
+        order = db.scalar(select(Order))
+        source = db.scalar(select(OrderImportSource))
+        assert order is not None and order.customer_po is None
+        assert source is not None and source.order_id == order.id
+        assert source.source_hash == "e" * 64
 
 
 def test_different_trusted_sources_with_same_po_create_independent_orders_and_lines(
@@ -193,7 +195,7 @@ def test_same_source_replays_original_and_rejects_changed_business_payload(b1_ap
         assert db.scalar(select(func.count()).select_from(Order)) == 1
 
 
-def test_different_trusted_sources_without_po_are_both_rejected(b1_app) -> None:
+def test_different_trusted_sources_without_po_create_independent_orders(b1_app) -> None:
     app, factory = b1_app
     _ready_product(factory)
     with TestClient(app) as client:
@@ -210,12 +212,14 @@ def test_different_trusted_sources_without_po_are_both_rejected(b1_app) -> None:
                 app, "2" * 64, "t02-no-po-second", customer_po=None
             ),
         )
-    assert first.status_code == second.status_code == 400
-    assert "未识别到客户订单号" in first.json()["detail"]
-    assert "未识别到客户订单号" in second.json()["detail"]
+    assert first.status_code == second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
     with factory() as db:
-        assert db.scalar(select(func.count()).select_from(OrderImportSource)) == 0
-        assert db.scalar(select(func.count()).select_from(Order)) == 0
+        sources = list(db.scalars(select(OrderImportSource).order_by(OrderImportSource.id)))
+        orders = list(db.scalars(select(Order).order_by(Order.id)))
+        assert len(sources) == len(orders) == 2
+        assert {source.source_hash for source in sources} == {"1" * 64, "2" * 64}
+        assert all(order.customer_po is None for order in orders)
 
 
 def test_cancelled_source_replays_original_and_new_source_does_not_reopen_it(

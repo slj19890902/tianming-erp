@@ -20555,6 +20555,17 @@ def _mold_label_dict(
     template_version: str = MOLD_LABEL_TEMPLATE_40X30,
 ) -> dict:
     products = _visible_mold_products(row, allowed_customer_ids)
+    if not products and row.identity_status == "frozen":
+        # Discontinuing a SKU does not remove its physical mold. Keep the
+        # production/selection filters active-only; only asset labels may use
+        # an existing, non-deleted binding backed by formal customer identity.
+        associated_customer_ids = {link.customer_id for link in row.customer_links}
+        products = [
+            product
+            for product in _historical_visible_mold_products(row, allowed_customer_ids)
+            if product.deleted_at is None
+            and product.customer_id in associated_customer_ids
+        ]
     lookup_url = _mold_live_url(row.id)
     qr = qrcode.QRCode(
         version=2,

@@ -130,6 +130,28 @@ def _available_delivery_quantity(db: Session, order_item: OrderItem) -> int:
     )
 
 
+def _finished_inventory_quantity(db: Session, order_item: OrderItem) -> int:
+    """Return customer-unit coverage backed by formal finished inventory."""
+
+    from app.api.deliveries import _inventory_sources_for_order_item
+
+    pending = max(int(order_item.quantity or 0) - int(order_item.delivered_quantity or 0), 0)
+    sources = _inventory_sources_for_order_item(
+        db,
+        order_item=order_item,
+        planned_delivery_quantity=pending,
+        dispatched=False,
+    )
+    return min(
+        pending,
+        sum(
+            int(source.get("quantity_to_pick_requirement") or 0)
+            for source in sources
+            if source.get("source_type") == "finished"
+        ),
+    )
+
+
 def _image_order_no(row: RecognizedRow) -> str | None:
     if row.image_order_no:
         return row.image_order_no.strip()
@@ -371,7 +393,7 @@ def create_excel_batch(
                     "order_item_id":order_item.id,"order_id":order.id,
                     "order_number":order.order_number,"customer_order_no":order.customer_po,
                     "pending_quantity":max(int(order_item.quantity)-int(order_item.delivered_quantity),0),
-                    "finished_available":_available_delivery_quantity(db,order_item),
+                    "finished_available":_finished_inventory_quantity(db,order_item),
                     "delivery_date":order.delivery_date.isoformat() if order.delivery_date else None,
                 })
         requested=int(source.requested_quantity); finished=min(requested,sum(row["finished_available"] for row in candidates)); remaining=requested-finished

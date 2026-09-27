@@ -252,6 +252,7 @@ from app.services.product_drawings import (
 )
 from app.services.secure_uploads import (
     DRAWING_POLICY,
+    EXCEL_POLICY,
     PDF_POLICY,
     PendingTemporaryConsumption,
     UploadTokenError,
@@ -265,6 +266,7 @@ from app.services.secure_uploads import (
     stored_file_metadata,
     temporary_token_file,
 )
+from app.services.excel_document_import import ExcelImportError, parse_excel_document
 from app.services.warehouse_inventory import (
     WarehouseInventoryError,
     active_finished_reserved_qty,
@@ -845,6 +847,7 @@ def _encode_pdf_preview_safety_token(
         "type": PDF_PREVIEW_SAFETY_TOKEN_TYPE,
         "source_name": str(draft.get("source_name") or ""),
         "source_hash": str(draft.get("file_hash") or ""),
+        "source_format": str(draft.get("source_format") or "pdf"),
         "source_lines": signed_source_lines(draft),
         **states,
         "iat": now,
@@ -4246,6 +4249,38 @@ def _parse_order_pdf_preview(
     return parse_pdf_bytes(content, filename, template_rules).draft
 
 
+async def _validated_order_import_upload(file: UploadFile):
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix == ".pdf":
+        return await read_validated_upload(file, PDF_POLICY)
+    if suffix in {".xls", ".xlsx"}:
+        return await read_validated_upload(file, EXCEL_POLICY)
+    raise UploadValidationError("订单文件类型不允许，仅支持 .pdf、.xls、.xlsx")
+
+
+def _order_import_preview(
+    db: Session,
+    user: User,
+    *,
+    content: bytes,
+    filename: str,
+    digest: str,
+    template_rules: list[dict],
+) -> dict:
+    if filename.lower().endswith(".pdf"):
+        draft = _parse_order_pdf_preview(content, filename, template_rules)
+    else:
+        draft = _excel_order_draft(
+            db,
+            parse_excel_document(content, filename, document_type="order"),
+        )
+    draft["file_hash"] = digest
+    return _finalize_pdf_preview_for_user(
+        _match_pdf_preview_for_user(db, draft, user),
+        user,
+    )
+
+
 def _customer_id_value(value: object) -> int | None:
     try:
         customer_id = int(value)  # type: ignore[arg-type]
@@ -4540,6 +4575,166 @@ async def preview_order_pdf_batch(
                         "duplicate_status": None,
                         "items": [],
                         "warnings": ["文件识别失败，请检查文件内容后重试。"],
+                    },
+                    user,
+                )
+            )
+    return {"batch_count": len(files), "drafts": drafts}
+
+
+def _excel_order_draft(db: Session, document) -> dict:
+    customers = list(
+        db.scalars(
+            select(Customer).where(
+                func.upper(Customer.customer_code) == str(document.customer_code).upper(),
+                Customer.is_active.is_(True),
+                Customer.status == "active",
+            )
+        )
+    )
+    if len(customers) != 1:
+        raise ExcelImportError(
+            f"Excel 识别到客户代码 {document.customer_code}，但主数据没有唯一启用客户"
+        )
+    customer = customers[0]
+    items = [
+        {
+            "line_no": str(row.source_no or row.source_row),
+            "source_sheet": row.sheet,
+            "source_row": row.source_row,
+            "raw_product_code": row.stock_code,
+            "raw_product_name": row.product_name or row.model or row.stock_code,
+            "raw_spec_model": row.drawing_number or row.model,
+            "quantity": row.order_quantity or row.requested_quantity,
+            "unit_price": str(row.unit_price) if row.unit_price is not None else None,
+            "raw_lines": [
+                f"{row.sheet}!{cell.coordinate}={cell.display_value}"
+                for cell in row.cells.values()
+            ],
+            "warnings": list(row.issues),
+        }
+        for row in document.rows
+    ]
+    return {
+        "source_name": document.filename,
+        "source_format": document.source_format,
+        "file_hash": document.source_hash,
+        "business_fingerprint": document.business_fingerprint,
+        "parser_version": document.parser_version,
+        "template": document.template,
+        "parse_status": "recognized",
+        "recognition_status": "recognized",
+        "customer_name_raw": customer.name,
+        "customer_po": document.customer_po,
+        "order_date": document.source_date.isoformat() if document.source_date else None,
+        "delivery_date": None,
+        "customer_route": {
+            "status": "locked",
+            "template_customer_id": customer.id,
+            "customer_name": customer.name,
+        },
+        "integrity_check": {
+            "integrity_status": "passed",
+            "source_row_count": len(items),
+            "parsed_row_count": len(items),
+        },
+        "items": items,
+        "warnings": list(document.warnings)
+        + (["未识别到客户订单号，保存前必须人工填写。"] if not document.customer_po else []),
+    }
+
+
+@router.post("/import-preview-batch")
+async def preview_order_import_batch(
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+) -> dict:
+    """Preview PDF and customer Excel orders through one guarded entry point."""
+
+    if not files:
+        raise HTTPException(status_code=400, detail="请至少上传一个订单文件")
+    if len(files) > 20:
+        raise HTTPException(status_code=400, detail="单次最多上传 20 个订单文件")
+    drafts: list[dict] = []
+    seen_hashes: set[str] = set()
+    template_rules = load_active_pdf_template_rules(db)
+    request_total_bytes = 0
+    for file in files:
+        filename = (file.filename or "uploaded").strip()
+        digest = ""
+        try:
+            upload = await _validated_order_import_upload(file)
+            filename = upload.original_filename
+            request_total_bytes += upload.size
+            if request_total_bytes > 100 * 1024 * 1024:
+                raise ValueError("单次请求文件总大小不能超过 100MB")
+            digest = upload.sha256
+            if digest in seen_hashes:
+                drafts.append(
+                    _finalize_pdf_preview_for_user(
+                        {
+                            "source_name": filename,
+                            "file_hash": digest,
+                            "recognition_status": "duplicate_skipped",
+                            "duplicate_status": "duplicate_skipped",
+                            "items": [],
+                            "warnings": ["本批次已上传相同文件，已跳过。"],
+                        },
+                        user,
+                    )
+                )
+                continue
+            seen_hashes.add(digest)
+            drafts.append(
+                _order_import_preview(
+                    db,
+                    user,
+                    content=upload.content,
+                    filename=filename,
+                    digest=digest,
+                    template_rules=template_rules,
+                )
+            )
+        except (PdfParseError, ExcelImportError) as error:
+            drafts.append(
+                _finalize_pdf_preview_for_user(
+                    {
+                        "source_name": filename,
+                        "file_hash": digest,
+                        "recognition_status": "failed",
+                        "parse_status": "failed",
+                        "duplicate_status": None,
+                        "items": [],
+                        "warnings": [str(error)],
+                    },
+                    user,
+                )
+            )
+        except (UploadValidationError, ValueError) as error:
+            drafts.append(
+                _finalize_pdf_preview_for_user(
+                    {
+                        "source_name": filename,
+                        "file_hash": digest,
+                        "recognition_status": "failed",
+                        "duplicate_status": None,
+                        "items": [],
+                        "warnings": [str(error)],
+                    },
+                    user,
+                )
+            )
+        except Exception:
+            drafts.append(
+                _finalize_pdf_preview_for_user(
+                    {
+                        "source_name": filename,
+                        "file_hash": digest,
+                        "recognition_status": "failed",
+                        "duplicate_status": None,
+                        "items": [],
+                        "warnings": ["订单文件识别失败，请检查文件内容后重试。"],
                     },
                     user,
                 )

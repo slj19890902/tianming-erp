@@ -80,6 +80,8 @@ def signed_source_lines(draft: dict) -> list[dict[str, Any]]:
             {
                 "position": position,
                 "source_page": page if page and page > 0 else None,
+                "source_sheet": (str(item.get("source_sheet") or "").strip()[:120] or None),
+                "source_row": int(item["source_row"]) if item.get("source_row") else None,
                 "source_line_label": line_label or None,
                 "raw_line_hash": _digest(raw_lines) if raw_lines else None,
                 "recognized_line_hash": _digest(_line_values(item)),
@@ -152,7 +154,12 @@ def prepare(
         if email_context is not None
         else None
     )
-    source_kind = "email_attachment" if attachment_id is not None else "pdf_upload"
+    source_format = str(claims.get("source_format") or "pdf").casefold()
+    source_kind = (
+        "email_attachment"
+        if attachment_id is not None
+        else ("excel_upload" if source_format in {"xls", "xlsx"} else "pdf_upload")
+    )
     source_key = str(attachment_id) if attachment_id is not None else source_hash
     digest = payload_hash(payload)
     context = ImportSourceContext(
@@ -222,6 +229,8 @@ def audit_summary(db: Session, source: OrderImportSource | None) -> dict[str, An
             {
                 "source_position": row.source_position,
                 "source_page": row.source_page,
+                "source_sheet": row.source_sheet,
+                "source_row": row.source_row,
                 "source_line_label": row.source_line_label,
                 "order_item_id": row.order_item_id,
                 "manual_revision": bool(summary.get("manual_revision")),
@@ -294,6 +303,8 @@ def attach(
                 order_item_id=order_item.id,
                 source_position=int(signed["position"]),
                 source_page=signed.get("source_page"),
+                source_sheet=signed.get("source_sheet"),
+                source_row=signed.get("source_row"),
                 source_line_label=signed.get("source_line_label"),
                 raw_line_hash=signed.get("raw_line_hash"),
                 recognized_line_hash=recognized_hash,

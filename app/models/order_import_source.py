@@ -24,7 +24,7 @@ class OrderImportSource(Base):
     __tablename__ = "order_import_sources"
     __table_args__ = (
         CheckConstraint(
-            "source_kind IN ('pdf_upload', 'email_attachment')",
+            "source_kind IN ('pdf_upload', 'email_attachment', 'excel_upload')",
             name="ck_order_import_sources_kind",
         ),
         CheckConstraint(
@@ -115,6 +115,8 @@ class OrderImportSourceLine(Base):
     )
     source_position: Mapped[int] = mapped_column(Integer, nullable=False)
     source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_sheet: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    source_row: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_line_label: Mapped[str | None] = mapped_column(String(80), nullable=True)
     raw_line_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     recognized_line_hash: Mapped[str] = mapped_column(String(64), nullable=False)

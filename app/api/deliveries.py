@@ -1797,8 +1797,7 @@ def _pick_location_groups(
         location_ids,
         read_context=read_context,
     )
-    for sequence, group in enumerate(ordered, start=1):
-        group["recommended_sequence"] = sequence
+    for group in ordered:
         location_id = (
             int(group["location_id"])
             if group.get("location_id") is not None
@@ -1875,7 +1874,9 @@ def _pick_location_groups(
                 else "unmapped"
             )
             group["map_point"] = None
-    return ordered
+    from app.services.warehouse_pick_route import recommend_pick_route
+
+    return recommend_pick_route(ordered)
 
 
 def _pick_item_response(
@@ -1962,6 +1963,47 @@ def _pick_task_response(
         if include_location_plan
         else []
     )
+    if include_location_plan:
+        if task.route_snapshot_json:
+            try:
+                snapshot = json.loads(task.route_snapshot_json)
+            except (TypeError, ValueError):
+                snapshot = {}
+            sequence_by_key = {
+                str(row.get("key")): int(row.get("sequence"))
+                for row in snapshot.get("groups") or []
+                if row.get("key") and row.get("sequence")
+            }
+            location_groups.sort(key=lambda group: (
+                sequence_by_key.get(str(group.get("key")), 1_000_000),
+                str(group.get("key") or ""),
+            ))
+            for position, group in enumerate(location_groups, start=1):
+                group["recommended_sequence"] = position
+                group["route_snapshot_status"] = (
+                    "frozen" if str(group.get("key")) in sequence_by_key else "pending_review"
+                )
+        else:
+            frozen = {
+                "version": "warehouse-pick-route-v1",
+                "groups": [
+                    {
+                        "key": group.get("key"),
+                        "sequence": group.get("recommended_sequence"),
+                        "location_id": group.get("location_id"),
+                        "map_feature_id": group.get("map_feature_id"),
+                        "published_map_revision": group.get("published_map_revision"),
+                        "route_basis": group.get("route_basis"),
+                    }
+                    for group in location_groups
+                ],
+            }
+            task.route_snapshot_json = json.dumps(frozen, ensure_ascii=False, sort_keys=True)
+            task.route_snapshot_version = hashlib.sha256(
+                task.route_snapshot_json.encode("utf-8")
+            ).hexdigest()[:16]
+            for group in location_groups:
+                group["route_snapshot_status"] = "frozen"
     from app.services.fixed_shelf import enrich_pick_groups, display_specification
     enrich_pick_groups(db, location_groups)
     item_product_ids = {}
@@ -1979,6 +2021,7 @@ def _pick_task_response(
     print_version_payload = {
         "task_id": task.id,
         "snapshot_version": task.snapshot_version,
+        "route_snapshot_version": task.route_snapshot_version,
         "items": [
             {
                 "id": item.get("id"),
@@ -2056,6 +2099,7 @@ def _pick_task_response(
         "has_exception": bool(exception_items) or task.status == "exception",
         "exceptions": exception_items,
         "snapshot_version": task.snapshot_version,
+        "route_snapshot_version": task.route_snapshot_version,
         "print_version": f"{task.snapshot_version}-{print_version_digest}",
         "assigned_to": task.assigned_to,
         "assigned_to_name": (
@@ -5959,6 +6003,10 @@ def _build_pick_task(
                 ),
             )
         )
+    db.flush()
+    # Freeze the first published-map route in the task transaction so desktop,
+    # mobile and print keep the same stop order even if the map later changes.
+    _pick_task_response(db, task)
     db.flush()
     _write_audit(
         db,

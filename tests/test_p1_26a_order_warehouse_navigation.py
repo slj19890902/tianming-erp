@@ -51,7 +51,7 @@ def test_order_second_row_keeps_creation_left_and_refresh_right() -> None:
         '<div class="order-page-actionbar">',
         '<div class="order-filter-card">',
     )
-    assert actionbar.index(">新建订单<") < actionbar.index(">识别PDF订单<") < actionbar.index(">刷新<")
+    assert actionbar.index(">新建订单<") < actionbar.index(">导入订单<") < actionbar.index(">刷新<")
     assert actionbar.count('v-if="canCreateOrders"') == 2
     assert "<h2" not in actionbar
 
@@ -62,7 +62,7 @@ def test_requisition_actions_are_separated_and_fixed_in_requested_order() -> Non
         "<template v-else-if=\"activePage === 'incoming'\">",
     )
     assert ">新建订单<" not in page
-    assert ">识别PDF订单<" not in page
+    assert ">导入订单<" not in page
     assert '>待报料 {{ requisitionPendingOverallTotal }}<' in page
     assert ">已报料/已入库<" in page
     assert '@click="openSupplierRequisitionDraft()"' in page
@@ -97,7 +97,7 @@ def test_incoming_and_warehouse_do_not_gain_order_entry_actions() -> None:
     )
     for page in (incoming, warehouse):
         assert ">新建订单<" not in page
-        assert ">识别PDF订单<" not in page
+        assert ">导入订单<" not in page
 
 
 def test_inline_javascript_remains_valid(tmp_path: Path) -> None:

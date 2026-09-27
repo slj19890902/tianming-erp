@@ -19,6 +19,12 @@ class TianhuaPreDeliveryImportBatch(Base):
     total_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp(), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(30), default="tianhua_image", server_default="tianhua_image", nullable=False)
+    source_format: Mapped[str | None] = mapped_column(String(20))
+    source_hash: Mapped[str | None] = mapped_column(String(64))
+    business_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    parser_version: Mapped[str | None] = mapped_column(String(80))
+    source_name: Mapped[str | None] = mapped_column(String(255))
     items: Mapped[list["TianhuaPreDeliveryImportItem"]] = relationship(cascade="all, delete-orphan", order_by="TianhuaPreDeliveryImportItem.row_no")
 
 
@@ -48,6 +54,25 @@ class TianhuaPreDeliveryImportItem(Base):
     status: Mapped[str] = mapped_column(String(30), default="ocr_failed", nullable=False)
     warning: Mapped[str | None] = mapped_column(Text)
     selected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp(), nullable=False)
+    source_sheet: Mapped[str | None] = mapped_column(String(120))
+    source_row: Mapped[int | None] = mapped_column(Integer)
+    source_no: Mapped[str | None] = mapped_column(String(120))
+    source_payload_json: Mapped[str | None] = mapped_column(Text)
+
+
+class PreDeliverySourceAllocation(Base):
+    __tablename__ = "pre_delivery_source_allocations"
+    __table_args__ = (
+        CheckConstraint("allocated_qty > 0", name="ck_pre_delivery_source_allocations_qty"),
+        UniqueConstraint("import_item_id", "order_item_id", name="uq_pre_delivery_source_allocation"),
+        Index("ix_pre_delivery_source_allocations_item", "import_item_id"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    import_item_id: Mapped[int] = mapped_column(ForeignKey("tianhua_pre_delivery_import_items.id", ondelete="CASCADE"), nullable=False)
+    order_item_id: Mapped[int] = mapped_column(ForeignKey("sales_order_items.id", ondelete="RESTRICT"), nullable=False)
+    allocated_qty: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp(), nullable=False)
 
 

@@ -37,6 +37,6 @@ def test_supplier_aliases_are_only_used_for_display() -> None:
 
 
 def test_other_order_pdf_and_excel_entries_are_not_removed() -> None:
-    assert "识别PDF订单" in INDEX
+    assert "导入订单" in INDEX
     assert "导入常用箱" in INDEX
     assert "导出 Excel" in INDEX

@@ -54,10 +54,13 @@ PDF_POLICY = UploadPolicy(
     label="PDF",
 )
 EXCEL_POLICY = UploadPolicy(
-    extensions=frozenset({".xlsx"}),
+    extensions=frozenset({".xlsx", ".xls"}),
     max_bytes=20 * 1024 * 1024,
     allowed_mime_types=frozenset(
-        {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+        {
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
+        }
     ),
     label="Excel",
 )
@@ -158,6 +161,8 @@ def _detected_content_type(content: bytes, extension: str) -> str | None:
                 return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         except (OSError, zipfile.BadZipFile):
             return None
+    if extension == ".xls" and content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+        return "application/vnd.ms-excel"
     return None
 
 
@@ -192,6 +197,7 @@ def _validate_content(
         ".jpeg": "image/jpeg",
         ".webp": "image/webp",
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xls": "application/vnd.ms-excel",
     }[extension]
     if supplied_type != expected_by_extension or detected_type != expected_by_extension:
         raise UploadValidationError(f"{policy.label}扩展名、MIME 与文件签名不一致")

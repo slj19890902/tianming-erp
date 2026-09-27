@@ -193,7 +193,7 @@ def test_same_source_replays_original_and_rejects_changed_business_payload(b1_ap
         assert db.scalar(select(func.count()).select_from(Order)) == 1
 
 
-def test_different_trusted_sources_without_po_remain_independent(b1_app) -> None:
+def test_different_trusted_sources_without_po_are_both_rejected(b1_app) -> None:
     app, factory = b1_app
     _ready_product(factory)
     with TestClient(app) as client:
@@ -210,10 +210,12 @@ def test_different_trusted_sources_without_po_remain_independent(b1_app) -> None
                 app, "2" * 64, "t02-no-po-second", customer_po=None
             ),
         )
-    assert first.status_code == second.status_code == 201
-    assert first.json()["id"] != second.json()["id"]
+    assert first.status_code == second.status_code == 400
+    assert "未识别到客户订单号" in first.json()["detail"]
+    assert "未识别到客户订单号" in second.json()["detail"]
     with factory() as db:
-        assert db.scalar(select(func.count()).select_from(OrderImportSource)) == 2
+        assert db.scalar(select(func.count()).select_from(OrderImportSource)) == 0
+        assert db.scalar(select(func.count()).select_from(Order)) == 0
 
 
 def test_cancelled_source_replays_original_and_new_source_does_not_reopen_it(

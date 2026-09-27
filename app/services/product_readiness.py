@@ -46,6 +46,15 @@ def product_readiness(product: object, *, bom_profiles: dict | None = None) -> d
     the master data can safely create a requisition.
     """
     missing: list[tuple[str, str]] = []
+    from app.services.legacy_product_classification import classification
+    category = classification(product)
+    if category["needs_supply_completion"] or category["kind"] == "expense":
+        label = (category["label"] + "：请完善真实规格、采购单位和供应商产品"
+                 if category["needs_supply_completion"] else "模具费属于费用项目，请通过费用入口登记")
+        return {"ready": False, "order_save_missing_labels": [label],
+                "status": "外购资料待完善" if category["needs_supply_completion"] else "费用项目",
+                "missing_fields": ["external_supply" if category["needs_supply_completion"] else "expense_item"],
+                "missing_labels": [label]}
     if not str(_value(product, "product_code") or "").strip():
         missing.append(("product_code", "存货编码未填写"))
     if not str(_value(product, "product_name") or "").strip():

@@ -99,12 +99,9 @@ def test_confirmed_legacy_box_names_resolve_to_existing_types(
 @pytest.mark.parametrize(
     "ambiguous_name",
     [
-        "NH 天华内盒1",
-        "THNH1 腾华内盒1",
-        "CTSNH 抽屉式内盒",
-        "HP01 恒鹏模切1",
-        "WGX 无盖箱",
-        "WDX 无底箱",
+        "客户新内盒",
+        "恒鹏新模切",
+        "新无盖箱",
     ],
 )
 def test_ambiguous_legacy_names_remain_unclassified(ambiguous_name: str) -> None:

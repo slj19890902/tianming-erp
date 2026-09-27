@@ -47,8 +47,10 @@ def test_preview_is_aggregate_read_only_and_separates_uncertain_names(tmp_path: 
     assert by_name["WC 五层钉箱"]["status"] == "confirmed_legacy"
     assert by_name["WC 五层钉箱"]["target_code"] == "a1_0201"
     assert by_name["WC 五层钉箱"]["double_splice_count"] == 1
-    assert by_name["NH 天华内盒1"]["status"] == "pending_confirmation"
+    assert by_name["NH 天华内盒1"]["status"] == "confirmed_legacy"
+    assert by_name["NH 天华内盒1"]["target_code"] == "irregular"
     assert by_name["ZHJ 纸护角"]["status"] == "not_box"
+    assert by_name["ZHJ 纸护角"]["target_code"] == "paper_corner_guard"
     assert by_name["BOM组合"]["status"] == "system_special"
 
     verify = sqlite3.connect(database)

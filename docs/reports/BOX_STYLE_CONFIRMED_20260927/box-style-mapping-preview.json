@@ -1,0 +1,1586 @@
+{
+  "database": "D:\\.codex\\workspace_artifacts\\box_style_confirmed_20260927\\isolated.sqlite3",
+  "summary": {
+    "active_products": 3736,
+    "distinct_values": 69,
+    "existing_recognized_products": 1764,
+    "confirmed_legacy_products": 1920,
+    "pending_products": 0,
+    "held_products": 52,
+    "status_product_counts": {
+      "existing_recognized": 1764,
+      "confirmed_legacy": 1920,
+      "not_box": 46,
+      "missing": 4,
+      "system_special": 2
+    }
+  },
+  "items": [
+    {
+      "legacy_name": "WCX1 五层箱1",
+      "legacy_name_kind": "value",
+      "product_count": 578,
+      "dimensions_2d": 528,
+      "dimensions_3d": 528,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "WC 五层钉箱",
+      "legacy_name_kind": "value",
+      "product_count": 533,
+      "dimensions_2d": 465,
+      "dimensions_3d": 465,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "名称明确为普通开槽钉箱；层数与钉箱工艺继续保留在产品字段"
+    },
+    {
+      "legacy_name": "衬板",
+      "legacy_name_kind": "value",
+      "product_count": 354,
+      "dimensions_2d": 312,
+      "dimensions_3d": 9,
+      "double_splice_count": 0,
+      "die_evidence_count": 1,
+      "bom_count": 0,
+      "process_values": [
+        "无需结合",
+        "模切"
+      ],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "liner",
+      "target_name": "衬板",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "A1/0201 普通开槽箱",
+      "legacy_name_kind": "value",
+      "product_count": 307,
+      "dimensions_2d": 305,
+      "dimensions_3d": 305,
+      "double_splice_count": 48,
+      "die_evidence_count": 4,
+      "bom_count": 9,
+      "process_values": [
+        "开槽",
+        "开槽、打钉",
+        "开槽、粘贴",
+        "打钉",
+        "无需结合",
+        "模切",
+        "粘贴"
+      ],
+      "unit_values": [
+        "只",
+        "套"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "模切内盒",
+      "legacy_name_kind": "value",
+      "product_count": 285,
+      "dimensions_2d": 60,
+      "dimensions_3d": 55,
+      "double_splice_count": 0,
+      "die_evidence_count": 266,
+      "bom_count": 9,
+      "process_values": [
+        "开槽",
+        "打钉",
+        "无需结合",
+        "无需结合、模切",
+        "模切",
+        "模切、粘贴",
+        "模切、粘贴、二次粘合",
+        "粘贴",
+        "粘贴、模切"
+      ],
+      "unit_values": [
+        "只",
+        "套"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "NH 天华内盒1",
+      "legacy_name_kind": "value",
+      "product_count": 265,
+      "dimensions_2d": 243,
+      "dimensions_3d": 242,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "irregular",
+      "target_name": "异形箱",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "SCX 单瓦箱",
+      "legacy_name_kind": "value",
+      "product_count": 206,
+      "dimensions_2d": 175,
+      "dimensions_3d": 173,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "名称明确为普通单瓦开槽箱；层数继续保留在产品字段"
+    },
+    {
+      "legacy_name": "WCZX 五层粘箱",
+      "legacy_name_kind": "value",
+      "product_count": 182,
+      "dimensions_2d": 164,
+      "dimensions_3d": 164,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "名称明确为普通开槽粘箱；层数与粘箱工艺继续保留在产品字段"
+    },
+    {
+      "legacy_name": "异形箱",
+      "legacy_name_kind": "value",
+      "product_count": 116,
+      "dimensions_2d": 115,
+      "dimensions_3d": 115,
+      "double_splice_count": 0,
+      "die_evidence_count": 62,
+      "bom_count": 0,
+      "process_values": [
+        "打钉",
+        "无需结合",
+        "模切",
+        "粘贴"
+      ],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "irregular",
+      "target_name": "异形箱",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "TDG 天地盖",
+      "legacy_name_kind": "value",
+      "product_count": 90,
+      "dimensions_2d": 66,
+      "dimensions_3d": 66,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a3_set",
+      "target_name": "A3 天地盖",
+      "basis": "名称明确为天地盖整套"
+    },
+    {
+      "legacy_name": "隔板",
+      "legacy_name_kind": "value",
+      "product_count": 83,
+      "dimensions_2d": 82,
+      "dimensions_3d": 1,
+      "double_splice_count": 0,
+      "die_evidence_count": 60,
+      "bom_count": 1,
+      "process_values": [
+        "无需结合",
+        "模切",
+        "粘贴"
+      ],
+      "unit_values": [
+        "只",
+        "套"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "divider",
+      "target_name": "隔板",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "THNH1 腾华内盒1",
+      "legacy_name_kind": "value",
+      "product_count": 60,
+      "dimensions_2d": 58,
+      "dimensions_3d": 58,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "irregular",
+      "target_name": "异形箱",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "THWX 腾华外箱",
+      "legacy_name_kind": "value",
+      "product_count": 57,
+      "dimensions_2d": 57,
+      "dimensions_3d": 57,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "名称明确为普通外箱，抽样均有三维且无模切证据"
+    },
+    {
+      "legacy_name": "001 思展钉箱",
+      "legacy_name_kind": "value",
+      "product_count": 48,
+      "dimensions_2d": 48,
+      "dimensions_3d": 48,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "名称明确为钉箱，抽样均有三维且无模切证据"
+    },
+    {
+      "legacy_name": "008 外箱无钉",
+      "legacy_name_kind": "value",
+      "product_count": 47,
+      "dimensions_2d": 47,
+      "dimensions_3d": 47,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "名称明确为普通外箱；无钉只描述结合工艺，不改变开槽结构"
+    },
+    {
+      "legacy_name": "QCX 七层纸箱",
+      "legacy_name_kind": "value",
+      "product_count": 46,
+      "dimensions_2d": 37,
+      "dimensions_3d": 37,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "名称明确为普通七层开槽箱；层数继续保留在产品字段"
+    },
+    {
+      "legacy_name": "CTSNH 抽屉式内盒",
+      "legacy_name_kind": "value",
+      "product_count": 44,
+      "dimensions_2d": 35,
+      "dimensions_3d": 35,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "irregular",
+      "target_name": "异形箱",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "007 华元内盒",
+      "legacy_name_kind": "value",
+      "product_count": 37,
+      "dimensions_2d": 37,
+      "dimensions_3d": 37,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "006 华元外箱",
+      "legacy_name_kind": "value",
+      "product_count": 36,
+      "dimensions_2d": 36,
+      "dimensions_3d": 36,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "名称明确为普通外箱，抽样均有三维且无模切证据"
+    },
+    {
+      "legacy_name": "YXX 异型箱",
+      "legacy_name_kind": "value",
+      "product_count": 33,
+      "dimensions_2d": 13,
+      "dimensions_3d": 12,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "irregular",
+      "target_name": "异形箱",
+      "basis": "名称明确为异形箱；本类型没有自动报料公式"
+    },
+    {
+      "legacy_name": "009 内盒无钉",
+      "legacy_name_kind": "value",
+      "product_count": 31,
+      "dimensions_2d": 31,
+      "dimensions_3d": 31,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "WZX 外纸箱",
+      "legacy_name_kind": "value",
+      "product_count": 31,
+      "dimensions_2d": 31,
+      "dimensions_3d": 31,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "名称明确为普通外纸箱，抽样均有三维且无模切证据"
+    },
+    {
+      "legacy_name": "ZHJ 纸护角",
+      "legacy_name_kind": "value",
+      "product_count": 22,
+      "dimensions_2d": 17,
+      "dimensions_3d": 17,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "not_box",
+      "target_code": "paper_corner_guard",
+      "target_name": "其他外购产品｜纸护角",
+      "basis": "老板2026-09-27确认；外购采购资料仍需按真实来源完善；费用项目不进入产品箱型"
+    },
+    {
+      "legacy_name": "FJH 飞机盒",
+      "legacy_name_kind": "value",
+      "product_count": 19,
+      "dimensions_2d": 13,
+      "dimensions_3d": 13,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "飞机盒属于模切成型盒；本类型没有自动报料公式"
+    },
+    {
+      "legacy_name": "WB 围板",
+      "legacy_name_kind": "value",
+      "product_count": 15,
+      "dimensions_2d": 14,
+      "dimensions_3d": 14,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "surround_panel",
+      "target_name": "围板",
+      "basis": "名称明确为围板"
+    },
+    {
+      "legacy_name": "刀卡",
+      "legacy_name_kind": "value",
+      "product_count": 15,
+      "dimensions_2d": 15,
+      "dimensions_3d": 0,
+      "double_splice_count": 0,
+      "die_evidence_count": 5,
+      "bom_count": 0,
+      "process_values": [
+        "无需结合",
+        "模切",
+        "粘贴"
+      ],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "die_cut_partition",
+      "target_name": "刀卡",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "GD2 格挡2",
+      "legacy_name_kind": "value",
+      "product_count": 14,
+      "dimensions_2d": 6,
+      "dimensions_3d": 1,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "divider",
+      "target_name": "隔板",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "BJX 半截箱",
+      "legacy_name_kind": "value",
+      "product_count": 11,
+      "dimensions_2d": 11,
+      "dimensions_3d": 11,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "half_slotted_carton",
+      "target_name": "半开槽箱",
+      "basis": "名称明确为半开槽箱"
+    },
+    {
+      "legacy_name": "JB 简包",
+      "legacy_name_kind": "value",
+      "product_count": 11,
+      "dimensions_2d": 10,
+      "dimensions_3d": 10,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_partition",
+      "target_name": "刀卡",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "其他",
+      "legacy_name_kind": "value",
+      "product_count": 11,
+      "dimensions_2d": 0,
+      "dimensions_3d": 0,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只",
+        "根"
+      ],
+      "supply_values": [
+        "external_purchase"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "other",
+      "target_name": "其他",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "TDGD 天地盖底",
+      "legacy_name_kind": "value",
+      "product_count": 10,
+      "dimensions_2d": 7,
+      "dimensions_3d": 7,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "bottom_base",
+      "target_name": "独立底",
+      "basis": "名称明确为天地盖的底组件"
+    },
+    {
+      "legacy_name": "XH 鞋盒",
+      "legacy_name_kind": "value",
+      "product_count": 10,
+      "dimensions_2d": 8,
+      "dimensions_3d": 8,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "QCB 七层板",
+      "legacy_name_kind": "value",
+      "product_count": 9,
+      "dimensions_2d": 5,
+      "dimensions_3d": 3,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "liner",
+      "target_name": "衬板",
+      "basis": "名称明确为二维纸板组件；层数继续保留"
+    },
+    {
+      "legacy_name": "A3 天地盖",
+      "legacy_name_kind": "value",
+      "product_count": 8,
+      "dimensions_2d": 8,
+      "dimensions_3d": 8,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [
+        "打钉"
+      ],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "a3_set",
+      "target_name": "A3 天地盖",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "EPE epe",
+      "legacy_name_kind": "value",
+      "product_count": 8,
+      "dimensions_2d": 6,
+      "dimensions_3d": 3,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "not_box",
+      "target_code": "epe_cushion",
+      "target_name": "其他外购产品｜EPE缓冲包装",
+      "basis": "老板2026-09-27确认；外购采购资料仍需按真实来源完善；费用项目不进入产品箱型"
+    },
+    {
+      "legacy_name": "FWB 蜂窝板",
+      "legacy_name_kind": "value",
+      "product_count": 7,
+      "dimensions_2d": 7,
+      "dimensions_3d": 5,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "not_box",
+      "target_code": "honeycomb_board",
+      "target_name": "其他外购产品｜蜂窝板",
+      "basis": "老板2026-09-27确认；外购采购资料仍需按真实来源完善；费用项目不进入产品箱型"
+    },
+    {
+      "legacy_name": "NZX 内纸箱",
+      "legacy_name_kind": "value",
+      "product_count": 7,
+      "dimensions_2d": 7,
+      "dimensions_3d": 7,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "名称明确为普通内纸箱，抽样均有三维且无模切证据"
+    },
+    {
+      "legacy_name": "HRHJ 华融护角",
+      "legacy_name_kind": "value",
+      "product_count": 6,
+      "dimensions_2d": 5,
+      "dimensions_3d": 5,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "not_box",
+      "target_code": "paper_corner_guard",
+      "target_name": "其他外购产品｜纸护角",
+      "basis": "老板2026-09-27确认；外购采购资料仍需按真实来源完善；费用项目不进入产品箱型"
+    },
+    {
+      "legacy_name": "MYG 满摇盖",
+      "legacy_name_kind": "value",
+      "product_count": 5,
+      "dimensions_2d": 5,
+      "dimensions_3d": 5,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "full_flap_carton",
+      "target_name": "满摇盖纸箱",
+      "basis": "名称明确为满摇盖"
+    },
+    {
+      "legacy_name": "SC AB白卡",
+      "legacy_name_kind": "value",
+      "product_count": 5,
+      "dimensions_2d": 5,
+      "dimensions_3d": 0,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "WDX 无底箱",
+      "legacy_name_kind": "value",
+      "product_count": 5,
+      "dimensions_2d": 5,
+      "dimensions_3d": 5,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "half_slotted_carton",
+      "target_name": "半开槽箱",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "WGX 无盖箱",
+      "legacy_name_kind": "value",
+      "product_count": 5,
+      "dimensions_2d": 5,
+      "dimensions_3d": 5,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "half_slotted_carton",
+      "target_name": "半开槽箱",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "模切盖 模切盖",
+      "legacy_name_kind": "value",
+      "product_count": 5,
+      "dimensions_2d": 5,
+      "dimensions_3d": 5,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "top_cover",
+      "target_name": "独立天盖",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "013 半截天地盖",
+      "legacy_name_kind": "value",
+      "product_count": 4,
+      "dimensions_2d": 4,
+      "dimensions_3d": 4,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a3_set",
+      "target_name": "A3 天地盖",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "015 白卡内盒",
+      "legacy_name_kind": "value",
+      "product_count": 4,
+      "dimensions_2d": 4,
+      "dimensions_3d": 4,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "A1",
+      "legacy_name_kind": "value",
+      "product_count": 4,
+      "dimensions_2d": 4,
+      "dimensions_3d": 4,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "HP01 恒鹏模切1",
+      "legacy_name_kind": "value",
+      "product_count": 4,
+      "dimensions_2d": 4,
+      "dimensions_3d": 0,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_partition",
+      "target_name": "刀卡",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "MQXX 模切小箱",
+      "legacy_name_kind": "value",
+      "product_count": 4,
+      "dimensions_2d": 2,
+      "dimensions_3d": 2,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "名称明确为模切小箱；本类型没有自动报料公式"
+    },
+    {
+      "legacy_name": "SAT 驶安特模",
+      "legacy_name_kind": "value",
+      "product_count": 4,
+      "dimensions_2d": 4,
+      "dimensions_3d": 4,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": null,
+      "legacy_name_kind": "null",
+      "product_count": 3,
+      "dimensions_2d": 2,
+      "dimensions_3d": 2,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 1,
+      "process_values": [
+        "无需结合",
+        "（外径）印刷内容同5H纸箱"
+      ],
+      "unit_values": [
+        "只",
+        "套"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "missing",
+      "target_code": null,
+      "target_name": null,
+      "basis": "箱型为空，必须逐产品核对"
+    },
+    {
+      "legacy_name": "010 单瓦满摇盖",
+      "legacy_name_kind": "value",
+      "product_count": 3,
+      "dimensions_2d": 3,
+      "dimensions_3d": 3,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "full_flap_carton",
+      "target_name": "满摇盖纸箱",
+      "basis": "名称明确为满摇盖；单瓦继续保留在层数／楞型字段"
+    },
+    {
+      "legacy_name": "HP02 恒鹏模切2",
+      "legacy_name_kind": "value",
+      "product_count": 3,
+      "dimensions_2d": 3,
+      "dimensions_3d": 0,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_partition",
+      "target_name": "刀卡",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "TBM 天宝模",
+      "legacy_name_kind": "value",
+      "product_count": 3,
+      "dimensions_2d": 3,
+      "dimensions_3d": 3,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "TDGG 天地盖盖",
+      "legacy_name_kind": "value",
+      "product_count": 3,
+      "dimensions_2d": 1,
+      "dimensions_3d": 1,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "top_cover",
+      "target_name": "独立天盖",
+      "basis": "名称明确为天地盖的盖组件"
+    },
+    {
+      "legacy_name": "004 豪迪纸箱",
+      "legacy_name_kind": "value",
+      "product_count": 2,
+      "dimensions_2d": 2,
+      "dimensions_3d": 2,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "016 井字架",
+      "legacy_name_kind": "value",
+      "product_count": 2,
+      "dimensions_2d": 1,
+      "dimensions_3d": 0,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "divider",
+      "target_name": "隔板",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "BOM组合",
+      "legacy_name_kind": "value",
+      "product_count": 2,
+      "dimensions_2d": 1,
+      "dimensions_3d": 0,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 2,
+      "process_values": [
+        "无需结合"
+      ],
+      "unit_values": [
+        "套"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "system_special",
+      "target_code": null,
+      "target_name": null,
+      "basis": "现有 BOM 组合父件专用语义，不归入普通纸箱结构注册表"
+    },
+    {
+      "legacy_name": "HP03 恒鹏护角",
+      "legacy_name_kind": "value",
+      "product_count": 2,
+      "dimensions_2d": 2,
+      "dimensions_3d": 0,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "not_box",
+      "target_code": "paper_corner_guard",
+      "target_name": "其他外购产品｜纸护角",
+      "basis": "老板2026-09-27确认；外购采购资料仍需按真实来源完善；费用项目不进入产品箱型"
+    },
+    {
+      "legacy_name": "THYW 天华压外",
+      "legacy_name_kind": "value",
+      "product_count": 2,
+      "dimensions_2d": 2,
+      "dimensions_3d": 2,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": null,
+      "legacy_name_kind": "empty",
+      "product_count": 1,
+      "dimensions_2d": 1,
+      "dimensions_3d": 1,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "missing",
+      "target_code": null,
+      "target_name": null,
+      "basis": "箱型为空，必须逐产品核对"
+    },
+    {
+      "legacy_name": "00001 模具费",
+      "legacy_name_kind": "value",
+      "product_count": 1,
+      "dimensions_2d": 0,
+      "dimensions_3d": 0,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "not_box",
+      "target_code": null,
+      "target_name": "费用项目｜模具费",
+      "basis": "老板2026-09-27确认；外购采购资料仍需按真实来源完善；费用项目不进入产品箱型"
+    },
+    {
+      "legacy_name": "003 思展模切",
+      "legacy_name_kind": "value",
+      "product_count": 1,
+      "dimensions_2d": 1,
+      "dimensions_3d": 1,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "005 粘合成型",
+      "legacy_name_kind": "value",
+      "product_count": 1,
+      "dimensions_2d": 1,
+      "dimensions_3d": 1,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "a1_0201",
+      "target_name": "A1/0201 普通开槽箱",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "011 佩特罗模",
+      "legacy_name_kind": "value",
+      "product_count": 1,
+      "dimensions_2d": 1,
+      "dimensions_3d": 1,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "014 恒鹏模切3",
+      "legacy_name_kind": "value",
+      "product_count": 1,
+      "dimensions_2d": 1,
+      "dimensions_3d": 1,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "LXBG 模切日本黄",
+      "legacy_name_kind": "value",
+      "product_count": 1,
+      "dimensions_2d": 1,
+      "dimensions_3d": 1,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "confirmed_legacy",
+      "target_code": "die_cut_inner_box",
+      "target_name": "模切内盒",
+      "basis": "老板2026-09-27确认：指定项按最新指示，其余采纳推荐；保留原工艺及物理尺寸"
+    },
+    {
+      "legacy_name": "围板",
+      "legacy_name_kind": "value",
+      "product_count": 1,
+      "dimensions_2d": 1,
+      "dimensions_3d": 1,
+      "double_splice_count": 1,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [
+        "打钉"
+      ],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "surround_panel",
+      "target_name": "围板",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "独立天盖",
+      "legacy_name_kind": "value",
+      "product_count": 1,
+      "dimensions_2d": 1,
+      "dimensions_3d": 1,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 0,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "top_cover",
+      "target_name": "独立天盖",
+      "basis": "现有规范名称或既有显式别名"
+    },
+    {
+      "legacy_name": "独立底",
+      "legacy_name_kind": "value",
+      "product_count": 1,
+      "dimensions_2d": 1,
+      "dimensions_3d": 1,
+      "double_splice_count": 0,
+      "die_evidence_count": 0,
+      "bom_count": 1,
+      "process_values": [],
+      "unit_values": [
+        "只"
+      ],
+      "supply_values": [
+        "corrugated_production"
+      ],
+      "preserve": "产品ID、客户、编号、尺寸、报料尺寸、单双拼、钉/粘、层数、BOM、模具、图纸及历史快照",
+      "status": "existing_recognized",
+      "target_code": "bottom_base",
+      "target_name": "独立底",
+      "basis": "现有规范名称或既有显式别名"
+    }
+  ]
+}

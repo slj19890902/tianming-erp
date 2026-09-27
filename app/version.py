@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.511"
-APP_VERSION_NAME = "二维码标签手机化与旧码兼容"
+APP_VERSION = "v0.22.512"
+APP_VERSION_NAME = "Excel订单预送货与地图找货路线"
 APP_BUILD_DATE = "2026-09-27"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4912,3 +4912,17 @@ APP_VERIFICATION_STEPS = [
     "进入系统备份 → 系统版本确认v0.22.511；数据库revision保持不变，历史打印任务与正式库存数量不变。",
 ]
 APP_CHANGELOG = [*(f"v0.22.511：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "订单入口统一为‘导入订单’，原 PDF 识别保持不变，并增加研光 xls/xlsx 结构化识别；存货编码、空客户单号、工作表和真实行号按原文件保存并防止重复建单。",
+    "送货页保留天华图片识别，增加研光与光洋 Excel 预送货；只匹配已有客户产品和未送订单，支持一行人工分配多个订单，仅在确认后生成待发货草稿，不自动建订单、库存或执行发货。",
+    "预送货核对显示成品可拿、待组套/加工、有效在途和需新购数量；通用片料不自动采用，歧义和缺口保留人工核对。",
+    "仓库找货顺序按正式发布平面图位置计算并冻结到拿货任务，网页、手机与精简 A4 共用同一顺序；未完成地图确认的位置明确标为待核对。",
+]
+APP_VERIFICATION_STEPS = [
+    "订单页点击导入订单，分别选择原 PDF 和研光 Excel，核对客户、42 行明细、存货编码和空客户单号，再人工确认保存一份测试订单。",
+    "送货页点击导入预送货，分别选择天华图片和研光/光洋 Excel；核对候选订单、缺货诊断及多订单分配，确认保存后只出现待发货草稿，不应自动发货。",
+    "对含 R012-R019、R032、R040 的待发货单生成拿货任务，核对网页、手机和仓库找货单顺序一致；地图待核位置应显示待核对。",
+    "进入系统备份 → 系统版本确认 v0.22.512、数据库 revision 为 ec0927xl；再抽查旧 PDF、天华图片和旧拿货任务保持可用。",
+]
+APP_CHANGELOG = [*(f"v0.22.512：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

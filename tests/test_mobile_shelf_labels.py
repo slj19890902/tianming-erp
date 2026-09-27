@@ -119,7 +119,7 @@ def test_whole_rack_grouping_uses_identity_not_name(monkeypatch):
 def test_whole_rack_qr_opens_rack_not_single_cell(monkeypatch):
     import app.api.warehouse as api
     from fastapi import Response
-    row=SimpleNamespace(map_rack_id='rack-ABC',warehouse_floor=3)
+    row=SimpleNamespace(id=1,map_rack_id='rack-ABC',warehouse_floor=3)
     monkeypatch.setattr(api,'_mobile_shelf_location',lambda *args:(row,{'rack_key':'stable','rack_label':'A架'}))
     result=api.mobile_shelf_label(1,Response(),lot_id=None,db=None,user=None)
     parsed=urlsplit(result['rack_lookup_url'])

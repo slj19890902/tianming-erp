@@ -121,7 +121,9 @@ def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_p
     assert body["source_type"] == "excel_upload"
     assert body["total_rows"] == 1
     assert body["items"][0]["stock_code"] == "80010631"
-    assert body["items"][0]["fulfillment_status"] == "ready"
+    assert body["items"][0]["fulfillment_status"] == "pending_production"
+    assert body["items"][0]["finished_available_qty"] == 0
+    assert body["items"][0]["shortage_qty"] == 600
     with factory() as db:
         assert db.query(TianhuaPreDeliveryImportBatch).count() == 1
         assert db.query(Delivery).count() == 0

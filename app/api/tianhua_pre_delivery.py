@@ -102,9 +102,9 @@ def _batch_response(db: Session, batch: TianhuaPreDeliveryImportBatch) -> dict:
             if int(source.get("quantity_to_pick_stock") or 0) > 0
         ]
         finished_available = sum(
-            location["quantity"]
-            for location in locations
-            if location["source_type"] == "finished"
+            int(source.get("quantity_to_pick_requirement") or 0)
+            for source in sources
+            if source.get("source_type") == "finished"
         )
         semi_available = sum(
             int(source.get("quantity_to_pick_requirement") or 0)

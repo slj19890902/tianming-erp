@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.513"
-APP_VERSION_NAME = "首页加载性能与异常恢复"
+APP_VERSION = "v0.22.514"
+APP_VERSION_NAME = "预送货真实在途数量诊断"
 APP_BUILD_DATE = "2026-09-27"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4939,3 +4939,15 @@ APP_VERIFICATION_STEPS = [
     "系统版本应为v0.22.513；手机扫码与订单导入仍按原入口操作。",
 ]
 APP_CHANGELOG = [*(f"v0.22.513：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "Excel预送货按有效采购和实际收料计算在途数量，区分已收待加工、成品可拿和仍需采购；少收结清、作废采购及备库用途不再虚增订单在途。",
+    "数量按订单冻结的纸板或外购换算比例计算；缺少有效采购资料和复杂组件齐套待核对的数量单独提示，不用报料状态代替数量。",
+    "重新打开批次或调整订单分配、送货数量时刷新备货诊断，同一订单在同一批次不重复计算覆盖；保留天华图片识别、首页性能优化和原保存发货保护。",
+]
+APP_VERIFICATION_STEPS = [
+    "强制刷新并确认v0.22.514，打开研光或光洋Excel预送货批次，核对部分采购、部分收料行的有效在途与需新购数量。",
+    "修改建议送货数量或多订单分配，确认备货结论刷新；少收结清不再显示未收在途，资料不完整的行显示待核数量。",
+    "预览和分配不会自动保存订单或执行发货；原天华图片入口保持可用。",
+]
+APP_CHANGELOG = [*(f"v0.22.514：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

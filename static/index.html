@@ -9415,8 +9415,8 @@
                     <tr v-for="row in tianhuaPreimport.items" :key="row.row_no" :class="'tianhua-row-'+row.status">
                       <td><input type="checkbox" v-model="row.selected" :disabled="!isTianhuaRowGeneratable(row)" :title="tianhuaRowDisabledReason(row)" /></td>
                       <td>{{ row.status_label }}</td><td>{{ row.stock_code || "-" }}</td><td>{{ row.image_qty ?? "-" }}</td><td>{{ row.system_pending_qty ?? "-" }}</td>
-                      <td><input class="input compact-input" type="number" min="1" v-model.number="row.final_delivery_qty" :disabled="!isTianhuaRowGeneratable(row)" /></td><td><strong>{{row.fulfillment_label||'-'}}</strong><div v-for="location in row.pick_locations||[]" :key="location.location_id||location.location_code" class="muted">{{location.location_name||location.location_code||'位置待核'}} ×{{location.quantity}}</div><template v-if="row.source_payload?.shortage_diagnostic"><div class="muted">成品可拿 {{row.source_payload.shortage_diagnostic.finished_available}}；待组套/加工 {{row.source_payload.shortage_diagnostic.pending_processing}}；有效在途 {{row.source_payload.shortage_diagnostic.effective_inbound}}；需新购 {{row.source_payload.shortage_diagnostic.new_purchase_shortage}}</div><div v-if="row.source_payload.shortage_diagnostic.pending_review" class="status orange">订单分配待核对</div></template><div v-else-if="row.shortage_qty" class="status orange">缺 {{row.shortage_qty}}</div></td>
-                      <td>{{ row.product_name || "-" }}</td><td><order-reference v-if="!(row.source_payload?.candidates?.length>1)" :row="row"></order-reference><div v-else class="field" style="min-width:220px"><label v-for="candidate in row.source_payload.candidates" :key="candidate.order_item_id" style="display:flex;gap:5px;align-items:center"><input type="checkbox" v-model="candidate._selected" /><span>{{candidate.order_number}} / {{candidate.customer_order_no||'无客户单号'}}（可送{{candidate.finished_available}}）</span><input v-if="candidate._selected" class="input compact-input" type="number" min="1" :max="candidate.finished_available" v-model.number="candidate._qty" placeholder="分配数" /></label></div></td><td>{{ row.candidate_count ?? 0 }}</td><td>{{ row.match_reason || "-" }}</td>
+                      <td><input class="input compact-input" type="number" min="1" v-model.number="row.final_delivery_qty" @input="scheduleTianhuaReadiness()" :disabled="!isTianhuaRowGeneratable(row)" /></td><td><strong>{{row.fulfillment_label||'-'}}</strong><div v-for="location in row.pick_locations||[]" :key="location.location_id||location.location_code" class="muted">{{location.location_name||location.location_code||'位置待核'}} ×{{location.quantity}}</div><template v-if="row.source_payload?.shortage_diagnostic"><div class="muted">成品可拿 {{row.source_payload.shortage_diagnostic.finished_available}}；待组套/加工 {{row.source_payload.shortage_diagnostic.pending_processing}}；有效在途 {{row.source_payload.shortage_diagnostic.effective_inbound}}；需新购 {{row.source_payload.shortage_diagnostic.new_purchase_shortage}}<span v-if="row.source_payload.shortage_diagnostic.unresolved_quantity">；待核数量 {{row.source_payload.shortage_diagnostic.unresolved_quantity}}</span></div><div v-if="row.source_payload.shortage_diagnostic.pending_review" class="status orange">{{(row.source_payload.shortage_diagnostic.review_reasons||[]).join("；")||"订单分配待核对"}}</div><div v-if="row._readinessLoading" class="muted">正在刷新备货数量…</div><div v-if="row._readinessError" class="status orange">{{row._readinessError}}</div></template><div v-else-if="row.shortage_qty" class="status orange">缺 {{row.shortage_qty}}</div></td>
+                      <td>{{ row.product_name || "-" }}</td><td><order-reference v-if="!(row.source_payload?.candidates?.length>1)" :row="row"></order-reference><div v-else class="field" style="min-width:220px"><label v-for="candidate in row.source_payload.candidates" :key="candidate.order_item_id" style="display:flex;gap:5px;align-items:center"><input type="checkbox" v-model="candidate._selected" @change="scheduleTianhuaReadiness()" /><span>{{candidate.order_number}} / {{candidate.customer_order_no||'无客户单号'}}（可送{{candidate.finished_available}}）</span><input v-if="candidate._selected" class="input compact-input" type="number" min="1" :max="candidate.finished_available" v-model.number="candidate._qty" @input="scheduleTianhuaReadiness()" placeholder="分配数" /></label></div></td><td>{{ row.candidate_count ?? 0 }}</td><td>{{ row.match_reason || "-" }}</td>
                       <td>{{ tianhuaPickStatusLabel(row.mobile_pick_status) }}</td><td>{{ row.mobile_picked_qty ?? "-" }}</td><td>{{ row.mobile_pick_note || "-" }}</td><td>{{ row.mobile_picked_at ? formatTime(row.mobile_picked_at) : "-" }}</td><td>{{ row.warning || "-" }}</td>
                       <td class="toolbar-group"><button v-if="row.order_item_id && canDelivery" class="btn small" :disabled="loading" @click="deferTianhuaRow(row)">等待下次送货</button><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaImageQty(row)">按图片数量</button><button v-if="row.status==='qty_mismatch'" class="btn small" @click="useTianhuaPendingQty(row)">补齐未送数量</button></td>
                     </tr>
@@ -37975,6 +37975,42 @@
           },
           tianhuaPickStatusLabel(status) {
             return ({pending:"待拿货",picked:"已拿货",no_stock:"没货",partial:"部分拿货"})[status] || "待拿货";
+          },
+          scheduleTianhuaReadiness() {
+            if (!this.tianhuaPreimport.items.some(row => row.source_payload?.shortage_diagnostic)) return;
+            clearTimeout(this._tianhuaReadinessTimer);
+            const requestId = this._tianhuaReadinessRequestId = (this._tianhuaReadinessRequestId || 0) + 1;
+            const state = this.tianhuaPreimport;
+            const rows = state.items, userId = this.user?.id;
+            const current = () => requestId === this._tianhuaReadinessRequestId && state === this.tianhuaPreimport && rows === state.items && userId === this.user?.id;
+            state.items.forEach(row => { row._readinessLoading = true; row._readinessError = ""; });
+            this._tianhuaReadinessTimer = setTimeout(async () => {
+              if (!current()) return;
+              const items = state.items.map(row => ({item_id:row.item_id,row_no:row.row_no,
+                final_delivery_qty:Math.max(0,Math.floor(Number(row.final_delivery_qty)||0)),order_item_id:row.order_item_id||null,
+                allocations:(row.source_payload?.candidates||[]).filter(c=>c._selected&&Number(c._qty)>0)
+                  .map(c=>({order_item_id:c.order_item_id,quantity:Math.floor(Number(c._qty))}))}));
+              try {
+                const {data} = await axios.post(`/api/deliveries/tianhua-preimport/${state.batchId}/readiness-preview`, {items}, {timeout:15000});
+                if (!current()) return;
+                for (const row of state.items) {
+                  const fresh = data.items.find(value=>value.item_id===row.item_id);
+                  if (!fresh) continue;
+                  row.source_payload.shortage_diagnostic = fresh.source_payload.shortage_diagnostic;
+                  row.fulfillment_status = fresh.fulfillment_status;
+                  row.fulfillment_label = fresh.fulfillment_label;
+                  row.finished_available_qty = fresh.finished_available_qty;
+                  row.shortage_qty = fresh.shortage_qty;
+                  row.pick_locations = fresh.pick_locations || [];
+                }
+              } catch (error) {
+                if (current())
+                  state.items.forEach(row=>{row._readinessError="备货数量刷新失败，请重新打开批次后核对";});
+              } finally {
+                if (current())
+                  state.items.forEach(row=>{row._readinessLoading=false;});
+              }
+            }, 300);
           },
           async loadTianhuaBatch() {
             if (!this.tianhuaPreimport.batchId) return;

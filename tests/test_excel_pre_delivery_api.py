@@ -117,16 +117,40 @@ def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_p
                 )
             },
         )
+        assert response.status_code == 201, response.text
+        batch_id = response.json()["batch_id"]
+        line = response.json()["items"][0]
+        with factory() as db:
+            db.get(OrderItem, line["order_item_id"]).requisition_qty = 120
+            db.commit()
+        refreshed = client.get(f"/api/deliveries/tianhua-preimport/{batch_id}")
+        assert refreshed.status_code == 200, refreshed.text
+        updated = refreshed.json()["items"][0]["source_payload"]["shortage_diagnostic"]
+        assert (updated["effective_inbound"], updated["new_purchase_shortage"]) == (120, 480)
+        preview = client.post(f"/api/deliveries/tianhua-preimport/{batch_id}/readiness-preview", json={"items":[{
+            "item_id":line["item_id"],"row_no":1,"final_delivery_qty":50,"order_item_id":line["order_item_id"]}]})
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["items"][0]["source_payload"]["shortage_diagnostic"]["effective_inbound"] == 50
+        foreign = client.post(f"/api/deliveries/tianhua-preimport/{batch_id}/readiness-preview", json={"items":[{
+            "item_id":line["item_id"],"row_no":1,"final_delivery_qty":50,"allocations":[{"order_item_id":99999,"quantity":50}]}]})
+        assert foreign.status_code == 200
+        assert foreign.json()["items"][0]["source_payload"]["shortage_diagnostic"]["unresolved_quantity"] == 50
+        bad = client.post(f"/api/deliveries/tianhua-preimport/{batch_id}/readiness-preview", json={"items":[{
+            "item_id":99999,"row_no":1,"final_delivery_qty":50}]})
+        assert bad.status_code == 400
+        after_preview = client.get(f"/api/deliveries/tianhua-preimport/{batch_id}")
+        assert after_preview.json()["items"][0]["final_delivery_qty"] == line["final_delivery_qty"]
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["source_type"] == "excel_upload"
     assert body["total_rows"] == 1
     assert body["items"][0]["stock_code"] == "80010631"
-    assert body["items"][0]["fulfillment_status"] == "incoming"
+    assert body["items"][0]["fulfillment_status"] == "needs_review"
     assert body["items"][0]["finished_available_qty"] == 0
     assert body["items"][0]["shortage_qty"] == 600
     diagnostic = body["items"][0]["source_payload"]["shortage_diagnostic"]
-    assert diagnostic["effective_inbound"] == 600
+    assert diagnostic["effective_inbound"] == 0
+    assert diagnostic["unresolved_quantity"] == 600
     assert diagnostic["new_purchase_shortage"] == 0
     with factory() as db:
         assert db.query(TianhuaPreDeliveryImportBatch).count() == 1

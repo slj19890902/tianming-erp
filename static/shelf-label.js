@@ -26,7 +26,7 @@ async function load() {
       if (!r.ok) throw Error(typeof data.detail === 'string' ? data.detail : '读取失败');
       return data;
     })));
-    $('labels').innerHTML = rows.map(label).join('');
+    $('labels').innerHTML = rows.map(row => `<section class="label-page">${label(row)}</section>`).join('');
     await document.fonts.ready;
     await Promise.all([...document.querySelectorAll('img')].map(img => img.decode()));
     for (const node of document.querySelectorAll('.fit')) {
@@ -35,7 +35,7 @@ async function load() {
       if (node.scrollWidth > node.clientWidth + 1) throw Error('文字过长，请核对简称或名称');
     }
     for (const node of document.querySelectorAll('.label')) if(node.scrollHeight > node.clientHeight + 1) throw Error('标签内容超出尺寸');
-    $('message').textContent = `80×40mm · ${rows.length}张 · 按100%实际大小打印`;
+    $('message').textContent = `40×80mm纵向纸型 · ${rows.length}张 · 缩放100%、无边距，不再手动旋转`;
     $('print').disabled = false;
     return true;
   } catch(e) { $('labels').innerHTML = ''; $('message').textContent = e.message || '读取失败，请重试'; return false; }

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.508"
-APP_VERSION_NAME = "来料移库后管理员撤销"
+APP_VERSION = "v0.22.509"
+APP_VERSION_NAME = "货架标签40×80纸型修复"
 APP_BUILD_DATE = "2026-09-27"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4890,3 +4890,7 @@ APP_VERIFICATION_STEPS = [
     "核对撤销后的当前货位库存及历史记录；有效下游业务仍须先撤销。系统版本为v0.22.508。",
 ]
 APP_CHANGELOG = [*(f"v0.22.508：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["修复仓库地图打印货架标签与40×80纵向纸型不一致的问题；每张物理页完整容纳横向文字和二维码，避免裁切和批量错页。", "货架位置标签与同入口产品标签共用40×80物理页，保留原扫码身份及权限，无数据库迁移或业务数据修改。"]
+APP_VERIFICATION_STEPS = ["刷新仓库地图并重新打开打印货架标签，选择40×80纵向纸型，缩放100%、无边距，不再手动旋转；先试打一张核对货架名称、层格和二维码。", "核对多张标签每页一张，无文字缺失或多余空白页；系统版本v0.22.509。"]
+APP_CHANGELOG = [*(f"v0.22.509：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

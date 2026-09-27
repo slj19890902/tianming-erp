@@ -1,16 +1,17 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>货架标签</title><style>
-@page{size:80mm 40mm;margin:0}*{box-sizing:border-box}body{margin:0;background:#eef2f7;font:14px Arial,"Microsoft YaHei",sans-serif}
+@page{size:40mm 80mm;margin:0}*{box-sizing:border-box}body{margin:0;background:#eef2f7;font:14px Arial,"Microsoft YaHei",sans-serif}
 header{text-align:center;padding:12px}button{padding:10px 18px;border:0;border-radius:6px;background:#15803d;color:white;cursor:pointer}button:disabled{opacity:.5}
 #message{text-align:center;padding:8px}#labels{display:grid;justify-content:center;gap:12px}
-.label{width:80mm;height:40mm;padding:2mm;background:white;overflow:hidden;break-after:page}.label:last-child{break-after:auto}
+.label-page{position:relative;width:40mm;height:80mm;overflow:hidden;break-inside:avoid;page-break-after:always;break-after:page;background:white}.label-page:last-child{page-break-after:auto;break-after:auto}
+.label{position:absolute;left:0;top:0;transform:translateX(40mm) rotate(90deg);transform-origin:top left;width:80mm;height:40mm;padding:2mm;background:white;overflow:hidden;break-after:auto}
 .location{display:grid;grid-template-columns:minmax(0,1fr) 28mm;gap:2mm;align-items:center;height:100%}.location h1{font-size:19pt;line-height:1.3;margin:0 0 4mm;overflow-wrap:anywhere}.location strong{font-size:20pt}.location img{width:28mm;height:28mm}
 .product-head{display:grid;grid-template-columns:minmax(0,1fr) 15mm;gap:1mm;height:15mm;align-items:start;border-bottom:.2mm solid #333}
 .product-address{min-width:0;padding-top:.8mm}.product-title-row{display:flex;align-items:baseline;gap:1.5mm}.product-head h1{flex:1;min-width:0;font-size:18pt;line-height:1.3;margin:0;white-space:nowrap}.product-head strong{flex:none;font-size:12pt;white-space:nowrap}.product-head img{width:15mm;height:15mm}.product-floor{font-size:10pt;margin-top:1.1mm;white-space:nowrap}
 .fields{padding-top:.6mm}.field{display:grid;grid-template-columns:21mm minmax(0,1fr);height:5mm;align-items:center;font-size:10.5pt}.field>span{white-space:nowrap}.value{display:block;min-width:0;white-space:nowrap;line-height:1.15}.code{font-size:15pt;font-weight:800}.customer{font-weight:700;font-size:12pt}
-@media print{header,#message{display:none}body{background:white}#labels{display:block}.label{margin:0}}
+@media print{html,body{width:40mm;margin:0;background:white}header,#message{display:none!important}#labels{display:block;width:40mm;margin:0;padding:0}.label-page{margin:0;padding:0;contain:strict}.label{margin:0}}
 </style></head><body>
-<header><button id="print" disabled>打印</button> <button id="retry">刷新</button></header>
+<header><div>40×80 mm 纵向纸型 · 缩放100% · 无边距 · 不再手动旋转</div><button id="print" disabled>打印</button> <button id="retry">刷新</button></header>
 <div id="message">读取标签…</div><main id="labels"></main>
-<script src="/static/shelf-label.js"></script></body></html>
+<script src="/static/shelf-label.js?v=20260927-paper40x80"></script></body></html>

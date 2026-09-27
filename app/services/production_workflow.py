@@ -4673,9 +4673,9 @@ def _reverse_completion_finished_lot(
         raise ProductionWorkflowError("生产完工成品预占已发生后续变化，不能自动回退", 409)
     pallet = lot.pallet_item.pallet if lot.pallet_item is not None else None
     from app.services.admin_order_reversal_scope import may_reverse_at_current_location
-    # Administrator cascade reverses the exact unchanged lot at its CURRENT
-    # location. All source, quantity, consumption, reservation and CAS checks
-    # above/below still apply; normal receipt reversal retains its move guard.
+    # Administrator order/receipt reversal targets the exact unchanged lot at
+    # its CURRENT location. All source, quantity, consumption, reservation and
+    # CAS checks above/below still apply; unscoped callers retain the move guard.
     if pallet is not None and not may_reverse_at_current_location(completion.order_item_id) and any(
         not (graph_restored and _is_reversed_delivery_pallet_restore(db, movement, lot, completion))
         for movement in db.scalars(select(InventoryLocationMovement)

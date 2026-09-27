@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.507"
-APP_VERSION_NAME = "停用产品实体模具标签兼容"
+APP_VERSION = "v0.22.508"
+APP_VERSION_NAME = "来料移库后管理员撤销"
 APP_BUILD_DATE = "2026-09-27"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4880,3 +4880,13 @@ APP_VERIFICATION_STEPS = [
     "批量预览按数字顺序排列，共用模具只保留一个本体；检查系统版本v0.22.507。",
 ]
 APP_CHANGELOG = [*(f"v0.22.507：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复管理员在来料页面撤销时，整栈板移库仍被旧规则拦截的问题；按原收料来源从当前货位反向扣回。",
+    "保留后续发货、消耗、数量与版本校验，以及客户权限、审计和幂等；不自动撤销任何正式订单，无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员刷新来料历史，找到研光TM20260923001的两条来料，逐条点击撤销并确认，核对不再仅因移库被阻止。",
+    "核对撤销后的当前货位库存及历史记录；有效下游业务仍须先撤销。系统版本为v0.22.508。",
+]
+APP_CHANGELOG = [*(f"v0.22.508：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

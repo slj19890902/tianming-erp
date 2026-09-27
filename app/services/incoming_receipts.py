@@ -2415,13 +2415,24 @@ def revert_receipt_item(
     purpose_reversal = None
     if purpose_allocation is not None:
         try:
-            purpose_reversal = reverse_receipt_purpose_allocation(
-                db,
-                receipt_item=receipt_item,
-                operator_id=user.id,
-                reason=clean_reason,
-                idempotency_key=stable_idempotency_key,
+            from contextlib import nullcontext
+            from app.services.admin_order_reversal_scope import current_location_reversal
+
+            # A pallet move changes location, not receipt quantity or ownership.
+            # Grant only this verified receipt item the same authority as the
+            # administrator order reversal; all downstream/stock/CAS checks stay.
+            scope = (
+                current_location_reversal([target.order_item.id])
+                if user.role == "admin" else nullcontext()
             )
+            with scope:
+                purpose_reversal = reverse_receipt_purpose_allocation(
+                    db,
+                    receipt_item=receipt_item,
+                    operator_id=user.id,
+                    reason=clean_reason,
+                    idempotency_key=stable_idempotency_key,
+                )
         except ReceiptPurposeFlowError as error:
             raise IncomingReceiptError(
                 str(error), error.status_code, code=error.code

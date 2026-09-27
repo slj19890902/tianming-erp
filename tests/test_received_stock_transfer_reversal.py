@@ -92,3 +92,65 @@ def test_order_cancel_only_releases_preexisting_stock(requisition_app):
     with factory() as db:
         stock = db.get(InventoryLot, lot_id)
         assert stock.quantity_available == 200 and stock.quantity_reserved == 0
+
+
+@pytest.mark.parametrize("case", ["normal", "quantity_changed", "audit_failure"])
+def test_receipt_reversal_after_whole_pallet_move(requisition_app, monkeypatch, case):
+    from app.models.production import ProductionCompletion
+    from app.models.warehouse_inventory import InventoryLot, WarehouseLocation, InventoryMovement
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.services.floor3_locations import move_pallet
+    from app.services.admin_order_reversal_scope import may_reverse_at_current_location
+    app, factory = requisition_app
+    _seed_material_and_staging(factory)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        _login(client, 'admin')
+        source = _create_frozen_sources(client, factory, order_quantity=20, purchase_total=20,
+            order_purpose=20, stock_purpose=0)[0]
+        frozen = _freeze_receipt_fact(client, source, idempotency_key='pallet-freeze')
+        assert frozen.status_code == 200, frozen.text
+        received = _receive(client, source, frozen.json(), quantity=20, idempotency_key='pallet-receive')
+        assert received.status_code == 200, received.text
+        receipt_id = received.json()['receipt_item_id']
+        with factory() as db:
+            completion = db.scalar(select(ProductionCompletion))
+            lot = db.get(InventoryLot, completion.inventory_lot_id)
+            lot_id, item_id = lot.id, completion.order_item_id
+            pallet = lot.pallet_item.pallet
+            target = db.scalar(select(WarehouseLocation).where(WarehouseLocation.location_code == 'F1-FIN-001-L002'))
+            move_pallet(db, pallet_id=pallet.id, expected_version=pallet.version,
+                to_location_id=target.id, remarks='整栈板移动', operator_id=1,
+                idempotency_key='pallet-move', require_published_target=True,
+                expected_target_layout_version=2)
+            if case == 'quantity_changed':
+                lot.quantity_reserved -= 1
+            db.commit()
+            before = (lot.quantity_available, lot.quantity_reserved, lot.version)
+            movement_count = len(list(db.scalars(select(InventoryMovement))))
+        if case == 'audit_failure':
+            import app.api.incoming as incoming
+            def fail(*args, **kwargs):
+                raise RuntimeError('injected reversal audit failure')
+            monkeypatch.setattr(incoming, '_record_reversal_fact', fail)
+        url = f'/api/incoming/receipt-items/{receipt_id}/revert'
+        payload = {'reason':'撤销移库收料', 'idempotency_key':'pallet-revert'}
+        result = client.put(url, json=payload)
+        assert not may_reverse_at_current_location(item_id)
+        if case != 'normal':
+            assert result.status_code == (409 if case == 'quantity_changed' else 500), result.text
+            with factory() as db:
+                lot = db.get(InventoryLot, lot_id)
+                assert (lot.quantity_available, lot.quantity_reserved, lot.version) == before
+                assert db.get(IncomingReceiptItem, receipt_id).status == 'posted'
+                assert len(list(db.scalars(select(InventoryMovement)))) == movement_count
+            return
+        assert result.status_code == 200, result.text
+        with factory() as db:
+            lot = db.get(InventoryLot, lot_id)
+            assert lot.quantity_available + lot.quantity_reserved == 0
+            assert db.get(IncomingReceiptItem, receipt_id).status == 'reversed'
+            movement_count = len(list(db.scalars(select(InventoryMovement))))
+        assert client.put(url, json=payload).status_code == 200
+        assert client.put(url, json={**payload, 'reason':'异载荷'}).status_code == 409
+        with factory() as db:
+            assert len(list(db.scalars(select(InventoryMovement)))) == movement_count

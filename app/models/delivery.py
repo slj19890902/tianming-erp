@@ -330,6 +330,8 @@ class DeliveryPickTask(Base):
     )
     status: Mapped[str] = mapped_column(String(24), default="pushed", nullable=False)
     snapshot_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    route_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    route_snapshot_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

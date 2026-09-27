@@ -11,6 +11,7 @@ from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naiv
 from app.core.security import create_tianhua_pick_token, decode_tianhua_pick_token
 from app.models.order import OrderItem
 from app.models.product import Product
+from app.models.production import ProductionTask
 from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryDraft,
     TianhuaPreDeliveryDraftItem,
@@ -18,9 +19,10 @@ from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryImportItem,
 )
 from app.models.user import User
-from app.services.tianhua_pre_delivery import STATUS_LABELS, batch_dict, create_batch, draft_dict, ensure_draft_delivery, save_draft
+from app.services.tianhua_pre_delivery import STATUS_LABELS, batch_dict, create_batch, create_excel_batch, draft_dict, ensure_draft_delivery, save_draft
 from app.services.delivery_numbering import DeliveryNumberingError
-from app.services.secure_uploads import IMAGE_POLICY, UploadValidationError, read_validated_upload
+from app.services.excel_document_import import ExcelImportError, parse_excel_document
+from app.services.secure_uploads import EXCEL_POLICY, IMAGE_POLICY, UploadValidationError, read_validated_upload
 from app.services.product_specification import resolved_product_specification
 from app.services.mobile_qr import mobile_absolute_url, qr_data_url
 
@@ -33,11 +35,18 @@ TIANHUA_MAX_IMAGE_COUNT = 10
 TIANHUA_MAX_TOTAL_BYTES = 60 * 1024 * 1024
 
 
+class DraftAllocation(BaseModel):
+    order_item_id:int=Field(ge=1)
+    quantity:int=Field(ge=1)
+
+
 class DraftLine(BaseModel):
     item_id:int|None=Field(default=None,ge=1)
     row_no:int=Field(ge=1)
     selected:bool=False
     final_delivery_qty:int|None=Field(default=None,ge=0)
+    order_item_id:int|None=Field(default=None,ge=1)
+    allocations:list[DraftAllocation]=Field(default_factory=list)
 
 
 class DraftRequest(BaseModel):
@@ -55,7 +64,7 @@ class MobilePickUpdate(BaseModel):
 
 def _batch(db,batch_id):
     value=db.get(TianhuaPreDeliveryImportBatch,batch_id)
-    if value is None: raise HTTPException(404,"天华预送货识别批次不存在")
+    if value is None: raise HTTPException(404,"预送货识别批次不存在")
     return value
 
 
@@ -63,6 +72,74 @@ def _batch_for_user(db:Session,batch_id:int,user:User) -> TianhuaPreDeliveryImpo
     batch=_batch(db,batch_id)
     require_customer_access(batch.customer_id,user,db)
     return batch
+
+
+def _batch_response(db: Session, batch: TianhuaPreDeliveryImportBatch) -> dict:
+    payload = batch_dict(db, batch)
+    for row in payload.get("items") or []:
+        order_item = db.get(OrderItem, row.get("order_item_id")) if row.get("order_item_id") else None
+        requested = int(row.get("final_delivery_qty") or row.get("image_qty") or 0)
+        sources = (
+            _inventory_sources_for_order_item(
+                db,
+                order_item=order_item,
+                planned_delivery_quantity=requested,
+                delivery_item_id=row.get("delivery_item_id"),
+                dispatched=False,
+            )
+            if order_item is not None and requested > 0
+            else []
+        )
+        locations = [
+            {
+                "location_id": source.get("location_id"),
+                "location_code": source.get("location_code"),
+                "location_name": source.get("location_name"),
+                "quantity": int(source.get("quantity_to_pick_stock") or 0),
+                "source_type": source.get("source_type"),
+            }
+            for source in sources
+            if int(source.get("quantity_to_pick_stock") or 0) > 0
+        ]
+        finished_available = sum(
+            location["quantity"]
+            for location in locations
+            if location["source_type"] == "finished"
+        )
+        semi_available = sum(
+            int(source.get("quantity_to_pick_requirement") or 0)
+            for source in sources
+            if source.get("source_type") == "semi_finished"
+        )
+        shortage = max(requested - finished_available, 0)
+        task = (
+            db.scalar(select(ProductionTask).where(ProductionTask.order_item_id == order_item.id))
+            if order_item is not None
+            else None
+        )
+        if order_item is None:
+            fulfillment_status, fulfillment_label = "needs_review", "待核对订单"
+        elif shortage <= 0:
+            fulfillment_status, fulfillment_label = "ready", "仓库可拿"
+        elif semi_available > 0:
+            fulfillment_status, fulfillment_label = "pending_production", "有半成品，待加工"
+        elif task is not None and task.status in {"pending", "in_progress"}:
+            fulfillment_status, fulfillment_label = "pending_production", "待生产"
+        elif order_item.material_status in {"reported", "ordered", "partially_received"}:
+            fulfillment_status, fulfillment_label = "incoming", "材料在途/待收料"
+        elif order_item.material_status == "received":
+            fulfillment_status, fulfillment_label = "pending_production", "材料已收，待生产"
+        else:
+            fulfillment_status, fulfillment_label = "purchase_required", "需订材料"
+        row.update(
+            fulfillment_status=fulfillment_status,
+            fulfillment_label=fulfillment_label,
+            finished_available_qty=finished_available,
+            semi_available_qty=semi_available,
+            shortage_qty=shortage,
+            pick_locations=locations,
+        )
+    return payload
 
 
 @router.post("/tianhua-preimport/upload",status_code=status.HTTP_201_CREATED)
@@ -109,7 +186,7 @@ async def upload(
         require_customer_access(batch.customer_id,user,db)
         db.commit()
         db.refresh(batch)
-        return batch_dict(db,batch)
+        return _batch_response(db,batch)
     except HTTPException:
         db.rollback()
         raise
@@ -123,7 +200,37 @@ async def upload(
 
 @router.get("/tianhua-preimport/{batch_id}")
 def get_batch(batch_id:int,db:Session=Depends(get_db),_user:User=Depends(can_read)):
-    return batch_dict(db,_batch_for_user(db,batch_id,_user))
+    return _batch_response(db,_batch_for_user(db,batch_id,_user))
+
+
+@router.post("/pre-delivery-excel/upload", status_code=status.HTTP_201_CREATED)
+async def upload_pre_delivery_excel(
+    file: UploadFile = File(...),
+    pre_delivery_date: date | None = Form(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+):
+    try:
+        upload = await read_validated_upload(file, EXCEL_POLICY)
+        document = parse_excel_document(
+            upload.content,
+            upload.original_filename,
+            document_type="pre_delivery",
+        )
+        batch = create_excel_batch(db, document, user.id, pre_delivery_date)
+        require_customer_access(batch.customer_id, user, db)
+        db.commit()
+        db.refresh(batch)
+        return _batch_response(db, batch)
+    except (UploadValidationError, ExcelImportError, ValueError) as error:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _save(batch_id,payload,db,user,update):

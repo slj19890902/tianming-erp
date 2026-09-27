@@ -222,6 +222,7 @@ from app.models.invoice_task import (  # noqa: E402,F401
 )
 from app.models.company_config import CompanyConfig  # noqa: E402,F401
 from app.models.tianhua_pre_delivery import (  # noqa: E402,F401
+    PreDeliverySourceAllocation,
     TianhuaPreDeliveryDraft,
     TianhuaPreDeliveryDraftItem,
     TianhuaPreDeliveryImportBatch,

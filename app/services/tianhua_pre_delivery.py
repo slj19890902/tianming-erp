@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -21,7 +22,8 @@ from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.production import ProductionTask
-from app.models.tianhua_pre_delivery import TianhuaPreDeliveryDraft, TianhuaPreDeliveryDraftItem, TianhuaPreDeliveryImportBatch, TianhuaPreDeliveryImportItem
+from app.models.tianhua_pre_delivery import PreDeliverySourceAllocation, TianhuaPreDeliveryDraft, TianhuaPreDeliveryDraftItem, TianhuaPreDeliveryImportBatch, TianhuaPreDeliveryImportItem
+from app.services.excel_document_import import ImportedDocument
 from app.services.delivery_numbering import next_delivery_number
 from app.services.delivery_snapshots import (
     build_order_delivery_snapshot,
@@ -92,9 +94,14 @@ def recognize_tianhua_image(content: bytes) -> list[RecognizedRow]:
     return result
 
 
-def _products(db, code):
+def _products(db, code, customer_id: int | None = None):
+    customer_filter = (
+        Customer.id == customer_id
+        if customer_id is not None
+        else or_(Customer.name.contains("天华"), Customer.customer_code == "天华")
+    )
     return list(db.scalars(select(Product).join(Customer,Customer.id==Product.customer_id).where(
-        or_(Customer.name.contains("天华"),Customer.customer_code=="天华"),Product.is_active.is_(True),Product.deleted_at.is_(None),
+        customer_filter,Product.is_active.is_(True),Product.deleted_at.is_(None),
         or_(Product.product_code==code,Product.customer_material_code==code,Product.legacy_customer_material_code==code,Product.product_code.like(f"{code}/%"),Product.legacy_customer_material_code.like(f"{code}/%"))
     ).order_by(Product.customer_id.desc(),Product.id)).all())
 
@@ -165,13 +172,14 @@ def preprocess_row(
     db: Session,
     row: RecognizedRow,
     pre_delivery_date: date | None = None,
+    customer_id: int | None = None,
 ) -> dict:
     target_date = pre_delivery_date or (beijing_today() + timedelta(days=1))
     image_order_no = _image_order_no(row)
     data=dict(row_no=row.row_no,raw_text=row.raw_text,stock_code=row.stock_code,image_qty=row.image_qty,image_order_no=image_order_no,product_id=None,product_name=None,order_item_id=None,order_id=None,order_number=None,customer_order_no=None,match_reason=None,match_score=None,candidate_count=0,system_pending_qty=None,available_qty=None,suggested_qty=row.image_qty,final_delivery_qty=row.image_qty,status="ocr_failed",warning="未能同时识别 8 位存货编码和最右侧整数数量。",selected=False)
     if row.stock_code is None or row.image_qty is None: return data
-    products=_products(db,row.stock_code)
-    if not products: data.update(status="not_matched",warning="未找到该存货编码对应的天华产品。"); return data
+    products=_products(db,row.stock_code,customer_id)
+    if not products: data.update(status="not_matched",warning="未找到该客户下对应的存货编码产品。"); return data
     pmap={p.id:p for p in products}
     candidates=[]
     for oi,o in db.execute(select(OrderItem,Order).join(Order,Order.id==OrderItem.order_id).where(OrderItem.product_id.in_(pmap),OrderItem.delivered_quantity<OrderItem.quantity,OrderItem.is_force_closed.is_(False),Order.status.in_(VALID_ORDER_STATUSES))):
@@ -206,7 +214,9 @@ def preprocess_row(
 
 
 def item_dict(i, draft_item=None):
-    return {"item_id":i.id,"row_no":i.row_no,"raw_text":i.raw_text,"stock_code":i.stock_code,"image_qty":i.image_qty,"image_order_no":i.image_order_no,"product_id":i.product_id,"product_name":i.product_name,"order_item_id":i.order_item_id,"order_id":i.order_id,"order_no":i.order_number,"customer_order_no":i.customer_order_no,"match_reason":i.match_reason,"match_score":i.match_score,"candidate_count":i.candidate_count,"system_pending_qty":i.system_pending_qty,"available_qty":i.available_qty,"suggested_qty":i.suggested_qty,"final_delivery_qty":i.final_delivery_qty,"status":i.status,"status_label":STATUS_LABELS.get(i.status,i.status),"warning":i.warning or "","selected":i.selected,"delivery_item_id":draft_item.delivery_item_id if draft_item else None,"mobile_pick_status":draft_item.mobile_pick_status if draft_item else "pending","mobile_picked_qty":draft_item.mobile_picked_qty if draft_item else None,"mobile_pick_note":draft_item.mobile_pick_note if draft_item else "","mobile_picked_at":utc_naive_to_api(draft_item.mobile_picked_at) if draft_item and draft_item.mobile_picked_at else None}
+    try: source_payload=json.loads(i.source_payload_json) if i.source_payload_json else {}
+    except (TypeError,ValueError): source_payload={}
+    return {"item_id":i.id,"row_no":i.row_no,"raw_text":i.raw_text,"stock_code":i.stock_code,"image_qty":i.image_qty,"image_order_no":i.image_order_no,"product_id":i.product_id,"product_name":i.product_name,"order_item_id":i.order_item_id,"order_id":i.order_id,"order_no":i.order_number,"customer_order_no":i.customer_order_no,"match_reason":i.match_reason,"match_score":i.match_score,"candidate_count":i.candidate_count,"system_pending_qty":i.system_pending_qty,"available_qty":i.available_qty,"suggested_qty":i.suggested_qty,"final_delivery_qty":i.final_delivery_qty,"status":i.status,"status_label":STATUS_LABELS.get(i.status,i.status),"warning":i.warning or "","selected":i.selected,"source_sheet":i.source_sheet,"source_row":i.source_row,"source_no":i.source_no,"source_payload":source_payload,"delivery_item_id":draft_item.delivery_item_id if draft_item else None,"mobile_pick_status":draft_item.mobile_pick_status if draft_item else "pending","mobile_picked_qty":draft_item.mobile_picked_qty if draft_item else None,"mobile_pick_note":draft_item.mobile_pick_note if draft_item else "","mobile_picked_at":utc_naive_to_api(draft_item.mobile_picked_at) if draft_item and draft_item.mobile_picked_at else None}
 
 
 def draft_dict(db,draft):
@@ -226,7 +236,7 @@ def batch_dict(db,batch):
             )
         ).all()
     } if draft else {}
-    return {"batch_id":batch.id,"batch_number":batch.batch_number,"customer_id":batch.customer_id,"customer_name":batch.customer_name,"pre_delivery_date":batch.pre_delivery_date.isoformat() if batch.pre_delivery_date else None,"status":batch.status,"total_rows":len(items),"draft":draft_dict(db,draft) if draft else None,"items":[item_dict(i,draft_items.get(i.id)) for i in items]}
+    return {"batch_id":batch.id,"batch_number":batch.batch_number,"customer_id":batch.customer_id,"customer_name":batch.customer_name,"pre_delivery_date":batch.pre_delivery_date.isoformat() if batch.pre_delivery_date else None,"status":batch.status,"source_type":getattr(batch,"source_type","tianhua_image"),"source_format":getattr(batch,"source_format",None),"source_name":getattr(batch,"source_name",None) or batch.filename,"source_hash":getattr(batch,"source_hash",None),"business_fingerprint":getattr(batch,"business_fingerprint",None),"total_rows":len(items),"draft":draft_dict(db,draft) if draft else None,"items":[item_dict(i,draft_items.get(i.id)) for i in items]}
 
 
 def _batch_filename_summary(filenames: list[str]) -> str:
@@ -270,6 +280,134 @@ def create_batch(db,content,filename,user_id,pre_delivery_date=None):
     db.add(batch); db.flush()
     for x in processed: db.add(TianhuaPreDeliveryImportItem(batch_id=batch.id,**x))
     db.flush(); return batch
+
+
+def create_excel_batch(
+    db: Session,
+    document: ImportedDocument,
+    user_id: int | None,
+    pre_delivery_date: date | None = None,
+) -> TianhuaPreDeliveryImportBatch:
+    if document.document_type != "pre_delivery":
+        raise ValueError("当前 Excel 不是预送货文件")
+    customer = db.scalar(
+        select(Customer).where(
+            func.upper(func.coalesce(Customer.customer_code, ""))
+            == str(document.customer_code or "").upper(),
+            Customer.is_active.is_(True),
+            Customer.status == "active",
+        )
+    )
+    if customer is None:
+        raise ValueError(
+            f"Excel 识别到客户 {document.customer_code or '未知'}，但系统没有唯一启用客户"
+        )
+    existing = db.scalar(
+        select(TianhuaPreDeliveryImportBatch).where(
+            TianhuaPreDeliveryImportBatch.source_type == "excel_upload",
+            TianhuaPreDeliveryImportBatch.source_hash == document.source_hash,
+        )
+    )
+    if existing is not None:
+        raise ValueError(f"该 Excel 已导入批次 {existing.batch_number}，不能重复导入")
+    target_date = (
+        pre_delivery_date
+        or document.delivery_date
+        or document.source_date
+        or (beijing_today() + timedelta(days=1))
+    )
+    processed: list[tuple[dict, object]] = []
+    for sequence, source in enumerate(document.rows, start=1):
+        raw = " | ".join(
+            [
+                source.stock_code,
+                source.product_name or source.model or "",
+                source.drawing_number or "",
+                str(source.requested_quantity),
+            ]
+        ).strip(" |")
+        value = preprocess_row(
+            db,
+            RecognizedRow(
+                row_no=sequence,
+                raw_text=raw,
+                stock_code=source.stock_code,
+                image_qty=source.requested_quantity,
+                image_order_no=source.customer_po,
+            ),
+            target_date,
+            customer.id,
+        )
+        processed.append((value, source))
+    prefix = "YG" if str(document.customer_code).upper() == "YG" else "GY"
+    batch = TianhuaPreDeliveryImportBatch(
+        batch_number=f"{prefix}-{beijing_now_naive():%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6].upper()}",
+        filename=document.filename,
+        customer_id=customer.id,
+        customer_name=customer.name,
+        pre_delivery_date=target_date,
+        total_rows=len(processed),
+        created_by=user_id,
+        source_type="excel_upload",
+        source_format=document.source_format,
+        source_hash=document.source_hash,
+        business_fingerprint=document.business_fingerprint,
+        parser_version=document.parser_version,
+        source_name=document.filename,
+    )
+    db.add(batch)
+    db.flush()
+    for value, source in processed:
+        candidates=[]
+        if value.get("product_id"):
+            for order_item,order in db.execute(select(OrderItem,Order).join(Order,Order.id==OrderItem.order_id).where(
+                Order.customer_id==batch.customer_id,
+                OrderItem.product_id==value["product_id"],
+                OrderItem.delivered_quantity<OrderItem.quantity,
+                OrderItem.is_force_closed.is_(False),
+                Order.status.in_(VALID_ORDER_STATUSES),
+            ).order_by(Order.delivery_date,Order.order_date,OrderItem.id)):
+                candidates.append({
+                    "order_item_id":order_item.id,"order_id":order.id,
+                    "order_number":order.order_number,"customer_order_no":order.customer_po,
+                    "pending_quantity":max(int(order_item.quantity)-int(order_item.delivered_quantity),0),
+                    "finished_available":_available_delivery_quantity(db,order_item),
+                    "delivery_date":order.delivery_date.isoformat() if order.delivery_date else None,
+                })
+        requested=int(source.requested_quantity); finished=min(requested,sum(row["finished_available"] for row in candidates)); remaining=requested-finished
+        bound=db.get(OrderItem,value.get("order_item_id")) if value.get("order_item_id") else None
+        pending_processing=remaining if bound is not None and bound.material_status=="received" else 0
+        remaining-=pending_processing
+        payload = {
+            "drawing_number": source.drawing_number,
+            "category": source.category,
+            "model": source.model,
+            "product_name": source.product_name,
+            "unit_price": str(source.unit_price) if source.unit_price is not None else None,
+            "amount": str(source.amount) if source.amount is not None else None,
+            "issues": list(source.issues),
+            "candidates":candidates,
+            "shortage_diagnostic":{
+                "finished_available":finished,
+                "pending_processing":pending_processing,
+                "effective_inbound":0,
+                "new_purchase_shortage":remaining,
+                "pending_review":bool(len(candidates)!=1),
+                "generic_material_auto_applied":False,
+            },
+        }
+        db.add(
+            TianhuaPreDeliveryImportItem(
+                batch_id=batch.id,
+                source_sheet=source.sheet,
+                source_row=source.source_row,
+                source_no=source.source_no,
+                source_payload_json=json.dumps(payload, ensure_ascii=False),
+                **value,
+            )
+        )
+    db.flush()
+    return batch
 
 
 def _delivery_total(db: Session, delivery_id: int) -> int:
@@ -360,31 +498,35 @@ def ensure_draft_delivery(
             existing.pop(row.order_item_id, None)
             row.delivery_item_id = None
             continue
-        if row.order_item_id in positive_order_items:
-            raise ValueError(f"第 {row.row_no} 行与其他行重复绑定同一订单明细，请只保留一行生成正式送货单")
-        positive_order_items.add(row.order_item_id)
-        order_item = db.get(OrderItem, row.order_item_id)
-        if order_item is None or order_item.order_id != row.order_id:
-            raise ValueError(f"第 {row.row_no} 行订单绑定无效")
-        remaining = _available_delivery_quantity(db, order_item)
-        if qty > remaining:
-            raise ValueError(f"第 {row.row_no} 行数量超过系统未送数量")
-        delivery_item = existing.get(row.order_item_id)
-        if delivery_item is None:
-            delivery_item = DeliveryItem(
-                delivery_id=delivery.id,
-                order_item_id=row.order_item_id,
-                **build_order_delivery_snapshot(db, order_item),
-                delivered_quantity=qty,
-                remarks=None,
-            )
-            db.add(delivery_item)
-        else:
-            delivery_item.delivered_quantity = qty
-            ensure_order_delivery_snapshot(db, delivery_item, order_item)
-        db.flush()
-        row.delivery_item_id = delivery_item.id
-        wanted_ids.add(delivery_item.id)
+        allocations=list(db.scalars(select(PreDeliverySourceAllocation).where(
+            PreDeliverySourceAllocation.import_item_id==row.import_item_id
+        ).order_by(PreDeliverySourceAllocation.id)))
+        targets=[(value.order_item_id,int(value.allocated_qty)) for value in allocations] or [(row.order_item_id,qty)]
+        if sum(value for _order_item_id,value in targets)!=qty:
+            raise ValueError(f"第 {row.row_no} 行分配数量与送货数量不一致")
+        row.delivery_item_id=None
+        for order_item_id,target_qty in targets:
+            if order_item_id in positive_order_items:
+                raise ValueError(f"第 {row.row_no} 行与其他行重复绑定同一订单明细")
+            positive_order_items.add(order_item_id)
+            order_item=db.get(OrderItem,order_item_id)
+            if order_item is None:
+                raise ValueError(f"第 {row.row_no} 行订单绑定无效")
+            remaining=_available_delivery_quantity(db,order_item)
+            if target_qty>remaining:
+                raise ValueError(f"第 {row.row_no} 行分配数量超过系统未送数量")
+            delivery_item=existing.get(order_item_id)
+            if delivery_item is None:
+                delivery_item=DeliveryItem(
+                    delivery_id=delivery.id,order_item_id=order_item_id,
+                    **build_order_delivery_snapshot(db,order_item),
+                    delivered_quantity=target_qty,remarks=None,
+                ); db.add(delivery_item)
+            else:
+                delivery_item.delivered_quantity=target_qty
+                ensure_order_delivery_snapshot(db,delivery_item,order_item)
+            db.flush(); wanted_ids.add(delivery_item.id)
+            if len(targets)==1: row.delivery_item_id=delivery_item.id
 
     for delivery_item in db.scalars(
         select(DeliveryItem).where(
@@ -413,14 +555,45 @@ def _selection(db,batch_id,submitted,zero_allowed=None):
             raise ValueError(f"第 {row_no} 行不属于当前批次")
         item.selected=bool(line.get("selected"))
         if not item.selected: continue
-        if item.status not in GENERATABLE: raise ValueError(f"第 {item.row_no} 行为{STATUS_LABELS.get(item.status,item.status)}，不允许生成")
         qty=int(line.get("final_delivery_qty") or 0)
+        allocations=line.get("allocations") or []
+        if allocations:
+            if sum(int(value.get("quantity") or 0) for value in allocations)!=qty:
+                raise ValueError(f"第 {item.row_no} 行订单分配数量合计必须等于送货数量")
+            db.execute(delete(PreDeliverySourceAllocation).where(PreDeliverySourceAllocation.import_item_id==item.id))
+            seen_allocations=set()
+            first=None
+            for allocation in allocations:
+                order_item_id=int(allocation["order_item_id"]); allocated_qty=int(allocation["quantity"])
+                if order_item_id in seen_allocations: raise ValueError(f"第 {item.row_no} 行重复分配同一订单")
+                seen_allocations.add(order_item_id)
+                candidate=db.get(OrderItem,order_item_id); order=db.get(Order,candidate.order_id) if candidate else None
+                if candidate is None or order is None or item.product_id is None or candidate.product_id!=item.product_id:
+                    raise ValueError(f"第 {item.row_no} 行分配订单与产品不一致")
+                batch=db.get(TianhuaPreDeliveryImportBatch,batch_id)
+                if batch is None or order.customer_id!=batch.customer_id:
+                    raise ValueError(f"第 {item.row_no} 行分配订单不属于当前客户")
+                if allocated_qty>_available_delivery_quantity(db,candidate):
+                    raise ValueError(f"第 {item.row_no} 行分配数量超过订单 {order.order_number} 当前可送量")
+                db.add(PreDeliverySourceAllocation(import_item_id=item.id,order_item_id=order_item_id,allocated_qty=allocated_qty,created_by=batch.created_by))
+                first=first or (candidate,order)
+            if first:
+                item.order_item_id=first[0].id; item.order_id=first[1].id; item.order_number=first[1].order_number; item.customer_order_no=first[1].customer_po
+                item.status="ok"
+        elif line.get("order_item_id") is not None and int(line["order_item_id"])!=(item.order_item_id or 0):
+            candidate=db.get(OrderItem,int(line["order_item_id"])); order=db.get(Order,candidate.order_id) if candidate else None
+            batch=db.get(TianhuaPreDeliveryImportBatch,batch_id)
+            if candidate is None or order is None or batch is None or candidate.product_id!=item.product_id or order.customer_id!=batch.customer_id:
+                raise ValueError(f"第 {item.row_no} 行所选订单与客户或产品不一致")
+            item.order_item_id=candidate.id; item.order_id=order.id; item.order_number=order.order_number; item.customer_order_no=order.customer_po
+            item.available_qty=_available_delivery_quantity(db,candidate); item.status="ok" if item.available_qty>=qty else "stock_shortage"
+        if item.status not in GENERATABLE: raise ValueError(f"第 {item.row_no} 行为{STATUS_LABELS.get(item.status,item.status)}，不允许生成")
         if qty<0 or (qty==0 and item.id not in zero_allowed) or item.order_item_id is None or item.order_id is None or not item.order_number or item.product_id is None: raise ValueError(f"第 {item.row_no} 行数据不完整")
         bound_order_item=db.get(OrderItem,item.order_item_id)
         if bound_order_item is None or bound_order_item.order_id!=item.order_id:
             raise ValueError(f"第 {item.row_no} 行订单绑定无效")
         available=_available_delivery_quantity(db,bound_order_item)
-        if qty>available: raise ValueError(f"第 {item.row_no} 行数量超过系统可送数量")
+        if not allocations and qty>available: raise ValueError(f"第 {item.row_no} 行数量超过系统可送数量")
         if qty>0 and item.order_item_id in selected_order_items:
             raise ValueError(f"第 {item.row_no} 行与其他行重复绑定同一订单明细，请只保留一行生成正式送货单")
         if qty>0:
@@ -456,7 +629,8 @@ def save_draft(db,batch,submitted,remark,user_id,update_existing=False):
     else:
         draft=TianhuaPreDeliveryDraft(draft_number=f"THYSH-{beijing_now_naive():%Y%m%d-%H%M%S}-{batch.id}",batch_id=batch.id,customer_id=batch.customer_id,created_by=user_id)
         db.add(draft); db.flush(); batch.status="draft_created"
-    draft.remark=f"来源：天华预送货图片导入，批次 ID：{batch.id}"+(f"；{remark.strip()}" if remark and remark.strip() else "")
+    source_label = "天华预送货图片" if getattr(batch,"source_type","tianhua_image")=="tianhua_image" else f"{batch.customer_name}预送货 Excel"
+    draft.remark=f"来源：{source_label}导入，批次 ID：{batch.id}"+(f"；{remark.strip()}" if remark and remark.strip() else "")
     draft.updated_at=utc_now_naive()
     for item,qty in selected:
         old=previous.get(item.id)

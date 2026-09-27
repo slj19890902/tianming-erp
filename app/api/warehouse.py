@@ -12,7 +12,7 @@ import sqlite3
 from threading import Lock
 from collections.abc import Mapping
 from typing import Annotated, Literal
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 import qrcode
@@ -17719,8 +17719,15 @@ def _mobile_shelf_location(db, location_id):
     path = employee_location_name(row, area=context.get("area"), floor=context.get("floor"),
                                   area_sequence=context.get("area_sequence"))
     title, position, address = readable_address(dict(display_path=path, level_no=row.level_no, slot_no=row.slot_no))
-    return row, dict(location_id=row.id, title=title, position=position, address=address,
-                     **print_address(dict(display_path=path, level_no=row.level_no, slot_no=row.slot_no)))
+    result = dict(location_id=row.id, title=title, position=position, address=address,
+                  **print_address(dict(display_path=path, level_no=row.level_no, slot_no=row.slot_no)))
+    if row.address_kind == "rack_slot" and row.address_area_id and (row.map_rack_id or row.rack_code):
+        # Group physical racks by stable identity, never by their display names.
+        rack_identity = [row.address_area_id, "map" if row.map_rack_id else "address",
+                         row.map_rack_id or row.rack_code]
+        result["rack_key"] = hashlib.sha256(json.dumps(rack_identity).encode()).hexdigest()
+        result["rack_label"] = result["print_title"]
+    return row, result
 
 
 @router.get("/locations/{location_id}/mobile-label")
@@ -17747,6 +17754,14 @@ def mobile_shelf_label(location_id: int, response: Response, lot_id: int | None 
     buffer = BytesIO()
     qrcode.make(url).save(buffer, format="PNG")
     result.update(lookup_url=url, qr_data_url="data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii"))
+    if result.get("rack_key") and row.map_rack_id:
+        origin = urlsplit(url)
+        rack_query = urlencode({"floor": f"{row.warehouse_floor}F", "rack_id": row.map_rack_id})
+        rack_url = urlunsplit((origin.scheme, origin.netloc, "/warehouse.html", rack_query, ""))
+        rack_buffer = BytesIO()
+        qrcode.make(rack_url).save(rack_buffer, format="PNG")
+        result.update(rack_lookup_url=rack_url,
+                      rack_qr_data_url="data:image/png;base64," + base64.b64encode(rack_buffer.getvalue()).decode("ascii"))
     response.headers["Cache-Control"] = "no-store"
     return result
 

@@ -96,3 +96,34 @@ def test_scan_and_print_are_lightweight_and_product_specific():
     ui=(root/"factory_twin/frontend/src/WarehouseTwinApp.tsx").read_text(encoding="utf-8")
     assert "&lot_id=${selectedItem.lot_id}" in ui
     assert 'className="shelf-position-print"' in ui
+
+
+def test_whole_rack_grouping_uses_identity_not_name(monkeypatch):
+    import app.api.warehouse as api
+    monkeypatch.setattr(api, 'load_warehouse_location_projection_contexts', lambda db, rows: {})
+    monkeypatch.setattr(api, '_require_printable_location_label', lambda *args: None)
+    monkeypatch.setattr(api, 'employee_location_name', lambda *args, **kwargs: '三楼·D02·A·2层·3格')
+    def query(area=10, rack='rack-a', code='A', kind='rack_slot', location_id=1):
+        row=SimpleNamespace(id=location_id,level_no=2,slot_no=3,address_area_id=area,
+                            map_rack_id=rack,rack_code=code,address_kind=kind)
+        return api._mobile_shelf_location(SimpleNamespace(get=lambda *args:row),location_id)[1]
+    first=query()
+    assert first['rack_label']=='D02-A架'
+    assert query(location_id=2)['rack_key']==first['rack_key']
+    assert query(area=11)['rack_key']!=first['rack_key']
+    assert query(rack='rack-b')['rack_key']!=first['rack_key']
+    assert query(rack=None)['rack_key']!=first['rack_key']
+    assert 'rack_key' not in query(kind='ground_slot')
+
+
+def test_whole_rack_qr_opens_rack_not_single_cell(monkeypatch):
+    import app.api.warehouse as api
+    from fastapi import Response
+    row=SimpleNamespace(map_rack_id='rack-ABC',warehouse_floor=3)
+    monkeypatch.setattr(api,'_mobile_shelf_location',lambda *args:(row,{'rack_key':'stable','rack_label':'A架'}))
+    result=api.mobile_shelf_label(1,Response(),lot_id=None,db=None,user=None)
+    parsed=urlsplit(result['rack_lookup_url'])
+    assert parsed.path=='/warehouse.html'
+    assert parse_qs(parsed.query)=={'floor':['3F'],'rack_id':['rack-ABC']}
+    assert result['rack_qr_data_url'].startswith('data:image/png;base64,')
+    assert result['qr_data_url']!=result['rack_qr_data_url']

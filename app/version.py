@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.509"
-APP_VERSION_NAME = "货架标签40×80纸型修复"
+APP_VERSION = "v0.22.510"
+APP_VERSION_NAME = "整架编号标签与二维码打印"
 APP_BUILD_DATE = "2026-09-27"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4894,3 +4894,7 @@ APP_CHANGELOG = [*(f"v0.22.508：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["修复仓库地图打印货架标签与40×80纵向纸型不一致的问题；每张物理页完整容纳横向文字和二维码，避免裁切和批量错页。", "货架位置标签与同入口产品标签共用40×80物理页，保留原扫码身份及权限，无数据库迁移或业务数据修改。"]
 APP_VERIFICATION_STEPS = ["刷新仓库地图并重新打开打印货架标签，选择40×80纵向纸型，缩放100%、无边距，不再手动旋转；先试打一张核对货架名称、层格和二维码。", "核对多张标签每页一张，无文字缺失或多余空白页；系统版本v0.22.509。"]
 APP_CHANGELOG = [*(f"v0.22.509：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["货架标签新增整架编号＋二维码模式，每架一张、不含层格，保留每层每格模式。", "打印时将文字和二维码合成40×80原生尺寸图片，避免旋转图文在打印驱动中分开处理。"]
+APP_VERIFICATION_STEPS = ["仓库地图选货架，点击打印货架标签，标签内容选择货架编号＋二维码（不含层格），确认每架一张。", "选择Gprinter GP-3120TU - 40x80纵向标签、100%、无边距，先试打一张核对文字及二维码；扫码登录后打开对应货架地图。"]
+APP_CHANGELOG = [*(f"v0.22.510：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

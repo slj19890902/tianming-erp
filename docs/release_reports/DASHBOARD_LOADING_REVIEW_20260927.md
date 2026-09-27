@@ -24,3 +24,10 @@
 1. Ctrl+F5刷新首页，确认统计与待办显示、加载提示结束；切订单再回首页复查。
 2. 网络恢复后若仍显示超时，点击重新加载；系统版本核对v0.22.513。
 3. 手机扫一张旧货架码，核对仍定位原货架；实体打印不由自动测试代替。
+
+## 正式发布结果
+- 技术发布完成：v0.22.513，源码caca767ef5a2fda7cee3914cf06c15db6987750a，签名包d58ad18f925f30565d5a547aac7925e4801a39e52237472c09f8dcc71ab9789a；NAS更新源已回读同一版本和SHA。管理员人工验收待完成。
+- Manager按原流程停服、完整备份、加密后解密一致性及NAS副本SHA校验，然后切包并启动；备份Z:/sata1-18015598002/BoxERP/backups/20260927-195129-de240bd5.tmbackup，SHA256 a9d6e9fa3e9ce0c8740ad353f4dbefa4574b445d8d23f3944cd743ed5458db1a。旧v512签名包保留，数据库同head，必要时仅回退程序，不用旧库覆盖新事实。
+- 停服态305张业务表备份前后逐项哈希一致；启动后仅email_intake_settings变化，与审计副本逐字段核对为last_sync_started_at/last_sync_completed_at。其他304表保持。schema未变，唯一revision ec0927xl，integrity_check=ok，外键0。
+- localhost:18000、192.168.3.80:8000、172.16.1.26:8000健康200；首页、材料毛利资源及仓库当前twin入口与签名文件哈希一致；首页三个数据接口未登录401。初次验收脚本误把/warehouse.html和退役旧静态页比较，已按真实路由static/factory-twin-assets/warehouse-twin.html纠正，非部署缺文件。
+- 本次未在正式页自动点击、未创建或发货测试订单，未重建安装器（助手代码未改）。原工作区无关改动保留。

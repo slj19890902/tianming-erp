@@ -11,3 +11,7 @@ User requests verification of recent updates and investigation/fix of dashboard 
 
 ## Invariants
 Preserve Tianhua image recognition, existing latest features and unrelated worktree edits. Fixtures/attachments only in isolated tests; no formal import/shipment/data mutation. No migration planned. Single agent.
+
+## File allowlist and final status
+Implementation: app/api/dashboard.py; app/services/{inventory_read_scope,paper_color,warehouse_goods,semi_finished_inventory}.py; static/index.html; app/version.py. Tests: dashboard inventory scope, dashboard loading Node, existing phase8 and authoritative cards frontend contracts. Documentation: this task, matching release report and short formal-baseline handoff index.
+Completed v0.22.513 technical release; 75 Python + 15 Node targeted tests pass. No DDL; full response parity on isolated snapshot. See release report for existing test-fixture gaps and pre-delivery in-transit quantity finding. Admin manual acceptance pending.

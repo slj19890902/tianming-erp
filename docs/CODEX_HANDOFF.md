@@ -5928,3 +5928,6 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 2026-09-27 v507/adc02b97：停用产品实体模具标签兼容，保留并发v506分类，head eb0926dq无迁移。23款停用模具登记及YL共用模具R04已完成；研光/光洋80011946共享身份待答。详见release_reports/MOLD_INACTIVE_R04_20260927.md及NAS同名回执。
 
 2026-09-27 v512/b4db61db：Excel订单、研光/光洋预送货、缺货分层及正式地图找货路线已技术发布；签名包42b273ba，唯一head ec0927xl，正式核心计数保持，三入口健康。无客户PO按稳定来源身份保存且不伪造号码；附件未写正式业务数据、未发货。详见release_reports/EXCEL_ORDER_PREDELIVERY_512_20260927.md及NAS回执20260927-v512-Excel订单预送货与地图找货路线.md，待管理员人工验收。
+
+## 2026-09-27 首页加载v513
+正式运行v0.22.513/caca767e，唯一revision ec0927xl不变；首页重复库存匹配读取优化、请求超时和旧响应保护。备份、75项Python/15项Node、只读发布验收及近期功能未闭合项见 docs/release_reports/DASHBOARD_LOADING_REVIEW_20260927.md；管理员页面验收待完成。

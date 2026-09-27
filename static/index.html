@@ -3299,7 +3299,7 @@
             <template v-if="activePage === 'dashboard'">
               <div class="page-head"><div><h2>首页仪表盘</h2><p>一打开就能看到今天最该处理的订单、报料、送货、回单和对账事项。</p><span v-if="overview.as_of" class="muted">统计截至 {{ formatDateTime(overview.as_of) }} · 对账月份 {{ overview.statement_month }}</span></div></div>
               <div v-if="overviewLoading" class="status blue" style="margin-bottom: 12px;">首页数据加载中……</div>
-              <div v-if="overviewError" class="status red" style="margin-bottom: 12px;">首页数据加载失败：{{ overviewError }}</div>
+              <div v-if="overviewError" class="status red" style="margin-bottom: 12px;">首页数据加载失败：{{ overviewError }} <button type="button" :disabled="overviewLoading" @click="loadOverview()">重新加载</button></div>
               <div v-if="dashboardCards.length" class="dashboard-cards">
                 <div v-for="card in dashboardCards" :key="card.key" class="card dashboard-card" @click="openDashboardTarget(card)">
                   <div class="card-label">{{ card.title }}</div>
@@ -16697,37 +16697,61 @@
             module._mountedRoot = root;
           },
           async loadOverview() {
+            const requestKey = "dashboard:overview";
+            const controller = this.beginLatestRequest(requestKey);
+            const generation = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            const isCurrent = () => latestRequestControllers.get(requestKey) === controller
+              && generation === this.authGeneration && userId === (this.user?.id ?? null);
             if(this.hasPermission('deliveries.view')) this.loadDeliveryBacklogs(1,false);
             this.overviewLoading = true;
             this.overviewError = "";
             this.overview = { cards: [], todos: [], summary: {} };
             this.warehouseCapacitySummary = null;
             try {
-              const data = (await axios.get("/api/dashboard/overview")).data || { cards: [], todos: [], summary: {} };
+              const data = (await axios.get("/api/dashboard/overview", {signal:controller.signal, timeout:20000})).data || { cards: [], todos: [], summary: {} };
+              if (!isCurrent()) return false;
               this.overview = data;
-              await this.loadWarehouseCapacitySummary();
               if (data.kpi) this.kpi = data.kpi;
               else await this.loadKpi();
+              if (!isCurrent()) return false;
+              // Optional capacity must not hold the main dashboard in loading.
+              this.loadWarehouseCapacitySummary();
               return true;
             } catch (error) {
+              if (!isCurrent() || this.isCancelledRequest(error)) return false;
               this.overview = { cards: [], todos: [], summary: {} };
               this.kpi = {};
-              this.overviewError = this.errorMessage(error);
+              this.overviewError = error?.code === "ECONNABORTED"
+                ? "请求超时，请点击重新加载" : this.errorMessage(error);
               return false;
             } finally {
-              this.overviewLoading = false;
-              this.$nextTick(() => this.syncDesktopDeliveryMargin());
+              if (isCurrent()) {
+                this.overviewLoading = false;
+                this.$nextTick(() => this.syncDesktopDeliveryMargin());
+              }
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           async loadWarehouseCapacitySummary() {
+            const requestKey = "dashboard:capacity";
+            const controller = this.beginLatestRequest(requestKey);
+            const generation = this.authGeneration;
+            const userId = this.user?.id ?? null;
+            const isCurrent = () => latestRequestControllers.get(requestKey) === controller
+              && generation === this.authGeneration && userId === (this.user?.id ?? null);
             if (!this.hasPermission("warehouse.view")) {
               this.warehouseCapacitySummary = null;
+              this.finishLatestRequest(requestKey, controller);
               return;
             }
             try {
-              this.warehouseCapacitySummary = (await axios.get("/api/warehouse/capacity/summary")).data || null;
+              const { data } = await axios.get("/api/warehouse/capacity/summary", {signal:controller.signal, timeout:10000});
+              if (isCurrent()) this.warehouseCapacitySummary = data || null;
             } catch (_error) {
-              this.warehouseCapacitySummary = null;
+              if (isCurrent()) this.warehouseCapacitySummary = null;
+            } finally {
+              this.finishLatestRequest(requestKey, controller);
             }
           },
           async loadKpi() {
@@ -16738,7 +16762,7 @@
               && requestUserId === (this.user?.id ?? null)
             );
             try {
-              const {data} = await axios.get("/api/dashboard/kpi");
+              const {data} = await axios.get("/api/dashboard/kpi", {timeout:10000});
               if (!sessionIsCurrent()) return false;
               this.kpi = data;
               return true;

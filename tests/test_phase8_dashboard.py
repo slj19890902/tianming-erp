@@ -38,7 +38,7 @@ def test_dashboard_frontend_loads_real_kpi_endpoint() -> None:
         Path(__file__).resolve().parents[1] / "static" / "index.html"
     ).read_text(encoding="utf-8")
 
-    assert 'axios.get("/api/dashboard/kpi")' in source
+    assert 'axios.get("/api/dashboard/kpi",' in source
     assert "monthly_gross_profit" in source
     assert "含模拟订单" not in source
 

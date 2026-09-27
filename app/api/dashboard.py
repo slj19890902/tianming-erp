@@ -51,6 +51,7 @@ from app.services.location_candidates import (
     load_warehouse_location_projection_contexts,
 )
 from app.services.customer_delivery_margin import build_customer_delivery_margin
+from app.services.inventory_read_scope import inventory_summary_read_scope
 
 
 router = APIRouter()
@@ -372,6 +373,14 @@ def _todo_sort_key(todo: dict) -> tuple:
 
 
 def _common_box_low_stock_warnings(
+    db: Session,
+    visible_customer_ids: set[int] | None,
+) -> list[dict]:
+    with inventory_summary_read_scope(db):
+        return _common_box_low_stock_warnings_in_scope(db, visible_customer_ids)
+
+
+def _common_box_low_stock_warnings_in_scope(
     db: Session,
     visible_customer_ids: set[int] | None,
 ) -> list[dict]:

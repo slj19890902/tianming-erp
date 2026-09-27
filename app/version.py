@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.512"
-APP_VERSION_NAME = "Excel订单预送货与地图找货路线"
+APP_VERSION = "v0.22.513"
+APP_VERSION_NAME = "首页加载性能与异常恢复"
 APP_BUILD_DATE = "2026-09-27"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4926,3 +4926,16 @@ APP_VERIFICATION_STEPS = [
     "进入系统备份 → 系统版本确认 v0.22.512、数据库 revision 为 ec0927xl；再抽查旧 PDF、天华图片和旧拿货任务保持可用。",
 ]
 APP_CHANGELOG = [*(f"v0.22.512：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "首页常用箱低库存提醒复用单次汇总中的批次、材质和面纸颜色读取，减少重复查询；原库存匹配与客户范围规则保持。",
+    "首页主数据不再等待库容请求；请求超时后显示重新加载，重复刷新和切换账号时拒绝旧请求覆盖新结果。",
+    "保留Excel/PDF订单、天华图片预送货及新旧手机二维码功能；无数据库迁移，不改订单、库存或价格事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "强制刷新首页，确认待办和统计正常显示且加载提示结束；切到订单后再回首页复查。",
+    "若网络异常，确认显示失败和重新加载按钮；网络恢复后点击重新加载。",
+    "系统版本应为v0.22.513；手机扫码与订单导入仍按原入口操作。",
+]
+APP_CHANGELOG = [*(f"v0.22.513：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -156,12 +156,13 @@ def test_dashboard_frontend_carries_deterministic_filters_and_clears_stale_data(
     assert "openDashboardTarget(todo)" in source
     assert 'status:"dispatched", return_status:"waiting_receipt"' in source
     assert 'deliveryDashboardMode = "pending_customers"' in source
-    assert "balance_type:this.financeFilters.balance_type || undefined" in source
-    assert "statement_month:this.financeFilters.statement_month || month()" in source
+    assert "const rawFinanceFilters = {...this.financeFilters}" in source
+    assert "balance_type:rawFinanceFilters.balance_type || undefined" in source
+    assert "statement_month:rawFinanceFilters.statement_month || undefined" in source
     assert 'axios.get("/api/finance/current-customer-months"' in source
-    assert "已筛选 {{ financeCurrentTotal }} 位客户" in source
+    assert "{{ financeCurrentTotal }} 个结算对象账期" in source
     loading_index = source.index("async loadOverview()")
-    request_index = source.index('axios.get("/api/dashboard/overview")', loading_index)
+    request_index = source.index('axios.get("/api/dashboard/overview",', loading_index)
     clear_index = source.index(
         "this.overview = { cards: [], todos: [], summary: {} };",
         loading_index,

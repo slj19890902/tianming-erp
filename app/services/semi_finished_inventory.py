@@ -7,7 +7,7 @@ from math import ceil
 
 from sqlalchemy import and_, cast, Integer, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm import object_session
 from app.models.warehouse_goods import WarehouseGoodsProfile
 from app.services.warehouse_goods import goods_profile, qualification_issues, lot_face, product_face
@@ -1180,6 +1180,7 @@ def _semi_finished_candidates_for_signature(
     )
     rows = db.scalars(
         select(InventoryLot)
+        .options(selectinload(InventoryLot.semi_finished_detail))
         .join(
             SemiFinishedInventoryDetail,
             SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,

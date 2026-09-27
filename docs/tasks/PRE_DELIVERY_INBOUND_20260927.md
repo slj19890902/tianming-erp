@@ -6,3 +6,6 @@ Success: count only effective frozen procurement quantity not received/short-clo
 Sequence: inspect authoritative receiving/purpose/conversion services; add failing isolated tests for status-only, partial purchase/receipt, short close/void/reverse, conversion, multiple orders and source selection; implement shared read-only diagnostic and UI live refresh as required; focused regressions; signed release with verified backup, integrity/FK and read-only acceptance; NAS receipt; administrator final page acceptance.
 
 Allowlist: new pre_delivery_readiness service; tianhua_pre_delivery service/API and relevant frontend if needed; focused tests; version and task/release docs, short handoff index. Single agent; original worktree unrelated changes preserved.
+
+## Result
+Technically deployed v0.22.514 / 926d3e68 / ec0927xl; 18 Python + 10 Node tests passed, one unavailable image sample skipped. Verified NAS backup and unchanged business facts; admin UI acceptance pending. See docs/release_reports/PRE_DELIVERY_INBOUND_20260927.md.

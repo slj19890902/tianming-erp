@@ -42,3 +42,7 @@ test('timeout ends loading and visibly marks stale coverage',async()=>{
 test('image recognition rows do not use Excel readiness preview',()=>{
   const x=setup();x.row.source_payload={};x.schedule();assert.equal(x.pending.length,0);
 });
+test('selected alternative with no quantity cannot silently fall back to the old order',async()=>{
+  const x=setup();x.row.source_payload.candidates[0]._qty=null;await x.start();
+  assert.equal(x.pending.length,0);assert.match(x.row._readinessError,/分配数量/);assert.equal(x.row._readinessLoading,false);
+});

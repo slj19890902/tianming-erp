@@ -140,6 +140,8 @@ def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_p
         assert bad.status_code == 400
         after_preview = client.get(f"/api/deliveries/tianhua-preimport/{batch_id}")
         assert after_preview.json()["items"][0]["final_delivery_qty"] == line["final_delivery_qty"]
+        client.cookies.clear()
+        assert client.post(f"/api/deliveries/tianhua-preimport/{batch_id}/readiness-preview", json={"items":[]}).status_code == 401
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["source_type"] == "excel_upload"

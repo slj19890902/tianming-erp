@@ -138,3 +138,19 @@ def test_allocation_does_not_reuse_order_or_unselected_candidate():
     assert chosen["finished_available"]==200
     foreign=allocate_readiness(200,[(3,200)],facts,{})
     assert foreign["unresolved_quantity"]==200 and foreign["pending_review"]
+
+
+def test_initial_diagnostic_covers_file_demand_not_finished_suggestion(context, monkeypatch):
+    from types import SimpleNamespace
+    from app.services import pre_delivery_readiness as service
+    db, item = context
+    monkeypatch.setattr(service,"order_readiness",lambda *_:dict(finished_available=100,
+        pending_processing=80,effective_inbound=120,pending_quantity=600,review_reasons=[]))
+    payload={"draft":None,"items":[dict(item_id=999,product_id=item.product_id,order_item_id=item.id,
+        final_delivery_qty=100,image_qty=600,source_payload={})]}
+    batch=SimpleNamespace(customer_id=db.get(Order,item.order_id).customer_id)
+    service.refresh_excel_readiness(db,batch,payload)
+    diagnostic=payload["items"][0]["source_payload"]["shortage_diagnostic"]
+    assert (diagnostic["finished_available"],diagnostic["effective_inbound"],diagnostic["new_purchase_shortage"]) == (100,120,300)
+    service.refresh_excel_readiness(db,batch,payload,{999:{"order_item_id":item.id,"final_delivery_qty":50}})
+    assert payload["items"][0]["source_payload"]["shortage_diagnostic"]["finished_available"] == 50

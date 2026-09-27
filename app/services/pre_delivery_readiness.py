@@ -225,7 +225,10 @@ def refresh_excel_readiness(db, batch, payload, overrides=None):
                 pending_quantity=facts[item.id]["pending_quantity"], finished_available=facts[item.id]["finished_available"],
                 delivery_date=order.delivery_date.isoformat() if order.delivery_date else None))
         change = overrides.get(row["item_id"])
-        quantity = (change.get("final_delivery_qty") if change else row.get("final_delivery_qty"))
+        # Before a draft exists, the initial suggested delivery may be only the
+        # finished subset. Diagnose the file's full demand, not that suggestion.
+        quantity = (change.get("final_delivery_qty") if change else
+                    row.get("final_delivery_qty") if payload.get("draft") else row.get("image_qty"))
         requested = int(quantity or row.get("image_qty") or 0)
         # Multiple orders are alternatives until explicitly allocated, never
         # cumulative coverage of whichever order happened to match first.

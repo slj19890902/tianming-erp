@@ -37986,6 +37986,10 @@
             state.items.forEach(row => { row._readinessLoading = true; row._readinessError = ""; });
             this._tianhuaReadinessTimer = setTimeout(async () => {
               if (!current()) return;
+              if (state.items.some(row => (row.source_payload?.candidates||[]).some(c => c._selected && (!Number.isInteger(Number(c._qty)) || Number(c._qty)<=0)))) {
+                state.items.forEach(row => { row._readinessLoading=false; row._readinessError="请填写已勾选订单的有效分配数量，再核对备货结论"; });
+                return;
+              }
               const items = state.items.map(row => ({item_id:row.item_id,row_no:row.row_no,
                 final_delivery_qty:Math.max(0,Math.floor(Number(row.final_delivery_qty)||0)),order_item_id:row.order_item_id||null,
                 allocations:(row.source_payload?.candidates||[]).filter(c=>c._selected&&Number(c._qty)>0)

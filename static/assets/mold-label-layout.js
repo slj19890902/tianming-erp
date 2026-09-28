@@ -5,6 +5,7 @@
   const PAPER_HEIGHT_MM = 40;
   const STAGE_SCALE = 8;
   const MIN_TEXT_SIZE_MM = 1.2;
+  // 历史 V1-V7 二维码保持14.2毫米；V8使用15毫米，不改写冻结作业。
   const V7_MIN_FONT_SIZE_MM = Object.freeze({
     cutting_mode: 2.6,
     rack_location: 2.6,
@@ -13,6 +14,14 @@
     product_name: 2.6,
     report_specification: 3.0,
   });
+  const V8_MIN_FONT_SIZE_MM = Object.freeze({
+    cutting_mode: 2.4,
+    rack_location: 2.4,
+    custom_note: 2.2,
+    customer_inventory_code: 2.8,
+    product_name: 2.4,
+    report_specification: 2.8,
+  });
   const V1_CATALOG_VERSION = "p1-103-v1";
   const V2_CATALOG_VERSION = "p1-103-v2";
   const V3_CATALOG_VERSION = "p1-103-v3";
@@ -20,6 +29,7 @@
   const V5_CATALOG_VERSION = "p1-115-v1";
   const V6_CATALOG_VERSION = "p1-117-v1";
   const V7_CATALOG_VERSION = "p1-118-v1";
+  const V8_CATALOG_VERSION = "p1-119-v1";
   const LEGACY_ELEMENT_LABELS = Object.freeze({
     board_specification: "片料尺寸",
     inventory_code: "纸箱存货编码",
@@ -93,6 +103,10 @@
     })[character]);
   }
 
+  function isIncompleteText(value) {
+    return ["待完善", "未填", "冲突"].some((marker) => String(value || "").includes(marker));
+  }
+
   async function requestJson(url, options = {}) {
     const response = await fetch(url, {
       credentials: "same-origin",
@@ -129,7 +143,7 @@
     if (!Number.isInteger(version) || version < 0 || !layout || typeof layout !== "object") {
       throw new Error("40×80模具标签布局版本无效");
     }
-    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION, V3_CATALOG_VERSION, V4_CATALOG_VERSION, V5_CATALOG_VERSION, V6_CATALOG_VERSION, V7_CATALOG_VERSION].includes(layout.catalog_version)) {
+    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION, V3_CATALOG_VERSION, V4_CATALOG_VERSION, V5_CATALOG_VERSION, V6_CATALOG_VERSION, V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(layout.catalog_version)) {
       throw new Error("40×80模具标签元素目录不受支持");
     }
     if (
@@ -139,7 +153,7 @@
       throw new Error("40×80模具标签内容区尺寸无效");
     }
     const currentCatalog = [V4_CATALOG_VERSION, V5_CATALOG_VERSION].includes(layout.catalog_version);
-    const catalogLabels = layout.catalog_version === V7_CATALOG_VERSION
+    const catalogLabels = [V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(layout.catalog_version)
       ? V7_ELEMENT_LABELS
       : layout.catalog_version === V6_CATALOG_VERSION
       ? V6_ELEMENT_LABELS
@@ -182,12 +196,19 @@
         throw new Error(`${catalogLabels[element.id]}不能隐藏`);
       }
       if (element.kind === "qr") {
-        if (width !== 14.2 || height !== 14.2) {
-          throw new Error("模具二维码必须保持14.2毫米正方形");
+        const currentQrSize = layout.catalog_version === V8_CATALOG_VERSION ? 15 : 14.2;
+        if (width !== currentQrSize || height !== currentQrSize) {
+          throw new Error(`模具二维码必须保持${currentQrSize}毫米正方形`);
         }
         if (
           layout.catalog_version === V7_CATALOG_VERSION
           && (x !== 64.4 || y !== 18.7)
+        ) {
+          throw new Error("模具二维码必须保持既定位置");
+        }
+        if (
+          layout.catalog_version === V8_CATALOG_VERSION
+          && (x !== 63.6 || y !== 18.2)
         ) {
           throw new Error("模具二维码必须保持既定位置");
         }
@@ -229,7 +250,7 @@
         }
       }
     }
-    if (layout.catalog_version === V7_CATALOG_VERSION) {
+    if ([V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(layout.catalog_version)) {
       const elements = Object.fromEntries(layout.elements.map((element) => [element.id, element]));
       const ruleAt = (id, y) => {
         const rule = elements[id];
@@ -266,16 +287,34 @@
 
   function valueForElement(row, elementId, catalogVersion = V3_CATALOG_VERSION) {
     const product = Array.isArray(row?.products) ? row.products[0] : null;
-    if (catalogVersion === V7_CATALOG_VERSION) {
+    if ([V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(catalogVersion)) {
       const customer = String(row?.label_customer_name ?? product?.customer_short_name ?? "").trim() || "待完善";
       const inventoryCode = String(row?.label_inventory_code ?? product?.product_code ?? "").trim() || "待完善";
       const values = {
-        report_specification: String(row?.label_report_specification ?? product?.report_specification ?? "").trim() || "待完善",
-        cutting_mode: String(row?.label_cutting_mode ?? product?.default_cutting_mode ?? "").trim() || "待完善",
+        report_specification: String(
+          catalogVersion === V8_CATALOG_VERSION
+            ? row?.label_display_report_specification ?? row?.label_report_specification ?? product?.report_specification ?? ""
+            : row?.label_report_specification ?? product?.report_specification ?? ""
+        ).trim() || "待完善",
+        cutting_mode: String(
+          catalogVersion === V8_CATALOG_VERSION
+            ? row?.label_display_cutting_mode ?? row?.label_cutting_mode ?? product?.default_cutting_mode ?? ""
+            : row?.label_cutting_mode ?? product?.default_cutting_mode ?? ""
+        ).trim() || "待完善",
         rack_location: String(row?.label_rack_location ?? "").trim() || "待完善",
-        custom_note: String(row?.label_custom_note ?? "").trim(),
-        product_name: String(row?.label_product_name ?? product?.product_name ?? "").trim() || "待完善",
-        customer_inventory_code: `${customer} ${inventoryCode}`,
+        custom_note: String(
+          catalogVersion === V8_CATALOG_VERSION
+            ? row?.label_display_remarks ?? row?.label_custom_note ?? ""
+            : row?.label_custom_note ?? ""
+        ).trim(),
+        product_name: String(
+          catalogVersion === V8_CATALOG_VERSION
+            ? row?.label_display_product_name ?? row?.label_product_name ?? product?.product_name ?? ""
+            : row?.label_product_name ?? product?.product_name ?? ""
+        ).trim() || "待完善",
+        customer_inventory_code: catalogVersion === V8_CATALOG_VERSION
+          ? String(row?.label_display_identity ?? "").trim() || `${customer} ${inventoryCode}`
+          : `${customer} ${inventoryCode}`,
       };
       return values[elementId] || "";
     }
@@ -388,22 +427,27 @@
       const identityClass = envelope.layout.catalog_version === V6_CATALOG_VERSION && element.id === "mold_identity"
         ? " mold-layout-identity-line"
         : "";
-      const minFontSize = envelope.layout.catalog_version === V7_CATALOG_VERSION
+      const minFontSize = envelope.layout.catalog_version === V8_CATALOG_VERSION
+        ? V8_MIN_FONT_SIZE_MM[element.id]
+        : envelope.layout.catalog_version === V7_CATALOG_VERSION
         ? V7_MIN_FONT_SIZE_MM[element.id]
         : null;
       const fitAttributes = minFontSize === undefined || minFontSize === null
         ? ""
         : ` data-min-font-mm="${minFontSize}" data-full-text="${escapeHtml(value)}"`;
-      return `<div class="mold-layout-element mold-layout-text${identityClass}${value.includes("待完善") ? " missing" : ""}" data-layout-id="${escapeHtml(element.id)}" data-layout-label="${escapeHtml(ELEMENT_LABELS[element.id])}" data-max-font-mm="${Number(element.font_size_mm)}"${fitAttributes} style="${style}">${textElementHtml(row, element, envelope.layout.catalog_version)}</div>`;
+      return `<div class="mold-layout-element mold-layout-text${identityClass}${isIncompleteText(value) ? " missing" : ""}" data-layout-id="${escapeHtml(element.id)}" data-layout-label="${escapeHtml(ELEMENT_LABELS[element.id])}" data-max-font-mm="${Number(element.font_size_mm)}"${fitAttributes} style="${style}">${textElementHtml(row, element, envelope.layout.catalog_version)}</div>`;
     }).join("");
     return `<article class="mold-label-page" data-layout-catalog="${escapeHtml(envelope.layout.catalog_version)}"><div class="label template-80x40 layout-driven">${elements}${prototypeMode ? '<span class="prototype-mark">样例</span>' : ""}</div></article>`;
   }
 
   function fitAndValidate(container) {
     const failures = [];
-    for (const node of container.querySelectorAll('.mold-label-page[data-layout-catalog="p1-118-v1"] .mold-layout-text[data-min-font-mm]')) {
+    for (const node of container.querySelectorAll('.mold-label-page[data-layout-catalog="p1-118-v1"] .mold-layout-text[data-min-font-mm],.mold-label-page[data-layout-catalog="p1-119-v1"] .mold-layout-text[data-min-font-mm]')) {
       let size = Number(node.dataset.maxFontMm);
       const minimum = Number(node.dataset.minFontMm);
+      const fullText = node.dataset.fullText || node.textContent || "";
+      node.textContent = fullText;
+      delete node.dataset.truncated;
       node.style.fontSize = `${size}mm`;
       const overflowing = () => (
         node.scrollWidth > node.clientWidth + 1
@@ -415,7 +459,10 @@
       }
       node.dataset.appliedFontMm = String(size);
       if (!overflowing()) continue;
-      const fullText = node.dataset.fullText || node.textContent || "";
+      if (node.closest('.mold-label-page')?.dataset.layoutCatalog === V8_CATALOG_VERSION) {
+        failures.push(node.dataset.layoutLabel || "文字");
+        continue;
+      }
       const ellipsis = "…";
       let low = 0;
       let high = fullText.length;
@@ -504,7 +551,7 @@
     const selected = element.id === selectedElementId ? " selected" : "";
     const style = elementInlineStyle(element, STAGE_SCALE);
     if (element.kind === "qr") {
-      return `<div class="mold-layout-element mold-layout-qr-missing${selected}" data-editor-element="${element.id}" style="${style}">二维码<br>14.2mm</div>`;
+      return `<div class="mold-layout-element mold-layout-qr-missing${selected}" data-editor-element="${element.id}" style="${style}">二维码<br>${Number(element.width_mm)}mm</div>`;
     }
     if (element.kind === "rule") {
       return `<div class="mold-layout-element mold-layout-rule${selected}" data-editor-element="${element.id}" style="${style}" aria-hidden="true"></div>`;
@@ -534,7 +581,7 @@
     byId("moldLayoutHeight").value = element.height_mm;
     const isText = element.kind === "text";
     const fixedSectionGeometry = element.kind === "rule" || (
-      editorLayout.catalog_version === V7_CATALOG_VERSION && element.id === "report_specification"
+      [V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(editorLayout.catalog_version) && element.id === "report_specification"
     );
     byId("moldLayoutX").disabled = element.kind === "rule";
     byId("moldLayoutY").disabled = fixedSectionGeometry;
@@ -551,7 +598,7 @@
   }
 
   function verticalBounds(element) {
-    if (editorLayout?.catalog_version !== V7_CATALOG_VERSION) {
+    if (![V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(editorLayout?.catalog_version)) {
       return [0, PAPER_HEIGHT_MM - Number(element.height_mm)];
     }
     if (["cutting_mode", "rack_location", "custom_note"].includes(element.id)) {
@@ -566,14 +613,17 @@
 
   function widthLimit(element) {
     if (
-      editorLayout?.catalog_version === V7_CATALOG_VERSION
+      [V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(editorLayout?.catalog_version)
       && ["product_name", "customer_inventory_code"].includes(element.id)
-    ) return 64.4 - Number(element.x_mm);
+    ) {
+      const qrX = editorLayout.catalog_version === V8_CATALOG_VERSION ? 63.6 : 64.4;
+      return qrX - Number(element.x_mm);
+    }
     return PAPER_WIDTH_MM - Number(element.x_mm);
   }
 
   function heightLimit(element) {
-    if (editorLayout?.catalog_version !== V7_CATALOG_VERSION) {
+    if (![V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(editorLayout?.catalog_version)) {
       return PAPER_HEIGHT_MM - Number(element.y_mm);
     }
     if (["cutting_mode", "rack_location", "custom_note"].includes(element.id)) return 16.6 - Number(element.y_mm);
@@ -699,7 +749,8 @@
     mutationAttempt = null;
     if (draftPreviewTimer !== null) global.clearTimeout(draftPreviewTimer);
     draftPreviewTimer = null;
-    showStatus("按住元素拖动，或输入毫米坐标、宽高和字号；二维码尺寸固定为14.2mm。")
+    const qrSize = editorLayout.catalog_version === V8_CATALOG_VERSION ? 15 : 14.2;
+    showStatus(`按住元素拖动，或输入毫米坐标、宽高和字号；二维码尺寸固定为${qrSize}mm。`)
     renderEditor();
     byId("moldLayoutEditor").hidden = false;
   }

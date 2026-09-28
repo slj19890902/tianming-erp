@@ -8,10 +8,21 @@ LEDGER = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
 
 
 def _function_source(name: str) -> str:
-    match = re.search(rf"function {re.escape(name)}\([^)]*\)\{{", LEDGER)
+    match = re.search(rf"(?:async )?function {re.escape(name)}\b", LEDGER)
     assert match, f"missing {name}"
+    parentheses = 0
+    body_start = None
+    for index in range(match.end(), len(LEDGER)):
+        if LEDGER[index] == "(":
+            parentheses += 1
+        elif LEDGER[index] == ")":
+            parentheses -= 1
+        elif LEDGER[index] == "{" and parentheses == 0:
+            body_start = index
+            break
+    assert body_start is not None, f"missing body for {name}"
     depth = 0
-    for index in range(match.start(), len(LEDGER)):
+    for index in range(body_start, len(LEDGER)):
         if LEDGER[index] == "{":
             depth += 1
         elif LEDGER[index] == "}":
@@ -19,7 +30,6 @@ def _function_source(name: str) -> str:
             if depth == 0:
                 return LEDGER[match.start() : index + 1]
     raise AssertionError(f"unterminated {name}")
-
 
 def _run_workspace_functions(*names: str) -> str:
     source = "\n".join(_function_source(name) for name in names)
@@ -37,10 +47,16 @@ const clearQuery = warehouseWorkspaceActivationPlan('/warehouse-ledger.html?tab=
 assert.equal(clearQuery.hasQuery, true);
 assert.equal(clearQuery.query, '');
 assert.equal(warehouseWorkspaceActivationNeedsApply(clearQuery, current), true);
+const unlocated = warehouseWorkspaceActivationPlan('/warehouse-ledger.html?search_floor=UNLOCATED');
+assert.equal(warehouseWorkspaceActivationNeedsApply(unlocated, current), true);
+assert.equal(warehouseWorkspaceActivationNeedsApply(unlocated, {{...current, searchFloor: 'UNLOCATED'}}), false);
 const semi = warehouseWorkspaceActivationPlan('/warehouse-ledger.html?tab=semi_finished&q=半成品');
 assert.equal(warehouseWorkspaceActivationNeedsApply(semi, current), true);
 assert.equal(warehouseLedgerInventoryType(null, 'semi_finished', 'finished'), 'semi_finished');
 assert.equal(warehouseLedgerInventoryType({{inventory_type: 'finished'}}, 'semi_finished', 'semi_finished'), 'finished');
+assert.equal(warehouseWorkspaceShouldRenderTab('finished', 'finished', false), true);
+assert.equal(warehouseWorkspaceShouldRenderTab('finished', 'finished', true), false);
+assert.equal(warehouseWorkspaceShouldRenderTab('semi_finished', 'finished', true), true);
 const lookup = {{disabled: false, matches: () => false, closest: selector => selector === '#moldBindingPanel' ? {{closest: () => null}} : null}};
 assert.equal(warehouseWorkspaceDirtySection(lookup), '');
 const moldLabel = {{disabled: false, matches: selector => selector.includes('#moldPrimaryCustomer1'), closest: () => null}};
@@ -59,6 +75,59 @@ console.log('workspace helpers passed');
     assert completed.returncode == 0, completed.stderr
     return completed.stdout
 
+
+
+def _run_initial_ledger_render_behavior() -> str:
+    source = "\n".join(
+        _function_source(name)
+        for name in (
+            "warehouseWorkspaceActivationPlan",
+            "warehouseWorkspaceShouldRenderTab",
+            "applyWarehouseDeepLink",
+        )
+    )
+    program = f"""
+const assert = require('node:assert/strict');
+global.window = {{location: {{origin: 'https://erp.test'}}}};
+global.location = {{search: ''}};
+global.state = {{tab: 'finished'}};
+global.warehouseWorkspace = {{initialTabRendered: false, submittedQuery: ''}};
+const keyword = {{value: ''}};
+global.$ = id => {{ if (id === 'keywordFilter') return keyword; throw new Error(`unexpected element ${{id}}`); }};
+let switchCalls = 0;
+let inventoryVisible = false;
+let locateCalls = 0;
+global.switchTab = async tab => {{ switchCalls += 1; state.tab = tab; warehouseWorkspace.initialTabRendered = true; inventoryVisible = tab === 'finished'; return true; }};
+global.locateWarehouseLedger = async args => {{ locateCalls += 1; assert.equal(args.keyword, 'P007'); assert.equal(args.scroll, false); return true; }};
+global.publishWarehouseWorkspaceContext = () => {{}};
+{source}
+(async () => {{
+  await applyWarehouseDeepLink(new URLSearchParams('tab=finished&q=P007'));
+  assert.equal(switchCalls, 1);
+  assert.equal(inventoryVisible, true);
+  assert.equal(keyword.value, 'P007');
+  assert.equal(locateCalls, 1);
+  await applyWarehouseDeepLink(new URLSearchParams('tab=finished&q=P007'));
+  assert.equal(switchCalls, 1);
+  warehouseWorkspace.initialTabRendered = false;
+  warehouseWorkspace.submittedQuery = '';
+  locateCalls = 0;
+  await applyWarehouseDeepLink(new URLSearchParams());
+  assert.equal(switchCalls, 2);
+  assert.equal(inventoryVisible, true);
+  assert.equal(locateCalls, 0);
+  console.log('initial ledger render passed');
+}})().catch(error => {{ console.error(error); process.exit(1); }});
+"""
+    completed = subprocess.run(
+        ["node", "-e", program],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout
 
 def test_ledger_uses_the_same_origin_keepalive_workspace_protocol() -> None:
     assert 'message.source!=="tianming-erp-shell"' in LEDGER
@@ -102,6 +171,7 @@ def test_workspace_command_helpers_execute_real_ledger_functions() -> None:
         "warehouseWorkspaceActivationPlan",
         "warehouseWorkspaceActivationNeedsApply",
         "warehouseLedgerInventoryType",
+        "warehouseWorkspaceShouldRenderTab",
         "warehouseWorkspaceDirtySection",
     )
     assert output.strip() == "workspace helpers passed"
@@ -116,3 +186,19 @@ def test_tab_guard_and_section_specific_drafts_are_preserved() -> None:
     assert 'clearWarehouseWorkspaceDirty("finishedEntry")' in LEDGER
     assert 'clearWarehouseWorkspaceDirty("semiEntry")' in LEDGER
     assert 'runWarehouseMutation' in LEDGER
+
+
+def test_initial_ledger_route_renders_once_and_embedded_hides_duplicate_tabs() -> None:
+    assert 'initialTabRendered:false' in LEDGER
+    assert 'warehouseWorkspaceShouldRenderTab("finished",state.tab,warehouseWorkspace.initialTabRendered)&&await switchTab("finished")' in LEDGER
+    assert 'warehouseWorkspace.initialTabRendered=true;' in LEDGER
+    assert '$("inventorySection").classList.toggle("hidden",!["finished","semi_finished"].includes(tab))' in LEDGER
+    assert 'body.embedded>.wrap>.tabs>[data-tab]' in LEDGER
+    assert 'body.embedded>.wrap>.warehouse-secondary [data-tab="molds"]' in LEDGER
+    assert 'body.embedded>.wrap>.tabs .warehouse-help' in LEDGER
+    assert 'lastActivation.searchFloor||warehouseLedgerSearchFloor()' in LEDGER
+    assert 'warehouseWorkspace.lastActivation.searchFloor=null;warehouseWorkspace.scopeChanged=true' in LEDGER
+
+
+def test_initial_ledger_route_runs_real_same_tab_render_once() -> None:
+    assert _run_initial_ledger_render_behavior().strip() == "initial ledger render passed"

@@ -285,7 +285,7 @@ def test_mold_location_frontend_uses_compact_intersection_filters_and_two_lines(
     ):
         tag = re.search(rf'<input[^>]+id="{checkbox}"[^>]*>', source)
         assert tag is not None
-        assert "checked" not in tag.group(0)
+        assert ("checked" in tag.group(0)) == (checkbox == "moldIncludeUnprinted")
 
     customer_candidates = source.split(
         "async function renderMoldCustomerCandidates(){", 1

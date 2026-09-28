@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.514"
-APP_VERSION_NAME = "预送货真实在途数量诊断"
-APP_BUILD_DATE = "2026-09-27"
+APP_VERSION = "v0.22.515"
+APP_VERSION_NAME = "新登记模具默认可见"
+APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
 _V022124_CHANGES = [
@@ -4951,3 +4951,7 @@ APP_VERIFICATION_STEPS = [
     "预览和分配不会自动保存订单或执行发货；原天华图片入口保持可用。",
 ]
 APP_CHANGELOG = [*(f"v0.22.514：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["仓库模具列表默认包含未打印模具，研光、光洋已登记的新模具可直接搜索和进入标签打印；筛选项明确为包含未打印。", "保留未启用、归档、维修、客户权限和原标签打印登记规则，不改模具编号、产品绑定或位置。"]
+APP_VERIFICATION_STEPS = ["刷新仓库库存管理的模具页面，确认包含未打印默认勾选。", "按研光、光洋或存货编码查询，选择已有模具进入标签预览；实际打印由管理员操作。"]
+APP_CHANGELOG = [*(f"v0.22.515：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

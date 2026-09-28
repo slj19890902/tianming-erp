@@ -150,8 +150,10 @@
     .floor3-slot-marker.disabled { background:#94a3b8; }
     .floor3-plan-hotspot.selected,.floor3-area-entry.selected { background:#e9d5ff; border-color:#9333ea; }
     .floor3-plan-hotspot.matched,.floor3-plan-hotspot.selected.matched,.floor3-area-entry.matched { background:#bbf7d0; border-color:#15803d; }
+    .mold-label-edit-workspace{grid-column:1/-1;display:grid;grid-template-columns:minmax(360px,1fr) minmax(330px,420px);gap:14px;margin-top:8px;padding:12px;border:1px solid #cbd5e1;border-radius:9px;background:#f8fafc}.mold-label-edit-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.mold-label-edit-fields .field.full{grid-column:1/-1}.mold-label-preview-wrap{min-width:0}.mold-label-preview-wrap h3{margin:0 0 6px;font-size:15px}.mold-label-preview-paper{display:flex;justify-content:center;min-height:174px;padding:10px;border:1px solid #94a3b8;border-radius:8px;background:#e2e8f0;overflow:auto}.mold-label-preview-paper .mold-label-page{box-shadow:0 1px 6px #64748b66}.mold-label-preview-state{min-height:38px;margin-top:7px;padding:7px 9px;border-radius:6px;background:#eff6ff;color:#1e3a8a;font-size:12px}.mold-label-preview-state.error{background:#fee2e2;color:#991b1b}.mold-label-preview-state.success{background:#dcfce7;color:#166534}.mold-label-preview-tips{margin-top:8px;color:#475569;font-size:12px}.mold-label-preview-tips summary{width:max-content;color:#1d4ed8;cursor:pointer;font-weight:800}.mold-label-preview-tips p{margin:6px 0 0;line-height:1.55}.mold-label-preview-auto{display:block;margin-top:3px;color:#64748b;font-size:11px;white-space:normal}.mold-label-edit-workspace[hidden]{display:none!important}@media(max-width:980px){.mold-label-edit-workspace{grid-template-columns:1fr}.mold-label-edit-fields{grid-template-columns:1fr}.mold-label-edit-fields .field.full{grid-column:auto}}
+    .mold-bound-products{grid-column:1/-1;margin-top:8px;padding:12px;border:1px solid #cbd5e1;border-radius:9px;background:#fff}.mold-bound-products h3{margin:0}.mold-bound-products-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}.mold-bound-products[hidden]{display:none!important}
   </style>
-<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script><script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script></head>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><link rel="stylesheet" href="/static/assets/mold-label-layout.css?v=p1-119-v1" /><script src="/static/ui/order-reference.js?v=423"></script><script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script><script src="/static/assets/mold-label-layout.js?v=p1-119-v1"></script></head>
 <body>
   <header>
     <div><h1>仓库库存管理</h1><span class="muted desktop-note">成品入仓、三楼货位与库存流水联动</span></div>
@@ -630,8 +632,8 @@
         <div class="grid">
           <div class="field"><label>搜索正式客户</label><input id="moldCustomerSearch" autocomplete="off" placeholder="客户中文、简称、编码或拼音"></div>
           <div class="field"><label>第一主标签客户</label><select id="moldPrimaryCustomer1"><option value="">请先选择客户</option></select></div>
-          <div id="moldPrimaryCustomer2Field" class="field hidden"><label>第二主标签客户（仅共享模具编辑）</label><select id="moldPrimaryCustomer2" disabled><option value="">不显示第二个客户</option></select></div>
-          <div class="field" style="grid-column:span 4"><label id="moldCustomerSelectionLabel">正式客户（新增只选一个）</label><div id="moldCustomerCandidates" class="floor3-candidates"></div></div>
+          <div id="moldPrimaryCustomer2Field" class="field"><label>第二主标签客户（可不选）</label><select id="moldPrimaryCustomer2"><option value="">不显示第二个客户</option></select></div>
+          <div class="field" style="grid-column:span 4"><label id="moldCustomerSelectionLabel">适用客户（可多选，主标签最多显示两个）</label><div id="moldCustomerCandidates" class="floor3-candidates"></div></div>
           <div class="field"><label>模具标签名称</label><input id="moldLabelName" required autocomplete="off" placeholder="例如：92.5*36.5*1.8/2"></div>
           <div class="field"><label>中文简写（可不填）</label><input id="moldChineseShortName" autocomplete="off" placeholder="例如：24*36中性内盒"></div>
           <div class="field"><label>一楼模具货架</label><select id="moldRackSelect"><option value="">正在读取已确认货架…</option></select></div>
@@ -642,6 +644,29 @@
           <div class="field"><label>&nbsp;</label><button id="moldSaveButton" class="btn primary" type="submit">保存为新模具</button></div>
           <div class="field"><label>&nbsp;</label><button id="resetMoldForm" class="btn" type="button">关闭</button></div>
         </div>
+        <section id="moldLabelEditWorkspace" class="mold-label-edit-workspace" hidden aria-labelledby="moldLabelEditTitle">
+          <div>
+            <h3 id="moldLabelEditTitle" style="margin:0 0 8px">当前模具标签显示内容</h3>
+            <div class="mold-label-edit-fields">
+              <div class="field full"><label>大身份文字</label><input id="moldLabelDisplayIdentity" autocomplete="off" disabled></div>
+              <div class="field"><label>产品名称</label><input id="moldLabelDisplayProductName" autocomplete="off" disabled></div>
+              <div class="field"><label>片料尺寸</label><input id="moldLabelDisplayReportSpecification" autocomplete="off" disabled></div>
+              <div class="field"><label>开料方式</label><input id="moldLabelDisplayCuttingMode" autocomplete="off" disabled></div>
+              <div class="field"><label>标签说明</label><input id="moldLabelDisplayRemarks" autocomplete="off" disabled></div>
+            </div>
+            <details class="mold-label-preview-tips"><summary>! 标签字段说明</summary><p>输入框内浅色文字是当前自动内容；留空会继续随正式资料自动更新。这里仅修改以后新登记的 40×80 模具标签，不改变模具正式客户、常用箱、报料、位置或历史打印任务；40×30 标签保持原版式。</p></details>
+          </div>
+          <div class="mold-label-preview-wrap">
+            <h3>80 × 40 mm 实时预览</h3>
+            <div id="moldLabelPreviewPaper" class="mold-label-preview-paper"></div>
+            <div id="moldLabelPreviewState" class="mold-label-preview-state" aria-live="polite">正在读取当前模具标签…</div>
+          </div>
+        </section>
+        <section id="moldBoundProductsPanel" class="mold-bound-products" hidden aria-labelledby="moldBoundProductsTitle">
+          <div class="mold-bound-products-head"><h3 id="moldBoundProductsTitle">已绑定常用箱</h3><span id="moldBoundProductsCount" class="muted"></span></div>
+          <div class="table-wrap"><table><thead><tr><th>客户</th><th>存货编码 / 产品</th><th>生产工艺</th><th>操作</th></tr></thead><tbody id="moldBoundProductsBody"></tbody></table></div>
+          <details class="mold-label-preview-tips"><summary>! 解绑说明</summary><p>解绑会取消该常用箱当前选用的模具及“模切”工艺关联，影响以后生产选模；不会删除订单、生产、库存或历史绑定记录。网络结果不确定时系统先重新读取当前绑定核对，不会盲目重复解绑。</p></details>
+        </section>
         <div id="moldCodeHint" class="mold-inline-feedback hidden" aria-live="polite"></div>
         <div id="moldLocationBuilderHint" class="notice warn hidden" style="margin-top:10px"></div>
         <div id="moldEditLocationNotice" class="notice warn hidden" style="margin-top:10px">编辑位置代表模具实物已经搬动。保存前系统会显示原位置和新位置，请核对后确认。</div>
@@ -661,7 +686,7 @@
       </div>
       <div class="panel">
         <div class="mold-query-heading"><h2>模具与位置查询</h2><button id="openMoldCreate" class="btn primary admin-only" type="button">新增模具</button></div>
-        <div class="mold-filter-row"><input id="moldCustomerFilter" autocomplete="off" aria-label="客户名称或简写" placeholder="客户中文 / 简称 / 缩写"><input id="moldProductCodeFilter" autocomplete="off" aria-label="存货编码" placeholder="存货编码"><input id="moldRackFilter" autocomplete="off" aria-label="货架位置" placeholder="货架位置"><input id="moldKeyword" autocomplete="off" aria-label="模具名称" placeholder="模具名称 / 中文简称"><span class="mold-filter-checks"><label><input id="moldIncludeUnprinted" type="checkbox" checked>包含未打印</label><label><input id="moldIncludeInactive" type="checkbox">未启用</label><label><input id="moldIncludeRepair" type="checkbox">维修</label></span><select id="moldLabelTemplate" aria-label="标签纸型" title="标签纸型"><option value="mold_80x40_v1" selected title="40×80 标签样式">40×80</option><option value="mold_40x30_v1" title="40×30 标签样式">40×30</option></select><button id="refreshMolds" class="btn primary" type="button">查询</button></div>
+        <div class="mold-filter-row"><input id="moldCustomerFilter" autocomplete="off" aria-label="客户名称或简写" placeholder="客户"><input id="moldProductCodeFilter" autocomplete="off" aria-label="存货编码" placeholder="存货编码"><input id="moldRackFilter" autocomplete="off" aria-label="货架位置" placeholder="位置"><input id="moldKeyword" autocomplete="off" aria-label="模具或产品名称" placeholder="模具 / 产品名称"><span class="mold-filter-checks"><label><input id="moldIncludeUnprinted" type="checkbox" checked>包含未打印</label><label><input id="moldIncludeInactive" type="checkbox">未启用</label><label><input id="moldIncludeRepair" type="checkbox">维修</label></span><select id="moldLabelTemplate" aria-label="标签纸型" title="标签纸型"><option value="mold_80x40_v1" selected title="40×80 标签样式">40×80</option><option value="mold_40x30_v1" title="40×30 标签样式">40×30</option></select><button id="refreshMolds" class="btn primary" type="button">查询</button></div>
         <div class="toolbar mold-print-toolbar"><button id="moldBatchPrint" class="btn primary" type="button" disabled onclick="openMoldBatchLabels()">按所选纸型批量打印</button><span id="moldBatchCount" class="muted">已选 0 件</span><button class="btn admin-only" type="button" onclick="openMoldLabelLayoutEditor()">调整40×80标签布局</button><button class="btn admin-only" type="button" onclick="openMoldLabelPrototype()">预览所选纸型</button></div>
       </div>
       <div class="panel"><div class="table-wrap mold-table-wrap"><table class="mold-table"><thead><tr><th><input id="moldSelectAll" type="checkbox" aria-label="全选当前页" onchange="toggleAllMolds(this.checked)"></th><th>模具标签名称</th><th>货架位置</th><th><button id="moldStatusSort" class="mold-sort-button" type="button" aria-pressed="false" title="点击后把未打印、待维修等状态排到前面">状态 <span id="moldStatusSortMark">↕</span></button></th><th>最近编辑</th><th>已绑定常用箱</th><th>操作</th></tr></thead><tbody id="moldBody"></tbody></table><div id="moldEmpty" class="empty hidden">没有符合当前条件的模具。</div></div><div class="toolbar" style="justify-content:space-between;margin-top:10px"><span id="moldResultSummary" class="muted">共 0 件模具</span><div class="toolbar"><button id="moldPrevPage" class="btn small" type="button">上一页</button><strong id="moldPageLabel">第 1/1 页</strong><button id="moldNextPage" class="btn small" type="button">下一页</button></div></div></div>
@@ -888,6 +913,8 @@
     state.moldRepairAttempt=null;
     state.moldLocationOptionsLoadedAt=0;
     state.moldEditLocation={moldId:null,originalLocation:"",expectedVersion:null,syncing:false,selectionChanged:false,attempt:null};
+    state.moldLabelPreview={moldId:null,row:null,envelope:null,autoFields:{},loaded:false,loading:false,error:"",requestId:0,overflow:[]};
+    state.moldBoundProducts={moldId:null,items:[],loading:false,requestId:0,unbindAttempt:null};
     const $=id=>document.getElementById(id);
     const hasPermission=code=>state.user?.role==="admin"||state.permissions.includes(code);
     const canReviewStocktakes=()=>!state.readOnly&&hasPermission("warehouse.stocktake.review");
@@ -1087,6 +1114,7 @@
       $("refreshMolds").onclick=loadMoldsFirstPage;["moldCustomerFilter","moldProductCodeFilter","moldRackFilter","moldKeyword"].forEach(id=>$(id).onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadMoldsFirstPage()}});["moldIncludeUnprinted","moldIncludeInactive","moldIncludeRepair"].forEach(id=>$(id).onchange=loadMoldsFirstPage);
       $("moldPrevPage").onclick=()=>{if(state.moldPage>1){state.moldPage-=1;loadMolds()}};$("moldNextPage").onclick=()=>{const pages=Math.max(1,Math.ceil(state.moldTotal/state.moldPageSize));if(state.moldPage<pages){state.moldPage+=1;loadMolds()}};
       $("moldCustomerSearch").oninput=renderMoldCustomerCandidates;$("moldPrimaryCustomer1").onchange=updateMoldIdentityPreview;$("moldPrimaryCustomer2").onchange=updateMoldIdentityPreview;$("moldLabelName").oninput=updateMoldIdentityPreview;$("moldChineseShortName").oninput=updateMoldIdentityPreview;$("moldRackSelect").onchange=()=>{markMoldLocationSelectionChanged();renderMoldLocationLevels()};$("moldLevelSelect").onchange=()=>{markMoldLocationSelectionChanged();renderMoldLocationGrids()};$("moldGridSelect").onchange=()=>{markMoldLocationSelectionChanged();buildMoldRackLocation()};$("openMoldCreate").onclick=openMoldCreateForm;$("resetMoldForm").onclick=()=>resetMoldForm();$("moldStatusSort").onclick=toggleMoldStatusSort;
+      ["moldLabelDisplayIdentity","moldLabelDisplayProductName","moldLabelDisplayReportSpecification","moldLabelDisplayCuttingMode","moldLabelDisplayRemarks"].forEach(id=>$(id).oninput=renderMoldLabelPreview);
       $("moldBindingCustomerKeyword").oninput=renderMoldBindingCustomerCandidates;$("moldBindingCustomerKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();renderMoldBindingCustomerCandidates()}};$("moldBindingKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchMoldBindingProducts()}};$("searchMoldBindingProducts").onclick=searchMoldBindingProducts;$("confirmMoldBinding").onclick=()=>saveMoldBinding(false);$("addMoldBinding").onclick=()=>saveMoldBinding(true);$("closeMoldBinding").onclick=closeMoldBinding;
       $("refreshPrintingPlates").onclick=loadPrintingPlates;$("printingPlateKeyword").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();loadPrintingPlates()}};$("resetPrintingPlateForm").onclick=resetPrintingPlateForm;
       $("printingPlateRackSelect").onchange=$("printingPlateLevelSelect").onchange=$("printingPlatePositionNumber").oninput=buildPrintingPlateLocation;$("printingPlateLocation").onchange=()=>syncPrintingPlateLocationBuilder($("printingPlateLocation").value);
@@ -1999,7 +2027,7 @@
     function buildMoldRackLocation(){
       if(state.moldEditLocation.moldId&&!state.moldEditLocation.selectionChanged&&!state.moldEditLocation.syncing)return;
       const rack=selectedMoldRack();if(!rack)return;
-      if(rack.location_depth==="rack"){$("moldRackLocation").value=`1F-M-${rack.rack_code}`;setMoldLocationBuilderMessage();return}
+      if(rack.location_depth==="rack"){$("moldRackLocation").value=`1F-M-${rack.rack_code}`;setMoldLocationBuilderMessage();renderMoldLabelPreview();return}
       const level=selectedMoldLevel();if(!level)return;
       if((level.grids||[]).length){
         const grid=Number.parseInt($("moldGridSelect").value,10);if(!grid)return;
@@ -2009,6 +2037,7 @@
         $("moldRackLocation").value=`1F-M-${rack.rack_code}-L${level.level}`;
         setMoldLocationBuilderMessage();
       }
+      renderMoldLabelPreview();
     }
     function renderMoldLocationLevels(){
       const rack=selectedMoldRack(),previous=$("moldLevelSelect").value,levels=rack?.levels||[];
@@ -2050,10 +2079,61 @@
     }
     function updateMoldIdentityPreview(){
       const first=state.customers.find(row=>Number(row.id)===Number($("moldPrimaryCustomer1").value)),second=state.customers.find(row=>Number(row.id)===Number($("moldPrimaryCustomer2").value)),label=$("moldLabelName").value.trim(),shortName=$("moldChineseShortName").value.trim(),shorts=[first,second].filter(Boolean).map(row=>String(row.chinese_short_name||"").trim());
-      const hint=$("moldCodeHint");if(!first){hint.textContent="";hint.classList.add("hidden");return}hint.classList.remove("hidden");
-      if(first&&second&&first.id===second.id){hint.textContent="两个主标签客户不能相同";return}
-      if(shorts.some(value=>!value)){const missing=[first,second].filter(Boolean).filter(row=>!String(row.chinese_short_name||"").trim()).map(row=>row.name).join("、");hint.textContent=`${missing} 尚未维护客户中文简称，请先到客户资料补充`;return}
+      const hint=$("moldCodeHint");if(!first){hint.textContent="";hint.classList.add("hidden");renderMoldLabelPreview();return}hint.classList.remove("hidden");
+      if(first&&second&&first.id===second.id){hint.textContent="两个主标签客户不能相同";renderMoldLabelPreview();return}
+      if(shorts.some(value=>!value)){const missing=[first,second].filter(Boolean).filter(row=>!String(row.chinese_short_name||"").trim()).map(row=>row.name).join("、");hint.textContent=`${missing} 尚未维护客户中文简称，请先到客户资料补充`;renderMoldLabelPreview();return}
       hint.textContent=`标签预览：${shorts.join("/")} ${label||"模具标签名称待填写"}${shortName?` ${shortName}`:""}`;
+      if(state.moldLabelPreview.loaded)$("moldLabelDisplayIdentity").placeholder=`自动：${currentMoldAutomaticIdentity()||moldLabelAutoValue("display_identity")||"不显示"}`;renderMoldLabelPreview();
+    }
+    const moldLabelOverrideFields=Object.freeze({display_identity:"moldLabelDisplayIdentity",product_name:"moldLabelDisplayProductName",report_specification:"moldLabelDisplayReportSpecification",cutting_mode:"moldLabelDisplayCuttingMode",remarks:"moldLabelDisplayRemarks"});
+    function moldLabelAutoValue(key){const fields=state.moldLabelPreview.autoFields||{};return String(fields[key]??fields[`label_${key}`]??"").trim()}
+    function currentMoldAutomaticIdentity(){const first=state.customers.find(row=>Number(row.id)===Number($("moldPrimaryCustomer1").value)),second=state.customers.find(row=>Number(row.id)===Number($("moldPrimaryCustomer2").value)),shorts=[first,second].filter(Boolean).map(row=>String(row.chinese_short_name||"").trim()).filter(Boolean),label=$("moldLabelName").value.trim(),shortName=$("moldChineseShortName").value.trim();return shorts.length&&label?`${shorts.join("/")} ${label}${shortName?` ${shortName}`:""}`:""}
+    function setMoldLabelOverrideControlsDisabled(disabled){Object.values(moldLabelOverrideFields).forEach(id=>$(id).disabled=disabled)}
+    function updateMoldSaveAvailability(){const invalidPreview=Boolean($("moldId").value)&&state.moldLabelPreview.loaded&&state.moldLabelPreview.overflow.length>0;$("moldSaveButton").disabled=state.moldSaving||invalidPreview||Boolean(state.moldBoundProducts.unbindAttempt)}
+    function clearMoldLabelPreview({hide=true}={}){
+      state.moldLabelPreview.requestId+=1;state.moldLabelPreview={moldId:null,row:null,envelope:null,autoFields:{},loaded:false,loading:false,error:"",requestId:state.moldLabelPreview.requestId,overflow:[]};
+      Object.values(moldLabelOverrideFields).forEach(id=>{$(id).value="";$(id).placeholder="";$(id).disabled=true});
+      $("moldLabelPreviewPaper").innerHTML="";$("moldLabelPreviewState").textContent="请先从模具列表点击编辑";$("moldLabelPreviewState").className="mold-label-preview-state";$("moldLabelEditWorkspace").hidden=hide;updateMoldSaveAvailability();
+    }
+    function moldLabelOverridesPayload(){return Object.fromEntries(Object.entries(moldLabelOverrideFields).map(([key,id])=>[key,$(id).value.trim()||null]))}
+    function moldLabelPreviewDraft(){
+      const preview=state.moldLabelPreview,row={...(preview.row||{})},overrides=moldLabelOverridesPayload();
+      row.label_display_identity=overrides.display_identity||currentMoldAutomaticIdentity()||moldLabelAutoValue("display_identity")||row.label_display_identity;
+      row.label_display_product_name=overrides.product_name||moldLabelAutoValue("product_name")||row.label_display_product_name;
+      row.label_display_report_specification=overrides.report_specification||moldLabelAutoValue("report_specification")||row.label_display_report_specification;
+      row.label_display_cutting_mode=overrides.cutting_mode||moldLabelAutoValue("cutting_mode")||row.label_display_cutting_mode;
+      row.label_display_remarks=overrides.remarks||moldLabelAutoValue("remarks")||"";
+      row.label_rack_location=$("moldRackLocation").value.trim()||row.label_rack_location;
+      return row;
+    }
+    function renderMoldLabelPreview(){
+      const preview=state.moldLabelPreview,stateNode=$("moldLabelPreviewState"),paper=$("moldLabelPreviewPaper");if(!preview.loaded||!preview.row||!preview.envelope)return;
+      try{paper.innerHTML=TmMoldLabelLayout.labelHtml(moldLabelPreviewDraft(),preview.envelope);const failures=TmMoldLabelLayout.fitAndValidate(paper);preview.overflow=failures;if(failures.length){stateNode.textContent=`以下内容无法完整显示：${failures.join("、")}。请缩短标签专用内容后再保存。`;stateNode.className="mold-label-preview-state error"}else if(preview.row.printable===false){stateNode.textContent=`预览已生成；当前不能打印：${preview.row.printability_error||"请先完善模具资料"}`;stateNode.className="mold-label-preview-state error"}else{stateNode.textContent="预览与以后新登记的 40×80 打印使用同一渲染器；当前内容可完整显示。";stateNode.className="mold-label-preview-state success"}}catch(error){preview.overflow=["预览布局"];stateNode.textContent=`预览失败：${error.message||"布局无效"}`;stateNode.className="mold-label-preview-state error"}updateMoldSaveAvailability();
+    }
+    async function loadMoldLabelPreview(moldId,{preserveDraft=false}={}){
+      const preview=state.moldLabelPreview,requestId=++preview.requestId;preview.moldId=Number(moldId);preview.loading=true;preview.error="";if(!preserveDraft){preview.loaded=false;preview.overflow=[];Object.values(moldLabelOverrideFields).forEach(id=>{$(id).value="";$(id).placeholder="正在读取自动内容…"});$("moldLabelPreviewPaper").innerHTML="";setMoldLabelOverrideControlsDisabled(true)}$("moldLabelEditWorkspace").hidden=false;$("moldLabelPreviewState").textContent=preserveDraft?"正在更新标签自动内容…":"正在读取当前模具标签…";$("moldLabelPreviewState").className="mold-label-preview-state";updateMoldSaveAvailability();
+      try{const data=await api(`/api/warehouse/molds/${moldId}/label-preview`);if(requestId!==state.moldLabelPreview.requestId||Number(state.moldEditLocation.moldId)!==Number(moldId))return;preview.row=data;preview.envelope=data.label_layout;preview.autoFields=data.label_auto_fields||{};const overrides=data.label_overrides||{};Object.entries(moldLabelOverrideFields).forEach(([key,id])=>{if(!preserveDraft)$(id).value=String(overrides[key]??"").trim();$(id).placeholder=`自动：${key==="display_identity"?currentMoldAutomaticIdentity()||moldLabelAutoValue(key)||"不显示":moldLabelAutoValue(key)||"不显示"}`});preview.loaded=true;preview.loading=false;setMoldLabelOverrideControlsDisabled(false);renderMoldLabelPreview()}
+      catch(error){if(requestId!==state.moldLabelPreview.requestId)return;preview.loading=false;preview.error=error.message||"标签预览读取失败";$("moldLabelPreviewState").textContent=`${preview.error}。模具其他资料仍可编辑，本次不会清空已有标签专用内容。`;$("moldLabelPreviewState").className="mold-label-preview-state error";updateMoldSaveAvailability()}
+    }
+    function clearMoldBoundProducts(){state.moldBoundProducts.requestId+=1;state.moldBoundProducts={moldId:null,items:[],loading:false,requestId:state.moldBoundProducts.requestId,unbindAttempt:null};$("moldBoundProductsPanel").hidden=true;$("moldBoundProductsCount").textContent="";$("moldBoundProductsBody").innerHTML="";updateMoldSaveAvailability()}
+    function applyMoldBoundProducts(data,moldId){if(Number(state.moldEditLocation.moldId)!==Number(moldId))return false;state.moldBoundProducts.moldId=Number(moldId);state.moldBoundProducts.items=data.items||data.products||[];state.moldBoundProducts.loading=false;renderMoldBoundProducts();return true}
+    function renderMoldBoundProducts(){
+      const binding=state.moldBoundProducts,attempt=binding.unbindAttempt;$("moldBoundProductsPanel").hidden=!$("moldId").value;$("moldBoundProductsCount").textContent=binding.loading?"正在读取…":`共 ${binding.items.length} 款`;
+      if(binding.loading&&!binding.items.length){$("moldBoundProductsBody").innerHTML='<tr><td colspan="4" class="empty">正在读取已绑定常用箱…</td></tr>';return}
+      $("moldBoundProductsBody").innerHTML=binding.items.map(row=>{const current=attempt&&Number(attempt.productId)===Number(row.id),busy=Boolean(attempt),label=current&&attempt.phase==="unknown"?"核对解绑结果":current?"正在解绑…":"解绑";return `<tr><td>${h(row.customer_name||"客户待完善")}</td><td><b>${h(row.customer_material_code||row.product_code||"编码待完善")}</b><br>${h(row.product_name||"名称待完善")}</td><td>${h(row.production_process||"未填写")}</td><td><button class="btn danger" type="button" ${busy&&!current||current&&attempt.phase!=="unknown"?"disabled":""} onclick="unbindMoldBoundProduct(${Number(row.id)})">${label}</button></td></tr>`}).join("")||'<tr><td colspan="4" class="empty">当前没有绑定常用箱；仍可预览和维护标签内容</td></tr>';updateMoldSaveAvailability();
+    }
+    async function loadMoldBoundProducts(moldId,{quiet=false}={}){
+      const binding=state.moldBoundProducts,requestId=++binding.requestId;binding.moldId=Number(moldId);binding.loading=true;if(!quiet)binding.items=[];$("moldBoundProductsPanel").hidden=false;renderMoldBoundProducts();
+      try{const data=await api(`/api/warehouse/molds/${moldId}/bound-products`);if(requestId!==state.moldBoundProducts.requestId)return null;applyMoldBoundProducts(data,moldId);return data}catch(error){if(requestId!==state.moldBoundProducts.requestId)return null;binding.loading=false;$("moldBoundProductsCount").textContent="读取失败";$("moldBoundProductsBody").innerHTML=`<tr><td colspan="4" class="empty error-text">${h(error.message)}</td></tr>`;if(!quiet)toast(`已绑定常用箱读取失败：${error.message}`,true);return null}
+    }
+    async function refreshMoldAfterBindingChange(moldId,message){state.moldBoundProducts.unbindAttempt=null;const results=await Promise.all([loadMolds(),loadMoldBoundProducts(moldId,{quiet:true}),loadMoldLabelPreview(moldId,{preserveDraft:true})]);if(state.moldBinding.moldId===Number(moldId)&&state.moldBinding.customerId)void searchMoldBindingProducts();toast(results[1]===null?`${message}，但绑定列表刷新失败，请手动核对`:message);updateMoldSaveAvailability()}
+    async function reconcileMoldUnbind(attempt){
+      attempt.phase="checking";renderMoldBoundProducts();try{const data=await api(`/api/warehouse/molds/${attempt.moldId}/bound-products`);if(state.moldBoundProducts.unbindAttempt!==attempt)return;applyMoldBoundProducts(data,attempt.moldId);const current=state.moldBoundProducts.items.find(row=>Number(row.id)===Number(attempt.productId));if(!current){await refreshMoldAfterBindingChange(attempt.moldId,"已核对：当前常用箱已解绑");return}state.moldBoundProducts.unbindAttempt=null;renderMoldBoundProducts();toast(Number(current.version)===Number(attempt.expectedVersion)?"已核对：当前仍保持绑定，请再次点击解绑":"绑定资料版本已变化，请核对当前行后重新点击解绑",true)}catch(error){if(state.moldBoundProducts.unbindAttempt!==attempt)return;attempt.phase="unknown";renderMoldBoundProducts();toast(`解绑结果仍无法核对：${error.message}；请稍后点击“核对解绑结果”`,true)}
+    }
+    async function unbindMoldBoundProduct(productId){
+      const binding=state.moldBoundProducts,item=binding.items.find(row=>Number(row.id)===Number(productId));if(!item||!binding.moldId)return;let attempt=binding.unbindAttempt;if(attempt){if(Number(attempt.productId)!==Number(productId)){toast("上一项解绑结果尚未核对，请先处理当前项",true);return}if(attempt.phase==="unknown")return reconcileMoldUnbind(attempt);return}
+      attempt={moldId:Number(binding.moldId),productId:Number(item.id),expectedVersion:Number(item.version),phase:"deleting"};binding.unbindAttempt=attempt;renderMoldBoundProducts();
+      try{const data=await api(`/api/warehouse/molds/${attempt.moldId}/product-bindings/${attempt.productId}?expected_version=${attempt.expectedVersion}`,{method:"DELETE"});if(binding.unbindAttempt!==attempt)return;await refreshMoldAfterBindingChange(attempt.moldId,data.message||`${item.customer_material_code||item.product_code} 已解绑`)}catch(error){if(binding.unbindAttempt!==attempt)return;if(error.status&&error.status<500){binding.unbindAttempt=null;await loadMoldBoundProducts(attempt.moldId,{quiet:true});toast(error.message,true);renderMoldBoundProducts();return}attempt.phase="unknown";renderMoldBoundProducts();toast("解绑结果暂不确定，正在重新读取当前绑定核对",true);await reconcileMoldUnbind(attempt)}
     }
     async function renderMoldCustomerCandidates(){
       const keyword=$("moldCustomerSearch").value.trim().toLocaleLowerCase().replace(/\s+/g,"");
@@ -2067,30 +2147,32 @@
       const editing=Boolean(row?.id),displayName=row?.display_name||row?.mold_name||"当前模具";
       $("moldFormTitle").textContent=editing?`编辑生产模具：${displayName}`:"新增生产模具";
       $("moldSaveButton").textContent=editing?"保存修改":"保存为新模具";
-      $("moldPrimaryCustomer2").disabled=!editing;
-      $("moldPrimaryCustomer2Field").classList.toggle("hidden",!editing);
-      $("moldCustomerSelectionLabel").textContent=editing?"适用客户（共享模具可多选）":"正式客户（新增只选一个）";
+      $("moldPrimaryCustomer2").disabled=false;
+      $("moldPrimaryCustomer2Field").classList.remove("hidden");
+      $("moldCustomerSelectionLabel").textContent="适用客户（可多选，主标签最多显示两个）";
+      $("moldLabelEditWorkspace").hidden=!editing;
+      $("moldBoundProductsPanel").hidden=!editing;
     }
     function toggleMoldCustomer(id){
       const customerId=Number(id),editing=Boolean($("moldId").value),wasSelected=state.moldCustomerSelection.has(customerId);
-      if(!editing){state.moldCustomerSelection.clear();if(!wasSelected)state.moldCustomerSelection.add(customerId)}
-      else if(wasSelected)state.moldCustomerSelection.delete(customerId);else state.moldCustomerSelection.add(customerId);
+      if(wasSelected&&editing&&state.moldBoundProducts.items.some(row=>Number(row.customer_id)===customerId)){toast("该客户仍有常用箱绑定当前模具，请先在下方逐项解绑",true);return}
+      if(wasSelected)state.moldCustomerSelection.delete(customerId);else state.moldCustomerSelection.add(customerId);
       updateMoldPrimaryCustomerOptions();renderMoldCustomerCandidates();
     }
     function moldCustomerAssociations(){
       const first=Number($("moldPrimaryCustomer1").value),second=Number($("moldPrimaryCustomer2").value);
-      if(!$("moldId").value&&state.moldCustomerSelection.size!==1)throw new Error("新增模具只能选择一个正式客户");
+      if(!state.moldCustomerSelection.size)throw new Error("请至少选择一个适用客户");
       if(!first)throw new Error("请选择第一主标签客户");if(first===second)throw new Error("两个主标签客户不能相同");
       return [...state.moldCustomerSelection].sort((a,b)=>a-b).map(customerId=>({customer_id:customerId,display_order:customerId===first?1:customerId===second?2:null}));
     }
     function resetMoldForm({preserveLocation=false,hideForm=true}={}){
-      if(state.moldMasterAttempt||state.moldEditLocation.attempt&&!state.moldEditLocation.attempt.committed){toast("当前模具的保存结果还未确定，请先原样重试核对",true);return false}
+      if(state.moldMasterAttempt||state.moldEditLocation.attempt&&!state.moldEditLocation.attempt.committed||state.moldBoundProducts.unbindAttempt){toast("当前模具的保存或解绑结果还未确定，请先原样核对",true);return false}
       const preservedLocation=preserveLocation?$("moldRackLocation").value:"";
       state.moldCodePreviewRequestId+=1;clearTimeout(state.moldCodePreviewTimer);
       state.moldEditLocation={moldId:null,originalLocation:"",expectedVersion:null,syncing:false,selectionChanged:false,attempt:null};
       state.moldCustomerSelection.clear();state.moldMasterAttempt=null;
       state.moldBinding={moldId:null,customerId:null,items:[],selected:null,requestId:state.moldBinding.requestId+1,saving:false};
-      $("moldForm").reset();$("moldId").value="";$("moldVersion").value="";$("moldCode").value="";
+      $("moldForm").reset();$("moldId").value="";$("moldVersion").value="";$("moldCode").value="";clearMoldLabelPreview();clearMoldBoundProducts();
       setMoldFormMode();setMoldLocationBuilderDisabled(false);$("moldEditLocationNotice").classList.add("hidden");
       $("moldCodeHint").textContent="";$("moldCodeHint").classList.add("hidden");setMoldLocationBuilderMessage();
       closeMoldBinding();updateMoldPrimaryCustomerOptions();renderMoldCustomerCandidates();renderMoldLocationLevels();
@@ -2130,11 +2212,10 @@
     async function saveMoldBinding(keepOpen){
       const row=state.moldBinding.selected;if(!row||state.moldBinding.saving)return;state.moldBinding.saving=true;renderMoldBindingSelection();
       const customerId=state.moldBinding.customerId;
-      try{const data=await api(`/api/warehouse/molds/${state.moldBinding.moldId}/product-bindings`,{method:"POST",body:JSON.stringify({items:[{product_id:row.id,expected_version:row.version}]})});toast(`${row.customer_material_code||row.product_code} 已绑定 ${data.mold.display_name||data.mold.mold_name}`);await loadMolds();if(keepOpen){const current=state.molds.find(item=>item.id===state.moldBinding.moldId)||data.mold;openMoldBinding(current);selectMoldBindingCustomer(customerId,false);await searchMoldBindingProducts();$("moldBindingKeyword").focus()}else closeMoldBinding()}catch(error){toast(error.message,true);await searchMoldBindingProducts()}finally{state.moldBinding.saving=false;renderMoldBindingSelection()}
+      try{const moldId=Number(state.moldBinding.moldId),data=await api(`/api/warehouse/molds/${moldId}/product-bindings`,{method:"POST",body:JSON.stringify({items:[{product_id:row.id,expected_version:row.version}]})});await refreshMoldAfterBindingChange(moldId,`${row.customer_material_code||row.product_code} 已绑定 ${data.mold.display_name||data.mold.mold_name}`);if(keepOpen){const current=state.molds.find(item=>item.id===moldId)||data.mold;openMoldBinding(current);selectMoldBindingCustomer(customerId,false);await searchMoldBindingProducts();$("moldBindingKeyword").focus()}else closeMoldBinding()}catch(error){toast(error.message,true);await searchMoldBindingProducts()}finally{state.moldBinding.saving=false;renderMoldBindingSelection()}
     }
     async function removeMoldBinding(index){
-      const row=state.moldBinding.items[index];if(!row||Number(row.mold_tool_id)!==Number(state.moldBinding.moldId)||state.moldBinding.saving)return;if(!window.confirm(`确认解除 ${row.customer_material_code||row.product_code} 与当前模具的绑定？`))return;state.moldBinding.saving=true;renderMoldBindingSelection();
-      try{const data=await api(`/api/warehouse/molds/${state.moldBinding.moldId}/product-bindings/${row.id}?expected_version=${row.version}`,{method:"DELETE"});toast(`${row.customer_material_code||row.product_code} 已解除模具绑定`);await loadMolds();$("moldBindingCurrent").innerHTML=`当前模具：<b>${h(data.mold.display_name||data.mold.mold_name)}</b>；已绑定 ${Number(data.mold.product_count||0)} 款`;await searchMoldBindingProducts()}catch(error){toast(error.message,true);await searchMoldBindingProducts()}finally{state.moldBinding.saving=false;renderMoldBindingSelection()}
+      const row=state.moldBinding.items[index],moldId=Number(state.moldBinding.moldId);if(!row||Number(row.mold_tool_id)!==moldId||state.moldBinding.saving)return;if(!state.moldBoundProducts.items.some(item=>Number(item.id)===Number(row.id)))await loadMoldBoundProducts(moldId,{quiet:true});return unbindMoldBoundProduct(row.id)
     }
     function setPrintingPlateLocationBuilderDisabled(disabled){["printingPlateRackSelect","printingPlateLevelSelect","printingPlatePositionNumber"].forEach(id=>$(id).disabled=disabled)}
     function buildPrintingPlateLocation(){
@@ -2192,17 +2273,21 @@
     function openMoldLabelLayoutEditor(){window.open(`/mold-label.html?prototype=1&template_version=${encodeURIComponent("mold_80x40_v1")}`,"_blank")}
     function editMold(id){
       const row=state.molds.find(value=>value.id===id);if(!row)return;
-      const pending=state.moldEditLocation.attempt||state.moldMasterAttempt;if(pending){toast(Number(state.moldEditLocation.moldId)===Number(id)?"这件模具的保存结果正在核对，请在当前编辑区再次点击保存":"上一件模具的保存结果还未确定，请先原样重试核对",true);return}
+      const pending=state.moldEditLocation.attempt||state.moldMasterAttempt||state.moldBoundProducts.unbindAttempt;if(pending){toast(Number(state.moldEditLocation.moldId)===Number(id)?"这件模具的保存或解绑结果正在核对，请在当前编辑区继续处理":"上一件模具的保存或解绑结果还未确定，请先原样核对",true);return}
       $("moldForm").classList.remove("hidden");
       state.moldCodePreviewRequestId+=1;state.moldEditLocation={moldId:row.id,originalLocation:row.rack_location,expectedVersion:row.location_version,syncing:false,selectionChanged:false,attempt:null};state.moldCustomerSelection=new Set((row.associated_customers||[]).map(item=>Number(item.customer_id)));$("moldId").value=row.id;$("moldVersion").value=row.version;$("moldCode").value=row.internal_code||row.mold_code||"";$("moldLabelName").value=row.label_name||"";$("moldChineseShortName").value=row.chinese_short_name||"";$("moldCustomerSearch").value="";$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";setMoldFormMode(row);const primary=[...(row.primary_customers||[])].sort((a,b)=>Number(a.display_order)-Number(b.display_order));updateMoldPrimaryCustomerOptions(primary[0]?.customer_id||null,primary[1]?.customer_id||null);renderMoldCustomerCandidates();syncMoldLocationBuilder(row.rack_location);setMoldLocationBuilderDisabled(false);$("moldEditLocationNotice").classList.remove("hidden");openMoldBinding(row);
       void loadMoldLocationOptions(true).then(ok=>{if(ok&&Number(state.moldEditLocation.moldId)===Number(row.id))syncMoldLocationBuilder(row.rack_location)});
+      void loadMoldLabelPreview(row.id);
+      void loadMoldBoundProducts(row.id);
       $("moldForm").scrollIntoView({behavior:"smooth",block:"start"});
     }
     async function saveMold(event){
       event.preventDefault();if(state.moldSaving)return;state.moldSaving=true;$("moldSaveButton").disabled=true;
       try{
         const id=$("moldId").value,labelName=$("moldLabelName").value.trim();if(!labelName){toast("请填写模具标签名称",true);return}
-        const basePayload={label_name:labelName,chinese_short_name:$("moldChineseShortName").value.trim()||null,customers:moldCustomerAssociations(),rack_location:$("moldRackLocation").value,remarks:$("moldRemarks").value.trim()||null,...(id?{expected_version:Number($("moldVersion").value)}:{})},signature=JSON.stringify({id,...basePayload});
+        if(id&&state.moldLabelPreview.loaded&&state.moldLabelPreview.overflow.length){toast(`标签内容无法完整显示：${state.moldLabelPreview.overflow.join("、")}，请缩短后再保存`,true);return}
+        const labelOverrides=id&&state.moldLabelPreview.loaded?{label_overrides:moldLabelOverridesPayload()}:{};
+        const basePayload={label_name:labelName,chinese_short_name:$("moldChineseShortName").value.trim()||null,customers:moldCustomerAssociations(),rack_location:$("moldRackLocation").value,remarks:$("moldRemarks").value.trim()||null,...labelOverrides,...(id?{expected_version:Number($("moldVersion").value)}:{})},signature=JSON.stringify({id,...basePayload});
         let attempt=state.moldMasterAttempt;
         if(attempt?.committed){const refreshed=await loadMolds();if(refreshed===false){toast("模具档案已保存，但列表刷新失败；请勿重复提交，稍后再点保存只会继续刷新",true);return}finishMoldSave("已核对模具档案保存成功");return}
         if(attempt&&attempt.signature!==signature){toast("上次保存结果尚未确定，请恢复原资料后重试，不能更换客户、名称或位置",true);return}
@@ -2223,7 +2308,7 @@
         attempt.committed=true;attempt.savedId=saved.id;
         const refreshed=await loadMolds();if(refreshed===false){toast("模具档案已保存，但列表刷新失败；请勿重复提交，稍后再点保存只会继续刷新",true);return}
         finishMoldSave(id&&payload.physical_move_confirmed?"模具新位置已保存，并已记录移位流水":"模具档案已保存");
-      }catch(err){toast(err.message,true)}finally{state.moldSaving=false;$("moldSaveButton").disabled=false}
+      }catch(err){toast(err.message,true)}finally{state.moldSaving=false;updateMoldSaveAvailability()}
     }
     async function enableLegacyMold(id){const row=state.molds.find(item=>item.id===id);if(!row||row.archive_status!=="active"||row.is_active)return;const name=row.display_name||row.mold_name||"当前模具";if(!window.confirm(`确认恢复历史停用模具 ${name}？恢复不会生成搬运事实；如实物已搬到封存区，请不要使用此按钮。`))return;try{await api(`/api/warehouse/molds/${id}/enable`,{method:"PUT"});toast(`${name} 已恢复使用`);await loadMolds()}catch(err){toast(err.message,true)}}
     async function changeMoldRepairStatus(id,targetStatus){

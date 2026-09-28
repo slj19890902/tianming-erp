@@ -41,8 +41,18 @@ export function warehouseWorkspaceBlockMessage(state) {
   if (state.moveSubmitting || state.stocktakeSubmitting || state.mergeSubmitting || state.otherSubmitting) {
     return "仓库操作正在提交，请等待当前结果后再切换页面。";
   }
-  if (state.moveUncertain || state.stocktakeRefreshRequired || state.pendingRefreshRequired || state.rackOperationBlocked) {
+  if (state.moveUncertain || state.mergeUncertain || state.pendingUncertain || state.stocktakeUncertain
+      || state.stocktakeRefreshRequired || state.pendingRefreshRequired || state.rackOperationBlocked) {
     return state.rackOperationBlocked || "仓库操作结果尚未确认，请先用当前保留记录刷新核对。";
   }
   return "";
+}
+
+export function warehouseWorkspaceNavigateMessage(url, requestId) {
+  return {
+    source: "tianming-warehouse",
+    type: "warehouse-workspace-navigate",
+    url,
+    ...(requestId === undefined ? {} : { request_id: requestId })
+  };
 }

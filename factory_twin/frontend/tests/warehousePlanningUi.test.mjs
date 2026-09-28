@@ -203,9 +203,9 @@ test("scoped geometry apply keeps its retry key and distinguishes commit from re
 
 test("stocktake keeps an acknowledged receipt when readback fails and retains only unacknowledged drafts", async () => {
   for (const acknowledged of [false, true]) {
-    const state = { drafts: [{ operation: "add", quantity: 1 }], key: "same-request", receipt: [], refresh: false, calls: 0, message: "" };
+    const state = { drafts: [{ operation: "add", quantity: 1 }], key: "same-request", receipt: [], refresh: false, uncertain: false, calls: 0, message: "" };
     const context = {
-      stocktakeDrafts: state.drafts, stocktakeBatchBusy: false, stocktakeRefreshRequired: false,
+      stocktakeDrafts: state.drafts, stocktakeBatchBusy: false, stocktakeBatchUncertain: false, stocktakeRefreshRequired: false,
       stocktakeBatchIdempotencyKey: state.key, window: { confirm: () => true }, inventoryUnitLabel: () => "箱",
       buildStocktakeBatchPayload: key => ({ idempotency_key: key }),
       mutateJson: async () => { state.calls++; if (!acknowledged) throw Error("write response unavailable"); return { items: [{ operation: "add", lot_id: 7 }] }; },
@@ -213,6 +213,7 @@ test("stocktake keeps an acknowledged receipt when readback fails and retains on
       setStocktakeBatchBusy: () => {}, setStocktakeDrafts: v => { state.drafts = v; },
       setStocktakeLastResult: v => { state.receipt = v; }, setStocktakeLotId: () => {}, setStocktakeDecreaseQuantity: () => {},
       setStocktakeBatchIdempotencyKey: v => { state.key = v; }, setStocktakeRefreshRequired: v => { state.refresh = v; },
+      setStocktakeBatchUncertain: v => { state.uncertain = v; },
       setWarehouseOperationMessage: v => { state.message = v; }, stocktakeBlockResolution: v => v,
     };
     await componentValue("confirmStocktakeDrafts", context)();
@@ -220,9 +221,10 @@ test("stocktake keeps an acknowledged receipt when readback fails and retains on
     assert.equal(state.receipt.length, acknowledged ? 1 : 0);
     assert.equal(state.key, acknowledged ? "next-request" : "same-request");
     assert.equal(state.refresh, acknowledged);
+    assert.equal(state.uncertain, !acknowledged);
     assert.match(state.message, acknowledged ? /已写入.*刷新失败/ : /结果未确认/);
     if (acknowledged) {
-      await componentValue("confirmStocktakeDrafts", { ...context, stocktakeDrafts: state.drafts, stocktakeRefreshRequired: state.refresh })();
+      await componentValue("confirmStocktakeDrafts", { ...context, stocktakeDrafts: state.drafts, stocktakeBatchUncertain: state.uncertain, stocktakeRefreshRequired: state.refresh })();
       assert.equal(state.calls, 1);
     }
   }
@@ -344,7 +346,7 @@ test("pending placement separates acknowledged write from refresh failure and bl
   const calls = [], changes = [];
   const context = {
     pendingPlacementRef: { current: { busy: false, signature: "", key: "" } },
-    pendingRefreshRequired: false, canEditLocations: true,
+    pendingRefreshRequired: false, pendingPlacementUncertain: false, canEditLocations: true,
     selectedLocation: { location_id: 10, map_position: { version: 2 } },
     selectedPendingItem: { lot_id: 8, version: 3, available_quantity: 10, unit: "boxes" },
     selectedLocationFinishedAddBlockReason: null, pendingQuantity: "4",
@@ -353,6 +355,7 @@ test("pending placement separates acknowledged write from refresh failure and bl
     mutateJson: async (...args) => { calls.push(args); },
     refreshDashboard: async () => { throw new Error("回读中断"); },
     setPendingPlacementBusy: () => {}, setPendingRefreshRequired: value => { context.pendingRefreshRequired = value; },
+    setPendingPlacementUncertain: value => { context.pendingPlacementUncertain = value; },
     setRecountLotId: value => changes.push(value), setPendingQuantity: value => changes.push(value),
     setWarehouseOperationMessage: value => changes.push(value),
   };
@@ -360,9 +363,43 @@ test("pending placement separates acknowledged write from refresh failure and bl
   assert.equal(calls.length, 1);
   assert.equal(calls[0][2].quantity, 4);
   assert.equal(context.pendingRefreshRequired, true);
+  assert.equal(context.pendingPlacementUncertain, false);
   assert(changes.some(value => typeof value === "string" && value.includes("货物已归位，但地图刷新失败")));
   await componentValue("placePendingInventory", context)();
   assert.equal(calls.length, 1);
+});
+
+test("unacknowledged pending placement keeps its exact signature and key until the same request succeeds", async () => {
+  const calls = [];
+  const messages = [];
+  let fail = true;
+  const context = {
+    pendingPlacementRef: { current: { busy: false, signature: "", key: "" } },
+    pendingRefreshRequired: false, pendingPlacementUncertain: false, canEditLocations: true,
+    selectedLocation: { location_id: 10, location_name: "目标", map_position: { version: 2 } },
+    selectedPendingItem: { lot_id: 8, version: 3, available_quantity: 10, unit: "boxes" },
+    selectedLocationFinishedAddBlockReason: null, pendingQuantity: "4",
+    movableLotQuantity: item => item.available_quantity, operationKey: () => "pending-key",
+    employeeLocationName: () => "目标货位", inventoryUnitLabel: () => "箱",
+    mutateJson: async (_url, _method, payload) => { calls.push(payload); if (fail) throw new TypeError("Failed to fetch"); },
+    refreshDashboard: async () => {}, setPendingPlacementBusy: () => {}, setPendingRefreshRequired: () => {},
+    setPendingPlacementUncertain: value => { context.pendingPlacementUncertain = value; },
+    setRecountLotId: () => {}, setPendingQuantity: () => {}, setWarehouseOperationMessage: value => messages.push(value)
+  };
+  await componentValue("placePendingInventory", context)();
+  assert.equal(context.pendingPlacementUncertain, true);
+  assert.equal(context.pendingPlacementRef.current.key, "pending-key");
+  context.pendingQuantity = "5";
+  await componentValue("placePendingInventory", context)();
+  assert.equal(calls.length, 1, "an uncertain request rejects a changed quantity before POST");
+  assert.match(messages.at(-1), /货物、数量、目标货位和原凭证必须保持不变/);
+  context.pendingQuantity = "4";
+  fail = false;
+  await componentValue("placePendingInventory", context)();
+  assert.equal(context.pendingPlacementUncertain, false);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].idempotency_key, calls[1].idempotency_key);
+  assert.equal(calls[0].quantity, calls[1].quantity);
 });
 
 test("object context menu only selects a known card without choosing a source or target", () => {
@@ -464,11 +501,13 @@ test("pallet merge keeps one retry key until acknowledgement and does not repeat
     let target = sources[1];
     let activeKey = "same-merge-request";
     let reads = 0;
+    let uncertain = false;
     const messages = [];
     await componentValue("confirmPalletMergeBatch", {
       mergeSources: sources,
       mergeTarget: target,
       mergeBatchBusy: false,
+      mergeBatchUncertain: false,
       mergeBatchIdempotencyKey: activeKey,
       window: { confirm: () => true },
       buildPalletMergeBatchPayload: (idempotencyKey, items, selectedTarget) => ({ idempotencyKey, items, selectedTarget }),
@@ -479,6 +518,7 @@ test("pallet merge keeps one retry key until acknowledgement and does not repeat
       },
       refreshDashboard: async () => { reads++; if (failure === "readback") throw new Error("刷新中断"); },
       setMergeBatchBusy: () => {},
+      setMergeBatchUncertain: value => { uncertain = value; },
       setWarehouseOperationMessage: value => messages.push(value),
       setMergeSources: value => { sources = value; },
       setMergeTarget: value => { target = value; },
@@ -494,6 +534,7 @@ test("pallet merge keeps one retry key until acknowledgement and does not repeat
       assert.equal(target.pallet_id, 22);
       assert.equal(activeKey, "same-merge-request", "uncertain write retains the same idempotency key");
       assert.equal(reads, 0);
+      assert.equal(uncertain, true);
       assert.match(messages.at(-1), /提交未收到服务器回执.*服务连接中断.*刷新页面核对.*同一幂等键/);
       assert.doesNotMatch(messages.at(-1), /Failed to fetch/);
     } else {
@@ -501,6 +542,7 @@ test("pallet merge keeps one retry key until acknowledgement and does not repeat
       assert.equal(target, null);
       assert.equal(activeKey, "next-merge-request");
       assert.equal(reads, 1);
+      assert.equal(uncertain, false);
       assert.match(messages.at(-1), failure === "readback" ? /合并已完成.*地图刷新失败.*不要重复提交/ : /已一次并入/);
     }
   }
@@ -793,6 +835,26 @@ test("warehouse header keeps the ledger link on the command row", () => {
   assert.match(cssSource, /@media \(max-width: 1180px\)[\s\S]*grid-template-columns:\s*minmax\(470px, 1fr\) auto auto/);
 });
 
+test("the unique location inspector prints one real batch and never an aggregated product total", () => {
+  const labelUrl = componentValue("warehouseProductLabelUrl", { encodeURIComponent });
+  const printableBatches = componentValue("printableWarehouseProductBatches", { Map, Number });
+  assert.equal(labelUrl(42, 901), "/static/shelf-label.html?location_id=42&lot_id=901");
+  assert.deepEqual(Array.from(printableBatches([
+    { lot_id: 700, inventory_type: "semi_finished", product_id: 8 },
+    { lot_id: 701, inventory_type: "finished", product_id: null },
+    { lot_id: 702, inventory_type: "finished", product_id: 9 },
+    { lot_id: 703, inventory_type: "finished", product_id: 9 },
+    { lot_id: 702, inventory_type: "finished", product_id: 9 }
+  ]), item => item.lot_id), [702, 703]);
+  assert.match(source, /function ProductLabelPrintAction[\s\S]*选择实际批次[\s\S]*打印所选批次标签[\s\S]*打印产品标签/);
+  assert.match(source, /<ProductLabelPrintAction locationId=\{selectedLocation\.location_id\} items=\{displayGroup\?\.items \|\| \[item\]\} \/>/);
+  assert.doesNotMatch(source, /twin-sidebar-product-label|sidebarLabelLotId|点击查看完整产品标签/);
+  const printAction = source.slice(source.indexOf("function ProductLabelPrintAction"), source.indexOf("function StocktakeProductChoices"));
+  assert.match(printAction, /selectedBatch\.lot_id/);
+  assert.doesNotMatch(printAction, /displayGroup|\.physical|reduce\(/);
+  assert.match(source, /item\.inventory_type !== "finished" \|\| !Number\.isSafeInteger\(item\.product_id\)/);
+});
+
 test("workspace commands preserve map drafts and only publish committed shared search context", () => {
   assert.match(source, /event\.origin !== window\.location\.origin \|\| event\.source !== window\.parent/);
   assert.match(source, /type: "warehouse-workspace-context"[\s\S]*q: submittedSearch[\s\S]*search_floor: searchFloor/);
@@ -801,6 +863,21 @@ test("workspace commands preserve map drafts and only publish committed shared s
   assert.match(workspaceCommands, /activation\.q === "" && submittedSearch/);
   assert.match(workspaceCommands, /if \(payload\.command === "refresh"\)[\s\S]*void refreshDashboard\(\)/);
   assert.doesNotMatch(workspaceCommands, /refreshPlanningTwinFloor|refreshPublishedTwinFloor/);
+  assert.match(source, /mergeUncertain: mergeBatchUncertain[\s\S]*pendingUncertain: pendingPlacementUncertain[\s\S]*stocktakeUncertain: stocktakeBatchUncertain/);
+});
+
+test("collapsing a rack keeps the current location and lot while restoring the rack focus highlight", () => {
+  const calls = [];
+  componentValue("collapseFocusedRack", {
+    rackFocusId: "rack-f9",
+    setRackFocusId: value => calls.push(["rack-focus", value]),
+    focusRackInVisibleMap: value => calls.push(["map-focus", value])
+  })();
+  assert.deepEqual(calls, [["rack-focus", null], ["map-focus", "rack-f9"]]);
+  const focusSource = source.slice(source.indexOf("  const focusRackInVisibleMap ="), source.indexOf("  const collapseFocusedRack ="));
+  assert.match(focusSource, /entity: \{ kind: "rack", id: rackId \}[^}]*token[^}]*source: "selection"/s);
+  const collapseSource = source.slice(source.indexOf("  const collapseFocusedRack ="), source.indexOf("  const switchFocusedRack ="));
+  assert.doesNotMatch(collapseSource, /setSelected|setTraceFocusedLotId|setSidebarLabelLotId|setLocationDetailOpen/);
 });
 
 test("lookup has one entry and area planning uses short adaptive actions", () => {

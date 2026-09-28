@@ -93,6 +93,130 @@ def _frozen_v2_layout() -> dict:
     return legacy
 
 
+def _frozen_v4_layout() -> dict:
+    return {
+        "catalog_version": "p1-112-v1",
+        "paper": {"width_mm": 80.0, "height_mm": 40.0},
+        "elements": [
+            {
+                "id": "board_specification", "kind": "text", "x_mm": 1.2,
+                "y_mm": 0.8, "width_mm": 61.8, "height_mm": 7.0,
+                "font_size_mm": 5.6, "font_weight": 900, "text_align": "left", "visible": True,
+            },
+            {
+                "id": "product_specification", "kind": "text", "x_mm": 1.2,
+                "y_mm": 8.7, "width_mm": 48.0, "height_mm": 7.0,
+                "font_size_mm": 4.8, "font_weight": 900, "text_align": "left", "visible": True,
+            },
+            {
+                "id": "flute_type", "kind": "text", "x_mm": 50.0,
+                "y_mm": 8.7, "width_mm": 13.0, "height_mm": 7.0,
+                "font_size_mm": 4.0, "font_weight": 800, "text_align": "left", "visible": True,
+            },
+            {
+                "id": "customer_name", "kind": "text", "x_mm": 1.2,
+                "y_mm": 24.6, "width_mm": 30.0, "height_mm": 7.0,
+                "font_size_mm": 6.0, "font_weight": 900, "text_align": "left", "visible": True,
+            },
+            {
+                "id": "mold_number", "kind": "text", "x_mm": 31.8,
+                "y_mm": 24.6, "width_mm": 31.2, "height_mm": 7.0,
+                "font_size_mm": 6.0, "font_weight": 900, "text_align": "left", "visible": True,
+            },
+            {
+                "id": "mold_qr", "kind": "qr", "x_mm": 64.4,
+                "y_mm": 24.6, "width_mm": 14.2, "height_mm": 14.2, "visible": True,
+            },
+        ],
+    }
+
+
+def _frozen_v6_layout() -> dict:
+    return {
+        "catalog_version": "p1-117-v1",
+        "paper": {"width_mm": 80.0, "height_mm": 40.0},
+        "elements": [
+            {
+                "id": "board_specification", "kind": "text", "x_mm": 1.2,
+                "y_mm": 0.8, "width_mm": 61.8, "height_mm": 7.0,
+                "font_size_mm": 5.6, "font_weight": 900, "text_align": "left", "visible": True,
+            },
+            {
+                "id": "product_specification", "kind": "text", "x_mm": 1.2,
+                "y_mm": 8.7, "width_mm": 48.0, "height_mm": 7.0,
+                "font_size_mm": 4.8, "font_weight": 900, "text_align": "left", "visible": True,
+            },
+            {
+                "id": "flute_type", "kind": "text", "x_mm": 50.0,
+                "y_mm": 8.7, "width_mm": 13.0, "height_mm": 7.0,
+                "font_size_mm": 4.0, "font_weight": 800, "text_align": "left", "visible": True,
+            },
+            {
+                "id": "mold_identity", "kind": "text", "x_mm": 1.2,
+                "y_mm": 24.6, "width_mm": 61.8, "height_mm": 7.0,
+                "font_size_mm": 6.0, "font_weight": 900, "text_align": "left", "visible": True,
+            },
+            {
+                "id": "mold_chinese_short_name", "kind": "text", "x_mm": 1.2,
+                "y_mm": 31.6, "width_mm": 61.8, "height_mm": 7.7,
+                "font_size_mm": 6.0, "font_weight": 900, "text_align": "left", "visible": True,
+            },
+            {
+                "id": "mold_qr", "kind": "qr", "x_mm": 64.4,
+                "y_mm": 24.6, "width_mm": 14.2, "height_mm": 14.2, "visible": True,
+            },
+        ],
+    }
+
+
+def test_v7_default_layout_has_requested_hierarchy_and_fixed_qr() -> None:
+    from app.services.mold_label_layout import default_layout, normalize_layout
+
+    layout = normalize_layout(default_layout())
+    assert layout["catalog_version"] == "p1-118-v1"
+    assert [element["id"] for element in layout["elements"]] == [
+        "cutting_mode",
+        "rack_location",
+        "custom_note",
+        "section_rule_top",
+        "product_name",
+        "customer_inventory_code",
+        "mold_qr",
+        "section_rule_bottom",
+        "report_specification",
+    ]
+    elements = {element["id"]: element for element in layout["elements"]}
+    assert (elements["cutting_mode"]["font_size_mm"], elements["rack_location"]["font_size_mm"], elements["custom_note"]["font_size_mm"]) == (4.4, 4.4, 4.4)
+    assert (elements["product_name"]["font_size_mm"], elements["customer_inventory_code"]["font_size_mm"]) == (3.6, 6.0)
+    assert (elements["report_specification"]["y_mm"], elements["report_specification"]["height_mm"]) == (35.0, 5.0)
+    assert [(elements[item]["kind"], elements[item]["y_mm"]) for item in ("section_rule_top", "section_rule_bottom")] == [("rule", 16.6), ("rule", 34.8)]
+    assert all(elements[item]["y_mm"] >= 0.6 and elements[item]["y_mm"] + elements[item]["height_mm"] <= 16.6 for item in ("cutting_mode", "rack_location", "custom_note"))
+    assert all(elements[item]["y_mm"] >= 16.8 and elements[item]["y_mm"] + elements[item]["height_mm"] <= 34.8 for item in ("product_name", "customer_inventory_code", "mold_qr"))
+    assert [item["id"] for item in layout["elements"] if item["kind"] == "text" and item["y_mm"] >= 35.0] == ["report_specification"]
+    assert {
+        key: elements["mold_qr"][key]
+        for key in ("x_mm", "y_mm", "width_mm", "height_mm")
+    } == {"x_mm": 64.4, "y_mm": 18.7, "width_mm": 14.2, "height_mm": 14.2}
+
+
+def test_v1_v4_v6_frozen_snapshots_replay_without_current_v7_upgrade() -> None:
+    from app.services.mold_label_layout import _default_layout_v6, layout_hash, load_snapshot
+
+    v1 = _frozen_v2_layout()
+    v1["catalog_version"] = "p1-103-v1"
+    assert _default_layout_v6() == _frozen_v6_layout()
+    for version, layout in ((1, v1), (4, _frozen_v4_layout()), (6, _frozen_v6_layout())):
+        frozen_hash = layout_hash(layout)
+        frozen = load_snapshot(
+            version=version,
+            payload_json=json.dumps(layout, ensure_ascii=False),
+            payload_hash=frozen_hash,
+        )
+        assert frozen["layout"] == layout
+        assert layout_hash(frozen["layout"]) == frozen_hash
+        assert frozen["layout"]["catalog_version"] != "p1-118-v1"
+
+
 def _layout_driven_label(index: int, qr: str) -> str:
     return f'''<article class="mold-label-page" data-layout-catalog="p1-117-v1"><div class="label template-80x40 layout-driven">
       <div class="mold-layout-element mold-layout-text" data-layout-id="board_specification" style="left:1.2mm;top:.8mm;width:61.8mm;height:7mm;font-size:5.6mm;font-weight:900">片料 1100 × 760</div>
@@ -195,7 +319,7 @@ def test_layout_editor_frozen_job_and_overflow_preflight_fail_closed(
         const result=document.getElementById("result");
         const adminState={json.dumps(state, ensure_ascii=False)};
         const sampleRow={json.dumps(sample, ensure_ascii=False)};
-        let fetchCalls=0,postCalls=0,confirmCalls=0;
+        let fetchCalls=0,postCalls=0,confirmCalls=0,draftCalls=0;
         window.fetch=async(url,options={{}})=>{{
           fetchCalls+=1;
           if((options.method||"GET").toUpperCase()==="POST")postCalls+=1;
@@ -213,12 +337,12 @@ def test_layout_editor_frozen_job_and_overflow_preflight_fail_closed(
 
           const editableInit=await TmMoldLabelLayout.initializeEditor({{
             wideTemplate:true,prototypeMode:true,printJobId:null,
-            sampleRow:()=>sampleRow,onPublished:async()=>{{}},
+            sampleRow:()=>sampleRow,onPublished:async()=>{{}},onDraftChanged:async()=>{{draftCalls+=1;}},
           }});
           result.dataset.editableInit=String(editableInit);
           document.getElementById("moldLayoutOpen").click();
           const selector=document.getElementById("moldLayoutElement");
-          selector.value="product_specification";
+          selector.value="customer_inventory_code";
           selector.dispatchEvent(new Event("change",{{bubbles:true}}));
           const width=document.getElementById("moldLayoutWidth");
           width.value="0.5";
@@ -227,6 +351,7 @@ def test_layout_editor_frozen_job_and_overflow_preflight_fail_closed(
           await new Promise(resolve=>setTimeout(resolve,150));
           result.dataset.postCalls=String(postCalls);
           result.dataset.confirmCalls=String(confirmCalls);
+          result.dataset.draftCalls=String(draftCalls);
           result.dataset.status=document.getElementById("moldLayoutStatus").textContent;
           result.dataset.done="true";
         }})().catch(error=>{{result.dataset.failure=String(error?.stack||error)}});
@@ -241,8 +366,9 @@ def test_layout_editor_frozen_job_and_overflow_preflight_fail_closed(
     assert 'data-editable-init="true"' in dom
     assert 'data-post-calls="0"' in dom
     assert 'data-confirm-calls="0"' in dom
+    assert 'data-draft-calls="1"' in dom
     assert 'data-done="true"' in dom
-    assert "产品尺寸在当前样例中无法完整显示" in dom
+    assert "客户简称与存货编码在当前样例中无法完整显示" in dom
     assert "data-failure=" not in dom
 
 
@@ -276,6 +402,7 @@ def test_80x40_projection_and_print_fact_are_explicit_and_idempotent(mold_app) -
         assert body["template_label"] == "40×80"
         assert body["label_inventory_code"] == "SME-LONG-CODE-1"
         assert body["label_product_name"] == "五层加强纸箱横向标签样例1"
+        assert body["label_rack_location"] == "1F-M-R01-L1-G01"
         assert body["label_product_specification"] == "520 × 350 × 300"
         assert body["label_report_specification"] == "1100 × 760"
         assert body["label_flute_type"] == "BC"
@@ -300,7 +427,7 @@ def test_80x40_projection_and_print_fact_are_explicit_and_idempotent(mold_app) -
         assert job is not None and job.template_version == "mold_80x40_v1"
 
 
-def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app) -> None:
+def test_80x40_multi_product_prints_all_codes_and_names_without_shared_copy(mold_app) -> None:
     from app.models.mold_tool import MoldLabelPrintJob
     from app.models.product import Product
 
@@ -318,6 +445,7 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
                 report_length_mm=900,
                 report_width_mm=650,
                 flute_type="B",
+                default_cutting_mode="一开一",
                 mold_tool_id=mold_id,
             )
         )
@@ -350,16 +478,20 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
         body = wide.json()
         assert body["product_count"] == 2
         assert body["label_projection_mode"] == "shared_mold"
-        assert body["label_inventory_code"] == "SME-LONG-CODE-2 等2款"
+        assert body["label_inventory_code"] == "SME-LONG-CODE-2 / SME-SECOND"
         assert body["label_inventory_codes"] == [
             "SME-LONG-CODE-2",
             "SME-SECOND",
         ]
-        assert body["label_shared_summary"] == "共用 2 款"
-        assert body["label_product_specification"] == "多款见扫码"
-        assert body["label_report_specification"] == "多款见扫码"
-        assert body["label_flute_type"] == "多款见扫码"
-        assert body["label_cutting_mode"] == "一开二/一开一"
+        assert "label_shared_summary" not in body
+        assert body["label_product_specification"] == "待完善"
+        assert body["label_report_specification"] == "待完善"
+        assert body["label_flute_type"] == "待完善"
+        assert body["label_cutting_mode"] == "待完善"
+        assert body["label_product_name"] == "五层加强纸箱横向标签样例2 / 第二款"
+        rendered_facts = json.dumps(body, ensure_ascii=False)
+        for forbidden in ("共用", "等2款", "多款见扫码", "按任务显示"):
+            assert forbidden not in rendered_facts
         assert body["label_products"] == [
             {
                 "product_code": "SME-LONG-CODE-2",
@@ -378,14 +510,14 @@ def test_80x40_prints_shared_mold_summary_without_guessing_one_product(mold_app)
         )
         assert batch.status_code == 200, batch.text
         assert batch.json()["items"][0]["label_projection_mode"] == "shared_mold"
-        assert batch.json()["items"][0]["label_shared_summary"] == "共用 2 款"
+        assert "label_shared_summary" not in batch.json()["items"][0]
 
         assert created.json()["template_version"] == "mold_80x40_v1"
     with factory() as db:
         assert db.scalar(select(func.count(MoldLabelPrintJob.id))) == 1
 
 
-def test_shared_mold_keeps_single_label_multi_product_summary(mold_app) -> None:
+def test_v7_reports_inconsistent_material_size_as_missing(mold_app) -> None:
     from app.models.product import Product
 
     app, factory = mold_app
@@ -431,15 +563,22 @@ def test_shared_mold_keeps_single_label_multi_product_summary(mold_app) -> None:
             },
         )
         assert printed.status_code == 200, printed.text
-        assert printed.json()["label_report_specifications"] == [
+        body = printed.json()
+        assert body["label_report_specifications"] == [
             "1100 × 760",
             "900 × 650",
         ]
-        assert printed.json()["label_report_specification"] == "多款见扫码"
-        assert printed.json()["label_inventory_code"] == "SME-MAJORITY-1 等3款"
+        assert body["label_report_specification"] == "待完善"
+        assert body["label_inventory_code"] == (
+            "SME-LONG-CODE-majority / SME-MAJORITY-1 / SME-MAJORITY-2"
+        )
+        assert body["label_product_name"] == (
+            "五层加强纸箱横向标签样例majority / 多数规格产品1 / 多数规格产品2"
+        )
+        assert body["label_report_specification"] not in body["label_report_specifications"]
 
 
-def test_shared_mold_many_codes_use_one_representative_and_keep_full_qr_facts(
+def test_v7_many_codes_keeps_every_code_in_display_projection(
     mold_app,
 ) -> None:
     from app.models.product import Product
@@ -490,13 +629,17 @@ def test_shared_mold_many_codes_use_one_representative_and_keep_full_qr_facts(
         assert printed.status_code == 200, printed.text
         body = printed.json()
         assert body["product_count"] == 10
-        assert body["label_inventory_code"] == "SME-CODE-02 等10款"
+        assert body["label_inventory_code"] == " / ".join(
+            [f"SME-CODE-{index:02d}" for index in range(2, 11)]
+            + ["SME-LONG-CODE-many-codes"]
+        )
         assert len(body["label_inventory_codes"]) == 10
         assert len(body["label_products"]) == 10
         assert "SME-LONG-CODE-many-codes" in body["label_inventory_codes"]
 
 
-def test_v3_allows_missing_hidden_product_dimensions(mold_app) -> None:
+def test_v7_shows_missing_report_dimensions_without_inventing_a_value(mold_app) -> None:
+    from app.models.mold_tool import MoldTool
     from app.models.product import Product
 
     app, factory = mold_app
@@ -504,9 +647,11 @@ def test_v3_allows_missing_hidden_product_dimensions(mold_app) -> None:
     with factory() as db:
         product = db.scalar(select(Product).where(Product.mold_tool_id == mold_id))
         assert product is not None
-        product.length_mm = None
-        product.width_mm = None
-        product.height_mm = None
+        product.report_length_mm = None
+        product.report_width_mm = None
+        mold = db.get(MoldTool, mold_id)
+        assert mold is not None
+        mold.rack_location = "仓储一楼模具区东侧第一货架第五层-A"
         db.commit()
 
     with TestClient(app) as client:
@@ -522,7 +667,7 @@ def test_v3_allows_missing_hidden_product_dimensions(mold_app) -> None:
         )
         assert created.status_code == 200, created.text
         assert created.json()["label_layout"]["layout"]["catalog_version"] == (
-            "p1-117-v1"
+            "p1-118-v1"
         )
         printed = client.get(
             f"/api/warehouse/molds/{mold_id}/label",
@@ -532,7 +677,10 @@ def test_v3_allows_missing_hidden_product_dimensions(mold_app) -> None:
             },
         )
         assert printed.status_code == 200, printed.text
-        assert printed.json()["label_product_specification"] == ""
+        body = printed.json()
+        assert body["label_report_specification"] == "待完善"
+        assert body["label_rack_location"].endswith("…")
+        assert len(body["label_rack_location"]) == 16
 
 
 def test_rm9_hash_name_uses_verified_short_customer_and_prints_wide_label(mold_app) -> None:
@@ -651,6 +799,13 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
         "product_specification",
         "mold_number",
         "mold_identity",
+        "report_specification",
+        "rack_location",
+        "custom_note",
+        "section_rule_top",
+        "product_name",
+        "customer_inventory_code",
+        "section_rule_bottom",
         "fitAndValidate",
     ):
         assert marker in LAYOUT_JS
@@ -660,10 +815,13 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
     assert 'product=shared?null:products[0]||null' not in LABEL
     assert "多款见扫码" not in LAYOUT_JS
     assert "body,html{width:40mm;height:auto" in LABEL
+    assert 'CURRENT_WIDE_CATALOG="p1-118-v1"' in LABEL
+    assert LABEL.count("?v=0.22.516") == 2
+    assert "?v=0.22.203" not in LABEL
 
 
 @pytest.mark.parametrize("product_count", (5, 11))
-def test_actual_layout_javascript_fits_shared_mold_facts_without_clipping(
+def test_v7_layout_shrinks_then_marks_truncated_multi_product_text(
     product_count: int,
     headless_browser: Path,
     tmp_path: Path,
@@ -674,16 +832,18 @@ def test_actual_layout_javascript_fits_shared_mold_facts_without_clipping(
         f"SME-VERY-LONG-CODE-{index:02d}"
         for index in range(1, product_count + 1)
     ]
-    product_sizes = ["520 × 350 × 300" for _index in range(product_count)]
+    product_names = [f"超长产品名称横向标签样例{index:02d}" for index in range(1, product_count + 1)]
     row = {
         "label_report_specification": "1100 × 760",
         "label_inventory_code": " / ".join(product_codes),
         "label_flute_type": "BC",
         "label_cutting_mode": "一开二",
         "label_customer_name": "苏州思迈尔包装科技有限公司",
+        "label_product_name": " / ".join(product_names),
+        "label_rack_location": "1F-M-R01-L1-G01",
         "label_mold_name": "3D30268-超长现场手写标签",
         "label_mold_chinese_short_name": "" if product_count == 5 else "加强箱",
-        "label_product_specification": "多款见扫码",
+        "label_product_specification": "待完善",
         "label_mold_number": "P162-共用模具",
         "qr_data_url": _qr_data_url(),
         "products": [
@@ -708,19 +868,40 @@ def test_actual_layout_javascript_fits_shared_mold_facts_without_clipping(
         + 'document.body.dataset.elementCount=String(labels.querySelectorAll("[data-layout-id]").length);'
         + 'document.body.dataset.productSizeCount=String(labels.querySelectorAll("[data-layout-id=product_specification]").length);'
         + 'document.body.dataset.inventoryCount=String(labels.querySelectorAll("[data-layout-id=inventory_code]").length);'
+        + 'const customerInventory=labels.querySelector("[data-layout-id=customer_inventory_code]");'
+        + 'const customNote=labels.querySelector("[data-layout-id=custom_note]");'
+        + 'const productName=labels.querySelector("[data-layout-id=product_name]");'
+        + 'const qr=labels.querySelector("[data-layout-id=mold_qr]");'
+        + 'document.body.dataset.customerInventoryFont=customerInventory.dataset.appliedFontMm;'
+        + 'document.body.dataset.productNameFont=productName.dataset.appliedFontMm;'
+        + 'document.body.dataset.customerInventoryTruncated=String(customerInventory.dataset.truncated==="true");'
+        + 'document.body.dataset.productNameTruncated=String(productName.dataset.truncated==="true");'
+        + 'document.body.dataset.customerInventoryFits=String(customerInventory.scrollWidth<=customerInventory.clientWidth+1);'
+        + 'document.body.dataset.productNameFits=String(productName.scrollWidth<=productName.clientWidth+1);'
+        + 'document.body.dataset.customNoteText=customNote.textContent;'
+        + 'document.body.dataset.lowerStaysLeftOfQr=String([productName,labels.querySelector("[data-layout-id=customer_inventory_code]")].every(node=>node.getBoundingClientRect().right<=qr.getBoundingClientRect().left));'
         + "</script></body></html>",
         encoding="utf-8",
     )
     rendered = _dump_rendered_dom(headless_browser, fixture, tmp_path)
     assert 'data-fit-failures=""' in rendered
-    assert 'data-element-count="6"' in rendered
-    assert 'data-product-size-count="1"' in rendered
+    assert 'data-element-count="9"' in rendered
+    assert 'data-product-size-count="0"' in rendered
     assert 'data-inventory-count="0"' in rendered
-    assert "多款见扫码" in rendered
+    assert "多款见扫码" not in rendered
     assert ">待完善</div>" not in rendered
+    assert 'data-customer-inventory-font="3"' in rendered
+    assert 'data-product-name-font="2.6"' in rendered
+    assert 'data-customer-inventory-truncated="true"' in rendered
+    assert 'data-product-name-truncated="true"' in rendered
+    assert 'data-customer-inventory-fits="true"' in rendered
+    assert 'data-product-name-fits="true"' in rendered
+    assert 'data-lower-stays-left-of-qr="true"' in rendered
+    assert 'data-custom-note-text=""' in rendered
+    assert "…</div>" in rendered
 
 
-def test_current_identity_order_changes_while_v1_v2_snapshots_stay_frozen(
+def test_v7_current_order_changes_while_v1_v2_snapshots_stay_frozen(
     headless_browser: Path,
     tmp_path: Path,
 ) -> None:
@@ -732,6 +913,8 @@ def test_current_identity_order_changes_while_v1_v2_snapshots_stay_frozen(
         "label_flute_type": "E",
         "label_cutting_mode": "一开一",
         "label_customer_name": "瑞明",
+        "label_product_name": "防静电单回路",
+        "label_rack_location": "1F-M-R01-L3-G01",
         "label_mold_number": "9#",
         "label_mold_name": "9#",
         "label_mold_chinese_short_name": "防静电单回路",
@@ -739,7 +922,7 @@ def test_current_identity_order_changes_while_v1_v2_snapshots_stay_frozen(
         "qr_data_url": _qr_data_url(),
         "products": [],
     }
-    v3 = default_layout()
+    v7 = default_layout()
     v2 = _frozen_v2_layout()
     v1 = deepcopy(v2)
     v1["catalog_version"] = "p1-103-v1"
@@ -747,17 +930,17 @@ def test_current_identity_order_changes_while_v1_v2_snapshots_stay_frozen(
     fixture.write_text(
         '<!doctype html><html><head><meta charset="utf-8">'
         + _current_print_styles()
-        + '</head><body><main id="v3"></main><main id="v2"></main><main id="v1"></main><script>'
+        + '</head><body><main id="v7"></main><main id="v2"></main><main id="v1"></main><script>'
         + LAYOUT_JS.replace("</script>", "<\\/script>")
         + "</script><script>"
         + f"const row={json.dumps(row, ensure_ascii=False)};"
-        + f"const v3={{version:0,layout:{json.dumps(v3, ensure_ascii=False)}}};"
+        + f"const v7={{version:0,layout:{json.dumps(v7, ensure_ascii=False)}}};"
         + f"const v2={{version:1,layout:{json.dumps(v2, ensure_ascii=False)}}};"
         + f"const v1={{version:1,layout:{json.dumps(v1, ensure_ascii=False)}}};"
-        + 'document.getElementById("v3").innerHTML=TmMoldLabelLayout.labelHtml(row,v3);'
+        + 'document.getElementById("v7").innerHTML=TmMoldLabelLayout.labelHtml(row,v7);'
         + 'document.getElementById("v2").innerHTML=TmMoldLabelLayout.labelHtml(row,v2);'
         + 'document.getElementById("v1").innerHTML=TmMoldLabelLayout.labelHtml(row,v1);'
-        + 'document.body.dataset.v3Text=[...document.querySelectorAll("#v3 .mold-layout-text")].map(node=>node.textContent).join("|");'
+        + 'document.body.dataset.v7Text=[...document.querySelectorAll("#v7 .mold-layout-text")].map(node=>node.textContent).join("|");'
         + 'document.body.dataset.v2Text=[...document.querySelectorAll("#v2 .mold-layout-text")].map(node=>node.textContent).join("|");'
         + 'document.body.dataset.v1Text=[...document.querySelectorAll("#v1 .mold-layout-text")].map(node=>node.textContent).join("|");'
         + "</script></body></html>",
@@ -765,7 +948,7 @@ def test_current_identity_order_changes_while_v1_v2_snapshots_stay_frozen(
     )
     rendered = _dump_rendered_dom(headless_browser, fixture, tmp_path)
     assert (
-        'data-v3-text="片料 890 × 650|290 × 140 × 120|E|瑞明 9#|防静电单回路"'
+        'data-v7-text="一开一|1F-M-R01-L3-G01||防静电单回路|瑞明 22700002|890 × 650"'
     ) in rendered
     assert (
         'data-v2-text="890 × 650|22700002|E|一开一|瑞明|9#|'
@@ -775,6 +958,53 @@ def test_current_identity_order_changes_while_v1_v2_snapshots_stay_frozen(
         'data-v1-text="片料 890 × 650|纸箱 22700002|楞 E|开 一开一|瑞明|9#|'
         '中文 防静电单回路|尺寸 290 × 140 × 120"'
     ) in rendered
+
+
+def test_v1_v4_v6_rendered_font_sizes_stay_frozen_during_v7_text_fit(
+    headless_browser: Path,
+    tmp_path: Path,
+) -> None:
+    row = {
+        "label_report_specification": "890 × 650",
+        "label_inventory_code": "22700002",
+        "label_flute_type": "E",
+        "label_cutting_mode": "一开一",
+        "label_customer_name": "瑞明",
+        "label_product_name": "防静电单回路",
+        "label_rack_location": "1F-M-R01-L3-G01",
+        "label_mold_number": "9#",
+        "label_mold_name": "9#",
+        "label_mold_chinese_short_name": "防静电单回路",
+        "label_product_specification": "290 × 140 × 120",
+        "qr_data_url": _qr_data_url(),
+        "products": [],
+    }
+    v1 = _frozen_v2_layout()
+    v1["catalog_version"] = "p1-103-v1"
+    layouts = {"v1": v1, "v4": _frozen_v4_layout(), "v6": _frozen_v6_layout()}
+    fixture = tmp_path / "p1-118-frozen-fonts.html"
+    fixture.write_text(
+        '<!doctype html><html><head><meta charset="utf-8">'
+        + _current_print_styles()
+        + '</head><body><main id="v1"></main><main id="v4"></main><main id="v6"></main><script>'
+        + LAYOUT_JS.replace("</script>", "<\\/script>")
+        + "</script><script>"
+        + f"const row={json.dumps(row, ensure_ascii=False)};"
+        + f"const layouts={json.dumps(layouts, ensure_ascii=False)};"
+        + "for(const [id,layout] of Object.entries(layouts)){document.getElementById(id).innerHTML=TmMoldLabelLayout.labelHtml(row,{version:6,layout});}"
+        + "const snapshot=id=>[...document.querySelectorAll(`#${id} .mold-layout-text`)].map(node=>`${node.textContent}@${node.style.fontSize}`).join('|');"
+        + "const before=Object.fromEntries(Object.keys(layouts).map(id=>[id,snapshot(id)]));"
+        + "const failures=TmMoldLabelLayout.fitAndValidate(document.body);"
+        + "for(const id of Object.keys(layouts)){document.body.dataset[`${id}Unchanged`]=String(before[id]===snapshot(id));}"
+        + "document.body.dataset.fitFailures=failures.join('|');"
+        + "</script></body></html>",
+        encoding="utf-8",
+    )
+    rendered = _dump_rendered_dom(headless_browser, fixture, tmp_path)
+    assert 'data-v1-unchanged="true"' in rendered
+    assert 'data-v4-unchanged="true"' in rendered
+    assert 'data-v6-unchanged="true"' in rendered
+    assert 'data-fit-failures=""' in rendered
 
 
 def test_job52_like_v2_layout_fits_compact_ten_product_projection(

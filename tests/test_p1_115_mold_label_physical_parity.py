@@ -29,25 +29,34 @@ LAYOUT_CSS = (ROOT / "static" / "assets" / "mold-label-layout.css").read_text(
 )
 
 
-def test_current_layout_keeps_board_prefix_and_aligns_customer_with_qr() -> None:
+def test_v7_three_sections_keep_qr_and_left_text_inside_the_middle_band() -> None:
     from app.services.mold_label_layout import default_layout, normalize_layout
 
     layout = normalize_layout(default_layout())
-    assert layout["catalog_version"] == "p1-117-v1"
+    assert layout["catalog_version"] == "p1-118-v1"
 
     elements = {item["id"]: item for item in layout["elements"]}
-    customer = elements["mold_identity"]
-    mold_number = elements["mold_chinese_short_name"]
     qr = elements["mold_qr"]
+    lower_rows = (
+        elements["product_name"],
+        elements["customer_inventory_code"],
+    )
 
-    assert customer["y_mm"] == qr["y_mm"]
-    line_gap = mold_number["y_mm"] - (customer["y_mm"] + customer["height_mm"])
-    assert 0 <= line_gap <= 0.3
-    assert mold_number["y_mm"] + mold_number["height_mm"] <= 40.0
+    for row in lower_rows:
+        assert 16.8 <= row["y_mm"]
+        assert row["y_mm"] + row["height_mm"] <= 34.8
+        assert row["x_mm"] + row["width_mm"] <= qr["x_mm"]
+    assert (qr["y_mm"], qr["y_mm"] + qr["height_mm"]) == (18.7, 32.9)
+    assert [(elements[item]["kind"], elements[item]["y_mm"]) for item in ("section_rule_top", "section_rule_bottom")] == [("rule", 16.6), ("rule", 34.8)]
+    assert (elements["report_specification"]["y_mm"], elements["report_specification"]["height_mm"]) == (35.0, 5.0)
+    assert all(item["y_mm"] + item["height_mm"] <= 40.0 for item in elements.values())
 
-    assert 'CURRENT_WIDE_CATALOG="p1-117-v1"' in LABEL_PAGE
+    assert 'CURRENT_WIDE_CATALOG="p1-118-v1"' in LABEL_PAGE
+    assert 'moldLabelDraftEnvelope||moldLabelLayoutEnvelope' in LABEL_PAGE
+    assert 'tm-mold-label-draft' in LABEL_PAGE
     assert 'const V6_CATALOG_VERSION = "p1-117-v1"' in LAYOUT_JS
     assert "catalogVersion === V6_CATALOG_VERSION" in LAYOUT_JS
+    assert 'element.kind === "rule"' in LAYOUT_JS
     assert 'elementId === "board_specification" ? "片料 " : ""' in LAYOUT_JS
 
 
@@ -63,8 +72,8 @@ def test_40x30_renderer_keeps_board_prefix_only() -> None:
 
 
 def test_print_assets_are_release_versioned_and_pages_cannot_flex_shrink() -> None:
-    assert 'mold-label-layout.css?v=0.22.203' in LABEL_PAGE
-    assert 'mold-label-layout.js?v=0.22.203' in LABEL_PAGE
+    assert 'mold-label-layout.css?v=0.22.516' in LABEL_PAGE
+    assert 'mold-label-layout.js?v=0.22.516' in LABEL_PAGE
     assert ".mold-label-page" in LAYOUT_CSS
     assert "flex: none" in LAYOUT_CSS
     assert "break-inside: avoid-page" in LAYOUT_CSS

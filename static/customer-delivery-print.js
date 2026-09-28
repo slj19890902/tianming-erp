@@ -188,7 +188,6 @@
     }
     document.querySelector('.toolbar').append(bar);
     const warnings = [...(data.document_warnings || [])];
-    if (!data.price_display.shown) warnings.push('无价版已隐藏单价和所有金额，请同时核对手工备注中是否包含价格文字。');
     if (warnings.length) {const warning=node('div',warnings.join('；'),'cd-warning no-print');warning.id='customerPrintWarnings';document.querySelector('.toolbar').after(warning);}
   }
   const pendingPrints = new Map();

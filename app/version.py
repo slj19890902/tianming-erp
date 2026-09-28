@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.523"
-APP_VERSION_NAME = "送货单打印安全区与清晰度"
+APP_VERSION = "v0.22.524"
+APP_VERSION_NAME = "日常页面说明精简"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5050,3 +5050,7 @@ APP_VERIFICATION_STEPS = [
     "需要校准时进入系统→送货单打印纸张，调整正文安全宽度与偏移；确认系统版本v0.22.523。",
 ]
 APP_CHANGELOG = [*(f"v0.22.523：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["打印预览删除重复说明，打印帮助改为工具栏ⓘ。", "采购、生产、财务和资料维护页精简常驻说明，必要帮助点击查看。"]
+APP_VERIFICATION_STEPS = ["刷新后打开送货单打印预览，查看工具栏ⓘ。", "检查日常页面说明已收起，数量、状态和异常仍直接显示。"]
+APP_CHANGELOG = [*(f"v0.22.524：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

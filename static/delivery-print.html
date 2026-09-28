@@ -52,18 +52,11 @@
       color: #1e3a8a;
       text-align: center;
     }
-    .print-guide {
-      max-width: 920px;
-      margin: -6px auto 14px;
-      padding: 9px 12px;
-      border: 1px solid #f59e0b;
-      border-radius: 6px;
-      background: #fffbeb;
-      color: #92400e;
-      font-size: 14px;
-      line-height: 1.55;
-      text-align: center;
-    }
+    .print-guide { position: relative; text-align: left; }
+    .print-guide summary { cursor: pointer; list-style: none; color: #2563eb; font-size: 20px; padding: 4px 8px; }
+    .print-guide summary::-webkit-details-marker { display: none; }
+    .print-guide summary:focus-visible { outline: 2px solid #2563eb; border-radius: 4px; }
+    .print-guide-content { position: absolute; z-index: 20; top: 100%; right: 0; width: min(320px, 80vw); padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; box-shadow: 0 4px 16px #0002; color: #334155; font-size: 14px; line-height: 1.6; }
     .sheet {
       position: relative;
       display: flex;
@@ -259,14 +252,17 @@
     <button id="printButton" disabled type="button">确认打印</button>
     <button id="retryButton" class="secondary hidden" type="button">重新读取</button>
     <a href="/" aria-label="返回系统">返回系统</a>
+    <details class="print-guide no-print">
+      <summary aria-label="打印设置帮助">ⓘ</summary>
+      <div class="print-guide-content"><strong id="printProfileSummary"></strong><br>
+        驱动选择相同纸型，缩放100%，关闭页眉页脚。方向沿用打印机进纸设置。
+        纸面偏移在“系统 → 送货单打印纸张”校准。预览虚线不打印。
+      </div>
+    </details>
   </div>
 
   <div id="loadState" class="load-state no-print">正在读取送货单…</div>
-  <details class="print-guide no-print">
-    <summary id="printProfileSummary">打印纸张与安全区 ⓘ</summary>
-    打印驱动中选择相同的自定义纸型，缩放100%，关闭页眉页脚；方向沿用针式打印机进纸设置。
-    虚线仅用于屏幕预览，不会打印。纸面偏移可在“系统 → 送货单打印纸张”校准；请先试打一张。
-  </details>
+
   <div id="errorBox" class="error no-print" hidden></div>
 
   <template id="sheetTemplate">

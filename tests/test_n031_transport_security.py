@@ -255,18 +255,23 @@ def test_production_only_allows_explicit_same_origin_embedded_frames(
     with TestClient(app, base_url="https://testserver") as client:
         embedded_responses = [
             client.get("/warehouse.html?embedded=1"),
+            client.get("/warehouse-ledger.html?embedded=1&tab=finished"),
             client.get("/incoming.html?embedded=1"),
             client.get("/mobile/delivery-pick.html?embedded=1"),
             client.get("/mobile/stocktake.html?embedded=1"),
         ]
         standalone_responses = [
             client.get("/warehouse.html"),
+            client.get("/warehouse-ledger.html"),
+            client.get("/warehouse-ledger.html?embedded=0"),
+            client.get("/warehouse-ledger.html?embedded=true"),
             client.get("/incoming.html"),
             client.get("/mobile/delivery-pick.html"),
             client.get("/mobile/stocktake.html"),
             client.get("/incoming.html?embedded=0"),
         ]
         dashboard = client.get("/")
+        embedded_dashboard = client.get("/?embedded=1")
 
     for embedded in embedded_responses:
         assert embedded.status_code == 200
@@ -277,6 +282,7 @@ def test_production_only_allows_explicit_same_origin_embedded_frames(
         assert standalone.headers["x-frame-options"] == "DENY"
         assert "content-security-policy" not in standalone.headers
     assert dashboard.headers["x-frame-options"] == "DENY"
+    assert embedded_dashboard.headers["x-frame-options"] == "DENY"
 
 
 @pytest.mark.parametrize(

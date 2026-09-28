@@ -173,6 +173,7 @@ class HSTSMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         same_origin_embedded_paths = {
             "/warehouse.html",
+            "/warehouse-ledger.html",
             "/incoming.html",
             "/mobile/delivery-pick.html",
             "/mobile/stocktake.html",

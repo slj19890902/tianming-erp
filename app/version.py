@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.521"
-APP_VERSION_NAME = "货架产品标签大二维码"
+APP_VERSION = "v0.22.522"
+APP_VERSION_NAME = "模具标签实时编辑预览"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5023,3 +5023,18 @@ APP_VERIFICATION_STEPS = [
     "按40×80mm、100%缩放打印一张，由管理员用手机确认扫码速度、产品身份与文字清晰度。",
 ]
 APP_CHANGELOG = [*(f"v0.22.521：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "模具编辑新增与打印同版的实时预览，标签主标题、产品名称、片料尺寸、开料方式及备注可单独修改、保存或恢复自动取值。",
+    "共享模具的不同报料尺寸分别显示，不再错误标记待完善；相同产品名称合并显示。标签修改不回写常用箱报料资料。",
+    "40×80模具标签首行左位置、右开料，二维码15×15毫米；完整文字自适应，过长提示调整，不静默裁切。",
+    "模具编辑直接显示已绑定常用箱并支持解绑；新增可选第二主标签客户，查询支持客户、名称、编码和位置组合关键词。",
+    "新增可空标签显示配置列，旧记录留空；保留权限、客户范围、版本、幂等、审计及历史打印版式。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新确认v0.22.522，仓库→模具→编辑80011946，核对实时预览显示两组报料尺寸。",
+    "修改标签显示内容，确认预览同步变化；保存后重开，核对内容保留，可恢复自动取值。",
+    "新登记40×80标签，以100%缩放打印，核对位置、一开几、完整文字及15毫米二维码，并用现场手机扫码。",
+]
+APP_CHANGELOG = [*(f"v0.22.522：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -20489,6 +20489,70 @@ def _label_cutting_mode(products: list[Product]) -> str:
     return values[0]
 
 
+def _label_shared_value(values: list[str], product_count: int) -> str:
+    """Project a shared-mold fact without claiming one product represents all."""
+
+    normalized = [str(value or "").strip() for value in values]
+    if product_count <= 1:
+        return normalized[0] if normalized and normalized[0] else "待完善"
+    if not normalized or any(not value for value in normalized):
+        return f"待完善（共用{product_count}款）"
+    if len(set(normalized)) == 1:
+        return normalized[0]
+    return f"共用{product_count}款"
+
+
+def _label_compact_product_name(products: list[Product]) -> str:
+    """Use a stable representative name while retaining a shared-mold count."""
+
+    names = [str(product.product_name or "").strip() for product in products]
+    if len(products) <= 1:
+        return names[0] if names else ""
+    if not names or any(not name for name in names):
+        return f"待完善（共用{len(products)}款）"
+    _dimension, representative = _label_representative_dimension(
+        products,
+        "report_specification",
+    )
+    if representative is None:
+        representative = min(
+            products,
+            key=lambda product: (
+                str(product.product_code or "").strip().casefold(),
+                int(product.id or 0),
+            ),
+        )
+    name = str(representative.product_name or "").strip()
+    return f"{name} 等{len(products)}款" if name else f"待完善（共用{len(products)}款）"
+
+
+def _label_v7_join_product_facts(products: list[Product], field: str) -> str:
+    """Render every V7 binding, never a representative product or count."""
+
+    values = [str(getattr(product, field, "") or "").strip() for product in products]
+    if not values or any(not value for value in values):
+        return "待完善"
+    return " / ".join(values)
+
+
+def _label_v7_consistent_value(values: list[str]) -> str:
+    """Fail closed when supposedly shared production facts disagree."""
+
+    normalized = [str(value or "").strip() for value in values]
+    if not normalized or any(not value for value in normalized):
+        return "待完善"
+    return normalized[0] if len(set(normalized)) == 1 else "待完善"
+
+
+def _label_rack_location(value: str | None, *, maximum_characters: int = 16) -> str:
+    """Fit the V7 position line while making every omitted suffix visible."""
+
+    location = str(value or "").strip()
+    if len(location) <= maximum_characters:
+        return location
+    return f"{location[: maximum_characters - 1]}…"
+
+
 _LABEL_PRINTABLE_IDENTITY_LIMIT = 40
 
 
@@ -20618,6 +20682,7 @@ def _mold_label_dict(
             }
             for product in products
         ]
+        product_count = len(products)
         result.update(
             {
                 "template_version": template_version,
@@ -20634,16 +20699,25 @@ def _mold_label_dict(
                 "label_flute_types": flute_types,
                 "label_cutting_modes": cutting_modes,
                 "label_products": label_products,
-                "label_cutting_mode": "/".join(cutting_modes),
-                "label_inventory_code": _label_compact_inventory_code(products),
-                "label_product_name": " / ".join(
-                    product["product_name"] for product in label_products
+                "label_cutting_mode": _label_v7_consistent_value(
+                    _label_cutting_rows(products)
                 ),
-                "label_shared_summary": (
-                    f"共用 {len(products)} 款"
-                    if shared_mold
-                    else None
+                "label_inventory_code": _label_v7_join_product_facts(
+                    products, "product_code"
                 ),
+                "label_product_name": _label_v7_join_product_facts(
+                    products, "product_name"
+                ),
+                "label_report_specification": _label_v7_consistent_value(
+                    _label_dimension_rows(products, "report_specification")
+                ),
+                "label_product_specification": _label_v7_consistent_value(
+                    _label_dimension_rows(products, "specification")
+                ),
+                "label_flute_type": _label_v7_consistent_value(
+                    _label_flute_rows(products)
+                ),
+                "label_rack_location": _label_rack_location(row.rack_location),
             }
         )
     return result

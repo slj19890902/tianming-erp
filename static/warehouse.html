@@ -654,7 +654,7 @@
               <div class="field"><label>开料方式</label><input id="moldLabelDisplayCuttingMode" autocomplete="off" disabled></div>
               <div class="field"><label>标签说明</label><input id="moldLabelDisplayRemarks" autocomplete="off" disabled></div>
             </div>
-            <details class="mold-label-preview-tips"><summary>! 标签字段说明</summary><p>输入框内浅色文字是当前自动内容；留空会继续随正式资料自动更新。这里仅修改以后新登记的 40×80 模具标签，不改变模具正式客户、常用箱、报料、位置或历史打印任务；40×30 标签保持原版式。</p></details>
+            <details class="mold-label-preview-tips"><summary>! 标签字段说明</summary><p>输入框内浅色文字是当前自动内容；留空会继续随正式资料自动更新。保存后用于新打印的标签，旧打印任务和 40×30 标签保持原版式。</p></details>
           </div>
           <div class="mold-label-preview-wrap">
             <h3>80 × 40 mm 实时预览</h3>
@@ -2108,7 +2108,7 @@
     }
     function renderMoldLabelPreview(){
       const preview=state.moldLabelPreview,stateNode=$("moldLabelPreviewState"),paper=$("moldLabelPreviewPaper");if(!preview.loaded||!preview.row||!preview.envelope)return;
-      try{paper.innerHTML=TmMoldLabelLayout.labelHtml(moldLabelPreviewDraft(),preview.envelope);const failures=TmMoldLabelLayout.fitAndValidate(paper);preview.overflow=failures;if(failures.length){stateNode.textContent=`以下内容无法完整显示：${failures.join("、")}。请缩短标签专用内容后再保存。`;stateNode.className="mold-label-preview-state error"}else if(preview.row.printable===false){stateNode.textContent=`预览已生成；当前不能打印：${preview.row.printability_error||"请先完善模具资料"}`;stateNode.className="mold-label-preview-state error"}else{stateNode.textContent="预览与以后新登记的 40×80 打印使用同一渲染器；当前内容可完整显示。";stateNode.className="mold-label-preview-state success"}}catch(error){preview.overflow=["预览布局"];stateNode.textContent=`预览失败：${error.message||"布局无效"}`;stateNode.className="mold-label-preview-state error"}updateMoldSaveAvailability();
+      try{paper.innerHTML=TmMoldLabelLayout.labelHtml(moldLabelPreviewDraft(),preview.envelope);const failures=TmMoldLabelLayout.fitAndValidate(paper);preview.overflow=failures;if(failures.length){stateNode.textContent=`以下内容无法完整显示：${failures.join("、")}。请缩短标签专用内容后再保存。`;stateNode.className="mold-label-preview-state error"}else if(preview.row.printable===false){stateNode.textContent=`预览已生成；当前不能打印：${preview.row.printability_error||"请先完善模具资料"}`;stateNode.className="mold-label-preview-state error"}else{stateNode.textContent="预览已更新，内容可完整显示";stateNode.className="mold-label-preview-state success"}}catch(error){preview.overflow=["预览布局"];stateNode.textContent=`预览失败：${error.message||"布局无效"}`;stateNode.className="mold-label-preview-state error"}updateMoldSaveAvailability();
     }
     async function loadMoldLabelPreview(moldId,{preserveDraft=false}={}){
       const preview=state.moldLabelPreview,requestId=++preview.requestId;preview.moldId=Number(moldId);preview.loading=true;preview.error="";if(!preserveDraft){preview.loaded=false;preview.overflow=[];Object.values(moldLabelOverrideFields).forEach(id=>{$(id).value="";$(id).placeholder="正在读取自动内容…"});$("moldLabelPreviewPaper").innerHTML="";setMoldLabelOverrideControlsDisabled(true)}$("moldLabelEditWorkspace").hidden=false;$("moldLabelPreviewState").textContent=preserveDraft?"正在更新标签自动内容…":"正在读取当前模具标签…";$("moldLabelPreviewState").className="mold-label-preview-state";updateMoldSaveAvailability();

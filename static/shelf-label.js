@@ -3,6 +3,7 @@ const ids = (params.get('location_ids') || params.get('location_id') || '').spli
 const lot = params.get('lot_id');
 const h = value => String(value ?? '').replace(/[&<>"']/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
 const $ = id => document.getElementById(id);
+const productAddress = row => [row.compact_title ?? row.print_title ?? row.title, row.compact_position ?? row.print_position ?? row.position].filter(Boolean).join(' ');
 let busy = false;
 $('contentControl').hidden = Boolean(lot);
 function label(row) {
@@ -10,8 +11,7 @@ function label(row) {
   const heading = `<div><h1 class="fit">${h(row.title)}</h1><strong class="fit">${h(row.position)}</strong></div><img src="${h(row.qr_data_url)}" alt="手机查询二维码">`;
   if (!row.product) return `<article class="label"><div class="location">${heading}</div></article>`;
   const p = row.product;
-  const productHeading = `<div class="product-address"><div class="product-title-row"><h1 class="fit">${h(row.print_title || row.title)}</h1><strong>${h(row.print_position || row.position)}</strong></div><div class="product-floor fit">${h(row.print_floor || '')}</div></div><img src="${h(row.qr_data_url)}" alt="手机查询二维码">`;
-  return `<article class="label"><div class="product-head">${productHeading}</div><div class="fields">${[['客户',p.customer],['存货编码',p.code],['产品名称',p.name],['规格',p.specification]].map(([key,value]) => `<div class="field"><span>${key}：</span><span class="value fit ${key==='存货编码'?'code':key==='客户'?'customer':''}">${h(value)}</span></div>`).join('')}</div></article>`;
+  return `<article class="label"><div class="product-layout"><div class="product-details"><div class="product-head"><h1 class="fit">${h(productAddress(row))}</h1></div><div class="fields">${[['客户',p.customer],['编码',p.code],['品名',p.name],['规格',p.specification]].map(([key,value]) => `<div class="field"><span>${key}：</span><span class="value fit ${key==='编码'?'code':key==='客户'?'customer':''}">${h(value)}</span></div>`).join('')}</div></div><img class="product-qr" src="${h(row.qr_data_url)}" alt="手机查询二维码"></div></article>`;
 }
 // Send one native-size bitmap per physical page. Thermal drivers must not
 // independently rotate/vectorize text and the QR image.
@@ -44,15 +44,13 @@ async function rasterLabel(row, rackOnly) {
     text(row.position, 2, 23, 46, 20, true);
     ctx.drawImage(qr, 50, 6, 28, 28);
   } else {
-    text(row.print_title || row.title, 2, 3, 35, 18, true);
-    text(row.print_position || row.position, 39, 4, 23, 12, true);
-    text(row.print_floor || '', 2, 12, 59, 10);
-    ctx.drawImage(qr, 63, 2, 15, 15);
-    ctx.fillRect(2, 17, 76, .2);
+    text(productAddress(row), 2, 3, 44, 20, true);
+    ctx.drawImage(qr, 48, 5, 30, 30);
+    ctx.fillRect(2, 11, 44, .2);
     const p = row.product;
-    [['客户',p.customer],['存货编码',p.code],['产品名称',p.name],['规格',p.specification]].forEach(([key,value],i) => {
-      text(key+'：',2,18.2+i*5,21,10.5);
-      text(value,23,18.2+i*5,55,key==='存货编码'?15:key==='客户'?12:10.5,i<2);
+    [['客户',p.customer],['编码',p.code],['品名',p.name],['规格',p.specification]].forEach(([key,value],i) => {
+      text(key+'：',2,12.5+i*6,9,9);
+      text(value,12,12.5+i*6,34,key==='编码'?16:key==='客户'?14:11.5,i<2);
     });
   }
   const image = new Image(); image.className = 'print-raster';

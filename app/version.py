@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.520"
-APP_VERSION_NAME = "模具标签三段式版式"
+APP_VERSION = "v0.22.521"
+APP_VERSION_NAME = "货架产品标签大二维码"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5012,3 +5012,14 @@ APP_VERIFICATION_STEPS = [
     "进入调整40×80标签布局，改动草稿确认预览实时同步且打印按钮禁用；实体打印一张交管理员核对尺寸与字号。",
 ]
 APP_CHANGELOG = [*(f"v0.22.520：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "货架查货产品标签二维码由15mm扩大到30mm，独占右侧，横线只占左侧文字区，保持40×80mm纸型。",
+    "产品标签库位精简为R013 2层 2格，不再显示区域前缀和楼层；客户、编码、品名、规格完整保留并适度放大。",
+    "保留货位、整架标签及模具三段式标签；扫码身份、权限、客户范围与库存事实不变，无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新确认v0.22.521，在货架查货模式打印产品标签，核对R013 2层 2格等紧凑库位和右侧大二维码。",
+    "按40×80mm、100%缩放打印一张，由管理员用手机确认扫码速度、产品身份与文字清晰度。",
+]
+APP_CHANGELOG = [*(f"v0.22.521：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

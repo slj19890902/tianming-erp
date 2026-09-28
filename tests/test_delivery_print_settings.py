@@ -54,6 +54,9 @@ DEFAULT_PRINT_PROFILE = {
     "orientation_mode": "driver_managed",
     "paper_width_mm": 241.0,
     "paper_height_mm": 139.5,
+    "content_width_mm": 215.0,
+    "offset_x_mm": 0.0,
+    "offset_y_mm": 0.0,
 }
 
 
@@ -162,3 +165,29 @@ def test_delivery_print_settings_write_is_admin_only(delivery_print_settings_app
             json={"paper_width_mm": 241, "paper_height_mm": 139.5},
         )
     assert response.status_code == 403
+
+
+def test_calibration_rejects_clipped_content_and_preserves_existing_file(tmp_path, monkeypatch):
+    from app.services.delivery_print_settings import save_delivery_print_settings, get_delivery_print_settings
+    target = tmp_path / "profile.json"
+    monkeypatch.setenv("ERP_DELIVERY_PRINT_SETTINGS_PATH", str(target))
+    profile = {**DEFAULT_PRINT_PROFILE, "content_width_mm": 210, "offset_x_mm": 2, "offset_y_mm": 1}
+    assert save_delivery_print_settings(profile) == profile
+    before = target.read_bytes()
+    for invalid in ({"content_width_mm": 240}, {"offset_x_mm": 15}, {"offset_y_mm": 3}):
+        with pytest.raises(ValueError):
+            save_delivery_print_settings({**profile, **invalid})
+        assert target.read_bytes() == before
+    assert get_delivery_print_settings() == profile
+
+
+def test_old_narrow_paper_gets_safe_default_without_rewrite(tmp_path, monkeypatch):
+    from app.services.delivery_print_settings import get_delivery_print_settings
+    target = tmp_path / "profile.json"
+    monkeypatch.setenv("ERP_DELIVERY_PRINT_SETTINGS_PATH", str(target))
+    target.write_text('{"paper_width_mm": 200, "paper_height_mm": 130}')
+    before = target.read_bytes()
+    profile = get_delivery_print_settings()
+    assert profile["paper_width_mm"] == 200
+    assert profile["content_width_mm"] == 188
+    assert target.read_bytes() == before

@@ -109,6 +109,9 @@ class DeliveryPrintSettingsUpdate(BaseModel):
     orientation_mode: str = "driver_managed"
     paper_width_mm: float
     paper_height_mm: float
+    content_width_mm: float | None = None
+    offset_x_mm: float = 0
+    offset_y_mm: float = 0
 
 
 class DeliveryPrintTemplateElementPayload(BaseModel):
@@ -1521,7 +1524,7 @@ def update_delivery_print_paper_settings(
 ) -> dict:
     """Persist printer/paper calibration.  Only administrators may change it."""
     try:
-        settings = save_delivery_print_settings(body.model_dump())
+        settings = save_delivery_print_settings(body.model_dump(exclude_none=True))
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except OSError as error:

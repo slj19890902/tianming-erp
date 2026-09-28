@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.522"
-APP_VERSION_NAME = "模具标签实时编辑预览"
+APP_VERSION = "v0.22.523"
+APP_VERSION_NAME = "送货单打印安全区与清晰度"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5038,3 +5038,15 @@ APP_VERIFICATION_STEPS = [
     "新登记40×80标签，以100%缩放打印，核对位置、一开几、完整文字及15毫米二维码，并用现场手机扫码。",
 ]
 APP_CHANGELOG = [*(f"v0.22.522：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "送货单客户模板与旧模板统一使用215mm正文安全区，单价、金额列和签章完整保留，抬头按同一区域居中。",
+    "打印档案增加正文宽度及左右、上下偏移校准；预览与打印共用毫米尺寸，字体加载后分页，越界明确阻止打印。",
+    "客户模板辅助文字加大，新增模板正文默认10.5pt；历史单据保留冻结正文字号，无价版保留价格表头空格并继续隐藏金额。无数据库迁移，不改历史业务及打印记录。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新后重开YL送货单打印，无价版核对单价、金额表头及空格完整，有价版按权限显示数字。",
+    "驱动选择241×139.5mm、100%缩放、关闭页眉页脚，先试打无价与有价各一张；核对标题居中、右侧七列及签章完整，再核对连续两页走纸。",
+    "需要校准时进入系统→送货单打印纸张，调整正文安全宽度与偏移；确认系统版本v0.22.523。",
+]
+APP_CHANGELOG = [*(f"v0.22.523：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

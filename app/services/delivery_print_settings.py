@@ -21,6 +21,9 @@ DEFAULT_DELIVERY_PRINT_SETTINGS = {
     "orientation_mode": "driver_managed",
     "paper_width_mm": 241.0,
     "paper_height_mm": 139.5,
+    "content_width_mm": 215.0,
+    "offset_x_mm": 0.0,
+    "offset_y_mm": 0.0,
 }
 MIN_PAPER_WIDTH_MM = 100.0
 MAX_PAPER_WIDTH_MM = 400.0
@@ -75,7 +78,7 @@ def normalize_delivery_print_settings(payload: dict[str, Any]) -> dict[str, Any]
     )
     if orientation_mode != "driver_managed":
         raise ValueError("送货单打印方向必须由实际打印电脑的驱动管理")
-    return {
+    settings = {
         "printer_model": _validated_printer_model(payload.get("printer_model")),
         "orientation_mode": orientation_mode,
         "paper_width_mm": _validated_dimension(
@@ -91,6 +94,17 @@ def normalize_delivery_print_settings(payload: dict[str, Any]) -> dict[str, Any]
             label="送货单打印纸高",
         ),
     }
+    settings["content_width_mm"] = _validated_dimension(
+        payload.get("content_width_mm", min(215.0, settings["paper_width_mm"] - 12)),
+        minimum=60, maximum=settings["paper_width_mm"] - 12, label="正文安全宽度",
+    )
+    for key in ("offset_x_mm", "offset_y_mm"):
+        settings[key] = _validated_dimension(payload.get(key, 0), minimum=-20, maximum=20, label="打印偏移")
+    if abs(settings["offset_x_mm"]) > (settings["paper_width_mm"] - settings["content_width_mm"]) / 2 - 3:
+        raise ValueError("横向偏移使正文超出纸张安全区")
+    if abs(settings["offset_y_mm"]) > 2:
+        raise ValueError("上下偏移必须在 -2～2mm 内，避免页脚超出纸张")
+    return settings
 
 
 def get_delivery_print_settings() -> dict[str, Any]:
@@ -102,9 +116,9 @@ def get_delivery_print_settings() -> dict[str, Any]:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("配置不是对象")
-        return normalize_delivery_print_settings(
-            {**DEFAULT_DELIVERY_PRINT_SETTINGS, **raw}
-        )
+        return normalize_delivery_print_settings({
+            **{k: v for k, v in DEFAULT_DELIVERY_PRINT_SETTINGS.items() if k != "content_width_mm"}, **raw
+        })
     except (OSError, json.JSONDecodeError, ValueError):
         # Printer calibration must never stop printing because a hand-edited
         # local config file is invalid.  Falling back is safe and deterministic.

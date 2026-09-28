@@ -66,6 +66,10 @@
       } else {
         columns.forEach((col, index) => {
           const td = node('td', entry.values[index], numericKeys.has(col.key) ? 'cd-numeric' : '');
+          if (col.key === 'customer_po') {
+            td.className = 'customer-order-cell';
+            td.replaceChildren(node('span', entry.values[index], 'customer-order-text'));
+          }
           if (entry.continued && index === 0) td.prepend(node('div', `第${entry.row.sequence}行续`, 'cd-continuation'));
           tr.append(td);
         });
@@ -92,13 +96,35 @@
     footer.append(sign, node('div', `${pageNumber}/${pageCount}页　白联存档　红联客户　黄联回单`, 'cd-page'));
     body.append(footer); return sheet;
   }
+  function checkWidth(sheet) {
+    if (typeof global.fitCustomerOrderNumbers === 'function') global.fitCustomerOrderNumbers(sheet);
+    const body = sheet.querySelector('.cd-body,.print-safe-area');
+    const bounds = body.getBoundingClientRect(), paper = sheet.getBoundingClientRect();
+    const children = [body, ...body.querySelectorAll('header,section,table,th,td,footer,.cd-sign,.cd-page')];
+    if (bounds.left < paper.left - 1 || bounds.right > paper.right + 1 || children.some(el => {
+      if (!el.getClientRects().length) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.left < bounds.left - 1 || rect.right > bounds.right + 1 || el.scrollWidth > el.clientWidth + 2;
+    })) throw new Error('送货单内容超出正文安全宽度，请核对打印档案的正文宽度、偏移和模板列宽。');
+  }
+  function validate(container) {
+    container.querySelectorAll('.cd-sheet,.sheet').forEach(sheet => {
+      checkWidth(sheet);
+      const body = sheet.querySelector('.cd-body,.print-safe-area');
+      const paper = sheet.getBoundingClientRect(), bounds = body.getBoundingClientRect();
+      if (body.scrollHeight > body.clientHeight + 1 || bounds.top < paper.top - 1 || bounds.bottom > paper.bottom + 1)
+        throw new Error('送货单内容超出纸张高度，请核对纸型、上下偏移或模板字号。');
+    });
+  }
   function paginate(data, columns, container) {
     const pages = []; let current = [];
     const fits = entries => {
       const probe = makeSheet(data, columns, entries, 999, 999); container.append(probe);
       const body = probe.firstElementChild;
-      const okay = body.scrollHeight <= body.clientHeight + 1;
-      probe.remove(); return okay;
+      try {
+        checkWidth(probe);
+        return body.scrollHeight <= body.clientHeight + 1;
+      } finally { probe.remove(); }
     };
     if (!fits([])) throw new Error('抬头内容超过当前打印纸可用高度，请在模板中调整字号或联系管理员核对抬头。');
     function add(entry) {
@@ -137,6 +163,7 @@
     try {
       const pages = paginate(data, columns, container);
       container.replaceChildren(...pages.map((entries,i) => makeSheet(data, columns, entries, i+1, pages.length)));
+      validate(container);
       return pages.length;
     } finally { container.style.visibility = 'visible'; }
   }
@@ -186,6 +213,6 @@
     })().finally(() => { attempt.promise = null; });
     return attempt.promise;
   }
-  global.CustomerDeliveryPrint = { render, controls, visibleColumns, decimal, paginate, recordPrint };
+  global.CustomerDeliveryPrint = { render, controls, visibleColumns, decimal, paginate, recordPrint, validate, checkWidth };
   if (typeof module !== 'undefined') module.exports = global.CustomerDeliveryPrint;
 })(typeof window === 'undefined' ? globalThis : window);

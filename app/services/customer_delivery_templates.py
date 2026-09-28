@@ -29,7 +29,7 @@ def preset_layout(key: str) -> dict:
     return {'catalog_version':CATALOG_VERSION, 'preset':key,
             'columns':[{'key':k, 'label':('物料代号' if key=='yl' and k=='customer_material_code' else COLUMN_LABELS[k]),
                         'width':float(w)} for k,w in columns],
-            'font_size_pt':10.0, 'show_prices':key!='yl', 'show_headers':key!='kew',
+            'font_size_pt':10.5, 'show_prices':key!='yl', 'show_headers':key!='kew',
             'show_remarks':True, 'price_decimals':3, 'amount_decimals':2,
             'order_context':'', 'paper_width_mm':241.0, 'paper_height_mm':139.5}
 

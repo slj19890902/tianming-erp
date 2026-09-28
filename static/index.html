@@ -6009,6 +6009,18 @@
                     <label>打印纸高（mm）</label>
                     <input class="input" type="number" min="80" max="400" step="0.01" v-model.number="deliveryPrintSettings.paper_height_mm" :disabled="user.role !== 'admin'" />
                   </div>
+                  <div class="field" style="margin:0;min-width:150px">
+                    <label>正文安全宽度（mm）</label>
+                    <input class="input" type="number" min="60" :max="deliveryPrintSettings.paper_width_mm - 12" step="0.1" v-model.number="deliveryPrintSettings.content_width_mm" :disabled="user.role !== 'admin'" />
+                  </div>
+                  <div class="field" style="margin:0;min-width:150px">
+                    <label>左右偏移（mm，正数向右）</label>
+                    <input class="input" type="number" min="-20" max="20" step="0.1" v-model.number="deliveryPrintSettings.offset_x_mm" :disabled="user.role !== 'admin'" />
+                  </div>
+                  <div class="field" style="margin:0;min-width:150px">
+                    <label>上下偏移（mm，正数向下）</label>
+                    <input class="input" type="number" min="-2" max="2" step="0.1" v-model.number="deliveryPrintSettings.offset_y_mm" :disabled="user.role !== 'admin'" />
+                  </div>
                   <button v-if="user.role === 'admin'" class="btn primary" @click="saveDeliveryPrintSettings">保存打印档案</button>
                   <a v-if="user.role === 'admin'" class="btn" href="/delivery-print-designer.html" target="_blank" rel="noopener">设计送货单版式</a>
                 </div>

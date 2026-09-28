@@ -81,6 +81,7 @@
       margin: 0 auto;
     }
     .print-safe-area {
+      transform: translate(var(--print-offset-x, 0mm), var(--print-offset-y, 0mm));
       display: flex;
       flex-direction: column;
       width: var(--content-safe-width);
@@ -261,6 +262,11 @@
   </div>
 
   <div id="loadState" class="load-state no-print">正在读取送货单…</div>
+  <details class="print-guide no-print">
+    <summary id="printProfileSummary">打印纸张与安全区 ⓘ</summary>
+    打印驱动中选择相同的自定义纸型，缩放100%，关闭页眉页脚；方向沿用针式打印机进纸设置。
+    虚线仅用于屏幕预览，不会打印。纸面偏移可在“系统 → 送货单打印纸张”校准；请先试打一张。
+  </details>
   <div id="errorBox" class="error no-print" hidden></div>
 
   <template id="sheetTemplate">
@@ -356,6 +362,15 @@
       const printerModel = String(settings.printer_model || "EPSON SK820").trim() || "EPSON SK820";
       document.documentElement.style.setProperty("--paper-width", `${safeWidth}mm`);
       document.documentElement.style.setProperty("--paper-height", `${safeHeight}mm`);
+      const contentWidth = Number(settings.content_width_mm ?? Math.min(215, safeWidth - 12));
+      const offsetX = Number(settings.offset_x_mm ?? 0), offsetY = Number(settings.offset_y_mm ?? 0);
+      if (!Number.isFinite(contentWidth) || contentWidth < 60 || contentWidth > safeWidth - 12
+          || !Number.isFinite(offsetX) || Math.abs(offsetX) > (safeWidth - contentWidth) / 2 - 3
+          || !Number.isFinite(offsetY) || Math.abs(offsetY) > 2) throw new Error("送货单打印安全区配置无效");
+      document.documentElement.style.setProperty("--content-safe-width", `${contentWidth}mm`);
+      document.documentElement.style.setProperty("--print-offset-x", `${offsetX}mm`);
+      document.documentElement.style.setProperty("--print-offset-y", `${offsetY}mm`);
+      document.getElementById("printProfileSummary").textContent = `${safeWidth}×${safeHeight}mm · 正文${contentWidth}mm ⓘ`;
       document.documentElement.dataset.printerModel = printerModel;
       document.documentElement.dataset.orientationMode = "driver_managed";
 
@@ -561,6 +576,8 @@
         container.appendChild(probe);
         fitCustomerOrderNumbers(probe);
         const safeArea = probe.querySelector(".print-safe-area");
+        try { CustomerDeliveryPrint.checkWidth(probe); }
+        catch (error) { probe.remove(); throw error; }
         const fits = safeArea.scrollHeight <= safeArea.clientHeight + 1;
         probe.remove();
         return fits;
@@ -588,6 +605,7 @@
         fitCustomerOrderNumbers(sheet);
       });
       container.style.visibility = "visible";
+      CustomerDeliveryPrint.validate(container);
     }
 
     const printButton = document.getElementById("printButton");
@@ -698,6 +716,8 @@
         const data = await requestDeliveryPrint(id, controller.signal);
         if (generation !== loadGeneration || controller.signal.aborted) return false;
         CustomerDeliveryPrint.controls(data, loadDelivery);
+        if (document.fonts?.ready) await document.fonts.ready;
+        if (generation !== loadGeneration || controller.signal.aborted) return false;
         renderDelivery(data);
         showReady();
         return true;
@@ -746,14 +766,19 @@
       if (!printButton.disabled) {
         printButton.disabled = true;
         try {
+          if (document.fonts?.ready) await document.fonts.ready;
+          CustomerDeliveryPrint.validate(sheets);
           await CustomerDeliveryPrint.recordPrint();
           fitCustomerOrderNumbers();
           window.print();
         } catch (error) { showError(error.message); }
-        finally { printButton.disabled = false; }
+        finally { printButton.disabled = !errorBox.hidden; }
       }
     });
-    window.addEventListener('beforeprint', () => fitCustomerOrderNumbers());
+    window.addEventListener('beforeprint', () => {
+      try { fitCustomerOrderNumbers(); CustomerDeliveryPrint.validate(sheets); }
+      catch (error) { showError(error.message); }
+    });
     if (document.fonts?.ready) document.fonts.ready.then(() => fitCustomerOrderNumbers());
     retryButton.addEventListener("click", () => loadDelivery());
     if (deferDeliveryLoad) {

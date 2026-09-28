@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.528"
-APP_VERSION_NAME = "货架标签位置分隔"
+APP_VERSION = "v0.22.529"
+APP_VERSION_NAME = "仓库地图简洁布局"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5081,3 +5081,16 @@ APP_CHANGELOG = [*(f"v0.22.527：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["货架商品标签与每格标签用短横线分隔货架号、层数和格数，预览与实际打印一致。"]
 APP_VERIFICATION_STEPS = ["刷新后重新打开货架标签打印，核对R013-2层-2格等位置格式；整架标签仍仅显示货架号与二维码。"]
 APP_CHANGELOG = [*(f"v0.22.528：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "仓库地图取消重复楼层与布局标题，搜索结果改为右侧按需栏，空详情不再占位，地图从工具栏下方直接铺满可用空间。",
+    "展开货架时暂时收起搜索栏并保留查询状态；收起货架后仍保留查询词、区域和地图选中状态。",
+    "仓库导航与查货工具栏压缩为紧凑高度，地图颜色和操作说明收入帮助提示，位置、数量、异常和进行中的操作继续直接显示。",
+    "本版只调整仓库呈现与交互布局，不修改库存、位置、地图几何、权限或业务数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新确认v0.22.529，进入仓库地图，核对地图从紧凑工具栏下方开始，页面不再重复显示3F实测布局标题。",
+    "输入产品或编码，核对结果在右侧出现且地图不下移；关闭结果后地图恢复全宽。",
+    "打开有货货架并收起，核对地图、货架正视图与唯一详情可操作，搜索条件和货架选中状态仍保留。",
+]
+APP_CHANGELOG = [*(f"v0.22.529：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

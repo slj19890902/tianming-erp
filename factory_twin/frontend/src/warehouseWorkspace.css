@@ -1,27 +1,33 @@
 /* Warehouse workspaces: browsing and operations share one map and one inspector. */
 .warehouse-twin-shell { display:flex; flex-direction:column; min-height:0; font-size:14px; }
 .warehouse-twin-shell > .twin-toolbar,
-.warehouse-twin-shell.embedded-shell > .twin-toolbar { flex:0 0 auto; flex-wrap:wrap!important; gap:8px; overflow:visible; padding:8px 12px; z-index:30; }
+.warehouse-twin-shell.embedded-shell > .twin-toolbar { flex:0 0 auto; flex-wrap:nowrap!important; gap:6px; overflow:visible; padding:4px 8px; z-index:30; }
 .warehouse-twin-shell .twin-command-bar { flex:0 0 auto; min-height:40px; }
 .warehouse-twin-shell .twin-command-bar .twin-brand > :not(:first-child), .warehouse-twin-shell .twin-command-status,
 .warehouse-twin-shell .twin-toolbar-move-actions, .warehouse-twin-shell .twin-toolbar-view-tools { display:none; }
 .warehouse-twin-shell .twin-floor-area-row { display:flex; gap:8px; min-width:0; align-items:center; }
 .warehouse-twin-shell .twin-floor-area-row > label { display:flex; align-items:center; gap:5px; min-width:0; margin:0; }
-.warehouse-twin-shell .twin-floor-area-row > label:first-child { flex:0 0 96px; }
+.warehouse-twin-shell .twin-floor-area-row > label:first-child { flex:0 0 84px; }
 .warehouse-twin-shell .twin-floor-area-row > label:last-child { flex:1; }
 .warehouse-twin-shell .twin-floor-area-row select { min-width:0; width:100%; max-width:220px; }
-.warehouse-twin-shell .twin-top-search { display:flex; flex:1 1 250px; max-width:500px; min-width:180px; gap:4px; }
+.warehouse-twin-shell .twin-top-search { display:flex; flex:1 1 320px; max-width:none; min-width:220px; gap:4px; }
 .warehouse-twin-shell .twin-top-search input { flex:1; min-width:0; }
-.warehouse-twin-shell .twin-toolbar :is(input,select,button,summary) { min-height:36px; font-size:14px!important; border-radius:7px; }
+.warehouse-twin-shell .twin-toolbar :is(input,select,button,summary) { min-height:34px; font-size:14px!important; border-radius:7px; }
 .warehouse-twin-shell input,.warehouse-twin-shell select { border:1px solid #cbd5e1; padding:6px 8px; background:#fff; color:#18354b; }
 .twin-workspace-more { position:relative; }
 .twin-workspace-more > summary { cursor:pointer; padding:7px 10px; border:1px solid #cbd5e1; box-sizing:border-box; background:white; }
 .twin-workspace-more > div { position:absolute; right:0; top:100%; min-width:210px; max-width:calc(100vw - 16px); max-height:calc(100vh - 80px); overflow-y:auto; padding:8px; display:grid; gap:5px; background:#fff; border:1px solid #cbd5e1; box-shadow:0 6px 20px #18354b22; z-index:60; }
-#warehouse-twin-root .twin-workspace { flex:1; min-height:0; position:relative; grid-template-columns:minmax(0,1fr) 350px!important; grid-template-rows:auto minmax(0,1fr)!important; overflow:hidden; }
-.warehouse-twin-shell .twin-workspace > .twin-stage { grid-column:1; grid-row:2; min-height:0; }
-.warehouse-twin-shell .twin-workspace > .twin-inspector { display:flex!important; position:relative; inset:auto; flex-direction:column; grid-column:2; grid-row:2; width:auto; max-height:none; min-width:0; overflow-y:auto; gap:8px; }
+#warehouse-twin-root .twin-workspace { flex:1; min-height:0; position:relative; grid-template-columns:minmax(0,1fr)!important; grid-template-rows:minmax(0,1fr)!important; gap:0; padding:0; overflow:hidden; }
+#warehouse-twin-root .twin-workspace.context-open:not(.rack-focused) { grid-template-columns:minmax(0,1fr) minmax(320px,360px)!important; }
+#warehouse-twin-root .twin-workspace.context-collapsed:has(> .twin-inspector > :not([hidden])) { grid-template-columns:minmax(0,1fr) minmax(320px,350px)!important; }
+.warehouse-twin-shell .twin-workspace > .twin-stage { grid-column:1; grid-row:1; min-height:0; border:0; border-radius:0; }
+.warehouse-twin-shell .twin-workspace > .twin-inspector { display:flex!important; position:relative; inset:auto; flex-direction:column; grid-column:2; grid-row:1; width:auto; max-height:none; min-width:0; overflow-y:auto; gap:8px; border-width:0 0 0 1px; border-radius:0; }
+.warehouse-twin-shell .twin-workspace.context-open > .twin-inspector,
+.warehouse-twin-shell .twin-workspace > .twin-inspector:not(:has(> :not([hidden]))) { display:none!important; }
 .warehouse-twin-shell .twin-workspace > .twin-layer-rail { display:block; position:absolute; left:0; top:0; bottom:0; width:150px; z-index:20; overflow:auto; }
-.warehouse-twin-shell .twin-workspace > .twin-context-rail { display:flex!important; flex-direction:column; position:relative; inset:auto; grid-column:1/-1; grid-row:1; width:auto; max-height:min(42vh,420px); min-height:0; z-index:25; box-shadow:none; overflow:auto; }
+.warehouse-twin-shell .twin-workspace > .twin-context-rail { display:flex!important; flex-direction:column; position:relative; inset:auto; grid-column:2; grid-row:1; width:auto; max-height:none; min-height:0; z-index:25; border-width:0 0 0 1px; border-radius:0; box-shadow:none; overflow:hidden; }
+.warehouse-twin-shell .twin-workspace.context-collapsed > .twin-context-rail,
+.warehouse-twin-shell .twin-workspace.rack-focused > .twin-context-rail { display:none!important; }
 .warehouse-twin-shell .twin-context-rail > header { display:flex; justify-content:space-between; align-items:center; padding:6px 10px; }
 .warehouse-twin-shell .twin-global-search { display:block; overflow:auto!important; }
 .warehouse-twin-shell .twin-global-search .twin-search-step,.warehouse-twin-shell .twin-context-heading { display:none; }
@@ -71,14 +77,18 @@
 .twin-move-legend i { width:12px; height:12px; border:2px solid; display:inline-block; }
 .warehouse-twin-shell .twin-effective-map-status > b, .warehouse-twin-shell .twin-stage-heading > span { display:none; }
 .warehouse-twin-shell .location-editing .twin-effective-map-status > b { display:block; }
+.warehouse-twin-shell .twin-map-pane > .twin-effective-map-status { position:absolute; z-index:12; top:8px; right:8px; width:auto; max-width:min(440px,calc(100% - 16px)); min-height:0; margin:0; padding:4px; border:0; background:transparent; box-shadow:none; pointer-events:none; }
+.warehouse-twin-shell .twin-effective-map-status > * { pointer-events:auto; }
+.warehouse-twin-shell .twin-effective-map-status .twin-location-legend { display:none; }
 .warehouse-twin-shell > .twin-move-draft-bar { flex:0 0 auto; max-height:26vh; overflow:auto; }
 .warehouse-twin-shell .twin-secondary-action { width:auto; padding:6px; background:transparent; color:#375a72; }
-.twin-top-ledger { display:flex; gap:10px; font-size:14px; }
+.twin-top-ledger { display:none; }
 .warehouse-twin-shell .twin-command-bar { display:none; }
 .warehouse-twin-shell .twin-inspector > .twin-location-readonly-note[hidden] { display:none; }
 .warehouse-twin-shell .twin-inspector button:focus-visible,.warehouse-twin-shell summary:focus-visible { outline:3px solid #2563eb; outline-offset:2px; }
 @media(max-width:1100px) {
- #warehouse-twin-root .twin-workspace { grid-template-columns:minmax(0,1fr) 310px!important; }
+ #warehouse-twin-root .twin-workspace.context-open:not(.rack-focused),
+ #warehouse-twin-root .twin-workspace.context-collapsed:has(> .twin-inspector > :not([hidden])) { grid-template-columns:minmax(0,1fr) 320px!important; }
  .warehouse-twin-shell .twin-stage.rack-focused { grid-template-columns:minmax(0,1fr)!important; grid-template-rows:180px minmax(0,1fr); }
  .warehouse-twin-shell .twin-stage.rack-focused .twin-map-pane { min-height:180px; }
 }
@@ -115,10 +125,14 @@
  .warehouse-twin-shell .twin-stage.rack-focused .twin-map-pane { min-height:0; }
 }
 @media(max-width:880px) {
- #warehouse-twin-root .twin-workspace { display:grid!important; grid-template-columns:minmax(0,1fr)!important; grid-template-rows:auto auto auto!important; overflow:auto; }
- .warehouse-twin-shell .twin-workspace > .twin-context-rail { grid-column:1; grid-row:1; max-height:38vh; }
- .warehouse-twin-shell .twin-workspace > .twin-stage { grid-column:1; grid-row:2; min-height:62vh; }
- .warehouse-twin-shell .twin-workspace > .twin-inspector { grid-column:1; grid-row:3; max-height:none; overflow:visible; }
+ .warehouse-twin-shell > .twin-toolbar { flex-wrap:wrap!important; }
+ #warehouse-twin-root .twin-workspace,
+ #warehouse-twin-root .twin-workspace.context-open:not(.rack-focused),
+ #warehouse-twin-root .twin-workspace.context-collapsed:has(> .twin-inspector > :not([hidden])) { display:grid!important; grid-template-columns:minmax(0,1fr)!important; grid-template-rows:minmax(0,1fr)!important; overflow:hidden; }
+ .warehouse-twin-shell .twin-workspace.context-open > .twin-stage,
+ .warehouse-twin-shell .twin-workspace.context-collapsed:has(> .twin-inspector > :not([hidden])) > .twin-stage { display:none!important; }
+ .warehouse-twin-shell .twin-workspace > .twin-context-rail,
+ .warehouse-twin-shell .twin-workspace > .twin-inspector { grid-column:1; grid-row:1; max-height:none; border:0; overflow:auto; }
  .warehouse-twin-shell .twin-stage.rack-focused { display:flex!important; flex-direction:column; min-height:74vh; }
  .warehouse-twin-shell .twin-stage.rack-focused .twin-map-pane { flex:0 0 190px; display:flex!important; }
  .warehouse-twin-shell .twin-stage.rack-focused .twin-rack-stage { flex:1 1 auto; min-height:0; }

@@ -2159,7 +2159,7 @@ export function WarehouseTwinApp() {
     setMapMode((current) => traceReadOnly
       ? "lookup"
       : current === "move" || (current === "planning" && (pendingAreaPolicyEdit || pendingRackEdit)) ? current : "lookup");
-    setSearchPanelOpen(!traceReadOnly);
+    setSearchPanelOpen(false);
     setLocationEditMode(false);
     setAreaPolicyEditMode(false);
     setFloor1CandidatePlan(null);
@@ -6632,7 +6632,7 @@ export function WarehouseTwinApp() {
         <label>区域<select aria-label="地图区域" value={selectedAreaCode || ""} disabled={spatialEditBusy} onChange={event => switchWorkspaceArea(event.target.value)}><option value="">全部区域</option>{workspaceAreaGroups.map(([letter,areas]) => <optgroup key={letter} label={letter}>{areas.map(feature => <option key={feature.id} value={featureAreaCode(feature) || ""}>{employeeAreaName(feature,{floorCode})}</option>)}</optgroup>)}</select></label>
       </div>
       <div className="twin-top-search">
-        <input aria-label="全仓查货" placeholder="全仓查货：客户 / 编码 / 名称 / 规格" value={search} onFocus={() => {setDetailSearchOpen(false);setSearchPanelOpen(true);}} onChange={event => {setSearch(event.target.value);setSearchPanelOpen(true);setFocusedSearchItem(null);setFocusedSearchProductKey(null);setPendingRackSearchLocationId(null);setPendingLocationId(null);setPendingAreaCode(null);}} />
+        <input aria-label="全仓查货" placeholder="全仓查货：客户 / 编码 / 名称 / 规格" value={search} onFocus={() => setDetailSearchOpen(false)} onChange={event => {setSearch(event.target.value);setSearchPanelOpen(true);setFocusedSearchItem(null);setFocusedSearchProductKey(null);setPendingRackSearchLocationId(null);setPendingLocationId(null);setPendingAreaCode(null);}} />
         <WarehouseInfoTip id="warehouse-search-tip" label="查看全仓查货说明">支持客户、简称、存货编码、产品名称和规格；输入至少两个字符后查询。地图楼层是视角，“搜索楼层”才是查货范围。</WarehouseInfoTip>
         <button type="button" disabled={mapMode !== "lookup" || spatialEditBusy} aria-expanded={searchPanelOpen && detailSearchOpen} onClick={() => {setSearchPanelOpen(true);setDetailSearchOpen(value => !searchPanelOpen || !value);}}>详细查找</button>
         <button type="button" aria-expanded={searchPanelOpen && !detailSearchOpen} onClick={() => {setDetailSearchOpen(false);setSearchPanelOpen(value => detailSearchOpen || !value);}}>{searchPanelOpen && !detailSearchOpen ? "收起结果" : "查找"}</button>
@@ -6803,7 +6803,7 @@ export function WarehouseTwinApp() {
 
       <div className={`twin-stage ${focusedRack ? "rack-focused" : ""}`}>
         <div className="twin-map-pane">
-          <div className="twin-stage-heading"><div><small>{floorCode} · 实测布局</small><b>{floor4CalibrationMode ? "四楼实测成品仓库（重新校正中）" : layout?.name || floorTitle}</b></div><span>{floor4CalibrationMode ? "按门口两端和内侧后沿点选 · 地图已锁定" : locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust" ? "地图调整：区域外自动为通道" : locationEditMode ? "货位摆放：拖货位；点空白选区域" : viewMode === "2d" ? "按住左键平移 · 滚轮缩放" : "左键平移 · 右键旋转 · 滚轮缩放"}</span></div>
+          {(!embedded || locationEditMode || floor4CalibrationMode) && <div className="twin-stage-heading"><div><small>{floorCode} · 实测布局</small><b>{floor4CalibrationMode ? "四楼实测成品仓库（重新校正中）" : layout?.name || floorTitle}</b></div><span>{floor4CalibrationMode ? "按门口两端和内侧后沿点选 · 地图已锁定" : locationEditMode && layoutMapToolsOpen && layoutMapTool === "adjust" ? "地图调整：区域外自动为通道" : locationEditMode ? "货位摆放：拖货位；点空白选区域" : viewMode === "2d" ? "按住左键平移 · 滚轮缩放" : "左键平移 · 右键旋转 · 滚轮缩放"}</span></div>}
           <div className="twin-effective-map-status" role="status">
             <b>{activeObjectPreview ? "当前对象编辑预览" : "已应用位置 · 三种模式统一"}</b>
             {layoutDraftControl?.has_draft && <span>有已保存但尚未应用的调整</span>}

@@ -8,8 +8,9 @@
     if (cls) el.className = cls;
     return el;
   }
-  function visibleColumns(layout, shown) {
-    return layout.columns.filter(c => shown || !priceKeys.has(c.key));
+  function visibleColumns(layout) {
+    // Price mode changes values only; keep the customer's column layout intact.
+    return layout.columns;
   }
   function decimal(value, places) {
     // Values are decimal strings from the server; BigInt avoids binary rounding.
@@ -21,12 +22,13 @@
     const result = scaled.toString().padStart(places + 1, '0');
     return places ? result.slice(0, -places) + '.' + result.slice(-places) : result;
   }
-  function valuesFor(row, columns, layout) {
+  function valuesFor(row, columns, layout, shown) {
     return columns.map(col => {
+      if (priceKeys.has(col.key) && !shown) return '';
       const value = row[col.key];
       return value === undefined || value === null ? '' : priceKeys.has(col.key)
         ? decimal(value, col.key === 'unit_price' ? layout.price_decimals : layout.amount_decimals)
-        : String(value);
+        : col.key === 'specification' ? String(value).replace(/(?:mm|毫米)/gi, '').trim() : String(value);
     });
   }
   function makeSheet(data, columns, entries, pageNumber, pageCount) {
@@ -50,7 +52,11 @@
     table.append(group);
     if (layout.show_headers) {
       const head = node('thead'), tr = node('tr');
-      columns.forEach(col => tr.append(node('th', col.label))); head.append(tr); table.append(head);
+      columns.forEach(col => {
+        const label = col.key === 'specification'
+          ? `${col.label.replace(/\s*[（(]?\s*(?:mm|毫米)\s*[）)]?/gi, '').trim()}（mm）` : col.label;
+        tr.append(node('th', label));
+      }); head.append(tr); table.append(head);
     }
     const tbody = node('tbody');
     entries.forEach(entry => {
@@ -74,7 +80,13 @@
     });
     const quantityText = quantities => Object.entries(quantities).map(([unit,quantity])=>`${quantity}${unit}`).join('、') || '0';
     footer.append(node('div', `本页数量：${quantityText(pageQuantities)}${pageNumber === pageCount ? `　整单数量：${quantityText(data.commercial_quantities || {'':data.commercial_quantity})}` : ''}`, 'cd-totals'));
-    if (data.price_display.shown && pageNumber === pageCount) footer.append(node('div', `金额合计：${decimal(data.total_amount, layout.amount_decimals)} 元`, 'cd-totals'));
+    if (pageNumber === pageCount) {
+      const total = node('div', data.price_display.shown
+        ? `金额合计：${decimal(data.total_amount, layout.amount_decimals)} 元` : '金额合计：', 'cd-totals');
+      // Reserve the same footer height without placing hidden amounts in the DOM.
+      if (!data.price_display.shown) total.style.visibility = 'hidden';
+      footer.append(total);
+    }
     const sign = node('div', undefined, 'cd-sign');
     sign.append(node('span', '送货人：'), node('span', '收货单位（签章）：________________'));
     footer.append(sign, node('div', `${pageNumber}/${pageCount}页　白联存档　红联客户　黄联回单`, 'cd-page'));
@@ -112,7 +124,7 @@
       }
     }
     data.customer_document_rows.forEach(row => {
-      add({ row, values: valuesFor(row, columns, data.print_template.layout), continued: false });
+      add({ row, values: valuesFor(row, columns, data.print_template.layout, data.price_display.shown), continued: false });
       if (data.print_template.layout.show_remarks && row.remarks && !columns.some(col => col.key === 'remarks'))
         add({row, values:[`第${row.sequence}行备注：${row.remarks}`], note:true});
     });

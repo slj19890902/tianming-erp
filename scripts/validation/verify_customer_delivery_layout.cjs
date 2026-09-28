@@ -11,19 +11,39 @@ for(const file of ['static/index.html','static/delivery-print.html','static/deli
 }
 (async()=>{
  const browser=await chromium.launch({channel:'chrome',headless:true});
+ try {
  const page=await browser.newPage({viewport:{width:1150,height:800}});
  await page.route('**/*', route=>route.abort());
  await page.setContent('<style>html,body{margin:0;padding:0}</style><div id="sheets"></div>');
  await page.addStyleTag({content:fs.readFileSync(path.join(root,'static/customer-delivery-print.css'),'utf8')});
  await page.addScriptTag({content:fs.readFileSync(path.join(root,'static/customer-delivery-print.js'),'utf8')});
  const layouts=JSON.parse(fs.readFileSync(layoutFile,'utf8'));
- const results=[];
+ const results=[],pricedLayouts={};
  for(const [preset,layout] of Object.entries(layouts))for(const prices of [true,false]){
    const data={id:1,print_template:{layout},price_display:{shown:prices,allowed:true},order_context:preset==='yke'?'海外订单':'',
     sender:{company_name:'苏州天明包装有限公司',address:'苏州市吴中区临湖镇浦庄大道工业区',phone:'0512-66530018'},
     customer:{name:preset==='yl'?'苏州工业园区驿力机车科技有限公司':preset==='kew'?'光洋':'研光',address:'客户交货地点（沿用冻结地址）',contact_person:'客户联系人'},
     delivery_number:'DH-20260922-TEST',delivery_date:'2026-09-22',vehicle_number:'苏E测试',total_amount:'7941.68',commercial_quantity:3700,commercial_quantities:{'只':3700},
-    customer_document_rows:Array.from({length:37},(_,i)=>({sequence:i+1,customer_material_code:preset==='yl'?'Z.001.000205':'80010631',customer_drawing_number:'0632094-1',customer_category:'AT',customer_model:'TRD-N / KEW 长型号',customer_product_name:'305风机纸箱(含衬板）1:4',specification:'520×350×300',quantity:100,unit:'只',unit_price:'2.14642',amount:'214.64',customer_po:i%2?'POORD040860':'POORD040679',remarks:i===0?'按原始内容完整打印，无删减':'',pricing_included:true}))};
+    customer_document_rows:Array.from({length:37},(_,i)=>({sequence:i+1,customer_material_code:preset==='yl'?'Z.001.000205':'80010631',customer_drawing_number:'0632094-1',customer_category:'AT',customer_model:'TRD-N / KEW 长型号',customer_product_name:'305风机纸箱(含衬板）1:4',specification:i%2?'520mm×350mm×300mm':'520×350×300 毫米',quantity:100,unit:'只',unit_price:'2.14642',amount:'214.64',customer_po:i%2?'POORD040860':'POORD040679',remarks:i===0?'按原始内容完整打印，无删减':'',pricing_included:true}))};
+   const layoutResult=await page.evaluate(data=>{
+    const container=document.getElementById('sheets');CustomerDeliveryPrint.render(data,container);
+    const columns=data.print_template.layout.columns;
+    return {widths:[...container.querySelectorAll('col')].map(c=>c.style.width),
+     rows:[...container.querySelectorAll('tbody tr:not(.cd-note)')].map(tr=>[...tr.cells].map((td,i)=>['unit_price','amount'].includes(columns[i]?.key)?'':td.textContent)),
+     prices:[...container.querySelectorAll('tbody tr:not(.cd-note)')].flatMap(tr=>[...tr.cells].filter((td,i)=>['unit_price','amount'].includes(columns[i]?.key)).map(td=>td.textContent)),
+     specifications:[...container.querySelectorAll('tbody tr:not(.cd-note)')].flatMap(tr=>[...tr.cells].filter((td,i)=>columns[i]?.key==='specification').map(td=>td.textContent)),
+     headers:[...container.querySelectorAll('th')].map(th=>th.textContent)};
+   },data);
+   if(prices)pricedLayouts[preset]=layoutResult;
+   else {
+    assert.deepStrictEqual(layoutResult.widths,pricedLayouts[preset].widths,'price toggle must preserve columns, widths and page count');
+    assert.deepStrictEqual(layoutResult.rows,pricedLayouts[preset].rows,'price toggle must preserve all non-price details');
+    assert(layoutResult.prices.every(value=>value===''),'unpriced cells must not contain price data, even if the input has prices');
+   }
+   if(preset==='yl'){
+    assert(layoutResult.headers.includes('尺寸（mm）'),'dimension unit belongs in the header');
+    assert(layoutResult.specifications.every(value=>!/(?:mm|毫米)/i.test(value)&&value==='520×350×300'),'dimension values must not repeat units');
+   }
    const result=await page.evaluate(data=>{const container=document.getElementById('sheets');const pages=CustomerDeliveryPrint.render(data,container);return{pages,text:container.textContent,heights:[...container.children].map(s=>({client:s.firstChild.clientHeight,scroll:s.firstChild.scrollHeight,width:s.getBoundingClientRect().width})),quantity:[...container.querySelectorAll('.cd-totals')].map(n=>n.textContent)};},data);
    assert(result.pages>1);assert(result.heights.every(h=>h.scroll<=h.client+1));
    assert(result.text.includes('0632094-1')||preset==='yl');
@@ -41,5 +61,6 @@ for(const file of ['static/index.html','static/delivery-print.html','static/deli
  },{layout:layouts.yl,long});
  assert.strictEqual(longResult.restored,long);assert.strictEqual(longResult.counted,400);assert(longResult.pages>2);
  fs.writeFileSync(path.join(out,'print-verification.json'),JSON.stringify({syntax:'passed',results,long:{pages:longResult.pages,characters:long.length,preserved:true,counted:400}},null,2));
- await browser.close();process.stdout.write(JSON.stringify({syntax:'passed',scenarios:results.length,longPages:longResult.pages}));
+ process.stdout.write(JSON.stringify({syntax:'passed',scenarios:results.length,longPages:longResult.pages}));
+ } finally { await browser.close(); }
 })().catch(e=>{process.stderr.write(e.stack);process.exitCode=1});

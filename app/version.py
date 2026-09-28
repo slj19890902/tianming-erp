@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.516"
-APP_VERSION_NAME = "成套库存新订单抵扣修复"
+APP_VERSION = "v0.22.517"
+APP_VERSION_NAME = "送货单无价排版与尺寸单位"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4967,3 +4967,13 @@ APP_VERIFICATION_STEPS = [
     "库存被其他操作占用时以最新库存为准；实际订单保存及后续发货由管理员操作。",
 ]
 APP_CHANGELOG = [*(f"v0.22.516：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "无价送货单保留有价版的列、列宽和非价格信息，仅隐藏单价、金额和合计价格；切换价格模式不再删除表格列。",
+    "尺寸表头统一标注（mm），明细尺寸不再重复显示mm或毫米；只调整显示，不修改冻结尺寸、价格、数量或模板数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "强制刷新送货单打印页，切换显示价格与不显示价格，核对表格布局和非价格内容一致，无价版价格为空。",
+    "核对尺寸标题显示（mm），尺寸值如520×350×300不重复单位；打印及纸张效果由管理员人工验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.517：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -5971,3 +5971,6 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 运行12a330377，包d921c670，ed0928ml无迁移。新旧送货模板共用215mm正文安全区及校准偏移，价格空列完整保留，字体稳定后分页和双轴越界拦截；历史快照不改。43项Python、7组Chrome/15页PDF、新NAS备份、305表冷态事实与三地址健康/资源通过。报告 `docs/release_reports/DELIVERY_PRINT_SAFE_20260928.md`；无价/有价与连续走纸待管理员实打验收。
 
 - 2026-09-28：日常说明精简v0.22.525已发布，源码de1a4b80，保留仓库v524及打印v523全部更新；head ed0928ml，无迁移。见docs/release_reports/UI_HELP_CLEANUP_20260928.md，待管理员页面验收。
+
+
+2026-09-28：仓库台账同源内嵌拒绝连接已随v0.22.526发布，运行d7dde3c5、head ed0928ml不变；独立回执 docs/release_reports/WAREHOUSE_FRAME_FIX_20260928.md，待管理员刷新验收。

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.529"
-APP_VERSION_NAME = "仓库地图简洁布局"
+APP_VERSION = "v0.22.530"
+APP_VERSION_NAME = "货架聚焦辅助点清理"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5094,3 +5094,13 @@ APP_VERIFICATION_STEPS = [
     "打开有货货架并收起，核对地图、货架正视图与唯一详情可操作，搜索条件和货架选中状态仍保留。",
 ]
 APP_CHANGELOG = [*(f"v0.22.529：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "货架正视图展开并放大地图时，隐藏与货架本体重复的蓝色逻辑货位辅助点，保留货架、选中高亮和右侧真实货位信息。",
+    "逻辑货位的库存、位置、搜索定位和不可见点击区域保持不变；关闭货架后地图恢复原有货位标记。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新确认v0.22.530，进入仓库地图并打开一个有货货架，核对放大后的地图不再出现一串蓝色圆点。",
+    "收起货架后重新查货，核对搜索定位、货架高亮、数量与右侧货位详情仍可正常使用。",
+]
+APP_CHANGELOG = [*(f"v0.22.530：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

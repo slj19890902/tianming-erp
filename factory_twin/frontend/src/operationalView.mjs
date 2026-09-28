@@ -190,6 +190,10 @@ export function operationalEntitySelectable(visualTheme, entityKind, featureKind
   return entityKind === "equipment" || entityKind === "rack" || (entityKind === "feature" && featureKind === "zone");
 }
 
+export function shouldShowWarehousePalletVisual(pallet, hideRackLocationMarkers = false) {
+  return !(hideRackLocationMarkers && pallet?.is_rack_location);
+}
+
 export function wallSurfaceStyle(visualTheme, viewMode) {
   if (visualTheme !== "warehouse") {
     return {

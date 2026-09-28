@@ -25,6 +25,7 @@ import {
   warehouseFrustumDivisor,
   warehousePassageEnvelope,
   warehousePassageSurfaceStyle,
+  shouldShowWarehousePalletVisual,
   warehouseZoneColor
 } from "./operationalView.mjs";
 import { transformReferencePoint } from "./referenceOverlay.mjs";
@@ -71,6 +72,7 @@ interface Props {
   mapPanLocked?: boolean;
   allowPalletSelection?: boolean;
   preferStorageSelection?: boolean;
+  hideRackLocationMarkers?: boolean;
   palletSnapEnabled: boolean;
   palletSnapThresholdMm: number;
   drawMode: "zone" | "aisle" | "no_go" | "structure" | null;
@@ -482,6 +484,7 @@ export function EditorCanvas({
   mapPanLocked = false,
   allowPalletSelection = false,
   preferStorageSelection = false,
+  hideRackLocationMarkers = false,
   palletSnapEnabled,
   palletSnapThresholdMm,
   drawMode,
@@ -1138,7 +1141,7 @@ export function EditorCanvas({
             && (!draggablePalletIdSet || draggablePalletIdSet.has(pallet.id))
         };
         if (warehouseTheme) {
-          if (pallet.is_logical_anchor) {
+          if (pallet.is_logical_anchor && shouldShowWarehousePalletVisual(pallet, hideRackLocationMarkers)) {
             group.add(buildPalletMarkerVisual(pallet, viewMode, violated));
           }
           group.add(warehousePalletPickProxy(pallet, viewMode, violated));
@@ -1155,7 +1158,7 @@ export function EditorCanvas({
           interactive.push(warehouseTheme ? group.children[group.children.length - 1] : group);
         }
         scene.add(group);
-        if (warehouseTheme && !pallet.is_logical_anchor) {
+        if (warehouseTheme && !pallet.is_logical_anchor && shouldShowWarehousePalletVisual(pallet, hideRackLocationMarkers)) {
           warehousePalletInstances.push({ pallet, position, rotationY: group.rotation.y, violated });
         }
         if (layers.labels) {
@@ -1713,7 +1716,7 @@ export function EditorCanvas({
       });
       renderer.dispose();
     };
-  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, aisleEditingEnabled, mapPanLocked, allowPalletSelection, preferStorageSelection, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, effectiveDrawMode, drawPoints, drawPointLabels, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
+  }, [layout, assets, viewMode, cameraPreset, viewResetToken, layers, referenceLayout, referenceOverlay, productionProjections, palletEditingOnly, rackEditingEnabled, featureEditingEnabled, aisleEditingEnabled, mapPanLocked, allowPalletSelection, preferStorageSelection, hideRackLocationMarkers, draggablePalletIds, palletSnapEnabled, palletSnapThresholdMm, effectiveDrawMode, drawPoints, drawPointLabels, measureMode, measurePoints, readOnly, visualTheme, showInternalCodes]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

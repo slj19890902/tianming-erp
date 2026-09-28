@@ -1,4 +1,4 @@
-import type { Bounds, LayoutFeature } from "./types";
+import type { Bounds, LayoutFeature, Pallet } from "./types";
 
 export function filterOperationalFeatures(
   floorCode: string,
@@ -56,6 +56,11 @@ export function operationalEntitySelectable(
   visualTheme: "editor" | "warehouse",
   entityKind: "structure" | "feature" | "equipment" | "rack" | "pallet",
   featureKind?: "zone" | "aisle" | "no_go" | "structure" | null
+): boolean;
+
+export function shouldShowWarehousePalletVisual(
+  pallet: Pallet,
+  hideRackLocationMarkers?: boolean
 ): boolean;
 
 export function wallSurfaceStyle(

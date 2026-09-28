@@ -536,6 +536,7 @@ export function buildMappedLocationPallets(
         display_label: readableLocationName,
         operational_group_id: `location:${location.location_id}`,
         is_logical_anchor: isLogicalAnchor,
+        is_rack_location: Boolean(location.map_rack_id || location.address_kind === "rack_slot"),
         is_planning_location_slot: isPlanningLocationSlot,
         planning_slot_width_mm: isPlanningLocationSlot ? standard.width_mm : undefined,
         planning_slot_depth_mm: isPlanningLocationSlot ? standard.depth_mm : undefined,

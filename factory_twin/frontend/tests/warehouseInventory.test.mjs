@@ -1277,6 +1277,36 @@ test("empty and shared ground locations have the same footprint and status color
   assert.equal(emptyLookup.y_mm, lookup.y_mm);
 });
 
+test("rack-slot projections carry an explicit rack marker contract", () => {
+  const zone = {
+    id: "zone-rack",
+    feature_kind: "zone",
+    feature_code: "C",
+    erp_area_code: "C",
+    points: [[0, 0], [3000, 0], [3000, 2000], [0, 2000]]
+  };
+  const location = normalizeInventoryLocationProjection({
+    location_id: 1402,
+    location_code: "R014-2-2",
+    location_name: "三楼 R014 2层2格",
+    floor_code: "3F",
+    area_code: "C",
+    storage_type: "rack",
+    address_kind: "rack_slot",
+    map_rack_id: "rack-r014",
+    map_feature_id: "zone-rack",
+    position_status: "mapped",
+    occupancy_status: "occupied",
+    map_position: { left_pct: 40, top_pct: 40, width_pct: 2, height_pct: 2, version: 1, layout_kind: "logical_anchor" },
+    pallets: [],
+    loose_items: [{ lot_id: 1402, available_quantity: 300 }]
+  });
+
+  const [marker] = buildMappedLocationPallets([zone], [location], "3F", STANDARD_PALLET, "layout-3f");
+  assert.equal(marker.is_logical_anchor, true);
+  assert.equal(marker.is_rack_location, true);
+});
+
 test("move targets are the intersection of empty API candidates and mapped dashboard locations", () => {
   const candidates = [
     { id: 1, is_empty: true },

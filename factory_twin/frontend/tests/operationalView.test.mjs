@@ -6,6 +6,7 @@ import {
   effectiveMapFeatures,
   filterOperationalFeatures,
   operationalEntitySelectable,
+  shouldShowWarehousePalletVisual,
   warehouseAisleColor,
   warehouseFrustumDivisor,
   warehousePassageEnvelope,
@@ -143,6 +144,12 @@ test("warehouse interaction whitelist includes zones, racks and production equip
   assert.equal(operationalEntitySelectable("warehouse", "pallet"), false);
   assert.equal(operationalEntitySelectable("editor", "structure"), true);
   assert.equal(operationalEntitySelectable("editor", "rack"), true);
+});
+
+test("focused rack hides duplicate location markers but keeps floor locations visible", () => {
+  assert.equal(shouldShowWarehousePalletVisual({ is_rack_location: true }, true), false);
+  assert.equal(shouldShowWarehousePalletVisual({ is_rack_location: true }, false), true);
+  assert.equal(shouldShowWarehousePalletVisual({ is_rack_location: false }, true), true);
 });
 
 test("warehouse walls remain visible without occluding zones", () => {

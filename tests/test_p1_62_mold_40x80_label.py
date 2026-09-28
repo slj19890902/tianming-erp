@@ -816,7 +816,7 @@ def test_page_and_warehouse_select_one_frozen_paper_template() -> None:
     assert "多款见扫码" not in LAYOUT_JS
     assert "body,html{width:40mm;height:auto" in LABEL
     assert 'CURRENT_WIDE_CATALOG="p1-118-v1"' in LABEL
-    assert LABEL.count("?v=0.22.516") == 2
+    assert LABEL.count("?v=0.22.520") == 2
     assert "?v=0.22.203" not in LABEL
 
 

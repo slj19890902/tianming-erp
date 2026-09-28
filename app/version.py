@@ -11,10 +11,10 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.519"
-APP_VERSION_NAME = "已送货订单需求减量"
+APP_VERSION = "v0.22.520"
+APP_VERSION_NAME = "模具标签三段式版式"
 APP_BUILD_DATE = "2026-09-28"
-APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
+APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
     "待来料按当前有效供应商报料明细逐条展示和收料；天地盖的盖片、底片继续保持各自稳定身份，不再回退成订单级合计数量。",
@@ -4999,3 +4999,16 @@ APP_VERIFICATION_STEPS = [
     "核对订单数量300、已送300，原300送货单与完工记录不变，剩余300成品预占恢复可用；以保存时最新库存为准。",
 ]
 APP_CHANGELOG = [*(f"v0.22.519：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "40×80模具标签改为三段式：顶部几开、位置与自定义内容，中间18mm内为产品名称、客户简称加存货编码及二维码，底部5mm只显示片料尺寸，两段之间各有一条横线。",
+    "多款共用模具完整显示全部存货编码并自动缩字，不再出现“多款见扫码”“共用N款”；各款报料尺寸不一致时显示待完善，不借用任一款尺寸冒充。",
+    "标签编辑支持草稿实时预览，预览与打印使用同一渲染，草稿期间不保存、不写库且禁用打印按钮。",
+    "历史V1至V6冻结版式的回放、坐标、字号与哈希保持不变；无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新确认v0.22.520，打开任一模具的40×80标签预览，核对三段式、两条横线、底部仅片料尺寸。",
+    "选择一块共用多款的模具，确认全部存货编码完整显示且无“多款见扫码”“共用N款”字样。",
+    "进入调整40×80标签布局，改动草稿确认预览实时同步且打印按钮禁用；实体打印一张交管理员核对尺寸与字号。",
+]
+APP_CHANGELOG = [*(f"v0.22.520：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

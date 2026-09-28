@@ -72,8 +72,8 @@ def test_40x30_renderer_keeps_board_prefix_only() -> None:
 
 
 def test_print_assets_are_release_versioned_and_pages_cannot_flex_shrink() -> None:
-    assert 'mold-label-layout.css?v=0.22.516' in LABEL_PAGE
-    assert 'mold-label-layout.js?v=0.22.516' in LABEL_PAGE
+    assert 'mold-label-layout.css?v=0.22.520' in LABEL_PAGE
+    assert 'mold-label-layout.js?v=0.22.520' in LABEL_PAGE
     assert ".mold-label-page" in LAYOUT_CSS
     assert "flex: none" in LAYOUT_CSS
     assert "break-inside: avoid-page" in LAYOUT_CSS

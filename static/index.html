@@ -9944,6 +9944,24 @@
         </div>
       </div>
 
+      <div v-if="orderQuantityEditor" class="modal-backdrop" style="z-index:2100">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="order-quantity-title" style="max-width:480px">
+          <div class="modal-header"><h3 id="order-quantity-title">调整订单数量</h3></div>
+          <div class="modal-body">
+            <p>{{ orderQuantityEditor.order }} · {{ orderQuantityEditor.product }}</p>
+            <p>原订 {{ orderQuantityEditor.expected_quantity }}，已送 {{ orderQuantityEditor.delivered_quantity }}，待发货 {{ orderQuantityEditor.pending_delivery_quantity }}</p>
+            <label for="order-quantity-target">客户最终需要的数量</label>
+            <input id="order-quantity-target" class="input" type="number" step="1" :min="orderQuantityEditor.minimum_quantity" :max="orderQuantityEditor.expected_quantity" v-model.number="orderQuantityEditor.quantity" :disabled="orderQuantityEditor.saving || !!orderQuantityEditor.submitted" />
+            <p class="muted">数量不能低于已送和待发货合计。已生产、收料及送货记录保留，多余成品预占恢复为可用库存。</p>
+            <p v-if="orderQuantityEditor.error" class="notice warning" role="alert">{{ orderQuantityEditor.error }}</p>
+          </div>
+          <div class="modal-footer">
+            <button class="btn" :disabled="orderQuantityEditor.saving" @click="orderQuantityEditor=null">关闭</button>
+            <button class="btn primary" :disabled="orderQuantityEditor.saving" @click="saveOrderQuantityEditor">{{ orderQuantityEditor.saving ? "保存中…" : (orderQuantityEditor.submitted ? "重试保存" : "保存数量") }}</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 共用图纸预览必须位于业务页面分支之外；订单、来料等页面也会调用。 -->
       <div v-if="showDrawingPreview" class="modal-backdrop drawing-preview-backdrop" @click.self="closeDrawingPreview">
         <div ref="drawingPreviewDialog" class="modal" role="dialog" aria-modal="true" aria-labelledby="erp-drawing-preview-title" tabindex="-1" style="max-width:90vw;max-height:90vh;overflow:auto" @keydown="onDrawingPreviewKeydown">
@@ -10729,7 +10747,7 @@
               selected:{}, selection_sequence:0, request_id:0,
             },
             requisitionForm: { supplier_name: "", items: [] },
-            receiptForm: { items: [], reminder_drafts:[] }, receiptMonthOptions:{previous:"",current:month(),next:""}, orderItemForm: {}, estimatedCostForm:{},
+            receiptForm: { items: [], reminder_drafts:[] }, receiptMonthOptions:{previous:"",current:month(),next:""}, orderQuantityEditor: null, orderItemForm: {}, estimatedCostForm:{},
             costPanelTab:"gaps",
             costPanelReturnContext:null, costReviewFocusItemId:0,
             costGapState:{page:1,page_size:20,page_count:1,all_items:0,keyword:"",applied_keyword:"",requestId:0,loading:false,error:"",scope_label:"",total_items:0,returned_items:0,truncated:false,categories:[],items:[],filter:"all"},
@@ -34587,10 +34605,48 @@
             if (latestRequestControllers.get(requestKey) === controller) latestRequestControllers.delete(requestKey);
             return true;
           },
+          async openOrderQuantityEditor(order, item) {
+            const requestKey = "orders:item-editor";
+            const controller = this.beginLatestRequest(requestKey);
+            try {
+              const {data} = await axios.get(`/api/orders/items/${item.id}/quantity`, {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              this.orderQuantityEditor = {...data, expected_quantity:data.quantity,
+                product:item.snapshot_product_code || "", order:this.displayOrderNumber(order),
+                key:`qty-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                saving:false, submitted:null, error:""};
+            } catch (error) {
+              if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller)
+                this.showToast(error.response?.data?.detail || "订单数量读取失败", true);
+            }
+          },
+          async saveOrderQuantityEditor() {
+            const form = this.orderQuantityEditor;
+            if (!form || form.saving) return;
+            const quantity = Number(form.quantity);
+            if (!Number.isInteger(quantity) || quantity < form.minimum_quantity || quantity > form.expected_quantity) {
+              form.error = `请输入 ${form.minimum_quantity} 到 ${form.expected_quantity} 之间的整数`; return;
+            }
+            const payload = form.submitted || {quantity,expected_quantity:form.expected_quantity,
+              expected_revision:form.expected_revision,idempotency_key:form.key};
+            form.submitted = payload; form.saving = true; form.error = "";
+            try {
+              await axios.put(`/api/orders/items/${form.item_id}/quantity`, payload);
+              this.orderQuantityEditor = null;
+              this.showToast("订单数量已保存，多余成品预占已恢复可用");
+              await this.loadOrders();
+            } catch (error) {
+              if (error.response && error.response.status < 500) form.submitted = null;
+              form.error = error.response?.data?.detail || "保存结果暂未确认，请点重试保存核对，勿重复新建操作";
+            } finally { form.saving = false; }
+          },
           async openOrderItem(order, item) {
             if (this.finishedReservationActionBlocked?.()) {
               this.showToast("请先核对库存状态，再打开其他订单明细", true);
               return false;
+            }
+            if (Number(item.delivered_quantity || item.business_delivered_quantity || 0) > 0) {
+              return this.openOrderQuantityEditor(order, item);
             }
             const requestKey = "orders:item-editor";
             const controller = this.beginLatestRequest(requestKey);

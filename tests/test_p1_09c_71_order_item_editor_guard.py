@@ -46,7 +46,7 @@ const vm={{
   showToast(message,isError){{toasts.push({{message,isError}});}},displayOrderNumber(order){{return order.order_number;}},
   money(value){{return Number(value||0).toFixed(2);}},normalizeBoxTypeDisplay(value){{return value||"";}},normalizeCuttingMode(value){{return value||"一开一";}},
   displayMaterialText(value){{return value||"";}},buildMaterialDisplay(){{return "";}},orderSpecificationText(value){{return value||"";}},
-  loadFinishedInventoryReservations:async()=>true,loadExistingOrderItemBom:async()=>true
+  engineeringDrawings:()=>[],loadFinishedInventoryReservations:async()=>true,loadExistingOrderItemBom:async()=>true
 }};
 vm.openOrderItem=new AsyncFunction("order","item",{json.dumps(open_body, ensure_ascii=False)}).bind(vm);
 const orderA={{id:1,order_number:"A单",customer_name:"甲"}},orderB={{id:2,order_number:"B单",customer_name:"乙"}};
@@ -121,7 +121,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 def test_close_order_item_cancels_open_request_and_blocks_late_reopen(tmp_path: Path) -> None:
     open_body = _method_body("async openOrderItem(order, item) {", "async loadFinishedInventoryCandidates(")
-    cancel_body = _method_body("cancelOrderItemEditorRequests() {", "async openOrderItem(order, item) {")
+    cancel_body = _method_body("cancelOrderItemEditorRequests() {", "async openOrderQuantityEditor(order, item) {")
     close_body = _method_body("closeModal() {", "handleMasterSaveRefreshFailure(")
     assert 'if (this.modal?.type === "orderItem") this.cancelOrderItemEditorRequests();' in close_body
     script = _open_order_item_runtime(open_body) + f"""

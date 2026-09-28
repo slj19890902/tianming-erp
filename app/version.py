@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.518"
-APP_VERSION_NAME = "生产余货抵扣订单删除修复"
+APP_VERSION = "v0.22.519"
+APP_VERSION_NAME = "已送货订单需求减量"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4988,3 +4988,14 @@ APP_VERIFICATION_STEPS = [
     "按现场最新预占核对：仅释放该明细占用余货，旧订单TM20260825003的完工和送货记录保持不变。",
 ]
 APP_CHANGELOG = [*(f"v0.22.518：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "已送货订单点击编辑可单独减少客户需求数量，最低为已送与待发货数量合计；原订600、已送300可调整为300。",
+    "超出剩余需求的成品预占恢复可用，保留原完工、收料、送货及冻结成本；保存有并发、幂等及事务保护。",
+    "保留v516组合库存抵扣、v517打印版式及v518余货预占删除修复，无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新确认v0.22.519，找到客户单号POORD041674的Z.001.000132，点编辑，输入300并保存数量。",
+    "核对订单数量300、已送300，原300送货单与完工记录不变，剩余300成品预占恢复可用；以保存时最新库存为准。",
+]
+APP_CHANGELOG = [*(f"v0.22.519：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

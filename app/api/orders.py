@@ -8607,6 +8607,117 @@ def update_order_item_estimated_cost(
     )
 
 
+class OrderQuantityAmendment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    quantity: int = Field(strict=True, gt=0, le=2147483647)
+    expected_quantity: int = Field(strict=True, gt=0)
+    expected_revision: int = Field(strict=True, ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+def _quantity_amendment_state(db: Session, item: OrderItem) -> dict:
+    revision = db.scalar(select(func.max(OperationLog.id)).where(
+        OperationLog.action_code == "order.quantity_amended",
+        OperationLog.entity_type == "order_item", OperationLog.entity_id == item.id,
+    )) or 0
+    pending = db.scalar(select(func.coalesce(func.sum(DeliveryItem.delivered_quantity), 0))
+        .join(Delivery, Delivery.id == DeliveryItem.delivery_id).where(
+            DeliveryItem.order_item_id == item.id, DeliveryItem.is_current.is_(True),
+            Delivery.status == "pending")) or 0
+    return dict(item_id=item.id, quantity=item.quantity, expected_revision=revision,
+                delivered_quantity=item.delivered_quantity, pending_delivery_quantity=pending,
+                minimum_quantity=max(1, item.delivered_quantity + pending))
+
+
+@router.get("/items/{item_id}/quantity")
+def read_order_quantity_amendment(item_id: int, db: Session = Depends(get_db),
+                                  user: User = Depends(can_edit)) -> dict:
+    item = db.get(OrderItem, item_id)
+    if item is None:
+        raise HTTPException(404, "订单明细不存在")
+    order = db.get(Order, item.order_id)
+    require_customer_access(order.customer_id, current_user=user, db=db)
+    return _quantity_amendment_state(db, item)
+
+
+@router.put("/items/{item_id}/quantity")
+def amend_order_quantity(item_id: int, payload: OrderQuantityAmendment,
+                         request: Request = None, db: Session = Depends(get_db),
+                         user: User = Depends(can_edit)) -> dict:
+    from app.services.order_quantity_amendment import release_excess_finished_demand
+    from app.services.delivery_quantities import QuantityContractError
+    item = db.get(OrderItem, item_id)
+    if item is None:
+        raise HTTPException(404, "订单明细不存在")
+    order = db.get(Order, item.order_id)
+    require_customer_access(order.customer_id, current_user=user, db=db)
+    try:
+        _lock_orders_for_production_transition(db, [order.id])
+        db.refresh(item)
+        previous = db.scalar(select(OperationLog).where(
+            OperationLog.action_code == "order.quantity_amended",
+            OperationLog.batch_id == payload.idempotency_key))
+        identity = dict(item_id=item.id, **payload.model_dump())
+        if previous is not None:
+            details = json.loads(previous.details)
+            if details.get("request") != identity:
+                raise HTTPException(409, "该保存标识已用于其他数量调整，请重新打开后保存")
+            db.rollback()
+            return {**details["result"], "replayed": True}
+        state = _quantity_amendment_state(db, item)
+        if (item.quantity != payload.expected_quantity
+                or state["expected_revision"] != payload.expected_revision):
+            raise HTTPException(409, "订单数量已被修改，请重新打开后核对")
+        from app.services.order_status_policy import ORDER_ITEM_ACTIVE_ORDER_STATUSES
+        if order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES | {"delivered"} or item.is_force_closed:
+            raise HTTPException(409, "订单已作废或关闭，不能调整数量")
+        if payload.quantity < state["minimum_quantity"]:
+            raise HTTPException(409, f"订单数量不能少于已送{item.delivered_quantity}"
+                f"加待发货{state['pending_delivery_quantity']}，最低{state['minimum_quantity']}")
+        if payload.quantity > item.quantity:
+            raise HTTPException(409, "本入口用于减少客户需求；增加数量请新增订单明细安排补单生产")
+        before_quantity = item.quantity
+        if payload.quantity == before_quantity:
+            return {**state, "changed": False}
+        # Demand adjustments append to BOM snapshots rather than rewrite history.
+        append_order_quantity_adjustments(db, order_item_id=item.id,
+            delta_sets=payload.quantity-before_quantity,
+            reason="客户减少订单需求", actor_id=user.id,
+            idempotency_key=f"quantity:{payload.idempotency_key}",
+            target_order_quantity=payload.quantity)
+        releases = release_excess_finished_demand(db, item=item,
+            remaining=payload.quantity-item.delivered_quantity,
+            actor_id=user.id, key=payload.idempotency_key)
+        item.quantity = payload.quantity
+        item.subtotal = (Decimal(str(item.unit_price)) * item.quantity).quantize(
+            MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+        db.flush()
+        _refresh_total(db, order)
+        # Completed production tasks and their frozen costs are deliberately retained.
+        from app.services.production_workflow import refresh_existing_production_task
+        refresh_existing_production_task(db, item.id)
+        if item.delivered_quantity > 0:
+            from app.api.deliveries import _refresh_order_status
+            _refresh_order_status(db, order.id)
+        result = dict(item_id=item.id, quantity=item.quantity,
+                      delivered_quantity=item.delivered_quantity, changed=True,
+                      released_reservations=releases)
+        _append_order_audit(db, request=request, user=user, order=order,
+            action_code="order.quantity_amended", legacy_action="order_quantity_amended",
+            entity_type="order_item", entity_id=item.id,
+            description=f"客户需求数量由{before_quantity}调整为{item.quantity}；保留历史完工及送货",
+            details=dict(request=identity, result=result, before_quantity=before_quantity),
+            batch_id=payload.idempotency_key)
+        db.commit()
+        return result
+    except (WarehouseInventoryError, CompositeBomWorkflowError, QuantityContractError) as error:
+        db.rollback()
+        raise HTTPException(getattr(error, "status_code", 409), str(error)) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.put("/items/{item_id}")
 def update_order_item(
     item_id: int,

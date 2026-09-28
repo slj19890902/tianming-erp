@@ -5974,3 +5974,5 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 
 
 2026-09-28：仓库台账同源内嵌拒绝连接已随v0.22.526发布，运行d7dde3c5、head ed0928ml不变；独立回执 docs/release_reports/WAREHOUSE_FRAME_FIX_20260928.md，待管理员刷新验收。
+
+- 2026-09-28：模具40×80双编码/15mm侧面识别区v527已发布，源码9ea16e7a；保留v526仓库嵌入修复，head ed0928ml无迁移，见docs/release_reports/MOLD_EDGE_LABEL_20260928.md。旧打印保持冻结版式，待贴板验收。

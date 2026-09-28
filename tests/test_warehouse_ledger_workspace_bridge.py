@@ -93,12 +93,16 @@ global.location = {{search: ''}};
 global.state = {{tab: 'finished'}};
 global.warehouseWorkspace = {{initialTabRendered: false, submittedQuery: ''}};
 const keyword = {{value: ''}};
-global.$ = id => {{ if (id === 'keywordFilter') return keyword; throw new Error(`unexpected element ${{id}}`); }};
+const elements = {{keywordFilter: keyword, floorFilter: {{value: ''}}, areaFilter: {{}}, locationFilter: {{}}}};
+global.$ = id => {{ if (elements[id]) return elements[id]; throw new Error(`unexpected element ${{id}}`); }};
 let switchCalls = 0;
 let inventoryVisible = false;
 let locateCalls = 0;
+const locateArgs = [];
+global.refreshInventoryAreaOptions = () => {{}};
+global.refreshInventoryLocationOptions = () => {{}};
 global.switchTab = async tab => {{ switchCalls += 1; state.tab = tab; warehouseWorkspace.initialTabRendered = true; inventoryVisible = tab === 'finished'; return true; }};
-global.locateWarehouseLedger = async args => {{ locateCalls += 1; assert.equal(args.keyword, 'P007'); assert.equal(args.scroll, false); return true; }};
+global.locateWarehouseLedger = async args => {{ locateCalls += 1; locateArgs.push(args); return true; }};
 global.publishWarehouseWorkspaceContext = () => {{}};
 {source}
 (async () => {{
@@ -107,6 +111,8 @@ global.publishWarehouseWorkspaceContext = () => {{}};
   assert.equal(inventoryVisible, true);
   assert.equal(keyword.value, 'P007');
   assert.equal(locateCalls, 1);
+  assert.equal(locateArgs[0].keyword, 'P007');
+  assert.equal(locateArgs[0].scroll, false);
   await applyWarehouseDeepLink(new URLSearchParams('tab=finished&q=P007'));
   assert.equal(switchCalls, 1);
   warehouseWorkspace.initialTabRendered = false;
@@ -116,6 +122,13 @@ global.publishWarehouseWorkspaceContext = () => {{}};
   assert.equal(switchCalls, 2);
   assert.equal(inventoryVisible, true);
   assert.equal(locateCalls, 0);
+  state.tab = 'semi_finished';
+  warehouseWorkspace.initialTabRendered = true;
+  await applyWarehouseDeepLink(new URLSearchParams('tab=semi_finished&search_floor=3F'));
+  assert.equal(switchCalls, 2);
+  assert.equal(state.tab, 'semi_finished');
+  assert.equal(locateArgs.at(-1).inventoryType, 'semi_finished');
+  assert.equal(locateArgs.at(-1).scroll, false);
   console.log('initial ledger render passed');
 }})().catch(error => {{ console.error(error); process.exit(1); }});
 """
@@ -191,6 +204,7 @@ def test_tab_guard_and_section_specific_drafts_are_preserved() -> None:
 def test_initial_ledger_route_renders_once_and_embedded_hides_duplicate_tabs() -> None:
     assert 'initialTabRendered:false' in LEDGER
     assert 'warehouseWorkspaceShouldRenderTab("finished",state.tab,warehouseWorkspace.initialTabRendered)&&await switchTab("finished")' in LEDGER
+    assert 'else if(!requestedTab&&searchFloor&&searchFloor!=="UNLOCATED"' in LEDGER
     assert 'warehouseWorkspace.initialTabRendered=true;' in LEDGER
     assert '$("inventorySection").classList.toggle("hidden",!["finished","semi_finished"].includes(tab))' in LEDGER
     assert 'body.embedded>.wrap>.tabs>[data-tab]' in LEDGER

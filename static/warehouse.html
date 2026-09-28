@@ -1200,7 +1200,7 @@
       if(searchFloor==="UNLOCATED")toast("当前列表保留原楼层范围；待归位范围请切回地图查看");
       if(requestedTab&&["finished","semi_finished","molds"].includes(requestedTab)&&warehouseWorkspaceShouldRenderTab(requestedTab,state.tab,warehouseWorkspace.initialTabRendered)){if(await switchTab(requestedTab)===false)return}
       else if(requestedTab&&["movements","stocktake_review","printing_plates"].includes(requestedTab)&&warehouseWorkspaceShouldRenderTab(requestedTab,state.tab,warehouseWorkspace.initialTabRendered)){if(await switchTab(requestedTab)===false)return}
-      else if(searchFloor&&searchFloor!=="UNLOCATED"&&warehouseWorkspaceShouldRenderTab("finished",state.tab,warehouseWorkspace.initialTabRendered)){if(await switchTab("finished")===false)return}
+      else if(!requestedTab&&searchFloor&&searchFloor!=="UNLOCATED"&&warehouseWorkspaceShouldRenderTab("finished",state.tab,warehouseWorkspace.initialTabRendered)){if(await switchTab("finished")===false)return}
       else if(!warehouseWorkspace.initialTabRendered&&["finished","semi_finished"].includes(state.tab)){if(await switchTab(state.tab)===false)return}
       if(searchFloor&&["ALL","1F","3F","4F"].includes(searchFloor)&&["finished","semi_finished"].includes(state.tab)){
         $("floorFilter").value=searchFloor==="ALL"?"":searchFloor.slice(0,-1);

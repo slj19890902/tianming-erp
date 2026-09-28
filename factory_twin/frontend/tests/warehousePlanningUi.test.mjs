@@ -11,6 +11,7 @@ const editorSource = readFileSync(new URL("../src/EditorCanvas.tsx", import.meta
 const sceneSource = readFileSync(new URL("../src/industrialScene.ts", import.meta.url), "utf8");
 const inventorySource = readFileSync(new URL("../src/warehouseInventory.mjs", import.meta.url), "utf8");
 const cssSource = readFileSync(new URL("../src/warehouseTwin.css", import.meta.url), "utf8");
+const workspaceCssSource = readFileSync(new URL("../src/warehouseWorkspace.css", import.meta.url), "utf8");
 
 // Execute the component's actual selectors/handlers without mounting a second UI.
 // This catches wiring errors which tests of the projection utility alone miss.
@@ -434,7 +435,7 @@ test("acknowledged warehouse moves are not offered again when dashboard refresh 
       refreshDashboard: async () => { reads++; if (failure === "readback") throw new Error("刷新中断"); },
       setMoveDrafts: value => { drafts = value; },
       setMoveSource: value => { source = value; },
-      setMoveQuantity: () => {}, setMoveDraftTargetLocationId: () => {},
+      setMoveQuantity: () => {}, setMoveDraftTargetLocationId: () => {}, setProductionMoveUncertain: () => {},
       setMoveBatchIdempotencyKey: value => { activeKey = value; },
       operationKey: () => "next-request"
     })();
@@ -731,7 +732,7 @@ test("point save is the single explicit action and keeps inventory outside the w
 test("area planning gives a clicked location priority over its enclosing area", () => {
   assert.match(editorSource, /const preferredPlanningPallet = palletEditingOnly/);
   assert.match(editorSource, /candidate\.userData\.entityKind === "pallet" && candidate\.userData\.draggable/);
-  assert.match(editorSource, /preferredPlanningPallet \|\| preferredPlanningFeature \|\| roots\[0\]/);
+  assert.match(editorSource, /preferredPlanningPallet \|\| preferredPlanningFeature \|\| preferredStorage \|\| roots\[0\]/);
   assert.match(source, /if \(!locationEditMode \|\| layoutMapToolsOpen\) return/);
   assert.match(source, /setLocationPointEditAreaCode\(location\.area_code\)/);
   assert.match(source, /palletEditingOnly=\{locationEditMode \|\| warehouseMoveModeActive\}/);
@@ -782,7 +783,9 @@ test("map-first toolbar hides empty delayed dispatch and consolidates selective 
 test("warehouse header keeps label printing in the low-frequency ledger", () => {
   assert.doesNotMatch(source, /label_print=1/);
   assert.doesNotMatch(source, />打印货位编号<\/a>/);
-  assert.match(source, /href="\/warehouse-ledger\.html\?tab=finished"/);
+  assert.match(source, /new URLSearchParams\(\{ tab: "finished" \}\)/);
+  assert.match(source, /warehouse-workspace-navigate/);
+  assert.doesNotMatch(source, /target="_top">库存台账/);
 });
 
 test("warehouse header keeps the ledger link on the command row", () => {
@@ -790,11 +793,21 @@ test("warehouse header keeps the ledger link on the command row", () => {
   assert.match(cssSource, /@media \(max-width: 1180px\)[\s\S]*grid-template-columns:\s*minmax\(470px, 1fr\) auto auto/);
 });
 
+test("workspace commands preserve map drafts and only publish committed shared search context", () => {
+  assert.match(source, /event\.origin !== window\.location\.origin \|\| event\.source !== window\.parent/);
+  assert.match(source, /type: "warehouse-workspace-context"[\s\S]*q: submittedSearch[\s\S]*search_floor: searchFloor/);
+  assert.match(source, /scopeChanged \? \{ scope_changed: true \} : \{\}/);
+  const workspaceCommands = source.slice(source.indexOf('if (payload.type !== "warehouse-workspace-command")'), source.indexOf('if (productionMapContext && productionLocationPicker)'));
+  assert.match(workspaceCommands, /activation\.q === "" && submittedSearch/);
+  assert.match(workspaceCommands, /if \(payload\.command === "refresh"\)[\s\S]*void refreshDashboard\(\)/);
+  assert.doesNotMatch(workspaceCommands, /refreshPlanningTwinFloor|refreshPublishedTwinFloor/);
+});
+
 test("lookup has one entry and area planning uses short adaptive actions", () => {
   const toolbar = source.slice(source.indexOf('<section className="twin-toolbar">'), source.indexOf('<section className={`twin-workspace'));
   assert.doesNotMatch(toolbar, /twin-warehouse-search-toggle/);
   assert.match(toolbar, /className="twin-top-search"/);
-  assert.match(source, /<header><h2>全仓搜索结果<\/h2>/);
+  assert.match(source, /<h2>\{detailSearchOpen \? "详细查找" : "全仓搜索结果"\}<\/h2>/);
   assert.match(source, /<b>区域设置与容量<\/b>/);
   assert.match(source, /: "保存区域设置"\}<\/button>/);
   assert.match(source, />编辑<\/button>/);
@@ -918,8 +931,8 @@ test("rack focus keeps the map visible beside an ERP styled elevation", () => {
   assert.match(source, /className="twin-rack-map-callout"/);
   assert.match(source, /className="twin-rack-focus-panel twin-rack-stage/);
   assert.doesNotMatch(source, /className="twin-rack-modal"/);
-  assert.match(cssSource, /\.twin-stage\.rack-focused\s*\{[\s\S]*grid-template-columns:\s*minmax\(260px, 1fr\) minmax\(0, 2fr\)/);
-  assert.match(cssSource, /@media \(max-width: 880px\)[\s\S]*\.twin-stage\.rack-focused\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(workspaceCssSource, /\.twin-stage\.rack-focused\s*\{[\s\S]*grid-template-columns:minmax\(260px,.85fr\) minmax\(420px,1.4fr\)/);
+  assert.match(workspaceCssSource, /@media\(max-width:880px\)[\s\S]*\.twin-stage\.rack-focused\s*\{[\s\S]*flex-direction:column/);
 });
 
 test("saving geometry preserves the area's warehouse binding used by quantity controls", async () => {

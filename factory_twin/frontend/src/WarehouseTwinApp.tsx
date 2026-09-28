@@ -6,11 +6,16 @@ import { WarehouseDimensionSearch, type DimensionStock } from "./WarehouseDimens
 import { ActualStocktakeDialog } from "./ActualStocktakeDialog";
 import { mergeWarehouseSearchPage, searchPageRequestIsCurrent } from "./warehouseSearchPaging.mjs";
 import { moveLocationState, areaSortKey, type MoveLocationState } from "./warehouseWorkspace.mjs";
+import {
+  normalizeWarehouseWorkspaceUrl,
+  warehouseWorkspaceActivation,
+  warehouseWorkspaceBlockMessage
+} from "./warehouseWorkspaceBridge.mjs";
 import { MaterialCandidates } from "./MaterialCandidates";
 import { StocktakeObservationPanel } from "./StocktakeObservationPanel";
 // Also render these exact components in the isolated visual acceptance fixture.
 export { MoldRackElevation, WarehouseRackElevation };
-import { Fragment, createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { EditorCanvas, type CanvasFocusTarget } from "./EditorCanvas";
 import { filterOperationalFeatures } from "./operationalView.mjs";
 import {
@@ -81,7 +86,7 @@ import {
   moldRacksForArea
 } from "./moldRackView.mjs";
 import type { MoldLocationOption } from "./moldRackView.mjs";
-import { filterShelfMolds, groupShelfProducts, shelfStockDates } from "./shelfDisplay.mjs";
+import { filterShelfMolds, groupShelfProducts } from "./shelfDisplay.mjs";
 import { ShelfLotHistory } from "./ShelfLotHistory";
 import {
   buildStocktakeBatchPayload,
@@ -136,6 +141,34 @@ type WarehouseOperationalFloorCode = "1F" | "3F" | "4F";
 type RackDraft = Rack & { level_clear_heights_mm: number[]; level_cell_counts: number[] };
 const P1_49C_ENABLED = true;
 const WAREHOUSE_OPERATIONAL_FLOORS: readonly WarehouseOperationalFloorCode[] = ["1F", "3F", "4F"];
+
+function WarehouseInfoTip({ id, label, children }: { id: string; label: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeWithEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeWithEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeWithEscape);
+    };
+  }, [open]);
+  return <span className="warehouse-info-tip" ref={rootRef}>
+    <button ref={triggerRef} type="button" className="warehouse-info-tip-trigger" aria-label={label} aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>!</button>
+    {open && <span id={id} className="warehouse-info-tip-panel" role="note">{children}</span>}
+  </span>;
+}
 
 function isWarehouseOperationalFloorCode(value: unknown): value is WarehouseOperationalFloorCode {
   return typeof value === "string"
@@ -1247,6 +1280,7 @@ function MoldRackElevation({
   onPrevious,
   onNext,
   onMoldMoved,
+  onNavigationGuardChange,
   onClose
 }: {
   rack: Rack;
@@ -1259,6 +1293,7 @@ function MoldRackElevation({
   onPrevious: () => void;
   onNext: () => void;
   onMoldMoved: (message: string) => void;
+  onNavigationGuardChange: (message: string) => void;
   onClose: () => void;
 }) {
   const rackView = useMemo(
@@ -1282,6 +1317,12 @@ function MoldRackElevation({
   const [moveAttemptUncertain, setMoveAttemptUncertain] = useState(false);
   const [moveBusy, setMoveBusy] = useState(false);
   const [moveMessage, setMoveMessage] = useState("");
+  useEffect(() => {
+    onNavigationGuardChange(moveAttemptUncertain
+      ? "模具移动结果尚未确认，请先用原凭证核对结果。"
+      : moveBusy ? "模具移动正在提交，请等待当前结果。" : "");
+    return () => onNavigationGuardChange("");
+  }, [moveAttemptUncertain, moveBusy, onNavigationGuardChange]);
   useEffect(() => {
     const first = occupiedCells[0];
     setSelectedSlotKey(first?.key || null);
@@ -1523,7 +1564,6 @@ function WarehouseRackElevation({
   locations,
   unboundLocationCount,
   canChooseProducts,
-  locationPicker = false,
   highlightedLotIds = [],
   productQuantityLabels = {},
   searchLocationId,
@@ -1536,6 +1576,9 @@ function WarehouseRackElevation({
   onChooseEmptyLocation,
   moveStates,
   selectedLocationId,
+  selectedLotId,
+  onSelectLot,
+  onRefocus,
   onClose
 }: {
   rack: Rack;
@@ -1543,7 +1586,6 @@ function WarehouseRackElevation({
   locations: DashboardLocation[];
   unboundLocationCount: number;
   canChooseProducts: boolean;
-  locationPicker?: boolean;
   highlightedLotIds?: number[];
   productQuantityLabels?: Record<string, string>;
   searchLocationId?: number | null;
@@ -1556,14 +1598,13 @@ function WarehouseRackElevation({
   onChooseEmptyLocation: (locationId: number) => void;
   moveStates?: Record<number, MoveLocationState>;
   selectedLocationId?: number;
+  selectedLotId?: number | null;
+  onSelectLot: (locationId: number, lotId: number) => void;
+  onRefocus: () => void;
   onClose: () => void;
 }) {
   const levels = Array.from({ length: Math.max(1, rack.levels) }, (_, index) => Math.max(1, rack.levels) - index);
   const levelCellCounts = rackLevelCellCounts(rack);
-  const [selectedItem, setSelectedItem] = useState<RackInventoryItem | null>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
-  const selectedReadingGroup = selectedItem ? groupShelfProducts(locations.flatMap(rackLocationInventoryItems)).find(group => group.items.some(item => item.lot_id === selectedItem.lot_id)) : undefined;
-  const [expandedProductGroups, setExpandedProductGroups] = useState<Record<string, boolean>>({});
   const elevationRef = useRef<HTMLDivElement>(null);
   const searchLotIds = useMemo(() => new Set(highlightedLotIds), [highlightedLotIds]);
   const searchLocation = locations.find((location) => location.location_id === searchLocationId);
@@ -1589,12 +1630,7 @@ function WarehouseRackElevation({
     () => locations.filter((location) => rackLocationInventoryItems(location).length === 0).length,
     [locations]
   );
-  useEffect(() => { setSelectedItem(null); setDetailOpen(false); setExpandedProductGroups({}); }, [rack.id]);
-  useEffect(() => { setSelectedItem(null); setDetailOpen(false); }, [selectedLocationId]);
   useEffect(() => {
-    setSelectedItem(items.find((item) => item.lot_id === searchLotId) || null);
-    setDetailOpen(false);
-    setExpandedProductGroups({});
     elevationRef.current?.querySelector<HTMLElement>('[data-search-current="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [rack.id, searchLotId, searchLocationId]);
   useEffect(() => {
@@ -1609,8 +1645,9 @@ function WarehouseRackElevation({
   }, [onClose, onPrevious, onNext]);
   return <section className="twin-rack-focus-panel twin-rack-stage" role="region" aria-label={`${rack.rack_code} 参数化正视图`}>
       <header>
-      <div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p>{items.some((item) => searchLotIds.has(item.lot_id)) && <p className="twin-rack-search-marker" role="status">黄色格有此产品{searchLocation ? ` · 当前第 ${searchLocation.level_no} 层 · 第 ${searchLocation.slot_no} 格` : ""}</p>}</div>
+      <div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p><p>{items.length} 个批次 · {emptyLocationCount} 个正式空货位{unboundLocationCount ? ` · ${unboundLocationCount} 个有货旧货位未绑定货架层格，请先转入盘点待归位` : ""}{area?.quantities.length ? ` · ${area.quantities.map(item => `${formatNumber(item.available)} ${inventoryUnitLabel(item.unit)}`).join(" / ")}` : ""}</p>{items.some((item) => searchLotIds.has(item.lot_id)) && <p className="twin-rack-search-marker" role="status">黄色格有此产品{searchLocation ? ` · 当前第 ${searchLocation.level_no} 层 · 第 ${searchLocation.slot_no} 格` : ""}</p>}</div>
         <button type="button" disabled={!allCellsPrintable} title="80×40货位标签，不含产品信息" onClick={() => window.open(`/static/shelf-label.html?location_ids=${printableLocationIds.join(',')}`, '_blank', 'noopener')}>打印货架标签</button>
+        <button type="button" onClick={onRefocus}>重新定位</button>
         <button type="button" onClick={onClose}>收起货架</button>
       </header>
       <div className="twin-rack-content">
@@ -1620,16 +1657,17 @@ function WarehouseRackElevation({
           <div className="twin-elevation-frame" ref={elevationRef}>
             {levels.map((level) => {
               const cellCount = levelCellCounts[level - 1] || 0;
-              const visibleProductRows = Math.min(3, Math.max(0, ...Array.from({ length: cellCount }, (_, bay) => {
+              const visibleProductRows = Math.min(2, Math.max(0, ...Array.from({ length: cellCount }, (_, bay) => {
                 const rows = rackCells.get(rackCellIdentityKey(rack.id, level, bay + 1) || "") || [];
-                return groupShelfProducts(rows.flatMap(rackLocationInventoryItems)).length;
+                return Math.min(2, groupShelfProducts(rows.flatMap(rackLocationInventoryItems)).length);
               })));
-              return <div className="twin-elevation-level" key={level} style={visibleProductRows > 1 ? { minHeight: visibleProductRows * 76 + 50 } : undefined}>
+              return <div className="twin-elevation-level" key={level} style={visibleProductRows > 1 ? { minHeight: visibleProductRows * 92 + 56 } : undefined}>
               <span>第 {level} 层 · {cellCount ? `${cellCount} 格` : "尚未分格"}</span>
               <div className={cellCount ? "" : "unpartitioned"}>{cellCount === 0 ? <i className="twin-unpartitioned-cell">本层尚未分格</i> : Array.from({ length: cellCount }, (_, bay) => {
                 const cellKey = rackCellIdentityKey(rack.id, level, bay + 1);
                 const cellLocations = cellKey ? rackCells.get(cellKey) || [] : [];
                 const cellItems = cellLocations.flatMap((location) => rackLocationInventoryItems(location));
+                const productGroups = groupShelfProducts(cellItems);
                 const location = cellLocations.length === 1 ? cellLocations[0] : null;
                 const identityConflict = cellLocations.length > 1;
                 const cellSearchHit = Boolean(location && cellItems.some((item) => searchLotIds.has(item.lot_id)));
@@ -1645,7 +1683,7 @@ function WarehouseRackElevation({
                       : null;
                   blockReason = nextBlockReason;
                 }
-                const cellSelected = location?.location_id === selectedLocationId || cellItems.some((item) => item.lot_id === selectedItem?.lot_id);
+                const cellSelected = location?.location_id === selectedLocationId || cellItems.some((item) => item.lot_id === selectedLotId);
                 const moveState = location ? moveStates?.[location.location_id] : undefined;
                 const cellTotals = cellItems.reduce<Record<string, number>>((totals, item) => {
                   const unit = inventoryUnitLabel(item.unit);
@@ -1673,7 +1711,7 @@ function WarehouseRackElevation({
                   ><b>{bay + 1}格</b></button>
                   {moveState && <span className="twin-target-state">{moveState.kind === "target" ? "已选目标 · " : ""}{moveState.label}</span>}
                   {cellSearchHit && <small className="shelf-search-hit-marker">{cellSearchCurrent ? "当前位置" : "产品在此"}</small>}
-                  {cellItems.length > 0 && <small className="shelf-cell-kind">{groupShelfProducts(cellItems).length === 1 ? "单品存放" : `混放 · ${groupShelfProducts(cellItems).length} 款`}</small>}
+                  {cellItems.length > 0 && <small className="shelf-cell-kind">{productGroups.length === 1 ? "单品存放" : `混放 · ${productGroups.length} 款`}</small>}
                   {cellItems.length > 0 && canChooseProducts && <button
                     type="button"
                     className="shelf-cell-add-product"
@@ -1690,22 +1728,16 @@ function WarehouseRackElevation({
                   {location && !identityConflict && <button className="shelf-position-print" type="button" title="打印货位标签" onClick={() => window.open(`/static/shelf-label.html?location_id=${location.location_id}`, '_blank', 'noopener')}>打印货位</button>}</div>
                   {location && productQuantityLabels[`erp-location-${location.location_id}`] && <div className="product-location-quantity" aria-label="所选产品货位数量">{productQuantityLabels[`erp-location-${location.location_id}`]}</div>}
                   {cellItems.length ? <div className="shelf-product-cards">
-                    {groupShelfProducts(cellItems).map(group => <article className={`shelf-product-card${group.items.some(item => searchLotIds.has(item.lot_id)) ? " search-product-hit" : ""}`} key={group.key}>
-                      <div className="shelf-product-summary" title={`${warehouseCardCustomer(group.item)} · ${group.item.product_name || ""} · ${group.item.specification || ""}`}><span className="shelf-product-customer">{warehouseCardCustomer(group.item)}</span><span className="shelf-product-name">{group.item.product_name || "产品名称待补充"}</span><span className="shelf-specification">{group.item.inventory_type === "semi_finished" ? "" : group.item.specification || ""}</span><button type="button" className="shelf-product-details-toggle" title={`${group.items.length}个批次，查看入出库明细`} aria-expanded={Boolean(expandedProductGroups[group.key])} onClick={() => setExpandedProductGroups(current => ({ ...current, [group.key]: !current[group.key] }))}>{expandedProductGroups[group.key] ? "收起" : "明细"}·{group.items.length}</button></div>
+                    {productGroups.slice(0, 2).map(group => <article className={`shelf-product-card${group.items.some(item => searchLotIds.has(item.lot_id)) ? " search-product-hit" : ""}`} key={group.key}>
+                      <div className="shelf-product-summary" title={`${warehouseCardCustomer(group.item)} · ${group.item.product_name || ""} · ${group.item.specification || ""}`}><span className="shelf-product-customer">{warehouseCardCustomer(group.item)}</span><span className="shelf-product-name">{group.item.product_name || "产品名称待补充"}</span><span className="shelf-specification">{group.item.inventory_type === "semi_finished" ? "" : group.item.specification || ""}</span><span className="shelf-product-batches">{group.items.length} 批</span></div>
                       <div className="shelf-product-code-row">
-                      <button type="button" title={`${warehouseCardPrimary(group.item)} · 点击查看完整产品标签`} aria-label={`${warehouseCardPrimary(group.item)}：查看产品标签`} className={`shelf-product-label-button ${group.items.some(item => selectedItem?.lot_id === item.lot_id) ? "selected" : ""}`} onClick={() => { if (locationPicker && location && !identityConflict) onSelectLocation(location.location_id); setSelectedItem(group.item); setDetailOpen(false); }}>
+                      <button type="button" title={`${warehouseCardPrimary(group.item)} · 在右侧查看完整产品与批次`} aria-label={`${warehouseCardPrimary(group.item)}：在右侧查看完整产品与批次`} className={`shelf-product-label-button ${group.items.some(item => selectedLotId === item.lot_id) ? "selected" : ""}`} onClick={() => { if (location && !identityConflict) onSelectLot(location.location_id, group.item.lot_id); }}>
                         <strong className="shelf-inventory-code">{warehouseCardPrimary(group.item)}</strong>
                       </button>
                       <strong className="shelf-product-quantity">{formatNumber(group.physical)} {inventoryUnitLabel(group.item.unit)}</strong>
                       </div>
-                      <div className="shelf-product-details" hidden={!expandedProductGroups[group.key]}>
-                        <small>{warehouseCardCustomer(group.item)} · {group.item.product_name} · {group.item.specification} · {group.item.flute_type ? `${group.item.flute_type}楞` : ""}</small>
-                        <small>材质：{group.item.material || "未登记"}</small>
-                        <small>可用 {formatNumber(group.available)} · 已占用 {formatNumber(group.reserved)}{group.damaged ? ` · 异常 ${formatNumber(group.damaged)}` : ""}</small>
-                        <small>首次入库 {shelfStockDates(group.items).first || "待确认"} · 最近入库 {shelfStockDates(group.items).latest || "待确认"}</small>
-                        {(shelfStockDates(group.items).incomplete || shelfStockDates(group.items).approximate) && <small>部分入库日期不明或非精确，见批次详情</small>}
-                        {group.items.map(item => <button type="button" className="shelf-batch-row" key={item.lot_id} onClick={() => { setSelectedItem(item); setDetailOpen(true); }}><span>{item.lot_number || "批次号待补充"}</span><b>{formatNumber(inventoryLabelQuantity(item))} {inventoryUnitLabel(item.unit)}</b></button>)}</div>
                     </article>)}
+                    {productGroups.length > 2 && location && !identityConflict && <button type="button" className="shelf-view-all-products" onClick={() => onSelectLot(location.location_id, productGroups[0].item.lot_id)}>查看全部 {productGroups.length} 款</button>}
                   </div> : <button
                     type="button"
                     className="mold-rack-empty-spine"
@@ -1727,19 +1759,6 @@ function WarehouseRackElevation({
           </div>
           <div className="twin-width-ruler">正面宽度 {formatNumber(rack.width_mm)} mm</div>
         </div>
-        <aside hidden={!selectedItem}>
-          <small>产品标签</small>
-          {!selectedItem ? <><h3>请选择货位</h3><p>点击产品查看批次</p><strong>{items.length} 个批次 · {emptyLocationCount} 个正式空货位</strong>{unboundLocationCount > 0 && <p className="twin-mold-rack-warning">本区域还有 {unboundLocationCount} 个有货旧货位未绑定货架层格，请先转入盘点待归位。</p>}{area?.quantities.map((item) => <div className="twin-quantity-row" key={item.key}><span>{item.label}</span><b>{formatNumber(item.available)} {inventoryUnitLabel(item.unit)}</b></div>)}</> : <article className="twin-rack-product-label">
-            <div className="shelf-current-heading"><span>当前批次</span><button type="button" className="shelf-position-print" onClick={() => {
-              const at = locations.find(location => rackLocationInventoryItems(location).some(item => item.lot_id === selectedItem.lot_id));
-              if (at) window.open(`/static/shelf-label.html?location_id=${at.location_id}&lot_id=${selectedItem.lot_id}`, '_blank', 'noopener');
-            }}>打印产品标签</button></div>
-            <InventoryLabelSummary item={selectedItem} quantity={selectedReadingGroup?.physical} onLabel={() => setDetailOpen(false)} expanded={detailOpen} onDetails={() => setDetailOpen((value) => !value)} />
-            <div className="shelf-full-label">{warehouseCardCustomer(selectedItem)} · {selectedItem.product_name}<br />{warehouseCardPrimary(selectedItem)}{selectedItem.inventory_type !== "semi_finished" && <> · {selectedItem.specification} · {selectedItem.flute_type ? `${selectedItem.flute_type}楞` : ""}</>}</div>
-            {detailOpen && (selectedReadingGroup?.items || [selectedItem]).map(batch => <div key={batch.lot_id}><small>{batch.lot_number} · {formatNumber(inventoryLabelQuantity(batch))} {inventoryUnitLabel(batch.unit)} · {batch.material} · {batch.specification}</small><ShelfLotHistory lotId={batch.lot_id} load={requestJson} /></div>)}
-            {detailOpen && <dl className="twin-rack-product-detail"><div><dt>可用数量</dt><dd>{formatNumber(selectedItem.available_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>已预占</dt><dd>{formatNumber(selectedItem.reserved_quantity)} {inventoryUnitLabel(selectedItem.unit)}</dd></div><div><dt>实际位置</dt><dd>{selectedItem.location_name || "位置名称待完善"}</dd></div><div><dt>存放方式</dt><dd>{selectedItem.pallet_code ? "已绑定实物栈板" : "地堆或散存"}</dd></div><div><dt>批次</dt><dd>{selectedItem.lot_number || "—"}</dd></div></dl>}
-          </article>}
-        </aside>
         <button type="button" className="twin-rack-switch next" aria-label="下一个同区域货架" onClick={onNext}>›</button>
       </div>
   </section>;
@@ -1793,8 +1812,10 @@ export function WarehouseTwinApp() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [submittedSearch, setSubmittedSearch] = useState("");
   const [searchType, setSearchType] = useState<WarehouseSearchType>("finished");
   const [searchFloor, setSearchFloor] = useState("ALL");
+  const searchScopeChangedRef = useRef(false);
   const [catalogSearch, setCatalogSearch] = useState<CatalogSearchResponse | null>(null);
   const [catalogError, setCatalogError] = useState("");
   const [catalogMoreLoading, setCatalogMoreLoading] = useState(false);
@@ -1986,6 +2007,9 @@ export function WarehouseTwinApp() {
   const [stocktakeSupplementConfirmed, setStocktakeSupplementConfirmed] = useState(false);
   const [stocktakeStockDate, setStocktakeStockDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [rackFocusId, setRackFocusId] = useState<string | null>(null);
+  const rackFocusTokenRef = useRef(0);
+  const lastActivatedLocationRef = useRef("");
+  const [rackOperationBlockMessage, setRackOperationBlockMessage] = useState("");
   const [actualStocktakeLocationId, setActualStocktakeLocationId] = useState<number | null>(null);
   const [pendingQuery, setPendingQuery] = useState("");
   const [recountLotId, setRecountLotId] = useState<number | null>(null);
@@ -2188,6 +2212,7 @@ export function WarehouseTwinApp() {
     setFocusedSearchItem(null);
     setSearchResponse(null);
     if (keyword.length < 2) {
+      setSubmittedSearch("");
       setSearchResponse(null);
       setSearchLoading(false);
       setSearchError("");
@@ -2211,6 +2236,7 @@ export function WarehouseTwinApp() {
         .then((value) => {
           if (!active || !searchPageRequestIsCurrent(requestId, searchRequestRef.current)) return;
           setSearchResponse(value);
+          setSubmittedSearch(keyword);
           setSearchError("");
         })
         .catch((reason: Error) => {
@@ -6136,6 +6162,22 @@ export function WarehouseTwinApp() {
     : floorCode === "3F"
       ? "三楼实测仓库"
       : "四楼成品仓库";
+  const focusRackInVisibleMap = useCallback((rackId: string) => {
+    const token = ++rackFocusTokenRef.current;
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      setCameraFocusTarget({ entity: { kind: "rack", id: rackId }, token, source: "selection" });
+    }));
+  }, []);
+  useLayoutEffect(() => {
+    if (!rackFocusId) return;
+    setSearchPanelOpen(false);
+    focusRackInVisibleMap(rackFocusId);
+  }, [rackFocusId, focusRackInVisibleMap]);
+  const collapseFocusedRack = () => {
+    const rackId = rackFocusId;
+    setRackFocusId(null);
+    if (rackId) focusRackInVisibleMap(rackId);
+  };
   const switchFocusedRack = (offset: number) => {
     if (!focusedAreaRacks.length) return;
     const nextIndex = (focusedRackIndex + offset + focusedAreaRacks.length) % focusedAreaRacks.length;
@@ -6145,11 +6187,23 @@ export function WarehouseTwinApp() {
   const selectRackLocation = (locationId: number) => {
     if (spatialEditBusy || !focusedRackLocations.some((location) => location.location_id === locationId)) return;
     selectOperationalEntity({ kind: "pallet", id: `erp-location-${locationId}` }, "rack");
+    if (rackFocusId) {
+      setCameraFocusTarget({ entity: { kind: "rack", id: rackFocusId }, token: rackFocusTokenRef.current, source: "selection" });
+    }
     setLocationDetailOpen(false);
     requestAnimationFrame(() => {
       inspectorRef.current?.focus({ preventScroll: true });
       inspectorRef.current?.scrollIntoView({ block: "nearest" });
     });
+  };
+  const selectRackLot = (locationId: number, lotId: number) => {
+    selectRackLocation(locationId);
+    setTraceFocusedLotId(lotId);
+    setSidebarLabelLotId(lotId);
+    setLocationDetailOpen(true);
+    if (rackFocusId) {
+      setCameraFocusTarget({ entity: { kind: "rack", id: rackFocusId }, token: rackFocusTokenRef.current, source: "selection" });
+    }
   };
   const chooseRackEmptyLocation = (locationId: number) => {
     if (!canStocktake || mapMode !== "move" || moveSource || spatialEditBusy) return;
@@ -6270,6 +6324,48 @@ export function WarehouseTwinApp() {
       openObjectActions(selected, bounds.left, bounds.bottom + 4, event.currentTarget);
     }}>操作</button> : null;
 
+  const workspaceBlockMessage = warehouseWorkspaceBlockMessage({
+    moveSubmitting: moveSubmitLock.current || moveBatchBusy,
+    stocktakeSubmitting: stocktakeBatchBusy,
+    mergeSubmitting: mergeBatchBusy,
+    otherSubmitting: spatialEditBusy || locationEditBusy || pendingPlacementBusy || groundStorageBusy || productionBusy,
+    moveUncertain: productionMoveUncertain,
+    stocktakeRefreshRequired,
+    pendingRefreshRequired,
+    rackOperationBlocked: rackOperationBlockMessage
+  });
+  const requestWarehouseWorkspaceNavigation = (rawUrl: string, requestId = `map-${Date.now()}`) => {
+    const url = normalizeWarehouseWorkspaceUrl(rawUrl, window.location.origin);
+    if (!url) {
+      setWarehouseOperationMessage("仓库页面地址无效，已阻止离开当前操作。 ");
+      return;
+    }
+    if (workspaceBlockMessage) {
+      setWarehouseOperationMessage(workspaceBlockMessage);
+      if (embedded && window.parent !== window) window.parent.postMessage({
+        source: "tianming-warehouse",
+        type: "warehouse-workspace-blocked",
+        request_id: requestId,
+        message: workspaceBlockMessage
+      }, window.location.origin);
+      return;
+    }
+    if (embedded && window.parent !== window) {
+      window.parent.postMessage({
+        source: "tianming-warehouse",
+        type: "warehouse-workspace-navigate",
+        request_id: requestId,
+        url
+      }, window.location.origin);
+      return;
+    }
+    if (moveDrafts.length || stocktakeDrafts.length || moveSource) {
+      setWarehouseOperationMessage("当前页面还有未提交的移货或盘点选择；请先完成或取消，再离开仓库地图。 ");
+      return;
+    }
+    window.location.assign(url);
+  };
+
   useEffect(() => {
     if (!embedded || window.parent === window) return;
     window.parent.postMessage({
@@ -6295,18 +6391,112 @@ export function WarehouseTwinApp() {
   ]);
 
   useEffect(() => {
+    if (!embedded || window.parent === window) return;
+    const scopeChanged = searchScopeChangedRef.current;
+    searchScopeChangedRef.current = false;
+    window.parent.postMessage({
+      source: "tianming-warehouse",
+      type: "warehouse-workspace-context",
+      view: "map",
+      q: submittedSearch,
+      search_floor: searchFloor,
+      location_id: selectedLocation?.location_id || null,
+      lot_id: traceFocusedLotId,
+      ready: true,
+      ...(scopeChanged ? { scope_changed: true } : {})
+    }, window.location.origin);
+  }, [embedded, submittedSearch, searchFloor, selectedLocation?.location_id, traceFocusedLotId]);
+
+  useEffect(() => {
     if (!embedded) return undefined;
     const receiveShellCommand = (event: MessageEvent) => {
       if (event.origin !== window.location.origin || event.source !== window.parent) return;
       const payload = event.data || {};
-      if (payload.source !== "tianming-erp-shell" || payload.type !== "warehouse-command") return;
-      if (payload.command === "set-floor" && isWarehouseOperationalFloorCode(payload.floor_code)) {
+      if (payload.source !== "tianming-erp-shell") return;
+      if (payload.type === "warehouse-command" && payload.command === "set-floor" && isWarehouseOperationalFloorCode(payload.floor_code)) {
         switchWarehouseFloor(payload.floor_code);
+        return;
+      }
+      if (payload.type !== "warehouse-workspace-command") return;
+      if (payload.command === "navigate-request") {
+        const url = normalizeWarehouseWorkspaceUrl(payload.url, window.location.origin);
+        if (!url || workspaceBlockMessage) {
+          window.parent.postMessage({
+            source: "tianming-warehouse",
+            type: "warehouse-workspace-blocked",
+            request_id: payload.request_id,
+            message: workspaceBlockMessage || "仓库页面地址无效。"
+          }, window.location.origin);
+        } else {
+          window.parent.postMessage({
+            source: "tianming-warehouse",
+            type: "warehouse-workspace-navigate",
+            request_id: payload.request_id,
+            url
+          }, window.location.origin);
+        }
+        return;
+      }
+      if (payload.command === "activate") {
+        if (payload.ui_mode === "large" || payload.ui_mode === "standard") setUiMode(payload.ui_mode);
+        const activation = warehouseWorkspaceActivation(payload.url, window.location.origin);
+        if (!activation || activation.pathname !== "/warehouse.html") return;
+        if (activation.q !== undefined && activation.q !== search) {
+          setSearch(activation.q);
+          setSearchPanelOpen(Boolean(activation.q));
+          if (!activation.q) {
+            setSubmittedSearch("");
+            setSearchResponse(null);
+            setSearchError("");
+            setFocusedSearchItem(null);
+            setFocusedSearchProductKey(null);
+            setFocusedResource(null);
+          }
+        } else if (activation.q === "" && submittedSearch) {
+          // The search effect is intentionally paused while its panel is closed,
+          // so an explicit shell clear must also clear the committed context here.
+          setSubmittedSearch("");
+          setSearchResponse(null);
+        }
+        const requestedSearchFloor = new URL(activation.url, window.location.origin).searchParams.get("search_floor")?.toUpperCase();
+        if (requestedSearchFloor && ["ALL", "1F", "3F", "4F", "UNLOCATED"].includes(requestedSearchFloor) && requestedSearchFloor !== searchFloor) {
+          setSearchFloor(requestedSearchFloor);
+        }
+        if (activation.floor && isWarehouseOperationalFloorCode(activation.floor.toUpperCase()) && activation.floor.toUpperCase() !== floorCode) {
+          switchWarehouseFloor(activation.floor.toUpperCase() as WarehouseOperationalFloorCode);
+        }
+        if (activation.locationId) {
+          const targetKey = `${activation.locationId}:${activation.lotId || ""}`;
+          if (lastActivatedLocationRef.current !== targetKey) {
+            lastActivatedLocationRef.current = targetKey;
+            setRackFocusId(null);
+            setPendingLocationId(activation.locationId);
+            setPendingRackSearchLocationId(activation.locationId);
+            setPendingLotId(activation.lotId || null);
+            setSearchPanelOpen(false);
+          }
+        }
+        if (!traceReadOnly && activation.action && activation.action !== moveAction) {
+          if (activation.action === "stocktake") void enterWarehouseMoveMode().then(allowed => { if (allowed) { setMoveAction("stocktake"); setMoveSource(null); } });
+          if (activation.action === "relocate") void enterWarehouseMoveMode().then(allowed => { if (allowed) setMoveAction("relocate"); });
+        }
+        return;
+      }
+      if (payload.command === "refresh") {
+        if (workspaceBlockMessage) {
+          window.parent.postMessage({ source: "tianming-warehouse", type: "warehouse-workspace-blocked", request_id: payload.request_id, message: workspaceBlockMessage }, window.location.origin);
+          return;
+        }
+        void refreshDashboard()
+          .then(() => {
+            if (searchPanelOpen && search.trim().length >= 2) setSearchRetryToken(value => value + 1);
+          })
+          .catch((reason: Error) => setWarehouseOperationMessage(`刷新失败：${reason.message}`));
       }
     };
     window.addEventListener("message", receiveShellCommand);
     return () => window.removeEventListener("message", receiveShellCommand);
-  }, [embedded, floorCode, locationPointEditAreaCode, mapMode, moveSource]);
+  }, [embedded, floorCode, locationPointEditAreaCode, mapMode, moveSource, moveAction, search, submittedSearch, searchFloor, searchPanelOpen, traceReadOnly, workspaceBlockMessage, refreshDashboard]);
 
   useEffect(() => {
     if (productionMapContext && productionLocationPicker) window.parent.postMessage({
@@ -6338,6 +6528,11 @@ export function WarehouseTwinApp() {
     return () => window.removeEventListener("message", receiveReturn);
   }, [productionMapContext, moveBatchBusy, spatialEditBusy, moveDrafts, productionMoveUncertain, query]);
 
+  const ledgerNavigationParams = new URLSearchParams({ tab: "finished" });
+  if (submittedSearch) ledgerNavigationParams.set("q", submittedSearch);
+  if (searchFloor !== "ALL") ledgerNavigationParams.set("search_floor", searchFloor);
+  const ledgerNavigationUrl = `/warehouse-ledger.html?${ledgerNavigationParams.toString()}`;
+
   return <main className={`warehouse-twin-shell ${embedded ? "embedded-shell" : ""} ${uiMode === "large" ? "large-text" : ""} ${mapMode === "move" ? "move-mode" : ""}`}>
     {objectActions && <div ref={objectActionsRef} className="twin-object-actions-menu" role="menu" aria-label="所选对象操作" style={{ left: objectActions.clientX, top: objectActions.clientY }} onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); closeObjectActions(); return; }
@@ -6362,7 +6557,7 @@ export function WarehouseTwinApp() {
       </nav>{selectedAreaCode && <div className="twin-header-area-summary"><small>{mapMode === "planning" && canEditLocations ? `当前规划区域 · ${selectedAreaCode}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><span>{selectedAreaVisibleAreaMm2 ? `${(selectedAreaVisibleAreaMm2 / 1_000_000).toFixed(1)} m²` : "面积待确认"} · {selectedAreaLocationCount} 库位 · {selectedArea?.lot_count || 0} 批次</span></div>}<p>{floorCode === "4F" ? floor4CalibrationMode ? `${floorTitle} · 正在重新校正货梯位置与朝向` : floor4CalibrationApplied ? `${floorTitle} · 已与 3F 货梯对齐` : `${floorTitle} · 扫描规划 / 待现场标定，尚未启用正式作业` : `${floorTitle} · 正式仓库作业层`}</p></div>
       <div className="twin-command-status"><span className="live">{traceReadOnly ? (query.get("source") === "order_trace" ? "订单追溯 · 只读定位" : "订单库存 · 只读定位") : mapMode === "planning" ? locationPointEditAreaCode ? `区域规划 · ${locationPointEditAreaCode} 点位调整` : layoutMapToolsOpen ? "区域规划 · 调整地图" : advancedAreaMaintenanceOpen ? "区域规划 · 整理货位/货架" : "区域规划 · 核对区域" : mapMode === "move" ? moveAction === "ground" ? "地图点选成品存放" : moveAction === "stocktake" ? `盘点调整 · ${stocktakeDrafts.length} 条草稿` : moveAction === "merge" ? `移货 · 合并栈板 · ${mergeSources.length} 块已选` : `移货 · ${moveDrafts.length} 条页面草稿` : "查货模式 · 只读"}</span><b>{currentFloor?.active_lots || 0}</b><small>当前层有效批次</small></div>
       <nav className="twin-command-links" aria-label="仓库账目">
-        {!productionMapContext && !traceReadOnly && <a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>}
+        {!productionMapContext && !traceReadOnly && <a className="twin-ledger-link" href={ledgerNavigationUrl} onClick={(event) => { event.preventDefault(); requestWarehouseWorkspaceNavigation(ledgerNavigationUrl); }}>库存台账</a>}
       </nav>
     </header>
 
@@ -6373,10 +6568,11 @@ export function WarehouseTwinApp() {
       </div>
       <div className="twin-top-search">
         <input aria-label="全仓查货" placeholder="全仓查货：客户 / 编码 / 名称 / 规格" value={search} onFocus={() => {setDetailSearchOpen(false);setSearchPanelOpen(true);}} onChange={event => {setSearch(event.target.value);setSearchPanelOpen(true);setFocusedSearchItem(null);setFocusedSearchProductKey(null);setPendingRackSearchLocationId(null);setPendingLocationId(null);setPendingAreaCode(null);}} />
+        <WarehouseInfoTip id="warehouse-search-tip" label="查看全仓查货说明">支持客户、简称、存货编码、产品名称和规格；输入至少两个字符后查询。地图楼层是视角，“搜索楼层”才是查货范围。</WarehouseInfoTip>
         <button type="button" disabled={mapMode !== "lookup" || spatialEditBusy} aria-expanded={searchPanelOpen && detailSearchOpen} onClick={() => {setSearchPanelOpen(true);setDetailSearchOpen(value => !searchPanelOpen || !value);}}>详细查找</button>
         <button type="button" aria-expanded={searchPanelOpen && !detailSearchOpen} onClick={() => {setDetailSearchOpen(false);setSearchPanelOpen(value => detailSearchOpen || !value);}}>{searchPanelOpen && !detailSearchOpen ? "收起结果" : "查找"}</button>
       </div>
-      {!productionMapContext && !traceReadOnly && <nav className="twin-top-ledger" aria-label="库存账目"><a href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a></nav>}
+      {!productionMapContext && !traceReadOnly && <nav className="twin-top-ledger" aria-label="库存账目"><a href={ledgerNavigationUrl} onClick={(event) => { event.preventDefault(); requestWarehouseWorkspaceNavigation(ledgerNavigationUrl); }}>库存台账</a></nav>}
       <div className="twin-operation-modes" role="tablist" aria-label="仓库地图操作模式">
         {productionMapContext && !productionLocationPicker && canExecuteWarehouse && selectedLocation && traceFocusedLotId && <button type="button" disabled={moveBatchBusy || spatialEditBusy || !selectedLocationItems.some(item => item.lot_id === traceFocusedLotId && item.version && movableLotQuantity(item) > 0)} onClick={async () => {
           const item = selectedLocationItems.find(item => item.lot_id === traceFocusedLotId);
@@ -6497,10 +6693,10 @@ export function WarehouseTwinApp() {
             <button type="button" className={searchType === "printing_plate" ? "active" : ""} onClick={() => { setSearchType("printing_plate"); setSearchResponse(null); setFocusedSearchItem(null); setFocusedSearchProductKey(null); }}>印刷版</button>
           </div>
           {searchType === "finished" ? <>
-            <label className="twin-search-step"><span>搜索楼层</span><select value={searchFloor} onChange={event => { setSearchFloor(event.target.value); setFocusedSearchProductKey(null); }}><option value="ALL">全部楼层（含待归位）</option><option value="3F">三楼</option><option value="1F">一楼</option><option value="4F">四楼</option><option value="UNLOCATED">待归位 / 未定位</option></select></label>
-            <small>实存含预占；成品与材料按各自单位分别汇总。各楼层均包含待归位；暂无库存的ERP产品另列。</small>
+            <label className="twin-search-step"><span>搜索楼层</span><select value={searchFloor} onChange={event => { searchScopeChangedRef.current = true; setSearchFloor(event.target.value); setFocusedSearchProductKey(null); }}><option value="ALL">全部楼层（含待归位）</option><option value="3F">三楼</option><option value="1F">一楼</option><option value="4F">四楼</option><option value="UNLOCATED">待归位 / 未定位</option></select></label>
+            <div className="twin-search-help-line"><span>数量口径</span><WarehouseInfoTip id="warehouse-quantity-tip" label="查看库存数量口径">实存包含已占用数量；可用量、已占用和异常数量分别显示。成品与材料按各自单位汇总，不跨单位相加。</WarehouseInfoTip></div>
             <label className="twin-search-step"><span>客户、简写、存货编码、产品名称或规格</span><input value={search} onChange={(event) => { setSearch(event.target.value); setFocusedSearchProductKey(null); setFocusedSearchItem(null); setRackFocusId(null); setPendingRackSearchLocationId(null); setPendingLocationId(null); setPendingAreaCode(null); }} placeholder="例如：天华、TH、TM-FG、加强纸箱、520×350×300" autoFocus /></label>
-            <small>{search.trim().length < 2 ? "输入任意 2 个字符即可查找，不必先记住存货编码。" : searchLoading ? "正在读取有权限的真实库存…" : searchResponse ? `${searchResponse.pagination?.has_more ? "已加载" : "匹配"} ${searchProductGroups.length} 个产品 · ${searchResponse.inventory_result_count} 个真实位置批次${searchResponse.pagination?.has_more ? " · 数量与位置仅汇总已加载结果" : ""}` : "等待查找结果"}</small>
+            <small>{search.trim().length < 2 ? "等待查找" : searchLoading ? "正在读取有权限的真实库存…" : searchResponse ? `${searchResponse.pagination?.has_more ? "已加载" : "匹配"} ${searchProductGroups.length} 个产品 · ${searchResponse.inventory_result_count} 个真实位置批次${searchResponse.pagination?.has_more ? " · 数量与位置仅汇总已加载结果" : ""}` : "等待查找结果"}</small>
           </> : <>
             <label className="twin-search-step"><span>{searchType === "mold" ? "模具编码或名称" : "印刷版编码、产品或位置"}</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={searchType === "mold" ? "输入模具编码或名称" : "输入印刷版、产品或区域"} autoFocus /></label>
             <small>{search.trim().length < 2 ? "至少输入 2 个字符" : searchResponse ? `${searchResponse.resource_result_count} 条真实定位结果` : "正在查找…"}</small>
@@ -6547,6 +6743,7 @@ export function WarehouseTwinApp() {
             <b>{activeObjectPreview ? "当前对象编辑预览" : "已应用位置 · 三种模式统一"}</b>
             {layoutDraftControl?.has_draft && <span>有已保存但尚未应用的调整</span>}
             <span className="twin-location-legend"><i className="occupied" />有货 <i className="empty" />空位 <i className="located" />搜索货位 <i style={{background:"#bbf7d0"}} />搜索区域 <i className="selected" />选中货位 <i style={{background:"#e9d5ff"}} />选中区域 <i className="conflict" />异常{moveLocationStates && <><i style={{background:"#94a3b8"}} />不可选</>}</span>
+            <WarehouseInfoTip id="warehouse-map-tip" label="查看地图操作与颜色说明">拖动地图可平移，滚轮可缩放。橙色表示当前选择，黄色表示搜索命中，红色表示需要处理的空间异常；普通库存刷新不会重置镜头。</WarehouseInfoTip>
           </div>
           {loading && <div className="twin-loading">正在加载实测布局…</div>}
           {error && <div className="twin-error"><b>地图加载失败</b><span>{error}</span><button type="button" onClick={() => window.location.reload()}>重新加载</button></div>}
@@ -6635,14 +6832,14 @@ export function WarehouseTwinApp() {
           onPrevious={() => switchFocusedRack(-1)}
           onNext={() => switchFocusedRack(1)}
           onMoldMoved={(message) => { setMoldRackRefreshToken((value) => value + 1); setWarehouseOperationMessage(message); }}
-          onClose={() => setRackFocusId(null)}
+          onNavigationGuardChange={setRackOperationBlockMessage}
+          onClose={collapseFocusedRack}
         /> : focusedRack && <WarehouseRackElevation
           productQuantityLabels={productQuantityLabels}
           rack={focusedRack}
           area={focusedRackAreaCode ? areaStats.get(focusedRackAreaCode) : undefined}
           locations={focusedRackLocations}
           unboundLocationCount={unboundRackLocationCount}
-          locationPicker={productionLocationPicker}
           canChooseProducts={canStocktake && mapMode === "move" && !moveSource && !spatialEditBusy}
           highlightedLotIds={rackSearchLotIds}
           searchLocationId={focusedSearchItem?.location_id}
@@ -6653,9 +6850,12 @@ export function WarehouseTwinApp() {
           onNext={() => switchFocusedRack(1)}
           onSelectLocation={selectRackLocation}
           selectedLocationId={selectedLocation?.location_id}
+          selectedLotId={traceFocusedLotId}
+          onSelectLot={selectRackLot}
           moveStates={moveLocationStates}
           onChooseEmptyLocation={chooseRackEmptyLocation}
-          onClose={() => setRackFocusId(null)}
+          onRefocus={() => focusedRack && focusRackInVisibleMap(focusedRack.id)}
+          onClose={collapseFocusedRack}
         />}
       </div>
 

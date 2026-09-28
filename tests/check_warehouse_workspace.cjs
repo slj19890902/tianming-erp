@@ -105,3 +105,13 @@ test('changing text size does not replay stale query or location activation',()=
   const url=new URL(command.url,'http://fixture');assert.equal(url.searchParams.has('q'),false);assert.equal(url.searchParams.has('location_id'),false);
   assert.equal(ctx.warehouseContext.q,'new');
 });
+
+
+test('returning to inventory retains the previously chosen semi-finished tab',async()=>{
+  const {ctx,message,ledger,sent}=fixture();ctx.activateWarehouseRoute('/warehouse-ledger.html?tab=semi_finished');
+  message({type:'warehouse-workspace-context',ready:true,tab:'semi_finished',q:'BOARD',search_floor:'3F'},ledger);
+  ctx.activateWarehouseRoute('/warehouse.html?q=BOARD');
+  const pending=ctx.chooseWarehouseView('ledger');const req=sent.at(-1).data;
+  message({type:'warehouse-workspace-navigate',request_id:req.request_id,url:req.url});await pending;
+  assert.equal(ctx.warehouseLedgerTab,'semi_finished');assert.match(ctx._warehouseActivation.ledger,/tab=semi_finished/);
+});

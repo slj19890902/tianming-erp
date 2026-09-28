@@ -13,7 +13,7 @@
   }
   function install(app) {
     app.mixin({
-      data() { return this.$parent ? {} : {warehouseView:'map', warehouseLedgerUrl:'', warehouseLedgerTab:'finished',
+      data() { return this.$parent ? {} : {warehouseView:'map', warehouseLedgerUrl:'', warehouseLedgerTab:'finished', warehouseInventoryTab:'finished',
         warehouseContext:{q:'',search_floor:null}, warehouseNavigationError:'', warehouseNavigating:false}; },
       mounted() { if (!this.$parent) global.addEventListener('message', this.acceptWarehouseWorkspaceMessage); },
       beforeUnmount() { if (!this.$parent) { global.removeEventListener('message', this.acceptWarehouseWorkspaceMessage); this.resetWarehouseWorkspace(); } },
@@ -48,7 +48,7 @@
           this._warehousePending?.finish(false);
           this._warehousePending = null; this._warehouseReady = {};
           this._warehouseActivation = {}; this.warehouseLedgerUrl = ''; this.warehouseFrameUrl = '';
-          this.warehouseContext = {q:'',search_floor:null}; this.warehouseNavigationError = ''; this.warehouseView = 'map';
+          this.warehouseContext = {q:'',search_floor:null}; this.warehouseNavigationError = ''; this.warehouseView = 'map'; this.warehouseInventoryTab = 'finished';
         },
         initializeWarehouseWorkspace(target = '') {
           if (!this.pageAllowed('warehouse')) return;
@@ -87,7 +87,7 @@
             return false;
           }
           this.warehouseNavigationError = ''; this.warehouseView = next.view;
-          if (next.view === 'ledger') this.warehouseLedgerTab = next.tab;
+          if (next.view === 'ledger') { this.warehouseLedgerTab = next.tab; if (['finished','semi_finished'].includes(next.tab)) this.warehouseInventoryTab = next.tab; }
           this._warehouseActivation = {...this._warehouseActivation,[next.view]:next.url};
           if (next.view === 'map' && !this.warehouseFrameUrl) this.warehouseFrameUrl = next.url;
           if (next.view === 'ledger' && !this.warehouseLedgerUrl) this.warehouseLedgerUrl = next.url;
@@ -101,7 +101,8 @@
           } catch (_) {}
           return true;
         },
-        async chooseWarehouseView(view, tab = 'finished') {
+        async chooseWarehouseView(view, tab = null) {
+          tab = tab || this.warehouseInventoryTab || 'finished';
           const params = new URLSearchParams(view === 'map' ? {} : {tab});
           if ((view === 'map' || ['finished','semi_finished'].includes(tab)) && this.warehouseContext.q !== undefined) params.set('q',this.warehouseContext.q);
           if ((view === 'map' || ['finished','semi_finished'].includes(tab)) && this.warehouseContext.search_floor) params.set('search_floor',this.warehouseContext.search_floor);
@@ -152,7 +153,7 @@
                   this.warehouseContext = {...this.warehouseContext,search_floor:data.search_floor};
                 }
               }
-              if (view === 'ledger' && typeof data.tab === 'string') this.warehouseLedgerTab = data.tab;
+              if (view === 'ledger' && typeof data.tab === 'string') { this.warehouseLedgerTab = data.tab; if (['finished','semi_finished'].includes(data.tab)) this.warehouseInventoryTab = data.tab; }
             }
             if (first) this.sendWarehouseActivation(view);
             return;

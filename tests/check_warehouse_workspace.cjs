@@ -95,3 +95,13 @@ test('leaving warehouse updates refresh route while retaining child documents',(
   ctx.leaveWarehouseWorkspaceUrl('orders');const url=new URL(win.location.href);
   assert.equal(url.searchParams.get('page'),'orders');assert.equal(url.searchParams.has('warehouse_target'),false);assert.equal(ctx.warehouseLedgerUrl,frame);
 });
+
+
+test('changing text size does not replay stale query or location activation',()=>{
+  const {ctx,mixin,message,sent}=fixture();ctx.activateWarehouseRoute('/warehouse.html?q=old&location_id=92');
+  message({type:'warehouse-workspace-context',ready:true,q:'new',search_floor:'3F'});
+  ctx.uiMode='large';mixin.watch.uiMode.call(ctx);
+  const command=sent.at(-1).data;assert.equal(command.ui_mode,'large');
+  const url=new URL(command.url,'http://fixture');assert.equal(url.searchParams.has('q'),false);assert.equal(url.searchParams.has('location_id'),false);
+  assert.equal(ctx.warehouseContext.q,'new');
+});

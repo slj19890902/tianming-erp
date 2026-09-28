@@ -19,7 +19,7 @@
       beforeUnmount() { if (!this.$parent) { global.removeEventListener('message', this.acceptWarehouseWorkspaceMessage); this.resetWarehouseWorkspace(); } },
       watch:{
         authGeneration() { this.resetWarehouseWorkspace(); },
-        uiMode() { this.sendWarehouseActivation('map'); this.sendWarehouseActivation('ledger'); },
+        uiMode() { this.sendWarehouseActivation('map', true); this.sendWarehouseActivation('ledger', true); },
       },
       methods:{
         warehouseStocktakeVisible() { return this.hasPermission('warehouse.stocktake.view') || this.hasPermission('warehouse.stocktake.review'); },
@@ -73,10 +73,10 @@
           }
           this.activateWarehouseRoute(initial);
         },
-        sendWarehouseActivation(view = this.warehouseView) {
+        sendWarehouseActivation(view = this.warehouseView, appearanceOnly = false) {
           const url = this._warehouseActivation?.[view] || (view === 'map' ? this.warehouseFrameUrl : this.warehouseLedgerUrl);
           if (!url || !this._warehouseReady?.[view]) return;
-          this.warehouseWindow(view)?.postMessage({source:'tianming-erp-shell',type:'warehouse-workspace-command',command:'activate',url,ui_mode:this.uiMode},global.location.origin);
+          this.warehouseWindow(view)?.postMessage({source:'tianming-erp-shell',type:'warehouse-workspace-command',command:'activate',url:appearanceOnly ? (view === 'map' ? '/warehouse.html?embedded=1' : '/warehouse-ledger.html?embedded=1') : url,ui_mode:this.uiMode},global.location.origin);
         },
         activateWarehouseRoute(value) {
           const next = route(value, global.location.origin);

@@ -14,6 +14,7 @@
     <script src="/static/ui/pdf-workspace.js?v=20260926-physical-quantity"></script>
     <script src="/static/ui/purchase-workspace.js?v=66709867c608"></script>
     <script src="/static/ui/production-map.js?v=20260922-map-return"></script>
+    <script src="/static/ui/warehouse-workspace.js?v=20260928"></script>
     <script src="/static/ui/production-workspace.js?v=20260922-desk"></script>
     <script src="/static/ui/production-desk.js?v=20260922"></script>
     <link rel="stylesheet" href="/static/ui/production-desk.css?v=20260922-map-return">
@@ -3134,7 +3135,7 @@
       .delivery-selection-quantity { width:96px; }
       .delivery-unified-table td { vertical-align:middle; }
 </style>
-    <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260911-1">
+    <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260928">
     <link rel="stylesheet" href="/static/product-editor-compact.css?v=20260913-bomui002" />
     <link rel="stylesheet" href="/static/ui/workspace.css?v=c63fcfd14771" />
     <link rel="stylesheet" href="/static/ui/order-reference.css?v=423" />
@@ -3286,14 +3287,22 @@
               </div>
             </section>
 
-            <section v-if="warehouseFrameUrl" v-show="activePage === 'warehouse'" class="warehouse-shell">
-              <iframe
-                ref="warehouseFrame"
-                :key="warehouseFrameRevision"
-                class="warehouse-shell-frame"
-                :src="warehouseFrameUrl"
-                title="天明智慧仓储"
-              ></iframe>
+            <section v-if="warehouseFrameUrl || warehouseLedgerUrl" v-show="activePage === 'warehouse'" class="warehouse-shell">
+              <nav class="warehouse-workspace-nav" aria-label="仓库工作区">
+                <strong>仓库</strong>
+                <div class="warehouse-workspace-tabs" role="group" aria-label="仓库业务视图">
+                  <button type="button" :class="['btn',{primary:warehouseView==='map'}]" :aria-pressed="warehouseView==='map'" :disabled="warehouseNavigating" @click="chooseWarehouseView('map')">仓库地图</button>
+                  <button type="button" :class="['btn',{primary:warehouseView==='ledger' && warehouseLedgerTab==='finished'}]" :aria-pressed="warehouseView==='ledger' && warehouseLedgerTab==='finished'" :disabled="warehouseNavigating" @click="chooseWarehouseView('ledger','finished')">库存列表</button>
+                  <button type="button" :class="['btn',{primary:warehouseView==='ledger' && warehouseLedgerTab==='movements'}]" :aria-pressed="warehouseView==='ledger' && warehouseLedgerTab==='movements'" :disabled="warehouseNavigating" @click="chooseWarehouseView('ledger','movements')">库存流水</button>
+                  <button type="button" :class="['btn',{primary:warehouseView==='ledger' && warehouseLedgerTab==='stocktake_review'}]" :aria-pressed="warehouseView==='ledger' && warehouseLedgerTab==='stocktake_review'" :disabled="warehouseNavigating" @click="chooseWarehouseView('ledger','stocktake_review')">盘点记录</button>
+                  <button type="button" :class="['btn',{primary:warehouseView==='ledger' && ['molds','printing_plates'].includes(warehouseLedgerTab)}]" :aria-pressed="warehouseView==='ledger' && ['molds','printing_plates'].includes(warehouseLedgerTab)" :disabled="warehouseNavigating" @click="chooseWarehouseView('ledger','molds')">模具与印版</button>
+                </div>
+              </nav>
+              <div v-if="warehouseNavigationError" class="warehouse-navigation-error" role="alert">{{ warehouseNavigationError }}</div>
+              <div class="warehouse-workspace-content">
+                <iframe v-if="warehouseFrameUrl" v-show="warehouseView==='map'" ref="warehouseFrame" :key="warehouseFrameRevision" class="warehouse-shell-frame" :src="warehouseFrameUrl" title="仓库地图"></iframe>
+                <iframe v-if="warehouseLedgerUrl" v-show="warehouseView==='ledger'" ref="warehouseLedgerFrame" class="warehouse-shell-frame" :src="warehouseLedgerUrl" title="库存列表与业务记录"></iframe>
+              </div>
             </section>
 
             <template v-if="activePage === 'dashboard'">
@@ -11823,6 +11832,7 @@
                 countDetails: `订单 ${this.ordersUnfinishedTotal}｜报料 ${this.requisitionPendingOverallTotal}｜纸板待入库 ${this.incomingPendingTotal}`,
               },
               { key: "production", label: "生产与成品", count: this.productionPlacementPendingTotal },
+              { key: "warehouse", label: "仓库" },
               { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
               { key: "finance", label: "对账与开票" },
               { key: "master", label: "主数据" },
@@ -11836,7 +11846,7 @@
               ))
               .filter(item => item.key !== "system_hub" || this.user?.role !== "boss")
               .filter(item => ["workbench","master","system_hub"].includes(item.key) || this.pageAllowed(item.key));
-            return this.applyEffectiveLayout("menus", eligible);
+            return this.warehouseNavigationMenus(eligible);
           },
           deliveryCustomers() {
             const ids = [...new Set(this.pendingDeliveryItems.map(row => row.customer_id))];
@@ -16263,6 +16273,7 @@
             }, 300));
           },
           async go(page) {
+            if (this.activePage === "warehouse" && page !== "warehouse" && !await this.checkWarehouseNavigation()) return;
             if (!this.pageAllowed(page)) {
               this.showToast("当前账号没有访问该功能的权限", true);
               return;
@@ -16455,6 +16466,7 @@
             }
             const requested = String(floorCode || "3F").toUpperCase();
             const normalized = this.isWarehouseTwinFloorCode(requested) ? requested : "3F";
+            if (!await this.checkWarehouseNavigation(`/warehouse.html?embedded=1&floor=${normalized}&view=2d`)) return;
             this.warehouseTwinFloor = normalized;
             this.ensureWarehouseFrame(`/warehouse.html?embedded=1&floor=${normalized}&view=2d`);
             this.activePage = "warehouse";
@@ -16623,29 +16635,10 @@
             return this.loadPage(this.activePage, { force:true });
           },
           ensureWarehouseFrame(target = "") {
-            if (target) {
-              this.warehouseFrameUrl = target;
-              try {
-                const floor = new URL(target, window.location.origin).searchParams.get("floor");
-                if (this.isWarehouseTwinFloorCode(floor)) this.warehouseTwinFloor = floor;
-              } catch (_) {}
-            } else if (!this.warehouseFrameUrl) {
-              const query = new URLSearchParams(window.location.search);
-              const requestedFloor = String(query.get("warehouse_floor") || "3F").toUpperCase();
-              const floor = this.isWarehouseTwinFloorCode(requestedFloor) ? requestedFloor : "3F";
-              const requestedMode = query.get("warehouse_mode") || "";
-              const requestedAction = query.get("warehouse_action") || "";
-              const requestedView = query.get("warehouse_view") || "2d";
-              const params = new URLSearchParams({ embedded:"1", floor, view:requestedView === "25d" ? "25d" : "2d" });
-              if (["lookup", "move", "planning"].includes(requestedMode)) params.set("mode", requestedMode);
-              if (["relocate", "stocktake", "merge", "ground"].includes(requestedAction)) params.set("action", requestedAction);
-              this.warehouseFrameUrl = `/warehouse.html?${params.toString()}`;
-              this.warehouseTwinFloor = floor;
-            }
+            this.initializeWarehouseWorkspace(target);
           },
           refreshWarehouseFrame() {
-            this.ensureWarehouseFrame();
-            this.warehouseFrameRevision += 1;
+            return this.refreshWarehouseWorkspace();
           },
           handleWarehouseFrameMessage(event) {
             if (event.origin !== window.location.origin) return;
@@ -41374,6 +41367,7 @@
       window.ERPProductionWorkspace?.install(app);
       window.ERPProductionDesk?.install(app);
       window.ERPProductionMap?.install(app);
+      window.ERPWarehouseWorkspace?.install(app);
       window.ERPFinanceWorkspace?.install(app);
       app.mount("#app");
     </script>

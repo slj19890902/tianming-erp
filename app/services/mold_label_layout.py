@@ -105,7 +105,8 @@ _V7_CATALOG_BY_ID = {item["id"]: item for item in V7_ELEMENT_CATALOG}
 
 # These aliases describe the catalog accepted for new writes.  Historical
 # print snapshots use their own version-pinned decoder below.
-CATALOG_VERSION = V7_CATALOG_VERSION
+V8_CATALOG_VERSION = "p1-119-v1"
+CATALOG_VERSION = V8_CATALOG_VERSION
 PAPER_WIDTH_MM = V7_PAPER_WIDTH_MM
 PAPER_HEIGHT_MM = V7_PAPER_HEIGHT_MM
 ELEMENT_CATALOG = V7_ELEMENT_CATALOG
@@ -119,11 +120,11 @@ class MoldLabelLayoutConflict(MoldLabelLayoutError):
     pass
 
 
-def default_layout() -> dict[str, Any]:
-    """Return the V7 40 x 80 mm operator-facing mold label layout."""
+def _default_layout_v7() -> dict[str, Any]:
+    """Historical V7 geometry; never change existing print snapshots."""
 
     return {
-        "catalog_version": CATALOG_VERSION,
+        "catalog_version": V7_CATALOG_VERSION,
         "paper": {"width_mm": PAPER_WIDTH_MM, "height_mm": PAPER_HEIGHT_MM},
         "elements": [
             {
@@ -231,6 +232,26 @@ def default_layout() -> dict[str, Any]:
             },
         ],
     }
+
+
+def default_layout() -> dict[str, Any]:
+    """V8: readable first row and an unobstructed 15 mm QR code."""
+    layout = _default_layout_v7()
+    layout["catalog_version"] = V8_CATALOG_VERSION
+    geometry = {
+        "rack_location": (1.2, .6, 50.0, 5.0),
+        "cutting_mode": (53.0, .6, 25.8, 5.0),
+        "custom_note": (1.2, 6.6, 77.6, 9.0),
+        "product_name": (1.2, 17.2, 60.6, 4.2),
+        "customer_inventory_code": (1.2, 22.0, 60.6, 11.6),
+        "mold_qr": (63.6, 18.2, 15.0, 15.0),
+    }
+    for element in layout["elements"]:
+        if element["id"] in geometry:
+            element.update(zip(("x_mm", "y_mm", "width_mm", "height_mm"), geometry[element["id"]]))
+        if element["id"] == "cutting_mode":
+            element["text_align"] = "right"
+    return layout
 
 
 def _default_layout_v6() -> dict[str, Any]:
@@ -849,7 +870,7 @@ def _normalize_layout_v6(payload: object) -> dict[str, Any]:
 _SNAPSHOT_NORMALIZERS[V6_CATALOG_VERSION] = _normalize_layout_v6
 
 
-def _normalize_element_v7(raw: object) -> dict[str, Any]:
+def _normalize_element_v7(raw: object, *, v8: bool = False) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise MoldLabelLayoutError("布局中存在无效元素")
     element_id = str(raw.get("id") or "").strip()
@@ -883,9 +904,10 @@ def _normalize_element_v7(raw: object) -> dict[str, Any]:
     ):
         raise MoldLabelLayoutError(f"{metadata['label']}的位置或尺寸超出80×40内容区")
     if metadata["kind"] == "qr":
-        if normalized["width_mm"] != 14.2 or normalized["height_mm"] != 14.2:
-            raise MoldLabelLayoutError("模具二维码必须保持14.2毫米正方形")
-        if normalized["x_mm"] != 64.4 or normalized["y_mm"] != 18.7:
+        qr_size = 15.0 if v8 else 14.2
+        if normalized["width_mm"] != qr_size or normalized["height_mm"] != qr_size:
+            raise MoldLabelLayoutError(f"模具二维码必须保持{qr_size}毫米正方形")
+        if normalized["x_mm"] != (63.6 if v8 else 64.4) or normalized["y_mm"] != (18.2 if v8 else 18.7):
             raise MoldLabelLayoutError("模具二维码必须保持既定位置")
         return normalized
     if metadata["kind"] == "rule":
@@ -924,12 +946,12 @@ def _normalize_element_v7(raw: object) -> dict[str, Any]:
     return normalized
 
 
-def _normalize_layout_v7(payload: object) -> dict[str, Any]:
+def _normalize_layout_v7(payload: object, *, v8: bool = False) -> dict[str, Any]:
     """Validate the V7 operator-facing 40 x 80 mm layout."""
 
     if not isinstance(payload, dict):
         raise MoldLabelLayoutError("模具标签布局必须是对象")
-    if payload.get("catalog_version") != V7_CATALOG_VERSION:
+    if payload.get("catalog_version") != (V8_CATALOG_VERSION if v8 else V7_CATALOG_VERSION):
         raise MoldLabelLayoutError("标签元素目录版本已变化，请重新加载默认布局")
     paper = payload.get("paper")
     if not isinstance(paper, dict):
@@ -947,7 +969,7 @@ def _normalize_layout_v7(payload: object) -> dict[str, Any]:
     normalized_elements: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in raw_elements:
-        normalized = _normalize_element_v7(raw)
+        normalized = _normalize_element_v7(raw, v8=v8)
         if normalized["id"] in seen:
             raise MoldLabelLayoutError(f"布局中存在重复元素：{normalized['id']}")
         seen.add(normalized["id"])
@@ -991,7 +1013,7 @@ def _normalize_layout_v7(payload: object) -> dict[str, Any]:
     order = {item["id"]: index for index, item in enumerate(V7_ELEMENT_CATALOG)}
     normalized_elements.sort(key=lambda item: order[item["id"]])
     return {
-        "catalog_version": V7_CATALOG_VERSION,
+        "catalog_version": V8_CATALOG_VERSION if v8 else V7_CATALOG_VERSION,
         "paper": {
             "width_mm": V7_PAPER_WIDTH_MM,
             "height_mm": V7_PAPER_HEIGHT_MM,
@@ -1000,41 +1022,33 @@ def _normalize_layout_v7(payload: object) -> dict[str, Any]:
     }
 
 
+def _normalize_layout_v8(payload: object) -> dict[str, Any]:
+    return _normalize_layout_v7(payload, v8=True)
+
+
 _SNAPSHOT_NORMALIZERS[V7_CATALOG_VERSION] = _normalize_layout_v7
+_SNAPSHOT_NORMALIZERS[V8_CATALOG_VERSION] = _normalize_layout_v8
 
 
 def normalize_layout(payload: object) -> dict[str, Any]:
     """Validate a layout submitted for the currently published catalog."""
 
-    return _normalize_layout_v7(payload)
+    return _normalize_layout_v8(payload)
 
 
 def _upgrade_to_current_catalog(layout: dict[str, Any]) -> dict[str, Any]:
     """Project an active legacy release without changing frozen snapshots."""
 
     catalog_version = layout.get("catalog_version")
-    if catalog_version == V7_CATALOG_VERSION:
-        return _normalize_layout_v7(layout)
-    if catalog_version == V6_CATALOG_VERSION:
-        return _normalize_layout_v6(layout)
-    if catalog_version == V5_CATALOG_VERSION:
-        _normalize_layout_v5(layout)
-    elif catalog_version == V4_CATALOG_VERSION:
-        _normalize_layout_v4(layout)
-    elif catalog_version == V3_CATALOG_VERSION:
-        _normalize_layout_v3(layout)
-    elif catalog_version == V2_CATALOG_VERSION:
-        _normalize_layout_v2(layout)
-    elif catalog_version == V1_CATALOG_VERSION:
-        _normalize_layout_v1(layout)
-    else:
+    if catalog_version == V8_CATALOG_VERSION:
+        return _normalize_layout_v8(layout)
+    normalizer = _SNAPSHOT_NORMALIZERS.get(catalog_version)
+    if normalizer is None:
         raise MoldLabelLayoutError("保存的模具标签目录版本不受支持")
-    # Older layouts described a different business label.  Reusing their
-    # coordinates would preserve the very single/batch mismatch fixed by
-    # P1-112.  Validate the frozen source, then start new jobs from the
-    # approved single-label-equivalent default.  Historical print snapshots
-    # keep their version-pinned decoder and remain exactly replayable.
-    return _normalize_layout_v7(default_layout())
+    normalizer(layout)
+    # Projection for new jobs only. Persisted revisions and frozen print jobs
+    # remain byte-for-byte intact and are decoded by their original catalog.
+    return _normalize_layout_v8(default_layout())
 
 
 def _normalize_snapshot_layout(payload: object) -> dict[str, Any]:

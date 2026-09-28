@@ -19,7 +19,7 @@ def _block(start_marker: str, end_marker: str) -> str:
 def test_production_success_guide_is_destination_specific_and_short() -> None:
     guide = _block(
         '<section v-if="productionNextStepGuide.visible',
-        '<section v-if="warehouseFrameUrl"',
+        '<section v-if="warehouseFrameUrl || warehouseLedgerUrl"',
     )
     assert "已进入系统选择的真实成品位置，下一步按客户开送货单。" in guide
     assert "一楼待送区" not in guide
@@ -44,7 +44,7 @@ def test_direct_completion_shows_guide_only_after_formal_post_succeeds() -> None
 def test_component_completion_never_gets_delivery_primary_action() -> None:
     guide = _block(
         '<section v-if="productionNextStepGuide.visible',
-        '<section v-if="warehouseFrameUrl"',
+        '<section v-if="warehouseFrameUrl || warehouseLedgerUrl"',
     )
     primary_start = guide.index("下一步：开送货单")
     button_start = guide.rfind("<button", 0, primary_start)
@@ -55,7 +55,7 @@ def test_component_completion_never_gets_delivery_primary_action() -> None:
 
 
 def test_stock_batch_guide_counts_only_succeeded_rows_and_keeps_failures() -> None:
-    batch = _block("async batchConfirmProduction()", "async transferProductionCompletionToStock(row)")
+    batch = _block("async batchConfirmProduction()", "async transferProductionCompletionToStock(row,")
 
     assert "const succeededRows = [];" in batch
     assert "const failedGroups = [];" in batch
@@ -88,6 +88,7 @@ const fs = require("fs");
 const vm = require("vm");
 const source = fs.readFileSync(process.argv[2], "utf8");
 const sandbox = {
+  TMOrderReference:{component:{}},
   axios:{defaults:{},interceptors:{response:{use(){}}}},
   Vue:{createApp(definition){sandbox.definition=definition;return {component(){return this},mount(){return this}}}},
   localStorage:{getItem(){return ""},setItem(){},removeItem(){}},

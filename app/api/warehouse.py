@@ -395,6 +395,14 @@ from app.services.mold_identity import (
     normalize_mold_chinese_short_name,
     normalize_mold_label_name,
 )
+from app.services.mold_label_content import (
+    LABEL_OVERRIDE_FIELDS,
+    MoldLabelContentError,
+    apply_label_overrides,
+    canonical_label_overrides,
+    normalize_label_override_text,
+    parse_label_overrides,
+)
 from app.services.mold_label_layout import (
     MoldLabelLayoutConflict,
     MoldLabelLayoutError,
@@ -1453,6 +1461,27 @@ class MoldCustomerAssociationPayload(BaseModel):
     display_order: Literal[1, 2] | None = None
 
 
+class MoldLabelOverridesPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_identity: str | None = Field(default=None, max_length=200)
+    product_name: str | None = Field(default=None, max_length=250)
+    report_specification: str | None = Field(default=None, max_length=200)
+    cutting_mode: str | None = Field(default=None, max_length=100)
+    remarks: str | None = Field(default=None, max_length=500)
+
+    @field_validator(*LABEL_OVERRIDE_FIELDS)
+    @classmethod
+    def normalize_fields(cls, value: str | None, info) -> str | None:
+        try:
+            return normalize_label_override_text(value, field=info.field_name)
+        except MoldLabelContentError as error:
+            raise ValueError(str(error)) from error
+
+    def as_dict(self) -> dict[str, str | None]:
+        return {field: getattr(self, field) for field in LABEL_OVERRIDE_FIELDS}
+
+
 class MoldToolPayload(BaseModel):
     # mold_code remains optional for compatibility with older API clients.
     # The warehouse UI sends customer_initials and lets the server allocate it.
@@ -1461,6 +1490,7 @@ class MoldToolPayload(BaseModel):
     mold_name: str | None = Field(default=None, max_length=200)
     label_name: str | None = Field(default=None, max_length=200)
     chinese_short_name: str | None = Field(default=None, max_length=100)
+    label_overrides: MoldLabelOverridesPayload | None = None
     customers: list[MoldCustomerAssociationPayload] | None = Field(
         default=None,
         max_length=50,
@@ -1505,6 +1535,7 @@ class MoldToolPayload(BaseModel):
             for value in (
                 self.label_name,
                 self.chinese_short_name,
+                self.label_overrides,
                 self.customers,
                 self.expected_version,
                 self.idempotency_key,
@@ -18852,6 +18883,10 @@ def _mold_master_request_hash(
         "rack_location": payload.rack_location,
         "remarks": payload.remarks,
     }
+    # Omit the new field entirely for legacy requests.  Their already-issued
+    # idempotency keys must keep the exact request hash across this release.
+    if payload.label_overrides is not None:
+        canonical["label_overrides"] = payload.label_overrides.as_dict()
     return hashlib.sha256(
         json.dumps(
             canonical,
@@ -19022,6 +19057,7 @@ def _mold_binding_dict(row: MoldTool, product: Product) -> dict:
         "product_code": product.product_code,
         "product_name": product.product_name,
         "customer_material_code": product.customer_material_code,
+        "version": product.version,
         "specification": " × ".join(
             str(round(value))
             for value in (product.length_mm, product.width_mm, product.height_mm)
@@ -19109,6 +19145,14 @@ def _mold_tool_dict(
         "display_name": display_name,
         "label_name": row.label_name,
         "chinese_short_name": row.chinese_short_name,
+        # A restricted customer scope may read the mold row, but must not see
+        # an administrator's label-only free text for another linked customer.
+        # The edit preview itself is limited to unrestricted accounts.
+        "label_overrides": (
+            parse_label_overrides(getattr(row, "label_overrides_json", None))
+            if allowed_customer_ids is None
+            else {field: None for field in LABEL_OVERRIDE_FIELDS}
+        ),
         "identity_status": row.identity_status,
         "identity_ready": row.identity_status == "frozen",
         "identity_issue": (
@@ -19360,6 +19404,7 @@ def _mold_tools_query(
                     or_(
                         Product.product_code.like(product_pattern),
                         Product.customer_material_code.like(product_pattern),
+                        Product.product_name.like(product_pattern),
                     ),
                 )
             )
@@ -19371,7 +19416,6 @@ def _mold_tools_query(
             MoldTool.rack_location.like(f"%{normalized_rack_location}%")
         )
     if keyword:
-        pattern = f"%{keyword}%"
         linked_scope_filters = []
         if allowed_customer_ids is not None:
             linked_scope_filters.append(
@@ -19382,68 +19426,80 @@ def _mold_tools_query(
             if allowed_customer_ids is not None
             else []
         )
-        linked_molds = (
-            select(Product.mold_tool_id)
-            .join(Customer, Customer.id == Product.customer_id)
-            .where(
-                Product.mold_tool_id.is_not(None),
-                *product_state_filters,
-                *linked_scope_filters,
+        # A word may match any operational identity field, while multiple
+        # words narrow the same single search box.  Named filters above remain
+        # independent AND conditions.
+        keyword_clauses = []
+        for token in re.split(r"\s+", keyword):
+            if not token:
+                continue
+            pattern = f"%{token}%"
+            linked_molds = (
+                select(Product.mold_tool_id)
+                .join(Customer, Customer.id == Product.customer_id)
+                .where(
+                    Product.mold_tool_id.is_not(None),
+                    *product_state_filters,
+                    *linked_scope_filters,
+                    or_(
+                        Product.product_code.like(pattern),
+                        Product.customer_material_code.like(pattern),
+                        Product.product_name.like(pattern),
+                        Customer.name.like(pattern),
+                        Customer.chinese_short_name.like(pattern),
+                        Customer.customer_code.like(pattern),
+                    ),
+                )
+            )
+            associated_molds = (
+                select(MoldToolCustomer.mold_tool_id)
+                .join(Customer, Customer.id == MoldToolCustomer.customer_id)
+                .where(
+                    *(
+                        [MoldToolCustomer.customer_id.in_(allowed_customer_ids)]
+                        if allowed_customer_ids is not None
+                        else []
+                    ),
+                    or_(
+                        Customer.name.like(pattern),
+                        Customer.chinese_short_name.like(pattern),
+                        Customer.customer_code.like(pattern),
+                    ),
+                )
+            )
+            keyword_clauses.append(
                 or_(
-                    Product.product_code.like(pattern),
-                    Product.customer_material_code.like(pattern),
-                    Product.product_name.like(pattern),
-                    Customer.name.like(pattern),
-                ),
+                    MoldTool.mold_code.like(pattern),
+                    MoldTool.mold_name.like(pattern),
+                    MoldTool.label_name.like(pattern),
+                    MoldTool.chinese_short_name.like(pattern),
+                    MoldTool.rack_location.like(pattern),
+                    MoldTool.remarks.like(pattern),
+                    MoldTool.id.in_(linked_molds),
+                    MoldTool.id.in_(associated_molds),
+                    *(
+                        [
+                            MoldTool.id.in_(
+                                select(MoldToolCustomer.mold_tool_id).where(
+                                    MoldToolCustomer.customer_id.in_(legacy_customer_ids)
+                                )
+                            ),
+                            MoldTool.id.in_(
+                                select(Product.mold_tool_id).where(
+                                    Product.mold_tool_id.is_not(None),
+                                    Product.deleted_at.is_(None),
+                                    Product.is_active.is_(True),
+                                    Product.customer_id.in_(legacy_customer_ids),
+                                )
+                            ),
+                        ]
+                        if legacy_customer_ids
+                        else []
+                    ),
+                )
             )
-        )
-        associated_molds = (
-            select(MoldToolCustomer.mold_tool_id)
-            .join(Customer, Customer.id == MoldToolCustomer.customer_id)
-            .where(
-                *(
-                    [MoldToolCustomer.customer_id.in_(allowed_customer_ids)]
-                    if allowed_customer_ids is not None
-                    else []
-                ),
-                or_(
-                    Customer.name.like(pattern),
-                    Customer.chinese_short_name.like(pattern),
-                    Customer.customer_code.like(pattern),
-                ),
-            )
-        )
-        query = query.where(
-            or_(
-                MoldTool.mold_code.like(pattern),
-                MoldTool.mold_name.like(pattern),
-                MoldTool.label_name.like(pattern),
-                MoldTool.chinese_short_name.like(pattern),
-                MoldTool.rack_location.like(pattern),
-                MoldTool.remarks.like(pattern),
-                MoldTool.id.in_(linked_molds),
-                MoldTool.id.in_(associated_molds),
-                *(
-                    [
-                        MoldTool.id.in_(
-                            select(MoldToolCustomer.mold_tool_id).where(
-                                MoldToolCustomer.customer_id.in_(legacy_customer_ids)
-                            )
-                        ),
-                        MoldTool.id.in_(
-                            select(Product.mold_tool_id).where(
-                                Product.mold_tool_id.is_not(None),
-                                Product.deleted_at.is_(None),
-                                Product.is_active.is_(True),
-                                Product.customer_id.in_(legacy_customer_ids),
-                            )
-                        ),
-                    ]
-                    if legacy_customer_ids
-                    else []
-                ),
-            )
-        )
+        if keyword_clauses:
+            query = query.where(and_(*keyword_clauses))
     return query, allowed_customer_ids
 
 
@@ -19598,6 +19654,36 @@ def get_mold_tool_detail(
     )
     result["timeline"] = archive["timeline"]
     return result
+
+
+@router.get("/molds/{mold_id}/bound-products")
+def list_mold_bound_products(
+    mold_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return current bindable rows without requiring label-print eligibility."""
+
+    allowed_customer_ids = _mold_customer_scope(user, db)
+    row = db.scalar(
+        select(MoldTool)
+        .options(
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            ),
+            selectinload(MoldTool.products).selectinload(Product.customer),
+            selectinload(MoldTool.products).selectinload(Product.material),
+        )
+        .where(MoldTool.id == mold_id)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="模具不存在")
+    _require_mold_customer_scope(row, allowed_customer_ids)
+    products = _visible_mold_products(row, allowed_customer_ids)
+    return {
+        "mold": _mold_tool_dict(row, allowed_customer_ids),
+        "items": [_mold_binding_dict(row, product) for product in products],
+    }
 
 
 @router.get("/molds/by-map-area")
@@ -20265,6 +20351,63 @@ def _label_identity(row: MoldTool, products: list[Product]) -> str:
     return f"{customer_name}{_label_mold_number(row, products)}"
 
 
+def _label_display_report_specification(products: list[Product]) -> str:
+    values = _label_dimension_rows(products, "report_specification")
+    complete = _ordered_label_values([value for value in values if value])
+    missing = any(not value for value in values)
+    if not complete:
+        return "待完善"
+    if missing:
+        return " / ".join([*complete, "部分尺寸未填"])
+    return " / ".join(complete)
+
+
+def _label_display_cutting_mode(products: list[Product]) -> str:
+    # The legacy normalizer fills blank input with "一开一" for old labels.
+    # V8 editor defaults must instead surface missing source facts.
+    values = [
+        normalize_cutting_mode(product.default_cutting_mode)
+        if str(product.default_cutting_mode or "").strip()
+        else ""
+        for product in products
+    ]
+    complete = _ordered_label_values([value for value in values if value])
+    missing = any(not value for value in values)
+    if not complete:
+        return "待完善"
+    if missing:
+        return " / ".join([*complete, "部分开料未填"])
+    return " / ".join(complete)
+
+
+def _mold_label_auto_fields(row: MoldTool, products: list[Product]) -> dict[str, str]:
+    product_names = _ordered_label_values(
+        [str(product.product_name or "").strip() for product in products]
+    )
+    return {
+        "display_identity": _label_identity(row, products),
+        "product_name": " / ".join(product_names) if product_names else "待完善",
+        "report_specification": _label_display_report_specification(products),
+        "cutting_mode": _label_display_cutting_mode(products),
+        "remarks": "",
+    }
+
+
+def _mold_label_content_projection(row: MoldTool, products: list[Product]) -> dict:
+    overrides = parse_label_overrides(row.label_overrides_json)
+    auto_fields = _mold_label_auto_fields(row, products)
+    effective = apply_label_overrides(auto_fields, overrides)
+    return {
+        "label_overrides": overrides,
+        "label_auto_fields": auto_fields,
+        "label_display_identity": effective["display_identity"],
+        "label_display_product_name": effective["product_name"],
+        "label_display_report_specification": effective["report_specification"],
+        "label_display_cutting_mode": effective["cutting_mode"],
+        "label_display_remarks": effective["remarks"],
+    }
+
+
 def _ordered_label_values(values: list[str]) -> list[str]:
     result: list[str] = []
     for value in values:
@@ -20594,6 +20737,8 @@ def _mold_label_dict(
     row: MoldTool,
     allowed_customer_ids: set[int] | None,
     template_version: str = MOLD_LABEL_TEMPLATE_40X30,
+    *,
+    preview_only: bool = False,
 ) -> dict:
     products = _visible_mold_products(row, allowed_customer_ids)
     if not products and row.identity_status == "frozen":
@@ -20636,13 +20781,15 @@ def _mold_label_dict(
         products,
         template_version,
     )
-    if printability_error:
+    if printability_error and not preview_only:
         raise HTTPException(status_code=409, detail=printability_error)
     result = {
         "mold_code": row.mold_code,
         "rack_location": row.rack_location,
         "location_guide": basics["location_guide"],
         "is_active": row.is_active,
+        "printable": printability_error is None,
+        "printability_error": printability_error,
         "product_count": len(products),
         "label_identity": _label_identity(row, products),
         "label_customer_name": _label_customer(row, products)[0],
@@ -20720,6 +20867,7 @@ def _mold_label_dict(
                 "label_rack_location": _label_rack_location(row.rack_location),
             }
         )
+        result.update(_mold_label_content_projection(row, products))
     return result
 
 
@@ -22485,6 +22633,59 @@ def get_mold_label(
     return result
 
 
+@router.get("/molds/{mold_id}/label-preview")
+def get_mold_label_preview(
+    mold_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read),
+) -> dict:
+    """Return the current V8 label projection without registering a print job."""
+
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Vary"] = "Cookie"
+    row = db.scalar(
+        select(MoldTool)
+        .options(
+            selectinload(MoldTool.customer_links).selectinload(
+                MoldToolCustomer.customer
+            ),
+            selectinload(MoldTool.products).selectinload(Product.customer),
+            selectinload(MoldTool.products).selectinload(Product.material),
+        )
+        .where(MoldTool.id == mold_id)
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="模具不存在")
+    allowed_customer_ids = _mold_customer_scope(user, db)
+    if allowed_customer_ids is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="实体模具标签仅允许全客户范围的仓库账号预览",
+        )
+    _require_mold_customer_scope(row, allowed_customer_ids)
+    try:
+        label_layout = effective_mold_label_layout(db)
+    except MoldLabelLayoutError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    result = _mold_label_dict(
+        row,
+        allowed_customer_ids,
+        MOLD_LABEL_TEMPLATE_80X40,
+        preview_only=True,
+    )
+    result.update(
+        {
+            "row": _mold_tool_dict(row, allowed_customer_ids),
+            "label_layout": label_layout,
+            "print_job": None,
+            "preview_only": True,
+        }
+    )
+    return result
+
+
 @router.get("/molds/code-preview")
 def preview_mold_code(
     mold_name: str = Query(min_length=1, max_length=200),
@@ -22613,6 +22814,11 @@ def create_mold_tool(
                     mold_name=display_name,
                     label_name=normalize_mold_label_name(payload.label_name),
                     chinese_short_name=chinese_short_name,
+                    label_overrides_json=(
+                        canonical_label_overrides(payload.label_overrides.as_dict())
+                        if payload.label_overrides is not None
+                        else None
+                    ),
                     identity_status="frozen",
                     version=1,
                     rack_location=payload.rack_location,
@@ -22670,6 +22876,9 @@ def create_mold_tool(
                             for item in (payload.customers or [])
                             if item.display_order is not None
                         ],
+                        "label_overrides": parse_label_overrides(
+                            row.label_overrides_json
+                        ),
                         "idempotency_key": payload.idempotency_key,
                     },
                 )
@@ -22714,6 +22923,7 @@ def create_mold_tool(
                 "customer_initials",
                 "label_name",
                 "chinese_short_name",
+                "label_overrides",
                 "customers",
                 "expected_version",
                 "idempotency_key",
@@ -22788,6 +22998,7 @@ def update_mold_tool(
         "display_name": _mold_display_name(row, None),
         "label_name": row.label_name,
         "chinese_short_name": row.chinese_short_name,
+        "label_overrides": parse_label_overrides(row.label_overrides_json),
         "customers": [
             {
                 "customer_id": link.customer_id,
@@ -22908,6 +23119,7 @@ def update_mold_tool(
             "rack_location",
             "label_name",
             "chinese_short_name",
+            "label_overrides",
             "customers",
             "expected_version",
             "idempotency_key",
@@ -22922,6 +23134,10 @@ def update_mold_tool(
     if formal_identity:
         row.label_name = normalize_mold_label_name(payload.label_name)
         row.chinese_short_name = formal_chinese_short_name
+        if payload.label_overrides is not None:
+            row.label_overrides_json = canonical_label_overrides(
+                payload.label_overrides.as_dict()
+            )
         row.mold_name = formal_display_name or row.mold_name
         row.identity_status = "frozen"
         _replace_mold_customer_links(
@@ -22955,6 +23171,9 @@ def update_mold_tool(
                     "display_name": row.mold_name,
                     "label_name": row.label_name,
                     "chinese_short_name": row.chinese_short_name,
+                    "label_overrides": parse_label_overrides(
+                        row.label_overrides_json
+                    ),
                     "customers": [
                         {
                             "customer_id": item.customer_id,
@@ -23336,7 +23555,11 @@ def search_template_locations(
                 MoldTool.mold_code.like(pattern),
                 MoldTool.mold_name.like(pattern),
                 MoldTool.rack_location.like(pattern),
+                MoldTool.label_name.like(pattern),
+                MoldTool.chinese_short_name.like(pattern),
                 Customer.name.like(pattern),
+                Customer.chinese_short_name.like(pattern),
+                Customer.customer_code.like(pattern),
             ),
         )
         .order_by(Customer.name, Product.product_code, Product.id)

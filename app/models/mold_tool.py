@@ -75,6 +75,7 @@ class MoldTool(Base):
     mold_name: Mapped[str] = mapped_column(String(200), nullable=False)
     label_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     chinese_short_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    label_overrides_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     identity_status: Mapped[str] = mapped_column(
         String(20), default="legacy_unset", server_default="legacy_unset", nullable=False
     )

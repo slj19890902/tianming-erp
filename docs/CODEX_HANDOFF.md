@@ -5980,3 +5980,5 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 - 2026-09-28：货架位置标签短横线分隔v528已发布，源码873fd22b；保留v527模具标签改动，head ed0928ml无迁移。见docs/release_reports/RACK_LABEL_SEPARATORS_20260928.md，待纸面验收。
 
 - 2026-09-28：仓库地图简洁布局v529已发布，源码81722ace；导航与工具栏压缩，默认地图全宽，搜索结果按需置于右侧，货架收起后保留查询与地图选中。head ed0928ml无迁移，见docs/release_reports/WAREHOUSE_MAP_COMPACT_UI_20260928.md，待管理员页面验收。
+
+- 2026-09-28：货架聚焦蓝色辅助点清理v530已发布，功能源码b4fd304f；打开货架正视图时隐藏重复的逻辑库位锚点，保留货架高亮、点击区域、搜索与库存数据，收起后恢复普通地图显示。head ed0928ml无迁移，见docs/release_reports/WAREHOUSE_RACK_BLUE_DOTS_20260928.md，待管理员页面验收。

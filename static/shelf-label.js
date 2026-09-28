@@ -3,12 +3,13 @@ const ids = (params.get('location_ids') || params.get('location_id') || '').spli
 const lot = params.get('lot_id');
 const h = value => String(value ?? '').replace(/[&<>"']/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]));
 const $ = id => document.getElementById(id);
-const productAddress = row => [row.compact_title ?? row.print_title ?? row.title, row.compact_position ?? row.print_position ?? row.position].filter(Boolean).join(' ');
+const productAddress = row => [row.compact_title ?? row.print_title ?? row.title, String(row.compact_position ?? row.print_position ?? row.position ?? '').replace(/层\s+(?=\d+格)/g, '层-')].filter(Boolean).join('-');
+const locationTitle = row => String(row.title ?? '') + (row.position ? '-' : '');
 let busy = false;
 $('contentControl').hidden = Boolean(lot);
 function label(row) {
   if (!lot && $('labelContent').value === 'rack') return `<article class="label"><div class="rack-only"><h1 class="fit">${h(row.rack_label)}</h1><img src="${h(row.rack_qr_data_url)}" alt="扫码查看整架"></div></article>`;
-  const heading = `<div><h1 class="fit">${h(row.title)}</h1><strong class="fit">${h(row.position)}</strong></div><img src="${h(row.qr_data_url)}" alt="手机查询二维码">`;
+  const heading = `<div><h1 class="fit">${h(locationTitle(row))}</h1><strong class="fit">${h(row.position)}</strong></div><img src="${h(row.qr_data_url)}" alt="手机查询二维码">`;
   if (!row.product) return `<article class="label"><div class="location">${heading}</div></article>`;
   const p = row.product;
   return `<article class="label"><div class="product-layout"><div class="product-details"><div class="product-head"><h1 class="fit">${h(productAddress(row))}</h1></div><div class="fields">${[['客户',p.customer],['编码',p.code],['品名',p.name],['规格',p.specification]].map(([key,value]) => `<div class="field"><span>${key}：</span><span class="value fit ${key==='编码'?'code':key==='客户'?'customer':''}">${h(value)}</span></div>`).join('')}</div></div><img class="product-qr" src="${h(row.qr_data_url)}" alt="手机查询二维码"></div></article>`;
@@ -40,7 +41,7 @@ async function rasterLabel(row, rackOnly) {
     text(row.rack_label, 2, 12, 46, 36, true);
     ctx.drawImage(qr, 50, 6, 28, 28);
   } else if (!row.product) {
-    text(row.title, 2, 7, 46, 19, true);
+    text(locationTitle(row), 2, 7, 46, 19, true);
     text(row.position, 2, 23, 46, 20, true);
     ctx.drawImage(qr, 50, 6, 28, 28);
   } else {

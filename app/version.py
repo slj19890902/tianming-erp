@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.527"
-APP_VERSION_NAME = "模具标签双编码与侧面识别"
+APP_VERSION = "v0.22.528"
+APP_VERSION_NAME = "货架标签位置分隔"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5077,3 +5077,7 @@ APP_CHANGELOG = [*(f"v0.22.526：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["40×80模具标签首行大编码，侧面15mm区域再次显示完整编码、客户与原内容。", "位置与开数同行，片料尺寸带前缀，多款尺寸对应客户与编码；右侧15mm手机二维码保留。", "历史标签作业与40×30版式不变，无数据库迁移。"]
 APP_VERIFICATION_STEPS = ["仓库→模具→打印标签，选择40×80并新登记打印，核对上下两处存货编码。", "先试打一张贴在15mm木板侧面，核对中间编码、客户和原内容可见，并手机扫码。"]
 APP_CHANGELOG = [*(f"v0.22.527：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["货架商品标签与每格标签用短横线分隔货架号、层数和格数，预览与实际打印一致。"]
+APP_VERIFICATION_STEPS = ["刷新后重新打开货架标签打印，核对R013-2层-2格等位置格式；整架标签仍仅显示货架号与二维码。"]
+APP_CHANGELOG = [*(f"v0.22.528：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

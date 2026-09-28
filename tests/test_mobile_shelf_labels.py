@@ -14,8 +14,8 @@ from app.services.mobile_shelf_labels import readable_address, product_key, mobi
 
 def test_pdf_print_address_uses_area_and_human_rack_not_internal_code():
     result = print_address(dict(display_path="三楼·D02·A·2层·3格", level_no=2, slot_no=3))
-    assert result == dict(print_title="D02-A架", print_floor="三楼", print_position="02层 03格",
-                         compact_title="A", compact_position="2层 3格")
+    assert result == dict(print_title="D02-A架", print_floor="三楼", print_position="02层-03格",
+                         compact_title="A", compact_position="2层-3格")
     assert print_address(dict(display_path="三楼·北货架G1·G1·2层·1格", level_no=2, slot_no=1))["print_title"] == "北货架G1-G1架"
     assert print_address(dict(display_path="三楼·D02·A架·2层·3格", level_no=2, slot_no=3))["print_title"] == "D02-A架"
     with pytest.raises(HTTPException):
@@ -25,7 +25,7 @@ def test_pdf_print_address_uses_area_and_human_rack_not_internal_code():
 def test_product_label_compact_address_keeps_rack_identity_and_location_modes():
     result = print_address(dict(display_path="二楼·C货架·R013架·02层·02格", level_no=2, slot_no=2))
     assert result['compact_title'] == 'R013'
-    assert result['compact_position'] == '2层 2格'
+    assert result['compact_position'] == '2层-2格'
     assert result['print_title'] == 'C货架-R013架'
     assert result['print_floor'] == '二楼'
     ground = print_address(dict(display_path="一楼·成品待送区"))
@@ -107,7 +107,7 @@ def test_scan_and_print_are_lightweight_and_product_specific():
     assert "data.location?.id" in scan
     assert "warehouseTwin" not in scan
     ui=(root/"factory_twin/frontend/src/WarehouseTwinApp.tsx").read_text(encoding="utf-8")
-    assert "&lot_id=${selectedItem.lot_id}" in ui
+    assert "&lot_id=${encodeURIComponent(lotId)}" in ui
     assert 'className="shelf-position-print"' in ui
 
 

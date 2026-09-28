@@ -96,11 +96,11 @@ def print_address(label):
         floor, area, rack = head[0], head[1], head[2]
         rack = rack if rack.endswith("架") else rack + "架"
         return dict(print_title=f"{area}-{rack}", print_floor=floor,
-                    print_position=position.replace("-", " "),
+                    print_position=position,
                     compact_title=rack.removesuffix("架"),
-                    compact_position=f"{int(label['level_no'])}层 {int(label['slot_no'])}格")
-    return dict(print_title=title, print_floor="", print_position=position.replace("-", " "),
-                compact_title=title, compact_position=position.replace("-", " "))
+                    compact_position=f"{int(label['level_no'])}层-{int(label['slot_no'])}格")
+    return dict(print_title=title, print_floor="", print_position=position,
+                compact_title=title, compact_position=position)
 
 
 def product_fields(db, lot):

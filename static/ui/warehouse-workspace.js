@@ -14,7 +14,7 @@
   function install(app) {
     app.mixin({
       data() { return this.$parent ? {} : {warehouseView:'map', warehouseLedgerUrl:'', warehouseLedgerTab:'finished',
-        warehouseContext:{q:''}, warehouseNavigationError:'', warehouseNavigating:false}; },
+        warehouseContext:{q:'',search_floor:null}, warehouseNavigationError:'', warehouseNavigating:false}; },
       mounted() { if (!this.$parent) global.addEventListener('message', this.acceptWarehouseWorkspaceMessage); },
       beforeUnmount() { if (!this.$parent) { global.removeEventListener('message', this.acceptWarehouseWorkspaceMessage); this.resetWarehouseWorkspace(); } },
       watch:{
@@ -22,6 +22,13 @@
         uiMode() { this.sendWarehouseActivation('map'); this.sendWarehouseActivation('ledger'); },
       },
       methods:{
+        warehouseStocktakeVisible() { return this.hasPermission('warehouse.stocktake.view') || this.hasPermission('warehouse.stocktake.review'); },
+        leaveWarehouseWorkspaceUrl(page) {
+          const url = new URL(global.location.href);
+          url.searchParams.set('page',page);
+          for (const key of [...url.searchParams.keys()]) if (key.startsWith('warehouse_')) url.searchParams.delete(key);
+          global.history.replaceState(global.history.state,'',url.pathname + url.search + url.hash);
+        },
         warehouseNavigationMenus(eligible) {
           const menus = this.applyEffectiveLayout('menus',eligible);
           const warehouse = eligible.find(item => item.key === 'warehouse');
@@ -41,7 +48,7 @@
           this._warehousePending?.finish(false);
           this._warehousePending = null; this._warehouseReady = {};
           this._warehouseActivation = {}; this.warehouseLedgerUrl = ''; this.warehouseFrameUrl = '';
-          this.warehouseContext = {q:''}; this.warehouseNavigationError = ''; this.warehouseView = 'map';
+          this.warehouseContext = {q:'',search_floor:null}; this.warehouseNavigationError = ''; this.warehouseView = 'map';
         },
         initializeWarehouseWorkspace(target = '') {
           if (!this.pageAllowed('warehouse')) return;
@@ -52,7 +59,9 @@
             let saved = 'map';
             try { saved = global.localStorage.getItem('tm-warehouse-view:' + this.user?.id) || 'map'; } catch (_) {}
             const requested = query.get('warehouse_view');
-            const view = ['map','list'].includes(requested) ? requested : saved;
+            const legacyMapIntent = ['2d','25d'].includes(requested) || ['warehouse_floor','warehouse_mode','warehouse_action'].some(key => query.has(key));
+            const display = query.get('warehouse_display') || requested;
+            const view = legacyMapIntent ? 'map' : ['map','list'].includes(display) ? display : saved;
             if (view === 'list') initial = '/warehouse-ledger.html?tab=finished';
             else {
               const floor = String(query.get('warehouse_floor') || '3F').toUpperCase();
@@ -72,6 +81,11 @@
         activateWarehouseRoute(value) {
           const next = route(value, global.location.origin);
           if (!next || !this.pageAllowed('warehouse')) return false;
+          if (next.view === 'ledger' && next.tab === 'stocktake_review' && !this.warehouseStocktakeVisible()) {
+            this.warehouseNavigationError = '当前账号没有盘点记录查看权限';
+            if (!this.warehouseFrameUrl && !this.warehouseLedgerUrl) this.warehouseFrameUrl = '/warehouse.html?embedded=1';
+            return false;
+          }
           this.warehouseNavigationError = ''; this.warehouseView = next.view;
           if (next.view === 'ledger') this.warehouseLedgerTab = next.tab;
           this._warehouseActivation = {...this._warehouseActivation,[next.view]:next.url};
@@ -90,6 +104,7 @@
         async chooseWarehouseView(view, tab = 'finished') {
           const params = new URLSearchParams(view === 'map' ? {} : {tab});
           if ((view === 'map' || ['finished','semi_finished'].includes(tab)) && this.warehouseContext.q !== undefined) params.set('q',this.warehouseContext.q);
+          if ((view === 'map' || ['finished','semi_finished'].includes(tab)) && this.warehouseContext.search_floor) params.set('search_floor',this.warehouseContext.search_floor);
           const target = (view === 'map' ? '/warehouse.html' : '/warehouse-ledger.html') + '?' + params;
           if (await this.checkWarehouseNavigation(target)) this.activateWarehouseRoute(target);
         },
@@ -131,7 +146,12 @@
             const first = data.ready && !this._warehouseReady?.[view];
             this._warehouseReady = {...this._warehouseReady,[view]:Boolean(data.ready || this._warehouseReady?.[view])};
             if (view === this.warehouseView) {
-              if ((view === 'map' || ['finished','semi_finished'].includes(data.tab)) && typeof data.q === 'string') this.warehouseContext = {q:data.q.slice(0,500)};
+              if (view === 'map' || ['finished','semi_finished'].includes(data.tab)) {
+                if (typeof data.q === 'string') this.warehouseContext = {...this.warehouseContext,q:data.q.slice(0,500)};
+                if (['ALL','1F','3F','4F','UNLOCATED'].includes(data.search_floor) && (data.scope_changed || !this.warehouseContext.search_floor)) {
+                  this.warehouseContext = {...this.warehouseContext,search_floor:data.search_floor};
+                }
+              }
               if (view === 'ledger' && typeof data.tab === 'string') this.warehouseLedgerTab = data.tab;
             }
             if (first) this.sendWarehouseActivation(view);

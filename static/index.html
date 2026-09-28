@@ -3160,7 +3160,7 @@
         <header class="topbar">
           <div class="brand"><img class="brand-logo" src="/static/assets/logo.png" alt="天明包装ERP" /><span>天明包装ERP</span></div>
           <div class="top-actions">
-            <details v-if="activePage==='warehouse'" class="warehouse-top-overview"><summary>库存概况<span v-if="warehouseTwinMetrics.unlocated_finished || warehouseTwinMetrics.column_conflicts" class="status warning">需处理 {{ warehouseTwinMetrics.unlocated_finished + warehouseTwinMetrics.column_conflicts }}</span></summary><div class="warehouse-top-metrics" aria-label="仓库当前楼层状态">
+            <details v-if="activePage==='warehouse' && warehouseView==='map'" class="warehouse-top-overview"><summary>{{ warehouseTwinFloor }} 地图概况<span v-if="warehouseTwinMetrics.unlocated_finished || warehouseTwinMetrics.column_conflicts" class="status warning">需处理 {{ warehouseTwinMetrics.unlocated_finished + warehouseTwinMetrics.column_conflicts }}</span></summary><div class="warehouse-top-metrics" aria-label="仓库当前楼层状态">
               <span><b>{{ warehouseTwinMetrics.active_lots }}</b>有效批次</span>
               <span><b>{{ warehouseTwinMetrics.occupied_locations }}</b>占用库位</span>
               <span><b>{{ warehouseTwinMetrics.mapped_locations }}</b>地图库位</span>
@@ -3294,7 +3294,7 @@
                   <button type="button" :class="['btn',{primary:warehouseView==='map'}]" :aria-pressed="warehouseView==='map'" :disabled="warehouseNavigating" @click="chooseWarehouseView('map')">仓库地图</button>
                   <button type="button" :class="['btn',{primary:warehouseView==='ledger' && warehouseLedgerTab==='finished'}]" :aria-pressed="warehouseView==='ledger' && warehouseLedgerTab==='finished'" :disabled="warehouseNavigating" @click="chooseWarehouseView('ledger','finished')">库存列表</button>
                   <button type="button" :class="['btn',{primary:warehouseView==='ledger' && warehouseLedgerTab==='movements'}]" :aria-pressed="warehouseView==='ledger' && warehouseLedgerTab==='movements'" :disabled="warehouseNavigating" @click="chooseWarehouseView('ledger','movements')">库存流水</button>
-                  <button type="button" :class="['btn',{primary:warehouseView==='ledger' && warehouseLedgerTab==='stocktake_review'}]" :aria-pressed="warehouseView==='ledger' && warehouseLedgerTab==='stocktake_review'" :disabled="warehouseNavigating" @click="chooseWarehouseView('ledger','stocktake_review')">盘点记录</button>
+                  <button v-if="warehouseStocktakeVisible()" type="button" :class="['btn',{primary:warehouseView==='ledger' && warehouseLedgerTab==='stocktake_review'}]" :aria-pressed="warehouseView==='ledger' && warehouseLedgerTab==='stocktake_review'" :disabled="warehouseNavigating" @click="chooseWarehouseView('ledger','stocktake_review')">盘点记录</button>
                   <button type="button" :class="['btn',{primary:warehouseView==='ledger' && ['molds','printing_plates'].includes(warehouseLedgerTab)}]" :aria-pressed="warehouseView==='ledger' && ['molds','printing_plates'].includes(warehouseLedgerTab)" :disabled="warehouseNavigating" @click="chooseWarehouseView('ledger','molds')">模具与印版</button>
                 </div>
               </nav>
@@ -16274,6 +16274,7 @@
           },
           async go(page) {
             if (this.activePage === "warehouse" && page !== "warehouse" && !await this.checkWarehouseNavigation()) return;
+            const leavingWarehouse = this.activePage === "warehouse" && page !== "warehouse";
             if (!this.pageAllowed(page)) {
               this.showToast("当前账号没有访问该功能的权限", true);
               return;
@@ -16314,6 +16315,7 @@
               }
             }
             this.activePage = page;
+            if (leavingWarehouse) this.leaveWarehouseWorkspaceUrl(page);
             await this.loadPage(page);
           },
           async openBusinessFlowStep(step) {

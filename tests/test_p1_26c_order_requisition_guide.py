@@ -37,7 +37,7 @@ def test_compact_business_flow_uses_five_plain_language_steps_without_false_comp
 def test_order_success_guide_is_permission_scoped_and_keeps_copy_short() -> None:
     guide = _block(
         '<section v-if="orderNextStepGuide.visible',
-        '<section v-if="warehouseFrameUrl"',
+        '<section v-if="warehouseFrameUrl || warehouseLedgerUrl"',
     )
     assert "下一步去报料，核对材质和报料数量。" in guide
     assert "下一步：去报料" in guide

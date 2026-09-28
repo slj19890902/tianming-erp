@@ -33,7 +33,7 @@ def test_business_flow_replaces_duplicate_order_workbench_tabs() -> None:
 
     shell = _page(
         '<section v-if="businessFlowCurrentStep"',
-        '<section v-if="warehouseFrameUrl"',
+        '<section v-if="warehouseFrameUrl || warehouseLedgerUrl"',
     )
     assert shell.index('class="business-flow-guide"') < shell.index('class="workbench-nav"')
     assert "currentNavigationGroup && currentNavigationGroup.key!=='workbench'" in shell
@@ -92,7 +92,7 @@ def test_incoming_and_warehouse_do_not_gain_order_entry_actions() -> None:
         "<template v-else-if=\"activePage === 'production'\">",
     )
     warehouse = _page(
-        '<section v-if="warehouseFrameUrl"',
+        '<section v-if="warehouseFrameUrl || warehouseLedgerUrl"',
         "<template v-if=\"activePage === 'dashboard'\">",
     )
     for page in (incoming, warehouse):

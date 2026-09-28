@@ -4,3 +4,12 @@
 .warehouse-account-menu > div { display:grid; gap:8px; }
 .warehouse-top-overview .warehouse-top-metrics { flex-direction:column; align-items:stretch; }
 .warehouse-account-menu summary:focus-visible,.warehouse-top-overview summary:focus-visible { outline:3px solid #2563eb; }
+.warehouse-workspace-nav { display:flex; flex:0 0 auto; align-items:center; gap:18px; padding:10px 14px; border-bottom:1px solid var(--line,#dce3ed); background:var(--panel,#fff); }
+.warehouse-workspace-nav > strong { font-size:18px; white-space:nowrap; }
+.warehouse-workspace-tabs { display:flex; flex-wrap:wrap; gap:6px; }
+.warehouse-workspace-tabs .btn { min-height:36px; font-size:14px; }
+.warehouse-workspace-content { flex:1 1 auto; min-height:0; display:flex; overflow:hidden; }
+.erp-enterprise-ui .warehouse-workspace-content .warehouse-shell-frame { height:100%; min-height:0; border:0; border-radius:0; }
+.warehouse-navigation-error { flex:0 0 auto; color:#9f231b; background:#fff1f0; padding:10px 14px; border-bottom:1px solid #f0b6b1; }
+.ui-large .warehouse-workspace-tabs .btn { font-size:17px; min-height:42px; }
+@media(max-width:900px) { .warehouse-workspace-nav { align-items:flex-start; gap:8px; padding:8px; } .warehouse-workspace-nav > strong { display:none; } .warehouse-workspace-tabs { gap:4px; } }

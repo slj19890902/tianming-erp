@@ -19,7 +19,7 @@ def _block(start_marker: str, end_marker: str) -> str:
 def test_requisition_success_guide_is_short_permission_scoped_and_receipt_safe() -> None:
     guide = _block(
         '<section v-if="requisitionNextStepGuide.visible',
-        '<section v-if="warehouseFrameUrl"',
+        '<section v-if="warehouseFrameUrl || warehouseLedgerUrl"',
     )
     assert "材料到厂后，再去来料入库确认实收。" in guide
     assert "材料到厂后：去来料入库" in guide
@@ -78,6 +78,7 @@ const fs = require("fs");
 const vm = require("vm");
 const source = fs.readFileSync(process.argv[2], "utf8");
 const sandbox = {
+  TMOrderReference:{component:{}},
   axios:{defaults:{},interceptors:{response:{use(){}}}},
   Vue:{createApp(definition){sandbox.definition=definition;return {component(){return this},mount(){return this}}}},
   localStorage:{getItem(){return ""},setItem(){},removeItem(){}},

@@ -155,8 +155,10 @@ def test_embedded_warehouse_shell_has_a_definite_visible_height() -> None:
     ) in ERP_INDEX
 
 
-def test_embedded_twin_opens_the_ledger_in_the_top_level_page() -> None:
-    assert '<a className="twin-ledger-link" href="/warehouse-ledger.html?tab=finished" target="_top">库存台账</a>' in SOURCE
+def test_embedded_twin_opens_the_ledger_through_the_guarded_workspace() -> None:
+    assert 'className="twin-ledger-link" href={ledgerNavigationUrl}' in SOURCE
+    assert "event.preventDefault(); requestWarehouseWorkspaceNavigation(ledgerNavigationUrl);" in SOURCE
+    assert 'type: "warehouse-workspace-navigate"' in SOURCE
     assert 'className={`warehouse-twin-shell ${embedded ? "embedded-shell" : ""}' in SOURCE
     assert ".warehouse-twin-shell.embedded-shell .twin-command-bar" in TWIN_CSS
     assert "display: none" in TWIN_CSS

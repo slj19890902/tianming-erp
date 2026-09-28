@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.524"
+APP_VERSION = "v0.22.525"
 APP_VERSION_NAME = "日常页面说明精简"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5051,6 +5051,21 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.523：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
-APP_CHANGES = ["打印预览删除重复说明，打印帮助改为工具栏ⓘ。", "采购、生产、财务和资料维护页精简常驻说明，必要帮助点击查看。"]
-APP_VERIFICATION_STEPS = ["刷新后打开送货单打印预览，查看工具栏ⓘ。", "检查日常页面说明已收起，数量、状态和异常仍直接显示。"]
+
+APP_CHANGES = [
+    "仓库成为ERP同级工作区，地图、库存列表、流水、盘点记录与模具印版在同一导航内切换，保留各自查询与页面状态。",
+    "货架查货取消搜索遮挡和格内裁切，产品标签与批次操作合并到唯一详情栏；选中货架在可见地图居中高亮，收起后保持选中。",
+    "说明改为可点击帮助，数量、单位、真实位置和异常继续直接显示；大字模式和小屏采用一致的仓库样式。",
+    "地图与列表使用真实批次和货位衔接既有操作，未确定的写入阻止离开；保留生产地图返回、权限、版本和幂等保护。",
+    "本版无数据库迁移，不自动修改库存、订单或正式空间事实，保留v522模具标签编辑与解绑功能。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新确认v0.22.524，从左侧仓库切换地图与库存列表，核对ERP导航持续显示、查询与返回状态保留。",
+    "选择有货货架，核对产品编码及数量完整可见、右侧仅一个完整标签栏，地图居中高亮；收起后仍选中同一货架。",
+    "从实际批次进入移库或盘点，核对位置、权限与结果提示；查看说明按钮及大字模式，正式操作由管理员人工验收。",
+]
 APP_CHANGELOG = [*(f"v0.22.524：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["打印预览删除重复说明，打印帮助改为工具栏ⓘ。", "采购、生产、财务和资料维护页精简常驻说明，必要帮助点击查看。", "保留已经发布的仓库工作台更新。"]
+APP_VERIFICATION_STEPS = ["刷新后打开送货单打印预览，查看工具栏ⓘ。", "检查日常页面说明已收起，数量、状态和异常仍直接显示。"]
+APP_CHANGELOG = [*(f"v0.22.525：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

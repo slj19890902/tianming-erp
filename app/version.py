@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.515"
-APP_VERSION_NAME = "新登记模具默认可见"
+APP_VERSION = "v0.22.516"
+APP_VERSION_NAME = "成套库存新订单抵扣修复"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4955,3 +4955,15 @@ APP_CHANGELOG = [*(f"v0.22.514：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["仓库模具列表默认包含未打印模具，研光、光洋已登记的新模具可直接搜索和进入标签打印；筛选项明确为包含未打印。", "保留未启用、归档、维修、客户权限和原标签打印登记规则，不改模具编号、产品绑定或位置。"]
 APP_VERIFICATION_STEPS = ["刷新仓库库存管理的模具页面，确认包含未打印默认勾选。", "按研光、光洋或存货编码查询，选择已有模具进入标签预览；实际打印由管理员操作。"]
 APP_CHANGELOG = [*(f"v0.22.515：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复导入常用箱后，实际已组装的组合成品被误判为不能抵扣父项库存而保存失败；草稿预览与保存使用相同规则。",
+    "成套库存按冻结BOM父项预占，组装子件只计算不足量，配套随单件继续保留；虚拟组合项、跨客户和版本变更保护不变。",
+    "组合品不再生成虚假的父项半成品和纸板抵扣计划；保留既有模具搜索、首页性能及Excel/PDF导入功能，无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "强制刷新确认v0.22.516，新建YL订单，导入000205输入600，核对库存抵扣后保存。",
+    "若可用库存仍为960套，保存后应预占600套、剩余360套；这600套不再重复生成组装子件生产需求。",
+    "库存被其他操作占用时以最新库存为准；实际订单保存及后续发货由管理员操作。",
+]
+APP_CHANGELOG = [*(f"v0.22.516：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

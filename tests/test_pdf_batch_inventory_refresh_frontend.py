@@ -33,6 +33,11 @@ vm.createContext(sandbox);
 vm.runInContext(script, sandbox);
 const methods = sandbox.definition.methods;
 
+if (methods.inventoryComponents({_inventory_product:{is_composite:true,box_style:'A3'}}).length !== 0)
+  throw new Error('Composite parents must not build their own paper/semi reservation plan');
+if (methods.inventoryComponents({_inventory_product:{is_composite:false,box_style:'A3'}}).join(',') !== 'cover,base')
+  throw new Error('Ordinary telescoping paper routes changed');
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }

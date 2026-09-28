@@ -387,6 +387,7 @@ def test_existing_physical_stock_reserves_customer_quantity_for_new_order(routin
 
 @pytest.mark.parametrize('receipts,expected_customer', [([199], 99), ([1, 1], 1), ([1, 2], 1)])
 def test_new_order_plan_matches_physical_stock_draft_preview(routing_app, receipts, expected_customer):
+    from app.core.time_contract import beijing_today
     from app.api.deliveries import router as delivery_router, pick_router
     routing_app.include_router(delivery_router, prefix='/api/deliveries')
     routing_app.include_router(pick_router, prefix='/api/delivery-picks')
@@ -440,7 +441,7 @@ def test_new_order_plan_matches_physical_stock_draft_preview(routing_app, receip
             lots[0].finished_detail.physical_basis_json = original_identity
             assert managed(db, item)
         delivery = client.post('/api/deliveries', json={
-            'customer_id': routing_app.state.fixture['customer_a'], 'delivery_date': '2026-09-26',
+            'customer_id': routing_app.state.fixture['customer_a'], 'delivery_date': beijing_today().isoformat(),
             'lines': [{'order_item_id': new_item_id, 'delivered_quantity': expected_customer}]})
         assert delivery.status_code == 201, delivery.text
         printed = client.get(f"/api/deliveries/{delivery.json()['id']}/print")

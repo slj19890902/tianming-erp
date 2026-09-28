@@ -14611,6 +14611,9 @@
           },
           inventoryComponents(line) {
             const product = line._inventory_product || line;
+            // Composite paper/semi stock belongs to the frozen BOM nodes;
+            // the new-order parent plan only selects complete finished sets.
+            if (product.is_composite) return [];
             const style = String(product.box_style || "").toUpperCase();
             return (style.includes("A3") || style.includes("天地盖") || (product.base_report_length_mm && product.base_report_width_mm)) ? ["cover", "base"] : ["whole"];
           },
@@ -14657,6 +14660,7 @@
             if (!state || state.loading || state.authoritative_loading) return "计算中";
             if (state.api_error || state.authoritative_error || !authority) return "待计算";
             if (authority.coverage_state === "unsupported") return "进入订单后计算";
+            if (authority.requisition_calculation_scope === "bom") return "按组件计算";
             const quantity = Math.max(Number(authority.requisition_sheet_quantity || 0), 0);
             const unit = authority.requisition_unit || "张";
             return quantity > 0 ? `${quantity} ${unit}` : `0 ${unit}`;

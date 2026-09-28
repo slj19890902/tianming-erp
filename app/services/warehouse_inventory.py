@@ -3383,6 +3383,10 @@ def finished_inventory_candidates_for_product(
         raise WarehouseInventoryError("产品不存在", 404)
     if product.customer_id != customer_id:
         raise WarehouseInventoryError("产品不属于所选客户", 409)
+    from app.models.multilevel_bom import ProductBomProfile
+    profile = db.get(ProductBomProfile, product_id)
+    if product.is_virtual_composite_parent or (profile and profile.source == "separate"):
+        return []
     from app.services.fixed_shelf_staging import held_for_staging_expression
     rows = db.scalars(
         select(InventoryLot)
@@ -3404,7 +3408,10 @@ def finished_inventory_candidates_for_product(
         .order_by(*inventory_fifo_order_columns())
     ).all()
     from app.services.bom_inventory_contract import is_body_lot
-    return [lot for lot in rows if not is_body_lot(lot)]
+    from app.services.finished_stock_identity import product_basis
+    expected = product_basis(product) if profile and product.is_composite else None
+    return [lot for lot in rows if not is_body_lot(lot)
+            and (expected is None or lot.finished_detail.physical_basis_json == expected)]
 
 
 def has_unconsumed_inventory_reservations(

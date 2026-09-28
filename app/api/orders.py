@@ -1161,6 +1161,16 @@ def _order_item_direct_semi_facts(
     )
 
 
+def _physical_bom_parent(db: Session, product: Product) -> bool:
+    from app.models.multilevel_bom import ProductBomProfile
+
+    if not is_composite_product(product):
+        return False
+    profile = db.get(ProductBomProfile, product.id)
+    return bool(profile and profile.source in {"assembled", "manufactured", "purchased"}
+                and not product.is_virtual_composite_parent)
+
+
 def _preflight_reservation_plans(
     db: Session,
     *,
@@ -1183,13 +1193,18 @@ def _preflight_reservation_plans(
             continue
         product = resolved_products[index]
         component_yields: dict[str, int] = {}
-        if is_composite_product(product):
+        physical_parent = _physical_bom_parent(db, product)
+        if is_composite_product(product) and not physical_parent:
             if plan.finished or plan.semi:
                 raise WarehouseInventoryError(
                     f"第{index}条组合品明细不能建立父项库存抵扣计划",
                     409,
                 )
             continue
+        if physical_parent and plan.semi:
+            raise WarehouseInventoryError(
+                f"第{index}条组合品半成品须按BOM实际组件抵扣，不能计入父项", 409
+            )
         for entry in [*plan.finished, *plan.semi]:
             if not entry.confirmed:
                 raise WarehouseInventoryError(
@@ -1234,6 +1249,13 @@ def _preflight_reservation_plans(
                     raise WarehouseInventoryError(
                         "成品库存与订单存货编码不一致", 409
                     )
+                if physical_parent:
+                    from app.services.finished_stock_identity import product_basis
+                    from app.services.bom_inventory_contract import is_body_lot
+                    if is_body_lot(lot) or detail.physical_basis_json != product_basis(product):
+                        raise WarehouseInventoryError(
+                            "成套库存的冻结规格或组装关系与当前产品不一致，请刷新库存候选", 409
+                        )
             else:
                 detail = lot.semi_finished_detail
                 if lot.inventory_type != "semi_finished" or detail is None:
@@ -1467,7 +1489,8 @@ def _apply_order_reservation_plans(
     for index, (item_payload, item) in enumerate(
         zip(payload_items, created_items, strict=True), start=1
     ):
-        if is_composite_product(resolved_products[index]):
+        physical_parent = _physical_bom_parent(db, resolved_products[index])
+        if is_composite_product(resolved_products[index]) and not physical_parent:
             continue
         plan = item_payload.reservation_plan
         if plan is None:
@@ -1501,8 +1524,21 @@ def _apply_order_reservation_plans(
                 allocated_boxes = int(allocated_boxes)
             if allocated_boxes <= 0:
                 continue
-            reserve_finished_inventory(
+            reserve = reserve_finished_inventory
+            bom_args = {}
+            if physical_parent:
+                from app.services.multilevel_bom_orders import read_compiled_order_bom
+                from app.services.warehouse_inventory import reserve_finished_inventory_for_bom_component
+                compiled = read_compiled_order_bom(db, item.id)
+                root = next((row for row in compiled.snapshots
+                             if row.component_product_id == item.product_id), None) if compiled else None
+                if root is None:
+                    raise WarehouseInventoryError("成套库存抵扣缺少冻结BOM父项，请刷新后重试", 409)
+                reserve = reserve_finished_inventory_for_bom_component
+                bom_args["bom_snapshot_id"] = root.id
+            reserve(
                 db,
+                **bom_args,
                 order_item_id=item.id,
                 inventory_lot_id=lot.id,
                 quantity=allocated_boxes,
@@ -4003,13 +4039,6 @@ def preview_order_inventory_draft(
         if classification_issue:
             raise HTTPException(422, f"第{index}条明细：{classification_issue}")
         products.append(product)
-        if is_composite_product(product):
-            if draft_item.reservation_plan.finished or draft_item.reservation_plan.semi:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"第{index}条组合产品不能建立父项库存抵扣计划",
-                )
-            continue
         preflight_index = len(preflight_items) + 1
         preflight_items.append(
             OrderItemCreate(
@@ -4043,7 +4072,8 @@ def preview_order_inventory_draft(
     preflight_by_line = {row.client_line_id: row for row in preflight_items}
     for draft_item, product in zip(payload.items, products, strict=True):
         order_quantity = int(draft_item.quantity)
-        if is_composite_product(product):
+        physical_parent = _physical_bom_parent(db, product)
+        if is_composite_product(product) and not physical_parent:
             response_items.append(
                 {
                     "client_line_id": draft_item.client_line_id,
@@ -4118,7 +4148,9 @@ def preview_order_inventory_draft(
         )
         cutting_mode = _draft_preview_cutting_mode(product)
         component_rows: list[dict] = []
-        for component in _draft_preview_component_specs(product):
+        # A BOM parent's paper belongs to its real production nodes. Never
+        # invent a parent sheet demand from the number of unfilled sets.
+        for component in ([] if physical_parent else _draft_preview_component_specs(product)):
             component_type = str(component["component_type"])
             pieces_per_box = int(component["pieces_per_box"])
             required_pieces = required_piece_quantity(
@@ -4211,6 +4243,8 @@ def preview_order_inventory_draft(
                 "finished_planned_quantity": planned_finished_quantity,
                 "production_required_quantity": production_required_quantity,
                 "shortage_quantity": production_required_quantity,
+                **({"requisition_calculation_scope": "bom",
+                    "message": "剩余生产与配套子件按订单BOM计算"} if physical_parent else {}),
                 "required_piece_quantity": sum(
                     int(row["required_piece_quantity"]) for row in component_rows
                 ),

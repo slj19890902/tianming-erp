@@ -33,12 +33,14 @@ vm.runInContext(js, sandbox);
 function render(overrides = {}) {
   const selected = [];
   const inspected = [];
+  const selectedLots = [];
   const tree = sandbox.WarehouseRackElevation({rack, locations, canChooseProducts: true,
     rackIndex: 0, rackCount: 1, unboundLocationCount: 0,
-    onPrevious() {}, onNext() {}, onClose() {}, onSelectLocation: id => inspected.push(id), onChooseEmptyLocation: id => selected.push(id), ...overrides});
+    onPrevious() {}, onNext() {}, onClose() {}, onRefocus() {}, onSelectLocation: id => inspected.push(id),
+    onSelectLot: (locationId, lotId) => selectedLots.push([locationId, lotId]), onChooseEmptyLocation: id => selected.push(id), ...overrides});
   function nodes(node) { return node && typeof node === "object" ? [node, ...node.children.flatMap(nodes)] : []; }
   const emptyControls = nodes(tree).filter(node => node.props.className?.includes("mold-rack-empty-spine"));
-  return {selected, inspected, emptyControls, nodes: nodes(tree)};
+  return {selected, inspected, selectedLots, emptyControls, nodes: nodes(tree)};
 }
 
 test('search highlights only matching products and exact cells, and replaces old highlights for another product', () => {
@@ -59,25 +61,17 @@ test('search highlights only matching products and exact cells, and replaces old
   assert.equal(nodes.filter(n=>n.props.className?.includes('rack-search-hit')).length,0,'ambiguous formal cells must never be marked as an exact location');
 });
 
-test('switching a search hit on the same rack updates the product label and clears previous batch expansion', () => {
-  const originalState = sandbox.useState, originalEffect = sandbox.useEffect;
-  const states = []; let index = 0;
-  sandbox.useState = initial => {
-    const slot=index++;
-    if (!(slot in states)) states[slot]=initial;
-    return [states[slot],value=>{states[slot]=typeof value==='function'?value(states[slot]):value;}];
-  };
-  sandbox.useEffect = (fn,deps) => { if (deps.length===3) fn(); };
-  const items=[{lot_id:71,product_id:7},{lot_id:72,product_id:8}];
-  try {
-    for (const item of items) {
-      index=0; states[1]=true; states[2]={oldProduct:true};
-      render({locations:[{...locations[0],items}],searchLotId:item.lot_id,searchLocationId:101,highlightedLotIds:[item.lot_id]});
-      assert.equal(states[0],item);
-      assert.equal(states[1],false);
-      assert.equal(Object.keys(states[2]).length,0);
-    }
-  } finally { sandbox.useState=originalState; sandbox.useEffect=originalEffect; }
+test('selected batch is controlled by the shared right detail and survives elevation remounts', () => {
+  const shared = {product_id: 7, customer_id: 3, inventory_type: 'finished', inventory_code: 'A',
+    product_name: '测试纸箱', box_style: '0201', is_bom_component: false, unit: 'pcs', location_id: 101};
+  const items=[{...shared,lot_id:71},{...shared,lot_id:72}];
+  for (const item of items) {
+    const {nodes} = render({locations:[{...locations[0],items}],selectedLotId:item.lot_id});
+    const selected = nodes.filter(node => node.props.className?.includes('shelf-product-label-button selected'));
+    assert.equal(selected.length, 1);
+    assert.ok(selected[0].children.flat(Infinity).some(child => child?.children?.includes(item.inventory_code)));
+  }
+  assert.doesNotMatch(component, /setSelectedItem|setExpandedProductGroups/);
 });
 
 test("cell headings and non-action content select the formal location even for read-only users", () => {
@@ -130,12 +124,12 @@ test("cell selection keeps the elevation and focuses the existing inspector with
         selectOperationalEntity: (value, origin) => actions.push(['select', value.id, origin]),
         inspectorRef: {current: {focus: () => actions.push(['focus']), scrollIntoView: () => actions.push(['scroll'])}},
         requestAnimationFrame: fn => fn(),
-        setRackFocusId: value => actions.push(['rack', value]),
+        rackFocusId: 'rack-f9', rackFocusTokenRef: {current: 4}, setCameraFocusTarget: value => actions.push(['camera', value.entity.id]),
         setLocationDetailOpen: value => actions.push(['detail', value]),
       };
       vm.runInNewContext(code + `\nselectRackLocation(${blocked === 'missing' ? 999 : 107});`, context);
       assert.deepEqual(actions, blocked === 'none'
-        ? [['select', 'erp-location-107', 'rack'], ['detail', false], ['focus'], ['scroll']]
+        ? [['select', 'erp-location-107', 'rack'], ['camera', 'rack-f9'], ['detail', false], ['focus'], ['scroll']]
         : []);
     }
   }
@@ -204,8 +198,9 @@ test("occupied cells cannot bypass permissions, blocked policy or duplicate loca
   }
 });
 
-test("carton cells prioritize code before product details and retain every batch", () => {
+test("carton cells show a readable summary while every batch remains in the shared right detail", () => {
   const items = [1, 2].map(lot_id => ({lot_id, product_id: 5, customer_id: 7, product_name: "中性内盒",
+    inventory_type: 'finished', box_style: '0201', is_bom_component: false, location_id: 101,
     specification: "400×300×200", inventory_code: "CODE-5", quantity: 15, unit: "pcs"}));
   const {nodes} = render({locations: [{...locations[0], items}]});
   const cards = nodes.filter(node => node.props.className === "shelf-product-card");
@@ -215,19 +210,18 @@ test("carton cells prioritize code before product details and retain every batch
   assert.ok(content.indexOf("中性内盒") < content.indexOf("CODE-5"));
   assert.ok(content.indexOf("400×300×200") < content.indexOf("CODE-5"));
   assert.ok(content.includes('30'));
-  assert.equal(nodes.filter(node => node.props.className === "shelf-batch-row").length, 2);
+  assert.equal(nodes.filter(node => node.props.className === "shelf-batch-row").length, 0);
   assert.equal(nodes.filter(node => node.props.className === "mold-rack-book-spines").length, 0);
   const codeRow = nodes.find(node => node.props.className === "shelf-product-code-row");
-  assert.ok(codeRow, "code and details must share a row with separate controls");
-  assert.equal(codeRow.children.filter(node => node?.type === "button").length, 2);
+  assert.ok(codeRow, "code and quantity share the readable rack summary row");
+  assert.equal(codeRow.children.filter(node => node?.type === "button").length, 1);
   const summary = nodes.find(node => node.props.className === "shelf-product-summary");
   assert.ok(summary);
-  assert.deepEqual(summary.children.map(node => node.props.className), ['shelf-product-customer','shelf-product-name','shelf-specification']);
+  assert.deepEqual(summary.children.map(node => node.props.className), ['shelf-product-customer','shelf-product-name','shelf-specification','shelf-product-batches']);
   assert.equal(codeRow.children[1].props.className, 'shelf-product-quantity');
-  const details = nodes.find(node => node.props.className === 'shelf-product-details');
-  assert.ok(!visibleText(details).includes('中性内盒'));
-  assert.ok(!visibleText(details).includes('400×300×200'));
-  assert.ok(visibleText(details).includes('首次入库'));
+  assert.equal(nodes.filter(node => node.props.className === 'shelf-product-details').length, 0);
+  const batchCount = nodes.find(node => node.props.className === 'shelf-product-batches');
+  assert.match(visibleText(batchCount), /2\s*批/);
   const heading = nodes.find(node => node.props.className === 'shelf-cell-heading' && node.children.some(child => child?.props?.className === 'shelf-cell-kind'));
   assert.ok(heading, 'single/mixed summary must be in cell heading');
 });
@@ -251,31 +245,18 @@ test("the selected empty cell opens its stocktake inspector without writing inve
   }
 });
 
-test("code opens its product label while details only toggles that product's batches", () => {
-  const original = sandbox.useState;
-  const states = []; let index = 0;
-  sandbox.useState = initial => {
-    const slot = index++;
-    if (!(slot in states)) states[slot] = initial;
-    return [states[slot], value => { states[slot] = typeof value === 'function' ? value(states[slot]) : value; }];
-  };
+test("code opens the unique right detail and cells show two readable products before an explicit view-all action", () => {
   const product = {lot_id: 71, product_id: 5, customer_id: 7, inventory_code: 'CODE-5', unit: 'pcs'};
-  const overrides = {locations: [{...locations[0], items: [product]}]};
-  const draw = () => { index = 0; return render(overrides).nodes; };
-  try {
-    let nodes = draw();
-    const toggle = nodes.find(n => n.props.className === 'shelf-product-details-toggle');
-    assert.equal(toggle.props['aria-expanded'], false);
-    toggle.props.onClick();
-    assert.equal(states[0], null, 'opening details must not select a product label');
-    nodes = draw();
-    assert.equal(nodes.find(n => n.props.className === 'shelf-product-details').props.hidden, false);
-    nodes.find(n => n.props.className?.includes('shelf-product-label-button')).props.onClick();
-    assert.equal(states[0], product);
-    assert.equal(states[1], false);
-    nodes = draw();
-    assert.equal(nodes.find(n => n.props.className === 'shelf-product-details-toggle').props['aria-expanded'], true, 'label click does not collapse details');
-    nodes.find(n => n.props.className === 'shelf-product-details-toggle').props.onClick();
-    assert.equal(draw().find(n => n.props.className === 'shelf-product-details').props.hidden, true);
-  } finally { sandbox.useState = original; }
+  const another = {...product, lot_id: 72, product_id: 6, inventory_code: 'CODE-6'};
+  const third = {...product, lot_id: 73, product_id: 7, inventory_code: 'CODE-7'};
+  const result = render({locations: [{...locations[0], items: [product, another, third]}]});
+  const code = result.nodes.find(n => n.props.className?.includes('shelf-product-label-button'));
+  code.props.onClick();
+  assert.deepEqual(result.selectedLots, [[101, 71]]);
+  const all = result.nodes.find(n => n.props.className === 'shelf-view-all-products');
+  assert.ok(all);
+  assert.match(all.children.join(''), /查看全部 3 款/);
+  all.props.onClick();
+  assert.deepEqual(result.selectedLots, [[101, 71], [101, 71]]);
+  assert.equal(result.nodes.filter(n => n.props.className === 'shelf-product-card').length, 2, 'two summaries remain readable before the whole-rack scroll surface');
 });

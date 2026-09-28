@@ -25,11 +25,14 @@ class MoldPrivateNoStoreMiddleware:
         if path.startswith("/M/"):
             return True
         prefix = "/api/warehouse/molds/"
-        suffix = "/label"
-        if not path.startswith(prefix) or not path.endswith("/label"):
+        if not path.startswith(prefix):
             return False
-        identity = path[len(prefix) : -len(suffix)].strip("/")
-        return bool(identity) and "/" not in identity
+        for suffix in ("/label-preview", "/label"):
+            if not path.endswith(suffix):
+                continue
+            identity = path[len(prefix) : -len(suffix)].strip("/")
+            return bool(identity) and "/" not in identity
+        return False
 
     @staticmethod
     def _secure_headers(message: Message) -> None:

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.524"
-APP_VERSION_NAME = "仓库工作区与货架查货整合"
+APP_VERSION = "v0.22.525"
+APP_VERSION_NAME = "日常页面说明精简"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5065,3 +5065,7 @@ APP_VERIFICATION_STEPS = [
     "从实际批次进入移库或盘点，核对位置、权限与结果提示；查看说明按钮及大字模式，正式操作由管理员人工验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.524：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["打印预览删除重复说明，打印帮助改为工具栏ⓘ。", "采购、生产、财务和资料维护页精简常驻说明，必要帮助点击查看。", "保留已经发布的仓库工作台更新。"]
+APP_VERIFICATION_STEPS = ["刷新后打开送货单打印预览，查看工具栏ⓘ。", "检查日常页面说明已收起，数量、状态和异常仍直接显示。"]
+APP_CHANGELOG = [*(f"v0.22.525：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

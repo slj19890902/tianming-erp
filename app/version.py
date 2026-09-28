@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.517"
-APP_VERSION_NAME = "送货单无价排版与尺寸单位"
+APP_VERSION = "v0.22.518"
+APP_VERSION_NAME = "生产余货抵扣订单删除修复"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = False
 
@@ -4977,3 +4977,14 @@ APP_VERIFICATION_STEPS = [
     "核对尺寸标题显示（mm），尺寸值如520×350×300不重复单位；打印及纸张效果由管理员人工验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.517：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "新订单借用旧生产批次的余货时，删除未流转订单明细可正常释放自身预占，不再误报为生产完工自动预占。",
+    "原生产订单的自动预占、完工与送货事实继续保护；来源不明、已进入后续流程及库存余额异常仍禁止释放。",
+    "保留实体组合品订单抵扣及送货单无价排版修复；无数据库迁移，不自动删除或修改历史业务。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新确认v0.22.518，打开YL新订单TM20260928001，删除未送的000132明细。",
+    "按现场最新预占核对：仅释放该明细占用余货，旧订单TM20260825003的完工和送货记录保持不变。",
+]
+APP_CHANGELOG = [*(f"v0.22.518：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

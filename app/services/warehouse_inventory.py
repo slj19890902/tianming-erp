@@ -4473,9 +4473,17 @@ def release_finished_reservation(
     if lot is None:
         raise WarehouseInventoryError("关联库存批次不存在", 409)
     if lot.source_ref_type == "production_completion" and not allow_production_reversal:
-        raise WarehouseInventoryError(
-            "生产完工自动预占属于完工事实，当前不允许手工释放", 409
-        )
+        from app.models.production import ProductionCompletion
+
+        completion = db.get(ProductionCompletion, lot.source_ref_id) if lot.source_ref_id else None
+        if completion is None or completion.order_item_id is None or reservation.order_item_id is None:
+            raise WarehouseInventoryError("库存缺少可核对的生产来源，不能释放预占", 409)
+        # Surplus from an older completion can be reserved by a NEW order.
+        # Releasing that independent reservation does not reverse production.
+        if completion.order_item_id == reservation.order_item_id:
+            raise WarehouseInventoryError(
+                "生产完工自动预占属于完工事实，当前不允许手工释放", 409
+            )
     from app.services.production_workflow import has_production_completion_facts
 
     if not allow_production_reversal and reservation.order_item_id is not None and has_production_completion_facts(

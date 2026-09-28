@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.526"
-APP_VERSION_NAME = "仓库内嵌连接修复"
+APP_VERSION = "v0.22.527"
+APP_VERSION_NAME = "模具标签双编码与侧面识别"
 APP_BUILD_DATE = "2026-09-28"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5073,3 +5073,7 @@ APP_CHANGELOG = [*(f"v0.22.525：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["修复仓库库存列表被浏览器拒绝加载，允许ERP同站点内嵌台账，继续禁止外部网站嵌入。"]
 APP_VERIFICATION_STEPS = ["刷新ERP后点击仓库，在地图与库存列表之间切换，确认不再出现拒绝连接。"]
 APP_CHANGELOG = [*(f"v0.22.526：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["40×80模具标签首行大编码，侧面15mm区域再次显示完整编码、客户与原内容。", "位置与开数同行，片料尺寸带前缀，多款尺寸对应客户与编码；右侧15mm手机二维码保留。", "历史标签作业与40×30版式不变，无数据库迁移。"]
+APP_VERIFICATION_STEPS = ["仓库→模具→打印标签，选择40×80并新登记打印，核对上下两处存货编码。", "先试打一张贴在15mm木板侧面，核对中间编码、客户和原内容可见，并手机扫码。"]
+APP_CHANGELOG = [*(f"v0.22.527：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

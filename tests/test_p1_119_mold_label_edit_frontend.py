@@ -189,8 +189,8 @@ async function scenario(present){presentAfterUnknown=present;apiCalls=[];refresh
     assert "请再次点击解绑" in result["stillBound"]["toasts"][-1]["message"]
 
 
-def test_v8_is_current_without_reclassifying_frozen_v7() -> None:
-    assert 'CURRENT_WIDE_CATALOG="p1-119-v1"' in LABEL_PAGE
+def test_edge_is_current_without_reclassifying_frozen_v7_v8() -> None:
+    assert 'CURRENT_WIDE_CATALOG="mold-edge-v1"' in LABEL_PAGE
     assert 'const V7_CATALOG_VERSION = "p1-118-v1"' in LAYOUT_JS
     assert 'const V8_CATALOG_VERSION = "p1-119-v1"' in LAYOUT_JS
     assert "dataset.truncated" in LAYOUT_JS

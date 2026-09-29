@@ -90,6 +90,14 @@ def test_hidden_material_mapping_is_not_requested_by_any_system_section() -> Non
     assert "/api/system/material-mapping" not in loader
 
 
+def test_backup_section_distinguishes_managed_restore_from_database_snapshots() -> None:
+    assert "完整备份与恢复" in INDEX
+    assert "最近完整备份创建时已验证" in INDEX
+    assert "数据库快照" in INDEX
+    assert "不能从网页直接恢复正式系统" in INDEX
+    assert "/api/system/backups/managed-status" in INDEX
+
+
 def test_pdf_template_refresh_failure_preserves_previous_visible_rows() -> None:
     loader = _method_source("async loadPdfTemplates()", "openPdfTemplateEditor")
 

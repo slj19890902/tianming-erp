@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.533"
-APP_VERSION_NAME = "货架入库错误明确反馈"
+APP_VERSION = "v0.22.534"
+APP_VERSION_NAME = "送货单窄幅打印防截断"
 APP_BUILD_DATE = "2026-09-29"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5116,3 +5116,14 @@ APP_CHANGELOG = [*(f"v0.22.532：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["货架添加货物提交失败时，在确认按钮同一区域显示具体原因，展开货架也不会隐藏反馈。", "显示服务器字段校验明细，保留失败草稿、同凭证重试和成功后清空保护；不改变库存入账规则。"]
 APP_VERIFICATION_STEPS = ["刷新仓库地图后重新填写待添加货物，点击一次确认；失败时在下方核对具体字段错误。", "成功时确认草稿清空、库存更新；此版本不代管理员新增库存。"]
 APP_CHANGELOG = [*(f"v0.22.533：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "送货单纸张总宽与可打印区域分开，默认200mm打印区、188mm正文，减少左侧空白并把右侧列及页脚收进安全范围。",
+    "新旧模板预览、分页与打印使用同一宽度；保留价格模式列布局、冻结内容和原字号，不修改业务数据或打印机驱动。",
+    "系统打印档案增加可打印区域宽度校准，保留已明确保存的旧正文校准；实际EPSON SK820需管理员试打验收。",
+]
+APP_VERIFICATION_STEPS = [
+    "另一台EPSON SK820电脑刷新确认v0.22.534，关闭旧打印页后重开YL或GLR送货单。",
+    "沿用241×139.5mm连续纸及驱动方向，缩放100%，关闭页眉页脚，先试打一张核对数量后各列、合计和签章。",
+]
+APP_CHANGELOG = [*(f"v0.22.534：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

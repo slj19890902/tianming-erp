@@ -862,20 +862,82 @@ def test_completion_transfer_chain_keeps_partial_two_level_full_move_and_consump
             quantity=6, available_quantity=6, reserved_quantity=0,
         )
         child.quantity_available = 3
-        add_location_transfer(
+        second_transfer = add_location_transfer(
             db, "lineage-second", child, grandchild,
             source_location=moved_target, target_location=final_target,
             quantity=3, available_quantity=3, reserved_quantity=0,
         )
+        second_transfer.source_version_before = 2
+        second_transfer.source_version_after = 3
         grandchild.quantity_available = 0
         grandchild.quantity_consumed = 3
-        add_movement(db, "TRANSFER-LINEAGE-CONSUME", grandchild, "consume", 3)
+        consume = add_movement(
+            db, "TRANSFER-LINEAGE-CONSUME", grandchild, "consume", 3
+        )
+        consume.before_available = 3
+        consume.after_available = 0
+        consume.before_consumed = 0
+        consume.after_consumed = 3
         db.commit()
         report = run_audit(db)
 
     codes = finding_codes(report)
     assert "P015_COMPLETION_WITHOUT_ACTIVE_FINISHED_LOT" not in codes
     assert "P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT" not in codes
+    assert not any(
+        row["evidence"].get("trace_kind") == "completion_transfer_graph_invalid"
+        for row in report["findings"]
+    )
+
+
+def test_split_completion_transfer_conserves_stock_disposition_not_direct_quantity(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "completion-transfer-split.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db, "TRANSFER-SPLIT-COMPLETION", status="pending_delivery", quantity=10
+        )
+        task = add_task(db, item)
+        add_traced_receipt(db, "TRANSFER-SPLIT-COMPLETION", order, item)
+        source_location = add_location(db, "TRANSFER-SPLIT-SOURCE")
+        target_location = add_location(db, "TRANSFER-SPLIT-TARGET")
+        completion = add_completion(
+            db, "TRANSFER-SPLIT-COMPLETION", task, item, location=source_location
+        )
+        completion.initial_disposition = "split"
+        completion.stock_quantity = 6
+        completion.direct_delivery_quantity = 4
+        completion.order_reserved_quantity = 6
+        completion.surplus_finished_quantity = 4
+        source = add_lot(
+            db, "TRANSFER-SPLIT-SOURCE", customer, product,
+            source_ref_id=completion.id, quantity_available=0,
+            location=source_location,
+        )
+        source.status = "closed"
+        target = add_lot(
+            db, "TRANSFER-SPLIT-TARGET", customer, product,
+            source_ref_id=completion.id, quantity_available=6,
+            location=target_location,
+        )
+        target.source_type = "transfer"
+        completion.inventory_lot_id = source.id
+        add_movement(
+            db, "TRANSFER-SPLIT-IN", source, "manual_in", 6,
+            order=order, item=item,
+        )
+        add_location_transfer(
+            db, "split-completion", source, target,
+            source_location=source_location, target_location=target_location,
+            quantity=6, available_quantity=6, reserved_quantity=0,
+        )
+        db.commit()
+        report = run_audit(db)
+
+    codes = finding_codes(report)
+    assert "P015_COMPLETION_WITHOUT_ACTIVE_FINISHED_LOT" not in codes
+    assert "P015_COMPLETION_WITHOUT_INVENTORY_MOVEMENT" not in codes
     assert not any(
         row["evidence"].get("trace_kind") == "completion_transfer_graph_invalid"
         for row in report["findings"]
@@ -987,6 +1049,218 @@ def test_completion_transfer_chain_reports_closed_no_transfer_equal_quantity_wro
     }
 
 
+def test_completion_transfer_chain_rejects_unexplained_location_and_balance_mutation(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "completion-transfer-state-red.sqlite3")
+    with Session(engine) as db:
+        invalid_completion_ids = set()
+        for token, defect in (
+            ("TRANSFER-LEAF-LOCATION", "location"),
+            ("TRANSFER-BALANCE-FAMILY", "consumed"),
+            ("TRANSFER-TERMINAL-TOTAL", "terminal_total"),
+        ):
+            customer, product, order, item = add_order(
+                db, token, status="pending_delivery", quantity=10
+            )
+            task = add_task(db, item)
+            add_traced_receipt(db, token, order, item)
+            source_location = add_location(db, f"{token}-SOURCE")
+            target_location = add_location(db, f"{token}-TARGET")
+            completion = add_completion(
+                db, token, task, item, location=source_location
+            )
+            source = add_lot(
+                db, f"{token}-SOURCE", customer, product,
+                source_ref_id=completion.id, quantity_available=0,
+                location=source_location,
+            )
+            source.status = "closed"
+            target = add_lot(
+                db, f"{token}-TARGET", customer, product,
+                source_ref_id=completion.id, quantity_available=10,
+                location=target_location,
+            )
+            target.source_type = "transfer"
+            completion.inventory_lot_id = source.id
+            manual_in = add_movement(
+                db, f"{token}-IN", source, "manual_in", 10,
+                order=order, item=item,
+            )
+            add_location_transfer(
+                db, token.lower(), source, target,
+                source_location=source_location, target_location=target_location,
+                quantity=10, available_quantity=10, reserved_quantity=0,
+            )
+            if defect == "location":
+                target.warehouse_location_id = add_location(
+                    db, f"{token}-UNEXPLAINED"
+                ).id
+            elif defect == "consumed":
+                source_move = db.scalar(
+                    select(InventoryMovement).where(
+                        InventoryMovement.idempotency_key
+                        == f"location-transfer:anon-transfer-{token.lower()}:source"
+                    )
+                )
+                assert source_move is not None
+                source_move.after_consumed = source_move.before_consumed + 1
+            else:
+                manual_in.after_available = 11
+                source_move = db.scalar(
+                    select(InventoryMovement).where(
+                        InventoryMovement.idempotency_key
+                        == f"location-transfer:anon-transfer-{token.lower()}:source"
+                    )
+                )
+                assert source_move is not None
+                source_move.before_available = 11
+                source_move.after_available = 1
+                source.quantity_available = 1
+            invalid_completion_ids.add(completion.id)
+        db.commit()
+        report = run_audit(db)
+
+    invalid_transfers = {
+        row["evidence"]["completion_id"]
+        for row in report["findings"]
+        if row["evidence"].get("trace_kind") == "completion_transfer_graph_invalid"
+    }
+    assert invalid_transfers == invalid_completion_ids
+
+
+def test_valid_transfer_does_not_hide_unrelated_transfer_labelled_duplicate(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "completion-transfer-orphan.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db, "TRANSFER-ORPHAN", status="pending_delivery", quantity=10
+        )
+        task = add_task(db, item)
+        add_traced_receipt(db, "TRANSFER-ORPHAN", order, item)
+        source_location = add_location(db, "TRANSFER-ORPHAN-SOURCE")
+        target_location = add_location(db, "TRANSFER-ORPHAN-TARGET")
+        completion = add_completion(
+            db, "TRANSFER-ORPHAN", task, item, location=source_location
+        )
+        source = add_lot(
+            db, "TRANSFER-ORPHAN-SOURCE", customer, product,
+            source_ref_id=completion.id, quantity_available=0,
+            location=source_location,
+        )
+        source.status = "closed"
+        target = add_lot(
+            db, "TRANSFER-ORPHAN-TARGET", customer, product,
+            source_ref_id=completion.id, quantity_available=10,
+            location=target_location,
+        )
+        target.source_type = "transfer"
+        orphan = add_lot(
+            db, "TRANSFER-ORPHAN-FORGED", customer, product,
+            source_ref_id=completion.id, quantity_available=10,
+        )
+        orphan.source_type = "transfer"
+        orphan_id = orphan.id
+        completion.inventory_lot_id = source.id
+        add_movement(
+            db, "TRANSFER-ORPHAN-IN", source, "manual_in", 10,
+            order=order, item=item,
+        )
+        add_location_transfer(
+            db, "orphan-valid-edge", source, target,
+            source_location=source_location, target_location=target_location,
+            quantity=10, available_quantity=10, reserved_quantity=0,
+        )
+        db.commit()
+        report = run_audit(db)
+
+    duplicate = [
+        row for row in report["findings"]
+        if row["code"] == "P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT"
+    ]
+    assert len(duplicate) == 1
+    assert orphan_id in duplicate[0]["evidence"]["inventory_lot_ids"]
+
+
+def test_transfer_graph_rejects_two_sources_merging_into_one_lot(tmp_path: Path):
+    engine = build_p0_15_database(tmp_path / "completion-transfer-merge.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db, "TRANSFER-MERGE", status="pending_delivery", quantity=10
+        )
+        task = add_task(db, item)
+        add_traced_receipt(db, "TRANSFER-MERGE", order, item)
+        root_location = add_location(db, "TRANSFER-MERGE-ROOT")
+        left_location = add_location(db, "TRANSFER-MERGE-LEFT")
+        right_location = add_location(db, "TRANSFER-MERGE-RIGHT")
+        merged_location = add_location(db, "TRANSFER-MERGE-TARGET")
+        completion = add_completion(
+            db, "TRANSFER-MERGE", task, item, location=root_location
+        )
+        completion_id = completion.id
+        root = add_lot(
+            db, "TRANSFER-MERGE-ROOT", customer, product,
+            source_ref_id=completion.id, quantity_available=5,
+            location=root_location,
+        )
+        left = add_lot(
+            db, "TRANSFER-MERGE-LEFT", customer, product,
+            source_ref_id=completion.id, quantity_available=5,
+            location=left_location,
+        )
+        right = add_lot(
+            db, "TRANSFER-MERGE-RIGHT", customer, product,
+            source_ref_id=completion.id, quantity_available=5,
+            location=right_location,
+        )
+        merged = add_lot(
+            db, "TRANSFER-MERGE-TARGET", customer, product,
+            source_ref_id=completion.id, quantity_available=5,
+            location=merged_location,
+        )
+        left.source_type = right.source_type = merged.source_type = "transfer"
+        completion.inventory_lot_id = root.id
+        add_movement(
+            db, "TRANSFER-MERGE-IN", root, "manual_in", 10,
+            order=order, item=item,
+        )
+        add_location_transfer(
+            db, "merge-root-left", root, left,
+            source_location=root_location, target_location=left_location,
+            quantity=5, available_quantity=5, reserved_quantity=0,
+        )
+        root.quantity_available = 0
+        second_root = add_location_transfer(
+            db, "merge-root-right", root, right,
+            source_location=root_location, target_location=right_location,
+            quantity=5, available_quantity=5, reserved_quantity=0,
+        )
+        second_root.source_version_before = 2
+        second_root.source_version_after = 3
+        left.quantity_available = 0
+        add_location_transfer(
+            db, "merge-left-target", left, merged,
+            source_location=left_location, target_location=merged_location,
+            quantity=5, available_quantity=5, reserved_quantity=0,
+        )
+        right.quantity_available = 0
+        merged.quantity_available = 10
+        add_location_transfer(
+            db, "merge-right-target", right, merged,
+            source_location=right_location, target_location=merged_location,
+            quantity=5, available_quantity=5, reserved_quantity=0,
+        )
+        db.commit()
+        report = run_audit(db)
+
+    assert any(
+        row["evidence"].get("trace_kind") == "completion_transfer_graph_invalid"
+        and row["evidence"].get("completion_id") == completion_id
+        for row in report["findings"]
+    )
+
+
 def test_completion_manual_in_without_auxiliary_order_links_needs_source_identity(
     tmp_path: Path,
 ):
@@ -1014,8 +1288,8 @@ def test_delivery_fractional_credit_uses_frozen_denominator_and_accept_over_is_r
     engine = build_p0_15_database(tmp_path / "delivery-fraction.sqlite3")
     with Session(engine) as db:
         customer, product, order, item = add_order(
-            db, "DELIVERY-FRACTION", status="partially_delivered", quantity=2,
-            delivered_quantity=2,
+            db, "DELIVERY-FRACTION", status="partially_delivered", quantity=4,
+            delivered_quantity=3,
         )
         lot = add_lot(db, "DELIVERY-FRACTION", customer, product, quantity_available=0,
                       quantity_reserved=4)
@@ -1059,7 +1333,78 @@ def test_delivery_fractional_credit_uses_frozen_denominator_and_accept_over_is_r
         assert effective[line.id]["resolution_action"] == "accept_over"
         assert effective[line.id]["actual_received_quantity"] == 3
         report = run_audit(db)
-    assert "P015_DELIVERY_INVENTORY_QUANTITY_MISMATCH" not in finding_codes(report)
+    codes = finding_codes(report)
+    assert "P015_DELIVERY_INVENTORY_QUANTITY_MISMATCH" not in codes
+    assert "P015_ORDER_STATUS_SNAPSHOT_DIVERGENCE" not in codes
+    assert any(
+        row["evidence"].get("trace_kind") == "delivery_receipt_quantity_divergence"
+        for row in report["findings"]
+    )
+
+
+def test_accept_over_completed_fulfillment_matches_persisted_status_and_keeps_review(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "delivery-accept-over-complete.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db, "DELIVERY-ACCEPT-OVER", status="delivered", quantity=100,
+            delivered_quantity=101,
+        )
+        lot = add_lot(
+            db, "DELIVERY-ACCEPT-OVER", customer, product,
+            quantity_available=0, quantity_reserved=100,
+        )
+        reservation = InventoryReservation(
+            reservation_number="ANON-RESERVATION-ACCEPT-OVER",
+            inventory_lot_id=lot.id, reservation_type="finished_order",
+            order_id=order.id, order_item_id=item.id,
+            reserved_stock_quantity=100, credited_requirement_quantity=100,
+            requirement_quantity_denominator=1, consumed_stock_quantity=100,
+            consumed_requirement_quantity=100, status="consumed",
+        )
+        db.add(reservation); db.flush()
+        delivery = Delivery(
+            delivery_number="ANON-DELIVERY-ACCEPT-OVER",
+            customer_id=customer.id, delivery_date=TODAY,
+            status="dispatched", total_quantity=100,
+        )
+        db.add(delivery); db.flush()
+        line = DeliveryItem(
+            delivery_id=delivery.id, order_item_id=item.id,
+            delivered_quantity=100, ordered_quantity_snapshot=100,
+            source_type="order", is_current=True,
+        )
+        db.add(line); db.flush()
+        movement = add_movement(
+            db, "DELIVERY-ACCEPT-OVER", lot, "consume", 100,
+            order=order, item=item, delivery=delivery, reservation=reservation,
+        )
+        db.add(DeliveryInventoryAllocation(
+            delivery_item_id=line.id, reservation_id=reservation.id,
+            consume_movement_id=movement.id, consumed_stock_quantity=100,
+            credited_requirement_quantity=100,
+            requirement_quantity_denominator=1, status="active",
+        ))
+        receipt = ReturnReceipt(
+            delivery_id=delivery.id, actual_received_date=TODAY,
+            status="confirmed",
+        )
+        db.add(receipt); db.flush()
+        db.add(ReturnReceiptItem(
+            return_receipt_id=receipt.id, delivery_item_id=line.id,
+            actual_received_quantity=101, resolution_action="accept_over",
+        ))
+        db.commit()
+        report = run_audit(db)
+
+    codes = finding_codes(report)
+    assert "P015_DELIVERY_INVENTORY_QUANTITY_MISMATCH" not in codes
+    assert "P015_ORDER_STATUS_SNAPSHOT_DIVERGENCE" not in codes
+    assert any(
+        row["evidence"].get("trace_kind") == "delivery_receipt_quantity_divergence"
+        for row in report["findings"]
+    )
 
 
 def test_p0_15_cli_scans_only_a_new_synthetic_copy(tmp_path: Path, capsys):

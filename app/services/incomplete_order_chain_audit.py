@@ -329,6 +329,7 @@ def _lots_by_id(db: Session, lot_ids: Sequence[int]) -> dict[int, dict]:
                 InventoryLot.quantity_consumed,
                 InventoryLot.quantity_damaged,
                 InventoryLot.quantity_scrapped,
+                InventoryLot.warehouse_location_id,
             ).where(InventoryLot.id.in_(chunk))
         ).mappings():
             result[int(row["id"])] = dict(row)
@@ -367,6 +368,8 @@ def _lot_and_movement_maps(
                     InventoryLotTransfer.available_quantity,
                     InventoryLotTransfer.reserved_quantity,
                     InventoryLotTransfer.idempotency_key,
+                    InventoryLotTransfer.source_location_id,
+                    InventoryLotTransfer.target_location_id,
                 ).where(InventoryLotTransfer.source_lot_id.in_(chunk))
             ).mappings():
                 record = dict(row)
@@ -393,6 +396,10 @@ def _lot_and_movement_maps(
                 InventoryMovement.related_delivery_id,
                 InventoryMovement.idempotency_key,
                 InventoryMovement.remarks,
+                InventoryMovement.before_available,
+                InventoryMovement.after_available,
+                InventoryMovement.before_reserved,
+                InventoryMovement.after_reserved,
             ).where(InventoryMovement.inventory_lot_id.in_(chunk))
         ).mappings():
             movements[int(row["inventory_lot_id"])].append(dict(row))
@@ -509,6 +516,40 @@ def _completion_transfer_chain_is_valid(
     active: set[int] = set()
     saw_transfer = False
 
+    def transfer_movement_key(transfer_key: str, role: str) -> str:
+        """Mirror the immutable key written by warehouse_inventory._transfer_key.
+
+        InventoryMovement has no transfer foreign key.  The two transaction
+        rows are therefore bound to an InventoryLotTransfer by this exact
+        derived key, rather than by matching a quantity or a loose suffix.
+        """
+        raw = f"location-transfer:{transfer_key}:{role}"
+        if len(raw) <= 100:
+            return raw
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+        return f"{raw[:75]}:{digest}"
+
+    def balances(row: dict, *, available_delta: int, reserved_delta: int) -> bool:
+        before_available = row.get("before_available")
+        after_available = row.get("after_available")
+        before_reserved = row.get("before_reserved")
+        after_reserved = row.get("after_reserved")
+        if None in {
+            before_available,
+            after_available,
+            before_reserved,
+            after_reserved,
+        }:
+            return False
+        return (
+            int(after_available) - int(before_available) == available_delta
+            and int(after_reserved) - int(before_reserved) == reserved_delta
+            and min(
+                int(before_available), int(after_available),
+                int(before_reserved), int(after_reserved),
+            ) >= 0
+        )
+
     def compatible(lot_id: int) -> bool:
         lot = lots.get(lot_id)
         detail = finished_details.get(lot_id)
@@ -536,39 +577,76 @@ def _completion_transfer_chain_is_valid(
             return False
         seen.add(lot_id)
         active.add(lot_id)
-        for transfer in transfers_by_source.get(lot_id, []):
+        final_source_location_id: int | None = None
+        for transfer in sorted(
+            transfers_by_source.get(lot_id, []), key=lambda row: int(row["id"])
+        ):
             saw_transfer = True
             target_id = int(transfer["target_lot_id"])
             quantity = int(transfer["quantity"] or 0)
+            available_quantity = int(transfer["available_quantity"] or 0)
+            reserved_quantity = int(transfer["reserved_quantity"] or 0)
+            source_location_id = int(transfer["source_location_id"] or 0)
+            target_location_id = int(transfer["target_location_id"] or 0)
             if (
                 quantity <= 0
-                or quantity != int(transfer["available_quantity"] or 0)
-                + int(transfer["reserved_quantity"] or 0)
+                or quantity != available_quantity + reserved_quantity
+                or source_location_id <= 0
+                or target_location_id <= 0
+                or source_location_id == target_location_id
             ):
+                return False
+            key = str(transfer.get("idempotency_key") or "")
+            if not key:
                 return False
             source_moves = [
-                row for row in movements.get(lot_id, [])
+                row
+                for row in movements.get(lot_id, [])
                 if row["movement_type"] == "location_transfer"
                 and int(row["quantity"] or 0) == quantity
+                and row.get("idempotency_key") == transfer_movement_key(key, "source")
             ]
+            if len(source_moves) != 1:
+                return False
+            if target_id == lot_id:
+                # A full-location move keeps one lot and hence only writes its
+                # source movement.  It must preserve both stock balances.
+                if not balances(
+                    source_moves[0], available_delta=0, reserved_delta=0
+                ):
+                    return False
+                final_source_location_id = target_location_id
+                continue
             target_moves = [
-                row for row in movements.get(target_id, [])
+                row
+                for row in movements.get(target_id, [])
                 if row["movement_type"] == "location_transfer"
                 and int(row["quantity"] or 0) == quantity
+                and row.get("idempotency_key") == transfer_movement_key(key, "target")
             ]
-            key = str(transfer.get("idempotency_key") or "")
-            if (
-                not key
-                or not any(str(row.get("idempotency_key") or "").endswith(":source")
-                           for row in source_moves)
-                or (target_id != lot_id and not any(
-                    str(row.get("idempotency_key") or "").endswith(":target")
-                    for row in target_moves
-                ))
+            if len(target_moves) != 1:
+                return False
+            # The paired ledger rows must be this transfer's two lots and must
+            # conserve its available/reserved decomposition exactly.
+            if not balances(
+                source_moves[0],
+                available_delta=-available_quantity,
+                reserved_delta=-reserved_quantity,
+            ) or not balances(
+                target_moves[0],
+                available_delta=available_quantity,
+                reserved_delta=reserved_quantity,
             ):
                 return False
+            final_source_location_id = source_location_id
             if target_id != lot_id and not walk(target_id):
                 return False
+        if (
+            final_source_location_id is not None
+            and int(lots[lot_id].get("warehouse_location_id") or 0)
+            != final_source_location_id
+        ):
+            return False
         active.remove(lot_id)
         return True
 
@@ -1730,6 +1808,31 @@ def audit_incomplete_order_chains(
                         transfers_by_source=transfers_by_source,
                     )
                 )
+                if (
+                    lot_id is not None
+                    and transfers_by_source.get(int(lot_id))
+                    and not transfer_chain_valid
+                ):
+                    findings.append(
+                        _finding(
+                            code="P015_TRACE_LINK_BROKEN",
+                            severity="error",
+                            order=order,
+                            item=item,
+                            key=anonymization_key,
+                            summary="完工移库图的批次、库位、流水或数量守恒记录不一致。",
+                            evidence={
+                                "trace_kind": "completion_transfer_graph_invalid",
+                                "completion_id": completion_id,
+                                "inventory_lot_id": int(lot_id),
+                                "transfer_ids": sorted(
+                                    int(row["id"])
+                                    for row in transfers_by_source[int(lot_id)]
+                                ),
+                            },
+                            focus_terms=normalized_focus,
+                        )
+                    )
                 # A transfer-labelled sibling is excluded only after its whole
                 # graph has passed the checks above; a forged label remains a
                 # second completion output.

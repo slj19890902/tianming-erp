@@ -298,6 +298,61 @@ def add_movement(
     return movement
 
 
+def add_location_transfer(
+    db: Session,
+    token: str,
+    source: InventoryLot,
+    target: InventoryLot,
+    *,
+    source_location: WarehouseLocation,
+    target_location: WarehouseLocation,
+    quantity: int,
+    available_quantity: int,
+    reserved_quantity: int,
+) -> InventoryLotTransfer:
+    """Build the ledger pair emitted by the finished-lot transfer service."""
+    assert quantity == available_quantity + reserved_quantity
+    key = f"anon-transfer-{token}"
+    source_move = add_movement(db, f"{token}-SOURCE", source, "location_transfer", quantity)
+    source_move.idempotency_key = f"location-transfer:{key}:source"
+    source_move.before_available = (
+        source.quantity_available
+        if target.id == source.id
+        else source.quantity_available + available_quantity
+    )
+    source_move.after_available = source.quantity_available
+    source_move.before_reserved = (
+        source.quantity_reserved
+        if target.id == source.id
+        else source.quantity_reserved + reserved_quantity
+    )
+    source_move.after_reserved = source.quantity_reserved
+    if target.id != source.id:
+        target_move = add_movement(db, f"{token}-TARGET", target, "location_transfer", quantity)
+        target_move.idempotency_key = f"location-transfer:{key}:target"
+        target_move.before_available = target.quantity_available - available_quantity
+        target_move.after_available = target.quantity_available
+        target_move.before_reserved = target.quantity_reserved - reserved_quantity
+        target_move.after_reserved = target.quantity_reserved
+    transfer = InventoryLotTransfer(
+        source_lot_id=source.id,
+        target_lot_id=target.id,
+        source_location_id=source_location.id,
+        target_location_id=target_location.id,
+        quantity=quantity,
+        available_quantity=available_quantity,
+        reserved_quantity=reserved_quantity,
+        source_version_before=1,
+        source_version_after=2,
+        idempotency_key=key,
+        request_hash=(token.encode("utf-8").hex() + "0" * 64)[:64],
+        transferred_at=NOW,
+    )
+    db.add(transfer)
+    db.flush()
+    return transfer
+
+
 def add_completion(
     db: Session,
     token: str,
@@ -719,17 +774,12 @@ def test_completion_transfer_descendants_preserve_source_identity_but_forged_edg
         target.source_type = "transfer"
         completion.inventory_lot_id = source.id
         add_movement(db, "TRANSFER-OK-IN", source, "manual_in", item.quantity, order=order, item=item)
-        ok_out = add_movement(db, "TRANSFER-OK-OUT", source, "location_transfer", item.quantity)
-        ok_in = add_movement(db, "TRANSFER-OK-INTO", target, "location_transfer", item.quantity)
-        ok_out.idempotency_key = "location-transfer:anon-transfer-ok:source"
-        ok_in.idempotency_key = "location-transfer:anon-transfer-ok:target"
-        db.add(InventoryLotTransfer(
-            source_lot_id=source.id, target_lot_id=target.id,
-            source_location_id=source_location.id, target_location_id=target_location.id,
-            quantity=item.quantity, available_quantity=item.quantity, reserved_quantity=0,
-            source_version_before=1, source_version_after=2,
-            idempotency_key="anon-transfer-ok", request_hash="a" * 64, transferred_at=NOW,
-        ))
+        add_location_transfer(
+            db, "transfer-ok", source, target,
+            source_location=source_location, target_location=target_location,
+            quantity=item.quantity, available_quantity=item.quantity,
+            reserved_quantity=0,
+        )
 
         bad_customer, bad_product, bad_order, bad_item = add_order(db, "TRANSFER-BAD", status="pending_delivery")
         bad_task = add_task(db, bad_item)
@@ -749,17 +799,12 @@ def test_completion_transfer_descendants_preserve_source_identity_but_forged_edg
         bad_target.source_type = "transfer"
         bad_completion.inventory_lot_id = bad_source.id
         add_movement(db, "TRANSFER-BAD-IN", bad_source, "manual_in", bad_item.quantity, order=bad_order, item=bad_item)
-        bad_out = add_movement(db, "TRANSFER-BAD-OUT", bad_source, "location_transfer", bad_item.quantity)
-        bad_in = add_movement(db, "TRANSFER-BAD-INTO", bad_target, "location_transfer", bad_item.quantity)
-        bad_out.idempotency_key = "location-transfer:anon-transfer-bad:source"
-        bad_in.idempotency_key = "location-transfer:anon-transfer-bad:target"
-        db.add(InventoryLotTransfer(
-            source_lot_id=bad_source.id, target_lot_id=bad_target.id,
-            source_location_id=bad_source_location.id, target_location_id=bad_target_location.id,
-            quantity=bad_item.quantity, available_quantity=bad_item.quantity, reserved_quantity=0,
-            source_version_before=1, source_version_after=2,
-            idempotency_key="anon-transfer-bad", request_hash="b" * 64, transferred_at=NOW,
-        ))
+        add_location_transfer(
+            db, "transfer-bad", bad_source, bad_target,
+            source_location=bad_source_location, target_location=bad_target_location,
+            quantity=bad_item.quantity, available_quantity=bad_item.quantity,
+            reserved_quantity=0,
+        )
         db.commit()
         report = run_audit(db)
 
@@ -767,6 +812,179 @@ def test_completion_transfer_descendants_preserve_source_identity_but_forged_edg
                      if row["code"] == "P015_COMPLETION_WITHOUT_ACTIVE_FINISHED_LOT"]
     assert len(active_errors) == 1
     assert finding_codes(report).count("P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT") == 1
+
+
+def test_completion_transfer_chain_keeps_partial_two_level_full_move_and_consumption_explainable(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "completion-transfer-lineage.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db, "TRANSFER-LINEAGE", status="pending_delivery", quantity=10
+        )
+        task = add_task(db, item)
+        add_traced_receipt(db, "TRANSFER-LINEAGE", order, item)
+        root_location = add_location(db, "TRANSFER-LINEAGE-ROOT")
+        first_target = add_location(db, "TRANSFER-LINEAGE-FIRST")
+        moved_target = add_location(db, "TRANSFER-LINEAGE-MOVED")
+        final_target = add_location(db, "TRANSFER-LINEAGE-FINAL")
+        completion = add_completion(
+            db, "TRANSFER-LINEAGE", task, item, location=root_location
+        )
+        root = add_lot(
+            db, "TRANSFER-LINEAGE-ROOT", customer, product,
+            source_ref_id=completion.id, quantity_available=4, location=root_location,
+        )
+        child = add_lot(
+            db, "TRANSFER-LINEAGE-CHILD", customer, product,
+            source_ref_id=completion.id, quantity_available=6, location=first_target,
+        )
+        child.source_type = "transfer"
+        grandchild = add_lot(
+            db, "TRANSFER-LINEAGE-GRANDCHILD", customer, product,
+            source_ref_id=completion.id, quantity_available=3, location=final_target,
+        )
+        grandchild.source_type = "transfer"
+        completion.inventory_lot_id = root.id
+        add_movement(
+            db, "TRANSFER-LINEAGE-IN", root, "manual_in", 10,
+            order=order, item=item,
+        )
+        add_location_transfer(
+            db, "lineage-first", root, child,
+            source_location=root_location, target_location=first_target,
+            quantity=6, available_quantity=6, reserved_quantity=0,
+        )
+        child.warehouse_location_id = moved_target.id
+        add_location_transfer(
+            db, "lineage-full", child, child,
+            source_location=first_target, target_location=moved_target,
+            quantity=6, available_quantity=6, reserved_quantity=0,
+        )
+        child.quantity_available = 3
+        add_location_transfer(
+            db, "lineage-second", child, grandchild,
+            source_location=moved_target, target_location=final_target,
+            quantity=3, available_quantity=3, reserved_quantity=0,
+        )
+        grandchild.quantity_available = 0
+        grandchild.quantity_consumed = 3
+        add_movement(db, "TRANSFER-LINEAGE-CONSUME", grandchild, "consume", 3)
+        db.commit()
+        report = run_audit(db)
+
+    codes = finding_codes(report)
+    assert "P015_COMPLETION_WITHOUT_ACTIVE_FINISHED_LOT" not in codes
+    assert "P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT" not in codes
+    assert not any(
+        row["evidence"].get("trace_kind") == "completion_transfer_graph_invalid"
+        for row in report["findings"]
+    )
+
+
+def test_completion_transfer_chain_reports_closed_no_transfer_equal_quantity_wrong_legs_and_active_bad_edge(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "completion-transfer-red.sqlite3")
+    with Session(engine) as db:
+        # A closed completion root without a real transfer remains an error.
+        customer1, product1, order1, item1 = add_order(db, "TRANSFER-CLOSED", status="pending_delivery")
+        task1 = add_task(db, item1)
+        add_traced_receipt(db, "TRANSFER-CLOSED", order1, item1)
+        location1 = add_location(db, "TRANSFER-CLOSED")
+        completion1 = add_completion(db, "TRANSFER-CLOSED", task1, item1, location=location1)
+        closed_root = add_lot(
+            db, "TRANSFER-CLOSED", customer1, product1,
+            source_ref_id=completion1.id, quantity_available=0, location=location1,
+        )
+        closed_root.status = "closed"
+        completion1.inventory_lot_id = closed_root.id
+        add_movement(db, "TRANSFER-CLOSED-IN", closed_root, "manual_in", item1.quantity, order=order1, item=item1)
+        completion1_id = completion1.id
+
+        # Same amounts on the opposite lots cannot substitute for this
+        # transfer's exact source/target ledger keys.
+        customer2, product2, order2, item2 = add_order(db, "TRANSFER-WRONG-LEGS", status="pending_delivery")
+        task2 = add_task(db, item2)
+        add_traced_receipt(db, "TRANSFER-WRONG-LEGS", order2, item2)
+        source_location2 = add_location(db, "TRANSFER-WRONG-LEGS-SOURCE")
+        target_location2 = add_location(db, "TRANSFER-WRONG-LEGS-TARGET")
+        completion2 = add_completion(db, "TRANSFER-WRONG-LEGS", task2, item2, location=source_location2)
+        root2 = add_lot(
+            db, "TRANSFER-WRONG-LEGS-ROOT", customer2, product2,
+            source_ref_id=completion2.id, quantity_available=0, location=source_location2,
+        )
+        root2.status = "closed"
+        target2 = add_lot(
+            db, "TRANSFER-WRONG-LEGS-TARGET", customer2, product2,
+            source_ref_id=completion2.id, quantity_available=item2.quantity, location=target_location2,
+        )
+        target2.source_type = "transfer"
+        completion2.inventory_lot_id = root2.id
+        add_movement(db, "TRANSFER-WRONG-LEGS-IN", root2, "manual_in", item2.quantity, order=order2, item=item2)
+        wrong_source = add_movement(db, "TRANSFER-WRONG-LEGS-SOURCE", target2, "location_transfer", item2.quantity)
+        wrong_source.idempotency_key = "location-transfer:anon-transfer-wrong-legs:source"
+        wrong_target = add_movement(db, "TRANSFER-WRONG-LEGS-TARGET", root2, "location_transfer", item2.quantity)
+        wrong_target.idempotency_key = "location-transfer:anon-transfer-wrong-legs:target"
+        db.add(InventoryLotTransfer(
+            source_lot_id=root2.id, target_lot_id=target2.id,
+            source_location_id=source_location2.id, target_location_id=target_location2.id,
+            quantity=item2.quantity, available_quantity=item2.quantity, reserved_quantity=0,
+            source_version_before=1, source_version_after=2,
+            idempotency_key="anon-transfer-wrong-legs", request_hash="c" * 64, transferred_at=NOW,
+        ))
+        completion2_id = completion2.id
+
+        # An active root must also be reported when a transfer ledger is
+        # malformed; otherwise it would silently bypass the closed-lot check.
+        customer3, product3, order3, item3 = add_order(db, "TRANSFER-ACTIVE-BAD", status="pending_delivery")
+        task3 = add_task(db, item3)
+        add_traced_receipt(db, "TRANSFER-ACTIVE-BAD", order3, item3)
+        source_location3 = add_location(db, "TRANSFER-ACTIVE-BAD-SOURCE")
+        target_location3 = add_location(db, "TRANSFER-ACTIVE-BAD-TARGET")
+        completion3 = add_completion(db, "TRANSFER-ACTIVE-BAD", task3, item3, location=source_location3)
+        root3 = add_lot(
+            db, "TRANSFER-ACTIVE-BAD-ROOT", customer3, product3,
+            source_ref_id=completion3.id, quantity_available=4, location=source_location3,
+        )
+        target3 = add_lot(
+            db, "TRANSFER-ACTIVE-BAD-TARGET", customer3, product3,
+            source_ref_id=completion3.id, quantity_available=item3.quantity - 4, location=target_location3,
+        )
+        target3.source_type = "transfer"
+        completion3.inventory_lot_id = root3.id
+        add_movement(db, "TRANSFER-ACTIVE-BAD-IN", root3, "manual_in", item3.quantity, order=order3, item=item3)
+        add_location_transfer(
+            db, "active-bad", root3, target3,
+            source_location=source_location3, target_location=target_location3,
+            quantity=item3.quantity - 4, available_quantity=item3.quantity - 4,
+            reserved_quantity=0,
+        )
+        bad_source_move = db.scalar(
+            select(InventoryMovement).where(
+                InventoryMovement.idempotency_key == "location-transfer:anon-transfer-active-bad:source"
+            )
+        )
+        assert bad_source_move is not None
+        bad_source_move.after_available += 1
+        completion3_id = completion3.id
+        db.commit()
+        report = run_audit(db)
+
+    closed_errors = [
+        row for row in report["findings"]
+        if row["code"] == "P015_COMPLETION_WITHOUT_ACTIVE_FINISHED_LOT"
+        and row["evidence"].get("completion_id") == completion1_id
+    ]
+    assert len(closed_errors) == 1
+    invalid_transfers = [
+        row for row in report["findings"]
+        if row["evidence"].get("trace_kind") == "completion_transfer_graph_invalid"
+    ]
+    assert {row["evidence"]["completion_id"] for row in invalid_transfers} == {
+        completion2_id,
+        completion3_id,
+    }
 
 
 def test_completion_manual_in_without_auxiliary_order_links_needs_source_identity(

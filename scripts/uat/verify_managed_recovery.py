@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--port", type=int, default=18929)
     parser.add_argument("--verify-existing", action="store_true", help="Verify the already restored local instance without restoring or starting again")
     parser.add_argument("--backup-again", action="store_true", help="After verification, test managed stop/backup/restart of this isolated instance")
+    parser.add_argument("--experience-fixtures", action="store_true", help="Seed synthetic pending, production and backlog page scenarios")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
     root = args.root.resolve()
@@ -132,15 +133,20 @@ def main():
         connection.exec_driver_sql("CREATE TABLE alembic_version(version_num TEXT NOT NULL)")
         connection.exec_driver_sql("INSERT INTO alembic_version VALUES (?)", (revision,))
     with Session(engine) as session:
-        session.add(User(username="round-admin", password_hash=hash_password("RoundUat2026!"),
+        actor = User(username="round-admin", password_hash=hash_password("RoundUat2026!"),
                          role="admin", real_name="隔离体验管理员", is_active=True,
-                         must_change_password=False, customer_access_mode="all"))
+                         must_change_password=False, customer_access_mode="all")
+        session.add(actor)
         customer = Customer(name="本轮隔离体验客户", customer_number=1, customer_code="ROUND-UAT", is_active=True)
         session.add(customer)
         session.flush()
         session.add(Product(customer_id=customer.id, product_code="ROUND-BOX-001", customer_material_code="ROUND-BOX-001", product_name="恢复验证纸箱",
                             length_mm=300, width_mm=200, height_mm=100, box_category="normal",
                             box_style="A1", unit="个", report_length_mm=1020, report_width_mm=310))
+        if args.experience_fixtures:
+            from scripts.uat.round_experience_fixtures import seed
+            fixtures = seed(session, shared, customer, actor)
+            write_json(root / "experience-fixtures.json", fixtures)
         session.commit()
     engine.dispose()
     (shared / "data/recovery-proof.txt").write_text("synthetic-attachment-restored", encoding="utf8")

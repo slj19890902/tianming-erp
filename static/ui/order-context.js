@@ -16,7 +16,9 @@
     orderContextCurrent(context){
      return this.productEditReturnContext===context && context.authGeneration===this.authGeneration
       && context.userId===(this.user?.id??null)
-      && (context.source==='pdf'?this.orderImportDrafts.includes(context.draft):this.orderForm===context.order);
+      && (context.source==='pdf'?this.orderImportDrafts.includes(context.draft):context.source==='requisition'
+       ? this.activePage==='requisition' && this.requisitionWorkspace==='board' && this.requisitionPending.includes(context.row)
+       :this.orderForm===context.order);
     },
     captureOrderContextView(){
      return {focus:document.activeElement,scroll:['.modal-mask','.modal-body','.pdf-inventory-table-wrap','.order-common-box-table-wrap'].flatMap(selector=>[...document.querySelectorAll(selector)].map((el,index)=>({selector,index,top:el.scrollTop,left:el.scrollLeft})))};
@@ -36,6 +38,27 @@
       if(!this.orderContextCurrent(context))return false;
       if(!opened){await this.restoreOrderContextProduct(context.productId);return false;}
       this.modal.title=`编辑常用箱 · ${item.normalized_product_code||item.product_code||this.productForm.product_code||''}`;
+      return true;
+     }finally{if(this.productEditReturnContext===context || !this.productEditReturnContext)this.orderContextOpening=false;}
+    },
+    captureRequisitionContextView(row){
+     return {workspace:this.requisitionWorkspace,tab:this.requisitionTab,supplierFilter:this.requisitionSupplierFilter,
+      page:this.pages.requisitionPending,selectedKeys:[...(this.selectedPendingKeys||[])],selectedRows:{...(this.requisitionSelected||{})},
+      rowKey:this.pendingRowKey(row),view:this.captureOrderContextView()};
+    },
+    async openRequisitionContextProduct(row){
+     const productId=Number(row?.product_id||0);
+     if(!this.canEditProducts || this.orderContextOpening || this.masterSavePending || row?.is_merge_group || !productId
+      || this.activePage!=='requisition' || this.requisitionWorkspace!=='board')return false;
+     const requisitionView=this.captureRequisitionContextView(row);
+     this.productEditReturnContext={source:'requisition',productId,row,requisitionView,returnModal:{...this.modal},
+      authGeneration:this.authGeneration,userId:this.user?.id??null,saved:false};
+     const context=this.productEditReturnContext;this.orderContextOpening=true;
+     try{
+      const opened=await this.openProduct({id:productId});
+      if(!this.orderContextCurrent(context))return false;
+      if(!opened){await this.restoreOrderContextProduct(productId);return false;}
+      this.modal.title=`补齐常用箱 · ${row.product_code||this.productForm.product_code||''}`;
       return true;
      }finally{if(this.productEditReturnContext===context || !this.productEditReturnContext)this.orderContextOpening=false;}
     },
@@ -81,6 +104,20 @@
        if(!this.orderContextCurrent(context))return false;
        if(Number(product.id)!==context.productId)throw new Error('产品资料不一致');
       }catch(error){if(this.orderContextCurrent(context))this.showToast(`常用箱已保存，资料刷新失败：${this.errorMessage(error)}。请点击返回重试。`,true);return false;}
+     }
+     if(context.source==='requisition'){
+      const savedView=context.requisitionView;
+      this.productEditReturnContext=null;this.resetProductEditorState();this.modal=context.returnModal;
+      this.requisitionWorkspace=savedView.workspace;this.requisitionTab=savedView.tab;
+      this.requisitionSupplierFilter=savedView.supplierFilter;this.pages.requisitionPending=savedView.page;
+      this.selectedPendingKeys=[...savedView.selectedKeys];this.requisitionSelected={...savedView.selectedRows};
+      if(product){
+       try{await this.loadRequisition({skipAutoRelease:true});}
+       catch(error){this.showToast(`常用箱已保存，待报料刷新失败：${this.errorMessage(error)}。请刷新后核对。`,true);return false;}
+       this.showToast(this.commonBoxReadiness(product).ready?'常用箱资料已完善，已返回原报料筛选':'已保存；仍有资料待完善，请按缺项补充');
+      }
+      this.restoreOrderContextView(savedView.view);
+      return true;
      }
      const refreshed=[];
      if(product){

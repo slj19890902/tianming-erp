@@ -16,6 +16,10 @@ import psutil
 from desktop_assistant.storage import (archive_path, database_info, decrypt_file, encrypt_file,
                                       extract_verified, pack_tree, pack_recovery, read_json, sha, write_json, signed_release_manifest)
 from desktop_assistant.attachments import rebind_pdf_sources
+from desktop_assistant.schema_contract import (
+    schema_contract_from_signed_release,
+    validate_database_schema,
+)
 
 CN = timezone(timedelta(hours=8))
 
@@ -542,22 +546,51 @@ class Manager:
             info = database_info(payload / 'shared/data/carton_erp.sqlite3')
             if info != manifest['database']:
                 raise ValueError('恢复库表计数或版本不一致')
+            release_manifest, release_contract = schema_contract_from_signed_release(
+                payload / 'release.zip', self.public_key
+            )
             release = self.stage_release(payload / 'release.zip')
+            if any(release.get(key) != value for key, value in release_manifest.items()):
+                raise ValueError('恢复程序与签名版本信息不一致')
             authority = manifest.get('schema_authority')
+            authority_manifest = None
+            authority_contract = None
             if authority:
                 compatible_package = payload / 'compatibility.zip'
                 if sha(compatible_package) != authority:
                     raise ValueError('恢复包兼容授权身份不一致')
-                self.stage_release(compatible_package)
-            if not self.compatible(release['id'], info['revision'], authority):
+                authority_manifest, authority_contract = schema_contract_from_signed_release(
+                    compatible_package, self.public_key
+                )
+                staged_authority = self.stage_release(compatible_package)
+                if any(staged_authority.get(key) != value for key, value in authority_manifest.items()):
+                    raise ValueError('恢复兼容授权与签名版本信息不一致')
+            directly_compatible = release_manifest['revision'] == info['revision']
+            if not directly_compatible and authority_manifest:
+                migration = authority_manifest.get('migration') or {}
+                directly_compatible = (
+                    authority_manifest.get('revision') == info['revision']
+                    and migration.get('policy') == 'preserve_existing_facts_v1'
+                    and migration.get('rollback_package_sha256') == release['id']
+                )
+            if (not directly_compatible
+                    or not self.compatible(release['id'], info['revision'], authority)):
                 raise ValueError('备份程序与数据不兼容')
-            rebind_pdf_sources(payload / 'shared/data/carton_erp.sqlite3', Path(manifest['source_shared']),
+            contract = release_contract if release['revision'] == info['revision'] else authority_contract
+            if not contract or contract['revision'] != info['revision']:
+                raise ValueError('缺少与恢复数据库版本匹配的签名必要结构契约')
+            database = payload / 'shared/data/carton_erp.sqlite3'
+            validate_database_schema(database, contract)
+            rebind_pdf_sources(database, Path(manifest['source_shared']),
                                payload / 'shared', self.root / 'shared')
             from desktop_assistant.preflight import inspect
-            checks = inspect(payload / 'shared/data/carton_erp.sqlite3', payload / 'shared',
+            checks = inspect(database, payload / 'shared',
                              managed=True, recorded_root=self.root / 'shared')
             if any(checks['counts'][key] for key in ('missing', 'external', 'hash_mismatch')):
                 raise ValueError('恢复附件缺失或校验失败，尚未启用恢复数据')
+            if database_info(database) != info:
+                raise ValueError('恢复库最终完整性、表计数或版本复核失败')
+            validate_database_schema(database, contract)
             (self.root / 'shared').rmdir()  # proven empty above
             (payload / 'shared').rename(self.root / 'shared')
             write_json(self.root / 'state.json', {'current': release['id'], 'previous': None,

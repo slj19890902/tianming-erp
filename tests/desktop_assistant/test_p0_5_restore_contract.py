@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import sys
 import types
+import zipfile
 
 import pytest
 
@@ -41,6 +42,7 @@ from desktop_assistant.storage import (
     database_info,
     encrypt_file,
     pack_recovery,
+    pack_tree,
     sha,
 )
 from tests.desktop_assistant import test_recovery as recovery
@@ -66,13 +68,15 @@ def _package_shared(
     *,
     database_metadata: dict,
     name: str,
+    release_package: Path | None = None,
 ) -> Path:
-    release_id = case.manager.state["current"]
+    release_package = release_package or case.manager.root / "packages" / f'{case.manager.state["current"]}.zip'
+    release_id = sha(release_package)
     raw = case.root / f"{name}.zip"
     encrypted = case.root / f"{name}.tmbackup"
     pack_recovery(
         shared,
-        {"release.zip": case.manager.root / "packages" / f"{release_id}.zip"},
+        {"release.zip": release_package},
         raw,
         {
             "type": "tianming.recovery.v1",
@@ -88,6 +92,21 @@ def _package_shared(
     return encrypted
 
 
+def _custom_release(case: recovery.RecoveryTests, name: str, addition: str) -> Path:
+    source = case.root / f"custom-source-{name}"
+    shutil.copytree(case.root / "source-one", source)
+    models = source / "app/models/fixture.py"
+    models.write_text(models.read_text(encoding="utf-8") + addition, encoding="utf-8")
+    package = case.root / f"custom-{name}.zip"
+    pack_tree(
+        source,
+        package,
+        {"type": "tianming.release.v1", "version": name, "revision": "r1"},
+        case.key,
+    )
+    return package
+
+
 def test_incomplete_database_inside_full_package_never_activates(
     recovery_case: recovery.RecoveryTests,
 ) -> None:
@@ -96,21 +115,157 @@ def test_incomplete_database_inside_full_package_never_activates(
     shutil.copytree(case.manager.root / "shared", shared)
     database = shared / "data/carton_erp.sqlite3"
     with closing(sqlite3.connect(database)) as connection:
-        connection.execute("DROP TABLE sales_orders")
+        connection.execute("DROP TABLE sales_order_items")
         connection.commit()
     package = _package_shared(
         case,
         shared,
-        database_metadata={"revision": "r1", "counts": {}},
+        database_metadata=database_info(database),
         name="incomplete",
     )
     target = TestManager(case.root / "rejected-incomplete", case.public)
 
-    with pytest.raises(ValueError, match="缺少ERP业务表"):
+    with pytest.raises(ValueError, match="必要结构"):
         target.restore(package, PASSWORD)
 
     assert target.state["current"] is None
     assert not any((target.root / "shared").iterdir())
+
+
+def test_missing_required_column_with_self_consistent_manifest_never_activates(
+    recovery_case: recovery.RecoveryTests,
+) -> None:
+    case = recovery_case
+    shared = case.root / "missing-column-shared"
+    shutil.copytree(case.manager.root / "shared", shared)
+    database = shared / "data/carton_erp.sqlite3"
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("ALTER TABLE sales_order_items DROP COLUMN note")
+        connection.commit()
+    package = _package_shared(
+        case,
+        shared,
+        database_metadata=database_info(database),
+        name="missing-column",
+    )
+    target = TestManager(case.root / "rejected-missing-column", case.public)
+
+    with pytest.raises(ValueError, match="必要结构（列）"):
+        target.restore(package, PASSWORD)
+
+    assert target.state["current"] is None
+    assert not any((target.root / "shared").iterdir())
+
+
+def test_final_schema_is_rechecked_after_pdf_rebinding(
+    recovery_case: recovery.RecoveryTests,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = recovery_case
+    shared = case.root / "post-rebind-shared"
+    shutil.copytree(case.manager.root / "shared", shared)
+    database = shared / "data/carton_erp.sqlite3"
+    package = _package_shared(
+        case,
+        shared,
+        database_metadata=database_info(database),
+        name="post-rebind",
+    )
+    target = TestManager(case.root / "rejected-post-rebind", case.public)
+
+    def corrupt_after_initial_check(path: Path, *_args, **_kwargs) -> int:
+        with closing(sqlite3.connect(path)) as connection:
+            connection.execute("DROP TABLE sales_order_items")
+            connection.commit()
+        return 0
+
+    monkeypatch.setattr("desktop_assistant.manager.rebind_pdf_sources", corrupt_after_initial_check)
+    with pytest.raises(ValueError, match="最终完整性|必要结构"):
+        target.restore(package, PASSWORD)
+
+    assert target.state["current"] is None
+    assert not any((target.root / "shared").iterdir())
+
+
+def test_unknown_signed_model_structure_fails_without_activation(
+    recovery_case: recovery.RecoveryTests,
+) -> None:
+    case = recovery_case
+    release = _custom_release(
+        case,
+        "unknown-model",
+        "\nclass DynamicTable(Base):\n"
+        "    __tablename__ = choose_table_name()\n"
+        "    id: Mapped[int] = mapped_column(primary_key=True)\n",
+    )
+    package = _package_shared(
+        case,
+        case.manager.root / "shared",
+        database_metadata=database_info(case.manager.root / "shared/data/carton_erp.sqlite3"),
+        name="unknown-model",
+        release_package=release,
+    )
+    target = TestManager(case.root / "rejected-unknown-model", case.public)
+
+    with pytest.raises(ValueError, match="静态"):
+        target.restore(package, PASSWORD)
+
+    assert target.state["current"] is None
+    assert not any((target.root / "shared").iterdir())
+
+
+def test_changed_signed_model_bytes_fail_without_activation(
+    recovery_case: recovery.RecoveryTests,
+) -> None:
+    case = recovery_case
+    original = _custom_release(case, "signed-source", "\n# original\n")
+    tampered = case.root / "tampered-release.zip"
+    with zipfile.ZipFile(original) as source, zipfile.ZipFile(tampered, "x") as target_zip:
+        for info in source.infolist():
+            raw = source.read(info.filename)
+            if info.filename == "app/models/fixture.py":
+                raw += b"# changed after signing\n"
+            target_zip.writestr(info, raw)
+    package = _package_shared(
+        case,
+        case.manager.root / "shared",
+        database_metadata=database_info(case.manager.root / "shared/data/carton_erp.sqlite3"),
+        name="changed-model",
+        release_package=tampered,
+    )
+    target = TestManager(case.root / "rejected-changed-model", case.public)
+
+    with pytest.raises(ValueError, match="模型文件校验失败"):
+        target.restore(package, PASSWORD)
+
+    assert target.state["current"] is None
+    assert not any((target.root / "shared").iterdir())
+
+
+def test_model_top_level_code_is_never_executed_during_restore(
+    recovery_case: recovery.RecoveryTests,
+) -> None:
+    case = recovery_case
+    marker = case.root / "model-code-executed.txt"
+    release = _custom_release(
+        case,
+        "non-executed-model",
+        f"\nfrom pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n",
+    )
+    package = _package_shared(
+        case,
+        case.manager.root / "shared",
+        database_metadata=database_info(case.manager.root / "shared/data/carton_erp.sqlite3"),
+        name="non-executed-model",
+        release_package=release,
+    )
+    target = TestManager(case.root / "accepted-non-executed-model", case.public)
+
+    result = target.restore(package, PASSWORD)
+
+    assert result["started"] is False
+    assert not marker.exists()
+    assert target.state["current"] == sha(release)
 
 
 def test_unsupported_revision_never_activates_or_changes_source(

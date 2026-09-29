@@ -18,7 +18,8 @@ class UpdateChainTests(unittest.TestCase):
     def tearDown(self):self.fixture.tearDown()
 
     def package(self,name,revision,previous=None,origin=None):
-        source=self.fixture.release(name,revision)
+        extras=() if previous is None else ('feature_'+revision,)
+        source=self.fixture.release(name,revision,extra_tables=extras)
         target=source.with_name(name+'-signed.zip')
         contract=None if previous is None else {'policy':'preserve_existing_facts_v1','from_revision':origin,'rollback_package_sha256':sha(previous)}
         pack_tree(self.fixture.root/('source-'+name),target,{'type':'tianming.release.v1','version':name,'revision':revision,'migration':contract},self.fixture.key)

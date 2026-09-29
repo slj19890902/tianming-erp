@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from sqlalchemy import event, text
+from sqlalchemy import event, select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import create_sqlite_engine
@@ -40,6 +41,7 @@ from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     FinishedGoodsInventoryDetail,
     InventoryLot,
+    InventoryLotTransfer,
     InventoryMovement,
     InventoryReservation,
     WarehouseLocation,
@@ -695,6 +697,175 @@ def test_completion_requires_one_finished_lot_and_one_matching_initial_movement(
         for row in movement_findings
     )
     assert codes.count("P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT") == 1
+
+
+def test_completion_transfer_descendants_preserve_source_identity_but_forged_edges_do_not(
+    tmp_path: Path,
+):
+    """A real location-transfer graph is not a second completion lot."""
+    engine = build_p0_15_database(tmp_path / "completion-transfer.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(db, "TRANSFER-OK", status="pending_delivery")
+        task = add_task(db, item)
+        add_traced_receipt(db, "TRANSFER-OK", order, item)
+        source_location = add_location(db, "TRANSFER-SOURCE")
+        target_location = add_location(db, "TRANSFER-TARGET")
+        completion = add_completion(db, "TRANSFER-OK", task, item, location=source_location)
+        source = add_lot(db, "TRANSFER-OK-SOURCE", customer, product, source_ref_id=completion.id,
+                         quantity_available=0, location=source_location)
+        source.status = "closed"
+        target = add_lot(db, "TRANSFER-OK-TARGET", customer, product, source_ref_id=completion.id,
+                         quantity_available=item.quantity, location=target_location)
+        target.source_type = "transfer"
+        completion.inventory_lot_id = source.id
+        add_movement(db, "TRANSFER-OK-IN", source, "manual_in", item.quantity, order=order, item=item)
+        ok_out = add_movement(db, "TRANSFER-OK-OUT", source, "location_transfer", item.quantity)
+        ok_in = add_movement(db, "TRANSFER-OK-INTO", target, "location_transfer", item.quantity)
+        ok_out.idempotency_key = "location-transfer:anon-transfer-ok:source"
+        ok_in.idempotency_key = "location-transfer:anon-transfer-ok:target"
+        db.add(InventoryLotTransfer(
+            source_lot_id=source.id, target_lot_id=target.id,
+            source_location_id=source_location.id, target_location_id=target_location.id,
+            quantity=item.quantity, available_quantity=item.quantity, reserved_quantity=0,
+            source_version_before=1, source_version_after=2,
+            idempotency_key="anon-transfer-ok", request_hash="a" * 64, transferred_at=NOW,
+        ))
+
+        bad_customer, bad_product, bad_order, bad_item = add_order(db, "TRANSFER-BAD", status="pending_delivery")
+        bad_task = add_task(db, bad_item)
+        add_traced_receipt(db, "TRANSFER-BAD", bad_order, bad_item)
+        bad_source_location = add_location(db, "TRANSFER-BAD-SOURCE")
+        bad_target_location = add_location(db, "TRANSFER-BAD-TARGET")
+        bad_completion = add_completion(db, "TRANSFER-BAD", bad_task, bad_item, location=bad_source_location)
+        bad_source = add_lot(db, "TRANSFER-BAD-SOURCE", bad_customer, bad_product, source_ref_id=bad_completion.id,
+                             quantity_available=0, location=bad_source_location)
+        bad_source.status = "closed"
+        wrong_product = Product(customer_id=bad_customer.id, product_code="ANON-WRONG-TRANSFER",
+                                customer_material_code="ANON-WRONG-TRANSFER", product_name="错误移库", pieces_per_box=1)
+        db.add(wrong_product); db.flush()
+        bad_target = add_lot(db, "TRANSFER-BAD-TARGET", bad_customer, wrong_product,
+                             source_ref_id=bad_completion.id, quantity_available=bad_item.quantity,
+                             location=bad_target_location)
+        bad_target.source_type = "transfer"
+        bad_completion.inventory_lot_id = bad_source.id
+        add_movement(db, "TRANSFER-BAD-IN", bad_source, "manual_in", bad_item.quantity, order=bad_order, item=bad_item)
+        bad_out = add_movement(db, "TRANSFER-BAD-OUT", bad_source, "location_transfer", bad_item.quantity)
+        bad_in = add_movement(db, "TRANSFER-BAD-INTO", bad_target, "location_transfer", bad_item.quantity)
+        bad_out.idempotency_key = "location-transfer:anon-transfer-bad:source"
+        bad_in.idempotency_key = "location-transfer:anon-transfer-bad:target"
+        db.add(InventoryLotTransfer(
+            source_lot_id=bad_source.id, target_lot_id=bad_target.id,
+            source_location_id=bad_source_location.id, target_location_id=bad_target_location.id,
+            quantity=bad_item.quantity, available_quantity=bad_item.quantity, reserved_quantity=0,
+            source_version_before=1, source_version_after=2,
+            idempotency_key="anon-transfer-bad", request_hash="b" * 64, transferred_at=NOW,
+        ))
+        db.commit()
+        report = run_audit(db)
+
+    active_errors = [row for row in report["findings"]
+                     if row["code"] == "P015_COMPLETION_WITHOUT_ACTIVE_FINISHED_LOT"]
+    assert len(active_errors) == 1
+    assert finding_codes(report).count("P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT") == 1
+
+
+def test_completion_manual_in_without_auxiliary_order_links_needs_source_identity(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "manual-in-identity.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(db, "MANUAL-IDENTITY", status="pending_delivery")
+        task = add_task(db, item)
+        add_traced_receipt(db, "MANUAL-IDENTITY", order, item)
+        location = add_location(db, "MANUAL-IDENTITY")
+        completion = add_completion(db, "MANUAL-IDENTITY", task, item, location=location)
+        lot = add_lot(db, "MANUAL-IDENTITY", customer, product, source_ref_id=completion.id,
+                      quantity_available=item.quantity, location=location)
+        completion.inventory_lot_id = lot.id
+        movement = add_movement(db, "MANUAL-IDENTITY", lot, "manual_in", item.quantity)
+        movement.related_order_id = None
+        movement.related_order_item_id = None
+        db.commit()
+        report = run_audit(db)
+    assert "P015_COMPLETION_WITHOUT_INVENTORY_MOVEMENT" not in finding_codes(report)
+
+
+def test_delivery_fractional_credit_uses_frozen_denominator_and_accept_over_is_review(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "delivery-fraction.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db, "DELIVERY-FRACTION", status="partially_delivered", quantity=2,
+            delivered_quantity=2,
+        )
+        lot = add_lot(db, "DELIVERY-FRACTION", customer, product, quantity_available=0,
+                      quantity_reserved=4)
+        reservation = InventoryReservation(
+            reservation_number="ANON-RESERVATION-FRACTION", inventory_lot_id=lot.id,
+            reservation_type="finished_order", order_id=order.id, order_item_id=item.id,
+            reserved_stock_quantity=4, credited_requirement_quantity=4,
+            requirement_quantity_denominator=2, consumed_stock_quantity=4,
+            consumed_requirement_quantity=4, status="consumed",
+        )
+        db.add(reservation); db.flush()
+        delivery = Delivery(delivery_number="ANON-DELIVERY-FRACTION", customer_id=customer.id,
+                            delivery_date=TODAY, status="dispatched", total_quantity=2)
+        db.add(delivery); db.flush()
+        line = DeliveryItem(delivery_id=delivery.id, order_item_id=item.id,
+                            delivered_quantity=2, ordered_quantity_snapshot=item.quantity,
+                            source_type="order", is_current=True)
+        db.add(line); db.flush()
+        movement = add_movement(db, "DELIVERY-FRACTION", lot, "consume", 4,
+                                order=order, item=item, delivery=delivery, reservation=reservation)
+        db.add(DeliveryInventoryAllocation(
+            delivery_item_id=line.id, reservation_id=reservation.id,
+            consume_movement_id=movement.id, consumed_stock_quantity=4,
+            credited_requirement_quantity=4, requirement_quantity_denominator=2,
+            status="active",
+        ))
+        receipt = ReturnReceipt(delivery_id=delivery.id, actual_received_date=TODAY, status="confirmed")
+        db.add(receipt); db.flush()
+        db.add(ReturnReceiptItem(return_receipt_id=receipt.id, delivery_item_id=line.id,
+                                 actual_received_quantity=3, resolution_action="accept_over"))
+        db.commit()
+        assert db.scalar(select(ReturnReceiptItem.resolution_action)) == "accept_over"
+        from app.services.incomplete_order_chain_audit import (
+            _delivery_rows,
+            _effective_delivery_quantities,
+        )
+        delivery_rows, allocation_rows = _delivery_rows(db, [item.id])
+        assert delivery_rows[item.id][0]["id"] == line.id
+        assert allocation_rows[line.id][0]["requirement_quantity_denominator"] == 2
+        effective = _effective_delivery_quantities(db, [line.id])
+        assert effective[line.id]["resolution_action"] == "accept_over"
+        assert effective[line.id]["actual_received_quantity"] == 3
+        report = run_audit(db)
+    assert "P015_DELIVERY_INVENTORY_QUANTITY_MISMATCH" not in finding_codes(report)
+
+
+def test_p0_15_cli_scans_only_a_new_synthetic_copy(tmp_path: Path, capsys):
+    database = tmp_path / "cli.sqlite3"
+    engine = build_p0_15_database(database)
+    with Session(engine) as db:
+        add_order(db, "CLI-READONLY")
+        db.commit()
+    engine.dispose()
+    before = hashlib.sha256(database.read_bytes()).hexdigest()
+    from scripts.audit.p0_15_incomplete_order_chain import main
+    code = main([
+        "--database", str(database),
+        "--json-output", str(tmp_path / "report.json"),
+        "--csv-output", str(tmp_path / "report.csv"),
+        "--markdown-output", str(tmp_path / "report.md"),
+        "--source-label", "synthetic-cli-only",
+        "--expected-revision", REVISION,
+        "--expected-sha256", before,
+    ])
+    assert code == 0, capsys.readouterr().err
+    assert hashlib.sha256(database.read_bytes()).hexdigest() == before
+    assert not any((tmp_path / f"cli.sqlite3{suffix}").exists()
+                   for suffix in ("-journal", "-wal", "-shm"))
 
 
 def test_active_finished_reservation_must_really_be_deliverable(tmp_path: Path):

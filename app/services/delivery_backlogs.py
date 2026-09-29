@@ -1,6 +1,7 @@
 """An explicit reminder over the original order, fulfilled only by real dispatch."""
 import json
 from datetime import date
+from fractions import Fraction
 from sqlalchemy import select,func
 from fastapi import HTTPException
 from app.models.delivery_backlog import DeliveryBacklog as Backlog,DeliveryBacklogSource as Source,DeliveryBacklogFulfillment as Fulfillment
@@ -76,35 +77,82 @@ def defer(db,notice,*,quantity,reason,actor=None,mobile=False,excluded_delivery_
     db.flush();return row
 
 
+def _quantity_context(db,item):
+    from app.services.direct_external_finished import eligible
+    from app.services.delivery_quantities import order_basis,QuantityContractError
+    order=db.get(Order,item.order_id)
+    product=db.get(Product,item.product_id)
+    customer_unit=str(item.sales_unit_snapshot or (product.unit if product else '') or '只').strip()
+    try:
+        basis=order_basis(item,order.customer_id) if eligible(db,item) else None
+    except QuantityContractError as error:
+        fail(str(error))
+    return basis,customer_unit,(basis['physical_unit'] if basis else customer_unit)
+
+
 def physical_ready(db,item):
     from app.models.warehouse_inventory import InventoryReservation,InventoryLot,FinishedGoodsInventoryDetail
     from app.api.deliveries import _delivery_remaining_quantity
     from app.services.warehouse_inventory import finished_inventory_candidates,WarehouseInventoryError
     from app.services.fixed_shelf_staging import held_for_staging_expression
     from app.services.bom_inventory_contract import is_body_lot
+    from app.services.delivery_quantities import (available_customer_quantity,
+        requirement_amount,reservation_customer_quantity)
+    basis,_,_=_quantity_context(db,item)
     rows=db.execute(select(InventoryReservation,InventoryLot).join(InventoryLot,InventoryLot.id==InventoryReservation.inventory_lot_id)
         .join(FinishedGoodsInventoryDetail,FinishedGoodsInventoryDetail.inventory_lot_id==InventoryLot.id)
         .where(InventoryReservation.order_item_id==item.id,InventoryReservation.reservation_type=='finished_order',InventoryReservation.status!='cancelled',
+            InventoryReservation.sales_order_item_bom_component_id.is_(None),
             InventoryLot.inventory_type=='finished',InventoryLot.status=='active',~held_for_staging_expression(),FinishedGoodsInventoryDetail.product_id==item.product_id,
             FinishedGoodsInventoryDetail.owner_customer_id==db.get(Order,item.order_id).customer_id)).all()
-    reserved=sum(min(max((r.credited_requirement_quantity or 0)-r.consumed_requirement_quantity-r.released_requirement_quantity,0),
-                     max(r.reserved_stock_quantity-r.consumed_stock_quantity-r.released_stock_quantity,0),lot.quantity_reserved) for r,lot in rows if not is_body_lot(lot))
+    reserved_credit=Fraction(0)
+    reserved_physical=0
+    for reservation,lot in rows:
+        if is_body_lot(lot):continue
+        stock=max(min(int(reservation.reserved_stock_quantity or 0)
+            -int(reservation.consumed_stock_quantity or 0)
+            -int(reservation.released_stock_quantity or 0),int(lot.quantity_reserved or 0)),0)
+        if stock<=0:continue
+        credit=max(requirement_amount(reservation,'credited_requirement_quantity')
+            -requirement_amount(reservation,'consumed_requirement_quantity')
+            -requirement_amount(reservation,'released_requirement_quantity'),0)
+        reserved_credit+=min(credit,reservation_customer_quantity(reservation,stock))
+        reserved_physical+=stock
+    if basis:
+        reserved=min(int(reserved_credit),available_customer_quantity(basis,reserved_physical))
+        customer_step=int(basis['customer_basis'])
+    else:
+        reserved=int(reserved_credit)
+        customer_step=1
     ready=min(reserved,max(_delivery_remaining_quantity(db,item),0))
+    ready-=ready%customer_step
     try:free=sum(l.quantity_available for l in finished_inventory_candidates(db,item.id) if l.finished_detail.owner_customer_id==db.get(Order,item.order_id).customer_id)
     except WarehouseInventoryError:free=0
-    return ready,free
+    free_customer=available_customer_quantity(basis,free) if basis else free
+    return ready,free_customer
 
 
 def describe(db,row,*,inventory=True):
     from app.models.customer import Customer
     item=db.get(OrderItem,row.order_item_id);order=db.get(Order,item.order_id);customer=db.get(Customer,row.customer_id)
     done=fulfilled(db,row.id);remaining=debt(db,row) if row.status=='active' else 0
-    ready,free=physical_ready(db,item) if inventory and remaining and not item.is_force_closed else (0,0)
+    basis,customer_unit,physical_unit=_quantity_context(db,item)
+    ready,free=(physical_ready(db,item) if inventory and remaining and not item.is_force_closed else (0,0))
+    ready_customer=min(remaining,ready);free_customer=min(remaining,free)
+    from app.services.delivery_quantities import physical_for
+    if basis:
+        customer_step=int(basis['customer_basis'])
+        ready_customer-=ready_customer%customer_step
+        free_customer-=free_customer%customer_step
+    ready_physical=(physical_for(basis,ready_customer) if basis else ready_customer)
+    free_physical=(physical_for(basis,free_customer) if basis else free_customer)
     return dict(id=row.id,version=row.version,customer_id=row.customer_id,customer_name=customer.chinese_short_name or customer.name,order_id=order.id,
         product_id=row.product_id,stock_code=row.stock_code,product_name=row.product_name,order_item_id=item.id,order_number=order.order_number,
         customer_order_no=row.customer_order_no,due_date=row.due_date,original_quantity=row.original_quantity,target_quantity=row.target_quantity,
         fulfilled_quantity=done,remaining_quantity=remaining,order_remaining_quantity=max(item.quantity-item.delivered_quantity,0),
-        ready_quantity=min(remaining,ready),available_finished_quantity=min(remaining,free),reason=row.reason,
+        ready_quantity=ready_customer,available_finished_quantity=free_customer,
+        ready_physical_quantity=ready_physical,available_finished_physical_quantity=free_physical,
+        customer_unit=customer_unit,physical_unit=physical_unit,reason=row.reason,
         status='cancelled' if row.status=='cancelled' else 'fulfilled' if remaining==0 else 'partial' if done else 'waiting',
         cancelled_reason=row.cancelled_reason,created_at=utc_naive_to_api(row.created_at),
         sources=[dict(import_item_id=s.import_item_id,requested_quantity=s.requested_quantity,**json.loads(s.snapshot_json)) for s in db.scalars(select(Source).where(Source.backlog_id==row.id))],

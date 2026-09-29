@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.537"
-APP_VERSION_NAME = "常用箱默认货架位置记忆"
+APP_VERSION = "v0.22.538"
+APP_VERSION_NAME = "货架与产品标签位置简化"
 APP_BUILD_DATE = "2026-09-29"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5153,3 +5153,13 @@ APP_VERIFICATION_STEPS = [
     "手动修改默认位置后核对后续添加不覆盖；取消后核对不会再次自动记住。",
 ]
 APP_CHANGELOG = [*(f"v0.22.537：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "货架编号＋二维码标签只显示货架名称，例如货A1，不再附带区域名称和自动添加的架字。",
+    "产品标签位置统一显示货A1-2层-1格，保留产品资料、二维码和原纸型；二维码继续定位真实货架或产品货位。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新并重新打开货架编号＋二维码预览，核对只显示货架名称和二维码。",
+    "打开产品标签核对位置为货A1-2层-1格格式，试打一张并扫码核对真实位置。",
+]
+APP_CHANGELOG = [*(f"v0.22.538：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

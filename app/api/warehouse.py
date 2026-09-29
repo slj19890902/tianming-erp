@@ -17733,7 +17733,7 @@ def get_location_label(
 
 
 def _mobile_shelf_location(db, location_id):
-    from app.services.mobile_shelf_labels import readable_address, print_address
+    from app.services.mobile_shelf_labels import compact_rack_title, readable_address, print_address
     row = db.get(WarehouseLocation, location_id)
     if row is None:
         raise HTTPException(404, "货位不存在")
@@ -17749,7 +17749,7 @@ def _mobile_shelf_location(db, location_id):
         rack_identity = [row.address_area_id, "map" if row.map_rack_id else "address",
                          row.map_rack_id or row.rack_code]
         result["rack_key"] = hashlib.sha256(json.dumps(rack_identity).encode()).hexdigest()
-        result["rack_label"] = result["print_title"]
+        result["rack_label"] = compact_rack_title(row.rack_display_name or result["compact_title"])
     return row, result
 
 

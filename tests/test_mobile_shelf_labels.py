@@ -31,6 +31,11 @@ def test_product_label_compact_address_keeps_rack_identity_and_location_modes():
     ground = print_address(dict(display_path="一楼·成品待送区"))
     assert ground['compact_title'] == ground['print_title']
     assert ground['compact_position'] == ''
+    named = print_address(dict(display_path="三楼·成品区·货A1·2层·1格", level_no=2, slot_no=1))
+    assert named['compact_title'] == '货A1'
+    assert f"{named['compact_title']}-{named['compact_position']}" == '货A1-2层-1格'
+    assert print_address(dict(display_path="三楼·成品区·北货架·2层·1格",
+                              level_no=2, slot_no=1))['compact_title'] == '北货架'
 
 
 def test_readable_address_hides_internal_identity():
@@ -115,17 +120,21 @@ def test_whole_rack_grouping_uses_identity_not_name(monkeypatch):
     import app.api.warehouse as api
     monkeypatch.setattr(api, 'load_warehouse_location_projection_contexts', lambda db, rows: {})
     monkeypatch.setattr(api, '_require_printable_location_label', lambda *args: None)
-    monkeypatch.setattr(api, 'employee_location_name', lambda *args, **kwargs: '三楼·D02·A·2层·3格')
-    def query(area=10, rack='rack-a', code='A', kind='rack_slot', location_id=1):
+    monkeypatch.setattr(api, 'employee_location_name',
+                        lambda row, **kwargs: f'三楼·D02·{row.rack_display_name}·2层·3格')
+    def query(area=10, rack='rack-a', code='A', name='货A1', kind='rack_slot', location_id=1):
         row=SimpleNamespace(id=location_id,level_no=2,slot_no=3,address_area_id=area,
-                            map_rack_id=rack,rack_code=code,address_kind=kind)
+                            map_rack_id=rack,rack_code=code,rack_display_name=name,address_kind=kind)
         return api._mobile_shelf_location(SimpleNamespace(get=lambda *args:row),location_id)[1]
     first=query()
-    assert first['rack_label']=='D02-A架'
+    assert first['rack_label']=='货A1'
     assert query(location_id=2)['rack_key']==first['rack_key']
     assert query(area=11)['rack_key']!=first['rack_key']
     assert query(rack='rack-b')['rack_key']!=first['rack_key']
     assert query(rack=None)['rack_key']!=first['rack_key']
+    assert query(area=11,rack='rack-b',name='货A1')['rack_label']==first['rack_label']
+    assert query(name='R013架')['rack_label']=='R013'
+    assert query(name='北货架')['rack_label']=='北货架'
     assert 'rack_key' not in query(kind='ground_slot')
 
 

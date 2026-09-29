@@ -87,6 +87,14 @@ def legacy_scan_redirect(hostname, location_id, key=None):
     return mobile_url(origin, location_id, key)
 
 
+def compact_rack_title(value):
+    """Keep the published rack name, removing only a code-style trailing 架."""
+    title = str(value or "").strip()
+    if re.search(r"[A-Za-z0-9]架$", title):
+        return title[:-1]
+    return title
+
+
 def print_address(label):
     """Separate the published human area/rack names, never derive from internal codes."""
     title, position, _ = readable_address(label)
@@ -94,10 +102,10 @@ def print_address(label):
     head = [p for p in parts if not re.fullmatch(r"\d+层|\d+格", p)]
     if label.get("level_no") and label.get("slot_no") and len(head) >= 3:
         floor, area, rack = head[0], head[1], head[2]
-        rack = rack if rack.endswith("架") else rack + "架"
-        return dict(print_title=f"{area}-{rack}", print_floor=floor,
+        print_rack = rack if rack.endswith("架") else rack + "架"
+        return dict(print_title=f"{area}-{print_rack}", print_floor=floor,
                     print_position=position,
-                    compact_title=rack.removesuffix("架"),
+                    compact_title=compact_rack_title(rack),
                     compact_position=f"{int(label['level_no'])}层-{int(label['slot_no'])}格")
     return dict(print_title=title, print_floor="", print_position=position,
                 compact_title=title, compact_position=position)

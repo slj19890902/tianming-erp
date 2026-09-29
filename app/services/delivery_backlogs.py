@@ -153,6 +153,7 @@ def describe(db,row,*,inventory=True):
         ready_quantity=ready_customer,available_finished_quantity=free_customer,
         ready_physical_quantity=ready_physical,available_finished_physical_quantity=free_physical,
         customer_unit=customer_unit,physical_unit=physical_unit,reason=row.reason,
+        customer_quantity_step=int(basis['customer_basis']) if basis else 1,
         status='cancelled' if row.status=='cancelled' else 'fulfilled' if remaining==0 else 'partial' if done else 'waiting',
         cancelled_reason=row.cancelled_reason,created_at=utc_naive_to_api(row.created_at),
         sources=[dict(import_item_id=s.import_item_id,requested_quantity=s.requested_quantity,**json.loads(s.snapshot_json)) for s in db.scalars(select(Source).where(Source.backlog_id==row.id))],
@@ -187,14 +188,18 @@ def suggestions(db,user,*,customer_id,product_id,quantity,customer_order_no=None
         data=describe(db,row)
         if not data['remaining_quantity']:continue
         item=db.get(OrderItem,row.order_item_id)
+        # Allocate whole physical groups per frozen order. An odd remainder may
+        # fit a later order with another ratio; never invent half a stock piece.
+        take=min(remaining,data['remaining_quantity'],data['ready_quantity'])
+        take-=take%data['customer_quantity_step']
+        remaining-=take
         from app.api.deliveries import _delivery_kit_metadata,_inventory_sources_for_order_item
         data['candidate']=dict(order_item_id=item.id,order_id=item.order_id,order_number=data['order_number'],
             customer_po=data['customer_order_no'],product_id=row.product_id,product_code=row.stock_code,product_name=row.product_name,
             specification=item.snapshot_spec or '',remaining_quantity=data['ready_quantity'],deliverable_quantity=data['ready_quantity'],
             order_remaining_quantity=data['order_remaining_quantity'],
-            inventory_sources=_inventory_sources_for_order_item(db,order_item=item,planned_delivery_quantity=min(quantity,data['ready_quantity'])),
-            **_delivery_kit_metadata(db,item,planned_delivery_quantity=min(quantity,data['ready_quantity'])))
-        take=min(remaining,data['remaining_quantity'],data['ready_quantity']);remaining-=take
+            inventory_sources=_inventory_sources_for_order_item(db,order_item=item,planned_delivery_quantity=take),
+            **_delivery_kit_metadata(db,item,planned_delivery_quantity=take))
         output.append(dict(data,suggested_quantity=take,same_customer_order_no=bool(customer_order_no and row.customer_order_no==customer_order_no)))
     return dict(items=output,requested_quantity=quantity,unallocated_quantity=remaining,
         notice='草稿只关联原订单；按实际发货数量核销。已有新单明细不能冒充旧单补送，请按预览选择对应原订单。')

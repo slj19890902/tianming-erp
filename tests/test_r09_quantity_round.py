@@ -151,3 +151,24 @@ def test_backlog_dispatch_cancel_and_print_keep_both_quantities(routing_app):
             row = describe(db, db.get(DeliveryBacklog, backlog_id))
             assert (row["fulfilled_quantity"], row["remaining_quantity"]) == (0, 1000)
             assert (row["ready_quantity"], row["ready_physical_quantity"]) == (1000, 500)
+
+
+def test_backlog_preview_leaves_incomplete_physical_group_unallocated(routing_app):
+    from app.models.user import User
+    from app.services.delivery_backlogs import suggestions
+
+    with TestClient(routing_app) as client:
+        order_id, purchase_id, line_id = prepare(routing_app, client, ratio="0.5")
+        posted = receive(client, purchase_id, line_id, 500, key="r09-odd-stock")
+        assert posted.status_code == 200, posted.text
+    _, item_id, customer_id = _backlog(routing_app.state.factory, order_id)
+    with routing_app.state.factory() as db:
+        from app.models.order import OrderItem
+        item = db.get(OrderItem, item_id)
+        actor = db.scalar(select(User).where(User.username == "p1-40a-admin"))
+        for requested, expected in ((1, 0), (3, 2), (1001, 1000)):
+            preview = suggestions(db, actor, customer_id=customer_id,
+                product_id=item.product_id, quantity=requested)
+            assert preview["items"][0]["suggested_quantity"] == expected
+            assert preview["unallocated_quantity"] == requested - expected
+            assert preview["items"][0]["customer_quantity_step"] == 2

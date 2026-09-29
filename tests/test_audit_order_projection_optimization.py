@@ -118,7 +118,13 @@ def test_cold_projection_avoids_loading_non_page_order_item_details(tmp_path, mo
 def test_lightweight_status_inputs_preserve_direct_liner_eligibility(b1_app, style, reserved):
     from app.models.product import Product
     from app.models.warehouse_inventory import InventoryLot
+    from tests.test_inventory_cost_snapshot import _material
     app, factory = b1_app
+    # The real inventory writer now requires a quoted material. Keep this
+    # projection fixture valid without mocking or relaxing that cost gate.
+    with factory() as db:
+        _material(db, code="A416D", price="2", supplier="测试供应商")
+        db.commit()
     lot_id, version = add_semi_lot(factory, quantity=12, key="audit-liner")
     with factory() as db:
         product = db.get(Product, 1)

@@ -64,7 +64,7 @@ class RecoveryTests(unittest.TestCase):
         with closing(sqlite3.connect(shared / 'data/carton_erp.sqlite3')) as db:
             db.execute('CREATE TABLE alembic_version(version_num TEXT)')
             db.execute("INSERT INTO alembic_version VALUES ('r1')")
-            for name in ('users', 'customers', 'products', 'sales_orders'):
+            for name in ('users', 'customers', 'products', 'sales_orders', 'sales_order_items'):
                 db.execute(f'CREATE TABLE {name}(id INTEGER PRIMARY KEY, note TEXT)')
                 db.execute(f"INSERT INTO {name} VALUES (1, 'synthetic')")
             db.commit()
@@ -75,13 +75,33 @@ class RecoveryTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def release(self, version, revision='r1'):
+    def release(self, version, revision='r1', extra_tables=()):
         source = self.root / ('source-' + version)
         source.mkdir()
         for name in ('runtime/python.exe', 'main.py', 'app/main.py', 'desktop_assistant/server_entry.py'):
             path = source / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(version)
+        models = source / 'app/models'
+        models.mkdir()
+        (models / '__init__.py').write_text(
+            'from sqlalchemy.orm import DeclarativeBase\n'
+            'class Base(DeclarativeBase):\n    pass\n'
+            'from app.models.fixture import FixtureUser, FixtureCustomer, FixtureProduct, FixtureOrder, FixtureOrderItem\n',
+            encoding='utf-8',
+        )
+        tables = ('users', 'customers', 'products', 'sales_orders', 'sales_order_items', *extra_tables)
+        class_names = ('FixtureUser', 'FixtureCustomer', 'FixtureProduct', 'FixtureOrder', 'FixtureOrderItem')
+        definitions = ['from sqlalchemy.orm import Mapped, mapped_column', 'from app.models import Base']
+        for index, table in enumerate(tables):
+            class_name = class_names[index] if index < len(class_names) else f'FixtureExtra{index}'
+            definitions.extend((
+                f'class {class_name}(Base):',
+                f'    __tablename__ = {table!r}',
+                '    id: Mapped[int] = mapped_column(primary_key=True)',
+                '    note: Mapped[str]',
+            ))
+        (models / 'fixture.py').write_text('\n'.join(definitions) + '\n', encoding='utf-8')
         target = self.root / (version + '.zip')
         pack_tree(source, target, {'type': 'tianming.release.v1', 'version': version, 'revision': revision}, self.key)
         return target

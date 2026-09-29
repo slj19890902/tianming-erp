@@ -1,9 +1,10 @@
 from contextlib import closing
+import shutil
 import sqlite3
 import unittest
 from unittest.mock import patch
 from tests.desktop_assistant import test_recovery as recovery
-from desktop_assistant.storage import pack_tree,sha
+from desktop_assistant.storage import database_info, encrypt_file, pack_recovery, pack_tree, sha
 from desktop_assistant.manager import Manager
 
 
@@ -16,7 +17,7 @@ class CrossRevisionTests(unittest.TestCase):
     def tearDown(self):self.fixture.tearDown()
 
     def package(self,name='next',old=None):
-        package=self.fixture.release(name,'r2').with_name(name+'-signed.zip')
+        package=self.fixture.release(name,'r2',extra_tables=('new_feature',)).with_name(name+'-signed.zip')
         pack_tree(self.fixture.root/('source-'+name),package,{'type':'tianming.release.v1',
             'version':name,'revision':'r2','migration':{'policy':'preserve_existing_facts_v1',
             'from_revision':'r1','rollback_package_sha256':old or self.manager.state['current']}},self.fixture.key)
@@ -24,7 +25,7 @@ class CrossRevisionTests(unittest.TestCase):
 
     def migrate(self,release,shared,revision,log,environment=None):
         with closing(sqlite3.connect(shared/'data/carton_erp.sqlite3')) as db:
-            db.execute('CREATE TABLE new_feature(id INTEGER PRIMARY KEY, value TEXT)')
+            db.execute('CREATE TABLE new_feature(id INTEGER PRIMARY KEY, note TEXT)')
             db.execute('UPDATE alembic_version SET version_num=?',(revision,));db.commit()
         log.write_text('fixture migration')
 
@@ -46,8 +47,37 @@ class CrossRevisionTests(unittest.TestCase):
         self.assertTrue(restored.compatible(restored.state['current'],'r2'))
         with closing(sqlite3.connect(restored.root/'shared/data/carton_erp.sqlite3')) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM sales_orders').fetchone()[0],2)
-            self.assertEqual(db.execute('SELECT value FROM new_feature').fetchone()[0],'new version fact')
+            self.assertEqual(db.execute('SELECT note FROM new_feature').fetchone()[0],'new version fact')
             self.assertEqual(db.execute('SELECT version_num FROM alembic_version').fetchone()[0],'r2')
+
+    def test_cross_revision_restore_uses_authority_schema_contract(self):
+        old=self.manager.state['current'];package=self.package()
+        with patch('desktop_assistant.migration.run_migration',side_effect=self.migrate):
+            self.manager.update(package,recovery.PASSWORD,self.fixture.nas)
+        self.manager.rollback(recovery.PASSWORD,self.fixture.nas)
+        state=self.manager.state
+        self.assertEqual(state['current'],old)
+        shared=self.fixture.root/'cross-incomplete-shared'
+        shutil.copytree(self.manager.root/'shared',shared)
+        database=shared/'data/carton_erp.sqlite3'
+        with closing(sqlite3.connect(database)) as db:
+            db.execute('DROP TABLE new_feature');db.commit()
+        raw=self.fixture.root/'cross-incomplete.zip'
+        encrypted=self.fixture.root/'cross-incomplete.tmbackup'
+        pack_recovery(shared,{
+            'release.zip':self.manager.root/'packages'/(state['current']+'.zip'),
+            'compatibility.zip':self.manager.root/'packages'/(state['schema_authority']+'.zip'),
+        },raw,{'type':'tianming.recovery.v1','created':'2026-09-29T22:00:00+08:00',
+               'release':state['current'],'version':self.manager.manifest()['version'],
+               'database':database_info(database),'source_shared':str(shared),
+               'schema_authority':state['schema_authority']})
+        encrypt_file(raw,encrypted,recovery.PASSWORD)
+        restored=recovery.TestManager(self.fixture.root/'rejected-cross-incomplete',self.fixture.public)
+
+        with self.assertRaisesRegex(ValueError,'必要结构'):
+            restored.restore(encrypted,recovery.PASSWORD)
+        self.assertIsNone(restored.state['current'])
+        self.assertFalse(any((restored.root/'shared').iterdir()))
 
     def test_registered_invoice_attachment_is_required_for_complete_backup(self):
         folder=self.manager.root/'shared/data/invoice_attachments';folder.mkdir()

@@ -301,10 +301,10 @@ def build_order_business_statuses(
                 .where(Product.id.in_(product_ids))
             ).all()
         }
-        # Small detail pages already retain their few products in the session.
-        # The explicit batch matters only for large list projections, where it
-        # prevents the direct-liner check from reloading the same products.
-        if len(item_ids) > 100 and product_ids
+        # Always batch this lookup.  Scanner/list callers commonly pass tens of
+        # freshly-loaded order rows, so relying on the identity map below the
+        # old threshold produced one Product SELECT per order item.
+        if product_ids
         else {}
     )
 

@@ -1,3 +1,4 @@
+import { apiErrorMessage } from "./warehouseApiError.mjs";
 import { areaRackLabelBatch } from "./rackLabelBatch.mjs";
 import { EntryProductButton } from "./EntryProductButton";
 import { OrderReference } from './OrderReference';
@@ -942,13 +943,6 @@ const EMPTY_CANVAS_IDS: string[] = [];
 const CALIBRATION_POINT_LABELS = ["门1", "门2", "内"];
 const EMPTY_PRODUCTION_PROJECTIONS: ProductionTaskProjection[] = [];
 
-function apiErrorMessage(body: unknown, status: number) {
-  if (body && typeof body === "object" && "detail" in body) {
-    const detail = (body as { detail?: unknown }).detail;
-    if (typeof detail === "string") return detail;
-  }
-  return status === 401 ? "登录状态已失效" : `请求失败（${status}）`;
-}
 
 export function availableFormalAreasForFeature(
   areas: FormalWarehouseAreaOption[],
@@ -4822,6 +4816,7 @@ export function WarehouseTwinApp() {
       const message = (reason as Error).message;
       setWarehouseOperationMessage(written
         ? "盘点已写入，但地图刷新失败；已提交草稿已清除，请刷新核对，不要重复补录。"
+        : status === 422 ? `未入库：${message}。请核对后重试，草稿已保留。`
         : `盘点结果未确认：${message}。解决方法：${stocktakeBlockResolution(message)} 页面草稿与本次幂等键已保留，可核对后重试。`);
     } finally {
       setStocktakeBatchBusy(false);
@@ -7495,6 +7490,7 @@ export function WarehouseTwinApp() {
     </section>
     {mapMode === "move" && moveAction !== "ground" && (canExecuteWarehouse || canStocktake) && <section className={`twin-move-draft-bar ${moveAction === "merge" ? "merge-mode" : moveAction === "stocktake" ? "stocktake-mode" : ""}`} aria-label={moveAction === "stocktake" ? "盘点调整页面草稿汇总" : moveAction === "merge" ? "多栈合并页面草稿汇总" : "移货页面草稿汇总"}>
       {moveAction === "stocktake" ? <>
+        {warehouseOperationMessage && <div className="twin-location-message" role="alert" aria-live="assertive" style={{gridColumn:"1 / -1", margin:0}}>{warehouseOperationMessage}</div>}
         <div className="twin-move-draft-heading"><div><small>新增入库草稿 · 尚未写入</small><b>{stocktakeDrafts.length ? `${stocktakeDrafts.length} 条待确认调整` : "尚无新增草稿"}</b></div><span>{stocktakeDrafts.length ? "一次确认整批提交；失败后草稿和重试键都会保留。" : "已有货物请填写实际数量；未登记实物才新增入库。"}</span></div>
         <div className="twin-move-draft-list">{stocktakeDrafts.map((item) => <article key={item.client_item_id}>
           <div><b>{item.operation === "add" ? "盘点新增" : "盘点调减"} · {item.inventory_code}</b><span>{item.customer_name} · {item.product_name}</span></div>

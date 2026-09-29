@@ -6,6 +6,7 @@ test('422 reveals row and field without echoing request input',()=>{
  assert.equal(apiErrorMessage({detail:[{loc:['body','idempotency_key'],type:'string_too_long'}]},422),'提交凭证：内容超过允许长度');
 });
 test('business rejection and authentication/network fallback remain readable',()=>{
+ assert.equal(apiErrorMessage({detail:{code:'INVENTORY_ENTRY_INCOMPLETE',message:'本次入库尚未保存：请补齐实物规格后继续',product_id:3822}},422),'本次入库尚未保存：请补齐实物规格后继续');
  assert.equal(apiErrorMessage({detail:'货位版本已变化'},409),'货位版本已变化');
  assert.equal(apiErrorMessage({},401),'登录状态已失效');
  assert.equal(apiErrorMessage({},503),'请求失败（503）');

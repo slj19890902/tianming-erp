@@ -10,6 +10,59 @@ from app.core.receipt_price_guard import ReceiptPriceGuardSession
 from sqlalchemy.sql.elements import TextClause
 
 
+def _positive(value):
+    try:
+        number = Decimal(str(value))
+        return number.is_finite() and number > 0
+    except (InvalidOperation, ValueError, TypeError):
+        return False
+
+
+def _assembled_specifications(cost, basis):
+    """Validate all frozen assembly leaves, never today's mutable master data."""
+    if (cost.get('algorithm_version') != 'assembled-entry-v1'
+            or cost.get('source') != 'assembled'
+            or cost.get('product_id') != basis.get('product_id')):
+        return False
+    parts, assembly = cost.get('components'), basis.get('assembly')
+    if not isinstance(parts, list) or not parts or not isinstance(assembly, list) or len(parts) != len(assembly):
+        return False
+    def identities(rows, quantity):
+        result = {}
+        for row in rows:
+            if not isinstance(row, dict) or not row.get('product_id') or not _positive(row.get(quantity)):
+                return None
+            if row['product_id'] in result:
+                return None
+            result[row['product_id']] = Decimal(str(row[quantity]))
+        return result
+    actual, expected = identities(parts, 'quantity_per_set'), identities(assembly, 'quantity')
+    if actual is None or expected is None or actual != expected:
+        return False
+
+    def complete(node, product_id, depth=0):
+        if not isinstance(node, dict) or node.get('product_id') != product_id or depth > 64:
+            return False
+        children = node.get('components')
+        if node.get('source') in {'assembled', 'manufactured', 'purchased'}:
+            if not isinstance(children, list) or not children:
+                return False
+            if node['source'] != 'assembled' and not any(
+                    isinstance(p, dict) and p.get('product_id') == product_id for p in children):
+                return False
+            return all(isinstance(p, dict) and _positive(p.get('quantity_per_set'))
+                       and complete(p.get('evidence'), p.get('product_id'), depth + 1) for p in children)
+        # Material evidence at a leaf must cover every physical sheet.
+        if isinstance(children, list) and children:
+            return all(isinstance(p, dict) and _positive(p.get('length_mm'))
+                       and _positive(p.get('width_mm')) for p in children)
+        rule = node.get('cost_rule')
+        return (isinstance(rule, dict) and rule.get('mode') == 'material'
+                and _positive(rule.get('length_mm')) and _positive(rule.get('width_mm')))
+
+    return complete(cost, basis['product_id'])
+
+
 @event.listens_for(ReceiptPriceGuardSession, 'do_orm_execute')
 def reject_untracked_insert(state):
     table = getattr(state.statement, 'table', None)
@@ -79,7 +132,8 @@ def validate_entries(session):
                 and lot.source_ref_type in {'external_packaging_receipt_item', 'direct_external_receipt'}
                 and cost_detail.get('external_receipt_item_id') == lot.source_ref_id)
             has_external_spec = external_source and isinstance(external_spec, dict) and bool(external_spec)
-            if not basis.get('spec') and not (detail.length_mm and detail.width_mm) and not has_sheet and not has_external_spec:
+            has_assembly_spec = _assembled_specifications(cost_detail, basis)
+            if not basis.get('spec') and not (detail.length_mm and detail.width_mm) and not has_sheet and not has_external_spec and not has_assembly_spec:
                 missing.append('实物规格')
         elif lot.semi_finished_detail:
             sheet = lot.semi_finished_detail

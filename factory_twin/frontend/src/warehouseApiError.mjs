@@ -2,6 +2,7 @@ const fields = {items:'明细',quantity:'数量',stock_date:'库存日期',custo
 export function apiErrorMessage(body, status) {
   const detail = body && typeof body === 'object' ? body.detail : null;
   if (typeof detail === 'string') return detail;
+  if (detail && !Array.isArray(detail) && typeof detail.message === 'string' && detail.message.trim()) return detail.message;
   if (Array.isArray(detail) && detail.length) {
     return detail.map(error => {
       const loc = Array.isArray(error?.loc) ? error.loc : [];

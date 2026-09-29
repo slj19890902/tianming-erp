@@ -6091,7 +6091,7 @@
                   <span v-else-if="managedRestoreStatus.status === 'backup_unavailable'" class="status red">完整备份文件不可达</span>
                   <span v-else-if="managedRestoreStatus.configured" class="status orange">尚无可确认的完整备份</span>
                   <span v-else class="status gray">未检测到桌面助手</span>
-                  <span v-if="managedRestoreStatus.release"><strong>配套版本：</strong>{{ managedRestoreStatus.release.version || '-' }} · {{ managedRestoreStatus.release.revision || '-' }}</span>
+                  <span v-if="managedRestoreStatus.release"><strong>当前程序：</strong>{{ managedRestoreStatus.release.version || '-' }} · {{ managedRestoreStatus.release.revision || '-' }}</span>
                 </div>
                 <div v-if="managedRestoreStatus.latest_backup" style="margin-top:8px">
                   最近完整备份：<strong>{{ managedRestoreStatus.latest_backup.filename }}</strong>

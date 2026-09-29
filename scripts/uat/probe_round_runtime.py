@@ -31,5 +31,10 @@ check_blocked("outside_file_write", lambda: (root.parent / "round-guard-must-not
 check_blocked("outside_database", lambda: sqlite3.connect(root.parent / "round-guard-must-not-exist.sqlite3"))
 with socket.socket() as client:
     check_blocked("external_network", lambda: client.connect(("192.0.2.1", 443)))
+# Different loopback ports are blocked too; probe an unused synthetic port,
+# never a production listener. The audit hook rejects before the system call.
+other_port = 19998 if int(os.environ["ERP_PORT"]) != 19998 else 19997
+with socket.socket() as client:
+    check_blocked("other_local_service", lambda: client.connect(("127.0.0.1", other_port)))
 check_blocked("subprocess", lambda: subprocess.run(["cmd", "/c", "exit", "0"], check=True))
 print(json.dumps({"loaded_consumers": consumers, "blocked_operations": blocked}, ensure_ascii=False))

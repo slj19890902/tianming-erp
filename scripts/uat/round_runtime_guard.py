@@ -9,6 +9,9 @@ if root.parent != Path("D:/tm-uat").resolve() or not root.name.startswith("round
     os._exit(78)  # sitecustomize exceptions alone do not stop Python startup.
 if os.environ.get("ERP_ENVIRONMENT") != "test":
     os._exit(78)
+port = int(os.environ.get("ERP_PORT", "0"))
+if not 18001 <= port <= 19999:
+    os._exit(78)
 sys.dont_write_bytecode = True
 
 
@@ -43,9 +46,16 @@ def guard(event, args):
         address = args[1]
         if not isinstance(address, tuple) or address[0] not in ("127.0.0.1", "::1"):
             raise PermissionError("UAT_EXTERNAL_NETWORK_BLOCKED")
+        frame = sys._getframe(1)
+        socket_module = sys.modules.get("socket")
+        internal_pair = bool(socket_module and
+            frame.f_code.co_filename == socket_module.__file__ and
+            frame.f_code.co_name in ("socketpair", "_fallback_socketpair"))
+        if address[1] != port and not internal_pair:
+            raise PermissionError("UAT_OTHER_LOCAL_SERVICE_BLOCKED")
     elif event in ("subprocess.Popen", "os.system"):
         raise PermissionError("UAT_EXTERNAL_PROCESS_BLOCKED")
 
 
 sys.addaudithook(guard)
-(root / f"runtime-guard-{os.getpid()}.txt").write_text("test; loopback only; writes inside run root", encoding="utf8")
+(root / f"runtime-guard-{os.getpid()}.txt").write_text("test; own loopback port only; writes inside run root", encoding="utf8")

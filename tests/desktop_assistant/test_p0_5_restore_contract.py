@@ -130,6 +130,38 @@ def test_incomplete_database_inside_full_package_never_activates(
 
     assert target.state["current"] is None
     assert not any((target.root / "shared").iterdir())
+    assert not any((target.root / "releases").iterdir())
+    assert not any((target.root / "packages").iterdir())
+
+
+@pytest.mark.parametrize("tamper", ["changed", "extra", "manifest"])
+def test_restore_rejects_changed_existing_program_cache(recovery_case, tamper):
+    case = recovery_case
+    backup = case.manager.backup(PASSWORD, case.nas)
+    target = TestManager(case.root / "cached-target", case.public)
+    package = case.manager.root / "packages" / f'{case.manager.state["current"]}.zip'
+    release = target.stage_release(package)
+    cached = target.root / "releases" / release["id"]
+    if tamper == "changed":
+        (cached / "main.py").write_text("changed after signing", encoding="utf8")
+    elif tamper == "extra":
+        (cached / "sitecustomize.py").write_text("unlisted program", encoding="utf8")
+    else:
+        (cached / "manifest.json").write_text('{}', encoding="utf8")
+    with pytest.raises(ValueError, match="缓存"):
+        target.restore(backup, PASSWORD)
+    assert target.state["current"] is None
+    assert not any((target.root / "shared").iterdir())
+
+
+def test_restore_reuses_unchanged_verified_program_cache(recovery_case):
+    case = recovery_case
+    backup = case.manager.backup(PASSWORD, case.nas)
+    target = TestManager(case.root / "cached-good-target", case.public)
+    package = case.manager.root / "packages" / f'{case.manager.state["current"]}.zip'
+    release = target.stage_release(package)
+    assert target.restore(backup, PASSWORD)["started"] is False
+    assert target.state["current"] == release["id"]
 
 
 def test_missing_required_column_with_self_consistent_manifest_never_activates(

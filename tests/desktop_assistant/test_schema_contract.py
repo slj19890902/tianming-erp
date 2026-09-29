@@ -175,3 +175,30 @@ def test_changed_model_bytes_fail_even_when_manifest_signature_is_unchanged(tmp_
 
     with pytest.raises(ValueError, match="模型文件校验失败"):
         schema_contract_from_signed_release(tampered, public)
+
+
+@pytest.mark.parametrize("definition", [
+    "Base = make_runtime_base()",
+    "class Base(DeclarativeBase):\n    inherited: Mapped[int]",
+    "class Base(UnknownMixin, DeclarativeBase):\n    pass",
+    "class Base(DeclarativeBase):\n    pass\nBase = wrap(Base)",
+])
+def test_unknown_base_cannot_silently_omit_inherited_columns(definition):
+    sources = _sources()
+    sources["app/models/__init__.py"] = (
+        "from sqlalchemy.orm import DeclarativeBase, Mapped\n" + definition
+        + "\nfrom app.models.fixture import Example\n").encode()
+    with pytest.raises(ValueError, match="静态"):
+        schema_contract_from_sources(sources, "r1")
+
+
+@pytest.mark.parametrize("class_head", [
+    "@inject_runtime_columns\nclass Example(Base):",
+    "class Example(Base, metaclass=RuntimeColumns):",
+])
+def test_runtime_class_transform_cannot_hide_database_requirements(class_head):
+    sources = _sources()
+    sources["app/models/fixture.py"] = sources["app/models/fixture.py"].replace(
+        b"class Example(Base):", class_head.encode())
+    with pytest.raises(ValueError, match="静态"):
+        schema_contract_from_sources(sources, "r1")

@@ -29,7 +29,7 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MODEL_PREFIX = "app/models/"
 _MODEL_LIMIT = 32 * 1024 * 1024
-_STRUCTURAL_NAMES = {"Base", "Column", "Mapped", "mapped_column", "relationship"}
+_STRUCTURAL_NAMES = {"Base", "DeclarativeBase", "Column", "Mapped", "mapped_column", "relationship"}
 
 
 def _parse(path: str, raw: bytes) -> ast.Module:
@@ -149,8 +149,33 @@ def _reject_structural_aliases(path: str, tree: ast.Module) -> None:
                     raise ValueError(f"模型结构模块导入无法静态确认：{path}:{item.name}")
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             _name, value, _annotation = _assigned(node)
+            if _name in _STRUCTURAL_NAMES:
+                raise ValueError(f"模型结构符号被重新定义，无法静态确认：{path}:{_name}")
             if isinstance(value, ast.Name) and value.id in _STRUCTURAL_NAMES:
                 raise ValueError(f"模型结构符号使用运行时别名，无法静态确认：{path}:{value.id}")
+
+
+def _validate_base(trees: Mapping[str, ast.Module]) -> None:
+    """The supported ERP grammar has exactly one empty DeclarativeBase.
+
+    Inherited columns/factories require a new reviewed contract version, not a
+    best-effort projection that quietly forgets their database requirements.
+    """
+    definitions = [(path, node) for path, tree in trees.items() for node in ast.walk(tree)
+                   if isinstance(node, ast.ClassDef) and node.name == "Base"]
+    if len(definitions) != 1:
+        raise ValueError("模型Base必须具有唯一静态定义")
+    path, base = definitions[0]
+    if (path != "app/models/__init__.py" or base not in trees[path].body
+            or base.decorator_list or base.keywords or len(base.bases) != 1
+            or not isinstance(base.bases[0], ast.Name) or base.bases[0].id != "DeclarativeBase"
+            or any(not isinstance(node, ast.Pass) for node in base.body)):
+        raise ValueError("模型Base继承或字段无法静态确认")
+    imports = [node for node in trees[path].body if isinstance(node, ast.ImportFrom)
+               and node.module == "sqlalchemy.orm" and not node.level]
+    if not any(any(item.name == "DeclarativeBase" and not item.asname for item in node.names)
+               for node in imports):
+        raise ValueError("模型Base来源无法静态确认")
 
 
 def _column_name(call: ast.Call, attribute_name: str, table_name: str) -> str:
@@ -199,6 +224,7 @@ def schema_contract_from_sources(sources: Mapping[str, bytes], revision: str) ->
     if not model_sources or sum(len(raw) for raw in model_sources.values()) > _MODEL_LIMIT:
         raise ValueError("签名程序模型源码缺失或过大")
     reachable, trees = _registered_modules(model_sources)
+    _validate_base(trees)
     tables: dict[str, list[str]] = {}
     for path in sorted(reachable):
         _reject_structural_aliases(path, trees[path])
@@ -228,6 +254,8 @@ def schema_contract_from_sources(sources: Mapping[str, bytes], revision: str) ->
                 continue
             if bases != ["Base"] or not table_name or not _IDENTIFIER.fullmatch(table_name):
                 raise ValueError(f"模型继承或表名无法静态确认：{path}:{class_node.name}")
+            if class_node.decorator_list or class_node.keywords:
+                raise ValueError(f"模型装饰器或元类无法静态确认：{path}:{class_node.name}")
             if table_name in tables:
                 raise ValueError(f"模型表名重复：{table_name}")
             columns: set[str] = set()

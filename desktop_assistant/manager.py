@@ -73,11 +73,11 @@ class Manager:
                 and contract.get('policy') == 'preserve_existing_facts_v1'
                 and contract.get('rollback_package_sha256') == release)
 
-    def stage_release(self, package: Path) -> dict:
+    def stage_release(self, package: Path, *, verify_existing: bool = False) -> dict:
         # Hash names avoid arbitrary version strings becoming paths.
         identity = sha(package)
         destination = self.root / 'releases' / identity
-        if not destination.exists():
+        if not destination.exists() or verify_existing:
             stage = self.root / 'staging' / uuid.uuid4().hex
             manifest = extract_verified(package, stage, self.public_key)
             if manifest.get('type') != 'tianming.release.v1':
@@ -87,7 +87,15 @@ class Manager:
                 raise ValueError('发布包缺少程序或运行环境')
             if any((stage / p).exists() for p in ('data', '.env', 'static/uploads', 'factory_twin/data')):
                 raise ValueError('程序发布包不得携带业务数据或配置')
-            stage.rename(destination)
+            if destination.exists():
+                # Restore must authenticate the code that will actually run,
+                # not merely the archive or its mutable manifest cache.
+                self._verify_cached_release(destination, manifest)
+                if stage.resolve().parent != (self.root / 'staging').resolve():
+                    raise ValueError('恢复校验暂存路径异常')
+                shutil.rmtree(stage)
+            else:
+                stage.rename(destination)
         # Preserve the signed source for recovery even after app data junctions exist.
         cache = self.root / 'packages' / (identity + '.zip')
         if not cache.exists():
@@ -95,6 +103,21 @@ class Manager:
         if sha(cache) != identity:
             raise ValueError('缓存发布包校验失败')
         return {'id': identity, **read_json(destination / 'manifest.json')}
+
+    def _verify_cached_release(self, destination: Path, manifest: dict) -> None:
+        if destination.is_symlink() or destination.is_junction():
+            raise ValueError('恢复程序缓存不得使用链接')
+        entries = list(destination.rglob('*'))
+        if any(path.is_symlink() or path.is_junction() for path in entries):
+            raise ValueError('恢复程序缓存包含链接，不能确认安全')
+        actual = {path.relative_to(destination).as_posix() for path in entries if path.is_file()}
+        if actual != set(manifest['files']) | {'manifest.json'}:
+            raise ValueError('恢复程序缓存文件清单不一致')
+        if read_json(destination / 'manifest.json') != manifest:
+            raise ValueError('恢复程序缓存版本信息不一致')
+        for name, expected in manifest['files'].items():
+            if sha(destination / name) != expected:
+                raise ValueError('恢复程序缓存文件校验失败：' + name)
 
     def _process(self):
         path = self.root / 'control' / 'process.json'
@@ -549,9 +572,7 @@ class Manager:
             release_manifest, release_contract = schema_contract_from_signed_release(
                 payload / 'release.zip', self.public_key
             )
-            release = self.stage_release(payload / 'release.zip')
-            if any(release.get(key) != value for key, value in release_manifest.items()):
-                raise ValueError('恢复程序与签名版本信息不一致')
+            release = {'id': manifest['release'], **release_manifest}
             authority = manifest.get('schema_authority')
             authority_manifest = None
             authority_contract = None
@@ -562,9 +583,6 @@ class Manager:
                 authority_manifest, authority_contract = schema_contract_from_signed_release(
                     compatible_package, self.public_key
                 )
-                staged_authority = self.stage_release(compatible_package)
-                if any(staged_authority.get(key) != value for key, value in authority_manifest.items()):
-                    raise ValueError('恢复兼容授权与签名版本信息不一致')
             directly_compatible = release_manifest['revision'] == info['revision']
             if not directly_compatible and authority_manifest:
                 migration = authority_manifest.get('migration') or {}
@@ -573,8 +591,9 @@ class Manager:
                     and migration.get('policy') == 'preserve_existing_facts_v1'
                     and migration.get('rollback_package_sha256') == release['id']
                 )
-            if (not directly_compatible
-                    or not self.compatible(release['id'], info['revision'], authority)):
+            # Same compatibility rule as compatible(), applied only to the
+            # authenticated archive facts; no mutable extracted manifest.
+            if not directly_compatible:
                 raise ValueError('备份程序与数据不兼容')
             contract = release_contract if release['revision'] == info['revision'] else authority_contract
             if not contract or contract['revision'] != info['revision']:
@@ -591,6 +610,10 @@ class Manager:
             if database_info(database) != info:
                 raise ValueError('恢复库最终完整性、表计数或版本复核失败')
             validate_database_schema(database, contract)
+            # Promote program caches only after all payload checks pass.
+            if authority:
+                self.stage_release(compatible_package, verify_existing=True)
+            self.stage_release(payload / 'release.zip', verify_existing=True)
             (self.root / 'shared').rmdir()  # proven empty above
             (payload / 'shared').rename(self.root / 'shared')
             write_json(self.root / 'state.json', {'current': release['id'], 'previous': None,

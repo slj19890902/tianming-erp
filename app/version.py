@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.532"
-APP_VERSION_NAME = "产品标签文字编辑"
+APP_VERSION = "v0.22.533"
+APP_VERSION_NAME = "货架入库错误明确反馈"
 APP_BUILD_DATE = "2026-09-29"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5112,3 +5112,7 @@ APP_CHANGELOG = [*(f"v0.22.531：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["产品标签文字过长时可编辑客户简称、品名和规格，更新预览后打印，也可恢复原文。", "仅修改本次打印内容，不改产品资料、库存、位置或手机二维码身份；保留40×80毫米版式。"]
 APP_VERIFICATION_STEPS = ["仓库产品标签打开编辑标签文字，缩短Z.001.000148的客户简称或品名，更新预览后打印。", "核对编码、位置和二维码保留，编辑区不会印到标签，原资料未改变。"]
 APP_CHANGELOG = [*(f"v0.22.532：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["货架添加货物提交失败时，在确认按钮同一区域显示具体原因，展开货架也不会隐藏反馈。", "显示服务器字段校验明细，保留失败草稿、同凭证重试和成功后清空保护；不改变库存入账规则。"]
+APP_VERIFICATION_STEPS = ["刷新仓库地图后重新填写待添加货物，点击一次确认；失败时在下方核对具体字段错误。", "成功时确认草稿清空、库存更新；此版本不代管理员新增库存。"]
+APP_CHANGELOG = [*(f"v0.22.533：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

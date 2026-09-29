@@ -7437,6 +7437,21 @@ def _unordered_finished_customer_summaries(
     ]
 
 
+def _active_delivery_candidate_identities(db: Session, grouped: dict[int, dict]) -> list[dict]:
+    """Only the identity needed to select an already-authorized delivery source.
+
+    This does not expose the customer master, contact, credit or tax details.
+    Both delivery loaders share the same active-customer qualification.
+    """
+    if not grouped:
+        return []
+    identities = db.execute(select(Customer.id, Customer.name, Customer.customer_code).where(
+        Customer.id.in_(grouped), Customer.is_active.is_(True)))
+    return sorted(({
+        **grouped[int(row.id)], "customer_name": row.name, "customer_code": row.customer_code,
+    } for row in identities), key=lambda row: (row["customer_name"], row["customer_id"]))
+
+
 def _delivery_customer_candidates_from_pending_items(
     db: Session,
     *,
@@ -7489,25 +7504,7 @@ def _delivery_customer_candidates_from_pending_items(
             summary["available_quantity"]
         )
 
-    if grouped:
-        active_customer_ids = set(
-            db.scalars(
-                select(Customer.id).where(
-                    Customer.id.in_(grouped),
-                    Customer.is_active.is_(True),
-                )
-            ).all()
-        )
-        grouped = {
-            customer_id: candidate
-            for customer_id, candidate in grouped.items()
-            if customer_id in active_customer_ids
-        }
-
-    return sorted(
-        grouped.values(),
-        key=lambda row: (row["customer_name"], row["customer_id"]),
-    )
+    return _active_delivery_candidate_identities(db, grouped)
 
 
 def _delivery_customer_candidates_from_summaries(
@@ -7553,10 +7550,7 @@ def _delivery_customer_candidates_from_summaries(
             summary["available_quantity"]
         )
 
-    return sorted(
-        grouped.values(),
-        key=lambda row: (row["customer_name"], row["customer_id"]),
-    )
+    return _active_delivery_candidate_identities(db, grouped)
 
 
 @router.get("/unordered-finished-candidates")

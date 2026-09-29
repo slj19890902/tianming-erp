@@ -11896,7 +11896,17 @@
             const candidates = new Map((this.deliveryCustomerCandidates || []).map(row => [Number(row.customer_id), row]));
             const editingCustomerId = this.deliveryForm.editingId ? Number(this.deliveryForm.customer_id) : null;
             const sources = this.deliveryCustomerSources || {orders:true, inventory:false};
-            return this.customerOptions.filter(row => (
+            // Delivery-scoped identities are already permissioned and active.
+            // A cold dashboard entry must not depend on loading master data.
+            const known = new Map((this.customerOptions || []).map(row => [Number(row.id), row]));
+            const options = [...candidates.values()].map(candidate => ({
+              ...(known.get(Number(candidate.customer_id)) || {}),
+              id:Number(candidate.customer_id), name:candidate.customer_name,
+              customer_code:candidate.customer_code || known.get(Number(candidate.customer_id))?.customer_code,
+              is_active:true,
+            }));
+            if (editingCustomerId && !candidates.has(editingCustomerId) && known.has(editingCustomerId)) options.push(known.get(editingCustomerId));
+            return options.filter(row => (
               (row.is_active && candidates.has(Number(row.id)) && (
                 (!!sources.orders && !!candidates.get(Number(row.id))?.has_pending_orders)
                 || (!!sources.inventory && !!candidates.get(Number(row.id))?.has_unordered_finished)

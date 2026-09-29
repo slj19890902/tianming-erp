@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from desktop_assistant.storage import archive_path, pack_tree, sha, write_json
+from desktop_assistant.schema_contract import schema_contract_from_sources
 
 
 def remove_transient_build_trees(output: Path) -> None:
@@ -96,6 +97,7 @@ def main():
                      'rollback_package_sha256': args.rollback_package_sha256}
     root, output = args.repo.resolve(), archive_path(args.output)
     code_sha, sources = source_snapshot(root, args.version, args.revision)
+    schema_contract = schema_contract_from_sources(sources, args.revision)
     if output.exists():
         raise ValueError('构建输出必须是新目录')
     if root == output or root in output.parents:
@@ -133,6 +135,7 @@ def main():
     package = output / 'release.zip'
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration,
+                            'schema_contract': schema_contract,
                             'offline_ocr_models': models}, key)
     if args.package_only:
         write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,

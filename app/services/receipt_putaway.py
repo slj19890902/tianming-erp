@@ -3,7 +3,7 @@ from sqlalchemy import select, update
 from app.models.receipt_putaway import ProductStoragePreference, ReceiptStagingArea
 from app.models.product import Product
 from app.models.user import User
-from app.models.warehouse_inventory import WarehouseArea, WarehouseFloor, WarehouseLocation, InventoryLot, FinishedGoodsInventoryDetail
+from app.models.warehouse_inventory import WarehouseArea, WarehouseFloor, WarehouseLocation, InventoryLot
 from app.services.fixed_shelf import ShelfError, location_info
 from app.services.location_candidates import operational_location_issue, claim_active_placed_location
 
@@ -75,7 +75,8 @@ def save(db, product_id, *, expected_version, area_id, location_id, address_vers
 
 def remember_stocktake(db, lot, operator_id):
     operator = db.get(User, operator_id) if operator_id else None
-    if not operator or operator.role not in {"admin", "boss"} or not lot.finished_detail:
+    if (not operator or operator.role not in {"admin", "boss"} or not lot.finished_detail
+            or lot.finished_detail.is_general):
         return
     product_id = lot.finished_detail.product_id
     # Serialize against explicit edits and other stocktakes for this product.
@@ -87,11 +88,6 @@ def remember_stocktake(db, lot, operator_id):
         return
     location = db.get(WarehouseLocation, lot.warehouse_location_id)
     if not location or location.storage_type != "rack" or location_issue(db, location):
-        return
-    locations = set(db.scalars(select(InventoryLot.warehouse_location_id).join(FinishedGoodsInventoryDetail).where(
-        FinishedGoodsInventoryDetail.product_id == product_id, InventoryLot.status.in_(["active", "frozen"]),
-        InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged > 0)).all())
-    if locations != {location.id}:
         return
     area = db.scalar(select(WarehouseArea).join(WarehouseFloor).where(
         WarehouseFloor.floor_number == location.warehouse_floor, WarehouseArea.area_code == location.area_code))

@@ -8400,6 +8400,8 @@ def place_twin_pending_lot(lot_id: int, payload: TwinStagingPlacementPayload, re
             expected_target_address_version=payload.expected_address_version,
             expected_target_map_revision=payload.expected_map_revision)
         if not result.replayed:
+            from app.services.receipt_putaway import remember_stocktake
+            remember_stocktake(db, result.target_lot, user.id)
             append_audit_event(db, request=request, actor=user, event_category="business", result="success",
                 source="web", module_code="warehouse", action_code="warehouse.recount.pending.place",
                 resource="InventoryLotTransfer", entity_id=result.transfer.id,

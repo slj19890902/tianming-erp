@@ -7198,10 +7198,15 @@
                 </div>
               </div>
               </fieldset>
-              <details v-if="productForm.id" :key="`storage-${productForm.id}`" class="product-secondary-disclosure" @toggle="$event.target.open && loadReceiptStorage()">
-                <summary>收料默认位置</summary>
-                <div style="padding:10px;background:#edf8f3">
+              <section v-if="productForm.id" :key="`storage-${productForm.id}`" class="panel" style="margin:10px 0;background:#edf8f3">
+                <div class="toolbar" style="margin-bottom:8px"><strong>以后默认存放位置</strong>
+                  <span v-if="!receiptStorage.loading && !receiptStorage.error && receiptStorage.product_id===productForm.id" :class="['status',receiptStorage.location_id ? 'green' : 'blue']">
+                    {{ receiptStorage.saved_label }}
+                  </span>
+                </div>
+                <div>
                   <div v-if="receiptStorage.loading">正在读取…</div>
+                  <div v-else-if="receiptStorage.error" class="notice error">{{ receiptStorage.error }} <button class="btn small" type="button" @click.prevent="loadReceiptStorage()">重新读取</button></div>
                   <template v-else-if="receiptStorage.product_id===productForm.id">
                     <div style="display:flex;gap:6px;flex-wrap:wrap">
                       <select class="select" style="flex:1;min-width:100px" v-model.number="receiptStorage.floor" @change="receiptStorage.area_id=null;receiptStorage.location_id=null" aria-label="默认楼层"><option :value="null">待入库区</option><option v-for="floor in [...new Set(receiptStorage.locations.map(x=>x.floor))].sort((a,b)=>a-b)" :value="floor">{{ floor }}F</option></select>
@@ -7210,11 +7215,11 @@
                       <button v-if="['admin','boss'].includes(user?.role)" class="btn small primary" :disabled="receiptStorage.saving || (!!receiptStorage.floor && !receiptStorage.area_id)" @click.prevent="saveReceiptStorage(false)">保存默认位置</button>
                       <button v-if="['admin','boss'].includes(user?.role)" class="btn small" :disabled="receiptStorage.saving" @click.prevent="saveReceiptStorage(true)">取消固定位置</button>
                     </div>
-                    <div class="muted">仅影响后续收料，不移动现有库存。</div>
+                    <info-note>第一次在货架添加该成品后会记住这里；已有固定货架配置时沿用原配置。以后仍用此位置，除非管理员手动修改。取消后，后续添加不会再次自动记住。此设置只影响以后收料和成品自动入位，不移动现有库存。</info-note>
                   </template>
-                  <div v-if="receiptStorage.message" role="status">{{ receiptStorage.message }}</div>
+                  <div v-if="!receiptStorage.error && receiptStorage.message" role="status">{{ receiptStorage.message }}</div>
                 </div>
-              </details>
+              </section>
               <section v-if="productForm.id" class="panel" style="margin:10px 0">
                 <fieldset :disabled="drawingV2.busy || drawingV2.reading" style="border:0;padding:0">
                 <h4>图纸 V2｜结构与发布</h4>
@@ -10754,7 +10759,7 @@
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"", record_type:"", operator_name:"" },
             productionPlacementFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"" },
             productionCompletionAttempts: {}, productionDirectAttempts: {}, productionTransferAttempts: {}, productionActualAdjustmentAttempts: {}, productionLabelRefreshAttempts: {},
-            receiptStorage: {product_id:null,locations:[],loading:false,saving:false,message:'',floor:null,area_id:null,location_id:null,version:0},
+            receiptStorage: {product_id:null,locations:[],loading:false,saving:false,message:'',error:'',saved_label:'',floor:null,area_id:null,location_id:null,version:0},
             productionDrawingAdoption: {taskId:null,loading:false,busy:false,error:'',data:null,releaseId:null,confirmed:false,pending:null}, productionDrawingAdoptionAttempts: {},
             productFormSnapshot: null, productBomSnapshot: null,
             productEditReturnContext: null,
@@ -12274,20 +12279,21 @@
         methods: {
           async loadReceiptStorage() {
             const id=this.productForm.id;
-            this.receiptStorage={product_id:id,locations:[],loading:true,saving:false,message:'',floor:null,area_id:null,location_id:null,version:0};
+            this.receiptStorage={product_id:id,locations:[],loading:true,saving:false,message:'',error:'',saved_label:'',floor:null,area_id:null,location_id:null,version:0};
             try {
               const {data}=await axios.get(`/api/warehouse/fixed-shelf/receipt-storage/${id}`);
               if(this.productForm.id!==id)return;
               const loc=data.locations.find(x=>x.area_id===data.area_id);
-              this.receiptStorage={...data,loading:false,saving:false,floor:loc?.floor||null,message:data.issue||''};
-            } catch(e) {if(this.productForm.id===id){this.receiptStorage.loading=false;this.receiptStorage.message=e.response?.data?.detail||'读取失败，请重新展开';}}
+              const savedLabel=data.location?.name||(data.area_id?'区域内自动分配':(data.configured?'已取消自动记忆':'首次添加后自动记住'));
+              this.receiptStorage={...data,loading:false,saving:false,error:'',saved_label:savedLabel,floor:loc?.floor||null,message:data.issue||''};
+            } catch(e) {if(this.productForm.id===id){this.receiptStorage.loading=false;this.receiptStorage.error=e.response?.data?.detail||'默认位置读取失败';}}
           },
           receiptStorageAreas() {
             return [...new Map(this.receiptStorage.locations.filter(x=>x.floor===this.receiptStorage.floor).map(x=>[x.area_id,x])).values()];
           },
           async saveReceiptStorage(clear) {
             const state=this.receiptStorage,id=this.productForm.id;
-            if(state.product_id!==id || state.saving)return;
+            if(state.product_id!==id || state.loading || state.error || state.saving)return;
             const loc=clear?null:state.locations.find(x=>x.location_id===state.location_id);
             state.saving=true;state.message='';
             try {
@@ -12296,7 +12302,8 @@
                 address_version:loc?.address_version||null,layout_version:loc?.layout_version||null,
                 idempotency_key:`receipt-storage:${id}:${createIdempotencyKey()}`});
               if(this.productForm.id!==id)return;
-              Object.assign(state,data,{floor:clear?null:state.floor,message:clear?'已取消，后续收料进入待入库区':'默认位置已保存'});
+              const savedLabel=data.location?.name||(data.area_id?'区域内自动分配':(data.configured?'已取消自动记忆':'首次添加后自动记住'));
+              Object.assign(state,data,{floor:clear?null:state.floor,saved_label:savedLabel,message:clear?'已取消，后续添加不会再次自动记住':'默认位置已保存'});
             } catch(e){state.message=e.response?.data?.detail||'保存失败，请重试';} finally {state.saving=false;}
           },
           customerPhoneAnalysis(value) {
@@ -28228,7 +28235,7 @@
                 || (Number(this.productForm.id || 0) || null) !== openedId
               ) return false;
               if (openedId) {
-                const loaders = [this.loadProductBom(openedId)];
+                const loaders = [this.loadProductBom(openedId),this.loadReceiptStorage()];
                 if (this.canAdmin) loaders.push(this.loadExternalComponents(openedId));
                 if (this.hasPermission("requisition.view")) loaders.push(this.loadProductMaterialContext(openedId));
                 else this.productMaterialContext.error = "当前账号无报料历史查看权限";

@@ -1,11 +1,17 @@
 from sqlalchemy import select
 import pytest
 from app.models.receipt_putaway import ProductStoragePreference, ReceiptStagingArea
+from app.models.fixed_shelf import ShelfBinding, ShelfProfile
 from app.models.warehouse_inventory import WarehouseArea, WarehouseLocation
 from app.services import receipt_putaway as service
 from app.services.fixed_shelf import ShelfError
 from test_fixed_shelf import setup, incoming
 from test_p1_123_warehouse_region_rack_labels import rack_factory
+
+
+@pytest.fixture(autouse=True)
+def _isolate_receipt_storage_from_entry_cost(monkeypatch):
+    monkeypatch.setattr("app.services.inventory_valuation.freeze_entry_cost", lambda *_args, **_kwargs: None)
 
 
 def choose(db, pid, lid, version=0):
@@ -41,13 +47,51 @@ def test_first_admin_stocktake_remembers_without_moving_stock(setup):
         assert first.warehouse_location_id==ids[0] and second.warehouse_location_id==ids[1]
 
 
-def test_multiple_existing_locations_are_not_arbitrarily_remembered(setup):
+def test_remembered_and_manually_changed_locations_drive_receipt_routing(setup):
+    factory,pid,cid,ids=setup
+    with factory() as db:
+        first=incoming(db,pid,cid,ids[0])
+        service.remember_stocktake(db,first,1)
+        preference=db.get(ProductStoragePreference,pid)
+        db.add(ReceiptStagingArea(area_id=preference.area_id))
+        db.flush()
+        location,kind,_warning=service.resolve(db,product_id=pid,customer_id=cid)
+        assert (location.id,kind)==(ids[0],'product_storage')
+        choose(db,pid,ids[1],version=1)
+        service.remember_stocktake(db,first,1)
+        assert service.info(db,pid)['version']==2
+        location,kind,_warning=service.resolve(db,product_id=pid,customer_id=cid)
+        assert (location.id,kind)==(ids[1],'product_storage')
+
+
+def test_existing_fixed_shelf_binding_is_not_replaced_by_automatic_preference(setup):
+    factory,pid,cid,ids=setup
+    with factory() as db:
+        db.add(ShelfProfile(product_id=pid,version=1))
+        db.flush()
+        db.add(ShelfBinding(location_id=ids[1],product_id=pid,priority=0))
+        first=incoming(db,pid,cid,ids[0])
+        service.remember_stocktake(db,first,1)
+        assert service.info(db,pid)['configured'] is False
+        assert db.get(ShelfBinding,ids[1]).product_id==pid
+
+
+def test_general_finished_stock_does_not_create_customer_product_preference(setup):
+    factory,pid,cid,ids=setup
+    with factory() as db:
+        first=incoming(db,pid,cid,ids[0])
+        first.finished_detail.is_general=True
+        service.remember_stocktake(db,first,1)
+        assert service.info(db,pid)['configured'] is False
+
+
+def test_first_explicit_add_is_remembered_even_when_product_exists_elsewhere(setup):
     factory,pid,cid,ids=setup
     with factory() as db:
         first=incoming(db,pid,cid,ids[0])
         incoming(db,pid,cid,ids[1],key='second')
         service.remember_stocktake(db,first,1)
-        assert service.info(db,pid)['version']==0
+        assert service.info(db,pid)['location_id']==ids[0]
 
 
 def test_stale_map_identity_is_rejected(setup):

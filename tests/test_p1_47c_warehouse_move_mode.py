@@ -21,6 +21,7 @@ from app.models import Base
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.product import Product
+from app.models.receipt_putaway import ProductStoragePreference
 from app.models.user import User
 from app.models.warehouse_inventory import (
     Floor3LocationLayout,
@@ -702,7 +703,9 @@ def test_pending_reset_rejects_pallet_stock_outside_the_confirmed_floor_scope(mo
         assert db.scalar(select(WarehouseLocation.id).where(WarehouseLocation.location_code == "RECOUNT-PENDING")) is None
 
 
-def test_pending_reset_and_partial_placement_keep_reservations_and_replay(move_batch_app):
+def test_pending_reset_and_partial_placement_keep_reservations_and_replay(
+    move_batch_app, monkeypatch: pytest.MonkeyPatch
+):
     app, factory, ids, _database = move_batch_app
     import importlib.util
     from alembic.operations import Operations
@@ -723,6 +726,9 @@ def test_pending_reset_and_partial_placement_keep_reservations_and_replay(move_b
             migration.upgrade()
     prefix = "/api/warehouse/twin-operations/pending-relocation"
     with factory() as db:
+        db.get(WarehouseLocation, ids["floor1_target"]).storage_type = "rack"
+        db.get(WarehouseLocation, ids["floor1_target_2"]).storage_type = "rack"
+        db.commit()
         totals, reserved = _inventory_totals(db), _remaining_reserved(db)
     with TestClient(app) as client:
         _login(client, "p147c-viewer")
@@ -766,8 +772,30 @@ def test_pending_reset_and_partial_placement_keep_reservations_and_replay(move_b
         assert stale.status_code == 409, stale.text
         bad = client.post(url, json={**payload, "quantity": 999999})
         assert bad.status_code == 409, bad.text
+        with monkeypatch.context() as scoped:
+            def fail_after_transfer(*_args, **_kwargs):
+                raise RuntimeError("pending preference audit failed")
+            scoped.setattr("app.services.receipt_putaway.remember_stocktake", fail_after_transfer)
+            with pytest.raises(RuntimeError, match="preference audit failed"):
+                client.post(url, json=payload)
+        with factory() as db:
+            source = db.get(InventoryLot, ids["loose_lot"])
+            assert source.quantity_available == amount - 1
+            assert db.scalar(select(func.count(ProductStoragePreference.product_id))) == 0
         placed = client.post(url, json=payload)
         assert placed.status_code == 200, placed.text
+        with factory() as db:
+            placed_lot = db.get(InventoryLot, placed.json()["target_lot_id"])
+            product_id = placed_lot.finished_detail.product_id
+            preference = db.get(ProductStoragePreference, product_id)
+            assert preference is not None
+            assert preference.location_id == ids["floor1_target"]
+            assert db.scalar(select(func.count(OperationLog.id)).where(
+                OperationLog.action_code == "warehouse.receipt_storage.remember")) == 1
+            preference.area_id = None
+            preference.location_id = None
+            preference.version += 1
+            db.commit()
         assert client.post(url, json=payload).json()["replayed"] is True
         assert client.post(url, json={**payload, "quantity": amount + 1}).status_code == 409
         with factory() as db:
@@ -781,6 +809,12 @@ def test_pending_reset_and_partial_placement_keep_reservations_and_replay(move_b
         assert _inventory_totals(db) == totals
         assert _remaining_reserved(db) == reserved
         assert db.get(InventoryLot, placed.json()["target_lot_id"]).warehouse_location_id == ids["floor1_target"]
+        placed_lot = db.get(InventoryLot, placed.json()["target_lot_id"])
+        preference = db.get(ProductStoragePreference, placed_lot.finished_detail.product_id)
+        assert preference is not None
+        assert (preference.area_id, preference.location_id, preference.version) == (None, None, 2)
+        assert db.scalar(select(func.count(OperationLog.id)).where(
+            OperationLog.action_code == "warehouse.receipt_storage.remember")) == 1
 
 
 def test_batch_moves_dispatch_system_pallet_and_partial_lot_with_full_conservation(

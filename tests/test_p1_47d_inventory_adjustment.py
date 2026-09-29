@@ -21,6 +21,7 @@ from app.models.access_control import UserCustomerScope, UserPermissionOverride
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.product import Product
+from app.models.receipt_putaway import ProductStoragePreference
 from app.models.stocktake import StocktakeItem, StocktakeOrder
 from app.models.user import User
 from app.models.warehouse_inventory import (
@@ -869,6 +870,54 @@ def test_multi_item_add_finished_and_semi_plus_decrease_records_formal_facts(
         assert audit.created_at is not None
 
 
+def test_first_successful_rack_add_wins_when_same_product_is_added_twice(
+    stocktake_app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, factory, ids, _database = stocktake_app
+    monkeypatch.setattr(
+        "app.services.inventory_valuation.freeze_entry_cost",
+        lambda *_args, **_kwargs: None,
+    )
+    with factory() as db:
+        first = db.get(WarehouseLocation, ids["loc_fg1_add"])
+        second = db.get(WarehouseLocation, ids["loc_fg3_add"])
+        first.storage_type = "rack"
+        second.storage_type = "rack"
+        db.commit()
+    payload = _batch(
+        "p147d-default-location-order",
+        _add(
+            client_item_id="first-rack",
+            location_id=ids["loc_fg1_add"],
+            inventory_type="finished",
+            customer_id=ids["customer"],
+            product_id=ids["product"],
+            quantity=2,
+        ),
+        _add(
+            client_item_id="second-rack",
+            location_id=ids["loc_fg3_add"],
+            inventory_type="finished",
+            customer_id=ids["customer"],
+            product_id=ids["product"],
+            quantity=3,
+        ),
+    )
+    with TestClient(app) as client:
+        _login(client, "p147d-admin")
+        response = client.post(URL, json=payload)
+        assert response.status_code == 200, response.text
+        rows = {row["client_item_id"]: row for row in response.json()["items"]}
+    with factory() as db:
+        preference = db.get(ProductStoragePreference, ids["product"])
+        assert preference is not None
+        assert preference.location_id == ids["loc_fg1_add"]
+        assert db.get(InventoryLot, rows["first-rack"]["lot_id"]).warehouse_location_id == ids["loc_fg1_add"]
+        assert db.get(InventoryLot, rows["second-rack"]["lot_id"]).warehouse_location_id == ids["loc_fg3_add"]
+        assert db.scalar(select(func.count(OperationLog.id)).where(
+            OperationLog.action_code == "warehouse.receipt_storage.remember")) == 1
+
+
 def test_published_floor4_allows_mobile_stocktake_add_and_decrease(
     stocktake_app,
 ) -> None:
@@ -1262,6 +1311,13 @@ def test_stale_last_item_and_runtime_failure_roll_back_entire_batch(
         assert db.get(InventoryLot, ids["lot_normal"]).quantity_available == 10
 
     original = warehouse_api.execute_warehouse_stocktake_batch
+    monkeypatch.setattr(
+        "app.services.inventory_valuation.freeze_entry_cost",
+        lambda *_args, **_kwargs: None,
+    )
+    with factory() as db:
+        db.get(WarehouseLocation, ids["loc_fg1_add"]).storage_type = "rack"
+        db.commit()
 
     def fail_after_execute(*args, **kwargs):
         original(*args, **kwargs)
@@ -1270,6 +1326,14 @@ def test_stale_last_item_and_runtime_failure_roll_back_entire_batch(
     monkeypatch.setattr(warehouse_api, "execute_warehouse_stocktake_batch", fail_after_execute)
     payload = _batch(
         "p147d-injected",
+        _add(
+            client_item_id="failure-add",
+            location_id=ids["loc_fg1_add"],
+            inventory_type="finished",
+            customer_id=ids["customer"],
+            product_id=ids["product"],
+            quantity=2,
+        ),
         _decrease(
             client_item_id="failure-row",
             location_id=ids["loc_fg1"],
@@ -1278,12 +1342,15 @@ def test_stale_last_item_and_runtime_failure_roll_back_entire_batch(
         ),
     )
     with TestClient(app, raise_server_exceptions=False) as client:
-        _login(client)
+        _login(client, "p147d-admin")
         failed = client.post(URL, json=payload)
         assert failed.status_code == 500
     with factory() as db:
         assert _counts(db) == before
         assert db.get(InventoryLot, ids["lot_normal"]).quantity_available == 10
+        assert db.get(ProductStoragePreference, ids["product"]) is None
+        assert db.scalar(select(func.count(OperationLog.id)).where(
+            OperationLog.action_code == "warehouse.receipt_storage.remember")) == 0
 
 
 def test_customer_scope_and_add_location_product_type_unit_gates(stocktake_app) -> None:

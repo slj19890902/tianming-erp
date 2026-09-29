@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.536"
-APP_VERSION_NAME = "组套内衬盘点入库修复"
+APP_VERSION = "v0.22.537"
+APP_VERSION_NAME = "常用箱默认货架位置记忆"
 APP_BUILD_DATE = "2026-09-29"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5142,3 +5142,14 @@ APP_CHANGELOG = [*(f"v0.22.535：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["组套内衬入库按全部子件的冻结规格核验，修复母件无独立长宽时错误拒绝入库。", "仓库确认失败显示具体业务原因，保留草稿、重复提交保护及资料完整性检查。"]
 APP_VERIFICATION_STEPS = ["保留现有165件草稿，点击一次确认，核对L016第2层第2格库存及草稿清空。", "若页面已关闭，刷新地图后先核对是否已入库，再决定是否重新填写。"]
 APP_CHANGELOG = [*(f"v0.22.536：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "货架首次添加成品或待归位库存首次归位后，记住常用箱默认层格；已有其他货位库存不再阻止首次记忆。",
+    "后续添加不覆盖已有默认位置，手动修改和取消持续生效；常用箱编辑直接显示当前默认位置。",
+    "复用原权限、客户范围、版本和事务保护，无数据库迁移，不回填历史位置或搬动现有库存。",
+]
+APP_VERIFICATION_STEPS = [
+    "选择尚未设置默认位置的常用箱，在货架正常添加或归位后，打开常用箱编辑核对默认层格。",
+    "手动修改默认位置后核对后续添加不覆盖；取消后核对不会再次自动记住。",
+]
+APP_CHANGELOG = [*(f"v0.22.537：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

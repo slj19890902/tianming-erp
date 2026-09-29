@@ -27,6 +27,9 @@ def main():
     parser.add_argument("--experience-fixtures", action="store_true", help="Seed synthetic pending, production and backlog page scenarios")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
+    if not args.verify_existing and subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=repo, text=True).strip():
+        raise ValueError("Build the reviewable UAT package from a clean committed workspace")
     root = args.root.resolve()
     if root.parent != Path("D:/tm-uat").resolve() or not root.name.startswith("round-upgrade-"):
         raise ValueError("Use a new D:/tm-uat/round-upgrade-* directory")
@@ -45,6 +48,7 @@ def main():
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from desktop_assistant.manager import Manager
     from desktop_assistant.storage import database_info, pack_tree, sha, write_json
+    from desktop_assistant.schema_contract import schema_contract_from_sources
 
     if args.verify_existing:
         restored = Manager(root / "restored", (root / "test-public.pem").read_bytes())
@@ -152,7 +156,13 @@ def main():
     (shared / "data/recovery-proof.txt").write_text("synthetic-attachment-restored", encoding="utf8")
     package = root / "test-release.zip"
     print("Building synthetic signed runtime package", flush=True)
-    pack_tree(source, package, {"type": "tianming.release.v1", "version": "round-P0-5-UAT", "revision": revision}, key)
+    import runpy
+    version = runpy.run_path(str(repo / "app/version.py"))["APP_VERSION"]
+    source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    contract = schema_contract_from_sources({p.relative_to(source).as_posix(): p.read_bytes()
+        for p in (source / "app/models").rglob("*.py")}, revision)
+    pack_tree(source, package, {"type": "tianming.release.v1", "version": version + "-isolated",
+        "revision": revision, "git_sha": source_commit, "schema_contract": contract}, key)
     release = manager.stage_release(package)
     write_json(installation / "state.json", {"current": release["id"], "previous": None})
     nas = root / "isolated-backup-storage"
@@ -179,7 +189,7 @@ def main():
 
 
 def verify_running(repo, root, restored, port, revision, source_hash, result):
-    from desktop_assistant.storage import write_json
+    from desktop_assistant.storage import read_json, write_json
     import httpx
     restored_db = restored.root / "shared/data/carton_erp.sqlite3"
     process = json.loads((restored.root / "control/process.json").read_text(encoding="utf8"))
@@ -206,10 +216,15 @@ def verify_running(repo, root, restored, port, revision, source_hash, result):
             checks[path] = response.status_code
         assert client.get("/api/system/backups/managed-status").json()["configured"] is True
         assert client.post("/api/system/backups/restore", json={"filename": "old.sqlite3"}).status_code == 409
-    receipt = {"status": "restored_started_authenticated", "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
+    previous_path = root / "recovery-runtime-evidence.json"
+    previous = read_json(previous_path) if previous_path.is_file() else {}
+    original_restore = previous.get("actual_restore", result) if result.get("restore_proof") else result
+    manifest = restored.manifest()
+    receipt = {"status": "restored_started_authenticated", "source_commit": manifest.get("git_sha"),
+               "candidate_version": manifest["version"], "package_sha256": restored.state["current"],
                "root": str(root), "url": base, "process": restored.state,
                "database": str(restored_db), "revision": revision, "db_sha_before_start": source_hash,
-               "actual_restore": result, "actual_http_checks": checks,
+               "actual_restore": original_restore, "latest_verification": result, "actual_http_checks": checks,
                "actual_runtime_isolation_probe": isolation_probe,
                "isolation": {"environment": "test", "bind": "127.0.0.1", "all_paths_below_restored_shared": True,
                              "runtime_guard": "writes/database outside run, external network and subprocesses blocked"},

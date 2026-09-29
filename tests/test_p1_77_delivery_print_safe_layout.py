@@ -20,10 +20,10 @@ def _between(start: str, end: str) -> str:
     return PAGE[start_index:end_index]
 
 
-def test_physical_profile_stays_driver_managed_while_content_is_215mm() -> None:
+def test_physical_profile_stays_driver_managed_with_separate_printable_area() -> None:
     assert "--paper-width: 241mm" in PAGE
-    assert "--content-safe-width: 215mm" in PAGE
-    assert "width: var(--paper-width)" in _css(".sheet")
+    assert "--content-safe-width: 188mm" in PAGE
+    assert "width: var(--print-layout-width)" in _css(".sheet")
     assert "width: var(--content-safe-width)" in _css(".print-safe-area")
     assert "margin: 0 auto" in _css(".print-safe-area")
     assert "size: auto" in _css("@page")

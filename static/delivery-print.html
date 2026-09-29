@@ -10,7 +10,8 @@
     :root {
       --paper-width: 241mm;
       --paper-height: 139.5mm;
-      --content-safe-width: 215mm;
+      --print-layout-width: 200mm;
+      --content-safe-width: 188mm;
     }
     body {
       margin: 0;
@@ -61,7 +62,7 @@
       position: relative;
       display: flex;
       flex-direction: column;
-      width: var(--paper-width);
+      width: var(--print-layout-width);
       height: calc(var(--paper-height) - 0.5mm);
       margin: 0 auto 24px;
       padding: 4mm 0;
@@ -70,7 +71,7 @@
       overflow: hidden;
     }
     .sheets {
-      width: var(--paper-width);
+      width: var(--print-layout-width);
       margin: 0 auto;
     }
     .print-safe-area {
@@ -217,18 +218,18 @@
     @media print {
       body { background: #fff; }
       html, body {
-        width: var(--paper-width);
+        width: var(--print-layout-width);
         margin: 0;
         padding: 0;
       }
       .no-print { display: none !important; }
       .sheets {
-        width: var(--paper-width);
+        width: var(--print-layout-width);
         margin: 0;
         padding: 0;
       }
       .sheet {
-        width: var(--paper-width);
+        width: var(--print-layout-width);
         height: calc(var(--paper-height) - 0.5mm);
         margin: 0;
         padding: 4mm 0;
@@ -256,7 +257,7 @@
       <summary aria-label="打印设置帮助">ⓘ</summary>
       <div class="print-guide-content"><strong id="printProfileSummary"></strong><br>
         驱动选择相同纸型，缩放100%，关闭页眉页脚。方向沿用打印机进纸设置。
-        纸面偏移在“系统 → 送货单打印纸张”校准。预览虚线不打印。
+        纸张总宽包含两侧孔边，不等于可打印宽度。右侧裁切时在“系统 → 送货单打印纸张”校准打印区和偏移。预览虚线不打印。
       </div>
     </details>
   </div>
@@ -358,15 +359,20 @@
       const printerModel = String(settings.printer_model || "EPSON SK820").trim() || "EPSON SK820";
       document.documentElement.style.setProperty("--paper-width", `${safeWidth}mm`);
       document.documentElement.style.setProperty("--paper-height", `${safeHeight}mm`);
-      const contentWidth = Number(settings.content_width_mm ?? Math.min(215, safeWidth - 12));
+      const printableWidth = Number(settings.printable_width_mm ??
+        (settings.content_width_mm !== undefined ? safeWidth : Math.min(200, safeWidth)));
+      if (!Number.isFinite(printableWidth) || printableWidth < 100 || printableWidth > safeWidth)
+        throw new Error("可打印区域宽度必须在100mm与纸张宽度之间");
+      const contentWidth = Number(settings.content_width_mm ?? Math.min(188, printableWidth - 12));
       const offsetX = Number(settings.offset_x_mm ?? 0), offsetY = Number(settings.offset_y_mm ?? 0);
-      if (!Number.isFinite(contentWidth) || contentWidth < 60 || contentWidth > safeWidth - 12
-          || !Number.isFinite(offsetX) || Math.abs(offsetX) > (safeWidth - contentWidth) / 2 - 3
+      if (!Number.isFinite(contentWidth) || contentWidth < 60 || contentWidth > printableWidth - 12
+          || !Number.isFinite(offsetX) || Math.abs(offsetX) > (printableWidth - contentWidth) / 2 - 3
           || !Number.isFinite(offsetY) || Math.abs(offsetY) > 2) throw new Error("送货单打印安全区配置无效");
+      document.documentElement.style.setProperty("--print-layout-width", `${printableWidth}mm`);
       document.documentElement.style.setProperty("--content-safe-width", `${contentWidth}mm`);
       document.documentElement.style.setProperty("--print-offset-x", `${offsetX}mm`);
       document.documentElement.style.setProperty("--print-offset-y", `${offsetY}mm`);
-      document.getElementById("printProfileSummary").textContent = `${safeWidth}×${safeHeight}mm · 正文${contentWidth}mm ⓘ`;
+      document.getElementById("printProfileSummary").textContent = `纸张${safeWidth}×${safeHeight}mm · 打印区${printableWidth}mm · 正文${contentWidth}mm`;
       document.documentElement.dataset.printerModel = printerModel;
       document.documentElement.dataset.orientationMode = "driver_managed";
 

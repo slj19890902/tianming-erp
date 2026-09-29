@@ -54,7 +54,8 @@ DEFAULT_PRINT_PROFILE = {
     "orientation_mode": "driver_managed",
     "paper_width_mm": 241.0,
     "paper_height_mm": 139.5,
-    "content_width_mm": 215.0,
+    "printable_width_mm": 200.0,
+    "content_width_mm": 188.0,
     "offset_x_mm": 0.0,
     "offset_y_mm": 0.0,
 }
@@ -171,7 +172,7 @@ def test_calibration_rejects_clipped_content_and_preserves_existing_file(tmp_pat
     from app.services.delivery_print_settings import save_delivery_print_settings, get_delivery_print_settings
     target = tmp_path / "profile.json"
     monkeypatch.setenv("ERP_DELIVERY_PRINT_SETTINGS_PATH", str(target))
-    profile = {**DEFAULT_PRINT_PROFILE, "content_width_mm": 210, "offset_x_mm": 2, "offset_y_mm": 1}
+    profile = {**DEFAULT_PRINT_PROFILE, "printable_width_mm": 241, "content_width_mm": 210, "offset_x_mm": 2, "offset_y_mm": 1}
     assert save_delivery_print_settings(profile) == profile
     before = target.read_bytes()
     for invalid in ({"content_width_mm": 240}, {"offset_x_mm": 15}, {"offset_y_mm": 3}):
@@ -191,3 +192,18 @@ def test_old_narrow_paper_gets_safe_default_without_rewrite(tmp_path, monkeypatc
     assert profile["paper_width_mm"] == 200
     assert profile["content_width_mm"] == 188
     assert target.read_bytes() == before
+
+
+def test_printable_area_distinct_from_paper_and_legacy_calibration_preserved(tmp_path, monkeypatch):
+    from app.services.delivery_print_settings import normalize_delivery_print_settings, get_delivery_print_settings
+    narrow = normalize_delivery_print_settings({"paper_width_mm":241,"paper_height_mm":139.5})
+    assert narrow["printable_width_mm"] == 200 and narrow["content_width_mm"] == 188
+    for bad in ({"printable_width_mm":242}, {"content_width_mm":189}, {"offset_x_mm":4}):
+        with pytest.raises(ValueError):
+            normalize_delivery_print_settings({**narrow, **bad})
+    path=tmp_path/'legacy.json'
+    monkeypatch.setenv('ERP_DELIVERY_PRINT_SETTINGS_PATH',str(path))
+    path.write_text('{"paper_width_mm":241,"paper_height_mm":139.5,"content_width_mm":210,"offset_x_mm":2}')
+    before=path.read_bytes(); profile=get_delivery_print_settings()
+    assert profile['printable_width_mm']==241 and profile['content_width_mm']==210
+    assert profile['offset_x_mm']==2 and path.read_bytes()==before

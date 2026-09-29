@@ -109,6 +109,7 @@ class DeliveryPrintSettingsUpdate(BaseModel):
     orientation_mode: str = "driver_managed"
     paper_width_mm: float
     paper_height_mm: float
+    printable_width_mm: float | None = None
     content_width_mm: float | None = None
     offset_x_mm: float = 0
     offset_y_mm: float = 0

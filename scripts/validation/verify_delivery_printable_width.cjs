@@ -52,14 +52,15 @@ function fixture(preset, prices=false, items=rows) {
     }
     async function measure() {return page.evaluate(()=>Array.from(document.querySelectorAll('.cd-sheet,.sheet')).map(s=>{
       const b=s.querySelector('.cd-body,.print-safe-area'),r=b.getBoundingClientRect(),p=s.getBoundingClientRect();
-      return {paperMM:p.width*25.4/96,widthMM:r.width*25.4/96,centerError:Math.abs((r.left+r.right-p.left-p.right)/2),
+      return {paperMM:p.width*25.4/96,widthMM:r.width*25.4/96,leftMM:r.left*25.4/96,rightMM:r.right*25.4/96,centerError:Math.abs((r.left+r.right-p.left-p.right)/2),
         rows:s.querySelectorAll('tbody tr').length,headers:Array.from(s.querySelectorAll('th')).map(t=>t.textContent),height:s.scrollHeight};
     }));}
     if (process.argv.includes('--baseline')) {
-      await render(fixture('yl'));
+      await render(fixture('yl'),{paper_width_mm:241,paper_height_mm:139.5,content_width_mm:215});
+      await page.emulateMedia({media:'print'});
       const baseline=await measure();
-      assert(Math.abs(baseline[0].widthMM-231)<.2);
-      fs.writeFileSync(path.join(output,'baseline-reproduction.json'),JSON.stringify({baseline,safeWidthExceededByMM:baseline[0].widthMM-215},null,2));
+      assert(Math.abs(baseline[0].widthMM-215)<.2);assert(baseline[0].rightMM>227);
+      fs.writeFileSync(path.join(output,'baseline-reproduction.json'),JSON.stringify({baseline,printableWidth:200,clippedRightMM:baseline[0].rightMM-200},null,2));
       console.log(JSON.stringify({baseline}));return;
     }
     const long=Array.from({length:35},(_,i)=>({...rows[i%7],sequence:i+1,customer_po:'CUSTOMER-ORDER-LONG-0000000000000000',customer_product_name:'长名称测试'.repeat(6)}));
@@ -81,6 +82,7 @@ function fixture(preset, prices=false, items=rows) {
       await page.emulateMedia({media:'print'});
       await page.evaluate(()=>CustomerDeliveryPrint.validate(document.getElementById('sheets')));
       const printed=await measure();
+      assert(printed.every(x=>x.leftMM>=5.8 && x.rightMM<=194.2), "rightmost content must fit the 200mm printable span");
       assert.deepEqual(printed.map(x=>[x.widthMM,x.rows]),screen.map(x=>[x.widthMM,x.rows]));
       await page.pdf({path:path.join(output,name+'.pdf'),width:'241mm',height:'139.5mm',margin:{top:0,bottom:0,left:0,right:0},printBackground:true});
       await page.screenshot({path:path.join(output,name+'.png'),fullPage:true});
@@ -97,7 +99,7 @@ function fixture(preset, prices=false, items=rows) {
     await render(fixture('yl',true));
     await page.locator('#printButton').click();await page.waitForFunction(()=>!document.getElementById('printButton').disabled);
     assert.equal(posts,1);assert.equal(prints,1);
-    fs.writeFileSync(path.join(output,'chrome-evidence.json'),JSON.stringify({evidence,custom,overflowBlocked:true,printCalls:prints,localMockEvents:posts,formalAccess:false},null,2));
+    fs.writeFileSync(path.join(output,'printable-width-evidence.json'),JSON.stringify({evidence,custom,overflowBlocked:true,printCalls:prints,localMockEvents:posts,formalAccess:false},null,2));
     console.log(JSON.stringify({cases:evidence.length,custom,overflowBlocked:true,prints,posts}));
   } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

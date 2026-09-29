@@ -163,6 +163,7 @@ def _external_receipt_facts(db, supplier, customer, actor, order, item, lot):
         ExternalPackagingPurchaseOrder, ExternalPackagingPurchaseItem,
         ExternalPackagingReceipt, ExternalPackagingReceiptItem)
     from app.services.external_physical_receipt import freeze_purchase_piece_cost
+    from app.services.external_packaging_purchase import _amounts
 
     spec = '{"summary":"合成演示包材"}'
     db.add(SupplierSupplyCategory(supplier_id=supplier.id, category_code="other_packaging"))
@@ -184,6 +185,7 @@ def _external_receipt_facts(db, supplier, customer, actor, order, item, lot):
     batch = ExternalPackagingPurchaseBatch(sales_order_id=order.id, idempotency_key="round-uat-purchase",
         request_fingerprint="round-uat-purchase", confirmed_by=actor.id)
     db.add_all([price, component, batch]); db.flush()
+    line_amount, tax_amount, total_amount = _amounts(price, quantity=Decimal("500"), unit_price=Decimal("1"))
     candidate = SalesOrderItemExternalComponentCandidate(order_component_id=component.id,
         external_product_id_snapshot=supplied.id, is_default=True, supplier_id_snapshot=supplier.id,
         supplier_name_snapshot=supplier.standard_name, supplier_product_code_snapshot="UAT-EXTERNAL",
@@ -191,7 +193,7 @@ def _external_receipt_facts(db, supplier, customer, actor, order, item, lot):
         customer_scope_id_snapshot=customer.id, external_product_version_snapshot=1)
     purchase_order = ExternalPackagingPurchaseOrder(batch_id=batch.id, purchase_number="UAT-PO-001",
         supplier_id=supplier.id, supplier_name_snapshot=supplier.standard_name, currency="CNY",
-        goods_amount=Decimal("500"), tax_amount=Decimal("0"), total_amount=Decimal("500"), confirmed_by=actor.id)
+        goods_amount=line_amount, tax_amount=tax_amount, total_amount=total_amount, confirmed_by=actor.id)
     db.add_all([candidate, purchase_order]); db.flush()
     purchase = ExternalPackagingPurchaseItem(purchase_order_id=purchase_order.id, sales_order_id=order.id,
         sales_order_item_id=item.id, order_component_id=component.id, order_candidate_id=candidate.id,
@@ -201,8 +203,8 @@ def _external_receipt_facts(db, supplier, customer, actor, order, item, lot):
         supplier_product_code_snapshot="UAT-EXTERNAL", product_name_snapshot=supplied.product_name,
         price_version_id=price.id, price_version_number_snapshot=1, purchase_quantity=Decimal("500"),
         purchase_unit="片", unit_price=Decimal("1"), currency="CNY", tax_mode="tax_inclusive",
-        tax_rate=Decimal("0.13"), line_amount=Decimal("500"), tax_amount=Decimal("0"),
-        total_amount=Decimal("500"), shipping_fee_mode="not_provided",
+        tax_rate=Decimal("0.13"), line_amount=line_amount, tax_amount=tax_amount,
+        total_amount=total_amount, shipping_fee_mode="not_provided",
         price_evidence_reference_snapshot="ROUND-UAT synthetic")
     receipt = ExternalPackagingReceipt(purchase_order_id=purchase_order.id, receipt_number="UAT-RCPT-001",
         idempotency_key="round-uat-receipt", request_fingerprint="round-uat-receipt", received_by=actor.id)

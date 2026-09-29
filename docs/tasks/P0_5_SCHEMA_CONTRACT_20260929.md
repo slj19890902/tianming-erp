@@ -1,6 +1,6 @@
 # P0-5 恢复必要结构契约返工回执
 
-状态：开发与隔离测试完成，等待独立代码复审和最终候选真实受管恢复验收。未执行正式发布、正式恢复、正式停服/重启、正式配置修改、数据库迁移或历史数据写入。
+状态：独立复审发现缓存和动态 Base 缺口后已返工，98 项集成回归通过；等待最终候选真实受管恢复验收。未执行正式发布、正式恢复、正式停服/重启、正式配置修改、数据库迁移或历史数据写入。
 
 ## 问题与红灯
 
@@ -16,7 +16,7 @@
 - 对当前契约语法可能漏收结构的已知旁路明确拒绝：动态/条件导入、星号导入、未注册模型模块、非顶层或条件内表类、类内条件表名、动态表名、mixin/未知继承、`Base` / `Column` / `Mapped` / `mapped_column` / `relationship` 导入或赋值别名、SQLAlchemy 模块别名、动态列名、列工厂、`**kwargs` 列参数及未知 `Mapped` 赋值。
 - 当前源码得到 263 张必要 ORM 表、3829 个必要列；结果与当前受信源码的 `Base.metadata` 逐表逐列相等，并包含两个隐式 `tax_included` 列。
 - 新构建包由 `desktop_assistant/build.py` 从干净提交快照生成 `schema_contract` 并写入签名 manifest。没有该字段的旧签名包仍可从逐文件验哈希的模型源码派生同一契约；无法静态解析的旧包拒绝，不执行其代码。
-- 普通恢复使用 active release 的签名结构契约。程序回退但数据库停留在新 revision 时，继续保留原 `compatible()` 门禁，并额外用直接验签的 authority manifest 核对 revision、`preserve_existing_facts_v1` 和 `rollback_package_sha256`，结构契约取自该 authority 包。
+- 普通恢复使用 active release 的签名结构契约。程序回退但数据库停留在新 revision 时，保留原 `compatible()` 的业务规则，直接用验签后的 authority manifest 核对 revision、`preserve_existing_facts_v1` 和 `rollback_package_sha256`，不读取可修改缓存来裁决兼容；结构契约取自该 authority 包。
 - 初次必要结构校验在任何恢复库写入前执行；PDF 路径重绑定和附件预检后，在 `shared.rename()` 与 state 激活前再次执行 `database_info()`（integrity、foreign key、唯一 revision、counts）和完整必要表列校验。
 - 不新增或修改 migration，不改变数据库结构或业务数据。
 
@@ -37,3 +37,13 @@
 - 旧包 AST fallback 保证 ORM 必要表和列存在，允许额外历史表/列；它不宣称逐项验证所有索引、CHECK/UNIQUE/FK DDL 与默认值。原有 SQLite integrity、foreign key、唯一 revision、表计数、附件哈希和发布兼容门禁继续保留。
 - 本轮只核验了现场当前 v538 签名包，没有遍历全部历代包；合成旧包及跨 revision 回退包提供真阳性。解析器只保证上述直接声明式模型语法及已列明旁路，未宣称识别任意未来 ORM 框架或自定义元编程；未来若引入命令式 `Table()`、自定义映射装饰器或其他生成方式，必须先扩展离线解析与反例，不能让构建/恢复降级回四表门槛。
 - 安全回退不得完整撤销 P0-5 或重开网页恢复。若结构解析器误拒绝旧包，保持空目标和停服状态，前滚补充解析/签名契约；不得用残缺库自证或执行备份内代码。
+
+## 2026-09-30 独立复审返工
+
+- Terra 独立复现签名包正确但已解压 main.py 被改后仍可恢复；另发现动态 Base、继承列及装饰器/元类可能漏字段。根代理保留失败用例，`round-tests/070331075852` 为8失败1通过。
+- 恢复的 `stage_release(..., verify_existing=True)` 对整个签名包重新解包验哈希，并核对已有缓存的全部文件清单、manifest、逐文件SHA和链接；缓存异常明确拒绝，不覆盖缓存，更不激活数据库。正常已验证缓存仍可复用。
+- 必要结构与附件的全部校验完成后才提升程序缓存，缺表拒绝时 releases/packages 均为空。staging 作为失败现场可以保留，不显示成功。
+- Base 限定为唯一顶层、无成员、无装饰器的 DeclarativeBase；结构符号重定义、模型装饰器/元类均拒绝。现行263表3829列逐项等于运行模型，独立确认现行v538静态旧包仍兼容。
+- 第二轮完整测试暴露隔离runner对Python3.12 `_fallback_socketpair`误拦及NAS适配异常措辞差异，记录79通过19失败；只修runner，保留业务和测试断言。
+- 最终同组 `98 passed / 0 skipped`，证据 `D:/ERP-AUDIT/20260929-comprehensive/round-tests/070812094521/results.xml`。覆盖结构、恢复、备份、迁移兼容、受管状态、服务入口和网页权限。
+- 独立复审 `/root/p015_terra_rework` 检查实际差异后未发现剩余阻断；真实最终包恢复/启动仍须单独完成。

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.534"
-APP_VERSION_NAME = "送货单窄幅打印防截断"
+APP_VERSION = "v0.22.535"
+APP_VERSION_NAME = "组套内衬盘点入库修复"
 APP_BUILD_DATE = "2026-09-29"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5127,3 +5127,7 @@ APP_VERIFICATION_STEPS = [
     "沿用241×139.5mm连续纸及驱动方向，缩放100%，关闭页眉页脚，先试打一张核对数量后各列、合计和签章。",
 ]
 APP_CHANGELOG = [*(f"v0.22.534：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["组套内衬入库按全部子件的冻结规格核验，修复母件无独立长宽时错误拒绝入库。", "仓库确认失败显示具体业务原因，保留草稿、重复提交保护及资料完整性检查。"]
+APP_VERIFICATION_STEPS = ["保留现有165件草稿，点击一次确认，核对L016第2层第2格库存及草稿清空。", "若页面已关闭，刷新地图后先核对是否已入库，再决定是否重新填写。"]
+APP_CHANGELOG = [*(f"v0.22.535：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

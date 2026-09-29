@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.534"
-APP_VERSION_NAME = "送货单窄幅打印防截断"
+APP_VERSION = "v0.22.535"
+APP_VERSION_NAME = "手机添加货物返回当前货架"
 APP_BUILD_DATE = "2026-09-29"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5127,3 +5127,13 @@ APP_VERIFICATION_STEPS = [
     "沿用241×139.5mm连续纸及驱动方向，缩放100%，关闭页眉页脚，先试打一张核对数量后各列、合计和签章。",
 ]
 APP_CHANGELOG = [*(f"v0.22.534：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "手机添加成品、半成品或原材料保存后，自动回到当前货架正视图或栈板所在区域，并高亮当前货位。",
+    "返回货架和区域时保留真实位置身份，避免空货位循环进入添加页；保存失败或结果未确认时仍留在表单重试。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机打开货架货位添加货物并保存，核对自动返回同一货架正视图且当前格高亮。",
+    "栈板货位保存后核对回到所在区域并高亮；空货位未保存时返回区域不再循环进入添加页。",
+]
+APP_CHANGELOG = [*(f"v0.22.535：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

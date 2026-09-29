@@ -215,8 +215,6 @@ async function saveInitialInbound() {
     inbound.attempt = null;
     persistInboundAttempt();
     setInboundBusy(false);
-    await openLocation(locationId);
-    showMessage("入库已保存，已重新读取当前货位。可点“换库位”继续盘点。", "success");
   } catch (error) {
     const uncertain = !error.status || error.status >= 500;
     if (!uncertain) { inbound.attempt = null; persistInboundAttempt(); }
@@ -225,6 +223,18 @@ async function saveInitialInbound() {
       : error.message;
     setInboundBusy(false);
     if (!uncertain) await refreshInboundContext();
+    return;
+  }
+  await completeInboundSave(locationId);
+}
+
+async function completeInboundSave(locationId) {
+  try {
+    if (returnToWarehouseContext()) return;
+    await openLocation(locationId);
+    showMessage("入库已保存", "success");
+  } catch (error) {
+    showMessage("货物已保存，返回页面失败，请点击返回货架 / 区域。", "success");
   }
 }
 
@@ -290,7 +300,7 @@ async function findInboundProducts(){
 $("inboundNotListed").onclick=()=>{if(inbound.busy||inbound.attempt)return;inbound.stockLot=null;$("inboundSave").textContent="保存入库";findErpProducts();};
 window.mobileGoodsConfig=()=>({locationId:Number(pick(state.selectedLocation,["id","location_id"])),layoutVersion:state.selectedLocation.layout_version,raw:inbound.type==="raw",canSave:state.user?.role==="admin"&&!state.locked});
 window.mobileGoodsBusy=value=>{setInboundBusy(value)};
-window.mobileGoodsSaved=async()=>{setInboundBusy(false);await openLocation(pick(state.selectedLocation,["id","location_id"]));showMessage("货物已入库","success");};
+window.mobileGoodsSaved=async()=>{setInboundBusy(false);await completeInboundSave(pick(state.selectedLocation,["id","location_id"]));};
 document.querySelectorAll("[data-goods-type]").forEach(button=>button.onclick=()=>{
   if(inbound.busy||inbound.attempt)return;
   inbound.type=button.dataset.goodsType;

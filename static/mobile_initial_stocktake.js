@@ -1,10 +1,10 @@
 /* Load only a runtime compatible with this document; old cached pages reload first. */
 (() => {
   const required=["inboundCandidates","goodsTypes","sheetGoods","finishedGoods","inboundNotListed","inboundEditProduct"];
-  if(required.some(id=>!document.getElementById(id))){
+  if(required.some(id=>!document.getElementById(id))||typeof returnToWarehouseContext!=="function"){
     const url=new URL(window.location.href);
-    if(url.searchParams.get("stocktake_ui")!=="4"){
-      url.searchParams.set("stocktake_ui","4");
+    if(url.searchParams.get("stocktake_ui")!=="5"){
+      url.searchParams.set("stocktake_ui","5");
       url.searchParams.set("refresh",String(Date.now()));
       window.location.replace(url.toString());
     }else{
@@ -19,7 +19,7 @@
   if(window.mobileStocktakeRuntimeLoading)return;
   window.mobileStocktakeRuntimeLoading=true;
   const script=document.createElement("script");
-  script.src="/mobile/initial-stocktake-runtime.js?ui=4";
+  script.src="/mobile/initial-stocktake-runtime.js?ui=5";
   script.onerror=()=>{
     window.mobileStocktakeRuntimeLoading=false;
     const box=document.getElementById("message");

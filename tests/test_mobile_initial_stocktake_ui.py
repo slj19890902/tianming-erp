@@ -20,7 +20,7 @@ const context = {console, URLSearchParams, Intl, Date, JSON, Number, $, state, h
   pick:(row,keys)=>keys.map(k=>row?.[k]).find(x=>x!==undefined),
   idempotencyKey:()=> 'stable-key', updateSubmitState(){}, showMessage(){},
   sessionStorage:{getItem(){return null},setItem(){},removeItem(){}},
-  openLocation:async()=>{},
+  openLocation:async()=>{}, returnToWarehouseContext(){return false},
   api:async (url,options)=>{
     if(mode==='race') return await new Promise(resolve=>deferred.push(resolve));
     calls.push(JSON.parse(options.body));

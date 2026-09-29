@@ -1594,6 +1594,7 @@
         if (state.warehouseMapArea) await loadWarehouseMapArea({
           preferredLotId: resolvedPreferred.lotId,
           preferredLocationId: state.warehouseMapFocusLocationId,
+          focusOnly: resolvedPreferred.focusOnly === true,
         });
         else await loadWarehouseFloorOverview();
       }
@@ -1651,7 +1652,7 @@
         }
       }
 
-      async function loadWarehouseMapArea({ preferredLotId = null, preferredLocationId = null, preserveMove = false } = {}) {
+      async function loadWarehouseMapArea({ preferredLotId = null, preferredLocationId = null, preserveMove = false, focusOnly = false } = {}) {
         if (!state.warehouseMapArea) return loadWarehouseFloorOverview();
         state.warehouseMapOverview = false;
         byId("warehouseFloorOverview").hidden = true;
@@ -1691,7 +1692,8 @@
             if (preferredLotId) state.warehouseSearchLocationId = Number(focusedLocation.location_id);
             if (focusedLocation.map_rack_id) state.warehouseSelectedRack = focusedLocation.map_rack_id;
             renderWarehouseMap();
-            renderWarehouseLocationGoods(focusedLocation, preferredLotId);
+            // Returning from a save keeps the rack/area visible, including empty locations.
+            if (!focusOnly) renderWarehouseLocationGoods(focusedLocation, preferredLotId);
             document.querySelector(`.warehouse-map-location[data-location-id="${focusedLocation.location_id}"]`)?.scrollIntoView({ block: "center", inline: "center" });
           }
         } catch (error) {
@@ -2934,6 +2936,7 @@
               locationId: Number(launchParams.get("location_id") || 0) || undefined,
               lotId: Number(launchParams.get("lot_id") || 0) || undefined,
               rackId: launchParams.get("rack_id") || undefined,
+              focusOnly: launchParams.get("focus_only") === "1",
             });
           }
           if (firstPage === "lookup" && state.lookupQuery) runUnifiedSearch(state.lookupPage);

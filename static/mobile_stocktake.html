@@ -71,7 +71,7 @@
       <div id="locationList" class="location-list"></div>
     </section>
     <section id="stocktakePanel" class="card hidden">
-      <div class="location-head"><div><div class="muted">当前货位</div><div id="selectedLocationCode" class="location-code"></div><div id="selectedLocationName" class="muted"></div><div id="selectedRackIdentity" class="identity-line"></div></div><div class="actions"><button id="openCurrentMap" class="btn" type="button">看地图</button><button id="backToLocations" class="btn" type="button">换库位</button></div></div>
+      <div class="location-head"><div><div class="muted">当前货位</div><div id="selectedLocationCode" class="location-code"></div><div id="selectedLocationName" class="muted"></div><div id="selectedRackIdentity" class="identity-line"></div></div><div class="actions"><button id="openCurrentMap" class="btn" type="button">返回地图</button><button id="backToLocations" class="btn" type="button">换库位</button></div></div>
       <div id="locationNotice" class="notice hidden" style="margin-top:10px"></div>
       <div id="lotSummary" class="summary"></div>
       <warehouse-costs id="locationCosts" location-id="0"></warehouse-costs>
@@ -129,9 +129,10 @@
     function locationArea(location){const projected=String(pick(location,["employee_area_name","area_name"],"")).trim();if(projected)return projected;const zone=pick(location,["address_zone_code"],""),subzone=Number(pick(location,["address_subzone_no"],0));if(zone&&subzone)return `${zone}${subzone}区`;const name=String(pick(location,["area","region","zone"],"")).trim(),code=String(pick(location,["area_code"],"")).trim();return name&&name.toUpperCase()!==code.toUpperCase()?name:"区域名称待完善"}
     function locationFloor(location){const value=Number(pick(location,["warehouse_floor","floor_number"],0));return Number.isInteger(value)&&value>0?value:null}
     function locationFloorLabel(location){const floor=locationFloor(location),name=pick(location,["floor_name"],"");return name?`${name}（${floor} 楼）`:(floor?`${floor} 楼`:"未登记楼层")}
-    function warehouseMapHref(lotId=null){const location=state.selectedLocation||{},params=new URLSearchParams({warehouse_map:"1"}),origin=new URLSearchParams(window.location.search);const floorCode=String(pick(location,["floor_code"],origin.get('return_floor')||"3F")).trim(),areaCode=String(pick(location,["area_code"],origin.get('return_area')||"")).trim(),locationId=pick(location,["id","location_id"],null);if(floorCode)params.set("floor_code",floorCode);if(areaCode)params.set("area_code",areaCode);if(lotId&&locationId)params.set("location_id",String(locationId));if(lotId)params.set("lot_id",String(lotId));return `/mobile/?${params.toString()}#warehouse`}
-    function openWarehouseMap(lotId=null){window.location.assign(warehouseMapHref(lotId))}
-    function renderSelectedLocationIdentity(){const location=state.selectedLocation||{},rack=String(pick(location,["rack_display_name"],"")).trim(),level=Number(pick(location,["level_no"],0)),slot=Number(pick(location,["slot_no"],0));$("selectedRackIdentity").textContent=rack&&level&&slot?`${rack} · 第 ${level} 层 · 第 ${slot} 格`:"地图位置与当前货位使用同一条库存台账";$("locationCosts").setAttribute("location-id",String(pick(location,["id","location_id"],0)));$("locationCosts").setAttribute("revision",String(Date.now()))}
+    function warehouseMapHref(lotId=null){const location=state.selectedLocation||{},params=new URLSearchParams({warehouse_map:"1"}),origin=new URLSearchParams(window.location.search);const floorCode=String(pick(location,["floor_code"],origin.get('return_floor')||"")).trim(),areaCode=String(pick(location,["area_code"],origin.get('return_area')||"")).trim(),locationId=pick(location,["id","location_id"],origin.get("location_id"));if(floorCode)params.set("floor_code",floorCode);if(areaCode)params.set("area_code",areaCode);if(locationId)params.set("location_id",String(locationId));if(lotId)params.set("lot_id",String(lotId));else params.set("focus_only","1");return `/mobile/?${params.toString()}#warehouse`}
+    function openWarehouseMap(lotId=null){if(state.submitting||(typeof inbound!=="undefined"&&(inbound.busy||inbound.attempt)))return;window.location.assign(warehouseMapHref(lotId))}
+    function returnToWarehouseContext(){if(embeddedStocktake)return false;openWarehouseMap();return true;}
+    function renderSelectedLocationIdentity(){const location=state.selectedLocation||{};$("openCurrentMap").textContent=location.map_rack_id?"返回货架":"返回区域";const rack=String(pick(location,["rack_display_name"],"")).trim(),level=Number(pick(location,["level_no"],0)),slot=Number(pick(location,["slot_no"],0));$("selectedRackIdentity").textContent=rack&&level&&slot?`${rack} · 第 ${level} 层 · 第 ${slot} 格`:"地图位置与当前货位使用同一条库存台账";$("locationCosts").setAttribute("location-id",String(pick(location,["id","location_id"],0)));$("locationCosts").setAttribute("revision",String(Date.now()))}
     function listItems(data,keys=["items","locations","results"]){for(const key of keys)if(Array.isArray(data?.[key]))return data[key];return Array.isArray(data)?data:[]}
     function renderFloors(){const rows=new Map();state.locations.forEach(location=>{const floor=locationFloor(location);if(floor)rows.set(floor,locationFloorLabel(location))});const previous=$("floorFilter").value;$("floorFilter").innerHTML='<option value="">请选择楼层</option>'+[...rows].sort((a,b)=>a[0]-b[0]).map(([value,label])=>`<option value="${h(value)}">${h(label)}</option>`).join("");if(rows.has(Number(previous)))$("floorFilter").value=previous;else if(rows.size===1)$("floorFilter").value=String([...rows.keys()][0])}
     function renderAreas(){const floor=Number($("floorFilter").value),values=[...new Set(state.locations.filter(location=>!floor||locationFloor(location)===floor).map(locationArea))].sort((a,b)=>a.localeCompare(b,"zh-CN",{numeric:true})),previous=$("areaFilter").value;$("areaFilter").innerHTML='<option value="">'+(floor?"请选择区域":"请先选择楼层")+'</option>'+values.map(value=>`<option value="${h(value)}">${h(value)}</option>`).join("");if(values.includes(previous))$("areaFilter").value=previous;$("areaFilter").disabled=!floor||!values.length}
@@ -170,13 +171,10 @@
         return;
       }
       if(!floor||!area)return;
-      const returnParams=new URLSearchParams({warehouse_map:'1',floor_code:floor,area_code:area});
-      const locationId=Number(params.get('location_id')||0);
-      // Return to the region, not the empty-location auto-entry route.
-      const target='/mobile/?'+returnParams+'#warehouse';
-      const link=document.querySelector('.header-link');link.href=target;link.textContent='返回原区域';
-      $('backToLocations').textContent='返回原区域';
-      $('backToLocations').addEventListener('click',event=>{event.preventDefault();event.stopImmediatePropagation();if(state.submitting||(typeof inbound!=='undefined'&&inbound.busy))return;window.location.assign(target)},true);
+      const link=document.querySelector('.header-link');link.href=warehouseMapHref();link.textContent='返回货架 / 区域';
+      $('backToLocations').textContent='返回货架 / 区域';
+      const back=event=>{event.preventDefault();event.stopImmediatePropagation();openWarehouseMap()};
+      link.addEventListener('click',back,true);$('backToLocations').addEventListener('click',back,true);
     }
     async function init(){restoreWarehouseAreaReturn();try{const data=await api('/api/auth/me');state.user=data.user||data;$('loginPanel').classList.add('hidden');const params=new URLSearchParams(window.location.search),id=params.get('location_id')||'';if(/^[1-9]\d*$/.test(id)){await openLocation(id)}else{await loadLocations()}}catch(error){if(error.status===401){showLogin();return}showMessage(`登录状态检查失败：${error.message}`)}}
     $('loginForm').onsubmit=login;$('floorFilter').onchange=()=>{renderAreas();renderLocations()};$('areaFilter').onchange=renderLocations;$('locationSearch').oninput=renderLocations;$('retryLocations').onclick=loadLocations;$('openCurrentMap').onclick=()=>openWarehouseMap();$('backToLocations').onclick=()=>resetToLocations('');$('fillAllButton').onclick=fillAll;$('submitButton').onclick=submitStocktake;init();

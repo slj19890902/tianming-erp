@@ -21,12 +21,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--runtime-source", type=Path, required=True)
+    parser.add_argument("--candidate-source", type=Path, help="Optional clean isolated checkout, including the protected fallback")
     parser.add_argument("--port", type=int, default=18929)
     parser.add_argument("--verify-existing", action="store_true", help="Verify the already restored local instance without restoring or starting again")
     parser.add_argument("--backup-again", action="store_true", help="After verification, test managed stop/backup/restart of this isolated instance")
     parser.add_argument("--experience-fixtures", action="store_true", help="Seed synthetic pending, production and backlog page scenarios")
     args = parser.parse_args()
-    repo = Path(__file__).resolve().parents[2]
+    repo = (args.candidate_source or Path(__file__).resolve().parents[2]).resolve()
+    if repo.parent != Path("D:/tm-worktrees").resolve() or (repo / ".env").exists():
+        raise ValueError("Candidate must be an isolated checkout without inherited dotenv")
     if not args.verify_existing and subprocess.check_output(
             ["git", "status", "--porcelain"], cwd=repo, text=True).strip():
         raise ValueError("Build the reviewable UAT package from a clean committed workspace")

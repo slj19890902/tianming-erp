@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -42,7 +42,10 @@ from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
     InventoryLot,
     InventoryLotTransfer,
+    InventoryLocationMovement,
     InventoryMovement,
+    InventoryPallet,
+    InventoryPalletItem,
     InventoryReservation,
     WarehouseLocation,
 )
@@ -814,6 +817,259 @@ def test_completion_transfer_descendants_preserve_source_identity_but_forged_edg
     assert finding_codes(report).count("P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT") == 1
 
 
+def test_direct_completion_transfer_uses_actual_output_instead_of_zero_stock(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "completion-transfer-direct.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db, "TRANSFER-DIRECT", status="pending_delivery", quantity=10
+        )
+        task = add_task(db, item)
+        add_traced_receipt(db, "TRANSFER-DIRECT", order, item)
+        source_location = add_location(db, "TRANSFER-DIRECT-SOURCE")
+        target_location = add_location(db, "TRANSFER-DIRECT-TARGET")
+        completion = add_completion(
+            db, "TRANSFER-DIRECT", task, item, location=source_location
+        )
+        completion.initial_disposition = "direct"
+        completion.direct_delivery_quantity = 10
+        completion.stock_quantity = 0
+        source = add_lot(
+            db, "TRANSFER-DIRECT-SOURCE", customer, product,
+            source_ref_id=completion.id, quantity_available=0,
+            location=source_location,
+        )
+        source.status = "closed"
+        target = add_lot(
+            db, "TRANSFER-DIRECT-TARGET", customer, product,
+            source_ref_id=completion.id, quantity_available=10,
+            location=target_location,
+        )
+        target.source_type = "transfer"
+        completion.inventory_lot_id = source.id
+        add_movement(
+            db, "TRANSFER-DIRECT-IN", source, "manual_in", 10,
+            order=order, item=item,
+        )
+        add_location_transfer(
+            db, "direct-completion", source, target,
+            source_location=source_location, target_location=target_location,
+            quantity=10, available_quantity=10, reserved_quantity=0,
+        )
+        db.commit()
+        report = run_audit(db)
+
+    codes = finding_codes(report)
+    assert "P015_COMPLETION_WITHOUT_ACTIVE_FINISHED_LOT" not in codes
+    assert "P015_COMPLETION_WITHOUT_INVENTORY_MOVEMENT" not in codes
+    assert "P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT" not in codes
+    assert not any(
+        row["evidence"].get("trace_kind") == "completion_transfer_graph_invalid"
+        for row in report["findings"]
+    )
+
+
+def test_transfer_graph_accepts_quantity_adjustment_and_verified_pallet_move(
+    tmp_path: Path,
+):
+    engine = build_p0_15_database(tmp_path / "completion-transfer-adjust-pallet.sqlite3")
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db, "TRANSFER-ADJUST-PALLET", status="pending_delivery", quantity=10
+        )
+        task = add_task(db, item)
+        add_traced_receipt(db, "TRANSFER-ADJUST-PALLET", order, item)
+        source_location = add_location(db, "TRANSFER-ADJUST-PALLET-SOURCE")
+        transfer_target = add_location(db, "TRANSFER-ADJUST-PALLET-TARGET")
+        current_location = add_location(db, "TRANSFER-ADJUST-PALLET-CURRENT")
+        completion = add_completion(
+            db, "TRANSFER-ADJUST-PALLET", task, item, location=source_location
+        )
+        completion.initial_disposition = "direct"
+        completion.direct_delivery_quantity = 10
+        completion.stock_quantity = 0
+        source = add_lot(
+            db, "TRANSFER-ADJUST-PALLET-SOURCE", customer, product,
+            source_ref_id=completion.id, quantity_available=0,
+            location=source_location,
+        )
+        source.status = "closed"
+        target = add_lot(
+            db, "TRANSFER-ADJUST-PALLET-TARGET", customer, product,
+            source_ref_id=completion.id, quantity_available=10,
+            location=transfer_target,
+        )
+        target.source_type = "transfer"
+        target.warehouse_location_id = current_location.id
+        completion.inventory_lot_id = source.id
+        add_movement(
+            db, "TRANSFER-ADJUST-PALLET-IN", source, "manual_in", 10,
+            order=order, item=item,
+        )
+        add_location_transfer(
+            db, "adjust-pallet", source, target,
+            source_location=source_location, target_location=transfer_target,
+            quantity=10, available_quantity=10, reserved_quantity=0,
+        )
+        target.quantity_available = 9
+        adjustment = add_movement(
+            db, "TRANSFER-ADJUST-PALLET-ADJUST", target, "adjust", 1
+        )
+        adjustment.before_available = 10
+        adjustment.after_available = 9
+        pallet = InventoryPallet(
+            pallet_code="ANON-PALLET-TRANSFER-ADJUST",
+            location_id=current_location.id,
+            status="active",
+            is_current=True,
+            version=2,
+        )
+        db.add(pallet)
+        db.flush()
+        db.add(InventoryPalletItem(
+            pallet_id=pallet.id,
+            inventory_lot_id=target.id,
+            customer_id=customer.id,
+            product_id=product.id,
+            item_type="finished",
+            quantity=Decimal("9"),
+            unit="boxes",
+            match_status="matched",
+            created_at=NOW,
+        ))
+        db.add(InventoryLocationMovement(
+            pallet_id=pallet.id,
+            from_location_id=transfer_target.id,
+            to_location_id=current_location.id,
+            movement_type="move",
+            moved_at=NOW,
+            confirmed_at=NOW,
+            pallet_version_before=1,
+            pallet_version_after=2,
+            idempotency_key="anon-pallet-move-transfer-adjust",
+        ))
+        db.commit()
+        report = run_audit(db)
+
+    codes = finding_codes(report)
+    assert "P015_COMPLETION_WITHOUT_ACTIVE_FINISHED_LOT" not in codes
+    assert "P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT" not in codes
+    assert not any(
+        row["evidence"].get("trace_kind", "").startswith(
+            "completion_transfer_graph_"
+        )
+        for row in report["findings"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("move_at", "pallet_version"),
+    (
+        (NOW - timedelta(days=1), 2),
+        (NOW + timedelta(days=1), 3),
+    ),
+)
+def test_pallet_history_gap_is_review_and_cannot_prove_transfer_location(
+    tmp_path: Path,
+    move_at: datetime,
+    pallet_version: int,
+):
+    engine = build_p0_15_database(
+        tmp_path / f"completion-transfer-pallet-gap-{pallet_version}.sqlite3"
+    )
+    with Session(engine) as db:
+        customer, product, order, item = add_order(
+            db, f"PALLET-GAP-{pallet_version}",
+            status="pending_delivery",
+            quantity=10,
+        )
+        task = add_task(db, item)
+        add_traced_receipt(db, f"PALLET-GAP-{pallet_version}", order, item)
+        source_location = add_location(db, f"PALLET-GAP-SOURCE-{pallet_version}")
+        transfer_target = add_location(db, f"PALLET-GAP-TARGET-{pallet_version}")
+        current_location = add_location(db, f"PALLET-GAP-CURRENT-{pallet_version}")
+        completion = add_completion(
+            db, f"PALLET-GAP-{pallet_version}", task, item,
+            location=source_location,
+        )
+        completion.initial_disposition = "direct"
+        completion.direct_delivery_quantity = 10
+        completion.stock_quantity = 0
+        source = add_lot(
+            db, f"PALLET-GAP-SOURCE-{pallet_version}", customer, product,
+            source_ref_id=completion.id, quantity_available=0,
+            location=source_location,
+        )
+        source.status = "closed"
+        target = add_lot(
+            db, f"PALLET-GAP-TARGET-{pallet_version}", customer, product,
+            source_ref_id=completion.id, quantity_available=10,
+            location=transfer_target,
+        )
+        target.source_type = "transfer"
+        target.warehouse_location_id = current_location.id
+        completion.inventory_lot_id = source.id
+        add_movement(
+            db, f"PALLET-GAP-IN-{pallet_version}", source, "manual_in", 10,
+            order=order, item=item,
+        )
+        add_location_transfer(
+            db, f"pallet-gap-{pallet_version}", source, target,
+            source_location=source_location, target_location=transfer_target,
+            quantity=10, available_quantity=10, reserved_quantity=0,
+        )
+        pallet = InventoryPallet(
+            pallet_code=f"ANON-PALLET-GAP-{pallet_version}",
+            location_id=current_location.id,
+            status="active",
+            is_current=True,
+            version=pallet_version,
+        )
+        db.add(pallet)
+        db.flush()
+        db.add(InventoryPalletItem(
+            pallet_id=pallet.id,
+            inventory_lot_id=target.id,
+            customer_id=customer.id,
+            product_id=product.id,
+            item_type="finished",
+            quantity=Decimal("10"),
+            unit="boxes",
+            match_status="matched",
+            created_at=NOW,
+        ))
+        db.add(InventoryLocationMovement(
+            pallet_id=pallet.id,
+            from_location_id=transfer_target.id,
+            to_location_id=current_location.id,
+            movement_type="move",
+            moved_at=move_at,
+            confirmed_at=move_at,
+            pallet_version_before=1,
+            pallet_version_after=2,
+            idempotency_key=f"anon-pallet-gap-{pallet_version}",
+        ))
+        db.commit()
+        report = run_audit(db)
+
+    graph_findings = [
+        row
+        for row in report["findings"]
+        if row["evidence"].get("trace_kind", "").startswith(
+            "completion_transfer_graph_"
+        )
+    ]
+    assert len(graph_findings) == 1
+    assert graph_findings[0]["severity"] == "review"
+    assert graph_findings[0]["evidence"]["trace_kind"] == (
+        "completion_transfer_graph_incomplete"
+    )
+    assert "P015_COMPLETION_WITHOUT_ACTIVE_FINISHED_LOT" not in finding_codes(
+        report
+    )
+
+
 def test_completion_transfer_chain_keeps_partial_two_level_full_move_and_consumption_explainable(
     tmp_path: Path,
 ):
@@ -915,6 +1171,7 @@ def test_split_completion_transfer_conserves_stock_disposition_not_direct_quanti
             source_ref_id=completion.id, quantity_available=0,
             location=source_location,
         )
+        source.source_type = "production_surplus"
         source.status = "closed"
         target = add_lot(
             db, "TRANSFER-SPLIT-TARGET", customer, product,
@@ -1055,8 +1312,10 @@ def test_completion_transfer_chain_rejects_unexplained_location_and_balance_muta
     engine = build_p0_15_database(tmp_path / "completion-transfer-state-red.sqlite3")
     with Session(engine) as db:
         invalid_completion_ids = set()
+        incomplete_location_completion_id = None
         for token, defect in (
             ("TRANSFER-LEAF-LOCATION", "location"),
+            ("TRANSFER-PALLET-CONTRADICTION", "pallet"),
             ("TRANSFER-BALANCE-FAMILY", "consumed"),
             ("TRANSFER-TERMINAL-TOTAL", "terminal_total"),
         ):
@@ -1096,6 +1355,41 @@ def test_completion_transfer_chain_rejects_unexplained_location_and_balance_muta
                 target.warehouse_location_id = add_location(
                     db, f"{token}-UNEXPLAINED"
                 ).id
+                incomplete_location_completion_id = completion.id
+            elif defect == "pallet":
+                current_location = add_location(db, f"{token}-CURRENT")
+                target.warehouse_location_id = current_location.id
+                pallet = InventoryPallet(
+                    pallet_code=f"ANON-PALLET-{token}",
+                    location_id=current_location.id,
+                    status="active",
+                    is_current=True,
+                    version=2,
+                )
+                db.add(pallet)
+                db.flush()
+                db.add(InventoryPalletItem(
+                    pallet_id=pallet.id,
+                    inventory_lot_id=target.id,
+                    customer_id=customer.id,
+                    product_id=product.id,
+                    item_type="finished",
+                    quantity=Decimal("10"),
+                    unit="boxes",
+                    match_status="matched",
+                    created_at=NOW,
+                ))
+                db.add(InventoryLocationMovement(
+                    pallet_id=pallet.id,
+                    from_location_id=target_location.id,
+                    to_location_id=current_location.id,
+                    movement_type="move",
+                    moved_at=NOW,
+                    confirmed_at=NOW,
+                    pallet_version_before=1,
+                    pallet_version_after=3,
+                    idempotency_key=f"anon-pallet-{token}",
+                ))
             elif defect == "consumed":
                 source_move = db.scalar(
                     select(InventoryMovement).where(
@@ -1117,7 +1411,8 @@ def test_completion_transfer_chain_rejects_unexplained_location_and_balance_muta
                 source_move.before_available = 11
                 source_move.after_available = 1
                 source.quantity_available = 1
-            invalid_completion_ids.add(completion.id)
+            if defect != "location":
+                invalid_completion_ids.add(completion.id)
         db.commit()
         report = run_audit(db)
 
@@ -1127,6 +1422,28 @@ def test_completion_transfer_chain_rejects_unexplained_location_and_balance_muta
         if row["evidence"].get("trace_kind") == "completion_transfer_graph_invalid"
     }
     assert invalid_transfers == invalid_completion_ids
+    location_reviews = [
+        row
+        for row in report["findings"]
+        if row["evidence"].get("trace_kind")
+        == "completion_transfer_graph_incomplete"
+        and row["evidence"].get("completion_id")
+        == incomplete_location_completion_id
+    ]
+    assert len(location_reviews) == 1
+    assert location_reviews[0]["severity"] == "review"
+    assert location_reviews[0]["evidence"]["review_reasons"] == [
+        "leaf_location_history_missing"
+    ]
+    assert not any(
+        row["code"] in {
+            "P015_COMPLETION_WITHOUT_ACTIVE_FINISHED_LOT",
+            "P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT",
+        }
+        and row["evidence"].get("completion_id")
+        == incomplete_location_completion_id
+        for row in report["findings"]
+    )
 
 
 def test_valid_transfer_does_not_hide_unrelated_transfer_labelled_duplicate(

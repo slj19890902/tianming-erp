@@ -25,5 +25,15 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://local
  const layout=await page.evaluate(()=>{const qr=document.querySelector('.product-qr'),left=document.querySelector('.product-details');return {qrWidth:qr.offsetWidth,qrHeight:qr.offsetHeight,leftEnd:left.offsetLeft+left.offsetWidth,qrStart:qr.offsetLeft};});assert(Math.abs(layout.qrWidth-30*96/25.4)<1);assert.equal(layout.qrWidth,layout.qrHeight);assert(layout.leftEnd<layout.qrStart);
  evidence.push({productLayout:layout},...await verify());assert(evidence.at(-1).children.every(c=>c.visible&&c.inside),JSON.stringify(evidence.at(-1)));await page.emulateMedia({media:'print'});await page.pdf({path:out+'/product-label.pdf',preferCSSPageSize:true,printBackground:true});await page.locator('.label-page').screenshot({path:out+'/product-label.png'});
  const productRaster=await page.locator('.print-raster').getAttribute('src');fs.writeFileSync(out+'/product-raster.png',Buffer.from(productRaster.split(',')[1],'base64'));
- fs.writeFileSync(out+'/chrome-evidence.json',JSON.stringify(evidence,null,2));console.log('PASS: rack-only grouping, whole-rack QR without level/slot; mode switch;  40x80 paper, three independent location pages, product text and QR bounds');
+ await page.emulateMedia({media:'screen'});
+ await page.goto(`http://127.0.0.1:${server.address().port}/static/shelf-label.html?content=rack&location_ids=1,3`);
+ await page.waitForFunction(()=>!document.getElementById('print').disabled);
+ assert.equal(await page.locator('#labelContent').inputValue(),'rack');assert.equal(await page.locator('.label-page').count(),2);
+ await page.evaluate(()=>{window.printCalls=0;window.print=()=>window.printCalls++;});
+ await page.locator('#print').click();await page.waitForFunction(()=>window.printCalls===1);
+ await page.route('**/mobile-label',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({rack_key:'a',rack_label:'R1',rack_qr_data_url:'data:image/png;base64,broken',qr_data_url:'data:image/png;base64,broken'})}));
+ await page.locator('#print').click();await page.waitForFunction(()=>!document.getElementById('retry').disabled);
+ assert.equal(await page.evaluate(()=>window.printCalls),1);assert(await page.locator('#print').isDisabled());assert.equal(await page.locator('.label-page').count(),0);
+ evidence.push({directRackMode:true,twoRacksTwoLabels:true,completeRasterPrinted:true,brokenQrBlocked:true});
+fs.writeFileSync(out+'/chrome-evidence.json',JSON.stringify(evidence,null,2));console.log('PASS: rack-only grouping, whole-rack QR without level/slot; mode switch;  40x80 paper, three independent location pages, product text and QR bounds');
  }finally{await browser.close();server.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

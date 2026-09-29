@@ -7,6 +7,7 @@ const productAddress = row => [row.compact_title ?? row.print_title ?? row.title
 const locationTitle = row => String(row.title ?? '') + (row.position ? '-' : '');
 let busy = false;
 $('contentControl').hidden = Boolean(lot);
+if (!lot && params.get('content') === 'rack') $('labelContent').value = 'rack';
 function label(row) {
   if (!lot && $('labelContent').value === 'rack') return `<article class="label"><div class="rack-only"><h1 class="fit">${h(row.rack_label)}</h1><img src="${h(row.rack_qr_data_url)}" alt="扫码查看整架"></div></article>`;
   const heading = `<div><h1 class="fit">${h(locationTitle(row))}</h1><strong class="fit">${h(row.position)}</strong></div><img src="${h(row.qr_data_url)}" alt="手机查询二维码">`;
@@ -35,7 +36,9 @@ async function rasterLabel(row, rackOnly) {
   }
   const qr = new Image();
   qr.src = rackOnly ? row.rack_qr_data_url : row.qr_data_url;
+  if (!qr.src || !qr.src.startsWith('data:image/')) throw Error('二维码缺失，已停止打印');
   await qr.decode();
+  if (!qr.naturalWidth || !qr.naturalHeight) throw Error('二维码尚未加载，已停止打印');
   ctx.imageSmoothingEnabled = false;
   if (rackOnly) {
     text(row.rack_label, 2, 12, 46, 36, true);
@@ -98,5 +101,14 @@ async function load() {
 }
 $('labelContent').onchange = load;
 $('retry').onclick = load;
-$('print').onclick = async () => { if (await load()) window.print(); };
+function readyToPrint() {
+  const pages=[...document.querySelectorAll('.label-page')];
+  return !busy && pages.length>0 && pages.every(page=>{const img=page.querySelector('.print-raster');return img?.complete && img.naturalWidth===320 && img.naturalHeight===640;});
+}
+$('print').onclick = async () => {
+  if (!await load()) return;
+  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  if (!readyToPrint()) { $('message').textContent='打印图片未准备完整，请重新读取'; return; }
+  window.print();
+};
 load();

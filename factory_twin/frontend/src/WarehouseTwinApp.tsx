@@ -1,3 +1,4 @@
+import { areaRackLabelBatch } from "./rackLabelBatch.mjs";
 import { EntryProductButton } from "./EntryProductButton";
 import { OrderReference } from './OrderReference';
 import { UnassignedFinishedEntry } from "./UnassignedFinishedEntry";
@@ -3259,6 +3260,7 @@ export function WarehouseTwinApp() {
     || (selectedAreaFeature?.feature_code && rack.area_code === selectedAreaFeature.feature_code)
     || (selectedAreaCode && rackAreaCode(rack, features) === selectedAreaCode)
   ));
+  const selectedAreaRackLabels = areaRackLabelBatch(selectedAreaRacks, selectedAreaLocations, floorCode);
   const selectedAreaMoldRacks = selectedAreaFeature
     ? moldRacksForArea(selectedAreaFeature, visualLayout?.racks || [])
     : selectedAreaRacks.filter((rack) => Boolean(rack.mold_rack_code));
@@ -7307,6 +7309,7 @@ export function WarehouseTwinApp() {
           {objectActionsButton}
           {selectedAreaFeature ? <>
             <div className="twin-inventory-title"><div><small>{locationEditMode && canEditLocations ? `当前规划区域 · ${selectedAreaCode || selectedAreaFeature.feature_code}` : "当前区域"}</small><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b></div><span>{selectedAreaActivationLabel}</span></div>
+            {!locationEditMode && selectedAreaRacks.length > 0 && <div className="twin-region-planning-actions"><button type="button" disabled={Boolean(selectedAreaRackLabels.error)} title={selectedAreaRackLabels.error || "每个货架一张"} onClick={() => window.open(selectedAreaRackLabels.url, "_blank", "noopener")}>打印此区域货架编号＋二维码（{selectedAreaRacks.length}架）</button>{selectedAreaRackLabels.error && <span role="status">{selectedAreaRackLabels.error}</span>}</div>}
           {layoutMapToolsOpen && layoutMapTool === "adjust" && selectedAreaFeature && selectedAreaBoundary && <div className="twin-zone-geometry-editor">
             <div><b>{employeeAreaName(selectedAreaFeature, { floorCode })}</b><small>{selectedAreaBoundaryLocked ? "区域移动不带动货位；红色冲突可保存后继续整理。" : "方向键短按10mm；按住连续移动；Shift精调1mm；松开保存草稿。"}</small></div>
             <div className="twin-zone-geometry-grid">{([['中心 X', 'centerXmm'], ['中心 Y', 'centerYmm'], ['长', 'widthMm'], ['宽', 'heightMm']] as const).map(([label, key]) => <label key={key}><span>{label} mm</span><input type="number" disabled={spatialEditBusy} value={selectedAreaBoundary[key]} onChange={(event) => {

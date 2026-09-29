@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.530"
-APP_VERSION_NAME = "货架聚焦辅助点清理"
-APP_BUILD_DATE = "2026-09-28"
+APP_VERSION = "v0.22.531"
+APP_VERSION_NAME = "区域整架标签批量打印"
+APP_BUILD_DATE = "2026-09-29"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -5104,3 +5104,7 @@ APP_VERIFICATION_STEPS = [
     "收起货架后重新查货，核对搜索定位、货架高亮、数量与右侧货位详情仍可正常使用。",
 ]
 APP_CHANGELOG = [*(f"v0.22.530：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["仓库地图选中区域后可直接批量打印货架编号与手机二维码，每架一张，无需逐架切换。", "缺少正式货位的货架明确提示；二维码或整张打印图片未准备完整时阻止打印。", "保留40×80毫米版式、库位短横线和手机扫码权限；打印机走纸需单独现场校准。"]
+APP_VERIFICATION_STEPS = ["仓库地图点击区域，点击打印此区域货架编号＋二维码，核对每架一张。", "选择40×80纵向打印队列，先确认机身FEED一次完整走一张，再试打两架并手机扫码。"]
+APP_CHANGELOG = [*(f"v0.22.531：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

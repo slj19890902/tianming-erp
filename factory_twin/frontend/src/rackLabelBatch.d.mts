@@ -1,0 +1,1 @@
+export function areaRackLabelBatch(racks: Array<{id:string;name?:string;x_mm:number;y_mm:number}>, locations: Array<{location_id:number;is_active:boolean;floor_code:string;map_rack_id?:string|null;level_no?:number|null;slot_no?:number|null}>, floorCode:string): {count:number;error:string;url:string};

@@ -13,7 +13,7 @@ import jwt
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from app.api.deps import (
     PermissionChecker,
@@ -30,9 +30,6 @@ from app.core.time_contract import (
 from app.core.config import load_settings, normalize_path
 from app.core.database import (
     backup_to_nas,
-    create_sqlite_engine,
-    engine,
-    restore_from_backup,
 )
 from app.models.audit import OperationLog
 from app.models.company_config import CompanyConfig
@@ -51,6 +48,7 @@ from app.services.delivery_print_templates import (
     save_draft as save_delivery_template_draft,
 )
 from app.services.audit_log import append_audit_event
+from app.services.managed_recovery_status import managed_recovery_status
 from app.services.ui_layout_settings import (
     DISPLAY_MODES,
     LAYOUT_ROLES,
@@ -216,79 +214,6 @@ def _safe_backup_path(backup_dir: Path, filename: str) -> Path:
     if candidate.parent != normalize_path(backup_dir):
         raise HTTPException(status_code=400, detail="备份文件名无效")
     return candidate
-
-
-def _validate_erp_backup(path: Path) -> None:
-    try:
-        with sqlite3.connect(path, timeout=10) as connection:
-            tables = {
-                row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                )
-            }
-            statement_columns = {
-                row[1]
-                for row in connection.execute(
-                    "PRAGMA table_info(finance_statements)"
-                )
-            }
-    except sqlite3.DatabaseError as error:
-        raise HTTPException(status_code=400, detail="备份文件不是有效数据库") from error
-    required_tables = {
-        "users",
-        "operation_logs",
-        "alembic_version",
-        "finance_statements",
-        "finance_invoices",
-        "finance_settlement_records",
-    }
-    required_columns = {"invoiced_amount", "settled_amount"}
-    if (
-        not required_tables <= tables
-        or not required_columns <= statement_columns
-    ):
-        raise HTTPException(status_code=400, detail="备份文件不是兼容的 ERP 备份")
-
-
-def _write_restore_audit(
-    *,
-    database_path: Path,
-    user_id: int,
-    username: str,
-    role: str,
-    request: Request,
-    source_filename: str,
-    emergency_filename: str,
-) -> None:
-    audit_engine = create_sqlite_engine(database_path)
-    factory = sessionmaker(bind=audit_engine, expire_on_commit=False)
-    try:
-        with factory() as session:
-            restored_user = session.get(User, user_id)
-            session.add(
-                OperationLog(
-                    user_id=restored_user.id if restored_user else None,
-                    action="RESTORE_DATABASE",
-                    resource="System",
-                    details=json.dumps(
-                        {
-                            "source_backup": source_filename,
-                            "pre_restore_backup": emergency_filename,
-                        },
-                        ensure_ascii=False,
-                    ),
-                    ip_address=request.client.host if request.client else None,
-                    username=username,
-                    role=role,
-                    entity_type="system",
-                    description="管理员执行数据库灾难恢复",
-                    user_agent=request.headers.get("user-agent"),
-                )
-            )
-            session.commit()
-    finally:
-        audit_engine.dispose()
 
 
 def _list_backup_files(backup_dir: Path) -> list[Path]:
@@ -503,6 +428,13 @@ def cleanup_backups(
     }
 
 
+@router.get("/backups/managed-status")
+def get_managed_restore_status(
+    _user: User = Depends(can_backup),
+) -> dict:
+    return managed_recovery_status()
+
+
 @router.delete("/backups/{filename}")
 def delete_backup(
     filename: str,
@@ -571,51 +503,17 @@ def delete_backup(
 
 @router.post("/backups/restore")
 def restore_backup(
-    payload: RestoreRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    user: User = Depends(admin_only),
+    _payload: RestoreRequest,
+    _user: User = Depends(admin_only),
 ) -> dict:
-    current = load_settings()
-    source = _safe_backup_path(current.backup_dir, payload.filename)
-    if not source.is_file():
-        raise HTTPException(status_code=404, detail="备份文件不存在")
-    _validate_erp_backup(source)
-
-    actor = {
-        "id": user.id,
-        "username": user.username,
-        "role": user.role,
-    }
-    db.rollback()
-    db.close()
-    engine.dispose()
-    try:
-        result = restore_from_backup(
-            source,
-            target_path=current.database_path,
-            backup_dir=current.backup_dir,
-        )
-        _write_restore_audit(
-            database_path=current.database_path,
-            user_id=actor["id"],
-            username=actor["username"],
-            role=actor["role"],
-            request=request,
-            source_filename=result.source_backup.name,
-            emergency_filename=result.emergency_backup.name,
-        )
-    except (OSError, sqlite3.DatabaseError, RuntimeError) as error:
-        raise HTTPException(
-            status_code=500,
-            detail="数据库恢复失败，系统已尝试自动回滚",
-        ) from error
-    return {
-        "ok": True,
-        "restored_from": result.source_backup.name,
-        "pre_restore_backup": result.emergency_backup.name,
-        "integrity_check": result.integrity_check,
-    }
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "网页直接恢复已关闭：运行中的网页服务不能安全停止自身，也不能只替换数据库。"
+            "请在服务器桌面打开“天明ERP助手”，使用经过验证的完整备份（.tmbackup）"
+            "恢复到全新安装目录。"
+        ),
+    )
 
 
 # ─────────────────────────────────────────────────────────────

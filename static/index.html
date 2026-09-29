@@ -6083,8 +6083,27 @@
               </template>
 
               <template v-if="systemSection === 'backup' && (systemSectionLoaded.backup || (!systemSectionLoading.backup && !systemSectionErrors.backup))">
-              <div class="section-title">数据备份</div>
+              <div class="section-title">完整备份与恢复</div>
               <div class="panel" style="margin-bottom:10px;padding:12px 16px">
+                <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
+                  <strong>受管恢复：</strong>
+                  <span v-if="managedRestoreStatus.status === 'verified'" class="status green">最近完整备份创建时已验证</span>
+                  <span v-else-if="managedRestoreStatus.status === 'backup_unavailable'" class="status red">完整备份文件不可达</span>
+                  <span v-else-if="managedRestoreStatus.configured" class="status orange">尚无可确认的完整备份</span>
+                  <span v-else class="status gray">未检测到桌面助手</span>
+                  <span v-if="managedRestoreStatus.release"><strong>配套版本：</strong>{{ managedRestoreStatus.release.version || '-' }} · {{ managedRestoreStatus.release.revision || '-' }}</span>
+                </div>
+                <div v-if="managedRestoreStatus.latest_backup" style="margin-top:8px">
+                  最近完整备份：<strong>{{ managedRestoreStatus.latest_backup.filename }}</strong>
+                  · {{ formatDateTime(managedRestoreStatus.latest_backup.created_at) }}
+                  · {{ fileSize(managedRestoreStatus.latest_backup.size || 0) }}
+                </div>
+                <div v-if="managedRestoreStatus.backup_error_present" class="notice danger" style="margin-top:8px">最近一次自动备份尝试有错误；请先在桌面助手核对，不能把旧成功记录当作最新成功。</div>
+                <div class="muted" style="margin-top:8px">{{ managedRestoreStatus.guidance || '网页不执行正式恢复；请使用服务器桌面的天明ERP助手。' }}</div>
+              </div>
+              <div class="section-title">数据库快照</div>
+              <div class="panel" style="margin-bottom:10px;padding:12px 16px">
+                <div class="muted" style="margin-bottom:8px">以下为旧式单数据库快照，可用于核对和留档，不能替代包含程序、附件与配置的完整恢复包，也不能从网页直接恢复正式系统。</div>
                 <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-size:14px">
                   <span><strong>备份位置：</strong>{{ backupStats.location_type === 'nas' ? 'NAS 网络存储' : '本地磁盘' }}</span>
                   <span class="muted">{{ backupStats.backup_dir || '-' }}</span>
@@ -6094,7 +6113,7 @@
               </div>
               <div v-if="backupListError" class="notice danger" style="margin-bottom:10px">{{ backupListError }} <button class="btn small" @click="loadBackups()" :disabled="backupAction || backupListLoading || loading">重新加载</button></div>
               <div class="toolbar">
-                <button class="btn primary" @click="createBackup" :disabled="backupAction || backupListLoading || loading">{{ backupAction === 'create' ? '正在备份…' : '立即备份' }}</button>
+                <button class="btn primary" @click="createBackup" :disabled="backupAction || backupListLoading || loading">{{ backupAction === 'create' ? '正在创建…' : '创建数据库快照' }}</button>
                 <button class="btn" @click="loadBackups()" :disabled="backupAction || backupListLoading || loading">{{ backupListLoading ? '正在刷新…' : '刷新列表' }}</button>
                 <button v-if="(backupStats.deletable_count || 0) > 0" class="btn danger" @click="previewCleanup" :disabled="backupAction || backupListLoading || loading">{{ backupAction === 'preview' ? '正在检查…' : '一键清理旧备份…' }}</button>
               </div>
@@ -10666,7 +10685,7 @@
             customerInvoiceProfile:{invoice_title:"",tax_no:"",invoice_address:"",invoice_phone:"",bank_name:"",bank_account:"",default_seller_id:null,settlement_entity_id:null,price_tax_mode:"tax_inclusive",default_tax_rate:"0.13",is_enabled:true,confirmation_status:"pending",version:null,error:""},
             customerInvoiceRule:{project_name:"纸箱",tax_classification_code:"1060105010000000000",unit:"PCS",tax_rate:"0.13",spec_source:"product_code_snapshot",fill_unit_price:true,confirmation_status:"pending",version:null,error:""},
             customerInvoiceState:{profileLoading:false,profileSaving:false,profileLoadedCustomerId:null,ruleLoading:false,ruleSaving:false,ruleLoadedCustomerId:null},
-            pendingStatements: [], pendingStatementCharges: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
+            pendingStatements: [], pendingStatementCharges: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, managedRestoreStatus: {}, backupCleanupPreview: null, showCleanupPreview: false, backupListLoading: false, backupListError: "", backupAction: "",
             systemUsers: [], systemSection:"basic",
             emailSettings:{configured:false,version:0,sender_addresses:[],sync_interval_minutes:5,automatic_enabled:false},
             emailAuthorizationCode:"", emailSenderText:"", emailSettingsSaving:false,
@@ -25614,9 +25633,13 @@
             this.backupListLoading = true;
             this.backupListError = "";
             try {
-              const { data } = await axios.get("/api/system/backups", {signal:controller.signal});
+              const [{ data }, managed] = await Promise.all([
+                axios.get("/api/system/backups", {signal:controller.signal}),
+                axios.get("/api/system/backups/managed-status", {signal:controller.signal}),
+              ]);
               if (latestRequestControllers.get(requestKey) !== controller) return false;
               this.backups = data.items || [];
+              this.managedRestoreStatus = managed.data || {};
               this.backupStats = {
                 backup_dir: data.backup_dir,
                 location_type: data.location_type,
@@ -25630,6 +25653,7 @@
               if (!this.isCancelledRequest(error) && latestRequestControllers.get(requestKey) === controller) {
                 this.backups = [];
                 this.backupStats = {};
+                this.managedRestoreStatus = {};
                 this.backupListError = `备份列表读取失败：${this.errorMessage(error)}`;
                 if (throwOnError) throw error;
               }
@@ -40474,8 +40498,8 @@
             try {
               const {data}=await axios.post("/api/system/backups");
               const refreshed = await this.loadBackups();
-              if (refreshed) this.showToast(`备份成功：${data.filename}`);
-              else this.showToast(`备份已创建：${data.filename}，但列表刷新失败，请点“重新加载”；不要重复备份`, true);
+              if (refreshed) this.showToast(`数据库快照已创建：${data.filename}`);
+              else this.showToast(`数据库快照已创建：${data.filename}，但列表刷新失败，请点“重新加载”；不要重复创建`, true);
               return true;
             }
             catch (error) { this.showToast(this.errorMessage(error), true); return false; }

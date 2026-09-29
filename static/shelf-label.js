@@ -6,6 +6,24 @@ const $ = id => document.getElementById(id);
 const productAddress = row => [row.compact_title ?? row.print_title ?? row.title, String(row.compact_position ?? row.print_position ?? row.position ?? '').replace(/层\s+(?=\d+格)/g, '层-')].filter(Boolean).join('-');
 const locationTitle = row => String(row.title ?? '') + (row.position ? '-' : '');
 let busy = false;
+let printText = null;
+function openTextEditor(product) {
+  if (!lot || !product) return;
+  $('labelEditor').hidden = false;
+  const values = printText || product;
+  for (const [field, id] of [['customer','editCustomer'],['name','editName'],['specification','editSpecification']]) $(id).value = values[field] ?? '';
+}
+$('labelEditForm').onsubmit = event => {
+  event.preventDefault();
+  if (busy) return;
+  printText = {customer:$('editCustomer').value.trim(), name:$('editName').value.trim(), specification:$('editSpecification').value.trim()};
+  void load();
+};
+$('restoreLabel').onclick = () => { if (!busy) { printText = null; void load(); } };
+$('labelEditForm').oninput = () => {
+  $('print').disabled = true; document.body.dataset.printReady = 'false';
+  $('message').textContent = '文字已修改，请更新预览';
+};
 $('contentControl').hidden = Boolean(lot);
 if (!lot && params.get('content') === 'rack') $('labelContent').value = 'rack';
 function label(row) {
@@ -13,7 +31,7 @@ function label(row) {
   const heading = `<div><h1 class="fit">${h(locationTitle(row))}</h1><strong class="fit">${h(row.position)}</strong></div><img src="${h(row.qr_data_url)}" alt="手机查询二维码">`;
   if (!row.product) return `<article class="label"><div class="location">${heading}</div></article>`;
   const p = row.product;
-  return `<article class="label"><div class="product-layout"><div class="product-details"><div class="product-head"><h1 class="fit">${h(productAddress(row))}</h1></div><div class="fields">${[['客户',p.customer],['编码',p.code],['品名',p.name],['规格',p.specification]].map(([key,value]) => `<div class="field"><span>${key}：</span><span class="value fit ${key==='编码'?'code':key==='客户'?'customer':''}">${h(value)}</span></div>`).join('')}</div></div><img class="product-qr" src="${h(row.qr_data_url)}" alt="手机查询二维码"></div></article>`;
+  return `<article class="label"><div class="product-layout"><div class="product-details"><div class="product-head"><h1 class="fit">${h(productAddress(row))}</h1></div><div class="fields">${[['客户',p.customer],['编码',p.code],['品名',p.name],['规格',p.specification]].map(([key,value]) => `<div class="field"><span>${key}：</span><span data-field="${key}" class="value fit ${key==='编码'?'code':key==='客户'?'customer':''}">${h(value)}</span></div>`).join('')}</div></div><img class="product-qr" src="${h(row.qr_data_url)}" alt="手机查询二维码"></div></article>`;
 }
 // Send one native-size bitmap per physical page. Thermal drivers must not
 // independently rotate/vectorize text and the QR image.
@@ -64,7 +82,7 @@ async function rasterLabel(row, rackOnly) {
 }
 async function load() {
   if (busy) return false;
-  busy = true; $('labelContent').disabled = true; $('print').disabled = true; $('retry').disabled = true; $('labels').innerHTML = '';
+  busy = true; document.body.dataset.printReady = 'false'; $('labelEditFields').disabled = true; $('labelContent').disabled = true; $('print').disabled = true; $('retry').disabled = true; $('labels').innerHTML = '';
   try {
     if (!ids.length || ids.length > 500 || new Set(ids).size !== ids.length || ids.some(id => !/^[1-9]\d*$/.test(id)) || (lot && (!/^[1-9]\d*$/.test(lot) || ids.length !== 1))) throw Error('标签选择无效');
     $('message').textContent = '读取标签…';
@@ -77,6 +95,11 @@ async function load() {
       if (!r.ok) throw Error(typeof data.detail === 'string' ? data.detail : '读取失败');
       return data;
     })));
+    openTextEditor(rows[0]?.product);
+    if (lot && printText && rows[0]?.product) {
+      if (!printText.customer || !printText.name || !printText.specification) throw Error('客户简称、品名和规格不能为空');
+      rows[0] = {...rows[0], product:{...rows[0].product, ...printText}};
+    }
     let printable = rows;
     if (!lot && $('labelContent').value === 'rack') {
       if (rows.some(row => !row.rack_key || !row.rack_label || !row.rack_qr_data_url)) throw Error('所选位置缺少完整货架身份，请使用每层每格标签');
@@ -88,16 +111,16 @@ async function load() {
     for (const node of document.querySelectorAll('.fit')) {
       let size = parseFloat(getComputedStyle(node).fontSize);
       while (node.scrollWidth > node.clientWidth + 1 && size > 10) { size -= .5; node.style.fontSize = size+'px'; }
-      if (node.scrollWidth > node.clientWidth + 1) throw Error('文字过长，请核对简称或名称');
+      if (node.scrollWidth > node.clientWidth + 1) throw Error(`${node.dataset.field || '位置/编码'}过长${lot ? '，请在编辑标签文字中缩短客户简称、品名或规格' : '，请核对简称或名称'}`);
     }
     for (const node of document.querySelectorAll('.label')) if(node.scrollHeight > node.clientHeight + 1) throw Error('标签内容超出尺寸');
     const pages = [...document.querySelectorAll('.label-page')];
     for (let i=0; i<printable.length; i++) pages[i].append(await rasterLabel(printable[i], !lot && $('labelContent').value === 'rack'));
     $('message').textContent = `40×80mm纵向纸型 · ${printable.length}张 · 缩放100%、无边距，不再手动旋转`;
-    $('print').disabled = false;
+    document.body.dataset.printReady = 'true'; $('print').disabled = false;
     return true;
-  } catch(e) { $('labels').innerHTML = ''; $('message').textContent = e.message || '读取失败，请重试'; return false; }
-  finally {busy=false; $('labelContent').disabled=false; $('retry').disabled=false;}
+  } catch(e) { if (lot && !$('labelEditor').hidden) $('labelEditor').open = true; $('labels').innerHTML = ''; $('message').textContent = e.message || '读取失败，请重试'; return false; }
+  finally {busy=false; $('labelEditFields').disabled=false; $('labelContent').disabled=false; $('retry').disabled=false;}
 }
 $('labelContent').onchange = load;
 $('retry').onclick = load;

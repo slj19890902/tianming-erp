@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.531"
-APP_VERSION_NAME = "区域整架标签批量打印"
+APP_VERSION = "v0.22.532"
+APP_VERSION_NAME = "产品标签文字编辑"
 APP_BUILD_DATE = "2026-09-29"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5108,3 +5108,7 @@ APP_CHANGELOG = [*(f"v0.22.530：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["仓库地图选中区域后可直接批量打印货架编号与手机二维码，每架一张，无需逐架切换。", "缺少正式货位的货架明确提示；二维码或整张打印图片未准备完整时阻止打印。", "保留40×80毫米版式、库位短横线和手机扫码权限；打印机走纸需单独现场校准。"]
 APP_VERIFICATION_STEPS = ["仓库地图点击区域，点击打印此区域货架编号＋二维码，核对每架一张。", "选择40×80纵向打印队列，先确认机身FEED一次完整走一张，再试打两架并手机扫码。"]
 APP_CHANGELOG = [*(f"v0.22.531：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["产品标签文字过长时可编辑客户简称、品名和规格，更新预览后打印，也可恢复原文。", "仅修改本次打印内容，不改产品资料、库存、位置或手机二维码身份；保留40×80毫米版式。"]
+APP_VERIFICATION_STEPS = ["仓库产品标签打开编辑标签文字，缩短Z.001.000148的客户简称或品名，更新预览后打印。", "核对编码、位置和二维码保留，编辑区不会印到标签，原资料未改变。"]
+APP_CHANGELOG = [*(f"v0.22.532：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

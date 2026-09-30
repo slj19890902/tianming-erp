@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.544"
-APP_VERSION_NAME = "管理员货架删除立即生效"
+APP_VERSION = "v0.22.545"
+APP_VERSION_NAME = "订单导入库存余额与订单号识别"
 APP_BUILD_DATE = "2026-09-30"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5227,3 +5227,14 @@ APP_VERIFICATION_STEPS = [
     "后续正常删除空货架后刷新页面，核对正式地图与编辑地图均无残影；有库存时应明确提示不能删除。",
 ]
 APP_CHANGELOG = [*(f"v0.22.544：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "订单导入增加抵扣后库存，人工不抵扣时显示实存，重复产品按导入顺序计算余量。",
+    "订单数量输入框压缩并完整显示六位整数，库存说明按实际物理单位显示。",
+    "Excel管理NO.识别为客户订单号，支持日期格式订单号；无数据库迁移及历史数据改写。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新后重新识别订单，核对抵扣后库存；切换不抵扣显示实存，修改数量后余量同步更新。",
+    "核对六位数量完整显示，同昌Excel管理NO.识别为20260930；核对客户及明细后按正常业务保存。",
+]
+APP_CHANGELOG = [*(f"v0.22.545：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

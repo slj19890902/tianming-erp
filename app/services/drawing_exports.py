@@ -12,6 +12,49 @@ from reportlab.lib.utils import ImageReader
 from app.services.drawing_geometry import print_placement, print_focus_geometry
 
 
+def engineering_pdf_1to1(geometry: dict) -> bytes:
+    """One-to-one vector outline in millimetres for verified release export.
+
+    This deliberately contains no fitted page layout or print artwork.  It is
+    an exchange/print-scale artifact; users must still check printer scaling.
+    """
+    width, height = float(geometry['width_mm']), float(geometry['height_mm'])
+    if width > 10_000 or height > 10_000:
+        raise ValueError("1:1 图纸尺寸超过导出上限")
+    output = BytesIO()
+    points_per_mm = 72 / 25.4
+    c = canvas.Canvas(output, pagesize=(width * points_per_mm, height * points_per_mm), pageCompression=1)
+    c.setTitle("天明 ERP 1:1 矢量图纸（单位 mm）")
+    c.scale(points_per_mm, points_per_mm)
+    c.setLineWidth(.25)
+    for line in geometry['cut']:
+        c.setStrokeColor(colors.black)
+        c.line(float(line['x1']), height-float(line['y1']), float(line['x2']), height-float(line['y2']))
+    c.setStrokeColor(colors.HexColor('#2862a3'))
+    c.setDash(2, 1)
+    for line in geometry['score']:
+        c.line(float(line['x1']), height-float(line['y1']), float(line['x2']), height-float(line['y2']))
+    c.showPage()
+    c.save()
+    return output.getvalue()
+
+
+def dxf(geometry: dict) -> bytes:
+    """Minimal ASCII DXF R12 with explicit millimetre CUT and SCORE layers."""
+    rows = ['0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4',
+            '0', 'ENDSEC', '0', 'SECTION', '2', 'TABLES',
+            '0', 'TABLE', '2', 'LAYER', '70', '2']
+    for name, color, style in (('CUT', '7', 'CONTINUOUS'), ('SCORE', '5', 'DASHED')):
+        rows += ['0', 'LAYER', '2', name, '70', '0', '62', color, '6', style]
+    rows += ['0', 'ENDTAB', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES']
+    for layer, lines in (('CUT', geometry['cut']), ('SCORE', geometry['score'])):
+        for line in lines:
+            rows += ['0', 'LINE', '8', layer, '10', str(line['x1']), '20', str(-float(line['y1'])),
+                     '30', '0', '11', str(line['x2']), '21', str(-float(line['y2'])), '31', '0']
+    rows += ['0', 'ENDSEC', '0', 'EOF']
+    return ('\r\n'.join(rows) + '\r\n').encode('ascii')
+
+
 def _wrapped_lines(text: str, width: float, font_size: float) -> list[str]:
     """Wrap CJK and unbroken customer drawing IDs at measured glyph widths."""
     rows, current = [], ''

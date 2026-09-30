@@ -247,7 +247,7 @@ def test_draft_release_idempotency_scope_and_snapshot(tmp_path, monkeypatch):
         product = Product(customer_id=customer.id, product_code='21301634',
                           customer_material_code='SYNTH-1', product_name='合成验证',
                           length_mm=Decimal('1165'), width_mm=Decimal('615'),
-                          height_mm=Decimal('25'), layer_count=7, version=1)
+                          height_mm=Decimal('25'), layer_count=7, flute_type='ABC', version=1)
         user = User(username='drawing-v2-uat', password_hash='x', role='admin', real_name='UAT')
         db.add_all([product, user])
         db.commit()
@@ -258,7 +258,7 @@ def test_draft_release_idempotency_scope_and_snapshot(tmp_path, monkeypatch):
         save_design(product.id, DesignWrite(expected_product_version=1,
                     template_key='custom_21301634_v1', parameters=params), db, user)
         draft = get_design(product.id, db, user)['draft']
-        assert draft['thickness_approximate'] and draft['thickness_mm'] == '9'
+        assert not draft['thickness_approximate'] and draft['thickness_mm'] == '9'
         payload = PublishWrite(expected_product_version=1,
                                expected_design_version=draft['version'],
                                idempotency_key='same-request-key-123')

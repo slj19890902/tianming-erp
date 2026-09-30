@@ -13,6 +13,7 @@ def test_managed_entry_preserves_read_only_control_path_for_web_status(monkeypat
     monkeypatch.setenv("TM_ERP_NONCE", "synthetic-startup")
     monkeypatch.setenv("ERP_BIND_HOST", "127.0.0.1")
     monkeypatch.setenv("ERP_PORT", "18929")
+    monkeypatch.setenv("ERP_DATABASE_PATH", str(control.parent / 'shared/data/carton_erp.sqlite3'))
     observed = {}
 
     class Server:

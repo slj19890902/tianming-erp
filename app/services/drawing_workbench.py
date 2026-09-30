@@ -56,7 +56,7 @@ def split_editor_state(parameters: dict[str, Any]) -> tuple[dict[str, Any], dict
         raise DrawingGeometryError("图纸工作台状态格式无效")
     if len(json.dumps(state, default=str)) > 2_000_000:
         raise DrawingGeometryError("图纸工作台状态过大")
-    if set(state) - {"schema_version", "dimension_basis", "local_overrides", "assembly"}:
+    if set(state) - {"schema_version", "dimension_basis", "local_overrides", "assembly", "slot_width_mode"}:
         raise DrawingGeometryError("图纸工作台包含未知状态字段")
     return values, deepcopy(state)
 
@@ -67,6 +67,8 @@ def validate_editor_state(state: dict[str, Any] | None) -> dict[str, Any] | None
     if not isinstance(state, dict):
         raise DrawingGeometryError("图纸工作台状态格式无效")
     result = deepcopy(state)
+    if result.get('slot_width_mode') not in (None, 'flute'):
+        raise DrawingGeometryError('槽宽来源无效')
     version = result.setdefault("schema_version", CATALOG_VERSION)
     if version != CATALOG_VERSION:
         raise DrawingGeometryError("图纸工作台状态版本不支持")
@@ -133,7 +135,7 @@ def template_catalog() -> dict[str, Any]:
         templates.append({"key": key, "label": label,
                           "description": "",
                           "parameter_schema": fields, "editable_dimensions": fields,
-                          "capabilities": {"preview": True, "fold_3d": True,
+                          "capabilities": {"preview": True, "fold_3d": False,
                                            "export_svg": key != "assembly_v1", "export_pdf_1to1": key != "assembly_v1",
                                            "export_dxf": key != "assembly_v1"}})
     return {"catalog_version": CATALOG_VERSION, "unit": "mm",

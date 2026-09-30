@@ -32,6 +32,7 @@ from app.services.drawing_artwork import inspect_artwork, prepare_artwork
 from app.services.drawing_text import render_text_artwork
 from app.services.drawing_switch import drawing_v2_enabled, require_drawing_v2_write
 from app.services.drawing_product_rules import slotted_parameter_candidates, validate_single_piece_slotted
+from app.services.drawing_paper import flute_paper, bind_slot_width
 from app.services.drawing_geometry import DrawingGeometryError, PARAMETER_KEYS, build_geometry, svg, number, custom_parameter_suggestions, print_focus_geometry
 from app.services.drawing_workbench import (CATALOG_VERSION, fold_model, preview_payload,
                                             split_editor_state, template_catalog,
@@ -45,8 +46,6 @@ router = APIRouter()
 read = PermissionChecker("products.view")
 write = PermissionChecker("products.edit")
 TEMPLATES = set(PARAMETER_KEYS)
-THICKNESS = {"AB": ("7", False), "BE": ("4", False), "A": ("4", False),
-             "B": ("3", False), "E": ("1", False)}
 
 
 @router.get("/drawing-workbench/catalog")
@@ -305,12 +304,9 @@ def _thickness(product: Product, request: DesignWrite) -> tuple[str | None, str 
         if not request.thickness_source:
             raise HTTPException(422, "人工纸厚需要填写来源")
         return str(request.thickness_mm), request.thickness_source, request.thickness_approximate
-    if product.layer_count == 7:
-        return "9", "工厂默认：七层约9mm（2026-09-21）", True
-    flute = str(product.flute_type or "").upper()
-    if flute in THICKNESS:
-        value, approximate = THICKNESS[flute]
-        return value, f"工厂默认：{flute}瓦（2026-09-21）", approximate
+    paper = flute_paper(product)
+    if paper['thickness_mm'] is not None:
+        return str(paper['thickness_mm']), paper['source'], False
     return None, None, False
 
 
@@ -401,7 +397,10 @@ def workbench_context(product_id: int, db: Session = Depends(get_db), user: User
         defaults["slotted_v1"] = slotted_parameter_candidates(product)
     except DrawingGeometryError:
         defaults["slotted_v1"] = {}
-    return {"catalog_version": CATALOG_VERSION, "unit": "mm",
+    paper = flute_paper(product)
+    for template in ('slotted_v1', 'partition_v1'):
+        defaults[template]['slot_width_mm'] = paper['thickness_mm']
+    return {"catalog_version": CATALOG_VERSION, "unit": "mm", "paper": paper,
             "product": {"id": product.id, "version": product.version, "customer_id": product.customer_id,"box_style":product.box_style,
                         "nominal_dimensions_mm": {"length": str(product.length_mm) if product.length_mm is not None else None,
                                                   "width": str(product.width_mm) if product.width_mm is not None else None,
@@ -427,6 +426,7 @@ def workbench_preview(product_id: int, payload: WorkbenchPreviewWrite,
         _validate_template_context(db, product, payload.template_key)
         state = _validate_component_state(db, product, state, for_publish=False)
         parameters = _params(product, payload.template_key, payload.parameters, state)
+        parameters = bind_slot_width(product, payload.template_key, parameters, state)
         result = preview_payload(payload.template_key, parameters, state)
         result["editor_state"] = state
         result["svg"] = svg(result["geometry"])
@@ -464,6 +464,7 @@ def save_design(product_id: int, payload: DesignWrite,
             editor_state = validate_editor_state({"assembly":{"basis_hash":context["basis_hash"],"placements":[]}})
         editor_state = _validate_component_state(db, product, editor_state, for_publish=False)
         resolved = _params(product, payload.template_key, incoming, editor_state)
+        resolved = bind_slot_width(product, payload.template_key, resolved, editor_state)
         validate_parameters(payload.template_key,resolved)
         missing = [key for key in PARAMETER_KEYS[payload.template_key] if resolved.get(key) is None]
         geometry = None if missing else build_geometry(payload.template_key, resolved)
@@ -486,8 +487,13 @@ def save_design(product_id: int, payload: DesignWrite,
         raise HTTPException(422, "结构分段尚未完善，请先保存结构草稿再配置印刷")
     _draft_assets(db, product.id, objects)
     thickness, source, approximate = _thickness(product, payload)
+    flute_bound = (editor_state or {}).get('slot_width_mode') == 'flute'
+    if flute_bound:
+        paper = flute_paper(product)
+        if paper['thickness_mm'] is not None:
+            thickness, source, approximate = str(paper['thickness_mm']), paper['source'], False
     design = db.get(DrawingDesign, product.id, populate_existing=True)
-    if payload.thickness_mm is None and design is not None and design.thickness_mm is not None:
+    if not flute_bound and payload.thickness_mm is None and design is not None and design.thickness_mm is not None:
         thickness, source, approximate = design.thickness_mm, design.thickness_source, design.thickness_approximate
     if design and payload.idempotency_key and design.last_save_key == payload.idempotency_key:
         if design.last_save_hash != digest:

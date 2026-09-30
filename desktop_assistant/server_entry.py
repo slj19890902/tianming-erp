@@ -8,10 +8,22 @@ import time
 import uvicorn
 
 
+def configure_managed_drawing_storage(control):
+    """Pin missing drawing storage to the same managed shared data tree."""
+    if os.environ.get('ERP_FILE_STORAGE_DIR'):
+        return
+    shared = control.resolve().parent / 'shared'
+    configured_db = os.environ.get('ERP_DATABASE_PATH')
+    if not configured_db or Path(configured_db).resolve() != (shared / 'data/carton_erp.sqlite3').resolve():
+        raise ValueError('受管图纸存储与数据库目录不一致，拒绝启动')
+    os.environ['ERP_FILE_STORAGE_DIR'] = str((shared / 'data/private_uploads').resolve())
+
+
 def main():
     # The web app reads the assistant's non-secret backup status from this root.
     # Keep the path available while consuming the process-control nonce here.
     control = Path(os.environ['TM_ERP_CONTROL'])
+    configure_managed_drawing_storage(control)
     nonce = os.environ.pop('TM_ERP_NONCE')
     server = uvicorn.Server(uvicorn.Config(
         'app.main:app', host=os.environ['ERP_BIND_HOST'], port=int(os.environ['ERP_PORT']),

@@ -629,8 +629,9 @@ def test_batch_preview_stock_projection_keeps_physical_quantity_and_basis_unit(
     assert row["finished_stock_unit"] == "\u4e2a"
 
 
+@pytest.mark.parametrize("select_staged", [False, True])
 def test_batch_preview_shows_staged_physical_stock_without_making_it_allocatable(
-    inventory_preview_app,
+    inventory_preview_app, select_staged,
 ) -> None:
     app, factory, ids = inventory_preview_app
     with factory() as db:
@@ -657,6 +658,7 @@ def test_batch_preview_shows_staged_physical_stock_without_making_it_allocatable
         db.add(line)
         db.flush()
         db.add(ShelfLotState(lot_id=staged.id, staged_delivery_item_id=line.id))
+        staged_id = staged.id
         db.commit()
 
     with TestClient(app) as client:
@@ -667,11 +669,18 @@ def test_batch_preview_shows_staged_physical_stock_without_making_it_allocatable
                 "customer_id": ids["customer"],
                 "items": [_preview_item(
                     line="STAGED", product_id=ids["shared_product"], quantity=7,
-                    finished=[_finished_plan(ids["shared_lot"], 7)],
+                    finished=[_finished_plan(staged_id if select_staged else ids["shared_lot"], 7)],
                 )],
             },
         )
 
+    if select_staged:
+        assert response.status_code == 409, response.text
+        assert "库存" in response.json()["detail"]
+        with factory() as db:
+            assert db.get(InventoryLot, staged_id).quantity_available == 7
+            assert db.scalar(select(func.count(InventoryReservation.id))) == 0
+        return
     assert response.status_code == 200, response.text
     row = response.json()["items"][0]
     assert row["finished_stock_on_hand_quantity"] == 12

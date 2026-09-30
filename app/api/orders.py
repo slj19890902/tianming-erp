@@ -4149,10 +4149,14 @@ def preview_order_inventory_draft(
         )
         selected_lots = []
         selected_entries = []
+        eligible_finished_by_id = {lot.id: lot for lot in candidates}
         for entry in draft_item.reservation_plan.finished:
-            lot = db.get(InventoryLot, entry.lot_id)
+            lot = eligible_finished_by_id.get(entry.lot_id)
             if lot is None:
-                continue
+                raise HTTPException(
+                    status_code=409,
+                    detail="所选成品库存已变化或已集货，请刷新库存后重新选择",
+                )
             try:
                 require_physical_stock(lot, quantity_basis)
             except QuantityContractError as error:

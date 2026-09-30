@@ -202,6 +202,13 @@ def validate_component_placements(db, product: Product, placements: list,
         frozen = _release_view(release)
         if release.template_key != "assembly_v1" and not frozen["geometry"].get("cut"):
             _fail("子件发布图纸缺少有效刀线")
+        if release.template_key == "assembly_v1":
+            assembly = frozen.get("assembly")
+            if not isinstance(assembly, dict) or not assembly.get("placements"):
+                _fail("子装配发布版缺少冻结摆放资料")
+            child = db.get(Product, release.product_id)
+            if for_publish and assembly.get("basis_hash") != component_context(db, child)["basis_hash"]:
+                _fail("子装配发布版与当前 BOM 不一致，请先核对并发布子装配新版", 409)
         row = {"path": path, "instance_index": index, "product_id": release.product_id,
                "child_release_id": release.id, "child_revision": release.revision,
                "position_mm": _vector(placement.get("position_mm"), "摆放位置", Decimal(100000)),
@@ -229,10 +236,14 @@ def validate_component_placements(db, product: Product, placements: list,
     if for_publish:
         if not paths:
             _fail("组合图纸缺少真实 BOM 子件")
+        covered_count = 0
         for entry in paths.values():
             if not nodes[entry["product_id"]]["has_body"]:
                 continue
             for index in range(entry["instance_count"]):
                 if (entry["path"], index) not in selected and not ancestor_covers(entry["path"], index):
                     _fail("组合图纸尚有子件未摆放或未发布图纸")
+                covered_count += 1
+        if not covered_count:
+            _fail("组合图纸缺少有本体的真实子件")
     return normalized

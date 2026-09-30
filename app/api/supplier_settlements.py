@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import or_, select, update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -33,6 +33,7 @@ from app.services.audit_log import append_audit_event
 from app.services.invoice_attachments import (
     InvoiceAttachmentError,
     store_original_invoice_pdf,
+    validate_invoice_pdf,
 )
 from app.services.supplier_monthly_settlement import (
     SupplierSettlementError,
@@ -784,6 +785,103 @@ def _invoice_for_statement(
     return statement, invoice
 
 
+def _attachment_response(
+    *, invoice_id: int, content_hash: str, file_size: int, reused: bool
+) -> dict[str, Any]:
+    return {
+        "invoice_id": invoice_id,
+        "content_hash": content_hash,
+        "file_size": file_size,
+        "reused": reused,
+    }
+
+
+def _verified_supplier_attachment(
+    db: Session,
+    *,
+    invoice_id: int,
+    content_hash: str,
+    stored_name: str,
+) -> tuple[bool, int | None] | None:
+    """Read the durable attachment result without trusting a failed session.
+
+    ``None`` means the verification connection itself failed, while ``False``
+    means it completed and found no matching durable attachment.
+    """
+
+    try:
+        with Session(bind=db.get_bind()) as verification:
+            row = verification.execute(
+                select(
+                    SupplierMonthlyInvoice.attachment_content_hash,
+                    SupplierMonthlyInvoice.attachment_stored_name,
+                    SupplierMonthlyInvoice.attachment_size,
+                ).where(SupplierMonthlyInvoice.id == invoice_id)
+            ).one_or_none()
+    except SQLAlchemyError:
+        return None
+    if (
+        row is None
+        or row.attachment_content_hash != content_hash
+        or row.attachment_stored_name != stored_name
+    ):
+        return False, None
+    return True, row.attachment_size
+
+
+def _discard_unreferenced_new_supplier_original(
+    db: Session,
+    *,
+    stored: Any,
+    stored_name: str,
+) -> None:
+    """Remove only a newly-created, conclusively unreferenced PDF.
+
+    Content-addressed originals are shared by retrying uploads.  If the
+    verification query is unavailable or any invoice refers to this digest or
+    path, preserving a possible orphan is safer than breaking a real invoice.
+    """
+
+    if stored.reused:
+        return
+    try:
+        with Session(bind=db.get_bind()) as verification:
+            referenced = verification.scalar(
+                select(SupplierMonthlyInvoice.id)
+                .where(
+                    or_(
+                        SupplierMonthlyInvoice.attachment_content_hash
+                        == stored.sha256,
+                        SupplierMonthlyInvoice.attachment_stored_name
+                        == stored_name,
+                    )
+                )
+                .limit(1)
+            )
+    except SQLAlchemyError:
+        return
+    if referenced is not None:
+        return
+    root = _attachment_root().resolve()
+    target = stored.path.resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return
+    try:
+        target.unlink(missing_ok=True)
+    except OSError:
+        # The original remains available for a safe retry or later reconciliation.
+        return
+
+
+def _attachment_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="该供应商发票已经归档原件，不能覆盖；请核对发票号码",
+    )
+
+
 @router.post(
     "/supplier-settlements/{statement_id}/invoices/{invoice_id}/attachment",
     status_code=201,
@@ -799,6 +897,22 @@ async def upload_supplier_invoice_attachment(
     statement, invoice = _invoice_for_statement(db, statement_id, invoice_id)
     content = await file.read()
     try:
+        digest = validate_invoice_pdf(
+            filename=file.filename or "",
+            content=content,
+        )
+    except InvoiceAttachmentError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if invoice.attachment_content_hash:
+        if invoice.attachment_content_hash != digest:
+            raise _attachment_conflict()
+        return _attachment_response(
+            invoice_id=invoice.id,
+            content_hash=invoice.attachment_content_hash,
+            file_size=invoice.attachment_size or 0,
+            reused=True,
+        )
+    try:
         stored = store_original_invoice_pdf(
             storage_root=_attachment_root(),
             original_filename=file.filename or "",
@@ -806,48 +920,103 @@ async def upload_supplier_invoice_attachment(
         )
     except InvoiceAttachmentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    if invoice.attachment_content_hash:
-        if invoice.attachment_content_hash != stored.sha256:
-            raise HTTPException(
-                status_code=409,
-                detail="该供应商发票已经归档原件，不能覆盖；请核对发票号码",
-            )
-        return {
-            "invoice_id": invoice.id,
-            "content_hash": invoice.attachment_content_hash,
-            "file_size": invoice.attachment_size,
-            "reused": True,
-        }
-    invoice.attachment_original_name = stored.original_filename
-    invoice.attachment_stored_name = stored.path.relative_to(
-        _attachment_root()
-    ).as_posix()
-    invoice.attachment_content_hash = stored.sha256
-    invoice.attachment_size = stored.size
-    invoice.attached_by = user.id
+    stored_name = stored.path.relative_to(_attachment_root()).as_posix()
     from app.core.time_contract import utc_now_naive
 
-    invoice.attached_at = utc_now_naive()
-    _audit(
-        db,
-        user=user,
-        action="SUPPLIER_INVOICE_ATTACHMENT",
-        row=statement,
-        description="归档供应商发票原始PDF",
-        details={
-            "invoice_id": invoice.id,
-            "invoice_number": invoice.invoice_number,
-            "content_hash": stored.sha256,
-            "file_size": stored.size,
-        },
-    )
-    db.commit()
-    return {
-        "invoice_id": invoice.id,
-        "content_hash": stored.sha256,
-        "file_size": stored.size,
-        "reused": stored.reused,
+    values = {
+        "attachment_original_name": stored.original_filename,
+        "attachment_stored_name": stored_name,
+        "attachment_content_hash": stored.sha256,
+        "attachment_size": stored.size,
+        "attached_by": user.id,
+        "attached_at": utc_now_naive(),
     }
+    try:
+        claimed = db.execute(
+            update(SupplierMonthlyInvoice)
+            .where(
+                SupplierMonthlyInvoice.id == invoice.id,
+                SupplierMonthlyInvoice.statement_id == statement.id,
+                SupplierMonthlyInvoice.attachment_content_hash.is_(None),
+            )
+            .values(**values)
+        )
+    except SQLAlchemyError:
+        db.rollback()
+        _discard_unreferenced_new_supplier_original(
+            db, stored=stored, stored_name=stored_name
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="供应商发票附件归档失败，请重试并核对附件状态",
+        )
+    if claimed.rowcount != 1:
+        db.rollback()
+        verified = _verified_supplier_attachment(
+            db,
+            invoice_id=invoice.id,
+            content_hash=stored.sha256,
+            stored_name=stored_name,
+        )
+        _discard_unreferenced_new_supplier_original(
+            db, stored=stored, stored_name=stored_name
+        )
+        if verified and verified[0]:
+            return _attachment_response(
+                invoice_id=invoice.id,
+                content_hash=stored.sha256,
+                file_size=verified[1] or stored.size,
+                reused=True,
+            )
+        if verified is None:
+            raise HTTPException(
+                status_code=503,
+                detail="供应商发票附件归档结果待核对，请重试并核对附件状态",
+            )
+        raise _attachment_conflict()
+    try:
+        _audit(
+            db,
+            user=user,
+            action="SUPPLIER_INVOICE_ATTACHMENT",
+            row=statement,
+            description="归档供应商发票原始PDF",
+            details={
+                "invoice_id": invoice.id,
+                "invoice_number": invoice.invoice_number,
+                "content_hash": stored.sha256,
+                "file_size": stored.size,
+            },
+        )
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        verified = _verified_supplier_attachment(
+            db,
+            invoice_id=invoice.id,
+            content_hash=stored.sha256,
+            stored_name=stored_name,
+        )
+        if verified and verified[0]:
+            return _attachment_response(
+                invoice_id=invoice.id,
+                content_hash=stored.sha256,
+                file_size=verified[1] or stored.size,
+                reused=stored.reused,
+            )
+        _discard_unreferenced_new_supplier_original(
+            db, stored=stored, stored_name=stored_name
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="供应商发票附件归档结果待核对，请重试并核对附件状态",
+        )
+    return _attachment_response(
+        invoice_id=invoice.id,
+        content_hash=stored.sha256,
+        file_size=stored.size,
+        reused=stored.reused,
+    )
 
 
 @router.get(

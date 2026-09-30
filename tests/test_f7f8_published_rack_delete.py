@@ -51,9 +51,12 @@ def _request():
 def _setup(tmp_path: Path, monkeypatch):
     baseline = tmp_path / "baseline.json"; pub = tmp_path / "runtime" / "published.json"; draft = tmp_path / "draft" / "layout.json"
     pub_rev, rack_id = _document(baseline, retired=False)
+    # The strict-isolation runner deliberately forbids fallback from an absent
+    # runtime map to a shared source baseline.  Seed only this synthetic runtime.
+    pub.write_bytes(baseline.read_bytes())
     draft_rev, _ = _document(draft, retired=True)
     draft_doc = json.loads(draft.read_text(encoding="utf-8"))
-    draft_doc["draft_meta"] = {"status": "draft", "base_published_sha256": __import__("hashlib").sha256(baseline.read_bytes()).hexdigest(), "base_floor_revisions": {"3F": pub_rev}}
+    draft_doc["draft_meta"] = {"status": "draft", "base_published_sha256": __import__("hashlib").sha256(pub.read_bytes()).hexdigest(), "base_floor_revisions": {"3F": pub_rev}}
     draft.write_text(json.dumps(draft_doc), encoding="utf-8")
     monkeypatch.setattr(editor, "TWIN_LAYOUT_BASELINE_PATH", baseline); monkeypatch.setattr(editor, "TWIN_LAYOUT_PATH", pub); monkeypatch.setattr(editor, "TWIN_LAYOUT_DRAFT_PATH", draft)
     engine = create_sqlite_engine(tmp_path / "test.sqlite3"); Base.metadata.create_all(engine); factory=sessionmaker(bind=engine, expire_on_commit=False)
@@ -98,7 +101,8 @@ def test_published_delete_blocks_live_inventory_and_preserves_all_maps(tmp_path,
             db.add(InventoryLot(lot_number="rack-delete-live",inventory_type="finished",warehouse_location_id=loc.id,quantity_available=1,quantity_reserved=0,quantity_consumed=0,quantity_damaged=0,quantity_scrapped=0,unit="boxes",status="active",source_type="manual",stock_date=__import__('datetime').date.today(),stock_date_accuracy="exact",last_movement_at=__import__('datetime').datetime.now(),version=1)); db.commit()
             with pytest.raises(HTTPException, match="仍有库存") as caught: _delete(db,admin,pub_rev,draft_rev,rack_id)
             assert caught.value.status_code == 409
-        assert not pub.exists(); assert json.loads(draft.read_text())["floors"]["3F"]["racks"] == [_rack("rack-keep", "F9")]
+        assert pub.read_bytes() == baseline.read_bytes()
+        assert json.loads(draft.read_text())["floors"]["3F"]["racks"] == [_rack("rack-keep", "F9")]
     finally: factory.kw["bind"].dispose()
 
 
@@ -112,7 +116,7 @@ def test_published_delete_blocks_default_location_and_audit_failure_restores_fil
             db.delete(db.scalar(select(InventoryStockPolicy))); db.commit()
             monkeypatch.setattr(warehouse_api,"_twin_layout_asset_log",lambda *a,**k: (_ for _ in ()).throw(RuntimeError("audit fail")))
             with pytest.raises(RuntimeError, match="audit fail"): _delete(db,admin,pub_rev,draft_rev,rack_id)
-            assert not pub.exists() and draft.read_bytes() == before
+            assert pub.read_bytes() == baseline.read_bytes() and draft.read_bytes() == before
             assert all(row.is_active for row in db.scalars(select(WarehouseLocation)).all())
     finally: factory.kw["bind"].dispose()
 
@@ -127,13 +131,14 @@ def test_unpublished_draft_rack_keeps_draft_only_delete_contract(tmp_path, monke
         source_floor["racks"] = [item for item in source_floor["racks"] if item["id"] != rack_id]
         source_floor["revision"] = _floor_revision(source_floor)
         baseline.write_text(json.dumps(source), encoding="utf-8")
+        pub.write_bytes(baseline.read_bytes())
         published_revision = source_floor["revision"]
         draft_source = json.loads(draft.read_text(encoding="utf-8"))
         draft_floor = draft_source["floors"]["3F"]
         retired = draft_floor.pop("retired_racks")
         draft_floor["racks"].insert(0, retired[0])
         draft_floor["revision"] = _floor_revision(draft_floor)
-        draft_source["draft_meta"]["base_published_sha256"] = __import__("hashlib").sha256(baseline.read_bytes()).hexdigest()
+        draft_source["draft_meta"]["base_published_sha256"] = __import__("hashlib").sha256(pub.read_bytes()).hexdigest()
         draft_source["draft_meta"]["base_floor_revisions"]["3F"] = published_revision
         draft.write_text(json.dumps(draft_source), encoding="utf-8")
         with factory() as db:
@@ -153,7 +158,7 @@ def test_unpublished_draft_rack_keeps_draft_only_delete_contract(tmp_path, monke
                 operation_key="draft-only-delete-01", request=_request(), db=db, user=admin,
             )
             assert replay["applied"] is False and replay["idempotent_replay"] is True
-        assert not pub.exists()
+        assert pub.read_bytes() == baseline.read_bytes()
         assert rack_id not in {item["id"] for item in json.loads(draft.read_text(encoding="utf-8"))["floors"]["3F"]["racks"]}
     finally: factory.kw["bind"].dispose()
 

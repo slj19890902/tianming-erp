@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from threading import Barrier
+from threading import Event
 
 from fastapi import HTTPException
 import pytest
@@ -155,12 +155,14 @@ def test_concurrent_different_originals_have_one_winner_and_no_loser_file(
 ) -> None:
     api, session_factory, ids, root = attachment_context
     original_store = api.store_original_invoice_pdf
-    barrier = Barrier(2)
+    first_entered_storage = Event()
+    release_first_storage = Event()
 
     def synchronized_store(**kwargs):
-        stored = original_store(**kwargs)
-        barrier.wait(timeout=10)
-        return stored
+        if kwargs["original_filename"] == "a.pdf":
+            first_entered_storage.set()
+            assert release_first_storage.wait(timeout=10)
+        return original_store(**kwargs)
 
     monkeypatch.setattr(api, "store_original_invoice_pdf", synchronized_store)
 
@@ -173,12 +175,11 @@ def test_concurrent_different_originals_have_one_winner_and_no_loser_file(
                 return ("http", error.status_code)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(
-            pool.map(
-                lambda item: submit(*item),
-                ((PDF_A, "a.pdf"), (PDF_B, "b.pdf")),
-            )
-        )
+        first = pool.submit(submit, PDF_A, "a.pdf")
+        assert first_entered_storage.wait(timeout=5)
+        second = pool.submit(submit, PDF_B, "b.pdf")
+        release_first_storage.set()
+        results = [first.result(timeout=15), second.result(timeout=15)]
 
     assert sorted(kind for kind, _value in results) == ["http", "ok"]
     assert {value for kind, value in results if kind == "http"} == {409}
@@ -230,6 +231,97 @@ def test_undurable_commit_failure_keeps_shared_content_file(attachment_context, 
 
         second = verify.get(SupplierMonthlyInvoice, ids["invoice_b"])
         assert second is not None and second.attachment_content_hash is None
+
+
+def test_failed_new_upload_cannot_delete_same_hash_waiting_on_another_invoice(
+    attachment_context, monkeypatch
+) -> None:
+    """A cleanup must not race a second invoice that already reused its file."""
+
+    api, session_factory, ids, root = attachment_context
+    original_store = api.store_original_invoice_pdf
+    second_stored = Event()
+    cleanup_finished = Event()
+
+    def interleaved_store(**kwargs):
+        stored = original_store(**kwargs)
+        if kwargs["original_filename"] == "first.pdf":
+            # The corrected SQLite lock keeps the second upload before store;
+            # the old unlocked implementation reaches the reused file here.
+            second_stored.wait(timeout=2)
+        else:
+            second_stored.set()
+        return stored
+
+    def interleaved_audit(*args, **kwargs):
+        if kwargs["details"]["invoice_id"] == ids["invoice_b"]:
+            cleanup_finished.wait(timeout=1)
+
+    original_discard = api._discard_unreferenced_new_supplier_original
+
+    def tracked_discard(*args, **kwargs):
+        try:
+            return original_discard(*args, **kwargs)
+        finally:
+            cleanup_finished.set()
+
+    monkeypatch.setattr(api, "store_original_invoice_pdf", interleaved_store)
+    monkeypatch.setattr(api, "_audit", interleaved_audit)
+    monkeypatch.setattr(api, "_discard_unreferenced_new_supplier_original", tracked_discard)
+
+    def first_upload():
+        with session_factory() as db:
+            monkeypatch.setattr(
+                db,
+                "commit",
+                lambda: (_ for _ in ()).throw(
+                    SQLAlchemyError("first invoice commit failure")
+                ),
+            )
+            with pytest.raises(HTTPException) as error:
+                _upload(api, db, ids, ids["invoice_a"], PDF_SHARED, "first.pdf")
+            return error.value.status_code
+
+    def second_upload():
+        with session_factory() as db:
+            return _upload(api, db, ids, ids["invoice_b"], PDF_SHARED, "second.pdf")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(first_upload)
+        second = pool.submit(second_upload)
+        assert first.result(timeout=15) == 503
+        result = second.result(timeout=15)
+
+    assert result["content_hash"]
+    assert (root / "originals" / f"{result['content_hash']}.pdf").is_file()
+    with session_factory() as verify:
+        from app.models.supplier_settlement import SupplierMonthlyInvoice
+
+        invoice = verify.get(SupplierMonthlyInvoice, ids["invoice_b"])
+        assert invoice is not None and invoice.attachment_content_hash == result["content_hash"]
+
+
+def test_audit_runtime_failure_rolls_back_without_false_success(
+    attachment_context, monkeypatch
+) -> None:
+    api, session_factory, ids, root = attachment_context
+    monkeypatch.setattr(
+        api,
+        "_audit",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("audit unavailable")),
+    )
+
+    with session_factory() as db:
+        with pytest.raises(RuntimeError, match="audit unavailable"):
+            _upload(api, db, ids, ids["invoice_a"], PDF_A, "audit-failure.pdf")
+        db.rollback()
+
+    assert _originals(root) == []
+    with session_factory() as verify:
+        from app.models.supplier_settlement import SupplierMonthlyInvoice
+
+        invoice = verify.get(SupplierMonthlyInvoice, ids["invoice_a"])
+        assert invoice is not None and invoice.attachment_content_hash is None
 
 
 def test_scope_and_statement_mismatch_reject_before_read(attachment_context) -> None:

@@ -1814,6 +1814,8 @@ export function WarehouseTwinApp() {
     const requested = query.get("floor")?.toUpperCase();
     return isWarehouseOperationalFloorCode(requested) ? requested : "3F";
   });
+  const activeFloorCodeRef = useRef(floorCode);
+  activeFloorCodeRef.current = floorCode;
   const [viewMode, setViewMode] = useState<ViewMode>(query.get("view") === "25d" ? "25d" : "2d");
   const [cameraPreset, setCameraPreset] = useState<CameraPreset>("fit");
   const [viewResetToken, setViewResetToken] = useState(0);
@@ -1823,6 +1825,10 @@ export function WarehouseTwinApp() {
   const [layoutDraftControl, setLayoutDraftControl] = useState<LayoutDraftControl | null>(null);
   const geometryApplyRequestRef = useRef<{ signature: string; operationKey: string } | null>(null);
   const rackApplyRequestRef = useRef<{ signature: string; operationKey: string } | null>(null);
+  const rackDeleteRequestsRef = useRef<Record<string, {
+    expected_revision: string; expected_published_revision: string;
+    expected_version: number; operation_key: string;
+  }>>({});
   const [legacyRackBindingPreview, setLegacyRackBindingPreview] = useState<LegacyRackBindingPreview | null>(null);
   const [legacyRackBindingSelections, setLegacyRackBindingSelections] = useState<Record<string, string>>({});
   const [publishedFloorRevision, setPublishedFloorRevision] = useState("");
@@ -4850,6 +4856,7 @@ export function WarehouseTwinApp() {
       requestJson<TwinFloorDraftResponse>(`/api/warehouse/twin-layout/floors/${floorCode}/draft`),
       requestJson<TwinFloorResponse>(`/api/warehouse/twin-layout/floors/${floorCode}`)
     ]);
+    if (activeFloorCodeRef.current !== floorCode) return;
     showTwinFloor(raw);
     setPlanningPublishedLayout(hydrateLayout(publishedRaw));
     setPublishedFloorRevision(publishedRaw.revision);
@@ -5666,19 +5673,39 @@ export function WarehouseTwinApp() {
   };
 
   const deleteSelectedRack = async () => {
-    if (!layout || !selectedRack) return;
-    const original = layout.racks.find((item) => item.id === selectedRack.id);
+    if (!layout || !selectedRack || spatialEditBusy || !canEditLocations) return;
+    const original = planningPublishedLayout?.racks.find((item) => item.id === selectedRack.id)
+      || layout.racks.find((item) => item.id === selectedRack.id);
     if (!original) return;
-    if (!window.confirm(`确认删除 ${original.name} 并将占地释放为空地吗？\n此操作不删除库存、栈板或正式库位。`)) return;
+    const requestId = `${floorCode}/${original.id}`;
+    if (!rackDeleteRequestsRef.current[requestId]) {
+      if (!window.confirm(`确认删除 ${original.name} 吗？\n删除后立即从地图移除，对应空货位停用并保留历史；有库存或其他占用时不能删除。`)) return;
+      rackDeleteRequestsRef.current[requestId] = {
+        expected_revision: layout.source_sha256,
+        expected_published_revision: planningPublishedLayout?.source_sha256 || publishedFloorRevision,
+        expected_version: original.version,
+        operation_key: operationKey("rack-delete"),
+      };
+    }
     setSpatialEditBusy(true);
+    let deleted = false;
     try {
-      const key = operationKey("rack-delete");
-      const response = await mutateJson<LayoutMutationResponse<{ id: string; deleted: boolean }>>(
-        `/api/warehouse/twin-layout/floors/${floorCode}/racks/${original.id}?expected_revision=${encodeURIComponent(layout.source_sha256)}&expected_version=${original.version}&operation_key=${encodeURIComponent(key)}`,
+      const fields = rackDeleteRequestsRef.current[requestId];
+      const query = new URLSearchParams(Object.entries(fields).map(([key, value]) => [key, String(value)]));
+      const response = await mutateJson<LayoutMutationResponse<{ id: string; deleted: boolean; inactive_location_count: number }> & { published_revision: string }>(
+        `/api/warehouse/twin-layout/floors/${floorCode}/racks/${original.id}?${query}`,
         "DELETE"
       );
-      if (!response) return;
+      if (!response?.published_revision || !response.revision || response.item?.id !== original.id || response.item.deleted !== true) {
+        throw new Error("尚未收到完整删除回执，请核对后重试");
+      }
+      deleted = true;
+      delete rackDeleteRequestsRef.current[requestId];
+      if (activeFloorCodeRef.current !== floorCode) return;
       setLayout((current) => current ? { ...current, source_sha256: response.revision, racks: current.racks.filter((item) => item.id !== original.id) } : current);
+      setPlanningPublishedLayout((current) => current ? { ...current, source_sha256: response.published_revision, racks: current.racks.filter((item) => item.id !== original.id) } : current);
+      setPublishedFloorRevision(response.published_revision);
+      setPlanningPublishedRevision(response.published_revision);
       rememberServerDraft(response.revision);
       setRackDrafts((current) => {
         const next = { ...current };
@@ -5686,9 +5713,16 @@ export function WarehouseTwinApp() {
         return next;
       });
       setSelected(selectedAreaFeature ? { kind: "feature", id: selectedAreaFeature.id } : null);
-      setLocationEditMessage(`${original.name} 已从布局草稿删除；员工地图、库存与正式库位未改变。`);
+      await Promise.all([refreshPlanningTwinFloor(), refreshDashboard()]);
+      setLocationEditMessage(`${original.name} 已删除并生效，对应空货位已停用，历史记录保留。`);
     } catch (reason) {
-      setLocationEditMessage(`删除货架失败：${(reason as Error).message}`);
+      const status = (reason as Error & { status?: number }).status;
+      const rejected = status != null && [400, 401, 403, 404, 409, 422].includes(status);
+      if (rejected) delete rackDeleteRequestsRef.current[requestId];
+      setLocationEditMessage(deleted
+        ? `${original.name} 删除已生效，但地图刷新失败：${(reason as Error).message}。请刷新核对。`
+        : rejected ? `货架未删除：${(reason as Error).message}`
+        : `删除结果未确认：${(reason as Error).message}。本次请求已保留，重试不会重复删除。`);
     } finally {
       setSpatialEditBusy(false);
     }

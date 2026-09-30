@@ -8,3 +8,7 @@
 - 验证：隔离 runner 完整 `tests/test_p0_15_incomplete_order_chain.py` 为 31 通过；覆盖 direct 实物入库、split surplus、合法/伪造移库、关闭无移库、错流水、活动坏边、叶子错库位、合法/伪造盘点、托盘移动时间与版本缺口三态、非移动余额篡改、双来源合并、独立伪 transfer、部分/两级/同 ID 整批移位、后续消耗、冻结分母及 accept_over。查询诊断为 1 单 25、20 单 25 个 SELECT。只读一致性副本复扫由原 74 项（21 error、53 review）变为 55 项（2 条 error 告警、53 review）；202、349、385 三条指定链和十条 direct 零数量误报均消失，保留的 2 条 error 都是原完工投入超过有效收料告警，仍待业务核对，不能称作已确认业务错误。`tests/test_p0_order_business_status.py` 11 通过；真实仓库服务用例 `test_reserved_transfer_copies_packaging_and_preserves_reserved_totals` 通过。集成侧已补齐报价夹具并确认 `test_audit_order_projection_optimization.py` 5 通过。隔离器只允许审计临时目录写入；TestClient 适配器仅放行本机 loopback 自管 socket，继续阻断外网及子进程。
 - 工具限制：当前虚拟环境没有 `ruff`，已用 `py_compile`、`git diff --check` 与上述回归代替；不把缺少静态工具写成通过。
 - 状态：本轮 bounded 修复及隔离验证完成，尚未正式发布；55 项扫描提示仍只是 2 条 error 告警和 53 条 review，需按业务证据继续定性，不能据此自动修历史数据。
+
+## 最终集成与独立接受
+
+Sol最终提交8a75bde72a6bfa15046a68fc7abc002eab72dfac，集成f0d03b82；Terra独立13+3通过，root最终组合52通过。最终只读复扫证据round-tests/075758114333，55提示（2 error级告警、53 review），哈希/sidecar不变，未打开或修复正式库。状态：隔离开发与技术验收通过，待人工验收/待上线。

@@ -1,6 +1,6 @@
 # P0-5 恢复必要结构契约返工回执
 
-状态：独立复审发现缓存和动态 Base 缺口后已返工，98 项集成回归通过；等待最终候选真实受管恢复验收。未执行正式发布、正式恢复、正式停服/重启、正式配置修改、数据库迁移或历史数据写入。
+状态：独立复审发现缓存和动态 Base 缺口后已返工，98 项集成回归通过；最终d6c15d66候选真实受管备份/恢复/启动/登录、18路径/5阻断及Chrome验收通过，待人工验收/待上线。未执行正式发布、正式恢复、正式停服/重启、正式配置修改、数据库迁移或历史数据写入。
 
 ## 问题与红灯
 
@@ -47,3 +47,5 @@
 - 第二轮完整测试暴露隔离runner对Python3.12 `_fallback_socketpair`误拦及NAS适配异常措辞差异，记录79通过19失败；只修runner，保留业务和测试断言。
 - 最终同组 `98 passed / 0 skipped`，证据 `D:/ERP-AUDIT/20260929-comprehensive/round-tests/070812094521/results.xml`。覆盖结构、恢复、备份、迁移兼容、受管状态、服务入口和网页权限。
 - 独立复审 `/root/p015_terra_rework` 检查实际差异后未发现剩余阻断；r6及保留P0保护的独立回退候选已实际恢复/启动/登录，最终集成包验收继续进行。
+
+最终运行证据：`D:/tm-uat/round-upgrade-20260930-final/recovery-runtime-evidence.json`、`final-http-evidence.json`及`final-browser-and-persistence-evidence.json`。当前模型合成库，不是正式数据库迁移演练；全部历史版本、SQL约束/索引/默认值覆盖未作承诺。

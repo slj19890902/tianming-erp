@@ -104,6 +104,16 @@ def _private_no_store_file_endpoint(path: Path):
     return endpoint
 
 
+def _legacy_customers_spa_redirect() -> RedirectResponse:
+    """Keep old customer bookmarks on the supported SPA entry."""
+
+    return RedirectResponse(
+        "/?page=customers",
+        status_code=307,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @asynccontextmanager
 async def phase2_lifespan(_: FastAPI):
     # Alembic and init_db.py own schema/user initialization from Phase 2 onward.
@@ -334,9 +344,16 @@ def create_app() -> FastAPI:
     application.state.erp_settings = current
     application.router.lifespan_context = phase2_lifespan
     index_path = Path(__file__).resolve().parents[1] / "static" / "index.html"
+    # The legacy singleton registered a standalone customer client that calls
+    # retired customer-management endpoints.  Remove only that endpoint before
+    # route resolution, then retain the bookmark through the SPA redirect.
+    application.router.routes[:] = [
+        route
+        for route in application.routes
+        if getattr(route, "endpoint", None) is not legacy.customer_management_page
+    ]
     spa_page_paths = {
         "/dashboard",
-        "/customers",
         "/contracts",
         "/quotations",
         "/products",
@@ -357,6 +374,13 @@ def create_app() -> FastAPI:
                 methods=["GET"],
                 include_in_schema=False,
             )
+    if not any(route.path == "/customers" for route in application.routes):
+        application.add_api_route(
+            "/customers",
+            _legacy_customers_spa_redirect,
+            methods=["GET"],
+            include_in_schema=False,
+        )
     if not any(
         route.path == "/requisition-print.html"
         for route in application.routes

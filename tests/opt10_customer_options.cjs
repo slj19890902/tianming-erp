@@ -7,7 +7,7 @@ const end = source.indexOf('async loadProducts() {', start);
 const latestRequestControllers = new Map();
 const load = eval('(' + source.slice(start,end).trim().replace(/,$/,'').replace(/^async loadCustomerOptions\(/,'async function loadCustomerOptions(') + ')');
 function state() { return {
- user:{id:1}, authGeneration:1, customerOptions:[], customerOptionsIdentity:'1:1',
+ user:{id:1}, authGeneration:1, customerOptions:[], customerOptionsIdentity:'',
  hasPermission:()=>true,
  beginLatestRequest(key) { latestRequestControllers.get(key)?.abort(); const c=new AbortController();latestRequestControllers.set(key,c);return c; },
  finishLatestRequest(key,c) { if(latestRequestControllers.get(key)===c)latestRequestControllers.delete(key); },
@@ -23,11 +23,11 @@ global.axios={get:(...args)=>get(...args)};
  const vm=state();await load.call(vm);
  assert.equal(vm.customerOptions.length,201,'customer 201 must remain selectable');assert.deepEqual(calls,[1,2]);
  await load.call(vm);assert.deepEqual(calls,[1,2],'same-session complete cache is reusable');
- const failed=state();failed.customerOptions=[{id:999,name:'complete cache'}];
+ const failed=state();failed.customerOptionsIdentity='1:1';failed.customerOptions=[{id:999,name:'complete cache'}];
  get=async(_,{params})=>{if(params.page===2)throw new Error('page two failed');return page(1);};
  await assert.rejects(()=>load.call(failed,true),/page two failed/);
  assert.deepEqual(failed.customerOptions,[{id:999,name:'complete cache'}]);
- const rejected=state();rejected.customerOptions=[{id:999,name:'revoked cache'}];
+ const rejected=state();rejected.customerOptionsIdentity='1:1';rejected.customerOptions=[{id:999,name:'revoked cache'}];
  get=async()=>{throw Object.assign(new Error('forbidden'),{response:{status:403}});};
  await assert.rejects(()=>load.call(rejected,true),/forbidden/);assert.deepEqual(rejected.customerOptions,[]);
  const cancelled=state();get=async()=>{throw Object.assign(new Error('cancelled'),{name:'AbortError'});};
@@ -45,5 +45,7 @@ global.axios={get:(...args)=>get(...args)};
  const previousUser=state();previousUser.customerOptionsIdentity='9:9';previousUser.customerOptions=[{id:999,name:'previous user'}];
  get=async(_,{params})=>({data:{page:params.page,total:0,total_pages:0,items:[]}});await load.call(previousUser);
  assert.deepEqual(previousUser.customerOptions,[],'another identity must not reuse the warm cache');
+ let emptyReads=0;get=async(_,{params})=>{emptyReads+=1;return {data:{page:params.page,total:0,total_pages:0,items:[]}};};
+ await load.call(previousUser);assert.equal(emptyReads,0,'a complete empty result is also cached');
  console.log('PASS: pagination, complete cache, failures, permissions, session changes and stale responses');
 })().catch(error=>{console.error(error);process.exitCode=1;});

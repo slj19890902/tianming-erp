@@ -16946,7 +16946,7 @@
               this.customerOptions = [];
               this.customerOptionsIdentity = "";
             }
-            if (!force && this.customerOptionsIdentity === identity && this.customerOptions.length) return true;
+            if (!force && this.customerOptionsIdentity === identity) return true;
             const requestKey = "customers:options";
             const controller = this.beginLatestRequest(requestKey);
             const isCurrent = () => latestRequestControllers.get(requestKey) === controller

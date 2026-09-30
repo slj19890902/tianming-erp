@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.543"
-APP_VERSION_NAME = "图纸二维与楞型槽宽修复"
+APP_VERSION = "v0.22.544"
+APP_VERSION_NAME = "管理员货架删除立即生效"
 APP_BUILD_DATE = "2026-09-30"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5216,3 +5216,14 @@ APP_VERIFICATION_STEPS = [
     "核对旧客户地址跳转、侧栏统计单位及附件重复上传提示；正式页面由管理员按业务使用。",
 ]
 APP_CHANGELOG = [*(f"v0.22.543：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "管理员删除已发布空货架后，正式地图与布局草稿同步移除，关联空货位停用，历史记录保留。",
+    "有库存、预占、默认位置或其他有效关联的货架明确拒绝删除；版本冲突、断网重试和失败回滚统一校验。",
+    "未发布的新货架仍可删除草稿；单架删除不发布其他未完成地图修改。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新三楼地图，确认原货F7、货F8已消失，其他货架与草稿保持原状。",
+    "后续正常删除空货架后刷新页面，核对正式地图与编辑地图均无残影；有库存时应明确提示不能删除。",
+]
+APP_CHANGELOG = [*(f"v0.22.544：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

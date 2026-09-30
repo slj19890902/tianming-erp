@@ -27,7 +27,7 @@ function fixture(overrides = {}) {
     operationKey: () => `delete-attempt-${++key}`,
     mutateJson: async (url, method) => {
       calls.push({ url, method });
-      return { item: { id: rack.id, deleted: true, inactive_location_count: 6 }, revision: 'draft-after', published_revision: 'published-after', applied: true };
+      return { item: { id: rack.id, deleted: true, inactive_location_count: 6, published_map_changed: true }, revision: 'draft-after', published_revision: 'published-after', applied: true };
     },
     setLayout: update => { ctx.layout = update(ctx.layout); },
     setPlanningPublishedLayout: update => { ctx.planningPublishedLayout = update(ctx.planningPublishedLayout); },
@@ -61,6 +61,20 @@ test('a previously draft-deleted published rack can still complete deletion', as
   const f = fixture(); f.ctx.layout.racks = f.ctx.layout.racks.filter(r => r.id !== 'rack-f7');
   await f.ctx.remove(); assert.equal(f.calls.length, 1);
   assert.equal(f.ctx.planningPublishedLayout.racks.some(r => r.id === 'rack-f7'), false);
+});
+
+test('an unpublished draft rack deletes using its draft version and describes draft-only result', async () => {
+  const f = fixture(); f.ctx.planningPublishedLayout.racks = f.ctx.planningPublishedLayout.racks.filter(r => r.id !== 'rack-f7');
+  const good = f.ctx.mutateJson;
+  f.ctx.mutateJson = async (...args) => {
+    const result = await good(...args);
+    return { ...result, published_revision: 'published-before', item: { ...result.item, inactive_location_count: 0, published_map_changed: false } };
+  };
+  await f.ctx.remove();
+  assert.equal(new URL(f.calls[0].url, 'http://synthetic.invalid').searchParams.get('expected_version'), '4');
+  assert.equal(f.ctx.layout.racks.length, 1);
+  assert.equal(f.ctx.planningPublishedLayout.source_sha256, 'published-before');
+  assert.match(f.messages.at(-1), /从布局草稿删除.*正式地图和库位未改变/);
 });
 
 test('cancel, busy and no administrator capability do not send delete', async () => {

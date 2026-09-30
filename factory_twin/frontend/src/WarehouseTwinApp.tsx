@@ -5674,12 +5674,14 @@ export function WarehouseTwinApp() {
 
   const deleteSelectedRack = async () => {
     if (!layout || !selectedRack || spatialEditBusy || !canEditLocations) return;
-    const original = planningPublishedLayout?.racks.find((item) => item.id === selectedRack.id)
-      || layout.racks.find((item) => item.id === selectedRack.id);
+    const publishedRack = planningPublishedLayout?.racks.find((item) => item.id === selectedRack.id);
+    const original = publishedRack || layout.racks.find((item) => item.id === selectedRack.id);
     if (!original) return;
     const requestId = `${floorCode}/${original.id}`;
     if (!rackDeleteRequestsRef.current[requestId]) {
-      if (!window.confirm(`确认删除 ${original.name} 吗？\n删除后立即从地图移除，对应空货位停用并保留历史；有库存或其他占用时不能删除。`)) return;
+      if (!window.confirm(`确认删除 ${original.name} 吗？\n${publishedRack
+        ? "删除后立即从地图移除，对应空货位停用并保留历史；有库存或其他占用时不能删除。"
+        : "该货架尚未发布，将从布局草稿删除。"}`)) return;
       rackDeleteRequestsRef.current[requestId] = {
         expected_revision: layout.source_sha256,
         expected_published_revision: planningPublishedLayout?.source_sha256 || publishedFloorRevision,
@@ -5692,11 +5694,11 @@ export function WarehouseTwinApp() {
     try {
       const fields = rackDeleteRequestsRef.current[requestId];
       const query = new URLSearchParams(Object.entries(fields).map(([key, value]) => [key, String(value)]));
-      const response = await mutateJson<LayoutMutationResponse<{ id: string; deleted: boolean; inactive_location_count: number }> & { published_revision: string }>(
+      const response = await mutateJson<LayoutMutationResponse<{ id: string; deleted: boolean; inactive_location_count: number; published_map_changed: boolean }> & { published_revision: string }>(
         `/api/warehouse/twin-layout/floors/${floorCode}/racks/${original.id}?${query}`,
         "DELETE"
       );
-      if (!response?.published_revision || !response.revision || response.item?.id !== original.id || response.item.deleted !== true) {
+      if (!response?.published_revision || !response.revision || response.item?.id !== original.id || response.item.deleted !== true || typeof response.item.published_map_changed !== "boolean") {
         throw new Error("尚未收到完整删除回执，请核对后重试");
       }
       deleted = true;
@@ -5714,7 +5716,9 @@ export function WarehouseTwinApp() {
       });
       setSelected(selectedAreaFeature ? { kind: "feature", id: selectedAreaFeature.id } : null);
       await Promise.all([refreshPlanningTwinFloor(), refreshDashboard()]);
-      setLocationEditMessage(`${original.name} 已删除并生效，对应空货位已停用，历史记录保留。`);
+      setLocationEditMessage(response.item.published_map_changed
+        ? `${original.name} 已删除并生效，对应空货位已停用，历史记录保留。`
+        : `${original.name} 已从布局草稿删除，正式地图和库位未改变。`);
     } catch (reason) {
       const status = (reason as Error & { status?: number }).status;
       const rejected = status != null && [400, 401, 403, 404, 409, 422].includes(status);

@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.540"
+APP_VERSION = "v0.22.541"
 APP_VERSION_NAME = "常用箱参数化图纸工作台"
 APP_BUILD_DATE = "2026-09-30"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5192,3 +5192,8 @@ APP_VERIFICATION_STEPS = [
     "000148长短隔板的插槽数量、位置、槽宽、槽深须按实际模具填写；实际纸厚、加工补偿、100mm标尺试印及刀模导入另做现场核对。",
 ]
 APP_CHANGELOG = [*(f"v0.22.540：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = [
+    "常用箱参数化图纸工作台统一使用正式主数据接口，支持模板读取、二维/三维实时预览、BOM子件装配、保存发布和矢量导出。",
+    "已补充前端实际请求与正式路由联测；保留v540图纸功能与历史资料，本版无数据库迁移和业务数据改写。",
+]
+APP_CHANGELOG = [*(f"v0.22.541：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

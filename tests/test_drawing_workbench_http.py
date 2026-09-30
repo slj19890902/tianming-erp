@@ -1,6 +1,8 @@
 """HTTP contract checks: real router dependencies, disposable SQLite only."""
 from contextlib import contextmanager
 from decimal import Decimal
+import json
+import subprocess
 
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
@@ -81,6 +83,31 @@ def test_workbench_http_roundtrip_and_frozen_exports(tmp_path, monkeypatch):
             assert client.put(root, json=current).status_code == 200
             stale = {**draft, 'idempotency_key': 'http-workbench-save-003', 'expected_design_version': 1}
             assert client.put(root, json=stale).status_code == 409
+    finally:
+        engine.dispose()
+
+
+def test_frontend_requests_reach_production_router_without_aliases(tmp_path, monkeypatch):
+    """Use URLs emitted by the real workbench, with only production's mount."""
+    monkeypatch.setenv('ERP_FILE_STORAGE_DIR', str(tmp_path / 'files'))
+    engine, factory, ids = _fixture(tmp_path)
+    script = r"""
+const {Workbench}=require('./static/drawing-workbench.js');
+const requests=[];
+global.axios={get:async url=>{requests.push({method:'GET',url});return {data:{}}},
+  post:async(url,payload)=>{requests.push({method:'POST',url,payload});throw {code:'ERR_CANCELED'}}};
+const w=new Workbench({productId:Number(process.argv[1])});
+w.mount=()=>{w.root={}};w.setStatus=()=>{};w.initState=()=>{};w.render=()=>{};w.requestPreview=()=>{};
+(async()=>{await w.open();w.state={templateKey:'liner_v1',parameters:{},editorState:{dimension_basis:'dieline'}};
+await w.previewNow();process.stdout.write(JSON.stringify(requests))})().catch(e=>{console.error(e);process.exitCode=1});
+"""
+    try:
+        requests = json.loads(subprocess.check_output(['node', '-e', script, str(ids['one'])], text=True))
+        assert len(requests) == 4
+        with TestClient(_app(factory, [ids['admin']])) as client:
+            for request in requests:
+                response = client.request(request['method'], request['url'], json=request.get('payload'))
+                assert response.status_code == 200, (request['url'], response.text)
     finally:
         engine.dispose()
 

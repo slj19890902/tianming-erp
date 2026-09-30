@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.540"
+APP_VERSION = "v0.22.542"
 APP_VERSION_NAME = "资料保护与高频操作优化"
 APP_BUILD_DATE = "2026-09-30"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5180,6 +5180,26 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.539：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 APP_CHANGES = [
+    "常用箱新增参数化图纸工作台：选择结构模板、修改主尺寸或点选局部尺寸，实时更新二维轮廓与三维折叠，支持随动恢复、撤销重做和保存重开。",
+    "长短隔板按真实插槽生成闭合轮廓；组合内衬与纸盒通过真实BOM用量摆放冻结子件发布版，同编码不同子件保持独立。",
+    "发布版支持工程PDF、1:1 PDF、SVG和分层DXF；保留历史图纸、印刷对象、附件与采用关系。纯组合输出装配清单，实体子件单独导出刀线。",
+    "保留权限、客户范围、版本、幂等及事务保护，无数据库迁移，不代填正式插槽、模具、BOM或库存。",
+]
+APP_VERIFICATION_STEPS = [
+    "主数据→常用箱，打开目标产品的图纸工作台；选择箱型、输入尺寸，点选尺寸标注后微调，核对二维与三维实时变化。",
+    "保存后退出重开，核对参数、局部覆盖和客户图号；发布后下载工程PDF、SVG、1:1 PDF或DXF。",
+    "组合产品先分别保存并发布实体子件图纸，再按BOM用量摆放；打开子件后用返回上级图纸回到原装配。",
+    "000148长短隔板的插槽数量、位置、槽宽、槽深须按实际模具填写；实际纸厚、加工补偿、100mm标尺试印及刀模导入另做现场核对。",
+]
+APP_CHANGELOG = [*(f"v0.22.540：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGES = [
+    "常用箱参数化图纸工作台统一使用正式主数据接口，支持模板读取、二维/三维实时预览、BOM子件装配、保存发布和矢量导出。",
+    "已补充前端实际请求与正式路由联测；保留v540图纸功能与历史资料，本版无数据库迁移和业务数据改写。",
+]
+APP_CHANGELOG = [*(f"v0.22.541：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
     "合同草稿删除校验页面版本，防止旧页面删除其他人刚保存的内容。",
     "供应商发票附件串行核验归档，冲突和失败不覆盖原件；读取时执行20MiB上限。",
     "客户完整编辑统一停用权限和未结案订单保护，税率输入限定为0至1，历史资料保持可读。",
@@ -5195,4 +5215,4 @@ APP_VERIFICATION_STEPS = [
     "下载含等号开头文字的对账Excel，核对文字、数量、金额及编码保持原值。",
     "核对旧客户地址跳转、侧栏统计单位及附件重复上传提示；正式页面由管理员按业务使用。",
 ]
-APP_CHANGELOG = [*(f"v0.22.540：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.542：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

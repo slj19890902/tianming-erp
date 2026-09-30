@@ -1,0 +1,66 @@
+const assert=require('node:assert/strict');
+const {foldPanels,assemblyPanels,projectPanels,preserveManagedPayload,stableState,cacheMatchesBaseline}=require('../../static/drawing-workbench.js');
+
+const geometry={panels:[
+  {id:'base',x:0,y:0,width:100,height:80},
+  {id:'side',x:100,y:0,width:40,height:80},
+]};
+const hinges=[{parent_panel_id:'base',child_panel_id:'side',parent_hinge_axis:{x1_mm:100,y1_mm:0,x2_mm:100,y2_mm:80},max_angle_deg:90,direction:1}];
+const flat=foldPanels(geometry,hinges,0),folded=foldPanels(geometry,hinges,1);
+assert.deepEqual(flat.find(x=>x.id==='side').points[1],[140,0,0]);
+const foldedTip=folded.find(x=>x.id==='side').points[1];
+assert.ok(Math.abs(foldedTip[0]-100)<1e-8);
+assert.ok(Math.abs(Math.abs(foldedTip[2])-40)<1e-8,'child panel must rotate around the backend hinge');
+const projected=projectPanels(folded,-25,45,900,650);
+assert.equal(projected.length,2);
+assert.ok(projected.every(p=>p.projected.flat().every(Number.isFinite)));
+const child={path:'12',instance_index:0,position_mm:[10,20,30],rotation_deg:[0,0,90],geometry:{panels:[{id:'child',x:0,y:0,width:10,height:5}]},fold_model:[],assembly:{placements:[{path:'12/13',instance_index:0,position_mm:[0,10,0],rotation_deg:[0,0,0],geometry:{panels:[{id:'nested',x:0,y:0,width:2,height:2}]},fold_model:[]}]}};
+const scene=assemblyPanels(geometry,hinges,[child],0);
+assert.equal(scene.length,4,'root, child and nested released geometry must share one scene');
+assert.deepEqual(scene.find(p=>p.id==='child').points[0],[10,20,30]);
+assert.deepEqual(scene.find(p=>p.id==='nested').points[0],[0,20,30]);
+
+const existing={draft:{version:7,print_objects:[{kind:'text',text:'KEEP',panel_id:'base'}],paper_color:'kraft',thickness_mm:4.5,thickness_source:'caliper',thickness_approximate:false,customer_number:'DRAW-9',customer_revision:'B'}};
+const state={templateKey:'slotted_v1',parameters:{panel_1_mm:100},editorState:{schema_version:'drawing-workbench-v1',dimension_basis:'inner',local_overrides:{panel_1_mm:{value_mm:100}}},catalogVersion:'drawing-workbench-v1'};
+const payload=preserveManagedPayload(existing,state,11);
+assert.equal(payload.expected_product_version,11);
+assert.equal(payload.expected_design_version,7);
+assert.equal(payload.print_objects[0].text,'KEEP');
+assert.equal(payload.thickness_mm,4.5);
+assert.equal(payload.customer_number,'DRAW-9');
+assert.equal(payload.parameters.__drawing_workbench_v1,undefined,'UI must not inject metadata into numeric parameters');
+assert.equal(payload.editor_state.dimension_basis,'inner');
+payload.editor_state.local_overrides.panel_1_mm.value_mm=999;
+assert.equal(state.editorState.local_overrides.panel_1_mm.value_mm,100,'pending save payload must not alias live editor state');
+assert.notStrictEqual(payload.print_objects,existing.draft.print_objects);
+assert.equal(stableState(state),stableState(JSON.parse(JSON.stringify(state))));
+const baseline={productVersion:11,designVersion:7,userKey:'admin-3'};
+assert.equal(cacheMatchesBaseline({...baseline,parameters:{}},baseline),true);
+assert.equal(cacheMatchesBaseline({...baseline,designVersion:8},baseline),false);
+assert.equal(cacheMatchesBaseline({...baseline,productVersion:12},baseline),false);
+assert.equal(cacheMatchesBaseline({...baseline,userKey:'other'},baseline),false);
+assert.equal(preserveManagedPayload(existing,{...state,publication:{customer_number:'NEW',thickness_mm:3}},11).customer_number,'NEW');
+assert.notEqual(stableState(state),stableState({...state,publication:{customer_number:'NEW'}}),'publication metadata must participate in unsaved-state detection');
+
+(async()=>{
+  const {Workbench}=require('../../static/drawing-workbench.js');
+  const w=new Workbench({productId:1,canEdit:true});
+  w.state=JSON.parse(JSON.stringify(state));
+  w.managed=existing;w.baseline={productVersion:11,designVersion:7};w.root={};
+  w.render=()=>{};w.setStatus=()=>{};
+  let cached=false,cleared=false,releaseRead,reads=0,sent;
+  w.cache=()=>{cached=true};w.clearCache=()=>{cleared=true};
+  w.get=async()=>{if(++reads===1)await new Promise(resolve=>releaseRead=resolve);return {draft:{...existing.draft,version:reads===1?7:8}}};
+  global.axios={put:async(url,payload)=>{sent=JSON.parse(JSON.stringify(payload))}};
+  const pending=w.save();
+  w.state.parameters.panel_1_mm=200;
+  releaseRead();await pending;
+  assert.equal(sent.parameters.panel_1_mm,100,'save must submit the snapshot taken before the server-version read');
+  assert.equal(w.state.parameters.panel_1_mm,200,'edits while saving must survive');
+  assert.ok(cached&&!cleared&&w.dirty(),'newer edits must remain cached and unsaved');
+  w.catalog={templates:[{key:'slotted_v1',parameter_schema:[{key:'panel_3_mm',formula:{source:'panel_1_mm'}}]}]};
+  w.state.parameters.panel_1_mm=null;w.applyDerived('panel_1_mm');
+  assert.equal(w.state.parameters.panel_3_mm,null,'clearing a driver must not silently produce a zero dimension');
+  delete global.axios;
+  console.log('drawing workbench behavior checks passed');
+})().catch(error=>{console.error(error);process.exitCode=1});

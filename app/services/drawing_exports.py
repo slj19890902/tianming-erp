@@ -12,6 +12,85 @@ from reportlab.lib.utils import ImageReader
 from app.services.drawing_geometry import print_placement, print_focus_geometry
 
 
+def engineering_pdf_1to1(geometry: dict) -> bytes:
+    """One-to-one vector outline in millimetres for verified release export.
+
+    This deliberately contains no fitted page layout or print artwork.  It is
+    an exchange/print-scale artifact; users must still check printer scaling.
+    """
+    if geometry.get('type') == 'assembly':
+        raise ValueError("组合图没有自身刀版，不能导出 1:1 PDF")
+    width, height = float(geometry['width_mm']), float(geometry['height_mm'])
+    if width > 10_000 or height > 10_000:
+        raise ValueError("1:1 图纸尺寸超过导出上限")
+    output = BytesIO()
+    points_per_mm = 72 / 25.4
+    safety = 10.0
+    # Keep the blank at a true 1:1 scale and reserve a physical safety border.
+    page_width = max(width + safety * 2, 120.0)
+    page_height = max(height + safety * 2, 30.0)
+    c = canvas.Canvas(output, pagesize=(page_width * points_per_mm, page_height * points_per_mm), pageCompression=1)
+    c.setTitle("天明 ERP 1:1 矢量图纸（单位 mm）")
+    c.scale(points_per_mm, points_per_mm)
+    c.saveState()
+    c.translate(safety, safety)
+    c.setLineWidth(.25)
+    for line in geometry['cut']:
+        c.setStrokeColor(colors.black)
+        c.line(float(line['x1']), height-float(line['y1']), float(line['x2']), height-float(line['y2']))
+    c.setStrokeColor(colors.HexColor('#2862a3'))
+    c.setDash(2, 1)
+    for line in geometry['score']:
+        c.line(float(line['x1']), height-float(line['y1']), float(line['x2']), height-float(line['y2']))
+    c.restoreState()
+    # The ruler is in page millimetres, independently of the blank's bounds.
+    c.setStrokeColor(colors.black)
+    c.setLineWidth(.2)
+    ruler_y, ruler_start = 3.0, safety
+    c.line(ruler_start, ruler_y, ruler_start + 100, ruler_y)
+    c.setFont('Helvetica', 2.4)
+    for mark in range(0, 101, 10):
+        tick = 3.0 if mark % 50 == 0 else 2.0
+        c.line(ruler_start + mark, ruler_y-tick/2, ruler_start + mark, ruler_y+tick/2)
+        c.drawCentredString(ruler_start + mark, ruler_y + 2.2, str(mark))
+    c.drawString(ruler_start + 102, ruler_y - 1, 'mm')
+    c.showPage()
+    c.save()
+    return output.getvalue()
+
+
+def dxf(geometry: dict) -> bytes:
+    """Valid R2010 millimetre exchange, authored by the existing CAD library."""
+    if geometry.get('type') == 'assembly':
+        raise ValueError("组合图没有自身刀版，不能导出 DXF")
+    import ezdxf
+    from io import StringIO
+    doc = ezdxf.new('R2010', setup=['linetypes'])
+    doc.units = 4
+    doc.layers.new('CUT', dxfattribs={'color':7,'linetype':'CONTINUOUS'})
+    doc.layers.new('SCORE', dxfattribs={'color':5,'linetype':'DASHED'})
+    model = doc.modelspace()
+    for layer, lines in (('CUT',geometry['cut']),('SCORE',geometry['score'])):
+        for line in lines:
+            model.add_line((float(line['x1']),-float(line['y1']),0),
+                           (float(line['x2']),-float(line['y2']),0),dxfattribs={'layer':layer})
+    output = StringIO()
+    doc.write(output)
+    return output.getvalue().encode('utf-8')
+
+
+def _assembly_placements(metadata: dict | None) -> list[dict]:
+    """Read frozen placement data without deriving a nonexistent parent blank."""
+    if not isinstance(metadata, dict):
+        return []
+    editor = metadata.get('editor_state')
+    if not isinstance(editor, dict):
+        editor = (metadata.get('parameters') or {}).get('__drawing_workbench_v1', {}).get('editor_state')
+    assembly = editor.get('assembly') if isinstance(editor, dict) else None
+    placements = assembly.get('placements') if isinstance(assembly, dict) else None
+    return [entry for entry in placements if isinstance(entry, dict)] if isinstance(placements, list) else []
+
+
 def _wrapped_lines(text: str, width: float, font_size: float) -> list[str]:
     """Wrap CJK and unbroken customer drawing IDs at measured glyph widths."""
     rows, current = [], ''
@@ -111,7 +190,8 @@ def _draw_geometry(c, geometry: dict, viewport: tuple[float, float, float, float
 
 def engineering_pdf(geometry: dict, *, customer: str, product: str,
                     number: str, revision: str, thickness: str,
-                    print_objects: list[dict], image_assets: dict[int, tuple[bytes, str]] | None = None) -> bytes:
+                    print_objects: list[dict], image_assets: dict[int, tuple[bytes, str]] | None = None,
+                    drawing_metadata: dict | None = None) -> bytes:
     """Annotated reference pages, never a 1:1 machine cutting file."""
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
     page = landscape(A3 if max(float(geometry["width_mm"]), float(geometry["height_mm"])) > 900 else A4)
@@ -123,7 +203,7 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
     header_lines = []
     for line in (f"客户：{customer}    产品：{product}",
                  f"图号：{number}    版次：{revision}    单位：mm",
-                 f"纸厚：{thickness}    总展开：{geometry['width_mm']} × {geometry['height_mm']} mm"):
+                 (f"纸厚：{thickness}" if geometry.get('type') == 'assembly' else f"纸厚：{thickness}    总展开：{geometry['width_mm']} × {geometry['height_mm']} mm")):
         header_lines.extend(_wrapped_lines(line, pw-margin*2, 9))
     title_h = max(88, 30 + 14*len(header_lines))
     available_w = pw-margin*2
@@ -171,41 +251,59 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
                          f"X:{obj['x_mm']} Y:{obj['y_mm']}mm  方向:{obj.get('rotation_deg', 0)}°")
         finish_page()
 
-    header('天明 ERP 完整结构图（按标注尺寸核对）')
-    _draw_geometry(c, geometry, (margin, margin+footer_h, available_w, available_h), [], image_assets)
-    c.setFillColor(colors.black)
-    c.setFont('STSong-Light', 8)
-    c.drawString(margin, margin+78, '黑实线：切断    蓝虚线：压折；颜色仅辅助区分，以线型为准。')
-    c.drawString(margin, margin+62, '此图为尺寸与工艺核对图；不得按纸面缩放量尺寸或直接作为机台程序。')
-    finish_page()
-    c.setFont('STSong-Light', 13)
-    y = ph-margin
-    for line in _wrapped_lines(f'尺寸明细｜{number} {revision}', pw-margin*2, 13):
-        c.drawString(margin, y, line)
-        y -= 18
-    c.setFont('STSong-Light', 10)
-    c.drawString(margin, y-4, '所有尺寸单位：mm；以明确标注和已确认原件为准，不按 PDF 纸面比例量取。')
-    y -= 36
-    for label, value in geometry.get('dimensions', {}).items():
-        c.drawString(margin, y, f'{label}：{value} mm')
-        y -= 19
-    if print_objects:
-        y -= 12
-        c.drawString(margin, y, '印刷内容、所属面板及距边：')
-        y -= 20
-        for obj in print_objects:
-            description = f"{obj.get('text') or '图片'}｜{obj['width_mm']}×{obj['height_mm']}｜{obj['panel_id']}｜X:{obj['x_mm']} Y:{obj['y_mm']}｜角度:{obj.get('rotation_deg', 0)}"
-            for line in _wrapped_lines(description, pw-margin*2, 10):
+    if geometry.get('type') != 'assembly':
+        header('天明 ERP 完整结构图（按标注尺寸核对）')
+        _draw_geometry(c, geometry, (margin, margin+footer_h, available_w, available_h), [], image_assets)
+        c.setFillColor(colors.black)
+        c.setFont('STSong-Light', 8)
+        c.drawString(margin, margin+78, '黑实线：切断    蓝虚线：压折；颜色仅辅助区分，以线型为准。')
+        c.drawString(margin, margin+62, '此图为尺寸与工艺核对图；不得按纸面缩放量尺寸或直接作为机台程序。')
+        finish_page()
+        c.setFont('STSong-Light', 13)
+        y = ph-margin
+        for line in _wrapped_lines(f'尺寸明细｜{number} {revision}', pw-margin*2, 13):
+            c.drawString(margin, y, line)
+            y -= 18
+        c.setFont('STSong-Light', 10)
+        c.drawString(margin, y-4, '所有尺寸单位：mm；以明确标注和已确认原件为准，不按 PDF 纸面比例量取。')
+        y -= 36
+        for label, value in geometry.get('dimensions', {}).items():
+            c.drawString(margin, y, f'{label}：{value} mm')
+            y -= 19
+        if print_objects:
+            y -= 12
+            c.drawString(margin, y, '印刷内容、所属面板及距边：')
+            y -= 20
+            for obj in print_objects:
+                description = f"{obj.get('text') or '图片'}｜{obj['width_mm']}×{obj['height_mm']}｜{obj['panel_id']}｜X:{obj['x_mm']} Y:{obj['y_mm']}｜角度:{obj.get('rotation_deg', 0)}"
+                for line in _wrapped_lines(description, pw-margin*2, 10):
+                    if y < margin+20:
+                        finish_page()
+                        c.setFont('STSong-Light', 10)
+                        y = ph-margin
+                        for heading in _wrapped_lines(f'印刷明细（续页）｜{number} {revision}', pw-margin*2, 10):
+                            c.drawString(margin, y, heading)
+                            y -= 14
+                        y -= 12
+                    c.drawString(margin, y, line)
+                    y -= 18
+        finish_page()
+    placements = _assembly_placements(drawing_metadata)
+    if geometry.get('type') == 'assembly' or placements:
+        header('天明 ERP 组合部件清单')
+        c.setFont('STSong-Light', 9)
+        c.drawString(margin, ph-margin-title_h, '子件图纸与摆放位置（mm）')
+        y = ph-margin-title_h-24
+        for index, placement in enumerate(placements, 1):
+            path = placement.get('path', '')
+            product_id = str(placement.get('product_code','')) + ' ' + str(placement.get('product_name',placement.get('product_id','')))
+            release = str(placement.get('child_number',placement.get('child_release_id',''))) + ' / ' + str(placement.get('child_revision',''))
+            position = placement.get('position_mm', '')
+            line = f"{index}. 路径:{path}  产品:{product_id}  发布图:{release}  位置(mm):{position}  旋转(度):{placement.get('rotation_deg',[])}"
+            for row in _wrapped_lines(line, pw-margin*2, 9):
                 if y < margin+20:
-                    finish_page()
-                    c.setFont('STSong-Light', 10)
-                    y = ph-margin
-                    for heading in _wrapped_lines(f'印刷明细（续页）｜{number} {revision}', pw-margin*2, 10):
-                        c.drawString(margin, y, heading)
-                        y -= 14
-                    y -= 12
-                c.drawString(margin, y, line)
-                y -= 18
-    finish_page()
+                    finish_page(); c.setFont('STSong-Light', 9); y = ph-margin
+                c.drawString(margin, y, row); y -= 14
+        finish_page()
     c.save()
     return output.getvalue()

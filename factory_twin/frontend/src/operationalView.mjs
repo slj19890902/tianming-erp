@@ -191,7 +191,20 @@ export function operationalEntitySelectable(visualTheme, entityKind, featureKind
 }
 
 export function shouldShowWarehousePalletVisual(pallet, hideRackLocationMarkers = false) {
+  // Rack cells share the rack footprint across levels. Their point markers are
+  // not physical stock and pile up on the plan; keep warnings and ground slots.
+  if (pallet?.is_rack_location && pallet?.is_logical_anchor && !pallet?.is_planning_location_slot
+      && pallet?.candidate_status_color !== "#b91c1c") return false;
   return !(hideRackLocationMarkers && pallet?.is_rack_location);
+}
+
+export function warehouseRackMapName(rack) {
+  const name = String(rack?.name || "").trim();
+  const short = name.match(/^(?:货架?|货架号)?\s*([A-Z]+\d+)\s*(?:货架|架)?$/i);
+  if (short) return short[1].toUpperCase();
+  if (name) return name;
+  const code = String(rack?.mold_rack_code || rack?.rack_code || "").trim();
+  return /^[A-Z]+\d+$/i.test(code) ? code.toUpperCase() : "货架";
 }
 
 export function wallSurfaceStyle(visualTheme, viewMode) {

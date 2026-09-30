@@ -7,6 +7,7 @@ import {
   filterOperationalFeatures,
   operationalEntitySelectable,
   shouldShowWarehousePalletVisual,
+  warehouseRackMapName,
   warehouseAisleColor,
   warehouseFrustumDivisor,
   warehousePassageEnvelope,
@@ -150,6 +151,23 @@ test("focused rack hides duplicate location markers but keeps floor locations vi
   assert.equal(shouldShowWarehousePalletVisual({ is_rack_location: true }, true), false);
   assert.equal(shouldShowWarehousePalletVisual({ is_rack_location: true }, false), true);
   assert.equal(shouldShowWarehousePalletVisual({ is_rack_location: false }, true), true);
+});
+
+test("ordinary rack anchors stay hidden without focus; ground, real stock and anomalies remain", () => {
+  const rack = { is_rack_location: true, is_logical_anchor: true };
+  assert.equal(shouldShowWarehousePalletVisual(rack, false), false);
+  assert.equal(shouldShowWarehousePalletVisual({ ...rack, is_planning_location_slot: true }), true);
+  assert.equal(shouldShowWarehousePalletVisual({ ...rack, is_logical_anchor: false }), true);
+  assert.equal(shouldShowWarehousePalletVisual({ ...rack, candidate_status_color: "#b91c1c" }), true);
+  assert.equal(shouldShowWarehousePalletVisual({ is_logical_anchor: true, is_rack_location: false }), true);
+});
+
+test("rack map uses the renamed employee number, never the old internal rack code", () => {
+  assert.equal(warehouseRackMapName({ name: "货A1", rack_code: "RACK-3F-EDIT-001" }), "A1");
+  assert.equal(warehouseRackMapName({ name: "A2货架" }), "A2");
+  assert.equal(warehouseRackMapName({ name: "左架", mold_rack_code: "R01" }), "左架");
+  assert.equal(warehouseRackMapName({ name: "K12" }), "K12");
+  assert.equal(warehouseRackMapName({ rack_code: "RACK-3F-EDIT-049" }), "货架");
 });
 
 test("warehouse walls remain visible without occluding zones", () => {

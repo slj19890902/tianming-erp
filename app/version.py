@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.546"
-APP_VERSION_NAME = "盘点位置跟随与常用箱默认规则"
+APP_VERSION = "v0.22.547"
+APP_VERSION_NAME = "仓库地图货架编号清晰显示"
 APP_BUILD_DATE = "2026-09-30"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5249,3 +5249,13 @@ APP_VERIFICATION_STEPS = [
     "管理员确认货架盘点或移货后，打开常用箱核对默认位置同步更新。",
 ]
 APP_CHANGELOG = [*(f"v0.22.546：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "仓库总览隐藏普通货架逻辑货位圆点，保留真实栈板、地面货位和异常提示。",
+    "货架常显当前编号，白底粗体随缩放保持清晰，密集标牌自动错开。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，核对A1、A2等当前货架编号常显，普通货架不再堆叠蓝色定位点。",
+    "缩放地图并点击货架，核对编号、正视图及搜索货位数量正常。",
+]
+APP_CHANGELOG = [*(f"v0.22.547：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

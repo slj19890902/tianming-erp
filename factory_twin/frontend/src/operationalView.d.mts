@@ -63,6 +63,8 @@ export function shouldShowWarehousePalletVisual(
   hideRackLocationMarkers?: boolean
 ): boolean;
 
+export function warehouseRackMapName(rack: { name?: string; rack_code?: string; mold_rack_code?: string | null }): string;
+
 export function wallSurfaceStyle(
   visualTheme: "editor" | "warehouse",
   viewMode: "2d" | "25d"

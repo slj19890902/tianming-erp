@@ -26,6 +26,7 @@ import {
   warehousePassageEnvelope,
   warehousePassageSurfaceStyle,
   shouldShowWarehousePalletVisual,
+  warehouseRackMapName,
   warehouseZoneColor
 } from "./operationalView.mjs";
 import { transformReferencePoint } from "./referenceOverlay.mjs";
@@ -322,6 +323,31 @@ function textSprite(
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
   sprite.scale.set(widthMm, heightMm, 1);
   sprite.renderOrder = 30;
+  return sprite;
+}
+
+function rackNumberSprite(text: string, violated: boolean) {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d")!;
+  context.font = "bold 36px Microsoft YaHei, sans-serif";
+  canvas.width = Math.max(60, Math.ceil(context.measureText(text).width) + 16);
+  canvas.height = 48;
+  context.fillStyle = "rgba(255,255,255,.96)";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.strokeStyle = violated ? "#b91c1c" : "#334155";
+  context.lineWidth = 3;
+  context.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+  context.fillStyle = violated ? "#b91c1c" : "#0f172a";
+  context.font = "bold 36px Microsoft YaHei, sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillText(text, canvas.width / 2, canvas.height / 2);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(canvas), depthTest: false, depthWrite: false
+  }));
+  sprite.userData.pixelWidth = canvas.width / 2;
+  sprite.userData.pixelHeight = canvas.height / 2;
+  sprite.renderOrder = 39;
   return sprite;
 }
 
@@ -649,11 +675,44 @@ export function EditorCanvas({
     controls.minZoom = 0.25;
     let disposed = false;
     let renderFrame: number | null = null;
+    const rackNumberLabels: THREE.Sprite[] = [];
+    const badgeOffsets = Array.from({ length: 11 }, (_, ix) =>
+      Array.from({ length: 9 }, (_, iy) => [(ix - 5) * 12, (iy - 4) * 26])
+    ).flat().sort((a, b) => Math.hypot(...a) - Math.hypot(...b));
     const requestRender = () => {
       if (disposed || renderFrame !== null) return;
       renderFrame = requestAnimationFrame(() => {
         renderFrame = null;
         const controlsChanged = controls.update();
+        const mmPerPixel = (camera.top - camera.bottom) / camera.zoom / Math.max(renderer.domElement.clientHeight, 1);
+        const occupied: { x: number; y: number; w: number; h: number }[] = [];
+        const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+        const screenRight = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+        for (const label of rackNumberLabels) {
+          label.scale.set(label.userData.pixelWidth * mmPerPixel, label.userData.pixelHeight * mmPerPixel, 1);
+          const anchor = label.userData.anchor as THREE.Vector3;
+          const projected = anchor.clone().project(camera);
+          const x = (projected.x + 1) * renderer.domElement.clientWidth / 2;
+          const y = (1 - projected.y) * renderer.domElement.clientHeight / 2;
+          const w = label.userData.pixelWidth;
+          const h = label.userData.pixelHeight;
+          let offsetX = 0, offsetY = 0;
+          // Nearby parallel racks must not cover one another's numbers. Short
+          // leaders keep staggered badges tied to their real rack centres.
+          for (const [dx, dy] of badgeOffsets) {
+            offsetX = dx; offsetY = dy;
+            if (!occupied.some(box => Math.abs(box.x - (x + dx)) < (box.w + w) / 2 + 2
+                && Math.abs(box.y - (y - dy)) < (box.h + h) / 2 + 2)) break;
+          }
+          label.position.copy(anchor).addScaledVector(screenUp, offsetY * mmPerPixel).addScaledVector(screenRight, offsetX * mmPerPixel);
+          occupied.push({ x: x + offsetX, y: y - offsetY, w, h });
+          const leader = label.userData.leader as THREE.Line;
+          leader.visible = offsetX !== 0 || offsetY !== 0;
+          const positions = leader.geometry.getAttribute("position") as THREE.BufferAttribute;
+          positions.setXYZ(0, anchor.x, anchor.y, anchor.z);
+          positions.setXYZ(1, label.position.x, label.position.y, label.position.z);
+          positions.needsUpdate = true;
+        }
         renderer.render(scene, camera);
         if (controlsChanged) requestRender();
       });
@@ -1118,9 +1177,23 @@ export function EditorCanvas({
           }
         }
         scene.add(group);
-        if (layers.labels) {
-          const label = textSprite(rack.rack_code, violated ? "#dc2626" : warehouseTheme ? "#5eead4" : "#4c1d95", 1700, 320, warehouseTheme);
+        if (warehouseTheme || layers.labels) {
+          const label = warehouseTheme
+            ? rackNumberSprite(warehouseRackMapName(rack), violated)
+            : textSprite(rack.rack_code, violated ? "#dc2626" : "#4c1d95", 1700, 320);
+          if (warehouseTheme) rackNumberLabels.push(label);
           label.position.set(position.x, viewMode === "25d" ? rack.height_mm + 380 : 150, position.z);
+          if (warehouseTheme) {
+            label.userData.anchor = label.position.clone();
+            const leader = new THREE.Line(
+              new THREE.BufferGeometry().setFromPoints([label.position.clone(), label.position.clone()]),
+              new THREE.LineBasicMaterial({ color: 0x475569, depthTest: false, depthWrite: false })
+            );
+            leader.frustumCulled = false;
+            leader.renderOrder = 38;
+            label.userData.leader = leader;
+            scene.add(leader);
+          }
           scene.add(label);
         }
       }
@@ -1141,7 +1214,7 @@ export function EditorCanvas({
             && (!draggablePalletIdSet || draggablePalletIdSet.has(pallet.id))
         };
         if (warehouseTheme) {
-          if (pallet.is_logical_anchor && shouldShowWarehousePalletVisual(pallet, hideRackLocationMarkers)) {
+          if (pallet.is_logical_anchor && (violated || shouldShowWarehousePalletVisual(pallet, hideRackLocationMarkers))) {
             group.add(buildPalletMarkerVisual(pallet, viewMode, violated));
           }
           group.add(warehousePalletPickProxy(pallet, viewMode, violated));

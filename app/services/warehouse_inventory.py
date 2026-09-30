@@ -3377,7 +3377,15 @@ def finished_inventory_candidates_for_product(
     *,
     customer_id: int,
     product_id: int,
+    include_reserved: bool = False,
+    include_held: bool = False,
 ) -> list[InventoryLot]:
+    """Return eligible customer finished lots.
+
+    The default remains the allocator's available-only view.  Draft-preview
+    display additionally requests already-reserved or staged lots so it can
+    distinguish physical stock from stock that can still be allocated.
+    """
     product = db.get(Product, product_id)
     if product is None or product.deleted_at is not None:
         raise WarehouseInventoryError("产品不存在", 404)
@@ -3397,8 +3405,15 @@ def finished_inventory_candidates_for_product(
         .where(
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
-            InventoryLot.quantity_available > 0,
-            ~held_for_staging_expression(),
+            (
+                or_(
+                    InventoryLot.quantity_available > 0,
+                    InventoryLot.quantity_reserved > 0,
+                )
+                if include_reserved
+                else InventoryLot.quantity_available > 0
+            ),
+            ~held_for_staging_expression() if not include_held else True,
             FinishedGoodsInventoryDetail.product_id == product_id,
             FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
             FinishedGoodsInventoryDetail.is_general.is_(False),

@@ -4088,10 +4088,12 @@ def preview_order_inventory_draft(
             )
             continue
 
-        candidates = finished_inventory_candidates_for_product(
+        stock_projection_lots = finished_inventory_candidates_for_product(
             db,
             customer_id=payload.customer_id,
             product_id=product.id,
+            include_reserved=True,
+            include_held=True,
         )
         from app.services.delivery_quantities import (
             product_basis, require_physical_stock, available_customer_quantity,
@@ -4101,6 +4103,22 @@ def preview_order_inventory_draft(
             quantity_basis = product_basis(product)
         except QuantityContractError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        verified_projection_lots = []
+        for lot in stock_projection_lots:
+            try:
+                require_physical_stock(lot, quantity_basis)
+            except QuantityContractError:
+                continue
+            verified_projection_lots.append(lot)
+        stock_projection_lots = verified_projection_lots
+        # Keep the original allocator query separate.  Staged inventory and
+        # fully reserved lots are physical stock facts, but cannot become
+        # candidates for a new order import.
+        candidates = finished_inventory_candidates_for_product(
+            db,
+            customer_id=payload.customer_id,
+            product_id=product.id,
+        )
         verified_candidates = []
         for lot in candidates:
             try:
@@ -4109,14 +4127,26 @@ def preview_order_inventory_draft(
                 continue
             verified_candidates.append(lot)
         candidates = verified_candidates
+        finished_stock_on_hand_quantity = sum(
+            max(int(lot.quantity_available or 0), 0) + max(int(lot.quantity_reserved or 0), 0)
+            for lot in stock_projection_lots
+        )
+        finished_stock_reserved_quantity = sum(
+            max(int(lot.quantity_reserved or 0), 0) for lot in stock_projection_lots
+        )
         candidate_available_quantity = available_customer_quantity(quantity_basis, sum(
-            max(
-                int(lot.quantity_available or 0)
-                - used_stock_by_lot.get(lot.id, 0),
-                0,
-            )
+            max(int(lot.quantity_available or 0) - used_stock_by_lot.get(lot.id, 0), 0)
             for lot in candidates
         ))
+        finished_stock_available_quantity = sum(
+            max(int(lot.quantity_available or 0), 0) for lot in candidates
+        )
+        finished_stock_unavailable_quantity = max(
+            finished_stock_on_hand_quantity
+            - finished_stock_reserved_quantity
+            - finished_stock_available_quantity,
+            0,
+        )
         selected_lots = []
         selected_entries = []
         for entry in draft_item.reservation_plan.finished:
@@ -4139,11 +4169,21 @@ def preview_order_inventory_draft(
         except QuantityContractError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         planned_finished_quantity = int(sum(credit for _physical, credit in allocations))
+        finished_stock_line_allocated_quantity = sum(
+            int(physical_quantity) for physical_quantity, _credit in allocations
+        )
         for lot, (physical_quantity, _credit) in zip(selected_lots, allocations, strict=True):
             used_stock_by_lot[lot.id] = used_stock_by_lot.get(lot.id, 0) + physical_quantity
 
         production_required_quantity = max(
             order_quantity - planned_finished_quantity,
+            0,
+        )
+        finished_stock_allocated_quantity = sum(
+            int(used_stock_by_lot.get(lot.id, 0)) for lot in stock_projection_lots
+        )
+        finished_stock_remaining_quantity = max(
+            finished_stock_available_quantity - finished_stock_allocated_quantity,
             0,
         )
         cutting_mode = _draft_preview_cutting_mode(product)
@@ -4240,6 +4280,14 @@ def preview_order_inventory_draft(
                 "interaction_state": interaction_state,
                 "coverage_state": coverage_state,
                 "finished_candidate_available_quantity": candidate_available_quantity,
+                "finished_stock_on_hand_quantity": finished_stock_on_hand_quantity,
+                "finished_stock_reserved_quantity": finished_stock_reserved_quantity,
+                "finished_stock_available_quantity": finished_stock_available_quantity,
+                "finished_stock_unavailable_quantity": finished_stock_unavailable_quantity,
+                "finished_stock_line_allocated_quantity": finished_stock_line_allocated_quantity,
+                "finished_stock_allocated_quantity": finished_stock_allocated_quantity,
+                "finished_stock_remaining_quantity": finished_stock_remaining_quantity,
+                "finished_stock_unit": quantity_basis["physical_unit"],
                 "finished_planned_quantity": planned_finished_quantity,
                 "production_required_quantity": production_required_quantity,
                 "shortage_quantity": production_required_quantity,

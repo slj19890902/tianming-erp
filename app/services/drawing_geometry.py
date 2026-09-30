@@ -132,6 +132,8 @@ def build_geometry(template: str, params: dict[str, object]) -> dict:
         scores: list[dict] = []
         panels = [{"id": "face", "x": "0", "y": "0", "width": plain(w), "height": plain(h)}]
         dimensions = {"衬板长": plain(h), "衬板宽": plain(w)}
+        fold_panels = [{"id": "face", "x": "0", "y": "0", "width": plain(w), "height": plain(h),
+                        "parameter_keys": ["length_mm", "width_mm"]}]
     elif template == "custom_21301634_v1":
         width = number(params.get("panel_width_mm"), "中间板面宽")
         height = number(params.get("panel_height_mm"), "中间板面高")
@@ -173,6 +175,17 @@ def build_geometry(template: str, params: dict[str, object]) -> dict:
                       "上盖": plain(top), "下盖": plain(bottom), "上折边": plain(tf),
                       "下折边": plain(bf), "左折边": plain(lf), "右折边": plain(rf),
                       "左侧翼": plain(lw), "右侧翼": plain(rw)}
+        fold_panels = [
+            {"id": "center", "x": plain(x1), "y": plain(y1), "width": plain(width), "height": plain(height), "parameter_keys": ["panel_width_mm", "panel_height_mm"]},
+            {"id": "top_fold", "x": plain(x1), "y": plain(y0), "width": plain(width), "height": plain(tf), "parameter_keys": ["top_fold_mm"]},
+            {"id": "top_cover", "x": plain(x1), "y": "0", "width": plain(width), "height": plain(top), "parameter_keys": ["top_cover_mm"]},
+            {"id": "bottom_fold", "x": plain(x1), "y": plain(y2), "width": plain(width), "height": plain(bf), "parameter_keys": ["bottom_fold_mm"]},
+            {"id": "bottom_cover", "x": plain(x1), "y": plain(y3), "width": plain(width), "height": plain(bottom), "parameter_keys": ["bottom_cover_mm"]},
+            {"id": "left_fold", "x": plain(lw), "y": plain(y1), "width": plain(lf), "height": plain(height), "parameter_keys": ["left_fold_mm"]},
+            {"id": "left_wing", "x": "0", "y": plain(y1), "width": plain(lw), "height": plain(height), "parameter_keys": ["left_wing_mm"]},
+            {"id": "right_fold", "x": plain(x2), "y": plain(y1), "width": plain(rf), "height": plain(height), "parameter_keys": ["right_fold_mm"]},
+            {"id": "right_wing", "x": plain(x3), "y": plain(y1), "width": plain(rw), "height": plain(height), "parameter_keys": ["right_wing_mm"]},
+        ]
     elif template == "slotted_v1":
         lengths = [number(params.get(f"panel_{i}_mm"), f"第{i}面宽") for i in range(1,5)]
         body = number(params.get("body_height_mm"), "箱身高")
@@ -216,6 +229,21 @@ def build_geometry(template: str, params: dict[str, object]) -> dict:
         dimensions = {**{f"第{index}面宽": plain(length) for index,length in enumerate(lengths,1)},
                       "箱身高": plain(body), "上盖片": plain(top), "下盖片": plain(bottom),
                       "接头": plain(glue), "槽宽": plain(slot)}
+        fold_panels = []
+        x = z
+        for index, length in enumerate(lengths, 1):
+            fold_panels.append({"id": f"wall_{index}", "x": plain(x), "y": plain(top),
+                                "width": plain(length), "height": plain(body),
+                                "parameter_keys": [f"panel_{index}_mm", "body_height_mm"]})
+            start = x + (slot / 2 if index > 1 else z)
+            end = x + length - (slot / 2 if index < 4 else z)
+            for side, y, parameter in (("top", z, "top_flap_mm"), ("bottom", top + body, "bottom_flap_mm")):
+                fold_panels.append({"id": f"{side}_flap_{index}", "x": plain(start), "y": plain(y),
+                                    "width": plain(end-start), "height": plain(top if side == "top" else bottom),
+                                    "parameter_keys": [f"panel_{index}_mm", parameter, "slot_width_mm"]})
+            x += length
+        fold_panels.append({"id": "glue_tab", "x": plain(x), "y": plain(top), "width": plain(glue),
+                            "height": plain(body), "parameter_keys": ["glue_flap_mm", "body_height_mm"]})
     else:
         raise DrawingGeometryError("未验证的结构模板")
     cuts = _polyline(points)
@@ -312,8 +340,14 @@ def build_geometry(template: str, params: dict[str, object]) -> dict:
     view_left, view_top = -gap*3, -gap*2
     view_right = legend_x + legend_width + gap
     view_bottom = max(h+gap*3, gap+legend_step*len(legends))
+    for panel in fold_panels:
+        px, py = Decimal(panel["x"]), Decimal(panel["y"])
+        pw, ph = Decimal(panel["width"]), Decimal(panel["height"])
+        panel["points_mm"] = [[plain(px), plain(py)], [plain(px+pw), plain(py)],
+                              [plain(px+pw), plain(py+ph)], [plain(px), plain(py+ph)], [plain(px), plain(py)]]
     return {"template": template, "unit": "mm", "width_mm": plain(w),
             "height_mm": plain(h), "cut": cuts, "score": scores, "panels": panels,
+            "fold_panels": fold_panels,
             "dimensions": dimensions, "annotations": annotations,
             "dimension_index": dimension_index, "annotation_legends": legends,
             "view_bounds": {"x": plain(view_left), "y": plain(view_top),

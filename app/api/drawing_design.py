@@ -409,7 +409,7 @@ def workbench_context(product_id: int, db: Session = Depends(get_db), user: User
                         "drawing_basis_note": "产品和采购尺寸未被图纸工作台改写"},
             "draft": draft, "component_context": component_context,"template_defaults":defaults,
             "release_summaries": [{"id": release.id, "number": release.external_number,
-                                    "revision": release.revision, "design_version": release.design_version,
+                                    "revision": release.revision, "design_version": release.design_version,"template_key":release.template_key,
                                     "published_at": release.published_at} for release in releases]}
 
 

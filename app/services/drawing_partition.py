@@ -55,15 +55,19 @@ def partition_geometry(params):
         mark = dict(zip(("x1","y1","x2","y2"),map(plain,coords)))
         mark.update(label=code,tx=plain(tx),ty=plain(ty),tick_mm=plain(gap/10))
         annotations.append(mark)
+        dimensions[label] = plain(end-start)
     panel = {"id":"partition","x":"0","y":"0","width":plain(length),"height":plain(height),
              "parameter_keys":["length_mm","height_mm"],"points_mm":[[plain(x),plain(y)] for x,y in points]}
     # Each slot's three physical edges select that slot's independent position.
     for i,line in enumerate(cuts):
         line["id"] = f"cut-{i+1}"
         line["parameter_key"] = f"slot_{(i-1)//4+1}_position_mm" if 1 <= i <= int(count)*4 and i%4 else "length_mm"
+    legends = [{"x":plain(length+gap*2),"y":plain(gap*(i+1)),
+                "text":f"{entry['id']}  {entry['name']}  {entry['value_mm']} mm"} for i,entry in enumerate(entries)]
+    legend_width = max(Decimal(len(item["text"]))*gap/3 for item in legends)
     return {"template":"partition_v1","unit":"mm","width_mm":plain(length),"height_mm":plain(height),
             "cut":cuts,"score":[],"panels":[panel],"fold_panels":[panel],"dimensions":dimensions,
-            "dimension_index":entries,"annotations":annotations,"annotation_legends":[],
+            "dimension_index":entries,"annotations":annotations,"annotation_legends":legends,
             "annotation_font_mm":plain(gap/3),"annotation_margin_mm":plain(gap*5),
-            "view_bounds":{"x":plain(-gap*5),"y":plain(-gap),"width":plain(length+gap*6),
+            "view_bounds":{"x":plain(-gap*5),"y":plain(-gap),"width":plain(length+gap*8+legend_width),
                            "height":plain(height+gap*(len(specs)+2))}}

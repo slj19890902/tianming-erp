@@ -245,6 +245,11 @@ def preview_payload(template_key: str, parameters: dict[str, Any], editor_state:
             segment.setdefault("id",f"{kind}-{i+1}")
             length = abs(Decimal(segment["x2"])-Decimal(segment["x1"])) + abs(Decimal(segment["y2"])-Decimal(segment["y1"]))
             matches = [key for key in PARAMETER_KEYS[template_key] if key.endswith("_mm") and parameters.get(key) is not None and Decimal(str(parameters[key])) == length]
+            if not matches:
+                axis = "x" if segment["y1"] == segment["y2"] else "y"
+                start,end=sorted((Decimal(segment[axis+"1"]),Decimal(segment[axis+"2"])))
+                matches = [d["parameter_key"] for d in geometry.get("dimension_index",[]) if d["axis"]==axis
+                           and min(end,Decimal(d["end_mm"])) > max(start,Decimal(d["start_mm"])) and d.get("parameter_key")]
             segment["parameter_keys"] = matches
             if not segment.get("parameter_key") and matches:
                 segment["parameter_key"] = matches[0]

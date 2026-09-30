@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.542"
-APP_VERSION_NAME = "资料保护与高频操作优化"
+APP_VERSION = "v0.22.543"
+APP_VERSION_NAME = "图纸二维与楞型槽宽修复"
 APP_BUILD_DATE = "2026-09-30"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5215,4 +5215,4 @@ APP_VERIFICATION_STEPS = [
     "下载含等号开头文字的对账Excel，核对文字、数量、金额及编码保持原值。",
     "核对旧客户地址跳转、侧栏统计单位及附件重复上传提示；正式页面由管理员按业务使用。",
 ]
-APP_CHANGELOG = [*(f"v0.22.542：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.543：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -61,7 +61,7 @@ def test_pdf_default_table_prioritizes_products_quantity_and_permissioned_prices
     table = block[table_start:table_end]
     header = table[table.index("<thead>") : table.index("</thead>")]
 
-    assert len(re.findall(r"<th(?:\s|>)", header)) == 9
+    assert len(re.findall(r"<th(?:\s|>)", header)) == 10
     for label in (
         "序号",
         "存货编码",
@@ -70,13 +70,14 @@ def test_pdf_default_table_prioritizes_products_quantity_and_permissioned_prices
         "单价",
         "金额",
         "库存 / 需报",
+        "抵扣后库存",
         "异常",
         "操作",
     ):
         assert label in header
 
     column_count = _method_source("pdfDraftColumnCount")
-    assert "this.canViewSalesAmounts ? 9 : 7" in column_count
+    assert "this.canViewSalesAmounts ? 10 : 8" in column_count
     assert "draft?._show_advanced_details ? 10 : 5" not in column_count
 
 
@@ -107,7 +108,8 @@ def test_pdf_uses_dedicated_inventory_helpers_without_changing_manual_order() ->
     shared = _method_source("orderLineInventoryAutoSummary")
     for marker in (
         "成品${reservedFinished}",
-        "半成品${semiPieces}",
+        "半成品可用${semiAvailable}张",
+        "已安排${semiPieces}片",
         "需生产${productionRequired}",
     ):
         assert marker in shared
@@ -202,6 +204,7 @@ const sandbox = {{
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
   window: {{ addEventListener() {{}}, history: {{ pushState() {{}}, back() {{}} }} }},
   document: {{ addEventListener() {{}} }},
+  TMOrderReference: {{component: {{}}}},
   console, URLSearchParams, setTimeout, clearTimeout,
 }};
 vm.createContext(sandbox);

@@ -53,6 +53,7 @@ can_create = PermissionChecker("customers.create")
 can_write = PermissionChecker("customers.edit")
 can_deactivate = PermissionChecker("customers.deactivate")
 can_delete = PermissionChecker("customers.delete")
+CustomerStatus = Literal["active", "inactive"]
 
 
 class CustomerPayload(BaseModel):
@@ -72,7 +73,7 @@ class CustomerPayload(BaseModel):
     tax_no: str | None = None
     bank_account: str | None = None
     remark: str | None = None
-    status: str = "active"
+    status: CustomerStatus = "active"
 
     @field_validator("chinese_short_name", mode="before")
     @classmethod
@@ -93,6 +94,9 @@ class CustomerResponse(CustomerPayload):
     id: int
     is_active: bool
     version: int
+    # Existing historical rows must remain readable while new write payloads
+    # accept only the two supported lifecycle states.
+    status: str
     price_tax_mode: Literal["tax_inclusive", "tax_exclusive"] = "tax_inclusive"
 
 
@@ -205,6 +209,41 @@ def _changed_updates(customer: Customer, updates: dict) -> dict:
         for key, value in updates.items()
         if getattr(customer, key) != value
     }
+
+
+def _require_customer_status_transition(
+    db: Session,
+    *,
+    customer: Customer,
+    is_active: bool,
+    user: User,
+) -> None:
+    """Apply the dedicated lifecycle eligibility to every real transition."""
+
+    if customer.is_active == is_active:
+        return
+    if not has_permission(user, "customers.deactivate"):
+        raise HTTPException(status_code=403, detail="权限不足")
+    if is_active:
+        return
+    open_order = db.scalar(
+        select(Order.id)
+        .where(
+            Order.customer_id == customer.id,
+            not_(
+                or_(
+                    Order.status == "cancelled",
+                    and_(
+                        Order.status == "delivered",
+                        Order.payment_status == "paid",
+                    ),
+                )
+            ),
+        )
+        .limit(1)
+    )
+    if open_order is not None:
+        raise HTTPException(status_code=400, detail="客户存在未结案订单，不能停用")
 
 
 def _customer_or_404(db: Session, customer_id: int) -> Customer:
@@ -637,6 +676,12 @@ def preview_customer_update(
     require_customer_access(customer_id, current_user=user, db=db)
     customer = _customer_or_404(db, customer_id)
     updates = _customer_write_data(payload, existing=customer)
+    _require_customer_status_transition(
+        db,
+        customer=customer,
+        is_active=updates["is_active"],
+        user=user,
+    )
     return preview_versioned_update(
         db,
         object_type="customer",
@@ -658,6 +703,12 @@ def update_customer(
     customer = _customer_or_404(db, customer_id)
     before = CustomerResponse.model_validate(customer).model_dump()
     updates = _customer_write_data(payload, existing=customer)
+    _require_customer_status_transition(
+        db,
+        customer=customer,
+        is_active=updates["is_active"],
+        user=user,
+    )
     changed = _changed_updates(customer, updates)
     try:
         apply_versioned_update(
@@ -700,28 +751,12 @@ def update_customer_status(
 ) -> CustomerResponse:
     require_customer_access(customer_id, current_user=user, db=db)
     customer = _customer_or_404(db, customer_id)
-    if not payload.is_active:
-        open_order = db.scalar(
-            select(Order.id)
-            .where(
-                Order.customer_id == customer.id,
-                not_(
-                    or_(
-                        Order.status == "cancelled",
-                        and_(
-                            Order.status == "delivered",
-                            Order.payment_status == "paid",
-                        ),
-                    )
-                ),
-            )
-            .limit(1)
-        )
-        if open_order is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="客户存在未结案订单，不能停用",
-            )
+    _require_customer_status_transition(
+        db,
+        customer=customer,
+        is_active=payload.is_active,
+        user=user,
+    )
     before = customer.is_active
     updates = {
         "is_active": payload.is_active,

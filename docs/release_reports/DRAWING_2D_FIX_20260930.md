@@ -22,3 +22,14 @@
 管理员验收：刷新常用箱后重开工作台，核对完整二维和槽宽；按正常业务保存草稿、发布版本。尚未代填管理员人工验收。真实token用量不可获取。
 
 补充验证：重开实测发现服务器数字字符串与前端数值造成假未保存；数值参数及纸厚做规范比较、对象键排序，客户图号保持字符串原义。Node增设重开与数字图号保护回归，两项UI测试重跑通过，实际隔离HTTP已存图纸重开为已保存。首个未发布构建废弃，正式使用final构建。
+
+## 正式发布结果
+
+技术发布完成，待管理员人工验收。
+
+- 正式 v0.22.543；运行源 `e64e4e965ac874478130b2a47d80d3fc75cd2a0d`；签名包 `19b5a8f7dc11a58cd4ffc19bafcfe40f7ad6ce7e79040273a44f25d1dfd59b60`。
+- NAS 时点备份 `Z:\sata1-18015598002\BoxERP\backups\20260930-105331-49744e37.tmbackup`；SHA `409bff2598e7d99a1afb77bf8ce9d238e71477546272ebb90913b240e73faad3`，停写后备份加密及验证通过。
+- 305表冷态事实一致，启动后仅邮箱同步运行字段变化；schema不变、ed0928ml唯一head，integrity ok/FK0，打印校准文件未变。无迁移，无正式图纸/订单/库存/BOM写入。
+- 三入口健康200，HTML/JS/CSS与签名包哈希一致；匿名图纸接口401。实际进程文件根 `D:\TianmingERP\shared\data\private_uploads` 已核实。
+- 回退程序为v542包 `f63c965fbcd233d5c57deea3f02de0590888ed11ce86a169b67ce483b506de38`；必须通过受管助手先备份，保留当前业务数据库，不用旧备份覆盖新业务。
+- 证据 C:/ERP-UAT/drawing-2d-fix-20260930/v543，含deployment-result.json、release-facts.json、health-acceptance.json。原工作区未知改动保留，未操作正式浏览器。

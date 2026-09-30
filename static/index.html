@@ -10577,7 +10577,7 @@
             loginForm: { username: localStorage.getItem("erp_username") || "", password: "", remember_me: true },
             deliveryBacklogs:{items:[],page:1,has_more:false,history:false,loading:false,error:'',preview:null,sequence:0},
             overview: { cards: [], todos: [], summary: {} }, warehouseCapacitySummary:null, overviewError: "", overviewLoading: false, dashboardDetailsVisible:false,
-            kpi: {}, customers: [], customerOptions: [], orderCustomerOptions: [], products: [], materials: [], orders: [],
+            kpi: {}, customers: [], customerOptions: [], customerOptionsIdentity:"", orderCustomerOptions: [], products: [], materials: [], orders: [],
             orderWorkspace: "queue", orderListColumnPanelOpen:false, orderListColumns:{customer_name:true,customer_po:true,order_date:true,delivery_date:true,child_count:true,total_quantity:true,total_amount:true,status:true,actions:true}, customerHeatItems:[], customerHeatTotal:0, customerHeatLoading:false, customerHeatError:"", customerHeatAmountVisible:false, customerHeatAsOf:"", customerHeatThresholdContract:null, customerHeatThresholdVersion:"", customerHeatThresholdStatus:"prototype_pending_p1_61c_acceptance", customerHeatSortBy:"heat", customerHeatSortDirection:"desc", customerHeatAppliedSignature:"", customerHeatExpanded:{}, customerHeatOrders:{},
             customerPhoneGovernanceExporting: false,
             quotationCustomer: null,
@@ -15956,6 +15956,8 @@
             }
           },
           resetPagePerformanceState() {
+            this.customerOptions = [];
+            this.customerOptionsIdentity = "";
             this.orderHistoryOpening = null;
             this.loginAttemptSequence += 1;
             this.pageLoadSequence += 1;
@@ -16926,20 +16928,49 @@
             }
           },
           async loadCustomerOptions(force=false) {
-            if (!this.hasPermission("customers.view")) return true;
-            if (!force && this.customerOptions.length) return true;
+            if (!this.hasPermission("customers.view")) {
+              this.customerOptions = [];
+              this.customerOptionsIdentity = "";
+              return true;
+            }
+            const identity = `${this.user?.id ?? "anonymous"}:${this.authGeneration}`;
+            if (this.customerOptionsIdentity !== identity) {
+              this.customerOptions = [];
+              this.customerOptionsIdentity = "";
+            }
+            if (!force && this.customerOptionsIdentity === identity && this.customerOptions.length) return true;
             const requestKey = "customers:options";
             const controller = this.beginLatestRequest(requestKey);
+            const isCurrent = () => latestRequestControllers.get(requestKey) === controller
+              && identity === `${this.user?.id ?? "anonymous"}:${this.authGeneration}`
+              && this.hasPermission("customers.view");
             try {
-              const { data } = await axios.get("/api/master/customers", {
-                params:{ page_size:200, include_inactive:true },
-                signal:controller.signal,
-              });
-              if (latestRequestControllers.get(requestKey) !== controller) return false;
-              this.customerOptions = data.items;
+              const options = new Map();
+              let pageCount = 1;
+              for (let page = 1; page <= pageCount; page += 1) {
+                const { data } = await axios.get("/api/master/customers", {
+                  params:{ page, page_size:200, include_inactive:true },
+                  signal:controller.signal,
+                });
+                if (!isCurrent()) return false;
+                const totalPages = Number(data?.total_pages ?? 1);
+                if (!Array.isArray(data?.items) || !Number.isInteger(totalPages) || totalPages < 1
+                    || (data.page !== undefined && Number(data.page) !== page)) {
+                  throw new Error("客户列表分页数据异常，请重试");
+                }
+                pageCount = Math.max(pageCount, totalPages);
+                for (const row of data.items) options.set(row.id, row);
+              }
+              if (!isCurrent()) return false;
+              this.customerOptions = [...options.values()];
+              this.customerOptionsIdentity = identity;
               return true;
             } catch (error) {
-              if (this.isCancelledRequest(error)) return false;
+              if (!isCurrent() || this.isCancelledRequest(error)) return false;
+              if (isCurrent() && [401,403].includes(error?.response?.status)) {
+                this.customerOptions = [];
+                this.customerOptionsIdentity = "";
+              }
               throw error;
             } finally {
               this.finishLatestRequest(requestKey, controller);

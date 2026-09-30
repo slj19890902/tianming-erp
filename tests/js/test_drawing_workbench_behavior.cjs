@@ -1,0 +1,35 @@
+const assert=require('node:assert/strict');
+const {foldPanels,projectPanels,preserveManagedPayload,stableState,cacheMatchesBaseline}=require('../../static/drawing-workbench.js');
+
+const geometry={panels:[
+  {id:'base',x:0,y:0,width:100,height:80},
+  {id:'side',x:100,y:0,width:40,height:80},
+]};
+const hinges=[{parent_panel_id:'base',child_panel_id:'side',parent_hinge_axis:{x1_mm:100,y1_mm:0,x2_mm:100,y2_mm:80},max_angle_deg:90,direction:1}];
+const flat=foldPanels(geometry,hinges,0),folded=foldPanels(geometry,hinges,1);
+assert.deepEqual(flat.find(x=>x.id==='side').points[1],[140,0,0]);
+const foldedTip=folded.find(x=>x.id==='side').points[1];
+assert.ok(Math.abs(foldedTip[0]-100)<1e-8);
+assert.ok(Math.abs(Math.abs(foldedTip[2])-40)<1e-8,'child panel must rotate around the backend hinge');
+const projected=projectPanels(folded,-25,45,900,650);
+assert.equal(projected.length,2);
+assert.ok(projected.every(p=>p.projected.flat().every(Number.isFinite)));
+
+const existing={draft:{version:7,print_objects:[{kind:'text',text:'KEEP',panel_id:'base'}],paper_color:'kraft',thickness_mm:4.5,thickness_source:'caliper',thickness_approximate:false,customer_number:'DRAW-9',customer_revision:'B'}};
+const state={templateKey:'slotted_v1',parameters:{panel_1_mm:100},editorState:{dimension_basis:'inner',overrides:{panel_1_mm:{value_mm:100}}},catalogVersion:'drawing-workbench-v1'};
+const payload=preserveManagedPayload(existing,state,11);
+assert.equal(payload.expected_product_version,11);
+assert.equal(payload.expected_design_version,7);
+assert.equal(payload.print_objects[0].text,'KEEP');
+assert.equal(payload.thickness_mm,4.5);
+assert.equal(payload.customer_number,'DRAW-9');
+assert.equal(payload.parameters.__drawing_workbench_v1,undefined,'UI must not inject metadata into numeric parameters');
+assert.equal(payload.editor_state.dimension_basis,'inner');
+assert.notStrictEqual(payload.print_objects,existing.draft.print_objects);
+assert.equal(stableState(state),stableState(JSON.parse(JSON.stringify(state))));
+const baseline={productVersion:11,designVersion:7,userKey:'admin-3'};
+assert.equal(cacheMatchesBaseline({...baseline,parameters:{}},baseline),true);
+assert.equal(cacheMatchesBaseline({...baseline,designVersion:8},baseline),false);
+assert.equal(cacheMatchesBaseline({...baseline,productVersion:12},baseline),false);
+assert.equal(cacheMatchesBaseline({...baseline,userKey:'other'},baseline),false);
+console.log('drawing workbench behavior checks passed');

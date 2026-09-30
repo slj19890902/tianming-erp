@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {foldPanels,projectPanels,preserveManagedPayload,stableState,cacheMatchesBaseline}=require('../../static/drawing-workbench.js');
+const {foldPanels,assemblyPanels,projectPanels,preserveManagedPayload,stableState,cacheMatchesBaseline}=require('../../static/drawing-workbench.js');
 
 const geometry={panels:[
   {id:'base',x:0,y:0,width:100,height:80},
@@ -14,9 +14,14 @@ assert.ok(Math.abs(Math.abs(foldedTip[2])-40)<1e-8,'child panel must rotate arou
 const projected=projectPanels(folded,-25,45,900,650);
 assert.equal(projected.length,2);
 assert.ok(projected.every(p=>p.projected.flat().every(Number.isFinite)));
+const child={path:'12',instance_index:0,position_mm:[10,20,30],rotation_deg:[0,0,90],geometry:{panels:[{id:'child',x:0,y:0,width:10,height:5}]},fold_model:[],assembly:{placements:[{path:'12/13',instance_index:0,position_mm:[0,10,0],rotation_deg:[0,0,0],geometry:{panels:[{id:'nested',x:0,y:0,width:2,height:2}]},fold_model:[]}]}};
+const scene=assemblyPanels(geometry,hinges,[child],0);
+assert.equal(scene.length,4,'root, child and nested released geometry must share one scene');
+assert.deepEqual(scene.find(p=>p.id==='child').points[0],[10,20,30]);
+assert.deepEqual(scene.find(p=>p.id==='nested').points[0],[0,20,30]);
 
 const existing={draft:{version:7,print_objects:[{kind:'text',text:'KEEP',panel_id:'base'}],paper_color:'kraft',thickness_mm:4.5,thickness_source:'caliper',thickness_approximate:false,customer_number:'DRAW-9',customer_revision:'B'}};
-const state={templateKey:'slotted_v1',parameters:{panel_1_mm:100},editorState:{dimension_basis:'inner',overrides:{panel_1_mm:{value_mm:100}}},catalogVersion:'drawing-workbench-v1'};
+const state={templateKey:'slotted_v1',parameters:{panel_1_mm:100},editorState:{schema_version:'drawing-workbench-v1',dimension_basis:'inner',local_overrides:{panel_1_mm:{value_mm:100}}},catalogVersion:'drawing-workbench-v1'};
 const payload=preserveManagedPayload(existing,state,11);
 assert.equal(payload.expected_product_version,11);
 assert.equal(payload.expected_design_version,7);

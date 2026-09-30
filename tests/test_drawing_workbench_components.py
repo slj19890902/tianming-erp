@@ -144,7 +144,8 @@ def test_nested_assembly_release_covers_children_once(assembly_db):
                  external_number="inner-drawing",internal_number="inner-drawing",idempotency_key="inner-release",
                  design_version=1,product_version=1,template_key="assembly_v1",
                  manifest_json=json.dumps({"geometry":geometry,"fold_model":[],
-                    "editor_state":{"assembly":{"placements":[{"frozen":"test"}]}}}),
+                    "editor_state":{"assembly":{"basis_hash":component_context(db, inner)["basis_hash"],
+                                                   "placements":[{"frozen":"test"}]}}}),
                  pdf_reference="test-unused",pdf_sha256="0"*64)
     db.add(release);db.commit()
     context = component_context(db,root)
@@ -154,3 +155,8 @@ def test_nested_assembly_release_covers_children_once(assembly_db):
     with pytest.raises(HTTPException) as caught:
         validate_component_placements(db,root,[whole]+placements_for(context))
     assert "重复摆放" in caught.value.detail
+    products[2].version += 1
+    db.commit()
+    with pytest.raises(HTTPException) as caught:
+        validate_component_placements(db,root,[whole],for_publish=True)
+    assert caught.value.status_code == 409

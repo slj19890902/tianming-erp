@@ -22,6 +22,8 @@
     <script src="/static/ui/desktop-delivery-margin.js?v=20260926-dashboard-cost"></script>
     <script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script>
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
+    <link rel="stylesheet" href="/static/drawing-workbench.css?v=20260930" />
+    <script src="/static/drawing-workbench.js?v=20260930"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
     <script src="/static/assets/phone-display.js?v=b9c44d142168"></script>
     <style>
@@ -7222,7 +7224,7 @@
               </section>
               <section v-if="productForm.id" class="panel" style="margin:10px 0">
                 <fieldset :disabled="drawingV2.busy || drawingV2.reading" style="border:0;padding:0">
-                <h4>图纸 V2｜结构与发布</h4>
+                <div class="toolbar"><h4 style="margin:0">图纸 V2｜结构与发布</h4><button type="button" class="btn primary" @click="openDrawingWorkbench">打开图纸工作台</button></div>
                 <info-note>结构尺寸在本常用箱页维护；保存产品后再保存图纸草稿。发布版固定供新任务使用。</info-note>
                 <p class="muted">结构尺寸修改后，请核对现有模具是否仍适用；刀高、桥位等由刀模师傅确认。</p>
                 <button type="button" class="btn small" @click="loadDrawingV2">读取图纸</button>
@@ -10936,7 +10938,7 @@
             customerFinishedStorageDraft: {floor_id:null,area_id:null},
             customerQuotePreferenceOptionsLoading: false, customerQuotePreferenceOptionsError: "",
             customerQuotePreferenceDraft: { box_type:"", layer_count:null, flute_type:"", supplier_name:"", material_id:null, tax_included_square_price:"", is_active:true }, productForm: blankProduct(),
-            drawingV2: {template_key:'liner_v1',parameters:{},print_objects:[],paper_color:'white',thickness_mm:null,thickness_source:'',thickness_approximate:false,customer_number:'',customer_revision:'',version:null,releases:[],printEditorOpen:false,error:''},
+            drawingV2: {template_key:'liner_v1',parameters:{},editor_state:null,print_objects:[],paper_color:'white',thickness_mm:null,thickness_source:'',thickness_approximate:false,customer_number:'',customer_revision:'',version:null,releases:[],printEditorOpen:false,error:''},
             quickStockPolicyForm: { id:null, product_id:null, customer_name:"", product_code:"", product_name:"", available_quantity:0, allocatable_available_quantity:0, reserved_quantity:0, warning_quantity:0, target_quantity:1 },
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), requisition_strategy:"normal", remark: "", items: [] },
@@ -28131,6 +28133,18 @@
             };
             return (fields[this.drawingV2.template_key] || []).map(([key,label]) => ({key,label}));
           },
+          openDrawingWorkbench() {
+            if (!this.productForm.id || !window.DrawingWorkbench) return;
+            window.DrawingWorkbench.open({
+              productId:this.productForm.id,
+              productVersion:this.productForm.version,
+              productCode:this.productForm.product_code,
+              productName:this.productForm.product_name,
+              userKey:this.user?.id || this.user?.username || this.user?.role || 'anonymous',
+              canEdit:!!this.canEditProducts && this.drawingV2.editing_enabled!==false,
+              onUpdated:()=>this.loadDrawingV2({internal:true}),
+            });
+          },
           async loadDrawingV2({internal=false} = {}) {
             if (!this.productForm.id) return;
             const productId = this.productForm.id, context = this.drawingV2;
@@ -28153,7 +28167,7 @@
           },
           drawingV2Signature() {
             const d = this.drawingV2;
-            return JSON.stringify({template_key:d.template_key,parameters:d.parameters,print_objects:d.print_objects.map(({display_unit,_asset_info,...obj})=>obj),paper_color:d.paper_color,thickness_mm:d.thickness_mm,thickness_source:d.thickness_source,thickness_approximate:d.thickness_approximate,customer_number:d.customer_number,customer_revision:d.customer_revision});
+            return JSON.stringify({template_key:d.template_key,parameters:d.parameters,editor_state:d.editor_state || null,print_objects:d.print_objects.map(({display_unit,_asset_info,...obj})=>obj),paper_color:d.paper_color,thickness_mm:d.thickness_mm,thickness_source:d.thickness_source,thickness_approximate:d.thickness_approximate,customer_number:d.customer_number,customer_revision:d.customer_revision});
           },
           async saveDrawingV2() {
             const d = this.drawingV2, productId = this.productForm.id;
@@ -28163,7 +28177,7 @@
             try {
               const signature = this.drawingV2Signature();
               if (d.pendingSave && d.pendingSave.signature !== signature) throw new Error('上次保存结果尚未确认，请先读取图纸核对再修改');
-              if (!d.pendingSave) d.pendingSave = {signature,payload:JSON.parse(JSON.stringify({idempotency_key:createIdempotencyKey(),expected_product_version:this.productForm.version,expected_design_version:d.version || null,template_key:d.template_key,parameters:Object.fromEntries(this.drawingV2Fields().map(f => [f.key,d.parameters[f.key] === '' ? null : d.parameters[f.key]])),print_objects:d.print_objects,paper_color:d.paper_color,thickness_mm:d.thickness_mm || null,thickness_source:d.thickness_source || null,thickness_approximate:d.thickness_approximate,customer_number:d.customer_number || null,customer_revision:d.customer_revision || null}))};
+              if (!d.pendingSave) d.pendingSave = {signature,payload:JSON.parse(JSON.stringify({idempotency_key:createIdempotencyKey(),expected_product_version:this.productForm.version,expected_design_version:d.version || null,template_key:d.template_key,parameters:Object.fromEntries(Object.entries(d.parameters || {}).map(([key,value]) => [key,value === '' ? null : value])),editor_state:d.editor_state || null,print_objects:d.print_objects,paper_color:d.paper_color,thickness_mm:d.thickness_mm || null,thickness_source:d.thickness_source || null,thickness_approximate:d.thickness_approximate,customer_number:d.customer_number || null,customer_revision:d.customer_revision || null}))};
               await axios.put(`/api/master/products/${productId}/managed-drawing`,d.pendingSave.payload);
               d.pendingSave = null;
               if (this.productForm.id !== productId || this.drawingV2 !== d) return;
@@ -28207,7 +28221,7 @@
                   drawings: [],
                 }
               );
-              this.drawingV2 = {template_key:'liner_v1',parameters:{},print_objects:[],paper_color:'white',thickness_mm:null,thickness_source:'',thickness_approximate:false,customer_number:'',customer_revision:'',version:null,releases:[],printEditorOpen:false,error:''};
+              this.drawingV2 = {template_key:'liner_v1',parameters:{},editor_state:null,print_objects:[],paper_color:'white',thickness_mm:null,thickness_source:'',thickness_approximate:false,customer_number:'',customer_revision:'',version:null,releases:[],printEditorOpen:false,error:''};
               const openedId = Number(this.productForm.id || 0) || null;
               this.productMaterialContext = { product_id:openedId, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" };
               this.productMaterialActiveTab = "candidates";

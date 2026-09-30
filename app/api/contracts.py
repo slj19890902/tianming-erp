@@ -11,7 +11,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -99,6 +99,7 @@ class ContractConvertPayload(BaseModel):
 
 class ContractDeletePayload(BaseModel):
     confirm_text: str = Field(min_length=1, max_length=50)
+    expected_version: int = Field(ge=1)
 
 
 def _next_number(db: Session, contract_date: date) -> str:
@@ -464,17 +465,52 @@ def delete_contract(
         raise HTTPException(status_code=409, detail="仅合同草稿可以删除")
     if payload.confirm_text != DELETE_CONFIRM_TEXT:
         raise HTTPException(status_code=400, detail="删除确认文字不正确")
-    _audit(
-        db,
-        user=user,
-        action="DELETE",
-        contract=contract,
-        details={"contract_no": contract.contract_no, "customer_id": contract.customer_id},
-        description="删除客户合同草稿",
-    )
-    db.delete(contract)
-    db.commit()
-    return {"ok": True, "contract_id": contract_id}
+    try:
+        # A plain in-memory version check leaves a race between the check and
+        # DELETE.  This no-op conditional UPDATE claims the exact draft/version
+        # row in the database transaction before its audit and child cascade.
+        claimed = db.execute(
+            update(CustomerContract)
+            .where(
+                CustomerContract.id == contract_id,
+                CustomerContract.status == "draft",
+                CustomerContract.version == payload.expected_version,
+            )
+            .values(version=CustomerContract.version)
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(
+                status_code=409,
+                detail="合同已被其他操作更新，请刷新后重新确认删除",
+            )
+        _audit(
+            db,
+            user=user,
+            action="DELETE",
+            contract=contract,
+            details={
+                "contract_no": contract.contract_no,
+                "customer_id": contract.customer_id,
+                "expected_version": payload.expected_version,
+            },
+            description="删除客户合同草稿",
+        )
+        db.delete(contract)
+        db.commit()
+        return {"ok": True, "contract_id": contract_id}
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="合同已关联其他业务或状态已变化，请刷新后重试",
+        ) from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.post("/{contract_id}/confirm")

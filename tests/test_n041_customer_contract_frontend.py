@@ -53,6 +53,7 @@ def test_contract_form_uses_customer_products_and_payload_contract() -> None:
         'axios.delete(`/api/contracts/${target.id}`',
         'confirm_text:"我确认删除合同"',
         'expected_version:target.version',
+        'data:{ confirm_text:"我确认删除合同", expected_version:target.version }',
         'product_id: Number(line.product_id)',
         'contractProductOptions',
         '@search="searchContractProducts"',

@@ -13,6 +13,11 @@ assert.match(ctx.pdfInventoryBalanceHint(line),/已预占 20 只/);
 line._inventory.finished.skipped=true;
 assert.equal(ctx.pdfInventoryBalanceText(line),'100 只');
 assert.match(ctx.pdfInventoryBalanceHint(line),/不抵扣/);
+line._inventory.finished._batch_auto_skipped=true;
+line._inventory.authoritative.finished_stock_remaining_quantity=0;
+assert.equal(ctx.pdfInventoryBalanceText(line),'0 只');
+assert.equal(ctx.pdfFinishedInventoryExplicitlySkipped(line),false);
+line._inventory.finished._batch_auto_skipped=false;
 for(const [key,value,text] of [['loading',true,'计算中'],['stale',true,'待刷新'],['api_error',true,'查询失败'],['authoritative_loading',true,'计算中'],['authoritative_error','failed','查询失败']]){
  line._inventory[key]=value;assert.equal(ctx.pdfInventoryBalanceText(line),text);line._inventory[key]=typeof value==='boolean'?false:'';
 }

@@ -7767,7 +7767,7 @@
                       </td>
                       <td class="pdf-stock-balance">
                         {{ pdfInventoryBalanceText(item) }}<info-note v-if="pdfInventoryBalanceHint(item)" label="库存数量说明">{{ pdfInventoryBalanceHint(item) }}</info-note>
-                        <span v-if="item._inventory?.finished?.skipped && pdfInventoryBalanceHint(item)" class="status neutral">实存</span>
+                        <span v-if="pdfFinishedInventoryExplicitlySkipped(item) && pdfInventoryBalanceHint(item)" class="status neutral">实存</span>
                       </td>
                       <td style="font-size:11px;white-space:normal" :title="pdfInventoryIssueText(item)">
                         <button v-if="item.matched_product_id && !item.is_new_product && !commonBoxReadiness(item).ready && canEditProducts && !isImportDraftLocked(draft)" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" @click.stop="openCommonBoxEditorFromPdf(draftIndex,item)">常用箱资料待完善</button><span v-else-if="pdfInventoryIssueText(item)" :class="['status',pdfInventoryDisplayState(item)==='exception'?'red':'orange']">{{ pdfInventoryIssueText(item) }}</span>
@@ -14747,6 +14747,10 @@
               exception:"库存需核对",
             })[this.pdfInventoryDisplayState(line)] || "库存需核对";
           },
+          pdfFinishedInventoryExplicitlySkipped(line) {
+            const finished = line?._inventory?.finished;
+            return !!finished?.skipped && !finished._batch_auto_skipped;
+          },
           pdfInventoryBalanceText(line) {
             if (!Number(line?.matched_product_id || line?.product_id || 0)) return "待匹配";
             const state = line?._inventory;
@@ -14756,7 +14760,7 @@
             if (state.authoritative_loading) return "计算中";
             const authority = state.authoritative;
             if (authority?.finished_stock_balance_unavailable_reason) return "分批查看";
-            const value = state.finished?.skipped ? authority?.finished_stock_on_hand_quantity : authority?.finished_stock_remaining_quantity;
+            const value = this.pdfFinishedInventoryExplicitlySkipped(line) ? authority?.finished_stock_on_hand_quantity : authority?.finished_stock_remaining_quantity;
             if (value === null || value === undefined || !Number.isFinite(Number(value)) || Number(value) < 0 || !authority?.finished_stock_unit) return "待核对";
             return `${Number(value)} ${authority.finished_stock_unit}`;
           },
@@ -14767,7 +14771,7 @@
             if (!authority || ["待匹配", "计算中", "待刷新", "查询失败", "待核对"].includes(this.pdfInventoryBalanceText(line))) return "";
             const unit = authority.finished_stock_unit;
             const quantity = (key) => authority[key] === null || authority[key] === undefined ? "待核对" : `${Number(authority[key])} ${unit}`;
-            return `实存 ${quantity("finished_stock_on_hand_quantity")}；已预占 ${quantity("finished_stock_reserved_quantity")}；导入前可用 ${quantity("finished_stock_available_quantity")}；本行拟抵扣 ${quantity("finished_stock_line_allocated_quantity")}。${state.finished?.skipped ? "本行不抵扣，显示实存；实存包含已预占部分，不代表全部可用。" : "显示按本批导入顺序至本行的可用余量；预览不会实际扣库，保存时重新校验。"}`;
+            return `同产品有效成品实存 ${quantity("finished_stock_on_hand_quantity")}；已预占 ${quantity("finished_stock_reserved_quantity")}；其他不可用 ${quantity("finished_stock_unavailable_quantity")}；导入前可用 ${quantity("finished_stock_available_quantity")}；本行拟抵扣 ${quantity("finished_stock_line_allocated_quantity")}。${this.pdfFinishedInventoryExplicitlySkipped(line) ? "本行不抵扣，显示实存；实存包含已预占及已集货部分，不代表全部可用。" : "显示按本批导入顺序至本行的可用余量；预览不会实际扣库，保存时重新校验。"}`;
           },
           pdfInventoryShortageText(line) {
             const authority = line?._inventory?.authoritative;
@@ -15585,7 +15589,7 @@
                   material:this.pdfImportItemMaterialCode(line),
                   flute_type:line.flute_type || null,
                   reservation_plan:this.buildReservationPlan(line),
-                  finished_skipped:!!line._inventory?.finished?.skipped,
+                  finished_skipped:this.pdfFinishedInventoryExplicitlySkipped(line),
                 })),
               };
               const { data } = await axios.post("/api/orders/inventory-draft-preview", payload, {timeout:10000});

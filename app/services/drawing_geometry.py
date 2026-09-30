@@ -23,6 +23,9 @@ PARAMETER_KEYS = {
                              "left_wing_mm", "right_wing_mm"),
     "slotted_v1": ("panel_1_mm", "panel_2_mm", "panel_3_mm", "panel_4_mm", "body_height_mm",
                    "top_flap_mm", "bottom_flap_mm", "glue_flap_mm", "slot_width_mm"),
+    "partition_v1": ("length_mm", "height_mm", "slot_count", "slot_width_mm", "slot_depth_mm",
+                     "slot_pitch_mm", "slot_offset_mm", "slot_edge"),
+    "assembly_v1": (),
 }
 
 
@@ -124,6 +127,14 @@ def build_geometry(template: str, params: dict[str, object]) -> dict:
     The custom template does not infer any panel dimension from the finished
     box height.  Slotted-carton flap and slot parameters must be evidenced.
     """
+    if template == "partition_v1":
+        from app.services.drawing_partition import partition_geometry
+        return partition_geometry(params)
+    if template == "assembly_v1":
+        return {"template": template, "type": "assembly", "unit": "mm", "width_mm": "1", "height_mm": "1",
+                "cut": [], "score": [], "panels": [], "fold_panels": [], "dimensions": {},
+                "annotations": [], "dimension_index": [], "annotation_legends": [],
+                "view_bounds": {"x": "0", "y": "0", "width": "1", "height": "1"}}
     z = Decimal(0)
     if template == "liner_v1":
         w = number(params.get("width_mm"), "衬板宽")

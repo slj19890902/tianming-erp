@@ -6,11 +6,14 @@ from app.services.drawing_geometry import build_geometry
 
 def test_release_vector_exports_preserve_mm_layers():
     geometry = build_geometry('liner_v1', {'length_mm': '100', 'width_mm': '50'})
-    exported = dxf(geometry).decode('ascii')
-    assert '$ACADVER\r\n1\r\nAC1009' in exported
-    assert '$INSUNITS\r\n70\r\n4' in exported
-    assert 'LTYPE\r\n70\r\n2' in exported and 'DASHED' in exported
-    assert 'CUT' in exported and 'SCORE' in exported
+    import ezdxf
+    from io import StringIO
+    doc = ezdxf.read(StringIO(dxf(geometry).decode('utf-8')))
+    assert doc.units == 4 and doc.dxfversion == 'AC1024'
+    assert len(doc.modelspace()) == len(geometry['cut'])
+    assert {entry.dxf.layer for entry in doc.modelspace()} == {'CUT'}
+    assert not doc.audit().errors
+    assert doc.layers.get('SCORE').dxf.linetype == 'DASHED'
     pdf = engineering_pdf_1to1(geometry)
     assert pdf.startswith(b'%PDF')
     # 50mm blank + two 10mm margins is widened to retain a physical 100mm ruler.

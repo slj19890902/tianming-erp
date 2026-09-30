@@ -8,6 +8,7 @@ import os
 from functools import wraps
 from decimal import Decimal
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, Response
@@ -34,7 +35,8 @@ from app.services.drawing_product_rules import slotted_parameter_candidates, val
 from app.services.drawing_geometry import DrawingGeometryError, PARAMETER_KEYS, build_geometry, svg, number, custom_parameter_suggestions, print_focus_geometry
 from app.services.drawing_workbench import (CATALOG_VERSION, fold_model, preview_payload,
                                             split_editor_state, template_catalog,
-                                            validate_editor_state, with_editor_state)
+                                            validate_editor_state, with_editor_state, validate_parameters,
+                                            same_manufacturing_geometry)
 from app.services.secure_uploads import (ValidatedUpload, remove_stored_reference,
                                          resolve_stored_reference, store_private_upload)
 
@@ -42,7 +44,7 @@ from app.services.secure_uploads import (ValidatedUpload, remove_stored_referenc
 router = APIRouter()
 read = PermissionChecker("products.view")
 write = PermissionChecker("products.edit")
-TEMPLATES = {"liner_v1", "slotted_v1", "custom_21301634_v1"}
+TEMPLATES = set(PARAMETER_KEYS)
 THICKNESS = {"AB": ("7", False), "BE": ("4", False), "A": ("4", False),
              "B": ("3", False), "E": ("1", False)}
 
@@ -153,8 +155,18 @@ def _published_result(release: DrawingRelease, customer_id: int) -> dict:
     return {"id": release.id, "number": release.external_number, "revision": release.revision}
 
 
-def _params(product: Product, template: str, params: dict) -> dict:
-    result, _ = split_editor_state(params)
+def _params(product: Product, template: str, params: dict, editor_state: dict | None = None) -> dict:
+    result, stored_state = split_editor_state(params)
+    if editor_state is not None or stored_state is not None:
+        # Workbench dimensions are a separate, versioned design. Product facts
+        # remain untouched; an omitted old-editor field keeps its stored value.
+        if template == "liner_v1":
+            result.setdefault("length_mm", product.length_mm)
+            result.setdefault("width_mm", product.width_mm)
+        elif template == "custom_21301634_v1":
+            result.setdefault("panel_width_mm", product.length_mm)
+            result.setdefault("panel_height_mm", product.width_mm)
+        return result
     if template == "liner_v1":
         result = {"length_mm": product.length_mm, "width_mm": product.width_mm}
     elif template == "custom_21301634_v1":
@@ -199,6 +211,17 @@ def _validate_component_state(db: Session, product: Product, state: dict | None,
     except DrawingGeometryError as error:
         raise HTTPException(422, str(error)) from error
     return {**state, "assembly": assembly}
+
+
+def _validate_template_context(db, product, template):
+    from app.services.drawing_components import component_context
+    context = component_context(db, product)
+    root = next(node for node in context["nodes"] if node["product_id"] == product.id)
+    if template == "assembly_v1" and (root["has_body"] or not context["edges"]):
+        raise HTTPException(422, "纯组合模板只适用于已配置子件的组合BOM；带本体产品请保留本体图纸并添加子件")
+    if template != "assembly_v1" and not root["has_body"]:
+        raise HTTPException(422, "该产品为组合BOM，请使用组合图纸；实体子件分别维护图纸")
+    return context
 
 
 def _objects(design: DrawingDesign, geometry: dict) -> list[dict]:
@@ -307,7 +330,7 @@ def get_design(product_id: int, db: Session = Depends(get_db), user: User = Depe
         panels = geometry["panels"]
         _objects(design, geometry)
         publication_outdated = any(r.design_version == design.version and r.product_version == product.version
-                                   and json.loads(r.manifest_json).get('geometry') != geometry for r in releases)
+                                   and not same_manufacturing_geometry(json.loads(r.manifest_json).get('geometry'), geometry) for r in releases)
         if design.source_product_version != product.version:
             geometry_error = "常用箱已变化，请重新核对并保存草稿"
     except HTTPException as error:
@@ -365,21 +388,26 @@ def workbench_context(product_id: int, db: Session = Depends(get_db), user: User
                  "parameters": parameters, "editor_state": editor_state}
     releases = db.scalars(select(DrawingRelease).where(DrawingRelease.product_id == product.id,
                           DrawingRelease.customer_id == product.customer_id).order_by(DrawingRelease.id.desc())).all()
-    component_context = None
+    from app.services.drawing_components import component_context as load_component_context
+    component_context = load_component_context(db, product)
+    defaults = {"liner_v1":{"length_mm":product.length_mm,"width_mm":product.width_mm},
+                "partition_v1":{"length_mm":product.length_mm,"height_mm":product.width_mm},"assembly_v1":{}}
     try:
-        from app.services.drawing_components import component_context as load_component_context
-        component_context = load_component_context(db, product)
-    except ImportError:
-        # This branch is deliberately usable before the independently-owned
-        # read-only component projection is integrated.
-        component_context = None
+        defaults["custom_21301634_v1"] = {"panel_width_mm":product.length_mm,"panel_height_mm":product.width_mm,
+            **custom_parameter_suggestions(product.length_mm,product.width_mm,product.height_mm)}
+    except DrawingGeometryError:
+        defaults["custom_21301634_v1"] = {"panel_width_mm":product.length_mm,"panel_height_mm":product.width_mm}
+    try:
+        defaults["slotted_v1"] = slotted_parameter_candidates(product)
+    except DrawingGeometryError:
+        defaults["slotted_v1"] = {}
     return {"catalog_version": CATALOG_VERSION, "unit": "mm",
-            "product": {"id": product.id, "version": product.version, "customer_id": product.customer_id,
+            "product": {"id": product.id, "version": product.version, "customer_id": product.customer_id,"box_style":product.box_style,
                         "nominal_dimensions_mm": {"length": str(product.length_mm) if product.length_mm is not None else None,
                                                   "width": str(product.width_mm) if product.width_mm is not None else None,
                                                   "height": str(product.height_mm) if product.height_mm is not None else None},
                         "drawing_basis_note": "产品和采购尺寸未被图纸工作台改写"},
-            "draft": draft, "component_context": component_context,
+            "draft": draft, "component_context": component_context,"template_defaults":defaults,
             "release_summaries": [{"id": release.id, "number": release.external_number,
                                     "revision": release.revision, "design_version": release.design_version,
                                     "published_at": release.published_at} for release in releases]}
@@ -395,9 +423,12 @@ def workbench_preview(product_id: int, payload: WorkbenchPreviewWrite,
     try:
         if payload.template_key == "slotted_v1":
             validate_single_piece_slotted(product)
-        parameters = _params(product, payload.template_key, payload.parameters)
         state = validate_editor_state(payload.editor_state)
+        _validate_template_context(db, product, payload.template_key)
+        state = _validate_component_state(db, product, state, for_publish=False)
+        parameters = _params(product, payload.template_key, payload.parameters, state)
         result = preview_payload(payload.template_key, parameters, state)
+        result["editor_state"] = state
         result["svg"] = svg(result["geometry"])
         return result
     except DrawingGeometryError as error:
@@ -422,23 +453,28 @@ def save_design(product_id: int, payload: DesignWrite,
     if payload.template_key not in TEMPLATES:
         raise HTTPException(422, "尚未验证该结构模板")
     try:
-        editor_state = _validate_component_state(db, product, validate_editor_state(payload.editor_state), for_publish=False)
-        resolved = _params(product, payload.template_key, payload.parameters)
-        for key, value in resolved.items():
-            if value is not None:
-                number(value, key)
+        context = _validate_template_context(db, product, payload.template_key)
+        editor_state = validate_editor_state(payload.editor_state)
+        incoming = dict(payload.parameters)
+        if editor_state is None and existing is not None and existing.template_key == payload.template_key:
+            previous_params, editor_state = _draft_parameters(existing)
+            if editor_state is not None:
+                incoming = {**previous_params,**incoming}
+        if payload.template_key == "assembly_v1" and editor_state is None:
+            editor_state = validate_editor_state({"assembly":{"basis_hash":context["basis_hash"],"placements":[]}})
+        editor_state = _validate_component_state(db, product, editor_state, for_publish=False)
+        resolved = _params(product, payload.template_key, incoming, editor_state)
+        validate_parameters(payload.template_key,resolved)
         missing = [key for key in PARAMETER_KEYS[payload.template_key] if resolved.get(key) is None]
         geometry = None if missing else build_geometry(payload.template_key, resolved)
     except DrawingGeometryError as error:
         raise HTTPException(422, str(error)) from error
-    params = {key: str(value) if value is not None else None for key, value in payload.parameters.items()}
-    if payload.template_key == "liner_v1":
+    params = {key: str(value) if value is not None else None for key, value in (resolved if editor_state is not None else incoming).items()}
+    if payload.template_key == "liner_v1" and editor_state is None:
         params = {}  # no second editable copy of the product dimensions
-    if payload.template_key == "custom_21301634_v1":
+    if payload.template_key == "custom_21301634_v1" and editor_state is None:
         params.pop("panel_width_mm", None)
         params.pop("panel_height_mm", None)
-    if editor_state is None and existing is not None:
-        _, editor_state = _draft_parameters(existing)
     params = with_editor_state(params, editor_state)
     objects = [item.model_dump(mode="json") for item in payload.print_objects]
     # Validate on save, not only when rendering.
@@ -526,18 +562,23 @@ def publish_design(product_id: int, payload: PublishWrite,
                            DrawingRelease.design_version == design.version,
                            DrawingRelease.product_version == product.version))
     if published is not None:
-        if json.loads(published.manifest_json).get('geometry') != _geometry(product, design):
+        if not same_manufacturing_geometry(json.loads(published.manifest_json).get('geometry'), _geometry(product, design)):
             raise HTTPException(409, '图纸规则已更新，请保存草稿、核对预览后发布新版；旧版仍保留')
         return _published_result(published, product.customer_id)
     if not os.getenv("ERP_FILE_STORAGE_DIR"):
         raise HTTPException(503, "图纸存储根未显式配置，禁止发布")
     stored_parameters, stored_editor_state = _draft_parameters(design)
+    publish_context = _validate_template_context(db, product, design.template_key)
+    if stored_editor_state is not None and publish_context["edges"] and not stored_editor_state.get("assembly"):
+        raise HTTPException(422, "当前产品包含BOM子件，请先核对组合摆放后发布完整图纸")
+    if design.template_key == "assembly_v1" and not (stored_editor_state or {}).get("assembly"):
+        raise HTTPException(422, "请先配置组合图纸的子件摆放")
     frozen_editor_state = _validate_component_state(db, product, stored_editor_state, for_publish=True)
     if frozen_editor_state is not None and frozen_editor_state.get("dimension_basis", "dieline") != "dieline":
         raise HTTPException(422, "内尺寸或外尺寸尚无已确认加工补偿；请核实并按刀线/压线尺寸保存后发布")
     geometry = _geometry(product, design)
     objects = _objects(design, geometry)
-    if design.thickness_mm is None:
+    if design.thickness_mm is None and design.template_key != "assembly_v1":
         raise HTTPException(422, "纸厚及来源尚未确定，暂不能发布工程图")
     if not design.internal_number:
         today = beijing_today().strftime("%Y%m%d")
@@ -552,7 +593,7 @@ def publish_design(product_id: int, payload: PublishWrite,
     if db.scalar(select(DrawingRelease.id).where(DrawingRelease.product_id == product.id,
             DrawingRelease.external_number == number, DrawingRelease.revision == revision)) is not None:
         raise HTTPException(409, "该图号和版次已发布；修改内容请填写新客户版次，原发布版保留")
-    thickness = f"{'约' if design.thickness_approximate else ''}{design.thickness_mm}mm（{design.thickness_source}）"
+    thickness = "按各子件发布图纸" if design.template_key == "assembly_v1" else f"{'约' if design.thickness_approximate else ''}{design.thickness_mm}mm（{design.thickness_source}）"
     stored_references = []
     assets = {}
     try:
@@ -634,7 +675,7 @@ def publish_design(product_id: int, payload: PublishWrite,
         content = engineering_pdf(geometry, customer=manifest['customer_name'],
                                   product=product.product_name, number=number,
                                   revision=revision, thickness=thickness, print_objects=objects,
-                                  image_assets=assets)
+                                  image_assets=assets, drawing_metadata=manifest)
         saved = store_private_upload(ValidatedUpload(content=content, original_filename="drawing.pdf",
                                                        extension=".pdf", content_type="application/pdf",
                                                        size=len(content), sha256=hashlib.sha256(content).hexdigest()),
@@ -706,6 +747,8 @@ def export_release(product_id: int, release_id: int, format: str,
     geometry = manifest.get("geometry")
     if not isinstance(geometry, dict):
         raise HTTPException(503, "发布图纸快照不完整")
+    if release.template_key == "assembly_v1":
+        raise HTTPException(422, "组合图请下载工程PDF；各子件刀版请进入对应子件发布版导出")
     if format == "svg":
         content, media_type, extension = svg(geometry).encode("utf-8"), "image/svg+xml", "svg"
     elif format == "pdf_1to1":
@@ -714,9 +757,9 @@ def export_release(product_id: int, release_id: int, format: str,
         content, media_type, extension = dxf(geometry), "application/dxf", "dxf"
     else:
         raise HTTPException(422, "仅支持 svg、pdf_1to1 或 dxf 导出")
-    filename = f"{release.external_number}-{release.revision}.{extension}".replace('"', '')
+    filename = quote(f"{release.external_number}-{release.revision}.{extension}", safe="")
     return Response(content, media_type=media_type, headers={"Cache-Control": "private, no-store",
-                    "Content-Disposition": f'attachment; filename="{filename}"'})
+                    "Content-Disposition": f'attachment; filename="drawing-{release.id}.{extension}"; filename*=UTF-8\'\'{filename}'})
 
 
 @router.get("/{product_id}/managed-drawing/releases/{release_id}/{layer}.svg")

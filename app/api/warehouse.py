@@ -70,6 +70,7 @@ from app.models.printing_plate import (
     PrintingPlateResinReuse,
 )
 from app.models.product import Product
+from app.models.receipt_putaway import ProductStoragePreference
 from app.models.product_bom import SalesOrderItemBomComponent
 from app.models.product_bom import RequisitionItemBomSource
 from app.models.requisition import Requisition, RequisitionItem
@@ -198,6 +199,7 @@ from app.services.warehouse_twin_layout_editor import (
     number_warehouse_twin_area_racks,
     delete_warehouse_twin_feature,
     delete_warehouse_twin_rack,
+    delete_published_warehouse_twin_rack,
     discard_warehouse_twin_layout_draft,
     load_effective_warehouse_twin_floor_for_edit,
     load_published_warehouse_twin_floor_for_edit,
@@ -13114,6 +13116,115 @@ def _formal_area_archive_blockers(
     return list(dict.fromkeys(blockers))
 
 
+
+def _formal_rack_archive_location_rows(
+    db: Session,
+    *,
+    floor_code: str,
+    rack_id: str,
+) -> tuple[list[WarehouseLocation], list[str]]:
+    """Resolve exactly the active formal slots owned by one published rack."""
+
+    try:
+        floor_number = int(str(floor_code).strip().upper().removesuffix("F"))
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail="数字孪生楼层不存在") from error
+    rows = list(db.scalars(
+        select(WarehouseLocation).where(
+            WarehouseLocation.map_rack_id == rack_id,
+            WarehouseLocation.is_active.is_(True),
+        ).order_by(WarehouseLocation.id)
+    ).all())
+    blockers: list[str] = []
+    if any(int(row.warehouse_floor or 0) != floor_number for row in rows):
+        blockers.append("存在绑定该地图货架但楼层身份不一致的正式库位")
+    return rows, blockers
+
+
+def _formal_rack_archive_blockers(
+    db: Session,
+    *,
+    locations: list[WarehouseLocation],
+    rack_id: str,
+    rack_code: str | None,
+) -> list[str]:
+    """Fail closed on every live fact that would make an empty-rack delete unsafe."""
+
+    location_ids = [int(row.id) for row in locations]
+    blockers: list[str] = []
+    lot_count, lot_quantity = db.execute(
+        select(
+            func.count(InventoryLot.id),
+            func.coalesce(func.sum(
+                InventoryLot.quantity_available
+                + InventoryLot.quantity_reserved
+                + InventoryLot.quantity_damaged
+            ), 0),
+        ).where(
+            InventoryLot.warehouse_location_id.in_(location_ids),
+            (InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged) > 0,
+        )
+    ).one()
+    if int(lot_count or 0):
+        blockers.append(f"仍有库存 {int(lot_count)} 批，共 {int(lot_quantity or 0)} 个物理单位")
+    checks = (
+        (select(func.count(InventoryReservation.id)).join(
+            InventoryLot, InventoryLot.id == InventoryReservation.inventory_lot_id
+        ).where(
+            InventoryLot.warehouse_location_id.in_(location_ids),
+            InventoryReservation.status.in_(("active", "partial")),
+            InventoryReservation.reserved_stock_quantity > InventoryReservation.consumed_stock_quantity + InventoryReservation.released_stock_quantity,
+        ), "仍有未完成库存预占 {} 条"),
+        (select(func.count(InventoryPallet.id)).where(
+            InventoryPallet.location_id.in_(location_ids), InventoryPallet.is_current.is_(True),
+        ), "仍有活动栈板 {} 块"),
+        (select(func.count(InventoryStockPolicy.id)).where(
+            InventoryStockPolicy.default_location_id.in_(location_ids), InventoryStockPolicy.active.is_(True),
+        ), "仍有库存预警/补库默认位置 {} 条"),
+        (select(func.count(ProductStoragePreference.product_id)).where(
+            ProductStoragePreference.location_id.in_(location_ids),
+        ), "仍有产品默认入库位置 {} 条"),
+        (select(func.count(StocktakeOrder.id)).where(
+            StocktakeOrder.location_id.in_(location_ids), StocktakeOrder.status.in_(("draft", "submitted")),
+        ), "仍有未完成盘点 {} 单"),
+        (select(func.count(InventoryOnboardingLine.id)).join(
+            InventoryOnboardingBatch, InventoryOnboardingBatch.id == InventoryOnboardingLine.batch_id
+        ).where(
+            InventoryOnboardingLine.location_id.in_(location_ids), InventoryOnboardingBatch.status.in_(("draft", "submitted")),
+        ), "仍有待处理库存补录 {} 条"),
+        (select(func.count(StockReplenishmentOrderItem.id)).join(
+            StockReplenishmentOrder, StockReplenishmentOrder.id == StockReplenishmentOrderItem.replenishment_order_id
+        ).where(
+            StockReplenishmentOrderItem.location_id.in_(location_ids),
+            StockReplenishmentOrder.status.in_(("draft", "confirmed", "partially_stocked")),
+        ), "仍有活动补库明细 {} 条"),
+        (select(func.count(WarehouseUnmatchedInventoryObservation.id)).where(
+            WarehouseUnmatchedInventoryObservation.observed_location_id.in_(location_ids),
+            WarehouseUnmatchedInventoryObservation.status == "open",
+        ), "仍有现场实物待核对标记 {} 条"),
+        (select(func.count(WarehouseLocationDiscrepancy.id)).where(
+            WarehouseLocationDiscrepancy.status == "open",
+            or_(WarehouseLocationDiscrepancy.registered_location_id.in_(location_ids), WarehouseLocationDiscrepancy.observed_location_id.in_(location_ids)),
+        ), "仍有未处理库位差异 {} 条"),
+    )
+    for statement, wording in checks:
+        count = int(db.scalar(statement) or 0)
+        if count:
+            blockers.append(wording.format(count))
+    text_markers = {str(rack_id).strip().upper(), str(rack_code or "").strip().upper()} - {""}
+    def references_rack(location_text: str | None) -> bool:
+        text = str(location_text or "").strip().upper()
+        return any(re.search(r"(?<![A-Z0-9])" + re.escape(marker) + r"(?![A-Z0-9])", text) for marker in text_markers)
+    for mold in db.scalars(select(MoldTool).where(or_(MoldTool.is_active.is_(True), MoldTool.archive_status == "archived"))).all():
+        if references_rack(mold.rack_location):
+            blockers.append("仍有实体模具引用该货架，不能删除")
+            break
+    for plate in db.scalars(select(PrintingPlate).where(PrintingPlate.status.in_(("active", "damaged")))).all():
+        if references_rack(plate.rack_location):
+            blockers.append("仍有启用或受损挂板引用该货架，不能删除")
+            break
+    return list(dict.fromkeys(blockers))
+
 def _formal_area_archive_replay_response(
     policy: WarehouseAreaStoragePolicy,
     *,
@@ -13998,56 +14109,196 @@ def delete_twin_layout_rack(
     floor_code: str,
     rack_id: str,
     expected_revision: str = Query(min_length=1, max_length=64),
+    expected_published_revision: str = Query(min_length=1, max_length=64),
     expected_version: int = Query(ge=1),
     operation_key: str = Query(min_length=8, max_length=120),
     request: Request = None,
     db: Session = Depends(get_db),
     user: User = Depends(admin_only),
 ) -> dict:
+    """Immediately retire one published, fully empty rack and its formal slots."""
+
+    normalized_floor = floor_code.strip().upper()
+    request_fingerprint = hashlib.sha256(json.dumps({
+        "floor_code": normalized_floor,
+        "rack_id": str(rack_id).strip(),
+        "expected_revision": expected_revision,
+        "expected_published_revision": expected_published_revision,
+        "expected_version": expected_version,
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
-        _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
-        _assert_twin_rack_not_archived(
-            db,
-            floor_code=floor_code,
-            rack_id=rack_id,
+        _claim_floor_projection_for_layout_write(db, floor_code=normalized_floor)
+        _assert_twin_rack_not_archived(db, floor_code=normalized_floor, rack_id=rack_id)
+        published_floor = load_published_warehouse_twin_floor_for_edit(normalized_floor)
+        # Authenticate/authorize and claim the floor before this branch, but
+        # replay before stale-version/rack-presence gates: the first response
+        # may have been lost after a committed delete.
+        replay_receipt = next((item for item in published_floor.get("layout_edit_receipts") or []
+                               if item.get("operation_key") == operation_key), None)
+        if replay_receipt is not None:
+            # A receipt in the map is not enough: a process interruption after
+            # file replacement but before DB commit must never masquerade as a
+            # successful deletion.  Stop for controlled recovery instead.
+            replay_active_slots = int(db.scalar(select(func.count(WarehouseLocation.id)).where(
+                WarehouseLocation.map_rack_id == str(rack_id),
+                WarehouseLocation.is_active.is_(True),
+            )) or 0)
+            if replay_active_slots:
+                raise HTTPException(status_code=409, detail="货架删除回放发现正式库位尚未归档，请先完成受控恢复。")
+            try:
+                mutation = delete_published_warehouse_twin_rack(
+                    normalized_floor, rack_id,
+                    expected_revision=expected_revision,
+                    expected_published_revision=expected_published_revision,
+                    expected_version=expected_version,
+                    operation_key=operation_key,
+                    request_fingerprint=request_fingerprint,
+                    inactive_location_count=0,
+                )
+            except WarehouseTwinLayoutEditError as error:
+                _handle_twin_layout_edit_error(error)
+            return {
+                "item": mutation.value,
+                "revision": mutation.floor_revision,
+                "published_revision": mutation.published_revision,
+                "applied": mutation.applied,
+                "idempotent_replay": not mutation.applied,
+            }
+        published_racks = [item for item in published_floor.get("racks") or [] if str(item.get("id") or "") == str(rack_id)]
+        if not published_racks:
+            # A newly drawn rack has never become a formal spatial object.
+            # Replay the draft receipt before all existence/version checks, as
+            # the successful first response may have been lost in transit.
+            effective_floor = load_effective_warehouse_twin_floor_for_edit(normalized_floor)
+            draft_receipt = next((item for item in effective_floor.get("layout_edit_receipts") or []
+                                  if item.get("operation_key") == operation_key), None)
+            if draft_receipt is not None:
+                try:
+                    mutation = delete_warehouse_twin_rack(
+                        normalized_floor, rack_id, expected_revision=expected_revision,
+                        expected_version=expected_version, operation_key=operation_key,
+                    )
+                except WarehouseTwinLayoutEditError as error:
+                    _handle_twin_layout_edit_error(error)
+                replay_item = dict(mutation.value)
+                replay_item.setdefault("inactive_location_count", 0)
+                replay_item.setdefault("published_map_changed", False)
+                replay_item.setdefault("inventory_changed", False)
+                return {"item": replay_item, "revision": mutation.floor_revision,
+                        "published_revision": str(published_floor.get("revision") or ""),
+                        "applied": mutation.applied, "idempotent_replay": not mutation.applied}
+            if str(published_floor.get("revision") or "") != expected_published_revision:
+                raise HTTPException(status_code=409, detail="正式地图已更新，请刷新后重新删除。")
+            draft_racks = [item for item in effective_floor.get("racks") or [] if str(item.get("id") or "") == str(rack_id)]
+            if len(draft_racks) != 1:
+                raise HTTPException(status_code=404, detail="货架不存在或已被删除。")
+            mapped_count = int(db.scalar(select(func.count(WarehouseLocation.id)).where(
+                WarehouseLocation.map_rack_id == str(rack_id), WarehouseLocation.is_active.is_(True),
+            )) or 0)
+            if mapped_count:
+                raise HTTPException(status_code=409, detail="未发布货架已被正式库位引用，请先完成一致性治理。")
+            draft_snapshot = snapshot_warehouse_twin_layout_draft()
+            mutation = None
+            try:
+                mutation = delete_warehouse_twin_rack(
+                    normalized_floor, rack_id, expected_revision=expected_revision,
+                    expected_version=expected_version, operation_key=operation_key,
+                )
+                if mutation.applied:
+                    mutation.value.update({
+                        "inactive_location_count": 0,
+                        "published_map_changed": False,
+                        "inventory_changed": False,
+                    })
+                    _twin_layout_asset_log(
+                        db, request=request, user=user, action="TWIN_RACK_DELETE_DRAFT",
+                        entity_type="twin_rack_layout", entity_id=str(rack_id),
+                        description="管理员删除未发布二维库位货架草稿",
+                        details={"floor_code": normalized_floor, **mutation.value,
+                                 "published_revision": str(published_floor.get("revision") or "")},
+                    )
+                    db.commit()
+                return {"item": mutation.value, "revision": mutation.floor_revision,
+                        "published_revision": str(published_floor.get("revision") or ""),
+                        "applied": mutation.applied, "idempotent_replay": not mutation.applied}
+            except WarehouseTwinLayoutEditError as error:
+                db.rollback()
+                if mutation is not None and mutation.applied:
+                    restore_warehouse_twin_layout_draft(draft_snapshot)
+                _handle_twin_layout_edit_error(error)
+            except Exception:
+                db.rollback()
+                if mutation is not None and mutation.applied:
+                    restore_warehouse_twin_layout_draft(draft_snapshot)
+                raise
+        if str(published_floor.get("revision") or "") != expected_published_revision:
+            raise HTTPException(status_code=409, detail="正式地图已更新，请刷新后重新删除。")
+        if len(published_racks) != 1:
+            raise HTTPException(status_code=409, detail="正式地图中的货架身份已变化，请刷新后重新删除。")
+        rack = published_racks[0]
+        locations, identity_blockers = _formal_rack_archive_location_rows(
+            db, floor_code=normalized_floor, rack_id=str(rack_id),
         )
-        draft_snapshot = snapshot_warehouse_twin_layout_draft()
+        blockers = [*identity_blockers, *_formal_rack_archive_blockers(
+            db, locations=locations, rack_id=str(rack_id), rack_code=rack.get("rack_code"),
+        )]
+        if blockers:
+            raise HTTPException(status_code=409, detail="该货架不能删除：" + "；".join(blockers[:8]))
+        layout_snapshot = snapshot_warehouse_twin_publish_state()
         mutation = None
         try:
-            mutation = delete_warehouse_twin_rack(
-                floor_code,
-                rack_id,
+            mutation = delete_published_warehouse_twin_rack(
+                normalized_floor, rack_id,
                 expected_revision=expected_revision,
+                expected_published_revision=expected_published_revision,
                 expected_version=expected_version,
                 operation_key=operation_key,
+                request_fingerprint=request_fingerprint,
+                inactive_location_count=len(locations),
             )
             if mutation.applied:
+                # Claim a second time after map writes: a concurrent inbound,
+                # pallet placement, or reservation cannot slip into an empty
+                # slot between the initial dependency scan and retirement.
+                inactive_location_count = 0
+                now = beijing_now_naive()
+                for location in locations:
+                    if not _claim_empty_location_for_reflow(db, location):
+                        raise HTTPException(status_code=409, detail="货架内库位刚被占用，请刷新后先完成移货。")
+                    location.is_active = False
+                    location.updated_at = now
+                    inactive_location_count += 1
+                if inactive_location_count != mutation.value.get("inactive_location_count"):
+                    raise HTTPException(status_code=409, detail="货架库位集合刚被其他操作更新，请刷新后重试。")
                 _twin_layout_asset_log(
-                    db,
-                    request=request,
-                    user=user,
-                    action="TWIN_RACK_DELETE",
-                    entity_type="twin_rack_layout",
-                    entity_id=rack_id,
-                    description="二维库位布局删除货架并释放为空地",
-                    details={"floor_code": floor_code, **mutation.value},
+                    db, request=request, user=user,
+                    action="TWIN_RACK_DELETE_PUBLISHED",
+                    entity_type="twin_rack_layout", entity_id=str(rack_id),
+                    description="管理员删除正式空货架并归档关联空货位",
+                    details={
+                        "floor_code": normalized_floor, **mutation.value,
+                        "published_revision": mutation.published_revision,
+                        "draft_revision": mutation.floor_revision,
+                    },
                 )
                 db.commit()
+            return {
+                "item": mutation.value,
+                "revision": mutation.floor_revision,
+                "published_revision": mutation.published_revision,
+                "applied": mutation.applied,
+                "idempotent_replay": not mutation.applied,
+            }
         except WarehouseTwinLayoutEditError as error:
             db.rollback()
             if mutation is not None and mutation.applied:
-                restore_warehouse_twin_layout_draft(draft_snapshot)
+                restore_warehouse_twin_publish_state(layout_snapshot)
             _handle_twin_layout_edit_error(error)
         except Exception:
             db.rollback()
             if mutation is not None and mutation.applied:
-                restore_warehouse_twin_layout_draft(draft_snapshot)
+                restore_warehouse_twin_publish_state(layout_snapshot)
             raise
-        return {
-            "item": mutation.value,
-            "revision": mutation.floor_revision,
-            "applied": mutation.applied,
-        }
 
 
 @router.patch('/twin-layout/floors/{floor_code}/zones/{feature_id}/geometry')

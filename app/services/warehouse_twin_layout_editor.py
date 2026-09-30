@@ -2442,6 +2442,233 @@ def delete_warehouse_twin_rack(
     )
 
 
+
+@dataclass(frozen=True)
+class PublishedRackDeleteMutation:
+    """One rack removed from the published map and any active draft."""
+
+    value: dict[str, Any]
+    floor_revision: str
+    published_revision: str
+    applied: bool
+
+
+def _retire_rack_in_floor(
+    floor: dict[str, Any],
+    rack: dict[str, Any],
+    *,
+    reason: str,
+) -> None:
+    rack_id = str(rack.get("id") or "").strip()
+    if not rack_id:
+        raise WarehouseTwinLayoutEditError("货架缺少稳定标识，不能删除")
+    floor["racks"] = [
+        item for item in floor.get("racks") or []
+        if str(item.get("id") or "").strip() != rack_id
+    ]
+    retired_racks = list(floor.get("retired_racks") or [])
+    same = [
+        item for item in retired_racks
+        if str(item.get("id") or "").strip() == rack_id
+    ]
+    if len(same) > 1:
+        raise WarehouseTwinLayoutEditConflictError("草稿中存在重复的已删除货架身份，请先完成治理")
+    if same:
+        # A prior draft-only delete (F7/F8) is a tombstone, not a reason to
+        # publish the old rack again.  Preserve its historical timestamp and
+        # replace the object fields with the published identity below.
+        retired = dict(same[0])
+        retired_racks = [
+            item for item in retired_racks
+            if str(item.get("id") or "").strip() != rack_id
+        ]
+    else:
+        retired = {}
+    retired.update(deepcopy(rack))
+    retired.setdefault("retired_at", _utc_iso())
+    retired["retired_reason"] = reason
+    retired_racks.append(retired)
+    floor["retired_racks"] = retired_racks
+
+
+def delete_published_warehouse_twin_rack(
+    floor_code: str,
+    rack_id: str,
+    *,
+    expected_revision: str,
+    expected_published_revision: str,
+    expected_version: int,
+    operation_key: str,
+    request_fingerprint: str,
+    inactive_location_count: int,
+    published_path: Path | None = None,
+    draft_path: Path | None = None,
+) -> PublishedRackDeleteMutation:
+    """Delete one already-published empty rack without publishing other drafts.
+
+    The persisted draft is rebased on the new published document.  This is the
+    critical part of the operation: an old draft cannot subsequently bring the
+    retired rack back by publishing its former base map.
+    """
+
+    normalized = _normalize_floor_code(floor_code)
+    normalized_id = str(rack_id or "").strip()
+    normalized_key = str(operation_key or "").strip()
+    if not normalized_id:
+        raise WarehouseTwinLayoutEditNotFoundError("货架不存在")
+    if len(normalized_key) < 8 or len(normalized_key) > 120:
+        raise WarehouseTwinLayoutEditError("布局操作键长度必须为 8 至 120 个字符")
+    if not request_fingerprint:
+        raise WarehouseTwinLayoutEditError("删除请求缺少完整性指纹")
+
+    paths = _published_layout_paths(published_path)
+    published_source, published_target = paths.source, paths.target
+    draft_target = draft_path or TWIN_LAYOUT_DRAFT_PATH
+    with _LAYOUT_EDIT_LOCK:
+        snapshot = snapshot_warehouse_twin_publish_state(
+            published_path=published_target, draft_path=draft_target,
+        )
+        try:
+            published = _read_document(published_source)
+            published_floor = published.get("floors", {}).get(normalized)
+            if not isinstance(published_floor, dict):
+                raise WarehouseTwinLayoutEditNotFoundError(f"数字孪生平面缺少 {normalized}")
+
+            # Replay is checked before version comparison because a successful
+            # delete necessarily changes the published revision.
+            receipt = _find_receipt(
+                published_floor, normalized_key, "rack.delete.published"
+            )
+            if receipt is not None:
+                stored = dict(receipt.get("result") or {})
+                if stored.get("request_fingerprint") != request_fingerprint:
+                    raise WarehouseTwinLayoutEditConflictError("同一删除操作键不能用于不同请求")
+                replay_draft = _active_draft_document_unlocked(
+                    published_path=published_source, draft_path=draft_target, create=False,
+                )
+                replay_floor = (
+                    replay_draft.get("floors", {}).get(normalized)
+                    if replay_draft is not None else published_floor
+                )
+                if not isinstance(replay_floor, dict):
+                    raise WarehouseTwinLayoutEditError(f"布局草稿缺少 {normalized}")
+                return PublishedRackDeleteMutation(
+                    value={key: value for key, value in stored.items() if key != "request_fingerprint"},
+                    floor_revision=str(replay_floor.get("revision") or ""),
+                    published_revision=str(published_floor.get("revision") or ""),
+                    applied=False,
+                )
+            if str(published_floor.get("revision") or "") != str(expected_published_revision or ""):
+                raise WarehouseTwinLayoutEditConflictError("正式地图已更新，请刷新后重新删除")
+
+            active_draft = _active_draft_document_unlocked(
+                published_path=published_source, draft_path=draft_target, create=False,
+            )
+            effective_floor = (
+                active_draft.get("floors", {}).get(normalized)
+                if active_draft is not None else published_floor
+            )
+            if not isinstance(effective_floor, dict):
+                raise WarehouseTwinLayoutEditError(f"布局草稿缺少 {normalized}")
+            if str(effective_floor.get("revision") or "") != str(expected_revision or ""):
+                raise WarehouseTwinLayoutEditConflictError("布局草稿已更新，请刷新后重新删除")
+
+            matches = [
+                item for item in published_floor.get("racks") or []
+                if str(item.get("id") or "").strip() == normalized_id
+            ]
+            if len(matches) != 1 or not isinstance(matches[0], dict):
+                raise WarehouseTwinLayoutEditConflictError("正式地图中的货架身份已变化，请刷新后重新删除")
+            rack = matches[0]
+            _ensure_version(rack, expected_version, "正式货架")
+            if rack.get("is_locked"):
+                raise WarehouseTwinLayoutEditConflictError("货架已确认并锁定，必须先解除锁定")
+
+            result = {
+                "id": normalized_id,
+                "rack_code": rack.get("rack_code"),
+                "area_code": rack.get("area_code"),
+                "deleted": True,
+                "inventory_changed": False,
+                "published_map_changed": True,
+                "inactive_location_count": max(0, int(inactive_location_count)),
+                "request_fingerprint": request_fingerprint,
+            }
+            _retire_rack_in_floor(
+                published_floor, rack,
+                reason="管理员删除正式空货架；关联空货位已归档，库存与历史未改变",
+            )
+            _remember_receipt(
+                published_floor,
+                operation_key=normalized_key,
+                action="rack.delete.published",
+                result=result,
+            )
+            published_floor["layout_edited_at"] = _utc_iso()
+            published_floor["revision"] = _floor_revision(published_floor)
+            published["generated_at"] = published_floor["layout_edited_at"]
+
+            if active_draft is not None:
+                draft_floor = active_draft.get("floors", {}).get(normalized)
+                if not isinstance(draft_floor, dict):
+                    raise WarehouseTwinLayoutEditError(f"布局草稿缺少 {normalized}")
+                _retire_rack_in_floor(
+                    draft_floor, rack,
+                    reason="管理员删除正式空货架；关联空货位已归档，库存与历史未改变",
+                )
+                # The operation receipt belongs to the published action.  The
+                # draft keeps its own former edit receipts for unrelated work.
+                draft_floor["layout_edited_at"] = published_floor["layout_edited_at"]
+                draft_floor["revision"] = _floor_revision(draft_floor)
+                active_draft["generated_at"] = published_floor["layout_edited_at"]
+
+            _write_document(published_target, published)
+            written = _read_document(published_target)
+            written_floor = written.get("floors", {}).get(normalized)
+            if not isinstance(written_floor, dict) or not str(written_floor.get("revision") or ""):
+                raise WarehouseTwinLayoutEditError("正式货架删除后地图回读失败")
+            if any(
+                str(item.get("id") or "").strip() == normalized_id
+                for item in written_floor.get("racks") or []
+            ):
+                raise WarehouseTwinLayoutEditError("正式货架删除后仍存在目标货架")
+
+            if active_draft is not None:
+                meta = active_draft.get("draft_meta")
+                if not isinstance(meta, dict):
+                    raise WarehouseTwinLayoutEditError("高级维护草稿元数据缺失")
+                meta["status"] = "draft"
+                meta["updated_at"] = published_floor["layout_edited_at"]
+                meta["base_published_sha256"] = _path_sha256(published_target)
+                meta["base_floor_revisions"] = {
+                    code: str(item.get("revision") or "")
+                    for code, item in written.get("floors", {}).items()
+                    if isinstance(item, dict)
+                }
+                for key in (
+                    "validated_at", "validated_floor_revisions", "floor_validations",
+                    "validation_blockers", "validation_warnings", "published_at", "last_publish",
+                ):
+                    meta.pop(key, None)
+                _write_document(draft_target, active_draft)
+
+            response_value = {
+                key: value for key, value in result.items() if key != "request_fingerprint"
+            }
+            return PublishedRackDeleteMutation(
+                value=response_value,
+                floor_revision=(
+                    str((active_draft.get("floors", {}).get(normalized) or {}).get("revision") or "")
+                    if active_draft is not None
+                    else str(written_floor.get("revision") or "")
+                ),
+                published_revision=str(written_floor.get("revision") or ""),
+                applied=True,
+            )
+        except Exception:
+            restore_warehouse_twin_publish_state(snapshot)
+            raise
+
 def delete_warehouse_twin_feature(
     floor_code: str,
     feature_id: str,

@@ -43,7 +43,7 @@ global.axios={get:(...args)=>get(...args)};
  await load.call(replaced,true);waiting.resolve(page(1));await old;
  assert.deepEqual(replaced.customerOptions,[{id:700,name:'newer request'}]);
  const previousUser=state();previousUser.customerOptionsIdentity='9:9';previousUser.customerOptions=[{id:999,name:'previous user'}];
- get=async(_,{params})=>({data:{page:params.page,total:0,total_pages:1,items:[]}});await load.call(previousUser);
+ get=async(_,{params})=>({data:{page:params.page,total:0,total_pages:0,items:[]}});await load.call(previousUser);
  assert.deepEqual(previousUser.customerOptions,[],'another identity must not reuse the warm cache');
  console.log('PASS: pagination, complete cache, failures, permissions, session changes and stale responses');
 })().catch(error=>{console.error(error);process.exitCode=1;});

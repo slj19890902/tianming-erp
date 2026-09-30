@@ -16954,7 +16954,7 @@
                 });
                 if (!isCurrent()) return false;
                 const totalPages = Number(data?.total_pages ?? 1);
-                if (!Array.isArray(data?.items) || !Number.isInteger(totalPages) || totalPages < 1
+                if (!Array.isArray(data?.items) || !Number.isInteger(totalPages) || totalPages < 0
                     || (data.page !== undefined && Number(data.page) !== page)) {
                   throw new Error("客户列表分页数据异常，请重试");
                 }

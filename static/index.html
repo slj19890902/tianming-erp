@@ -3194,7 +3194,7 @@
             <button v-for="item in menus" :key="item.key" :class="['menu-item', {active: isMenuActive(item.key)}]" @click="goMenu(item.key)">
               <span class="menu-item-inner"><span class="menu-icon" v-html="navIcon(item.key)"></span><span>{{ item.label }}</span></span>
               <span v-if="item.count !== undefined" class="menu-count-summary" :title="item.countDetails || `${item.countLabel || '数量'} ${item.count}`">
-                <span class="status">{{ item.countLabel || '数量' }} {{ item.count }}</span>
+                <span class="status">{{ item.countLabel || '数量' }} {{ item.count }}{{ item.countUnit || '' }}</span>
               </span>
             </button>
           </aside>
@@ -11863,17 +11863,22 @@
             return this.navigationGroups.find(group => group.pages.some(page => page.key === this.activePage)) || null;
           },
           menus() {
+            const workload = (key, label) => {
+              if (this.overviewLoading || this.overviewError) return {};
+              const card = (this.overview?.cards || []).find(row => row.key === key);
+              if (!card || typeof card.count !== "number" || !Number.isSafeInteger(card.count)
+                  || card.count < 0 || !String(card.count_unit || "").trim()) return {};
+              return {
+                count:card.count, countLabel:label, countUnit:card.count_unit,
+                countDetails:`首页统计：${label} ${card.count} ${card.count_unit}；返回首页刷新`,
+              };
+            };
             const items = [
               { key: "dashboard", label: "首页" },
-              {
-                key: "workbench", label: "订单主链",
-                count: this.ordersUnfinishedTotal + this.requisitionPendingOverallTotal + this.incomingPendingTotal,
-                countLabel: "待办",
-                countDetails: `订单 ${this.ordersUnfinishedTotal}｜报料 ${this.requisitionPendingOverallTotal}｜纸板待入库 ${this.incomingPendingTotal}`,
-              },
-              { key: "production", label: "生产与成品", count: this.productionPlacementPendingTotal },
+              { key: "workbench", label: "订单主链", ...workload("pending_material", "待报料") },
+              { key: "production", label: "生产与成品", ...workload("pending_production", "待生产") },
               { key: "warehouse", label: "仓库" },
-              { key: "deliveries", label: "送货与回单", count: this.deliveriesTotal },
+              { key: "deliveries", label: "送货与回单", ...workload("pending_delivery", "待送货") },
               { key: "finance", label: "对账与开票" },
               { key: "master", label: "主数据" },
               { key: "system_hub", label: "系统管理" }
@@ -15956,6 +15961,9 @@
             }
           },
           resetPagePerformanceState() {
+            this.overview = { cards: [], todos: [], summary: {} };
+            this.overviewError = "";
+            this.overviewLoading = false;
             this.customerOptions = [];
             this.customerOptionsIdentity = "";
             this.orderHistoryOpening = null;

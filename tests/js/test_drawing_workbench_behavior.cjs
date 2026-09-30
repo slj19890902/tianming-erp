@@ -79,6 +79,11 @@ assert.notEqual(stableState(state),stableState({...state,publication:{customer_n
   retry.state.parameters.slot_width_mm=99;retry.bindPaper();
   assert.equal(retry.state.parameters.slot_width_mm,7);
   assert.equal(retry.state.editorState.slot_width_mode,'flute');
+  const reopened=new Workbench({productId:1,canEdit:true});
+  reopened.context={product:{version:11},template_defaults:{slotted_v1:{slot_width_mm:3}},paper:{flute:'B',thickness_mm:3,source:'flute'},draft:{design_version:8,template_key:'slotted_v1',parameters:{panel_1_mm:'100',slot_width_mm:'3'},editor_state:{assembly:null,dimension_basis:'dieline',local_overrides:{},schema_version:'drawing-workbench-v1',slot_width_mode:'flute'}}};
+  reopened.managed={draft:{version:8,thickness_mm:'3',thickness_source:'flute'}};
+  reopened.initState();assert.equal(reopened.dirty(),false,'reopening saved numeric strings must not require another save');
+  reopened.state.publication.customer_number='0001';assert.equal(reopened.dirty(),true,'numeric-looking customer identifiers must not be normalized');
   delete global.axios;
   console.log('drawing workbench behavior checks passed');
 })().catch(error=>{console.error(error);process.exitCode=1});

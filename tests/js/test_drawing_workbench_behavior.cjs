@@ -30,6 +30,8 @@ assert.equal(payload.thickness_mm,4.5);
 assert.equal(payload.customer_number,'DRAW-9');
 assert.equal(payload.parameters.__drawing_workbench_v1,undefined,'UI must not inject metadata into numeric parameters');
 assert.equal(payload.editor_state.dimension_basis,'inner');
+payload.editor_state.local_overrides.panel_1_mm.value_mm=999;
+assert.equal(state.editorState.local_overrides.panel_1_mm.value_mm,100,'pending save payload must not alias live editor state');
 assert.notStrictEqual(payload.print_objects,existing.draft.print_objects);
 assert.equal(stableState(state),stableState(JSON.parse(JSON.stringify(state))));
 const baseline={productVersion:11,designVersion:7,userKey:'admin-3'};

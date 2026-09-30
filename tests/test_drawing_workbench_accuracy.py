@@ -57,6 +57,8 @@ def test_dimension_selection_maps_to_real_parameters_and_individual_slots():
         bindings={ref for item in payload['editable_dimensions'] for ref in item['geometry_refs']['dimension_ids']}
         assert bindings == {d['id'] for d in payload['geometry']['dimension_index']}
     changed=build_geometry('partition_v1',{**PARTITION,'slot_1_position_mm':80})
+    assert changed['dimensions']['默认首槽中心距']=='70'
+    assert changed['dimensions']['第1槽中心距']=='80'
     assert changed['cut'][1]['x1']=='77'
     points=[(float(l['x1']),float(l['y1'])) for l in changed['cut']]
     area=abs(sum(a[0]*b[1]-a[1]*b[0] for a,b in zip(points,points[1:]+points[:1])))/2

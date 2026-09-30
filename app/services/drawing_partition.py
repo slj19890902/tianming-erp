@@ -34,7 +34,7 @@ def partition_geometry(params):
         points = [(x,height-y) for x,y in points]
     cuts = _polyline(points)
     dimensions = {"隔板长": plain(length), "隔板高": plain(height), "槽宽": plain(width),
-                  "槽深": plain(depth), "槽中心间距": plain(pitch), "首槽中心距": plain(offset)}
+                  "槽深": plain(depth), "默认槽中心间距": plain(pitch), "默认首槽中心距": plain(offset)}
     gap = max(length,height)/20
     specs = [("length_mm","隔板长","x",z,length), ("height_mm","隔板高","y",z,height),
              ("slot_width_mm","槽宽","x",centres[0]-width/2,centres[0]+width/2),

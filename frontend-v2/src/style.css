@@ -1,0 +1,348 @@
+/* ============================================================
+ * 天明包装 ERP v2 · 深色科技感主题
+ * 基底：深空蓝黑 #070b14 / #0b1220
+ * 强调：青蓝渐变 #22d3ee → #3b82f6
+ * ============================================================ */
+
+:root {
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", Arial, sans-serif;
+  font-size: 15px;
+  color: #dbe7f5;
+  background: #070b14;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  /* v2 设计变量 */
+  --tm-bg-0: #070b14;
+  --tm-bg-1: #0b1220;
+  --tm-bg-2: #101a2e;
+  --tm-bg-3: #16233c;
+  --tm-line: rgba(120, 170, 230, 0.16);
+  --tm-line-strong: rgba(120, 170, 230, 0.32);
+  --tm-text: #dbe7f5;
+  --tm-text-dim: #8ea3bf;
+  --tm-text-faint: #5c6f8c;
+  --tm-accent-a: #22d3ee;
+  --tm-accent-b: #3b82f6;
+  --tm-accent-gradient: linear-gradient(135deg, #22d3ee 0%, #3b82f6 100%);
+  --tm-glow: 0 0 24px rgba(56, 189, 248, 0.28);
+  --tm-danger: #f87171;
+  --tm-warn: #fbbf24;
+  --tm-ok: #34d399;
+  --tm-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --tm-radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(1100px 500px at 85% -10%, rgba(59, 130, 246, 0.14), transparent 60%),
+    radial-gradient(900px 480px at -10% 110%, rgba(34, 211, 238, 0.1), transparent 60%),
+    var(--tm-bg-0);
+  color: var(--tm-text);
+}
+
+/* 微妙网格底纹（登录页 / 空状态装饰用） */
+.tm-grid-bg {
+  background-image:
+    linear-gradient(rgba(120, 170, 230, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 170, 230, 0.055) 1px, transparent 1px);
+  background-size: 34px 34px;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+/* ---------- 通用布局 ---------- */
+.tm-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 100%;
+}
+
+.tm-card {
+  background: linear-gradient(180deg, rgba(22, 35, 60, 0.72), rgba(11, 18, 32, 0.86));
+  border: 1px solid var(--tm-line);
+  border-radius: var(--tm-radius);
+  box-shadow: 0 8px 28px rgba(2, 6, 16, 0.55);
+  backdrop-filter: blur(10px);
+}
+
+.tm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+}
+
+.tm-section-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #f0f6ff;
+}
+
+.tm-section-title::before {
+  content: "";
+  display: inline-block;
+  width: 4px;
+  height: 16px;
+  margin-right: 8px;
+  border-radius: 2px;
+  background: var(--tm-accent-gradient);
+  box-shadow: var(--tm-glow);
+  vertical-align: -2px;
+}
+
+.tm-muted {
+  color: var(--tm-text-dim);
+  font-size: 13px;
+}
+
+.tm-mono {
+  font-family: var(--tm-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Element Plus 深色覆盖 ---------- */
+/* Element Plus 的 dark 模式 CSS 变量已在 main.ts 引入，这里做品牌微调 */
+html.dark {
+  --el-bg-color: #0b1220;
+  --el-bg-color-page: #070b14;
+  --el-bg-color-overlay: #101a2e;
+  --el-text-color-primary: #dbe7f5;
+  --el-text-color-regular: #b9c9e2;
+  --el-text-color-secondary: #8ea3bf;
+  --el-border-color: rgba(120, 170, 230, 0.16);
+  --el-border-color-light: rgba(120, 170, 230, 0.12);
+  --el-border-color-lighter: rgba(120, 170, 230, 0.09);
+  --el-fill-color-blank: #101a2e;
+  --el-fill-color-light: #16233c;
+  --el-mask-color: rgba(4, 8, 18, 0.72);
+  --el-color-primary: #38bdf8;
+  --el-color-primary-light-3: #7dd3fc;
+  --el-color-primary-dark-2: #0284c7;
+}
+
+html.dark .el-card {
+  background: linear-gradient(180deg, rgba(22, 35, 60, 0.72), rgba(11, 18, 32, 0.86));
+  border-color: var(--tm-line);
+}
+
+html.dark .el-dialog {
+  background: linear-gradient(180deg, #101a2e, #0b1220);
+  border: 1px solid var(--tm-line-strong);
+  box-shadow: 0 24px 70px rgba(2, 6, 16, 0.8), var(--tm-glow);
+}
+
+html.dark .el-dialog__title {
+  color: #f0f6ff;
+  font-weight: 800;
+}
+
+html.dark .el-drawer {
+  background: #0b1220;
+  border-left: 1px solid var(--tm-line-strong);
+}
+
+html.dark .el-drawer__header {
+  color: #f0f6ff;
+  font-weight: 800;
+}
+
+html.dark .el-tabs--border-card {
+  background: transparent;
+  border: 1px solid var(--tm-line);
+}
+
+html.dark .el-tabs--border-card > .el-tabs__header {
+  background: rgba(16, 26, 46, 0.8);
+  border-bottom-color: var(--tm-line);
+}
+
+html.dark .el-tabs--border-card > .el-tabs__header .el-tabs__item.is-active {
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.16), rgba(59, 130, 246, 0.1));
+  border-bottom: 2px solid var(--tm-accent-a);
+  color: #a5f3fc;
+}
+
+html.dark .el-input__wrapper,
+html.dark .el-textarea__inner,
+html.dark .el-select__wrapper {
+  background: rgba(7, 11, 20, 0.72);
+  border: 1px solid var(--tm-line);
+  box-shadow: none;
+  color: var(--tm-text);
+}
+
+html.dark .el-input__wrapper.is-focus,
+html.dark .el-select__wrapper.is-focused {
+  border-color: var(--tm-accent-a);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.45), var(--tm-glow);
+}
+
+html.dark .el-input__inner,
+html.dark .el-textarea__inner {
+  color: var(--tm-text);
+}
+
+html.dark .el-form-item__label {
+  color: var(--tm-text-dim);
+}
+
+html.dark .el-button--primary {
+  background: var(--tm-accent-gradient);
+  border: none;
+  font-weight: 700;
+  box-shadow: var(--tm-glow);
+}
+
+html.dark .el-button--primary:hover {
+  filter: brightness(1.12);
+}
+
+html.dark .el-button--success {
+  font-weight: 700;
+}
+
+html.dark .el-tag {
+  border-color: var(--tm-line-strong);
+}
+
+html.dark .el-empty__description p {
+  color: var(--tm-text-dim);
+}
+
+html.dark .el-loading-mask {
+  background: rgba(7, 11, 20, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+html.dark .el-message-box {
+  background: #101a2e;
+  border: 1px solid var(--tm-line-strong);
+}
+
+/* ---------- vxe-table 深色覆盖 ---------- */
+html.dark .vxe-table {
+  background: transparent;
+  color: var(--tm-text);
+}
+
+html.dark .vxe-table .vxe-header--column {
+  background: linear-gradient(180deg, #16233c, #101a2e) !important;
+  color: #a5f3fc !important;
+  font-weight: 800;
+  border-bottom: 1px solid var(--tm-line-strong) !important;
+}
+
+html.dark .vxe-table .vxe-body--column {
+  border-bottom: 1px solid var(--tm-line) !important;
+  color: var(--tm-text);
+}
+
+html.dark .vxe-table .vxe-body--row.row--stripe {
+  background: rgba(22, 35, 60, 0.38);
+}
+
+html.dark .vxe-table .vxe-body--row.row--hover {
+  background: rgba(56, 189, 248, 0.1) !important;
+}
+
+html.dark .vxe-table .vxe-table--border-line {
+  border-color: var(--tm-line);
+}
+
+html.dark .vxe-pager {
+  background: transparent;
+  color: var(--tm-text-dim);
+}
+
+html.dark .vxe-pager .vxe-pager--jump .vxe-input__inner {
+  background: rgba(7, 11, 20, 0.72);
+  color: var(--tm-text);
+  border-color: var(--tm-line);
+}
+
+/* vxe-table 的 loading 与空状态 */
+html.dark .vxe-table .vxe-loading--spinner {
+  border-color: var(--tm-accent-a);
+}
+
+/* ---------- 数字徽标 / 状态 ---------- */
+.tm-kpi {
+  position: relative;
+  overflow: hidden;
+  padding: 16px 18px;
+  border-radius: var(--tm-radius);
+  background: linear-gradient(160deg, rgba(22, 35, 60, 0.9), rgba(11, 18, 32, 0.9));
+  border: 1px solid var(--tm-line);
+}
+
+.tm-kpi::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(320px 120px at 90% 0%, rgba(34, 211, 238, 0.16), transparent 70%);
+}
+
+.tm-kpi .kpi-label {
+  color: var(--tm-text-dim);
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+
+.tm-kpi .kpi-value {
+  margin-top: 6px;
+  font-family: var(--tm-mono);
+  font-size: 30px;
+  font-weight: 700;
+  background: var(--tm-accent-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.tm-kpi.warn .kpi-value {
+  background: linear-gradient(135deg, #fbbf24, #f97316);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+.tm-kpi.danger .kpi-value {
+  background: linear-gradient(135deg, #f87171, #ef4444);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+/* ---------- 打印 ---------- */
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}

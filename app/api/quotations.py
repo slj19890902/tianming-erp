@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import (
     PermissionChecker,
+    customer_scope_ids,
     get_db,
     has_permission,
+    has_unrestricted_customer_access,
     require_customer_access,
 )
 from app.models.company_config import CompanyConfig
@@ -580,6 +582,10 @@ def list_quotations(
     if customer_id is not None:
         require_customer_access(customer_id, current_user=user, db=db)
         query = query.where(QuotationOrder.customer_id == customer_id)
+    elif not has_unrestricted_customer_access(user, db):
+        query = query.where(
+            QuotationOrder.customer_id.in_(customer_scope_ids(user, db))
+        )
     if status_filter:
         query = query.where(QuotationOrder.status == status_filter)
     quotations = db.scalars(
@@ -588,22 +594,9 @@ def list_quotations(
             QuotationOrder.id.desc(),
         )
     ).all()
-    visible_quotations = []
-    for quotation in quotations:
-        try:
-            require_customer_access(
-                quotation.customer_id,
-                current_user=user,
-                db=db,
-            )
-        except HTTPException as error:
-            if error.status_code == status.HTTP_403_FORBIDDEN:
-                continue
-            raise
-        visible_quotations.append(quotation)
     return {
-        "items": [_quotation_dict(row, user) for row in visible_quotations],
-        "total": len(visible_quotations),
+        "items": [_quotation_dict(row, user) for row in quotations],
+        "total": len(quotations),
     }
 
 

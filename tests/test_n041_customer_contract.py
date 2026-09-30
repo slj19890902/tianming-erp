@@ -157,7 +157,7 @@ def test_contract_draft_confirm_convert_once_and_audit(tmp_path):
     assert client.request(
         "DELETE",
         f"/api/contracts/{contract['id']}",
-        json={"confirm_text": "我确认删除合同"},
+        json={"confirm_text": "我确认删除合同", "expected_version": 3},
     ).status_code == 409
 
     first = client.post(
@@ -278,7 +278,9 @@ def test_contract_defaults_po_and_delivery_to_contract_business_defaults(tmp_pat
 
 
 def test_contract_rejects_other_customer_product_and_requires_delete_text(tmp_path):
-    client, _factory, ids = _contract_test_client(tmp_path)
+    from app.models.customer_contract import CustomerContract, CustomerContractItem
+
+    client, factory, ids = _contract_test_client(tmp_path)
     wrong = client.post("/api/contracts", json=_payload(ids, product_id=ids["other_product_id"]))
     assert wrong.status_code == 400
 
@@ -286,11 +288,125 @@ def test_contract_rejects_other_customer_product_and_requires_delete_text(tmp_pa
     assert created.status_code == 201
     contract_id = created.json()["id"]
     assert client.request(
-        "DELETE", f"/api/contracts/{contract_id}", json={"confirm_text": "确认"}
+        "DELETE",
+        f"/api/contracts/{contract_id}",
+        json={"confirm_text": "我确认删除合同"},
+    ).status_code == 422
+    assert client.request(
+        "DELETE",
+        f"/api/contracts/{contract_id}",
+        json={"confirm_text": "确认", "expected_version": created.json()["version"]},
     ).status_code == 400
     deleted = client.request(
         "DELETE",
         f"/api/contracts/{contract_id}",
-        json={"confirm_text": "我确认删除合同"},
+        json={
+            "confirm_text": "我确认删除合同",
+            "expected_version": created.json()["version"],
+        },
     )
     assert deleted.status_code == 200
+    with factory() as db:
+        assert db.get(CustomerContract, contract_id) is None
+        assert db.query(CustomerContractItem).filter_by(contract_id=contract_id).count() == 0
+
+
+def test_contract_delete_rejects_stale_version_and_preserves_latest_draft(tmp_path):
+    from app.models.audit import OperationLog
+    from app.models.customer_contract import CustomerContract, CustomerContractItem
+
+    client, factory, ids = _contract_test_client(tmp_path)
+    created = client.post("/api/contracts", json=_payload(ids))
+    assert created.status_code == 201
+    stale = created.json()
+
+    updated_payload = _payload(ids)
+    updated_payload["expected_version"] = stale["version"]
+    updated_payload["remarks"] = "另一操作员已保存的新内容"
+    updated_payload["items"][0]["quantity"] = 12
+    updated = client.put(f"/api/contracts/{stale['id']}", json=updated_payload)
+    assert updated.status_code == 200
+    assert updated.json()["version"] == 2
+
+    rejected = client.request(
+        "DELETE",
+        f"/api/contracts/{stale['id']}",
+        json={
+            "confirm_text": "我确认删除合同",
+            "expected_version": stale["version"],
+        },
+    )
+    assert rejected.status_code == 409
+    assert "刷新" in rejected.json()["detail"]
+
+    with factory() as db:
+        contract = db.get(CustomerContract, stale["id"])
+        assert contract is not None
+        assert contract.version == 2
+        assert contract.remarks == "另一操作员已保存的新内容"
+        items = db.query(CustomerContractItem).filter_by(contract_id=stale["id"]).all()
+        assert len(items) == 1
+        assert items[0].quantity == 12
+        delete_audits = db.query(OperationLog).filter(
+            OperationLog.entity_type == "customer_contract",
+            OperationLog.entity_id == stale["id"],
+            OperationLog.action == "DELETE",
+        ).all()
+        assert delete_audits == []
+
+
+def test_contract_delete_cas_rejects_change_after_initial_read(tmp_path, monkeypatch):
+    from sqlalchemy import update
+
+    from app.api import contracts as contracts_api
+    from app.models.audit import OperationLog
+    from app.models.customer_contract import CustomerContract
+
+    client, factory, ids = _contract_test_client(tmp_path)
+    created = client.post("/api/contracts", json=_payload(ids))
+    assert created.status_code == 201
+    draft = created.json()
+
+    original_require_customer_access = contracts_api.require_customer_access
+    injected = False
+
+    def update_after_initial_read(customer_id, current_user, db):
+        nonlocal injected
+        result = original_require_customer_access(
+            customer_id, current_user=current_user, db=db
+        )
+        if not injected:
+            injected = True
+            with factory() as concurrent_db:
+                concurrent_db.execute(
+                    update(CustomerContract)
+                    .where(CustomerContract.id == draft["id"])
+                    .values(version=2, remarks="并发保存发生在删除初读之后")
+                )
+                concurrent_db.commit()
+        return result
+
+    monkeypatch.setattr(
+        contracts_api, "require_customer_access", update_after_initial_read
+    )
+    rejected = client.request(
+        "DELETE",
+        f"/api/contracts/{draft['id']}",
+        json={
+            "confirm_text": "我确认删除合同",
+            "expected_version": draft["version"],
+        },
+    )
+    assert rejected.status_code == 409
+    assert "刷新" in rejected.json()["detail"]
+
+    with factory() as db:
+        contract = db.get(CustomerContract, draft["id"])
+        assert contract is not None
+        assert contract.version == 2
+        assert contract.remarks == "并发保存发生在删除初读之后"
+        assert db.query(OperationLog).filter(
+            OperationLog.entity_type == "customer_contract",
+            OperationLog.entity_id == draft["id"],
+            OperationLog.action == "DELETE",
+        ).count() == 0

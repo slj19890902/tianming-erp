@@ -102,6 +102,8 @@ def test_contract_mutations_freeze_targets_and_report_refresh_partial_success() 
         assert "await this.refreshContractHistoryAfterMutation(" in body
     assert "target.version" in confirm_body
     assert "target.version" in convert_body
+    assert "target.version" in delete_body
+    assert "expected_version:target.version" in delete_body
     assert "target.idempotencyKey" in convert_body
     assert "不要重复操作" in refresh_body
     assert "请手动刷新核对" in refresh_body
@@ -133,6 +135,38 @@ const row={{id:7,version:3,contract_no:"CT-007"}};
   if(calls[0].url!=="/api/contracts/7/convert-order")throw new Error("contract id was not frozen");
   if(calls[0].payload.expected_version!==3||calls[0].payload.idempotency_key!=="frozen-key")throw new Error("version or idempotency key was not frozen");
   if(!messages[0].includes("TM-001"))throw new Error("committed conversion message was lost");
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path)
+
+
+def test_delete_contract_runtime_freezes_version_and_preserves_draft_on_conflict(tmp_path: Path) -> None:
+    body = _method_body("async deleteContract(row) {", "async confirmContract(row) {")
+    script = f"""
+const body={json.dumps(body, ensure_ascii=False)};
+const calls=[],toasts=[];
+let rejectDelete;
+const axios={{delete:(url,options)=>{{calls.push({{url,options}});return new Promise((resolve,reject)=>{{rejectDelete=reject;}});}}}};
+const factory=new Function("axios","return async function(row) {{"+body+"}}");
+const vm={{
+  contractDraft:{{id:7,version:3,remarks:"保留当前编辑内容"}},
+  runContractAction:async({{task}})=>{{try{{return await task();}}catch(error){{vm.showToast(vm.errorMessage(error),true);return false;}}}},
+  newContractDraft(){{throw new Error("conflict cleared the current draft");}},
+  refreshContractHistoryAfterMutation(){{throw new Error("conflict refreshed after an uncommitted delete");}},
+  showToast:(message,isError)=>toasts.push({{message,isError}}),
+  errorMessage:error=>error.response.data.detail,
+}};
+const row={{id:7,version:3,contract_no:"CT-007"}};
+(async()=>{{
+  const pending=factory(axios).bind(vm)(row);
+  row.id=99;row.version=88;row.contract_no="CHANGED";
+  rejectDelete({{response:{{status:409,data:{{detail:"合同已被其他操作更新，请刷新后重新确认删除"}}}}}});
+  const result=await pending;
+  if(result!==false)throw new Error("delete conflict was reported as success");
+  if(calls.length!==1||calls[0].url!=="/api/contracts/7")throw new Error("contract id was not frozen");
+  if(calls[0].options.data.expected_version!==3)throw new Error("contract version was not frozen");
+  if(vm.contractDraft.remarks!=="保留当前编辑内容")throw new Error("draft content changed after conflict");
+  if(toasts.length!==1||!toasts[0].isError||!toasts[0].message.includes("刷新"))throw new Error("conflict refresh guidance was not shown");
 }})().catch(error=>{{console.error(error);process.exit(1);}});
 """
     _run_node(script, tmp_path)

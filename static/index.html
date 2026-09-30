@@ -26523,13 +26523,14 @@
           async deleteContract(row) {
             const target = {
               id:Number(row.id),
+              version:Number(row.version || 1),
               contractNo:String(row.contract_no || "草稿"),
             };
             return this.runContractAction({
               action:"delete", contractId:target.id,
               confirmMessage:`确认删除合同 ${target.contractNo} 吗？`,
               task:async() => {
-                await axios.delete(`/api/contracts/${target.id}`, { data:{ confirm_text:"我确认删除合同" } });
+                await axios.delete(`/api/contracts/${target.id}`, { data:{ confirm_text:"我确认删除合同", expected_version:target.version } });
                 this.newContractDraft();
                 await this.refreshContractHistoryAfterMutation("合同草稿已删除");
                 return true;

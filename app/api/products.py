@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.business_transaction import commit_business_change
+
 import json
 import math
 import os
@@ -2656,7 +2658,7 @@ def _update_product(product_id, payload, db, user, *, commit=True) -> dict:
             product.manual_modified = True
             product.manual_modified_at = beijing_now_naive()
         if commit:
-            db.commit()
+            commit_business_change(db)
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(

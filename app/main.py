@@ -1008,6 +1008,11 @@ def create_app() -> FastAPI:
             prefix="/api/system",
             tags=["system"],
         )
+    from app.services.business_visibility import BusinessVisibilityMiddleware
+    application.add_middleware(BusinessVisibilityMiddleware)
+    from app.api.business_approvals import router as business_approvals_router
+    if not any(route.path == "/api/business-approvals" for route in application.routes):
+        application.include_router(business_approvals_router, prefix="/api/business-approvals", tags=["approvals"])
     if not any(route.path == "/api/pdf-training/stats" for route in application.routes):
         application.include_router(
             pdf_training_router,

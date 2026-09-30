@@ -5,6 +5,7 @@ tax bureau and never treats a download as an issued invoice.
 """
 
 from __future__ import annotations
+from app.services.business_transaction import commit_business_change
 
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -1322,7 +1323,7 @@ def confirm_statement_for_invoice(
     statement.confirmed_at = datetime.now()
     statement.version += 1
     _audit(db, user=user, action="CONFIRM_FINANCE_STATEMENT", resource="Statement", entity_id=statement.id, customer=customer, details={"statement_number": statement.statement_number, "version": statement.version}, description="核对并确认月结对账单")
-    db.commit()
+    commit_business_change(db)
     return {
         "id": statement.id,
         "confirmation_status": statement.confirmation_status,

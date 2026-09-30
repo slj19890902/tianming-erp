@@ -3177,6 +3177,7 @@
               <span :class="{warning:warehouseTwinMetrics.column_conflicts>0}"><b>{{ warehouseTwinMetrics.column_conflicts }}</b>柱子冲突</span>
             </div></details>
             <button v-if="pageAllowed('warehouse')" type="button" :class="['btn','primary','topbar-warehouse-entry',{active:activePage==='warehouse'}]" :aria-current="activePage==='warehouse' ? 'page' : null" title="进入仓库页面" @click="goMenu('warehouse')"><span aria-hidden="true" v-html="navIcon('warehouse')"></span><span>仓库</span></button>
+            <button v-if="canSubmitBusinessRequest || ['admin','boss'].includes(user.role)" class="btn small" @click="openBusinessRequests()">{{ ['admin','boss'].includes(user.role) ? "审批中心" : "业务申请" }}</button>
             <details v-if="activePage==='warehouse'" class="warehouse-account-menu"><summary>{{ user.real_name || user.username }} · {{ roleLabel(user.role) }}</summary><div>
               <button type="button" class="btn small" :disabled="uiModeSaving" @click="setUiMode(uiMode==='large'?'standard':'large')">{{ uiMode==='large'?'切换标准字号':'切换大字' }}</button>
               <button type="button" class="btn small" @click="openChangePassword()">修改密码</button>
@@ -3407,9 +3408,9 @@
                             <span v-if="item.is_virtual_composite_parent">本次补料 {{ item.suggested_new_requisition_finished_quantity }} 套 · 子件纸板 {{ item.suggested_new_requisition_sheet_quantity }} 张</span><span v-else-if="item.procurement_mode==='external_purchase'">本次建议备库 <strong>{{ item.suggested_new_requisition_finished_quantity }}</strong> 个成品</span><span v-else>本次新报 <strong>{{ item.suggested_new_requisition_sheet_quantity }}</strong> 张</span>
                           </div>
                           <div class="low-stock-detail-actions">
-                            <button v-if="canRequisition && (item.procurement_mode!=='external_purchase' || (canAdmin && canViewCosts))" class="btn small success" :disabled="!item.draft_ready || !Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0)" @click="openLowStockReplenishment(item)">{{ Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0) ? (item.is_virtual_composite_parent ? `建议报料 ${item.suggested_new_requisition_finished_quantity} 套` : item.procurement_mode==='external_purchase' ? `建议采购备库 ${item.suggested_new_requisition_finished_quantity} 个` : `建议报料 ${item.suggested_new_requisition_sheet_quantity} 张`) : item.replenishment_state==='board_preparation_ready' ? '已有备料，待生产' : item.replenishment_state==='already_ordered' ? (item.procurement_mode==='external_purchase' ? '已采购，待到货' : '已报料，待到货') : '无需再报料' }}</button>
+                            <button v-if="(canRequisition || canSubmitBusinessRequest) && (canSubmitBusinessRequest || item.procurement_mode!=='external_purchase' || (canAdmin && canViewCosts))" class="btn small success" :disabled="!item.draft_ready || !Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0)" @click="openLowStockReplenishment(item)">{{ Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0) ? (item.is_virtual_composite_parent ? `建议报料 ${item.suggested_new_requisition_finished_quantity} 套` : item.procurement_mode==='external_purchase' ? `建议采购备库 ${item.suggested_new_requisition_finished_quantity} 个` : `建议报料 ${item.suggested_new_requisition_sheet_quantity} 张`) : item.replenishment_state==='board_preparation_ready' ? '已有备料，待生产' : item.replenishment_state==='already_ordered' ? (item.procurement_mode==='external_purchase' ? '已采购，待到货' : '已报料，待到货') : '无需再报料' }}</button>
                             <button class="btn small primary" @click="openLowStockLocations(item)">查看库存位置</button>
-                            <button v-if="canRequisition" class="btn small" @click="openProductStockPolicy(item)">修改预警</button>
+                            <button v-if="canRequisition || canEditStockAlerts" class="btn small" @click="openProductStockPolicy(item)">修改预警</button>
                           </div>
                         </div>
                       </div>
@@ -3742,7 +3743,7 @@
                   <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
                   <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="runExplicitPageListLoad('products')">重试</button></div>
                   <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div><div v-if="row.customer_document?.customer_product_name">用途：{{ row.customer_document.customer_product_name }}</div><span v-if="row.customer_document?.missing_labels?.length" class="status orange">{{ row.customer_document.missing_labels.join('、') }}待核对</span><span v-else class="status green">送货资料已具备</span></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="canRequisition && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div><div v-if="row.customer_document?.customer_product_name">用途：{{ row.customer_document.customer_product_name }}</div><span v-if="row.customer_document?.missing_labels?.length" class="status orange">{{ row.customer_document.missing_labels.join('、') }}待核对</span><span v-else class="status green">送货资料已具备</span></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <data-panel v-else-if="productTab === 'suppliers'" :empty="false">
@@ -5848,7 +5849,7 @@
                       </label>
                     </div>
                   </div>
-                  <div class="section-title">客户范围</div>
+                  <div class="section-title">客户范围 <button v-if="!permissionProfile.customer_scope_locked" class="btn small" :disabled="permissionSaving" @click="applyScopedBusinessProfile()">指定客户业务模板</button></div>
                   <div v-if="permissionProfile.customer_scope_locked" class="status blue" style="display:block;margin:12px 0">管理员与老板角色固定可访问全部客户。</div>
                   <div v-if="!permissionProfile.customer_scope_locked" class="toolbar-group" style="padding:12px 0">
                     <label><input type="radio" value="all" v-model="permissionDraft.customer_access_mode" :disabled="permissionSaving" /> 全部客户</label>
@@ -11681,7 +11682,7 @@
           canAdjustReconciliationPeriod() { return this.hasPermission("finance.return_receipt.period.adjust"); },
           canManageCustomerCharges() { return this.hasPermission("finance.customer_charge.manage"); },
           canConfirmCustomerCharges() { return this.hasPermission("finance.customer_charge.confirm"); },
-          canViewInvoiceTasks() { return this.hasPermission("finance.view") && (this.hasPermission("finance.invoice_task.generate") || this.hasPermission("finance.invoice_result.register")); },
+          canViewInvoiceTasks() { return this.hasPermission("finance.view") && (this.canSubmitBusinessRequest || this.hasPermission("finance.invoice_task.generate") || this.hasPermission("finance.invoice_result.register")); },
           canConfirmStatement() { return this.hasPermission("finance.statement.confirm"); },
           canGenerateInvoiceTask() { return this.hasPermission("finance.invoice_task.generate"); },
           canConfirmInvoiceTask() { return this.hasPermission("finance.invoice_task.generate"); },
@@ -11690,6 +11691,8 @@
           canManageInvoiceAttachment() { return this.hasPermission("finance.invoice_attachment.manage"); },
           canDelivery() { return this.hasPermission("deliveries.execute"); },
           canRequisition() { return this.hasPermission("requisition.execute"); },
+          canSubmitBusinessRequest() { return this.hasPermission("business_requests.submit"); },
+          canEditStockAlerts() { return this.hasPermission("warehouse.alerts.edit"); },
           canWarehouseReserve() { return this.hasPermission("warehouse.reserve"); },
           permissionGroups() {
             const groups = {};
@@ -11833,7 +11836,7 @@
             if (this.modal.type === "requisition") return this.canRequisition;
             if (this.modal.type === "supplierRequisitionDraft") return this.canRequisition;
             if (this.modal.type === "stockReplenishment") return this.canRequisition;
-            if (this.modal.type === "finishedStockPolicy") return this.canRequisition;
+            if (this.modal.type === "finishedStockPolicy") return this.canRequisition || this.canEditStockAlerts;
             if (this.modal.type === "receipt") return this.canFinance;
             if (this.modal.type === "password") return true;
             if (this.modal.type === "resetPassword") return this.user?.role === "admin";
@@ -20012,6 +20015,7 @@
             this.lowStockExpandedCustomers[key] = !this.lowStockExpandedCustomers[key];
           },
           async openLowStockReplenishment(item) {
+            if (this.canSubmitBusinessRequest && !this.canRequisition) { this.openBusinessRequests(item); return; }
             if (!Number(item?.suggested_new_requisition_sheet_quantity || 0)) {
               const message = item?.replenishment_state === "board_preparation_ready"
                 ? "已有客户专用纸板备料，当前无需重复报料，请按订单安排生产"
@@ -25784,6 +25788,9 @@
               }
             }
           },
+          async applyScopedBusinessProfile() {
+            try { const {data} = await axios.get("/api/business-approvals/profile"); this.permissionDraft.permissions = data.overrides; this.permissionDraft.customer_access_mode = "selected"; } catch(error) { this.showToast(this.errorMessage(error),true); }
+          },
           permissionCatalogSeed() {
             const rows = [
               ["customers", "客户查看", "customers.view"], ["customers", "客户新增", "customers.create"], ["customers", "客户编辑", "customers.edit"], ["customers", "客户停用", "customers.deactivate"], ["customers", "客户删除", "customers.delete"],
@@ -28012,6 +28019,12 @@
               return true;
             }
             return false;
+          },
+          openBusinessRequests(item=null) {
+            const params = new URLSearchParams();
+            if (item?.policy_id) params.set("policy", item.policy_id);
+            if (item?.customer_id) params.set("customer", item.customer_id);
+            window.location.href = "/static/business-approvals.html?" + params.toString();
           },
           async openProductStockPolicy(row) {
             const productId = Number(row?.product_id || row?.id || 0);

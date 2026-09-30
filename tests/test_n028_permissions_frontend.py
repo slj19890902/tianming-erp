@@ -93,15 +93,15 @@ def test_n028_view_only_operational_pages_hide_write_controls() -> None:
     assert "v-if=\"hasPermission('incoming.execute')\"" in INDEX
     assert "v-if=\"canAdmin && row.receipt_status==='posted'\"" in INDEX
     assert 'canFinance() { return this.hasPermission("finance.execute"); }' in INDEX
-    assert '<button v-if="canFinance" class="btn primary" @click="openStatement(financeFilters.statement_month)">' in INDEX
-    assert 'v-if="canConfirmStatement && statement.confirmation_status!==\'confirmed\'"' in INDEX
-    assert 'v-else-if="canGenerateInvoiceTask && statement.confirmation_status===\'confirmed\'"' in INDEX
+    assert '<button v-if="canFinance && financeView===\'current\'" class="btn primary" @click="openStatement(financeFilters.statement_month || month())">' in INDEX
+    assert 'v-if="financeView===\'current\' && canConfirmStatement && canGenerateInvoiceTask && !statement.financially_completed && statement.confirmation_status!==\'confirmed\'"' in INDEX
+    assert 'v-else-if="financeView===\'current\' && canGenerateInvoiceTask && statement.confirmation_status===\'confirmed\' && !statement.invoice_task_pending && Number(statement.pending_invoice_amount)>0"' in INDEX
     assert '@click="generateInvoiceTask(statement)"' in INDEX
     assert 'v-if="canFinance && row.status===\'draft\'" class="btn small success"' in INDEX
     assert 'quotations:"quotations.view"' in INDEX
     assert 'if (!this.pageAllowed(page))' in INDEX
     assert "当前账号没有访问该功能的权限" in INDEX
-    assert "v-if=\"hasPermission('finance.view')\">本月累计营收" in INDEX
+    assert "v-if=\"hasPermission('finance.view')\">回单确认销售额（原口径）" in INDEX
     assert "v-if=\"hasPermission('finance.view')\">待收账款" in INDEX
     assert 'hasPermission("incoming.execute")' in INCOMING
     assert 'hasPermission("incoming.view")' in INCOMING
@@ -133,3 +133,14 @@ def test_n028_inline_javascript_is_syntactically_valid(tmp_path: Path) -> None:
             [node, "--check", str(target)], capture_output=True, text=True, encoding="utf-8"
         )
         assert result.returncode == 0, result.stderr
+
+
+def test_scoped_business_alert_and_approval_entry_points() -> None:
+    assert 'v-if="canRequisition || canEditStockAlerts" class="btn small" @click="openProductStockPolicy(item)"' in INDEX
+    assert 'if (this.modal.type === "finishedStockPolicy") return this.canRequisition || this.canEditStockAlerts;' in INDEX
+    assert 'if (this.canSubmitBusinessRequest && !this.canRequisition) { this.openBusinessRequests(item); return; }' in INDEX
+    assert '/static/business-approvals.html?' in INDEX
+    node = shutil.which("node")
+    assert node
+    result = subprocess.run([node,"--check",str(ROOT / "static" / "business-approvals.js")],capture_output=True,text=True,encoding="utf-8")
+    assert result.returncode == 0,result.stderr

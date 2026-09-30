@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.business_transaction import commit_business_change
+
 import hashlib
 import json
 import re
@@ -6696,7 +6698,7 @@ def create_statement(
             resource_id=statement.id,
             response=response,
         )
-        db.commit()
+        commit_business_change(db)
         return response
     except HTTPException:
         db.rollback()

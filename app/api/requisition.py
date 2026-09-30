@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.business_transaction import commit_business_change
+
 from app.services.replenishment_receipt_progress import receipt_progress, receipt_progress_map
 
 import hashlib
@@ -24,6 +26,7 @@ from app.api.deps import (
     PermissionChecker,
     RoleChecker,
     customer_scope_ids,
+    get_current_user,
     get_db,
     has_permission,
     has_unrestricted_customer_access,
@@ -267,6 +270,10 @@ from app.services.production_label_operations import (
 router = APIRouter()
 can_read = PermissionChecker("requisition.view")
 can_operate = PermissionChecker("requisition.execute")
+def can_edit_alerts(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if has_permission(user, "warehouse.alerts.edit") or has_permission(user, "requisition.execute"):
+        return user
+    raise HTTPException(403, "没有库存预警修改权限")
 can_receive_material_variance = PermissionChecker("incoming.execute")
 can_reserve = PermissionChecker("warehouse.reserve")
 can_read_production_labels = PermissionChecker("orders.view")
@@ -14624,7 +14631,7 @@ def save_finished_stock_policy_quick(
     product_id: int,
     payload: FinishedStockPolicyQuickPayload,
     db: Session = Depends(get_db),
-    user: User = Depends(can_operate),
+    user: User = Depends(can_edit_alerts),
 ) -> dict:
     if payload.target_quantity < payload.warning_quantity:
         raise HTTPException(
@@ -14647,6 +14654,7 @@ def save_finished_stock_policy_quick(
             active=True,
             created_by=user.id,
         )
+        previous_alert = {"warning_quantity": policy.warning_quantity, "target_quantity": policy.target_quantity} if rows else None
         policy.warning_quantity = payload.warning_quantity
         policy.target_quantity = payload.target_quantity
         policy.customer_id = product.customer_id
@@ -14655,6 +14663,12 @@ def save_finished_stock_policy_quick(
             validate_stock_policy(db, policy)
             if policy.id is None:
                 db.add(policy)
+            db.flush()
+            from app.services.audit_log import append_audit_event
+            append_audit_event(db, actor=user, event_category="business", result="success", source="web",
+                module_code="warehouse", action_code="stock_alert.update", resource="InventoryStockPolicy",
+                entity_id=policy.id, customer_id=product.customer_id, description="修改库存预警",
+                details={"product_id":product.id,"before":previous_alert,"after":payload.model_dump()})
             db.commit()
             policy = db.scalar(
                 _stock_policy_query().where(InventoryStockPolicy.id == policy.id)
@@ -15810,7 +15824,7 @@ def create_stock_replenishment_order(
                 user=user,
             )
             _require_stock_replenishment_order_access(db, order, user)
-            db.commit()
+            commit_business_change(db)
             order = db.scalar(
                 _replenishment_order_query().where(
                     StockReplenishmentOrder.id == order.id
@@ -16038,7 +16052,7 @@ def create_stock_replenishment_order(
         db.flush()
         if payload.stock_now:
             stock_replenishment_order(db, order=order, operator_id=user.id)
-        db.commit()
+        commit_business_change(db)
         order = db.scalar(
             _replenishment_order_query().where(StockReplenishmentOrder.id == order.id)
         )

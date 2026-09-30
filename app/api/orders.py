@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.business_transaction import commit_business_change
+
 import hashlib
 import json
 import logging
@@ -6963,7 +6965,7 @@ def update_order(
             },
         },
     )
-    db.commit()
+    commit_business_change(db)
     db.refresh(order)
     customer = db.get(Customer, order.customer_id)
     return _order_response(

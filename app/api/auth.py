@@ -47,6 +47,8 @@ _LOGIN_AUDIT_GATE = Lock()
 
 
 PERMISSION_LABELS: dict[str, tuple[str, str]] = {
+    "business_requests.submit": ("orders", "业务变更提交审批"),
+    "warehouse.alerts.edit": ("warehouse", "指定客户库存预警编辑"),
     "customers.view": ("customers", "客户查看"),
     "customers.create": ("customers", "客户新增"),
     "customers.edit": ("customers", "客户编辑"),
@@ -1274,6 +1276,8 @@ def save_user_access(
 ) -> dict:
     """Atomically replace one user's permission overrides and customer scope."""
     user = _get_user_or_404(db, user_id)
+    if user.role not in {"admin", "boss"} and payload.overrides.get("business_requests.submit") and payload.mode != "selected":
+        raise HTTPException(400, "业务审批账号必须选择指定客户范围")
     unknown = sorted(set(payload.overrides).difference(PERMISSION_CATALOG))
     if unknown:
         raise HTTPException(status_code=400, detail=f"未知权限代码: {', '.join(unknown)}")

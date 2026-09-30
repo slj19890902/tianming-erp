@@ -243,6 +243,18 @@ def _login(client: TestClient, username: str, password: str) -> None:
 def _pdf_stub(value: str) -> bytes:
     return b"%PDF-1.4\n" + value.encode("ascii")
 
+def _seed_inventory_cost_recipe(db):
+    """Scope tests need a valid physical entry under the current cost contract."""
+    from app.models.material import Material
+    from app.models.product import Product
+    material=Material(code="A416D",layer_count=5,flute_type="AB",quote_price=Decimal("2.8"),
+        price_unit="元/㎡",purchase_currency="CNY",purchase_tax_included=True,purchase_tax_rate=Decimal("0.13"))
+    db.add(material);db.flush()
+    for product in db.scalars(select(Product)):
+        product.material_id=material.id;product.report_length_mm=1000;product.report_width_mm=800
+        product.layer_count=5;product.flute_type="AB";product.pieces_per_box=1;product.box_style="衬板"
+    db.flush()
+
 
 def _product_payload(customer_id: int, *, code: str, name: str) -> dict:
     return {
@@ -943,6 +955,7 @@ def test_warehouse_insights_and_direct_lot_access_are_customer_scoped(
 
     app, ids, factory = n028_customer_scope_app
     with factory() as db:
+        _seed_inventory_cost_recipe(db)
         products = {
             row.customer_id: row for row in db.scalars(select(Product)).all()
         }
@@ -1758,6 +1771,7 @@ def test_null_owner_inventory_and_cross_customer_semi_binding_fail_closed(
 
     app, ids, factory = n028_customer_scope_app
     with factory() as db:
+        _seed_inventory_cost_recipe(db)
         product_b = db.scalar(
             select(Product).where(Product.customer_id == ids["other_customer"])
         )
@@ -1775,7 +1789,7 @@ def test_null_owner_inventory_and_cross_customer_semi_binding_fail_closed(
                 db,
                 location_id=location.id,
                 quantity=5,
-                stock_date=date.today(),
+                stock_date=date(2025, 1, 1),
                 source_type="manual",
                 material_code="A416D",
                 layer_count=5,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.business_transaction import commit_business_change
+
 from decimal import Decimal
 import re
 from typing import Literal
@@ -734,7 +736,7 @@ def update_customer(
                 resource_id=customer.id,
                 details={"before": before, "after": updates},
             )
-        db.commit()
+        commit_business_change(db)
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status_code=409, detail="客户编号、缩写或名称重复") from error

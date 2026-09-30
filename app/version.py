@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.547"
-APP_VERSION_NAME = "仓库地图货架编号清晰显示"
+APP_VERSION = "v0.22.548"
+APP_VERSION_NAME = "指定客户业务权限与审批中心"
 APP_BUILD_DATE = "2026-09-30"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5259,3 +5259,16 @@ APP_VERIFICATION_STEPS = [
     "缩放地图并点击货架，核对编号、正视图及搜索货位数量正常。",
 ]
 APP_CHANGELOG = [*(f"v0.22.547：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "指定客户业务模板支持新订单导入、库存与位置查询、销售财务查看和库存预警编辑，采购价格及成本毛利不开放。",
+    "业务申请与审批中心支持客户、常用箱、订单表头修改，以及预警报料、送货单、对账和开票任务申请。",
+    "管理员审批后调用原业务校验生效，报料也可由老板审批；拒绝不改业务，保留版本、幂等、审计与事务回滚。",
+    "新增审批历史表，不改写历史订单、库存数量和财务事实；审批生成的报料、送货及开票任务继续遵守后续正式流程。",
+]
+APP_VERIFICATION_STEPS = [
+    "钱总退出重新登录，核对仅YL、研光、光洋可见，重新预览订单确认成品及半成品库存查询正常。",
+    "修改库存预警并从首页申请报料，核对批准前无报料草稿，采购价格、成本和毛利不可见。",
+    "业务申请提交后，管理员打开顶部审批中心，查看修改前后内容并批准或拒绝，核对对应业务和审批记录。",
+]
+APP_CHANGELOG = [*(f"v0.22.548：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

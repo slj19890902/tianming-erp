@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.business_transaction import commit_business_change
+
 from app.services.reconciliation_cycle import default_receipt_month, cycle_days_for_customers, month_for_date
 from app.services.external_receipt_state import active_receipt_item
 from app.services.liner_direct_delivery import direct_liner_item_ids, liner_direct_coverage
@@ -9077,7 +9079,7 @@ def create_delivery(
             delivery_id=delivery.id,
             response=response,
         )
-        db.commit()
+        commit_business_change(db)
         return response
     except DeliveryNumberingError as error:
         db.rollback()

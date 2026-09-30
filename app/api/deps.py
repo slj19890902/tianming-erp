@@ -17,6 +17,8 @@ from app.services.audit_log import append_audit_event
 # PermissionChecker without expanding broad role checks across the application.
 PERMISSION_CATALOG = frozenset(
     {
+        "business_requests.submit",
+        "warehouse.alerts.edit",
         "customers.view",
         "customers.create",
         "customers.edit",
@@ -274,6 +276,7 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="未登录或登录已失效",
         )
+    request.state.restricted_business = has_permission(user, "business_requests.submit") and not has_permission(user, "cost.view")
     return user
 
 

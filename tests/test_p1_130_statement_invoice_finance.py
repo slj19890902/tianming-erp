@@ -516,7 +516,11 @@ def test_statement_customer_exports_are_compact_sorted_and_have_matching_totals(
         assert pdf.content.startswith(b"%PDF")
 
 
-def test_payables_feed_aging_structure_and_six_month_trend(p1_130_app) -> None:
+def test_payables_feed_aging_structure_and_six_month_trend(p1_130_app, monkeypatch) -> None:
+    # Aging is measured at today's date, not the selected trend month. Keep
+    # this August fixture ten days overdue regardless of the machine date.
+    from app.api import finance
+    monkeypatch.setattr(finance, "beijing_today", lambda: date(2026, 8, 20))
     app, _factory = p1_130_app
     with TestClient(app) as client:
         _login(client)

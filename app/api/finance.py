@@ -1873,6 +1873,20 @@ def _statement_detail_response(
     )
 
 
+def _literal_statement_text(workbook: Workbook) -> None:
+    """These statement exports contain values, never calculated Excel formulas.
+
+    Explicit string cells preserve customer names/codes/POs exactly, including
+    leading '=' and zeros, without allowing business text to execute as Excel.
+    Monetary amounts, quantities and dates keep their original numeric types.
+    """
+    for sheet in workbook:
+        for row in sheet:
+            for cell in row:
+                if isinstance(cell.value, str):
+                    cell.data_type = "s"
+
+
 @router.get("/statements/{statement_id}/export")
 def export_statement_excel(
     statement_id: int,
@@ -2143,6 +2157,7 @@ def export_statement_excel(
         summary.freeze_panes = "A6"
 
     output = BytesIO()
+    _literal_statement_text(workbook)
     workbook.save(output)
     output.seek(0)
     abbr = _customer_abbr(settlement_name)
@@ -2470,6 +2485,7 @@ def export_customer_statement_excel(
         sheet.cell(row, 7).number_format = "0.0000"
         sheet.cell(row, 8).number_format = "0.00"
     output = BytesIO()
+    _literal_statement_text(workbook)
     workbook.save(output)
     output.seek(0)
     filename = _safe_filename(

@@ -17482,6 +17482,7 @@
             await this.loadProductExternalSupplyCandidates();
           },
           async onProductExternalCustomerChange() {
+            this.applyPartnerProductDefaults();
             if (this.productForm.supply_mode !== "external_purchase") return;
             this.productForm._external_selected_ids = [];
             this.productForm._external_default_product_id = null;
@@ -28363,6 +28364,7 @@
                 }
               );
               this.drawingV2 = {template_key:'liner_v1',parameters:{},editor_state:null,print_objects:[],paper_color:'white',thickness_mm:null,thickness_source:'',thickness_approximate:false,customer_number:'',customer_revision:'',version:null,releases:[],printEditorOpen:false,error:''};
+              this.applyPartnerProductDefaults();
               const openedId = Number(this.productForm.id || 0) || null;
               this.productMaterialContext = { product_id:openedId, candidates:[], requisition_history:[], material_history:[], manual_selection_history:[], loading:false, error:"" };
               this.productMaterialActiveTab = "candidates";
@@ -28924,6 +28926,19 @@
             const count = this.productPrintingPlateCount(form);
             for (let index=count+1; index<=3; index+=1) form[`printing_plate_${index}_id`]=null;
           },
+          applyPartnerProductDefaults() {
+            const form = this.productForm;
+            if (!form || form.id) return;
+            const customer = this.activeCustomerOptions.find(row => Number(row.id) === Number(form.customer_id));
+            if (!form._label_choice_manual && /研光|光洋/.test(customer?.name || '')) {
+              form.production_label_enabled = true;
+              form.production_label_units_per_label = this.productionLabelDefaultUnits(form.box_style) || 50;
+            }
+            if (Number(form.layer_count) === 5 && !form.flute_type) form.flute_type = 'AB';
+            if (!form._joining_choice_manual && /A1|0201/i.test(form.box_style || '') && !(form._production_processes || []).some(p => ['打钉','粘贴'].includes(p))) {
+              form._production_processes = (form._production_processes || []).filter(p => p !== '无需结合').concat('打钉');
+            }
+          },
           productionLabelDefaultUnits(boxStyle) {
             const code = this.productBoxTypeRule(boxStyle)?.code;
             if (code === "a1_0201") return 5;
@@ -28932,6 +28947,7 @@
           },
           async onProductProductionLabelToggle() {
             const form = this.productForm;
+            form._label_choice_manual = true;
             form.production_label_enabled = form.production_label_enabled === true;
             if (!form.production_label_enabled) {
               form.production_label_units_per_label = null;
@@ -28944,6 +28960,7 @@
             form.production_label_units_per_label = this.productionLabelDefaultUnits(form.box_style);
           },
           onProductProcessesChanged(event = null) {
+            if (event) this.productForm._joining_choice_manual = true;
             const joining = ["粘贴", "打钉", "无需结合"];
             const changed = String(event?.target?.value || "");
             const checked = event?.target?.checked === true;
@@ -31268,6 +31285,7 @@
           },
           onProductBoxStyleChange() {
             this.productForm.box_style = this.normalizeBoxTypeDisplay(this.productForm.box_style);
+            this.applyPartnerProductDefaults();
             const selected = this.productForm.box_style;
             if (selected === "BOM组合") {
               if (this.bomEditor.subkit?.enabled) {
@@ -40819,6 +40837,7 @@
             const allowed = this.fluteOptionsByLayer(lc);
             const ft = String(this.productForm.flute_type || "").toUpperCase();
             if (!lc || !allowed.includes(ft)) this.productForm.flute_type = null;
+            if (Number(lc) === 5 && !this.productForm.flute_type) this.productForm.flute_type = 'AB';
           },
           async previewFluteMapping() {
             this.loading = true;

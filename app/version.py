@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.545"
-APP_VERSION_NAME = "订单导入库存余额与订单号识别"
+APP_VERSION = "v0.22.546"
+APP_VERSION_NAME = "盘点位置跟随与常用箱默认规则"
 APP_BUILD_DATE = "2026-09-30"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5238,3 +5238,14 @@ APP_VERIFICATION_STEPS = [
     "核对六位数量完整显示，同昌Excel管理NO.识别为20260930；核对客户及明细后按正常业务保存。",
 ]
 APP_CHANGELOG = [*(f"v0.22.545：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "管理员确认货架盘点或移货后，常用箱默认位置跟随实际货位，保留位置版本和审计。",
+    "研光、光洋新常用箱默认勾选打印标签，手动取消继续保留；五层缺楞默认AB，A1新箱默认打钉。",
+]
+APP_VERIFICATION_STEPS = [
+    "核对80012156在H6-1-1和H6-2-1各400，82021156只在M3-1-1保留50。",
+    "新增研光或光洋常用箱，检查标签默认勾选，手动取消后切换箱型不重新勾选。",
+    "管理员确认货架盘点或移货后，打开常用箱核对默认位置同步更新。",
+]
+APP_CHANGELOG = [*(f"v0.22.546：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -73,7 +73,7 @@ def save(db, product_id, *, expected_version, area_id, location_id, address_vers
     return info(db, product_id)
 
 
-def remember_stocktake(db, lot, operator_id):
+def remember_stocktake(db, lot, operator_id, *, follow_position=False):
     operator = db.get(User, operator_id) if operator_id else None
     if (not operator or operator.role not in {"admin", "boss"} or not lot.finished_detail
             or lot.finished_detail.is_general):
@@ -81,10 +81,11 @@ def remember_stocktake(db, lot, operator_id):
     product_id = lot.finished_detail.product_id
     # Serialize against explicit edits and other stocktakes for this product.
     db.execute(update(Product).where(Product.id == product_id).values(product_code=Product.product_code))
-    if db.get(ProductStoragePreference, product_id) is not None:
+    previous = db.get(ProductStoragePreference, product_id)
+    if previous is not None and not follow_position:
         return
     from app.models.fixed_shelf import ShelfBinding
-    if db.scalar(select(ShelfBinding.location_id).where(ShelfBinding.product_id == product_id).limit(1)):
+    if not follow_position and db.scalar(select(ShelfBinding.location_id).where(ShelfBinding.product_id == product_id).limit(1)):
         return
     location = db.get(WarehouseLocation, lot.warehouse_location_id)
     if not location or location.storage_type != "rack" or location_issue(db, location):
@@ -92,11 +93,17 @@ def remember_stocktake(db, lot, operator_id):
     area = db.scalar(select(WarehouseArea).join(WarehouseFloor).where(
         WarehouseFloor.floor_number == location.warehouse_floor, WarehouseArea.area_code == location.area_code))
     if area:
-        db.add(ProductStoragePreference(product_id=product_id, area_id=area.id, location_id=location.id, version=1))
+        if previous and previous.location_id == location.id and previous.area_id == area.id:
+            return
+        before_location_id = previous.location_id if previous else None
+        save(db, product_id, expected_version=previous.version if previous else 0,
+             area_id=area.id, location_id=location.id, address_version=location.address_version,
+             layout_version=location.floor3_layout.version)
         from app.services.audit_log import append_audit_event
         append_audit_event(db, event_category="business", result="success", source="web", module_code="warehouse",
             action_code="warehouse.receipt_storage.remember", resource="product", actor=operator,
-            object_ref=str(product_id), details={"lot_id": lot.id, "location_id": location.id})
+            object_ref=str(product_id), details={"lot_id": lot.id, "location_id": location.id,
+                "before_location_id": before_location_id, "follow_position": follow_position})
         db.flush()
 
 

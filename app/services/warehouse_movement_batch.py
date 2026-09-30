@@ -403,6 +403,8 @@ def execute_warehouse_movement_batch(
                         "transfer_id": transferred.transfer.id,
                     }
                 )
+                from app.services.receipt_putaway import remember_stocktake
+                remember_stocktake(db, transferred.target_lot, operator_id, follow_position=True)
         except Floor3LocationError as error:
             raise WarehouseMovementBatchError(str(error), error.status_code) from error
         except WarehouseInventoryError as error:

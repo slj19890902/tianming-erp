@@ -1195,7 +1195,7 @@ def execute_warehouse_stocktake_batch(
     from app.services.receipt_putaway import remember_stocktake
     for result in results:
         if result["operation"] == "add" and result["inventory_type"] == "finished":
-            remember_stocktake(db, db.get(InventoryLot, result["lot_id"]), operator_id)
+            remember_stocktake(db, db.get(InventoryLot, result["lot_id"]), operator_id, follow_position=True)
     return {
         "message": "盘点批次已确认，正式库存与流水已原子提交",
         "batch_id": batch_id,

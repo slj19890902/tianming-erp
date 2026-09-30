@@ -1068,6 +1068,10 @@ def approve_stocktake(
         )
 
     reviewed_at = utc_now_naive()
+    from app.services.receipt_putaway import remember_stocktake
+    for lot in lots:
+        if items_by_lot[lot.id].counted_quantity > 0:
+            remember_stocktake(db, lot, reviewer.id, follow_position=True)
     adjustments: list[dict[str, object]] = []
     movement_bindings: list[tuple[StocktakeItem, int]] = []
     for lot in lots:

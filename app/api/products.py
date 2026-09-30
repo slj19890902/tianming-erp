@@ -2534,6 +2534,18 @@ def create_product(
 
 
 def _create_product(payload, db, user, *, commit=True) -> dict:
+    from app.services.partner_product_defaults import product_defaults
+    customer = db.get(Customer, payload.customer_id)
+    defaults = product_defaults(customer_name=customer.name if customer else '',
+        layer_count=payload.layer_count, flute_type=payload.flute_type,
+        box_style=payload.box_style, production_process=payload.production_process)
+    label_explicit = 'production_label_enabled' in payload.model_fields_set
+    for key, value in defaults.items():
+        if key.startswith('production_label') and label_explicit:
+            continue
+        if key == 'production_process' and payload.production_process:
+            continue
+        setattr(payload, key, value)
     require_customer_access(payload.customer_id, current_user=user, db=db)
     if payload.box_style == "BOM组合" and commit:
         raise HTTPException(422, "BOM组合请同时填写子件和每套用量后保存")

@@ -13147,6 +13147,7 @@ def _formal_rack_archive_blockers(
     locations: list[WarehouseLocation],
     rack_id: str,
     rack_code: str | None,
+    rack_name: str | None = None,
 ) -> list[str]:
     """Fail closed on every live fact that would make an empty-rack delete unsafe."""
 
@@ -13211,7 +13212,9 @@ def _formal_rack_archive_blockers(
         count = int(db.scalar(statement) or 0)
         if count:
             blockers.append(wording.format(count))
-    text_markers = {str(rack_id).strip().upper(), str(rack_code or "").strip().upper()} - {""}
+    # rack_code is a stable internal map key, while physical mold/plate
+    # locations normally use the displayed rack name (for example F7-1).
+    text_markers = {str(rack_id).strip().upper(), str(rack_code or "").strip().upper(), str(rack_name or "").strip().upper()} - {""}
     def references_rack(location_text: str | None) -> bool:
         text = str(location_text or "").strip().upper()
         return any(re.search(r"(?<![A-Z0-9])" + re.escape(marker) + r"(?![A-Z0-9])", text) for marker in text_markers)
@@ -14268,7 +14271,7 @@ def delete_twin_layout_rack(
             db, floor_code=normalized_floor, rack_id=str(rack_id),
         )
         blockers = [*identity_blockers, *_formal_rack_archive_blockers(
-            db, locations=locations, rack_id=str(rack_id), rack_code=rack.get("rack_code"),
+            db, locations=locations, rack_id=str(rack_id), rack_code=rack.get("rack_code"), rack_name=rack.get("name"),
         )]
         if blockers:
             raise HTTPException(status_code=409, detail="该货架不能删除：" + "；".join(blockers[:8]))

@@ -35,7 +35,8 @@ def test_unsaved_preview_and_editor_state_round_trip(tmp_path, monkeypatch):
                                 idempotency_key='workbench-save-0001'), db, user)
             assert saved['draft']['editor_state']['dimension_basis'] == 'inner'
             reloaded = get_design(product.id, db, user)
-            assert reloaded['draft']['parameters'] == {}
+            assert Decimal(reloaded['draft']['parameters']['length_mm']) == 100
+            assert Decimal(reloaded['draft']['parameters']['width_mm']) == 50
             assert reloaded['draft']['editor_state']['schema_version'] == 'drawing-workbench-v1'
     finally:
         engine.dispose()

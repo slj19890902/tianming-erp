@@ -39,7 +39,8 @@ def _manifest(release: DrawingRelease) -> dict:
 
 def _release_view(release: DrawingRelease) -> dict:
     manifest = _manifest(release)
-    geometry = manifest["geometry"]
+    from app.services.drawing_workbench import with_frozen_fold_panels
+    geometry = with_frozen_fold_panels(release.template_key, manifest["geometry"])
     metadata = (manifest.get("parameters") or {}).get("__drawing_workbench_v1", {})
     editor = manifest.get("editor_state") or metadata.get("editor_state") or {}
     folding = manifest.get("fold_model", geometry.get("fold_model"))
@@ -211,6 +212,8 @@ def validate_component_placements(db, product: Product, placements: list,
                 _fail("子装配发布版与当前 BOM 不一致，请先核对并发布子装配新版", 409)
         row = {"path": path, "instance_index": index, "product_id": release.product_id,
                "child_release_id": release.id, "child_revision": release.revision,
+               "child_number": release.external_number,
+               "product_code": nodes[release.product_id]["code"], "product_name": nodes[release.product_id]["name"],
                "position_mm": _vector(placement.get("position_mm"), "摆放位置", Decimal(100000)),
                "rotation_deg": _vector(placement.get("rotation_deg"), "摆放角度", Decimal(360)),
                "geometry": frozen["geometry"], "fold_model": frozen["fold_model"],

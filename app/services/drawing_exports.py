@@ -60,24 +60,23 @@ def engineering_pdf_1to1(geometry: dict) -> bytes:
 
 
 def dxf(geometry: dict) -> bytes:
-    """Minimal ASCII DXF R12 with explicit millimetre CUT and SCORE layers."""
+    """Valid R2010 millimetre exchange, authored by the existing CAD library."""
     if geometry.get('type') == 'assembly':
         raise ValueError("组合图没有自身刀版，不能导出 DXF")
-    rows = ['0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1009',
-            '9', '$INSUNITS', '70', '4', '0', 'ENDSEC', '0', 'SECTION', '2', 'TABLES',
-            '0', 'TABLE', '2', 'LTYPE', '70', '2',
-            '0', 'LTYPE', '2', 'CONTINUOUS', '70', '0', '3', 'Solid line', '72', '65', '73', '0', '40', '0',
-            '0', 'LTYPE', '2', 'DASHED', '70', '0', '3', 'Dashed __ __', '72', '65', '73', '2', '40', '6', '49', '4', '49', '-2',
-            '0', 'ENDTAB', '0', 'TABLE', '2', 'LAYER', '70', '2']
-    for name, color, style in (('CUT', '7', 'CONTINUOUS'), ('SCORE', '5', 'DASHED')):
-        rows += ['0', 'LAYER', '2', name, '70', '0', '62', color, '6', style]
-    rows += ['0', 'ENDTAB', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES']
-    for layer, lines in (('CUT', geometry['cut']), ('SCORE', geometry['score'])):
+    import ezdxf
+    from io import StringIO
+    doc = ezdxf.new('R2010', setup=['linetypes'])
+    doc.units = 4
+    doc.layers.new('CUT', dxfattribs={'color':7,'linetype':'CONTINUOUS'})
+    doc.layers.new('SCORE', dxfattribs={'color':5,'linetype':'DASHED'})
+    model = doc.modelspace()
+    for layer, lines in (('CUT',geometry['cut']),('SCORE',geometry['score'])):
         for line in lines:
-            rows += ['0', 'LINE', '8', layer, '10', str(line['x1']), '20', str(-float(line['y1'])),
-                     '30', '0', '11', str(line['x2']), '21', str(-float(line['y2'])), '31', '0']
-    rows += ['0', 'ENDSEC', '0', 'EOF']
-    return ('\r\n'.join(rows) + '\r\n').encode('ascii')
+            model.add_line((float(line['x1']),-float(line['y1']),0),
+                           (float(line['x2']),-float(line['y2']),0),dxfattribs={'layer':layer})
+    output = StringIO()
+    doc.write(output)
+    return output.getvalue().encode('utf-8')
 
 
 def _assembly_placements(metadata: dict | None) -> list[dict]:
@@ -204,7 +203,7 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
     header_lines = []
     for line in (f"客户：{customer}    产品：{product}",
                  f"图号：{number}    版次：{revision}    单位：mm",
-                 f"纸厚：{thickness}    总展开：{geometry['width_mm']} × {geometry['height_mm']} mm"):
+                 (f"纸厚：{thickness}" if geometry.get('type') == 'assembly' else f"纸厚：{thickness}    总展开：{geometry['width_mm']} × {geometry['height_mm']} mm")):
         header_lines.extend(_wrapped_lines(line, pw-margin*2, 9))
     title_h = max(88, 30 + 14*len(header_lines))
     available_w = pw-margin*2
@@ -252,55 +251,55 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
                          f"X:{obj['x_mm']} Y:{obj['y_mm']}mm  方向:{obj.get('rotation_deg', 0)}°")
         finish_page()
 
-    header('天明 ERP 完整结构图（按标注尺寸核对）')
-    _draw_geometry(c, geometry, (margin, margin+footer_h, available_w, available_h), [], image_assets)
-    c.setFillColor(colors.black)
-    c.setFont('STSong-Light', 8)
-    c.drawString(margin, margin+78, '黑实线：切断    蓝虚线：压折；颜色仅辅助区分，以线型为准。')
-    c.drawString(margin, margin+62, '此图为尺寸与工艺核对图；不得按纸面缩放量尺寸或直接作为机台程序。')
-    finish_page()
-    c.setFont('STSong-Light', 13)
-    y = ph-margin
-    for line in _wrapped_lines(f'尺寸明细｜{number} {revision}', pw-margin*2, 13):
-        c.drawString(margin, y, line)
-        y -= 18
-    c.setFont('STSong-Light', 10)
-    c.drawString(margin, y-4, '所有尺寸单位：mm；以明确标注和已确认原件为准，不按 PDF 纸面比例量取。')
-    y -= 36
-    for label, value in geometry.get('dimensions', {}).items():
-        c.drawString(margin, y, f'{label}：{value} mm')
-        y -= 19
-    if print_objects:
-        y -= 12
-        c.drawString(margin, y, '印刷内容、所属面板及距边：')
-        y -= 20
-        for obj in print_objects:
-            description = f"{obj.get('text') or '图片'}｜{obj['width_mm']}×{obj['height_mm']}｜{obj['panel_id']}｜X:{obj['x_mm']} Y:{obj['y_mm']}｜角度:{obj.get('rotation_deg', 0)}"
-            for line in _wrapped_lines(description, pw-margin*2, 10):
-                if y < margin+20:
-                    finish_page()
-                    c.setFont('STSong-Light', 10)
-                    y = ph-margin
-                    for heading in _wrapped_lines(f'印刷明细（续页）｜{number} {revision}', pw-margin*2, 10):
-                        c.drawString(margin, y, heading)
-                        y -= 14
-                    y -= 12
-                c.drawString(margin, y, line)
-                y -= 18
-    finish_page()
+    if geometry.get('type') != 'assembly':
+        header('天明 ERP 完整结构图（按标注尺寸核对）')
+        _draw_geometry(c, geometry, (margin, margin+footer_h, available_w, available_h), [], image_assets)
+        c.setFillColor(colors.black)
+        c.setFont('STSong-Light', 8)
+        c.drawString(margin, margin+78, '黑实线：切断    蓝虚线：压折；颜色仅辅助区分，以线型为准。')
+        c.drawString(margin, margin+62, '此图为尺寸与工艺核对图；不得按纸面缩放量尺寸或直接作为机台程序。')
+        finish_page()
+        c.setFont('STSong-Light', 13)
+        y = ph-margin
+        for line in _wrapped_lines(f'尺寸明细｜{number} {revision}', pw-margin*2, 13):
+            c.drawString(margin, y, line)
+            y -= 18
+        c.setFont('STSong-Light', 10)
+        c.drawString(margin, y-4, '所有尺寸单位：mm；以明确标注和已确认原件为准，不按 PDF 纸面比例量取。')
+        y -= 36
+        for label, value in geometry.get('dimensions', {}).items():
+            c.drawString(margin, y, f'{label}：{value} mm')
+            y -= 19
+        if print_objects:
+            y -= 12
+            c.drawString(margin, y, '印刷内容、所属面板及距边：')
+            y -= 20
+            for obj in print_objects:
+                description = f"{obj.get('text') or '图片'}｜{obj['width_mm']}×{obj['height_mm']}｜{obj['panel_id']}｜X:{obj['x_mm']} Y:{obj['y_mm']}｜角度:{obj.get('rotation_deg', 0)}"
+                for line in _wrapped_lines(description, pw-margin*2, 10):
+                    if y < margin+20:
+                        finish_page()
+                        c.setFont('STSong-Light', 10)
+                        y = ph-margin
+                        for heading in _wrapped_lines(f'印刷明细（续页）｜{number} {revision}', pw-margin*2, 10):
+                            c.drawString(margin, y, heading)
+                            y -= 14
+                        y -= 12
+                    c.drawString(margin, y, line)
+                    y -= 18
+        finish_page()
     placements = _assembly_placements(drawing_metadata)
     if geometry.get('type') == 'assembly' or placements:
-        c.setFont('STSong-Light', 13)
-        c.drawString(margin, ph-margin, f'组合部件清单｜{number} {revision}')
+        header('天明 ERP 组合部件清单')
         c.setFont('STSong-Light', 9)
-        c.drawString(margin, ph-margin-18, '组合预览不生成父件刀线/压线；以下均为冻结子件图纸及摆放信息。')
-        y = ph-margin-42
+        c.drawString(margin, ph-margin-title_h, '子件图纸与摆放位置（mm）')
+        y = ph-margin-title_h-24
         for index, placement in enumerate(placements, 1):
             path = placement.get('path', '')
-            product_id = placement.get('product_id', '')
-            release = placement.get('child_release_id', placement.get('child_revision', ''))
+            product_id = str(placement.get('product_code','')) + ' ' + str(placement.get('product_name',placement.get('product_id','')))
+            release = str(placement.get('child_number',placement.get('child_release_id',''))) + ' / ' + str(placement.get('child_revision',''))
             position = placement.get('position_mm', '')
-            line = f'{index}. 路径:{path}  产品:{product_id}  发布图:{release}  位置(mm):{position}'
+            line = f"{index}. 路径:{path}  产品:{product_id}  发布图:{release}  位置(mm):{position}  旋转(度):{placement.get('rotation_deg',[])}"
             for row in _wrapped_lines(line, pw-margin*2, 9):
                 if y < margin+20:
                     finish_page(); c.setFont('STSong-Light', 9); y = ph-margin

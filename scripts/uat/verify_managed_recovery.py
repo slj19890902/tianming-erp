@@ -34,8 +34,9 @@ def main():
             ["git", "status", "--porcelain"], cwd=repo, text=True).strip():
         raise ValueError("Build the reviewable UAT package from a clean committed workspace")
     root = args.root.resolve()
-    if root.parent != Path("D:/tm-uat").resolve() or not root.name.startswith("round-upgrade-"):
-        raise ValueError("Use a new D:/tm-uat/round-upgrade-* directory")
+    allowed_parents = {Path("D:/tm-uat").resolve(), Path("C:/ERP-OPT10-20260930").resolve()}
+    if root.parent not in allowed_parents or not root.name.startswith("round-upgrade-"):
+        raise ValueError("Use a fresh round-upgrade-* directory in an explicit UAT parent")
     if (root.exists() and not args.verify_existing) or not 18000 <= args.port <= 19999:
         raise ValueError("Fresh root and isolated port required")
     root.mkdir(exist_ok=args.verify_existing)

@@ -7,7 +7,7 @@ import sqlite3
 import subprocess
 
 root = Path(os.environ["ERP_ROUND_TEST_ROOT"]).resolve()
-assert root.parent == Path("D:/tm-uat").resolve() and root.name.startswith("round-upgrade-")
+assert root.parent in {Path("D:/tm-uat").resolve(), Path("C:/ERP-OPT10-20260930").resolve()} and root.name.startswith("round-upgrade-")
 assert (root / f"runtime-guard-{os.getpid()}.txt").is_file()
 from app.core.config import settings
 from app.core.uat_isolation import collect_actual_uat_consumers

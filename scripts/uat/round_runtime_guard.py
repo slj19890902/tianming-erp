@@ -5,7 +5,8 @@ import sys
 from urllib.parse import unquote, urlsplit
 
 root = Path(os.environ.get("ERP_ROUND_TEST_ROOT", "invalid")).resolve()
-if root.parent != Path("D:/tm-uat").resolve() or not root.name.startswith("round-upgrade-"):
+allowed_parents = {Path("D:/tm-uat").resolve(), Path("C:/ERP-OPT10-20260930").resolve()}
+if root.parent not in allowed_parents or not root.name.startswith("round-upgrade-"):
     os._exit(78)  # sitecustomize exceptions alone do not stop Python startup.
 if os.environ.get("ERP_ENVIRONMENT") != "test":
     os._exit(78)

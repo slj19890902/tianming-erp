@@ -13,7 +13,7 @@ def seed(session, shared: Path, customer, actor):
     boundary = Path(os.environ["ERP_ROUND_TEST_ROOT"]).resolve()
     database = Path(session.bind.url.database).resolve()
     if (os.environ.get("ERP_ENVIRONMENT") != "test"
-            or boundary.parent != Path("D:/tm-uat").resolve()
+            or boundary.parent not in {Path("D:/tm-uat").resolve(), Path("C:/ERP-OPT10-20260930").resolve()}
             or not boundary.name.startswith("round-upgrade-")
             or not database.is_relative_to(boundary)
             or not shared.resolve().is_relative_to(boundary)):

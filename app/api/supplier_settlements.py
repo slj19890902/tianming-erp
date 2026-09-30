@@ -829,35 +829,61 @@ def _verified_supplier_attachment(
     return True, row.attachment_size
 
 
+def _lock_sqlite_supplier_attachment_write(
+    db: Session, *, invoice_id: int, statement_id: int
+) -> bool:
+    """Serialize SQLite attachment writes before a content-addressed file exists.
+
+    SQLite has a database-wide writer lock.  A no-op UPDATE acquires it without
+    inventing an attachment state or opening a manual transaction.  The caller
+    keeps that transaction through disk storage, CAS and any cleanup.
+    """
+
+    if db.get_bind().dialect.name != "sqlite":
+        return False
+    locked = db.execute(
+        update(SupplierMonthlyInvoice)
+        .where(
+            SupplierMonthlyInvoice.id == invoice_id,
+            SupplierMonthlyInvoice.statement_id == statement_id,
+        )
+        .values(attachment_content_hash=SupplierMonthlyInvoice.attachment_content_hash)
+    )
+    if locked.rowcount != 1:
+        raise HTTPException(status_code=404, detail="供应商发票不存在")
+    return True
+
+
 def _discard_unreferenced_new_supplier_original(
     db: Session,
     *,
     stored: Any,
     stored_name: str,
+    sqlite_write_locked: bool,
 ) -> None:
     """Remove only a newly-created, conclusively unreferenced PDF.
 
-    Content-addressed originals are shared by retrying uploads.  If the
-    verification query is unavailable or any invoice refers to this digest or
-    path, preserving a possible orphan is safer than breaking a real invoice.
+    Content-addressed originals are shared by retrying uploads.  On non-SQLite
+    backends this API cannot prove an equivalent cross-process file lock, so it
+    deliberately retains a possible orphan.  SQLite calls this while its
+    writer lock is still held, so another invoice cannot reuse the file between
+    the reference check and unlink.
     """
 
-    if stored.reused:
+    if stored.reused or not sqlite_write_locked:
         return
     try:
-        with Session(bind=db.get_bind()) as verification:
-            referenced = verification.scalar(
-                select(SupplierMonthlyInvoice.id)
-                .where(
-                    or_(
-                        SupplierMonthlyInvoice.attachment_content_hash
-                        == stored.sha256,
-                        SupplierMonthlyInvoice.attachment_stored_name
-                        == stored_name,
-                    )
+        referenced = db.scalar(
+            select(SupplierMonthlyInvoice.id)
+            .where(
+                or_(
+                    SupplierMonthlyInvoice.attachment_content_hash
+                    == stored.sha256,
+                    SupplierMonthlyInvoice.attachment_stored_name == stored_name,
                 )
-                .limit(1)
             )
+            .limit(1)
+        )
     except SQLAlchemyError:
         return
     if referenced is not None:
@@ -873,6 +899,35 @@ def _discard_unreferenced_new_supplier_original(
     except OSError:
         # The original remains available for a safe retry or later reconciliation.
         return
+
+
+def _cleanup_after_supplier_attachment_failure(
+    db: Session,
+    *,
+    invoice_id: int,
+    statement_id: int,
+    stored: Any,
+    stored_name: str,
+) -> None:
+    """Reacquire the SQLite writer lock before deciding whether to unlink."""
+
+    try:
+        sqlite_write_locked = _lock_sqlite_supplier_attachment_write(
+            db, invoice_id=invoice_id, statement_id=statement_id
+        )
+    except (HTTPException, SQLAlchemyError):
+        db.rollback()
+        return
+    try:
+        _discard_unreferenced_new_supplier_original(
+            db,
+            stored=stored,
+            stored_name=stored_name,
+            sqlite_write_locked=sqlite_write_locked,
+        )
+    finally:
+        if sqlite_write_locked:
+            db.rollback()
 
 
 def _attachment_conflict() -> HTTPException:
@@ -903,15 +958,37 @@ async def upload_supplier_invoice_attachment(
         )
     except InvoiceAttachmentError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    try:
+        sqlite_write_locked = _lock_sqlite_supplier_attachment_write(
+            db, invoice_id=invoice.id, statement_id=statement.id
+        )
+        # The lock may have waited behind another attachment request.  Reload
+        # only after it is acquired so a retry cannot use stale ORM state.
+        if sqlite_write_locked:
+            db.refresh(invoice)
+    except HTTPException:
+        db.rollback()
+        raise
+    except SQLAlchemyError as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="供应商发票附件归档暂不可用，请重试",
+        ) from error
     if invoice.attachment_content_hash:
         if invoice.attachment_content_hash != digest:
+            if sqlite_write_locked:
+                db.rollback()
             raise _attachment_conflict()
-        return _attachment_response(
+        response = _attachment_response(
             invoice_id=invoice.id,
             content_hash=invoice.attachment_content_hash,
             file_size=invoice.attachment_size or 0,
             reused=True,
         )
+        if sqlite_write_locked:
+            db.rollback()
+        return response
     try:
         stored = store_original_invoice_pdf(
             storage_root=_attachment_root(),
@@ -919,6 +996,8 @@ async def upload_supplier_invoice_attachment(
             content=content,
         )
     except InvoiceAttachmentError as error:
+        if sqlite_write_locked:
+            db.rollback()
         raise HTTPException(status_code=422, detail=str(error)) from error
     stored_name = stored.path.relative_to(_attachment_root()).as_posix()
     from app.core.time_contract import utc_now_naive
@@ -941,15 +1020,21 @@ async def upload_supplier_invoice_attachment(
             )
             .values(**values)
         )
-    except SQLAlchemyError:
+    except Exception as error:
         db.rollback()
-        _discard_unreferenced_new_supplier_original(
-            db, stored=stored, stored_name=stored_name
+        _cleanup_after_supplier_attachment_failure(
+            db,
+            invoice_id=invoice.id,
+            statement_id=statement.id,
+            stored=stored,
+            stored_name=stored_name,
         )
+        if not isinstance(error, SQLAlchemyError):
+            raise
         raise HTTPException(
             status_code=503,
             detail="供应商发票附件归档失败，请重试并核对附件状态",
-        )
+        ) from error
     if claimed.rowcount != 1:
         db.rollback()
         verified = _verified_supplier_attachment(
@@ -958,8 +1043,12 @@ async def upload_supplier_invoice_attachment(
             content_hash=stored.sha256,
             stored_name=stored_name,
         )
-        _discard_unreferenced_new_supplier_original(
-            db, stored=stored, stored_name=stored_name
+        _cleanup_after_supplier_attachment_failure(
+            db,
+            invoice_id=invoice.id,
+            statement_id=statement.id,
+            stored=stored,
+            stored_name=stored_name,
         )
         if verified and verified[0]:
             return _attachment_response(
@@ -989,7 +1078,7 @@ async def upload_supplier_invoice_attachment(
             },
         )
         db.commit()
-    except SQLAlchemyError:
+    except Exception as error:
         db.rollback()
         verified = _verified_supplier_attachment(
             db,
@@ -1004,13 +1093,19 @@ async def upload_supplier_invoice_attachment(
                 file_size=verified[1] or stored.size,
                 reused=stored.reused,
             )
-        _discard_unreferenced_new_supplier_original(
-            db, stored=stored, stored_name=stored_name
+        _cleanup_after_supplier_attachment_failure(
+            db,
+            invoice_id=invoice.id,
+            statement_id=statement.id,
+            stored=stored,
+            stored_name=stored_name,
         )
+        if not isinstance(error, SQLAlchemyError):
+            raise
         raise HTTPException(
             status_code=503,
             detail="供应商发票附件归档结果待核对，请重试并核对附件状态",
-        )
+        ) from error
     return _attachment_response(
         invoice_id=invoice.id,
         content_hash=stored.sha256,

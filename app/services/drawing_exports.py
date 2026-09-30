@@ -18,14 +18,22 @@ def engineering_pdf_1to1(geometry: dict) -> bytes:
     This deliberately contains no fitted page layout or print artwork.  It is
     an exchange/print-scale artifact; users must still check printer scaling.
     """
+    if geometry.get('type') == 'assembly':
+        raise ValueError("组合图没有自身刀版，不能导出 1:1 PDF")
     width, height = float(geometry['width_mm']), float(geometry['height_mm'])
     if width > 10_000 or height > 10_000:
         raise ValueError("1:1 图纸尺寸超过导出上限")
     output = BytesIO()
     points_per_mm = 72 / 25.4
-    c = canvas.Canvas(output, pagesize=(width * points_per_mm, height * points_per_mm), pageCompression=1)
+    safety = 10.0
+    # Keep the blank at a true 1:1 scale and reserve a physical safety border.
+    page_width = max(width + safety * 2, 120.0)
+    page_height = max(height + safety * 2, 30.0)
+    c = canvas.Canvas(output, pagesize=(page_width * points_per_mm, page_height * points_per_mm), pageCompression=1)
     c.setTitle("天明 ERP 1:1 矢量图纸（单位 mm）")
     c.scale(points_per_mm, points_per_mm)
+    c.saveState()
+    c.translate(safety, safety)
     c.setLineWidth(.25)
     for line in geometry['cut']:
         c.setStrokeColor(colors.black)
@@ -34,6 +42,18 @@ def engineering_pdf_1to1(geometry: dict) -> bytes:
     c.setDash(2, 1)
     for line in geometry['score']:
         c.line(float(line['x1']), height-float(line['y1']), float(line['x2']), height-float(line['y2']))
+    c.restoreState()
+    # The ruler is in page millimetres, independently of the blank's bounds.
+    c.setStrokeColor(colors.black)
+    c.setLineWidth(.2)
+    ruler_y, ruler_start = 3.0, safety
+    c.line(ruler_start, ruler_y, ruler_start + 100, ruler_y)
+    c.setFont('Helvetica', 2.4)
+    for mark in range(0, 101, 10):
+        tick = 3.0 if mark % 50 == 0 else 2.0
+        c.line(ruler_start + mark, ruler_y-tick/2, ruler_start + mark, ruler_y+tick/2)
+        c.drawCentredString(ruler_start + mark, ruler_y + 2.2, str(mark))
+    c.drawString(ruler_start + 102, ruler_y - 1, 'mm')
     c.showPage()
     c.save()
     return output.getvalue()
@@ -41,9 +61,14 @@ def engineering_pdf_1to1(geometry: dict) -> bytes:
 
 def dxf(geometry: dict) -> bytes:
     """Minimal ASCII DXF R12 with explicit millimetre CUT and SCORE layers."""
-    rows = ['0', 'SECTION', '2', 'HEADER', '9', '$INSUNITS', '70', '4',
-            '0', 'ENDSEC', '0', 'SECTION', '2', 'TABLES',
-            '0', 'TABLE', '2', 'LAYER', '70', '2']
+    if geometry.get('type') == 'assembly':
+        raise ValueError("组合图没有自身刀版，不能导出 DXF")
+    rows = ['0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1009',
+            '9', '$INSUNITS', '70', '4', '0', 'ENDSEC', '0', 'SECTION', '2', 'TABLES',
+            '0', 'TABLE', '2', 'LTYPE', '70', '2',
+            '0', 'LTYPE', '2', 'CONTINUOUS', '70', '0', '3', 'Solid line', '72', '65', '73', '0', '40', '0',
+            '0', 'LTYPE', '2', 'DASHED', '70', '0', '3', 'Dashed __ __', '72', '65', '73', '2', '40', '6', '49', '4', '49', '-2',
+            '0', 'ENDTAB', '0', 'TABLE', '2', 'LAYER', '70', '2']
     for name, color, style in (('CUT', '7', 'CONTINUOUS'), ('SCORE', '5', 'DASHED')):
         rows += ['0', 'LAYER', '2', name, '70', '0', '62', color, '6', style]
     rows += ['0', 'ENDTAB', '0', 'ENDSEC', '0', 'SECTION', '2', 'ENTITIES']
@@ -53,6 +78,18 @@ def dxf(geometry: dict) -> bytes:
                      '30', '0', '11', str(line['x2']), '21', str(-float(line['y2'])), '31', '0']
     rows += ['0', 'ENDSEC', '0', 'EOF']
     return ('\r\n'.join(rows) + '\r\n').encode('ascii')
+
+
+def _assembly_placements(metadata: dict | None) -> list[dict]:
+    """Read frozen placement data without deriving a nonexistent parent blank."""
+    if not isinstance(metadata, dict):
+        return []
+    editor = metadata.get('editor_state')
+    if not isinstance(editor, dict):
+        editor = (metadata.get('parameters') or {}).get('__drawing_workbench_v1', {}).get('editor_state')
+    assembly = editor.get('assembly') if isinstance(editor, dict) else None
+    placements = assembly.get('placements') if isinstance(assembly, dict) else None
+    return [entry for entry in placements if isinstance(entry, dict)] if isinstance(placements, list) else []
 
 
 def _wrapped_lines(text: str, width: float, font_size: float) -> list[str]:
@@ -154,7 +191,8 @@ def _draw_geometry(c, geometry: dict, viewport: tuple[float, float, float, float
 
 def engineering_pdf(geometry: dict, *, customer: str, product: str,
                     number: str, revision: str, thickness: str,
-                    print_objects: list[dict], image_assets: dict[int, tuple[bytes, str]] | None = None) -> bytes:
+                    print_objects: list[dict], image_assets: dict[int, tuple[bytes, str]] | None = None,
+                    drawing_metadata: dict | None = None) -> bytes:
     """Annotated reference pages, never a 1:1 machine cutting file."""
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
     page = landscape(A3 if max(float(geometry["width_mm"]), float(geometry["height_mm"])) > 900 else A4)
@@ -250,5 +288,23 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
                 c.drawString(margin, y, line)
                 y -= 18
     finish_page()
+    placements = _assembly_placements(drawing_metadata)
+    if geometry.get('type') == 'assembly' or placements:
+        c.setFont('STSong-Light', 13)
+        c.drawString(margin, ph-margin, f'组合部件清单｜{number} {revision}')
+        c.setFont('STSong-Light', 9)
+        c.drawString(margin, ph-margin-18, '组合预览不生成父件刀线/压线；以下均为冻结子件图纸及摆放信息。')
+        y = ph-margin-42
+        for index, placement in enumerate(placements, 1):
+            path = placement.get('path', '')
+            product_id = placement.get('product_id', '')
+            release = placement.get('child_release_id', placement.get('child_revision', ''))
+            position = placement.get('position_mm', '')
+            line = f'{index}. 路径:{path}  产品:{product_id}  发布图:{release}  位置(mm):{position}'
+            for row in _wrapped_lines(line, pw-margin*2, 9):
+                if y < margin+20:
+                    finish_page(); c.setFont('STSong-Light', 9); y = ph-margin
+                c.drawString(margin, y, row); y -= 14
+        finish_page()
     c.save()
     return output.getvalue()

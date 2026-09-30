@@ -14,7 +14,7 @@ from app.models import Base
 from app.models.audit import OperationLog
 from app.models.stock_replenishment import InventoryStockPolicy
 from app.models.user import User
-from app.models.warehouse_inventory import InventoryLot, WarehouseFloor, WarehouseLocation
+from app.models.warehouse_inventory import InventoryLot, WarehouseArea, WarehouseFloor, WarehouseLocation
 from app.services import warehouse_twin_layout_editor as editor
 from app.services.warehouse_twin_layout_editor import _floor_revision
 
@@ -51,6 +51,7 @@ def _request():
 def _setup(tmp_path: Path, monkeypatch):
     baseline = tmp_path / "baseline.json"; pub = tmp_path / "runtime" / "published.json"; draft = tmp_path / "draft" / "layout.json"
     pub_rev, rack_id = _document(baseline, retired=False)
+    pub.parent.mkdir(parents=True, exist_ok=True)
     # The strict-isolation runner deliberately forbids fallback from an absent
     # runtime map to a shared source baseline.  Seed only this synthetic runtime.
     pub.write_bytes(baseline.read_bytes())
@@ -64,7 +65,9 @@ def _setup(tmp_path: Path, monkeypatch):
         admin=User(username="rack-delete-admin",password_hash="x",role="admin",real_name="admin",is_active=True,must_change_password=False,customer_access_mode="all",ui_mode="standard")
         floor=WarehouseFloor(floor_code="3F",floor_name="三楼",floor_number=3,construction_status="enabled",planning_reference_pallet_capacity=0)
         db.add_all([admin,floor]); db.flush()
-        for n in range(2): db.add(WarehouseLocation(location_code=f"F7-{n}",location_name=f"F7-{n}",warehouse_type="finished",is_active=True,warehouse_floor=3,area_code="A",storage_type="rack",address_kind="rack_slot",rack_code="F7",map_rack_id=rack_id,level_no=1,slot_no=n+1,address_version=1,placement_status="placed"))
+        area=WarehouseArea(floor_id=floor.id,area_code="A",area_name="测试区",planned_location_count=2,planned_pallet_capacity=0,construction_status="enabled",capacity_review_status="pending",capacity_eligible=False)
+        db.add(area); db.flush()
+        for n in range(2): db.add(WarehouseLocation(location_code=f"F7-{n}",location_name=f"F7-{n}",warehouse_type="finished",is_active=True,warehouse_floor=3,area_code="A",storage_type="rack",address_kind="rack_slot",address_area_id=area.id,rack_code="F7",map_rack_id=rack_id,level_no=1,slot_no=n+1,address_version=1,placement_status="placed"))
         db.commit()
     return factory, pub_rev, draft_rev, rack_id, pub, draft
 
@@ -101,7 +104,7 @@ def test_published_delete_blocks_live_inventory_and_preserves_all_maps(tmp_path,
             db.add(InventoryLot(lot_number="rack-delete-live",inventory_type="finished",warehouse_location_id=loc.id,quantity_available=1,quantity_reserved=0,quantity_consumed=0,quantity_damaged=0,quantity_scrapped=0,unit="boxes",status="active",source_type="manual",stock_date=__import__('datetime').date.today(),stock_date_accuracy="exact",last_movement_at=__import__('datetime').datetime.now(),version=1)); db.commit()
             with pytest.raises(HTTPException, match="仍有库存") as caught: _delete(db,admin,pub_rev,draft_rev,rack_id)
             assert caught.value.status_code == 409
-        assert pub.read_bytes() == baseline.read_bytes()
+        assert pub.read_bytes() == editor.TWIN_LAYOUT_BASELINE_PATH.read_bytes()
         assert json.loads(draft.read_text())["floors"]["3F"]["racks"] == [_rack("rack-keep", "F9")]
     finally: factory.kw["bind"].dispose()
 
@@ -111,12 +114,12 @@ def test_published_delete_blocks_default_location_and_audit_failure_restores_fil
     before=draft.read_bytes()
     try:
         with factory() as db:
-            admin=db.scalar(select(User)); loc=db.scalar(select(WarehouseLocation)); db.add(InventoryStockPolicy(policy_code="rack-delete",inventory_type="finished",default_location_id=loc.id,active=True,version=1)); db.commit()
+            admin=db.scalar(select(User)); loc=db.scalar(select(WarehouseLocation)); db.add(InventoryStockPolicy(policy_name="rack-delete",target_inventory_type="finished",target_quantity=1,default_location_id=loc.id,active=True)); db.commit()
             with pytest.raises(HTTPException, match="默认位置"): _delete(db,admin,pub_rev,draft_rev,rack_id)
             db.delete(db.scalar(select(InventoryStockPolicy))); db.commit()
             monkeypatch.setattr(warehouse_api,"_twin_layout_asset_log",lambda *a,**k: (_ for _ in ()).throw(RuntimeError("audit fail")))
             with pytest.raises(RuntimeError, match="audit fail"): _delete(db,admin,pub_rev,draft_rev,rack_id)
-            assert pub.read_bytes() == baseline.read_bytes() and draft.read_bytes() == before
+            assert pub.read_bytes() == editor.TWIN_LAYOUT_BASELINE_PATH.read_bytes() and draft.read_bytes() == before
             assert all(row.is_active for row in db.scalars(select(WarehouseLocation)).all())
     finally: factory.kw["bind"].dispose()
 
@@ -143,6 +146,9 @@ def test_unpublished_draft_rack_keeps_draft_only_delete_contract(tmp_path, monke
         draft.write_text(json.dumps(draft_source), encoding="utf-8")
         with factory() as db:
             admin=db.scalar(select(User))
+            for location in db.scalars(select(WarehouseLocation)).all():
+                location.map_rack_id = None
+            db.commit()
             result=warehouse_api.delete_twin_layout_rack(
                 "3F", rack_id, expected_revision=draft_floor["revision"],
                 expected_published_revision=published_revision, expected_version=3,
@@ -163,8 +169,21 @@ def test_unpublished_draft_rack_keeps_draft_only_delete_contract(tmp_path, monke
     finally: factory.kw["bind"].dispose()
 
 
-def test_rack_reference_uses_token_boundaries_and_checks_assets_without_slots():
-    assert warehouse_api._formal_rack_archive_blockers.__name__
-    # The helper's regex treats '-' as a separator: F7-1 is F7, F70 is not.
-    source=Path(warehouse_api.__file__).read_text(encoding="utf-8")
-    assert 'r"(?<![A-Z0-9])" + re.escape(marker) + r"(?![A-Z0-9])"' in source
+def test_rack_asset_reference_uses_real_token_boundaries_without_slots():
+    from types import SimpleNamespace
+    class _ScalarResult:
+        def __init__(self, value): self.value=value
+        def one(self): return self.value
+    class _Db:
+        def __init__(self, mold_text): self.mold_text=mold_text; self.calls=0
+        def execute(self, _statement): return _ScalarResult((0, 0))
+        def scalar(self, _statement): return 0
+        def scalars(self, _statement):
+            self.calls += 1
+            if self.calls == 1:
+                return SimpleNamespace(all=lambda: [SimpleNamespace(rack_location=self.mold_text)])
+            return SimpleNamespace(all=lambda: [])
+    assert "实体模具" in "；".join(warehouse_api._formal_rack_archive_blockers(
+        _Db("3F-F7-1"), locations=[], rack_id="rack-delete", rack_code="F7"))
+    assert warehouse_api._formal_rack_archive_blockers(
+        _Db("3F-F70-1"), locations=[], rack_id="rack-delete", rack_code="F7") == []

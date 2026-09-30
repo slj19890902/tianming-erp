@@ -14145,6 +14145,19 @@ def delete_twin_layout_rack(
             )) or 0)
             if replay_active_slots:
                 raise HTTPException(status_code=409, detail="货架删除回放发现正式库位尚未归档，请先完成受控恢复。")
+            replay_audited = False
+            for audit in db.scalars(select(OperationLog).where(
+                OperationLog.action == "TWIN_RACK_DELETE_PUBLISHED",
+            )).all():
+                try:
+                    details = json.loads(audit.details or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if details.get("operation_key") == operation_key and details.get("request_fingerprint") == request_fingerprint:
+                    replay_audited = True
+                    break
+            if not replay_audited:
+                raise HTTPException(status_code=409, detail="货架删除回放缺少已提交审计，请先完成受控恢复。")
             try:
                 mutation = delete_published_warehouse_twin_rack(
                     normalized_floor, rack_id,
@@ -14173,6 +14186,19 @@ def delete_twin_layout_rack(
             draft_receipt = next((item for item in effective_floor.get("layout_edit_receipts") or []
                                   if item.get("operation_key") == operation_key), None)
             if draft_receipt is not None:
+                replay_audited = False
+                for audit in db.scalars(select(OperationLog).where(
+                    OperationLog.action == "TWIN_RACK_DELETE_DRAFT",
+                )).all():
+                    try:
+                        details = json.loads(audit.details or "{}")
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if details.get("operation_key") == operation_key and details.get("request_fingerprint") == request_fingerprint:
+                        replay_audited = True
+                        break
+                if not replay_audited:
+                    raise HTTPException(status_code=409, detail="货架草稿删除回放缺少已提交审计，请先完成受控恢复。")
                 try:
                     mutation = delete_warehouse_twin_rack(
                         normalized_floor, rack_id, expected_revision=expected_revision,
@@ -14215,6 +14241,8 @@ def delete_twin_layout_rack(
                         entity_type="twin_rack_layout", entity_id=str(rack_id),
                         description="管理员删除未发布二维库位货架草稿",
                         details={"floor_code": normalized_floor, **mutation.value,
+                                 "operation_key": operation_key,
+                                 "request_fingerprint": request_fingerprint,
                                  "published_revision": str(published_floor.get("revision") or "")},
                     )
                     db.commit()
@@ -14277,6 +14305,8 @@ def delete_twin_layout_rack(
                     description="管理员删除正式空货架并归档关联空货位",
                     details={
                         "floor_code": normalized_floor, **mutation.value,
+                        "operation_key": operation_key,
+                        "request_fingerprint": request_fingerprint,
                         "published_revision": mutation.published_revision,
                         "draft_revision": mutation.floor_revision,
                     },

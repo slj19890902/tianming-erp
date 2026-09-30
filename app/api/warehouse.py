@@ -13148,6 +13148,9 @@ def _formal_rack_archive_blockers(
     rack_id: str,
     rack_code: str | None,
     rack_name: str | None = None,
+    floor_code: str | None = None,
+    mold_rack_code: str | None = None,
+    area_code: str | None = None,
 ) -> list[str]:
     """Fail closed on every live fact that would make an empty-rack delete unsafe."""
 
@@ -13214,16 +13217,39 @@ def _formal_rack_archive_blockers(
             blockers.append(wording.format(count))
     # rack_code is a stable internal map key, while physical mold/plate
     # locations normally use the displayed rack name (for example F7-1).
-    text_markers = {str(rack_id).strip().upper(), str(rack_code or "").strip().upper(), str(rack_name or "").strip().upper()} - {""}
-    def references_rack(location_text: str | None) -> bool:
+    normalized_floor = str(floor_code or "").strip().upper()
+    mold_code = str(mold_rack_code or "").strip().upper()
+    is_plate_rack = normalized_floor == "1F" and str(area_code or "").strip().upper() == "ZONE-1F-PLATE-002"
+    text_markers = {str(rack_id).strip().upper(), str(rack_code or "").strip().upper()} - {""}
+    # Existing asset locations use physical labels (1F-M-R01...), while map
+    # rack_code is an internal key (RACK-1F-MOLD-R01-001). Match both identities.
+    physical_names = [] if mold_code or is_plate_rack else [rack_name, *(getattr(row, "rack_display_name", None) for row in locations)]
+    for name in physical_names:
+        if str(name or "").strip():
+            text_markers.add(str(name).strip().upper())
+        match = re.match(r"^(?:货)?([A-Z]+\d+)(?:\s|$)", str(name or "").strip().upper())
+        if match:
+            text_markers.add(match.group(1))
+    mold_markers = set(text_markers)
+    plate_markers = set(text_markers)
+    if normalized_floor and mold_code:
+        mold_markers.add(f"{normalized_floor}-M-{mold_code}")
+    # The existing printing-plate location contract has one physical R01 rack
+    # in this measured area (describe_printing_plate_location).
+    if is_plate_rack:
+        plate_markers.add("1F-PL-R01")
+    def references_rack(location_text: str | None, markers: set[str]) -> bool:
         text = str(location_text or "").strip().upper()
-        return any(re.search(r"(?<![A-Z0-9])" + re.escape(marker) + r"(?![A-Z0-9])", text) for marker in text_markers)
+        location_floor = re.match(r"^(\d+F)[-_]", text)
+        if normalized_floor and location_floor and location_floor.group(1) != normalized_floor:
+            return False
+        return any(re.search(r"(?<![A-Z0-9])" + re.escape(marker) + r"(?![A-Z0-9])", text) for marker in markers)
     for mold in db.scalars(select(MoldTool).where(or_(MoldTool.is_active.is_(True), MoldTool.archive_status == "archived"))).all():
-        if references_rack(mold.rack_location):
+        if references_rack(mold.rack_location, mold_markers):
             blockers.append("仍有实体模具引用该货架，不能删除")
             break
     for plate in db.scalars(select(PrintingPlate).where(PrintingPlate.status.in_(("active", "damaged")))).all():
-        if references_rack(plate.rack_location):
+        if references_rack(plate.rack_location, plate_markers):
             blockers.append("仍有启用或受损挂板引用该货架，不能删除")
             break
     return list(dict.fromkeys(blockers))
@@ -14272,6 +14298,7 @@ def delete_twin_layout_rack(
         )
         blockers = [*identity_blockers, *_formal_rack_archive_blockers(
             db, locations=locations, rack_id=str(rack_id), rack_code=rack.get("rack_code"), rack_name=rack.get("name"),
+            floor_code=normalized_floor, mold_rack_code=rack.get("mold_rack_code"), area_code=rack.get("area_code"),
         )]
         if blockers:
             raise HTTPException(status_code=409, detail="该货架不能删除：" + "；".join(blockers[:8]))

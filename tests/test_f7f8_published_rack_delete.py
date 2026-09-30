@@ -169,7 +169,18 @@ def test_unpublished_draft_rack_keeps_draft_only_delete_contract(tmp_path, monke
     finally: factory.kw["bind"].dispose()
 
 
-def test_rack_asset_reference_uses_real_token_boundaries_without_slots():
+@pytest.mark.parametrize('location, rack_code, rack_name, floor_code, mold_code, area_code, blocked', [
+    ('3F-F7-1', 'F7', None, '3F', None, None, True),
+    ('3F-F70-1', 'F7', None, '3F', None, None, False),
+    ('3F-F7-1', 'RACK-3F-EDIT-079-EDIT-007', '货F7', '3F', None, None, True),
+    ('1F-M-R01-L1-G01', 'RACK-1F-MOLD-R01-001', 'R01 左架（模具002，小模切机上方）', '1F', 'R01', 'ZONE-1F-MOLD-002', True),
+    ('1F-M-R010-L1-G01', 'RACK-1F-MOLD-R01-001', 'R01 左架（模具002，小模切机上方）', '1F', 'R01', 'ZONE-1F-MOLD-002', False),
+    ('3F-M-R01-L1-G01', 'RACK-1F-MOLD-R01-001', 'R01 左架（模具002，小模切机上方）', '1F', 'R01', 'ZONE-1F-MOLD-002', False),
+    ('1F-PL-R01-L1-P01', 'RACK-1F-MOLD-R01-001', 'R01 左架（模具002，小模切机上方）', '1F', 'R01', 'ZONE-1F-MOLD-002', False),
+    ('1F-PL-R01-L1-P01', 'RACK-1F-PLATE-002-001', '挂板002两层整体架（现场实测）', '1F', None, 'ZONE-1F-PLATE-002', True),
+    ('1F-M-R01-L1-G01', 'RACK-1F-PLATE-002-001', '挂板002两层整体架（现场实测）', '1F', None, 'ZONE-1F-PLATE-002', False),
+])
+def test_rack_asset_reference_uses_real_token_boundaries_without_slots(location,rack_code,rack_name,floor_code,mold_code,area_code,blocked):
     from types import SimpleNamespace
     class _ScalarResult:
         def __init__(self, value): self.value=value
@@ -180,10 +191,9 @@ def test_rack_asset_reference_uses_real_token_boundaries_without_slots():
         def scalar(self, _statement): return 0
         def scalars(self, _statement):
             self.calls += 1
-            if self.calls == 1:
+            if self.calls == (2 if '-PL-' in self.mold_text else 1):
                 return SimpleNamespace(all=lambda: [SimpleNamespace(rack_location=self.mold_text)])
             return SimpleNamespace(all=lambda: [])
-    assert "实体模具" in "；".join(warehouse_api._formal_rack_archive_blockers(
-        _Db("3F-F7-1"), locations=[], rack_id="rack-delete", rack_code="F7"))
-    assert warehouse_api._formal_rack_archive_blockers(
-        _Db("3F-F70-1"), locations=[], rack_id="rack-delete", rack_code="F7") == []
+    assert bool(warehouse_api._formal_rack_archive_blockers(
+        _Db(location), locations=[], rack_id="rack-delete", rack_code=rack_code,
+        rack_name=rack_name, floor_code=floor_code, mold_rack_code=mold_code, area_code=area_code)) == blocked

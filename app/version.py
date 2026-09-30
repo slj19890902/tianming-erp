@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.539"
-APP_VERSION_NAME = "安全恢复与业务衔接升级候选"
+APP_VERSION = "v0.22.540"
+APP_VERSION_NAME = "常用箱参数化图纸工作台"
 APP_BUILD_DATE = "2026-09-30"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5178,3 +5178,17 @@ APP_VERIFICATION_STEPS = [
     "待生产查看三批10、20、30张来源，核对合计计划取用60张与逐批明细，重新登录后仍可读取。",
 ]
 APP_CHANGELOG = [*(f"v0.22.539：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "常用箱新增参数化图纸工作台：选择结构模板、修改主尺寸或点选局部尺寸，实时更新二维轮廓与三维折叠，支持随动恢复、撤销重做和保存重开。",
+    "长短隔板按真实插槽生成闭合轮廓；组合内衬与纸盒通过真实BOM用量摆放冻结子件发布版，同编码不同子件保持独立。",
+    "发布版支持工程PDF、1:1 PDF、SVG和分层DXF；保留历史图纸、印刷对象、附件与采用关系。纯组合输出装配清单，实体子件单独导出刀线。",
+    "保留权限、客户范围、版本、幂等及事务保护，无数据库迁移，不代填正式插槽、模具、BOM或库存。",
+]
+APP_VERIFICATION_STEPS = [
+    "主数据→常用箱，打开目标产品的图纸工作台；选择箱型、输入尺寸，点选尺寸标注后微调，核对二维与三维实时变化。",
+    "保存后退出重开，核对参数、局部覆盖和客户图号；发布后下载工程PDF、SVG、1:1 PDF或DXF。",
+    "组合产品先分别保存并发布实体子件图纸，再按BOM用量摆放；打开子件后用返回上级图纸回到原装配。",
+    "000148长短隔板的插槽数量、位置、槽宽、槽深须按实际模具填写；实际纸厚、加工补偿、100mm标尺试印及刀模导入另做现场核对。",
+]
+APP_CHANGELOG = [*(f"v0.22.540：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

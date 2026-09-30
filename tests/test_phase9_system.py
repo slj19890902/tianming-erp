@@ -140,7 +140,11 @@ def test_system_backup_api_is_admin_only_and_lists_created_backup(
     assert listed.json()["items"][0]["size"] > 0
 
 
-def test_restore_api_restores_data_and_writes_audit(system_api_app) -> None:
+def test_restore_api_requires_managed_assistant_and_keeps_database(
+    system_api_app,
+) -> None:
+    import hashlib
+
     app, database_path, backup_dir = system_api_app
     _write_marker(database_path, "backup-version")
     with TestClient(app) as client:
@@ -148,30 +152,30 @@ def test_restore_api_restores_data_and_writes_audit(system_api_app) -> None:
         created = client.post("/api/system/backups")
         assert created.status_code == 201, created.text
         _write_marker(database_path, "current-version")
+        before = hashlib.sha256(database_path.read_bytes()).hexdigest()
         restored = client.post(
             "/api/system/backups/restore",
             json={"filename": created.json()["filename"]},
         )
 
-    assert restored.status_code == 200, restored.text
-    assert restored.json()["integrity_check"] == "ok"
-    emergency = backup_dir / restored.json()["pre_restore_backup"]
-    assert emergency.name.endswith("_pre_restore.sqlite3")
-    assert _read_marker(database_path) == "backup-version"
-    assert _read_marker(emergency) == "current-version"
+    assert restored.status_code == 409, restored.text
+    assert "天明ERP助手" in str(restored.json()["detail"])
+    assert hashlib.sha256(database_path.read_bytes()).hexdigest() == before
+    assert _read_marker(database_path) == "current-version"
+    assert not list(backup_dir.glob("*_pre_restore.sqlite3"))
     with sqlite3.connect(database_path) as connection:
-        action = connection.execute(
+        action_count = connection.execute(
             "SELECT action FROM operation_logs "
-            "WHERE action = 'RESTORE_DATABASE' ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-    assert action == ("RESTORE_DATABASE",)
+            "WHERE action = 'RESTORE_DATABASE'"
+        ).fetchall()
+    assert action_count == []
 
 
 @pytest.mark.parametrize(
     "filename",
     ["../outside.sqlite3", r"C:\outside.sqlite3", "backup.txt"],
 )
-def test_restore_rejects_unsafe_backup_filename(
+def test_restore_rejects_all_legacy_web_payloads(
     system_api_app,
     filename: str,
 ) -> None:
@@ -183,7 +187,140 @@ def test_restore_rejects_unsafe_backup_filename(
             json={"filename": filename},
         )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
+    assert "完整备份" in str(response.json()["detail"])
+
+
+def test_p0_5_web_restore_endpoint_is_closed_without_touching_files(
+    system_api_app,
+) -> None:
+    """The running web service must never replace even an otherwise valid database."""
+    import hashlib
+
+    app, database_path, backup_dir = system_api_app
+    _write_marker(database_path, "backup-version")
+    with TestClient(app) as client:
+        _login(client, "admin")
+        created = client.post("/api/system/backups")
+        assert created.status_code == 201, created.text
+        source = backup_dir / created.json()["filename"]
+        _write_marker(database_path, "current-version")
+        before_database = hashlib.sha256(database_path.read_bytes()).hexdigest()
+        before_source = hashlib.sha256(source.read_bytes()).hexdigest()
+
+        response = client.post(
+            "/api/system/backups/restore",
+            json={"filename": source.name},
+        )
+
+    assert response.status_code == 409, response.text
+    assert "天明ERP助手" in str(response.json()["detail"])
+    assert hashlib.sha256(database_path.read_bytes()).hexdigest() == before_database
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == before_source
+    assert not list(backup_dir.glob("*_pre_restore.sqlite3"))
+
+
+def test_p0_5_restore_endpoint_checks_permission_before_closed_route(
+    system_api_app,
+) -> None:
+    app, _, _ = system_api_app
+    payload = {"filename": "candidate.sqlite3"}
+
+    with TestClient(app) as client:
+        anonymous = client.post("/api/system/backups/restore", json=payload)
+        _login(client, "finance")
+        forbidden = client.post("/api/system/backups/restore", json=payload)
+        _login(client, "admin")
+        closed = client.post("/api/system/backups/restore", json=payload)
+
+    assert anonymous.status_code == 401
+    assert forbidden.status_code == 403
+    assert closed.status_code == 409
+    assert "天明ERP助手" in str(closed.json()["detail"])
+
+
+def test_p0_5_managed_restore_status_is_permissioned_and_receipt_backed(
+    system_api_app,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import hashlib
+    import json
+
+    app, _, _ = system_api_app
+    managed_root = tmp_path / "managed-root"
+    control = managed_root / "control"
+    receipts = control / "backup-receipts"
+    release_id = "a" * 64
+    release = managed_root / "releases" / release_id
+    backup = tmp_path / "mock-nas" / "current.tmbackup"
+    receipts.mkdir(parents=True)
+    release.mkdir(parents=True)
+    backup.parent.mkdir()
+    backup.write_bytes(b"synthetic encrypted package")
+    digest = hashlib.sha256(backup.read_bytes()).hexdigest()
+    (managed_root / "state.json").write_text(
+        json.dumps(
+            {
+                "current": release_id,
+                "last_backup": str(backup),
+                "last_backup_at": "2026-09-29T16:09:06+08:00",
+                "backup_error": None,
+                "operation": "update",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (release / "manifest.json").write_text(
+        json.dumps(
+            {
+                "type": "tianming.release.v1",
+                "version": "fixture-current",
+                "revision": "fixture_head",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (receipts / "current.json").write_text(
+        json.dumps(
+            {
+                "path": str(backup),
+                "sha256": digest,
+                "size": backup.stat().st_size,
+                "verified": True,
+                "storage": "nas",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TM_ERP_CONTROL", str(control))
+
+    with TestClient(app) as client:
+        anonymous = client.get("/api/system/backups/managed-status")
+        _login(client, "finance")
+        forbidden = client.get("/api/system/backups/managed-status")
+        _login(client, "admin")
+        response = client.get("/api/system/backups/managed-status")
+
+    assert anonymous.status_code == 401
+    assert forbidden.status_code == 403
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["configured"] is True
+    assert body["direct_web_restore_enabled"] is False
+    assert body["latest_backup"] == {
+        "filename": "current.tmbackup",
+        "created_at": "2026-09-29T16:09:06+08:00",
+        "size": backup.stat().st_size,
+        "available": True,
+        "receipt_verified": True,
+    }
+    assert body["release"] == {
+        "version": "fixture-current",
+        "revision": "fixture_head",
+    }
+    assert str(managed_root) not in response.text
+    assert str(backup.parent) not in response.text
 
 
 def _plant_fake_backups(backup_dir: Path, count: int) -> list[str]:

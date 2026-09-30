@@ -23,6 +23,18 @@ from test_warehouse_inventory_foundation import db as legacy_db
 from test_n036_delivery_pick import pick_app
 
 
+def priced_product(db, product):
+    # New physical entries require an actual quoted material recipe. Keep the
+    # shelf fixture valid without bypassing the production cost gate.
+    from tests.test_inventory_cost_snapshot import _material
+    material = _material(db, code=f'SHELF-COST-{product.id}', price='2')
+    product.material_id = material.id
+    product.layer_count = material.layer_count
+    product.report_length_mm = 1000
+    product.report_width_mm = 300
+    db.flush()
+
+
 @pytest.fixture
 def setup(rack_factory, monkeypatch):
     monkeypatch.setattr(location_candidates, 'load_warehouse_twin_published_floor_identity',
@@ -30,6 +42,7 @@ def setup(rack_factory, monkeypatch):
     with rack_factory() as db:
         ids = sync_published_rack_cells(db, floor_layout=_layout(), operator_id=1).created_location_ids
         customer, product = seed_product(db)
+        priced_product(db, product)
         customer.chinese_short_name = '测试甲'
         db.commit()
         return rack_factory, product.id, customer.id, list(ids)
@@ -96,6 +109,7 @@ def test_bound_cell_rejects_mixed_goods_and_over_capacity(setup):
         db.rollback()
         assert db.scalar(select(InventoryLot.id)) is None
         other_customer, other_product = seed_other_customer_product(db, '02')
+        priced_product(db, other_product)
         db.commit()
         with pytest.raises(WarehouseInventoryError, match='混放'):
             incoming(db, other_product.id, other_customer.id, ids[0], 50)

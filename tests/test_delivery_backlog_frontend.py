@@ -16,6 +16,9 @@ const preview=()=>({customer_id:1,originKey:'new',signature:ctx.deliveryFormSign
  ctx.deliveryBacklogs={loading:false,preview:preview()};
  ctx.deliveryForm.lines[0].delivered_quantity=120;
  await ctx.applyDeliveryBacklogs();assert.equal(ctx.deliveryForm.lines.length,1);assert.equal(ctx.deliveryForm.lines[0].delivered_quantity,120);
+ ctx.deliveryBacklogs.preview=preview();ctx.deliveryBacklogs.preview.items[0].customer_quantity_step=2;ctx.deliveryBacklogs.preview.items[0].take=1;
+ const beforeFractionalStock=JSON.stringify(ctx.deliveryForm);
+ await ctx.applyDeliveryBacklogs();assert.equal(JSON.stringify(ctx.deliveryForm),beforeFractionalStock,'odd customer quantity must not write an impossible physical draft');
  ctx.deliveryForm.lines[0].delivered_quantity=100;ctx.deliveryBacklogs.preview=preview();
  await ctx.applyDeliveryBacklogs();assert.deepEqual(ctx.deliveryForm.lines.map(r=>[r.order_item_id,r.delivered_quantity]),[[1,40],[2,30],[3,30]]);
  assert.equal(ctx.deliveryForm.lines[2].remarks,'keep');assert.equal(ctx.deliveryBacklogs.preview,null);

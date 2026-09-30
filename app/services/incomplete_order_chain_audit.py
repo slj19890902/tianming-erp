@@ -5,6 +5,7 @@ import hmac
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from fractions import Fraction
 from typing import Iterable, Sequence
 
 from sqlalchemy import or_, select
@@ -32,8 +33,12 @@ from app.models.supplier_requisition_order import (
 from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation,
     FinishedGoodsInventoryDetail,
+    InventoryLocationMovement,
     InventoryLot,
+    InventoryLotTransfer,
     InventoryMovement,
+    InventoryPallet,
+    InventoryPalletItem,
     InventoryReservation,
 )
 from app.services.order_business_status import (
@@ -50,6 +55,15 @@ from app.services.production_station_routing import (
 REPORT_SCHEMA_VERSION = "p0-15-v2"
 TERMINAL_ORDER_STATUSES = frozenset(
     {"completed", "archived", "closed", "dead", "cancelled"}
+)
+DELIVERED_ORDER_BUSINESS_STATUSES = frozenset(
+    {
+        "waiting_receipt",
+        "pending_reconciliation",
+        "pending_invoice",
+        "pending_payment",
+        "completed",
+    }
 )
 FINDING_CODES = frozenset(
     {
@@ -300,6 +314,7 @@ def _completion_rows(db: Session, item_ids: Sequence[int]) -> dict[int, list[dic
                 ProductionCompletion.material_input_quantity,
                 ProductionCompletion.completion_type,
                 ProductionCompletion.origin,
+                ProductionCompletion.initial_disposition,
                 ProductionCompletion.stock_quantity,
                 ProductionCompletion.direct_delivery_quantity,
             ).where(
@@ -327,6 +342,7 @@ def _lots_by_id(db: Session, lot_ids: Sequence[int]) -> dict[int, dict]:
                 InventoryLot.quantity_consumed,
                 InventoryLot.quantity_damaged,
                 InventoryLot.quantity_scrapped,
+                InventoryLot.warehouse_location_id,
             ).where(InventoryLot.id.in_(chunk))
         ).mappings():
             result[int(row["id"])] = dict(row)
@@ -335,7 +351,13 @@ def _lots_by_id(db: Session, lot_ids: Sequence[int]) -> dict[int, dict]:
 
 def _lot_and_movement_maps(
     db: Session, completion_rows: dict[int, list[dict]]
-) -> tuple[dict[int, dict], dict[int, list[dict]], dict[int, list[int]]]:
+) -> tuple[
+    dict[int, dict],
+    dict[int, list[dict]],
+    dict[int, list[int]],
+    dict[int, list[dict]],
+    dict[int, dict],
+]:
     completion_ids = sorted(
         int(row["id"])
         for rows in completion_rows.values()
@@ -347,11 +369,44 @@ def _lot_and_movement_maps(
         for row in rows
         if row["inventory_lot_id"] is not None
     )
+    # A finished lot may be split and moved more than once.  The original
+    # completion lot is still the source identity, while descendants hold the
+    # live stock; collect the complete transfer graph before judging either.
+    graph_lot_ids = set(lot_ids)
+    frontier = set(lot_ids)
+    transfers_by_source: dict[int, list[dict]] = defaultdict(list)
+    while frontier:
+        next_frontier: set[int] = set()
+        for chunk in _chunks(sorted(frontier)):
+            for row in db.execute(
+                select(
+                    InventoryLotTransfer.id,
+                    InventoryLotTransfer.source_lot_id,
+                    InventoryLotTransfer.target_lot_id,
+                    InventoryLotTransfer.quantity,
+                    InventoryLotTransfer.available_quantity,
+                    InventoryLotTransfer.reserved_quantity,
+                    InventoryLotTransfer.idempotency_key,
+                    InventoryLotTransfer.source_location_id,
+                    InventoryLotTransfer.target_location_id,
+                    InventoryLotTransfer.source_version_before,
+                    InventoryLotTransfer.source_version_after,
+                    InventoryLotTransfer.transferred_at,
+                ).where(InventoryLotTransfer.source_lot_id.in_(chunk))
+            ).mappings():
+                record = dict(row)
+                transfers_by_source[int(row["source_lot_id"])].append(record)
+                target_id = int(row["target_lot_id"])
+                if target_id not in graph_lot_ids:
+                    graph_lot_ids.add(target_id)
+                    next_frontier.add(target_id)
+        frontier = next_frontier
+    graph_lot_ids = sorted(graph_lot_ids)
     lots: dict[int, dict] = {}
     movements: dict[int, list[dict]] = defaultdict(list)
     completion_source_lots: dict[int, list[int]] = defaultdict(list)
-    lots.update(_lots_by_id(db, lot_ids))
-    for chunk in _chunks(lot_ids):
+    lots.update(_lots_by_id(db, graph_lot_ids))
+    for chunk in _chunks(graph_lot_ids):
         for row in db.execute(
             select(
                 InventoryMovement.id,
@@ -361,6 +416,18 @@ def _lot_and_movement_maps(
                 InventoryMovement.related_order_id,
                 InventoryMovement.related_order_item_id,
                 InventoryMovement.related_delivery_id,
+                InventoryMovement.idempotency_key,
+                InventoryMovement.remarks,
+                InventoryMovement.before_available,
+                InventoryMovement.after_available,
+                InventoryMovement.before_reserved,
+                InventoryMovement.after_reserved,
+                InventoryMovement.before_consumed,
+                InventoryMovement.after_consumed,
+                InventoryMovement.before_damaged,
+                InventoryMovement.after_damaged,
+                InventoryMovement.before_scrapped,
+                InventoryMovement.after_scrapped,
             ).where(InventoryMovement.inventory_lot_id.in_(chunk))
         ).mappings():
             movements[int(row["inventory_lot_id"])].append(dict(row))
@@ -372,7 +439,61 @@ def _lot_and_movement_maps(
             )
         ):
             completion_source_lots[int(completion_id)].append(int(lot_id))
-    return lots, movements, completion_source_lots
+    pallet_evidence: dict[int, dict] = {}
+    pallet_ids: set[int] = set()
+    for chunk in _chunks(graph_lot_ids):
+        for row in db.execute(
+            select(
+                InventoryPalletItem.inventory_lot_id,
+                InventoryPalletItem.pallet_id,
+                InventoryPalletItem.created_at.label("pallet_item_created_at"),
+                InventoryPallet.location_id,
+                InventoryPallet.status,
+                InventoryPallet.is_current,
+                InventoryPallet.version,
+            )
+            .join(InventoryPallet, InventoryPallet.id == InventoryPalletItem.pallet_id)
+            .where(InventoryPalletItem.inventory_lot_id.in_(chunk))
+        ).mappings():
+            record = dict(row)
+            record["movements"] = []
+            lot_id = int(row["inventory_lot_id"])
+            if lot_id in pallet_evidence:
+                pallet_evidence[lot_id] = {
+                    "inventory_lot_id": lot_id,
+                    "conflict": "multiple_pallet_items",
+                    "movements": [],
+                }
+            else:
+                pallet_evidence[lot_id] = record
+            pallet_ids.add(int(row["pallet_id"]))
+    movements_by_pallet: dict[int, list[dict]] = defaultdict(list)
+    for chunk in _chunks(sorted(pallet_ids)):
+        for row in db.execute(
+            select(
+                InventoryLocationMovement.id,
+                InventoryLocationMovement.pallet_id,
+                InventoryLocationMovement.from_location_id,
+                InventoryLocationMovement.to_location_id,
+                InventoryLocationMovement.movement_type,
+                InventoryLocationMovement.moved_at,
+                InventoryLocationMovement.idempotency_key,
+                InventoryLocationMovement.confirmed_at,
+                InventoryLocationMovement.pallet_version_before,
+                InventoryLocationMovement.pallet_version_after,
+            ).where(InventoryLocationMovement.pallet_id.in_(chunk))
+        ).mappings():
+            movements_by_pallet[int(row["pallet_id"])].append(dict(row))
+    for evidence in pallet_evidence.values():
+        if evidence.get("pallet_id") is not None:
+            evidence["movements"] = movements_by_pallet[int(evidence["pallet_id"])]
+    return (
+        lots,
+        movements,
+        completion_source_lots,
+        transfers_by_source,
+        pallet_evidence,
+    )
 
 
 def _delivery_rows(db: Session, item_ids: Sequence[int]) -> tuple[dict[int, list[dict]], dict[int, list[dict]]]:
@@ -406,6 +527,7 @@ def _delivery_rows(db: Session, item_ids: Sequence[int]) -> tuple[dict[int, list
                 DeliveryInventoryAllocation.consume_movement_id,
                 DeliveryInventoryAllocation.consumed_stock_quantity,
                 DeliveryInventoryAllocation.credited_requirement_quantity,
+                DeliveryInventoryAllocation.requirement_quantity_denominator,
                 DeliveryInventoryAllocation.reversed_stock_quantity,
                 DeliveryInventoryAllocation.reversed_requirement_quantity,
                 DeliveryInventoryAllocation.status,
@@ -417,13 +539,14 @@ def _delivery_rows(db: Session, item_ids: Sequence[int]) -> tuple[dict[int, list
 
 def _effective_delivery_quantities(
     db: Session, delivery_item_ids: Sequence[int]
-) -> dict[int, int]:
-    result: dict[int, int] = {}
+) -> dict[int, dict]:
+    result: dict[int, dict] = {}
     for chunk in _chunks(sorted(set(delivery_item_ids))):
-        for delivery_item_id, actual_quantity in db.execute(
+        for row in db.execute(
             select(
                 ReturnReceiptItem.delivery_item_id,
                 ReturnReceiptItem.actual_received_quantity,
+                ReturnReceiptItem.resolution_action,
             )
             .join(
                 ReturnReceipt,
@@ -433,8 +556,8 @@ def _effective_delivery_quantities(
                 ReturnReceiptItem.delivery_item_id.in_(chunk),
                 ReturnReceipt.status == "confirmed",
             )
-        ):
-            result[int(delivery_item_id)] = max(int(actual_quantity or 0), 0)
+        ).mappings():
+            result[int(row["delivery_item_id"])] = dict(row)
     return result
 
 
@@ -453,6 +576,490 @@ def _movement_by_id(db: Session, movement_ids: Sequence[int]) -> dict[int, dict]
         ).mappings():
             result[int(row["id"])] = dict(row)
     return result
+
+
+@dataclass(frozen=True)
+class _TransferChainValidation:
+    status: str
+    lot_ids: frozenset[int]
+    review_reasons: tuple[str, ...] = ()
+
+
+def _completion_inventory_quantity(
+    completion: dict,
+    root_lot: dict | None,
+) -> int | None:
+    """Return the quantity represented by the completion's root lot.
+
+    Current direct completions write their full actual output to a physical
+    ``production_completion`` lot even though ``stock_quantity`` is zero.
+    A ``production_surplus`` lot represents only the frozen stock portion.
+    The completion conservation contract must hold before either source rule
+    is trusted.
+    """
+    if root_lot is None:
+        return None
+    actual = int(completion.get("actual_output_quantity") or 0)
+    direct = int(completion.get("direct_delivery_quantity") or 0)
+    stock = int(completion.get("stock_quantity") or 0)
+    disposition = str(completion.get("initial_disposition") or "")
+    if (
+        actual <= 0
+        or direct < 0
+        or stock < 0
+        or direct + stock != actual
+        or disposition not in {"direct", "stock", "split"}
+    ):
+        return None
+    source_type = str(root_lot.get("source_type") or "")
+    if source_type == "production_completion":
+        return actual
+    if source_type == "production_surplus" and stock > 0:
+        return stock
+    return None
+
+
+def _completion_transfer_chain_validation(
+    *,
+    root_lot_id: int,
+    completion_id: int,
+    completion_inventory_quantity: int | None,
+    customer_id: int,
+    product_id: int | None,
+    lots: dict[int, dict],
+    finished_details: dict[int, dict],
+    movements: dict[int, list[dict]],
+    transfers_by_source: dict[int, list[dict]],
+    pallet_evidence: dict[int, dict],
+) -> _TransferChainValidation:
+    """Verify a moved completion by graph and ledger facts, never by type alone."""
+    root = lots.get(root_lot_id)
+    root_detail = finished_details.get(root_lot_id)
+    if (
+        root is None
+        or root_detail is None
+        or completion_inventory_quantity is None
+        or completion_inventory_quantity <= 0
+    ):
+        return _TransferChainValidation("invalid", frozenset())
+    seen: set[int] = set()
+    active: set[int] = set()
+    saw_transfer = False
+    review_reasons: set[str] = set()
+    verified_transfer_movement_keys: set[str] = set()
+
+    def transfer_movement_key(transfer_key: str, role: str) -> str:
+        """Mirror the immutable key written by warehouse_inventory._transfer_key.
+
+        InventoryMovement has no transfer foreign key.  The two transaction
+        rows are therefore bound to an InventoryLotTransfer by this exact
+        derived key, rather than by matching a quantity or a loose suffix.
+        """
+        raw = f"location-transfer:{transfer_key}:{role}"
+        if len(raw) <= 100:
+            return raw
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+        return f"{raw[:75]}:{digest}"
+
+    balance_names = ("available", "reserved", "consumed", "damaged", "scrapped")
+
+    def movement_balances(row: dict, prefix: str) -> tuple[int, ...] | None:
+        values = tuple(row.get(f"{prefix}_{name}") for name in balance_names)
+        if any(value is None for value in values):
+            return None
+        normalized = tuple(int(value) for value in values)
+        return normalized if min(normalized) >= 0 else None
+
+    def balances(row: dict, *, available_delta: int, reserved_delta: int) -> bool:
+        before_available = row.get("before_available")
+        after_available = row.get("after_available")
+        before_reserved = row.get("before_reserved")
+        after_reserved = row.get("after_reserved")
+        if None in {
+            before_available,
+            after_available,
+            before_reserved,
+            after_reserved,
+        }:
+            return False
+        before = movement_balances(row, "before")
+        after = movement_balances(row, "after")
+        return bool(
+            before is not None
+            and after is not None
+            and int(after_available) - int(before_available) == available_delta
+            and int(after_reserved) - int(before_reserved) == reserved_delta
+            and all(after[index] == before[index] for index in range(2, 5))
+        )
+
+    def ledger_is_contiguous(lot_id: int) -> bool:
+        rows = sorted(movements.get(lot_id, []), key=lambda row: int(row["id"]))
+        if not rows:
+            return False
+        previous_after: tuple[int, ...] | None = None
+        for row in rows:
+            before = movement_balances(row, "before")
+            after = movement_balances(row, "after")
+            if before is None or after is None:
+                return False
+            if previous_after is None:
+                if any(before):
+                    return False
+            elif before != previous_after:
+                return False
+            if not movement_semantics_are_valid(row, before=before, after=after):
+                return False
+            previous_after = after
+        lot = lots.get(lot_id)
+        return bool(
+            lot
+            and previous_after
+            == tuple(int(lot.get(f"quantity_{name}") or 0) for name in balance_names)
+        )
+
+    def movement_semantics_are_valid(
+        row: dict,
+        *,
+        before: tuple[int, ...],
+        after: tuple[int, ...],
+    ) -> bool:
+        quantity = int(row.get("quantity") or 0)
+        if quantity < 0:
+            return False
+        delta = tuple(after[index] - before[index] for index in range(5))
+        movement_type = str(row.get("movement_type") or "")
+        if movement_type == "manual_in":
+            return delta == (quantity, 0, 0, 0, 0)
+        if movement_type == "adjust":
+            return (
+                delta[1:] == (0, 0, 0, 0)
+                and (
+                    (quantity == 0 and delta[0] == 0)
+                    or (quantity > 0 and abs(delta[0]) == quantity)
+                )
+            )
+        if movement_type == "reserve":
+            return delta == (-quantity, quantity, 0, 0, 0)
+        if movement_type == "release_reserve":
+            return delta == (quantity, -quantity, 0, 0, 0)
+        if movement_type == "consume":
+            return (
+                delta[0] <= 0
+                and delta[1] <= 0
+                and -delta[0] - delta[1] == quantity
+                and delta[2:] == (quantity, 0, 0)
+            )
+        if movement_type == "reverse_consume":
+            return (
+                delta[0] >= 0
+                and delta[1] >= 0
+                and delta[0] + delta[1] == quantity
+                and delta[2:] == (-quantity, 0, 0)
+            )
+        if movement_type == "damage":
+            return delta == (-quantity, 0, 0, quantity, 0)
+        if movement_type == "scrap":
+            return delta == (-quantity, 0, 0, 0, quantity)
+        if movement_type == "return_in":
+            return (
+                delta[0] >= 0
+                and delta[1] >= 0
+                and delta[0] + delta[1] == quantity
+                and delta[2:] == (0, 0, 0)
+            )
+        if movement_type == "return_reconsume":
+            return (
+                delta[0] <= 0
+                and delta[1] <= 0
+                and -delta[0] - delta[1] in {0, quantity}
+                and delta[2:] == (quantity, 0, 0)
+            )
+        if movement_type in {"freeze", "unfreeze", "transfer_to_general"}:
+            return quantity == 0 and delta == (0, 0, 0, 0, 0)
+        if movement_type == "location_transfer":
+            key = str(row.get("idempotency_key") or "")
+            if key in verified_transfer_movement_keys:
+                return True
+            return delta == (0, 0, 0, 0, 0)
+        return False
+
+    def pallet_move_proves_location(
+        lot_id: int,
+        *,
+        expected_location_id: int,
+        actual_location_id: int,
+        not_before: datetime | None,
+        not_after: datetime | None = None,
+    ) -> bool | None:
+        evidence = pallet_evidence.get(lot_id)
+        if evidence is None:
+            return None
+        if evidence.get("conflict"):
+            return False
+        if (
+            not bool(evidence.get("is_current"))
+            or str(evidence.get("status") or "") != "active"
+            or int(evidence.get("location_id") or 0) != actual_location_id
+        ):
+            return False
+        pallet_version = int(evidence.get("version") or 0)
+        item_created_at = evidence.get("pallet_item_created_at")
+        lower_bound = max(
+            (
+                value
+                for value in (not_before, item_created_at)
+                if value is not None
+            ),
+            default=None,
+        )
+        candidates: list[dict] = []
+        for row in sorted(
+            evidence.get("movements", []), key=lambda value: int(value["id"])
+        ):
+            moved_at = row.get("moved_at")
+            before_version = int(row.get("pallet_version_before") or 0)
+            after_version = int(row.get("pallet_version_after") or 0)
+            if (
+                row.get("movement_type") != "move"
+                or row.get("from_location_id") is None
+            ):
+                continue
+            confirmed_at = row.get("confirmed_at")
+            if (
+                moved_at is None
+                or confirmed_at is None
+                or confirmed_at < moved_at
+                or not str(row.get("idempotency_key") or "")
+                or int(row.get("from_location_id") or 0) <= 0
+                or int(row.get("to_location_id") or 0) <= 0
+                or before_version <= 0
+                or after_version != before_version + 1
+            ):
+                return False
+            if lower_bound is not None and confirmed_at < lower_bound:
+                continue
+            if not_after is not None and confirmed_at > not_after:
+                continue
+            candidates.append(row)
+        current_location_id = expected_location_id
+        last_version = 0
+        saw_move = False
+        for row in candidates:
+            before_version = int(row["pallet_version_before"])
+            after_version = int(row["pallet_version_after"])
+            if (
+                int(row["from_location_id"]) != current_location_id
+                or (last_version and before_version != last_version)
+            ):
+                return False
+            current_location_id = int(row["to_location_id"])
+            last_version = after_version
+            saw_move = True
+        if not saw_move or current_location_id != actual_location_id:
+            return None
+        if not_after is None and last_version != pallet_version:
+            return None if last_version < pallet_version else False
+        return True
+
+    def compatible(lot_id: int) -> bool:
+        lot = lots.get(lot_id)
+        detail = finished_details.get(lot_id)
+        return bool(
+            lot
+            and detail
+            and lot["inventory_type"] == "finished"
+            and lot["source_ref_type"] == "production_completion"
+            and int(lot["source_ref_id"] or 0) == completion_id
+            and (
+                bool(detail["is_general"])
+                or int(detail["owner_customer_id"] or 0) == customer_id
+            )
+            and (product_id is None or bool(detail["is_general"])
+                 or int(detail["product_id"] or 0) == product_id)
+        )
+
+    incoming_parent_by_lot: dict[int, int] = {}
+
+    def walk(
+        lot_id: int,
+        *,
+        incoming_location_id: int | None = None,
+        incoming_transferred_at: datetime | None = None,
+    ) -> bool:
+        nonlocal saw_transfer
+        if lot_id in active:
+            return False
+        if lot_id in seen:
+            return False
+        if not compatible(lot_id):
+            return False
+        if (
+            incoming_location_id is not None
+            and lots[lot_id].get("source_type") != "transfer"
+        ):
+            return False
+        seen.add(lot_id)
+        active.add(lot_id)
+        logical_location_id = incoming_location_id
+        logical_location_since = incoming_transferred_at
+        last_source_version_before: int | None = None
+        for transfer in sorted(
+            transfers_by_source.get(lot_id, []), key=lambda row: int(row["id"])
+        ):
+            saw_transfer = True
+            target_id = int(transfer["target_lot_id"])
+            quantity = int(transfer["quantity"] or 0)
+            available_quantity = int(transfer["available_quantity"] or 0)
+            reserved_quantity = int(transfer["reserved_quantity"] or 0)
+            source_location_id = int(transfer["source_location_id"] or 0)
+            target_location_id = int(transfer["target_location_id"] or 0)
+            source_version_before = int(transfer["source_version_before"] or 0)
+            source_version_after = int(transfer["source_version_after"] or 0)
+            transferred_at = transfer.get("transferred_at")
+            if (
+                quantity <= 0
+                or quantity != available_quantity + reserved_quantity
+                or source_location_id <= 0
+                or target_location_id <= 0
+                or source_location_id == target_location_id
+                or source_version_before <= 0
+                or source_version_after != source_version_before + 1
+                or transferred_at is None
+                or (
+                    last_source_version_before is not None
+                    and source_version_before <= last_source_version_before
+                )
+            ):
+                return False
+            if (
+                logical_location_id is not None
+                and source_location_id != logical_location_id
+            ):
+                pallet_proof = pallet_move_proves_location(
+                    lot_id,
+                    expected_location_id=logical_location_id,
+                    actual_location_id=source_location_id,
+                    not_before=logical_location_since,
+                    not_after=transferred_at,
+                )
+                if pallet_proof is False:
+                    return False
+                if pallet_proof is None:
+                    review_reasons.add("intermediate_location_history_missing")
+                logical_location_id = source_location_id
+                logical_location_since = transferred_at
+            last_source_version_before = source_version_before
+            key = str(transfer.get("idempotency_key") or "")
+            if not key:
+                return False
+            source_moves = [
+                row
+                for row in movements.get(lot_id, [])
+                if row["movement_type"] == "location_transfer"
+                and int(row["quantity"] or 0) == quantity
+                and row.get("idempotency_key") == transfer_movement_key(key, "source")
+            ]
+            if len(source_moves) != 1:
+                return False
+            verified_transfer_movement_keys.add(
+                str(source_moves[0].get("idempotency_key") or "")
+            )
+            if target_id == lot_id:
+                # A full-location move keeps one lot and hence only writes its
+                # source movement.  It must preserve both stock balances.
+                if not balances(
+                    source_moves[0], available_delta=0, reserved_delta=0
+                ):
+                    return False
+                logical_location_id = target_location_id
+                logical_location_since = transferred_at
+                continue
+            target_moves = [
+                row
+                for row in movements.get(target_id, [])
+                if row["movement_type"] == "location_transfer"
+                and int(row["quantity"] or 0) == quantity
+                and row.get("idempotency_key") == transfer_movement_key(key, "target")
+            ]
+            if len(target_moves) != 1:
+                return False
+            verified_transfer_movement_keys.add(
+                str(target_moves[0].get("idempotency_key") or "")
+            )
+            # The paired ledger rows must be this transfer's two lots and must
+            # conserve its available/reserved decomposition exactly.
+            if not balances(
+                source_moves[0],
+                available_delta=-available_quantity,
+                reserved_delta=-reserved_quantity,
+            ) or not balances(
+                target_moves[0],
+                available_delta=available_quantity,
+                reserved_delta=reserved_quantity,
+            ):
+                return False
+            if logical_location_id is None:
+                logical_location_id = source_location_id
+            existing_parent = incoming_parent_by_lot.get(target_id)
+            if existing_parent is not None and existing_parent != lot_id:
+                return False
+            incoming_parent_by_lot[target_id] = lot_id
+            if not walk(
+                target_id,
+                incoming_location_id=target_location_id,
+                incoming_transferred_at=transferred_at,
+            ):
+                return False
+        if (
+            logical_location_id is not None
+            and int(lots[lot_id].get("warehouse_location_id") or 0)
+            != logical_location_id
+        ):
+            actual_location_id = int(
+                lots[lot_id].get("warehouse_location_id") or 0
+            )
+            pallet_proof = pallet_move_proves_location(
+                lot_id,
+                expected_location_id=logical_location_id,
+                actual_location_id=actual_location_id,
+                not_before=logical_location_since,
+            )
+            if pallet_proof is False:
+                return False
+            if pallet_proof is None:
+                review_reasons.add("leaf_location_history_missing")
+        if not ledger_is_contiguous(lot_id):
+            return False
+        active.remove(lot_id)
+        return True
+
+    valid = walk(root_lot_id) and saw_transfer
+    if valid:
+        root_manual_in = [
+            row
+            for row in movements.get(root_lot_id, [])
+            if row.get("movement_type") == "manual_in"
+        ]
+        valid = (
+            len(root_manual_in) == 1
+            and int(root_manual_in[0].get("quantity") or 0)
+            == completion_inventory_quantity
+            and all(
+                not any(
+                    row.get("movement_type") == "manual_in"
+                    for row in movements.get(lot_id, [])
+                )
+                for lot_id in seen
+                if lot_id != root_lot_id
+            )
+        )
+    if not valid:
+        return _TransferChainValidation("invalid", frozenset())
+    return _TransferChainValidation(
+        "review" if review_reasons else "valid",
+        frozenset(seen),
+        tuple(sorted(review_reasons)),
+    )
 
 
 def _reservation_rows(
@@ -785,9 +1392,13 @@ def audit_incomplete_order_chains(
     required_components = _required_components(db, item_ids)
     required_external_components = _required_external_components(db, item_ids)
     completions = _completion_rows(db, item_ids)
-    lots, lot_movements, completion_source_lots = _lot_and_movement_maps(
-        db, completions
-    )
+    (
+        lots,
+        lot_movements,
+        completion_source_lots,
+        transfers_by_source,
+        pallet_evidence,
+    ) = _lot_and_movement_maps(db, completions)
     completion_finished_details = _finished_details_by_lot(db, list(lots))
     deliveries, allocations = _delivery_rows(db, item_ids)
     effective_delivery_quantities = _effective_delivery_quantities(
@@ -898,6 +1509,14 @@ def audit_incomplete_order_chains(
         if (
             order.status not in MANAGEMENT_ORDER_STATUSES
             and str(order.status) != str(projection["business_status"])
+            # Persisted order status records fulfillment.  The read projection
+            # deliberately continues through receipt, reconciliation, invoice,
+            # and payment, so those later stages are compatible with delivered.
+            and not (
+                str(order.status) == "delivered"
+                and str(projection["business_status"])
+                in DELIVERED_ORDER_BUSINESS_STATUSES
+            )
         ):
             findings.append(
                 _finding(
@@ -915,10 +1534,46 @@ def audit_incomplete_order_chains(
                 )
             )
         for item in order.items:
-            if item.is_force_closed or int(item.delivered_quantity or 0) >= int(item.quantity):
+            item_id = int(item.id)
+            for delivery_item in deliveries.get(item_id, []):
+                delivery_item_id = int(delivery_item["id"])
+                receipt = effective_delivery_quantities.get(delivery_item_id)
+                if (
+                    receipt
+                    and receipt["resolution_action"] == "accept_over"
+                    and int(receipt["actual_received_quantity"] or 0)
+                    != int(delivery_item["delivered_quantity"] or 0)
+                ):
+                    findings.append(
+                        _finding(
+                            code="P015_TRACE_LINK_BROKEN",
+                            severity="review",
+                            order=order,
+                            item=item,
+                            key=anonymization_key,
+                            summary="签收数量与实际发货数量不同；签收口径不参与库存扣减核对。",
+                            evidence={
+                                "trace_kind": "delivery_receipt_quantity_divergence",
+                                "delivery_id": int(delivery_item["delivery_id"]),
+                                "delivery_item_id": delivery_item_id,
+                                "dispatched_quantity": int(
+                                    delivery_item["delivered_quantity"] or 0
+                                ),
+                                "receipt_quantity": int(
+                                    receipt["actual_received_quantity"] or 0
+                                ),
+                                "receipt_resolution_action": receipt[
+                                    "resolution_action"
+                                ],
+                            },
+                            focus_terms=normalized_focus,
+                        )
+                    )
+            if item.is_force_closed or int(item.delivered_quantity or 0) >= int(
+                item.quantity
+            ):
                 continue
             scanned_items += 1
-            item_id = int(item.id)
             item_projection = projection["items"].get(item_id, {})
             item_receipts = receipts.get(item_id, [])
             has_receipt = bool(item_receipts)
@@ -1590,23 +2245,107 @@ def audit_incomplete_order_chains(
                         )
                     )
                 source_lot_ids = completion_source_lots.get(completion_id, [])
-                if len(source_lot_ids) > 1:
+                finished_detail = completion_finished_details.get(int(lot_id or 0))
+                expected_product_id = (
+                    None
+                    if completion_task is not None
+                    and completion_task["sales_order_item_bom_component_id"] is not None
+                    else int(item.product_id)
+                )
+                completion_inventory_quantity = _completion_inventory_quantity(
+                    completion, lot
+                )
+                transfer_validation = _TransferChainValidation(
+                    "invalid", frozenset()
+                )
+                transfer_chain_trusted = False
+                transfer_graph_lot_ids: set[int] = set()
+                if lot_id is not None:
+                    transfer_validation = _completion_transfer_chain_validation(
+                        root_lot_id=int(lot_id),
+                        completion_id=completion_id,
+                        completion_inventory_quantity=completion_inventory_quantity,
+                        customer_id=int(order.customer_id),
+                        product_id=expected_product_id,
+                        lots=lots,
+                        finished_details=completion_finished_details,
+                        movements=lot_movements,
+                        transfers_by_source=transfers_by_source,
+                        pallet_evidence=pallet_evidence,
+                    )
+                    transfer_chain_trusted = transfer_validation.status in {
+                        "valid",
+                        "review",
+                    }
+                    transfer_graph_lot_ids = set(transfer_validation.lot_ids)
+                if (
+                    lot_id is not None
+                    and transfers_by_source.get(int(lot_id))
+                    and transfer_validation.status == "invalid"
+                ):
                     findings.append(
                         _finding(
-                            code="P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT",
+                            code="P015_TRACE_LINK_BROKEN",
                             severity="error",
                             order=order,
                             item=item,
                             key=anonymization_key,
-                            summary="同一生产完工事实生成了多条成品批次。",
+                            summary="完工移库图的批次、库位、流水或数量守恒记录不一致。",
                             evidence={
+                                "trace_kind": "completion_transfer_graph_invalid",
                                 "completion_id": completion_id,
-                                "inventory_lot_ids": sorted(source_lot_ids),
+                                "inventory_lot_id": int(lot_id),
+                                "transfer_ids": sorted(
+                                    int(row["id"])
+                                    for row in transfers_by_source[int(lot_id)]
+                                ),
                             },
                             focus_terms=normalized_focus,
                         )
                     )
-                finished_detail = completion_finished_details.get(int(lot_id or 0))
+                elif transfer_validation.status == "review":
+                    findings.append(
+                        _finding(
+                            code="P015_TRACE_LINK_BROKEN",
+                            severity="review",
+                            order=order,
+                            item=item,
+                            key=anonymization_key,
+                            summary="完工移库主链可核验，但后续库位历史证据不完整，需人工核对。",
+                            evidence={
+                                "trace_kind": "completion_transfer_graph_incomplete",
+                                "completion_id": completion_id,
+                                "inventory_lot_id": int(lot_id),
+                                "review_reasons": list(
+                                    transfer_validation.review_reasons
+                                ),
+                            },
+                            focus_terms=normalized_focus,
+                        )
+                    )
+                # A transfer-labelled sibling is excluded only after its whole
+                # graph has passed the checks above; a forged label remains a
+                # second completion output.
+                source_lot_ids = [
+                    candidate_id
+                    for candidate_id in source_lot_ids
+                    if candidate_id == lot_id
+                    or not (
+                        transfer_chain_trusted
+                        and candidate_id in transfer_graph_lot_ids
+                        and lots.get(candidate_id, {}).get("source_type") == "transfer"
+                    )
+                ]
+                if len(source_lot_ids) > 1:
+                    findings.append(
+                        _finding(
+                            code="P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT", severity="error",
+                            order=order, item=item, key=anonymization_key,
+                            summary="同一生产完工事实生成了多条未经验证的成品批次。",
+                            evidence={"completion_id": completion_id, "inventory_lot_ids": sorted(source_lot_ids)},
+                            focus_terms=normalized_focus,
+                        )
+                    )
                 invalid_lot = (
                     lot is None
                     or lot["inventory_type"] != "finished"
@@ -1629,10 +2368,8 @@ def audit_incomplete_order_chains(
                         and int((finished_detail or {}).get("product_id") or 0)
                         != int(item.product_id)
                     )
-                    or (
-                        lot["status"] == "closed"
-                        and not deliveries.get(item_id)
-                    )
+                    or completion_inventory_quantity is None
+                    or (lot["status"] == "closed" and not transfer_chain_trusted)
                 )
                 if invalid_lot:
                     findings.append(
@@ -1653,9 +2390,17 @@ def audit_incomplete_order_chains(
                 elif not any(
                     movement["movement_type"] == "manual_in"
                     and int(movement["quantity"] or 0)
-                    == int(completion["actual_output_quantity"] or 0)
-                    and int(movement["related_order_id"] or 0) == int(order.id)
-                    and int(movement["related_order_item_id"] or 0) == item_id
+                    == int(completion_inventory_quantity or 0)
+                    and (
+                        (
+                            int(movement["related_order_id"] or 0) == int(order.id)
+                            and int(movement["related_order_item_id"] or 0) == item_id
+                        )
+                        or (
+                            movement["related_order_id"] is None
+                            and movement["related_order_item_id"] is None
+                        )
+                    )
                     for movement in lot_movements.get(int(lot_id), [])
                 ):
                     findings.append(
@@ -1670,7 +2415,7 @@ def audit_incomplete_order_chains(
                                 "completion_id": completion_id,
                                 "inventory_lot_id": int(lot_id),
                                 "expected_quantity": int(
-                                    completion["actual_output_quantity"] or 0
+                                    completion_inventory_quantity or 0
                                 ),
                             },
                             focus_terms=normalized_focus,
@@ -1777,13 +2522,23 @@ def audit_incomplete_order_chains(
                     )
                     continue
                 credited = sum(
-                    int(row["credited_requirement_quantity"] or 0)
-                    - int(row["reversed_requirement_quantity"] or 0)
-                    for row in rows
+                    (
+                        Fraction(int(row["credited_requirement_quantity"] or 0)
+                                 - int(row["reversed_requirement_quantity"] or 0),
+                                 int(row["requirement_quantity_denominator"] or 1))
+                        for row in rows
+                    ),
+                    Fraction(0),
                 )
-                delivered = effective_delivery_quantities.get(
-                    delivery_item_id,
-                    int(delivery_item["delivered_quantity"] or 0),
+                dispatched = Fraction(int(delivery_item["delivered_quantity"] or 0), 1)
+                receipt = effective_delivery_quantities.get(delivery_item_id)
+                # A short receipt reverses/credits the net ordered delivery by
+                # its confirmed quantity.  An accept-over is a customer receipt
+                # fact only: it must not invent an extra inventory consumption.
+                delivered = (
+                    Fraction(int(receipt["actual_received_quantity"] or 0), 1)
+                    if receipt and receipt["resolution_action"] != "accept_over"
+                    else dispatched
                 )
                 if credited != delivered:
                     findings.append(
@@ -1797,8 +2552,10 @@ def audit_incomplete_order_chains(
                             evidence={
                                 "delivery_id": int(delivery_item["delivery_id"]),
                                 "delivery_item_id": delivery_item_id,
-                                "effective_delivered_quantity": delivered,
-                                "net_credited_requirement_quantity": credited,
+                                "effective_customer_quantity": int(delivered),
+                                "dispatched_customer_quantity": int(dispatched),
+                                "net_credited_requirement_numerator": credited.numerator,
+                                "net_credited_requirement_denominator": credited.denominator,
                             },
                             focus_terms=normalized_focus,
                         )

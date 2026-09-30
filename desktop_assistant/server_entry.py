@@ -9,7 +9,9 @@ import uvicorn
 
 
 def main():
-    control = Path(os.environ.pop('TM_ERP_CONTROL'))
+    # The web app reads the assistant's non-secret backup status from this root.
+    # Keep the path available while consuming the process-control nonce here.
+    control = Path(os.environ['TM_ERP_CONTROL'])
     nonce = os.environ.pop('TM_ERP_NONCE')
     server = uvicorn.Server(uvicorn.Config(
         'app.main:app', host=os.environ['ERP_BIND_HOST'], port=int(os.environ['ERP_PORT']),

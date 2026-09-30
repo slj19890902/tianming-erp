@@ -9,11 +9,6 @@ from test_fixed_shelf import setup, incoming
 from test_p1_123_warehouse_region_rack_labels import rack_factory
 
 
-@pytest.fixture(autouse=True)
-def _isolate_receipt_storage_from_entry_cost(monkeypatch):
-    monkeypatch.setattr("app.services.inventory_valuation.freeze_entry_cost", lambda *_args, **_kwargs: None)
-
-
 def choose(db, pid, lid, version=0):
     loc=db.get(WarehouseLocation,lid)
     area=db.scalar(select(WarehouseArea).where(WarehouseArea.area_code==loc.area_code))

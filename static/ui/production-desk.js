@@ -6,6 +6,7 @@
   methods:{
    selectedProductionMaterialIds(){return Object.entries(this.productionMaterialsSelected).filter(([,v])=>v).map(([id])=>Number(id));},
    materialSources(row){return row.customer_board_preparation_sources||[];},
+   materialSourcePlanSummary(row){const totals=new Map();for(const source of this.materialSources(row)){const quantity=Number(source?.remaining_sheet_quantity);if(!Number.isFinite(quantity)||quantity<0)continue;const unit=String(source?.unit||'张').trim()||'张';totals.set(unit,(totals.get(unit)||0)+quantity);}return [...totals].map(([unit,quantity])=>`${quantity} ${unit}`).join(' / ')||'数量待核';},
    materialSpec(s){return [s.board_length_mm&&s.board_width_mm?`${s.board_length_mm} × ${s.board_width_mm} mm`:'尺寸待核',s.flute_type||'楞型待核'].join(' · ');},
    materialMap(s){return '/warehouse.html?'+new URLSearchParams({readonly:'1',source:'order-context',tab:'map',floor:String(s.warehouse_floor)+'F',mode:'lookup',view:'2d',location_id:String(s.location_id),lot_id:String(s.inventory_lot_id)});},
    async showProductionMaterials(rows){

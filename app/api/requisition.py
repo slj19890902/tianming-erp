@@ -8,6 +8,7 @@ import re
 from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
 from typing import Annotated, Literal
@@ -50,6 +51,8 @@ from app.models.customer_material import (
 from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.multilevel_bom import ProductBomProfile
+from app.models.product_drawing import ProductDrawing
 from app.models.production import ProductionCompletion, ProductionTask
 from app.models.production_label_print import ProductionPackagingLabelPrintJob
 from app.models.product_bom import (
@@ -138,6 +141,8 @@ from app.services.flute_mapping import (
     validate_flute_for_write,
 )
 from app.services.product_specification import resolved_product_specification
+from app.services.product_readiness import product_readiness
+from app.services.product_drawings import engineering_drawing_condition
 from app.services.report_crease import crease_width_error
 from app.services.order_status_policy import (
     ORDER_ITEM_ACTIVE_ORDER_STATUSES,
@@ -7125,6 +7130,109 @@ def _pending_entry_dict(entry: dict) -> dict:
     }
 
 
+def _drawing_suffix(reference: str | None) -> str:
+    suffix = Path(reference or "").suffix.lower()
+    return suffix if suffix in {".jpg", ".jpeg", ".png", ".webp", ".pdf"} else ".bin"
+
+
+def _order_drawing_url(item_id: int, reference: str | None) -> str | None:
+    if not reference:
+        return None
+    return f"/api/orders/items/{item_id}/drawing/content/file{_drawing_suffix(reference)}"
+
+
+def _product_drawing_url(drawing: ProductDrawing | None) -> str | None:
+    if drawing is None:
+        return None
+    return (
+        f"/api/master/products/drawings/{drawing.id}/content/"
+        f"original{_drawing_suffix(drawing.image_path)}"
+    )
+
+
+def _decorate_pending_item_context(
+    db: Session,
+    rows: list[dict],
+    *,
+    item_models: dict[int, OrderItem],
+    products_by_id: dict[int, Product],
+) -> None:
+    """Add read-only product context without changing pending requisition facts.
+
+    The order attachment is the frozen, line-specific source.  The common-box
+    drawing is only a fallback for a line without an order attachment, matching
+    the incoming-workbench display rule.  Merge rows intentionally stay out of
+    this projection: one merged purchase row can represent several order lines
+    and therefore has no single truthful drawing identity.
+    """
+
+    product_ids = {
+        int(row["product_id"])
+        for row in rows
+        if not row.get("is_merge_group") and row.get("product_id")
+    }
+    latest_drawings: dict[int, ProductDrawing] = {}
+    bom_profiles: dict[int, ProductBomProfile] = {}
+    if product_ids:
+        drawings = db.scalars(
+            select(ProductDrawing)
+            .where(
+                ProductDrawing.product_id.in_(product_ids),
+                engineering_drawing_condition(),
+            )
+            .order_by(
+                ProductDrawing.product_id,
+                ProductDrawing.uploaded_at.desc(),
+                ProductDrawing.id.desc(),
+            )
+        ).all()
+        for drawing in drawings:
+            latest_drawings.setdefault(int(drawing.product_id), drawing)
+        bom_profiles = {
+            int(profile.product_id): profile
+            for profile in db.scalars(
+                select(ProductBomProfile).where(
+                    ProductBomProfile.product_id.in_(product_ids)
+                )
+            )
+        }
+
+    for row in rows:
+        if row.get("is_merge_group"):
+            continue
+        item = item_models.get(int(row.get("item_id") or 0))
+        product = products_by_id.get(int(row.get("product_id") or 0))
+        if item is None or product is None:
+            continue
+        order_drawing_reference = (item.drawing_file or "").strip() or None
+        product_drawing = latest_drawings.get(product.id)
+        order_drawing_path = _order_drawing_url(item.id, order_drawing_reference)
+        product_drawing_path = _product_drawing_url(product_drawing)
+        final_reference = order_drawing_reference or (
+            product_drawing.image_path if product_drawing else None
+        )
+        row.update(
+            {
+                "common_box_readiness": product_readiness(
+                    product, bom_profiles=bom_profiles
+                ),
+                "order_drawing_path": order_drawing_path,
+                "product_drawing_path": product_drawing_path,
+                "drawing_path": order_drawing_path or product_drawing_path,
+                "drawing_source": (
+                    "订单图纸"
+                    if order_drawing_path
+                    else "常用箱图纸"
+                    if product_drawing_path
+                    else None
+                ),
+                "drawing_is_pdf": bool(
+                    final_reference and final_reference.lower().endswith(".pdf")
+                ),
+            }
+        )
+
+
 def _int_value(value, default: int = 0) -> int:
     if value is None:
         return default
@@ -10245,6 +10353,12 @@ def _pending_requisitions_full_payload(
         if int(row.get("remaining_required_piece_qty") or 0) > 0
         and int(row.get("requisition_qty") or 0) > 0
     ] + items
+    _decorate_pending_item_context(
+        db,
+        items,
+        item_models=item_models,
+        products_by_id={product.id: product for _item, _order, _customer, product in rows},
+    )
     supplier_counts: dict[str, int] = {}
     for row in items:
         supplier = (row.get("supplier_name") or row.get("snapshot_supplier_name") or "未设置供应商").strip()

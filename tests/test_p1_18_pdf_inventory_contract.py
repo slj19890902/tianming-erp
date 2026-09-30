@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+import json
 from datetime import date, datetime
 from pathlib import Path
 
@@ -15,6 +16,8 @@ from app.core.security import hash_password
 from app.models import Base
 from app.models.access_control import UserCustomerScope, UserPermissionOverride
 from app.models.customer import Customer
+from app.models.delivery import Delivery, DeliveryItem
+from app.models.fixed_shelf import ShelfLotState
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.user import User
@@ -510,3 +513,172 @@ def test_batch_preview_rejects_duplicate_client_line_id(
 
     assert response.status_code == 409, response.text
     assert "client_line_id 重复" in response.json()["detail"]
+
+
+def test_batch_preview_stock_projection_is_physical_includes_formal_reservations_and_debits_current_line(
+    inventory_preview_app,
+) -> None:
+    app, factory, ids = inventory_preview_app
+    with factory() as db:
+        customer = db.get(Customer, ids["customer"])
+        product = db.get(Product, ids["shared_product"])
+        location = db.scalar(select(WarehouseLocation).where(WarehouseLocation.location_code == "P118-FG"))
+        fully_reserved = _add_finished_lot(
+            db,
+            lot_number="P118-SHARED-FULLY-RESERVED",
+            customer=customer,
+            product=product,
+            location=location,
+            quantity=7,
+        )
+        fully_reserved.quantity_available = 0
+        fully_reserved.quantity_reserved = 7
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "preview-allowed")
+        response = client.post(
+            "/api/orders/inventory-draft-preview",
+            json={
+                "customer_id": ids["customer"],
+                "items": [
+                    _preview_item(
+                        line="PHYSICAL-1",
+                        product_id=ids["shared_product"],
+                        quantity=4,
+                        finished=[_finished_plan(ids["shared_lot"], 4)],
+                    ),
+                    _preview_item(
+                        line="PHYSICAL-2-NOT-ADOPTED",
+                        product_id=ids["shared_product"],
+                        quantity=4,
+                    ),
+                ],
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    first, second = response.json()["items"]
+    # These fields are physical-ledger facts.  The fully reserved lot is part
+    # of actual stock but cannot increase available stock for this draft.
+    assert first["finished_stock_on_hand_quantity"] == 12
+    assert first["finished_stock_reserved_quantity"] == 7
+    assert first["finished_stock_available_quantity"] == 5
+    assert first["finished_stock_unit"] == "只"
+    assert first["finished_stock_line_allocated_quantity"] == 4
+    assert first["finished_stock_allocated_quantity"] == 4
+    assert first["finished_stock_remaining_quantity"] == 1
+    # A later non-adopted row must retain the preceding same-product debit.
+    assert second["finished_stock_line_allocated_quantity"] == 0
+    assert second["finished_stock_allocated_quantity"] == 4
+    assert second["finished_stock_remaining_quantity"] == 1
+
+
+def test_batch_preview_stock_projection_keeps_physical_quantity_and_basis_unit(
+    inventory_preview_app,
+) -> None:
+    app, factory, ids = inventory_preview_app
+    with factory() as db:
+        product = db.get(Product, ids["shared_product"])
+        lot = db.get(InventoryLot, ids["shared_lot"])
+        product.unit = "\u7bb1"
+        product.supply_mode = "external_purchase"
+        product.external_packaging_category_code = "carton"
+        product.external_packaging_specification_json = "{}"
+        product.external_packaging_specification_summary = "\u5916\u8d2d\u7eb8\u7bb1"
+        product.external_packaging_purchase_unit = "\u4e2a"
+        product.external_packaging_candidate_snapshot_json = "{}"
+        product.external_packaging_default_order_quantity_basis = 1
+        product.external_packaging_default_purchase_quantity_basis = 10
+        lot.quantity_available = 20
+        lot.finished_detail.physical_basis_json = json.dumps({
+            "quantity_basis": {
+                "schema": 1,
+                "ledger": "physical",
+                "customer_id": ids["customer"],
+                "product_id": product.id,
+                "physical_unit": "\u4e2a",
+            }
+        })
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "preview-allowed")
+        response = client.post(
+            "/api/orders/inventory-draft-preview",
+            json={
+                "customer_id": ids["customer"],
+                "items": [_preview_item(
+                    line="PHYSICAL-RATIO",
+                    product_id=ids["shared_product"],
+                    quantity=1,
+                    finished=[_finished_plan(ids["shared_lot"], 1)],
+                )],
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    row = response.json()["items"][0]
+    # One customer carton consumes ten physical pieces.  The new display facts
+    # must remain physical instead of applying available_customer_quantity.
+    assert row["finished_stock_on_hand_quantity"] == 20
+    assert row["finished_stock_available_quantity"] == 20
+    assert row["finished_stock_line_allocated_quantity"] == 10
+    assert row["finished_stock_allocated_quantity"] == 10
+    assert row["finished_stock_remaining_quantity"] == 10
+    assert row["finished_stock_unit"] == "\u4e2a"
+
+
+def test_batch_preview_shows_staged_physical_stock_without_making_it_allocatable(
+    inventory_preview_app,
+) -> None:
+    app, factory, ids = inventory_preview_app
+    with factory() as db:
+        customer = db.get(Customer, ids["customer"])
+        product = db.get(Product, ids["shared_product"])
+        location = db.scalar(select(WarehouseLocation).where(WarehouseLocation.location_code == "P118-FG"))
+        staged = _add_finished_lot(
+            db, lot_number="P118-SHARED-STAGED", customer=customer, product=product,
+            location=location, quantity=7,
+        )
+        delivery = Delivery(
+            delivery_number="P118-STAGED-DELIVERY", customer_id=customer.id,
+            delivery_date=date.today(), source_mode="unordered_finished",
+            status="pending", total_quantity=7,
+        )
+        db.add(delivery)
+        db.flush()
+        line = DeliveryItem(
+            delivery_id=delivery.id, source_type="unordered_finished",
+            product_id=product.id, product_code_snapshot=product.product_code,
+            product_name_snapshot=product.product_name, unit_snapshot=product.unit,
+            price_source="manual", delivered_quantity=7,
+        )
+        db.add(line)
+        db.flush()
+        db.add(ShelfLotState(lot_id=staged.id, staged_delivery_item_id=line.id))
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "preview-allowed")
+        response = client.post(
+            "/api/orders/inventory-draft-preview",
+            json={
+                "customer_id": ids["customer"],
+                "items": [_preview_item(
+                    line="STAGED", product_id=ids["shared_product"], quantity=7,
+                    finished=[_finished_plan(ids["shared_lot"], 7)],
+                )],
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    row = response.json()["items"][0]
+    assert row["finished_stock_on_hand_quantity"] == 12
+    assert row["finished_stock_reserved_quantity"] == 0
+    assert row["finished_stock_available_quantity"] == 5
+    assert row["finished_stock_unavailable_quantity"] == 7
+    # The 7 staged pieces remain visible but the original available-only
+    # allocator may allocate only the five ordinary pieces.
+    assert row["finished_stock_line_allocated_quantity"] == 5
+    assert row["finished_stock_remaining_quantity"] == 0

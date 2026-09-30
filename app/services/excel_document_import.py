@@ -189,9 +189,50 @@ def _coordinate(row: int, column: int) -> str:
 
 
 def _formatted_numeric(value: Any, number_format: str | None) -> str:
+    fmt = str(number_format or "").split(";")[0]
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        # Only implement the unambiguous date tokens used by order templates;
+        # this preserves Excel's yyyymmd (e.g. 2026-01-03 -> 2026013) rather
+        # than serialising a datetime or its Excel serial number.
+        token_format = fmt.casefold()
+        if "y" in token_format and "m" in token_format and "d" in token_format:
+            rendered: list[str] = []
+            index = 0
+            while index < len(fmt):
+                char = fmt[index]
+                if char == '"':
+                    closing = fmt.find('"', index + 1)
+                    if closing < 0:
+                        return value.isoformat()
+                    rendered.append(fmt[index + 1:closing])
+                    index = closing + 1
+                    continue
+                if char == "\\" and index + 1 < len(fmt):
+                    rendered.append(fmt[index + 1])
+                    index += 2
+                    continue
+                token = char.casefold()
+                if token in {"y", "m", "d"}:
+                    end = index + 1
+                    while end < len(fmt) and fmt[end].casefold() == token:
+                        end += 1
+                    width = end - index
+                    if token in {"m", "d"} and width > 2:
+                        return value.isoformat()
+                    raw = value.year % 100 if token == "y" and width == 2 else {
+                        "y": value.year, "m": value.month, "d": value.day,
+                    }[token]
+                    rendered.append(str(raw).zfill(width) if width > 1 else str(raw))
+                    index = end
+                    continue
+                rendered.append(char)
+                index += 1
+            return "".join(rendered)
+        return value.isoformat()
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return _clean_text(value) or ""
-    fmt = str(number_format or "").split(";")[0]
     integer = int(value) if float(value).is_integer() else None
     zero_match = re.fullmatch(r"0+", fmt)
     if integer is not None and zero_match:
@@ -333,6 +374,24 @@ def _sheet_text(sheet: _Sheet) -> str:
     return " ".join(cell.display_value for row in sheet.rows for cell in row if cell.display_value)
 
 
+def _management_no(sheet: _Sheet) -> str | None:
+    values: set[str] = set()
+    for row in sheet.rows:
+        for index, cell in enumerate(row):
+            label = re.sub(r"\s+", "", cell.display_value).upper()
+            if not re.fullmatch(r"管理NO\.?[:：]?", label):
+                continue
+            if index + 1 >= len(row):
+                raise ExcelImportError(f"{sheet.name}!{cell.coordinate} 管理NO缺少右侧订单号")
+            value = _clean_text(row[index + 1].display_value)
+            if not value:
+                raise ExcelImportError(f"{sheet.name}!{cell.coordinate} 管理NO缺少右侧订单号")
+            values.add(value)
+    if len(values) > 1:
+        raise ExcelImportError(f"{sheet.name} 存在多个管理NO，不能静默合并订单号")
+    return next(iter(values), None)
+
+
 def _parse_yanguang_order(sheets: list[_Sheet]) -> tuple[list[ImportedRow], date | None, str | None, list[str]]:
     rows: list[ImportedRow] = []
     warnings: list[str] = []
@@ -348,6 +407,11 @@ def _parse_yanguang_order(sheets: list[_Sheet]) -> tuple[list[ImportedRow], date
         if sheet.hidden:
             warnings.append(f"隐藏工作表“{sheet.name}”未自动导入")
             continue
+        management_no = _management_no(sheet)
+        if management_no:
+            if customer_po and customer_po != management_no:
+                raise ExcelImportError("工作簿存在多个管理NO，不能静默合并订单号")
+            customer_po = management_no
         source_date = source_date or _date_value(sheet.cell(4, 12).raw_value) or _date_value(sheet.cell(2, 16).raw_value)
         for number in range(11, sheet.max_row + 1):
             try:
@@ -357,8 +421,15 @@ def _parse_yanguang_order(sheets: list[_Sheet]) -> tuple[list[ImportedRow], date
                     raise
                 continue
             if parsed:
+                if management_no:
+                    if parsed.customer_po and parsed.customer_po != management_no:
+                        raise ExcelImportError("工作簿存在多个订单号，不能静默合并")
+                    parsed.customer_po = management_no
+                if parsed.customer_po:
+                    if customer_po and customer_po != parsed.customer_po:
+                        raise ExcelImportError("工作簿存在多个订单号，不能静默合并")
+                    customer_po = parsed.customer_po
                 rows.append(parsed)
-                customer_po = customer_po or parsed.customer_po
     if not rows:
         raise ExcelImportError("未识别到研光购买要求书有效明细")
     return rows, source_date, customer_po, warnings

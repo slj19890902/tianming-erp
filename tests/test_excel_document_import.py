@@ -1,9 +1,11 @@
 from collections import Counter
+from datetime import date
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 
-from app.services.excel_document_import import ExcelImportError, parse_excel_document
+from app.services.excel_document_import import ExcelImportError, _formatted_numeric, parse_excel_document
 
 
 SAMPLE_ROOT = Path("C:/Users/Administrator/Documents/xwechat_files/kimiyf_0342/msg/file/2026-09")
@@ -51,12 +53,12 @@ def test_codes_and_source_rows_are_not_coerced_or_deduplicated():
     assert all(row.source_row > 0 and row.sheet for row in order.rows + gy.rows)
 
 
-def test_customer_is_inferred_from_workbook_not_filename_and_po_is_not_invented():
+def test_customer_and_management_no_are_inferred_from_workbook_not_filename():
     filename, _, _, _ = SAMPLES["yg_order_2"]
     parsed = parse_excel_document((SAMPLE_ROOT / filename).read_bytes(), filename, document_type="order")
     assert parsed.customer_code == "YG"
-    assert parsed.customer_po is None
-    assert all(row.customer_po is None for row in parsed.rows)
+    assert parsed.customer_po == "20260916"
+    assert all(row.customer_po == "20260916" for row in parsed.rows)
 
 
 def test_wrong_customer_and_fake_extension_are_rejected():
@@ -66,3 +68,77 @@ def test_wrong_customer_and_fake_extension_are_rejected():
         parse_excel_document(content, filename, document_type="order", expected_customer_code="GY")
     with pytest.raises(ExcelImportError, match="文件签名"):
         parse_excel_document(b"not an xlsx", "fake.xlsx", document_type="order")
+
+
+def _management_no_workbook(
+    *,
+    numbers: list[date],
+    label: str = "管理NO.:",
+    row_customer_po: str | None = None,
+    unrelated_management_no: str | None = None,
+) -> bytes:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "包装箱格式 (1)"
+    sheet["A1"] = "研光"
+    sheet["A3"] = "品目"
+    sheet["B3"] = "發注"
+    for index, number in enumerate(numbers, start=2):
+        sheet.cell(index, 15, label)
+        value = sheet.cell(index, 16, number)
+        value.number_format = "yyyymmd"
+    if unrelated_management_no:
+        notes = workbook.create_sheet("说明")
+        notes["A1"] = "请核对管理NO"
+        notes["B1"] = unrelated_management_no
+    # The Yanguang parser expects one valid row beginning at row 11.
+    sheet.cell(11, 1, "NO-1")
+    sheet.cell(11, 2, row_customer_po)
+    sheet.cell(11, 3, "C80010080")
+    sheet.cell(11, 4, "样品箱")
+    sheet.cell(11, 6, 5)
+    sheet.cell(11, 7, "只")
+    sheet.cell(11, 10, 5)
+    result = BytesIO()
+    workbook.save(result)
+    return result.getvalue()
+
+
+def test_yanguang_management_no_uses_right_cell_excel_display_and_maps_customer_po() -> None:
+    content = _management_no_workbook(numbers=[date(2026, 1, 3)])
+    parsed = parse_excel_document(content, "同昌订单.xlsx", document_type="order")
+    assert parsed.customer_po == "2026013"
+
+
+def test_yanguang_management_no_rejects_multiple_values_instead_of_silently_merging() -> None:
+    content = _management_no_workbook(numbers=[date(2026, 9, 30), date(2026, 10, 1)])
+    with pytest.raises(ExcelImportError, match="多个管理NO"):
+        parse_excel_document(content, "同昌订单.xlsx", document_type="order")
+
+
+def test_excel_date_display_honors_two_digit_year_quotes_and_escaped_literals() -> None:
+    value = date(2026, 1, 3)
+    assert _formatted_numeric(value, 'yy"年"m"月"d"日"') == "26年1月3日"
+    assert _formatted_numeric(value, 'yyyy\\-mm\\-dd') == "2026-01-03"
+    assert _formatted_numeric(value, '"PO-"yyyymmdd') == "PO-20260103"
+    assert _formatted_numeric(value, 'yyyy-mmm-dd') == "2026-01-03"
+
+
+def test_yanguang_management_no_header_is_anchored_and_ignores_unrelated_sheet() -> None:
+    content = _management_no_workbook(
+        numbers=[date(2026, 9, 30)],
+        label=" 管理 no ： ",
+        unrelated_management_no="NOT-A-PO",
+    )
+    parsed = parse_excel_document(content, "同昌订单.xlsx", document_type="order")
+    assert parsed.customer_po == "20260930"
+
+
+def test_yanguang_management_no_rejects_conflicting_row_order_number() -> None:
+    content = _management_no_workbook(
+        numbers=[date(2026, 9, 30)], row_customer_po="OTHER-PO"
+    )
+    with pytest.raises(ExcelImportError, match="多个订单号"):
+        parse_excel_document(content, "同昌订单.xlsx", document_type="order")

@@ -68,7 +68,7 @@ class CustomerPayload(BaseModel):
     contact_person: str | None = None
     phone: str | None = None
     address: str | None = None
-    default_tax_rate: Decimal = Field(default=Decimal("0.13"), ge=0)
+    default_tax_rate: Decimal = Field(default=Decimal("0.13"), ge=0, le=1)
     invoice_title: str | None = None
     tax_no: str | None = None
     bank_account: str | None = None
@@ -97,6 +97,9 @@ class CustomerResponse(CustomerPayload):
     # Existing historical rows must remain readable while new write payloads
     # accept only the two supported lifecycle states.
     status: str
+    # The write payload rejects rates outside 0..1.  Keep old rows readable so
+    # the existing safe downstream fallback remains available for remediation.
+    default_tax_rate: Decimal = Decimal("0.13")
     price_tax_mode: Literal["tax_inclusive", "tax_exclusive"] = "tax_inclusive"
 
 

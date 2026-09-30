@@ -26,9 +26,9 @@ class AsyncUpload:
         self._content = content
         self.read_count = 0
 
-    async def read(self) -> bytes:
+    async def read(self, size: int = -1) -> bytes:
         self.read_count += 1
-        return self._content
+        return self._content if size < 0 else self._content[:size]
 
 
 def _seed_statement_invoices(session_factory) -> dict[str, int]:

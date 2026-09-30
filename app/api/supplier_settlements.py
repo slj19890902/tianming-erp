@@ -31,6 +31,7 @@ from app.models.supplier_settlement import (
 from app.models.user import User
 from app.services.audit_log import append_audit_event
 from app.services.invoice_attachments import (
+    DEFAULT_MAX_INVOICE_ATTACHMENT_BYTES,
     InvoiceAttachmentError,
     store_original_invoice_pdf,
     validate_invoice_pdf,
@@ -950,7 +951,11 @@ async def upload_supplier_invoice_attachment(
 ) -> dict[str, Any]:
     _company_scope(user, db)
     statement, invoice = _invoice_for_statement(db, statement_id, invoice_id)
-    content = await file.read()
+    # Read one sentinel byte beyond the same application-memory limit enforced
+    # by validate_invoice_pdf.  The validator still owns the user-facing size
+    # error and all format checks, but an oversized multipart body cannot be
+    # read without a bound into this process.
+    content = await file.read(DEFAULT_MAX_INVOICE_ATTACHMENT_BYTES + 1)
     try:
         digest = validate_invoice_pdf(
             filename=file.filename or "",

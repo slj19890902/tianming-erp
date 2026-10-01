@@ -580,6 +580,27 @@ def test_temporary_reset_verdict_requires_all_accounts_to_remain_forced() -> Non
     }
 
     assert all(module.evaluate_temporary_reset_verification(result).values())
+
+    result["login_checks"]["admin"]["session_cookie_received"] = False
+    verdict = module.evaluate_temporary_reset_verification(result)
+    assert verdict["all_temporary_logins"] is False
+    assert not all(verdict.values())
+    result["login_checks"]["admin"]["session_cookie_received"] = True
+
+    result["after_users_security"][0]["auth_version"] = versions["admin"]["after"]
+    verdict = module.evaluate_temporary_reset_verification(result)
+    assert verdict["auth_versions_incremented"] is False
+    assert not all(verdict.values())
+    result["after_users_security"][0]["auth_version"] = (
+        versions["admin"]["after"] + 2
+    )
+    verdict = module.evaluate_temporary_reset_verification(result)
+    assert verdict["auth_versions_incremented"] is False
+    assert not all(verdict.values())
+    result["after_users_security"][0]["auth_version"] = (
+        versions["admin"]["after"] + 1
+    )
+
     result["after_users_security"][0]["must_change_password"] = False
     verdict = module.evaluate_temporary_reset_verification(result)
     assert verdict["four_expected_accounts_require_change"] is False
@@ -1106,6 +1127,18 @@ def test_pinned_loopback_tls_uses_real_secure_cookie_flow(
             assert completed["final_logout_status"] == 200
             assert completed["final_after_logout_status"] == 401
             assert completed["error"] is None
+
+            verified_login = module.verify_login(
+                public_origin,
+                "admin",
+                final_password,
+            )
+            assert verified_login.login_status == 200
+            assert verified_login.me_status == 200
+            assert verified_login.session_cookie_received is True
+            assert verified_login.logout_status == 200
+            assert verified_login.after_logout_status == 401
+            assert verified_login.error is None
     finally:
         server.should_exit = True
         thread.join(timeout=10)

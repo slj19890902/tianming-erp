@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.api.auth import router as auth_router
@@ -13,6 +14,7 @@ from app.api.deps import get_db
 from app.core.database import create_sqlite_engine
 from app.core.security import hash_password
 from app.models import Base
+from app.models.audit import OperationLog
 from app.models.user import User
 
 
@@ -32,17 +34,41 @@ def _isolated_app(database: Path) -> tuple[FastAPI, object]:
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     with factory() as session:
-        session.add(
-            User(
-                username="admin",
-                password_hash=hash_password("TemporaryAdmin9"),
-                role="admin",
-                real_name="Isolated Admin",
-                display_name="Isolated Admin",
-                is_active=True,
-                must_change_password=True,
-                customer_access_mode="all",
-            )
+        session.add_all(
+            [
+                User(
+                    username="admin",
+                    password_hash=hash_password("TemporaryAdmin9"),
+                    role="admin",
+                    real_name="Isolated Admin",
+                    display_name="Isolated Admin",
+                    is_active=True,
+                    must_change_password=True,
+                    customer_access_mode="all",
+                ),
+                User(
+                    username="tmbz",
+                    password_hash=hash_password("IsolatedBossOld9"),
+                    role="boss",
+                    real_name="Isolated Boss",
+                    display_name="Isolated Boss",
+                    is_active=True,
+                    must_change_password=False,
+                    customer_access_mode="all",
+                    ui_mode="large",
+                ),
+                User(
+                    username="tcbz",
+                    password_hash=hash_password("IsolatedSalesOld9"),
+                    role="sales",
+                    real_name="Isolated Sales",
+                    display_name="Isolated Sales",
+                    is_active=True,
+                    must_change_password=False,
+                    customer_access_mode="selected",
+                    ui_mode="standard",
+                ),
+            ]
         )
         session.commit()
 
@@ -124,5 +150,178 @@ def test_forced_password_change_blocks_business_until_normal_change(
                 },
             ).status_code == 200
             assert final.get("/api/business-approvals/profile").status_code == 200
+    finally:
+        engine.dispose()
+
+
+def test_admin_temporary_password_reset_preserves_account_access_and_forces_change(
+    tmp_path: Path,
+) -> None:
+    application, engine = _isolated_app(tmp_path / "admin-reset.sqlite3")
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        with TestClient(application, base_url="http://127.0.0.1:18082") as admin:
+            assert admin.post(
+                "/api/auth/login",
+                json={
+                    "username": "admin",
+                    "password": "TemporaryAdmin9",
+                    "remember_me": False,
+                },
+            ).status_code == 200
+            assert admin.put(
+                "/api/auth/password",
+                json={
+                    "current_password": "TemporaryAdmin9",
+                    "new_password": "FinalOwnerSecure9",
+                },
+            ).status_code == 200
+            assert admin.post(
+                "/api/auth/login",
+                json={
+                    "username": "admin",
+                    "password": "FinalOwnerSecure9",
+                    "remember_me": False,
+                },
+            ).status_code == 200
+
+            for username, old_password, temporary_password, final_password in (
+                (
+                    "tmbz",
+                    "IsolatedBossOld9",
+                    "IsolatedBossTemp9",
+                    "IsolatedBossFinal9",
+                ),
+                (
+                    "tcbz",
+                    "IsolatedSalesOld9",
+                    "IsolatedSalesTemp9",
+                    "IsolatedSalesFinal9",
+                ),
+            ):
+                with TestClient(
+                    application, base_url="http://127.0.0.1:18082"
+                ) as before_reset:
+                    assert before_reset.post(
+                        "/api/auth/login",
+                        json={
+                            "username": username,
+                            "password": old_password,
+                            "remember_me": False,
+                        },
+                    ).status_code == 200
+                    old_cookie = before_reset.cookies.get(
+                        "isolated_force_change_session"
+                    )
+                    assert old_cookie
+
+                with factory() as session:
+                    target = session.scalar(
+                        select(User).where(User.username == username)
+                    )
+                    assert target is not None
+                    before = {
+                        "role": target.role,
+                        "is_active": target.is_active,
+                        "customer_access_mode": target.customer_access_mode,
+                        "ui_mode": target.ui_mode,
+                        "auth_version": target.auth_version,
+                    }
+
+                reset = admin.put(
+                    f"/api/auth/users/{username}/reset-password",
+                    json={"new_password": temporary_password},
+                )
+                assert reset.status_code == 200
+                assert temporary_password not in reset.text
+                assert reset.json()["user"]["must_change_password"] is True
+
+                with factory() as session:
+                    target = session.scalar(
+                        select(User).where(User.username == username)
+                    )
+                    assert target is not None
+                    assert target.role == before["role"]
+                    assert target.is_active == before["is_active"]
+                    assert (
+                        target.customer_access_mode
+                        == before["customer_access_mode"]
+                    )
+                    assert target.ui_mode == before["ui_mode"]
+                    assert target.auth_version == before["auth_version"] + 1
+                    assert target.must_change_password is True
+                    audit = session.scalar(
+                        select(OperationLog)
+                        .where(
+                            OperationLog.action == "RESET_PASSWORD",
+                            OperationLog.username == "admin",
+                        )
+                        .order_by(OperationLog.id.desc())
+                    )
+                    assert audit is not None
+                    assert temporary_password not in (audit.details or "")
+
+                with TestClient(
+                    application, base_url="http://127.0.0.1:18082"
+                ) as stale:
+                    stale.cookies.set("isolated_force_change_session", old_cookie)
+                    assert stale.get("/api/auth/me").status_code == 401
+
+                with TestClient(
+                    application, base_url="http://127.0.0.1:18082"
+                ) as target_client:
+                    assert target_client.post(
+                        "/api/auth/login",
+                        json={
+                            "username": username,
+                            "password": old_password,
+                            "remember_me": False,
+                        },
+                    ).status_code == 401
+                    temporary_login = target_client.post(
+                        "/api/auth/login",
+                        json={
+                            "username": username,
+                            "password": temporary_password,
+                            "remember_me": False,
+                        },
+                    )
+                    assert temporary_login.status_code == 200
+                    assert (
+                        temporary_login.json()["user"]["must_change_password"]
+                        is True
+                    )
+                    assert (
+                        target_client.get("/api/business-approvals/profile").status_code
+                        == 403
+                    )
+                    assert target_client.put(
+                        "/api/auth/password",
+                        json={
+                            "current_password": temporary_password,
+                            "new_password": final_password,
+                        },
+                    ).status_code == 200
+                    assert target_client.post(
+                        "/api/auth/login",
+                        json={
+                            "username": username,
+                            "password": temporary_password,
+                            "remember_me": False,
+                        },
+                    ).status_code == 401
+                    final_login = target_client.post(
+                        "/api/auth/login",
+                        json={
+                            "username": username,
+                            "password": final_password,
+                            "remember_me": False,
+                        },
+                    )
+                    assert final_login.status_code == 200
+                    assert (
+                        final_login.json()["user"]["must_change_password"]
+                        is False
+                    )
     finally:
         engine.dispose()

@@ -3162,6 +3162,7 @@
           <div v-if="loginError" id="erp-login-error" class="danger-text" role="alert" aria-live="assertive" style="margin-bottom:10px">{{ loginError }}</div>
           <button class="btn primary" style="width:100%" :disabled="loading">{{ loading ? "登录中..." : "登录" }}</button>
           <div class="login-help"><button class="link-btn" type="button" @click="forgotPassword">忘记密码</button></div>
+          <div class="muted" style="margin-top:8px;font-size:12px;line-height:1.6">管理员重置后，请使用管理员单独交付的临时密码登录；系统会立即要求设置新密码。</div>
         </form>
       </div>
 
@@ -5918,7 +5919,7 @@
               <div class="panel" style="margin-bottom:10px">
                 <div class="section-title">用户与密码</div>
                 <div class="table-wrap"><table><thead><tr><th>用户名</th><th>姓名</th><th>角色</th><th>首次登录改密</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in systemUsers" :key="row.id"><td>{{ row.username }}</td><td>{{ row.real_name }}</td><td>{{ roleLabel(row.role) }}</td><td>{{ row.must_change_password ? "是" : "否" }}</td><td><button class="btn small danger" @click="openResetPassword(row)">重置密码</button></td></tr></tbody></table></div>
+                <tbody><tr v-for="row in systemUsers" :key="row.id"><td>{{ row.username }}</td><td>{{ row.real_name }}</td><td>{{ roleLabel(row.role) }}</td><td>{{ row.must_change_password ? "待本人修改" : "否" }}</td><td><button class="btn small danger" @click="openResetPassword(row)">设置临时密码</button></td></tr></tbody></table></div>
               </div>
 
               <!-- 公司信息 -->
@@ -26212,7 +26213,7 @@
           },
           openResetPassword(user) {
             this.resetPasswordForm = { username:user.username, new_password:"", confirm_password:"" };
-            this.modal = { type:"resetPassword", title:"重置账号密码" };
+            this.modal = { type:"resetPassword", title:"设置账号临时密码" };
           },
           blankCustomerQuotePreferenceDraft() {
             return { box_type:"", layer_count:null, flute_type:"", supplier_name:"", material_id:null, tax_included_square_price:"", is_active:true };

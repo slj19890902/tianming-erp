@@ -428,11 +428,8 @@ def test_verdict_fails_when_any_required_check_fails() -> None:
             for username in module.VALID_USERS
         },
         "old_password_results": {
-            **{
-                username: {"status": 401, "error": None}
-                for username in module.VALID_USERS
-            },
-            "generated_wrong_password_control": {"status": 401, "error": None},
+            username: {"status": 401, "error": None}
+            for username in module.VALID_USERS
         },
         "security_status_checks": {
             "no_login_me": {"status": 401},

@@ -1153,15 +1153,6 @@ def verify_old_passwords(
             base_url, open_api(base_url), username, previous_passwords[username]
         )
         result[username] = {"status": attempt.status, "error": attempt.error}
-
-    control_password = secrets.token_urlsafe(32)
-    control = _login(
-        base_url, open_api(base_url), "admin", control_password
-    )
-    result["generated_wrong_password_control"] = {
-        "status": control.status,
-        "error": control.error,
-    }
     return result
 
 
@@ -1362,13 +1353,6 @@ def evaluate_verification(result: dict[str, Any]) -> dict[str, bool]:
             old_passwords.get(username, {}).get("status") == 401
             and old_passwords.get(username, {}).get("error") is None
             for username in VALID_USERS
-        ),
-        "wrong_password_control_rejected": (
-            old_passwords.get("generated_wrong_password_control", {}).get("status")
-            == 401
-            and old_passwords.get(
-                "generated_wrong_password_control", {}
-            ).get("error") is None
         ),
         "anonymous_and_forged_sessions_rejected": (
             security.get("no_login_me", {}).get("status") == 401

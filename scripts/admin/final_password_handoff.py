@@ -4,21 +4,32 @@ import argparse
 import getpass
 import hashlib
 import hmac
+import http.client
+import http.server
+import ipaddress
 import json
 import os
 import secrets
+import socket
 import sqlite3
+import ssl
 import sys
 import tempfile
+import threading
 import urllib.error
 import urllib.request
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from http.cookiejar import CookieJar
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import urlsplit
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -75,6 +86,18 @@ class ExistingSession:
     error: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PinnedTlsConfig:
+    public_origin: str
+    connect_host: str
+    connect_port: int
+    upstream_origin: str
+    ca_certificate: Path
+
+
+_ACTIVE_PINNED_TLS: PinnedTlsConfig | None = None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Interactive, auditable final password handoff"
@@ -83,6 +106,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-base-url")
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--backup-dir")
+    parser.add_argument(
+        "--loopback-upstream",
+        help=(
+            "Optional plain-HTTP upstream restricted to a literal loopback address. "
+            "When supplied, the tool creates a temporary verified-TLS loopback proxy "
+            "and pins all API sockets to it while retaining the configured HTTPS origin."
+        ),
+    )
     parser.add_argument("--actor", required=True)
     parser.add_argument(
         "--managed-root",
@@ -271,6 +302,21 @@ def collect_new_passwords() -> dict[str, str]:
             passwords[username] = candidate
             break
     return passwords
+
+
+def collect_admin_final_password(
+    rotation_passwords: dict[str, str],
+) -> str:
+    while True:
+        print("[admin] 请输入完成首次登录改密后使用的最终密码。")
+        candidate = prompt_password("admin")
+        if any(
+            hmac.compare_digest(candidate, existing)
+            for existing in rotation_passwords.values()
+        ):
+            print("[admin] 最终密码必须与本轮四个轮换密码均不相同，请重试。")
+            continue
+        return candidate
 
 
 def prompt_previous_password(username: str) -> str:
@@ -491,12 +537,348 @@ def update_passwords(
     }
 
 
+class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(
+        self,
+        host: str,
+        *,
+        connect_host: str,
+        connect_port: int,
+        context: ssl.SSLContext,
+        **kwargs: Any,
+    ) -> None:
+        self._pinned_connect_host = connect_host
+        self._pinned_connect_port = connect_port
+        super().__init__(host, context=context, **kwargs)
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._pinned_connect_host, self._pinned_connect_port),
+            self.timeout,
+            self.source_address,
+        )
+        if self._tunnel_host:
+            self._tunnel()
+        self.sock = self._context.wrap_socket(
+            self.sock,
+            server_hostname=self.host,
+        )
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, config: PinnedTlsConfig) -> None:
+        context = ssl.create_default_context(cafile=str(config.ca_certificate))
+        super().__init__(context=context, check_hostname=True)
+        self._config = config
+
+    def https_open(self, request: urllib.request.Request) -> Any:
+        def factory(host: str, **kwargs: Any) -> _PinnedHTTPSConnection:
+            return _PinnedHTTPSConnection(
+                host,
+                connect_host=self._config.connect_host,
+                connect_port=self._config.connect_port,
+                context=self._context,
+                **kwargs,
+            )
+
+        return self.do_open(factory, request)
+
+
+class _LoopbackTlsProxyHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "ERPPasswordHandoffLoopback/1"
+
+    def log_message(self, format: str, *args: Any) -> None:
+        del format, args
+
+    def do_GET(self) -> None:
+        self._forward()
+
+    def do_POST(self) -> None:
+        self._forward()
+
+    def do_PUT(self) -> None:
+        self._forward()
+
+    def _forward(self) -> None:
+        allowed = {
+            ("GET", "/api/health"),
+            ("POST", "/api/auth/login"),
+            ("GET", "/api/auth/me"),
+            ("POST", "/api/auth/logout"),
+            ("PUT", "/api/auth/password"),
+            ("GET", "/api/incoming/pending"),
+            ("GET", "/incoming.html"),
+        }
+        path = urlsplit(self.path).path
+        if (self.command, path) not in allowed:
+            self.send_error(404)
+            return
+        if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+            self.send_error(403)
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.send_error(400)
+            return
+        if content_length < 0 or content_length > 1024 * 1024:
+            self.send_error(413)
+            return
+        body = self.rfile.read(content_length) if content_length else None
+        excluded = {
+            "connection",
+            "host",
+            "keep-alive",
+            "proxy-connection",
+            "transfer-encoding",
+            "upgrade",
+            "x-forwarded-for",
+            "x-forwarded-host",
+            "x-forwarded-proto",
+        }
+        headers = {
+            key: value
+            for key, value in self.headers.items()
+            if key.lower() not in excluded
+        }
+        proxy_server = self.server
+        headers.update(
+            {
+                "Host": proxy_server.public_hostname,
+                "X-Forwarded-For": "127.0.0.1",
+                "X-Forwarded-Host": proxy_server.public_hostname,
+                "X-Forwarded-Proto": "https",
+                "Connection": "close",
+            }
+        )
+        try:
+            connection = http.client.HTTPConnection(
+                proxy_server.upstream_host,
+                proxy_server.upstream_port,
+                timeout=15,
+            )
+            connection.request(
+                self.command,
+                self.path,
+                body=body,
+                headers=headers,
+            )
+            response = connection.getresponse()
+            response_body = response.read()
+            self.send_response(response.status, response.reason)
+            for key, value in response.getheaders():
+                if key.lower() not in {
+                    "connection",
+                    "content-length",
+                    "keep-alive",
+                    "transfer-encoding",
+                }:
+                    self.send_header(key, value)
+            self.send_header("Content-Length", str(len(response_body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(response_body)
+        except (OSError, http.client.HTTPException):
+            error_body = b'{"ok":false}'
+            self.send_response(502)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(error_body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(error_body)
+        finally:
+            self.close_connection = True
+            if "connection" in locals():
+                connection.close()
+
+
+def _write_loopback_certificates(
+    directory: Path,
+    public_hostname: str,
+) -> tuple[Path, Path, Path]:
+    directory.mkdir(parents=True, exist_ok=False)
+    os.chmod(directory, 0o700)
+    now = datetime.now(timezone.utc)
+    ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    ca_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "ERP password handoff local CA")]
+    )
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=4))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+    server_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    server_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, public_hostname)]
+    )
+    server_cert = (
+        x509.CertificateBuilder()
+        .subject_name(server_name)
+        .issuer_name(ca_cert.subject)
+        .public_key(server_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=2))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName(public_hostname)]),
+            critical=False,
+        )
+        .add_extension(
+            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
+            critical=False,
+        )
+        .sign(ca_key, hashes.SHA256())
+    )
+    ca_path = directory / "ca.pem"
+    cert_path = directory / "server.pem"
+    key_path = directory / "server.key"
+    ca_path.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+    cert_path.write_bytes(server_cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        server_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    for path in (ca_path, cert_path, key_path):
+        os.chmod(path, 0o600)
+    return ca_path, cert_path, key_path
+
+
+@contextmanager
+def pinned_loopback_tls_proxy(
+    public_origin: str,
+    upstream_origin: str,
+    secure_parent: Path,
+) -> Iterator[PinnedTlsConfig]:
+    global _ACTIVE_PINNED_TLS
+    if _ACTIVE_PINNED_TLS is not None:
+        raise RuntimeError("回环 TLS 维护通道已在运行")
+    public = urlsplit(public_origin)
+    upstream = urlsplit(upstream_origin)
+    if public.scheme != "https" or not public.hostname:
+        raise RuntimeError("回环 TLS 维护通道要求已配置的 HTTPS 公共来源")
+    try:
+        upstream_address = ipaddress.ip_address(upstream.hostname or "")
+    except ValueError as error:
+        raise RuntimeError("维护上游必须使用回环 IP 字面量") from error
+    if (
+        upstream.scheme != "http"
+        or not upstream_address.is_loopback
+        or upstream.username is not None
+        or upstream.password is not None
+        or upstream.query
+        or upstream.fragment
+        or upstream.path not in {"", "/"}
+        or upstream.port is None
+    ):
+        raise RuntimeError("维护上游必须是带端口的纯回环 HTTP 根地址")
+
+    secure_parent.mkdir(parents=True, exist_ok=True)
+    certificate_dir = secure_parent / (
+        f".password-handoff-tls-{os.getpid()}-{secrets.token_hex(4)}"
+    )
+    ca_path, cert_path, key_path = _write_loopback_certificates(
+        certificate_dir, public.hostname
+    )
+    server = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        _LoopbackTlsProxyHandler,
+    )
+    server.daemon_threads = True
+    server.upstream_host = str(upstream_address)
+    server.upstream_port = int(upstream.port)
+    server.public_hostname = public.hostname
+    tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    tls_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+    server.socket = tls_context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(
+        target=server.serve_forever,
+        name="password-handoff-loopback-tls",
+        daemon=True,
+    )
+    thread.start()
+    config = PinnedTlsConfig(
+        public_origin=public_origin,
+        connect_host="127.0.0.1",
+        connect_port=int(server.server_address[1]),
+        upstream_origin=upstream_origin,
+        ca_certificate=ca_path,
+    )
+    _ACTIVE_PINNED_TLS = config
+    try:
+        yield config
+    finally:
+        _ACTIVE_PINNED_TLS = None
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        for path in (key_path, cert_path, ca_path):
+            path.unlink(missing_ok=True)
+        certificate_dir.rmdir()
+
+
+def _transport_security_summary(base_url: str) -> dict[str, Any]:
+    config = _ACTIVE_PINNED_TLS
+    if config is None:
+        return {
+            "mode": "direct_https",
+            "public_origin": _origin(base_url),
+            "environment_proxy_disabled": True,
+            "redirects_disabled": True,
+            "certificate_verification": "system_trust",
+        }
+    return {
+        "mode": "pinned_loopback_tls",
+        "public_origin": config.public_origin,
+        "socket_target": f"{config.connect_host}:{config.connect_port}",
+        "upstream_origin": config.upstream_origin,
+        "environment_proxy_disabled": True,
+        "redirects_disabled": True,
+        "certificate_verification": "temporary_local_ca",
+        "loopback_only": True,
+    }
+
+
 def open_api(
     base_url: str,
     cookie_jar: CookieJar | None = None,
 ) -> urllib.request.OpenerDirector:
-    del base_url
-    handlers: list[Any] = [urllib.request.ProxyHandler({})]
+    handlers: list[Any] = [
+        urllib.request.ProxyHandler({}),
+        _RejectRedirectHandler(),
+    ]
+    pinned = _ACTIVE_PINNED_TLS
+    if pinned is not None:
+        if _origin(base_url) != pinned.public_origin:
+            raise RuntimeError("API 来源与回环 TLS 固定来源不一致")
+        handlers.append(_PinnedHTTPSHandler(pinned))
+    elif urlsplit(base_url).scheme == "https":
+        handlers.append(urllib.request.HTTPSHandler(context=ssl.create_default_context()))
     if cookie_jar is not None:
         handlers.append(urllib.request.HTTPCookieProcessor(cookie_jar))
     return urllib.request.build_opener(*handlers)
@@ -600,25 +982,12 @@ def _validate_api_base_url(api_base_url: str, settings: Any) -> str:
         )
         if value and urlsplit(value).scheme == "https"
     }
-    configured_private_http_origins = {
-        _origin(value)
-        for value in getattr(settings, "private_http_origins", ())
-        if value
-    }
-    if getattr(settings, "production_transport", "") == "lan_http":
-        configured_private_http_origins.update(
-            _origin(value)
-            for value in getattr(settings, "allowed_origins", ())
-            if value and urlsplit(value).scheme == "http"
-        )
-
     origin = _origin(normalized)
     if parsed.scheme == "https" and origin in configured_https_origins:
         return normalized
-    if parsed.scheme == "http" and origin in configured_private_http_origins:
-        return normalized
     raise RuntimeError(
-        "生产 API 地址必须精确匹配已配置 HTTPS 入口或受控局域网 HTTP 入口"
+        "生产密码交接 API 地址必须精确匹配已配置 HTTPS 入口；"
+        "普通局域网或公网明文 HTTP 禁止传输密码"
     )
 
 
@@ -661,6 +1030,7 @@ def preflight_handoff(
     return {
         "api_base_url": normalized_api,
         "health": {"status": health.status, "ok": True},
+        "transport_security": _transport_security_summary(normalized_api),
         "integrity": integrity,
         "target_accounts": [
             {
@@ -690,6 +1060,7 @@ def _login(
             "password": password,
             "remember_me": False,
         },
+        headers={"Origin": _origin(base_url)},
     )
 
 
@@ -794,6 +1165,115 @@ def verify_old_passwords(
     return result
 
 
+def complete_admin_forced_password_change(
+    base_url: str,
+    rotation_password: str,
+    final_password: str,
+) -> dict[str, Any]:
+    initial_jar = CookieJar()
+    initial_opener = open_api(base_url, initial_jar)
+    initial_login = _login(
+        base_url, initial_opener, "admin", rotation_password
+    )
+    before = request_json(initial_opener, f"{base_url}/api/auth/me")
+    before_user = (before.body or {}).get("user") if before.body else None
+    result: dict[str, Any] = {
+        "rotation_login_status": initial_login.status,
+        "before_change_me_status": before.status,
+        "before_change_required": (before_user or {}).get(
+            "must_change_password"
+        ),
+        "rotation_session_cookie_received": bool(list(initial_jar)),
+        "change_status": None,
+        "old_session_after_change_status": None,
+        "rotation_password_after_change_status": None,
+        "final_login_status": None,
+        "final_me_status": None,
+        "final_change_required": None,
+        "final_logout_status": None,
+        "final_after_logout_status": None,
+        "error": initial_login.error or before.error,
+    }
+    if (
+        initial_login.status != 200
+        or before.status != 200
+        or result["before_change_required"] is not True
+        or not list(initial_jar)
+        or result["error"] is not None
+    ):
+        return result
+
+    changed = request_json(
+        initial_opener,
+        f"{base_url}/api/auth/password",
+        method="PUT",
+        payload={
+            "current_password": rotation_password,
+            "new_password": final_password,
+        },
+        headers={"Origin": _origin(base_url)},
+    )
+    result["change_status"] = changed.status
+    result["error"] = changed.error
+    if changed.status != 200 or changed.error is not None:
+        return result
+
+    old_session = request_json(
+        initial_opener, f"{base_url}/api/auth/me"
+    )
+    result["old_session_after_change_status"] = old_session.status
+
+    intermediate_attempt = _login(
+        base_url,
+        open_api(base_url),
+        "admin",
+        rotation_password,
+    )
+    result["rotation_password_after_change_status"] = (
+        intermediate_attempt.status
+    )
+
+    final_jar = CookieJar()
+    final_opener = open_api(base_url, final_jar)
+    final_login = _login(base_url, final_opener, "admin", final_password)
+    final_me = request_json(final_opener, f"{base_url}/api/auth/me")
+    final_user = (
+        (final_me.body or {}).get("user") if final_me.body else None
+    )
+    final_session_cookie_received = bool(list(final_jar))
+    final_logout = request_json(
+        final_opener,
+        f"{base_url}/api/auth/logout",
+        method="POST",
+        payload={},
+        headers={"Origin": _origin(base_url)},
+    )
+    final_after_logout = request_json(
+        final_opener, f"{base_url}/api/auth/me"
+    )
+    result.update(
+        {
+            "final_login_status": final_login.status,
+            "final_me_status": final_me.status,
+            "final_change_required": (final_user or {}).get(
+                "must_change_password"
+            ),
+            "final_session_cookie_received": final_session_cookie_received,
+            "final_logout_status": final_logout.status,
+            "final_after_logout_status": final_after_logout.status,
+            "error": (
+                old_session.error
+                or intermediate_attempt.error
+                or final_login.error
+                or final_me.error
+                or final_logout.error
+                or final_after_logout.error
+            ),
+        }
+    )
+    return result
+
+
 def _security_status_checks(base_url: str, cookie_name: str) -> dict[str, Any]:
     no_login = request_json(open_api(base_url), f"{base_url}/api/auth/me")
     forged = request_json(
@@ -857,6 +1337,7 @@ def evaluate_verification(result: dict[str, Any]) -> dict[str, bool]:
     existing_sessions = result.get("prechange_sessions", {})
     old_passwords = result.get("old_password_results", {})
     security = result.get("security_status_checks", {})
+    admin_change = result.get("admin_forced_password_change", {})
     users = result.get("after_users_security", [])
 
     checks = {
@@ -896,6 +1377,22 @@ def evaluate_verification(result: dict[str, Any]) -> dict[str, bool]:
             is True
             and security.get("incoming_api_without_login", {}).get("status") == 401
         ),
+        "admin_forced_password_change_completed": (
+            admin_change.get("rotation_login_status") == 200
+            and admin_change.get("before_change_me_status") == 200
+            and admin_change.get("before_change_required") is True
+            and admin_change.get("rotation_session_cookie_received") is True
+            and admin_change.get("change_status") == 200
+            and admin_change.get("old_session_after_change_status") == 401
+            and admin_change.get("rotation_password_after_change_status") == 401
+            and admin_change.get("final_login_status") == 200
+            and admin_change.get("final_me_status") == 200
+            and admin_change.get("final_change_required") is False
+            and admin_change.get("final_session_cookie_received") is True
+            and admin_change.get("final_logout_status") == 200
+            and admin_change.get("final_after_logout_status") == 401
+            and admin_change.get("error") is None
+        ),
         "history_counts_unchanged": result.get("history_counts_unchanged") is True,
         "integrity_ok": result.get("integrity_after")
         == {"integrity_check": "ok", "foreign_key_check_count": 0},
@@ -913,7 +1410,8 @@ def evaluate_verification(result: dict[str, Any]) -> dict[str, bool]:
             and all(
                 row.get("role") == EXPECTED_ROLES[row.get("username")]
                 and row.get("active") is True
-                and row.get("must_change_password") is True
+                and row.get("must_change_password")
+                is (False if row.get("username") == "admin" else True)
                 and row.get("hash_compatible") is True
                 for row in users
             )
@@ -949,7 +1447,9 @@ def main() -> int:
         "passwords_recorded": False,
     }
     new_passwords: dict[str, str] | None = None
+    admin_final_passwords: dict[str, str] | None = None
     previous_passwords: dict[str, str] | None = None
+    proxy_context: Any = None
     committed = False
     _persist_state(
         output_json,
@@ -965,6 +1465,25 @@ def main() -> int:
         ).strip().rstrip("/")
         if not api_base_url:
             raise RuntimeError("必须显式提供 API 根地址或配置 ERP_BROWSER_URL")
+        loopback_upstream = getattr(args, "loopback_upstream", None)
+        if loopback_upstream:
+            upstream = urlsplit(loopback_upstream)
+            if int(upstream.port or 0) != int(getattr(settings, "port", 0)):
+                raise RuntimeError("维护上游端口与当前运行配置端口不一致")
+            configured_bind = str(getattr(settings, "bind_host", "")).strip()
+            try:
+                bind_address = ipaddress.ip_address(configured_bind)
+            except ValueError as error:
+                raise RuntimeError("当前服务绑定地址不是回环 IP") from error
+            if not bind_address.is_loopback:
+                raise RuntimeError("当前服务未绑定回环地址，拒绝建立维护通道")
+            pending_proxy_context = pinned_loopback_tls_proxy(
+                _origin(api_base_url),
+                loopback_upstream,
+                output_json.parent,
+            )
+            pending_proxy_context.__enter__()
+            proxy_context = pending_proxy_context
         preflight = preflight_handoff(
             db_path,
             api_base_url,
@@ -999,6 +1518,9 @@ def main() -> int:
         )
 
         new_passwords = collect_new_passwords()
+        admin_final_passwords = {
+            "admin": collect_admin_final_password(new_passwords)
+        }
         previous_passwords, existing_sessions, existing_session_summary = (
             collect_previous_passwords_and_sessions(api_base_url)
         )
@@ -1035,6 +1557,13 @@ def main() -> int:
         }
         result["old_password_results"] = verify_old_passwords(
             api_base_url, previous_passwords
+        )
+        result["admin_forced_password_change"] = (
+            complete_admin_forced_password_change(
+                api_base_url,
+                new_passwords["admin"],
+                admin_final_passwords["admin"],
+            )
         )
         result["security_status_checks"] = _security_status_checks(
             api_base_url, getattr(settings, "session_cookie_name", "erp_session")
@@ -1087,7 +1616,10 @@ def main() -> int:
         return 2
     finally:
         _scrub_password_mapping(new_passwords)
+        _scrub_password_mapping(admin_final_passwords)
         _scrub_password_mapping(previous_passwords)
+        if proxy_context is not None:
+            proxy_context.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

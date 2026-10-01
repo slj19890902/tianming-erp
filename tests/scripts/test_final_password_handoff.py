@@ -176,13 +176,12 @@ def test_production_https_must_match_configured_origin(tmp_path: Path) -> None:
         module._validate_api_base_url("https://other.example.test", settings)
 
 
-def test_https_proxy_allows_only_declared_dual_entry_http(tmp_path: Path) -> None:
+def test_https_proxy_rejects_all_plain_http_password_channels(
+    tmp_path: Path,
+) -> None:
     settings = _settings(tmp_path / "db.sqlite3")
-    assert (
-        module._validate_api_base_url("http://192.168.3.80:8000", settings)
-        == "http://192.168.3.80:8000"
-    )
     for unsafe in (
+        "http://192.168.3.80:8000",
         "http://127.0.0.1:18000",
         "http://192.168.3.80:8001",
         "http://user@192.168.3.80:8000",
@@ -192,14 +191,14 @@ def test_https_proxy_allows_only_declared_dual_entry_http(tmp_path: Path) -> Non
             module._validate_api_base_url(unsafe, settings)
 
 
-def test_lan_http_accepts_only_configured_http_origin(tmp_path: Path) -> None:
+def test_lan_http_configuration_still_cannot_send_passwords_in_plaintext(
+    tmp_path: Path,
+) -> None:
     settings = _settings(
         tmp_path / "db.sqlite3", production=True, transport="lan_http"
     )
-    assert (
+    with pytest.raises(RuntimeError, match="明文 HTTP"):
         module._validate_api_base_url("http://192.168.3.80:8000", settings)
-        == "http://192.168.3.80:8000"
-    )
     with pytest.raises(RuntimeError):
         module._validate_api_base_url("https://192.168.3.80:8000", settings)
 
@@ -443,6 +442,22 @@ def test_verdict_fails_when_any_required_check_fails() -> None:
             },
             "incoming_api_without_login": {"status": 401},
         },
+        "admin_forced_password_change": {
+            "rotation_login_status": 200,
+            "before_change_me_status": 200,
+            "before_change_required": True,
+            "rotation_session_cookie_received": True,
+            "change_status": 200,
+            "old_session_after_change_status": 401,
+            "rotation_password_after_change_status": 401,
+            "final_login_status": 200,
+            "final_me_status": 200,
+            "final_change_required": False,
+            "final_session_cookie_received": True,
+            "final_logout_status": 200,
+            "final_after_logout_status": 401,
+            "error": None,
+        },
         "history_counts_unchanged": True,
         "integrity_after": {"integrity_check": "ok", "foreign_key_check_count": 0},
         "backup": {
@@ -455,7 +470,7 @@ def test_verdict_fails_when_any_required_check_fails() -> None:
                 "username": username,
                 "role": module.EXPECTED_ROLES[username],
                 "active": True,
-                "must_change_password": True,
+                "must_change_password": username != "admin",
                 "hash_compatible": True,
             }
             for username in module.VALID_USERS
@@ -574,6 +589,11 @@ def test_main_records_committed_when_post_write_verification_raises(
         ),
     )
     monkeypatch.setattr(module, "collect_new_passwords", lambda: _passwords("New"))
+    monkeypatch.setattr(
+        module,
+        "collect_admin_final_password",
+        lambda *_args: "IsolatedFinalAdmin9",
+    )
     monkeypatch.setattr(
         module,
         "collect_previous_passwords_and_sessions",
@@ -712,6 +732,26 @@ def test_real_auth_flow_revokes_old_sessions_and_forces_change(
             assert changed.status_code == 200, changed.text
             assert changed.json()["user"]["must_change_password"] is False
             assert client.get("/api/auth/me").status_code == 401
+        with TestClient(app, base_url="http://127.0.0.1:18082") as client:
+            assert client.post(
+                "/api/auth/login",
+                json={
+                    "username": "admin",
+                    "password": new_passwords["admin"],
+                },
+            ).status_code == 401
+            assert client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": final_password},
+            ).status_code == 200
+            assert client.get("/api/auth/me").json()["user"][
+                "must_change_password"
+            ] is False
+            assert client.post(
+                "/api/auth/logout",
+                headers={"Origin": "http://127.0.0.1:18082"},
+            ).status_code == 200
+            assert client.get("/api/auth/me").status_code == 401
     finally:
         for client in old_clients.values():
             client.close()
@@ -720,3 +760,141 @@ def test_real_auth_flow_revokes_old_sessions_and_forces_change(
     assert database.is_file()
     assert upload_dir.parent == tmp_path
     assert backup_dir.parent == tmp_path
+
+
+def test_pinned_loopback_tls_uses_real_secure_cookie_flow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+    from fastapi import FastAPI
+    from sqlalchemy.orm import sessionmaker
+
+    from app.api.auth import router
+    from app.api.deps import get_db
+    from app.core.config import load_settings
+    from app.core.database import create_sqlite_engine
+    from app.main import apply_transport_security
+    from app.models import Base
+    from app.models.user import User
+
+    database = tmp_path / "pinned-loopback.sqlite3"
+    public_origin = "https://erp.example.test"
+    environment = {
+        "ERP_ENVIRONMENT": "production",
+        "ERP_PRODUCTION_TRANSPORT": "https_proxy",
+        "ERP_DATABASE_PATH": str(database),
+        "ERP_BACKUP_DIR": str(tmp_path / "backups"),
+        "ERP_UPLOAD_DIR": str(tmp_path / "uploads"),
+        "ERP_SECRET_KEY": "isolated-pinned-loopback-test-secret-value",
+        "ERP_BIND_HOST": "127.0.0.1",
+        "ERP_PORT": "18083",
+        "ERP_ALLOWED_ORIGINS": public_origin,
+        "ERP_TRUSTED_HOSTS": "erp.example.test",
+        "ERP_TRUSTED_PROXY_IPS": "127.0.0.1",
+        "ERP_BROWSER_URL": f"{public_origin}/",
+        "ERP_HEALTH_URL": f"{public_origin}/api/health",
+        "ERP_SESSION_COOKIE_SECURE": "true",
+        "HTTPS_PROXY": "http://192.0.2.1:9",
+        "HTTP_PROXY": "http://192.0.2.1:9",
+    }
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+    settings = load_settings()
+    engine = create_sqlite_engine(database)
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    rotation_password = "IsolatedRotationAdmin9"
+    final_password = "IsolatedFinalOwner10"
+    with factory() as session:
+        session.add(
+            User(
+                username="admin",
+                password_hash=module.hash_password(rotation_password),
+                role="admin",
+                real_name="Isolated admin",
+                display_name="Isolated admin",
+                is_active=True,
+                must_change_password=True,
+                customer_access_mode="all",
+            )
+        )
+        session.commit()
+
+    app = FastAPI()
+    app.state.erp_settings = settings
+
+    @app.get("/api/health")
+    def health() -> dict[str, bool]:
+        return {"ok": True}
+
+    app.include_router(router, prefix="/api/auth")
+
+    def isolated_db():
+        with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = isolated_db
+    apply_transport_security(app, settings)
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(128)
+    upstream_port = int(listener.getsockname()[1])
+    server = uvicorn.Server(
+        uvicorn.Config(app, log_level="critical", lifespan="off")
+    )
+    thread = threading.Thread(
+        target=server.run,
+        kwargs={"sockets": [listener]},
+        daemon=True,
+    )
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert server.started
+    try:
+        with module.pinned_loopback_tls_proxy(
+            public_origin,
+            f"http://127.0.0.1:{upstream_port}",
+            tmp_path,
+        ):
+            health_result = module.request_json(
+                module.open_api(public_origin),
+                f"{public_origin}/api/health",
+            )
+            assert health_result.status == 200
+            assert health_result.body == {"ok": True}
+            transport = module._transport_security_summary(public_origin)
+            assert transport["mode"] == "pinned_loopback_tls"
+            assert transport["environment_proxy_disabled"] is True
+            assert transport["redirects_disabled"] is True
+            assert transport["loopback_only"] is True
+
+            completed = module.complete_admin_forced_password_change(
+                public_origin,
+                rotation_password,
+                final_password,
+            )
+            assert completed["change_status"] == 200
+            assert completed["old_session_after_change_status"] == 401
+            assert completed["rotation_password_after_change_status"] == 401
+            assert completed["final_login_status"] == 200
+            assert completed["final_me_status"] == 200
+            assert completed["final_change_required"] is False
+            assert completed["final_logout_status"] == 200
+            assert completed["final_after_logout_status"] == 401
+            assert completed["error"] is None
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        listener.close()
+        engine.dispose()
+
+    assert module._ACTIVE_PINNED_TLS is None
+    assert not list(tmp_path.glob(".password-handoff-tls-*"))

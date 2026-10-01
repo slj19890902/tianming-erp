@@ -573,7 +573,7 @@ def test_temporary_reset_verdict_requires_all_accounts_to_remain_forced() -> Non
                 "active": True,
                 "must_change_password": True,
                 "hash_compatible": True,
-                "auth_version": versions[username]["after"],
+                "auth_version": versions[username]["after"] + 1,
             }
             for username in module.VALID_USERS
         ],
@@ -816,7 +816,7 @@ def test_main_temporary_reset_skips_old_password_and_final_admin_prompts(
                 "active": True,
                 "must_change_password": True,
                 "hash_compatible": True,
-                "auth_version": versions[username]["after"],
+                "auth_version": versions[username]["after"] + 1,
             }
             for username in module.VALID_USERS
         ],

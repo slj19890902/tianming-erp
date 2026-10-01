@@ -1166,6 +1166,7 @@ def verify_login(
             login.status, None, None, None, None, bool(list(jar)), login.error
         )
     me = request_json(opener, f"{base_url}/api/auth/me")
+    session_cookie_received = bool(list(jar))
     origin = _origin(base_url)
     logout = request_json(
         opener,
@@ -1182,7 +1183,9 @@ def verify_login(
         logout_status=logout.status,
         after_logout_status=after_logout.status,
         must_change_password=(user_payload or {}).get("must_change_password"),
-        session_cookie_received=bool(list(jar)),
+        # Logout intentionally clears the cookie, so capture this immediately
+        # after the authenticated /me request rather than after logout.
+        session_cookie_received=session_cookie_received,
         error=login.error or me.error or logout.error or after_logout.error,
     )
 
@@ -1482,7 +1485,9 @@ def evaluate_temporary_reset_verification(
                 version_changes[username].get("after")
                 == version_changes[username].get("before") + 1
                 and users_by_name.get(username, {}).get("auth_version")
-                == version_changes[username].get("after")
+                # A successful logout deliberately revokes every session for
+                # that account and increments auth_version once more.
+                == version_changes[username].get("after") + 1
                 for username in VALID_USERS
             )
         ),

@@ -3,7 +3,8 @@ from __future__ import annotations
 import unicodedata
 
 
-MIN_PASSWORD_LENGTH = 8
+DEFAULT_MIN_PASSWORD_LENGTH = 8
+ADMIN_MIN_PASSWORD_LENGTH = 10
 MAX_USERNAME_LENGTH = 50
 WEAK_PASSWORDS = frozenset(
     {
@@ -31,13 +32,23 @@ def normalize_username(username: str) -> str:
 def password_policy_issues(password: str, *, username: str | None = None) -> list[str]:
     issues: list[str] = []
     lowered = password.lower()
-    if len(password) < MIN_PASSWORD_LENGTH:
-        issues.append(f"至少 {MIN_PASSWORD_LENGTH} 位")
+    normalized_username = (
+        unicodedata.normalize("NFKC", username).strip().casefold()
+        if username
+        else None
+    )
+    minimum_length = (
+        ADMIN_MIN_PASSWORD_LENGTH
+        if normalized_username == "admin"
+        else DEFAULT_MIN_PASSWORD_LENGTH
+    )
+    if len(password) < minimum_length:
+        issues.append(f"至少 {minimum_length} 位")
     if lowered in WEAK_PASSWORDS:
         issues.append("不能使用弱密码")
-    if username and username.strip().lower() in lowered:
+    if normalized_username and normalized_username in lowered:
         issues.append("不能包含用户名")
-    if not any("a" <= character <= "z" or "A" <= character <= "Z" for character in password):
+    if not any(character.isascii() and character.isalpha() for character in password):
         issues.append("至少包含 1 个英文字母")
     if not any(character.isdigit() for character in password):
         issues.append("至少包含 1 个数字")

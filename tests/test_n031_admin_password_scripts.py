@@ -54,14 +54,19 @@ def _create_users_database(path: Path) -> None:
             );
             """
         )
-        connection.execute(
+        connection.executemany(
             """
             INSERT INTO users (
                 id, username, password_hash, role, is_active,
                 must_change_password, auth_version
-            ) VALUES (1, 'admin', ?, 'admin', 1, 0, 4)
+            ) VALUES (?, ?, ?, ?, 1, 0, ?)
             """,
-            (hash_password("OldPassword123!"),),
+            [
+                (1, "admin", hash_password("OldPassword123!"), "admin", 4),
+                (10, "finance", hash_password("OldFinance123!"), "finance", 1),
+                (11, "sales", hash_password("OldSales123!"), "sales", 1),
+                (12, "workshop", hash_password("OldWorkshop123!"), "workshop", 1),
+            ],
         )
 
 
@@ -148,9 +153,15 @@ def test_final_handoff_password_update_revokes_existing_sessions(tmp_path) -> No
     database_path = tmp_path / "users.sqlite3"
     _create_users_database(database_path)
 
+    passwords = {
+        "admin": "NewPassword123!",
+        "finance": "NewFinance123!",
+        "sales": "NewSales123!",
+        "workshop": "NewWorkshop123!",
+    }
     module.update_passwords(
         database_path,
-        {"admin": "NewPassword123!"},
+        passwords,
         actor_username="admin",
     )
 
@@ -169,8 +180,16 @@ def test_final_handoff_password_update_revokes_existing_sessions(tmp_path) -> No
         ).fetchone()
     assert handoff_audit[:2] == (1, "FINAL_PASSWORD_HANDOFF")
     assert handoff_audit[3:] == ("admin", "admin")
-    assert json.loads(handoff_audit[2]) == {"target_usernames": ["admin"]}
-    assert "NewPassword123!" not in (handoff_audit[2] or "")
+    audit_details = json.loads(handoff_audit[2])
+    assert audit_details["target_usernames"] == [
+        "admin",
+        "finance",
+        "sales",
+        "workshop",
+    ]
+    assert audit_details["must_change_password"] is True
+    assert set(audit_details["auth_version_changes"]) == set(passwords)
+    assert not any(password in (handoff_audit[2] or "") for password in passwords.values())
 
 
 @pytest.mark.parametrize("actor", ["missing-admin", "finance", "disabled-admin"])
@@ -193,8 +212,7 @@ def test_final_handoff_rejects_unrecognized_non_admin_or_inactive_actor(
             ) VALUES (?, ?, ?, ?, ?, 0, 1)
             """,
             [
-                (2, "finance", hash_password("FinancePass123!"), "finance", 1),
-                (3, "disabled-admin", hash_password("DisabledPass123!"), "admin", 0),
+                (20, "disabled-admin", hash_password("DisabledPass123!"), "admin", 0),
             ],
         )
         before = connection.execute(
@@ -204,7 +222,12 @@ def test_final_handoff_rejects_unrecognized_non_admin_or_inactive_actor(
     with pytest.raises(RuntimeError, match="--actor"):
         module.update_passwords(
             database_path,
-            {"admin": "NewPassword123!"},
+            {
+                "admin": "NewPassword123!",
+                "finance": "NewFinance123!",
+                "sales": "NewSales123!",
+                "workshop": "NewWorkshop123!",
+            },
             actor_username=actor,
         )
 

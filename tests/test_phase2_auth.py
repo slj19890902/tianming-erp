@@ -159,14 +159,14 @@ def test_user_can_change_own_password_and_must_supply_current_password(
             "/api/auth/password",
             json={
                 "current_password": "wrong-password",
-                "new_password": "tmAb1234",
+                "new_password": "tmAb123456",
             },
         )
         changed = client.put(
             "/api/auth/password",
             json={
                 "current_password": "AdminPass123!",
-                "new_password": "tmAb1234",
+                "new_password": "tmAb123456",
             },
         )
         client.post("/api/auth/logout")
@@ -176,7 +176,7 @@ def test_user_can_change_own_password_and_must_supply_current_password(
         )
         new_login = client.post(
             "/api/auth/login",
-            json={"username": "admin", "password": "tmAb1234"},
+            json={"username": "admin", "password": "tmAb123456"},
         )
 
     assert denied.status_code == 400

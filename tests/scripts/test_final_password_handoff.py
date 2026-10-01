@@ -19,18 +19,23 @@ spec.loader.exec_module(module)
 def test_validate_handoff_password_rejects_weak_and_short() -> None:
     issues = module.validate_handoff_password("admin", "admin")
     assert issues
-    assert any("弱密码" in issue or "至少 12 位" in issue for issue in issues)
+    assert "至少 10 位" in issues
+    assert "不能使用弱密码" in issues
 
 
-def test_validate_handoff_password_requires_complexity() -> None:
-    issues = module.validate_handoff_password("abcdefghijkl", "sales")
-    assert any("大写字母" in issue for issue in issues)
-    assert any("数字" in issue for issue in issues)
-    assert any("符号" in issue for issue in issues)
+def test_validate_handoff_password_requires_letters_and_digits() -> None:
+    assert "至少包含 1 个数字" in module.validate_handoff_password(
+        "abcdefgh", "sales"
+    )
+    assert "至少包含 1 个字母" in module.validate_handoff_password(
+        "87654321", "sales"
+    )
 
 
-def test_validate_handoff_password_accepts_strong_password() -> None:
-    assert module.validate_handoff_password("ErpTrial!2026", "finance") == []
+def test_validate_handoff_password_uses_account_specific_minimums() -> None:
+    assert module.validate_handoff_password("safe1234", "finance") == []
+    assert "至少 10 位" in module.validate_handoff_password("safe12345", "admin")
+    assert module.validate_handoff_password("safe123456", "admin") == []
 
 
 def test_handoff_cli_requires_actor(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -179,6 +184,39 @@ def test_verify_login_sends_same_origin_on_cookie_logout(
             {"Origin": "https://erp.example.com"},
         )
     ]
+
+
+def test_verify_old_passwords_prompts_at_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompted_users: list[str] = []
+    submitted_passwords: list[str] = []
+
+    def fake_getpass(prompt: str) -> str:
+        username = prompt.split(" ", 1)[0]
+        prompted_users.append(username)
+        return f"runtime-only-{username}"
+
+    def fake_request_json(_opener, _url, **kwargs):
+        submitted_passwords.append(kwargs["payload"]["password"])
+        return 401, None
+
+    monkeypatch.setattr(module.getpass, "getpass", fake_getpass)
+    monkeypatch.setattr(module.secrets, "token_urlsafe", lambda _size: "generated-control")
+    monkeypatch.setattr(module, "open_api", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(module, "request_json", fake_request_json)
+
+    result = module.verify_old_passwords("https://example.test")
+
+    assert prompted_users == ["admin", "workshop", "finance", "sales"]
+    assert submitted_passwords == [
+        "runtime-only-admin",
+        "runtime-only-workshop",
+        "runtime-only-finance",
+        "runtime-only-sales",
+        "generated-control",
+    ]
+    assert set(result.values()) == {401}
 
 
 def test_handoff_rejects_corrupt_backup_before_password_write(tmp_path: Path) -> None:

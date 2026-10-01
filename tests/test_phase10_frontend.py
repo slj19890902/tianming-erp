@@ -125,6 +125,7 @@ def test_frontend_has_safe_password_recovery_and_forced_change_flow() -> None:
     assert "/api/auth/password" in source
     assert "/reset-password" in source
     assert "must_change_password" in source
+    assert "普通账号至少 8 位，admin 账号至少 10 位" in source
 
 
 def test_v0210_entry_efficiency_controls_are_visible() -> None:

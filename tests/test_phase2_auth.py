@@ -186,6 +186,59 @@ def test_user_can_change_own_password_and_must_supply_current_password(
     assert new_login.status_code == 200
 
 
+def test_auth_api_uses_shared_account_specific_password_policy(auth_context) -> None:
+    app, _ = auth_context
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "AdminPass123!"},
+        ).status_code == 200
+
+        admin_too_short = client.put(
+            "/api/auth/password",
+            json={
+                "current_password": "AdminPass123!",
+                "new_password": "safe12345",
+            },
+        )
+        assert admin_too_short.status_code == 400
+        assert "至少 10 位" in admin_too_short.json()["detail"]
+
+        created = client.post(
+            "/api/auth/users",
+            json={
+                "username": "clerk",
+                "password": "safe1234",
+                "role": "sales",
+                "real_name": "文员",
+            },
+        )
+        assert created.status_code == 201
+
+        weak = client.post(
+            "/api/auth/users",
+            json={
+                "username": "weak-user",
+                "password": "password123",
+                "role": "sales",
+                "real_name": "弱密码账号",
+            },
+        )
+        assert weak.status_code == 400
+        assert "不能使用弱密码" in weak.json()["detail"]
+
+        client.post("/api/auth/logout")
+        assert client.post(
+            "/api/auth/login",
+            json={"username": "clerk", "password": "safe1234"},
+        ).status_code == 200
+        changed = client.put(
+            "/api/auth/password",
+            json={"current_password": "safe1234", "new_password": "next1234"},
+        )
+        assert changed.status_code == 200
+
+
 def test_admin_can_reset_account_password_and_non_admin_cannot(auth_context) -> None:
     from app.models.audit import OperationLog
 

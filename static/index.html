@@ -3790,7 +3790,7 @@
               <div class="field wide"><label>当前密码</label><input class="input" type="password" autocomplete="current-password" v-model="passwordForm.current_password" /></div>
               <div class="field"><label>新密码</label><input class="input" type="password" autocomplete="new-password" v-model="passwordForm.new_password" /></div>
               <div class="field"><label>确认新密码</label><input class="input" type="password" autocomplete="new-password" v-model="passwordForm.confirm_password" /></div>
-              <div class="field wide muted">至少 10 位，并同时包含字母和数字。</div>
+              <div class="field wide muted">普通账号至少 8 位，admin 账号至少 10 位；必须同时包含字母和数字，且不能使用弱密码。</div>
             </div>
             <div v-else-if="modal.type === 'resetPassword'" class="form-grid">
               <div class="field wide">正在重置账号：<strong>{{ resetPasswordForm.username }}</strong></div>

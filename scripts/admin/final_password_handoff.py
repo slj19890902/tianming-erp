@@ -49,12 +49,22 @@ EXPECTED_ROLES = {
     "workshop": "workshop",
 }
 HISTORY_COUNT_QUERIES = {
-    "sales_orders": "SELECT COUNT(*) FROM sales_orders",
-    "sales_order_items": "SELECT COUNT(*) FROM sales_order_items",
-    "legacy_ruida_orders": "SELECT COUNT(*) FROM legacy_ruida_orders",
-    "legacy_ruida_order_items": "SELECT COUNT(*) FROM legacy_ruida_order_items",
+    "sales_orders": ({"sales_orders"}, "SELECT COUNT(*) FROM sales_orders"),
+    "sales_order_items": (
+        {"sales_order_items"},
+        "SELECT COUNT(*) FROM sales_order_items",
+    ),
+    "legacy_ruida_orders": (
+        {"legacy_ruida_orders"},
+        "SELECT COUNT(*) FROM legacy_ruida_orders",
+    ),
+    "legacy_ruida_order_items": (
+        {"legacy_ruida_order_items"},
+        "SELECT COUNT(*) FROM legacy_ruida_order_items",
+    ),
     "ruida_prefixed_orders": (
-        "SELECT COUNT(*) FROM sales_orders WHERE order_number LIKE 'RUIDA-%'"
+        {"sales_orders"},
+        "SELECT COUNT(*) FROM sales_orders WHERE order_number LIKE 'RUIDA-%'",
     ),
 }
 
@@ -196,11 +206,21 @@ def db_integrity(db_path: Path) -> dict[str, Any]:
     }
 
 
-def history_counts(db_path: Path) -> dict[str, int]:
+def history_counts(db_path: Path) -> dict[str, int | None]:
     with closing(_read_only_connection(db_path)) as connection:
+        existing_tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
         return {
-            name: int(connection.execute(sql).fetchone()[0])
-            for name, sql in HISTORY_COUNT_QUERIES.items()
+            name: (
+                int(connection.execute(sql).fetchone()[0])
+                if required_tables <= existing_tables
+                else None
+            )
+            for name, (required_tables, sql) in HISTORY_COUNT_QUERIES.items()
         }
 
 

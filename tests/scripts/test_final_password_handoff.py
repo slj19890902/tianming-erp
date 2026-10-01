@@ -334,6 +334,22 @@ def test_update_passwords_commits_four_accounts_and_one_audit(tmp_path: Path) ->
         assert audits == 1
 
 
+def test_history_counts_records_retired_tables_as_absent(tmp_path: Path) -> None:
+    database = tmp_path / "current-production-shape.sqlite3"
+    _create_database(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE legacy_ruida_order_items")
+        connection.execute("DROP TABLE legacy_ruida_orders")
+        connection.commit()
+
+    counts = module.history_counts(database)
+
+    assert counts["sales_orders"] == 1
+    assert counts["sales_order_items"] == 1
+    assert counts["legacy_ruida_orders"] is None
+    assert counts["legacy_ruida_order_items"] is None
+
+
 def test_update_passwords_rolls_back_all_accounts_on_mid_transaction_error(
     tmp_path: Path,
 ) -> None:

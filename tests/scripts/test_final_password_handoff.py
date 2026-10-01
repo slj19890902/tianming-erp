@@ -334,6 +334,47 @@ def test_update_passwords_commits_four_accounts_and_one_audit(tmp_path: Path) ->
         assert audits == 1
 
 
+def test_temporary_reset_commits_distinct_audit_and_forces_all_changes(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "temporary-reset.sqlite3"
+    _create_database(database)
+    before_counts = module.history_counts(database)
+    before_versions = {
+        row["username"]: row["auth_version"] for row in module.fetch_users(database)
+    }
+
+    result = module.update_passwords(
+        database,
+        _passwords("Temporary"),
+        actor_username="admin",
+        operation="temporary_reset",
+    )
+
+    assert result["committed"] is True
+    assert result["audit_action"] == "ADMIN_TEMP_PASSWORD_RESET"
+    assert module.history_counts(database) == before_counts
+    with sqlite3.connect(database) as connection:
+        rows = connection.execute(
+            "SELECT username, must_change_password, auth_version "
+            "FROM users ORDER BY username"
+        ).fetchall()
+        assert len(rows) == len(module.VALID_USERS)
+        assert all(must_change == 1 for _, must_change, _ in rows)
+        assert all(
+            version == before_versions[username] + 1
+            for username, _, version in rows
+        )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM operation_logs "
+            "WHERE action = 'ADMIN_TEMP_PASSWORD_RESET'"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM operation_logs "
+            "WHERE action = 'FINAL_PASSWORD_HANDOFF'"
+        ).fetchone()[0] == 0
+
+
 def test_history_counts_records_retired_tables_as_absent(tmp_path: Path) -> None:
     database = tmp_path / "current-production-shape.sqlite3"
     _create_database(database)
@@ -496,6 +537,55 @@ def test_verdict_fails_when_any_required_check_fails() -> None:
     assert not all(verdict.values())
 
 
+def test_temporary_reset_verdict_requires_all_accounts_to_remain_forced() -> None:
+    login = {
+        "login_status": 200,
+        "me_status": 200,
+        "logout_status": 200,
+        "after_logout_status": 401,
+        "must_change_password": True,
+        "session_cookie_received": True,
+        "error": None,
+    }
+    versions = {
+        username: {"before": index, "after": index + 1}
+        for index, username in enumerate(module.VALID_USERS, start=1)
+    }
+    result = {
+        "login_checks": {username: dict(login) for username in module.VALID_USERS},
+        "security_status_checks": {
+            "no_login_me": {"status": 401},
+            "forged_cookie_me": {"status": 401, "non_empty_cookie_sent": True},
+            "incoming_api_without_login": {"status": 401},
+        },
+        "write": {"auth_version_changes": versions},
+        "history_counts_unchanged": True,
+        "integrity_after": {"integrity_check": "ok", "foreign_key_check_count": 0},
+        "backup": {
+            "integrity": {"integrity_check": "ok", "foreign_key_check_count": 0},
+            "restore": {"readable": True, "restore_tested": True},
+        },
+        "handoff_audit_exists": True,
+        "after_users_security": [
+            {
+                "username": username,
+                "role": module.EXPECTED_ROLES[username],
+                "active": True,
+                "must_change_password": True,
+                "hash_compatible": True,
+                "auth_version": versions[username]["after"],
+            }
+            for username in module.VALID_USERS
+        ],
+    }
+
+    assert all(module.evaluate_temporary_reset_verification(result).values())
+    result["after_users_security"][0]["must_change_password"] = False
+    verdict = module.evaluate_temporary_reset_verification(result)
+    assert verdict["four_expected_accounts_require_change"] is False
+    assert not all(verdict.values())
+
+
 def test_main_records_not_written_when_preflight_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -628,6 +718,119 @@ def test_main_records_committed_when_post_write_verification_raises(
     assert result["write_state"] == "committed"
     assert result["success"] is False
     assert result["passwords_recorded"] is False
+
+
+def test_main_temporary_reset_skips_old_password_and_final_admin_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "temporary-reset.json"
+    database = tmp_path / "db.sqlite3"
+    database.touch()
+    versions = {
+        username: {"before": index, "after": index + 1}
+        for index, username in enumerate(module.VALID_USERS, start=1)
+    }
+    monkeypatch.setattr(
+        module,
+        "parse_args",
+        lambda: Namespace(
+            sqlite_path=str(database),
+            api_base_url="https://erp.example.test",
+            output_json=str(output),
+            backup_dir=str(tmp_path / "backups"),
+            loopback_upstream=None,
+            actor="admin",
+            managed_root=None,
+            temporary_reset=True,
+        ),
+    )
+    monkeypatch.setattr(module, "load_settings", lambda: _settings(database))
+    monkeypatch.setattr(
+        module,
+        "preflight_handoff",
+        lambda *_args, **_kwargs: {
+            "api_base_url": "https://erp.example.test",
+            "health": {"status": 200, "ok": True},
+        },
+    )
+    monkeypatch.setattr(module, "history_counts", lambda *_args: {})
+    monkeypatch.setattr(module, "backup_sqlite", lambda *_args: None)
+    monkeypatch.setattr(
+        module,
+        "validate_backup_before_password_write",
+        lambda *_args: (
+            "A" * 64,
+            {"integrity_check": "ok", "foreign_key_check_count": 0},
+            {"readable": True, "restore_tested": True},
+        ),
+    )
+    monkeypatch.setattr(module, "collect_new_passwords", lambda: _passwords("Temp"))
+    monkeypatch.setattr(
+        module,
+        "collect_admin_final_password",
+        lambda *_args: pytest.fail("temporary reset requested an admin final password"),
+    )
+    monkeypatch.setattr(
+        module,
+        "collect_previous_passwords_and_sessions",
+        lambda *_args: pytest.fail("temporary reset requested previous passwords"),
+    )
+    monkeypatch.setattr(
+        module,
+        "update_passwords",
+        lambda *_args, **_kwargs: {
+            "committed": True,
+            "audit_log_id": 1,
+            "audit_action": "ADMIN_TEMP_PASSWORD_RESET",
+            "auth_version_changes": versions,
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "verify_login",
+        lambda *_args: module.LoginCheck(200, 200, 200, 401, True, True, None),
+    )
+    monkeypatch.setattr(
+        module,
+        "_security_status_checks",
+        lambda *_args: {
+            "no_login_me": {"status": 401},
+            "forged_cookie_me": {"status": 401, "non_empty_cookie_sent": True},
+            "incoming_api_without_login": {"status": 401},
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "db_integrity",
+        lambda *_args: {"integrity_check": "ok", "foreign_key_check_count": 0},
+    )
+    monkeypatch.setattr(module, "_audit_log_exists", lambda *_args: True)
+    monkeypatch.setattr(
+        module,
+        "_sanitized_user_security",
+        lambda *_args: [
+            {
+                "username": username,
+                "role": module.EXPECTED_ROLES[username],
+                "active": True,
+                "must_change_password": True,
+                "hash_compatible": True,
+                "auth_version": versions[username]["after"],
+            }
+            for username in module.VALID_USERS
+        ],
+    )
+
+    assert module.main() == 0
+    result = json.loads(output.read_text(encoding="utf-8"))
+    assert result["overall_status"] == "verified_success"
+    assert result["write_state"] == "committed"
+    assert result["mode"] == "temporary_reset"
+    assert result["limitations"]["first_login_password_change"] == (
+        "pending_for_all_accounts"
+    )
+    assert all(result["verification_checks"].values())
 
 
 def test_real_auth_flow_revokes_old_sessions_and_forces_change(

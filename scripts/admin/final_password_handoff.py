@@ -126,6 +126,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--actor", required=True)
     parser.add_argument(
+        "--temporary-reset",
+        action="store_true",
+        help=(
+            "Reset the four approved accounts to distinct temporary passwords, "
+            "leave must_change_password enabled for every account, and do not "
+            "request or probe any previous password."
+        ),
+    )
+    parser.add_argument(
         "--managed-root",
         help=(
             "Desktop-assistant root. In production this allows the tool to verify "
@@ -471,11 +480,25 @@ def update_passwords(
     passwords: dict[str, str],
     *,
     actor_username: str,
+    operation: str = "handoff",
 ) -> dict[str, Any]:
     if set(passwords) != set(VALID_USERS):
         raise RuntimeError("密码交接必须一次且仅覆盖四个指定账号")
     if len(set(passwords.values())) != len(VALID_USERS):
         raise RuntimeError("四个账号必须使用各不相同的新密码")
+
+    if operation not in {"handoff", "temporary_reset"}:
+        raise RuntimeError("不支持的密码维护操作")
+    audit_action = (
+        "ADMIN_TEMP_PASSWORD_RESET"
+        if operation == "temporary_reset"
+        else "FINAL_PASSWORD_HANDOFF"
+    )
+    audit_description = (
+        "管理员临时密码重置"
+        if operation == "temporary_reset"
+        else "最终密码交接"
+    )
 
     password_hashes = {
         username: hash_password(password) for username, password in passwords.items()
@@ -525,24 +548,24 @@ def update_passwords(
                 INSERT INTO operation_logs (
                     user_id, action, resource, details, username,
                     role, entity_type, description
-                ) VALUES (
-                    ?, 'FINAL_PASSWORD_HANDOFF', 'User', ?,
-                    ?, ?, 'user', '最终密码交接'
-                )
+                ) VALUES (?, ?, 'User', ?, ?, ?, 'user', ?)
                 """,
                 (
                     actor_id,
+                    audit_action,
                     json.dumps(
                         {
                             "target_usernames": list(VALID_USERS),
                             "auth_version_changes": version_changes,
                             "must_change_password": True,
+                            "operation": operation,
                         },
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
                     actor_name,
                     actor_role,
+                    audit_description,
                 ),
             )
             audit_log_id = int(audit_cursor.lastrowid)
@@ -553,6 +576,7 @@ def update_passwords(
     return {
         "committed": True,
         "audit_log_id": audit_log_id,
+        "audit_action": audit_action,
         "auth_version_changes": version_changes,
     }
 
@@ -1319,12 +1343,14 @@ def _security_status_checks(base_url: str, cookie_name: str) -> dict[str, Any]:
     }
 
 
-def _audit_log_exists(db_path: Path, audit_log_id: int) -> bool:
+def _audit_log_exists(
+    db_path: Path, audit_log_id: int, expected_action: str
+) -> bool:
     with closing(_read_only_connection(db_path)) as connection:
         row = connection.execute(
             "SELECT action FROM operation_logs WHERE id = ?", (audit_log_id,)
         ).fetchone()
-    return row is not None and row[0] == "FINAL_PASSWORD_HANDOFF"
+    return row is not None and row[0] == expected_action
 
 
 def _sanitized_user_security(db_path: Path) -> list[dict[str, Any]]:
@@ -1424,6 +1450,67 @@ def evaluate_verification(result: dict[str, Any]) -> dict[str, bool]:
     return checks
 
 
+def evaluate_temporary_reset_verification(
+    result: dict[str, Any],
+) -> dict[str, bool]:
+    login_checks = result.get("login_checks", {})
+    security = result.get("security_status_checks", {})
+    users = result.get("after_users_security", [])
+    version_changes = result.get("write", {}).get("auth_version_changes", {})
+    users_by_name = {row.get("username"): row for row in users}
+    return {
+        "all_temporary_logins": all(
+            login_checks.get(username, {}).get("login_status") == 200
+            and login_checks.get(username, {}).get("me_status") == 200
+            and login_checks.get(username, {}).get("logout_status") == 200
+            and login_checks.get(username, {}).get("after_logout_status") == 401
+            and login_checks.get(username, {}).get("must_change_password") is True
+            and login_checks.get(username, {}).get("session_cookie_received") is True
+            and login_checks.get(username, {}).get("error") is None
+            for username in VALID_USERS
+        ),
+        "anonymous_and_forged_sessions_rejected": (
+            security.get("no_login_me", {}).get("status") == 401
+            and security.get("forged_cookie_me", {}).get("status") == 401
+            and security.get("forged_cookie_me", {}).get("non_empty_cookie_sent")
+            is True
+            and security.get("incoming_api_without_login", {}).get("status") == 401
+        ),
+        "auth_versions_incremented": (
+            set(version_changes) == set(VALID_USERS)
+            and all(
+                version_changes[username].get("after")
+                == version_changes[username].get("before") + 1
+                and users_by_name.get(username, {}).get("auth_version")
+                == version_changes[username].get("after")
+                for username in VALID_USERS
+            )
+        ),
+        "history_counts_unchanged": result.get("history_counts_unchanged") is True,
+        "integrity_ok": result.get("integrity_after")
+        == {"integrity_check": "ok", "foreign_key_check_count": 0},
+        "backup_verified_and_restorable": (
+            result.get("backup", {}).get("integrity")
+            == {"integrity_check": "ok", "foreign_key_check_count": 0}
+            and result.get("backup", {}).get("restore", {}).get("readable") is True
+            and result.get("backup", {}).get("restore", {}).get("restore_tested")
+            is True
+        ),
+        "reset_audit_committed": result.get("handoff_audit_exists") is True,
+        "four_expected_accounts_require_change": (
+            len(users) == len(VALID_USERS)
+            and set(users_by_name) == set(VALID_USERS)
+            and all(
+                users_by_name[username].get("role") == EXPECTED_ROLES[username]
+                and users_by_name[username].get("active") is True
+                and users_by_name[username].get("must_change_password") is True
+                and users_by_name[username].get("hash_compatible") is True
+                for username in VALID_USERS
+            )
+        ),
+    }
+
+
 def _scrub_password_mapping(passwords: dict[str, str] | None) -> None:
     if passwords is None:
         return
@@ -1449,6 +1536,11 @@ def main() -> int:
         "output_json": str(output_json),
         "target_usernames": list(VALID_USERS),
         "passwords_recorded": False,
+        "mode": (
+            "temporary_reset"
+            if bool(getattr(args, "temporary_reset", False))
+            else "password_handoff"
+        ),
     }
     new_passwords: dict[str, str] | None = None
     admin_final_passwords: dict[str, str] | None = None
@@ -1521,14 +1613,23 @@ def main() -> int:
             verification_state="not_started",
         )
 
+        temporary_reset = bool(getattr(args, "temporary_reset", False))
         new_passwords = collect_new_passwords()
-        admin_final_passwords = {
-            "admin": collect_admin_final_password(new_passwords)
-        }
-        previous_passwords, existing_sessions, existing_session_summary = (
-            collect_previous_passwords_and_sessions(api_base_url)
-        )
-        result["prechange_session_setup"] = existing_session_summary
+        existing_sessions: dict[str, ExistingSession] = {}
+        if temporary_reset:
+            result["limitations"] = {
+                "old_password_rejection": "not_verified_previous_passwords_not_collected",
+                "prechange_live_sessions": "not_observed_no_previous_credentials",
+                "first_login_password_change": "pending_for_all_accounts",
+            }
+        else:
+            admin_final_passwords = {
+                "admin": collect_admin_final_password(new_passwords)
+            }
+            previous_passwords, existing_sessions, existing_session_summary = (
+                collect_previous_passwords_and_sessions(api_base_url)
+            )
+            result["prechange_session_setup"] = existing_session_summary
         _persist_state(
             output_json,
             result,
@@ -1538,7 +1639,10 @@ def main() -> int:
         )
 
         write_result = update_passwords(
-            db_path, new_passwords, actor_username=args.actor
+            db_path,
+            new_passwords,
+            actor_username=args.actor,
+            operation="temporary_reset" if temporary_reset else "handoff",
         )
         committed = True
         result["write"] = write_result
@@ -1550,35 +1654,43 @@ def main() -> int:
             verification_state="pending",
         )
 
-        result["prechange_sessions"] = verify_existing_sessions_revoked(
-            api_base_url, existing_sessions
-        )
+        if not temporary_reset:
+            result["prechange_sessions"] = verify_existing_sessions_revoked(
+                api_base_url, existing_sessions
+            )
         result["login_checks"] = {
             username: asdict(
                 verify_login(api_base_url, username, new_passwords[username])
             )
             for username in VALID_USERS
         }
-        result["old_password_results"] = verify_old_passwords(
-            api_base_url, previous_passwords
-        )
-        result["admin_forced_password_change"] = (
-            complete_admin_forced_password_change(
-                api_base_url,
-                new_passwords["admin"],
-                admin_final_passwords["admin"],
+        if not temporary_reset:
+            result["old_password_results"] = verify_old_passwords(
+                api_base_url, previous_passwords
             )
-        )
+            result["admin_forced_password_change"] = (
+                complete_admin_forced_password_change(
+                    api_base_url,
+                    new_passwords["admin"],
+                    admin_final_passwords["admin"],
+                )
+            )
         result["security_status_checks"] = _security_status_checks(
             api_base_url, getattr(settings, "session_cookie_name", "erp_session")
         )
         result["history_counts_unchanged"] = counts_before == history_counts(db_path)
         result["integrity_after"] = db_integrity(db_path)
         result["handoff_audit_exists"] = _audit_log_exists(
-            db_path, int(write_result["audit_log_id"])
+            db_path,
+            int(write_result["audit_log_id"]),
+            str(write_result["audit_action"]),
         )
         result["after_users_security"] = _sanitized_user_security(db_path)
-        verdict = evaluate_verification(result)
+        verdict = (
+            evaluate_temporary_reset_verification(result)
+            if temporary_reset
+            else evaluate_verification(result)
+        )
         result["verification_checks"] = verdict
         success = all(verdict.values())
         result["success"] = success

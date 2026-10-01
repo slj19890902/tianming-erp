@@ -56,6 +56,24 @@ def auth_context(tmp_path: Path):
     return app, session_factory
 
 
+def _login_admin_after_required_password_change(client: TestClient) -> None:
+    assert client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "AdminPass123!"},
+    ).status_code == 200
+    assert client.put(
+        "/api/auth/password",
+        json={
+            "current_password": "AdminPass123!",
+            "new_password": "OwnerReady123",
+        },
+    ).status_code == 200
+    assert client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "OwnerReady123"},
+    ).status_code == 200
+
+
 def test_login_sets_http_only_cookie_returns_me_and_writes_audit(auth_context) -> None:
     from app.models.audit import OperationLog
 
@@ -200,10 +218,7 @@ def test_admin_can_reset_account_password_and_non_admin_cannot(auth_context) -> 
             json={"new_password": "TMCD5678"},
         )
         client.post("/api/auth/logout")
-        client.post(
-            "/api/auth/login",
-            json={"username": "admin", "password": "AdminPass123!"},
-        )
+        _login_admin_after_required_password_change(client)
         reset = client.put(
             "/api/auth/users/workshop/reset-password",
             json={"new_password": "TMCD5678"},
@@ -236,10 +251,7 @@ def test_username_normalization_is_shared_by_create_update_reset_and_login(
 
     app, session_factory = auth_context
     with TestClient(app) as client:
-        assert client.post(
-            "/api/auth/login",
-            json={"username": "admin", "password": "AdminPass123!"},
-        ).status_code == 200
+        _login_admin_after_required_password_change(client)
         created = client.post(
             "/api/auth/users",
             json={
@@ -292,10 +304,7 @@ def test_role_checker_allows_listed_role_and_rejects_other_role(auth_context) ->
         return {"ok": True}
 
     with TestClient(app) as client:
-        client.post(
-            "/api/auth/login",
-            json={"username": "admin", "password": "AdminPass123!"},
-        )
+        _login_admin_after_required_password_change(client)
         assert client.get("/finance-only").status_code == 200
         client.post("/api/auth/logout")
         client.post(

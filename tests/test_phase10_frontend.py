@@ -139,6 +139,10 @@ def test_frontend_has_safe_password_recovery_and_forced_change_flow() -> None:
     source = INDEX.read_text(encoding="utf-8")
 
     assert "忘记密码" in source
+    assert "管理员单独交付的临时密码" in source
+    assert "系统会立即要求设置新密码" in source
+    assert "设置临时密码" in source
+    assert "待本人修改" in source
     assert "/api/auth/password" in source
     assert "/reset-password" in source
     assert "must_change_password" in source

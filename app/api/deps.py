@@ -239,6 +239,15 @@ def get_db() -> Generator[Session, None, None]:
         yield session
 
 
+_FORCED_PASSWORD_CHANGE_ALLOWED_REQUESTS = frozenset(
+    {
+        ("GET", "/api/auth/me"),
+        ("PUT", "/api/auth/password"),
+        ("POST", "/api/auth/logout"),
+    }
+)
+
+
 def get_current_user(
     request: Request,
     db: Session = Depends(get_db),
@@ -275,6 +284,21 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="未登录或登录已失效",
+        )
+    if user.must_change_password and (
+        request.method.upper(), request.url.path
+    ) not in _FORCED_PASSWORD_CHANGE_ALLOWED_REQUESTS:
+        _record_security_denial(
+            db,
+            request=request,
+            current_user=user,
+            action_code="credential_change_required.denied",
+            object_ref=request.url.path,
+            details={"required_action": "change_own_password"},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="首次登录必须先修改密码",
         )
     request.state.restricted_business = has_permission(user, "business_requests.submit") and not has_permission(user, "cost.view")
     return user

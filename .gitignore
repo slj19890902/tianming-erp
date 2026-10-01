@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .test-tmp/
 node_modules/
+frontend-v2/dist/
 
 # Secrets and environment config — never commit.
 .env

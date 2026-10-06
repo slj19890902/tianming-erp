@@ -350,11 +350,13 @@ def _lot_payload(
     *,
     composite_projection: dict | None = None,
     stocktake_decrease_issues: dict[int, str | None] | None = None,
+    intake_projections: dict[int, dict] | None = None,
 ) -> dict:
     from app.services.warehouse_display_units import lot_display_unit
     business = _lot_business_fields(row)
     age_days = _age_days(row, as_of)
     payload = {
+        **(intake_projections or {}).get(int(row.id), {}),
         "lot_id": row.id,
         "location_id": row.warehouse_location_id,
         "lot_number": row.lot_number,
@@ -833,6 +835,7 @@ def _location_payload(
     composite_projections: dict[int, dict] | None = None,
     stocktake_decrease_issues: dict[int, str | None] | None = None,
     pallet_move_issues: dict[int, str | None] | None = None,
+    intake_projections: dict[int, dict] | None = None,
 ) -> dict:
     context = projection_context or {}
     floor = context.get("floor")
@@ -876,6 +879,7 @@ def _location_payload(
                         int(lot.id)
                     ),
                     stocktake_decrease_issues=stocktake_decrease_issues,
+                    intake_projections=intake_projections,
                 ),
                 "pallet_projection_status": "current_same_location",
             }
@@ -898,6 +902,10 @@ def _location_payload(
                     "unit": item.unit,
                     "age_days": None,
                     "age_bucket": "unknown",
+                    "intake_identity_key": None,
+                    "intake_date": None,
+                    "intake_age_days": None,
+                    "intake_age_bucket": "unknown",
                     "stock_date_accuracy": "unknown",
                     "status": item.match_status,
                     "stocktake_decrease_eligible": False,
@@ -929,6 +937,7 @@ def _location_payload(
                 as_of,
                 composite_projection=(composite_projections or {}).get(int(lot.id)),
                 stocktake_decrease_issues=stocktake_decrease_issues,
+                intake_projections=intake_projections,
             ),
             "pallet_projection_status": (
                 "functional_loose_inventory"
@@ -1213,6 +1222,9 @@ def build_warehouse_twin_dashboard(
         for row in projection_lots
         if row.status in {"active", "frozen"} and _physical_quantity(row) > 0
     ]
+    from app.services.warehouse_intake_age import build_intake_age_projection
+    intake_projections = build_intake_age_projection(db, current_lots,
+        visible_customer_ids=visible_customer_ids, as_of=as_of)
     composite_projections = _parent_delivery_inventory_projections(db, current_lots)
     lots_by_location: dict[int, list[InventoryLot]] = defaultdict(list)
     for row in current_lots:
@@ -1317,6 +1329,7 @@ def build_warehouse_twin_dashboard(
             composite_projections=composite_projections,
             stocktake_decrease_issues=stocktake_decrease_issues,
             pallet_move_issues=pallet_move_issues,
+            intake_projections=intake_projections,
         )
         open_observations = unmatched_by_location.get(int(location.id), [])
         payload["has_unmatched_inventory_observation"] = bool(open_observations)
@@ -2044,12 +2057,13 @@ def build_inventory_code_search_results(
     keyword: str,
     as_of: date,
     location_projection_contexts: dict[int, dict] | None = None,
+    intake_projections: dict[int, dict] | None = None,
 ) -> dict:
     from app.services.warehouse_product_quantities import product_search_identity
     results = []
     floor_counts: dict[str, dict] = {}
     for row in lots:
-        payload = _lot_payload(row, as_of)
+        payload = _lot_payload(row, as_of, intake_projections=intake_projections)
         location = row.location
         location_context = (
             (location_projection_contexts or {}).get(int(location.id), {})

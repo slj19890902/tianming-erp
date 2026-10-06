@@ -53,7 +53,9 @@ def selected_product_quantities(db, *, seed_lot_id, visible_customer_ids):
             SemiFinishedInventoryDetail.board_width_mm == detail.board_width_mm)))
     lots = [lot for lot in db.scalars(query.order_by(InventoryLot.id)).unique()
         if _physical_quantity(lot) > 0 and product_search_identity(lot) == identity]
+    from app.services.warehouse_intake_age import build_intake_age_projection
     result = build_inventory_code_search_results(lots=lots, keyword='', as_of=beijing_today(),
+        intake_projections=build_intake_age_projection(db, lots, visible_customer_ids=visible_customer_ids, as_of=beijing_today()),
         location_projection_contexts=load_warehouse_location_projection_contexts(db,
             [r.location for r in lots if r.location is not None]))
     product_ids = ({seed.finished_detail.product_id} if seed.finished_detail else

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.548"
-APP_VERSION_NAME = "指定客户业务权限与审批中心"
+APP_VERSION = "v0.22.549"
+APP_VERSION_NAME = "库存成本与库存助手读取修复"
 APP_BUILD_DATE = "2026-09-30"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5272,3 +5272,14 @@ APP_VERIFICATION_STEPS = [
     "业务申请提交后，管理员打开顶部审批中心，查看修改前后内容并批准或拒绝，核对对应业务和审批记录。",
 ]
 APP_CHANGELOG = [*(f"v0.22.548：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "修复库存成本汇总缺少来源和单位字段导致读取失败，保留批次冻结成本与客户范围。",
+    "库存助手共享成本汇总恢复读取，登录失效、权限不足与服务读取失败分别提示。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员或老板刷新库存成本明细，核对金额、单位及翻页读取正常。",
+    "打开库存助手，核对库存金额与建议正常显示。",
+]
+APP_CHANGELOG = [*(f"v0.22.549：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

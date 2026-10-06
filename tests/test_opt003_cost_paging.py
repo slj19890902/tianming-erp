@@ -16,6 +16,96 @@ from app.services.warehouse_inventory import manual_finished_in
 from tests.test_inventory_valuation import db, product
 
 
+@pytest.mark.parametrize('source', ['stock_preparation', 'stock_preparation_assembly', 'bom_assembly', 'subkit_conversion'])
+def test_derived_cost_missing_origin_is_reported_without_breaking_summary(cost_app, source):
+    client, db, _ = cost_app
+    lot = db.get(InventoryLot, 1000)
+    lot.cost_snapshot_source = source
+    lot.source_ref_id = 999999
+    lot.cost_snapshot_detail_json = '{"source_lot_id":999999}'
+    db.commit()
+    for summary_only in (True, False):
+        response = client.get('/api/warehouse/costs', params={'summary_only': summary_only, 'page_size': 200})
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data['missing_lots'] == 1
+        assert data['inventory_value'] == '1.38'
+
+
+def test_summary_preserves_verified_stock_preparation_cost(cost_app, monkeypatch):
+    from app.models.stock_preparation import StockPreparationJob
+    from app.models.warehouse_inventory import InventoryReservation
+    client, db, _ = cost_app
+    origin = db.get(InventoryLot, 1000)
+    output = db.get(InventoryLot, 1001)
+    output.cost_snapshot_source = 'stock_preparation'
+    output.source_ref_id = 999999
+    output.cost_snapshot_detail_json = json.dumps(dict(source_lot_id=origin.id,
+        output_quantity=2, input_quantity=2, total_cost='0.01'))
+    db.commit()
+    original_get = db.get
+    def get(model, identity, *args, **kwargs):
+        if model is StockPreparationJob and identity == 999999:
+            return SimpleNamespace(status='completed', actual_output=2, input_quantity=2, reservation_id=999999)
+        if model is InventoryReservation and identity == 999999:
+            return SimpleNamespace(inventory_lot_id=origin.id, consumed_stock_quantity=2)
+        return original_get(model, identity, *args, **kwargs)
+    monkeypatch.setattr(db, 'get', get)
+    for summary_only in (True, False):
+        response = client.get('/api/warehouse/costs', params={'summary_only': summary_only, 'page_size': 200})
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data['missing_lots'] == 0 and data['inventory_value'] == '1.40'
+        if not summary_only:
+            row = next(row for row in data['rows'] if row['lot_id'] == output.id)
+            assert row['unit_cost'] == '0.005' and row['label'] == '加工继承成本'
+
+
+def test_summary_checks_assembly_product_identity(cost_app, monkeypatch):
+    from app.models.multilevel_bom import BomAssembly
+    client, db, _ = cost_app
+    lot = db.get(InventoryLot, 1000)
+    lot.cost_snapshot_source = 'bom_assembly'
+    lot.source_ref_id = 999999
+    lot.cost_snapshot_detail_json = '{}'
+    db.commit()
+    original_get = db.get
+    def get(model, identity, *args, **kwargs):
+        if model is BomAssembly and identity == 999999:
+            return SimpleNamespace(id=999999, status='posted', quantity=1,
+                output_product_id=lot.finished_detail.product_id, total_cost=Decimal('0.005'))
+        return original_get(model, identity, *args, **kwargs)
+    monkeypatch.setattr(db, 'get', get)
+    response = client.get('/api/warehouse/costs', params={'page_size': 200})
+    assert response.status_code == 200, response.text
+    row = next(row for row in response.json()['rows'] if row['lot_id'] == lot.id)
+    assert row['validation_issue'] == '组套投入成本合计不一致'
+
+
+@pytest.mark.parametrize('kind,expected', [('product', '套'), ('physical', '片'), ('external', '张'), ('subkit', '片')])
+def test_summary_and_detail_preserve_display_unit_contract(cost_app, kind, expected):
+    client, db, _ = cost_app
+    lot = db.get(InventoryLot, 1000)
+    # The stocktake fixture freezes "boxes"; remove that higher-priority basis
+    # to exercise the product and source-type fallbacks independently.
+    lot.finished_detail.physical_basis_json = '{}'
+    if kind == 'product':
+        lot.finished_detail.product.unit = '套'
+    elif kind == 'physical':
+        lot.finished_detail.physical_basis_json = json.dumps({'quantity_basis': {'ledger': 'physical', 'physical_unit': '片'}})
+    elif kind == 'external':
+        lot.source_ref_type = 'direct_external_receipt'
+        lot.cost_snapshot_detail_json = json.dumps({'currency': 'CNY', 'stock_unit': '张'})
+    else:
+        lot.source_ref_type = 'subkit_receipt'
+    db.commit()
+    response = client.get('/api/warehouse/costs', params={'page_size': 200})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data['inventory_value'] == '1.40'
+    assert next(row for row in data['rows'] if row['lot_id'] == lot.id)['display_unit'] == expected
+
+
 @pytest.fixture
 def cost_app(db, monkeypatch):
     item, _ = product(db)

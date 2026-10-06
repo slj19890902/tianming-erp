@@ -14,7 +14,7 @@ class WarehouseCosts extends HTMLElement {
     const el=(tag,text)=>{const n=document.createElement(tag);if(text!=null)n.textContent=text;return n;};
     const get=async(url,signal)=>{
       const r=await fetch(url,{credentials:"same-origin",cache:"no-store",signal});
-      if(!r.ok){const e=new Error("读取失败，请重试");e.status=r.status;throw e;}return r.json();
+      if(!r.ok){const e=new Error(`库存成本读取失败（${r.status}），请重试；仍失败请联系管理员`);e.status=r.status;throw e;}return r.json();
     };
     try {
       const auth=await get("/api/auth/me",lifetime.signal);
@@ -72,7 +72,7 @@ class WarehouseCosts extends HTMLElement {
           if(lifetime.signal.aborted||controller.signal.aborted||id!==requestId)return;
           if(error.status===401||error.status===403){root.replaceChildren();return;}
           const retry=el("button","重试");retry.type="button";retry.addEventListener("click",()=>loadPage(page,keyword));
-          list.replaceChildren(el("div","读取失败，请重试"),retry);
+          list.replaceChildren(el("div",error.message||"库存成本读取失败，请重试"),retry);
         }finally{
           if(!lifetime.signal.aborted&&!controller.signal.aborted&&id===requestId)setBusy(false);
         }

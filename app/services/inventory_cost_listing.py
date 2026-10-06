@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+from app.models.product import Product
 
 from app.models.warehouse_inventory import (
     InventoryLot as Lot, FinishedGoodsInventoryDetail as Finished,
@@ -23,14 +24,15 @@ def read_inventory_cost_page(db, scoped_ids, *, page=1, page_size=50, keyword=""
     # hydrate pallet, allowed-product, alias or revaluation graphs for every lot.
     snapshot_fields = ("id", "estimated_unit_cost_snapshot", "cost_snapshot_source",
         "cost_snapshot_detail_json", "cost_snapshot_at", "quantity_available",
-        "quantity_reserved", "quantity_damaged", "unit")
+        "quantity_reserved", "quantity_damaged", "unit", "source_ref_id", "source_ref_type")
     query = select(*(getattr(Lot, name) for name in snapshot_fields),
-        Finished.inventory_lot_id.label("finished_id"), Finished.length_mm, Finished.width_mm, Finished.height_mm,
+        Finished.inventory_lot_id.label("finished_id"), Finished.product_id, Finished.length_mm, Finished.width_mm, Finished.height_mm,
+        Finished.physical_basis_json, Product.unit.label("product_unit"),
         Finished.owner_customer_name_snapshot.label("finished_customer"), Finished.inventory_code_snapshot,
         Finished.product_name_snapshot, Semi.owner_customer_name_snapshot.label("semi_customer"),
         Semi.internal_name, Location.location_name,
     ).select_from(Lot).outerjoin(Finished, Finished.inventory_lot_id == Lot.id).outerjoin(
-        Semi, Semi.inventory_lot_id == Lot.id).outerjoin(Location, Location.id == Lot.warehouse_location_id
+        Semi, Semi.inventory_lot_id == Lot.id).outerjoin(Product, Product.id == Finished.product_id).outerjoin(Location, Location.id == Lot.warehouse_location_id
     ).where(Lot.id.in_(scoped_ids)).order_by(Lot.id).execution_options(yield_per=SUMMARY_BATCH_SIZE)
     total_value, total_lots, missing_lots, matched_count = Decimal(0), 0, 0, 0
     page_ids = []
@@ -38,7 +40,9 @@ def read_inventory_cost_page(db, scoped_ids, *, page=1, page_size=50, keyword=""
     offset = (page - 1) * page_size
     with db.execute(query) as result:
         for row in result.mappings():
-            physical = (SimpleNamespace(length_mm=row.length_mm, width_mm=row.width_mm, height_mm=row.height_mm)
+            physical = (SimpleNamespace(product_id=row.product_id, length_mm=row.length_mm, width_mm=row.width_mm, height_mm=row.height_mm,
+                physical_basis_json=row.physical_basis_json,
+                product=SimpleNamespace(unit=row.product_unit) if row.product_id is not None else None)
                 if row.finished_id is not None else None)
             snapshot = SimpleNamespace(**{name:row[name] for name in snapshot_fields}, finished_detail=physical)
             value = cost_payload(snapshot, db)

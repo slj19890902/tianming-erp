@@ -2614,6 +2614,33 @@ body.warehouse-twin-page {
 .twin-rack-stage .twin-elevation-level:has(.rack-search-hit) > span { background: #ffe8a0; color: #754000; font-weight: 800; }
 .twin-rack-stage .shelf-search-hit-marker { padding: 1px 4px; border-radius: 3px; background: #9a4800; color: white; font-size: 11px; white-space: nowrap; }
 .twin-rack-focus-panel.twin-rack-stage header p.twin-rack-search-marker { color: #754000; background: #fff3bf; padding: 4px 6px; font-size: 12px; }
+
+/* Intake fill is independent of hover, lookup and warehouse operations. */
+.editor-canvas.with-intake-legend { display: grid; grid-template-columns: 150px minmax(0, 1fr); }
+.editor-canvas.with-intake-legend .map-viewport { position: relative; grid-column: 2; height: 100%; }
+.warehouse-intake-legend { grid-column: 1; grid-row: 1; padding: 14px 10px; background: #F3F4F6; border-right: 1px solid #D8DDE3; font-size: 12px; color: #334155; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.warehouse-intake-legend b { font-size: 13px; color: #0F172A; margin-bottom: 3px; white-space: nowrap; }
+.warehouse-intake-legend span { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.warehouse-intake-legend i { display: inline-block; width: 27px; height: 17px; border: 1px solid #CBD5E1; flex: 0 0 auto; }
+.warehouse-intake-legend .legend-empty { background: #FFFFFF; }
+.warehouse-intake-legend .legend-unknown, .twin-rack-stage .intake-cell.intake-unknown { background-image: repeating-linear-gradient(135deg, transparent 0 5px, #94A3B844 5px 6px, transparent 6px 11px); background-color: #E4E7EB; }
+.warehouse-intake-legend .legend-selected { background: #FFFFFF; border: 4px solid #FACC15; }
+.warehouse-intake-legend .legend-search { background: #FFFFFF; border: 3px solid #2563EB; }
+.twin-rack-stage .mold-rack-cell.intake-cell { border: 1px solid #CBD5E1; box-shadow: none; outline: none; }
+.twin-rack-stage .mold-rack-cell.intake-cell:hover { box-shadow: inset 0 0 0 3px #475569; }
+.twin-rack-stage .mold-rack-cell.intake-cell.rack-search-hit { border-color: #2563EB; box-shadow: inset 0 0 0 3px #2563EB; }
+.twin-rack-stage .mold-rack-cell.intake-cell.selected { border-color: #FACC15; box-shadow: inset 0 0 0 4px #FACC15; }
+.twin-rack-stage .mold-rack-cell.intake-cell.intake-dimmed { opacity: .35; }
+.twin-rack-stage .intake-cell[class*="move-state-"] { border-style: dashed; }
+.twin-rack-stage .intake-cell .shelf-product-card.search-product-hit { background: #FFFFFFCC; border-color: #2563EB; }
+.twin-rack-stage .intake-cell .shelf-search-hit-marker { background: #2563EB; }
+.intake-partial-unknown { background: #E4E7EB; color: #475569; border: 1px solid #CBD5E1; font-size: 11px; line-height: 14px; padding: 0 4px; border-radius: 2px; }
+.twin-rack-stage .twin-elevation-level:has(.intake-cell.rack-search-hit) > span { background: #F1F5F9; color: #334155; }
+@media (max-width: 600px) {
+  .editor-canvas.with-intake-legend { grid-template-columns: 118px minmax(0, 1fr); }
+  .warehouse-intake-legend { padding: 10px 6px; gap: 6px; font-size: 11px; }
+  .warehouse-intake-legend b { font-size: 11px; }
+}
 @media (max-width:880px) {
   .twin-workspace.rack-focused.context-open { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(140px, 32vh) minmax(0, 1fr); }
   .twin-workspace.rack-focused.context-open > .twin-context-rail { min-height: 0; }

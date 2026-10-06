@@ -10,12 +10,14 @@ import {
   buildRackVisual,
   createGroundArrow,
   createHatchTexture,
+  createIntakeHatchTexture,
   palletMarkerSpec
 } from "./industrialScene";
 import { snapPalletPosition } from "./palletSnap.mjs";
 import { snapRackPosition } from "./rackSnap.mjs";
 import { createMapKeyboard, MAP_KEYBOARD_HINT } from "./mapKeyboard.mjs";
 import { palletStatusInfo } from "./palletStatus";
+import { INTAKE_AGE_BANDS, intakeOutlineState } from "./warehouseIntakeColors.mjs";
 import {
   aisleSurfaceStyle,
   effectiveMapFeatures,
@@ -60,6 +62,7 @@ interface Props {
   highlightFeatureIds?: string[];
   highlightedPalletIds?: string[];
   productQuantityLabels?: Record<string, string>;
+  showIntakeLegend?: boolean;
   selectedAreaFeatureId?: string;
   sourcePalletIds?: string[];
   mergeTargetPalletId?: string;
@@ -118,6 +121,9 @@ interface CanvasRuntime {
   searchHighlight: THREE.Group;
   resultHighlight: THREE.Group;
   productQuantityGroup: THREE.Group;
+  hoverHighlight: THREE.Group;
+  selectedKey?: string | null;
+  visualTheme: string;
   focusFrame: number | null;
   requestRender: () => void;
   viewMode: ViewMode;
@@ -184,29 +190,66 @@ function addEntityHighlight(group: THREE.Group, object: THREE.Object3D, color: n
   group.add(helper);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
-  const marker = new THREE.Mesh(
-    new THREE.BoxGeometry(Math.max(size.x, 220), 26, Math.max(size.z, 220)),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: order >= 110 ? 0.94 : (order < 100 ? 0.32 : 0.62), depthTest: false, depthWrite: false })
-  );
-  marker.position.set(center.x, box.max.y + 90, center.z);
-  marker.renderOrder = order + 1;
-  group.add(marker);
+  // Four thin perimeter strips retain the inventory fill; their thickness is
+  // updated in pixels at every render so zooming cannot turn selection into fill.
+  for (const [axis, sign] of [["x", -1], ["x", 1], ["z", -1], ["z", 1]] as const) {
+    const marker = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false }));
+    marker.position.set(center.x + (axis === "z" ? sign * size.x / 2 : 0), box.max.y + 90,
+      center.z + (axis === "x" ? sign * size.z / 2 : 0));
+    marker.userData.outlineBar = { axis, length: axis === "x" ? size.x : size.z, pixels: order >= 130 ? 4 : 3 };
+    marker.renderOrder = order + 1;
+    group.add(marker);
+  }
+}
+
+function addEntityWarning(group: THREE.Object3D, object: THREE.Object3D) {
+  const box = new THREE.Box3().setFromObject(object);
+  if (box.isEmpty()) return;
+  const icon = textSprite("!", "#9A3412", 320, 320, true);
+  icon.position.copy(box.getCenter(new THREE.Vector3()));
+  icon.position.y = box.max.y + 160;
+  icon.renderOrder = 140;
+  group.add(icon);
+}
+
+function addPartialUnknownMarker(group: THREE.Object3D, object: THREE.Object3D) {
+  const box = new THREE.Box3().setFromObject(object);
+  if (box.isEmpty()) return;
+  const icon = textSprite("?", "#64748B", 260, 260, true);
+  icon.position.set(box.max.x, box.max.y + 180, box.min.z);
+  icon.renderOrder = 140;
+  group.add(icon);
+}
+
+function addMoveOutline(group: THREE.Object3D, object: THREE.Object3D, role: string) {
+  const box = new THREE.Box3().setFromObject(object);
+  if (box.isEmpty()) return;
+  const y = box.max.y + 110;
+  const points = [[box.min.x, box.min.z], [box.max.x, box.min.z], [box.max.x, box.max.z], [box.min.x, box.max.z], [box.min.x, box.min.z]];
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points.map(([x, z]) => new THREE.Vector3(x, y, z))),
+    new THREE.LineDashedMaterial({ color: 0x334155, dashSize: role === "source" ? 130 : 280, gapSize: 90, depthTest: false, depthWrite: false }));
+  line.computeLineDistances();
+  line.renderOrder = 100;
+  const icon = textSprite(role === "source" ? "↗" : "↘", "#334155", 420, 320, true);
+  icon.position.set(box.max.x, y + 50, box.max.z);
+  icon.renderOrder = 125;
+  group.add(line, icon);
 }
 
 function syncEntityHighlights(runtime: CanvasRuntime, selected: SelectedEntity, focusTarget: CanvasFocusTarget | null | undefined, moveStates?: Record<string, string>) {
   clearHighlightGroup(runtime.selectionHighlight);
   clearHighlightGroup(runtime.searchHighlight);
   const focusedKey = focusTarget ? entityKey(focusTarget.entity) : null;
-  if (selected && entityKey(selected) !== focusedKey && !(selected.kind === "pallet" && moveStates?.[selected.id])) {
+  runtime.selectedKey = selected ? entityKey(selected) : null;
+  if (selected) {
     const selectedObject = runtime.entityNodes.get(entityKey(selected));
-    if (selectedObject) addEntityHighlight(runtime.selectionHighlight, selectedObject, selected.kind === "feature" ? 0xe9d5ff : 0xf59e0b, 90, selected.kind === "feature" ? 88 : 100);
+    if (selectedObject) addEntityHighlight(runtime.selectionHighlight, selectedObject, new THREE.Color(intakeOutlineState({ selected: true }).color).getHex(), 40, 130);
   }
-  if (focusTarget && !(focusTarget.entity.kind === "pallet" && moveStates?.[focusTarget.entity.id])) {
+  if (focusTarget && focusedKey !== runtime.selectedKey) {
     const focusedObject = runtime.entityNodes.get(focusedKey!);
     if (focusedObject) addEntityHighlight(runtime.searchHighlight, focusedObject,
-      focusTarget.source === "selection" ? (focusTarget.entity.kind === "feature" ? 0xe9d5ff : 0xf59e0b)
-        : focusTarget.entity.kind === "feature" ? 0xbbf7d0 : 0xffeb00, 160,
-      focusTarget.entity.kind === "feature" ? 90 : focusTarget.source === "search" ? 110 : 100);
+      focusTarget.source === "selection" ? 0xfacc15 : 0x2563eb, 40, focusTarget.source === "selection" ? 130 : 110);
   }
   runtime.requestRender();
 }
@@ -217,26 +260,30 @@ function syncResultHighlights(runtime: CanvasRuntime, featureIds: string[], pall
     const area = runtime.entityNodes.get(`feature:${selectedAreaFeatureId}`);
     if (area) addEntityHighlight(runtime.resultHighlight, area, 0xe9d5ff, 60, 88);
   }
-  const colors: Record<string, number> = {empty:0xffffff,occupied:0x2563eb,target:0xf59e0b,source:0xf59e0b,blocked:0x94a3b8};
+  const colors: Record<string, number> = {empty:0x94a3b8,occupied:0x475569,target:0x334155,source:0x334155,blocked:0x94a3b8};
   for (const [id, state] of Object.entries(moveLocationStates || {})) {
     const object = runtime.entityNodes.get(`pallet:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, colors[state] ?? colors.blocked, state === "target" ? 160 : 20);
+    if (object && runtime.selectedKey !== `pallet:${id}`) {
+      if (["source", "target"].includes(state)) addMoveOutline(runtime.resultHighlight, object, state);
+      else if (state === "blocked") addEntityWarning(runtime.resultHighlight, object);
+      else addEntityHighlight(runtime.resultHighlight, object, colors[state] ?? colors.blocked, 20, 85);
+    }
   }
   for (const id of featureIds) {
     const object = runtime.entityNodes.get(`feature:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xbbf7d0, 120, 90);
+    if (object && runtime.selectedKey !== `feature:${id}`) addEntityHighlight(runtime.resultHighlight, object, 0x2563eb, 40, 110);
   }
   for (const id of sourcePalletIds) {
     const object = runtime.entityNodes.get(`pallet:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xf59e0b, 100);
+    if (object) addMoveOutline(runtime.resultHighlight, object, "source");
   }
   for (const id of palletIds) {
     const object = runtime.entityNodes.get(`pallet:${id}`);
-    if (object) addEntityHighlight(runtime.resultHighlight, object, 0xffeb00, 100, 110);
+    if (object && runtime.selectedKey !== `pallet:${id}`) addEntityHighlight(runtime.resultHighlight, object, 0x2563eb, 40, 110);
   }
   if (mergeTargetPalletId) {
     const target = runtime.entityNodes.get(`pallet:${mergeTargetPalletId}`);
-    if (target) addEntityHighlight(runtime.resultHighlight, target, 0xf59e0b, 200);
+    if (target) addMoveOutline(runtime.resultHighlight, target, "target");
   }
   runtime.requestRender();
 }
@@ -326,24 +373,33 @@ function textSprite(
   return sprite;
 }
 
-function rackNumberSprite(text: string, violated: boolean) {
+function rackNumberSprite(text: string, violated: boolean, intakeColor?: string, unknown = false, dimmed = false) {
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d")!;
   context.font = "bold 36px Microsoft YaHei, sans-serif";
   canvas.width = Math.max(60, Math.ceil(context.measureText(text).width) + 16);
-  canvas.height = 48;
+  canvas.height = 54;
   context.fillStyle = "rgba(255,255,255,.96)";
   context.fillRect(0, 0, canvas.width, canvas.height);
+  if (intakeColor) {
+    context.fillStyle = intakeColor;
+    context.fillRect(0, 0, canvas.width, 6);
+    if (unknown) {
+      context.strokeStyle = "#94A3B8";
+      context.lineWidth = 1;
+      for (let x = -6; x < canvas.width; x += 8) { context.beginPath(); context.moveTo(x, 6); context.lineTo(x + 6, 0); context.stroke(); }
+    }
+  }
   context.strokeStyle = violated ? "#b91c1c" : "#334155";
   context.lineWidth = 3;
-  context.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+  context.strokeRect(2, 8, canvas.width - 4, canvas.height - 10);
   context.fillStyle = violated ? "#b91c1c" : "#0f172a";
   context.font = "bold 36px Microsoft YaHei, sans-serif";
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillText(text, canvas.width / 2, canvas.height / 2);
+  context.fillText(text, canvas.width / 2, 30);
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: new THREE.CanvasTexture(canvas), depthTest: false, depthWrite: false
+    map: new THREE.CanvasTexture(canvas), depthTest: false, depthWrite: false, opacity: dimmed ? 0.35 : 1, transparent: true
   }));
   sprite.userData.pixelWidth = canvas.width / 2;
   sprite.userData.pixelHeight = canvas.height / 2;
@@ -437,15 +493,20 @@ type WarehousePalletInstance = {
 };
 
 function addWarehousePalletInstances(scene: THREE.Scene, entries: WarehousePalletInstance[], viewMode: ViewMode) {
+  for (const unknown of [false, true]) addWarehousePalletBatch(scene, entries.filter(row => Boolean(row.pallet.intake_unknown) === unknown), viewMode, unknown);
+}
+
+function addWarehousePalletBatch(scene: THREE.Scene, entries: WarehousePalletInstance[], viewMode: ViewMode, unknown: boolean) {
   if (!entries.length) return;
+  const intakeColors = Boolean(entries[0].pallet.intake_color);
   const base = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.84 }),
+    new THREE.MeshBasicMaterial({ transparent: !intakeColors, opacity: intakeColors ? 1 : 0.84, map: unknown ? createIntakeHatchTexture() : null }),
     entries.length
   );
   const load = new THREE.InstancedMesh(
     new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.76 }),
+    new THREE.MeshBasicMaterial({ transparent: !intakeColors, opacity: intakeColors ? 1 : 0.76, map: unknown ? createIntakeHatchTexture() : null }),
     entries.length
   );
   const matrix = new THREE.Matrix4();
@@ -497,6 +558,7 @@ export function EditorCanvas({
   highlightFeatureIds = [],
   highlightedPalletIds = [],
   productQuantityLabels,
+  showIntakeLegend = false,
   selectedAreaFeatureId,
   sourcePalletIds = [],
   mergeTargetPalletId,
@@ -685,6 +747,14 @@ export function EditorCanvas({
         renderFrame = null;
         const controlsChanged = controls.update();
         const mmPerPixel = (camera.top - camera.bottom) / camera.zoom / Math.max(renderer.domElement.clientHeight, 1);
+        const currentRuntime = runtimeRef.current;
+        if (currentRuntime) for (const highlight of [currentRuntime.selectionHighlight, currentRuntime.searchHighlight, currentRuntime.resultHighlight, currentRuntime.hoverHighlight]) {
+          for (const bar of highlight.children) {
+            const spec = bar.userData.outlineBar;
+            if (spec) bar.scale.set(spec.axis === "x" ? spec.length : spec.pixels * mmPerPixel, 1,
+              spec.axis === "z" ? spec.length : spec.pixels * mmPerPixel);
+          }
+        }
         const occupied: { x: number; y: number; w: number; h: number }[] = [];
         const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
         const screenRight = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
@@ -1179,7 +1249,7 @@ export function EditorCanvas({
         scene.add(group);
         if (warehouseTheme || layers.labels) {
           const label = warehouseTheme
-            ? rackNumberSprite(warehouseRackMapName(rack), violated)
+            ? rackNumberSprite(`${warehouseRackMapName(rack)}${rack.intake_has_unknown && !rack.intake_unknown ? " ?" : ""}`, violated, rack.intake_color, rack.intake_unknown, rack.intake_dimmed)
             : textSprite(rack.rack_code, violated ? "#dc2626" : "#4c1d95", 1700, 320);
           if (warehouseTheme) rackNumberLabels.push(label);
           label.position.set(position.x, viewMode === "25d" ? rack.height_mm + 380 : 150, position.z);
@@ -1222,7 +1292,7 @@ export function EditorCanvas({
           group.add(buildPalletVisual(pallet, viewMode, violated));
         }
         if (!warehouseTheme || violated) {
-          addGroupOutlines(group, violated ? 0xdc2626 : new THREE.Color(palletState.color).getHex());
+          addGroupOutlines(group, pallet.intake_color ? 0x64748b : violated ? 0xdc2626 : new THREE.Color(palletState.color).getHex());
         }
         const position = worldPoint(pallet.x_mm, pallet.y_mm);
         group.position.set(position.x, 0, position.z);
@@ -1231,6 +1301,9 @@ export function EditorCanvas({
           interactive.push(warehouseTheme ? group.children[group.children.length - 1] : group);
         }
         scene.add(group);
+        if (warehouseTheme && (violated || pallet.inventory_warning)) addEntityWarning(scene, group);
+        if (warehouseTheme && pallet.intake_has_unknown && !pallet.intake_unknown) addPartialUnknownMarker(scene, group);
+        if (warehouseTheme && pallet.move_preview_role) addMoveOutline(scene, group, pallet.move_preview_role);
         if (warehouseTheme && !pallet.is_logical_anchor && shouldShowWarehousePalletVisual(pallet, hideRackLocationMarkers)) {
           warehousePalletInstances.push({ pallet, position, rotationY: group.rotation.y, violated });
         }
@@ -1542,7 +1615,19 @@ export function EditorCanvas({
       if (hoverPoint && coordinateRef.current) {
         coordinateRef.current.textContent = `X ${Math.round(hoverPoint.x + centerX).toLocaleString("zh-CN")} · Y ${Math.round(centerY - hoverPoint.z).toLocaleString("zh-CN")} mm`;
       }
-      if (!dragging) return;
+      if (!dragging) {
+        const current = runtimeRef.current;
+        if (warehouseTheme && current) {
+          const root = raycaster.intersectObjects(interactive, !warehouseTheme).map(hit => entityNode(hit.object)).find(Boolean);
+          clearHighlightGroup(current.hoverHighlight);
+          if (root && entityKey({kind: root.userData.entityKind, id: String(root.userData.entityId)}) !== current.selectedKey
+            && !(root.userData.entityKind === "pallet" && highlightedPalletIds.includes(String(root.userData.entityId)))
+            && !(root.userData.entityKind === "feature" && highlightFeatureIds.includes(String(root.userData.entityId))))
+            addEntityHighlight(current.hoverHighlight, root, new THREE.Color(intakeOutlineState({hover: true}).color).getHex(), 20, 95);
+          current.requestRender();
+        }
+        return;
+      }
       if (Math.hypot(event.clientX - dragging.startClientX, event.clientY - dragging.startClientY) > 4) {
         dragging.moved = true;
       }
@@ -1704,7 +1789,8 @@ export function EditorCanvas({
     const searchHighlight = new THREE.Group();
     const resultHighlight = new THREE.Group();
     const productQuantityGroup = new THREE.Group();
-    scene.add(selectionHighlight, searchHighlight, resultHighlight, productQuantityGroup);
+    const hoverHighlight = new THREE.Group();
+    scene.add(selectionHighlight, searchHighlight, resultHighlight, productQuantityGroup, hoverHighlight);
     const runtime: CanvasRuntime = {
       scene,
       camera,
@@ -1714,6 +1800,8 @@ export function EditorCanvas({
       searchHighlight,
       resultHighlight,
       productQuantityGroup,
+      hoverHighlight,
+      visualTheme,
       focusFrame: null,
       requestRender,
       viewMode,
@@ -1774,6 +1862,7 @@ export function EditorCanvas({
       if (runtime.focusFrame !== null) cancelAnimationFrame(runtime.focusFrame);
       clearHighlightGroup(selectionHighlight);
       clearHighlightGroup(searchHighlight);
+      clearHighlightGroup(hoverHighlight);
       clearHighlightGroup(resultHighlight);
       if (runtimeRef.current === runtime) runtimeRef.current = null;
       controls.dispose();
@@ -1795,6 +1884,7 @@ export function EditorCanvas({
     const runtime = runtimeRef.current;
     if (!runtime) return;
     syncEntityHighlights(runtime, selected, focusTarget, moveLocationStates);
+    syncResultHighlights(runtime, highlightFeatureIds, highlightedPalletIds, mergeTargetPalletId, moveLocationStates, selectedAreaFeatureId, sourcePalletIds);
     if (!focusTarget) return;
     const nextFocusKey = `${focusTarget.token}:${runtime.layoutId}:${runtime.viewMode}`;
     if (lastFocusKeyRef.current !== nextFocusKey && animateFocus(runtime, focusTarget)) {
@@ -1815,12 +1905,19 @@ export function EditorCanvas({
   const floor4CalibratingCompass = layout.floor_code.toUpperCase() === "4F" && calibrationMode;
   const compassCode = floor4CalibratingCompass ? "3F" : realEastCompass ? "E" : "N";
   const compassLabel = floor4CalibratingCompass ? "对齐3F" : realEastCompass ? "现实东向" : "图纸北向";
-  return <div className={`editor-canvas ${visualTheme === "warehouse" ? "warehouse-theme" : ""} ${effectiveDrawMode || measureMode ? "drawing" : ""}`} ref={containerRef}>
+  return <div className={`editor-canvas ${visualTheme === "warehouse" ? "warehouse-theme" : ""} ${showIntakeLegend ? "with-intake-legend" : ""} ${effectiveDrawMode || measureMode ? "drawing" : ""}`}>
+    {showIntakeLegend && <aside className="warehouse-intake-legend" aria-label="入库时间图例"><b>入库时间（天）</b>
+      {[...INTAKE_AGE_BANDS].reverse().map(band => <span key={band.bucket}><i style={{backgroundColor: band.color}} />{band.label}</span>)}
+      <span><i className="legend-empty" />空位</span><span><i className="legend-unknown" />日期待核</span>
+      <span><i className="legend-selected" />已选中</span><span><i className="legend-search" />查找命中</span>
+    </aside>}
+    <div className="map-viewport" ref={containerRef}>
     <div className="canvas-mount" ref={canvasMountRef} />
     {!readOnly && showInternalCodes && viewMode === "2d" && <small className="map-edit-keyboard-hint">{MAP_KEYBOARD_HINT}。货架拖近120mm内吸附，Alt取消吸附；调整后按原流程保存/应用。</small>}
     <div className="map-compass" aria-label={compassLabel}><span ref={northArrowRef}>↑</span><b>{compassCode}</b><small>{compassLabel}</small></div>
     {referenceLayout && referenceOverlay?.enabled && layout.floor_code.toUpperCase()==="1F" && <div className="reference-overlay-badge">{referenceOverlay.shared_coordinates ? "3F 左半区柱墙 · 同坐标复核" : "3F 左半区柱墙参照 · 草稿"}</div>}
     <div className="map-scale"><span ref={scaleBarRef} /><b ref={scaleLabelRef}>—</b></div>
     <small className="map-coordinate" hidden={!showInternalCodes} ref={coordinateRef}>X — · Y — mm</small>
+    </div>
   </div>;
 }

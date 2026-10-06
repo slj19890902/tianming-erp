@@ -64,9 +64,9 @@ test("warehouse framing fills 1F while preserving the accepted 3F global fit", (
   assert.equal(warehouseFrustumDivisor("1F", "editor"), 1.8);
 });
 
-test("warehouse aisles use a pale green surface and reserve strong green for empty locations", () => {
-  assert.equal(warehouseAisleColor("1F", "warehouse", "#22c55e"), "#dcefe3");
-  assert.equal(warehouseAisleColor("3F", "warehouse", "#f59e0b"), "#dcefe3");
+test("warehouse aisles use a very light neutral surface apart from inventory age", () => {
+  assert.equal(warehouseAisleColor("1F", "warehouse", "#22c55e"), "#F3F4F6");
+  assert.equal(warehouseAisleColor("3F", "warehouse", "#f59e0b"), "#F3F4F6");
   assert.equal(warehouseAisleColor("1F", "editor", "#22c55e"), "#22c55e");
 });
 
@@ -118,7 +118,7 @@ test("warehouse uses the floor envelope as passage and hides legacy drawn aisles
   const zone = { id: "zone", feature_kind: "zone", points: [[0, 0], [1000, 0], [1000, 1000], [0, 1000]] };
   assert.deepEqual(warehousePassageSurfaceStyle("warehouse"), {
     visible: true,
-    color: "#dcefe3",
+    color: "#F3F4F6",
     elevationMm: 0
   });
   assert.deepEqual(effectiveMapFeatures("warehouse", [aisle, zone]), [zone]);

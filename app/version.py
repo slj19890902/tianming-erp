@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.549"
-APP_VERSION_NAME = "库存成本与库存助手读取修复"
-APP_BUILD_DATE = "2026-09-30"
+APP_VERSION = "v0.22.550"
+APP_VERSION_NAME = "仓库地图入库时间色阶"
+APP_BUILD_DATE = "2026-10-06"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -5283,3 +5283,16 @@ APP_VERIFICATION_STEPS = [
     "打开库存助手，核对库存金额与建议正常显示。",
 ]
 APP_CHANGELOG = [*(f"v0.22.549：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "仓库地图按产品最新有效入库时间显示由浅绿到深红的五档色阶，左侧提供简洁图例。",
+    "同一产品各货位同步着色，移库和盘点更正不刷新入库时间；未知日期单独标识。",
+    "选中使用黄色边框，搜索使用蓝色边框，保留入库色阶；货架编号附带最久存放货物的色条。",
+    "保留库存数量、批次原始日期、客户查看范围及历史流水，无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，核对左侧入库时间图例、货架编号和货位色阶，点选后确认黄色边框不盖住底色。",
+    "搜索并选择一款多货位产品，核对各位置数量及颜色一致；取消选择恢复全部货物视图。",
+    "正常移库后核对颜色不变；新生产实际入库后核对同产品其他货位同步刷新。",
+]
+APP_CHANGELOG = [*(f"v0.22.550：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

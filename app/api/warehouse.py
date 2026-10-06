@@ -16511,10 +16511,12 @@ def search_warehouse_twin_inventory(
     today = beijing_today()
     lots, pagination = search_lot_page(db, query, keyword=effective_keyword,
         as_of=today, page_size=page_size, after_lot_id=after_lot_id)
+    from app.services.warehouse_intake_age import build_intake_age_projection
     result = build_inventory_code_search_results(
         lots=lots,
         keyword=effective_keyword,
         as_of=today,
+        intake_projections=build_intake_age_projection(db, lots, visible_customer_ids=visible_customer_ids, as_of=today),
         location_projection_contexts=load_warehouse_location_projection_contexts(
             db,
             [row.location for row in lots if row.location is not None],
@@ -17049,10 +17051,12 @@ def locate_warehouse_twin_objects(
         from app.services.warehouse_search_paging import search_lot_page
         lots, pagination = search_lot_page(db, query, keyword=effective_keyword,
             as_of=today, page_size=page_size, after_lot_id=after_lot_id)
+    from app.services.warehouse_intake_age import build_intake_age_projection
     inventory = build_inventory_code_search_results(
         lots=lots,
         keyword=effective_keyword,
         as_of=today,
+        intake_projections=build_intake_age_projection(db, lots, visible_customer_ids=visible_customer_ids, as_of=today),
         location_projection_contexts=load_warehouse_location_projection_contexts(
             db,
             [row.location for row in lots if row.location is not None],

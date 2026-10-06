@@ -111,6 +111,24 @@ export function createHatchTexture(color: string, crossed = false) {
   return texture;
 }
 
+export function createIntakeHatchTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 64;
+  const context = canvas.getContext("2d")!;
+  context.fillStyle = "#FFFFFF";
+  context.fillRect(0, 0, 64, 64);
+  context.strokeStyle = "#B6BDC7";
+  context.lineWidth = 2;
+  for (let x = -64; x < 128; x += 12) {
+    context.beginPath(); context.moveTo(x, 64); context.lineTo(x + 64, 0); context.stroke();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(2, 2);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
 export function buildEquipmentVisual(
   placement: Placement,
   template: AssetTemplate | undefined,
@@ -315,8 +333,9 @@ export function palletMarkerSpec(pallet: Pallet, viewMode: ViewMode, violated: b
   const width = Math.max(planningSlot ? Number(pallet.planning_slot_width_mm || 0) : pallet.width_mm, minimumFootprint);
   const depth = Math.max(planningSlot ? Number(pallet.planning_slot_depth_mm || 0) : pallet.depth_mm, minimumFootprint);
   const state = palletStatusInfo(pallet.visual_status);
-  const statusColor = violated ? "#dc2626" : pallet.candidate_status_color || state.color;
-  const baseColor = violated ? "#991b1b" : pallet.color || "#9a6a3a";
+  const paintColor = pallet.intake_color ? new THREE.Color(pallet.intake_color).lerp(new THREE.Color("#FFFFFF"), pallet.intake_dimmed ? 0.8 : 0).getStyle() : null;
+  const statusColor = paintColor || (violated ? "#dc2626" : pallet.candidate_status_color || state.color);
+  const baseColor = paintColor || (violated ? "#991b1b" : pallet.color || "#9a6a3a");
   const baseHeight = viewMode === "2d" ? 32 : 80;
   const loadHeight = viewMode === "2d" ? 26 : pallet.visual_status === "empty" ? 70 : 420;
   const loadY = viewMode === "2d" ? 66 : pallet.visual_status === "empty" ? 105 : 290;
@@ -341,18 +360,18 @@ export function buildPalletMarkerVisual(pallet: Pallet, viewMode: ViewMode, viol
   const spec = palletMarkerSpec(pallet, viewMode, violated);
 
   if (pallet.is_logical_anchor) {
-    const markerColor = violated ? 0xdc2626 : new THREE.Color(spec.loadColor).getHex();
+    const markerColor = new THREE.Color(spec.loadColor).getHex();
     if (pallet.is_planning_location_slot) {
       const height = viewMode === "2d" ? 28 : 48;
       const geometry = new THREE.BoxGeometry(spec.width, height, spec.depth);
       const fill = new THREE.Mesh(
         geometry,
-        new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.9 })
+        new THREE.MeshBasicMaterial({ color: markerColor, transparent: !pallet.intake_color, opacity: pallet.intake_color ? 1 : 0.9, map: pallet.intake_unknown ? createIntakeHatchTexture() : null })
       );
       fill.position.y = height / 2;
       const outline = new THREE.LineSegments(
         new THREE.EdgesGeometry(geometry),
-        new THREE.LineBasicMaterial({ color: violated ? 0xdc2626 : pallet.visual_status === "empty" ? 0x9b927d : markerColor, transparent: true, opacity: 0.95 })
+        new THREE.LineBasicMaterial({ color: pallet.intake_color ? 0xcbd5e1 : violated ? 0xdc2626 : pallet.visual_status === "empty" ? 0x9b927d : markerColor, transparent: true, opacity: 0.95 })
       );
       outline.position.copy(fill.position);
       // Flat planning outlines must remain visible even under overlapping
@@ -360,7 +379,7 @@ export function buildPalletMarkerVisual(pallet: Pallet, viewMode: ViewMode, viol
       if (viewMode === "2d") {
         fill.material.depthTest = false;
         fill.material.depthWrite = false;
-        fill.material.opacity = 0.35;
+        fill.material.opacity = pallet.intake_color ? 1 : 0.35;
         fill.renderOrder = 35;
         outline.material.depthTest = false;
         outline.material.depthWrite = false;
@@ -372,7 +391,7 @@ export function buildPalletMarkerVisual(pallet: Pallet, viewMode: ViewMode, viol
     const diameter = Math.min(Math.max(spec.width, spec.depth, 180), 260);
     const base = new THREE.Mesh(
       new THREE.CylinderGeometry(diameter / 2, diameter / 2, viewMode === "2d" ? 28 : 42, 24),
-      new THREE.MeshBasicMaterial({ color: markerColor, transparent: true, opacity: 0.82 })
+      new THREE.MeshBasicMaterial({ color: markerColor, transparent: !pallet.intake_color, opacity: pallet.intake_color ? 1 : 0.82, map: pallet.intake_unknown ? createIntakeHatchTexture() : null })
     );
     base.position.y = viewMode === "2d" ? 14 : 21;
     const stem = new THREE.Mesh(

@@ -48,7 +48,7 @@ export function warehouseFrustumDivisor(floorCode, visualTheme) {
 
 export function warehouseAisleColor(floorCode, visualTheme, fallback) {
   if (visualTheme !== "warehouse") return fallback;
-  return "#dcefe3";
+  return "#F3F4F6";
 }
 
 export function warehouseZoneColor(visualTheme, fallback) {
@@ -168,7 +168,7 @@ export function warehousePassageEnvelope(bounds, structures, sliceCount = 224) {
 
 export function warehousePassageSurfaceStyle(visualTheme) {
   return visualTheme === "warehouse"
-    ? { visible: true, color: "#dcefe3", elevationMm: 0 }
+    ? { visible: true, color: "#F3F4F6", elevationMm: 0 }
     : { visible: false, color: "#f1f5f9", elevationMm: -4 };
 }
 

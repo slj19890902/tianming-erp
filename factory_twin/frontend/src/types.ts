@@ -61,6 +61,10 @@ export interface Placement {
 }
 
 export interface Rack {
+  intake_has_unknown?: boolean;
+  intake_color?: string;
+  intake_unknown?: boolean;
+  intake_dimmed?: boolean;
   id: string;
   layout_id: string;
   rack_code: string;
@@ -91,6 +95,12 @@ export interface Rack {
 }
 
 export interface Pallet {
+  intake_has_unknown?: boolean;
+  intake_color?: string;
+  intake_unknown?: boolean;
+  intake_dimmed?: boolean;
+  inventory_warning?: boolean;
+  move_preview_role?: "source" | "target";
   id: string;
   layout_id: string;
   pallet_code: string;

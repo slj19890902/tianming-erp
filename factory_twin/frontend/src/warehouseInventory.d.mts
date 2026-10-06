@@ -11,6 +11,10 @@ export interface InventoryProjectionItem {
   damaged_quantity?: number;
   unit?: string;
   age_days?: number | null;
+  intake_date?: string | null;
+  intake_age_days?: number | null;
+  intake_age_bucket?: string;
+  intake_identity_key?: string;
 }
 
 export interface InventoryProjectionPallet {
@@ -23,6 +27,7 @@ export interface InventoryProjectionPallet {
 
 export interface InventoryProjectionLocation {
   location_id?: number;
+  map_rack_id?: string | null;
   location_code: string;
   location_name: string;
   employee_location_name?: string | null;

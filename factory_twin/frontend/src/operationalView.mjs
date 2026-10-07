@@ -199,6 +199,7 @@ export function shouldShowWarehousePalletVisual(pallet, hideRackLocationMarkers 
 }
 
 export function warehouseRackMapName(rack) {
+  if (/^[A-Z]+$/.test(String(rack?.mold_rack_code || ""))) return `模具 ${String(rack.mold_rack_code).trim()}`;
   const name = String(rack?.name || "").trim();
   const short = name.match(/^(?:货架?|货架号)?\s*([A-Z]+\d+)\s*(?:货架|架)?$/i);
   if (short) return short[1].toUpperCase();

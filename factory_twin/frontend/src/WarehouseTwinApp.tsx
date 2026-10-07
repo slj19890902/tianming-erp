@@ -1,3 +1,4 @@
+import { MoldRackElevation } from "./MoldRackElevation";
 import { apiErrorMessage } from "./warehouseApiError.mjs";
 import { areaRackLabelBatch } from "./rackLabelBatch.mjs";
 import { EntryProductButton } from "./EntryProductButton";
@@ -83,13 +84,10 @@ import {
 } from "./warehousePalletMergeDraft.mjs";
 import type { PalletMergeCandidate } from "./warehousePalletMergeDraft.mjs";
 import {
-  buildMoldLocationTarget,
-  buildMoldRackView,
   moldRackEmployeeName,
   moldRackLevelUsage,
   moldRacksForArea
 } from "./moldRackView.mjs";
-import type { MoldLocationOption } from "./moldRackView.mjs";
 import { filterShelfMolds, groupShelfProducts } from "./shelfDisplay.mjs";
 import { ShelfLotHistory } from "./ShelfLotHistory";
 import {
@@ -541,6 +539,9 @@ interface ProductQuantities extends SearchResponse {
 
 interface LocateResource {
   resource_id: string;
+  rack_id?: string | null;
+  mold_id?: number | null;
+  cell_id?: string | null;
   kind: "delivery_pick" | "mold" | "printing_plate" | "mold_area" | "printing_plate_area";
   primary_code?: string | null;
   title: string;
@@ -570,6 +571,10 @@ interface MoldAreaItem {
     level?: number | null;
     grid?: number | null;
     row?: number | null;
+    rack_code?: string | null;
+    rack_id?: string | null;
+    alias?: string | null;
+    short_label?: string | null;
   } | null;
   products: Array<{
     id: number;
@@ -591,32 +596,11 @@ interface MoldRackResponse {
     level_cell_counts: number[];
     blocked_levels: number[];
     uses_legacy_bays: boolean;
+    cells?: Array<{id: string; level: number; grid: number; alias: string; location_code?: string}>;
   };
   items: MoldAreaItem[];
   total: number;
   truncated: boolean;
-}
-
-interface MoldLocationOptionsResponse {
-  floor_code: string;
-  racks: MoldLocationOption[];
-}
-
-interface MoldLocationMovePreview {
-  mold: MoldAreaItem;
-  target_location: string;
-  target_guide?: { prompt?: string | null } | null;
-  expected_version: number;
-  same_location: boolean;
-  can_confirm: boolean;
-  co_located_count: number;
-}
-
-interface MoldLocationMoveResponse {
-  message: string;
-  mold: MoldAreaItem;
-  idempotent_replay: boolean;
-  no_change: boolean;
 }
 
 interface MoldAreaResponse {
@@ -1270,295 +1254,6 @@ function rackAreaCode(rack: Rack, features: LayoutFeature[]) {
   return candidate || null;
 }
 
-function MoldRackElevation({
-  rack,
-  response,
-  loading,
-  error,
-  canMoveMolds,
-  rackIndex,
-  rackCount,
-  onPrevious,
-  onNext,
-  onMoldMoved,
-  onNavigationGuardChange,
-  onClose
-}: {
-  rack: Rack;
-  response: MoldRackResponse | null;
-  loading: boolean;
-  error: string;
-  canMoveMolds: boolean;
-  rackIndex: number;
-  rackCount: number;
-  onPrevious: () => void;
-  onNext: () => void;
-  onMoldMoved: (message: string) => void;
-  onNavigationGuardChange: (message: string) => void;
-  onClose: () => void;
-}) {
-  const rackView = useMemo(
-    () => buildMoldRackView(rack, response?.items || [], response?.rack.blocked_levels || []),
-    [rack, response]
-  );
-  const occupiedCells = rackView.levels.flatMap((level) => level.cells
-    .filter((cell) => cell.items.length)
-    .map((cell) => ({ key: `L${level.level}-G${cell.grid}`, level: level.level, grid: cell.grid, items: cell.items })));
-  const [selectedSlotKey, setSelectedSlotKey] = useState<string | null>(null);
-  const [moldQuery, setMoldQuery] = useState("");
-  const [selectedMoldId, setSelectedMoldId] = useState<number | null>(null);
-  const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
-  const [movePanelOpen, setMovePanelOpen] = useState(false);
-  const [moveOptions, setMoveOptions] = useState<MoldLocationOption[]>([]);
-  const [moveRackCode, setMoveRackCode] = useState("");
-  const [moveLevel, setMoveLevel] = useState("");
-  const [moveGrid, setMoveGrid] = useState("");
-  const [movePreview, setMovePreview] = useState<MoldLocationMovePreview | null>(null);
-  const [moveIdempotencyKey, setMoveIdempotencyKey] = useState("");
-  const [moveAttemptUncertain, setMoveAttemptUncertain] = useState(false);
-  const [moveBusy, setMoveBusy] = useState(false);
-  const [moveMessage, setMoveMessage] = useState("");
-  useEffect(() => {
-    onNavigationGuardChange(moveAttemptUncertain
-      ? "模具移动结果尚未确认，请先用原凭证核对结果。"
-      : moveBusy ? "模具移动正在提交，请等待当前结果。" : "");
-    return () => onNavigationGuardChange("");
-  }, [moveAttemptUncertain, moveBusy, onNavigationGuardChange]);
-  useEffect(() => {
-    const first = occupiedCells[0];
-    setSelectedSlotKey(first?.key || null);
-    setSelectedMoldId(null);
-    setSelectedProductId(null);
-    setMovePanelOpen(false);
-    setMovePreview(null);
-    setMoveIdempotencyKey("");
-    setMoveAttemptUncertain(false);
-    setMoveMessage("");
-  }, [rack.id, response?.total]);
-  useEffect(() => {
-    setMovePanelOpen(false);
-    setMovePreview(null);
-    setMoveIdempotencyKey("");
-    setMoveAttemptUncertain(false);
-    setMoveMessage("");
-  }, [selectedMoldId]);
-  useEffect(() => {
-    const handleKey = (event: KeyboardEvent) => {
-      if (moveAttemptUncertain) return;
-      if (event.key === "Escape") onClose();
-      if (event.key === "ArrowLeft") onPrevious();
-      if (event.key === "ArrowRight") onNext();
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [moveAttemptUncertain, onClose, onPrevious, onNext]);
-  const selectedSlot = occupiedCells.find((cell) => cell.key === selectedSlotKey) || null;
-  const selectedMold = response?.items.find((item) => item.id === selectedMoldId) || null;
-  const selectedProduct = selectedMold?.products.find((product) => product.id === selectedProductId) || null;
-  const selectedMoveRack = moveOptions.find((item) => item.rack_code === moveRackCode) || null;
-  const selectedMoveLevel = selectedMoveRack?.levels.find((item) => String(item.level) === moveLevel) || null;
-  const selectedMoveTarget = buildMoldLocationTarget(selectedMoveRack, moveLevel, moveGrid);
-  const visibleMolds = filterShelfMolds(selectedSlot?.items || response?.items || [], moldQuery);
-  const unmatchedCount = rackView.unmatched_items.length + rackView.rack_only_items.length
-    + rackView.levels.reduce((sum, level) => sum + level.level_only_items.length, 0);
-  const levels = [...rackView.levels].reverse();
-
-  const resetMovePreview = () => {
-    setMovePreview(null);
-    setMoveIdempotencyKey("");
-    setMoveAttemptUncertain(false);
-    setMoveMessage("");
-  };
-
-  const selectMoveRack = (rackCode: string, options = moveOptions) => {
-    const option = options.find((item) => item.rack_code === rackCode) || options[0] || null;
-    const guide = selectedMold?.location_guide;
-    const preferredLevel = option?.rack_code === `R${String(guide?.rack || "").padStart(2, "0")}`
-      ? Number(guide?.level || 0)
-      : 0;
-    const level = option?.levels.find((item) => item.level === preferredLevel) || option?.levels[0] || null;
-    const preferredGrid = Number(guide?.grid || guide?.row || 0);
-    const grid = level?.grids.includes(preferredGrid) ? preferredGrid : level?.grids[0] || 0;
-    setMoveRackCode(option?.rack_code || "");
-    setMoveLevel(level ? String(level.level) : "");
-    setMoveGrid(grid ? String(grid) : "");
-    resetMovePreview();
-  };
-
-  const openMoldMove = async () => {
-    if (!selectedMold || !canMoveMolds || moveBusy || moveAttemptUncertain) return;
-    setMovePanelOpen(true);
-    setMoveMessage("");
-    if (moveOptions.length) {
-      const currentRackCode = selectedMold.location_guide?.rack
-        ? `R${String(selectedMold.location_guide.rack).padStart(2, "0")}`
-        : "";
-      selectMoveRack(currentRackCode || moveOptions[0].rack_code);
-      return;
-    }
-    setMoveBusy(true);
-    try {
-      const result = await requestJson<MoldLocationOptionsResponse>("/api/warehouse/molds/location-options");
-      const options = result.racks || [];
-      setMoveOptions(options);
-      const currentRackCode = selectedMold.location_guide?.rack
-        ? `R${String(selectedMold.location_guide.rack).padStart(2, "0")}`
-        : "";
-      selectMoveRack(currentRackCode || options[0]?.rack_code || "", options);
-      if (!options.length) setMoveMessage("当前正式地图还没有可选的模具货架位置。请先完成层格校验和发布。");
-    } catch (reason) {
-      setMoveMessage(`读取正式模具位置失败：${(reason as Error).message}`);
-    } finally {
-      setMoveBusy(false);
-    }
-  };
-
-  const previewMoldMove = async () => {
-    if (!selectedMold || !selectedMoveTarget || moveBusy) return;
-    setMoveBusy(true);
-    setMoveMessage("");
-    try {
-      const preview = await mutateJson<MoldLocationMovePreview>(
-        "/api/warehouse/molds/location-movement/preview",
-        "POST",
-        { mold_code: selectedMold.mold_code, target_location: selectedMoveTarget }
-      );
-      if (!preview) return;
-      setMovePreview(preview);
-      setMoveIdempotencyKey(operationKey("twin-mold-move"));
-      setMoveMessage(preview.same_location
-        ? "该模具已经在这个正式位置，无需移动。"
-        : `目标位置已校验；${preview.co_located_count ? `当前同格还有 ${preview.co_located_count} 件模具。` : "当前没有同格模具。"}`
-      );
-    } catch (reason) {
-      setMoveMessage(`目标位置不可用：${(reason as Error).message}`);
-    } finally {
-      setMoveBusy(false);
-    }
-  };
-
-  const confirmMoldMove = async () => {
-    if (!selectedMold || !movePreview || movePreview.same_location || !moveIdempotencyKey || moveBusy) return;
-    if (!window.confirm(
-      `请先确认模具实物已经搬动：\n\n模具：${selectedMold.mold_code} · ${selectedMold.mold_name}\n原位置：${selectedMold.rack_location}\n新位置：${movePreview.target_location}\n\n确认后将更新正式模具位置并追加不可变移位流水。`
-    )) return;
-    setMoveBusy(true);
-    setMoveMessage("");
-    try {
-      const result = await mutateJson<MoldLocationMoveResponse>(
-        "/api/warehouse/molds/location-movement/confirm",
-        "POST",
-        {
-          mold_code: selectedMold.mold_code,
-          target_location: movePreview.target_location,
-          expected_version: movePreview.expected_version,
-          idempotency_key: moveIdempotencyKey,
-          source: "manual_input",
-          note: "实测地图移货模式确认模具实物已搬动"
-        }
-      );
-      if (!result) return;
-      setMovePanelOpen(false);
-      setMovePreview(null);
-      setMoveIdempotencyKey("");
-      setMoveAttemptUncertain(false);
-      setMoveMessage(result.message);
-      onMoldMoved(`${result.mold.mold_code} 已移动到 ${result.mold.rack_location}，正式位置和移位流水已同步。`);
-    } catch (reason) {
-      const requestError = reason as Error & { status?: number };
-      if (requestError.status && requestError.status < 500) {
-        setMovePreview(null);
-        setMoveIdempotencyKey("");
-        setMoveAttemptUncertain(false);
-        setMoveMessage(`移动被拒绝：${requestError.message}。请刷新或重新预览目标位置。`);
-      } else {
-        setMoveAttemptUncertain(true);
-        setMoveMessage(`移动结果暂不确定：${requestError.message}。请保持当前模具和目标不变，再点一次确认；系统会复用同一凭证核对。`);
-      }
-    } finally {
-      setMoveBusy(false);
-    }
-  };
-
-  return <section className="twin-rack-focus-panel twin-rack-stage twin-mold-rack-stage" role="region" aria-label={`${rack.rack_code} 模具资产正视图`}>
-      <header>
-        <div><small>实时模具货架 · {response?.rack.mold_rack_code || rack.mold_rack_code || rack.rack_code}</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} 毫米 · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p></div>
-        <button type="button" disabled={moveAttemptUncertain} onClick={onClose}>{moveAttemptUncertain ? "请先核对移动结果" : "返回孪生地图"}</button>
-      </header>
-      {response?.rack.uses_legacy_bays && <div className="twin-mold-rack-legacy-note">当前发布地图仍沿用旧统一 {rack.bays || 1} 格结构；请在“区域规划”中补齐每层实际格数，发布前不会改动任何模具位置。</div>}
-      <div className="twin-rack-content">
-        <button type="button" className="twin-rack-switch previous" aria-label="上一个同区域货架" disabled={moveAttemptUncertain} onClick={onPrevious}>‹</button>
-        <div className="twin-elevation-shell">
-          <div className="twin-height-ruler"><b>{formatNumber(rack.height_mm)} mm</b></div>
-          <div className="twin-elevation-frame">
-            {levels.map((level) => <div className={`twin-elevation-level mold-level ${level.blocked ? "blocked" : ""}`} key={level.level}>
-              <span>第 {level.level} 层 · {level.blocked ? "设备占用，不作为模具位置" : level.cell_count ? `${level.cell_count} 格` : "尚未分格"}</span>
-              <div className={level.blocked || level.cell_count === 0 ? "unpartitioned" : ""}>
-                {level.blocked ? <i className="twin-unpartitioned-cell mold-blocked-cell">设备占用层</i> : level.cell_count === 0 ? <i className="twin-unpartitioned-cell">本层尚未分格</i> : level.cells.map((cell) => {
-                  const key = `L${level.level}-G${cell.grid}`;
-                  const matches = filterShelfMolds(cell.items, moldQuery);
-                  return <section className={`mold-rack-cell ${cell.items.length ? "occupied" : "empty"} ${selectedSlotKey === key ? "selected" : ""}`} key={key}>
-                    <button type="button" className="mold-rack-cell-summary" disabled={moveAttemptUncertain} onClick={() => { setSelectedSlotKey(key); setSelectedMoldId(null); setSelectedProductId(null); }}><b>第 {cell.grid} 格</b><strong>{cell.items.length ? `${cell.items.length} 件模具` : "空格"}</strong></button>
-                    {cell.items.length ? <button type="button" className={`shelf-mold-summary ${moldQuery && matches.length ? "matched" : ""}`} disabled={moveAttemptUncertain} onClick={() => { setSelectedSlotKey(key); setSelectedMoldId(null); setSelectedProductId(null); }}>
-                      <strong>{moldQuery ? `命中 ${matches.length} 件` : "查看本格标签目录"}</strong>
-                      <span>{matches.slice(0, 2).map(item => item.mold_name).join(" · ") || "本格无匹配"}</span>
-                      <small>第 {level.level} 层 · 第 {cell.grid} 格</small>
-                    </button> : <span className="mold-rack-empty-spine">尚无模具</span>}
-                  </section>;
-                })}
-              </div>
-            </div>)}
-          </div>
-          <div className="twin-width-ruler">正面宽度 {formatNumber(rack.width_mm)} mm · 共 {response?.total || 0} 件正式模具</div>
-        </div>
-        <aside className="twin-mold-rack-aside">
-          <small>实时模具台账</small>
-          {loading && <><h3>正在读取正式模具台账…</h3><p>只读，不修改模具位置或绑定。</p></>}
-          {!loading && error && <><h3>模具读取失败</h3><p className="error">{error}</p></>}
-          {!loading && !error && selectedMold && <article className="twin-rack-product-label mold-label">
-            <span>模具实物 · 关联产品详情</span><h3>{selectedMold.mold_name}</h3><strong>{selectedProduct?.product_name || "选择下方关联产品查看"}</strong>
-            <dl>{selectedProduct && <div><dt>客户</dt><dd>{selectedProduct.customer_name || "客户待确认"}</dd></div>}<div><dt>关联模具</dt><dd>{selectedMold.mold_name}</dd></div><div><dt>现场位置</dt><dd>{selectedMold.location_guide?.prompt || "位置指引待补充"}</dd></div><div><dt>关联产品</dt><dd>{selectedMold.product_count} 款</dd></div></dl>
-            <div className="twin-mold-rack-selected-actions">
-              <button type="button" className="twin-rack-detail-toggle" disabled={moveAttemptUncertain} onClick={() => { setSelectedMoldId(null); setSelectedProductId(null); }}>返回本格模具目录</button>
-              {canMoveMolds && <button type="button" className="move" disabled={moveBusy || moveAttemptUncertain} onClick={openMoldMove}>{movePanelOpen ? "重新选择目标位置" : "移动该模具"}</button>}
-            </div>
-            {movePanelOpen && <section className="twin-mold-move-panel">
-              <div><b>移动 {selectedMold.mold_name}</b><small>只列出当前正式发布的模具货架层格；预览不会写入。</small></div>
-              <label><span>目标货架</span><select value={moveRackCode} disabled={moveBusy || moveAttemptUncertain || !moveOptions.length} onChange={(event) => selectMoveRack(event.target.value)}>{moveOptions.map((option) => <option value={option.rack_code} key={option.rack_code}>{option.rack_code} · {option.name}</option>)}</select></label>
-              {selectedMoveRack?.levels.length ? <label><span>目标层</span><select value={moveLevel} disabled={moveBusy || moveAttemptUncertain} onChange={(event) => {
-                const value = event.target.value;
-                const level = selectedMoveRack.levels.find((item) => String(item.level) === value) || null;
-                setMoveLevel(value);
-                setMoveGrid(level?.grids[0] ? String(level.grids[0]) : "");
-                resetMovePreview();
-              }}>{selectedMoveRack.levels.map((level) => <option value={level.level} key={level.level}>第 {level.level} 层</option>)}</select></label> : null}
-              {selectedMoveLevel?.grids.length ? <label><span>目标格</span><select value={moveGrid} disabled={moveBusy || moveAttemptUncertain} onChange={(event) => { setMoveGrid(event.target.value); resetMovePreview(); }}>{selectedMoveLevel.grids.map((grid) => <option value={grid} key={grid}>第 {grid} 格</option>)}</select></label> : null}
-              <div className="twin-mold-move-target"><span>目标正式位置</span><b>{selectedMoveTarget || "当前没有可用位置"}</b></div>
-              {moveMessage && <p className={moveMessage.includes("失败") || moveMessage.includes("不可用") || moveMessage.includes("未完成") ? "error" : ""}>{moveMessage}</p>}
-              <div className="twin-mold-move-actions">
-                <button type="button" disabled={moveBusy || moveAttemptUncertain || !selectedMoveTarget} onClick={previewMoldMove}>{moveBusy ? "处理中…" : "预览并校验目标"}</button>
-                <button type="button" className="confirm" disabled={moveBusy || !movePreview || movePreview.same_location} onClick={confirmMoldMove}>{moveAttemptUncertain ? "用原凭证核对移动结果" : "确认实物已搬动并保存"}</button>
-              </div>
-            </section>}
-            <div className="twin-mold-product-links">{selectedMold.products.length ? selectedMold.products.map((product) => <button type="button" className={selectedProductId === product.id ? "selected" : ""} key={product.id} onClick={() => setSelectedProductId(product.id)}><b>{product.customer_name || "客户待确认"}</b><span>{product.product_code || "无存货编码"} · {product.product_name || "产品名称待补充"}</span></button>) : <p>当前模具尚未绑定产品。</p>}</div>
-          </article>}
-          {!loading && !error && !selectedMold && <>
-            <h3>{selectedSlot ? `第 ${selectedSlot.level} 层 · 第 ${selectedSlot.grid} 格` : "当前货架模具"}</h3>
-            <label className="shelf-search">搜索模具、客户、料号或产品<input value={moldQuery} disabled={moveAttemptUncertain} onKeyDown={event => event.stopPropagation()} onChange={event => setMoldQuery(event.target.value)} placeholder="输入名称或规格关键词" /></label>
-            {selectedSlot && <button type="button" disabled={moveAttemptUncertain} onClick={() => setSelectedSlotKey(null)}>查看整架目录</button>}
-            <p>一块实物一条标签。目录顺序不代表现场左右排位；尚未登记格内分组时，定位到层格。</p>
-            <strong>{visibleMolds.length} 件匹配模具{unmatchedCount ? ` · ${unmatchedCount} 件未精确到当前格` : ""}</strong>
-            <div className="twin-mold-rack-item-list shelf-mold-directory">{visibleMolds.map(item => <button type="button" disabled={moveAttemptUncertain} key={item.id} onClick={() => { setSelectedMoldId(item.id); setSelectedProductId(null); }}><b>{item.mold_name}</b><span>关联 {item.products.length} 款产品</span><small>{item.location_guide?.prompt || "具体位置待确认"}</small></button>)}</div>
-            {!visibleMolds.length && <p>没有匹配的模具，请修改关键词或查看整架目录。</p>}
-            {response?.truncated && <p className="error">该货架超过 500 件，本页只显示前 500 件；请按模具编号查找其精确位置。</p>}
-            {unmatchedCount > 0 && <p className="twin-mold-rack-warning">未精确到当前格的模具仍保留在台账中；调整层格不会自动搬动它们。</p>}
-          </>}
-        </aside>
-        <button type="button" className="twin-rack-switch next" aria-label="下一个同区域货架" disabled={moveAttemptUncertain} onClick={onNext}>›</button>
-      </div>
-  </section>;
-}
-
 function WarehouseRackElevation({
   rack,
   area,
@@ -1851,7 +1546,7 @@ export function WarehouseTwinApp() {
   const [layers, setLayers] = useState<LayerVisibility>(DEFAULT_LAYERS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(query.get("mold_query") || "");
   const [submittedSearch, setSubmittedSearch] = useState("");
   const [searchType, setSearchType] = useState<WarehouseSearchType>("finished");
   const [searchFloor, setSearchFloor] = useState("ALL");
@@ -1942,7 +1637,7 @@ export function WarehouseTwinApp() {
   }, [mapMode]);
   const [rackDrafts, setRackDrafts] = useState<Record<string, RackDraft>>({});
   const [newRackFormOpen, setNewRackFormOpen] = useState(false);
-  const [newRackSettings, setNewRackSettings] = useState({ width: "", depth: "", height: "", levels: "3", cells: "" });
+  const [newRackSettings, setNewRackSettings] = useState({ width: "", depth: "", height: "", levels: "", cells: "", moldCode: "A", rotation: "0" });
   const [zonePolicyDrafts, setZonePolicyDrafts] = useState<Record<string, { allowed_inventory_types: InventoryUsage[]; storage_layout: StorageLayout }>>({});
   const [zoneGeometryDrafts, setZoneGeometryDrafts] = useState<Record<string, number[][]>>({});
   const zoneGeometryDraftsRef = useRef<Record<string, number[][]>>({});
@@ -2047,7 +1742,7 @@ export function WarehouseTwinApp() {
   const [stocktakeAddQuantity, setStocktakeAddQuantity] = useState("");
   const [stocktakeSupplementConfirmed, setStocktakeSupplementConfirmed] = useState(false);
   const [stocktakeStockDate, setStocktakeStockDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [rackFocusId, setRackFocusId] = useState<string | null>(null);
+  const [rackFocusId, setRackFocusId] = useState<string | null>(query.get("mold_rack_id"));
   const rackFocusTokenRef = useRef(0);
   const lastActivatedLocationRef = useRef("");
   const [rackOperationBlockMessage, setRackOperationBlockMessage] = useState("");
@@ -3640,6 +3335,14 @@ export function WarehouseTwinApp() {
 
   useEffect(() => {
     if (!pendingLocateResource || pendingLocateResource.floor_code !== floorCode || !layout) return;
+    if (pendingLocateResource.rack_id && layout.racks.some(rack => rack.id === pendingLocateResource.rack_id)) {
+      setSelected({kind: "rack", id: pendingLocateResource.rack_id});
+      setRackFocusId(pendingLocateResource.rack_id);
+      cameraFocusSequenceRef.current += 1;
+      setCameraFocusTarget({entity: {kind: "rack", id: pendingLocateResource.rack_id}, token: cameraFocusSequenceRef.current, source: "search"});
+      setPendingLocateResource(null);
+      return;
+    }
     if (pendingLocateResource.location_id) {
       setSelected({ kind: "pallet", id: `erp-location-${pendingLocateResource.location_id}` });
       setPendingLocateResource(null);
@@ -5540,6 +5243,7 @@ export function WarehouseTwinApp() {
 
   const rackMutationPayload = (rack: RackDraft) => ({
     name: rack.name,
+    ...(rack.mold_rack_code ? {mold_rack_code: rack.mold_rack_code, mold_cells: rack.mold_cells?.filter(cell => cell.level <= rack.levels && cell.grid <= rack.level_cell_counts[cell.level - 1])} : {}),
     x_mm: rack.x_mm,
     y_mm: rack.y_mm,
     width_mm: rack.width_mm,
@@ -5682,7 +5386,8 @@ export function WarehouseTwinApp() {
           expected_revision: layout.source_sha256,
           operation_key: operationKey("rack-create"),
           area_feature_id: selectedAreaFeature.id,
-          name: `${areaCode} 新货架`,
+          name: selectedAreaIsMold ? `模具${newRackSettings.moldCode}架` : `${areaCode} 新货架`,
+          ...(selectedAreaIsMold ? {mold_rack_code: newRackSettings.moldCode} : {}),
           x_mm: Math.round(center.x),
           y_mm: Math.round(center.y),
           width_mm: width,
@@ -5695,8 +5400,8 @@ export function WarehouseTwinApp() {
           bays: 1,
           access_side: "south",
           min_aisle_width_mm: 1500,
-          rotation_deg: 0,
-          color: "#38bdf8"
+          rotation_deg: Number(newRackSettings.rotation),
+          color: selectedAreaIsMold ? "#94a3b8" : "#38bdf8"
         }
       );
       if (!response) return;
@@ -6967,9 +6672,11 @@ export function WarehouseTwinApp() {
         {focusedRack?.mold_rack_code ? <MoldRackElevation
           rack={focusedRack}
           response={moldRackResponse}
+          highlightedMoldId={focusedResource?.kind === "mold" ? focusedResource.mold_id : null}
+          initialCellId={focusedResource?.kind === "mold" ? focusedResource.cell_id : query.get("mold_cell_id")}
           loading={moldRackLoading}
           error={moldRackError}
-          canMoveMolds={!productionMapContext && mapMode === "move" && canExecuteWarehouse}
+          canMoveMolds={!productionMapContext && !traceReadOnly && canExecuteWarehouse}
           rackIndex={focusedRackIndex}
           rackCount={focusedAreaRacks.length || 1}
           onPrevious={() => switchFocusedRack(-1)}
@@ -7422,11 +7129,13 @@ export function WarehouseTwinApp() {
             </div>}
             {locationEditMode && canEditLocations && newRackFormOpen && <section className="twin-rack-layout-editor" aria-label="添加区域货架">
               <b>添加到 {employeeAreaName(selectedAreaFeature, { floorCode })}</b>
+              {selectedAreaIsMold && <label>模具架号<select value={newRackSettings.moldCode} onChange={event => setNewRackSettings({...newRackSettings, moldCode: event.target.value})}>{["A","B","C","D","E"].map(code => <option value={code} key={code} disabled={layout?.racks.some(rack => rack.mold_rack_code === code)}>{code}</option>)}</select></label>}
               <div className="twin-rack-primary-fields">
                 <label><span>新架长度 mm</span><input type="number" min="1" value={newRackSettings.width} onChange={(e) => setNewRackSettings({ ...newRackSettings, width: e.target.value })} /></label>
                 <label><span>新架宽度 mm</span><input type="number" min="1" value={newRackSettings.depth} onChange={(e) => setNewRackSettings({ ...newRackSettings, depth: e.target.value })} /></label>
                 <label><span>新架总高度 mm</span><input type="number" min="1" value={newRackSettings.height} onChange={(e) => setNewRackSettings({ ...newRackSettings, height: e.target.value })} /></label>
-                <label><span>新架层数</span><select value={newRackSettings.levels} onChange={(e) => setNewRackSettings({ ...newRackSettings, levels: e.target.value })}><option value="3">三层</option><option value="4">四层</option></select></label>
+                <label><span>新架层数</span><input type="number" min="1" max="20" value={newRackSettings.levels} onChange={(e) => setNewRackSettings({ ...newRackSettings, levels: e.target.value })} /></label>
+                <label><span>新架朝向</span><select value={newRackSettings.rotation} onChange={event => setNewRackSettings({...newRackSettings, rotation: event.target.value})}><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
                 <label><span>新架每层格数</span><input type="number" min="1" max="50" value={newRackSettings.cells} onChange={(e) => setNewRackSettings({ ...newRackSettings, cells: e.target.value })} /></label>
               </div>
               <div className="twin-layout-editor-actions"><button type="button" disabled={spatialEditBusy} onClick={addRackToSelectedArea}>添加货架</button><button type="button" disabled={spatialEditBusy} onClick={() => setNewRackFormOpen(false)}>取消添加</button></div>
@@ -7443,7 +7152,8 @@ export function WarehouseTwinApp() {
               {!selectedAreaFeature.formal_area_id && formalAreaOptions.length > 0 && <label className="twin-zone-simple-existing"><span>已有区域（可选）</span><select value={selectedExistingAreaId} onChange={(event) => selectExistingFormalArea(event.target.value)}><option value="">按地图编号新建</option>{formalAreaOptions.map((area) => <option value={area.id} key={area.id}>{area.area_code} · {employeeAreaName(area, { floorCode: area.floor_code })}</option>)}</select></label>}
               <div className="twin-zone-primary-fields">
                 <label className="twin-zone-name-field"><span>区域名称</span><input disabled={spatialEditBusy} maxLength={100} value={formalAreaNameDraft} onChange={(event) => updateAreaSettingsDraft({ name: event.target.value })} placeholder="例如 4F 新振成品区" /></label>
-                <label><span>形式</span><select disabled={spatialEditBusy} value={simpleAreaLayout} onChange={(event) => updateAreaSettingsDraft({ layout: event.target.value as Exclude<StorageLayout, "mixed"> })}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
+                <label><span>用途</span><select disabled={spatialEditBusy} value={simpleAreaUsage === "mold" ? "mold" : "finished"} onChange={event => updateAreaSettingsDraft({usage: event.target.value as InventoryUsage, ...(event.target.value === "mold" ? {layout: "rack" as const} : {})})}><option value="finished">货物</option><option value="mold">模具</option></select></label>
+                <label><span>形式</span><select disabled={spatialEditBusy || simpleAreaUsage === "mold"} value={simpleAreaLayout} onChange={(event) => updateAreaSettingsDraft({ layout: event.target.value as Exclude<StorageLayout, "mixed"> })}><option value="pallet_ground">栈板区</option><option value="rack">货架区</option></select></label>
                 <label><span>{simpleAreaLayout === "pallet_ground" ? "栈板货位数" : "最大货架数"}</span><input disabled={spatialEditBusy} type="number" min="0" max="500" step="1" value={simpleAreaCapacity} onChange={(event) => updateAreaSettingsDraft({ capacity: event.target.value })} /></label>
                 {simpleAreaLayout === "pallet_ground" && <label><span>货位朝向</span><select aria-label="货位朝向" disabled={spatialEditBusy} value={simpleAreaRotation} onChange={(event) => updateAreaSettingsDraft({ rotation: Number(event.target.value) as 0 | 90 })}><option value={0}>0° · 1.2m × 1m</option><option value={90}>90° · 1m × 1.2m</option></select></label>}
               </div>
@@ -7481,8 +7191,8 @@ export function WarehouseTwinApp() {
               </div>
             </div>}
             {locationEditMode && canEditLocations && selectedAreaIsMold && <section className="twin-mold-rack-planner">
-              <header><div><small>模具货架层格结构</small><b>直接选择货架，设置层数和每层格数</b></div><span>{selectedAreaMoldRacks.length} 个货架</span></header>
-              {!selectedAreaMoldRacks.length && <p className="twin-mold-rack-planner-empty">当前模具区域还没有绑定模具货架；请在高级维护中先添加并标记货架。</p>}
+              <header><div><small>模具货架层格结构</small><b>直接选择货架，设置层数和每层格数</b></div><span>{selectedAreaMoldRacks.length} 个货架</span><button type="button" disabled={spatialEditBusy} onClick={() => setNewRackFormOpen(true)}>＋ 添加模具货架</button></header>
+              {!selectedAreaMoldRacks.length && <p className="twin-mold-rack-planner-empty">当前没有模具货架，点击“添加模具货架”填写现场尺寸。</p>}
               <div className="twin-mold-rack-planner-list">{selectedAreaMoldRacks.map((rack) => {
                 const counts = rackLevelCellCounts(rack);
                 const blockedLevels = moldRackBlockedLevels(rack);
@@ -7499,7 +7209,7 @@ export function WarehouseTwinApp() {
                   <div><span>准备应用的层格</span><b>{selectedRackEditDraft.levels} 层 · {selectedRackEditDraft.level_cell_counts.map((count, index) => moldRackBlockedLevels(selectedRackEditDraft).includes(index + 1) ? `第${index + 1}层 设备占用` : `第${index + 1}层 ${count} 格`).join(" / ")}</b></div>
                   <em className={layoutDraftControl?.status || "none"}>{layoutDraftControl?.has_draft ? "有尚未应用的本层修改" : "本货架输入尚未保存"}</em>
                 </div>
-                {selectedMoldRackHighestUsedLevel > selectedRackEditDraft.levels && <p className="twin-mold-rack-structure-blocker">正式台账仍有模具放在第 {selectedMoldRackHighestUsedLevel} 层；保存时会自动校验，应用后这些模具将归入本货架首个可用格。</p>}
+                {selectedMoldRackHighestUsedLevel > selectedRackEditDraft.levels && <p className="twin-mold-rack-structure-blocker">正式台账仍有模具放在第 {selectedMoldRackHighestUsedLevel} 层；请先将受影响格内模具移出，再保存层格。</p>}
                 <div className="twin-mold-rack-fields">
                   <label><span title="货架总层数（含设备占用层）">总层数</span><input type="number" min="1" max="20" value={selectedRackEditDraft.levels} onChange={(event) => changeRackLevels(selectedRackEditDraft, Number(event.target.value))} /><small>已用到第 {selectedMoldRackHighestUsedLevel || 0} 层</small></label>
                   {selectedRackEditDraft.level_cell_counts.map((count, index) => {
@@ -7509,11 +7219,12 @@ export function WarehouseTwinApp() {
                     return <label className={machineBlocked ? "blocked" : ""} key={`${selectedRackEditDraft.id}-simple-grid-${level}`}><span>第 {level} 层格数{machineBlocked ? "（占用）" : usedCount ? `（已有 ${usedCount}）` : ""}</span><input type="number" min="0" max="50" disabled={machineBlocked} value={machineBlocked ? 0 : count} onChange={(event) => changeRackLevelCellCount(selectedRackEditDraft, index, Number(event.target.value))} /></label>;
                   })}
                 </div>
+                <div className="mold-cell-aliases">{(selectedRackEditDraft.mold_cells || []).map(cell => <label key={cell.id}><span>第{cell.level}层第{cell.grid}格 · 旧号对应</span><input maxLength={24} value={cell.alias} onChange={event => updateRackDraft(selectedRackEditDraft.id, {mold_cells: selectedRackEditDraft.mold_cells?.map(item => item.id === cell.id ? {...item, alias: event.target.value.toUpperCase()} : item)})} /></label>)}</div>
                 <div className="twin-mold-rack-planner-actions">
                   <button type="button" className="primary" disabled={spatialEditBusy} title="保存并直接应用当前货架" onClick={saveSelectedRack}>保存并应用货架</button>
                   <button type="button" disabled={spatialEditBusy} onClick={() => setRackDrafts((current) => { const next = { ...current }; delete next[selectedRackEditDraft.id]; return next; })}>取消本次输入</button>
                 </div>
-                <p>减少已被正式模具使用的层或格时，应用会保留原有校验；失效位置统一归入本货架首个可用格并写移动流水，之后可逐件手动调整。增加格位不会自动平均分配现有模具。</p>
+                <p>已用格必须先移出模具再减少层格；增加空格保留既有格号。</p>
               </div>}
             </section>}
             {locationEditMode && advancedAreaMaintenanceOpen && areaPolicyEditMode && canEditLocations && selectedAreaFeature && selectedZonePolicy && <div className="twin-zone-policy-editor">
@@ -7537,15 +7248,16 @@ export function WarehouseTwinApp() {
             {locationEditMode && advancedAreaMaintenanceOpen && canEditLocations && selectedAreaCode && selectedAreaHasFormalLedger && !selectedAreaCreatesInventoryLocations && <div className="twin-location-create"><p>该区域使用原料、模具、印版或临时周转台账，不生成成品/半成品库存库位；发布后按对应台账定位。</p></div>}
             {locationEditMode && advancedAreaMaintenanceOpen && canEditLocations && !selectedAreaCode && <div className="twin-location-create"><p>请先确认启用区域，之后才能生成可投入使用的库位。</p></div>}
             {selectedAreaIsMold ? <div className="twin-area-mold-list">
+              <a href={`/static/mold-location-label.html?floor_code=${floorCode}&feature_code=${encodeURIComponent(selectedAreaFeature?.feature_code || "")}`} target="_blank" rel="noreferrer">打印区域模具架/格位标签</a>
               {!locationEditMode && selectedAreaMoldRacks.length > 0 && <div className="twin-mold-rack-lookup-shortcuts"><b>打开模具货架正视图</b><div>{selectedAreaMoldRacks.map((rack) => <button type="button" key={rack.id} onClick={() => { setRackFocusId(rack.id); setSelected({ kind: "rack", id: rack.id }); }}>{rack.mold_rack_code || rack.rack_code}<small>{moldRackEmployeeName(rack)}</small></button>)}</div></div>}
               {moldAreaLoading && <div className="twin-area-empty"><b>正在读取模具资产台账…</b><span>只读取已登记且位置属于当前实测区域的模具。</span></div>}
               {!moldAreaLoading && moldAreaError && <div className="twin-area-empty error"><b>模具台账读取失败</b><span>{moldAreaError}</span></div>}
               {!moldAreaLoading && !moldAreaError && !moldAreaResponse?.items.length && <div className="twin-area-empty"><b>当前区域没有已定位模具</b><span>未填写位置或仍使用旧自由文本位置的模具，不会被误算进该实测区域。</span></div>}
               {!moldAreaLoading && moldAreaResponse?.items.map((item) => {
-                const rackCode = item.location_guide?.rack ? `R${String(item.location_guide.rack).padStart(2, "0")}` : null;
-                const mappedRack = rackCode ? selectedAreaMoldRacks.find((rack) => rack.mold_rack_code === rackCode) : null;
+                const rackCode = item.location_guide?.rack_code || (item.location_guide?.rack ? `R${String(item.location_guide.rack).padStart(2, "0")}` : null);
+                const mappedRack = selectedAreaMoldRacks.find(rack => rack.id === item.location_guide?.rack_id || rack.mold_rack_code === rackCode) || null;
                 return <article className="twin-area-mold" key={item.id}>
-                  <div><b>{item.mold_code}</b><em>{item.product_count ? `${item.product_count} 款产品` : "未绑产品"}</em></div>
+                  <div><b>{item.mold_name}</b><em>{item.product_count ? `${item.product_count} 款产品` : "未绑产品"}</em></div>
                   <strong>{item.mold_name}</strong>
                   <span>{item.location_guide?.prompt || "位置指引待补充"}</span>
                   {mappedRack && !locationEditMode && <button type="button" onClick={() => { setRackFocusId(mappedRack.id); setSelected({ kind: "rack", id: mappedRack.id }); }}>打开 {rackCode} 正视图</button>}

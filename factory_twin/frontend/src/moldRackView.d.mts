@@ -44,10 +44,15 @@ export interface MoldLocationOption {
   location_depth: "rack" | "level" | "grid";
   grid_count: number;
   levels: MoldLocationOptionLevel[];
+  floor_code?: string;
+  cells?: Array<{id: string; level: number; grid: number; alias: string; location_code: string}>;
 }
 
 export interface MoldRackCell<T extends MoldRackViewItem> {
   grid: number;
+  id?: string;
+  alias?: string;
+  location_code?: string;
   items: T[];
 }
 
@@ -60,7 +65,7 @@ export interface MoldRackLevel<T extends MoldRackViewItem> {
 }
 
 export function buildMoldRackView<T extends MoldRackViewItem>(
-  rack: { levels: number; bays?: number; level_cell_counts?: number[] },
+  rack: { levels: number; bays?: number; level_cell_counts?: number[]; cells?: Array<{id: string; level: number; grid: number; alias: string; location_code?: string}>; mold_cells?: Array<{id: string; level: number; grid: number; alias: string; location_code?: string}> },
   items: T[],
   blockedLevels?: number[]
 ): {
@@ -91,3 +96,6 @@ export function moldRackEmployeeName(rack: {
   area_code?: string | null;
   name?: string | null;
 } | null | undefined): string;
+export function moldCellSummary(items: MoldRackViewItem[]): string[];
+export function moldBatchPayload(items: Array<MoldRackViewItem & {location_version: number}>, target: string, key: string): {target_location: string; items: Array<{mold_code: string; expected_version: number}>; idempotency_key: string; source: string};
+export function moldLocationChoices(options: MoldLocationOption[]): Array<{value: string; label: string}>;

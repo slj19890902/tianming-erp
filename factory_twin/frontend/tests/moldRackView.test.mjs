@@ -6,9 +6,46 @@ import {
   buildMoldRackView,
   buildMoldShelfSpines,
   moldRackEmployeeName,
+  moldBatchPayload,
+  moldCellSummary,
+  moldLocationChoices,
   moldRackLevelUsage,
   moldRacksForArea
 } from "../src/moldRackView.mjs";
+
+test("A架员工简称独立于成品货架且稳定格位不从别名反推地址", () => {
+  assert.equal(moldRackEmployeeName({mold_rack_code: "A", name: "A"}), "模具A架");
+  assert.equal(moldRackEmployeeName({rack_code: "A1", name: "成品A1"}), "成品A1");
+  const options = {rack_code: "A", location_depth: "grid", cells: [{id: "fixed", level: 2, grid: 1, alias: "A9", location_code: "MCELL-fixed"}], levels: [{level: 2, grids: [1]}]};
+  assert.equal(buildMoldLocationTarget(options, 2, 1), "MCELL-fixed");
+  assert.equal(buildMoldLocationTarget({...options, cells: [{...options.cells[0], alias: "A1"}]}, 2, 1), "MCELL-fixed");
+  assert.equal(buildMoldLocationTarget(options, 1, 1), null);
+});
+
+test("模具格保留空格身份与手动旧编号，共享产品不增加实物块数", () => {
+  const item = {...mold(1, "MCELL-one", {kind: "storage_cell", level: 1, grid: 1}), products: [{id: 1, product_code: "P1"}, {id: 2, product_code: "P2"}]};
+  const view = buildMoldRackView({levels: 2, level_cell_counts: [2,1], mold_cells: [{id: "one", level: 1, grid: 1, alias: "A7"}, {id: "empty", level: 1, grid: 2, alias: "A2"}]}, [item,item]);
+  assert.equal(view.levels[0].cells[0].alias, "A7");
+  assert.equal(view.levels[0].cells[0].items.length, 1);
+  assert.equal(view.levels[0].cells[1].id, "empty");
+  assert.equal(view.levels[0].cells[1].items.length, 0);
+  assert.deepEqual(moldCellSummary([item, {...item,id: 2,products: [{product_code: "P3"}]}, {...item,id: 3,products: [{product_code: "P4"}]}]), ["P1","P3"]);
+});
+
+test("批量归位保留每块模具版本、同一幂等凭证并拒绝缺失版本", () => {
+  const item = {...mold(1,"old",{}), location_version: 4};
+  const payload = moldBatchPayload([item,item,{...item,id: 2,mold_code: "second",location_version: 9}], "MCELL-target", "stable-key");
+  assert.deepEqual(payload.items, [{mold_code:"M-1",expected_version:4},{mold_code:"second",expected_version:9}]);
+  assert.equal(payload.idempotency_key,"stable-key");
+  assert.equal(payload.target_location,"MCELL-target");
+  assert.throws(() => moldBatchPayload([{...item,location_version:undefined}],"target","key"), /版本/);
+});
+
+test("移动选项同时保留旧架级、旧层级和新稳定格位", () => {
+  const choices=moldLocationChoices([{rack_code:"R01",name:"旧架",location_depth:"rack",levels:[]},{rack_code:"R02",name:"旧层",location_depth:"level",levels:[{level:2,grids:[]}]},{rack_code:"A",name:"模具A架",floor_code:"3F",location_depth:"grid",levels:[{level:1,grids:[1]}],cells:[{id:"uuid",location_code:"MCELL-uuid",level:1,grid:1,alias:"A1"}]}]);
+  assert.deepEqual(choices.map(choice=>choice.value),["1F-M-R01","1F-M-R02-L2","MCELL-uuid"]);
+  assert.equal(choices[2].label,"3F · 模具A架 · A1");
+});
 
 test("员工地图只显示一楼模具货架简称且不改原始地图名称", () => {
   const rack = { rack_code: "R01", mold_rack_code: "R01", name: "R01 左架（模具002，小模切机上方）" };

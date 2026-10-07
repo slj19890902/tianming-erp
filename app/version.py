@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.561"
-APP_VERSION_NAME = "备库单双栏与E3货位连续编号"
+APP_VERSION = "v0.22.562"
+APP_VERSION_NAME = "模具标签选择与补打"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5350,3 +5350,7 @@ APP_CHANGELOG = [*(f"v0.22.560：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["出货备库单每行并排两组存货编码、货架、数量和实际数量，长编码完整显示，货架只显示楼层、货架号、层和格。", "同名栈板区域的货位统一连续编号，单区域筛选与地图保持一致；E3三个启用区域共26位不再重号，货位身份、库存及历史流水保持。"]
 APP_VERIFICATION_STEPS = ["刷新ERP后打开出货备库单打印预览，核对左右两组及三楼-货H6-1层-1格的位置格式。", "分别选择三个E3栈板区，核对01—26不重复及现有货物仍在原位置；实体打印由管理员验收。"]
 APP_CHANGELOG = [*(f"v0.22.561：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["货架整架及单格打印直接进入勾选页面，避免空白窗口闪退。", "未打印默认勾选，已打印默认不勾选且可补打；异常保留页面和原重试凭证。"]
+APP_VERIFICATION_STEPS = ["刷新仓库地图，打开A架A3格，点击打印本格模具标签，核对未打印默认勾选、已打印默认未选。", "手动勾选已打印标签并进入预览，核对数量、二维码和位置；整架入口同样可按需勾选。"]
+APP_CHANGELOG = [*(f"v0.22.562：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

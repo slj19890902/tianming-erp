@@ -21,15 +21,26 @@ test("map adjustment retains new regions and rack movements after deselection", 
   const original = { id: "rack", x_mm: 100 };
   const moved = { ...original, x_mm: 900 };
   const created = { id: "new-zone", feature_kind: "zone", points: [[0,0],[2,0],[2,2]] };
-  const context = { useMemo: fn => fn(), planningPreviewActive: true, layoutMapToolsOpen: true,
+  const context = { useMemo: fn => fn(), mapMode: "planning", planningPreviewActive: true, layoutMapToolsOpen: true,
     features: [created], zoneGeometryDrafts: {}, activeEditingFeatureId: null, activeRackPreviewId: null,
     layout: { racks: [original], features: [created] }, displayBaseLayout: { features: [], racks: [original] },
     rackDrafts: { rack: moved }, filterPlanningPublishedFeatures };
   assert.equal(componentValue("planningVisibleFeatures", context)[0].id, "new-zone");
   assert.equal(componentValue("planningCollisionRacks", context)[0].x_mm, 900);
   context.planningPreviewActive = false;
+  context.mapMode = "lookup";
   assert.equal(componentValue("planningVisibleFeatures", context).length, 0);
   assert.equal(componentValue("planningCollisionRacks", context)[0].x_mm, 100);
+});
+
+test("saved rack draft stays visible after leaving its selection and reopening planning", () => {
+  const saved = {id: "mold-b", mold_rack_code: "B", x_mm: 100};
+  const context={useMemo: f=>f(), mapMode: "planning", planningPreviewActive: false, layoutMapToolsOpen: false,
+    displayBaseLayout:{racks:[]}, layout:{racks:[saved]}, rackDrafts:{}, activeRackPreviewId:null};
+  assert.equal(componentValue("planningCollisionRacks",context)[0].id,"mold-b");
+  for(const mode of ["lookup","move"]){
+    context.mapMode=mode;assert.equal(componentValue("planningCollisionRacks",context).length,0);
+  }
 });
 
 test("complete map saves rack movement before validating the new revision and preserves failed drafts", async () => {
@@ -122,6 +133,20 @@ test("adding a rack cannot use the previous purpose after selecting mold", async
     assert.equal(mutations, 0);
     assert.match(message, /先点击下方“保存区域设置”/);
   }
+});
+
+test("adding an existing mold code selects its saved draft instead of creating another", async () => {
+  const rack={id:"mold-b",name:"模具B架",mold_rack_code:"B"};
+  let selected, drafts, message, mutations=0, open=true;
+  await componentValue("addRackToSelectedArea",{
+    layout:{racks:[rack]},selectedAreaFeature:{id:"area"},spatialEditBusy:false,
+    simpleAreaUsage:"mold",selectedAreaIsMold:true,newRackSettings:{moldCode:"B"},
+    setSelected:v=>selected=v,setRackDrafts:f=>drafts=f({}),rackDraft:r=>r,
+    setNewRackFormOpen:v=>open=v,setLocationEditMessage:v=>message=v,
+    mutateJson:()=>{mutations++;}
+  })();
+  assert.equal(mutations,0);assert.equal(selected.id,"mold-b");assert.equal(drafts['mold-b'].id,"mold-b");
+  assert.equal(open,false);assert.match(message,/无需重复新增/);
 });
 
 test("right clicking an empty map location targets that exact location in lookup and planning", () => {
@@ -249,7 +274,7 @@ test("new racks use entered dimensions and explicit cells for three and four lev
   for (const levels of [3, 4]) {
     const calls = [], messages = [];
     const context = {
-      layout: { source_sha256: "draft" }, selectedAreaFeature: { id: "area" }, selectedAreaIsMold: false, simpleAreaUsage: "finished", spatialEditBusy: false,
+      layout: { source_sha256: "draft", racks: [] }, selectedAreaFeature: { id: "area" }, selectedAreaIsMold: false, simpleAreaUsage: "finished", spatialEditBusy: false,
       newRackSettings: { width: "1200", depth: "500", height: "2000", levels: String(levels), cells: "2", rotation: "0" },
       featureCenter: () => ({ x: 200, y: 300 }), featureAreaCode: () => "C4", floorCode: "3F",
       setSpatialEditBusy: () => {}, operationKey: () => "rack-new",

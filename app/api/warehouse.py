@@ -11860,6 +11860,9 @@ def apply_twin_rack_layout(
                 commit=False,
                 floor_projection_claimed=True,
                 allow_archived_tombstone_cleanup=True,
+                # The isolated draft changes only this rack. Other areas keep
+                # their current policies/readiness, as in single-area saving.
+                isolated_area_feature_id=str(rack.get("area_feature_id") or "").strip() or None,
             )
             preserved = rebase_warehouse_twin_advanced_rack_after_one_step(
                 context, floor_code, rack_id,

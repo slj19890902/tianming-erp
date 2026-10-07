@@ -2109,7 +2109,9 @@ export function WarehouseTwinApp() {
   const planningCollisionStructures = displayBaseLayout?.structures || [];
   const planningCollisionPlacements = displayBaseLayout?.placements || [];
   const planningCollisionRacks = useMemo(() => {
-    if (planningPreviewActive && layoutMapToolsOpen) {
+    // Planning must keep persisted rack drafts discoverable after deselection
+    // and reopening. Lookup/move continue to use only the published layout.
+    if (mapMode === "planning") {
       return (layout?.racks || []).map((rack) => rackDrafts[rack.id] || rack);
     }
     const published = [...(displayBaseLayout?.racks || [])];
@@ -2120,7 +2122,7 @@ export function WarehouseTwinApp() {
     return published.some((rack) => rack.id === activeId)
       ? published.map((rack) => rack.id === activeId ? edited : rack)
       : [...published, edited];
-  }, [displayBaseLayout?.racks, rackDrafts, activeRackPreviewId, layout?.racks, planningPreviewActive, layoutMapToolsOpen]);
+  }, [displayBaseLayout?.racks, rackDrafts, activeRackPreviewId, layout?.racks, mapMode]);
   const standardPallet = useMemo(
     () => standardPalletContractsMatch(layoutStandardPallet, dashboard?.standard_pallet)
       ? normalizeStandardPalletContract(layoutStandardPallet)
@@ -5375,6 +5377,16 @@ export function WarehouseTwinApp() {
       setLocationEditMessage(text);
       return;
     }
+    const existingMoldRack = selectedAreaIsMold
+      ? layout.racks.find(rack => rack.mold_rack_code === newRackSettings.moldCode)
+      : null;
+    if (existingMoldRack) {
+      setSelected({kind: "rack", id: existingMoldRack.id});
+      setRackDrafts(current => ({...current, [existingMoldRack.id]: current[existingMoldRack.id] || rackDraft(existingMoldRack)}));
+      setNewRackFormOpen(false);
+      setLocationEditMessage(`已找到${existingMoldRack.name}，请查看该货架；待应用时点击“保存并应用货架”，无需重复新增。`);
+      return;
+    }
     const width = Number(newRackSettings.width), depth = Number(newRackSettings.depth), height = Number(newRackSettings.height);
     const levels = Number(newRackSettings.levels), cells = Number(newRackSettings.cells);
     if (![width, depth, height, levels, cells].every((value) => Number.isInteger(value) && value > 0) || levels > 20 || cells > 50 || height < levels) {
@@ -7206,7 +7218,7 @@ export function WarehouseTwinApp() {
                   setSelected({ kind: "rack", id: rack.id });
                   setRackDrafts((current) => ({ ...current, [rack.id]: current[rack.id] || rackDraft(rack) }));
                   setLocationEditMessage(`已选择 ${rack.mold_rack_code || rack.rack_code}；可直接修改层数与每层格数，点击保存后直接应用。`);
-                }}><b>{rack.mold_rack_code || rack.rack_code}</b><span>{moldRackEmployeeName(rack)}</span><small>{rack.levels} 层 · {counts.map((count, index) => blockedLevels.includes(index + 1) ? `第${index + 1}层 设备占用` : `第${index + 1}层 ${count} 格`).join(" / ")}</small></button>;
+                }}><b>{rack.mold_rack_code || rack.rack_code}</b><span>{moldRackEmployeeName(rack)}</span>{!planningPublishedLayout?.racks.some(item => item.id === rack.id && item.version === rack.version) && <em>待应用</em>}<small>{rack.levels} 层 · {counts.map((count, index) => blockedLevels.includes(index + 1) ? `第${index + 1}层 设备占用` : `第${index + 1}层 ${count} 格`).join(" / ")}</small></button>;
               })}</div>
               {selectedRackEditDraft?.mold_rack_code && selectedAreaMoldRacks.some((rack) => rack.id === selectedRackEditDraft.id) && <div className="twin-mold-rack-structure-editor">
                 <div><b>{selectedRackEditDraft.mold_rack_code} · {selectedRackEditDraft.name}</b><small>点击保存会校验并直接应用本货架；不会改变模具台账数量。</small></div>

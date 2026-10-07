@@ -626,7 +626,10 @@ class OrderItemCreate(BaseModel):
 class PdfImportConfirmation(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    preview_safety_token: str = Field(min_length=1, max_length=4000)
+    # The signed token includes every source-line identity. Even a 28-line
+    # Excel order exceeds the former 4,000-character, header-only allowance.
+    # Keep a finite request bound without truncating the signed source evidence.
+    preview_safety_token: str = Field(min_length=1, max_length=1024 * 1024)
     confirmed: bool = False
 
 

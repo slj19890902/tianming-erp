@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.559"
-APP_VERSION_NAME = "卡纸报料尺寸精度"
+APP_VERSION = "v0.22.560"
+APP_VERSION_NAME = "卡纸报料尺寸精度保护"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5338,4 +5338,11 @@ APP_VERIFICATION_STEPS = ["常用箱选择单层无楞卡纸，填写444.5×298.
 
 APP_CHANGELOG = [*(f"v0.22.558：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
-APP_CHANGELOG = ["v0.22.559：卡纸小数尺寸增加保留事实的版本保护，补库纸板整数校验；回退兼容版本v558。", *APP_CHANGELOG]
+APP_CHANGES = ["研光、光洋的同一份购买要求书Excel可从订单或预送货入口导入，按文件内容识别客户并保留管理NO及逐行来源。", "预送货按要求数，订单按发注数；两列不一致时明确提示核对，保留原送货Excel、客户权限及重复导入保护。"]
+APP_VERIFICATION_STEPS = ["送货与回单 → 导入预送货 → 研光/光洋Excel，选择原订单文件并解析核对。", "核对要求数、匹配订单和库存，生成送货草稿；订单导入仍使用发注数。"]
+APP_CHANGELOG = [*(f"v0.22.559：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = ["卡纸报料尺寸支持最多两位小数，瓦楞纸板仍使用整数毫米。", "新增小数数据的版本保护，保留当前订单与预送货Excel导入修复。"]
+APP_VERIFICATION_STEPS = ["常用箱核对80020548报料宽444.5、长298.5、一开一，保存重开保留小数。", "抽查80011929报料宽540、长318、一开二；瓦楞纸板小数应被拒绝。"]
+APP_CHANGELOG = [*(f"v0.22.560：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

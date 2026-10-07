@@ -20,7 +20,7 @@ MAX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 100
 OLE_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
 ZIP_SIGNATURES = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
-PARSER_VERSION = "excel-order-predelivery-v1"
+PARSER_VERSION = "excel-order-predelivery-v2"
 
 
 class ExcelImportError(ValueError):
@@ -431,7 +431,7 @@ def _parse_yanguang_order(sheets: list[_Sheet]) -> tuple[list[ImportedRow], date
                     customer_po = parsed.customer_po
                 rows.append(parsed)
     if not rows:
-        raise ExcelImportError("未识别到研光购买要求书有效明细")
+        raise ExcelImportError("未识别到购买要求书有效明细")
     return rows, source_date, customer_po, warnings
 
 
@@ -508,15 +508,29 @@ def parse_excel_document(
     source_date: date | None = None
     delivery_date: date | None = None
 
-    if document_type == "order":
-        if "研光" in all_text or "YKE" in all_text.upper():
-            template = "yanguang_purchase_order_v1"
-            customer_code = "YG"
-            customer_name_evidence = "工作簿内容包含研光/YKE"
-            rows, source_date, customer_po, extra = _parse_yanguang_order(nonempty)
-            warnings.extend(extra)
-        else:
-            raise ExcelImportError("订单 Excel 模板未识别，请先进行列映射")
+    purchase_sheets = [sheet for sheet in nonempty
+                       if "品目" in _sheet_text(sheet)
+                       and any(label in _sheet_text(sheet) for label in ("發注", "发注"))]
+    # Layout and requested operation are separate: customers use the same
+    # purchase workbook for ordering and for the pre-delivery request.
+    if purchase_sheets:
+        purchase_text = " ".join(_sheet_text(sheet) for sheet in purchase_sheets if not sheet.hidden)
+        yanguang = "研光" in purchase_text or "YKE" in purchase_text.upper()
+        guangyang = "光洋" in purchase_text or "KEW" in purchase_text.upper()
+        if yanguang and guangyang:
+            raise ExcelImportError("购买要求书客户识别不唯一，请分别上传研光或光洋文件")
+        if not (yanguang or guangyang):
+            raise ExcelImportError("购买要求书未识别到研光/YKE或光洋/KEW客户，不能猜测客户")
+        customer_code = "YG" if yanguang else "GY"
+        template = "yanguang_purchase_order_v1" if yanguang else "guangyang_purchase_order_v1"
+        customer_name_evidence = "工作簿内容包含研光/YKE" if yanguang else "工作簿内容包含光洋/KEW"
+        rows, source_date, customer_po, extra = _parse_yanguang_order(purchase_sheets)
+        warnings.extend(extra)
+        if document_type == "pre_delivery":
+            for row in rows:
+                row.issues = [issue.replace("请确认订单数量", "预送数量采用要求数，请核对本次预送数量") for issue in row.issues]
+    elif document_type == "order":
+        raise ExcelImportError("订单 Excel 模板未识别，请先进行列映射")
     elif "光洋" in all_text or any(
         sum(1 for number in range(1, min(sheet.max_row, 40) + 1)
             if re.fullmatch(r"C\d{6,}", sheet.text(number, 4), re.IGNORECASE)) >= 3

@@ -360,6 +360,8 @@ def create_excel_batch(
             target_date,
             customer.id,
         )
+        if source.issues:
+            value["warning"] = "；".join(filter(None, [value.get("warning"), *source.issues]))
         processed.append((value, source))
     prefix = "YG" if str(document.customer_code).upper() == "YG" else "GY"
     batch = TianhuaPreDeliveryImportBatch(
@@ -403,6 +405,8 @@ def create_excel_batch(
             "product_name": source.product_name,
             "unit_price": str(source.unit_price) if source.unit_price is not None else None,
             "amount": str(source.amount) if source.amount is not None else None,
+            "order_quantity": source.order_quantity,
+            "requested_quantity": source.requested_quantity,
             "issues": list(source.issues),
             "candidates":candidates,
         }

@@ -9447,7 +9447,8 @@
             <div v-else-if="modal.type === 'tianhuaPreimport'">
               <div class="panel" style="margin-bottom:12px">
                 <div class="toolbar-group" style="margin-bottom:10px"><button :class="['btn',tianhuaPreimport.sourceMode==='image'?'primary':'']" @click="resetPreDeliveryImportMode('image')">天华图片</button><button :class="['btn',tianhuaPreimport.sourceMode==='excel'?'primary':'']" @click="resetPreDeliveryImportMode('excel')">研光 / 光洋 Excel</button></div>
-                <div class="section-title">{{ tianhuaPreimport.sourceMode==='image' ? '上传天华预送货截图' : '上传研光或光洋预送货 Excel' }}</div>
+                <div class="section-title">{{ tianhuaPreimport.sourceMode==='image' ? '上传天华预送货截图' : '上传研光或光洋订单 / 预送货 Excel' }}</div>
+                <div v-if="tianhuaPreimport.sourceMode==='excel'" class="muted" style="margin-bottom:8px">可使用订单导入的同一份 Excel；购买要求书按“要求数”预送，订单保存仍按“发注数”。解析后核对已有订单与本次送货数量，再生成送货草稿。</div>
                 <div class="toolbar-group">
                   <input v-if="tianhuaPreimport.sourceMode==='image'" class="input" type="file" multiple accept=".jpg,.jpeg,.png,image/jpeg,image/png" @change="onTianhuaImageSelected" />
                   <input v-else class="input" type="file" accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" @change="onPreDeliveryExcelSelected" />

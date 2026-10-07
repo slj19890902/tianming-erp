@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.550"
-APP_VERSION_NAME = "仓库地图入库时间色阶"
-APP_BUILD_DATE = "2026-10-06"
+APP_VERSION = "v0.22.551"
+APP_VERSION_NAME = "模具区域与独立货架格位"
+APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -5296,3 +5296,16 @@ APP_VERIFICATION_STEPS = [
     "正常移库后核对颜色不变；新生产实际入库后核对同产品其他货位同步刷新。",
 ]
 APP_CHANGELOG = [*(f"v0.22.550：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "区域规划可手动新增模具区域和独立货架，按实际层格生成A1等编号，并允许对应旧编号。",
+    "模具正视图按格显示实物数量和编码，支持查找、单块及批量归位；固定格位身份与货物库存位置分开。",
+    "整架、格位和模具标签显示可读位置，手机扫码沿用当前模具位置及权限。",
+    "保留旧模具位置、共享关系和打印记录；本次发布不自动建立现场货架或改变模具、库存实物位置。",
+]
+APP_VERIFICATION_STEPS = [
+    "仓库地图进入区域规划，新增模具区域和A架，按现场填写层数、每层格数及位置，保存并应用。",
+    "打开正视图选择A1，搜索并核对实际模具后保存归位；搜索同一编码并核对目标格和实物数量。",
+    "打印一张模具或格位标签，用手机扫码核对位置和返回入口；真实标签与现场由管理员确认。",
+]
+APP_CHANGELOG = [*(f"v0.22.551：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number
+from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number, validate_sheet_dimensions
 
 from app.services.business_transaction import commit_business_change
 
@@ -14451,6 +14451,11 @@ def _apply_stock_policy_payload(
     user_id: int,
 ) -> None:
     values = payload.model_dump()
+    try:
+        validate_sheet_dimensions(payload.report_length_mm, payload.report_width_mm,
+                                  layer_count=payload.layer_count, flute_type=payload.flute_type)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     material_code = (values.pop("material_code", None) or "").strip() or None
     for key, value in values.items():
         setattr(row, key, value)
@@ -15499,6 +15504,10 @@ def _build_replenishment_item(
         payload.report_width_mm,
         policy.report_width_mm if policy else None,
     )
+    try:
+        validate_sheet_dimensions(report_length, report_width, layer_count=layer_count, flute_type=flute_type)
+    except ValueError as error:
+        raise StockReplenishmentError(str(error)) from error
     location_id = None
     if location_id:
         location = db.get(WarehouseLocation, location_id)

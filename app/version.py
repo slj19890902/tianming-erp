@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.556"
+APP_VERSION = "v0.22.557"
 APP_VERSION_NAME = "订单导入保存恢复入口修复"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5311,11 +5311,22 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.551：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 
+
 APP_CHANGES = ["修复多行Excel/PDF订单保存时预览安全确认凭证超过4000字符被拒绝，保留签名、有效期、来源及防重复校验。"]
 APP_VERIFICATION_STEPS = ["重新预览订单并核对明细后保存，确认成功数量和生成订单，再按原流程开送货单。"]
 APP_CHANGELOG = [*(f"v0.22.555：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
+APP_CHANGES = [
+    "电脑模具编辑支持新货架格位，按B2等短编号显示，保存对应的真实格位。",
+    "修复新格位回填与即时标签预览，保留旧货架、真实移位确认、版本和审计保护。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库模具管理，编辑模具选择B架B2格，核对位置栏和标签预览均显示B2。",
+    "确认实际位置后保存，再次编辑核对B2回填；未搬动的旧位置不能自动变成新格位。",
+]
+APP_CHANGELOG = [*(f"v0.22.556：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
 
 APP_CHANGES = ["订单导入的查询恢复按钮独立于锁定草稿，恢复查询后明确显示继续保存或查看已保存订单入口。", "未查到订单时保留核对提示和保存按钮，继续使用原保存凭据防止重复建单；查询失败时保持保护。"]
 APP_VERIFICATION_STEPS = ["强制刷新后重新导入原文件，点击“查询并恢复保存”。", "未查到订单时核对客户、数量和单价，再点击“核对无误并保存”；查到订单时点击“查看已保存订单”。"]
-APP_CHANGELOG = [*(f"v0.22.556：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.557：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -143,8 +143,9 @@ const lines = [
 const run = rows => sort.call({deliveryForm:{lines:rows}}).map(row=>row.key);
 assert.deepEqual(run(lines), ['one','two','three','stock','blank']);
 assert.deepEqual(lines.map(row=>row.key), ['three','stock','one','two','blank']);
-const pre = lines.filter(row=>row.order_item_id).map((row,i)=>({...row,document_position:i+1}));
+const pre = lines.filter(row=>row.order_item_id).map((row,i)=>({...row,pre_delivery_position:[i+1,0]}));
 assert.deepEqual(run(pre), ['three','one','two']);
+assert.deepEqual(run([lines[0], lines[3], lines[2]]), ['one','two','three']);
 '''.replace('BODY', json.dumps(body))
     result = subprocess.run([shutil.which('node'), '-e', script], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

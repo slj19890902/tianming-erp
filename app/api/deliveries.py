@@ -5481,9 +5481,8 @@ def _delivery_response(
     total_actual_goods_quantity = 0
     original_delivered_quantity = 0
     display_quantity = 0
-    for document_position, row in enumerate(items, 1):
+    for row in items:
         mapping = dict(row)
-        mapping["document_position"] = document_position
         mapping.pop("search_product_code", None)
         mapping.pop("search_product_name", None)
         current_product_fulfillment_mode = mapping.pop(

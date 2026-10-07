@@ -75,4 +75,13 @@ def sort_delivery_document_rows(db: Session, rows, *, id_key: str = "id"):
                 0 if position is not None else 1,
                 position if position is not None else (row.order_item_id or item_id), item_id)
 
-    return sorted(rows, key=key)
+    ordered = sorted(rows, key=key)
+    if isinstance(ordered[0], dict):
+        return [{
+            **row,
+            "item_sequence": by_id[row_id(row)].source_position or by_id[row_id(row)].item_sequence,
+            "pre_delivery_position": source_positions.get((
+                by_id[row_id(row)].delivery_id, by_id[row_id(row)].order_item_id
+            )),
+        } for row in ordered]
+    return ordered

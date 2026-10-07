@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.562"
-APP_VERSION_NAME = "模具标签选择与补打"
+APP_VERSION = "v0.22.563"
+APP_VERSION_NAME = "订单与送货单按原表顺序"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5354,3 +5354,7 @@ APP_CHANGELOG = [*(f"v0.22.561：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["货架整架及单格打印直接进入勾选页面，避免空白窗口闪退。", "未打印默认勾选，已打印默认不勾选且可补打；异常保留页面和原重试凭证。"]
 APP_VERIFICATION_STEPS = ["刷新仓库地图，打开A架A3格，点击打印本格模具标签，核对未打印默认勾选、已打印默认未选。", "手动勾选已打印标签并进入预览，核对数量、二维码和位置；整架入口同样可按需勾选。"]
 APP_CHANGELOG = [*(f"v0.22.562：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["订单详情、待送货选择及送货草稿沿用订单明细顺序；预送货生成的送货单优先沿用原表行顺序。", "页面与客户送货单打印使用同一来源顺序，拆分分配、明细补回和修改后保持一致；保留数量、库存、权限和防重复保护。"]
+APP_VERIFICATION_STEPS = ["Ctrl+F5刷新，打开同昌订单和待送货选择，核对存货编码顺序与Excel一致。", "打开预送货生成的送货单及打印预览，逐行核对原表；已打开的旧预览请关闭后重新打开。"]
+APP_CHANGELOG = [*(f"v0.22.563：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

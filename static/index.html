@@ -37232,8 +37232,8 @@
             const ranked = lines.map((line,index) => {
               if (!groups.has(line.order_id)) groups.set(line.order_id,index);
               const sequence = Number(line.item_sequence || 0);
-              const rank = Number(line.document_position || 0) > 0
-                ? [0,Number(line.document_position),0,0]
+              const rank = Array.isArray(line.pre_delivery_position)
+                ? [0,...line.pre_delivery_position,0]
                 : line.source_type === 'unordered_finished' ? [2,index,0,0]
                 : line.order_item_id ? [1,groups.get(line.order_id),sequence > 0 ? 0 : 1,sequence || Number(line.order_item_id)]
                 : [3,index,0,0];
@@ -39921,7 +39921,6 @@
                   source_type: "unordered_finished",
                   product_id: it.product_id,
                   delivery_item_id: it.id,
-                  document_position: it.document_position,
                   customer_po: it.customer_po === "无订单库存" ? "" : (it.customer_po || ""),
                   product_code: it.product_code || "",
                   product_name: it.product_name || "",
@@ -39942,8 +39941,8 @@
                 order_number: it.display_order_number || it.order_number || "",
                 customer_po: it.customer_po || "",
                 delivery_item_id: it.id,
-                document_position: it.document_position,
-                item_sequence: pending?.item_sequence,
+                pre_delivery_position: it.pre_delivery_position,
+                item_sequence: it.item_sequence ?? pending?.item_sequence,
                 product_code: it.product_code || "",
                 product_name: it.product_name || "",
                 specification: it.specification || "",

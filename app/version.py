@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.555"
+APP_VERSION = "v0.22.556"
 APP_VERSION_NAME = "模具编辑格位与标签位置一致"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5310,6 +5310,12 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.551：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
+
+
+APP_CHANGES = ["修复多行Excel/PDF订单保存时预览安全确认凭证超过4000字符被拒绝，保留签名、有效期、来源及防重复校验。"]
+APP_VERIFICATION_STEPS = ["重新预览订单并核对明细后保存，确认成功数量和生成订单，再按原流程开送货单。"]
+APP_CHANGELOG = [*(f"v0.22.555：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
 APP_CHANGES = [
     "电脑模具编辑支持新货架格位，按B2等短编号显示，保存对应的真实格位。",
     "修复新格位回填与即时标签预览，保留旧货架、真实移位确认、版本和审计保护。",
@@ -5318,4 +5324,5 @@ APP_VERIFICATION_STEPS = [
     "刷新仓库模具管理，编辑模具选择B架B2格，核对位置栏和标签预览均显示B2。",
     "确认实际位置后保存，再次编辑核对B2回填；未搬动的旧位置不能自动变成新格位。",
 ]
-APP_CHANGELOG = [*(f"v0.22.555：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.556：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+

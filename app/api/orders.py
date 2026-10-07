@@ -2504,7 +2504,9 @@ def _order_response(
             if db is not None and may_view_cost
             else {}
         )
-    for item in order.items:
+    for item in sorted(order.items, key=lambda item: (
+        item.item_sequence is None, item.item_sequence or 0, item.id
+    )):
         item_business_projection = business_projection.get("items", {}).get(
             int(item.id), {}
         )

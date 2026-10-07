@@ -2357,6 +2357,7 @@ def _pending_query(
         select(
             OrderItem.id.label("item_id"),
             OrderItem.id.label("order_item_id"),
+            OrderItem.item_sequence,
             Order.id.label("order_id"),
             Order.order_number,
             Order.customer_po,
@@ -2492,9 +2493,11 @@ def _pending_query(
 
     query = query.order_by(
         *rank_ordering,
-        OrderItem.material_received_at.desc(),
-        OrderItem.created_at.desc(),
-        OrderItem.id.desc(),
+        Order.created_at.desc(),
+        Order.id.desc(),
+        OrderItem.item_sequence.is_(None),
+        OrderItem.item_sequence.asc(),
+        OrderItem.id.asc(),
     )
     return query
 
@@ -3387,7 +3390,8 @@ def _delivery_item_rows(db: Session, delivery_ids: list[int]) -> list[dict]:
             height_mm=mapping.pop("product_height_mm", None),
         )
         result.append(mapping)
-    return result
+    from app.services.delivery_document_order import sort_delivery_document_rows
+    return sort_delivery_document_rows(db, result)
 
 
 _DELIVERY_SEARCH_FIELDS = ("customer_po", "product_code", "product_name")
@@ -5477,8 +5481,9 @@ def _delivery_response(
     total_actual_goods_quantity = 0
     original_delivered_quantity = 0
     display_quantity = 0
-    for row in items:
+    for document_position, row in enumerate(items, 1):
         mapping = dict(row)
+        mapping["document_position"] = document_position
         mapping.pop("search_product_code", None)
         mapping.pop("search_product_name", None)
         current_product_fulfillment_mode = mapping.pop(
@@ -11396,6 +11401,8 @@ def get_delivery_print_data(
         )
         .order_by(DeliveryItem.id)
     ).all()
+    from app.services.delivery_document_order import sort_delivery_document_rows
+    rows = sort_delivery_document_rows(db, rows, id_key="delivery_item_id")
     internal_remarks = _tianhua_internal_remarks_by_delivery_item(
         db,
         [

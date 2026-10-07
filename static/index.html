@@ -37227,7 +37227,23 @@
           deliveryUnifiedQuantity(item) { return item.source_type === "unordered_finished" ? (this.unorderedFinishedSelection(item)._quantity ?? "") : (this.deliveryBatchPicker.selected[item.order_item_id]?._quantity ?? ""); },
           selectDeliveryUnifiedQuantity(item) { if (!this.deliveryUnifiedSelected(item)) this.setDeliveryBatchSelection(item,true); },
           setDeliveryUnifiedQuantity(item,value) { this.selectDeliveryUnifiedQuantity(item); if (item.source_type === "unordered_finished") this.unorderedFinishedSelection(item)._quantity = value; else this.deliveryBatchPicker.selected[item.order_item_id]._quantity = value; },
-          deliveryUnifiedLines() { return [...this.deliveryForm.lines].sort((a,b) => Number(a.source_type==='unordered_finished')-Number(b.source_type==='unordered_finished')); },
+          deliveryUnifiedLines() {
+            const lines = this.deliveryForm.lines || [], groups = new Map();
+            const ranked = lines.map((line,index) => {
+              if (!groups.has(line.order_id)) groups.set(line.order_id,index);
+              const sequence = Number(line.item_sequence || 0);
+              const rank = Number(line.document_position || 0) > 0
+                ? [0,Number(line.document_position),0,0]
+                : line.source_type === 'unordered_finished' ? [2,index,0,0]
+                : line.order_item_id ? [1,groups.get(line.order_id),sequence > 0 ? 0 : 1,sequence || Number(line.order_item_id)]
+                : [3,index,0,0];
+              return {line,rank};
+            });
+            return ranked.sort((a,b) => {
+              for (let i=0;i<a.rank.length;i++) if (a.rank[i] !== b.rank[i]) return a.rank[i]-b.rank[i];
+              return 0;
+            }).map(row => row.line);
+          },
           clearDeliveryBatchSelection() {
             this.deliveryBatchPicker.selected = {};
           },
@@ -38012,6 +38028,7 @@
               inventory_code: candidate.product_code || line.inventory_code || "",
               product_id: Number(candidate.product_id || 0) || null,
               order_item_id: candidate.order_item_id,
+              item_sequence: candidate.item_sequence,
               order_id: candidate.order_id,
               order_number: candidate.display_order_number || candidate.order_number || "",
               customer_po: candidate.customer_po || "",
@@ -39904,6 +39921,7 @@
                   source_type: "unordered_finished",
                   product_id: it.product_id,
                   delivery_item_id: it.id,
+                  document_position: it.document_position,
                   customer_po: it.customer_po === "无订单库存" ? "" : (it.customer_po || ""),
                   product_code: it.product_code || "",
                   product_name: it.product_name || "",
@@ -39924,6 +39942,8 @@
                 order_number: it.display_order_number || it.order_number || "",
                 customer_po: it.customer_po || "",
                 delivery_item_id: it.id,
+                document_position: it.document_position,
+                item_sequence: pending?.item_sequence,
                 product_code: it.product_code || "",
                 product_name: it.product_name || "",
                 specification: it.specification || "",

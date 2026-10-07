@@ -234,8 +234,8 @@ test("new racks use entered dimensions and explicit cells for three and four lev
   for (const levels of [3, 4]) {
     const calls = [], messages = [];
     const context = {
-      layout: { source_sha256: "draft" }, selectedAreaFeature: { id: "area" }, spatialEditBusy: false,
-      newRackSettings: { width: "1200", depth: "500", height: "2000", levels: String(levels), cells: "2" },
+      layout: { source_sha256: "draft" }, selectedAreaFeature: { id: "area" }, selectedAreaIsMold: false, spatialEditBusy: false,
+      newRackSettings: { width: "1200", depth: "500", height: "2000", levels: String(levels), cells: "2", rotation: "0" },
       featureCenter: () => ({ x: 200, y: 300 }), featureAreaCode: () => "C4", floorCode: "3F",
       setSpatialEditBusy: () => {}, operationKey: () => "rack-new",
       mutateJson: async (url, method, payload) => { calls.push({ url, method, payload }); return { revision: "saved", item: { id: "new", rack_code: "stable" } }; },
@@ -249,6 +249,9 @@ test("new racks use entered dimensions and explicit cells for three and four lev
     assert.equal(p.levels, levels); assert.deepEqual(Array.from(p.level_cell_counts), Array(levels).fill(2));
     assert.equal(p.level_heights_mm.length, levels - 1);
     assert.equal(p.area_feature_id, "area"); assert.match(messages.at(-1), /草稿/);
+    calls.length=0;context.selectedAreaIsMold=true;context.newRackSettings.moldCode="A";
+    await componentValue("addRackToSelectedArea",context)();
+    assert.equal(calls[0].payload.mold_rack_code,"A");assert.equal(calls[0].payload.name,"模具A架");
     calls.length = 0; context.newRackSettings.cells = "";
     await componentValue("addRackToSelectedArea", context)();
     assert.equal(calls.length, 0); assert.match(messages.at(-1), /实际/);

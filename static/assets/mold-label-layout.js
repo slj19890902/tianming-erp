@@ -456,6 +456,7 @@
         return `<div class="mold-layout-element mold-layout-rule" data-layout-id="${escapeHtml(element.id)}" data-layout-label="${escapeHtml(ELEMENT_LABELS[element.id])}" style="${style}" aria-hidden="true"></div>`;
       }
       const value = valueForElement(row, element.id, envelope.layout.catalog_version);
+      const isCellLabel = element.id === "rack_location" && Boolean(row?.label_location_alias || row?.location_guide?.alias || row?.location_guide?.short_label);
       const identityClass = envelope.layout.catalog_version === V6_CATALOG_VERSION && element.id === "mold_identity"
         ? " mold-layout-identity-line"
         : "";
@@ -467,7 +468,7 @@
       const fitAttributes = minFontSize === undefined || minFontSize === null
         ? ""
         : ` data-min-font-mm="${minFontSize}" data-full-text="${escapeHtml(value)}"`;
-      return `<div class="mold-layout-element mold-layout-text${identityClass}${isIncompleteText(value) ? " missing" : ""}" data-layout-id="${escapeHtml(element.id)}" data-layout-label="${escapeHtml(ELEMENT_LABELS[element.id])}" data-max-font-mm="${Number(element.font_size_mm)}"${fitAttributes} style="${style}">${textElementHtml(row, element, envelope.layout.catalog_version)}</div>`;
+      return `<div class="mold-layout-element mold-layout-text${identityClass}${isIncompleteText(value) ? " missing" : ""}" data-layout-id="${escapeHtml(element.id)}" ${isCellLabel ? 'data-mold-cell-label="true"' : ""} data-layout-label="${escapeHtml(ELEMENT_LABELS[element.id])}" data-max-font-mm="${Number(element.font_size_mm)}"${fitAttributes} style="${style}">${textElementHtml(row, element, envelope.layout.catalog_version)}</div>`;
     }).join("");
     return `<article class="mold-label-page" data-layout-catalog="${escapeHtml(envelope.layout.catalog_version)}"><div class="label template-80x40 layout-driven">${elements}${prototypeMode ? '<span class="prototype-mark">样例</span>' : ""}</div></article>`;
   }

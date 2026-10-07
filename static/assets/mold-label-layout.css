@@ -355,3 +355,6 @@
 /* Versioned board-edge label: preserve full text, never ellipsize codes. */
 .mold-label-page[data-layout-catalog="mold-edge-v1"] .mold-layout-text { box-sizing:border-box; padding:0 .1mm; line-height:1; white-space:nowrap; overflow-wrap:normal; word-break:normal; font-family:Arial,"Microsoft YaHei",sans-serif; }
 .mold-label-page[data-layout-catalog="mold-edge-v1"] [data-layout-id="report_specification"] { white-space:normal; overflow-wrap:anywhere; }
+
+/* Stable mold cell aliases retain the existing print layout and QR path. */
+.mold-layout-text[data-mold-cell-label="true"]{gap:1mm;line-height:1;white-space:nowrap}.mold-layout-text[data-mold-cell-label="true"]::before{content:"模具位";font-size:1.6mm;font-weight:500;flex:none}

@@ -39,6 +39,7 @@ const MOLD_RACK_EMPLOYEE_NAMES = Object.freeze({
 
 export function moldRackEmployeeName(rack) {
   const code = normalizedIdentity(rack?.mold_rack_code || rack?.rack_code);
+  if (rack?.mold_rack_code && /^[A-Z]+$/.test(code)) return `模具${code}架`;
   const isMoldRack = Boolean(rack?.mold_rack_code)
     || /模具\s*00[12]/.test(String(rack?.name || ""))
     || normalizedIdentity(rack?.area_code).includes("MOLD");
@@ -102,6 +103,10 @@ export function buildMoldShelfSpines(items) {
 }
 
 export function buildMoldLocationTarget(rack, levelValue, gridValue) {
+  if (Array.isArray(rack?.cells)) {
+    const cell = rack.cells.find(item => Number(item.level) === Number(levelValue) && Number(item.grid) === Number(gridValue));
+    return cell?.location_code || (cell?.id ? `MCELL-${cell.id}` : null);
+  }
   const rackCode = normalizedIdentity(rack?.rack_code);
   if (!/^R\d+$/.test(rackCode)) return null;
   const prefix = `1F-M-${rackCode}`;
@@ -139,6 +144,7 @@ export function buildMoldRackView(rack, items, blockedLevels = []) {
     blocked: blocked.has(index + 1),
     cells: Array.from({ length: cellCount }, (_, cellIndex) => ({
       grid: cellIndex + 1,
+      ...((rack.cells || rack.mold_cells || []).find(cell => Number(cell.level) === index + 1 && Number(cell.grid) === cellIndex + 1) || {}),
       items: []
     })),
     level_only_items: []
@@ -146,7 +152,7 @@ export function buildMoldRackView(rack, items, blockedLevels = []) {
   const rackOnlyItems = [];
   const unmatchedItems = [];
 
-  for (const item of [...(items || [])].sort((left, right) => String(left.mold_code || "").localeCompare(String(right.mold_code || ""), "zh-CN", { numeric: true }))) {
+  for (const item of [...new Map((items || []).map(item => [item.id, item])).values()].sort((left, right) => String(left.mold_code || "").localeCompare(String(right.mold_code || ""), "zh-CN", { numeric: true }))) {
     const { level, grid } = slotCoordinates(item);
     if (!level) {
       rackOnlyItems.push(item);
@@ -173,6 +179,40 @@ export function buildMoldRackView(rack, items, blockedLevels = []) {
     levels,
     rack_only_items: rackOnlyItems,
     unmatched_items: unmatchedItems,
-    total_items: (items || []).length
+    total_items: new Set((items || []).map(item => item.id)).size
   };
+}
+
+export function moldCellSummary(items) {
+  return [...new Map((items || []).map(item => [item.id, item])).values()].slice(0, 2).map(item =>
+    item.products?.[0]?.product_code || item.display_name || item.mold_name || "名称待完善"
+  );
+}
+
+export function moldBatchPayload(items, target, key) {
+  if (!target || !key || !items?.length) throw new Error("请选择模具和目标格");
+  const unique = [...new Map(items.map(item => [item.id, item])).values()];
+  if (unique.some(item => !item.mold_code || !Number.isInteger(item.location_version) || item.location_version < 0)) throw new Error("模具位置版本缺失，请重新查询");
+  return { target_location: target, items: unique.map(item => ({ mold_code: item.mold_code, expected_version: item.location_version })), idempotency_key: key, source: "manual_input" };
+}
+
+export function moldLocationChoices(options) {
+  return (options || []).flatMap(rack => {
+    const label = `${rack.floor_code || "1F"} · ${rack.name}`;
+    if (rack.location_depth === "rack") {
+      const value = buildMoldLocationTarget(rack, 0, 0);
+      return value ? [{value, label}] : [];
+    }
+    return (rack.levels || []).flatMap(level => {
+      if (rack.location_depth === "level") {
+        const value = buildMoldLocationTarget(rack, level.level, 0);
+        return value ? [{value, label: `${label} · 第${level.level}层`}] : [];
+      }
+      return (level.grids || []).flatMap(grid => {
+        const value = buildMoldLocationTarget(rack, level.level, grid);
+        const alias = rack.cells?.find(cell => Number(cell.level) === Number(level.level) && Number(cell.grid) === Number(grid))?.alias;
+        return value ? [{value, label: `${label} · ${alias || `第${level.level}层第${grid}格`}`}] : [];
+      });
+    });
+  });
 }

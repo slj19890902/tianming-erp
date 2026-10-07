@@ -13,4 +13,4 @@ export function groupShelfProducts<T extends ShelfReadingItem>(items: T[]): Arra
   key: string; item: T; items: T[]; physical: number; available: number; reserved: number; damaged: number;
 }>;
 export function filterShelfMolds<T extends {id: number; mold_name: string; chinese_abbreviation?: string;
-  products?: Array<{customer_name?: string | null; product_code?: string | null; product_name?: string | null}>}>(items: T[], query?: string): T[];
+  products?: Array<{customer_name?: string | null; product_code?: string | null; product_name?: string | null; customer_drawing_number?: string | null; customer_drawing_display?: string | null}>}>(items: T[], query?: string): T[];

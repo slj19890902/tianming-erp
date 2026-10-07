@@ -33,8 +33,8 @@ export function groupShelfProducts(items) {
 export function filterShelfMolds(items, query = '') {
   const needle = query.trim().toLocaleLowerCase('zh-CN');
   return [...new Map(items.map(item => [item.id, item])).values()].filter(item => !needle ||
-    [item.mold_name, item.chinese_abbreviation, ...(item.products || []).flatMap(product =>
-      [product.customer_name, product.product_code, product.product_name])]
+    [item.mold_name, item.display_name, item.label_name, item.chinese_abbreviation, ...(item.products || []).flatMap(product =>
+      [product.customer_name, product.product_code, product.product_name, product.customer_drawing_number, product.customer_drawing_display])]
       .some(value => String(value || '').toLocaleLowerCase('zh-CN').includes(needle)));
 }
 

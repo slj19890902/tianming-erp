@@ -110,6 +110,7 @@ const nodes={{
 const $=id=>nodes[id];
 let renderGeneration=0;
 let labelDataReady=true;
+let moldLabelDraftEnvelope=null;
 let sourceRows=[{{}}];
 const wideTemplate=true;
 const TmMoldLabelLayout={{fitAndValidate:()=>[]}};

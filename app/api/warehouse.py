@@ -22765,6 +22765,53 @@ def _mold_label_print_job_for_replay(
     return job
 
 
+@router.get("/molds/label-options")
+def get_mold_label_options(
+    response: Response,
+    mold_ids: str = Query(min_length=1, max_length=6000),
+    template_version: Literal["mold_40x30_v1", "mold_80x40_v1"] = Query(default=MOLD_LABEL_TEMPLATE_80X40),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    """Read selection eligibility and history; opening the page never records printing."""
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    response.headers["Vary"] = "Cookie"
+    allowed = _mold_customer_scope(user, db)
+    if allowed is not None:
+        raise HTTPException(status_code=403, detail="实体模具标签仅允许全客户范围的仓库账号打印")
+    parts = [v.strip() for v in mold_ids.split(",") if v.strip()]
+    if not parts or any(not v.isascii() or not v.isdigit() or int(v) <= 0 for v in parts):
+        raise HTTPException(status_code=422, detail="模具标签选择参数无效")
+    ids = list(dict.fromkeys(int(v) for v in parts))
+    if len(ids) > 500:
+        raise HTTPException(status_code=422, detail="目录超过500块，请按单格打开")
+    rows = db.scalars(select(MoldTool).options(
+        selectinload(MoldTool.customer_links).selectinload(MoldToolCustomer.customer),
+        selectinload(MoldTool.products).selectinload(Product.customer),
+        selectinload(MoldTool.products).selectinload(Product.material),
+    ).where(MoldTool.id.in_(ids))).unique().all()
+    by_id = {row.id: row for row in rows}
+    if any(i not in by_id for i in ids):
+        raise HTTPException(status_code=404, detail="所选模具已变化，请重新读取")
+    statuses = _mold_label_print_statuses(db, ids)
+    items = []
+    for mold_id in ids:
+        row = by_id[mold_id]
+        _require_mold_customer_scope(row, allowed)
+        try:
+            label = _mold_label_dict(row, allowed, template_version, preview_only=True)
+            reason = label["printability_error"]
+        except HTTPException as error:
+            # A bad label stays visible without blocking other selected molds.
+            if error.status_code != 409:
+                raise
+            reason = str(error.detail)
+        item = _mold_tool_dict(row, allowed, label_print_status=statuses.get(mold_id))
+        item.update(printable=reason is None, printability_error=reason)
+        items.append(item)
+    return {"items": items, "count": len(items), "template_version": template_version}
+
+
 @router.get("/molds/labels")
 def get_mold_labels(
     response: Response,

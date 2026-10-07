@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.558"
+APP_VERSION = "v0.22.559"
 APP_VERSION_NAME = "卡纸报料尺寸精度"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5337,3 +5337,5 @@ APP_CHANGES = ["卡纸报料尺寸支持最多两位小数，瓦楞纸板仍要�
 APP_VERIFICATION_STEPS = ["常用箱选择单层无楞卡纸，填写444.5×298.5后保存重开核对；瓦楞纸板同样的小数应被拒绝。", "检查卡纸新订单和报料打印尺寸保留小数；实体打印由管理员确认。"]
 
 APP_CHANGELOG = [*(f"v0.22.558：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGELOG = ["v0.22.559：卡纸小数尺寸增加保留事实的版本保护，补库纸板整数校验；回退兼容版本v558。", *APP_CHANGELOG]

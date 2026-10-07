@@ -126,3 +126,17 @@ def test_supplier_print_retains_fractional_dimensions(production_print_app):
         component = card["components"][0]
         assert (component["report_length_mm"], component["report_width_mm"]) == (298.5, 444.5)
         db.rollback()
+
+
+def test_custom_stock_policy_cannot_introduce_corrugated_fraction():
+    from app.api.requisition import StockPolicyPayload, _apply_stock_policy_payload
+    payload = StockPolicyPayload(policy_name="precision", target_inventory_type="semi_finished",
+        layer_count=3, flute_type="B", report_length_mm=298.5, report_width_mm=444.5,
+        warning_quantity=10, target_quantity=100)
+    row = SimpleNamespace()
+    with pytest.raises(HTTPException, match="整数"):
+        _apply_stock_policy_payload(row, payload, user_id=1)
+    assert not vars(row)
+    payload.layer_count, payload.flute_type = 1, "NONE"
+    _apply_stock_policy_payload(row, payload, user_id=1)
+    assert row.report_length_mm == 298.5

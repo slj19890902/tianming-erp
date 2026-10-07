@@ -646,7 +646,7 @@
           <div class="field"><label>一楼模具货架</label><select id="moldRackSelect"><option value="">正在读取已确认货架…</option></select></div>
           <div id="moldLevelField" class="field"><label>层</label><select id="moldLevelSelect"><option value="">请先选择货架</option></select></div>
           <div id="moldGridField" class="field"><label>格</label><select id="moldGridSelect"><option value="">请先选择层</option></select></div>
-          <div class="field"><label>货架位置（系统自动生成）</label><input id="moldRackLocation" required readonly placeholder="例如：1F-M-R01-L2-G01"></div>
+          <div class="field"><label>模具位置</label><input id="moldRackLocation" type="hidden"><input id="moldRackLocationDisplay" readonly placeholder="请选择货架格位"></div>
           <div class="field"><label>备注（可不填）</label><input id="moldRemarks" placeholder="适用范围或现场说明"></div>
           <div class="field"><label>&nbsp;</label><button id="moldSaveButton" class="btn primary" type="submit">保存为新模具</button></div>
           <div class="field"><label>&nbsp;</label><button id="resetMoldForm" class="btn" type="button">关闭</button></div>
@@ -2170,6 +2170,9 @@
     }
     function positionCode(value){return String(Math.max(1,Number.parseInt(value,10)||1)).padStart(2,"0")}
     function selectedMoldRack(){return state.moldLocationOptions.find(row=>row.rack_code===$("moldRackSelect").value)||null}
+    function moldCellForLocation(value){const code=String(value||"").trim().toUpperCase();for(const rack of state.moldLocationOptions){const cell=(rack.cells||[]).find(row=>String(row.location_code||`MCELL-${row.id}`).toUpperCase()===code);if(cell)return {rack,cell}}return null}
+    function moldLocationDisplay(value){const found=moldCellForLocation(value);return found?found.cell.alias||found.cell.short_label||"格位名称待完善":/^MCELL-/i.test(String(value||""))?"格位待核对":String(value||"")}
+    function refreshMoldLocationDisplay(){$("moldRackLocationDisplay").value=moldLocationDisplay($("moldRackLocation").value)}
     function selectedMoldLevel(){const rack=selectedMoldRack(),level=Number.parseInt($("moldLevelSelect").value,10);return(rack?.levels||[]).find(row=>Number(row.level)===level)||null}
     function setMoldLocationBuilderDisabled(disabled){["moldRackSelect","moldLevelSelect","moldGridSelect"].forEach(id=>$(id).disabled=disabled)}
     function setMoldLocationBuilderMessage(message=""){const host=$("moldLocationBuilderHint");host.textContent=message;host.classList.toggle("hidden",!message)}
@@ -2177,7 +2180,8 @@
     function buildMoldRackLocation(){
       if(state.moldEditLocation.moldId&&!state.moldEditLocation.selectionChanged&&!state.moldEditLocation.syncing)return;
       const rack=selectedMoldRack();if(!rack)return;
-      if(rack.location_depth==="rack"){$("moldRackLocation").value=`1F-M-${rack.rack_code}`;setMoldLocationBuilderMessage();renderMoldLabelPreview();return}
+      if(Array.isArray(rack.cells)){const cell=rack.cells.find(row=>Number(row.level)===Number($("moldLevelSelect").value)&&Number(row.grid)===Number($("moldGridSelect").value));$("moldRackLocation").value=cell?(cell.location_code||`MCELL-${cell.id}`).toUpperCase():"";refreshMoldLocationDisplay();setMoldLocationBuilderMessage(cell?"":"请选择有效格位");renderMoldLabelPreview();return}
+      if(rack.location_depth==="rack"){$("moldRackLocation").value=`1F-M-${rack.rack_code}`;refreshMoldLocationDisplay();setMoldLocationBuilderMessage();renderMoldLabelPreview();return}
       const level=selectedMoldLevel();if(!level)return;
       if((level.grids||[]).length){
         const grid=Number.parseInt($("moldGridSelect").value,10);if(!grid)return;
@@ -2197,7 +2201,7 @@
     }
     function renderMoldLocationGrids(){
       const rack=selectedMoldRack(),level=selectedMoldLevel(),previous=$("moldGridSelect").value,grids=level?.grids||[];
-      $("moldGridSelect").innerHTML=grids.map(grid=>`<option value="${grid}">第 ${grid} 格</option>`).join("")||'<option value="">该层没有格号</option>';
+      $("moldGridSelect").innerHTML=grids.map(grid=>`<option value="${grid}">${h(rack?.cells?.find(cell=>Number(cell.level)===Number(level?.level)&&Number(cell.grid)===Number(grid))?.alias||`第 ${grid} 格`)}</option>`).join("")||'<option value="">该层没有格号</option>';
       if(grids.some(grid=>String(grid)===previous))$("moldGridSelect").value=previous;
       $("moldGridField").classList.toggle("hidden",!(level?.grids||[]).length);buildMoldRackLocation();
     }
@@ -2209,6 +2213,8 @@
       }catch(error){setMoldLocationBuilderMessage(`一楼模具货架读取失败：${error.message}；请刷新后重试，禁止猜测位置码。`);return false}
     }
     function syncMoldLocationBuilder(value){
+      const found=moldCellForLocation(value);if(found){state.moldEditLocation.syncing=true;try{$("moldRackSelect").value=found.rack.rack_code;renderMoldLocationLevels();$("moldLevelSelect").value=String(found.cell.level);renderMoldLocationGrids();$("moldGridSelect").value=String(found.cell.grid);buildMoldRackLocation();return true}finally{state.moldEditLocation.syncing=false}}
+      refreshMoldLocationDisplay();
       const clean=String(value||"").trim().toUpperCase(),match=/^1F-M-(R0[1-4])(?:-L(\d+))?(?:-G(\d+))?$/.exec(clean);if(!match){setMoldLocationBuilderMessage("这是历史模具位置；选择已发布的新货架、层、格后，保存时会按真实移位处理。");return false}
       state.moldEditLocation.syncing=true;
       try{setMoldLocationBuilderMessage();$("moldRackSelect").value=match[1];renderMoldLocationLevels();if(match[2]){$("moldLevelSelect").value=String(Number(match[2]));renderMoldLocationGrids()}if(match[3]){$("moldGridSelect").value=String(Number(match[3]));buildMoldRackLocation()}return true}finally{state.moldEditLocation.syncing=false}
@@ -2253,7 +2259,8 @@
       row.label_display_report_specification=overrides.report_specification||moldLabelAutoValue("report_specification")||row.label_display_report_specification;
       row.label_display_cutting_mode=overrides.cutting_mode||moldLabelAutoValue("cutting_mode")||row.label_display_cutting_mode;
       row.label_display_remarks=overrides.remarks||moldLabelAutoValue("remarks")||"";
-      row.label_rack_location=$("moldRackLocation").value.trim()||row.label_rack_location;
+      const location=$("moldRackLocation").value.trim(),found=moldCellForLocation(location);refreshMoldLocationDisplay();
+      if(location){row.label_rack_location=moldLocationDisplay(location);row.label_location_alias=found?.cell.alias||null;row.location_guide=found?{alias:found.cell.alias,short_label:found.cell.alias}:null}
       return row;
     }
     function renderMoldLabelPreview(){
@@ -2428,7 +2435,7 @@
       const pending=state.moldEditLocation.attempt||state.moldMasterAttempt||state.moldBoundProducts.unbindAttempt;if(pending){toast(Number(state.moldEditLocation.moldId)===Number(id)?"这件模具的保存或解绑结果正在核对，请在当前编辑区继续处理":"上一件模具的保存或解绑结果还未确定，请先原样核对",true);return}
       $("moldForm").classList.remove("hidden");
       state.moldCodePreviewRequestId+=1;state.moldEditLocation={moldId:row.id,originalLocation:row.rack_location,expectedVersion:row.location_version,syncing:false,selectionChanged:false,attempt:null};state.moldCustomerSelection=new Set((row.associated_customers||[]).map(item=>Number(item.customer_id)));$("moldId").value=row.id;$("moldVersion").value=row.version;$("moldCode").value=row.internal_code||row.mold_code||"";$("moldLabelName").value=row.label_name||"";$("moldChineseShortName").value=row.chinese_short_name||"";$("moldCustomerSearch").value="";$("moldRackLocation").value=row.rack_location;$("moldRemarks").value=row.remarks||"";setMoldFormMode(row);const primary=[...(row.primary_customers||[])].sort((a,b)=>Number(a.display_order)-Number(b.display_order));updateMoldPrimaryCustomerOptions(primary[0]?.customer_id||null,primary[1]?.customer_id||null);renderMoldCustomerCandidates();syncMoldLocationBuilder(row.rack_location);setMoldLocationBuilderDisabled(false);$("moldEditLocationNotice").classList.remove("hidden");openMoldBinding(row);
-      void loadMoldLocationOptions(true).then(ok=>{if(ok&&Number(state.moldEditLocation.moldId)===Number(row.id))syncMoldLocationBuilder(row.rack_location)});
+      void loadMoldLocationOptions(true).then(ok=>{if(ok&&Number(state.moldEditLocation.moldId)===Number(row.id)&&!state.moldEditLocation.selectionChanged)syncMoldLocationBuilder(row.rack_location)});
       void loadMoldLabelPreview(row.id);
       void loadMoldBoundProducts(row.id);
       $("moldForm").scrollIntoView({behavior:"smooth",block:"start"});
@@ -2437,6 +2444,7 @@
       event.preventDefault();if(state.moldSaving)return;state.moldSaving=true;$("moldSaveButton").disabled=true;
       try{
         const id=$("moldId").value,labelName=$("moldLabelName").value.trim();if(!labelName){toast("请填写模具标签名称",true);return}
+        if(!$("moldRackLocation").value.trim()){toast("请选择有效模具位置",true);return}
         if(id&&state.moldLabelPreview.loaded&&state.moldLabelPreview.overflow.length){toast(`标签内容无法完整显示：${state.moldLabelPreview.overflow.join("、")}，请缩短后再保存`,true);return}
         const labelOverrides=id&&state.moldLabelPreview.loaded?{label_overrides:moldLabelOverridesPayload()}:{};
         const basePayload={label_name:labelName,chinese_short_name:$("moldChineseShortName").value.trim()||null,customers:moldCustomerAssociations(),rack_location:$("moldRackLocation").value,remarks:$("moldRemarks").value.trim()||null,...labelOverrides,...(id?{expected_version:Number($("moldVersion").value)}:{})},signature=JSON.stringify({id,...basePayload});

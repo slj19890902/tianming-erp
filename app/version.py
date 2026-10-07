@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.554"
-APP_VERSION_NAME = "模具货架整架与单格标签打印"
+APP_VERSION = "v0.22.555"
+APP_VERSION_NAME = "模具编辑格位与标签位置一致"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5309,3 +5309,13 @@ APP_VERIFICATION_STEPS = [
     "打印一张模具或格位标签，用手机扫码核对位置和返回入口；真实标签与现场由管理员确认。",
 ]
 APP_CHANGELOG = [*(f"v0.22.551：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "电脑模具编辑支持新货架格位，按B2等短编号显示，保存对应的真实格位。",
+    "修复新格位回填与即时标签预览，保留旧货架、真实移位确认、版本和审计保护。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库模具管理，编辑模具选择B架B2格，核对位置栏和标签预览均显示B2。",
+    "确认实际位置后保存，再次编辑核对B2回填；未搬动的旧位置不能自动变成新格位。",
+]
+APP_CHANGELOG = [*(f"v0.22.555：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

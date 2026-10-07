@@ -1,0 +1,16 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const html=fs.readFileSync('static/warehouse.html','utf8');
+const funcs=html.slice(html.indexOf('    function positionCode(value)'),html.indexOf('    let moldPinyinRuntimePromise'));
+const fields={};function $(id){return fields[id]??=( {value:'',disabled:false,classList:{toggle(){}},textContent:'',set innerHTML(v){this.markup=v;const m=/value="([^"]*)"/.exec(v);this.value=m?.[1]||''},get innerHTML(){return this.markup||''}})}
+const racks=[{rack_code:'R04',location_depth:'rack',levels:[]},{rack_code:'R01',location_depth:'grid',levels:[{level:2,grids:[1,2]}]},{rack_code:'B',location_depth:'cell',levels:[{level:1,grids:[1,2]},{level:2,grids:[1]}],cells:[{id:'a',location_code:'MCELL-A',level:1,grid:1,alias:'B1'},{id:'b',location_code:'MCELL-B',level:1,grid:2,alias:'B2'},{id:'c',location_code:'MCELL-C',level:2,grid:1,alias:'旧B9'}]}];
+const ctx={$,h:x=>x,state:{moldLocationOptions:racks,moldEditLocation:{moldId:1,selectionChanged:false,syncing:false}},renderMoldLabelPreview(){},warehouseWorkspace:{dirtySections:new Set()}};vm.createContext(ctx);vm.runInContext(funcs,ctx);
+function run(s){return vm.runInContext(s,ctx)}
+$('moldRackLocation').value='MCELL-B';assert.equal(run("syncMoldLocationBuilder('mcell-b')"),true);assert.equal($('moldRackLocation').value,'MCELL-B');assert.equal($('moldRackLocationDisplay').value,'B2');assert.equal($('moldGridSelect').value,'2');assert.match($('moldGridSelect').innerHTML,/>B2</);
+$('moldLevelSelect').value='2';run('markMoldLocationSelectionChanged();renderMoldLocationGrids()');assert.equal($('moldRackLocation').value,'MCELL-C');assert.equal($('moldRackLocationDisplay').value,'旧B9');
+$('moldGridSelect').value='99';run('buildMoldRackLocation()');assert.equal($('moldRackLocation').value,'');
+ctx.state.moldEditLocation.selectionChanged=false;$('moldRackLocation').value='1F-M-R04';run("syncMoldLocationBuilder('1F-M-R04')");assert.equal($('moldRackLocation').value,'1F-M-R04');assert.equal($('moldRackLocationDisplay').value,'1F-M-R04');
+$('moldRackLocation').value='1F-M-R01-L2-G02';run("syncMoldLocationBuilder('1F-M-R01-L2-G02')");assert.equal($('moldRackLocation').value,'1F-M-R01-L2-G02');
+$('moldRackLocation').value='MCELL-REMOVED';assert.equal(run("syncMoldLocationBuilder('MCELL-REMOVED')"),false);assert.equal($('moldRackLocation').value,'MCELL-REMOVED');assert.equal($('moldRackLocationDisplay').value,'格位待核对');
+const draft=html.slice(html.indexOf('    function moldLabelPreviewDraft()'),html.indexOf('    function renderMoldLabelPreview()'));ctx.state.moldLabelPreview={row:{label_rack_location:'1F-M-R04',label_location_alias:'A1',location_guide:{alias:'A1'}}};ctx.moldLabelOverridesPayload=()=>({});ctx.currentMoldAutomaticIdentity=()=>'';ctx.moldLabelAutoValue=()=>'';vm.runInContext(draft,ctx);$('moldRackLocation').value='MCELL-B';let r=run('moldLabelPreviewDraft()');assert.equal(r.label_rack_location,'B2');assert.equal(r.label_location_alias,'B2');$('moldRackLocation').value='1F-M-R04';r=run('moldLabelPreviewDraft()');assert.equal(r.label_location_alias,null);assert.equal(r.location_guide,null);
+for(const script of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)){if(script[1].trim())new vm.Script(script[1]);}
+console.log('8 targeted location editor cases passed; all inline JS parsed');

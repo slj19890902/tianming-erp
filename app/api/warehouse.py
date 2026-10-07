@@ -5007,6 +5007,7 @@ def _validate_published_area_layouts_for_floor(
     floor_code: str,
     deferred_feature_id: str | None = None,
     allow_spatial_conflicts_for_feature_ids: set[str] | None = None,
+    only_feature_id: str | None = None,
 ) -> None:
     floor = warehouse_floor_for_code(db, floor_code)
     if floor is None:
@@ -5027,6 +5028,8 @@ def _validate_published_area_layouts_for_floor(
     )
     for area in areas:
         policy = area.storage_policy
+        if only_feature_id is not None and policy is not None and policy.map_feature_id != only_feature_id:
+            continue
         if policy is None or policy.map_feature_id == deferred_feature_id:
             continue
         sources = set(
@@ -11081,6 +11084,7 @@ def _formal_area_publish_blockers(
     floor_code: str,
     *,
     defer_location_readiness_for_feature_id: str | None = None,
+    readiness_feature_id: str | None = None,
 ) -> list[str]:
     normalized = floor_code.strip().upper()
     floor = warehouse_floor_for_code(db, normalized)
@@ -11313,6 +11317,7 @@ def _formal_area_publish_blockers(
             blockers.append(f"{area.area_code} 区的地图正式区域编号不一致")
         if (
             area.planned_location_count
+            and (readiness_feature_id is None or policy.map_feature_id == readiness_feature_id)
             and policy.map_feature_id != defer_location_readiness_for_feature_id
             # A rack publish reconciles its formal cells later in the same
             # transaction.  Pre-publish rows may therefore contain both the
@@ -11923,6 +11928,7 @@ def _publish_twin_layout_draft_locked(
     defer_location_readiness_for_feature_id: str | None = None,
     floor_projection_claimed: bool = False,
     allow_archived_tombstone_cleanup: bool = False,
+    isolated_area_feature_id: str | None = None,
 ) -> dict:
     if not floor_projection_claimed:
         _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
@@ -11969,6 +11975,7 @@ def _publish_twin_layout_draft_locked(
     blockers = _formal_area_publish_blockers(
         db,
         floor_code,
+        readiness_feature_id=isolated_area_feature_id,
         defer_location_readiness_for_feature_id=(
             defer_location_readiness_for_feature_id
         ),
@@ -12003,7 +12010,8 @@ def _publish_twin_layout_draft_locked(
             published_revision=str(result.value.get("published_revision") or ""),
                 operator_id=user.id,
                 published_features=list(
-                    load_warehouse_twin_floor(floor_code).get("features") or []
+                    feature for feature in load_warehouse_twin_floor(floor_code).get("features") or []
+                    if isolated_area_feature_id is None or feature.get("id") == isolated_area_feature_id
                 ),
                 defer_location_readiness_for_feature_id=(
                     defer_location_readiness_for_feature_id
@@ -12047,6 +12055,7 @@ def _publish_twin_layout_draft_locked(
         _validate_published_area_layouts_for_floor(
             db,
             floor_code=floor_code,
+            only_feature_id=isolated_area_feature_id,
             deferred_feature_id=defer_location_readiness_for_feature_id,
             allow_spatial_conflicts_for_feature_ids={
                 str(item.get("feature_id") or "") for item in coordinate_adjustments
@@ -15558,6 +15567,9 @@ def confirm_twin_zone_area(
                 defer_location_readiness_for_feature_id=feature_id,
                 floor_projection_claimed=True,
                 allow_archived_tombstone_cleanup=True,
+                # begin_warehouse_twin_one_step_publish isolated this zone from
+                # all unrelated drafts. Do not activate/revalidate other areas.
+                isolated_area_feature_id=feature_id,
             )
             advanced_draft_preserved = rebase_warehouse_twin_advanced_draft_after_one_step(
                 one_step_context,

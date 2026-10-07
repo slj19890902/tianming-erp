@@ -109,6 +109,21 @@ function componentValue(name, context, optional = false) {
   return sandbox.value;
 }
 
+test("adding a rack cannot use the previous purpose after selecting mold", async () => {
+  for (const [simpleAreaUsage, selectedAreaIsMold] of [["mold", false], ["finished", true]]) {
+    let message = "", mutations = 0;
+    const action = componentValue("addRackToSelectedArea", {
+      layout: {source_sha256: "draft"}, selectedAreaFeature: {id: "new-area"}, spatialEditBusy: false,
+      simpleAreaUsage, selectedAreaIsMold, floorCode: "1F",
+      setAreaSettingsMessage: value => { message = value.text; }, setLocationEditMessage: () => {},
+      mutateJson: () => { mutations++; }
+    });
+    await action();
+    assert.equal(mutations, 0);
+    assert.match(message, /先点击下方“保存区域设置”/);
+  }
+});
+
 test("right clicking an empty map location targets that exact location in lookup and planning", () => {
   for (const mapMode of ["lookup", "planning"]) {
     let menu;
@@ -234,7 +249,7 @@ test("new racks use entered dimensions and explicit cells for three and four lev
   for (const levels of [3, 4]) {
     const calls = [], messages = [];
     const context = {
-      layout: { source_sha256: "draft" }, selectedAreaFeature: { id: "area" }, selectedAreaIsMold: false, spatialEditBusy: false,
+      layout: { source_sha256: "draft" }, selectedAreaFeature: { id: "area" }, selectedAreaIsMold: false, simpleAreaUsage: "finished", spatialEditBusy: false,
       newRackSettings: { width: "1200", depth: "500", height: "2000", levels: String(levels), cells: "2", rotation: "0" },
       featureCenter: () => ({ x: 200, y: 300 }), featureAreaCode: () => "C4", floorCode: "3F",
       setSpatialEditBusy: () => {}, operationKey: () => "rack-new",
@@ -249,7 +264,7 @@ test("new racks use entered dimensions and explicit cells for three and four lev
     assert.equal(p.levels, levels); assert.deepEqual(Array.from(p.level_cell_counts), Array(levels).fill(2));
     assert.equal(p.level_heights_mm.length, levels - 1);
     assert.equal(p.area_feature_id, "area"); assert.match(messages.at(-1), /草稿/);
-    calls.length=0;context.selectedAreaIsMold=true;context.newRackSettings.moldCode="A";
+    calls.length=0;context.selectedAreaIsMold=true;context.simpleAreaUsage="mold";context.newRackSettings.moldCode="A";
     await componentValue("addRackToSelectedArea",context)();
     assert.equal(calls[0].payload.mold_rack_code,"A");assert.equal(calls[0].payload.name,"模具A架");
     calls.length = 0; context.newRackSettings.cells = "";

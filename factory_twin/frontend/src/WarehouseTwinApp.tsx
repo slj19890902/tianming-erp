@@ -5369,6 +5369,12 @@ export function WarehouseTwinApp() {
 
   const addRackToSelectedArea = async () => {
     if (!layout || !selectedAreaFeature || spatialEditBusy) return;
+    if ((simpleAreaUsage === "mold") !== selectedAreaIsMold) {
+      const text = "用途尚未保存，请先点击下方“保存区域设置”，再添加货架。当前货架尺寸输入已保留。";
+      setAreaSettingsMessage({key: `${floorCode}/${selectedAreaFeature.id}`, text});
+      setLocationEditMessage(text);
+      return;
+    }
     const width = Number(newRackSettings.width), depth = Number(newRackSettings.depth), height = Number(newRackSettings.height);
     const levels = Number(newRackSettings.levels), cells = Number(newRackSettings.cells);
     if (![width, depth, height, levels, cells].every((value) => Number.isInteger(value) && value > 0) || levels > 20 || cells > 50 || height < levels) {

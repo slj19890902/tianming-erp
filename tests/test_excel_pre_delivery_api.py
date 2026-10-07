@@ -6,6 +6,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 from sqlalchemy.orm import sessionmaker
+import pytest
+
+from tests.test_pre_delivery_order_excel import purchase_order_file
 
 
 def _yanguang_delivery_file() -> bytes:
@@ -21,7 +24,8 @@ def _yanguang_delivery_file() -> bytes:
     return buffer.getvalue()
 
 
-def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_path, monkeypatch):
+@pytest.mark.parametrize("customer_code,layout", [("YG", "delivery"), ("YG", "order"), ("GY", "order")])
+def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_path, monkeypatch, customer_code, layout):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.tianhua_pre_delivery import router
@@ -50,9 +54,9 @@ def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_p
         )
         customer = Customer(
             customer_number=137,
-            customer_code="YG",
-            chinese_short_name="研光",
-            name="研光电子（无锡）有限公司",
+            customer_code=customer_code,
+            chinese_short_name="研光" if customer_code == "YG" else "光洋",
+            name="研光电子（无锡）有限公司" if customer_code == "YG" else "光洋电子有限公司",
             credit_limit=Decimal("0"),
         )
         db.add_all([user, customer])
@@ -103,6 +107,7 @@ def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_p
             yield db
 
     app.dependency_overrides[get_db] = override
+    upload_content = _yanguang_delivery_file() if layout == "delivery" else purchase_order_file(customer_code, requested=600, ordered=500)
     with TestClient(app) as client:
         assert client.post(
             "/api/auth/login", json={"username": "admin", "password": "RolePass123!"}
@@ -112,7 +117,7 @@ def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_p
             files={
                 "file": (
                     "研光送货单.xlsx",
-                    _yanguang_delivery_file(),
+                    upload_content,
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
             },
@@ -120,6 +125,14 @@ def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_p
         assert response.status_code == 201, response.text
         batch_id = response.json()["batch_id"]
         line = response.json()["items"][0]
+        if layout == "order":
+            assert line["image_qty"] == line["final_delivery_qty"] == 600
+            assert line["image_order_no"] == "PO-TEST"
+            assert line["source_payload"]["order_quantity"] == 500
+            assert "要求数 600 与发注数 500" in line["warning"]
+            duplicate = client.post("/api/deliveries/pre-delivery-excel/upload", files={"file":("renamed.xlsx", upload_content)})
+            assert duplicate.status_code == 400
+            assert "不能重复导入" in duplicate.json()["detail"]
         with factory() as db:
             db.get(OrderItem, line["order_item_id"]).requisition_qty = 120
             db.commit()
@@ -142,6 +155,13 @@ def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_p
         assert after_preview.json()["items"][0]["final_delivery_qty"] == line["final_delivery_qty"]
         client.cookies.clear()
         assert client.post(f"/api/deliveries/tianhua-preimport/{batch_id}/readiness-preview", json={"items":[]}).status_code == 401
+        assert client.post("/api/deliveries/pre-delivery-excel/upload", files={"file":("order.xlsx", purchase_order_file(customer_code))}).status_code == 401
+        with factory() as db:
+            db.add(User(username="restricted", password_hash=hash_password("RolePass123!"), role="sales", real_name="受限测试", customer_access_mode="selected", must_change_password=False))
+            db.commit()
+        assert client.post("/api/auth/login", json={"username":"restricted", "password":"RolePass123!"}).status_code == 200
+        denied = client.post("/api/deliveries/pre-delivery-excel/upload", files={"file":("order.xlsx", purchase_order_file(customer_code, po="SCOPE-DENIED"))})
+        assert denied.status_code == 403, denied.text
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["source_type"] == "excel_upload"
@@ -157,3 +177,5 @@ def test_excel_pre_delivery_upload_matches_customer_order_without_dispatch(tmp_p
     with factory() as db:
         assert db.query(TianhuaPreDeliveryImportBatch).count() == 1
         assert db.query(Delivery).count() == 0
+        assert db.query(Order).count() == 1
+        assert db.query(OrderItem).one().delivered_quantity == 0

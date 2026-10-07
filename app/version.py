@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.557"
-APP_VERSION_NAME = "订单导入保存恢复入口修复"
+APP_VERSION = "v0.22.558"
+APP_VERSION_NAME = "订单Excel兼容预送货导入"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5330,3 +5330,7 @@ APP_CHANGELOG = [*(f"v0.22.556：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["订单导入的查询恢复按钮独立于锁定草稿，恢复查询后明确显示继续保存或查看已保存订单入口。", "未查到订单时保留核对提示和保存按钮，继续使用原保存凭据防止重复建单；查询失败时保持保护。"]
 APP_VERIFICATION_STEPS = ["强制刷新后重新导入原文件，点击“查询并恢复保存”。", "未查到订单时核对客户、数量和单价，再点击“核对无误并保存”；查到订单时点击“查看已保存订单”。"]
 APP_CHANGELOG = [*(f"v0.22.557：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["研光、光洋的同一份购买要求书Excel可从订单或预送货入口导入，按文件内容识别客户并保留管理NO及逐行来源。", "预送货按要求数，订单按发注数；两列不一致时明确提示核对，保留原送货Excel、客户权限及重复导入保护。"]
+APP_VERIFICATION_STEPS = ["送货与回单 → 导入预送货 → 研光/光洋Excel，选择原订单文件并解析核对。", "核对要求数、匹配订单和库存，生成送货草稿；订单导入仍使用发注数。"]
+APP_CHANGELOG = [*(f"v0.22.558：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

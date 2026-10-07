@@ -11,7 +11,7 @@ const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.
 function fixture(overrides={}) {
   const slots=[],effects=[],deps=[];let cursor=0,tree,failNext=false;const calls=[],moves=[];
   const react={useState(initial){const index=cursor++;if(!(index in slots))slots[index]=typeof initial==='function'?initial():initial;return[slots[index],value=>{slots[index]=typeof value==='function'?value(slots[index]):value}]},useMemo:fn=>fn(),useRef(initial){const index=cursor++;return slots[index]||(slots[index]={current:initial})},useEffect(fn,values){const index=cursor++;if(!deps[index]||values.some((value,i)=>value!==deps[index][i])){deps[index]=values;effects.push(fn)}}};
-  const exports={},context={exports,URL,URLSearchParams,Math,Date,crypto:{randomUUID:()=>"fixed-key"},location:{href:'http://fixture/warehouse.html?floor=3F',pathname:'/warehouse.html',search:'?floor=3F',assign(){}},window:{addEventListener(){},removeEventListener(){}},require(path){if(path==='react')return react;if(path==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};if(path.endsWith('moldRackView.mjs'))return moldView;if(path.endsWith('shelfDisplay.mjs'))return{filterShelfMolds};return{}},fetch:async(path,init={})=>{const body=init.body?JSON.parse(init.body):null;calls.push({path,body});if(path.includes('/location-movement/batch')&&failNext){failNext=false;return{ok:false,status:503,json:async()=>({detail:'network uncertain'})}}return{ok:true,status:200,json:async()=>path.includes('/location-movement/batch')?{message:'saved'}:{items:[{id:7,mold_code:'M-7',mold_name:'长片',rack_location:'old',location_version:4,products:[{id:1,product_code:'80012083',customer_name:'客户'}]}]}}}};
+  const exports={},context={exports,URL,URLSearchParams,Math,Date,crypto:{randomUUID:()=>"fixed-key"},location:{href:'http://fixture/warehouse.html?floor=3F',pathname:'/warehouse.html',search:'?floor=3F',assign(){}},window:{addEventListener(){},removeEventListener(){}},require(path){if(path==='react')return react;if(path==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};if(path.endsWith('moldRackView.mjs'))return moldView;if(path.endsWith('shelfDisplay.mjs'))return{filterShelfMolds};return{}},fetch:async(path,init={})=>{const body=init.body?JSON.parse(init.body):null;calls.push({path,body});if(path.includes('/location-movement/batch')&&failNext){failNext=false;return{ok:false,status:503,json:async()=>({detail:'network uncertain'})}}return{ok:true,status:200,json:async()=>path.includes('/location-movement/batch')?{message:'saved'}:path.includes('/location-options')?{racks:[]}:{items:[{id:7,mold_code:'M-7',mold_name:'长片',rack_location:'old',location_version:4,products:[{id:1,product_code:'80012083',customer_name:'客户'}]}]}}}};
   vm.runInNewContext(compiled,context);
   const props={rack:{id:'rack-a',mold_rack_code:'A',levels:1,level_cell_counts:[2],level_heights_mm:[],width_mm:2000,depth_mm:600,height_mm:1200},response:{floor_code:'3F',rack:{rack_id:'rack-a',blocked_levels:[],cells:[{id:'c1',location_code:'MCELL-c1',level:1,grid:1,alias:'A1'},{id:'c2',location_code:'MCELL-c2',level:1,grid:2,alias:'A2'}]},items:[],total:0,truncated:false},canMoveMolds:true,rackIndex:0,rackCount:1,onPrevious(){},onNext(){},onClose(){},onMoldMoved:message=>moves.push(message),...overrides};
   function render(){cursor=0;tree=exports.MoldRackElevation(props);while(effects.length)effects.shift()();return nodes(tree)}
@@ -41,6 +41,16 @@ test('空格选择与多选归位绑定稳定格身份，网络未知结果重�
 test('只读用户可以点选空格而没有放入入口',()=>{
   const f=fixture({canMoveMolds:false});f.render().find(node=>node.type==='button'&&text(node).includes('A2空格')).props.onClick();
   assert.ok(f.render().some(node=>node.type==='h3'&&text(node)==='A2'));assert.equal(button(f,'＋ 放入模具'),undefined);assert.equal(f.calls.length,0);
+});
+
+test('移动未选目标不会回退源格，取消后仍能向空格放入',async()=>{
+  const f=fixture({response:{floor_code:'3F',rack:{rack_id:'rack-a',blocked_levels:[],cells:[{id:'c1',location_code:'MCELL-c1',level:1,grid:1,alias:'A1'},{id:'c2',location_code:'MCELL-c2',level:1,grid:2,alias:'A2'}]},items:[{id:7,mold_code:'M-7',mold_name:'长片',rack_location:'MCELL-c1',location_version:4,location_guide:{level:1,grid:1,prompt:'3F · 模具A架 · A1'},products:[]}],total:1,truncated:false}});
+  f.render().find(node=>node.type==='button'&&text(node).startsWith('长片')).props.onClick();
+  button(f,'移动模具').props.onClick();await new Promise(setImmediate);
+  assert.equal(button(f,'实物已放好，保存归位').props.disabled,true,'目标不得回退源格');
+  button(f,'取消').props.onClick();
+  f.render().find(node=>node.type==='button'&&text(node).includes('A2空格')).props.onClick();
+  assert.equal(button(f,'＋ 放入模具').props.disabled,false);
 });
 
 test('手机格位入口首次打开保留指定格，目录不完整时不声称空格',()=>{

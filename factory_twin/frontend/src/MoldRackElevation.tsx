@@ -48,6 +48,7 @@ export function MoldRackElevation({rack, response, loading, error, canMoveMolds,
   const [message, setMessage] = useState("");
   const attempt = useRef<ReturnType<typeof moldBatchPayload> | null>(null);
   const searchSequence = useRef(0);
+  const locatedIntent = useRef("");
   const selectedCell = cells.find(cell => cell.key === selectedKey);
   const selectedMold = response?.items.find(mold => mold.id === selectedId);
   const target = moveMode ? moveTarget : selectedCell?.location_code || (selectedCell?.id ? `MCELL-${selectedCell.id}` : "");
@@ -55,10 +56,12 @@ export function MoldRackElevation({rack, response, loading, error, canMoveMolds,
   const visible = filterShelfMolds(selectedCell?.items || response?.items || [], query);
   const returnUrl = new URL(location.href); returnUrl.searchParams.set("mold_rack_id", rack.id); returnUrl.searchParams.set("floor", response?.floor_code || "1F"); if (selectedCell?.id) returnUrl.searchParams.set("mold_cell_id", selectedCell.id); if(query) returnUrl.searchParams.set("mold_query", query);
   const returnTo = returnUrl.pathname + returnUrl.search;
-  useEffect(() => {setSelectedKey(null); setSelectedId(null); setPutaway(false); setSelection([]); setMoveTarget(""); setMessage(""); attempt.current = null;}, [rack.id]);
+  useEffect(() => {setSelectedKey(null); setSelectedId(null); setPutaway(false); setMoveMode(false); setSelection([]); setMoveTarget(""); setMessage(""); attempt.current = null;}, [rack.id]);
   useEffect(() => {
+    const intent = `${rack.id}/${initialCellId || ""}/${highlightedMoldId || ""}`;
+    if (locatedIntent.current === intent) return;
     const found = cells.find(cell => initialCellId ? cell.id === initialCellId : highlightedMoldId ? cell.items.some(mold => mold.id === highlightedMoldId) : false);
-    if (found) {setSelectedKey(found.key); setSelectedId(highlightedMoldId || null);}
+    if (found) {locatedIntent.current = intent; setSelectedKey(found.key); setSelectedId(highlightedMoldId || null);}
   }, [rack.id, response, highlightedMoldId, initialCellId]);
   useEffect(() => {onNavigationGuardChange?.(uncertain ? "模具归位结果尚未确认，请用原凭证重试。" : busy ? "模具操作正在处理，请稍候。" : ""); return () => onNavigationGuardChange?.("");}, [busy, uncertain, onNavigationGuardChange]);
   useEffect(() => {
@@ -89,7 +92,7 @@ export function MoldRackElevation({rack, response, loading, error, canMoveMolds,
     setBusy(true); setMessage("");
     try {
       const result = await api<{message?: string}>("/api/warehouse/molds/location-movement/batch", attempt.current);
-      setUncertain(false); attempt.current = null; setPutaway(false); setSelection([]);
+      setUncertain(false); attempt.current = null; setPutaway(false); setMoveMode(false); setMoveTarget(""); setSelection([]);
       onMoldMoved(result.message || "模具归位已保存"); setMessage("归位已保存");
     } catch (reason) {
       const failure = reason as Error & {status?: number};
@@ -103,7 +106,7 @@ export function MoldRackElevation({rack, response, loading, error, canMoveMolds,
       {[...view.levels].reverse().map(level => <div className={`twin-elevation-level mold-level ${level.blocked ? "blocked" : ""}`} key={level.level} style={{flex: `${(rack.level_heights_mm[level.level-1] || rack.height_mm) - (rack.level_heights_mm[level.level-2] || 0)} 1 0`}}><span>第 {level.level} 层</span><div style={{gridTemplateColumns: `repeat(${level.cell_count || 1}, minmax(0, 1fr))`}}>{level.blocked ? <i>设备占用层</i> : !level.cell_count ? <i>尚未分格</i> : level.cells.map(cell => {
         const key = `L${level.level}-G${cell.grid}`;
         const hit = Boolean(highlightedMoldId && cell.items.some(mold => mold.id === highlightedMoldId)) || Boolean(query && filterShelfMolds(cell.items, query).length);
-        return <section className={`mold-rack-cell ${cell.items.length ? "occupied" : "empty"} ${selectedKey === key ? "selected" : ""} ${hit ? "search-match" : ""}`} key={key}><button className="mold-rack-cell-summary" disabled={locked} onClick={() => {setSelectedKey(key); setSelectedId(null); setPutaway(false); setMoveTarget("");}}><b>{cell.alias || `第${cell.grid}格`}</b><strong>{response?.truncated ? `可见 ${cell.items.length} 块` : cell.items.length ? `有模具 · ${cell.items.length} 块` : "空格"}</strong><span>{moldCellSummary(cell.items).join(" · ")}</span>{cell.items.length > 2 && <small>查看全部</small>}</button></section>;
+        return <section className={`mold-rack-cell ${cell.items.length ? "occupied" : "empty"} ${selectedKey === key ? "selected" : ""} ${hit ? "search-match" : ""}`} key={key}><button className="mold-rack-cell-summary" disabled={locked} onClick={() => {setSelectedKey(key); setSelectedId(null); setPutaway(false); setMoveMode(false); setMoveTarget("");}}><b>{cell.alias || `第${cell.grid}格`}</b><strong>{response?.truncated ? `可见 ${cell.items.length} 块` : cell.items.length ? `有模具 · ${cell.items.length} 块` : "空格"}</strong><span>{moldCellSummary(cell.items).join(" · ")}</span>{cell.items.length > 2 && <small>查看全部</small>}</button></section>;
       })}</div></div>)}
     </div><div className="twin-width-ruler">正面宽度 {rack.width_mm} mm · 当前可见 {response?.total || 0} 块模具</div></div>
     <aside className="twin-mold-rack-aside">
@@ -113,7 +116,7 @@ export function MoldRackElevation({rack, response, loading, error, canMoveMolds,
       {selectedCell?.id && <a href={`/m/mold-cell?cell_id=${encodeURIComponent(selectedCell.id)}&return_to=${encodeURIComponent(returnTo)}`}>手机格位页</a>}
       {selectedMold ? <article className="twin-rack-product-label mold-label"><h3>{name(selectedMold)}</h3><p>{position(selectedMold)}</p><p>{selectedMold.remarks || ""}</p><p>{selectedMold.is_active === false ? "停用" : selectedMold.repair_status === "needs_repair" ? "待维修" : "正常"}</p>{selectedMold.products.map(product => <div key={product.id}>{product.product_code} · {product.customer_name} · {product.product_name}</div>)}<div className="twin-mold-rack-selected-actions"><button disabled={locked} onClick={() => setSelectedId(null)}>返回目录</button>{canMoveMolds && <button disabled={locked} onClick={() => void openMove(selectedMold)}>移动模具</button>}<a href={`/M/${selectedMold.id}?return_to=${encodeURIComponent(returnTo)}`}>手机扫码资料</a></div></article> : <><small>目录排序</small><div className="twin-mold-rack-item-list shelf-mold-directory">{visible.map(mold => <button key={mold.id} className={mold.id === highlightedMoldId ? "search-match" : ""} disabled={locked} onClick={() => {setSelectedId(mold.id); const cell = cells.find(cell => cell.items.some(item => item.id === mold.id)); if (cell) setSelectedKey(cell.key);}}><b>{name(mold)}</b><span>{mold.products.slice(0, 2).map(product => `${product.product_code || ""} ${product.customer_name || ""}`).join(" · ")}</span><small>{position(mold)}</small></button>)}</div>{!visible.length && <p>当前没有匹配模具</p>}</>}
       {putaway && <section className="twin-mold-move-panel"><h4>{moveMode ? "移动模具" : `放入 ${selectedCell?.alias || "当前格"}`}</h4>{moveMode ? <label>目标格<select value={moveTarget} disabled={locked} onChange={event => {setMoveTarget(event.target.value); attempt.current = null;}}><option value="">请选择目标格</option>{moldLocationChoices(options).map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label> : <><form onSubmit={event => {event.preventDefault(); void findMolds();}}><label>搜索或扫描模具<input value={search} disabled={locked} onChange={event => setSearch(event.target.value)} placeholder="编码、名称或模具二维码" /></label><button disabled={locked}>查询</button></form><div className="mold-putaway-results">{candidates.map(mold => <label key={mold.id}><input type="checkbox" disabled={locked} checked={selection.some(item => item.id === mold.id)} onChange={event => {setSelection(current => event.target.checked ? [...current, mold] : current.filter(item => item.id !== mold.id)); attempt.current = null;}} /><span><b>{name(mold)}</b><small>{mold.products.map(product => `${product.product_code || ""} ${product.customer_name || ""}`).join(" · ")} · {position(mold)}</small></span></label>)}</div></>}
-      <p>已选 {selection.length} 块{selection.length ? ` · ${selection.map(name).join("、")}` : ""}</p><div className="twin-mold-move-actions"><button disabled={busy || !selection.length || !target} onClick={() => void save()}>{uncertain ? "用原凭证核对结果" : "实物已放好，保存归位"}</button><button disabled={locked} onClick={() => {setPutaway(false); setOptions([]); setSelection([]);}}>取消</button></div></section>}
+      <p>已选 {selection.length} 块{selection.length ? ` · ${selection.map(name).join("、")}` : ""}</p><div className="twin-mold-move-actions"><button disabled={busy || !selection.length || !target} onClick={() => void save()}>{uncertain ? "用原凭证核对结果" : "实物已放好，保存归位"}</button><button disabled={locked} onClick={() => {setPutaway(false); setMoveMode(false); setMoveTarget(""); setOptions([]); setSelection([]);}}>取消</button></div></section>}
       {message && <p role="status">{message}</p>}{response?.truncated && <p>目录较多，请使用地图查找定位。</p>}</>}
     </aside><button className="twin-rack-switch next" disabled={locked} aria-label="下一货架" onClick={onNext}>›</button></div>
   </section>;

@@ -5,6 +5,20 @@ from test_n036_delivery_pick import pick_app
 from app.api import deliveries as api
 
 
+def test_pick_groups_include_structured_rack_fields_for_compact_print(monkeypatch):
+    location=SimpleNamespace(id=7,warehouse_floor=3,area_code='EDIT-1',location_code='INTERNAL',
+        location_name='原名称',sort_order=1,address_kind='rack_slot',rack_display_name='货H6',
+        level_no=1,slot_no=2,placement_status='placed')
+    monkeypatch.setattr(api,'_pick_location_projection_batch',lambda *a,**k:({7:location},{7:{}}))
+    monkeypatch.setattr(api,'warehouse_location_projection',lambda *a,**k:{})
+    monkeypatch.setattr(api,'employee_location_name',lambda *a,**k:'三楼·E3区域·货H6·1层·2格')
+    groups=api._pick_location_groups(None,[{'location_lines':[dict(source_type='finished_inventory',location_id=7,pick_quantity=3)]}])
+    assert len(groups)==1
+    assert {k:groups[0][k] for k in ('warehouse_floor','address_kind','rack_display_name','level_no','slot_no')} == dict(
+        warehouse_floor=3,address_kind='rack_slot',rack_display_name='货H6',level_no=1,slot_no=2)
+    assert groups[0]['lines'][0]['pick_quantity']==3
+
+
 @pytest.mark.parametrize('root,quantity', [(True,300),(False,30)])
 def test_parent_inventory_is_never_picked_twice(pick_app, monkeypatch, root, quantity):
     _, factory, ids, _ = pick_app

@@ -16,4 +16,13 @@ const page=context.pageHtml(task,{},rows,0,1);
 assert(page.includes('800根、2100片、300套'));
 assert(page.includes('请勿按本单默认拿齐'));
 assert(!page.includes('2900'));
+assert.strictEqual((page.match(/<tbody>([\s\S]*?)<\/tbody>/)[1].match(/<tr>/g)||[]).length,2);
+const odd=context.pageHtml(task,{},rows.slice(0,3),0,1);
+assert.strictEqual((odd.match(/<tbody>([\s\S]*?)<\/tbody>/)[1].match(/<td/g)||[]).length,16);
+const rackTask={items:[],location_groups:[{warehouse_floor:3,address_kind:'rack_slot',rack_display_name:'货H6',level_no:1,slot_no:1,
+    label:'三楼·不应打印的区域·货H6·1层·1格',lines:[{product_code:'Z.001.000151-LONG-1234567890',pick_quantity:10,unit:'个'}]}]};
+const rackRows=context.buildRows(rackTask);
+assert.strictEqual(rackRows[0].location,'三楼-货H6-1层-1格');
+assert(context.pageHtml(rackTask,{},rackRows,0,1).includes('Z.001.000151-LONG-1234567890'));
+assert(!context.pageHtml(rackTask,{},rackRows,0,1).includes('不应打印的区域'));
 console.log('Print identity, separate units, missing-line warning: passed');

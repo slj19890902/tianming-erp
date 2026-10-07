@@ -52,16 +52,16 @@ def test_a4_pick_sheet_contains_required_readable_fields_and_pagination() -> Non
         "打印版本：",
         "打印人/时间：",
         "第 ${pageIndex + 1}/${pageCount} 页",
-        "型号 / 存货编码",
-        "货架 · 层 · 格",
-        "拿取数量",
-        "实际拿取",
+        "存货编码",
+        "货架",
+        "数量",
+        "实际数量",
         "拿货人：",
         "复核人：",
         "异常：",
     ):
         assert marker in PRINT
-    assert "ROWS_PER_PAGE = 24" in PRINT
+    assert "ROWS_PER_PAGE = 48" in PRINT
     assert "整单合计见末页" in PRINT
     assert "pageIndex === pageCount - 1" in PRINT
     assert "page-break-inside: avoid" in PRINT

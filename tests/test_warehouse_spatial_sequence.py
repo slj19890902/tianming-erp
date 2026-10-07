@@ -29,3 +29,32 @@ def test_applied_map_positions_replace_stale_percent_boxes_without_mutating_them
     assert applied_ground_geometry(5, layout, feature) == {"left_pct":20, "top_pct":10, "width_pct":12, "height_pct":10}
     assert layout.width_pct == 40
     assert applied_ground_geometry(6, layout, feature)["width_pct"] == 40
+
+
+def test_same_name_areas_share_numbers_even_for_single_area_queries(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+    from app.models.warehouse_inventory import WarehouseFloor, WarehouseArea, WarehouseLocation, Floor3LocationLayout
+    from app.services.warehouse_location_sequence import load_spatial_sequences
+    from app.services import warehouse_twin_layout
+    engine = create_engine(f"sqlite:///{tmp_path / 'sequence.sqlite3'}")
+    for model in (WarehouseFloor, WarehouseArea, WarehouseLocation, Floor3LocationLayout):
+        model.__table__.create(engine)
+    monkeypatch.setattr(warehouse_twin_layout, 'load_warehouse_twin_floor', lambda _: {'features': [
+        {'erp_area_code': 'EDIT-2', 'points': [[0, 100], [100, 200]]},
+        {'erp_area_code': 'EDIT-1', 'points': [[0, 0], [100, 100]]}]})
+    with Session(engine) as db:
+        db.add(WarehouseFloor(id=1, floor_code='3F', floor_number=3, floor_name='三楼'))
+        db.flush()
+        for index, name in [(1, 'E3栈板'), (2, 'E3栈板'), (3, '别区')]:
+            db.add(WarehouseArea(id=index, floor_id=1, area_code=f'EDIT-{index}', area_name=name))
+        for index, code, active in [(1,'EDIT-1',True),(2,'EDIT-1',True),(3,'EDIT-2',True),(4,'EDIT-2',False),(5,'EDIT-3',True)]:
+            db.add(WarehouseLocation(id=index,location_code=f'L{index}',location_name=f'位置{index}',
+                warehouse_floor=3,area_code=code,warehouse_type='finished',storage_type='ground',placement_status='placed',is_active=active))
+        db.commit()
+        all_numbers = load_spatial_sequences(db, {3}, {'EDIT-1','EDIT-2','EDIT-3'})
+        assert all_numbers == {3:1, 1:2, 2:3, 5:1}
+        assert load_spatial_sequences(db, {3}, {'EDIT-1'}) == {3:1, 1:2, 2:3}
+        partial = [(loc,None) for loc in db.scalars(select(WarehouseLocation).where(WarehouseLocation.area_code=='EDIT-1'))]
+        assert load_spatial_sequences(db, {3}, {'EDIT-1'}, rows=partial) == {3:1, 1:2, 2:3}
+        assert not db.dirty and not db.new

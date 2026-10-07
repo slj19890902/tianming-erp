@@ -1,3 +1,49 @@
 .twin-rack-stage.twin-mold-rack-stage .mold-rack-cell,.twin-rack-stage.twin-mold-rack-stage .mold-rack-cell.occupied,.twin-rack-stage.twin-mold-rack-stage .mold-rack-cell.empty{background:#f8fafc;border:2px solid #cbd5e1;color:#172033;min-width:0}.twin-rack-stage.twin-mold-rack-stage .mold-rack-cell.selected{background:#f8fafc;border-color:#eab308;box-shadow:0 0 0 2px #facc15}.mold-rack-cell.search-match{outline:3px solid #2563eb;outline-offset:-6px}.mold-rack-cell-summary{width:100%;min-height:90px;display:flex;flex-direction:column;gap:5px;align-items:center;justify-content:center;background:transparent!important;color:inherit!important;overflow-wrap:anywhere}.mold-rack-cell-summary b{font-size:30px!important;line-height:1.1}.mold-rack-cell-summary strong,.mold-rack-cell-summary span,.mold-rack-cell-summary small{font-size:12px}.mold-putaway-results{max-height:250px;overflow:auto}.mold-putaway-results label{display:flex!important;align-items:flex-start;gap:8px;border-bottom:1px solid #cbd5e1;padding:8px}.mold-putaway-results input{width:18px!important;height:18px}.mold-putaway-results span{display:flex;flex-direction:column}.twin-mold-rack-aside a{display:inline-block;margin:6px;color:#1d4ed8}.shelf-mold-directory .search-match{border:2px solid #2563eb!important}.twin-mold-move-panel input,.twin-mold-move-panel select{width:100%;padding:8px}.mold-cell-aliases{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.mold-cell-aliases input{width:100%;min-width:0}@media(max-width:600px){.mold-rack-cell-summary b{font-size:24px!important}.mold-cell-aliases{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .twin-mold-rack-stage .twin-elevation-frame{display:flex;flex-direction:column}.twin-mold-rack-stage .mold-level{min-height:95px}.twin-mold-rack-stage .mold-level>div{display:grid;grid-auto-flow:initial;align-items:stretch}
+
+/* This elevation has no separate height ruler; its frame owns the full column. */
+.twin-rack-focus-panel.twin-mold-rack-stage .twin-elevation-shell {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 26px;
+}
+.twin-rack-focus-panel.twin-mold-rack-stage .twin-elevation-frame {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  border: 4px solid #94a3b8;
+  background: #fff;
+  box-shadow: none;
+}
+.twin-rack-focus-panel.twin-mold-rack-stage .twin-width-ruler {
+  grid-column: 1;
+  grid-row: 2;
+  color: #475569;
+  border-color: #cbd5e1;
+}
+.twin-rack-focus-panel.twin-mold-rack-stage .twin-elevation-frame .mold-rack-cell {
+  display: flex;
+  background: #f8fafc;
+  border: 2px solid #cbd5e1;
+  color: #172033;
+  box-shadow: none;
+}
+.twin-rack-focus-panel.twin-mold-rack-stage .twin-elevation-frame .mold-rack-cell.selected {
+  border-color: #eab308;
+  box-shadow: 0 0 0 2px #facc15;
+  outline: none;
+}
+.twin-rack-focus-panel.twin-mold-rack-stage .twin-elevation-frame .mold-rack-cell.search-match {
+  outline: 3px solid #2563eb;
+  outline-offset: -6px;
+}
+.twin-rack-focus-panel.twin-mold-rack-stage .mold-rack-cell-summary {
+  height: 100%;
+  border: 0;
+}
+.twin-rack-focus-panel.twin-mold-rack-stage .mold-rack-cell-summary b,
+.twin-rack-focus-panel.twin-mold-rack-stage .mold-rack-cell-summary strong,
+.twin-rack-focus-panel.twin-mold-rack-stage .mold-rack-cell-summary span {
+  color: #172033;
+}

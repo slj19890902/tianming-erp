@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import SheetDimension
 
 
 PRESSURE_CREASE_TYPE = "压线"
@@ -8,7 +9,7 @@ def crease_width_error(
     *,
     label: str,
     crease_type: str | None,
-    report_width_mm: int | None,
+    report_width_mm: SheetDimension | None,
     left_mm: int | None,
     middle_mm: int | None,
     right_mm: int | None,

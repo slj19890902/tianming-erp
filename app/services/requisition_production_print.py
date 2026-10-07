@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import sheet_dimension_number
 
 import hashlib
 import json
@@ -923,17 +924,17 @@ def build_supplier_requisition_production_package(
                 lot = receipt_lots.get(int(lot_id or 0))
                 semi_detail = lot.semi_finished_detail if lot is not None else None
                 actual_length = (
-                    int(semi_detail.board_length_mm)
+                    sheet_dimension_number(semi_detail.board_length_mm)
                     if semi_detail is not None
                     else None
                 )
                 actual_width = (
-                    int(semi_detail.board_width_mm)
+                    sheet_dimension_number(semi_detail.board_width_mm)
                     if semi_detail is not None
                     else None
                 )
-                planned_length = int(component["report_length_mm"] or 0) or None
-                planned_width = int(component["report_width_mm"] or 0) or None
+                planned_length = sheet_dimension_number(component["report_length_mm"] or 0) or None
+                planned_width = sheet_dimension_number(component["report_width_mm"] or 0) or None
                 specification_changed = bool(
                     actual_length
                     and actual_width
@@ -1681,12 +1682,12 @@ def build_composite_requisition_production_package(
                 product_code=snapshot.snapshot_component_product_code,
                 product_name=snapshot.snapshot_component_product_name,
                 report_length_mm=(
-                    int(row.cardboard_len)
+                    sheet_dimension_number(row.cardboard_len)
                     if row.cardboard_len is not None
                     else snapshot.snapshot_component_report_length_mm
                 ),
                 report_width_mm=(
-                    int(row.cardboard_width)
+                    sheet_dimension_number(row.cardboard_width)
                     if row.cardboard_width is not None
                     else snapshot.snapshot_component_report_width_mm
                 ),

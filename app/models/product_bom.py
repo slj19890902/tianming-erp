@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.models.dimension_type import SheetDimensionColumn
 
 from datetime import datetime
 from decimal import Decimal
@@ -345,12 +346,12 @@ class SalesOrderItemBomComponent(Base):
         Text,
         nullable=True,
     )
-    snapshot_component_report_length_mm: Mapped[int | None] = mapped_column(
-        Integer,
+    snapshot_component_report_length_mm: Mapped[int | float | None] = mapped_column(
+        SheetDimensionColumn,
         nullable=True,
     )
-    snapshot_component_report_width_mm: Mapped[int | None] = mapped_column(
-        Integer,
+    snapshot_component_report_width_mm: Mapped[int | float | None] = mapped_column(
+        SheetDimensionColumn,
         nullable=True,
     )
     snapshot_component_crease_type: Mapped[str | None] = mapped_column(
@@ -373,12 +374,12 @@ class SalesOrderItemBomComponent(Base):
         Text,
         nullable=True,
     )
-    snapshot_component_base_report_length_mm: Mapped[int | None] = mapped_column(
-        Integer,
+    snapshot_component_base_report_length_mm: Mapped[int | float | None] = mapped_column(
+        SheetDimensionColumn,
         nullable=True,
     )
-    snapshot_component_base_report_width_mm: Mapped[int | None] = mapped_column(
-        Integer,
+    snapshot_component_base_report_width_mm: Mapped[int | float | None] = mapped_column(
+        SheetDimensionColumn,
         nullable=True,
     )
     snapshot_component_base_crease_type: Mapped[str | None] = mapped_column(

@@ -1,5 +1,6 @@
 """v0.19.2-B: 供应商报料单模型"""
 from __future__ import annotations
+from app.models.dimension_type import SheetDimensionColumn
 
 from datetime import date, datetime
 from typing import TYPE_CHECKING
@@ -54,8 +55,8 @@ class SupplierRequisitionOrder(Base):
     material_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("materials.id"), nullable=True)
     layer_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     flute_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    report_length_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    report_width_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report_length_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
+    report_width_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
     crease_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     crease_left_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     crease_middle_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -148,8 +149,8 @@ class SupplierRequisitionOrderItem(Base):
     order_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
     product_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     product_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    report_length_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    report_width_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report_length_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
+    report_width_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     stock_deduction_qty: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     requisition_qty: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

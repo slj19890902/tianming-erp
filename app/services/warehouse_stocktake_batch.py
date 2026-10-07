@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import sheet_dimension_number
 
 from app.services.warehouse_storage_usage import effective_inventory_usages
 
@@ -692,8 +693,8 @@ def _semi_product_facts(product: Product) -> dict:
         "material_id": product.material_id,
         "layer_count": int(layer_count),
         "flute_type": flute_type,
-        "board_length_mm": int(board_length),
-        "board_width_mm": int(board_width),
+        "board_length_mm": sheet_dimension_number(board_length),
+        "board_width_mm": sheet_dimension_number(board_width),
         "sheet_type": (
             "creased_sheet"
             if "压线" in crease_text

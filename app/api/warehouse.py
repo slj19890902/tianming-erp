@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number
 
 import base64
 from datetime import date, datetime, timedelta
@@ -1944,8 +1945,8 @@ class SemiFinishedManualInPayload(BaseModel):
     material_code: str = Field(min_length=1, max_length=100)
     layer_count: int
     flute_type: str
-    board_length_mm: int = Field(gt=0)
-    board_width_mm: int = Field(gt=0)
+    board_length_mm: SheetDimension = Field(gt=0)
+    board_width_mm: SheetDimension = Field(gt=0)
     sheet_type: str
     component_type: str = "whole"
     pieces_per_box: int = Field(default=1, gt=0)
@@ -2048,8 +2049,8 @@ class ReleaseReservationPayload(BaseModel):
 
 class SemiRequirementPayload(BaseModel):
     component_type: str
-    board_length_mm: int = Field(gt=0)
-    board_width_mm: int = Field(gt=0)
+    board_length_mm: SheetDimension = Field(gt=0)
+    board_width_mm: SheetDimension = Field(gt=0)
     material_code: str = Field(min_length=1, max_length=100)
     material_id: int | None = None
     flute_type: str = Field(min_length=1, max_length=20)
@@ -2060,8 +2061,8 @@ class SemiRequirementPayload(BaseModel):
 
 class SemiProductCandidatePayload(BaseModel):
     customer_id: int
-    board_length_mm: int = Field(gt=0)
-    board_width_mm: int = Field(gt=0)
+    board_length_mm: SheetDimension = Field(gt=0)
+    board_width_mm: SheetDimension = Field(gt=0)
     material_code: str = Field(min_length=1, max_length=100)
     flute_type: str = Field(min_length=1, max_length=20)
     component_type: str
@@ -3387,8 +3388,8 @@ def auto_cover_bom_component_inventory(
         remaining = max(required - coverage["total_piece_quantity"], 0)
         semi_added = 0
         semi_signature_complete = (
-            int(physical_facts["board_length_mm"] or 0) > 0
-            and int(physical_facts["board_width_mm"] or 0) > 0
+            sheet_dimension_number(physical_facts["board_length_mm"] or 0) > 0
+            and sheet_dimension_number(physical_facts["board_width_mm"] or 0) > 0
             and bool(str(snapshot.snapshot_component_material or "").strip())
             and bool(str(snapshot.snapshot_component_flute_type or "").strip())
         )
@@ -3441,8 +3442,8 @@ def auto_cover_bom_component_inventory(
                     order_item_id=item.id,
                     sales_order_item_bom_component_id=snapshot.id,
                     component_type=component_type,
-                    board_length_mm=int(physical_facts["board_length_mm"]),
-                    board_width_mm=int(physical_facts["board_width_mm"]),
+                    board_length_mm=sheet_dimension_number(physical_facts["board_length_mm"]),
+                    board_width_mm=sheet_dimension_number(physical_facts["board_width_mm"]),
                     material_code=str(snapshot.snapshot_component_material),
                     flute_type=str(snapshot.snapshot_component_flute_type),
                     pieces_per_box=physical_pieces_per_component,
@@ -3707,8 +3708,8 @@ def upsert_bom_component_semi_requirement(
             order_item_id=snapshot.sales_order_item_id,
             sales_order_item_bom_component_id=snapshot.id,
             component_type=component_type,
-            board_length_mm=int(physical_facts["board_length_mm"] or 0),
-            board_width_mm=int(physical_facts["board_width_mm"] or 0),
+            board_length_mm=sheet_dimension_number(physical_facts["board_length_mm"] or 0),
+            board_width_mm=sheet_dimension_number(physical_facts["board_width_mm"] or 0),
             material_code=str(snapshot.snapshot_component_material or "").strip(),
             flute_type=str(snapshot.snapshot_component_flute_type or "").strip(),
             pieces_per_box=physical_pieces_per_component,
@@ -8755,8 +8756,8 @@ def create_twin_semi_finished_inbound(
             material_id=product.material_id,
             layer_count=int(layer_count),
             flute_type=flute_type,
-            board_length_mm=int(board_length),
-            board_width_mm=int(board_width),
+            board_length_mm=sheet_dimension_number(board_length),
+            board_width_mm=sheet_dimension_number(board_width),
             sheet_type=sheet_type,
             supplier_name=None,
             customer_id=payload.customer_id,
@@ -24212,8 +24213,8 @@ def list_lots(
     semi_supplier: str | None = None,
     semi_material_code: str | None = None,
     semi_flute_type: str | None = None,
-    semi_board_length_mm: int | None = Query(default=None, gt=0),
-    semi_board_width_mm: int | None = Query(default=None, gt=0),
+    semi_board_length_mm: SheetDimension | None = Query(default=None, gt=0),
+    semi_board_width_mm: SheetDimension | None = Query(default=None, gt=0),
     semi_allowed_product: str | None = None,
     location_keyword: str | None = None,
     pallet_keyword: str | None = None,

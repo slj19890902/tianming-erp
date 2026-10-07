@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import sheet_dimension_number
 
 from collections import defaultdict
 from hashlib import sha256
@@ -661,8 +662,8 @@ def _manual_in(
                 material_code=str(source.material_code_snapshot),
                 layer_count=int(source.layer_count),
                 flute_type=str(source.flute_type),
-                board_length_mm=int(source.board_length_mm),
-                board_width_mm=int(source.board_width_mm),
+                board_length_mm=sheet_dimension_number(source.board_length_mm),
+                board_width_mm=sheet_dimension_number(source.board_width_mm),
                 sheet_type=str(source.sheet_type),
                 component_type=str(source.component_type or "whole"),
                 pieces_per_box=int(source.pieces_per_box or 1),

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.models.dimension_type import SheetDimensionColumn
 
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -81,8 +82,8 @@ class InventoryStockPolicy(Base):
     normalized_material_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     layer_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     flute_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    report_length_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    report_width_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report_length_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
+    report_width_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
     sheet_type: Mapped[str] = mapped_column(
         String(30), default="raw_board", nullable=False
     )
@@ -234,8 +235,8 @@ class StockReplenishmentOrderItem(Base):
     normalized_material_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     layer_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     flute_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    report_length_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    report_width_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    report_length_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
+    report_width_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
     crease_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     crease_left_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
     crease_middle_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number, validate_sheet_dimensions
 
 from app.services.business_transaction import commit_business_change
 
@@ -565,14 +566,14 @@ class OrderItemCreate(BaseModel):
     length_mm: int | None = Field(default=None, gt=0)
     width_mm: int | None = Field(default=None, gt=0)
     height_mm: int | None = Field(default=None, gt=0)
-    report_length_mm: int | None = Field(default=None, gt=0)
-    report_width_mm: int | None = Field(default=None, gt=0)
+    report_length_mm: SheetDimension | None = Field(default=None, gt=0)
+    report_width_mm: SheetDimension | None = Field(default=None, gt=0)
     crease_type: str | None = Field(default=None, max_length=20)
     crease_left_mm: int | None = Field(default=None, ge=0)
     crease_middle_mm: int | None = Field(default=None, ge=0)
     crease_right_mm: int | None = Field(default=None, ge=0)
-    base_report_length_mm: int | None = Field(default=None, gt=0)
-    base_report_width_mm: int | None = Field(default=None, gt=0)
+    base_report_length_mm: SheetDimension | None = Field(default=None, gt=0)
+    base_report_width_mm: SheetDimension | None = Field(default=None, gt=0)
     base_crease_type: str | None = Field(default=None, max_length=20)
     base_crease_left_mm: int | None = Field(default=None, ge=0)
     base_crease_middle_mm: int | None = Field(default=None, ge=0)
@@ -648,15 +649,15 @@ class OrderItemUpdate(BaseModel):
     layer_count: int | None = None
     flute_type: str | None = None
     # v0.19.2-B: 报料快照（从常用箱编辑/PDF 草稿编辑时写入）
-    snapshot_report_length_mm: int | None = None
-    snapshot_report_width_mm: int | None = None
+    snapshot_report_length_mm: SheetDimension | None = None
+    snapshot_report_width_mm: SheetDimension | None = None
     snapshot_crease_type: str | None = None
     snapshot_crease_left_mm: int | None = None
     snapshot_crease_middle_mm: int | None = None
     snapshot_crease_right_mm: int | None = None
     snapshot_report_notes: str | None = None
-    snapshot_base_report_length_mm: int | None = None
-    snapshot_base_report_width_mm: int | None = None
+    snapshot_base_report_length_mm: SheetDimension | None = None
+    snapshot_base_report_width_mm: SheetDimension | None = None
     snapshot_base_crease_type: str | None = None
     snapshot_base_crease_left_mm: int | None = None
     snapshot_base_crease_middle_mm: int | None = None
@@ -1087,8 +1088,8 @@ def _preflight_semi_signature(
     )
     return SemiFinishedSignature(
         customer_id=customer_id,
-        board_length_mm=int(board_length_mm),
-        board_width_mm=int(board_width_mm),
+        board_length_mm=sheet_dimension_number(board_length_mm),
+        board_width_mm=sheet_dimension_number(board_width_mm),
         normalized_material_code=normalize_material_code(material_code),
         flute_type=flute_type,
         component_type=component_type,
@@ -1611,8 +1612,8 @@ def _apply_order_reservation_plans(
                 db,
                 order_item_id=item.id,
                 component_type=component_type,
-                board_length_mm=int(board_length_mm),
-                board_width_mm=int(board_width_mm),
+                board_length_mm=sheet_dimension_number(board_length_mm),
+                board_width_mm=sheet_dimension_number(board_width_mm),
                 material_code=material_code,
                 flute_type=flute_type,
                 pieces_per_box=pieces_per_box,
@@ -9320,6 +9321,16 @@ def update_order_item(
     item.layer_count = prospective_item_layer
     item.flute_type = prospective_item_flute
     # v0.19.2-B: 报料快照
+    try:
+        validate_sheet_dimensions(
+            *(getattr(payload, name) if getattr(payload, name) is not None else getattr(item, name)
+              for name in ("snapshot_report_length_mm", "snapshot_report_width_mm",
+                           "snapshot_base_report_length_mm", "snapshot_base_report_width_mm")),
+            layer_count=payload.layer_count if payload.layer_count is not None else item.layer_count,
+            flute_type=payload.flute_type if payload.flute_type is not None else item.flute_type,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if payload.snapshot_report_length_mm is not None:
         item.snapshot_report_length_mm = payload.snapshot_report_length_mm
     if payload.snapshot_report_width_mm is not None:

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.556"
-APP_VERSION_NAME = "模具编辑格位与标签位置一致"
+APP_VERSION = "v0.22.557"
+APP_VERSION_NAME = "卡纸报料尺寸精度"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5326,3 +5326,7 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.556：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
+
+APP_CHANGES = ["卡纸报料尺寸支持最多两位小数，瓦楞纸板仍要求整数毫米。", "常用箱、订单快照、报料、片料匹配和打印保留小数，历史整数及冻结资料保持不变。"]
+APP_VERIFICATION_STEPS = ["常用箱选择单层无楞卡纸，填写444.5×298.5后保存重开核对；瓦楞纸板同样的小数应被拒绝。", "检查卡纸新订单和报料打印尺寸保留小数；实体打印由管理员确认。"]
+APP_CHANGELOG = [*(f"v0.22.557：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

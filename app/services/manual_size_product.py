@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number, validate_sheet_dimensions
 
 import secrets
 from dataclasses import dataclass
@@ -45,14 +46,14 @@ class ManualSizeProductInput:
     layer_count: int | None
     flute_type: str | None
     sale_unit_price: Decimal
-    report_length_mm: int | None = None
-    report_width_mm: int | None = None
+    report_length_mm: SheetDimension | None = None
+    report_width_mm: SheetDimension | None = None
     crease_type: str | None = None
     crease_left_mm: int | None = None
     crease_middle_mm: int | None = None
     crease_right_mm: int | None = None
-    base_report_length_mm: int | None = None
-    base_report_width_mm: int | None = None
+    base_report_length_mm: SheetDimension | None = None
+    base_report_width_mm: SheetDimension | None = None
     base_crease_type: str | None = None
     base_crease_left_mm: int | None = None
     base_crease_middle_mm: int | None = None
@@ -157,7 +158,7 @@ def _validate_input(
 
     report_length = chosen("report_length_mm")
     report_width = chosen("report_width_mm")
-    if report_length is None or report_width is None or int(report_length) <= 0 or int(report_width) <= 0:
+    if report_length is None or report_width is None or sheet_dimension_number(report_length) <= 0 or sheet_dimension_number(report_width) <= 0:
         raise ManualSizeProductError(
             "当前箱型没有完整自动公式，必须人工填写正数的报料长和报料宽"
         )
@@ -170,7 +171,7 @@ def _validate_input(
     error = crease_width_error(
         label="压线",
         crease_type=str(crease_type or "").strip() or None,
-        report_width_mm=int(report_width),
+        report_width_mm=sheet_dimension_number(report_width),
         left_mm=crease_values["crease_left_mm"],
         middle_mm=crease_values["crease_middle_mm"],
         right_mm=crease_values["crease_right_mm"],
@@ -190,14 +191,14 @@ def _validate_input(
         if (
             base_report_length is None
             or base_report_width is None
-            or int(base_report_length) <= 0
-            or int(base_report_width) <= 0
+            or sheet_dimension_number(base_report_length) <= 0
+            or sheet_dimension_number(base_report_width) <= 0
         ):
             raise ManualSizeProductError("天地盖底片必须同时填写正数的报料长和报料宽")
         error = crease_width_error(
             label="底压线",
             crease_type=str(base_crease_type or "").strip() or None,
-            report_width_mm=int(base_report_width),
+            report_width_mm=sheet_dimension_number(base_report_width),
             left_mm=chosen("base_crease_left_mm"),
             middle_mm=chosen("base_crease_middle_mm"),
             right_mm=chosen("base_crease_right_mm"),
@@ -205,17 +206,19 @@ def _validate_input(
         if error:
             raise ManualSizeProductError(f"天地盖底片{error}")
 
+    validate_sheet_dimensions(report_length, report_width, base_report_length, base_report_width,
+                              layer_count=data.layer_count, flute_type=data.flute_type)
     normalized = {
         "box_style": requested_box_style,
-        "report_length_mm": int(report_length),
-        "report_width_mm": int(report_width),
+        "report_length_mm": sheet_dimension_number(report_length),
+        "report_width_mm": sheet_dimension_number(report_width),
         "crease_type": str(crease_type or "").strip() or None,
         **{
             key: (int(value) if value is not None else None)
             for key, value in crease_values.items()
         },
-        "base_report_length_mm": int(base_report_length) if base_report_length is not None else None,
-        "base_report_width_mm": int(base_report_width) if base_report_width is not None else None,
+        "base_report_length_mm": sheet_dimension_number(base_report_length) if base_report_length is not None else None,
+        "base_report_width_mm": sheet_dimension_number(base_report_width) if base_report_width is not None else None,
         "base_crease_type": str(base_crease_type or "").strip() or None,
         "base_crease_left_mm": int(chosen("base_crease_left_mm")) if chosen("base_crease_left_mm") is not None else None,
         "base_crease_middle_mm": int(chosen("base_crease_middle_mm")) if chosen("base_crease_middle_mm") is not None else None,

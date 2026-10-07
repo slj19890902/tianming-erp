@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.models.dimension_type import SheetDimensionColumn
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -1393,8 +1394,8 @@ class SemiFinishedInventoryDetail(Base):
     normalized_material_code: Mapped[str] = mapped_column(String(100), nullable=False)
     layer_count: Mapped[int] = mapped_column(Integer, nullable=False)
     flute_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    board_length_mm: Mapped[int] = mapped_column(Integer, nullable=False)
-    board_width_mm: Mapped[int] = mapped_column(Integer, nullable=False)
+    board_length_mm: Mapped[int | float] = mapped_column(SheetDimensionColumn, nullable=False)
+    board_width_mm: Mapped[int | float] = mapped_column(SheetDimensionColumn, nullable=False)
     component_type: Mapped[str] = mapped_column(
         String(20), default="whole", nullable=False
     )
@@ -1476,8 +1477,8 @@ class OrderItemSemiRequirement(Base):
         ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
     )
     component_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    board_length_mm: Mapped[int] = mapped_column(Integer, nullable=False)
-    board_width_mm: Mapped[int] = mapped_column(Integer, nullable=False)
+    board_length_mm: Mapped[int | float] = mapped_column(SheetDimensionColumn, nullable=False)
+    board_width_mm: Mapped[int | float] = mapped_column(SheetDimensionColumn, nullable=False)
     material_code_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
     normalized_material_code: Mapped[str] = mapped_column(String(100), nullable=False)
     flute_type: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -1535,8 +1536,8 @@ class SemiFinishedMatchRule(Base):
     customer_id: Mapped[int] = mapped_column(
         ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False
     )
-    board_length_mm: Mapped[int] = mapped_column(Integer, nullable=False)
-    board_width_mm: Mapped[int] = mapped_column(Integer, nullable=False)
+    board_length_mm: Mapped[int | float] = mapped_column(SheetDimensionColumn, nullable=False)
+    board_width_mm: Mapped[int | float] = mapped_column(SheetDimensionColumn, nullable=False)
     normalized_material_code: Mapped[str] = mapped_column(String(100), nullable=False)
     flute_type: Mapped[str] = mapped_column(String(20), nullable=False)
     component_type: Mapped[str] = mapped_column(String(20), nullable=False)

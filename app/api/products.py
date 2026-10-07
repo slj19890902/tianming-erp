@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number, validate_sheet_dimensions
 
 from app.services.business_transaction import commit_business_change
 
@@ -373,7 +374,7 @@ def _crease_width_error(
     *,
     label: str,
     crease_type: str | None,
-    report_width_mm: int | None,
+    report_width_mm: SheetDimension | None,
     left_mm: int | None,
     middle_mm: int | None,
     right_mm: int | None,
@@ -536,15 +537,15 @@ class ProductPayload(BaseModel):
     layer_count: int | None = None
     surface_paper_type: str | None = None
     # v0.19.2-B: 报料尺寸 + 压线信息
-    report_length_mm: int | None = None
-    report_width_mm: int | None = None
+    report_length_mm: SheetDimension | None = None
+    report_width_mm: SheetDimension | None = None
     crease_type: str | None = Field(default=None, pattern="^(毛片|净料|压线|其他)$|^$")
     crease_left_mm: int | None = None
     crease_middle_mm: int | None = None
     crease_right_mm: int | None = None
     report_notes: str | None = None
-    base_report_length_mm: int | None = None
-    base_report_width_mm: int | None = None
+    base_report_length_mm: SheetDimension | None = None
+    base_report_width_mm: SheetDimension | None = None
     base_crease_type: str | None = Field(default=None, pattern="^(毛片|净料|压线|其他)$|^$")
     base_crease_left_mm: int | None = None
     base_crease_middle_mm: int | None = None
@@ -1601,6 +1602,13 @@ _PRODUCT_SYNC_TEXT_FIELDS = {
 
 
 def _normalize_product_sync_field(field_name: str, value: object) -> object:
+    if field_name in {"report_length_mm", "report_width_mm", "base_report_length_mm", "base_report_width_mm"}:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        try:
+            return sheet_dimension_number(value)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
     if field_name in _PRODUCT_SYNC_DECIMAL_FIELDS:
         if value is None or (isinstance(value, str) and not value.strip()):
             return None
@@ -1810,6 +1818,14 @@ def _validate_product_material_flute(db: Session, payload: ProductPayload) -> No
         raise HTTPException(status_code=400, detail=error)
     payload.layer_count = effective_layer_count
     payload.flute_type = normalized_flute
+    try:
+        validate_sheet_dimensions(
+            payload.report_length_mm, payload.report_width_mm,
+            payload.base_report_length_mm, payload.base_report_width_mm,
+            layer_count=effective_layer_count, flute_type=normalized_flute,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 class BoxTypeRecommendationPayload(BaseModel):
@@ -2999,6 +3015,14 @@ def sync_product_fields(
     flute_error = validate_flute_for_write(prospective_flute, prospective_layer)
     if flute_error:
         raise HTTPException(status_code=400, detail=flute_error)
+    try:
+        validate_sheet_dimensions(
+            *(fields.get(name, getattr(product, name)) for name in
+              ("report_length_mm", "report_width_mm", "base_report_length_mm", "base_report_width_mm")),
+            layer_count=prospective_layer, flute_type=prospective_flute,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if selected_material is not None and flute_fields.intersection(fields):
         fields["layer_count"] = prospective_layer
     if {"production_process", "box_style"}.intersection(fields):

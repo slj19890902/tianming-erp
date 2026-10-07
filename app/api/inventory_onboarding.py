@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import SheetDimension
 
 from copy import copy
 from datetime import date
@@ -157,8 +158,8 @@ class UpdateLineRequest(BaseModel):
     supplier_name: str | None = Field(default=None, max_length=200)
     layer_count: int | None = None
     flute_type: str | None = Field(default=None, max_length=20)
-    board_length_mm: int | None = Field(default=None, gt=0)
-    board_width_mm: int | None = Field(default=None, gt=0)
+    board_length_mm: SheetDimension | None = Field(default=None, gt=0)
+    board_width_mm: SheetDimension | None = Field(default=None, gt=0)
     sheet_type: str | None = None
     component_type: str | None = None
     pieces_per_box: int | None = Field(default=None, gt=0)

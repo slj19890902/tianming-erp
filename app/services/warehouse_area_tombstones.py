@@ -196,6 +196,10 @@ def assert_warehouse_asset_location_not_archived(
     rack_number = guide.get("rack")
     if rack_number is None:
         return
+    if guide.get("kind") in {"storage_cell","retired_cell"}:
+        if str(rack_number).upper() in identities["mold_rack_codes"] or _normalized(guide.get("area")) in identities["feature_codes"]:
+            raise ArchivedWarehouseAreaTargetError("该模具区域已归档，不能移入模具")
+        return
     rack_code = f"R{int(rack_number):02d}"
     confirmed_zone_code = next(
         (

@@ -1974,6 +1974,12 @@ def apply_product_import(
 
     saved_paths: list[tuple[str, str]] = []
     try:
+        if any(str(item.get("rack_location") or "").strip().upper().startswith("MCELL-") for item in preview.mold_items):
+            raise ProductImportWorkbookError(
+                "PRODUCT_IMPORT_MOLD_CELL_REQUIRES_PLACEMENT",
+                "模具格归位请从已发布模具架操作；资料导入不能指定内部格身份",
+                status_code=409,
+            )
         mold_floor_codes = sorted(
             {
                 floor_code

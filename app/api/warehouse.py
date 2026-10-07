@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 import hashlib
 from io import BytesIO
+from functools import wraps
 import json
 import re
 import sqlite3
@@ -424,9 +425,14 @@ from app.services.mold_location import (
     MoldLocationMoveResult,
     MoldLocationPreview,
     confirm_mold_location_move,
+    confirm_mold_location_batch,
     describe_mold_location,
     mold_rack_layout_relocation_warnings,
     mold_rack_structure,
+    mold_rack_layout_usage_blockers,
+    find_mold_cell,
+    published_mold_floors,
+    dynamic_mold_location_options,
     mold_location_feature_codes,
     one_floor_mold_location_options,
     plan_mold_rack_layout_relocations,
@@ -1613,6 +1619,19 @@ class MoldLocationConfirmPayload(MoldLocationPreviewPayload):
     def strip_mold_location_note(cls, value: str | None) -> str | None:
         text = (value or "").strip()
         return text or None
+
+
+class MoldLocationBatchItem(BaseModel):
+    mold_code: str = Field(min_length=1,max_length=100)
+    expected_version: int = Field(gt=0)
+
+
+class MoldLocationBatchPayload(BaseModel):
+    target_location: str = Field(min_length=1,max_length=250)
+    items: list[MoldLocationBatchItem] = Field(min_length=1,max_length=100)
+    idempotency_key: str = Field(min_length=8,max_length=120)
+    source: Literal["manual_input","scanner_paste","url_parameter","api"] = "api"
+    note: str | None = Field(default=None,max_length=500)
 
 
 class MoldArchiveConfirmPayload(BaseModel):
@@ -10308,6 +10327,13 @@ def get_warehouse_twin_floor_layout_draft(
         _handle_twin_layout_edit_error(error)
 
 
+class MoldCellLayoutFields(BaseModel):
+    id: str = Field(min_length=36, max_length=36)
+    level: int = Field(ge=1, le=20)
+    grid: int = Field(ge=1, le=50)
+    alias: str = Field(min_length=2, max_length=16)
+
+
 class TwinRackLayoutFields(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     x_mm: float = Field(ge=-10_000_000, le=10_000_000)
@@ -10317,7 +10343,9 @@ class TwinRackLayoutFields(BaseModel):
     height_mm: float = Field(gt=0, le=100_000)
     levels: int = Field(ge=1, le=20)
     level_heights_mm: list[float] = Field(max_length=19)
-    cargo_rows: int = Field(ge=3, le=5)
+    cargo_rows: int = Field(default=3, ge=3, le=5)
+    mold_rack_code: str | None = Field(default=None, pattern=r"^(?:[A-Z]{1,8}|R[0-9]{2})$")
+    mold_cells: list[MoldCellLayoutFields] | None = Field(default=None, max_length=1000)
     level_cell_counts: list[int] | None = Field(default=None, max_length=20)
     bays: int = Field(default=1, ge=1, le=50)
     access_side: Literal["north", "south", "east", "west", "both"] = "south"
@@ -10819,14 +10847,9 @@ def validate_twin_layout_draft(
                     + "；".join(geometry_blockers[:5]),
                 )
             mold_relocation_warnings: list[str] = []
-            if floor_code.strip().upper() == "1F":
-                mold_relocations = plan_mold_rack_layout_relocations(
-                    db,
-                    load_effective_warehouse_twin_floor_for_edit("1F"),
-                )
-                mold_relocation_warnings = mold_rack_layout_relocation_warnings(
-                    mold_relocations
-                )
+            mold_blockers = mold_rack_layout_usage_blockers(db, load_effective_warehouse_twin_floor_for_edit(floor_code))
+            if mold_blockers:
+                raise HTTPException(status_code=409, detail="模具层格仍有实物：" + "；".join(mold_blockers[:5]))
             result = validate_warehouse_twin_layout_draft(
                 floor_code,
                 expected_revision=validation_revision,
@@ -11940,14 +11963,9 @@ def _publish_twin_layout_draft_locked(
 
     mold_relocations = []
     mold_relocation_warnings: list[str] = []
-    if floor_code.strip().upper() == "1F":
-        mold_relocations = plan_mold_rack_layout_relocations(
-            db,
-            load_effective_warehouse_twin_floor_for_edit("1F"),
-        )
-        mold_relocation_warnings = mold_rack_layout_relocation_warnings(
-            mold_relocations
-        )
+    mold_blockers = mold_rack_layout_usage_blockers(db, load_effective_warehouse_twin_floor_for_edit(floor_code))
+    if mold_blockers:
+        raise HTTPException(status_code=409, detail="模具层格仍有实物：" + "；".join(mold_blockers[:5]))
     blockers = _formal_area_publish_blockers(
         db,
         floor_code,
@@ -11973,24 +11991,6 @@ def _publish_twin_layout_draft_locked(
             additional_warnings=mold_relocation_warnings,
             mold_location_reassignment_count=len(mold_relocations),
         )
-        if result.applied:
-            for relocation in mold_relocations:
-                movement_key = "layout-publish:" + hashlib.sha256(
-                    (
-                        f"{payload.operation_key}|{relocation.mold_tool_id}|"
-                        f"{relocation.to_location}"
-                    ).encode("utf-8")
-                ).hexdigest()[:48]
-                confirm_mold_location_move(
-                    db,
-                    mold_code=relocation.mold_code,
-                    target_location=relocation.to_location,
-                    expected_version=relocation.expected_version,
-                    idempotency_key=movement_key,
-                    actor_id=user.id,
-                    source="layout_publish",
-                    note=f"地图发布自动归位：{relocation.reason}",
-                )
         coordinate_adjustments = []
         if result.applied:
             from app.services.warehouse_location_geometry_draft import apply_adjustments
@@ -13245,7 +13245,8 @@ def _formal_rack_archive_blockers(
             return False
         return any(re.search(r"(?<![A-Z0-9])" + re.escape(marker) + r"(?![A-Z0-9])", text) for marker in markers)
     for mold in db.scalars(select(MoldTool).where(or_(MoldTool.is_active.is_(True), MoldTool.archive_status == "archived"))).all():
-        if references_rack(mold.rack_location, mold_markers):
+        guide = describe_mold_location(mold.rack_location) if str(mold.rack_location or "").upper().startswith("MCELL-") else {}
+        if guide.get("rack_id") == rack_id or references_rack(mold.rack_location, mold_markers):
             blockers.append("仍有实体模具引用该货架，不能删除")
             break
     for plate in db.scalars(select(PrintingPlate).where(PrintingPlate.status.in_(("active", "damaged")))).all():
@@ -14003,6 +14004,17 @@ def create_twin_layout_rack(
         draft_snapshot = snapshot_warehouse_twin_layout_draft()
         mutation = None
         try:
+            if payload.mold_rack_code:
+                for code in ("1F","3F","4F"):
+                    if code == floor_code.strip().upper():
+                        continue
+                    try:
+                        other=load_effective_warehouse_twin_floor_for_edit(code)
+                    except (WarehouseTwinLayoutNotFoundError,WarehouseTwinLayoutEditNotFoundError):
+                        continue
+                    if any(str(r.get("mold_rack_code") or "").upper()==payload.mold_rack_code
+                           for r in [*(other.get("racks") or []),*(other.get("retired_racks") or [])]):
+                        raise HTTPException(status_code=409,detail="该模具架号已在其他楼层使用或归档")
             mutation = create_warehouse_twin_rack(
                 floor_code,
                 expected_revision=payload.expected_revision,
@@ -14101,6 +14113,9 @@ def update_twin_layout_rack(
                 values=_rack_layout_values(payload),
             )
             if mutation.applied:
+                mold_blockers = mold_rack_layout_usage_blockers(db, load_effective_warehouse_twin_floor_for_edit(floor_code))
+                if mold_blockers:
+                    raise HTTPException(status_code=409, detail="；".join(mold_blockers[:5]))
                 _twin_layout_asset_log(
                     db,
                     request=request,
@@ -16566,6 +16581,14 @@ def _twin_reference_feature_codes(kind: str, location_text: str | None) -> list[
     return [code for code in candidates if code in normalized]
 
 
+def _mold_layout_locked(function):
+    @wraps(function)
+    def locked(*args, **kwargs):
+        with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+            return function(*args, **kwargs)
+    return locked
+
+
 def _assert_asset_location_operational(
     db: Session,
     *,
@@ -16583,6 +16606,10 @@ def _assert_asset_location_operational(
         asset_kind=asset_kind,
         location_text=normalized,
     )
+    if normalized.startswith("MCELL-") and describe_mold_location(normalized).get("kind") != "storage_cell":
+        raise HTTPException(status_code=409,detail="模具格已停用或不存在，请刷新后重新选择")
+    if normalized.startswith("MCELL-") and (not floor_code or warehouse_floor_for_code(db,floor_code) is None):
+        raise HTTPException(status_code=409,detail="模具格未绑定有效正式楼层，请刷新布局")
     if claim_floor and floor_code:
         _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
     try:
@@ -16647,12 +16674,12 @@ def _assert_asset_location_operational(
                 detail="该模具封存区域已经归档，不能再移入模具。",
             )
         return
-    if floor_code != "1F":
+    if floor_code not in {"1F","3F","4F"}:
         return
-    raw_floor = load_warehouse_twin_floor("1F")
+    raw_floor = load_warehouse_twin_floor(floor_code)
     active_floor = overlay_formal_area_bindings(
         db,
-        floor_code="1F",
+        floor_code=floor_code,
         floor_layout=raw_floor,
         include_draft=False,
     )
@@ -16764,6 +16791,13 @@ def _twin_mold_resources(
     )
     resources: list[dict] = []
     for mold in response.get("items") or []:
+        if visible_customer_ids is not None:
+            body=db.get(MoldTool,int(mold["id"]))
+            if body is None:
+                continue
+            if not _visible_mold_products(body,visible_customer_ids) and not _visible_mold_customer_links(body,visible_customer_ids):
+                continue
+            mold=_mold_tool_dict(body,visible_customer_ids)
         visible_products = [
             item
             for item in (
@@ -16774,7 +16808,7 @@ def _twin_mold_resources(
             if visible_customer_ids is None
             or item.get("customer_id") in visible_customer_ids
         ]
-        if visible_customer_ids is not None and not visible_products:
+        if visible_customer_ids is not None and not visible_products and not mold.get("associated_customers"):
             continue
         guide = describe_mold_location(str(mold.get("rack_location") or ""))
         location_text = str(mold.get("rack_location") or "")
@@ -16785,7 +16819,9 @@ def _twin_mold_resources(
                     *(
                         mold_location_feature_codes(
                             location_text,
-                            floor_layout=floor1_layout,
+                            floor_layout=(floor1_layout if guide.get("floor") == "1F" else
+                                overlay_formal_area_bindings(db,floor_code=guide["floor"],
+                                    floor_layout=load_warehouse_twin_floor(guide["floor"]),include_draft=False)) if guide.get("floor") in {"1F","3F","4F"} else floor1_layout,
                         )
                         if floor1_layout is not None
                         else []
@@ -16800,8 +16836,11 @@ def _twin_mold_resources(
         resources.append(
             {
                 "resource_id": f"mold:{mold.get('id')}",
+                "mold_id": mold.get("id"),
+                "rack_id": guide.get("rack_id"),
+                "cell_id": guide.get("location_id"),
                 "kind": "mold",
-                "primary_code": mold.get("mold_code"),
+                "primary_code": next((p.get("product_code") for p in visible_products if p.get("product_code")),None) or mold.get("label_name") or mold.get("display_name"),
                 "title": mold.get("display_name") or mold.get("mold_name") or "模具",
                 "subtitle": (
                     f"封存待复用 · {product_summary or '无历史绑定'}"
@@ -19373,6 +19412,8 @@ def _mold_binding_dict(row: MoldTool, product: Product) -> dict:
         ),
         "product_code": product.product_code,
         "product_name": product.product_name,
+        "customer_drawing_number": product.customer_drawing_number,
+        "customer_drawing_display": product.customer_drawing_display,
         "customer_material_code": product.customer_material_code,
         "version": product.version,
         "specification": " × ".join(
@@ -19762,6 +19803,8 @@ def _mold_tools_query(
                         Product.product_code.like(pattern),
                         Product.customer_material_code.like(pattern),
                         Product.product_name.like(pattern),
+                        Product.customer_drawing_number.like(pattern),
+                        Product.customer_drawing_display.like(pattern),
                         Customer.name.like(pattern),
                         Customer.chinese_short_name.like(pattern),
                         Customer.customer_code.like(pattern),
@@ -20036,7 +20079,7 @@ def list_mold_tools_by_map_area(
     )
     if feature is None:
         raise HTTPException(status_code=404, detail="实测地图区域不存在")
-    if "mold" not in str(feature.get("subtype") or "").casefold():
+    if "mold" not in str(feature.get("subtype") or "").casefold() and "mold" not in (feature.get("allowed_inventory_types") or []):
         raise HTTPException(status_code=422, detail="该实测地图区域不是模具区域")
 
     rack_codes = sorted(
@@ -20057,7 +20100,7 @@ def list_mold_tools_by_map_area(
         db=db,
         user=user,
         q=q,
-        include_inactive=False,
+        include_inactive=True,
     )
     if allowed_customer_ids == set() or not rack_codes:
         return {
@@ -20081,6 +20124,10 @@ def list_mold_tools_by_map_area(
                 normalized_location.like(f"{prefix}-%"),
             )
         )
+    cell_codes=[c["location_code"] for r in floor.get("racks") or []
+                if str(r.get("mold_rack_code") or "").upper() in rack_codes
+                for c in mold_rack_structure(r).get("cells") or []]
+    location_filters.append(func.upper(func.trim(MoldTool.rack_location)).in_(cell_codes))
     query = query.where(or_(*location_filters))
     total = int(
         db.scalar(
@@ -20150,23 +20197,20 @@ def list_mold_tools_by_map_rack(
         db=db,
         user=user,
         q=q,
-        include_inactive=False,
+        include_inactive=True,
     )
     normalized_location = func.upper(func.trim(MoldTool.rack_location))
     prefix = f"{floor_code}-M-{rack_code}"
-    query = query.where(
-        or_(
-            normalized_location == prefix,
-            normalized_location.like(f"{prefix}-%"),
-        )
-    )
+    query = query.where(or_(
+        normalized_location == prefix, normalized_location.like(f"{prefix}-%"),
+        normalized_location.in_([c["location_code"] for c in structure.get("cells") or []]),
+    ))
     total = int(
         db.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
         or 0
     )
     rows = db.scalars(
         query.order_by(MoldTool.rack_location, MoldTool.mold_code, MoldTool.id)
-        .limit(500)
     ).unique().all()
     return {
         "floor_code": floor_code,
@@ -20186,6 +20230,7 @@ def _mold_location_preview_dict(
         for occupant in preview.occupants
         if allowed_customer_ids is None
         or bool(_visible_mold_products(occupant, allowed_customer_ids))
+        or bool(_visible_mold_customer_links(occupant, allowed_customer_ids))
     ]
     return {
         "mold": _mold_tool_dict(preview.mold, allowed_customer_ids),
@@ -20202,7 +20247,7 @@ def _mold_location_preview_dict(
             {
                 "mold_tool_id": occupant.id,
                 "mold_code": occupant.mold_code,
-                "mold_name": occupant.mold_name,
+                "mold_name": _mold_display_name(occupant, allowed_customer_ids),
             }
             for occupant in visible_occupants
         ],
@@ -20216,6 +20261,8 @@ def _mold_location_movement_dict(row: MoldLocationMovement) -> dict:
         "mold_code": row.mold_code_snapshot,
         "from_location": row.from_location,
         "to_location": row.to_location,
+        "from_location_display": describe_mold_location(row.from_location)["prompt"],
+        "to_location_display": describe_mold_location(row.to_location)["prompt"],
         "actor_id": row.actor_id,
         "moved_at": utc_naive_to_api(row.moved_at),
         "idempotency_key": row.idempotency_key,
@@ -20427,6 +20474,7 @@ def _append_mold_archive_log(
 
 
 @router.post("/molds/{mold_id}/archive")
+@_mold_layout_locked
 def archive_mold(
     mold_id: int,
     payload: MoldArchiveConfirmPayload,
@@ -20462,6 +20510,7 @@ def archive_mold(
 
 
 @router.post("/molds/{mold_id}/restore")
+@_mold_layout_locked
 def restore_mold(
     mold_id: int,
     payload: MoldRestoreConfirmPayload,
@@ -20496,24 +20545,96 @@ def restore_mold(
         raise HTTPException(status_code=409, detail="模具恢复事实已变化，请刷新后重试") from error
 
 
+@router.get("/molds/cell")
+def get_mold_cell_contents(cell_id: str = Query(min_length=36,max_length=42),
+                           db: Session = Depends(get_db), user: User = Depends(can_read)) -> dict:
+    resolved=find_mold_cell(cell_id)
+    if resolved is None:
+        raise HTTPException(status_code=404,detail="模具格已停用或不存在")
+    floor,rack,cell=resolved
+    _assert_asset_location_operational(db,asset_kind="mold",location_text=cell["location_code"])
+    active=overlay_formal_area_bindings(db,floor_code=floor["floor_code"],floor_layout=floor,include_draft=False)
+    if not any(r.get("id")==rack["id"] for r in active.get("racks") or []):
+        raise HTTPException(status_code=404,detail="模具架所在区域已停用")
+    query,scope=_mold_tools_query(db=db,user=user,q=None,include_inactive=True)
+    rows=db.scalars(query.where(func.upper(func.trim(MoldTool.rack_location))==cell["location_code"])
+                   .order_by(MoldTool.mold_code,MoldTool.id)).unique().all()
+    return {"floor_code":floor["floor_code"],"rack":mold_rack_structure(rack),"cell":cell,
+            "items":[_mold_tool_dict(r,scope) for r in rows],"total":len(rows)}
+
+
+@router.get("/molds/location-labels")
+def get_mold_location_labels(floor_code: Literal["1F","3F","4F"],
+        rack_id: str | None = None, feature_code: str | None = None,
+        db: Session = Depends(get_db), user: User = Depends(can_read)) -> dict:
+    if not rack_id and not feature_code:
+        raise HTTPException(status_code=422,detail="请选择模具架或模具区域")
+    floor=overlay_formal_area_bindings(db,floor_code=floor_code,
+        floor_layout=load_warehouse_twin_floor(floor_code),include_draft=False)
+    racks=[r for r in floor.get("racks") or [] if r.get("mold_cells")
+           and (not rack_id or str(r.get("id"))==rack_id)
+           and (not feature_code or str(r.get("area_code") or "").upper()==feature_code.upper()
+                or str(r.get("area_feature_id") or "")==feature_code)]
+    if not racks:
+        raise HTTPException(status_code=404,detail="未找到可打印的模具货架")
+    origin=load_settings().browser_url.rstrip("/")
+    labels=[]
+    def add(kind,rack,cell=None):
+        label=f"模具位 {cell['alias']}" if cell else f"模具{rack['mold_rack_code']}架"
+        url=(f"{origin}/m/mold-cell?cell_id={cell['id']}" if cell else
+             f"{origin}/m/mold-rack?floor_code={floor_code}&rack_id={rack['id']}")
+        qr=qrcode.make(url); buffer=BytesIO(); qr.save(buffer,format="PNG")
+        labels.append({"kind":kind,"rack_id":rack["id"],"cell_id":cell["id"] if cell else None,
+                       "label":label,"alias":cell["alias"] if cell else rack["mold_rack_code"],"url":url,
+                       "qr_code":"data:image/png;base64,"+base64.b64encode(buffer.getvalue()).decode("ascii")})
+    for rack in racks:
+        add("rack",rack)
+        for cell in mold_rack_structure(rack)["cells"]: add("cell",rack,cell)
+    return {"floor_code":floor_code,"labels":labels,"total":len(labels)}
+
+
+@router.post("/molds/location-movement/batch")
+def confirm_mold_location_batch_movement(payload: MoldLocationBatchPayload,request: Request,
+        db: Session = Depends(get_db),user: User = Depends(can_operate)) -> dict:
+    try:
+        with WAREHOUSE_TWIN_LAYOUT_TRANSACTION_LOCK:
+            _assert_asset_location_operational(db,asset_kind="mold",location_text=payload.target_location,claim_floor=True)
+            scope=_mold_customer_scope(user,db)
+            for item in payload.items:
+                preview=preview_mold_location_move(db,mold_code=item.mold_code,target_location=payload.target_location)
+                _require_mold_customer_scope(preview.mold,scope)
+            results,replayed=confirm_mold_location_batch(db,items=[i.model_dump() for i in payload.items],
+                target_location=payload.target_location,idempotency_key=payload.idempotency_key,
+                actor_id=user.id,source=payload.source,note=payload.note)
+            for result in results:
+                _append_mold_location_move_log(db,request=request,user=user,result=result,description="批量归位模具")
+            db.commit()
+            return {"items":[_mold_location_move_response(r,scope) for r in results],
+                    "idempotent_replay":replayed,"total":len(results)}
+    except MoldLocationError as error:
+        db.rollback()
+        raise HTTPException(status_code=error.status_code,detail=str(error)) from error
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.get("/molds/location-options")
 def get_mold_location_options(
+    floor_code: Literal["1F", "3F", "4F"] | None = Query(default=None),
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
-    floor_layout = overlay_formal_area_bindings(
-        db,
-        floor_code="1F",
-        floor_layout=load_warehouse_twin_floor("1F"),
-        include_draft=False,
-    )
-    return {
-        "floor_code": "1F",
-        "position_order": None,
-        "position_numbers_are_dynamic": False,
-        "storage_rule": "rack_level_grid",
-        "racks": one_floor_mold_location_options(floor_layout=floor_layout),
-    }
+    racks=[]
+    for raw in published_mold_floors():
+        code=raw["floor_code"]
+        if floor_code and code != floor_code:
+            continue
+        floor=overlay_formal_area_bindings(db,floor_code=code,floor_layout=raw,include_draft=False)
+        options=one_floor_mold_location_options(floor) if code == "1F" else dynamic_mold_location_options(floor)
+        racks.extend({**r,"floor_code":code} for r in options)
+    return {"floor_code":floor_code,"position_order":None,"position_numbers_are_dynamic":False,
+            "storage_rule":"rack_level_grid","racks":racks}
 
 
 @router.post("/molds/location-movement/preview")
@@ -20541,6 +20662,7 @@ def preview_mold_location_movement(
 
 
 @router.post("/molds/location-movement/confirm")
+@_mold_layout_locked
 def confirm_mold_location_movement(
     payload: MoldLocationConfirmPayload,
     request: Request,
@@ -21007,7 +21129,8 @@ def _label_v7_consistent_value(values: list[str]) -> str:
 def _label_rack_location(value: str | None, *, maximum_characters: int = 16) -> str:
     """Fit the V7 position line while making every omitted suffix visible."""
 
-    location = str(value or "").strip()
+    guide = describe_mold_location(str(value or ""))
+    location = str(guide.get("alias") or value or "").strip()
     if len(location) <= maximum_characters:
         return location
     return f"{location[: maximum_characters - 1]}…"
@@ -21104,6 +21227,7 @@ def _mold_label_dict(
         "mold_code": row.mold_code,
         "rack_location": row.rack_location,
         "location_guide": basics["location_guide"],
+        "label_location_alias": basics["location_guide"].get("alias"),
         "is_active": row.is_active,
         "printable": printability_error is None,
         "printability_error": printability_error,
@@ -23089,6 +23213,7 @@ def search_mold_binding_products(
 
 
 @router.post("/molds", status_code=201)
+@_mold_layout_locked
 def create_mold_tool(
     payload: MoldToolPayload,
     request: Request,
@@ -23281,6 +23406,7 @@ def create_mold_tool(
 
 
 @router.put("/molds/{mold_id}")
+@_mold_layout_locked
 def update_mold_tool(
     mold_id: int,
     payload: MoldToolPayload,
@@ -23784,6 +23910,7 @@ def unbind_mold_product(
 
 
 @router.put("/molds/{mold_id}/enable")
+@_mold_layout_locked
 def enable_mold_tool(
     mold_id: int,
     request: Request,

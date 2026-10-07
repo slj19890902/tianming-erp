@@ -241,8 +241,8 @@ def restore_mold_tool(
     key = _validated_key(idempotency_key)
     target = normalize_mold_location_code(target_location)
     guide = describe_mold_location(target)
-    if guide.get("floor") != "1F":
-        raise MoldLocationError("封存模具只能恢复到已发布的一楼正式模具位置", status_code=422)
+    if guide.get("floor") != "1F" and guide.get("kind") != "storage_cell":
+        raise MoldLocationError("封存模具只能恢复到已发布的正式模具格或原一楼位置", status_code=422)
     existing = _movement_by_key(db, key)
     if existing is not None:
         return _idempotent_result(

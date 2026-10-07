@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
@@ -67,8 +68,8 @@ REVERSE_CREASE_ADMIN_OVERRIDE = "REVERSE_CREASE_ADMIN_OVERRIDE"
 @dataclass(frozen=True)
 class SemiFinishedSignature:
     customer_id: int
-    board_length_mm: int
-    board_width_mm: int
+    board_length_mm: SheetDimension
+    board_width_mm: SheetDimension
     normalized_material_code: str
     flute_type: str
     component_type: str
@@ -172,8 +173,8 @@ def save_order_item_semi_requirement(
     *,
     order_item_id: int,
     component_type: str,
-    board_length_mm: int,
-    board_width_mm: int,
+    board_length_mm: SheetDimension,
+    board_width_mm: SheetDimension,
     material_code: str,
     flute_type: str,
     pieces_per_box: int,
@@ -900,8 +901,8 @@ def semi_finished_candidates_for_bom_component(db: Session, *, snapshot_id: int,
     if component_type not in _snapshot_component_types(snapshot):
         raise WarehouseInventoryError("组件物理片组不匹配", 409)
     prefix = "snapshot_component_base_" if component_type == "base" else "snapshot_component_"
-    length = int(getattr(snapshot, prefix + "report_length_mm") or 0)
-    width = int(getattr(snapshot, prefix + "report_width_mm") or 0)
+    length = sheet_dimension_number(getattr(snapshot, prefix + "report_length_mm") or 0)
+    width = sheet_dimension_number(getattr(snapshot, prefix + "report_width_mm") or 0)
     if length <= 0 or width <= 0:
         raise WarehouseInventoryError("组件报料长宽必须大于0", 409)
     try:
@@ -941,8 +942,8 @@ def semi_finished_candidates_for_product(
     *,
     product_id: int,
     customer_id: int,
-    board_length_mm: int,
-    board_width_mm: int,
+    board_length_mm: SheetDimension,
+    board_width_mm: SheetDimension,
     material_code: str,
     flute_type: str,
     component_type: str,
@@ -1016,8 +1017,8 @@ def browse_semi_finished_inventory_for_product(
     *,
     product_id: int,
     customer_id: int,
-    board_length_mm: int,
-    board_width_mm: int,
+    board_length_mm: SheetDimension,
+    board_width_mm: SheetDimension,
     material_code: str,
     flute_type: str,
     component_type: str,

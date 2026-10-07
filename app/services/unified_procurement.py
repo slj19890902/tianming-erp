@@ -4,6 +4,7 @@ This module never creates inventory, reservations or sales orders. Its caller ow
 the transaction, including creation of ordinary/BOM purchase facts.
 """
 from __future__ import annotations
+from app.core.sheet_dimensions import sheet_dimension_number
 
 import hashlib
 import json
@@ -351,8 +352,8 @@ def attach_bom_sources(db, *, purchase, lines, user):
             layer_count_snapshot=bom.snapshot_component_layer_count if bom else order_item.layer_count,
             flute_type_snapshot=bom.snapshot_component_flute_type if bom else order_item.flute_type,
             order_number=order_item.item_order_number, product_code=source.product_code_snapshot,
-            product_name=source.product_name_snapshot, report_length_mm=int(source.cardboard_len),
-            report_width_mm=int(source.cardboard_width), quantity=source.required_piece_qty,
+            product_name=source.product_name_snapshot, report_length_mm=sheet_dimension_number(source.cardboard_len),
+            report_width_mm=sheet_dimension_number(source.cardboard_width), quantity=source.required_piece_qty,
             requisition_qty=source.requisition_qty, stock_deduction_qty=source.inventory_deducted_qty,
             cutting_mode=source.special_process, pieces_per_box=source.pieces_per_box,
             required_piece_qty=source.required_piece_qty, customer_name=customer.name,

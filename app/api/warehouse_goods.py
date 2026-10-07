@@ -1,3 +1,4 @@
+from app.core.sheet_dimensions import SheetDimension, validate_sheet_dimensions
 import hashlib
 import json
 from datetime import date
@@ -84,8 +85,8 @@ class SheetEntry(BaseModel):
     quantity: int = Field(gt=0, le=10000000)
     stock_date: date
     internal_name: str = Field(min_length=1, max_length=200)
-    board_length_mm: int = Field(gt=0, le=20000)
-    board_width_mm: int = Field(gt=0, le=20000)
+    board_length_mm: SheetDimension = Field(gt=0, le=20000)
+    board_width_mm: SheetDimension = Field(gt=0, le=20000)
     layer_count: Literal[1, 3, 5, 7]
     flute_type: Literal["NONE", "A", "B", "E", "AB", "BE", "AAA", "ABC"]
     supplier_id: int | None = Field(default=None, ge=1)
@@ -102,6 +103,7 @@ class SheetEntry(BaseModel):
 
     @model_validator(mode="after")
     def single_layer_entry(self):
+        validate_sheet_dimensions(self.board_length_mm, self.board_width_mm, layer_count=self.layer_count, flute_type=self.flute_type)
         if self.facts.processing == "creased":
             self.crease_type = "压线"
             values = [self.crease_left_mm,self.crease_middle_mm,self.crease_right_mm]
@@ -561,8 +563,8 @@ class UnassignedFinishedEntry(BaseModel):
     width_mm: int = Field(gt=0, le=20000)
     height_mm: int = Field(gt=0, le=20000)
     box_style: Literal['A1', '其他'] = 'A1'
-    report_length_mm: int | None = Field(default=None, gt=0, le=20000)
-    report_width_mm: int | None = Field(default=None, gt=0, le=20000)
+    report_length_mm: SheetDimension | None = Field(default=None, gt=0, le=20000)
+    report_width_mm: SheetDimension | None = Field(default=None, gt=0, le=20000)
     splice_mode: Literal['single', 'double'] = 'single'
     flap_mm: int = Field(default=30, gt=0, le=200)
     material_id: int = Field(gt=0)

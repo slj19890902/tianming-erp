@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import SheetDimension
 
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
@@ -98,15 +99,15 @@ class ConvertPayload(BaseModel):
     flute_type: str | None = Field(default=None, max_length=20)
     splice_mode: str | None = Field(default=None, max_length=20)
     flap_mm: int | None = Field(default=None, ge=0)
-    report_length_mm: int | None = Field(default=None, gt=0)
-    report_width_mm: int | None = Field(default=None, gt=0)
+    report_length_mm: SheetDimension | None = Field(default=None, gt=0)
+    report_width_mm: SheetDimension | None = Field(default=None, gt=0)
     crease_type: str | None = Field(default=None, max_length=20)
     crease_left_mm: int | None = Field(default=None, ge=0)
     crease_middle_mm: int | None = Field(default=None, gt=0)
     crease_right_mm: int | None = Field(default=None, ge=0)
     report_notes: str | None = None
-    base_report_length_mm: int | None = Field(default=None, gt=0)
-    base_report_width_mm: int | None = Field(default=None, gt=0)
+    base_report_length_mm: SheetDimension | None = Field(default=None, gt=0)
+    base_report_width_mm: SheetDimension | None = Field(default=None, gt=0)
     base_crease_type: str | None = Field(default=None, max_length=20)
     base_crease_left_mm: int | None = Field(default=None, ge=0)
     base_crease_middle_mm: int | None = Field(default=None, gt=0)

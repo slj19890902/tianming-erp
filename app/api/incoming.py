@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number
 
 import hashlib
 import hmac
@@ -3661,8 +3662,8 @@ def _filter_received_history_rows(
     product_code: str | None,
     product_name: str | None,
     supplier_name: str | None,
-    board_length_mm: int | None,
-    board_width_mm: int | None,
+    board_length_mm: SheetDimension | None,
+    board_width_mm: SheetDimension | None,
     date_from: date | None,
     date_to: date | None,
     receipt_status: str | None,
@@ -3693,9 +3694,9 @@ def _filter_received_history_rows(
             row.get("snapshot_supplier_name") or ""
         ).lower():
             return False
-        if board_length_mm is not None and int(row.get("cardboard_len") or 0) != board_length_mm:
+        if board_length_mm is not None and sheet_dimension_number(row.get("cardboard_len") or 0) != board_length_mm:
             return False
-        if board_width_mm is not None and int(row.get("cardboard_width") or 0) != board_width_mm:
+        if board_width_mm is not None and sheet_dimension_number(row.get("cardboard_width") or 0) != board_width_mm:
             return False
         received_at = row.get("material_received_at")
         received_date = received_at.date() if isinstance(received_at, datetime) else None
@@ -4090,10 +4091,10 @@ def incoming_production_card(
         "production_unit": product.unit if product is not None else "只",
         "cutting_mode": row.get("special_process") or "一开一",
         "board_length_mm": (
-            int(row["cardboard_len"]) if row.get("cardboard_len") is not None else None
+            sheet_dimension_number(row["cardboard_len"]) if row.get("cardboard_len") is not None else None
         ),
         "board_width_mm": (
-            int(row["cardboard_width"])
+            sheet_dimension_number(row["cardboard_width"])
             if row.get("cardboard_width") is not None
             else None
         ),
@@ -4392,8 +4393,8 @@ def history_received_items(
     product_code: str | None = None,
     product_name: str | None = None,
     supplier_name: str | None = None,
-    board_length_mm: int | None = Query(default=None, ge=1),
-    board_width_mm: int | None = Query(default=None, ge=1),
+    board_length_mm: SheetDimension | None = Query(default=None, ge=1),
+    board_width_mm: SheetDimension | None = Query(default=None, ge=1),
     date_from: date | None = None,
     date_to: date | None = None,
     receipt_status: str | None = None,

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import sheet_dimension_number
 
 from app.services.replenishment_receipt_progress import receipt_progress
 
@@ -373,8 +374,8 @@ def product_replenishment_signature(
         defaults["material_supplier_name"] or "",
         int(defaults["layer_count"]),
         defaults["flute_type"],
-        int(defaults["report_length_mm"]),
-        int(defaults["report_width_mm"]),
+        sheet_dimension_number(defaults["report_length_mm"]),
+        sheet_dimension_number(defaults["report_width_mm"]),
         defaults["crease_type"] or "",
         *crease_segments,
         int(output_per_sheet or defaults["output_per_sheet"]),
@@ -802,8 +803,8 @@ def _replenishment_item_signature(
         str(item.order.supplier_name or "").strip(),
         int(item.layer_count),
         str(item.flute_type).strip().upper(),
-        int(item.report_length_mm),
-        int(item.report_width_mm),
+        sheet_dimension_number(item.report_length_mm),
+        sheet_dimension_number(item.report_width_mm),
         crease_type,
         *crease_segments,
         int(item.stock_yield_per_sheet or 1),
@@ -901,8 +902,8 @@ def customer_board_preparation_coverage(
             db,
             product_id=product.id,
             customer_id=product.customer_id,
-            board_length_mm=int(defaults["report_length_mm"]),
-            board_width_mm=int(defaults["report_width_mm"]),
+            board_length_mm=sheet_dimension_number(defaults["report_length_mm"]),
+            board_width_mm=sheet_dimension_number(defaults["report_width_mm"]),
             material_code=str(defaults["material_code"]),
             flute_type=str(defaults["flute_type"]),
             component_type="whole",
@@ -1907,8 +1908,8 @@ def receive_replenishment_item(
                 material_code=item.material_code_snapshot or "",
                 layer_count=int(item.layer_count or 0),
                 flute_type=item.flute_type or "",
-                board_length_mm=int(item.report_length_mm or 0),
-                board_width_mm=int(item.report_width_mm or 0),
+                board_length_mm=sheet_dimension_number(item.report_length_mm or 0),
+                board_width_mm=sheet_dimension_number(item.report_width_mm or 0),
                 sheet_type=item.sheet_type,
                 component_type=item.component_type,
                 pieces_per_box=item.pieces_per_box,

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.models.dimension_type import SheetDimensionColumn
 
 from datetime import date, datetime
 from typing import TYPE_CHECKING
@@ -373,8 +374,8 @@ class InventoryOnboardingLine(Base):
     supplier_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     layer_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     flute_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    board_length_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    board_width_mm: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    board_length_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
+    board_width_mm: Mapped[int | float | None] = mapped_column(SheetDimensionColumn, nullable=True)
     sheet_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
     component_type: Mapped[str | None] = mapped_column(
         String(20), nullable=True

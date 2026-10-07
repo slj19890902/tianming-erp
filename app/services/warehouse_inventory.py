@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import SheetDimension, validate_sheet_dimensions
 
 from dataclasses import dataclass
 from datetime import date
@@ -4718,8 +4719,8 @@ def manual_semi_finished_in(
     material_code: str,
     layer_count: int,
     flute_type: str,
-    board_length_mm: int,
-    board_width_mm: int,
+    board_length_mm: SheetDimension,
+    board_width_mm: SheetDimension,
     sheet_type: str,
     component_type: str = "whole",
     pieces_per_box: int = 1,
@@ -4790,6 +4791,10 @@ def manual_semi_finished_in(
         raise WarehouseInventoryError(
             "单层仅支持无楞，三层仅支持A/B/E楞，五层仅支持AB/BE楞，七层仅支持AAA/ABC楞"
         )
+    try:
+        validate_sheet_dimensions(board_length_mm, board_width_mm, layer_count=layer_count, flute_type=flute)
+    except ValueError as error:
+        raise WarehouseInventoryError(str(error)) from error
     if sheet_type not in {"raw_board", "net_sheet", "creased_sheet"}:
         raise WarehouseInventoryError("片料类型无效")
     _location(

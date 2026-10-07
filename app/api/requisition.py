@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number
 
 from app.services.business_transaction import commit_business_change
 
@@ -1536,8 +1537,8 @@ class PendingSafeSemiInventoryBatchItem(BaseModel):
     requested_requirement_quantity: int = Field(gt=0)
     lots: list[PendingSemiInventoryLot] = Field(min_length=1)
     warning_acknowledged_codes: list[str] = Field(default_factory=list)
-    board_length_mm: int | None = Field(default=None, gt=0)
-    board_width_mm: int | None = Field(default=None, gt=0)
+    board_length_mm: SheetDimension | None = Field(default=None, gt=0)
+    board_width_mm: SheetDimension | None = Field(default=None, gt=0)
 
     @field_validator("component_type")
     @classmethod
@@ -1574,8 +1575,8 @@ class StockPolicyPayload(BaseModel):
     material_code: str | None = Field(default=None, max_length=100)
     layer_count: int | None = None
     flute_type: str | None = Field(default=None, max_length=20)
-    report_length_mm: int | None = Field(default=None, gt=0)
-    report_width_mm: int | None = Field(default=None, gt=0)
+    report_length_mm: SheetDimension | None = Field(default=None, gt=0)
+    report_width_mm: SheetDimension | None = Field(default=None, gt=0)
     sheet_type: str = "raw_board"
     component_type: str = "whole"
     pieces_per_box: int = Field(default=1, gt=0)
@@ -1637,8 +1638,8 @@ class StockReplenishmentItemPayload(BaseModel):
     material_code: str | None = Field(default=None, max_length=100)
     layer_count: int | None = None
     flute_type: str | None = Field(default=None, max_length=20)
-    report_length_mm: int | None = Field(default=None, gt=0)
-    report_width_mm: int | None = Field(default=None, gt=0)
+    report_length_mm: SheetDimension | None = Field(default=None, gt=0)
+    report_width_mm: SheetDimension | None = Field(default=None, gt=0)
     crease_type: str | None = Field(default=None, max_length=20)
     crease_left_mm: int | None = Field(default=None, ge=0)
     crease_middle_mm: int | None = Field(default=None, ge=0)
@@ -2880,12 +2881,12 @@ class _PendingRequisitionReadContext:
         candidate_lots: list[InventoryLot],
     ) -> list[InventoryLot]:
         requirement = self._regular_semi_requirement(item, component)
-        expected_length = int(
+        expected_length = sheet_dimension_number(
             requirement.board_length_mm
             if requirement is not None
             else spec.get("board_length_mm") or 0
         )
-        expected_width = int(
+        expected_width = sheet_dimension_number(
             requirement.board_width_mm
             if requirement is not None
             else spec.get("board_width_mm") or 0
@@ -2944,8 +2945,8 @@ class _PendingRequisitionReadContext:
                 continue
             if (
                 int(detail.owner_customer_id or 0) != int(order.customer_id)
-                or int(detail.board_length_mm or 0) != expected_length
-                or int(detail.board_width_mm or 0) != expected_width
+                or sheet_dimension_number(detail.board_length_mm or 0) != expected_length
+                or sheet_dimension_number(detail.board_width_mm or 0) != expected_width
                 or detail.flute_type != expected_flute
                 or detail.component_type != component
                 or int(detail.pieces_per_box or 0) != expected_pieces
@@ -4423,8 +4424,8 @@ def _safe_customer_board_preparation_options(
 
 
 def _purchase_dimensions(
-    report_length_mm: int | None,
-    report_width_mm: int | None,
+    report_length_mm: SheetDimension | None,
+    report_width_mm: SheetDimension | None,
     cutting_mode: str | None,
 ) -> tuple[Decimal | None, Decimal | None]:
     if not report_length_mm or not report_width_mm:
@@ -4483,8 +4484,8 @@ def _suggested_dimensions(product: Product) -> tuple[Decimal | None, Decimal | N
     if not recommendation["auto_calculated"]:
         return None, None
     return (
-        Decimal(int(recommendation["report_length_mm"])),
-        Decimal(int(recommendation["report_width_mm"])),
+        Decimal(sheet_dimension_number(recommendation["report_length_mm"])),
+        Decimal(sheet_dimension_number(recommendation["report_width_mm"])),
     )
 
 
@@ -8982,8 +8983,8 @@ def _create_supplier_order_for_pending_entries(
         material_id=first_item.material_id,
         layer_count=layer_count,
         flute_type=flute_type,
-        report_length_mm=int(first["cardboard_len"]),
-        report_width_mm=int(first["cardboard_width"]),
+        report_length_mm=sheet_dimension_number(first["cardboard_len"]),
+        report_width_mm=sheet_dimension_number(first["cardboard_width"]),
         crease_type=first_item.snapshot_crease_type,
         crease_left_mm=first_item.snapshot_crease_left_mm,
         crease_middle_mm=first_item.snapshot_crease_middle_mm,
@@ -9034,8 +9035,8 @@ def _create_supplier_order_for_pending_entries(
                     else f"{order_item.snapshot_product_name}{component_suffix}"
                 ),
                 source_key=entry.get("source_key"),
-                report_length_mm=int(entry["cardboard_len"]),
-                report_width_mm=int(entry["cardboard_width"]),
+                report_length_mm=sheet_dimension_number(entry["cardboard_len"]),
+                report_width_mm=sheet_dimension_number(entry["cardboard_width"]),
                 quantity=int(entry["production_required_qty"] or 0),
                 stock_deduction_qty=int(entry.get("inventory_deducted_qty") or 0),
                 requisition_qty=int(entry["requisition_qty"] or 0),
@@ -17435,8 +17436,8 @@ class SupplierOrderCreatePayload(BaseModel):
     material_id: int | None = None
     layer_count: int | None = None
     flute_type: str | None = None
-    report_length_mm: int | None = None
-    report_width_mm: int | None = None
+    report_length_mm: SheetDimension | None = None
+    report_width_mm: SheetDimension | None = None
     crease_type: str | None = None
     crease_left_mm: int | None = None
     crease_middle_mm: int | None = None
@@ -18096,8 +18097,8 @@ def _reserve_semi_inventory_from_pending(
             if (detail.flute_type or "").strip().upper() != expected.flute_type:
                 raise HTTPException(status_code=409, detail="库存楞型与订单楞型不一致，不能用于本次报料")
             dimensions_match = (
-                int(detail.board_length_mm) == int(expected.board_length_mm)
-                and int(detail.board_width_mm) == int(expected.board_width_mm)
+                sheet_dimension_number(detail.board_length_mm) == sheet_dimension_number(expected.board_length_mm)
+                and sheet_dimension_number(detail.board_width_mm) == sheet_dimension_number(expected.board_width_mm)
             )
             if not dimensions_match and not payload.allow_other_dimensions:
                 raise HTTPException(
@@ -18669,8 +18670,8 @@ def auto_use_customer_board_preparation(
                     db,
                     order_item_id=item.id,
                     component_type=str(option["component_type"]),
-                    board_length_mm=int(option["board_length_mm"]),
-                    board_width_mm=int(option["board_width_mm"]),
+                    board_length_mm=sheet_dimension_number(option["board_length_mm"]),
+                    board_width_mm=sheet_dimension_number(option["board_width_mm"]),
                     material_code=str(option["material_code"]),
                     flute_type=str(option["flute_type"]),
                     pieces_per_box=int(option["pieces_per_box"]),
@@ -19961,8 +19962,8 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
                     "order_number": display_number,
                     "product_code": item.product_code_snapshot,
                     "product_name": item.product_name_snapshot,
-                    "report_length_mm": int(item.cardboard_len),
-                    "report_width_mm": int(item.cardboard_width),
+                    "report_length_mm": sheet_dimension_number(item.cardboard_len),
+                    "report_width_mm": sheet_dimension_number(item.cardboard_width),
                     "material_code": item.material_snapshot,
                     "flute_type": flute_type,
                 }
@@ -20893,8 +20894,8 @@ def _build_reported_documents(
                     "order_number": display_order_number(order, registry) if order else None,
                     "product_code": item.product_code_snapshot,
                     "product_name": item.product_name_snapshot,
-                    "report_length_mm": int(item.cardboard_len),
-                    "report_width_mm": int(item.cardboard_width),
+                    "report_length_mm": sheet_dimension_number(item.cardboard_len),
+                    "report_width_mm": sheet_dimension_number(item.cardboard_width),
                     "crease_display": crease_display,
                     "material_code": item.material_snapshot,
                     "flute_type": flute_type,
@@ -20959,8 +20960,8 @@ def list_reported_documents(
     product_name: str | None = None,
     material_code: str | None = None,
     flute_type: str | None = None,
-    report_length_mm: int | None = Query(default=None, ge=1),
-    report_width_mm: int | None = Query(default=None, ge=1),
+    report_length_mm: SheetDimension | None = Query(default=None, ge=1),
+    report_width_mm: SheetDimension | None = Query(default=None, ge=1),
     report_length_min: int | None = Query(default=None, ge=1),
     report_length_max: int | None = Query(default=None, ge=1),
     report_width_min: int | None = Query(default=None, ge=1),
@@ -21315,8 +21316,8 @@ def list_reported_items(
     product_name: str | None = None,
     material_code: str | None = None,
     flute_type: str | None = None,
-    report_length_mm: int | None = Query(default=None, ge=1),
-    report_width_mm: int | None = Query(default=None, ge=1),
+    report_length_mm: SheetDimension | None = Query(default=None, ge=1),
+    report_width_mm: SheetDimension | None = Query(default=None, ge=1),
     supplier_name: str | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     source_type: str | None = None,

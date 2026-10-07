@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.559"
-APP_VERSION_NAME = "订单Excel兼容预送货导入"
+APP_VERSION = "v0.22.560"
+APP_VERSION_NAME = "备库单双栏与E3货位连续编号"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5341,3 +5341,7 @@ APP_CHANGELOG = [*(f"v0.22.558：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["研光、光洋的同一份购买要求书Excel可从订单或预送货入口导入，按文件内容识别客户并保留管理NO及逐行来源。", "预送货按要求数，订单按发注数；两列不一致时明确提示核对，保留原送货Excel、客户权限及重复导入保护。"]
 APP_VERIFICATION_STEPS = ["送货与回单 → 导入预送货 → 研光/光洋Excel，选择原订单文件并解析核对。", "核对要求数、匹配订单和库存，生成送货草稿；订单导入仍使用发注数。"]
 APP_CHANGELOG = [*(f"v0.22.559：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["出货备库单每行并排两组存货编码、货架、数量和实际数量，长编码完整显示，货架只显示楼层、货架号、层和格。", "同名栈板区域的货位统一连续编号，单区域筛选与地图保持一致；E3三个启用区域共26位不再重号，货位身份、库存及历史流水保持。"]
+APP_VERIFICATION_STEPS = ["刷新ERP后打开出货备库单打印预览，核对左右两组及三楼-货H6-1层-1格的位置格式。", "分别选择三个E3栈板区，核对01—26不重复及现有货物仍在原位置；实体打印由管理员验收。"]
+APP_CHANGELOG = [*(f"v0.22.560：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -22,8 +22,10 @@
     table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
     th, td { border: 1px solid #111827; padding: 2.2mm 1.2mm; vertical-align: middle; text-align: center; overflow-wrap: anywhere; line-height: 1.25; }
     th { background: #f3f4f6; font-weight: 700; }
-    .seq { width: 7%; } .code { width: 22%; } .location { width: 36%; text-align: left; }
-    .planned { width: 18%; } .actual { width: 17%; }
+    .code { width: 14%; } .location { width: 20%; text-align: left; }
+    .planned { width: 8%; } .actual { width: 8%; }
+    td.code { font-size: 10px; }
+    .pair-start { border-left: 2px solid #111827; }
     .product-name { font-weight: 700; }
     .spec, .subtotal { margin-top: 1mm; color: #4b5563; font-size: 10px; }
     .subtotal { color: #111827; font-weight: 700; }
@@ -57,7 +59,7 @@
   <div id="state" class="state">正在读取拿货任务和位置……</div>
   <main id="pages" class="pages" hidden></main>
   <script>
-    const ROWS_PER_PAGE = 24;
+    const ROWS_PER_PAGE = 48;
     const taskId = new URLSearchParams(location.search).get("task_id");
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
     const displayDateTime = value => {
@@ -78,6 +80,13 @@
       }
       return body;
     }
+    function printLocation(group, line) {
+      const floor = {1:'一楼',2:'二楼',3:'三楼',4:'四楼'}[group.warehouse_floor] || (group.warehouse_floor ? `${group.warehouse_floor}楼` : '');
+      if (group.address_kind === 'rack_slot' && floor && group.rack_display_name && group.level_no && group.slot_no) {
+        return `${floor}-${group.rack_display_name}-${group.level_no}层-${group.slot_no}格${group.needs_relocation ? '（待归位）' : ''}`;
+      }
+      return group.label || line.employee_location_name || line.current_address_name || line.location_name || '位置待核对';
+    }
     function buildRows(task) {
       const totals = new Map();
       const items = new Map((task.items || []).map(item => [String(item.id), item]));
@@ -92,7 +101,7 @@
             productCode: line.customer_inventory_code || line.product_code || "-",
             productName: line.product_name || "未命名产品",
             specification: line.specification_display || line.specification || "-",
-            location: group.label || line.employee_location_name || line.current_address_name || line.location_name || "位置待核对",
+            location: printLocation(group, line),
             quantity: Number(line.pick_quantity || 0),
             unit: line.unit || "个",
             bundleText: line.bundle_text || "每捆数量待核",
@@ -112,14 +121,21 @@
         return row;
       });
     }
-    function rowHtml(row) {
-      return `<tr>
-        <td class="route">${row.routeSequence || row.sequence}</td>
-        <td><strong>${escapeHtml(row.productCode)}</strong></td>
+    function cellsHtml(row, second = false) {
+      if (!row) return '<td class="pair-start"></td><td></td><td></td><td></td>';
+      return `
+        <td class="code${second ? ' pair-start' : ''}"><strong>${escapeHtml(row.productCode)}</strong></td>
         <td class="location"><strong>${escapeHtml(row.location)}</strong>${row.warning ? `<div class="warning">${escapeHtml(row.warning)}</div>` : ''}</td>
         <td><strong>${row.quantity} ${escapeHtml(row.unit)}</strong>${row.bundleText && row.bundleText !== '每捆数量待核' ? `<div class="spec">${escapeHtml(row.bundleText)}</div>` : ''}</td>
-        <td><span class="write-line"></span></td>
-      </tr>`;
+        <td><span class="write-line"></span></td>`;
+    }
+    function rowHtml(row, second) {
+      return `<tr>${cellsHtml(row)}${cellsHtml(second, true)}</tr>`;
+    }
+    function pairedRowsHtml(rows) {
+      const pairs = [];
+      for (let index = 0; index < rows.length; index += 2) pairs.push(rowHtml(rows[index], rows[index + 1]));
+      return pairs.join('');
     }
     function pageHtml(task, user, rows, pageIndex, pageCount, pageRows = rows.slice(pageIndex * ROWS_PER_PAGE, (pageIndex + 1) * ROWS_PER_PAGE)) {
       const totalsByUnit = new Map();
@@ -142,8 +158,8 @@
           <div><strong>打印人/时间：</strong>${escapeHtml(printUser)} / ${escapeHtml(displayDateTime())}</div>
         </div>
         <table>
-          <thead><tr><th class="seq">顺序</th><th class="code">型号 / 存货编码</th><th class="location">货架 · 层 · 格</th><th class="planned">拿取数量</th><th class="actual">实际拿取</th></tr></thead>
-          <tbody>${pageRows.map(rowHtml).join("")}</tbody>
+          <thead><tr><th class="code">存货编码</th><th class="location">货架</th><th class="planned">数量</th><th class="actual">实际数量</th><th class="code pair-start">存货编码</th><th class="location">货架</th><th class="planned">数量</th><th class="actual">实际数量</th></tr></thead>
+          <tbody>${pairedRowsHtml(pageRows)}</tbody>
         </table>
         <footer class="footer">
           <div class="summary"><span>${summaryText}</span><span>异常：________</span></div>
@@ -164,17 +180,22 @@
         await document.fonts.ready;
         const batches = [];
         let batch = [];
-        for(const row of rows){
-          const candidate = [...batch, row];
+        for(let index = 0; index < rows.length; index += 2){
+          const pair = rows.slice(index, index + 2);
+          const candidate = [...batch, ...pair];
           pages.innerHTML = pageHtml(task, user, rows, 0, 1, candidate);
           const tooTall = pages.firstElementChild.getBoundingClientRect().height > 296 * 96 / 25.4 + 1;
-          if(batch.length && (tooTall || candidate.length > ROWS_PER_PAGE)){batches.push(batch);batch=[row];}
-          else if(tooTall){throw Error("单条明细超过A4可打印高度，请核对产品名称或规格");}
+          if(batch.length && (tooTall || candidate.length > ROWS_PER_PAGE)){batches.push(batch);batch=pair;}
+          else if(tooTall){throw Error("明细超过A4可打印高度，请核对存货编码或位置说明");}
           else batch=candidate;
         }
         if(batch.length)batches.push(batch);
         const pageCount = batches.length;
         pages.innerHTML = batches.map((batch,index)=>pageHtml(task,user,rows,index,pageCount,batch)).join("");
+        if ([...pages.children].some(page => page.getBoundingClientRect().height > 296 * 96 / 25.4 + 1)) {
+          pages.hidden = true;
+          throw Error("明细超过A4可打印高度，请核对存货编码或位置说明");
+        }
         state.hidden = true;
         const differenceButton = document.getElementById("differenceButton");
         differenceButton.href = `/mobile/delivery-pick.html?task_id=${encodeURIComponent(task.id)}&print_version=${encodeURIComponent(task.print_version)}`;

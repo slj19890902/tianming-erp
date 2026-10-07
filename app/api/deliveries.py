@@ -1830,6 +1830,10 @@ def _pick_location_groups(
                     "location_code": location.location_code,
                     "location_name": location_name,
                     "location_sort_order": int(location.sort_order or 0),
+                    "address_kind": location.address_kind,
+                    "rack_display_name": location.rack_display_name,
+                    "level_no": location.level_no,
+                    "slot_no": location.slot_no,
                     "position_status": projection.get("position_status"),
                     "map_feature_id": projection.get("map_feature_id"),
                     "published_map_revision": projection.get(

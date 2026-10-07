@@ -3,6 +3,8 @@ import type { Rack } from "./types";
 import { moldLocationChoices, buildMoldRackView, moldBatchPayload, moldCellSummary, moldRackEmployeeName } from "./moldRackView.mjs";
 import type { MoldLocationOption } from "./moldRackView.mjs";
 import { filterShelfMolds } from "./shelfDisplay.mjs";
+import { createMoldRackPrinter } from "./moldRackPrint.mjs";
+import type { MoldPrintState } from "./moldRackPrint.mjs";
 import "./moldRack.css";
 
 interface Mold {
@@ -46,13 +48,24 @@ export function MoldRackElevation({rack, response, loading, error, canMoveMolds,
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [message, setMessage] = useState("");
+  const [printState, setPrintState] = useState<MoldPrintState>({busy: false, pending: false});
+  const [printTemplate, setPrintTemplate] = useState("mold_80x40_v1");
+  const printer = useRef<ReturnType<typeof createMoldRackPrinter> | null>(null);
+  if (!printer.current) printer.current = createMoldRackPrinter({
+    request: api, openWindow: url => {const popup = window.open(url, "_blank"); if (popup) popup.opener = null; return popup;},
+    confirmReprint: text => window.confirm(text),
+    changed: state => setPrintState(previous => ({...state, message: state.message === undefined ? previous.message : state.message})),
+    makeKey: () => `mold-rack-print-${globalThis.crypto?.randomUUID?.() || Date.now() + "-" + Math.random()}`,
+  });
   const attempt = useRef<ReturnType<typeof moldBatchPayload> | null>(null);
   const searchSequence = useRef(0);
   const locatedIntent = useRef("");
   const selectedCell = cells.find(cell => cell.key === selectedKey);
   const selectedMold = response?.items.find(mold => mold.id === selectedId);
   const target = moveMode ? moveTarget : selectedCell?.location_code || (selectedCell?.id ? `MCELL-${selectedCell.id}` : "");
-  const locked = busy || uncertain;
+  const locked = busy || uncertain || printState.busy || printState.pending;
+  const printReady = Boolean(response && response.rack.rack_id === rack.id && !loading && !error);
+  const printScope = {floorCode: response?.floor_code || "", rackId: rack.id};
   const visible = filterShelfMolds(selectedCell?.items || response?.items || [], query);
   const returnUrl = new URL(location.href); returnUrl.searchParams.set("mold_rack_id", rack.id); returnUrl.searchParams.set("floor", response?.floor_code || "1F"); if (selectedCell?.id) returnUrl.searchParams.set("mold_cell_id", selectedCell.id); if(query) returnUrl.searchParams.set("mold_query", query);
   const returnTo = returnUrl.pathname + returnUrl.search;
@@ -63,7 +76,7 @@ export function MoldRackElevation({rack, response, loading, error, canMoveMolds,
     const found = cells.find(cell => initialCellId ? cell.id === initialCellId : highlightedMoldId ? cell.items.some(mold => mold.id === highlightedMoldId) : false);
     if (found) {locatedIntent.current = intent; setSelectedKey(found.key); setSelectedId(highlightedMoldId || null);}
   }, [rack.id, response, highlightedMoldId, initialCellId]);
-  useEffect(() => {onNavigationGuardChange?.(uncertain ? "模具归位结果尚未确认，请用原凭证重试。" : busy ? "模具操作正在处理，请稍候。" : ""); return () => onNavigationGuardChange?.("");}, [busy, uncertain, onNavigationGuardChange]);
+  useEffect(() => {onNavigationGuardChange?.(uncertain ? "模具归位结果尚未确认，请用原凭证重试。" : printState.pending ? "请先继续上次打印，核对打印结果。" : busy || printState.busy ? "模具操作正在处理，请稍候。" : ""); return () => onNavigationGuardChange?.("");}, [busy, uncertain, printState.busy, printState.pending, onNavigationGuardChange]);
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (locked || /INPUT|SELECT|TEXTAREA/.test((event.target as HTMLElement)?.tagName)) return;
@@ -101,12 +114,13 @@ export function MoldRackElevation({rack, response, loading, error, canMoveMolds,
   }
   const labelsUrl = `/static/mold-location-label.html?floor_code=${encodeURIComponent(response?.floor_code || "")}&rack_id=${encodeURIComponent(rack.id)}`;
   return <section className="twin-rack-focus-panel twin-rack-stage twin-mold-rack-stage" role="region" aria-label={`${moldRackEmployeeName(rack)}正视图`}>
-    <header><div><h2>{moldRackEmployeeName(rack)}</h2><p>{rack.width_mm} × {rack.depth_mm} × {rack.height_mm} mm · {rack.levels} 层 · {rackIndex + 1}/{rackCount}</p></div><a href={labelsUrl} target="_blank" rel="noreferrer">整架/格位标签</a><button disabled={locked} onClick={onClose}>返回地图</button></header>
+    <header><div><h2>{moldRackEmployeeName(rack)}</h2><p>{rack.width_mm} × {rack.depth_mm} × {rack.height_mm} mm · {rack.levels} 层 · {rackIndex + 1}/{rackCount}</p></div>{canMoveMolds && <div className="mold-rack-print-actions"><select aria-label="模具标签纸型" value={printTemplate} disabled={locked} onChange={event => setPrintTemplate(event.target.value)}><option value="mold_80x40_v1">40×80 mm</option><option value="mold_40x30_v1">40×30 mm</option></select><button disabled={locked || !printReady || !response?.items.length} onClick={() => void printer.current?.run(printScope, printTemplate)}>打印整架模具标签</button></div>}<a href={labelsUrl} target="_blank" rel="noreferrer">整架/格位标签</a><button disabled={locked} onClick={onClose}>返回地图</button></header>
+    {(printState.message || printState.pending) && <div className="mold-rack-print-status" role="status">{printState.message}{printState.pending && <button disabled={printState.busy} onClick={() => void printer.current?.retry()}>继续上次打印</button>}</div>}
     <div className="twin-rack-content"><button className="twin-rack-switch previous" disabled={locked} aria-label="上一货架" onClick={onPrevious}>‹</button><div className="twin-elevation-shell"><div className="twin-elevation-frame">
       {[...view.levels].reverse().map(level => <div className={`twin-elevation-level mold-level ${level.blocked ? "blocked" : ""}`} key={level.level} style={{flex: `${(rack.level_heights_mm[level.level-1] || rack.height_mm) - (rack.level_heights_mm[level.level-2] || 0)} 1 0`}}><span>第 {level.level} 层</span><div style={{gridTemplateColumns: `repeat(${level.cell_count || 1}, minmax(0, 1fr))`}}>{level.blocked ? <i>设备占用层</i> : !level.cell_count ? <i>尚未分格</i> : level.cells.map(cell => {
         const key = `L${level.level}-G${cell.grid}`;
         const hit = Boolean(highlightedMoldId && cell.items.some(mold => mold.id === highlightedMoldId)) || Boolean(query && filterShelfMolds(cell.items, query).length);
-        return <section className={`mold-rack-cell ${cell.items.length ? "occupied" : "empty"} ${selectedKey === key ? "selected" : ""} ${hit ? "search-match" : ""}`} key={key}><button className="mold-rack-cell-summary" disabled={locked} onClick={() => {setSelectedKey(key); setSelectedId(null); setPutaway(false); setMoveMode(false); setMoveTarget("");}}><b>{cell.alias || `第${cell.grid}格`}</b><strong>{response?.truncated ? `可见 ${cell.items.length} 块` : cell.items.length ? `有模具 · ${cell.items.length} 块` : "空格"}</strong><span>{moldCellSummary(cell.items).join(" · ")}</span>{cell.items.length > 2 && <small>查看全部</small>}</button></section>;
+        return <section className={`mold-rack-cell ${cell.items.length ? "occupied" : "empty"} ${selectedKey === key ? "selected" : ""} ${hit ? "search-match" : ""}`} key={key}><button className="mold-rack-cell-summary" disabled={locked} onClick={() => {setSelectedKey(key); setSelectedId(null); setPutaway(false); setMoveMode(false); setMoveTarget("");}}><b>{cell.alias || `第${cell.grid}格`}</b><strong>{response?.truncated ? `可见 ${cell.items.length} 块` : cell.items.length ? `有模具 · ${cell.items.length} 块` : "空格"}</strong><span>{moldCellSummary(cell.items).join(" · ")}</span>{cell.items.length > 2 && <small>查看全部</small>}</button>{canMoveMolds && <button className="mold-cell-print" aria-label={`打印${cell.alias || `第${level.level}层第${cell.grid}格`}模具标签`} disabled={locked || !printReady || !cell.items.length} onClick={() => void printer.current?.run({...printScope, ...(cell.id ? {cellId: cell.id} : {level: level.level, grid: cell.grid})}, printTemplate)}>打印本格模具标签</button>}</section>;
       })}</div></div>)}
     </div><div className="twin-width-ruler">正面宽度 {rack.width_mm} mm · 当前可见 {response?.total || 0} 块模具</div></div>
     <aside className="twin-mold-rack-aside">

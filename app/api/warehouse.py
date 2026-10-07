@@ -20227,10 +20227,11 @@ def list_mold_tools_by_map_rack(
     rows = db.scalars(
         query.order_by(MoldTool.rack_location, MoldTool.mold_code, MoldTool.id)
     ).unique().all()
+    print_statuses = _mold_label_print_statuses(db, [row.id for row in rows])
     return {
         "floor_code": floor_code,
         "rack": structure,
-        "items": [_mold_tool_dict(row, allowed_customer_ids) for row in rows],
+        "items": [_mold_tool_dict(row, allowed_customer_ids, label_print_status=print_statuses.get(row.id)) for row in rows],
         "total": total,
         "truncated": total > len(rows),
     }

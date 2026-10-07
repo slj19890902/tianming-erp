@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.553"
-APP_VERSION_NAME = "模具区域与独立货架格位"
+APP_VERSION = "v0.22.554"
+APP_VERSION_NAME = "模具货架整架与单格标签打印"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 

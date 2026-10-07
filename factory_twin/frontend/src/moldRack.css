@@ -47,3 +47,9 @@
 .twin-rack-focus-panel.twin-mold-rack-stage .mold-rack-cell-summary span {
   color: #172033;
 }
+.twin-rack-focus-panel.twin-mold-rack-stage .twin-elevation-frame .mold-rack-cell {flex-direction: column; min-height: 0; overflow: auto;}
+.twin-rack-focus-panel.twin-mold-rack-stage .mold-rack-cell-summary {height: auto; flex: 1; min-height: 70px; padding: 6px;}
+.twin-rack-focus-panel.twin-mold-rack-stage .mold-cell-print {flex-shrink: 0; margin: 3px 6px 6px; padding: 5px 8px; font-size: 12px;}
+.mold-rack-print-actions, .mold-rack-print-status {display: flex; align-items: center; flex-wrap: wrap; gap: 8px;}
+.mold-rack-print-actions select {padding: 6px; border: 1px solid #cbd5e1; border-radius: 6px; background: white;}
+.mold-rack-print-status {padding: 6px 12px; color: #334155;}

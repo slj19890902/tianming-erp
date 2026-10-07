@@ -223,6 +223,31 @@ def test_inactive_physical_molds_still_count_in_cells(mold_app,dynamic_floor):
         assert result.json()["total"]==1 and not result.json()["items"][0]["is_active"]
 
 
+def test_rack_print_status_uses_registered_jobs_and_preserves_location(mold_app,dynamic_floor):
+    from tests.test_p1_58_mold_label_print_status import _printable_mold
+    from app.models.warehouse_inventory import WarehouseFloor
+    app,factory=mold_app
+    first,_,_=_printable_mold(factory,suffix="1")
+    second,_,_=_printable_mold(factory,suffix="2")
+    cell=projected_cells(dynamic_floor["racks"][0])[0]
+    with factory() as db:
+        db.add(WarehouseFloor(floor_code="3F",floor_number=3,floor_name="三楼"))
+        for identity in (first,second): db.get(MoldTool,identity).rack_location=cell["location_code"]
+        db.commit()
+    with TestClient(app) as client:
+        _login(client,"admin")
+        printed=client.post('/api/warehouse/molds/label-prints',json={"mold_ids":[first],"source":"batch","idempotency_key":"rack-status-001"})
+        assert printed.status_code==200,printed.text
+        result=client.get('/api/warehouse/molds/by-map-rack',params={"floor_code":"3F","rack_id":dynamic_floor["racks"][0]["id"]})
+        assert result.status_code==200,result.text
+        rows={row['id']:row for row in result.json()['items']}
+        assert len(rows)==2 and result.json()['total']==2
+        assert rows[first]['label_print_status']['print_count']==1
+        assert rows[first]['label_print_status']['printed']
+        assert not rows[second]['label_print_status']['printed']
+        assert all(row['location_guide']['cell_id']==cell['id'] and row['location_version']==1 for row in rows.values())
+
+
 def test_drawing_search_uses_visible_product_identity(mold_app,dynamic_floor):
     app,factory=mold_app
     from app.models.product import Product

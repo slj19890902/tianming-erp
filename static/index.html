@@ -7528,6 +7528,28 @@
                   <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'duplicate')">重复，不再提醒</button>
                   <button class="btn small danger" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'deleted')">删除</button>
                 </div>
+                <div
+                  v-if="draft._save_message || (draft._save_status && draft._save_status !== 'idle')"
+                  :class="['status',importDraftSaveStatusClass(draft)]"
+                  style="display:block;margin-bottom:10px;line-height:1.7;white-space:normal"
+                >
+                  <strong>{{ draft.source_name || "草稿" }}：</strong>{{ draft._save_message || importDraftSaveStatusText(draft) }}
+                  <button
+                    v-if="['failed','unknown'].includes(draft._save_status)"
+                    class="btn small"
+                    type="button"
+                    style="margin-left:8px"
+                    :disabled="loading || (draft._save_status !== 'unknown' && (!draft.confirmed || !canConfirmImportDraft(draft)))"
+                    @click="retryFailedImportDraft(draft)"
+                  >{{ draft._save_status === 'unknown' ? '查询并恢复保存' : '重试此文件' }}</button>
+                  <button
+                    v-if="draft._save_status === 'idle' && draft._save_message"
+                    class="btn primary small" type="button" style="margin-left:8px"
+                    :disabled="loading || isImportDraftLocked(draft) || !canConfirmImportDraft(draft)"
+                    @click="confirmAndSavePdf(draft)"
+                  >核对无误并保存</button>
+                  <a v-if="draft._saved_order_id" class="btn small" style="margin-left:8px" :href="`/?page=orders&email_order=${draft._saved_order_id}`" target="_blank" rel="noopener">查看已保存订单</a>
+                </div>
                 <fieldset
                   class="pdf-import-draft-fields"
                   :disabled="isImportDraftLocked(draft)"
@@ -7567,21 +7589,6 @@
                     <button class="btn primary small" type="button" @click="acknowledgeImportDraftReminders(draft)">知道了，继续确认草稿</button>
                   </div>
                   <button v-else-if="orderImportReminderDisplayRows(draft).length" class="btn small" type="button" @click="draft._reminder_visible=true">重新查看</button>
-                </div>
-                <div
-                  v-if="draft._save_status && draft._save_status !== 'idle'"
-                  :class="['status',importDraftSaveStatusClass(draft)]"
-                  style="display:block;margin-bottom:10px;line-height:1.7;white-space:normal"
-                >
-                  <strong>{{ draft.source_name || "草稿" }}：</strong>{{ draft._save_message || importDraftSaveStatusText(draft) }}
-                  <button
-                    v-if="['failed','unknown'].includes(draft._save_status)"
-                    class="btn small"
-                    type="button"
-                    style="margin-left:8px"
-                    :disabled="loading || (draft._save_status !== 'unknown' && (!draft.confirmed || !canConfirmImportDraft(draft)))"
-                    @click="retryFailedImportDraft(draft)"
-                  >{{ draft._save_status === 'unknown' ? '查询/重试原保存' : '重试此文件' }}</button>
                 </div>
                 <div v-if="draft.duplicate_reason" class="status orange" style="display:block;margin-bottom:10px;white-space:normal">
                   <div>{{ draft.duplicate_reason }}</div>
@@ -32758,12 +32765,14 @@
             if (draft?._save_status === "success") return "green";
             if (draft?._save_status === "failed") return "red";
             if (draft?._save_status === "saving") return "blue";
+            if (draft?._save_status === "unknown") return "orange";
             return draft?.confirmed ? "green" : "orange";
           },
           importDraftSaveStatusText(draft) {
             if (draft?._save_status === "success") return "保存成功";
             if (draft?._save_status === "failed") return "保存失败，可重试";
             if (draft?._save_status === "saving") return "正在保存";
+            if (draft?._save_status === "unknown") return "待查询保存结果";
             return draft?.confirmed ? "已加入批量保存" : "待核对";
           },
           async retryFailedImportDraft(draft) {
@@ -33135,7 +33144,7 @@
                 draft._create_key = key;
                 draft._save_actor_id = this.user.id;
                 draft._save_status = "unknown";
-                draft._save_message = "此文件有过保存请求，请先查询原保存结果；不会直接再次建单。";
+                draft._save_message = "此文件有过保存请求，请点击“查询并恢复保存”；查到原订单后可直接打开，未保存则返回核对。";
               }
             } catch (_) {
               // The save path checks storage again and blocks before any POST.
@@ -33162,6 +33171,7 @@
             if (!drafts.length) { this.showToast("请先确认至少一份完整草稿", true); return; }
             this.loading = true;
             const succeeded = [];
+            const recovered = [];
             const failed = [];
             try {
               for (const draft of drafts) {
@@ -33176,14 +33186,17 @@
                     resolving = true;
                     if (draft._save_actor_id !== this.user?.id) throw new Error("请使用原保存账号查询结果。");
                     const {data} = await axios.get(`/api/orders/create-attempts/${encodeURIComponent(draft._create_key)}`);
-                    if (data.status === "completed") savedOrder = data.order;
+                    if (data.status === "completed") {
+                      savedOrder = data.order;
+                      if (recovering) recovered.push(draft);
+                    }
                     else if (data.status !== "not_found") throw new Error("保存结果无法确认，请稍后查询。");
                     requestStarted = false;
                     resolving = false;
                     if (!savedOrder && recovering && !draft._save_payload) {
                       draft._save_status = "idle";
                       draft.confirmed = false;
-                      draft._save_message = "未查到已保存订单，请重新核对当前草稿后保存；继续沿用原请求标识。";
+                      draft._save_message = "未查到已保存订单。请核对下方客户、数量和单价，再点击“核对无误并保存”。如按钮不可用，请展开下方“无法保存”查看待处理项。";
                       continue;
                     }
                   }
@@ -33253,7 +33266,7 @@
                   draft._save_status = "success";
                   draft._save_payload = null;
                   if (draft.email_attachment_id) this.refreshEmailQueueCount();
-                  draft._save_message = "保存成功；本草稿已锁定，不会再次提交。";
+                  draft._save_message = "保存成功，请点击“查看已保存订单”继续处理。";
                   draft.confirmed = false;
                 } catch (error) {
                   const message = this.normalizeOrderSaveError(error);
@@ -33263,7 +33276,7 @@
                   const unknown = requestStarted && !rejected;
                   draft._save_status = unknown ? "unknown" : "failed";
                   if (!unknown) draft._save_payload = null;
-                  draft._save_message = unknown ? `保存结果尚未确认，草稿已锁定；请查询/重试原请求。${message}` : message;
+                  draft._save_message = unknown ? `保存结果尚未确认，请点击“查询并恢复保存”。${message}` : message;
                   failed.push(`${draft.source_name || "草稿"}：${message}`);
                 }
               }
@@ -33279,8 +33292,12 @@
                   && draft._save_status !== "success"
               );
               if (!remainingFailed.length && !remainingPending.length) {
-                this.modal=null;
-                this.showToast(`已保存 ${succeeded.length} 份确认草稿`);
+                if (recovered.length) {
+                  this.showToast("已找到原订单，请点击“查看已保存订单”继续处理。");
+                } else {
+                  this.modal=null;
+                  this.showToast(`已保存 ${succeeded.length} 份确认草稿`);
+                }
               } else {
                 const failedSummary = remainingFailed.map(
                   draft => `${draft.source_name || "草稿"}：${draft._save_message || "订单保存失败"}`

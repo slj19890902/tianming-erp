@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.555"
-APP_VERSION_NAME = "多行订单导入保存修复"
+APP_VERSION = "v0.22.556"
+APP_VERSION_NAME = "订单导入保存恢复入口修复"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5314,3 +5314,8 @@ APP_CHANGELOG = [*(f"v0.22.551：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["修复多行Excel/PDF订单保存时预览安全确认凭证超过4000字符被拒绝，保留签名、有效期、来源及防重复校验。"]
 APP_VERIFICATION_STEPS = ["重新预览订单并核对明细后保存，确认成功数量和生成订单，再按原流程开送货单。"]
 APP_CHANGELOG = [*(f"v0.22.555：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = ["订单导入的查询恢复按钮独立于锁定草稿，恢复查询后明确显示继续保存或查看已保存订单入口。", "未查到订单时保留核对提示和保存按钮，继续使用原保存凭据防止重复建单；查询失败时保持保护。"]
+APP_VERIFICATION_STEPS = ["强制刷新后重新导入原文件，点击“查询并恢复保存”。", "未查到订单时核对客户、数量和单价，再点击“核对无误并保存”；查到订单时点击“查看已保存订单”。"]
+APP_CHANGELOG = [*(f"v0.22.556：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

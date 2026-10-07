@@ -6065,3 +6065,5 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 2026-10-07：正式v0.22.556，模具编辑格位修复；YKE/KEW 148款报料尺寸已审计更新，卡纸80020548精度待独立闭环。见 docs/release_reports/MOLD_EDITOR_SHEET_DIMENSIONS_20261007.md。
 
 - 2026-10-07 v0.22.557订单导入恢复入口已技术发布，源码4e789431、包abb1cd4e；恢复按钮移出禁用草稿区，未保存给出核对保存、已保存提供订单入口。保留v556模具基线，ee0930ba无迁移，NAS备份/306表冷态不变/健康及双入口HTML哈希通过；待管理员人工验收。详见docs/release_reports/ORDER_IMPORT_RECOVERY_20261007.md。
+
+- 2026-10-07 v0.22.559订单Excel兼容预送货已技术发布，源码ff7d8f41、包2defadc8；研光/YKE和光洋/KEW购买要求书共用解析，预送货用要求数、订单用发注数。保留v558精度，ee0930ba无迁移；NAS时点备份、306表不变、健康与双入口资源验证通过。Cumtenn2200已配置工厂LAN共享，远端和实打待人工验收。详见docs/release_reports/PRE_DELIVERY_ORDER_EXCEL_20261007.md。

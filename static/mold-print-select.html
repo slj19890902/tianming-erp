@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>模具标签打印</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f1f5f9;color:#172b4d;font:15px/1.5 Arial,"Microsoft YaHei",sans-serif}header,main{max-width:1100px;margin:auto;padding:16px}header{display:flex;align-items:center;gap:12px;flex-wrap:wrap}h1{font-size:21px;margin:0}button,a{font:inherit}button{border:1px solid #cbd5e1;border-radius:6px;padding:8px 14px;background:white;cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}.primary{background:#1764df;color:white;border-color:#1764df}a{color:#1764df}.bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}#summary{margin-left:auto;color:#475569}.table-wrap{background:white;border:1px solid #cbd5e1;border-radius:8px;overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:10px 12px;border-bottom:1px solid #e2e8f0;text-align:left}th{background:#eaf0f8;white-space:nowrap}input[type=checkbox]{width:20px;height:20px;accent-color:#1764df;cursor:pointer}td b{display:block}td small{display:block;color:#64748b}.status{white-space:nowrap}.printed{color:#64748b}.unprinted{color:#116b45;font-weight:bold}.invalid{color:#b91c1c}#message{white-space:pre-wrap;color:#b91c1c;padding:10px 0}footer{display:flex;justify-content:flex-end;padding-top:14px}[hidden]{display:none!important}
+</style></head><body>
+<header><h1 id="title">模具标签打印</h1><span id="paper"></span><a href="/warehouse.html">返回仓库</a></header>
+<main><div class="bar"><button id="unprinted" disabled>只选未打印</button><button id="all" disabled>全选</button><button id="none" disabled>取消勾选</button><button id="reload">重新读取</button><span id="summary"></span></div>
+<div id="message" role="status" aria-live="polite">正在读取模具…</div>
+<div class="table-wrap"><table><thead><tr><th>选择</th><th>存货编码 / 模具</th><th>客户</th><th>位置</th><th>打印状态</th></tr></thead><tbody id="rows"></tbody></table></div>
+<footer><button id="preview" class="primary" disabled>预览所选标签</button></footer></main>
+<script src="/static/assets/print-recovery.js"></script><script src="/static/assets/mold-print-selection.js?v=1"></script>
+<script>
+const $=id=>document.getElementById(id),h=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+const params=new URLSearchParams(location.search),template=params.get("template_version")==="mold_40x30_v1"?"mold_40x30_v1":"mold_80x40_v1";
+const scope={floorCode:params.get("floor_code"),rackId:params.get("rack_id"),cellId:params.get("cell_id")||undefined,level:Number(params.get("level"))||undefined,grid:Number(params.get("grid"))||undefined};
+const storageKey="mold-print-selection:"+location.search;let rows=[],selected=new Set(),loading=false,attemptCache=null;
+try{attemptCache=JSON.parse(sessionStorage.getItem(storageKey)||"null")}catch{}
+$("paper").textContent=template==="mold_80x40_v1"?"40×80 mm":"40×30 mm";
+async function request(url,body){
+ if(body===undefined)return TmPrintRecovery.requestPrintData(url,undefined);
+ const response=await fetch(url,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),data=await response.json().catch(()=>({}));
+ if(!response.ok)throw Object.assign(new Error(TmPrintRecovery.parseErrorDetail(data.detail)||`请求失败（${response.status}）`),{status:response.status});
+ return data;
+}
+const submission=TmMoldPrintSelection.createSubmission({request,navigate:url=>location.assign(url),confirmReprint:text=>window.confirm(text),makeKey:()=>`mold-select-${crypto.randomUUID?.()||Date.now()+"-"+Math.random()}`,remember:value=>{attemptCache=value;try{value?sessionStorage.setItem(storageKey,JSON.stringify(value)):sessionStorage.removeItem(storageKey)}catch{}},savedAttempt:attemptCache,changed:state=>{if(state.message!==undefined)$("message").textContent=state.message;renderControls(state)}});
+function renderControls(state=submission.state()){
+ const locked=loading||state.busy||state.pending;
+ for(const id of ["unprinted","all","none","reload"])$(id).disabled=locked;
+ document.querySelectorAll("#rows input").forEach(input=>{input.disabled=locked||!rows.find(row=>row.id===Number(input.value))?.printable});
+ $("preview").disabled=loading||state.busy||(!state.pending&&!selected.size);
+ $("preview").textContent=state.pending?"继续上次操作":`预览所选标签（${selected.size}）`;
+ $("summary").textContent=`共 ${rows.length} 块 · 未打印 ${rows.filter(row=>!row.label_print_status.printed).length} · 已选 ${selected.size}`;
+}
+function render(){
+ $("rows").innerHTML=rows.map(row=>{const printed=row.label_print_status.printed,codes=[...new Set((row.products||[]).map(p=>p.product_code).filter(Boolean))].join(" / "),customers=[...new Set((row.products||[]).map(p=>p.customer_short_name||p.customer_name).filter(Boolean))].join(" / ");return `<tr><td><input type="checkbox" aria-label="打印 ${h(codes||row.label_name||row.display_name)}" value="${row.id}" ${selected.has(row.id)?"checked":""} ${row.printable?"":"disabled"}></td><td><b>${h(codes||row.label_name||row.display_name)}</b><small>${h(row.label_name||row.display_name||row.mold_name)}</small>${row.printability_error?`<small class="invalid">${h(row.printability_error)}</small>`:""}</td><td>${h(customers)}</td><td>${h(row.location_guide?.alias||row.location_guide?.short_label||row.rack_location)}</td><td class="status ${printed?"printed":"unprinted"}">${printed?`已打印 · ${row.label_print_status.print_count}次`:"未打印"}</td></tr>`}).join("");renderControls();
+}
+async function load(){
+ if(submission.state().pending){$("message").textContent="上次打印结果待核对，请继续上次操作";renderControls();return;}
+ loading=true;renderControls();$("message").textContent="正在读取模具…";
+ try{
+  if(!["1F","3F","4F"].includes(scope.floorCode)||!scope.rackId)throw new Error("打印链接无效，请从模具货架重新打开");
+  const rack=await request(`/api/warehouse/molds/by-map-rack?${new URLSearchParams({floor_code:scope.floorCode,rack_id:scope.rackId})}`),scoped=TmMoldPrintSelection.scopeRows(rack,scope);
+  if(scoped.length>500)throw new Error("目录超过500块，请按单格打开");
+  const options=await request(`/api/warehouse/molds/label-options?${new URLSearchParams({mold_ids:scoped.map(row=>row.id).join(","),template_version:template})}`);
+  if(options.items?.length!==scoped.length||options.items.some((row,index)=>row.id!==scoped[index].id))throw new Error("模具清单已变化，请重新读取");
+  rows=options.items;selected=new Set(TmMoldPrintSelection.defaultSelection(rows));
+  const cell=scope.cellId?rack.rack.cells.find(c=>c.id===scope.cellId):null;
+  $("title").textContent=`${cell?.alias||rack.rack.mold_rack_code||"模具货架"}${scope.level?` 第${scope.level}层第${scope.grid}格`:""} · 模具标签打印`;
+  $("message").textContent=rows.some(row=>!row.printable)?"部分模具资料需完善，见对应行。":selected.size?"":"已打印标签默认未选，可勾选补打。";
+ }catch(error){rows=[];selected.clear();$("message").textContent=error.message}
+ finally{loading=false;render()}
+}
+$("rows").addEventListener("change",event=>{const input=event.target;if(input.type!=="checkbox")return;const id=Number(input.value);input.checked?selected.add(id):selected.delete(id);renderControls()});
+$("unprinted").onclick=()=>{selected=new Set(TmMoldPrintSelection.defaultSelection(rows));render()};
+$("all").onclick=()=>{selected=new Set(rows.filter(row=>row.printable).map(row=>row.id));render()};$("none").onclick=()=>{selected.clear();render()};$("reload").onclick=load;
+$("preview").onclick=()=>submission.submit(rows,rows.filter(row=>selected.has(row.id)).map(row=>row.id),template);
+load();
+</script></body></html>

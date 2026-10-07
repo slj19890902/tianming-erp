@@ -52,10 +52,8 @@ export function MoldRackElevation({rack, response, loading, error, canMoveMolds,
   const [printTemplate, setPrintTemplate] = useState("mold_80x40_v1");
   const printer = useRef<ReturnType<typeof createMoldRackPrinter> | null>(null);
   if (!printer.current) printer.current = createMoldRackPrinter({
-    request: api, openWindow: url => {const popup = window.open(url, "_blank"); if (popup) popup.opener = null; return popup;},
-    confirmReprint: text => window.confirm(text),
+    openWindow: url => {const popup = window.open(url, "_blank"); if (popup) popup.opener = null; return popup;},
     changed: state => setPrintState(previous => ({...state, message: state.message === undefined ? previous.message : state.message})),
-    makeKey: () => `mold-rack-print-${globalThis.crypto?.randomUUID?.() || Date.now() + "-" + Math.random()}`,
   });
   const attempt = useRef<ReturnType<typeof moldBatchPayload> | null>(null);
   const searchSequence = useRef(0);

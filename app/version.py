@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.563"
-APP_VERSION_NAME = "订单与送货单按原表顺序"
+APP_VERSION = "v0.22.564"
+APP_VERSION_NAME = "客户图号打印修复与资料简化"
 APP_BUILD_DATE = "2026-10-07"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5358,3 +5358,7 @@ APP_CHANGELOG = [*(f"v0.22.562：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["订单详情、待送货选择及送货草稿沿用订单明细顺序；预送货生成的送货单优先沿用原表行顺序。", "页面与客户送货单打印使用同一来源顺序，拆分分配、明细补回和修改后保持一致；保留数量、库存、权限和防重复保护。"]
 APP_VERIFICATION_STEPS = ["Ctrl+F5刷新，打开同昌订单和待送货选择，核对存货编码顺序与Excel一致。", "打开预送货生成的送货单及打印预览，逐行核对原表；已打开的旧预览请关闭后重新打开。"]
 APP_CHANGELOG = [*(f"v0.22.563：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["常用箱客户送货资料只保留客户图号、客户类别、使用型番，取消客户品名/用途和图号栏显示文字。", "送货打印直接使用冻结客户图号，旧空白覆盖值不再隐藏已填图号；真实缺失时提示行号和编码，编号前导零保留。"]
+APP_VERIFICATION_STEPS = ["Ctrl+F5刷新常用箱，确认客户送货资料只显示三个输入框。", "关闭旧打印预览，重开YG-20261007-001，核对80012158等七项图号及82020083的0632264、80012632的9620185；无需重新建单。"]
+APP_CHANGELOG = [*(f"v0.22.564：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

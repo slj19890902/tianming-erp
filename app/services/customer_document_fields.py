@@ -9,9 +9,10 @@ from pathlib import Path
 
 FIELDS = (
     'customer_drawing_number', 'customer_category', 'customer_model',
-    'customer_product_name', 'customer_drawing_display',
 )
-LABELS = dict(zip(FIELDS, ('客户图号', '客户类别', '使用型番', '客户品名/用途', '图号栏显示文字')))
+# Retain validation of old snapshots, but never create new values for retired fields.
+RETIRED_FIELDS = ('customer_product_name', 'customer_drawing_display')
+LABELS = dict(zip(FIELDS, ('客户图号', '客户类别', '使用型番')))
 SOURCE_KEYS = {
     'customer_drawing_number': 'C图号', 'customer_category': 'E箱型',
     'customer_model': 'B使用型番',
@@ -55,6 +56,8 @@ def source_candidates(product) -> dict:
                 if value and value != '0' and value not in values[field]:
                     values[field].append(value)
     for entry in review_entries():
+        if entry['field'] not in FIELDS:
+            continue
         if entry['customer_id'] != _get(product, 'customer_id') or entry['code'] != _get(product, 'customer_material_code'):
             continue
         value = str(entry['value']).strip()
@@ -86,7 +89,7 @@ def document_snapshot(product, *, basis: str | None = None) -> dict[str, Any]:
         'basis': basis or ('stored_source_reference' if references else 'product_fields'),
         'reference_fields': references,
         'conflicts': [field for field in evidence['conflicts'] if _get(product, field) is None],
-        'missing_labels': [LABELS[field] for field in required if resolved[field] is None],
+        'missing_labels': [LABELS[field] for field in required if not str(resolved[field] or '').strip()],
     }
 
 
@@ -102,7 +105,7 @@ def decode_snapshot(value: str | None) -> dict | None:
         if not isinstance(decoded, dict) or decoded.get('schema_version') != 1:
             raise ValueError()
         if any(decoded.get(field) is not None and not isinstance(decoded[field], str)
-               for field in (*FIELDS, 'customer_material_code')):
+               for field in (*FIELDS, *RETIRED_FIELDS, 'customer_material_code')):
             raise ValueError()
         return decoded
     except (ValueError, TypeError) as error:

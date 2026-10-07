@@ -489,8 +489,6 @@ class ProductPayload(BaseModel):
     customer_drawing_number: str | None = Field(default=None, max_length=150)
     customer_category: str | None = Field(default=None, max_length=100)
     customer_model: str | None = Field(default=None, max_length=500)
-    customer_product_name: str | None = Field(default=None, max_length=500)
-    customer_drawing_display: str | None = Field(default=None, max_length=250)
     material_id: int | None = None
     mold_tool_id: int | None = None
     legacy_material_text: str | None = None
@@ -2042,7 +2040,6 @@ def list_products(
                 or_(False, *reviewed_matches),
                 Product.customer_category.like(pattern),
                 Product.customer_model.like(pattern),
-                Product.customer_product_name.like(pattern),
                 Product.legacy_material_text.like(pattern),
                 Material.code.like(pattern),
                 Material.paper_composition.like(pattern),

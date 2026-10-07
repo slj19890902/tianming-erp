@@ -51,10 +51,12 @@ def enrich_customer_print(db, delivery, result, user, *, show_prices=None, order
             'specification', 'unit', 'quantity', 'remarks')}
         row.update({key: identity.get(key) or '' for key in (
             'customer_material_code', 'customer_drawing_number', 'customer_category',
-            'customer_model', 'customer_product_name')})
-        if identity.get('customer_drawing_display') is not None:
-            row['customer_drawing_number'] = identity['customer_drawing_display']
-        row['customer_product_name'] = row['customer_product_name'] or row['product_name']
+            'customer_model')})
+        # The owner retired both alternate identity fields. Keep the legacy YL
+        # column key compatible, using only the delivery's frozen product name.
+        row['customer_product_name'] = row['product_name']
+        if any(column['key'] == 'customer_drawing_number' for column in layout['columns']) and not row['customer_drawing_number'].strip():
+            warnings.append(f'第{index}行（{row["customer_material_code"] or row["product_code"]}）客户图号未填写，请核对原单据')
         row['sequence'] = index
         row['identity_basis'] = identity.get('basis', 'missing_snapshot')
         # A commercial parent is counted/priced once. Visible components remain

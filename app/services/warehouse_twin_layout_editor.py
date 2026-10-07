@@ -14,6 +14,8 @@ from threading import RLock
 from typing import Any, Callable
 from uuid import uuid4
 
+from app.services.mold_cells import reconcile_mold_cells, RACK_CODE_PATTERN
+
 from app.services.warehouse_twin_layout import (
     TWIN_LAYOUT_PATH as TWIN_LAYOUT_BASELINE_PATH,
     TWIN_LAYOUT_RUNTIME_PATH as DEFAULT_TWIN_LAYOUT_RUNTIME_PATH,
@@ -2311,6 +2313,9 @@ def create_warehouse_twin_rack(
                 raise WarehouseTwinLayoutEditConflictError(
                     f"该区域最大货架数为 {maximum}，请先调整区域设置或整理现有货架"
                 )
+        is_mold_zone = "mold" in (zone.get("allowed_inventory_types") or [])
+        if is_mold_zone and not normalized_values.get("mold_rack_code"):
+            raise WarehouseTwinLayoutEditError("模具区域请添加具有独立架号的模具架")
         area_code = _feature_area_code(zone)
         rack = {
             "id": str(uuid4()),
@@ -2326,6 +2331,18 @@ def create_warehouse_twin_rack(
             "area_feature_id": area_feature_id,
             "area_code": area_code,
         }
+        if rack.get("mold_rack_code"):
+            code = str(rack["mold_rack_code"]).strip().upper()
+            if not RACK_CODE_PATTERN.fullmatch(code):
+                raise WarehouseTwinLayoutEditError("新增模具架号须为1至8个英文字母")
+            if "mold" not in (zone.get("allowed_inventory_types") or []) or len(zone.get("allowed_inventory_types") or []) != 1:
+                raise WarehouseTwinLayoutEditError("模具架只能加入专用模具区域")
+            if any(str(r.get("mold_rack_code") or "").upper() == code for r in [*(floor.get("racks") or []),*(floor.get("retired_racks") or [])]):
+                raise WarehouseTwinLayoutEditConflictError("模具架号已存在或已归档")
+            try:
+                reconcile_mold_cells(rack)
+            except ValueError as error:
+                raise WarehouseTwinLayoutEditError(str(error)) from error
         floor.setdefault("racks", []).append(rack)
         return rack
 
@@ -2389,8 +2406,17 @@ def update_warehouse_twin_rack(
         _ensure_version(rack, expected_version, "货架")
         if rack.get("is_locked"):
             raise WarehouseTwinLayoutEditConflictError("货架已确认并锁定，必须先解除锁定")
+        previous = deepcopy(rack)
+        if normalized_values.get("mold_rack_code") and not rack.get("mold_rack_code"):
+            raise WarehouseTwinLayoutEditConflictError("已有货物架不能直接改成模具架，请新增独立模具架")
         for key, value in normalized_values.items():
             rack[key] = value
+        if previous.get("mold_cells") and "mold_cells" not in normalized_values:
+            rack.pop("mold_cells", None)
+        try:
+            reconcile_mold_cells(rack, previous)
+        except ValueError as error:
+            raise WarehouseTwinLayoutEditError(str(error)) from error
         rack["status"] = "candidate"
         rack["version"] = int(rack.get("version") or 1) + 1
         return dict(rack)
@@ -2874,6 +2900,12 @@ def update_warehouse_twin_zone_policy(
         if feature.get("feature_kind") != "zone":
             raise WarehouseTwinLayoutEditError("只有仓储区域可以设置存放策略")
         _ensure_version(feature, expected_version, "区域")
+        area_code = _feature_area_code(feature)
+        racks=[r for r in floor.get("racks") or [] if r.get("area_feature_id")==feature_id or r.get("area_code")==area_code]
+        if any(r.get("mold_rack_code") for r in racks) and normalized_types != ["mold"]:
+            raise WarehouseTwinLayoutEditConflictError("区域仍有模具架，不能改为货物用途")
+        if "mold" in normalized_types and (normalized_types != ["mold"] or any(not r.get("mold_rack_code") for r in racks)):
+            raise WarehouseTwinLayoutEditConflictError("模具区域不能混用货物用途或已有货物架")
         feature["allowed_inventory_types"] = normalized_types
         feature["storage_layout"] = storage_layout
         if storage_layout == "pallet_ground" and pallet_rotation_deg is not None:

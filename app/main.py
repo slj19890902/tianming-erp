@@ -535,6 +535,11 @@ def create_app() -> FastAPI:
             methods=["GET"],
             include_in_schema=False,
         )
+    for mold_storage_route in ("/m/mold-rack", "/m/mold-cell"):
+        if not any(route.path == mold_storage_route for route in application.routes):
+            application.add_api_route(mold_storage_route,
+                _private_no_store_file_endpoint(Path(__file__).resolve().parents[1] / "static" / "mobile_mold_rack.html"),
+                methods=["GET"],include_in_schema=False)
     if not any(route.path == "/M/{mold_id}" for route in application.routes):
         mold_live_path = (
             Path(__file__).resolve().parents[1]

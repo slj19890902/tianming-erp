@@ -5669,7 +5669,7 @@ def test_publish_rechecks_validated_existing_area_identity_after_late_drift(
         engine.dispose()
 
 
-def test_mold_rack_publish_reassigns_invalid_positions_once_and_rolls_back_on_failure(
+def test_legacy_mold_rack_shrink_is_blocked_without_automatic_relocation(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -5750,124 +5750,22 @@ def test_mold_rack_publish_reassigns_invalid_positions_once_and_rolls_back_on_fa
             )
             db.commit()
 
-            validated = warehouse_api.validate_twin_layout_draft(
-                '1F',
-                warehouse_api.TwinLayoutDraftValidatePayload(
-                    expected_revision=reduced.floor_revision
-                ),
-                _request(),
-                db,
-                admin,
-            )
-            assert validated['status'] == 'validated'
-            assert any('R01 有1件模具' in warning for warning in validated['warnings'])
-            reloaded_draft = editor.load_effective_warehouse_twin_floor_for_edit('1F')
-            assert any(
-                'R01 有1件模具' in warning
-                for warning in reloaded_draft['draft_control']['warnings']
-            )
-            before_publish = db.scalar(
-                select(MoldTool).where(MoldTool.mold_code == 'MOLD-L3-TO-FIRST-GRID')
-            )
-            assert before_publish is not None
-            assert before_publish.rack_location == '1F-M-R01-L3-G01'
-            assert db.scalar(select(func.count(MoldLocationMovement.id))) == 0
-
-            payload = warehouse_api.TwinLayoutDraftPublishPayload(
-                expected_published_revision=published_revision,
-                expected_draft_revision=reduced.floor_revision,
-                operation_key='mold-rack-publish-auto-first-grid',
-            )
-            result = warehouse_api.publish_twin_layout_draft(
-                '1F', payload, _request(), db, admin
-            )
-            assert result['applied'] is True
-            assert result['mold_location_reassignment_count'] == 1
-            assert result['mold_location_changed'] is True
-            db.expire_all()
-            moved = db.scalar(
-                select(MoldTool).where(MoldTool.mold_code == 'MOLD-L3-TO-FIRST-GRID')
-            )
-            r04 = db.scalar(
-                select(MoldTool).where(MoldTool.mold_code == 'MOLD-R04-RACK-ONLY')
-            )
-            movement = db.scalar(select(MoldLocationMovement))
-            assert moved is not None and r04 is not None and movement is not None
-            assert moved.rack_location == '1F-M-R01-L2-G01'
-            assert moved.location_version == 2
-            assert r04.rack_location == '1F-M-R04'
-            assert r04.location_version == 1
-            assert movement.from_location == '1F-M-R01-L3-G01'
-            assert movement.to_location == '1F-M-R01-L2-G01'
-            assert movement.source == 'layout_publish'
-            published_options = mold_location.one_floor_mold_location_options(
-                runtime_floor('1F')
-            )
-            published_r01 = next(
-                option for option in published_options if option['rack_code'] == 'R01'
-            )
-            assert published_r01['levels'] == [
-                {'level': 2, 'kind': 'flat', 'grid_count': 2, 'grids': [1, 2]}
-            ]
-
-            replay = warehouse_api.publish_twin_layout_draft(
-                '1F', payload, _request(), db, admin
-            )
-            assert replay['applied'] is False
-            assert replay['mold_location_reassignment_count'] == 1
-            assert db.scalar(select(func.count(MoldLocationMovement.id))) == 1
-
-            current_floor = runtime_floor('1F')
-            second = editor.update_warehouse_twin_rack(
-                '1F',
-                'rack-r01',
-                expected_revision=current_floor['revision'],
-                expected_version=2,
-                operation_key='mold-rack-reduce-to-rack-only',
-                values=_rack_values(levels=1, level_cell_counts=[0]),
-            )
-            second_validation = warehouse_api.validate_twin_layout_draft(
-                '1F',
-                warehouse_api.TwinLayoutDraftValidatePayload(
-                    expected_revision=second.floor_revision
-                ),
-                _request(),
-                db,
-                admin,
-            )
-            assert second_validation['status'] == 'validated'
-            runtime_before_failure = runtime.read_bytes()
-            draft_before_failure = draft.read_bytes()
-
-            def fail_mold_move(*_args, **_kwargs):
-                raise mold_location.MoldLocationError(
-                    '模拟模具移动失败', status_code=409
-                )
-
-            monkeypatch.setattr(warehouse_api, 'confirm_mold_location_move', fail_mold_move)
+            runtime_before = runtime.read_bytes() if runtime.exists() else None
+            draft_before = draft.read_bytes()
             with pytest.raises(warehouse_api.HTTPException) as caught:
-                warehouse_api.publish_twin_layout_draft(
-                    '1F',
-                    warehouse_api.TwinLayoutDraftPublishPayload(
-                        expected_published_revision=current_floor['revision'],
-                        expected_draft_revision=second.floor_revision,
-                        operation_key='mold-rack-publish-rollback-on-move-failure',
-                    ),
-                    _request(),
-                    db,
-                    admin,
-                )
+                warehouse_api.validate_twin_layout_draft('1F',warehouse_api.TwinLayoutDraftValidatePayload(
+                    expected_revision=reduced.floor_revision),_request(),db,admin)
             assert caught.value.status_code == 409
-            assert runtime.read_bytes() == runtime_before_failure
-            assert draft.read_bytes() == draft_before_failure
-            db.expire_all()
-            rolled_back = db.scalar(
-                select(MoldTool).where(MoldTool.mold_code == 'MOLD-L3-TO-FIRST-GRID')
-            )
-            assert rolled_back is not None
-            assert rolled_back.rack_location == '1F-M-R01-L2-G01'
-            assert rolled_back.location_version == 2
-            assert db.scalar(select(func.count(MoldLocationMovement.id))) == 1
+            with pytest.raises(warehouse_api.HTTPException) as caught:
+                warehouse_api.publish_twin_layout_draft('1F',warehouse_api.TwinLayoutDraftPublishPayload(
+                    expected_published_revision=published_revision,expected_draft_revision=reduced.floor_revision,
+                    operation_key='legacy-shrink-must-block'),_request(),db,admin)
+            assert caught.value.status_code == 409
+            assert (runtime.read_bytes() if runtime.exists() else None) == runtime_before
+            assert draft.read_bytes() == draft_before
+            assert db.scalar(select(func.count(MoldLocationMovement.id))) == 0
+            body=db.scalar(select(MoldTool).where(MoldTool.mold_code=='MOLD-L3-TO-FIRST-GRID'))
+            assert body.rack_location == '1F-M-R01-L3-G01' and body.location_version == 1
     finally:
         engine.dispose()
 

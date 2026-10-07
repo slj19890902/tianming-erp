@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+import json
+import hashlib
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -9,7 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.core.time_contract import utc_now_naive
 from app.models.mold_tool import MoldLocationMovement, MoldTool
-from app.services.warehouse_twin_layout import load_warehouse_twin_floor
+from app.models.fixed_shelf import ShelfMutation
+from app.services.warehouse_twin_layout import load_warehouse_twin_floor, WarehouseTwinLayoutNotFoundError
+from app.services.mold_cells import CELL_PREFIX, cell_code, projected_cells
 
 
 _CANONICAL_FLAT_PATTERN = re.compile(
@@ -148,6 +152,47 @@ def _floor_text(value: str) -> str:
     return f"{chinese.get(floor, floor)}楼"
 
 
+def published_mold_floors() -> list[dict]:
+    floors = []
+    for code in ("1F", "3F", "4F"):
+        try:
+            floors.append(load_warehouse_twin_floor(code))
+        except WarehouseTwinLayoutNotFoundError:
+            continue
+    return floors
+
+
+def find_mold_cell(value: str, *, floors: list[dict] | None = None, include_retired: bool = False) -> tuple[dict, dict, dict] | None:
+    raw = str(value or "").strip()
+    identity = raw[len(CELL_PREFIX):] if raw.upper().startswith(CELL_PREFIX) else raw
+    for floor in (floors if floors is not None else published_mold_floors()):
+        racks=list(floor.get("racks") or [])
+        if include_retired:
+            racks.extend(floor.get("retired_racks") or [])
+        for rack in racks:
+            cells=projected_cells(rack)
+            if include_retired:
+                cells += projected_cells({**rack,"mold_cells":rack.get("retired_mold_cells") or []})
+            for cell in cells:
+                if str(cell["id"]).casefold() == identity.casefold():
+                    return floor, rack, cell
+    return None
+
+
+def dynamic_mold_location_options(floor_layout: dict) -> list[dict]:
+    result = []
+    for rack in floor_layout.get("racks") or []:
+        if not rack.get("mold_cells"):
+            continue
+        structure = mold_rack_structure(rack)
+        result.append({**structure, "floor_code": floor_layout["floor_code"],
+            "rack": rack.get("id"), "rack_code": rack["mold_rack_code"],
+            "zone_code": rack.get("area_code"), "location_depth": "cell",
+            "levels": [{"level": n, "grid_count": count,"grids":list(range(1,count+1))}
+                       for n,count in enumerate(structure["level_cell_counts"],1)]})
+    return result
+
+
 def one_floor_mold_location_options(
     floor_layout: dict | None = None,
 ) -> list[dict]:
@@ -228,7 +273,7 @@ def one_floor_mold_location_options(
                 "levels": levels,
             }
         )
-    return options
+    return options + dynamic_mold_location_options(floor)
 
 
 def mold_rack_structure(rack: dict) -> dict:
@@ -270,6 +315,8 @@ def mold_rack_structure(rack: dict) -> dict:
         int(value) for value in ((confirmed or {}).get("blocked_levels") or ())
     )
     return {
+        "id": str(rack.get("id") or ""),
+        "cells": projected_cells(rack),
         "rack_id": str(rack.get("id") or ""),
         "rack_code": str(rack.get("rack_code") or ""),
         "mold_rack_code": rack_code,
@@ -330,12 +377,11 @@ def plan_mold_rack_layout_relocations(
     relocations: list[MoldRackLayoutRelocation] = []
     rows = db.scalars(
         select(MoldTool)
-        .where(MoldTool.is_active.is_(True))
         .order_by(MoldTool.mold_code, MoldTool.id)
     ).all()
     for mold in rows:
         guide = describe_mold_location(mold.rack_location)
-        if guide.get("floor") != "1F" or not guide.get("rack"):
+        if guide.get("floor") != "1F" or not isinstance(guide.get("rack"), int):
             continue
         rack_code = f"R{int(guide['rack']):02d}"
         rack = rack_by_code.get(rack_code)
@@ -421,10 +467,33 @@ def mold_rack_layout_usage_blockers(
     db: Session,
     floor_layout: dict,
 ) -> list[str]:
-    """Compatibility shim: occupied mold positions no longer block publishing."""
-
-    del db, floor_layout
-    return []
+    """Block destructive changes; publishing never guesses a physical move."""
+    floor_code = str(floor_layout.get("floor_code") or "1F")
+    published = load_warehouse_twin_floor(floor_code)
+    old_cells = {cell["location_code"]:(rack,cell) for rack in published.get("racks") or [] for cell in projected_cells(rack)}
+    new_cells = {cell["location_code"]:(rack,cell) for rack in floor_layout.get("racks") or [] for cell in projected_cells(rack)}
+    blockers=[]
+    for mold in db.scalars(select(MoldTool)).all():
+        location = str(mold.rack_location or "").strip().upper()
+        if location not in old_cells:
+            continue
+        old_rack,old_cell=old_cells[location]
+        new = new_cells.get(location)
+        if new is None or any(new[1][k] != old_cell[k] for k in ("level","grid")) or new[0].get("id") != old_rack.get("id"):
+            blockers.append(f"模具位 {old_cell['alias']} 仍有实物，请先移出再调整层格")
+    if floor_code == "1F":
+        for move in plan_mold_rack_layout_relocations(db,floor_layout):
+            blockers.append(f"{move.rack_code} 的现存模具层格失效，请先移出再调整")
+        # The old relocation planner had no destination when every rack was removed.
+        new_racks={str(r.get("mold_rack_code") or "").upper() for r in floor_layout.get("racks") or []}
+        old_racks={str(r.get("mold_rack_code") or "").upper() for r in published.get("racks") or []}
+        for mold in db.scalars(select(MoldTool)).all():
+            guide=describe_mold_location(mold.rack_location)
+            if guide.get("floor")==floor_code and isinstance(guide.get("rack"),int):
+                code=f"R{guide['rack']:02d}"
+                if code in old_racks and code not in new_racks:
+                    blockers.append(f"{code} 仍有模具，不能删除货架")
+    return list(dict.fromkeys(blockers))
 
 
 def _rack_prompt(floor: str, rack: int) -> str:
@@ -439,6 +508,21 @@ def describe_mold_location(value: str) -> dict:
 
     raw = (value or "").strip()
     normalized = raw.upper()
+    if normalized.startswith(CELL_PREFIX):
+        resolved = find_mold_cell(normalized)
+        retired = resolved is None
+        if retired:
+            resolved = find_mold_cell(normalized,include_retired=True)
+        if resolved:
+            floor, rack, cell = resolved
+            code = str(rack["mold_rack_code"])
+            return {"kind":"retired_cell" if retired else "storage_cell", "location_code":cell["location_code"],
+                "location_id":cell["id"],"cell_id":cell["id"],"rack_code":code,"floor":floor["floor_code"],"area":rack.get("area_code"),
+                "rack":code,"rack_id":rack["id"],"level":cell["level"],"grid":cell["grid"],
+                "row":None,"position":None,"alias":cell["alias"],"short_label":cell["alias"],
+                "prompt":f"{_floor_text(floor['floor_code'])} · 模具{code}架 · {cell['alias']}（第{cell['level']}层第{cell['grid']}格）" + ("（已停用）" if retired else "")}
+        return {"kind":"retired_cell","location_code":normalized,"floor":None,"rack":None,
+                "level":None,"grid":None,"prompt":"原模具格已停用，请查看位置历史"}
     if normalized == MOLD_ARCHIVE_AREA_CODE:
         return {
             "kind": "archive_area",
@@ -606,10 +690,10 @@ def mold_location_feature_codes(
     """Resolve a confirmed mold rack position to its measured-map feature."""
 
     guide = describe_mold_location(value)
-    if guide.get("floor") != "1F" or not guide.get("rack"):
+    if not guide.get("floor") or not guide.get("rack"):
         return []
-    floor = floor_layout if floor_layout is not None else load_warehouse_twin_floor("1F")
-    rack_code = f"R{int(guide['rack']):02d}"
+    floor = floor_layout if floor_layout is not None else load_warehouse_twin_floor(guide["floor"])
+    rack_code = str(guide["rack"]) if guide.get("kind") in {"storage_cell","retired_cell"} else f"R{int(guide['rack']):02d}"
     feature_codes = {
         str(feature.get("feature_code") or "").strip().upper()
         for feature in (floor.get("features") or [])
@@ -629,6 +713,10 @@ def normalize_mold_location_code(value: str) -> str:
     """Accept only canonical, physically addressable confirmed mold positions."""
 
     guide = describe_mold_location(value)
+    if guide["kind"] == "storage_cell":
+        return str(guide["location_code"])
+    if guide["kind"] == "retired_cell":
+        raise MoldLocationError("模具格已停用或不存在，请刷新后重新选择", status_code=409)
     if guide["kind"] in {"storage_grid", "storage_level", "storage_rack"}:
         if guide["floor"] != "1F":
             raise MoldLocationError("新的货架/层/格位置码当前只允许一楼模具区", status_code=422)
@@ -788,7 +876,7 @@ def _idempotent_result(
     )
 
 
-def confirm_mold_location_move(
+def _confirm_mold_location_move(
     db: Session,
     *,
     mold_code: str,
@@ -898,3 +986,91 @@ def confirm_mold_location_move(
         replayed=False,
         no_change=False,
     )
+
+
+def confirm_mold_location_move(db: Session, *, mold_code: str, target_location: str,
+    expected_version: int, idempotency_key: str, actor_id: int | None, source: str, note: str | None) -> MoldLocationMoveResult:
+    # Persist no-op requests too: reusing their key for a different target is a conflict.
+    target=normalize_mold_location_code(target_location)
+    key=str(idempotency_key or "").strip()
+    if not 8 <= len(key) <= 120:
+        raise MoldLocationError("幂等键须为8至120个字符",status_code=422)
+    canonical={"mold_code":mold_code.strip().upper(),"target":target,"version":expected_version,
+               "actor":actor_id,"source":source.strip(),"note":_normalized_text(note)}
+    digest=hashlib.sha256(json.dumps(canonical,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    ledger_key="mold-single:"+hashlib.sha256(key.encode()).hexdigest()
+    def replay(ledger):
+        if ledger.request_hash != digest:
+            raise MoldLocationError("幂等键已用于不同的模具移动业务",status_code=409)
+        saved=json.loads(ledger.result_json)
+        mold=db.get(MoldTool,saved["mold_id"])
+        movement=db.get(MoldLocationMovement,saved["movement_id"]) if saved["movement_id"] else None
+        return MoldLocationMoveResult(mold,movement,True,saved["no_change"])
+    existing=db.get(ShelfMutation,ledger_key)
+    if existing:
+        return replay(existing)
+    try:
+        with db.begin_nested():
+            ledger=ShelfMutation(idempotency_key=ledger_key,request_hash=digest,result_json="{}")
+            db.add(ledger);db.flush()
+            result=_confirm_mold_location_move(db,mold_code=mold_code,target_location=target,
+                expected_version=expected_version,idempotency_key=key,actor_id=actor_id,source=source,note=note)
+            ledger.result_json=json.dumps({"mold_id":result.mold.id,"movement_id":result.movement.id if result.movement else None,"no_change":result.no_change})
+            db.flush()
+        return result
+    except IntegrityError:
+        existing=db.get(ShelfMutation,ledger_key)
+        if existing:
+            return replay(existing)
+        raise
+
+
+def confirm_mold_location_batch(db: Session, *, items: list[dict], target_location: str,
+                                idempotency_key: str, actor_id: int, source: str, note: str | None) -> tuple[list[MoldLocationMoveResult], bool]:
+    """Reuse the generic warehouse shelf mutation ledger for an atomic placement.
+
+    Its primary key protects same-key replay even across processes/floors and
+    no-op placements; each actual move retains its independent movement row.
+    """
+    key=str(idempotency_key or "").strip()
+    if not 8 <= len(key) <= 120:
+        raise MoldLocationError("批量归位幂等键须为8至120个字符", status_code=422)
+    codes=[str(item["mold_code"]).strip().upper() for item in items]
+    if not items or len(items)>100 or len(codes)!=len(set(codes)):
+        raise MoldLocationError("请选择1至100块不同模具",status_code=422)
+    target=normalize_mold_location_code(target_location)
+    canonical={"items":[{"mold_code":code,"expected_version":int(item["expected_version"])} for code,item in zip(codes,items)],
+               "target":target,"actor_id":actor_id,"source":source,"note":_normalized_text(note)}
+    digest=hashlib.sha256(json.dumps(canonical,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    ledger_key="mold-batch:"+hashlib.sha256(key.encode()).hexdigest()
+    def replay(ledger):
+        if ledger.request_hash != digest:
+            raise MoldLocationError("批量归位幂等键已用于不同请求",status_code=409)
+        result=[]
+        for row in json.loads(ledger.result_json):
+            mold=db.get(MoldTool,row["mold_id"])
+            movement=db.get(MoldLocationMovement,row["movement_id"]) if row["movement_id"] else None
+            if mold is None:
+                raise MoldLocationError("归位历史对应的模具已变化",status_code=409)
+            result.append(MoldLocationMoveResult(mold, movement, True, row["no_change"]))
+        return result,True
+    existing=db.get(ShelfMutation,ledger_key)
+    if existing:
+        return replay(existing)
+    results=[]
+    try:
+        with db.begin_nested():
+            ledger=ShelfMutation(idempotency_key=ledger_key,request_hash=digest,result_json="[]")
+            db.add(ledger); db.flush()
+            for item in canonical["items"]:
+                subkey="mold-batch-move:"+hashlib.sha256((ledger_key+"|"+item["mold_code"]).encode()).hexdigest()
+                results.append(confirm_mold_location_move(db,mold_code=item["mold_code"],target_location=target,
+                    expected_version=item["expected_version"],idempotency_key=subkey,actor_id=actor_id,source=source,note=note))
+            ledger.result_json=json.dumps([{"mold_id":r.mold.id,"movement_id":r.movement.id if r.movement else None,"no_change":r.no_change} for r in results])
+            db.flush()
+    except IntegrityError:
+        existing=db.get(ShelfMutation,ledger_key)
+        if existing:
+            return replay(existing)
+        raise
+    return results,False

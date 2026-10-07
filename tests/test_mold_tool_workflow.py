@@ -965,6 +965,9 @@ def test_workshop_can_open_structured_location_label_and_qr(
             "label_flute_type",
             "lookup_url",
             "qr_data_url",
+            "printable",
+            "printability_error",
+            "label_location_alias",
         }
         assert "id" not in data
         assert "public_lookup_token" not in data
@@ -2744,7 +2747,7 @@ def test_mold_rack_structure_change_plans_invalid_positions_to_first_grid(
         assert relocations[0].from_location == "1F-M-R01-L2-G03"
         assert relocations[0].to_location == "1F-M-R01-L2-G01"
         assert "第2层只剩2格" in relocations[0].reason
-        assert mold_rack_layout_usage_blockers(db, reduced_layout) == []
+        assert mold_rack_layout_usage_blockers(db, reduced_layout)
         assert mold_rack_layout_relocation_warnings(relocations) == [
             "R01 有1件模具的现位置将在发布后失效；"
             "发布时自动归入R01 第2层第1格，之后可逐件手动调整"

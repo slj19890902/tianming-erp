@@ -25,7 +25,7 @@
 - 转换后隔离API：常用箱、订单、待报料、材质、健康与JS/CSS均200。隔离Chrome连接两次失败，未换用IAB或其他UI技术；实际布局与正式操作由管理员验收。
 - 旧测试失败有基线复现：6项布局/旧字符串/未报价夹具，4项外购成本夹具，5项旧收料夹具及1项收料查询数（6而阈值5）。不放宽现有业务门禁、不声称全仓全绿。其他未运行全量测试。
 
-证据目录D:/.codex/workspace_artifacts/cutting-mold-contract-20261008。开发验证通过，当前候选v0.22.567尚未正式发布。
+证据目录D:/.codex/workspace_artifacts/cutting-mold-contract-20261008。技术发布完成，待管理员人工验收；运行源码70647fa0，签名包97387523，eg1008sc，正式3840/39转换与范围保持验证通过。详情见docs/release_reports/CUTTING_MOLD_CONTRACT_20261008.md。
 
 ## 发布门禁和回退
 

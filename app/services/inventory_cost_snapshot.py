@@ -170,6 +170,13 @@ def estimate_finished_product_cost(
     base_area = _area_m2(product.base_report_length_mm, product.base_report_width_mm)
     if (is_a3 or has_any_base_dimension) and base_area is None:
         return None
+    from app.services.sheet_cutting_settings import component_settings
+    sheet_settings = getattr(product, "sheet_cutting_settings", None)
+    if sheet_settings is not None:
+        cover_setting = component_settings(sheet_settings, "cover" if base_area is not None else "whole")
+        cover_area /= cover_setting.mold_count
+        if base_area is not None:
+            base_area /= component_settings(sheet_settings, "base").mold_count
     components = [
         {
             "component": "cover" if base_area is not None else "whole",
@@ -202,6 +209,7 @@ def estimate_finished_product_cost(
         source="material_quote_area",
         detail={
             "inventory_type": "finished",
+            **({"sheet_cutting_settings": sheet_settings, "area_basis": "theoretical_sheet_area_per_mold_output"} if sheet_settings else {}),
             "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
             "estimate_basis": "current_material_quote_not_actual_cash_cost",
             "material_id": material.id,

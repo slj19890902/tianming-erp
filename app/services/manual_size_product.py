@@ -342,6 +342,8 @@ def resolve_or_create_manual_size_product(
             pieces_per_box=normalized["pieces_per_box"],
             flap_mm=normalized["flap_mm"],
             default_cutting_mode=normalized["default_cutting_mode"],
+            sheet_cutting_settings={"schema_version": 2, "whole": {
+                "length_parts": 1, "width_parts": 1, "mold_count": 1, "is_die_cut": False}},
             remark=marker,
             is_active=True,
         )

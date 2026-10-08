@@ -43,7 +43,8 @@ def production_basis(compiled):
          "product_id": row.component_product_id,
          "fields": {column.key: scalar(getattr(row, column.key))
                     for column in SalesOrderItemBomComponent.__table__.columns
-                    if column.key not in {"created_at", "product_bom_component_id"}}}
+                    if column.key not in {"created_at", "product_bom_component_id"}
+                    and not (column.key == "sheet_cutting_settings_snapshot" and getattr(row, column.key) is None)}}
         for row in sorted(compiled.snapshots, key=lambda row: row.component_product_id)]})
 
 
@@ -69,6 +70,9 @@ def _validate_changes(changes, compiled):
             if not valid:
                 raise BomPlanError(f"生产资料修订字段{field}无效")
             if field == "default_cutting_mode":
+                snapshot = next(row for row in compiled.snapshots if str(row.component_product_id) == pid)
+                if snapshot.sheet_cutting_settings_snapshot is not None and value != snapshot.snapshot_component_default_cutting_mode:
+                    raise BomPlanError("该组件已使用独立模数与开料，请在报料草稿中点击修改开料")
                 from app.services.requisition_quantities import normalize_cutting_mode
                 try:
                     normalize_cutting_mode(value, strict=True)

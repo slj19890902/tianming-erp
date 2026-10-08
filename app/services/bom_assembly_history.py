@@ -9,6 +9,7 @@ from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
 from app.core.time_contract import utc_naive_to_api, utc_naive_to_beijing_date
 from app.services.location_candidates import load_warehouse_location_projection_contexts, warehouse_location_projection
 from app.services.warehouse_location_address import employee_location_name
+from app.services.warehouse_display_units import lot_display_unit
 
 
 def history(db, scope, **filters):
@@ -79,7 +80,7 @@ def history(db, scope, **filters):
             product_code=detail.inventory_code_snapshot, product_name=detail.product_name_snapshot,
             completed_at=utc_naive_to_api(a.created_at), actual_output_quantity=a.quantity,
             completed_by_name=users.get(a.created_by),
-            planned_output_quantity=a.quantity, output_unit=lot.unit, assembly_inputs=source_rows,
+            planned_output_quantity=a.quantity, output_unit=lot_display_unit(lot), assembly_inputs=source_rows,
             current_inventory_quantity=sum(l.quantity_available+l.quantity_reserved+l.quantity_damaged for l in current),
             current_inventory_status='located' if locations else 'drained',
             current_warehouse_location_map_issue=' / '.join(dict.fromkeys(issues)) or None,

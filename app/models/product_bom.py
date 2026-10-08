@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -154,6 +155,7 @@ class ProductBomComponent(Base):
 
 
 class SalesOrderItemBomComponent(Base):
+    sheet_cutting_settings_snapshot: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     """Immutable component requisition inputs captured with one parent order item."""
 
     __tablename__ = "sales_order_item_bom_components"

@@ -14,6 +14,17 @@ def command(row, key='confirm-physical-assembly'):
         target_locations={o['product_id']: o['location_id'] for o in row['outputs']})
 
 
+def seed_priced_graph(factory, **kwargs):
+    from app.models.material import Material
+    material_id, snapshots = seed_graph(factory, **kwargs)
+    with factory() as db:
+        # Manual stock entry requires an actual area-price contract. The receipt
+        # fixture's per-sheet price cannot stand in for that material quote.
+        db.get(Material, material_id).price_unit = '元/㎡'
+        db.commit()
+    return material_id, snapshots
+
+
 def test_receipts_wait_then_explicit_assembly_and_history(composite_requisition_app, _p181_published_map_identity, monkeypatch):
     app, factory = composite_requisition_app
     from app.api.deliveries import router as delivery_router
@@ -125,6 +136,10 @@ def test_old_finished_stock_reserved_not_assembled(composite_requisition_app, _p
     app, factory = composite_requisition_app
     seed_graph(factory)
     with factory() as db:
+        from app.models.product import Product
+        material=db.get(Product,2).material
+        material.quote_price=2;material.price_unit='元/㎡'
+        material.purchase_currency='CNY';material.purchase_tax_included=True
         ids = []
         for pid, qty in [(2,32),(3,38)]:
             target = _receipt_auto_finished_ground_target(db, claim=True, customer_id=1, product_id=pid)
@@ -181,6 +196,10 @@ def test_real_new_order_automatically_reserves_exact_stock(composite_requisition
     app, factory = composite_requisition_app
     seed_graph(factory)
     with factory() as db:
+        from app.models.product import Product
+        material=db.get(Product,2).material
+        material.quote_price=2;material.price_unit='元/㎡'
+        material.purchase_currency='CNY';material.purchase_tax_included=True
         target = _receipt_auto_finished_ground_target(db,claim=True,customer_id=1,product_id=2)
         lot = manual_finished_in(db,customer_id=1,product_id=2,location_id=target.location.id,
             quantity=80,stock_date=beijing_today(),source_type='manual',remarks='已加工',operator_id=1,

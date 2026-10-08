@@ -17,7 +17,7 @@ from app.models.procurement_source import ProcurementSourceLink
 from app.models.stock_replenishment import StockReplenishmentOrder, StockReplenishmentOrderItem
 from app.models.supplier_requisition_order import SupplierRequisitionOrderItem
 from app.core.time_contract import utc_now_naive
-from app.services.requisition_quantities import DEFAULT_CUTTING_MODE
+from app.services.requisition_quantities import DEFAULT_CUTTING_MODE, normalize_cutting_mode
 
 
 def supplier_line_customer_expression():
@@ -185,6 +185,7 @@ def pending_stock_rows(db, user):
         customer = db.get(Customer, snapshot["source_customer_id"]) if snapshot["source_customer_id"] else None
         result.append({
             "source_type": "stock_replenishment", "stock_replenishment_item_id": item.id,
+            "created_at": str(order.created_at or ''),
             "item_id": f"sr{item.id}", "id": f"sr{item.id}", "source_id": order.id,
             "source_fingerprint": fingerprint(snapshot), "is_merge_group": False,
             "item_order_number": order.order_number, "order_number": order.order_number,
@@ -201,8 +202,13 @@ def pending_stock_rows(db, user):
             "flute_type": item.flute_type, "layer_count": item.layer_count,
             "supplier_name": order.supplier_name, "snapshot_supplier_name": order.supplier_name,
             "source_snapshot": snapshot, "requisition_status": "未报料",
+            "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
         })
-        if item.quantity_contract_json is not None:
+        from app.services.stock_replenishment_plan import frozen_bom_plan
+        bom_plan = frozen_bom_plan(item)
+        if bom_plan:
+            result[-1]['replenishment_plan'] = bom_plan
+        if item.quantity_contract_json is not None and not bom_plan:
             from app.services.stock_warning_drafts import physical_demand_contract
             contract = physical_demand_contract(item)
             result[-1].update(procurement_mode='external_purchase',
@@ -253,6 +259,7 @@ def attach_stock_sources(db, *, purchase, selections, user):
         customer = db.get(Customer, snapshot["source_customer_id"]) if snapshot["source_customer_id"] else None
         line = SupplierRequisitionOrderItem(
             supplier_order_id=purchase.id, order_item_id=None, source_key=f"stock_replenishment:{item.id}",
+            sheet_cutting_snapshot=item.sheet_cutting_snapshot,
             product_id=item.reference_product_id or item.product_id, material_id=item.material_id,
             material_code_snapshot=item.material_code_snapshot, supplier_name_snapshot=order.supplier_name,
             layer_count_snapshot=item.layer_count, flute_type_snapshot=item.flute_type,
@@ -260,7 +267,8 @@ def attach_stock_sources(db, *, purchase, selections, user):
             product_name=item.product_name_snapshot or item.internal_name,
             report_length_mm=item.report_length_mm, report_width_mm=item.report_width_mm,
             quantity=item.quantity, stock_deduction_qty=0, requisition_qty=item.quantity,
-            cutting_mode=DEFAULT_CUTTING_MODE, pieces_per_box=item.pieces_per_box,
+            cutting_mode=(normalize_cutting_mode(item.stock_yield_per_sheet, strict=True)
+                          if item.sheet_cutting_snapshot else DEFAULT_CUTTING_MODE), pieces_per_box=item.pieces_per_box,
             required_piece_qty=item.quantity * item.stock_yield_per_sheet,
             customer_name=customer.name if customer else "通用备料",
         )
@@ -316,7 +324,7 @@ def release_stock_sources(db, purchase, user):
     db.flush()
 
 
-def attach_bom_sources(db, *, purchase, lines, user):
+def attach_bom_sources(db, *, purchase, lines, user, cutting_default_entries=None):
     from app.api.requisition import (RequisitionBatchCreate, _create_batch_locked,
         _bom_snapshot_crease, _component_crease, _requisition_item_component)
     from app.models.requisition import Requisition, RequisitionItem
@@ -325,6 +333,7 @@ def attach_bom_sources(db, *, purchase, lines, user):
     if not lines:
         return
     result = _create_batch_locked(db=db, user=user, commit=False,
+        deferred_cutting_defaults=cutting_default_entries,
         payload=RequisitionBatchCreate(supplier_name=purchase.supplier_name,
             request_key=hashlib.sha256((purchase.request_key + ":bom").encode()).hexdigest(), items=lines))
     batch = db.get(Requisition, result["id"])
@@ -345,6 +354,7 @@ def attach_bom_sources(db, *, purchase, lines, user):
             "quantity": source.requisition_qty, "direction_note": bom_source.direction_note if bom_source else None,
         }
         line = SupplierRequisitionOrderItem(supplier_order_id=purchase.id,
+            sheet_cutting_snapshot=source.sheet_cutting_snapshot,
             order_item_id=None, source_key=f"material_requisition:{source.id}:{component}",
             material_id=bom.snapshot_component_material_id if bom else order_item.material_id,
             material_code_snapshot=source.material_snapshot,

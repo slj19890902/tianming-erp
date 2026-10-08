@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER = (ROOT / "static" / "warehouse.html").read_text(encoding="utf-8")
 SHELL = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+WORKSPACE = (ROOT / "static" / "ui" / "warehouse-workspace.js").read_text(encoding="utf-8")
 COST_PAGE = (
     ROOT / "static" / "factory-twin-assets" / "warehouse-costs.html"
 ).read_text(encoding="utf-8")
@@ -39,10 +40,13 @@ def test_ledger_keeps_cost_entry_and_stocktake_returns_through_erp_shell() -> No
 
 
 def test_shell_forwards_stocktake_intent_to_embedded_warehouse() -> None:
-    assert 'const requestedMode = query.get("warehouse_mode") || "";' in SHELL
-    assert 'params.set("mode", requestedMode);' in SHELL
-    assert 'params.set("action", requestedAction);' in SHELL
-    assert 'this.warehouseFrameUrl = `/warehouse.html?${params.toString()}`;' in SHELL
+    # The guarded workspace router now owns this behavior; the shell loads it.
+    assert '/static/ui/warehouse-workspace.js' in SHELL
+    assert "['lookup','move','planning'].includes(query.get('warehouse_mode'))" in WORKSPACE
+    assert "params.set('mode', query.get('warehouse_mode'))" in WORKSPACE
+    assert "params.set('action', query.get('warehouse_action'))" in WORKSPACE
+    assert "initial = '/warehouse.html?' + params;" in WORKSPACE
+    assert 'this.activateWarehouseRoute(initial);' in WORKSPACE
 
 
 def test_cost_page_returns_to_erp_shell() -> None:

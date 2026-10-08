@@ -57,7 +57,7 @@
     function field(key,value){const shown=value===null||value===undefined||value===""?"待完善":value;return `<div class="field"><span class="key">${h(key)}</span><span class="value">${h(shown)}</span></div>`}
     function binding(row){
       const material=materialCode(row.material_code)||materialCode(row.material_composition);
-      return `<div class="binding"><div class="row"><div class="title">${h(row.product_name||row.product_code||"未命名产品")}</div><span class="tag">${h(row.customer_short_name||row.customer_name||row.customer_code||"客户待完善")}</span></div><div class="muted">存货 ${h(row.product_code||"待完善")}</div><div class="grid">${field("产品尺寸",row.specification)}${field("片料尺寸",row.report_specification)}${field("材质",material)}${field("楞型",row.flute_type)}${field("层数",row.layer_count?`${row.layer_count}层`:null)}</div></div>`;
+      return `<div class="binding"><div class="row"><div class="title">${h(row.product_name||row.product_code||"未命名产品")}</div><span class="tag">${h(row.customer_short_name||row.customer_name||row.customer_code||"客户待完善")}</span></div><div class="muted">存货 ${h(row.product_code||"待完善")}</div><div class="grid">${field("产品尺寸",row.specification)}${field("片料尺寸",row.report_specification)}${field("材质",material)}${field("楞型",row.flute_type)}${field("层数",row.layer_count?`${row.layer_count}层`:null)}${field("几模",row.mold_count_display)}</div></div>`;
     }
     function materialBlock(material){
       if(material.visibility!=="visible")return '<div class="material muted">当前账号无收料详情查看权限</div>';

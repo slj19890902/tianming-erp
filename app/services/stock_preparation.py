@@ -267,7 +267,7 @@ def plan_product(db, item, lot):
         fail("材料不能用于该产品："+"；".join(issues))
     return product
 
-def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='finished'):
+def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='finished', frozen_snapshot=None):
     if payload['action']=='store_output':
         from app.services.stock_preparation_disposition import store_output
         return store_output(db,receipt_id,payload,actor)
@@ -302,9 +302,9 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='
         quantity = payload["quantity"]
         if lot.inventory_type != "semi_finished" or quantity <= 0 or quantity > lot.quantity_available:
             fail("生产投入必须大于0且不能超过可用材料")
-        product = plan_product(db,item,lot)
+        product = plan_product(db,item,lot) if frozen_snapshot is None else db.get(Product, frozen_snapshot['product_id'])
         from app.services.finished_stock_identity import product_basis
-        expected = quantity * item.stock_yield_per_sheet // item.pieces_per_box
+        expected = quantity * (frozen_snapshot['factor'] if frozen_snapshot else item.stock_yield_per_sheet) // (frozen_snapshot['pieces_per_box'] if frozen_snapshot else item.pieces_per_box)
         if expected <= 0:
             fail("投入材料不足以产出一个成品")
         planned_location = None
@@ -317,7 +317,7 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='
             warning_codes="stock_preparation", reservation_group_key=f"prep:{payload['operation_key']}")
         db.add(reservation); db.flush()
         job = Job(receipt_item_id=receipt.id, reservation_id=reservation.id, product_id=product.id,
-            product_snapshot=json.dumps(dict(product_id=product.id,code=product.product_code,name=product.product_name,
+            product_snapshot=json.dumps(frozen_snapshot or dict(product_id=product.id,code=item.product_code_snapshot or product.product_code,name=item.product_name_snapshot or product.product_name,
                 factor=item.stock_yield_per_sheet,pieces_per_box=item.pieces_per_box,physical_basis=product_basis(product),
                 planned_location=planned_location,preparation_group=group_snapshot),ensure_ascii=False),
             input_quantity=quantity, expected_output=expected)
@@ -330,7 +330,7 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='
         if not job or job.receipt_item_id != receipt.id or job.status != "pending" or job.version != payload["job_version"]:
             fail("待生产任务已变化，请刷新")
         frozen_group = json.loads(job.product_snapshot).get("preparation_group")
-        if frozen_group and (not group_snapshot or group_snapshot.get("key") != frozen_group["key"]):
+        if frozen_group and not frozen_group.get('independent') and (not group_snapshot or group_snapshot.get("key") != frozen_group["key"]):
             fail("该子件属于整组生产，请从整组入口操作")
         reservation = db.get(InventoryReservation,job.reservation_id)
         quantity = job.input_quantity

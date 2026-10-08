@@ -89,7 +89,7 @@ def confirm(item_id: int, payload: ConfirmAssembly, user: User = Depends(can_com
     order = db.get(Order, item.order_id)
     require_customer_access(order.customer_id, user, db)
     if not payload.physical_assembly_confirmed:
-        raise HTTPException(409, '请在现场插合完成后确认')
+        raise HTTPException(409, '请在现场组装（插合或粘合）完成后确认')
     try:
         result = service.confirm(db, item_id=item_id, command=payload.model_dump(), actor=user)
         db.commit()

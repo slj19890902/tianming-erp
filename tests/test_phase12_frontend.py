@@ -116,7 +116,8 @@ def test_desktop_spa_preserves_deep_link_and_defaults_root_to_dashboard() -> Non
 
 def test_n029_production_page_deep_link_and_manual_destination_are_present() -> None:
     assert "activePage === 'production'" in INDEX
-    assert 'key: "production", label: "生产与成品"' in INDEX
+    assert 'key: "requisition", label: "报料"' in INDEX
+    assert "!this.pageAllowed('requisition') && this.pageAllowed('production')" in INDEX
     assert 'production: "orders.view"' in INDEX
     assert '<option value="">请选择完工去向</option>' in INDEX
     assert '<option value="direct">订单内直接待送</option>' in INDEX
@@ -130,7 +131,8 @@ def test_n029_production_page_deep_link_and_manual_destination_are_present() -> 
     assert "先选楼层" in INDEX
     assert "再选区域" in INDEX
     assert "再选库位" in INDEX
-    assert ':checked="!!productionSelected[row.id]"' in INDEX
+    assert 'v-else-if="productionSelected[row.id]"' in INDEX
+    assert '@click="registerProductionOutput(row)"' in INDEX
     assert 'activePage === \'production\'' in INDEX
 
     deep_link_start = INDEX.index("initialPageFromLocation()")

@@ -661,6 +661,38 @@ def _delivery_quantity_facts(db: Session, order_item: OrderItem) -> dict[str, in
     }
 
 
+def _graph_finished_stock_ready(db: Session, item: OrderItem, required_sets: int) -> bool:
+    """Frozen physical BOM stock can ship without a raw procurement record."""
+    from app.services.multilevel_bom_orders import read_compiled_order_bom
+    from app.services.multilevel_bom_plan import plan_bom
+    from app.services.finished_stock_identity import compiled_product_bases, matches_stock_identity
+    from app.services.composite_bom_workflow import _stock_reservations, _remaining_reservation_quantity
+    compiled = read_compiled_order_bom(db,item.id)
+    if compiled is None or required_sets <= 0:
+        return False
+    bases=compiled_product_bases(compiled)
+    snapshots={s.component_product_id:s.id for s in compiled.snapshots}
+    for pid,per_set in plan_bom(compiled.graph,1).picking:
+        quantity=0
+        for row in _stock_reservations(db,snapshots[pid]):
+            lot=db.get(InventoryLot,row.inventory_lot_id)
+            detail=lot.finished_detail if lot else None
+            remaining=_remaining_reservation_quantity(row)
+            if remaining<=0:
+                continue
+            if not (lot and lot.status=='active' and detail and detail.product_id==pid
+                    and (detail.owner_customer_id==compiled.graph.customer_id or detail.is_general)
+                    and lot.quantity_reserved>=remaining
+                    and matches_stock_identity(detail.physical_basis_json,bases[pid])):
+                # The existing consumption planner visits all FIFO sources.
+                # Never hide an incompatible earlier lot behind later good stock.
+                return False
+            quantity+=remaining
+        if quantity < required_sets*per_set:
+            return False
+    return True
+
+
 def _has_production_task(db: Session, order_item_id: int) -> bool:
     return db.scalar(
         select(ProductionTask.id)
@@ -7032,6 +7064,8 @@ def _collect_delivery_lines(
             if production_managed
             else inventory_fully_covers_order_item(db, order_item.id)
         )
+        graph_finished_stock_ready = (not production_managed and
+            _graph_finished_stock_ready(db,order_item,1))
         if (
             component_remaining is not None
             and line.delivered_quantity > component_remaining
@@ -7064,6 +7098,7 @@ def _collect_delivery_lines(
                     and _external_packaging_received(db, order_item.id)
                 )
                 and not full_inventory_coverage
+                and not graph_finished_stock_ready
                 and not direct_receipt_managed
                 and _received_telescoping_capacity(db, order_item.id) is None
             )
@@ -9378,6 +9413,11 @@ def _dispatch_delivery(
                     )
                 production_managed = _has_production_task(db, order_item.id)
             remaining = _delivery_remaining_quantity(db, order_item)
+            from app.services.multilevel_bom_orders import read_compiled_order_bom
+            if (not production_managed and order_item.material_status!='received'
+                    and read_compiled_order_bom(db,order_item.id) is not None
+                    and not _graph_finished_stock_ready(db,order_item,line.delivered_quantity)):
+                raise HTTPException(status_code=409,detail='冻结BOM成品预占身份或可送数量已变化')
             if production_managed and (
                 order_item.is_force_closed
                 or remaining <= 0

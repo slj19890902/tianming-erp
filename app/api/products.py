@@ -108,6 +108,7 @@ from app.services.composite_bom import (
 )
 from app.services.box_type_rules import (
     BOX_TYPE_RULES,
+    get_box_type_rule,
     BoxTypeRuleError,
     box_type_supports_cutting_mode,
     box_type_uses_flap,
@@ -482,6 +483,13 @@ class ProductExternalSupplyPayload(BaseModel):
 
 
 class ProductPayload(BaseModel):
+    sheet_cutting_settings: dict | None = None
+
+    @field_validator("sheet_cutting_settings")
+    @classmethod
+    def validate_sheet_cutting_settings(cls, value):
+        from app.services.sheet_cutting_settings import normalize_settings
+        return normalize_settings(value)
     customer_id: int
     product_code: str = Field(min_length=1, max_length=150)
     customer_material_code: str = Field(min_length=1, max_length=150)
@@ -582,7 +590,11 @@ class ProductPayload(BaseModel):
         if self.box_style == "BOM组合":
             if self.is_virtual_composite_parent or self.supply_mode == "external_purchase":
                 raise ValueError("BOM组合是实际组套成品，不是虚拟分存或直接外购产品")
-            self.unit = "套"
+            if "unit" not in self.model_fields_set:
+                self.unit = "套"
+            self.unit = str(self.unit or "").strip()
+            if self.unit not in {"只", "套"}:
+                raise ValueError("BOM组合成品单位请选择只或套")
             self.combination_mode = "parent_priced_set"
             self.composite_fulfillment_mode = "parent_delivery"
             _clear_virtual_composite_parent_fields(self)
@@ -611,7 +623,7 @@ class ProductPayload(BaseModel):
             splice_mode=self.splice_mode,
             pieces_per_box=self.pieces_per_box,
             flap_mm=self.flap_mm,
-            default_cutting_mode=self.default_cutting_mode,
+            default_cutting_mode=DEFAULT_CUTTING_MODE if self.sheet_cutting_settings else self.default_cutting_mode,
             crease_type=self.crease_type,
         )
         self.box_style = configuration["box_style"]
@@ -619,6 +631,9 @@ class ProductPayload(BaseModel):
         self.pieces_per_box = configuration["pieces_per_box"]
         self.flap_mm = configuration["flap_mm"]
         self.default_cutting_mode = configuration["default_cutting_mode"]
+        if self.sheet_cutting_settings:
+            from app.services.sheet_cutting_settings import component_settings
+            self.default_cutting_mode = component_settings(self.sheet_cutting_settings).cutting_mode
         if {
             "production_label_enabled",
             "production_label_units_per_label",
@@ -1311,6 +1326,8 @@ def _product_write_data(payload: ProductPayload, user: User) -> dict:
     """
     data = payload.model_dump(include=set(ProductPayload.model_fields))
     data.pop("external_supply", None)
+    if "sheet_cutting_settings" not in payload.model_fields_set:
+        data.pop("sheet_cutting_settings", None)
     from app.services.customer_document_fields import FIELDS
     for field in FIELDS:
         if field not in payload.model_fields_set:
@@ -1336,6 +1353,10 @@ def _validated_product_versioned_updates(
     payload: ProductPayload,
     user: User,
 ) -> dict:
+    if product.sheet_cutting_settings and "sheet_cutting_settings" not in payload.model_fields_set:
+        payload.sheet_cutting_settings = product.sheet_cutting_settings
+    if product.sheet_cutting_settings and payload.sheet_cutting_settings is None and not (payload.is_virtual_composite_parent or payload.box_style == "BOM组合" or payload.supply_mode == "external_purchase"):
+        raise HTTPException(409, "已启用独立开料的常用箱不能退回旧数量口径")
     virtual_marker_was_submitted = (
         "is_virtual_composite_parent" in payload.model_fields_set
     )
@@ -1365,6 +1386,7 @@ def _validated_product_versioned_updates(
     ):
         _normalize_product_joining_method(payload)
     _normalize_product_mold_binding(payload)
+    _validate_product_sheet_cutting(payload)
     printing_configuration_unchanged = _product_printing_configuration_unchanged(
         product,
         payload,
@@ -1409,6 +1431,35 @@ def _validated_product_versioned_updates(
     )
     updates.update(supply_updates)
     return updates
+
+
+def _validate_product_sheet_cutting(payload):
+    from app.services.sheet_cutting_settings import normalize_settings, component_settings
+    from app.services.sheet_cutting_contract import SheetCuttingContractError
+    try:
+        settings = normalize_settings(payload.sheet_cutting_settings)
+        if settings is None:
+            return
+        if payload.is_virtual_composite_parent or payload.box_style == "BOM组合" or payload.supply_mode == "external_purchase":
+            payload.sheet_cutting_settings = None
+            return
+        rule = get_box_type_rule(payload.box_style)
+        is_set = rule is not None and rule.code == "a3_set"
+        if is_set != ("base" in settings):
+            raise SheetCuttingContractError("天地盖须分别设置盖和底的开料方式")
+        die_cut = _production_process_uses_mold(payload.production_process)
+        for component in ("cover", "base") if is_set else ("whole",):
+            part = component_settings(settings, component)
+            if part.is_die_cut != die_cut:
+                raise SheetCuttingContractError("几模设置与模切工艺不一致，请核对生产工艺")
+            prefix = "base_report_" if component == "base" else "report_"
+            length, width = getattr(payload, prefix + "length_mm"), getattr(payload, prefix + "width_mm")
+            if length and width:
+                part.contract(length, width)
+        payload.sheet_cutting_settings = settings
+        payload.default_cutting_mode = component_settings(settings).cutting_mode
+    except SheetCuttingContractError as error:
+        raise HTTPException(422, str(error)) from error
 
 
 def _product_or_404(db: Session, product_id: int) -> Product:
@@ -2271,7 +2322,7 @@ def update_product_bom(
     return _update_product_bom(product_id, payload, db, user)
 
 
-def _update_product_bom(product_id, payload, db, user, *, commit=True) -> dict:
+def _update_product_bom(product_id, payload, db, user, *, commit=True, preserve_parent_unit=False) -> dict:
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
     try:
@@ -2285,6 +2336,7 @@ def _update_product_bom(product_id, payload, db, user, *, commit=True) -> dict:
             inventory_mode=payload.inventory_mode,
             material_mode=payload.material_mode,
             delivery_mode=payload.delivery_mode,
+            preserve_parent_unit=preserve_parent_unit,
         )
         from app.services.bom_subkits import read_subkit, save_subkit, SubkitError
         from app.services.composite_bom_execution import CompositeBOMExecutionError
@@ -2567,6 +2619,7 @@ def _create_product(payload, db, user, *, commit=True) -> dict:
     supply_updates = _normalize_product_external_supply(db, payload=payload)
     _normalize_product_joining_method(payload)
     _normalize_product_mold_binding(payload)
+    _validate_product_sheet_cutting(payload)
     _normalize_product_printing_configuration_for_api(payload)
     _validate_references(
         db,
@@ -2698,7 +2751,7 @@ def _save_product_with_bom(payload, db, user, product_id=None):
                      _update_product(product_id, payload.product, db, user, commit=False))
             product = _product_or_404(db, saved["id"])
             bom_payload = payload.bom.model_copy(update={"expected_version": product.version})
-            bom = _update_product_bom(product.id, bom_payload, db, user, commit=False)
+            bom = _update_product_bom(product.id, bom_payload, db, user, commit=False, preserve_parent_unit=True)
             db.flush()
             db.refresh(product)
             result = {"product": _response(product, user), "bom": bom}

@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     Date,
@@ -124,6 +125,7 @@ class Order(Base):
 
 
 class OrderItem(Base):
+    sheet_cutting_settings_snapshot: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     __tablename__ = "sales_order_items"
     __table_args__ = (
         CheckConstraint("quantity > 0", name="ck_sales_order_items_quantity"),

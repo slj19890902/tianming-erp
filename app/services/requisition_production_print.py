@@ -758,8 +758,15 @@ def build_supplier_requisition_production_package(
             joining_method = "无需结合"
             joining_method_source = "default_no_joining"
         component_printing_colors = printing_snapshot["printing_colors"]
+        from app.services.sheet_cutting_contract import cutting_work_instruction
+        from app.services.requisition_quantities import normalize_cutting_mode
+        cutting_instruction = cutting_work_instruction(item.sheet_cutting_snapshot)
         component = {
             "supplier_order_item_id": item.id,
+            "production_process": (component_snapshot.snapshot_component_production_process
+                if component_snapshot is not None else product.production_process if product else None),
+            "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
+            "cutting_work_instruction": cutting_instruction,
             "source_identity": source_identity,
             "component_label": component_label,
             "display_order": display_order,
@@ -773,7 +780,7 @@ def build_supplier_requisition_production_package(
             "requisition_unit": "张",
             "report_length_mm": item.report_length_mm or order.report_length_mm,
             "report_width_mm": item.report_width_mm or order.report_width_mm,
-            "cutting_mode": item.cutting_mode or order.cutting_mode,
+            "cutting_mode": (normalize_cutting_mode(item.sheet_cutting_snapshot["cutting_factor"]) if item.sheet_cutting_snapshot else item.cutting_mode or order.cutting_mode),
             "pieces_per_box": int(item.pieces_per_box or 1),
             "required_piece_quantity": int(item.required_piece_qty or 0),
             "material_code": item.material_code_snapshot,
@@ -781,7 +788,7 @@ def build_supplier_requisition_production_package(
             "flute_type": item.flute_type_snapshot or order.flute_type,
             "crease_type": crease_values[0],
             "crease_display": _crease_display(crease_values),
-            "production_notes": production_notes,
+            "production_notes": [*production_notes, cutting_instruction] if cutting_instruction else production_notes,
             "box_style": canonical_box_style(box_style),
             "box_type_code": box_type_code(box_style),
             "layout_kind": layout_kind,
@@ -837,7 +844,7 @@ def build_supplier_requisition_production_package(
             "production_task_id": task.id if task is not None else None,
             "production_task_version": task.version if task is not None else None,
             "output_factor": max(
-                int(task.output_factor if task is not None else 0)
+                int(item.sheet_cutting_snapshot["yield_per_supplier_sheet"] if item.sheet_cutting_snapshot else task.output_factor if task is not None else 0)
                 or cutting_output_factor(item.cutting_mode or order.cutting_mode),
                 1,
             ),
@@ -1107,6 +1114,49 @@ def build_supplier_requisition_production_package(
             )
         for component in card["components"]:
             component.pop("_product_id", None)
+    # A unified purchase can contain order rows and independent replenishment
+    # rows. Resolve each latter row by its active typed foreign-key link.
+    from app.models.procurement_source import ProcurementSourceLink
+    links = db.scalars(select(ProcurementSourceLink).where(
+        ProcurementSourceLink.supplier_item_id.in_([row.id for row in items]),
+        ProcurementSourceLink.status == 'active',
+        ProcurementSourceLink.stock_replenishment_item_id.is_not(None))).all()
+    stock_cards = {}
+    for link in links:
+        source = db.get(StockReplenishmentOrderItem, link.stock_replenishment_item_id)
+        line = next(row for row in items if row.id == link.supplier_item_id)
+        if source is None or source.order.status not in {'confirmed', 'partially_stocked', 'stocked'}:
+            continue
+        card = build_stock_replenishment_production_package(db, source.order,
+            selected_item_ids={source.id})['cards'][0]
+        identity = f'supplier_stock:{line.id}:{source.id}'
+        card.update(source_type='supplier_order', supplier_order_id=order.id,
+            supplier_order_item_id=line.id, supplier_order_item_ids=[line.id],
+            source_identity=identity, source_version=hashlib.sha256(json.dumps({
+                'link_id': link.id, 'snapshot': link.source_snapshot_json,
+                'source_quantity': link.source_quantity, 'supplier_quantity': line.requisition_qty,
+                'cutting': line.sheet_cutting_snapshot,
+                'contract': source.quantity_contract_json}, sort_keys=True, default=str).encode()).hexdigest(),
+            paper_phase_label='库存补库计划版')
+        if (int(link.source_quantity) != int(source.quantity)
+                or int(line.requisition_qty) != int(source.quantity)
+                or line.sheet_cutting_snapshot != source.sheet_cutting_snapshot):
+            card['selection_block_reasons'].append('补库来源与正式采购冻结数量或开料合同不一致')
+        for component in card['components']:
+            component.update(supplier_order_item_id=line.id, source_identity=identity)
+        stock_cards[line.id] = card
+    cards = [stock_cards.get(card['supplier_order_item_id'], card) for card in cards]
+    from app.services.production_route_contract import production_route_contract
+    for card in cards:
+        for component in card['components']:
+            if 'production_route' not in component:
+                component['production_route'] = production_route_contract(
+                    component.get('sheet_cutting_snapshot'),
+                    process=[component.get('production_process')],
+                    printing=component.get('printing_colors') or [],
+                    joining=component.get('joining_method'))
+        card['sheet_cutting_snapshot'] = card['components'][0].get('sheet_cutting_snapshot') if len(card['components']) == 1 else None
+        card['production_route'] = card['components'][0]['production_route'] if len(card['components']) == 1 else None
     immutable_payload = {
         "supplier_order_id": order.id,
         "supplier_order_number": order.order_number,
@@ -1147,10 +1197,10 @@ def build_supplier_requisition_production_package(
             if not card.get("review_required"):
                 card["status_label"] = "实收一致"
         card["production_task_versions"] = production_print_card_task_versions(card)
-        selection_block_reasons: list[str] = []
-        if not card["production_task_versions"] or len(
+        selection_block_reasons: list[str] = list(card.get('selection_block_reasons') or [])
+        if not card.get('stock_replenishment_item_id') and (not card["production_task_versions"] or len(
             card["production_task_versions"]
-        ) != len(card.get("components") or []):
+        ) != len(card.get("components") or [])):
             selection_block_reasons.append("生产任务版本缺失，请先核对任务")
         card["selection_block_reasons"] = selection_block_reasons
         card["selection_eligible"] = not selection_block_reasons
@@ -1357,9 +1407,26 @@ def build_stock_replenishment_production_package(
                 item.remark,
             ]
         )
+        from app.services.stock_replenishment_plan import frozen_bom_plan
+        frozen = frozen_bom_plan(item)
+        frozen_component = next((row for row in (frozen or {}).get('components', [])
+            if row['product_id'] == item.reference_product_id), None)
+        if frozen_component:
+            production_steps = _unique_text([frozen_component.get('production_process'), item.remark])
+        from app.services.production_route_contract import production_route_contract
+        route_process = [frozen_component.get('production_process') if frozen_component
+                         else product.production_process if product else None]
+        route = production_route_contract(item.sheet_cutting_snapshot, process=route_process,
+            printing=(frozen_component.get('printing_colors') if frozen_component
+                      else product.printing_colors if product else None),
+            joining=_explicit_joining_method(route_process))
+        route['source'] = 'frozen_bom_stock_plan' if frozen_component else 'current_common_box_fallback'
         joining_method = _explicit_joining_method(production_steps) or "无需结合"
         component = {
             "stock_replenishment_item_id": int(item.id),
+            "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
+            "production_route": route,
+            "cutting_work_instruction": route['cutting_instruction'],
             "source_identity": f"stock_replenishment_item:{int(item.id)}",
             "component_label": {
                 "cover": "盖",
@@ -1456,6 +1523,8 @@ def build_stock_replenishment_production_package(
         )
         card = {
             "source_type": "stock_replenishment",
+            "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
+            "production_route": route,
             "stock_replenishment_order_id": int(order.id),
             "stock_replenishment_item_id": int(item.id),
             "stock_replenishment_item_ids": [int(item.id)],
@@ -1694,7 +1763,8 @@ def build_composite_requisition_production_package(
                 quantity=int(source.required_piece_quantity),
                 stock_deduction_qty=0,
                 requisition_qty=int(row.requisition_qty or 0),
-                cutting_mode=snapshot.snapshot_component_default_cutting_mode,
+                sheet_cutting_snapshot=row.sheet_cutting_snapshot,
+                cutting_mode=row.special_process or snapshot.snapshot_component_default_cutting_mode,
                 pieces_per_box=(
                     row.pieces_per_box
                     or snapshot.snapshot_component_pieces_per_box

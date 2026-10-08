@@ -242,7 +242,7 @@ def test_split_movement_keeps_receipt_cost_and_finished_coverage(
                 assert sum(a.quantity for a in active) == 10
 
 
-def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, separate=False, quantity=None, cutting_modes=None, finished_slot_count=8, accompany=False):
+def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, separate=False, quantity=None, cutting_modes=None, finished_slot_count=8, accompany=False, two_piece=False):
     from app.models.warehouse_inventory import WarehouseLocation
     from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
@@ -276,7 +276,24 @@ def seed_graph(factory, *, liner=False, a3=False, splice=False, body=False, sepa
                 p.length_mm, p.width_mm, p.height_mm = 1000, 700, 20
             if cutting_modes and pid in cutting_modes:
                 p.default_cutting_mode = cutting_modes[pid]
-        if separate:
+        if two_piece:
+            from app.models.mold_tool import MoldTool, MoldToolCustomer
+            from app.services.composite_bom import replace_product_bom
+            root = db.get(Product, 1)
+            root.box_style, root.unit = 'BOM组合', '只'
+            root.material_id = None
+            item.sales_unit_snapshot = '只'
+            components = []
+            for pid, length, width in ((2, 1800, 900), (3, 1500, 750)):
+                mold = MoldTool(mold_code=f'FICTIONAL-TWO-PIECE-{pid}', mold_name=f'虚构异形片模具{pid}', label_name=f'虚构异形片{pid}', chinese_short_name='测试片', rack_location='虚构模具位',identity_status='frozen')
+                db.add(mold);db.flush()
+                db.add(MoldToolCustomer(mold_tool_id=mold.id,customer_id=1))
+                p = db.get(Product, pid)
+                p.unit='片';p.box_category='die_cut';p.production_process='模切';p.mold_tool_id=mold.id
+                p.report_length_mm=length;p.report_width_mm=width
+                components.append(dict(component_product_id=pid,quantity_per_set=1,inventory_relation='assembly',is_die_cut=True,mold_tool_id=mold.id,mold_max_yield_per_sheet=1))
+            replace_product_bom(db,parent_product_id=1,expected_version=root.version,user=actor,inventory_mode='assembled',material_mode='expand_children',delivery_mode='parent',components=components,preserve_parent_unit=True)
+        elif separate:
             from app.services.composite_bom import replace_product_bom
             replace_product_bom(db, parent_product_id=1, expected_version=db.get(Product, 1).version,
                 user=actor, inventory_mode="separate", material_mode="expand_children", delivery_mode="components",

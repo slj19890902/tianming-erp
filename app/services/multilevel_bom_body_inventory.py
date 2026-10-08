@@ -96,6 +96,10 @@ def body_completion_identity(db, completion, semi_cost_detail=None):
 
 def stock_product_identity(db, lot):
     """Real product/customer identity; never infer an ID from names or cost JSON."""
+    from app.services.processed_component_stock import output_identity
+    processed=output_identity(db,lot)
+    if processed is not None:
+        return processed[:2]
     if lot is not None and lot.inventory_type == "finished" and lot.finished_detail is not None:
         return lot.finished_detail.product_id, lot.finished_detail.owner_customer_id
     if lot is None or lot.inventory_type != "assembly_body" or lot.finished_detail is not None:

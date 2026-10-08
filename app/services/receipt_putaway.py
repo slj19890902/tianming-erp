@@ -150,20 +150,32 @@ def resolve(db, *, product_id=None, customer_id=None, claim=False, inventory_typ
         if not claim or claim_active_placed_location(db, loc.id, expected_layout_version=loc.floor3_layout.version):
             return loc, "product_storage", None
     staging = []
+    blocked_areas = []
     for area in db.scalars(select(WarehouseArea).where(WarehouseArea.id.in_(staging_ids))).all():
         if area.floor.floor_number != 1:
             continue
-        for loc in db.scalars(select(WarehouseLocation).where(WarehouseLocation.warehouse_floor == 1,
-                WarehouseLocation.area_code == area.area_code, WarehouseLocation.is_active.is_(True))).all():
-            if location_issue(db, loc, inventory_type) is None:
+        area_locations = db.scalars(select(WarehouseLocation).where(WarehouseLocation.warehouse_floor == 1,
+                WarehouseLocation.area_code == area.area_code, WarehouseLocation.is_active.is_(True))).all()
+        reasons = set()
+        for loc in area_locations:
+            issue = location_issue(db, loc, inventory_type)
+            if issue is None:
                 physical = sum(int(x.quantity_available or 0) + int(x.quantity_reserved or 0) + int(x.quantity_damaged or 0)
                     for x in db.scalars(select(InventoryLot).where(InventoryLot.warehouse_location_id == loc.id,
                         InventoryLot.status.in_(["active", "frozen"]))).all())
                 staging.append((physical, loc.id, loc))
+            else:
+                reasons.add(issue)
+        if not area_locations:
+            reasons.add("没有启用货位")
+        if reasons:
+            blocked_areas.append(f"{area.area_code}：{'、'.join(sorted(reasons))}")
     for _, _, loc in sorted(staging, key=lambda x: (x[0], x[1])):
         if not claim or claim_active_placed_location(db, loc.id, expected_layout_version=loc.floor3_layout.version):
             return loc, "receipt_staging", warning or "待入库区可混放，容量仅提醒；请按现场空间及时归位"
-    raise ShelfError("一楼待入库区没有可用的已发布货位，请管理员核对地图；本次未入库")
+    detail = "；".join(blocked_areas[:4]) or "货位版本正在变化，请刷新后重试"
+    raise ShelfError("一楼待入库区没有可用的已发布货位；" + detail
+                     + "。请管理员进入仓库地图核对待入库区域的发布状态；本次未入库")
 
 
 def placement_state(db, lot):

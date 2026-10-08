@@ -377,6 +377,8 @@ def graph_material_receipts_closed(db, item):
     if not external_graph_receipts_closed(db, item=item, requirements=requirements):
         return False
     received = defaultdict(int)
+    received_pieces = defaultdict(int)
+    v2_routes = set()
     from app.services.multilevel_bom_source_handoffs import current_source_handoffs
     from app.services.multilevel_bom_carried_material import carried_material_pieces
     current_ids = {row.id for row in requirements.compiled.snapshots}
@@ -391,15 +393,27 @@ def graph_material_receipts_closed(db, item):
         if row.status in ("有效", "supplier_requisition_created"):
             return False
         if row.status == "已入库" and source.sales_order_item_bom_component_id in current_ids:
-            received[source.sales_order_item_bom_component_id, source.component_type] += purpose.order_purpose_sheet_qty
+            key = (source.sales_order_item_bom_component_id, source.component_type)
+            # The purchase froze its own supplier layout. The order graph is
+            # immutable and can have an older A/B default for this same route.
+            received[key] += purpose.order_purpose_sheet_qty
+            received_pieces[key] += purpose.order_purpose_sheet_qty * int(purpose.yield_per_sheet_snapshot)
+            if row.sheet_cutting_snapshot:
+                v2_routes.add(key)
     snapshots = {s.component_product_id: s for s in requirements.compiled.snapshots}
     inherited = carried_material_pieces(db, requirements.compiled)
     yields = {(node.product_id, route.key): route.pieces_per_sheet
         for node in requirements.compiled.graph.nodes for route in node.routes}
-    return all(received[snapshots[m.product_id].id, m.route_key] * yields[m.product_id, m.route_key]
-        + inherited.get((m.product_id, m.route_key), 0) >= (m.purchase_sheets + (
-        int(snapshots[m.product_id].spare_sheet_quantity or 0) if m.purchase_sheets else 0)) * yields[m.product_id, m.route_key]
-        for m in requirements.plan.materials)
+    def covered(material):
+        key = (snapshots[material.product_id].id, material.route_key)
+        required = (max(material.required_pieces - material.credited_pieces, 0)
+                    if key in v2_routes else (material.purchase_sheets + (
+                        int(snapshots[material.product_id].spare_sheet_quantity or 0)
+                        if material.purchase_sheets else 0)) * yields[material.product_id, material.route_key])
+        delivered = (received_pieces[key] if key in v2_routes else
+                     received[key] * yields[material.product_id, material.route_key])
+        return delivered + inherited.get((material.product_id, material.route_key), 0) >= required
+    return all(covered(material) for material in requirements.plan.materials)
 
 
 def refresh_graph_main_task(db, item, *, create_if_missing):

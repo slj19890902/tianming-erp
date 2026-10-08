@@ -11,7 +11,7 @@ function setup(){
   window.removeEventListener=(type,fn)=>{if(listeners[type]===fn)delete listeners[type]};
   const responses=[];
   window.axios={interceptors:{response:{use:fn=>{responses.push(fn);return 1},eject:()=>calls.push('eject')}}};
-  const document={documentElement:{classList:{add(){},remove(){}}},createElement:()=>({}),head:{appendChild(){}}};
+  const document={documentElement:{classList:{add(){},remove(){},toggle(){}}},createElement:()=>({}),head:{appendChild(){}}};
   vm.runInNewContext(source,{window,document,location:{origin:'http://127.0.0.1:18381',search:'?frontend_shell=1'},URLSearchParams,clearInterval(){}});
   const instance={user:{id:1,role:'admin',must_change_password:false},authGeneration:1,loading:false,modal:{},canCreateOrders:true,hasPermission:()=>true,menus:[{key:'workbench',label:'订单主链'}],activePage:'orders',isMenuActive:()=>true,goMenu:key=>calls.push(key),$watch:()=>()=>{}};
   for(const [name,type] of [['openOrder','order'],['openOrderPdfImport','orderPdfImport'],['openEmailQueue','orderPdfImport']]) instance[name]=()=>{calls.push(name);instance.modal={type};};

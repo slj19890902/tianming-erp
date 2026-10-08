@@ -137,6 +137,7 @@ _PRODUCT_FIELDS = (
     "splice_mode",
     "pieces_per_box",
     "default_cutting_mode",
+    "sheet_cutting_settings",
     "production_label_enabled",
     "production_label_units_per_label",
     "flap_mm",

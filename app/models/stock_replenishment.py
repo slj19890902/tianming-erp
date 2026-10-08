@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -170,6 +171,7 @@ class StockReplenishmentOrder(Base):
 
 
 class StockReplenishmentOrderItem(Base):
+    sheet_cutting_snapshot: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     __tablename__ = "stock_replenishment_order_items"
     __table_args__ = (
         CheckConstraint(

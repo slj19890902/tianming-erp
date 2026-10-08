@@ -31,6 +31,7 @@ from app.models.multilevel_bom import ProductBomProfile, ProductBomInventoryRela
 from app.services.bom_transactions import atomic_bom
 from app.services.master_data_versioning import apply_versioned_update
 from app.services.product_specification import product_dimension_specification
+from app.services.sheet_cutting_settings import product_yield_mode, component_settings
 from app.services.requisition_quantities import (
     DEFAULT_CUTTING_MODE,
     cutting_factor,
@@ -454,12 +455,14 @@ def replace_product_bom(
     expected_version: int, user: User, change_reason: str | None = None,
     inventory_mode: str | None = None,
     material_mode: str | None = None, delivery_mode: str | None = None,
+    preserve_parent_unit: bool = False,
 ) -> dict[str, Any]:
     with atomic_bom(db):
         return _replace_product_bom(db, parent_product_id=parent_product_id,
             components=components, expected_version=expected_version, user=user,
             change_reason=change_reason, inventory_mode=inventory_mode,
-            material_mode=material_mode, delivery_mode=delivery_mode)
+            material_mode=material_mode, delivery_mode=delivery_mode,
+            preserve_parent_unit=preserve_parent_unit)
 
 
 def _replace_product_bom(
@@ -472,6 +475,7 @@ def _replace_product_bom(
     change_reason: str | None = None,
     inventory_mode: str | None = None,
     material_mode: str | None = None, delivery_mode: str | None = None,
+    preserve_parent_unit: bool = False,
 ) -> dict[str, Any]:
     """Atomically replace one parent BOM and advance the parent version."""
 
@@ -696,17 +700,20 @@ def _replace_product_bom(
             raise CompositeBOMError(f"请先设置子件 {component.product_name} 的真实BOM来源")
         relation = normalized[position - 1]
         if virtual_parent:
+            sheet_settings = component_settings(component.sheet_cutting_settings)
             is_die_cut = bool(
                 component.box_category == "die_cut"
                 or component.mold_tool_id is not None
                 or (component.die_cut_path or "").strip()
             )
+            if sheet_settings is not None:
+                is_die_cut = sheet_settings.is_die_cut
             relation.update(
                 {
                     "is_die_cut": is_die_cut,
                     "mold_tool_id": component.mold_tool_id if is_die_cut else None,
                     "mold_max_yield_per_sheet": (
-                        cutting_factor(component.default_cutting_mode)
+                        (sheet_settings.mold_count if sheet_settings else cutting_factor(component.default_cutting_mode))
                         if is_die_cut
                         else None
                     ),
@@ -783,7 +790,10 @@ def _replace_product_bom(
     if hasattr(Product, "is_composite"):
         product_updates["is_composite"] = bool(normalized)
     if mode == "assembled":
-        product_updates.update(unit="套", is_virtual_composite_parent=False)
+        # The combined master transaction has already validated the selected
+        # physical unit. Later recipe edits must retain it and frozen orders.
+        unit = parent.unit if preserve_parent_unit or before["inventory_mode"] == "assembled" else "套"
+        product_updates.update(unit=unit, is_virtual_composite_parent=False)
     if mode == "separate":
         product_updates.update(is_virtual_composite_parent=True)
     if delivery_mode is not None:
@@ -934,6 +944,19 @@ def _snapshot_kwargs(
     relation: Mapping[str, Any],
 ) -> dict[str, Any]:
     required_quantity = Decimal(int(order_item.quantity)) * relation["quantity_per_set"]
+    sheet_settings = component_settings(component.sheet_cutting_settings) if relation.get('_has_own_sheet', True) else None
+    if sheet_settings is not None:
+        # Newly frozen component geometry/yield comes from the same master
+        # configuration. Existing relation caches may still use the old label.
+        relation = dict(relation, is_die_cut=sheet_settings.is_die_cut,
+                        mold_tool_id=component.mold_tool_id if sheet_settings.is_die_cut else None,
+                        die_cut_path=component.die_cut_path if sheet_settings.is_die_cut else None,
+                        _mold_tool=component.mold_tool if sheet_settings.is_die_cut else None,
+                        mold_max_yield_per_sheet=(max(
+                            part["mold_count"] for key, part in component.sheet_cutting_settings.items()
+                            if key != "schema_version") if sheet_settings.is_die_cut else None))
+        if sheet_settings.is_die_cut and component.mold_tool_id is None:
+            raise CompositeBOMError(f"模切组件 {component.product_code} 缺少模具绑定，请在常用箱补齐后再建单")
     selected_mold = relation.get("_mold_tool")
     if (
         selected_mold is None
@@ -975,10 +998,13 @@ def _snapshot_kwargs(
         (("snapshot_component_flute_type",), component.flute_type or (component.material.flute_type if component.material is not None else None)),
         (("snapshot_component_box_category",), component.box_category),
         (("snapshot_component_box_style",), component.box_style),
+        (("sheet_cutting_settings_snapshot",), getattr(component, "sheet_cutting_settings", None) if relation.get('_has_own_sheet', True) else None),
         (
             ("snapshot_component_default_cutting_mode",),
             (
-                normalize_cutting_mode(component.default_cutting_mode)
+                product_yield_mode(component)
+                if sheet_settings is not None
+                else normalize_cutting_mode(component.default_cutting_mode)
                 if (component.box_style or "").strip()
                 in {"衬板", "平卡", "模切内盒", "隔板", "刀卡"}
                 else DEFAULT_CUTTING_MODE
@@ -1148,6 +1174,7 @@ def _snapshot_response(row: Any, *, fallback_position: int) -> dict[str, Any]:
             default="一开一",
         )
         or "一开一",
+        "sheet_cutting_settings_snapshot": _mapped_value(row, "sheet_cutting_settings_snapshot"),
         "snapshot_product_version": _mapped_value(
             row, "snapshot_product_version", "component_product_version", "product_version"
         ),

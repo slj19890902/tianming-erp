@@ -16,7 +16,8 @@ from tests.test_p1_81_receipt_purpose_flow import _p181_published_map_identity
 
 @pytest.mark.parametrize("create", [False, True])
 @pytest.mark.parametrize("fail", [False, True])
-def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_map_identity, monkeypatch, create, fail):
+@pytest.mark.parametrize("parent_unit", ["套", "只"])
+def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_map_identity, monkeypatch, create, fail, parent_unit):
     app, factory = composite_requisition_app
     app.include_router(api.router, prefix="/api/master/products")
     seed_graph(factory)
@@ -32,7 +33,7 @@ def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_
         root = db.get(Product, 1)
         fields = api._product_payload_snapshot(root)
         fields["production_notes"] = "本次原子保存备注"
-        fields["unit"] = "套"
+        fields["unit"] = parent_unit
         if create:
             fields.update(product_code="ATOMIC-NEW", customer_material_code="ATOMIC-NEW")
         else:
@@ -64,13 +65,13 @@ def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_
             return
         saved = response.json()["product"]
         assert saved["production_notes"] == fields["production_notes"]
-        assert saved["unit"] == "套"
+        assert saved["unit"] == parent_unit
         bom = response.json()["bom"]
         assert bom["version"] == saved["version"]
         assert sorted(Decimal(row["quantity_per_set"]) for row in bom["components"]) == [5, 6]
         with factory() as db:
             assert db.get(Product, saved["id"]).production_notes == fields["production_notes"]
-            assert db.get(Product, saved["id"]).unit == "套"
+            assert db.get(Product, saved["id"]).unit == parent_unit
             assert dump_graph(read_compiled_order_bom(db, 1).graph) == before[-1]
 
 

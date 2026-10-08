@@ -4,6 +4,7 @@ from app.core.sheet_dimensions import sheet_dimension_number
 from app.services.replenishment_receipt_progress import receipt_progress
 
 from math import ceil
+import json
 from uuid import uuid4
 
 from sqlalchemy import and_, case, func, or_, select
@@ -203,7 +204,9 @@ def product_replenishment_defaults(product: Product) -> dict:
         product.flute_type
         or (material.flute_type if material is not None else None)
     )
-    cutting_mode = normalize_cutting_mode(product.default_cutting_mode)
+    from app.services.sheet_cutting_settings import component_settings, product_yield_mode
+    settings = component_settings(getattr(product, "sheet_cutting_settings", None))
+    cutting_mode = product_yield_mode(product)
     crease_aliases = {"净": "净料", "毛": "毛片"}
     crease_type = crease_aliases.get(
         str(product.crease_type or "").strip(),
@@ -248,6 +251,12 @@ def product_replenishment_defaults(product: Product) -> dict:
         missing.append("压线尺寸")
     values["draft_ready"] = not missing
     values["missing_fields"] = missing
+    if settings is not None:
+        values["sheet_cutting_snapshot"] = None
+        if product.report_length_mm and product.report_width_mm:
+            contract = settings.contract(product.report_length_mm, product.report_width_mm)
+            values["report_length_mm"], values["report_width_mm"] = map(sheet_dimension_number, contract.supplier_size_mm)
+            values["sheet_cutting_snapshot"] = contract.to_snapshot()
     return values
 
 
@@ -325,7 +334,9 @@ def virtual_composite_replenishment_components(
         output_per_sheet = max(int(defaults.get("output_per_sheet") or 1), 1)
         if relation.is_die_cut and relation.mold_max_yield_per_sheet is not None:
             mold_yield = int(relation.mold_max_yield_per_sheet)
-            if output_per_sheet > mold_yield:
+            from app.services.sheet_cutting_settings import component_settings
+            setting = component_settings(getattr(component, "sheet_cutting_settings", None))
+            if (setting.mold_count if setting else output_per_sheet) > mold_yield:
                 missing.append(f"{label}：默认开料出数超过模具最大出数")
         components.append(
             {
@@ -354,6 +365,23 @@ def virtual_composite_replenishment_components(
     }
 
 
+def _cutting_signature(snapshot, supplier_length, supplier_width, output):
+    """NULL legacy means unsplit supplier sheets with the frozen total yield.
+
+    Only explicit 1x1 contracts have that same physical meaning.  A split
+    contract must match both direction factors and theoretical dimensions.
+    Extra plan/route metadata never participates in stock compatibility.
+    """
+    if not snapshot:
+        return (sheet_dimension_number(supplier_length), sheet_dimension_number(supplier_width),
+                1, 1, int(output))
+    from app.services.sheet_cutting_contract import SheetCuttingContract
+    contract = SheetCuttingContract.from_snapshot(snapshot)
+    return (sheet_dimension_number(contract.theoretical_length_mm),
+            sheet_dimension_number(contract.theoretical_width_mm),
+            contract.length_parts, contract.width_parts, contract.mold_count)
+
+
 def product_replenishment_signature(
     product: Product,
     *,
@@ -380,6 +408,8 @@ def product_replenishment_signature(
         *crease_segments,
         int(output_per_sheet or defaults["output_per_sheet"]),
         int(defaults["pieces_per_box"]),
+        _cutting_signature(defaults.get("sheet_cutting_snapshot"), defaults["report_length_mm"],
+                           defaults["report_width_mm"], output_per_sheet or defaults["output_per_sheet"]),
     )
 
 
@@ -809,6 +839,8 @@ def _replenishment_item_signature(
         *crease_segments,
         int(item.stock_yield_per_sheet or 1),
         int(item.pieces_per_box or 1),
+        _cutting_signature(item.sheet_cutting_snapshot, item.report_length_mm,
+                           item.report_width_mm, item.stock_yield_per_sheet or 1),
     )
 
 
@@ -911,6 +943,11 @@ def customer_board_preparation_coverage(
             stock_yield_per_sheet=effective_output_per_sheet,
         )
         for row in candidates:
+            # Completed physical pieces belong to the 1:1 component channel;
+            # their source-board dimensions never cover material demand again.
+            from app.services.warehouse_goods import goods_profile
+            if (goods_profile(db,row.lot) or {}).get('output_piece') is True:
+                continue
             detail = row.lot.semi_finished_detail
             customer_generic = bool(
                 detail is not None and detail.customer_generic_eligible
@@ -1106,6 +1143,9 @@ def free_bom_component_coverage(db: Session, product: Product) -> dict:
                     FinishedGoodsInventoryDetail.is_general.is_(True)),
                 or_(WarehouseLocation.source_version.is_(None), WarehouseLocation.source_version != "V11",
                     WarehouseLocation.warehouse_floor == 3))) or 0)
+        from app.services.processed_component_stock import available_outputs
+        quantity += sum(lot.quantity_available for lot in available_outputs(db,
+            product_id=component.id, customer_id=product.customer_id, expected_basis=product_basis(component)))
         pieces[component.id] = quantity
         capacities.append(quantity // int(ratio))
     return {"sets": min(capacities) if capacities else 0, "pieces": pieces}
@@ -1116,6 +1156,7 @@ def virtual_composite_replenishment_demand_plan(
     *,
     product: Product,
     finished_quantity: int,
+    manual_quantity: bool = False,
 ) -> dict | None:
     """Build component-level board demand for a virtual finished set."""
 
@@ -1148,13 +1189,13 @@ def virtual_composite_replenishment_demand_plan(
             # Complete free sets already reduced the parent's shortfall. Only
             # unmatched surplus pieces may reduce this remaining demand again.
             + max(free_coverage["pieces"].get(component.id, 0)
-                  - free_coverage["sets"] * quantity_per_set, 0)
+                  - (0 if manual_quantity else free_coverage["sets"] * quantity_per_set), 0)
         )
         outstanding_pieces = max(required_pieces - covered_pieces, 0)
         output_per_sheet = int(row["output_per_sheet"])
         pieces_per_unit = max(int(defaults["pieces_per_box"]), 1)
         free_surplus = max(free_coverage["pieces"].get(component.id, 0)
-                           - free_coverage["sets"] * quantity_per_set, 0)
+                           - (0 if manual_quantity else free_coverage["sets"] * quantity_per_set), 0)
         required_board_pieces = max((required_pieces - free_surplus) * pieces_per_unit
             - int(coverage.get("available_auto_cover_piece_quantity", 0))
             - int(coverage.get("incoming_auto_cover_piece_quantity", 0))
@@ -1490,7 +1531,9 @@ def replenishment_item_dict(
     db: Session | None = None,
 ) -> dict:
     from app.services.stock_warning_drafts import physical_demand_contract
-    quantity_contract = physical_demand_contract(item)
+    from app.services.stock_replenishment_plan import frozen_bom_plan
+    bom_plan = frozen_bom_plan(item)
+    quantity_contract = None if bom_plan else physical_demand_contract(item)
     location = item.location
     lot = item.inventory_lot
     location_context = projection_context or {}
@@ -1511,6 +1554,8 @@ def replenishment_item_dict(
         "id": item.id,
         "stock_policy_id": item.stock_policy_id,
         "quantity_contract": quantity_contract,
+        "replenishment_plan": bom_plan,
+        "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
         "target_inventory_type": item.target_inventory_type,
         "product_id": item.product_id,
         "reference_product_id": item.reference_product_id,

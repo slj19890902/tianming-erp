@@ -22,6 +22,7 @@ from desktop_assistant.schema_contract import (
 )
 
 CN = timezone(timedelta(hours=8))
+ORDER_INVENTORY_READER = 'order_inventory_v1'
 
 
 class Manager:
@@ -59,8 +60,33 @@ class Manager:
         return read_json(self.root / 'releases' / (release or self.state['current']) / 'manifest.json')
 
     def compatible(self, release, revision, authority=None):
+        # Additive JSON business facts can change semantics without an Alembic
+        # revision change. Check the signed reader contract before that shortcut.
+        activation = self.state.get('order_inventory_activation')
+        if activation:
+            if (not isinstance(activation, dict)
+                    or activation.get('reader_capability') != ORDER_INVENTORY_READER
+                    or type(activation.get('version')) is not int
+                    or activation.get('version') != 1
+                    or not self._order_inventory_reader(release)):
+                return False
         if self.manifest(release)['revision'] == revision:
             return True
+        if revision == 'eg1008sc' and self.manifest(release)['revision'] == 'ef1007cp':
+            # Old code can read additive NULL columns, but cannot create new
+            # business using the independent mold/supplier-cutting semantics.
+            import sqlite3
+            database = self.root / 'shared/data/carton_erp.sqlite3'
+            with sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True) as db:
+                for table, column in (
+                    ('products', 'sheet_cutting_settings'),
+                    ('sales_order_items', 'sheet_cutting_settings_snapshot'),
+                    ('sales_order_item_bom_components', 'sheet_cutting_settings_snapshot'),
+                    ('material_requisition_items', 'sheet_cutting_snapshot'),
+                    ('supplier_requisition_order_items', 'sheet_cutting_snapshot'),
+                    ('stock_replenishment_order_items', 'sheet_cutting_snapshot')):
+                    if db.execute(f'SELECT 1 FROM "{table}" WHERE "{column}" IS NOT NULL LIMIT 1').fetchone():
+                        return False
         authority = authority or self.state.get('schema_authority')
         if not authority:
             return False
@@ -72,6 +98,19 @@ class Manager:
         return (manifest['revision'] == revision
                 and contract.get('policy') == 'preserve_existing_facts_v1'
                 and contract.get('rollback_package_sha256') == release)
+
+    def _order_inventory_reader(self, release):
+        package = self.root / 'packages' / (release + '.zip')
+        try:
+            if not package.is_file() or sha(package) != release:
+                return False
+            manifest = signed_release_manifest(package, self.public_key)
+            capabilities = manifest.get('reader_capabilities') or {}
+            return (capabilities.get(ORDER_INVENTORY_READER) == 1
+                    and type(capabilities.get(ORDER_INVENTORY_READER)) is int
+                    and manifest == self.manifest(release))
+        except Exception:
+            return False
 
     def stage_release(self, package: Path, *, verify_existing: bool = False) -> dict:
         # Hash names avoid arbitrary version strings becoming paths.
@@ -490,15 +529,28 @@ class Manager:
                 raise ValueError('数据库升级未完整通过，服务保持停止；已保留现场及NAS备份，请专项恢复，未回写旧数据') from None
         new.update(current=candidate['id'], previous=old['current'], update_backup=str(backup),
                    operation='rollback' if rollback else 'update', manual_stop=False, updated_at=datetime.now(CN).isoformat())
+        if self._order_inventory_reader(candidate['id']):
+            new['order_inventory_activation'] = old.get('order_inventory_activation') or {
+                'reader_capability': ORDER_INVENTORY_READER, 'version': 1,
+                'activated_package': candidate['id'], 'activated_at': datetime.now(CN).isoformat(),
+                'pre_activation_package': old['current'], 'pre_activation_backup': str(backup),
+                'next_release_must_preserve_reader_contract': True,
+            }
+            if not self._order_inventory_reader(old['current']):
+                new['previous'] = None
+        # Commit the reader gate and removal of unsafe one-click rollback before
+        # starting the new process; failure here never opens new write requests.
         write_json(self.root / 'state.json', new)
         try:
             self.start()
         except Exception:
             self.stop()
+            if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
+                new.update(operation='update_failed_reader_contract', previous=None)
+                write_json(self.root / 'state.json', new)
+                raise ValueError('新程序未启动且旧程序不能读取新库存业务契约，服务保持停止；保留现场和备份，请向前修复，数据未回退') from None
             new.update(current=old['current'], previous=old.get('previous'), operation='update_failed')
             write_json(self.root / 'state.json', new)
-            if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
-                raise ValueError('新程序未启动且旧程序兼容检查失败，服务保持停止；数据未回退') from None
             self.start()
             raise ValueError('新版本启动失败，已切回原程序，业务数据库未回退') from None
         return candidate['version']

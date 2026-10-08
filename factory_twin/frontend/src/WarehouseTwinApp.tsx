@@ -16,6 +16,7 @@ import {
   warehouseWorkspaceNavigateMessage
 } from "./warehouseWorkspaceBridge.mjs";
 import { MaterialCandidates } from "./MaterialCandidates";
+import { unlocatedPalletChoice } from "./unlocatedPutaway.mjs";
 import { StocktakeObservationPanel } from "./StocktakeObservationPanel";
 // Also render these exact components in the isolated visual acceptance fixture.
 export { MoldRackElevation, WarehouseRackElevation };
@@ -1260,6 +1261,9 @@ function WarehouseRackElevation({
   locations,
   unboundLocationCount,
   canChooseProducts,
+  inventoryLoading = false,
+  inventoryError = "",
+  onRetryInventory,
   highlightedLotIds = [],
   productQuantityLabels = {},
   intakePaints = {},
@@ -1284,6 +1288,9 @@ function WarehouseRackElevation({
   locations: DashboardLocation[];
   unboundLocationCount: number;
   canChooseProducts: boolean;
+  inventoryLoading?: boolean;
+  inventoryError?: string;
+  onRetryInventory?: () => void;
   highlightedLotIds?: number[];
   productQuantityLabels?: Record<string, string>;
   intakePaints?: Record<number, IntakePaint>;
@@ -1343,6 +1350,14 @@ function WarehouseRackElevation({
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [onClose, onPrevious, onNext]);
+  if (inventoryLoading || inventoryError) return <section className="twin-rack-focus-panel twin-rack-stage" role="region" aria-label={`${rack.rack_code} 参数化正视图`}>
+    <header><div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2></div><button type="button" onClick={onClose}>收起货架</button></header>
+    <div className="twin-location-readonly-note" role={inventoryError ? "alert" : "status"}>
+      <b>{inventoryError ? "货架库存读取失败" : "正在读取货架库存…"}</b>
+      {inventoryError && <span>{inventoryError}</span>}
+      {inventoryError && <button type="button" onClick={onRetryInventory}>重新读取</button>}
+    </div>
+  </section>;
   return <section className="twin-rack-focus-panel twin-rack-stage" role="region" aria-label={`${rack.rack_code} 参数化正视图`}>
       <header>
       <div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p><p>{items.length} 个批次 · {emptyLocationCount} 个正式空货位{unboundLocationCount ? ` · ${unboundLocationCount} 个有货旧货位未绑定货架层格，请先转入盘点待归位` : ""}{area?.quantities.length ? ` · ${area.quantities.map(item => `${formatNumber(item.available)} ${inventoryUnitLabel(item.unit)}`).join(" / ")}` : ""}</p>{items.some((item) => searchLotIds.has(item.lot_id)) && <p className="twin-rack-search-marker" role="status">蓝边格有此产品，选中为黄边{searchLocation ? ` · 当前第 ${searchLocation.level_no} 层 · 第 ${searchLocation.slot_no} 格` : ""}</p>}</div>
@@ -1371,6 +1386,7 @@ function WarehouseRackElevation({
                 const productGroups = groupShelfProducts(cellItems);
                 const location = cellLocations.length === 1 ? cellLocations[0] : null;
                 const identityConflict = cellLocations.length > 1;
+                const locationPositionIssue = Boolean(location && location.position_status !== "mapped");
                 const intakePaint = location ? intakePaints[location.location_id] : undefined;
                 const cellSearchHit = Boolean(location && cellItems.some((item) => searchLotIds.has(item.lot_id)));
                 const cellSearchCurrent = cellSearchHit && location?.location_id === searchLocationId;
@@ -1378,7 +1394,9 @@ function WarehouseRackElevation({
                 if (location) {
                   const finishedBlock = stocktakeAddBlockReason(location, "finished");
                   const semiFinishedBlock = stocktakeAddBlockReason(location, "semi_finished");
-                  const nextBlockReason = !canChooseProducts
+                  const nextBlockReason = locationPositionIssue
+                    ? "货位位置待核对，当前仅可查看库存。"
+                    : !canChooseProducts
                     ? "请切换移货/盘点；先完成当前移货。"
                     : finishedBlock && semiFinishedBlock
                       ? finishedBlock
@@ -1428,6 +1446,7 @@ function WarehouseRackElevation({
                     }}
                   >＋ 添加货物</button>}
                   <span className="shelf-cell-status" title={cellSummary}>{identityConflict ? "货位身份冲突" : cellItems.length ? cellSummary : selectedProductLotIds !== null && allCellItems.length ? "该产品不在此处" : location ? "正式空货位" : "未建正式货位"}</span>
+                  {locationPositionIssue && <span className="shelf-cell-status" role="status">货位位置待核对 · 仅查看</span>}
                   {location && !identityConflict && <button className="shelf-position-print" type="button" title="打印货位标签" onClick={() => window.open(`/static/shelf-label.html?location_id=${location.location_id}`, '_blank', 'noopener')}>打印货位</button>}</div>
                   {location && productQuantityLabels[`erp-location-${location.location_id}`] && <div className="product-location-quantity" aria-label="所选产品货位数量">{productQuantityLabels[`erp-location-${location.location_id}`]}</div>}
                   {cellItems.length ? <div className="shelf-product-cards">
@@ -1542,6 +1561,10 @@ export function WarehouseTwinApp() {
   const [planningPublishedRevision, setPlanningPublishedRevision] = useState("");
   const [assets, setAssets] = useState<AssetTemplate[]>([]);
   const [dashboard, setDashboard] = useState<TwinDashboard | null>(null);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
+  const [dashboardError, setDashboardError] = useState("");
+  const dashboardRequestRef = useRef(0);
+  const dashboardAbortRef = useRef<AbortController | null>(null);
   const [selected, setSelected] = useState<SelectedEntity>(null);
   const [layers, setLayers] = useState<LayerVisibility>(DEFAULT_LAYERS);
   const [loading, setLoading] = useState(true);
@@ -1805,17 +1828,39 @@ export function WarehouseTwinApp() {
   }, [featureContextMenu, locationContextMenu]);
 
   const refreshDashboard = useCallback(async () => {
+    const requestId = ++dashboardRequestRef.current;
+    dashboardAbortRef.current?.abort();
+    const controller = new AbortController();
+    dashboardAbortRef.current = controller;
+    setDashboardLoading(true);
+    setDashboardError("");
     const params = new URLSearchParams({
       days: "30",
       dispatch_idle_days: String(dispatchIdleDays)
     });
-    const value = await requestJson<TwinDashboard>(`/api/warehouse/twin-dashboard/overview?${params.toString()}`);
-    setDashboard(value);
-    return value;
+    const timeout = window.setTimeout(() => controller.abort(), 20000);
+    try {
+      const value = await requestJson<TwinDashboard>(`/api/warehouse/twin-dashboard/overview?${params.toString()}`, controller.signal);
+      if (requestId === dashboardRequestRef.current) setDashboard(value);
+      return value;
+    } catch (reason) {
+      if (requestId !== dashboardRequestRef.current) return;
+      const message = controller.signal.aborted ? "读取超时，请重新读取。" : (reason as Error).message;
+      setDashboardError(message);
+      throw reason;
+    } finally {
+      window.clearTimeout(timeout);
+      if (requestId === dashboardRequestRef.current) setDashboardLoading(false);
+    }
   }, [dispatchIdleDays]);
 
+  useEffect(() => () => {
+    ++dashboardRequestRef.current;
+    dashboardAbortRef.current?.abort();
+  }, []);
+
   useEffect(() => {
-    refreshDashboard().catch((reason: Error) => setError(reason.message));
+    refreshDashboard().catch(() => undefined);
     requestJson<AuthResponse>("/api/auth/me")
       .then((value) => {
         setCanEditLocations(!productionMapContext && !traceReadOnly && value.user.role === "admin");
@@ -3246,20 +3291,20 @@ export function WarehouseTwinApp() {
   }, [moldRackQueryRack?.id, moldRackQueryRack?.mold_rack_code, floorCode, moldRackRefreshToken]);
   const focusedRackLocations = useMemo<DashboardLocation[]>(() => {
     if (!focusedRack) return [];
-    return visualLocations
+    // Reading a formal cell is independent of its map position or editing draft.
+    // Keep the backend projection status so a draft can never enable stock writes.
+    return (dashboard?.locations || []).map(location => normalizeInventoryLocationProjection(location) as DashboardLocation)
       .filter((location) => location.floor_code === floorCode
         && location.map_rack_id === focusedRack.id
         && location.address_kind === "rack_slot"
         && Number.isInteger(location.level_no)
         && Number.isInteger(location.slot_no)
         && location.storage_type === "rack"
-        && location.is_active
-        && location.position_status === "mapped"
-        && !locationDrafts[location.location_id])
+        && location.is_active)
       .sort((left, right) => Number(left.level_no) - Number(right.level_no)
         || Number(left.slot_no) - Number(right.slot_no)
         || left.location_id - right.location_id);
-  }, [focusedRack, visualLocations, floorCode, locationDrafts]);
+  }, [focusedRack, dashboard?.locations, floorCode]);
   const unboundRackLocationCount = useMemo(() => {
     if (!focusedRackAreaCode) return 0;
     return visualLocations.filter((location) => location.floor_code === floorCode
@@ -3774,6 +3819,20 @@ export function WarehouseTwinApp() {
     setWarehouseOperationMessage(
       `已选择待整理货物；请先把实物栈板搬到三楼左区，再选择一个空货位加入草稿并确认提交。当前尚未改库存位置。`
     );
+  };
+
+  const prepareUnlocatedPutaway = async (item: SearchItem) => {
+    if (!canExecuteWarehouse || traceReadOnly || moveBatchBusy || moveSubmitLock.current) return;
+    const choice = unlocatedPalletChoice(item, visualLocations);
+    if (!choice.location || !choice.pallet) { setWarehouseOperationMessage(choice.error); return; }
+    const source = palletMoveSource(choice.location, choice.pallet);
+    if (!source) { setWarehouseOperationMessage("来源栈板已变化，请刷新核对。"); return; }
+    if (mapMode !== "move" && !await enterWarehouseMoveMode()) return;
+    setRackFocusId(null); setSearchPanelOpen(false); setMoveAction("relocate");
+    chooseMoveSource(source);
+    setMoveTargetFloorCode(isWarehouseOperationalFloorCode(floorCode) ? floorCode : "3F");
+    setMoveTargetAreaCode(""); setMoveDraftTargetLocationId("");
+    setWarehouseOperationMessage(`已选 ${item.inventory_code || item.product_name} 所在整栈板（${choice.pallet.items.length}款）；请选择空地面货位。板内货物及订单预占一并归位。`);
   };
 
   const focusDelayedDispatchCandidate = (candidate: DelayedDispatchCandidate) => {
@@ -6073,6 +6132,8 @@ export function WarehouseTwinApp() {
   };
   const chooseRackEmptyLocation = (locationId: number) => {
     if (!canStocktake || mapMode !== "move" || moveSource || spatialEditBusy) return;
+    const location = focusedRackLocations.find((item) => item.location_id === locationId);
+    if (dashboardLoading || dashboardError || !location || location.position_status !== "mapped" || locationDrafts[locationId]) return;
     setViewMode("2d");
     setMoveAction("stocktake");
     setSelected({ kind: "pallet", id: `erp-location-${locationId}` });
@@ -6543,12 +6604,13 @@ export function WarehouseTwinApp() {
           {unlocatedFinishedCount > 0 && <div className="twin-unlocated-finished-blocker">
             <div><b>待定位成品 {unlocatedFinishedCount} 批</b><span>账上有货，但没有已发布实测格位；不会借用其他区域坐标。</span></div>
             <div className="twin-unlocated-finished-list">
-              {unlocatedFinishedItems.map((item) => <button type="button" key={item.lot_id} onClick={() => focusSearchItem(item)}>
+              {unlocatedFinishedItems.map((item) => <div className="twin-unlocated-row" key={item.lot_id}><button type="button" className="twin-unlocated-detail" onClick={() => focusSearchItem(item)}>
                 <b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b>
                 <strong>{item.product_name || "产品名称待补充"}</strong>
                 <span>{item.location_name || "尚未绑定正式位置"} · {item.unlocated_reason || "缺少已发布实测格位"}</span>
                 <small>实存 {formatNumber(inventoryPhysicalQuantity(item))} {inventoryUnitLabel(item.unit)}{Number(item.reserved_quantity || 0) > 0 ? ` · 已预占 ${formatNumber(item.reserved_quantity)}` : ""}{Number(item.damaged_quantity || 0) > 0 ? ` · 质量冻结 ${formatNumber(item.damaged_quantity)}` : ""} · {item.lot_number || "批次待补充"}</small>
-              </button>)}
+              </button>{!traceReadOnly && canExecuteWarehouse && <button type="button" disabled={moveBatchBusy || spatialEditBusy || Boolean(unlocatedPalletChoice(item, visualLocations).error)} title={unlocatedPalletChoice(item, visualLocations).error || "选择空地面货位，整栈板归位"} onClick={() => void prepareUnlocatedPutaway(item)}>整栈板归位</button>}
+              {!traceReadOnly && canExecuteWarehouse && unlocatedPalletChoice(item, visualLocations).error && <small role="status">{unlocatedPalletChoice(item, visualLocations).error}</small>}</div>)}
             </div>
           </div>}
           <div className="twin-search-type-grid" role="tablist" aria-label="查货类型">
@@ -6709,6 +6771,9 @@ export function WarehouseTwinApp() {
           rack={focusedRack}
           area={focusedRackAreaCode ? areaStats.get(focusedRackAreaCode) : undefined}
           locations={focusedRackLocations}
+          inventoryLoading={dashboardLoading}
+          inventoryError={dashboardError}
+          onRetryInventory={() => { void refreshDashboard().catch(() => undefined); }}
           unboundLocationCount={unboundRackLocationCount}
           canChooseProducts={canStocktake && mapMode === "move" && !moveSource && !spatialEditBusy}
           highlightedLotIds={rackSearchLotIds}

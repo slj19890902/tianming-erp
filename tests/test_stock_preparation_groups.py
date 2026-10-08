@@ -3,7 +3,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-from test_stock_replenishment_flow import stock_replenishment_app, _login, _customer_replenishment_payload
+from stock_preparation_legacy_fixture import stock_replenishment_app, base_stock_replenishment_app
+from test_stock_replenishment_flow import _login, _customer_replenishment_payload
 from app.api.stock_preparation import router
 from app.models.product import Product
 from app.models.product_bom import ProductBomComponent

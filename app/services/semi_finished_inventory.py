@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.sheet_cutting_settings import theoretical_product_yield
 from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number
 
 from collections.abc import Iterable
@@ -75,6 +76,7 @@ class SemiFinishedSignature:
     component_type: str
     pieces_per_box: int
     stock_yield_per_sheet: int
+    order_item_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -291,6 +293,7 @@ def requirement_signature(
         component_type=requirement.component_type,
         pieces_per_box=requirement.pieces_per_box,
         stock_yield_per_sheet=requirement.stock_yield_per_sheet,
+        order_item_id=requirement.order_item_id,
     )
 
 
@@ -906,7 +909,9 @@ def semi_finished_candidates_for_bom_component(db: Session, *, snapshot_id: int,
     if length <= 0 or width <= 0:
         raise WarehouseInventoryError("组件报料长宽必须大于0", 409)
     try:
-        sheet_yield = resolve_bom_sheet_yield(snapshot, strict=True).yield_per_sheet
+        from app.services.sheet_cutting_settings import component_settings
+        setting = component_settings(getattr(snapshot, "sheet_cutting_settings_snapshot", None), component_type)
+        sheet_yield = setting.mold_count if setting else resolve_bom_sheet_yield(snapshot, strict=True).yield_per_sheet
     except ValueError as error:
         raise WarehouseInventoryError(str(error), 409) from error
     expected = SemiFinishedSignature(customer_id=order.customer_id,
@@ -977,7 +982,7 @@ def semi_finished_candidates_for_product(
             1,
         )
     )
-    authoritative_stock_yield = cutting_factor(product.default_cutting_mode)
+    authoritative_stock_yield = theoretical_product_yield(product, _component(component_type))
     expected = SemiFinishedSignature(
         customer_id=customer_id,
         board_length_mm=board_length_mm,
@@ -1063,7 +1068,7 @@ def browse_semi_finished_inventory_for_product(
         flute_type=_flute(flute_type),
         component_type=_component(component_type),
         pieces_per_box=authoritative_pieces_per_box,
-        stock_yield_per_sheet=cutting_factor(product.default_cutting_mode),
+        stock_yield_per_sheet=theoretical_product_yield(product, _component(component_type)),
     )
     query = (select(InventoryLot)
         .join(

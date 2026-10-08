@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.565"
-APP_VERSION_NAME = "统一工作区与天明包装新品牌"
+APP_VERSION = "v0.22.566"
+APP_VERSION_NAME = "待定位库存整栈板归位入口"
 APP_BUILD_DATE = "2026-10-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5376,3 +5376,8 @@ APP_VERIFICATION_STEPS = [
     "打开仓库及模具标签预览，并用原手机入口确认页面正常；实体打印由管理员验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.565：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = ["待定位库存列表增加整栈板归位入口，可将真实栈板放入有效空地面货位。", "沿用原移货事务，保留订单预占、库存数量、入库日期和成本；异常来源不猜测对应栈板。"]
+APP_VERIFICATION_STEPS = ["Ctrl+F5刷新仓库地图，在待定位成品列表找到22000109或22000110，点击整栈板归位。", "按实物选择目标楼层、区域及空地面货位，确认移动后核对库存数量和订单预占保持。"]
+APP_CHANGELOG = [*(f"v0.22.566：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

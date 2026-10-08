@@ -772,6 +772,9 @@ body.warehouse-twin-page {
 .twin-unlocated-finished-blocker > div:first-child b { color: #9a4f0a; font-size: 11px; }
 .twin-unlocated-finished-blocker > div:first-child span { color: #815b36; font-size: 9px; line-height: 1.4; }
 .twin-unlocated-finished-list { min-height: 0; overflow-y: auto; }
+.twin-unlocated-row { padding: 6px 7px; border-bottom: 1px solid #f0dcc0; }
+.twin-unlocated-detail { width: 100%; display: grid; gap: 2px; border: 0; background: transparent; text-align: left; color: #6b4b2d; }
+.twin-unlocated-row > small { display: block; margin-top: 4px; }
 .twin-unlocated-finished-list > button { width: 100%; padding: 6px 7px; display: grid; gap: 2px; border: 0; border-bottom: 1px solid #f0dcc0; color: #6b4b2d; background: transparent; text-align: left; }
 .twin-unlocated-finished-list > button:hover { background: #fff2d8; }
 .twin-unlocated-finished-list b { color: #8b4507; font: 800 11px Consolas, "Microsoft YaHei", sans-serif; overflow-wrap: anywhere; }

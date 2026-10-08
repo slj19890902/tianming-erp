@@ -7,10 +7,78 @@
   function key(root) {
     return [root.activePage, root.uiMode, root.requisitionTab, root.incomingTab, root.productionTab, root.productionPendingSource, root.financeView, root.financeExpensePane, root.orderWorkspace, root.productTab].join(':');
   }
+  function fitTarget(root) {
+    if (root.activePage === 'customers') return 'customers';
+    if (root.activePage === 'products' && root.productTab === 'products')
+      return root.selectedProductCustomer ? 'products' : 'productCustomers';
+    if (root.activePage === 'incoming' && root.incomingTab === 'history') return 'incomingHistory';
+    return '';
+  }
+  function fitKey(root) {
+    return [fitTarget(root), root.uiMode, root.activePage === 'products' ? root.selectedProductCustomer?.id : ''].join(':');
+  }
   function install(app) {
     app.mixin({
-      data() { return this.$parent ? {} : {workspaceCapacities:{}, workspaceHeight:window.innerHeight}; },
+      data() { return this.$parent ? {} : {workspaceCapacities:{}, workspaceFitSizes:{}, workspaceHeight:window.innerHeight}; },
       methods: {
+        async measureViewportPage() {
+          const target = fitTarget(this);
+          if (!target || this.$parent || this.modal || this._viewportPageLoading || this.uiModeSaving
+              || window.innerWidth < 1000 || document.querySelector('.workspace-dialog')) return;
+          // Cached iframe pages remain mounted. Hidden frames cannot supply layout facts.
+          if (window.frameElement && !window.frameElement.getClientRects().length) return;
+          if ((target === 'products' && this.productsLoading) || (target === 'incomingHistory' && this.incomingHistoryLoading)) return;
+          const table = document.querySelector(`[data-viewport-page="${target}"]`), main = table?.closest('.main');
+          if (!main || !table.getBoundingClientRect().height || !table.getBoundingClientRect().width) return;
+          const cards = target === 'productCustomers';
+          const rows = cards ? [...table.querySelectorAll(':scope > .customer-master-row')]
+            : [...table.querySelectorAll(':scope > tbody > tr')].filter(row => row.cells.length > 1);
+          if (!rows.length) return;
+          const tableRect = table.getBoundingClientRect(), mainRect = main.getBoundingClientRect();
+          const top = tableRect.top + main.scrollTop;
+          const bottom = Math.min(window.innerHeight, mainRect.bottom);
+          // Count actual controls/padding, never unused panel height or the current page's row count.
+          let footer = (parseFloat(getComputedStyle(main).paddingBottom) || 0) + 8;
+          for (let node = table; node && node !== main; node = node.parentElement) {
+            const style = getComputedStyle(node);
+            footer += (parseFloat(style.paddingBottom) || 0) + (parseFloat(style.borderBottomWidth) || 0) + (parseFloat(style.marginBottom) || 0);
+            for (let sibling = node.nextElementSibling; sibling; sibling = sibling.nextElementSibling) {
+              const rect = sibling.getBoundingClientRect(), siblingStyle = getComputedStyle(sibling);
+              if (rect.height && !['fixed','absolute'].includes(siblingStyle.position))
+                footer += rect.height + (parseFloat(siblingStyle.marginTop) || 0) + (parseFloat(siblingStyle.marginBottom) || 0);
+            }
+          }
+          const headHeight = cards ? 0 : (table.tHead?.getBoundingClientRect().height || 36);
+          const id = fitKey(this);
+          const layout = [top, bottom, tableRect.width, footer, headHeight].map(Math.round).join(':');
+          const prior = this._viewportPageMeasurements?.[id];
+          const measuredRow = Math.max(...rows.map(row => row.getBoundingClientRect().height));
+          // A short last page cannot enlarge the limit. New geometry/mode can.
+          const rowHeight = prior?.layout === layout ? Math.max(prior.rowHeight, measuredRow) : measuredRow;
+          const next = capacity({height:bottom, top, rowHeight, footer, headHeight});
+          const current = ['customers','productCustomers'].includes(target) ? this.desktopListPageSize()
+            : target === 'products' ? this.productListPageSize() : this.incomingListPageSize();
+          (this._viewportPageMeasurements ||= {})[id] = {layout, rowHeight};
+          if (this.workspaceFitSizes[id] === next) return;
+          this.workspaceFitSizes[id] = next;
+          if (current === next) return;
+          // Keep the first visible record's page when geometry changes while paging.
+          const offset = (Math.max(1, Number(this.pages[target] || 1)) - 1) * current;
+          this.pages[target] = Math.floor(offset / next) + 1;
+          if (cards) return; // The customer selector already has its authorized list locally.
+          this._viewportPageLoading = true;
+          try {
+            if (target === 'incomingHistory') await this.loadIncomingHistory();
+            else await this.runExplicitPageListLoad(target);
+          } finally {
+            this._viewportPageLoading = false;
+            this.queueViewportPageMeasure?.();
+          }
+        },
+        queueViewportPageMeasure() {
+          cancelAnimationFrame(this._viewportPageFrame);
+          this._viewportPageFrame = requestAnimationFrame(() => void this.measureViewportPage());
+        },
         measureLocalTables(){
           document.querySelectorAll('table[data-workspace-list]').forEach(table=>{
             if(!table.getBoundingClientRect().height)return;
@@ -24,6 +92,7 @@
         },
         screenPageSize(fallback) {
           const large = this.uiMode === 'large';
+          if (fitTarget(this)) return this.workspaceFitSizes?.[fitKey(this)] || Math.max(1, Math.min(50, fallback));
           // Incoming rows grow while editing receipt drafts. Keep a fixed
           // mode capacity, never derive pagination from changing row heights.
           if(this.activePage==='incoming')
@@ -34,6 +103,7 @@
             capacity({height:this.workspaceHeight || 768, top:large ? 290 : 250, rowHeight:large ? 92 : 64, footer:48})));
         },
         async measureWorkspace(panel) {
+          if (fitTarget(this)) { await this.measureViewportPage(); return; }
           if (this.activePage === 'incoming') return;
           // Invoice tasks and expenses paginate locally. Measuring their stacked
           // tables must never overwrite the server-paged customer list's size.
@@ -111,12 +181,17 @@
     });
     app.mixin({
       updated(){if(this.$parent)return;cancelAnimationFrame(this._workspaceFrame);this._workspaceFrame=requestAnimationFrame(()=>{
+        this.queueViewportPageMeasure();
         this.measureLocalTables();
         const panel=[...document.querySelectorAll('.main .panel')].find(p=>p.getBoundingClientRect().height && p.querySelector('table:not([data-workspace-list])'));
         if(panel)this.measureWorkspace(panel);
       });},
-      mounted(){if(this.$parent)return;this._workspaceResize=()=>{clearTimeout(this._workspaceResizeTimer);this._workspaceResizeTimer=setTimeout(()=>{this.workspaceHeight=window.innerHeight;this.workspaceCapacities={};this.workspaceLocalSizes={};this.pdfFitCapacity=0;this.$forceUpdate();},200);};window.addEventListener('resize',this._workspaceResize);},
-      beforeUnmount(){if(this.$parent)return;window.removeEventListener('resize',this._workspaceResize);clearTimeout(this._workspaceResizeTimer);cancelAnimationFrame(this._workspaceFrame);},
+      mounted(){if(this.$parent)return;this._workspaceResize=()=>{clearTimeout(this._workspaceResizeTimer);this._workspaceResizeTimer=setTimeout(()=>{this.workspaceHeight=window.innerHeight;this.workspaceCapacities={};this.workspaceLocalSizes={};this.pdfFitCapacity=0;this.$forceUpdate();this.queueViewportPageMeasure();},200);};window.addEventListener('resize',this._workspaceResize);
+        this._viewportPageVisible = () => this.queueViewportPageMeasure();
+        window.addEventListener('erp-workspace-visible',this._viewportPageVisible);
+        if (typeof ResizeObserver !== 'undefined') {this._viewportPageObserver = new ResizeObserver(this._viewportPageVisible);this._viewportPageObserver.observe(document.documentElement);}
+      },
+      beforeUnmount(){if(this.$parent)return;window.removeEventListener('resize',this._workspaceResize);window.removeEventListener('erp-workspace-visible',this._viewportPageVisible);this._viewportPageObserver?.disconnect();clearTimeout(this._workspaceResizeTimer);cancelAnimationFrame(this._workspaceFrame);cancelAnimationFrame(this._viewportPageFrame);},
     });
   }
   global.ERPWorkspace = {install,capacity};

@@ -77,7 +77,7 @@
       };
       const receive = event => {
         if (event.source !== window.parent || event.origin !== location.origin) return;
-        if (event.data?.type === 'tianming-formal-shell-v1') { connected = true; unified = !!window.ERPUnifiedNavigation && event.data.unifiedNavigation === true; activeSurface = event.data.active !== false; publish(); }
+        if (event.data?.type === 'tianming-formal-shell-v1') { connected = true; unified = !!window.ERPUnifiedNavigation && event.data.unifiedNavigation === true; activeSurface = event.data.active !== false; publish(); if (activeSurface) vm.queueViewportPageMeasure?.(); }
         if (event.data?.type === 'tianming-unified-command-v1') { void runCommand(event.data); return; }
         if (event.data?.type === 'tianming-formal-order-entry-v1') { void openEntry(event.data); return; }
         if (event.data?.type !== 'tianming-formal-menu-v1' || !ready() || !connected) return;

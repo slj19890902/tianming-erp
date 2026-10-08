@@ -35,6 +35,13 @@ function setup(overrides = {}) {
 }
 const flush = () => new Promise(resolve=>setImmediate(resolve));
 
+test('showing a cached workspace remeasures locally; inactive and foreign messages cannot trigger it',()=>{
+  let measured=0;const f=setup({queueViewportPageMeasure:()=>measured++});
+  f.connect({active:false});assert.equal(measured,0);
+  f.listeners.message({source:{},origin:'http://127.0.0.1:18569',data:{type:'tianming-formal-shell-v1',active:true}});
+  assert.equal(measured,0);f.connect({active:true});assert.equal(measured,1);
+});
+
 const shellModule = {exports:{},crypto:{getRandomValues: array=>webcrypto.getRandomValues(array)}};
 runInNewContext(ts.transpileModule(readFileSync(new URL('../../frontend-v2/src/utils/unifiedNavigation.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,shellModule);
 test('LAN HTTP without randomUUID can create unique well-formed command IDs', () => {

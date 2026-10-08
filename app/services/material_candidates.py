@@ -14,6 +14,7 @@ from app.services.box_type_rules import BOX_TYPE_RULES
 from app.services.processed_sheet_matching import processed_match
 from app.services.sheet_cut_plan import rectangular_cut_plan
 from app.services.requisition_quantities import cutting_factor
+from app.services.sheet_cutting_settings import theoretical_product_yield
 from types import SimpleNamespace
 
 
@@ -67,7 +68,7 @@ def candidate_items(db, lot, visible_customer_ids=None):
             board_width_mm=product.base_report_width_mm if detail.component_type == "base" else product.report_width_mm,
             normalized_material_code=(product.material.code if product.material else product.default_material_code) or "",
             flute_type=product.flute_type, component_type=detail.component_type,
-            pieces_per_box=product.pieces_per_box or 1, stock_yield_per_sheet=cutting_factor(product.default_cutting_mode))
+            pieces_per_box=product.pieces_per_box or 1, stock_yield_per_sheet=theoretical_product_yield(product, detail.component_type))
         processed = processed_match(db, lot, product, expected) if expected.board_length_mm and expected.board_width_mm else None
         if processed:
             items.append(dict(product_id=product.id, customer_id=product.customer_id,

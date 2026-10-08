@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -275,6 +276,7 @@ class Product(Base):
         server_default="一开一",
         nullable=False,
     )
+    sheet_cutting_settings: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     production_label_enabled: Mapped[bool] = mapped_column(
         Boolean,
         default=False,

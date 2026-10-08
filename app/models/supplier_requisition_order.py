@@ -6,6 +6,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     DateTime,
     Date,
@@ -81,6 +82,7 @@ class SupplierRequisitionOrder(Base):
 
 
 class SupplierRequisitionOrderItem(Base):
+    sheet_cutting_snapshot: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     __tablename__ = "supplier_requisition_order_items"
     __table_args__ = (
         Index(

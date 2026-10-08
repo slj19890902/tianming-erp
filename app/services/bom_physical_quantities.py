@@ -16,7 +16,7 @@ class BomSheetYield:
 
 
 def resolve_bom_sheet_yield(snapshot, *, cutting_mode=None, actual_yield_per_sheet=None,
-                           strict=False):
+                           strict=False, component_type="whole", sheet_cutting_contract=None):
     """One yield, never cutting-factor times mold-yield.
 
     Preserve existing requisition precedence: explicit actual mold yield,
@@ -34,6 +34,21 @@ def resolve_bom_sheet_yield(snapshot, *, cutting_mode=None, actual_yield_per_she
             raise CompositeBOMExecutionError("模切组件缺少最大模切出数")
         if actual_yield_per_sheet > maximum:
             raise CompositeBOMExecutionError("实际模切出数不能超过模具最大出数")
+    from app.services.sheet_cutting_settings import component_settings
+    settings = component_settings(getattr(snapshot, "sheet_cutting_settings_snapshot", None), component_type)
+    if settings is not None:
+        if settings.is_die_cut != bool(snapshot.is_die_cut):
+            raise CompositeBOMExecutionError("组件模切设置与冻结开料设置不一致")
+        mold_count = actual_yield_per_sheet or settings.mold_count
+        if maximum is not None and mold_count > maximum:
+            raise CompositeBOMExecutionError("组件模数不能超过模具最大出数")
+        length_parts = sheet_cutting_contract.length_parts if sheet_cutting_contract else settings.length_parts
+        width_parts = sheet_cutting_contract.width_parts if sheet_cutting_contract else settings.width_parts
+        output = length_parts * width_parts * mold_count
+        mode = normalize_cutting_mode(output, strict=True)
+        if cutting_mode is not None and normalize_cutting_mode(cutting_mode, strict=True) != mode:
+            raise CompositeBOMExecutionError("独立开料组件须同时核对长宽份数和模数，不能单独覆盖每张产出")
+        return BomSheetYield(mode, length_parts * width_parts, output, actual_yield_per_sheet)
     supported = (snapshot.snapshot_component_box_style or "").strip() in CUTTING_MODE_BOX_STYLES
     mode = (cutting_mode or snapshot.snapshot_component_default_cutting_mode or DEFAULT_CUTTING_MODE) if supported else DEFAULT_CUTTING_MODE
     mode = normalize_cutting_mode(mode, strict=strict)

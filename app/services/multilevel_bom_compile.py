@@ -16,6 +16,7 @@ from app.services.incoming_receipts import _snapshot_component_types, _snapshot_
 from app.services.multilevel_bom_master import load_master_structure
 from app.services.multilevel_bom_plan import BomEdge, BomModes, BomPlanError, FrozenBom, MaterialRoute, ProductNode, PurchaseUnits, plan_bom
 from app.services.bom_physical_quantities import resolve_bom_sheet_yield
+from app.services.sheet_cutting_settings import component_settings
 from app.services.multilevel_bom_execution_boundary import ExecutionWindow
 
 
@@ -32,11 +33,12 @@ class CompiledMasterBom:
 def physical_routes(snapshot):
     """Use the same whole/cover/base and splice rules as actual receipt."""
     try:
-        output = resolve_bom_sheet_yield(snapshot, strict=True)
+        routes = tuple(MaterialRoute(kind, _snapshot_physical_pieces(snapshot, kind),
+                       resolve_bom_sheet_yield(snapshot, strict=True, component_type=kind).yield_per_sheet)
+                       for kind in _snapshot_component_types(snapshot))
     except ValueError as error:
         raise BomPlanError(str(error)) from error
-    return tuple(MaterialRoute(kind, _snapshot_physical_pieces(snapshot, kind), output.yield_per_sheet)
-                 for kind in _snapshot_component_types(snapshot))
+    return routes
 
 
 def compile_master_order_bom(db, order_item, *, root_order_snapshot=False):
@@ -82,7 +84,8 @@ def compile_master_order_bom(db, order_item, *, root_order_snapshot=False):
             if any(any(value[key] != relation[key] for key in process_fields) for value in values[1:]):
                 raise BomPlanError("共享子件的工艺或备料配置不一致，不能合并报料")
         else:
-            die_cut = product.box_category == "die_cut"
+            setting = component_settings(getattr(product, "sheet_cutting_settings", None))
+            die_cut = setting.is_die_cut if setting else product.box_category == "die_cut"
             relation = dict(id=None, is_die_cut=die_cut, die_cut_path=product.die_cut_path,
                 mold_tool_id=product.mold_tool_id if die_cut else None, mold_max_yield_per_sheet=None,
                 spare_sheet_quantity=0, display_mode="internal_only", show_on_delivery=True,
@@ -94,7 +97,8 @@ def compile_master_order_bom(db, order_item, *, root_order_snapshot=False):
         if len(values) > 1:
             relation["id"] = None
         if source == "manufactured":
-            die_cut = product.box_category == "die_cut"
+            setting = component_settings(getattr(product, "sheet_cutting_settings", None))
+            die_cut = setting.is_die_cut if setting else product.box_category == "die_cut"
             if die_cut and any(v["mold_max_yield_per_sheet"] is not None
                     and v["mold_tool_id"] not in (None, product.mold_tool_id) for v in values):
                 raise BomPlanError("子件模具已变更，请先核对BOM最大模切出数")
@@ -105,7 +109,7 @@ def compile_master_order_bom(db, order_item, *, root_order_snapshot=False):
         if source != "manufactured":
             # An assembled/purchased stock identity has no own board process.
             # Old descriptive master fields must not demand a phantom mold.
-            relation.update(is_die_cut=False, die_cut_path=None, mold_tool_id=None,
+            relation.update(_has_own_sheet=False, is_die_cut=False, die_cut_path=None, mold_tool_id=None,
                             mold_max_yield_per_sheet=None, spare_sheet_quantity=0)
         mold = _validate_die_cut_mold(db, product, position=position,
             is_die_cut=relation["is_die_cut"], mold_tool_id=relation["mold_tool_id"])
@@ -130,6 +134,7 @@ def compile_master_order_bom(db, order_item, *, root_order_snapshot=False):
                           "splice_mode", "pieces_per_box", "flap_mm"):
                 setattr(snapshot, f"snapshot_component_{field}", getattr(order_item, f"snapshot_{field}"))
             snapshot.snapshot_component_default_cutting_mode = order_item.special_process
+            snapshot.sheet_cutting_settings_snapshot = order_item.sheet_cutting_settings_snapshot
         snapshot.snapshot_schema_version = 5
         routes = physical_routes(snapshot) if source == "manufactured" else ()
         purchase_units = None

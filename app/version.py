@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.566"
-APP_VERSION_NAME = "待定位库存整栈板归位入口"
+APP_VERSION = "v0.22.567"
+APP_VERSION_NAME = "独立模数与供应商开料"
 APP_BUILD_DATE = "2026-10-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5381,3 +5381,17 @@ APP_CHANGELOG = [*(f"v0.22.565：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["待定位库存列表增加整栈板归位入口，可将真实栈板放入有效空地面货位。", "沿用原移货事务，保留订单预占、库存数量、入库日期和成本；异常来源不猜测对应栈板。"]
 APP_VERIFICATION_STEPS = ["Ctrl+F5刷新仓库地图，在待定位成品列表找到22000109或22000110，点击整栈板归位。", "按实物选择目标楼层、区域及空地面货位，确认移动后核对库存数量和订单预占保持。"]
 APP_CHANGELOG = [*(f"v0.22.566：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "常用箱将几模与供应商开料分开，支持长宽双向倍增，并分别显示理论尺寸与供应商报料尺寸。",
+    "报料草稿默认显示简洁摘要，点击修改开料才展开长宽份数；正式生成时按库存抵扣、模数和拼片计算张数，并同步常用箱默认。",
+    "图纸工作台默认收起并按需加载；材质、模具、挂板加载失败分别提示并支持单独重试。",
+    "增加独立数量快照，旧报料、收料、库存、成本和客户打印历史保持原口径；主档转换按已批准清单审计执行。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新ERP并确认v0.22.567，打开常用箱核对几模、理论尺寸与供应商尺寸，图纸默认收起。",
+    "在待报料生成草稿，点击修改开料，核对双向尺寸和张数；取消草稿不回写，正式生成后重开常用箱核对默认。",
+    "抽查旧送货打印图号和顺序；实体打印与现场生产尺寸由管理员验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.567：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

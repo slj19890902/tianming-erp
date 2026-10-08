@@ -258,6 +258,7 @@ def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_o
         missing.append("纸板尺寸1×1为占位资料，请填写实际展开尺寸")
     if missing:
         return (None if for_entry else _authorized_product_recipe(db, product)) or CostResolution(None, missing)
+    view.sheet_cutting_settings = getattr(product, "sheet_cutting_settings", None)
     estimate = estimate_finished_product_cost(db, product=view)
     if estimate is None or estimate.unit_cost <= 0:
         return CostResolution(None, ["供应商平方价、价格单位或天地盖底片尺寸不完整"])
@@ -267,6 +268,15 @@ def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_o
     except ValueError as error:
         return CostResolution(None, [str(error)])
     output = physical_yield if physical_yield is not None else cutting_factor(mode)
+    if view.sheet_cutting_settings is not None:
+        from app.services.sheet_cutting_settings import component_settings
+        setting = component_settings(view.sheet_cutting_settings)
+        # The v2 estimate already prices theoretical area per mold output.
+        # Supplier splitting changes sheets bought, never area per piece.
+        output = 1 if physical_yield is None else physical_yield
+        if physical_yield is not None:
+            estimate = InventoryCostEstimate(estimate.unit_cost * setting.output_per_sheet,
+                estimate.square_price, estimate.area_m2, estimate.source, estimate.detail)
     if type(output) is not int or output <= 0:
         return CostResolution(None, ['开料每张产出必须为正整数'])
     unit = estimate.unit_cost / output

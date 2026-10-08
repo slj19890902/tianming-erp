@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.sheet_cutting_settings import theoretical_product_yield
 from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number, validate_sheet_dimensions
 
 from app.services.business_transaction import commit_business_change
@@ -1276,7 +1277,7 @@ def _preflight_reservation_plans(
                         409,
                     )
                 component_yields[entry.component_type] = current_yield
-                expected_yield = cutting_factor(product.default_cutting_mode)
+                expected_yield = theoretical_product_yield(product, entry.component_type)
                 expected = _preflight_semi_signature(
                     customer_id=customer_id,
                     product=product,
@@ -1428,6 +1429,7 @@ def _is_telescoping_product(product: Product) -> bool:
 
 def _order_snapshot_box_configuration(product: Product) -> dict[str, object]:
     """Normalize recognized types while preserving unknown historical values."""
+    from app.services.sheet_cutting_settings import product_yield_mode
     if get_box_type_rule(product.box_style) is None:
         splice_mode = (product.splice_mode or "single").strip().lower()
         return {
@@ -1442,10 +1444,10 @@ def _order_snapshot_box_configuration(product: Product) -> dict[str, object]:
             ),
             "flap_mm": product.flap_mm,
             "default_cutting_mode": (
-                product.default_cutting_mode or "一开一"
+                product_yield_mode(product)
             ),
         }
-    return normalize_box_configuration(
+    configuration = normalize_box_configuration(
         box_style=product.box_style,
         splice_mode=product.splice_mode,
         pieces_per_box=product.pieces_per_box,
@@ -1453,6 +1455,9 @@ def _order_snapshot_box_configuration(product: Product) -> dict[str, object]:
         default_cutting_mode=product.default_cutting_mode,
         crease_type=product.crease_type,
     )
+    if getattr(product, "sheet_cutting_settings", None):
+        configuration["default_cutting_mode"] = product_yield_mode(product)
+    return configuration
 
 
 def _semi_component_specs(
@@ -1608,7 +1613,8 @@ def _apply_order_reservation_plans(
                         f"第{index}条明细缺少{component_type}半成品签名字段", 409
                     )
                 continue
-            stock_yield_per_sheet = cutting_output_factor(item.special_process)
+            from app.services.sheet_cutting_settings import theoretical_order_yield
+            stock_yield_per_sheet = theoretical_order_yield(item, component_type)
             pieces_per_box = int(spec["pieces_per_box"])
             requirement = save_order_item_semi_requirement(
                 db,
@@ -2664,6 +2670,7 @@ def _order_response(
                 "snapshot_weight": item.snapshot_weight,
                 "drawing_file": _order_drawing_url(item.id, item.drawing_file),
                 # v0.19.2-B: 报料快照
+                "sheet_cutting_settings_snapshot": item.sheet_cutting_settings_snapshot,
                 "snapshot_report_length_mm": item.snapshot_report_length_mm,
                 "snapshot_report_width_mm": item.snapshot_report_width_mm,
                 "snapshot_crease_type": item.snapshot_crease_type,
@@ -3978,6 +3985,9 @@ def _pdf_failure_draft(
 
 
 def _draft_preview_cutting_mode(product: Product) -> str:
+    if getattr(product, "sheet_cutting_settings", None):
+        from app.services.sheet_cutting_settings import product_yield_mode
+        return product_yield_mode(product)
     box_style = (product.box_style or "").strip()
     if box_style not in CUTTING_MODE_BOX_STYLES:
         return DEFAULT_CUTTING_MODE
@@ -4228,7 +4238,7 @@ def preview_order_inventory_draft(
                 cutting_plan = rectangular_cut_plan(db, lot, product, _preflight_semi_signature(
                     customer_id=payload.customer_id, product=product,
                     item_payload=preflight_by_line[draft_item.client_line_id], component_type=component_type,
-                    stock_yield_per_sheet=cutting_factor(product.default_cutting_mode),
+                    stock_yield_per_sheet=theoretical_product_yield(product, component_type),
                 ))
                 if cutting_plan:
                     output_per_stock_sheet = cutting_plan["yield_factor"]
@@ -8043,6 +8053,7 @@ def _create_order_impl(
                 ),
                 # v0.19.2-B: 报料快照（从常用箱复制，历史不回填）
                 snapshot_report_length_mm=product.report_length_mm,
+                sheet_cutting_settings_snapshot=product.sheet_cutting_settings,
                 snapshot_report_width_mm=product.report_width_mm,
                 snapshot_crease_type=product.crease_type,
                 snapshot_crease_left_mm=product.crease_left_mm,
@@ -9090,6 +9101,12 @@ def update_order_item(
             )
         except BoxTypeRuleError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        if item.sheet_cutting_settings_snapshot is not None:
+            from app.services.sheet_cutting_settings import component_settings
+            frozen_setting = component_settings(item.sheet_cutting_settings_snapshot)
+            if "special_process" in payload.model_fields_set and normalize_cutting_mode(payload.special_process) != frozen_setting.legacy_yield_mode:
+                raise HTTPException(409, "独立开料订单请在报料草稿中点击修改开料，不能在订单编辑中单独修改每张产出")
+            item_box_configuration["default_cutting_mode"] = frozen_setting.legacy_yield_mode
     product_to_sync: Product | None = None
     prospective_product_layer: int | None = None
     prospective_product_flute: str | None = None
@@ -9488,7 +9505,7 @@ def update_order_item(
                 "pieces_per_box"
             ]
             item.snapshot_flap_mm = box_configuration["flap_mm"]
-            if payload.sync_product and "special_process" in payload.model_fields_set:
+            if payload.sync_product and "special_process" in payload.model_fields_set and product.sheet_cutting_settings is None:
                 add_product_update(
                     "default_cutting_mode",
                     box_configuration["default_cutting_mode"],
@@ -9612,6 +9629,7 @@ def update_order_item(
         ),
         "snapshot_customer_model": item.snapshot_customer_model,  # v0.19.1
         "snapshot_production_notes": item.snapshot_production_notes,  # v0.19.2-A
+        "sheet_cutting_settings_snapshot": item.sheet_cutting_settings_snapshot,
         "snapshot_report_length_mm": item.snapshot_report_length_mm,
         "snapshot_report_width_mm": item.snapshot_report_width_mm,
         "snapshot_crease_type": item.snapshot_crease_type,

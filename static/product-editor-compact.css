@@ -110,3 +110,10 @@
   .product-editor-modal .product-printing-plate-row,
   .product-editor-modal .product-printing-plate-parameters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+.product-sheet-cutting-row { display:flex; flex-wrap:wrap; gap:8px 20px; margin:8px 0 12px; }
+.product-sheet-cutting-part { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 16px; }
+.sheet-cutting-disclosure summary { cursor:pointer; font-size:13px; }
+.sheet-cutting-inputs { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:6px; }
+.sheet-cutting-inputs label { display:inline-flex; align-items:center; gap:4px; }
+.sheet-cutting-inputs .input { width:70px; min-width:0; }
+.sheet-cutting-summary { white-space:normal; margin-top:4px; }

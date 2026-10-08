@@ -758,8 +758,13 @@ def build_supplier_requisition_production_package(
             joining_method = "无需结合"
             joining_method_source = "default_no_joining"
         component_printing_colors = printing_snapshot["printing_colors"]
+        from app.services.sheet_cutting_contract import cutting_work_instruction
+        from app.services.requisition_quantities import normalize_cutting_mode
+        cutting_instruction = cutting_work_instruction(item.sheet_cutting_snapshot)
         component = {
             "supplier_order_item_id": item.id,
+            "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
+            "cutting_work_instruction": cutting_instruction,
             "source_identity": source_identity,
             "component_label": component_label,
             "display_order": display_order,
@@ -773,7 +778,7 @@ def build_supplier_requisition_production_package(
             "requisition_unit": "张",
             "report_length_mm": item.report_length_mm or order.report_length_mm,
             "report_width_mm": item.report_width_mm or order.report_width_mm,
-            "cutting_mode": item.cutting_mode or order.cutting_mode,
+            "cutting_mode": (normalize_cutting_mode(item.sheet_cutting_snapshot["cutting_factor"]) if item.sheet_cutting_snapshot else item.cutting_mode or order.cutting_mode),
             "pieces_per_box": int(item.pieces_per_box or 1),
             "required_piece_quantity": int(item.required_piece_qty or 0),
             "material_code": item.material_code_snapshot,
@@ -781,7 +786,7 @@ def build_supplier_requisition_production_package(
             "flute_type": item.flute_type_snapshot or order.flute_type,
             "crease_type": crease_values[0],
             "crease_display": _crease_display(crease_values),
-            "production_notes": production_notes,
+            "production_notes": [*production_notes, cutting_instruction] if cutting_instruction else production_notes,
             "box_style": canonical_box_style(box_style),
             "box_type_code": box_type_code(box_style),
             "layout_kind": layout_kind,
@@ -837,7 +842,7 @@ def build_supplier_requisition_production_package(
             "production_task_id": task.id if task is not None else None,
             "production_task_version": task.version if task is not None else None,
             "output_factor": max(
-                int(task.output_factor if task is not None else 0)
+                int(item.sheet_cutting_snapshot["yield_per_supplier_sheet"] if item.sheet_cutting_snapshot else task.output_factor if task is not None else 0)
                 or cutting_output_factor(item.cutting_mode or order.cutting_mode),
                 1,
             ),
@@ -1694,7 +1699,8 @@ def build_composite_requisition_production_package(
                 quantity=int(source.required_piece_quantity),
                 stock_deduction_qty=0,
                 requisition_qty=int(row.requisition_qty or 0),
-                cutting_mode=snapshot.snapshot_component_default_cutting_mode,
+                sheet_cutting_snapshot=row.sheet_cutting_snapshot,
+                cutting_mode=row.special_process or snapshot.snapshot_component_default_cutting_mode,
                 pieces_per_box=(
                     row.pieces_per_box
                     or snapshot.snapshot_component_pieces_per_box

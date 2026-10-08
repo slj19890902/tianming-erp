@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.sheet_cutting_settings import theoretical_order_yield, order_yield_mode
 from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number, validate_sheet_dimensions
 
 from app.services.business_transaction import commit_business_change
@@ -1152,6 +1153,8 @@ def _company_sender(db: Session) -> dict:
 
 
 class RequisitionLinePayload(BaseModel):
+    sheet_cutting_snapshot: dict | None = None
+    expected_product_version: int | None = Field(default=None, gt=0, strict=True)
     order_item_id: int
     component_type: str | None = None
     bom_snapshot_id: int | None = Field(default=None, gt=0)
@@ -1352,6 +1355,7 @@ class SupplierRequisitionItemVoidPayload(BaseModel):
 
 
 class MergeGroupCreatePayload(BaseModel):
+    sheet_cutting_snapshot: dict | None = None
     member_item_ids: list[int] = Field(min_length=2)
     supplier_name: str | None = None
     report_length_mm: Decimal = Field(gt=0)
@@ -1374,6 +1378,7 @@ class MergeGroupCreatePayload(BaseModel):
 
 
 class MergeGroupUpdatePayload(BaseModel):
+    sheet_cutting_snapshot: dict | None = None
     supplier_name: str | None = None
     report_length_mm: Decimal | None = Field(default=None, gt=0)
     report_width_mm: Decimal | None = Field(default=None, gt=0)
@@ -1396,6 +1401,7 @@ class MergeGroupUpdatePayload(BaseModel):
 
 
 class PendingSupplierOrderSelection(BaseModel):
+    sheet_cutting_snapshots: dict[str, dict] | None = None
     retain_stock_purchase: bool = False
     type: str
     order_item_id: int | None = None
@@ -1755,6 +1761,7 @@ class PendingSupplierOrderDraftItem(BaseModel):
 
 
 class PendingSupplierOrderDraftSourceItem(BaseModel):
+    expected_product_version: int | None = Field(default=None, gt=0, strict=True)
     source_type: str
     order_item_id: int
     customer_id: int | None = Field(default=None, gt=0)
@@ -1786,6 +1793,7 @@ class PendingSupplierOrderDraftSourceItem(BaseModel):
 
 
 class PendingSupplierOrderDraftLine(BaseModel):
+    sheet_cutting_snapshot: dict | None = None
     retain_stock_purchase: bool = False
     line_key: str | None = None
     source_type: str | None = None
@@ -1851,12 +1859,22 @@ class PendingSupplierOrderFinalizePayload(BaseModel):
     supplier_groups: list[PendingSupplierOrderDraftGroup] = Field(min_length=1)
 
 
+def _cutting_compatible_payload(value):
+    """Nullable additive fields must not invalidate pre-upgrade request keys."""
+    if isinstance(value, list):
+        return [_cutting_compatible_payload(row) for row in value]
+    if isinstance(value, dict):
+        return {key: _cutting_compatible_payload(row) for key, row in value.items()
+                if not (row is None and key in {"sheet_cutting_snapshot", "sheet_cutting_snapshots", "expected_product_version"})}
+    return value
+
+
 def _pending_supplier_group_request_hash(
     group: PendingSupplierOrderDraftGroup,
 ) -> str:
     if group._request_hash_override:
         return group._request_hash_override
-    canonical = group.model_dump(mode="json", exclude_none=False)
+    canonical = _cutting_compatible_payload(group.model_dump(mode="json", exclude_none=False))
     for line in canonical.get("lines") or []:
         if not line.get("retain_stock_purchase"):
             line.pop("retain_stock_purchase", None)
@@ -2830,7 +2848,7 @@ class _PendingRequisitionReadContext:
             stock_yield = (
                 int(requirement.stock_yield_per_sheet or 1)
                 if requirement is not None
-                else _cutting_factor(item.special_process)
+                else theoretical_order_yield(item, component)
             )
             current = _current_requisition_requirements(
                 None,
@@ -2917,7 +2935,7 @@ class _PendingRequisitionReadContext:
         expected_yield = int(
             requirement.stock_yield_per_sheet
             if requirement is not None
-            else _cutting_factor(item.special_process)
+            else theoretical_order_yield(item, component)
         )
         material = (
             self.material_by_id.get(int(product.material_id))
@@ -2970,6 +2988,19 @@ class _PendingRequisitionReadContext:
                 continue
             safe_lots.append(lot)
         return safe_lots
+
+
+def _resolved_sheet_cutting(item, component="whole", proposal=None):
+    from app.services.sheet_cutting_settings import resolve_order_sheet_contract
+    from app.services.sheet_cutting_contract import SheetCuttingContractError
+    try:
+        return resolve_order_sheet_contract(item, component, proposal)
+    except SheetCuttingContractError as error:
+        raise HTTPException(409, str(error)) from error
+
+
+def _sheet_yield_mode(contract):
+    return normalize_cutting_mode(contract.yield_per_supplier_sheet, strict=True)
 
 
 def _ordinary_requisition_requirements(
@@ -3049,6 +3080,7 @@ def _bom_snapshot_requirements(
     effective_sets_override: int | None = None,
     required_piece_quantity_override: int | None = None,
     inventory_coverage_override: dict[str, int] | None = None,
+    sheet_cutting_snapshot: dict | None = None,
 ) -> dict:
     """Return one immutable BOM snapshot physical source requirement."""
     graph_requirements = None
@@ -3089,13 +3121,15 @@ def _bom_snapshot_requirements(
     )
     try:
         from app.services.bom_physical_quantities import resolve_bom_sheet_yield
+        from app.services.sheet_cutting_settings import resolve_bom_sheet_contract
+        sheet_contract = resolve_bom_sheet_contract(snapshot, component, sheet_cutting_snapshot, actual_yield_per_sheet)
         physical_yield = resolve_bom_sheet_yield(snapshot, cutting_mode=cutting_mode,
-                                               actual_yield_per_sheet=actual_yield_per_sheet)
+                                               actual_yield_per_sheet=actual_yield_per_sheet, component_type=component, sheet_cutting_contract=sheet_contract)
         quantity_per_set = require_positive_integer(
             snapshot.quantity_per_set,
             label="组件每套用量",
         )
-    except CompositeBOMExecutionError as error:
+    except (CompositeBOMExecutionError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     resolved_cutting_mode = physical_yield.cutting_mode
     cutting_factor = physical_yield.cutting_factor
@@ -3165,6 +3199,10 @@ def _bom_snapshot_requirements(
         if is_base
         else snapshot.snapshot_component_report_width_mm
     )
+    sheet_snapshot = None
+    if sheet_contract is not None:
+        report_length_mm, report_width_mm = sheet_contract.supplier_size_mm
+        sheet_snapshot = sheet_contract.to_snapshot()
     crease_type = (
         snapshot.snapshot_component_base_crease_type
         if is_base
@@ -3217,6 +3255,7 @@ def _bom_snapshot_requirements(
         "carried_material_piece_qty": carried_material_credit,
         "remaining_required_piece_qty": remaining,
         "actual_yield_per_sheet": actual_yield_per_sheet,
+        "sheet_cutting_snapshot": sheet_snapshot,
         "yield_per_sheet": yield_per_sheet,
         "requisition_qty": requisition_qty,
         "spare_sheet_quantity": spare_sheets,
@@ -3647,6 +3686,8 @@ def _current_requisition_requirements(
         cutting_mode or item.special_process
     )
     normalized_component = (component_type or "whole").strip().lower()
+    if cutting_mode is None and getattr(item, "sheet_cutting_settings_snapshot", None):
+        resolved_cutting_mode = order_yield_mode(item, normalized_component)
     resolved_pieces_per_box = max(
         int(
             1
@@ -3742,7 +3783,11 @@ def _current_requisition_summary(
         _current_requisition_requirements(
             db,
             item,
-            cutting_mode=cutting_mode,
+            cutting_mode=(
+                order_yield_mode(item, component_type)
+                if getattr(item, "sheet_cutting_settings_snapshot", None) and cutting_mode in (None, item.special_process)
+                else cutting_mode
+            ),
             finished_reserved_qty=finished_reserved_qty,
             component_type=component_type,
             semi_reserved_piece_qty=(
@@ -3983,7 +4028,7 @@ def _late_semi_inventory_options(
         stock_yield = (
             int(requirement.stock_yield_per_sheet or 1)
             if requirement
-            else _cutting_factor(entry.get("cutting_mode") or item.special_process)
+            else theoretical_order_yield(item, component, entry.get("cutting_mode"))
         )
         requirements = _current_requisition_requirements(
             db,
@@ -4353,7 +4398,7 @@ def _safe_customer_board_preparation_options(
         stock_yield = (
             int(requirement.stock_yield_per_sheet or 1)
             if requirement is not None
-            else _cutting_factor(item.special_process)
+            else theoretical_order_yield(item, component)
         )
         current = _current_requisition_requirements(
             db,
@@ -5653,6 +5698,7 @@ def _merge_group_cutting_plan(
     db: Session,
     *,
     cutting_mode: str | None = None,
+    sheet_cutting_snapshot: dict | None = None,
     retain_stock_purchase: bool = False,
 ) -> dict:
     """Return one authoritative aggregate plan for a pending merge group."""
@@ -5660,9 +5706,12 @@ def _merge_group_cutting_plan(
     if not rows:
         raise HTTPException(status_code=409, detail="合并报料组没有可核对的来源明细")
     first_req_item = rows[0][0]
+    sheet_contract = _resolved_sheet_cutting(rows[0][1], _requisition_item_component(first_req_item), sheet_cutting_snapshot or first_req_item.sheet_cutting_snapshot)
     resolved_mode = normalize_cutting_mode(
         cutting_mode or first_req_item.special_process or DEFAULT_CUTTING_MODE
     )
+    if sheet_contract is not None:
+        resolved_mode = _sheet_yield_mode(sheet_contract)
     factor = _cutting_factor(resolved_mode)
     original_dimensions: tuple[Decimal, Decimal] | None = None
     member_plans: list[dict] = []
@@ -5682,6 +5731,9 @@ def _merge_group_cutting_plan(
         ],
     )
     for req_item, order_item, order, customer, product in rows:
+        member_contract = _resolved_sheet_cutting(order_item, _requisition_item_component(req_item), sheet_contract.to_snapshot() if sheet_contract else None)
+        if member_contract != sheet_contract:
+            raise HTTPException(409, "不同模数或开料设置的来源不能合并计算报料数量")
         member_dimensions = _merge_group_original_report_dimensions(
             order_item, req_item, cutting_mode=resolved_mode
         )
@@ -5716,6 +5768,8 @@ def _merge_group_cutting_plan(
             },
         )
         active_quantity = int(active.get("quantity") or 0)
+        if active_quantity > 0 and sheet_contract is not None and sheet_contract != _resolved_sheet_cutting(order_item, _requisition_item_component(req_item)):
+            raise HTTPException(409, "合并组已有正式报料，不能修改冻结的开料方式")
         active_total += active_quantity
         member_active_covered_pieces = 0
         for active_row in active.get("orders") or []:
@@ -5826,6 +5880,7 @@ def _merge_group_cutting_plan(
         member["allocated_requisition_qty"] = int(allocation)
     theoretical_output = requisition_qty * factor
     fingerprint_payload = {
+        **({"sheet_cutting_snapshot": sheet_contract.to_snapshot()} if sheet_contract else {}),
         "group_id": group.id,
         "supplier_name": (group.supplier_name or "").strip(),
         "cutting_mode": resolved_mode,
@@ -5847,13 +5902,14 @@ def _merge_group_cutting_plan(
     ).hexdigest()
     return {
         "rows": rows,
+        "sheet_cutting_snapshot": sheet_contract.to_snapshot() if sheet_contract else None,
         "members": member_plans,
         "cutting_mode": resolved_mode,
         "cutting_factor": factor,
         "original_report_length_mm": original_dimensions[0],
         "original_report_width_mm": original_dimensions[1],
-        "report_length_mm": original_dimensions[0],
-        "report_width_mm": original_dimensions[1] * factor,
+        "report_length_mm": sheet_contract.supplier_size_mm[0] if sheet_contract else original_dimensions[0],
+        "report_width_mm": sheet_contract.supplier_size_mm[1] if sheet_contract else original_dimensions[1] * factor,
         "gross_effective_demand_piece_qty": effective_demand,
         "effective_demand_piece_qty": remaining_effective_demand,
         "remaining_effective_demand_piece_qty": remaining_effective_demand,
@@ -6041,6 +6097,7 @@ def _merge_group_dict(
         "item_id": f"mg{group.id}",
         "id": group.id,
         "is_merge_group": True,
+        "sheet_cutting_snapshot": cutting_plan["sheet_cutting_snapshot"],
         "merge_group_id": group.id,
         "status": group.status,
         "order_number": "合并组",
@@ -7070,6 +7127,8 @@ def _pending_entry_dict(entry: dict) -> dict:
     if material is None and order_item.material_id:
         db_material = None
     return {
+        "sheet_cutting_snapshot": entry.get("sheet_cutting_snapshot"),
+        "expected_product_version": product.version,
         "source_type": entry["source_type"],
         "component_type": component_type,
         "order_item_id": order_item.id,
@@ -7270,6 +7329,7 @@ def _purchase_line_spec_from_entry(entry: dict) -> dict:
     flute_type = _clean_supplier_flute(order_item.flute_type)
     clean_material_code = _clean_supplier_material_code(material_code, layer_count)
     return {
+        "sheet_cutting_snapshot": entry.get("sheet_cutting_snapshot"),
         # 备库用途默认只属于一个客户。内部采购草稿按 customer_id 拆行，
         # 供应商打印仍可按物理规格汇总总张数，不能把差额静默归给首客户。
         "customer_id": int(entry["customer"].id),
@@ -7302,6 +7362,7 @@ def _purchase_line_spec_from_entry(entry: dict) -> dict:
 
 def _purchase_line_key(supplier_name: str | None, spec: dict) -> str:
     key_payload = {
+        **({"sheet_cutting_snapshot": spec["sheet_cutting_snapshot"]} if spec.get("sheet_cutting_snapshot") else {}),
         "supplier_name": (supplier_name or "").strip(),
         "customer_id": spec.get("customer_id"),
         # A3 盖片与底片是两条独立物理来源；即使采购规格偶然相同，
@@ -7355,6 +7416,7 @@ def _purchase_purpose_plan_fingerprint(
         "authoritative_order_sheet_qty": int(authoritative_order_sheet_qty),
         "sources": [
             {
+                **({"sheet_cutting_snapshot": row["sheet_cutting_snapshot"], "expected_product_version": row.get("expected_product_version")} if row.get("sheet_cutting_snapshot") else {}),
                 "source_type": row.get("source_type"),
                 "order_item_id": int(row.get("order_item_id") or 0),
                 "merge_group_id": row.get("merge_group_id"),
@@ -7823,6 +7885,10 @@ def _pending_selection_preview_groups(
                 component_type = str(
                     component_requirements_row.get("component_type") or "whole"
                 ).strip().lower()
+                sheet_contract = _resolved_sheet_cutting(item, component_type, (selection.sheet_cutting_snapshots or {}).get(component_type))
+                if sheet_contract is not None:
+                    cutting_mode = _sheet_yield_mode(sheet_contract)
+                    component_requirements_row = _current_requisition_requirements(db, item, cutting_mode=cutting_mode, component_type=component_type)
                 if not _requires_supplier_purchase(component_requirements_row) and not selection.retain_stock_purchase:
                     continue
                 active_requisition = (
@@ -7844,6 +7910,8 @@ def _pending_selection_preview_groups(
                 theoretical_requisition_qty = int(
                     component_requirements_row["requisition_qty"]
                 )
+                if sheet_contract is not None and int(active_requisition["quantity"]) > 0 and sheet_contract != _resolved_sheet_cutting(item, component_type):
+                    raise HTTPException(409, "该来源已有正式报料，不能修改冻结的开料方式")
                 remaining_requisition_qty = max(
                     theoretical_requisition_qty
                     - int(active_requisition["quantity"]),
@@ -7868,11 +7936,15 @@ def _pending_selection_preview_groups(
                     product,
                     component_type=component_type,
                 )
+                if sheet_contract is not None:
+                    component_len, component_width = sheet_contract.supplier_size_mm
+                    recommended_len, recommended_width = sheet_contract.supplier_size_mm
                 add_preview(
                     supplier_name,
                     {
                         "source_type": "order_item",
                         "component_type": component_type,
+                        "sheet_cutting_snapshot": sheet_contract.to_snapshot() if sheet_contract else None,
                         "group": None,
                         "req_item": None,
                         "order_item": item,
@@ -7962,7 +8034,8 @@ def _pending_selection_preview_groups(
         supplier_name = (selection.supplier_name or group.supplier_name or "").strip()
         requested_mode = selection.cutting_mode or rows[0][0].special_process
         cutting_plan = _merge_group_cutting_plan(
-            group, db, cutting_mode=requested_mode, retain_stock_purchase=selection.retain_stock_purchase
+            group, db, cutting_mode=requested_mode, retain_stock_purchase=selection.retain_stock_purchase,
+            sheet_cutting_snapshot=(selection.sheet_cutting_snapshots or {}).get("whole"),
         )
         plan_members = {
             int(member["req_item"].id): member
@@ -8004,6 +8077,7 @@ def _pending_selection_preview_groups(
                 supplier_name,
                 {
                     "source_type": "merge_group_item",
+                    "sheet_cutting_snapshot": cutting_plan["sheet_cutting_snapshot"],
                     "component_type": _requisition_item_component(req_item),
                     "group": group,
                     "req_item": req_item,
@@ -8289,6 +8363,17 @@ def _draft_group_entries_by_purchase_lines(
                     order=ref["order"],
                     product=ref["product"],
                 )
+                contract = _resolved_sheet_cutting(ref["item"], ref["component_type"], draft_line.sheet_cutting_snapshot)
+                if contract is not None:
+                    if draft_line.sheet_cutting_snapshot is None:
+                        raise HTTPException(409, "独立开料草稿缺少完整计算依据，请刷新报料草稿")
+                    if ref["source_payload"].expected_product_version != ref["product"].version:
+                        raise HTTPException(409, "常用箱资料已变化，请刷新报料草稿后重试")
+                    if (Decimal(draft_line.report_length_mm), Decimal(draft_line.report_width_mm)) != contract.supplier_size_mm or draft_line.cutting_mode != _sheet_yield_mode(contract):
+                        raise HTTPException(409, "报料尺寸或每张产出与开料设置不一致")
+                    active = _active_supplier_requisition_facts(db, item=ref["item"], req_item=ref["req_item"], component_type=ref["component_type"])
+                    if int(active["quantity"]) > 0 and contract != _resolved_sheet_cutting(ref["item"], ref["component_type"]):
+                        raise HTTPException(409, "该来源已有正式报料，不能修改冻结的开料方式")
 
             current_requirements = [
                 _current_requisition_requirements(
@@ -8371,6 +8456,7 @@ def _draft_group_entries_by_purchase_lines(
                     merge_group,
                     db,
                     cutting_mode=draft_line.cutting_mode,
+                    sheet_cutting_snapshot=draft_line.sheet_cutting_snapshot,
                     retain_stock_purchase=draft_line.retain_stock_purchase,
                 )
                 if {
@@ -8560,6 +8646,7 @@ def _draft_group_entries_by_purchase_lines(
                                 if ref["item"].material_id
                                 else None
                             ),
+                            "sheet_cutting_snapshot": draft_line.sheet_cutting_snapshot,
                             "cardboard_len": draft_line.report_length_mm,
                             "cardboard_width": draft_line.report_width_mm,
                             "cutting_mode": draft_line.cutting_mode,
@@ -8583,6 +8670,8 @@ def _draft_group_entries_by_purchase_lines(
             seen_purchase_line_keys.add(current_line_key)
             current_purpose_sources = [
                 {
+                    "sheet_cutting_snapshot": draft_line.sheet_cutting_snapshot,
+                    "expected_product_version": ref["product"].version,
                     "source_type": ref["source_payload"].source_type,
                     "order_item_id": int(ref["item"].id),
                     "merge_group_id": (
@@ -8863,6 +8952,8 @@ def _draft_group_entries_by_purchase_lines(
                 material = db.get(Material, item.material_id) if item.material_id else None
                 entry = {
                     "source_type": source_payload.source_type,
+                    "sheet_cutting_snapshot": draft_line.sheet_cutting_snapshot,
+                    "expected_product_version": source_payload.expected_product_version,
                     "component_type": ref["component_type"],
                     "group": merge_group,
                     "req_item": req_item,
@@ -8957,6 +9048,40 @@ def _draft_group_entries_by_purchase_lines(
     return grouped, list(touched_groups_by_id.values())
 
 
+def _sync_supplier_cutting_defaults(db, entries, user):
+    from copy import deepcopy
+    from app.services.master_data_versioning import apply_versioned_update
+    from app.services.sheet_cutting_settings import component_settings
+    plans = {}
+    for entry in entries:
+        snapshot = entry.get("sheet_cutting_snapshot")
+        if snapshot is None:
+            continue
+        product = entry["product"]
+        if product is None or product.sheet_cutting_settings is None or product.version != entry.get("expected_product_version"):
+            raise HTTPException(409, "常用箱版本或开料资料已变化，请刷新报料草稿")
+        component = entry.get("component_type") or "whole"
+        key = "cover" if component == "whole" and "cover" in product.sheet_cutting_settings else component
+        plan = plans.setdefault(product.id, {"product": product, "settings": deepcopy(product.sheet_cutting_settings), "expected": entry["expected_product_version"], "seen": {}})
+        parts = (snapshot["length_parts"], snapshot["width_parts"])
+        if key in plan["seen"] and plan["seen"][key] != parts:
+            raise HTTPException(409, "同一常用箱在本次报料中选择了不同开料方式，请拆分核对后生成")
+        plan["seen"][key] = parts
+        if key not in plan["settings"]:
+            raise HTTPException(409, "常用箱组件设置已变化，请刷新报料草稿")
+        plan["settings"][key].update(length_parts=parts[0], width_parts=parts[1])
+    for plan in plans.values():
+        product = plan["product"]
+        if plan["settings"] == product.sheet_cutting_settings:
+            continue
+        if not has_permission(user, "products.edit"):
+            raise HTTPException(403, "修改报料开料方式并同步常用箱需要 products.edit 权限")
+        apply_versioned_update(db, object_type="product", entity=product,
+            updates={"sheet_cutting_settings": plan["settings"], "default_cutting_mode": component_settings(plan["settings"]).cutting_mode},
+            expected_version=plan["expected"], user=user, reason="正式报料生成后同步开料方式",
+            source="api.requisition.sheet_cutting")
+
+
 def _create_supplier_order_for_pending_entries(
     db: Session,
     *,
@@ -9019,6 +9144,7 @@ def _create_supplier_order_for_pending_entries(
             else "-底" if component_type == "base" else ""
         )
         supplier_item = SupplierRequisitionOrderItem(
+                sheet_cutting_snapshot=entry.get("sheet_cutting_snapshot"),
                 supplier_order_id=order.id,
                 order_item_id=order_item.id,
                 **_supplier_item_snapshot_values(
@@ -9120,6 +9246,8 @@ def _create_supplier_order_for_pending_entries(
         )
         entries_by_order_item.setdefault(order_item.id, []).append(entry)
         if req_item is not None:
+            if entry.get("sheet_cutting_snapshot") is not None:
+                req_item.sheet_cutting_snapshot = entry["sheet_cutting_snapshot"]
             merge_remaining = entry.get("merge_plan_remaining_after_qty")
             req_item.status = (
                 "supplier_requisition_created"
@@ -9162,6 +9290,16 @@ def _create_supplier_order_for_pending_entries(
             active_by_item.get(order_item_id, {}).get("quantity") or 0
         )
         order_item.special_process = first_entry["cutting_mode"]
+        if order_item.sheet_cutting_settings_snapshot is not None:
+            from copy import deepcopy
+            settings = deepcopy(order_item.sheet_cutting_settings_snapshot)
+            for entry in item_entries:
+                snapshot = entry.get("sheet_cutting_snapshot")
+                if snapshot is not None:
+                    component = entry.get("component_type") or "whole"
+                    key = "cover" if component == "whole" and "cover" in settings else component
+                    settings[key].update(length_parts=snapshot["length_parts"], width_parts=snapshot["width_parts"])
+            order_item.sheet_cutting_settings_snapshot = settings
         order_item.cardboard_len = first_entry["cardboard_len"]
         order_item.cardboard_width = first_entry["cardboard_width"]
         if component_types & {"cover", "base"}:
@@ -10329,6 +10467,21 @@ def _pending_requisitions_full_payload(
     )
     remaining_items: list[dict] = []
     for row in items:
+        item_model = item_models.get(int(row.get("item_id") or 0))
+        if item_model is not None and item_model.sheet_cutting_settings_snapshot:
+            row["sheet_cutting_settings_snapshot"] = item_model.sheet_cutting_settings_snapshot
+            snapshots = {}
+            for component in item_model.sheet_cutting_settings_snapshot:
+                if component == "schema_version":
+                    continue
+                prefix = "snapshot_base_report_" if component == "base" else "snapshot_report_"
+                if getattr(item_model, prefix + "length_mm") and getattr(item_model, prefix + "width_mm"):
+                    snapshots[component] = _resolved_sheet_cutting(item_model, component).to_snapshot()
+            row["sheet_cutting_snapshots"] = snapshots
+            main = snapshots.get("whole") or snapshots.get("cover")
+            if main:
+                row["suggested_cardboard_len"] = sheet_dimension_number(main["supplier_length_mm"])
+                row["suggested_cardboard_width"] = sheet_dimension_number(main["supplier_width_mm"])
         if row.get("is_composite_bom"):
             remaining_items.append(row)
             continue
@@ -12744,6 +12897,33 @@ def _add_material_requisition_purpose_snapshot(
     )
 
 
+@router.post("/bom-sheet-cutting/preview")
+def preview_bom_sheet_cutting(payload: RequisitionLinePayload, db: Session = Depends(get_db), user: User = Depends(can_operate)) -> dict:
+    snapshot = db.get(SalesOrderItemBomComponent, payload.bom_snapshot_id) if payload.bom_snapshot_id else None
+    if snapshot is None or snapshot.sales_order_item_id != payload.order_item_id:
+        raise HTTPException(404, "订单组件不存在，请刷新待报料")
+    item = _item_or_404(db, payload.order_item_id)
+    _require_order_item_customer_access(db, item, user)
+    component = _bom_snapshot_component_type(snapshot, payload.component_type)
+    if _bom_snapshot_has_active_requisition(db, snapshot.id, component_type=component):
+        raise HTTPException(409, "组件已有正式报料，不能改变冻结开料方式")
+    result = _bom_snapshot_requirements(db, snapshot, component_type=component,
+        cutting_mode=payload.special_process, actual_yield_per_sheet=payload.actual_yield_per_sheet,
+        sheet_cutting_snapshot=payload.sheet_cutting_snapshot)
+    quantity = int(result["requisition_qty"])
+    result.update(cardboard_len=result["report_length_mm"], cardboard_width=result["report_width_mm"],
+        special_process=result["cutting_mode"], expected_product_version=result["product_version"],
+        required_piece_qty=result["required_piece_quantity"], _minimum_requisition_qty=quantity,
+        _authoritative_order_purpose_sheet_qty=quantity, purchase_total_sheet_qty=quantity,
+        order_purpose_sheet_qty=quantity, stock_purpose_sheet_qty=0,
+        purpose_plan_version=_PURCHASE_PURPOSE_PLAN_VERSION,
+        purpose_plan_fingerprint=canonical_purchase_purpose_hash({
+            "version": _PURCHASE_PURPOSE_PLAN_VERSION, "source_key": f"bom_component:{snapshot.id}:{component}",
+            "customer_id": int(item.order.customer_id), "effective_piece_qty": int(result["remaining_required_piece_qty"]),
+            "yield_per_sheet": int(result["yield_per_sheet"]), "authoritative_order_sheet_qty": quantity}))
+    return result
+
+
 @router.post("/batches", status_code=status.HTTP_201_CREATED)
 def create_batch(
     payload: RequisitionBatchCreate,
@@ -12819,11 +12999,12 @@ def _create_batch_locked(
     db: Session,
     user: User,
     commit: bool = True,
+    deferred_cutting_defaults: list | None = None,
 ) -> dict:
     requisition_date = beijing_today()
     request_key = payload.request_key or uuid4().hex
     request_hash = canonical_purchase_purpose_hash(
-        payload.model_dump(mode="json", exclude_none=False)
+        _cutting_compatible_payload(payload.model_dump(mode="json", exclude_none=False))
     )
     if payload.request_key:
         existing = db.scalar(
@@ -12841,6 +13022,7 @@ def _create_batch_locked(
             return _material_requisition_replay_response(db, existing)
     try:
         supplier_name = (payload.supplier_name or "").strip()
+        sheet_cutting_default_entries = []
         if supplier_name:
             supplier_name = _require_active_supplier(db, supplier_name)
         from app.services.raw_purchase_plans import assert_no_plan
@@ -13194,7 +13376,19 @@ def _create_batch_locked(
                         component_type=component_type,
                         cutting_mode=line.special_process,
                         actual_yield_per_sheet=line.actual_yield_per_sheet,
+                        sheet_cutting_snapshot=line.sheet_cutting_snapshot,
                     )
+                    if requirements["sheet_cutting_snapshot"] is not None:
+                        if line.sheet_cutting_snapshot is None:
+                            raise HTTPException(409, "组件开料资料需要重新核对，请刷新报料草稿")
+                        if (Decimal(str(requirements["report_length_mm"])), Decimal(str(requirements["report_width_mm"]))) != (line.cardboard_len, line.cardboard_width):
+                            raise HTTPException(409, "组件采购尺寸与开料设置不一致，请刷新草稿")
+                        original = _bom_snapshot_requirements(db, snapshot, component_type=component_type, actual_yield_per_sheet=line.actual_yield_per_sheet)
+                        if _bom_snapshot_has_active_requisition(db, snapshot.id, component_type=component_type) and original["sheet_cutting_snapshot"] != requirements["sheet_cutting_snapshot"]:
+                            raise HTTPException(409, "组件已有正式报料，不能改变冻结开料方式")
+                        sheet_cutting_default_entries.append({"product": db.get(Product, snapshot.component_product_id),
+                            "component_type": component_type, "sheet_cutting_snapshot": requirements["sheet_cutting_snapshot"],
+                            "expected_product_version": line.expected_product_version})
                     if int(requirements["remaining_required_piece_qty"]) <= 0:
                         raise HTTPException(
                             status_code=409,
@@ -13256,6 +13450,7 @@ def _create_batch_locked(
                     ) or None
                     batch_item = RequisitionItem(
                         requisition_id=batch.id,
+                        sheet_cutting_snapshot=requirements.get("sheet_cutting_snapshot"),
                         order_item_id=item.id,
                         inventory_deducted_qty=0,
                         requisition_qty=component_confirmed_qty,
@@ -13399,6 +13594,8 @@ def _create_batch_locked(
                     status_code=400,
                     detail="当前订单明细不是复合产品，不能传 bom_snapshot_id",
                 )
+            if item.sheet_cutting_settings_snapshot is not None:
+                raise HTTPException(409, "此订单已使用独立开料与模数。请在待报料勾选订单，点击生成报料单，在供应商草稿中核对并保存。")
             if item.material_status == "received":
                 raise HTTPException(status_code=409, detail="已入库明细不能报料")
             if item.requisition_status != "未报料":
@@ -13674,6 +13871,10 @@ def _create_batch_locked(
                 else "未报料"
             )
             response_items.append(_item_response(item, db))
+        if deferred_cutting_defaults is not None:
+            deferred_cutting_defaults.extend(sheet_cutting_default_entries)
+        else:
+            _sync_supplier_cutting_defaults(db, sheet_cutting_default_entries, user)
         _audit(
             db,
             user=user,
@@ -14817,6 +15018,9 @@ def search_stock_replenishment_products(
                 "material_supplier_name": (
                     row.material.supplier_name if row.material is not None else None
                 ),
+                **({key: value for key, value in product_replenishment_defaults(row).items()
+                    if key in {"report_length_mm", "report_width_mm", "output_per_sheet", "sheet_cutting_snapshot"}}
+                   if row.sheet_cutting_settings is not None else {}),
             }
             for row in rows
         ]
@@ -15116,6 +15320,7 @@ def stock_policy_replenishment_draft(
             "component_type": draft_policy.component_type,
             "pieces_per_box": product_defaults["pieces_per_box"],
             "stock_yield_per_sheet": product_defaults["output_per_sheet"],
+            "sheet_cutting_snapshot": product_defaults.get("sheet_cutting_snapshot"),
             "quantity": finished_quantity if is_liner else theoretical_quantity,
             "suggested_finished_quantity": finished_quantity,
             "location_id": None,
@@ -15547,6 +15752,19 @@ def _build_replenishment_item(
 
     if payload.target_inventory_type == "finished" and product is None:
         raise StockReplenishmentError("成品补库必须选择产品。")
+    sheet_snapshot = None
+    if product is not None and product.sheet_cutting_settings is not None:
+        from app.services.sheet_cutting_settings import component_settings
+        component = payload.component_type or (policy.component_type if policy else "whole")
+        setting = component_settings(product.sheet_cutting_settings, component)
+        prefix = "base_report_" if component == "base" else "report_"
+        try:
+            contract = setting.contract(getattr(product, prefix + "length_mm"), getattr(product, prefix + "width_mm"))
+        except ValueError as error:
+            raise StockReplenishmentError(str(error), 409) from error
+        if (Decimal(str(report_length)), Decimal(str(report_width))) != contract.supplier_size_mm or int(payload.stock_yield_per_sheet or 1) != contract.yield_per_supplier_sheet:
+            raise StockReplenishmentError("补库尺寸或每张产出与常用箱开料设置不一致，请重新生成补库草稿", 409)
+        sheet_snapshot = contract.to_snapshot()
     if payload.target_inventory_type == "semi_finished":
         required = (material_code, layer_count, flute_type, report_length, report_width)
         if not all(value not in (None, "") for value in required):
@@ -15563,7 +15781,7 @@ def _build_replenishment_item(
         crease_error = crease_width_error(
             label="压线",
             crease_type=payload.crease_type,
-            report_width_mm=report_width,
+            report_width_mm=Decimal(sheet_snapshot["theoretical_width_mm"]) if sheet_snapshot else report_width,
             left_mm=payload.crease_left_mm,
             middle_mm=payload.crease_middle_mm,
             right_mm=payload.crease_right_mm,
@@ -15572,6 +15790,7 @@ def _build_replenishment_item(
             raise StockReplenishmentError(f"{crease_error}。")
 
     return StockReplenishmentOrderItem(
+        sheet_cutting_snapshot=sheet_snapshot,
         stock_policy_id=policy.id if policy else None,
         target_inventory_type=payload.target_inventory_type,
         procurement_route_snapshot="paperboard",
@@ -16816,10 +17035,15 @@ def create_merge_group(
         db, [item.id for item, *_ in rows]
     )
     resolved_mode = normalize_cutting_mode(payload.cutting_mode)
+    sheet_contract = _resolved_sheet_cutting(rows[0][0], "whole", payload.sheet_cutting_snapshot)
+    if sheet_contract is not None:
+        resolved_mode = _sheet_yield_mode(sheet_contract)
     resolved_factor = _cutting_factor(resolved_mode)
     original_dimensions: tuple[Decimal, Decimal] | None = None
     create_requirements: list[dict] = []
     for item, _order, _customer, _product in rows:
+        if _resolved_sheet_cutting(item, "whole", sheet_contract.to_snapshot() if sheet_contract else None) != sheet_contract:
+            raise HTTPException(409, "所选来源模数或开料设置不同，不能合并计算")
         if (
             item.snapshot_report_length_mm is None
             or item.snapshot_report_width_mm is None
@@ -16854,8 +17078,8 @@ def create_merge_group(
             )
         )
     assert original_dimensions is not None
-    expected_length = original_dimensions[0]
-    expected_width = original_dimensions[1] * resolved_factor
+    expected_length = sheet_contract.supplier_size_mm[0] if sheet_contract else original_dimensions[0]
+    expected_width = sheet_contract.supplier_size_mm[1] if sheet_contract else original_dimensions[1] * resolved_factor
     if Decimal(payload.report_length_mm) != expected_length or Decimal(
         payload.report_width_mm
     ) != expected_width:
@@ -16906,6 +17130,7 @@ def create_merge_group(
             db.add(
                 RequisitionItem(
                     requisition_id=group.id,
+                    sheet_cutting_snapshot=sheet_contract.to_snapshot() if sheet_contract else None,
                     order_item_id=item.id,
                     inventory_deducted_qty=0,
                     requisition_qty=int(allocation),
@@ -16913,7 +17138,7 @@ def create_merge_group(
                     cardboard_width=expected_width,
                     pieces_per_box=pieces_per_box,
                     required_piece_qty=required_piece_qty,
-                    special_process=payload.cutting_mode,
+                    special_process=resolved_mode,
                     material_snapshot=item.snapshot_material,
                     product_code_snapshot=item.snapshot_product_code or product.product_code,
                     product_name_snapshot=item.snapshot_product_name,
@@ -16954,6 +17179,7 @@ def update_merge_group(
     changes_cutting_plan = any(
         value is not None
         for value in (
+            payload.sheet_cutting_snapshot,
             payload.report_length_mm,
             payload.report_width_mm,
             payload.cutting_mode,
@@ -17004,7 +17230,7 @@ def _update_merge_group_locked(
             payload.cutting_mode or old_plan["cutting_mode"]
         )
         new_plan = _merge_group_cutting_plan(
-            group, db, cutting_mode=proposed_mode
+            group, db, cutting_mode=proposed_mode, sheet_cutting_snapshot=payload.sheet_cutting_snapshot
         )
         if changes_cutting_plan:
             _assert_merge_plan_submission(
@@ -17053,6 +17279,7 @@ def _update_merge_group_locked(
         for item in group.items:
             member = plan_members[int(item.id)]
             if changes_cutting_plan:
+                item.sheet_cutting_snapshot = new_plan["sheet_cutting_snapshot"]
                 item.cardboard_len = new_plan["report_length_mm"]
                 item.cardboard_width = new_plan["report_width_mm"]
                 item.special_process = new_plan["cutting_mode"]
@@ -17727,6 +17954,7 @@ def _supplier_order_purchase_lines(
         )
         spec = {
             "component_type": component_type,
+            "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
             "material_id": material_id,
             "material_code": _clean_supplier_material_code(material_code, layer_count),
             "material_display": material_display,
@@ -18904,6 +19132,7 @@ def _create_supplier_orders_from_pending_selection_locked(
         ) if ordinary_groups else ({}, [])
         created_orders: list[SupplierRequisitionOrder] = []
         created_entries: dict[int, list[dict]] = {}
+        cutting_default_entries = [entry for entries in grouped.values() for entry in entries]
         for request_group in payload.supplier_groups:
             supplier_name = _require_active_supplier(db, str(request_group.supplier_name or "").strip())
             entries = grouped.get(supplier_name, [])
@@ -18922,7 +19151,7 @@ def _create_supplier_orders_from_pending_selection_locked(
                 db.add(created_order)
                 db.flush()
             attach_stock_sources(db, purchase=created_order, selections=request_group.stock_sources, user=user)
-            attach_bom_sources(db, purchase=created_order, lines=request_group.bom_items, user=user)
+            attach_bom_sources(db, purchase=created_order, lines=request_group.bom_items, user=user, cutting_default_entries=cutting_default_entries)
             db.expire(created_order, ["items"])
             created_orders.append(created_order)
             created_entries[created_order.id] = entries
@@ -19028,6 +19257,7 @@ def _create_supplier_orders_from_pending_selection_locked(
                 "customer_names": sorted(all_customer_names),
             },
         )
+        _sync_supplier_cutting_defaults(db, cutting_default_entries, user)
         db.commit()
         for order in created_orders:
             db.refresh(order)

@@ -185,6 +185,22 @@ def _main_sources(item: OrderItem) -> list[dict[str, Any]]:
         "layer_count": item.layer_count or (product.layer_count if product else None),
         "flute_type": item.flute_type or (product.flute_type if product else None),
     }
+    if getattr(item, "sheet_cutting_settings_snapshot", None) is not None:
+        from app.services.sheet_cutting_settings import component_settings
+        from app.services.requisition_quantities import normalize_cutting_mode
+        keys = ("cover", "base") if "base" in item.sheet_cutting_settings_snapshot else ("whole",)
+        result = []
+        for key in keys:
+            setting = component_settings(item.sheet_cutting_settings_snapshot, key)
+            length, width = (base_length, base_width) if key == "base" else (report_length, report_width)
+            contract = setting.contract(length, width) if length and width else None
+            pieces = 1 if key != "whole" else _positive_int(item.snapshot_pieces_per_box or (product.pieces_per_box if product else None), 1)
+            result.append({**common, "source_type": "order_" + ("main" if key == "whole" else key),
+                "label": {"whole": "主片", "cover": "父件盖片", "base": "父件底片"}[key],
+                "length_mm": contract.supplier_size_mm[0] if contract else length, "width_mm": contract.supplier_size_mm[1] if contract else width,
+                "required_piece_qty": max(int(item.quantity or 0), 0) * pieces,
+                "cutting_mode": setting.legacy_yield_mode})
+        return result
     if base_length is not None or base_width is not None:
         return [
             {
@@ -262,6 +278,13 @@ def _bom_sources(
                 ),
             }
         )
+        if row.get("sheet_cutting_settings_snapshot") is not None and row.get("snapshot_component_report_length_mm") and row.get("snapshot_component_report_width_mm"):
+            from app.services.sheet_cutting_settings import component_settings
+            from app.services.requisition_quantities import normalize_cutting_mode
+            setting = component_settings(row["sheet_cutting_settings_snapshot"])
+            contract = setting.contract(row.get("snapshot_component_report_length_mm"), row.get("snapshot_component_report_width_mm"))
+            result[-1].update(length_mm=contract.supplier_size_mm[0], width_mm=contract.supplier_size_mm[1],
+                cutting_mode=normalize_cutting_mode(contract.yield_per_supplier_sheet))
     return result
 
 

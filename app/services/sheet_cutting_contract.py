@@ -18,6 +18,19 @@ MAX_SAFE_INTEGER = 2**53 - 1
 MAX_DIMENSION_MM = Decimal("9999999999.99")  # Existing NUMERIC(12, 2) contract.
 
 
+def cutting_work_instruction(snapshot):
+    if snapshot is None:
+        return None
+    contract = SheetCuttingContract.from_snapshot(snapshot)
+    if contract.cutting_factor == 1:
+        split = "一开一"
+    else:
+        split = f"报料纸先按长{contract.length_parts}×宽{contract.width_parts}分切成{contract.cutting_factor}片"
+    theory = f"每片{_decimal_text(contract.theoretical_length_mm)}×{_decimal_text(contract.theoretical_width_mm)}mm"
+    process = f"再按{contract.mold_count}模加工" if contract.is_die_cut else "每片加工1片产品"
+    return f"{split}；{theory}；{process}；每张报料纸产出{contract.yield_per_supplier_sheet}片产品"
+
+
 class SheetCuttingContractError(ValueError):
     pass
 

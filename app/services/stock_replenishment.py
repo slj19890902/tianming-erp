@@ -4,6 +4,7 @@ from app.core.sheet_dimensions import sheet_dimension_number
 from app.services.replenishment_receipt_progress import receipt_progress
 
 from math import ceil
+import json
 from uuid import uuid4
 
 from sqlalchemy import and_, case, func, or_, select
@@ -203,7 +204,9 @@ def product_replenishment_defaults(product: Product) -> dict:
         product.flute_type
         or (material.flute_type if material is not None else None)
     )
-    cutting_mode = normalize_cutting_mode(product.default_cutting_mode)
+    from app.services.sheet_cutting_settings import component_settings, product_yield_mode
+    settings = component_settings(getattr(product, "sheet_cutting_settings", None))
+    cutting_mode = product_yield_mode(product)
     crease_aliases = {"净": "净料", "毛": "毛片"}
     crease_type = crease_aliases.get(
         str(product.crease_type or "").strip(),
@@ -248,6 +251,12 @@ def product_replenishment_defaults(product: Product) -> dict:
         missing.append("压线尺寸")
     values["draft_ready"] = not missing
     values["missing_fields"] = missing
+    if settings is not None:
+        values["sheet_cutting_snapshot"] = None
+        if product.report_length_mm and product.report_width_mm:
+            contract = settings.contract(product.report_length_mm, product.report_width_mm)
+            values["report_length_mm"], values["report_width_mm"] = map(sheet_dimension_number, contract.supplier_size_mm)
+            values["sheet_cutting_snapshot"] = contract.to_snapshot()
     return values
 
 
@@ -325,7 +334,9 @@ def virtual_composite_replenishment_components(
         output_per_sheet = max(int(defaults.get("output_per_sheet") or 1), 1)
         if relation.is_die_cut and relation.mold_max_yield_per_sheet is not None:
             mold_yield = int(relation.mold_max_yield_per_sheet)
-            if output_per_sheet > mold_yield:
+            from app.services.sheet_cutting_settings import component_settings
+            setting = component_settings(getattr(component, "sheet_cutting_settings", None))
+            if (setting.mold_count if setting else output_per_sheet) > mold_yield:
                 missing.append(f"{label}：默认开料出数超过模具最大出数")
         components.append(
             {
@@ -380,6 +391,7 @@ def product_replenishment_signature(
         *crease_segments,
         int(output_per_sheet or defaults["output_per_sheet"]),
         int(defaults["pieces_per_box"]),
+        json.dumps(defaults["sheet_cutting_snapshot"], sort_keys=True, separators=(",", ":")) if defaults.get("sheet_cutting_snapshot") else "",
     )
 
 

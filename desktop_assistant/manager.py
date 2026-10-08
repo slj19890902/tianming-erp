@@ -61,6 +61,21 @@ class Manager:
     def compatible(self, release, revision, authority=None):
         if self.manifest(release)['revision'] == revision:
             return True
+        if revision == 'eg1008sc' and self.manifest(release)['revision'] == 'ef1007cp':
+            # Old code can read additive NULL columns, but cannot create new
+            # business using the independent mold/supplier-cutting semantics.
+            import sqlite3
+            database = self.root / 'shared/data/carton_erp.sqlite3'
+            with sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True) as db:
+                for table, column in (
+                    ('products', 'sheet_cutting_settings'),
+                    ('sales_order_items', 'sheet_cutting_settings_snapshot'),
+                    ('sales_order_item_bom_components', 'sheet_cutting_settings_snapshot'),
+                    ('material_requisition_items', 'sheet_cutting_snapshot'),
+                    ('supplier_requisition_order_items', 'sheet_cutting_snapshot'),
+                    ('stock_replenishment_order_items', 'sheet_cutting_snapshot')):
+                    if db.execute(f'SELECT 1 FROM "{table}" WHERE "{column}" IS NOT NULL LIMIT 1').fetchone():
+                        return False
         authority = authority or self.state.get('schema_authority')
         if not authority:
             return False

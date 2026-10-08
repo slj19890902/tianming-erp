@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     Date,
     DateTime,
@@ -87,6 +88,7 @@ class Requisition(Base):
 
 
 class RequisitionItem(Base):
+    sheet_cutting_snapshot: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     __tablename__ = "material_requisition_items"
     __table_args__ = (
         Index(

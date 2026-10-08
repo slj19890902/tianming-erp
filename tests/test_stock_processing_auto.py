@@ -10,7 +10,7 @@ from app.models.warehouse_inventory import InventoryLot,InventoryReservation
 from app.models.incoming_receipt import IncomingReceiptItem
 
 
-def receive(client,payload=None,before_receive=None):
+def receive(client,payload=None,before_receive=None,quantity=20):
     _login(client)
     created=client.post('/api/requisition/stock-replenishment/orders',json=payload or _customer_replenishment_payload(30))
     assert created.status_code==201,created.text
@@ -22,7 +22,8 @@ def receive(client,payload=None,before_receive=None):
     assert purchase.status_code==201,purchase.text
     if before_receive:
         before_receive(item)
-    body={'received_quantity':20,'idempotency_key':'processing-receive','resolution_action':'await_supplier'}
+    body={'received_quantity':quantity,'idempotency_key':'processing-receive'}
+    if quantity<30:body['resolution_action']='await_supplier'
     response=client.put(f"/api/incoming/receive/sr{item['id']}",json=body)
     assert response.status_code==200,response.text
     return item,body
@@ -112,6 +113,8 @@ def test_legacy_get_is_read_only_and_process_owns_remainder(stock_replenishment_
 @pytest.mark.parametrize('source',['legacy','assembled','manufactured'])
 def test_independent_components_actual_assembly_and_replay(stock_replenishment_app,source):
     app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    from app.api.production import router as production_router
+    app.include_router(production_router,prefix='/api/production')
     from test_stock_preparation_groups import prepare
     with TestClient(app) as client:
         pid=prepare(app,factory,client)
@@ -128,6 +131,21 @@ def test_independent_components_actual_assembly_and_replay(stock_replenishment_a
             body=completion(r,30,'independent-output-'+str(r['receipt_item_id']))
             response=client.post(f"/api/production/stock-preparation/{r['receipt_item_id']}/actions",json=body)
             assert response.status_code==200,response.text
+        if source=='assembled':
+            pending_response=client.get('/api/production/pending-assemblies')
+            assert pending_response.status_code==200,pending_response.text
+            pending=next(r for r in pending_response.json()['items'] if r.get('parent_product_id')==pid)
+            assert pending['can_assemble_stock'] and pending['available_sets']==7
+        # A malformed unrelated old task must not enter the new assembly path.
+        with factory() as db:
+            original=db.scalar(select(Job))
+            raw=db.get(InventoryReservation,original.reservation_id).inventory_lot_id
+            reservation=InventoryReservation(reservation_number='BROKEN-HISTORICAL',inventory_lot_id=raw,
+                reservation_type='semi_order',reserved_stock_quantity=1,released_stock_quantity=1,status='released')
+            db.add(reservation);db.flush()
+            db.add(Job(receipt_item_id=original.receipt_item_id,reservation_id=reservation.id,
+                product_id=original.product_id,product_snapshot='bad old JSON',input_quantity=1,expected_output=1,status='cancelled'))
+            db.commit()
         plan=client.get(f'/api/production/stock-preparation/assembly/{pid}/preview',params={'sets':5})
         if source=='manufactured':
             assert plan.status_code==409 and 'BOM' in plan.json()['detail']
@@ -181,3 +199,45 @@ def test_product_change_before_receipt_stays_raw_and_read_only(stock_replenishme
         body=dict(action='process',operation_key='changed-product-process',lot_version=r['lot_version'],actual_input_quantity=6,
             actual_output=6,location_id=7,layout_version=1,output_kind='semi')
         assert client.post(f"/api/production/stock-preparation/{r['receipt_item_id']}/actions",json=body).status_code==409
+
+
+def test_overreceipt_is_visible_raw_and_auto_plan_stays_within_purchase(stock_replenishment_app):
+    app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    with TestClient(app) as client:
+        receive(client,quantity=35)
+        r=row(client)
+        assert (r['available'],r['reserved'],r['physical'])==(5,30,35)
+        assert r['jobs'][0]['input_quantity']==30
+        body=completion(r,30);body.pop('output_kind')
+        response=client.post(f"/api/production/stock-preparation/{r['receipt_item_id']}/actions",json=body)
+        assert response.status_code==200,response.text
+        r=row(client)
+        assert r['available']==5 and r['jobs'][0]['output_kind']=='semi'
+
+
+@pytest.mark.parametrize('ownership',['staging','subkit','location'])
+def test_stock_assembly_excludes_order_owned_and_inactive_outputs(stock_replenishment_app,monkeypatch,ownership):
+    app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
+    from test_stock_preparation_groups import prepare
+    with TestClient(app) as client:
+        pid=prepare(app,factory,client)
+        for r in client.get('/api/production/stock-preparation').json()['items']:
+            body=completion(r,30,'owned-output-'+str(r['receipt_item_id']))
+            assert client.post(f"/api/production/stock-preparation/{r['receipt_item_id']}/actions",json=body).status_code==200
+        plan=client.get(f'/api/production/stock-preparation/assembly/{pid}/preview').json()
+        assert plan['available_sets']>0
+        if ownership=='staging':
+            from app.services import fixed_shelf_staging
+            monkeypatch.setattr(fixed_shelf_staging,'staging_owner',lambda *args:1)
+        elif ownership=='subkit':
+            from app.services import bom_subkits
+            monkeypatch.setattr(bom_subkits,'active_subkit_order',lambda *args:1)
+        else:
+            from app.models.warehouse_inventory import WarehouseLocation
+            with factory() as db:
+                db.get(WarehouseLocation,7).is_active=False;db.commit()
+        after=client.get(f'/api/production/stock-preparation/assembly/{pid}/preview').json()
+        assert after['available_sets']==0 and after['sources']==[]
+        body=dict(action='assemble_stock',parent_id=pid,sets=1,basis_hash=plan['basis_hash'],jobs=plan['sources'],
+            location_id=7,layout_version=1,operation_key='owned-stock-assembly')
+        assert client.post('/api/production/stock-preparation/group-actions',json=body).status_code==409

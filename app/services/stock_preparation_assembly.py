@@ -36,6 +36,12 @@ def _recipe(db,parent_id,jobs):
         if plan and plan.get('parent_product_id')==parent_id:
             plans.append((plan,snapshot.get('bom_parent_basis')))
     if plans:
+        # Select one physical recipe from live output candidates. Historical
+        # versions do not block a newer batch; each preview stays on one recipe.
+        selected_identity=_plan_identity(plans[-1][0])
+        excluded_recipes=[dict(parent_version=p['parent_product_version'],recipe_hash=_plan_identity(p))
+            for p,_ in plans if _plan_identity(p)!=selected_identity]
+        plans=[(p,b) for p,b in plans if _plan_identity(p)==selected_identity]
         fingerprints={_plan_identity(p) for p,_ in plans}
         bases={b for _,b in plans}
         if len(fingerprints)!=1 or len(bases)!=1 or None in bases:
@@ -49,7 +55,8 @@ def _recipe(db,parent_id,jobs):
                 prep.fail('冻结BOM子件关系或数量无效')
             children.append(dict(product_id=child.id,code=child.product_code,name=child.product_name,per_set=int(count),unit=child.unit))
         return dict(parent_id=parent_id,customer_id=plan['customer_id'],code=parent.product_code,name=parent.product_name,
-            version=plan['parent_product_version'],children=children,parent_basis=basis,frozen_plan_hash=_plan_identity(plan))
+            version=plan['parent_product_version'],children=children,parent_basis=basis,frozen_plan_hash=_plan_identity(plan),
+            excluded_recipes=excluded_recipes)
     # Explicit old independently processed stock may use a currently matching
     # physical recipe. Unknown or changed child identities are excluded below.
     from app.services.multilevel_bom_master import load_master_structure
@@ -83,10 +90,39 @@ def preview(db,parent_id,sets):
     if not parent:
         prep.fail('组合产品不存在')
     jobs=[]
-    for job in db.scalars(select(Job).where(Job.status=='completed').order_by(Job.id)):
-        _,item,_=prep.source(db,job.receipt_item_id)
-        if item.customer_id==parent.customer_id:
-            jobs.append(job)
+    from app.services.processed_component_stock import available_outputs
+    eligible={}
+    from app.models.product_bom import ProductBomComponent
+    child_ids=set(db.scalars(select(ProductBomComponent.component_product_id).where(ProductBomComponent.parent_product_id==parent_id)))
+    excluded=[]
+    candidates=db.scalars(select(Job).join(InventoryLot,
+        (InventoryLot.source_ref_type=='stock_preparation') & (InventoryLot.source_ref_id==Job.id))
+        .where(Job.status=='completed',InventoryLot.status=='active',InventoryLot.quantity_available>0)
+        .order_by(Job.id).distinct())
+    for job in candidates:
+        try:
+            snapshot=json.loads(job.product_snapshot)
+        except (ValueError,TypeError):
+            if job.product_id in child_ids:
+                excluded.append(dict(job_id=job.id,reason='历史子件身份不完整，请核对'))
+            continue
+        contract=snapshot.get('frozen_bom_plan')
+        if contract and contract.get('parent_product_id')!=parent_id:
+            continue
+        if not contract and job.product_id not in child_ids:
+            continue
+        identity_key=(job.product_id,snapshot.get('physical_basis'))
+        if identity_key not in eligible:
+            eligible[identity_key]=available_outputs(db,product_id=job.product_id,
+                customer_id=parent.customer_id,expected_basis=snapshot.get('physical_basis'))
+        if not any(l.source_ref_type=='stock_preparation' and l.source_ref_id==job.id for l in eligible[identity_key]):
+            continue
+        try:
+            _,item,_=prep.source(db,job.receipt_item_id)
+        except prep.WarehouseInventoryError as error:
+            excluded.append(dict(job_id=job.id,reason=str(error)))
+            continue
+        if item.customer_id==parent.customer_id:jobs.append(job)
     recipe=_recipe(db,parent_id,jobs)
     by_product=defaultdict(list)
     for job in jobs:
@@ -99,8 +135,9 @@ def preview(db,parent_id,sets):
             continue
         if not recipe['frozen_plan_hash'] and not matches_stock_identity(snapshot.get('physical_basis'),product_basis(db.get(Product,job.product_id))):
             continue
-        for lot in db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type=='stock_preparation',
-                InventoryLot.source_ref_id==job.id,InventoryLot.status=='active',InventoryLot.quantity_available>0)):
+        for lot in eligible[(job.product_id,snapshot.get('physical_basis'))]:
+            if lot.source_ref_type!='stock_preparation' or lot.source_ref_id!=job.id:
+                continue
             from app.services.warehouse_goods import goods_profile
             profile=goods_profile(db,lot) or {}
             detail=lot.semi_finished_detail
@@ -109,10 +146,11 @@ def preview(db,parent_id,sets):
                     or not matches_stock_identity(profile.get('physical_basis'),snapshot.get('physical_basis'))):
                 continue
             by_product[job.product_id].append((job,lot))
-    sources=[];capacities=[];shortages=[]
+    sources=[];capacities=[];shortages=[];component_availability={}
     for child in recipe['children']:
         lots=by_product[child['product_id']]
         available=sum(l.quantity_available for _,l in lots)
+        component_availability[child['product_id']]=available
         capacities.append(available//child['per_set'])
         remaining=sets*child['per_set']
         if remaining>available:
@@ -126,7 +164,8 @@ def preview(db,parent_id,sets):
                 quantity=take,available=lot.quantity_available,location=prep.location_name(db,lot)))
             remaining-=take
     result=dict(recipe=recipe,parent_product_id=parent_id,sets=sets,sources=sources,
-        available_sets=min(capacities,default=0),shortages=shortages)
+        available_sets=min(capacities,default=0),shortages=shortages,excluded_sources=excluded,
+        component_availability=component_availability,excluded_recipes=recipe.get('excluded_recipes',[]))
     result['basis_hash']=digest(result)
     return result
 
@@ -147,6 +186,12 @@ def assemble_stock(db,payload,actor):
     total=Decimal(0);inputs=[]
     for row in plan['sources']:
         lot=db.get(InventoryLot,row['lot_id']);require_inherited_entry_cost(db,lot);before=prep._balances(lot)
+        from app.services.processed_component_stock import available_outputs,matches_output
+        expected_basis=json.loads(db.get(Job,row['job_id']).product_snapshot)['physical_basis']
+        if (not matches_output(db,lot,product_id=row['product_id'],customer_id=plan['recipe']['customer_id'],expected_basis=expected_basis)
+                or lot.id not in {l.id for l in available_outputs(db,product_id=row['product_id'],
+                    customer_id=plan['recipe']['customer_id'],expected_basis=expected_basis)}):
+            prep.fail('子件身份、实际位置或集货归属已变化，请刷新')
         take=row['quantity']
         changed=db.execute(update(InventoryLot).where(InventoryLot.id==lot.id,InventoryLot.version==row['output_version'],
             InventoryLot.status=='active',InventoryLot.quantity_available>=take).values(

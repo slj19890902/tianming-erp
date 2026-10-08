@@ -75,8 +75,14 @@ def auto_plan_receipt(db, receipt, lot, actor):
         return None
     key = 'auto-stock-receipt:' + str(receipt.id)
     snapshot = freeze_snapshot(db, item, lot)
+    before = max(int(receipt.cumulative_received_quantity)-int(receipt.received_quantity),0)
+    planned_input = min(lot.quantity_available,max(int(receipt.planned_quantity)-before,0))
+    # A supplier over-receipt proves physical raw stock, not a new processing
+    # purpose. Cancelled earlier tasks do not refill this receipt-plan allowance.
+    if planned_input*snapshot['factor']//snapshot['pieces_per_box']<=0:
+        return None
     return prep.mutate(db, receipt_id=receipt.id, actor=actor, frozen_snapshot=snapshot,
-        payload=dict(action='plan', operation_key=key, lot_version=lot.version, quantity=lot.quantity_available))
+        payload=dict(action='plan', operation_key=key, lot_version=lot.version, quantity=planned_input))
 
 
 def process(db, receipt_id, payload, actor):

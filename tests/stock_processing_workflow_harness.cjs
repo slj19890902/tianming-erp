@@ -1,0 +1,32 @@
+// Exercise the actual page actions with network failures; no ERP database.
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
+const html=fs.readFileSync('static/index.html','utf8');
+const script=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(m=>m[1]).find(s=>s.trim());
+const sandbox={axios:{defaults:{},interceptors:{response:{use(){}}}},Vue:{createApp(d){sandbox.definition=d;return{component(){return this},mount(){return this}}}},localStorage:{getItem(){return ''},setItem(){},removeItem(){}},window:{confirm:()=>true},console,URLSearchParams,setTimeout,clearTimeout,TMOrderReference:{component:{}}};
+vm.createContext(sandbox);vm.runInContext(script,sandbox);
+vm.runInContext(fs.readFileSync('static/ui/production-workspace.js','utf8'),sandbox);
+sandbox.window.ERPProductionWorkspace.install({component(){},mixin(m){sandbox.mix=m;}});
+const context=()=>({...sandbox.definition.methods,...sandbox.mix.methods,authGeneration:1,canAdmin:true,stockPrepBusy:false,productionLocations:[],stockLocations:[{id:7,layout_version:2}],showToast(){},errorMessage:e=>e.message,rememberStockLocation(){},loadStockPreparation:async()=>{},stockOperationKey:()=>String(Math.random())});
+(async()=>{
+ const c=context(),job={id:1,version:1,input_quantity:3,expected_output:1,product:{factor:1,pieces_per_box:2},_actual:1,_location:7};
+ const row={receipt_item_id:1,lot_version:1,_actualInput:2,_outputKind:'semi',_layoutVersion:2};
+ assert.equal(c.stockProcessingExpected(row,job,2),1,'partial theoretical quantity uses frozen factor, not rounded batch ratio');
+ let calls=[];sandbox.axios.post=async(u,p)=>{calls.push({...p});throw Error('timeout');};
+ assert.equal(await c.stockPrepAction(row,'complete',job),false);
+ assert.equal(await c.stockPrepAction(row,'complete',job),false);
+ assert.equal(calls[0].operation_key,calls[1].operation_key,'retry retains idempotency key');
+ assert.equal(calls[0].actual_input_quantity,2);assert.equal(calls[0].actual_output,1);
+ row._actualInput=0;await c.stockPrepAction(row,'complete',job);assert.equal(calls.length,2,'zero input never submitted');
+ row._actualInput=2;sandbox.axios.post=async()=>({});c.loadStockPreparation=async()=>{throw Error('refresh');};
+ assert.equal(await c.stockPrepAction(row,'complete',job),true,'a failed refresh must not turn committed processing into failed save');
+ assert.match(c.stockPrepError,/刷新失败/);
+ const a=context();a.stockAssemblyDialog={row:{parent_product_id:9},sets:2,location:7,preview:{sets:2,basis_hash:'frozen',shortages:[],sources:[{job_id:1,job_version:2,output_version:3,lot_version:4,lot_id:5,quantity:2}]}};
+ let payload;sandbox.axios.post=async(u,p)=>{payload=p;throw Error('timeout');};
+ await a.saveStockAssembly();const key=payload.operation_key;assert.equal(payload.jobs[0].lot_id,5);
+ await a.saveStockAssembly();assert.equal(payload.operation_key,key);
+ a.stockAssemblyDialog.sets=3;payload=null;await a.saveStockAssembly();assert.equal(payload,null,'edited sets require a fresh preview');
+ const b=context();b.loadStockPreparation=async()=>{throw Error('must not refresh old login');};
+ sandbox.axios.post=async()=>{b.authGeneration++;return {};};
+ assert.equal(await b.stockPrepAction(row,'complete',job),false,'late results do not update a new login');
+ console.log('PASS: frozen partial yield, exact input, idempotent retries, saved/refresh distinction, assembly lot identity, stale preview and login');
+})().catch(e=>{console.error(e);process.exitCode=1;});

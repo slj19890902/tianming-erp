@@ -29,7 +29,7 @@
   app.mixin({
    mounted(){if(!this.$parent)global.addEventListener('message',this.acceptStockLocation);},
    beforeUnmount(){if(!this.$parent)global.removeEventListener('message',this.acceptStockLocation);},
-   data(){return this.$parent?{}:{stockPrepDialog:null,stockLocations:[],stockLocationsLoading:false,stockLocationsError:'',stockPrepPendingCount:0,productionPendingSource:'orders',stockDialogSequence:0,stockLocationMap:null};},
+   data(){return this.$parent?{}:{stockPrepDialog:null,stockAssemblyDialog:null,stockLocations:[],stockLocationsLoading:false,stockLocationsError:'',stockPrepPendingCount:0,productionPendingSource:'all',stockDialogSequence:0,stockLocationMap:null};},
    methods:{
     async ensureStockLocations({force=false}={}){
      if(this.stockLocationsLoading)return false;if(!force&&this.stockLocations.length)return true;
@@ -82,7 +82,7 @@
      if(!location){d.error='此货位当前不可存放，请重新选位';this.closeStockLocationMap();return;}
      if(picker.target)picker.target._location=Number(location.id);else d.location=Number(location.id);this.closeStockLocationMap();
     },
-    async selectStockProductionTab(tab){this.productionTab=tab;this.stockPrepState=tab==='pending'?'pending':tab==='stock'?'materials':'arrange';await this.loadStockPreparation(1);if(tab==='pending'){await this.loadProductionPage(1);if(!['orders','stock','all'].includes(this.productionPendingSource))this.productionPendingSource='orders';}},
+    async selectStockProductionTab(tab){this.productionTab=tab;this.stockPrepState=tab==='pending'?'pending':tab==='stock'?'materials':'arrange';await this.loadStockPreparation(1);if(tab==='pending'){await this.loadProductionPage(1);if(!['orders','stock','all'].includes(this.productionPendingSource))this.productionPendingSource='all';}},
     async loadStockWorkspace(page=1){const sequence=++this.stockPrepSequence,auth=this.authGeneration;this.stockPrepBusy=true;this.stockPrepRows=[];this.stockPrepError='';this.stockPrepPage=page;
      try {const {data}=await axios.get('/api/production/stock-preparation',{params:{workspace:true,q:this.stockPrepQuery,state:this.stockPrepState,page,page_size:this.screenPageSize(12)}});
       if(sequence!==this.stockPrepSequence||auth!==this.authGeneration)return;
@@ -123,7 +123,7 @@
      try{await axios.post('/api/production/stock-preparation/completions/'+encodeURIComponent(row.preparation_key)+'/revert',payload);if(auth!==this.authGeneration)return;await this.loadProductionHistory();this.showToast('备库误报已撤销，投入材料恢复待安排');}
      catch(e){if(auth===this.authGeneration)this.showToast('撤销失败：'+this.errorMessage(e),true);}finally{if(auth===this.authGeneration)this.productionBusy=false;}
     },
-    async openStockDialog(row){this.stockPrepError='';this.stockPrepDialog={row,loading:true,error:'',sets:row.task?.remaining_sets||row.task?.group?.sets||row.plan?.available_sets||1,disposition:'finished',keepKind:row.keep||'keep_raw',location:null,preview:null,jobs:[],job:row.job?{...row.job,_actual:row.job.expected_output}:null,quantity:row.available||0,view:'action',page:1,sources:[row]};
+    async openStockDialog(row){this.stockPrepError='';this.stockPrepDialog={row,loading:true,error:'',sets:row.task?.remaining_sets||row.task?.group?.sets||row.plan?.available_sets||1,disposition:row.entry_type==='group_stock'&&row.task?.jobs?.some(j=>j.output_kind!=='semi')?'finished':'semi',keepKind:row.keep||'keep_raw',location:null,preview:null,jobs:[],job:row.job?{...row.job,_actual:row.job.expected_output}:null,inputQuantity:row.job?.input_quantity||row.available||0,actualOutput:row.processing_expected_output||0,quantity:row.available||0,view:'action',page:1,sources:[row]};
      const dialog=this.stockPrepDialog;
      try {await this.ensureStockLocations();if(this.stockPrepDialog!==dialog)return;dialog.location=this.stockLastLocation();
       if(row.entry_type==='kit')await this.previewStockGroup();
@@ -131,16 +131,21 @@
       if(['single_job','single_output'].includes(row.entry_type))dialog.location=row.job.output_location_id||dialog.location||row.job.product.planned_location?.id||null;
      }catch(e){dialog.error=this.errorMessage(e);}finally{dialog.loading=false;this.$nextTick(()=>document.querySelector('.stock-production-dialog .toolbar button')?.focus());}
     },
+    stockProcessingExpected(row,job,input){const factor=Number(job?.product?.factor??row.processing_yield_per_sheet),pieces=Number(job?.product?.pieces_per_box??row.processing_pieces_per_product);return Number.isInteger(factor)&&factor>0&&Number.isInteger(pieces)&&pieces>0?Math.floor(Number(input)*factor/pieces):null;},
+    updateStockProcessingQuantity(){const d=this.stockPrepDialog;if(!d)return;const count=this.stockProcessingExpected(d.row,d.job,d.inputQuantity);if(count===null)return;if(d.job)d.job._actual=count;else d.actualOutput=count;},
+    async openStockAssembly(row){if(!this.canAdmin||!row.parent_product_id)return;const d={row,sets:Math.max(1,Number(row.available_sets||1)),location:null,preview:null,loading:true,saving:false,error:'',sequence:0};this.stockAssemblyDialog=d;const auth=this.authGeneration;try{await this.ensureStockLocations();if(this.stockAssemblyDialog!==d||auth!==this.authGeneration)return;d.location=this.stockLastLocation();await this.previewStockAssembly();}catch(e){if(this.stockAssemblyDialog===d)d.error=this.errorMessage(e);}finally{d.loading=false;}},
+    async previewStockAssembly(){const d=this.stockAssemblyDialog;if(!d||d.saving)return;const sequence=++d.sequence,auth=this.authGeneration;d.preview=null;d.error='';if(!Number.isInteger(Number(d.sets))||Number(d.sets)<=0){d.error='请填写实际组套数量';return;}d.loading=true;try{const {data}=await axios.get('/api/production/stock-preparation/assembly/'+d.row.parent_product_id+'/preview',{params:{sets:Number(d.sets)}});if(this.stockAssemblyDialog===d&&sequence===d.sequence&&auth===this.authGeneration)d.preview=data;}catch(e){if(this.stockAssemblyDialog===d&&sequence===d.sequence&&auth===this.authGeneration)d.error=this.errorMessage(e);}finally{if(sequence===d.sequence)d.loading=false;}},
+    async saveStockAssembly(){const d=this.stockAssemblyDialog;if(!d||d.loading||d.saving||!this.canAdmin)return;const p=d.preview,location=this.stockLocations.find(l=>l.id===d.location);if(!p?.basis_hash||Number(p.sets)!==Number(d.sets)||p.shortages?.length||!location){d.error='请核对实际组套数量、可用子件及成套货位';return;}const payload={action:'assemble_stock',parent_id:d.row.parent_product_id,sets:Number(d.sets),basis_hash:p.basis_hash,jobs:p.sources.map(s=>({job_id:s.job_id,job_version:s.job_version,output_version:s.output_version,lot_version:s.lot_version||0,lot_id:s.lot_id,quantity:s.quantity})),location_id:d.location,layout_version:location.layout_version};const signature=JSON.stringify(payload);if(d.attempt?.signature!==signature)d.attempt={signature,key:this.stockOperationKey()};payload.operation_key=d.attempt.key;d.saving=true;d.error='';const auth=this.authGeneration;try{await axios.post('/api/production/stock-preparation/group-actions',payload);if(auth!==this.authGeneration)return;if(this.stockAssemblyDialog===d)this.stockAssemblyDialog=null;this.rememberStockLocation(d.location);try{await this.loadPendingAssemblies(this.assemblyPage);if(auth!==this.authGeneration)return;this.showToast(this.assemblyError?'组套已保存；列表刷新失败，请刷新核对，不要重复组套':'组套已入库，余下子件保留原货位',!!this.assemblyError);}catch(e){this.showToast('组套已保存；列表刷新失败，请刷新核对，不要重复组套',true);}}catch(e){if(auth===this.authGeneration)d.error=this.errorMessage(e);}finally{d.saving=false;}},
     async previewStockGroup(){const d=this.stockPrepDialog;if(!d||!Number.isInteger(Number(d.sets))||d.sets<=0)return;const sequence=++this.stockDialogSequence;d.loading=true;d.error='';d.preview=null;
      try {const {data}=await axios.get('/api/production/stock-preparation/groups/'+d.row.plan.recipe.parent_id+'/preview',{params:{sets:d.sets}});if(this.stockPrepDialog===d&&sequence===this.stockDialogSequence)d.preview=data;}
      catch(e){if(this.stockPrepDialog===d&&sequence===this.stockDialogSequence)d.error=this.errorMessage(e);}finally{if(this.stockPrepDialog===d&&sequence===this.stockDialogSequence)d.loading=false;}
     },
     async saveStockDialog(action){const d=this.stockPrepDialog;if(!d||d.loading)return;d.error='';if(this.stockPrepBusy){d.error='列表正在刷新，请稍后重试';return;}
-     if((action==='complete'||action==='store_output'||action==='assemble'||(action==='dispose'&&d.disposition==='finished')||action.startsWith('keep_'))&&!d.location){d.error='请选择存放位置';return;}
+     if((action==='complete'||action==='process'||action==='store_output'||action==='assemble'||(action==='dispose'&&d.disposition==='finished')||action.startsWith('keep_'))&&!d.location){d.error='请选择实际存放货位';return;}
      if(!['kit','group_job','group_stock'].includes(d.row.entry_type)){
-      const row=d.row;row._quantity=Number(d.quantity);row._location=d.location;row._layoutVersion=this.stockLocations.find(l=>l.id===d.location)?.layout_version;row._outputKind=d.disposition==='semi'?'semi':'finished';row._outputVersion=d.job?.output_version||0;const job=d.job?{...d.job,_location:d.location}:null;
+       const row=d.row;row._quantity=Number(d.quantity);row._actualInput=Number(d.inputQuantity);row._actualOutput=Number(d.actualOutput);row._location=d.location;row._layoutVersion=this.stockLocations.find(l=>l.id===d.location)?.layout_version;row._outputKind=d.disposition==='semi'?'semi':'finished';row._outputVersion=d.job?.output_version||0;const job=d.job?{...d.job,_location:d.location}:null;
       const saved=await this.stockPrepAction(row,action,job);
-      if(this.stockPrepError)d.error=this.stockPrepError;else if(saved&&this.stockPrepDialog===d){this.rememberStockLocation(d.location);this.stockPrepDialog=null;}return;
+       if(saved&&this.stockPrepDialog===d){this.rememberStockLocation(d.location);this.stockPrepDialog=null;}else if(this.stockPrepError)d.error=this.stockPrepError;return;
      }
      if(action==='plan'&&(!d.preview||d.preview.sets!==Number(d.sets)||d.preview.shortages.length)){d.error='请先预览有效套数并补齐子件';return;}
      if(action==='cancel'&&!window.confirm('取消整组生产安排，并释放所有子件材料？'))return;

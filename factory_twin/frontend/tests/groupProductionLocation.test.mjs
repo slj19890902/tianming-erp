@@ -9,7 +9,7 @@ function fixture(text=source){
  const sandbox={Uint8Array,URLSearchParams,crypto:{getRandomValues:bytes=>webcrypto.getRandomValues(bytes)},location:{origin:'http://erp.test'},document:{querySelector:()=>null},axios:{post:async(url,data)=>{calls.push({...data});return response();}}};
  sandbox.window=sandbox;
  vm.runInNewContext(text,sandbox);sandbox.ERPProductionWorkspace.install({mixin:p=>parts.push(p),component:(n,c)=>components[n]=c});
- const ctx={...parts[0].methods,stockPrepDialog:{row:{entry_type:'kit',plan:{recipe:{parent_id:205}}},sets:5,location:4,preview:{sets:5,basis_hash:'basis',shortages:[]},loading:false},authGeneration:1,canAdmin:true,hasPermission:()=>true,productionLocations:[{id:4,layout_version:2}],$refs:{stockLocationFrame:{contentWindow:frame}},errorMessage:e=>e.message,ensureProductionLocations:async()=>true,loadStockPreparation:async()=>{},showToast:()=>{}};
+ const ctx={...parts[0].methods,stockPrepDialog:{row:{entry_type:'kit',plan:{recipe:{parent_id:205}}},sets:5,location:4,preview:{sets:5,basis_hash:'basis',shortages:[]},loading:false},authGeneration:1,canAdmin:true,hasPermission:()=>true,stockLocations:[{id:4,layout_version:2},{id:5,layout_version:3}],$refs:{stockLocationFrame:{contentWindow:frame}},errorMessage:e=>e.message,ensureStockLocations:async()=>true,loadStockPreparation:async()=>{},showToast:()=>{}};
  return {ctx,calls,components,frame,setResponse:r=>response=r};
 }
 test('HTTP without randomUUID submits, reports errors and reuses key after uncertain request',async()=>{

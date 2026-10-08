@@ -41,7 +41,7 @@ def test_performance_middleware_generates_server_request_id_and_ignores_client_i
 
 
 @pytest.fixture()
-def observable_order_app(tmp_path: Path):
+def observable_order_app(tmp_path: Path, seed_supplier_master):
     from app.api.auth import router as auth_router
     from app.api.deps import get_db
     from app.api.orders import router as orders_router
@@ -50,11 +50,13 @@ def observable_order_app(tmp_path: Path):
     from app.models import Base
     from app.models.customer import Customer
     from app.models.product import Product
+    from app.models.material import Material
     from app.models.user import User
 
     engine = create_sqlite_engine(tmp_path / "order-observability.sqlite3")
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     Base.metadata.create_all(engine)
+    seed_supplier_master(factory, '虚构异常路径供应商', 'OBS-TEST')
     with factory() as db:
         user = User(
             username="observability-admin",
@@ -73,7 +75,16 @@ def observable_order_app(tmp_path: Path):
         )
         db.add_all([user, customer])
         db.flush()
+        # Reach the injected reservation failure with a valid test-only product;
+        # incomplete master data must continue to fail the original readiness gate.
+        material = Material(code="OBS/AB", supplier_name="虚构异常路径供应商",
+                            layer_count=3, flute_type="B", is_active=True)
+        db.add(material); db.flush()
         product = Product(
+            material_id=material.id, default_material_code=material.code,
+            layer_count=3, flute_type="B", box_style="普通箱",
+            report_length_mm=800, report_width_mm=600,
+            splice_mode="single", pieces_per_box=1,
             customer_id=customer.id,
             product_code="OBS-PRODUCT-001",
             customer_material_code="OBS-PRODUCT-001",
@@ -130,6 +141,9 @@ def test_order_precommit_failure_returns_request_id_and_logs_only_safe_context(
                 "customer_match_status": "matched",
                 "integrity_check": {"integrity_status": "passed"},
                 "matched_customer_id": ids["customer"],
+                "items": [{"product_code": "FULL_ITEMS_SENTINEL",
+                           "product_name": "FULL_ITEMS_SENTINEL",
+                           "quantity": 1, "unit_price": "1.00"}],
             },
             actor,
         )
@@ -157,6 +171,7 @@ def test_order_precommit_failure_returns_request_id_and_logs_only_safe_context(
     payload = {
         "customer_id": ids["customer"],
         "customer_po": "PO-OBS-ERROR",
+        "idempotency_key": "fictional-observability-failure",
         "order_date": "2026-07-27",
         "import_draft": True,
         "import_integrity_status": "passed",
@@ -200,7 +215,9 @@ def test_order_precommit_failure_returns_request_id_and_logs_only_safe_context(
                 },
             )
 
-    assert response.status_code == 500
+    error_detail = response.json().get("detail")
+    safe_error_code = error_detail.get("code") if isinstance(error_detail, dict) else str(error_detail)[:160]
+    assert response.status_code == 500, (response.status_code, safe_error_code)
     detail = response.json()["detail"]
     response_id = response.headers["X-Request-ID"]
     assert detail["code"] == "ORDER_SAVE_INTERNAL_ERROR"

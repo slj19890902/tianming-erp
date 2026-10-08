@@ -9,7 +9,8 @@ const render = html.match(/      function renderWarehouseMap\(\) \{[\s\S]*?\n   
 const data = {floor_code:'3F',floor_name:'三楼',area_name:'匿名验收区',map_status:'ready',compass:{label:'现实东向 E'},
   bounds_mm:{min_x:0,min_y:0,max_x:5000,max_y:10000}, features:[],
   locations:[9,2,5,1,7,3,8,4,6].map(id=>({location_id:id,map_rack_id:'fixture',rack_display_name:'F1 样本',level_no:Math.ceil(id/3),slot_no:(id-1)%3+1,
-    can_select_target:true,goods:id===8?[{customer_short_name:'样本',product_code:'TEST-008',product_name:'样本纸箱',specification:'400×300×200',quantity_total:99,unit:'个'}]:[]}))};
+    can_select_target:true,goods:id===8?[{lot_id:8,location_id:8,customer_id:4,product_id:5,customer_short_name:'样本',product_code:'TEST-008',product_name:'样本纸箱',specification:'400×300×200',quantity_total:99,unit:'个'}]:[]}))};
+const goodsHelpers=html.slice(html.indexOf('      function groupWarehouseRackGoods('),html.indexOf('      function renderWarehouseLocationGoods('));
 class Element {
   constructor(tag='div'){this.tag=tag;this.children=[];this.style={};this.dataset={};this.attributes={};this.events={};this.classList={add:()=>{}};this.clientWidth=390;}
   append(...children){for(const child of children){child.parentElement=this;this.children.push(child);}}
@@ -21,7 +22,7 @@ test('real render preserves unsorted layer/cell identities and fits both axes wi
   const elements = new Map(); const byId=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
   byId('warehouseMapStage').parentElement=new Element();
   const state={warehouseMapData:data,warehouseSelectedRack:'fixture',warehouseMapZoom:1};
-  vm.runInNewContext(render+';renderWarehouseMap()', {state,byId,window:{innerHeight:844},
+  vm.runInNewContext(goodsHelpers+render+';renderWarehouseMap()', {state,byId,window:{innerHeight:844},
     document:{createElementNS:(_,tag)=>new Element(tag)},node:(tag,cls,text)=>Object.assign(new Element(tag),{className:cls,textContent:text}),compactWarehouseLocation:()=>'',showStatus:()=>{}});
   const rack=byId('warehouseRackList').children[0];
   assert.deepEqual(rack.children.slice(1).map(section=>section.children[0].textContent),['3层','2层','1层']);

@@ -117,7 +117,8 @@ def main():
         if not relative:
             continue
         path = Path(relative)
-        if path.parts[0] not in allowed and relative not in singles:
+        frontend_asset = relative.startswith('frontend-v2/dist/')
+        if path.parts[0] not in allowed and relative not in singles and not frontend_asset:
             continue
         if relative.startswith('static/uploads/') or relative.endswith('.pyc') or '__pycache__' in path.parts:
             continue

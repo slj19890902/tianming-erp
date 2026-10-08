@@ -74,6 +74,7 @@ from app.models.requisition import RequisitionItem
 from app.models.tianhua_pre_delivery import (
     TianhuaPreDeliveryDraft,
     TianhuaPreDeliveryDraftItem,
+    TianhuaPreDeliveryImportBatch,
 )
 from app.models.user import User
 from app.models.warehouse_inventory import (
@@ -5357,6 +5358,26 @@ def _unordered_finished_allocation_response(
     ]
 
 
+def _pre_delivery_batch_reference(db: Session, delivery: Delivery) -> dict | None:
+    """Expose only the linked batch header after the delivery access check."""
+    batch = db.scalar(
+        select(TianhuaPreDeliveryImportBatch)
+        .join(TianhuaPreDeliveryDraft, TianhuaPreDeliveryDraft.batch_id == TianhuaPreDeliveryImportBatch.id)
+        .where(
+            TianhuaPreDeliveryDraft.delivery_id == delivery.id,
+            TianhuaPreDeliveryDraft.customer_id == delivery.customer_id,
+            TianhuaPreDeliveryImportBatch.customer_id == delivery.customer_id,
+        )
+    )
+    if batch is None:
+        return None
+    return {
+        "batch_id": batch.id,
+        "batch_number": batch.batch_number,
+        "source_type": batch.source_type,
+    }
+
+
 def _delivery_response(
     db: Session,
     delivery_id: int,
@@ -5659,6 +5680,7 @@ def _delivery_response(
     return {
         "id": delivery.id,
         "delivery_number": delivery.delivery_number,
+        "pre_delivery_batch": _pre_delivery_batch_reference(db, delivery),
         "customer_id": delivery.customer_id,
         "customer_name": customer.name if customer else None,
         "delivery_date": delivery.delivery_date,

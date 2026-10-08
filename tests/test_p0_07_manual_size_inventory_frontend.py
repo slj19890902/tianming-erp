@@ -15,6 +15,9 @@ TIME_UTILS = (ROOT / "static" / "assets" / "time-utils.js").read_text(
 )
 
 
+ORDER_REFERENCE = (ROOT / "static" / "ui" / "order-reference.js").read_text(encoding="utf-8")
+
+
 def _inline_script() -> str:
     return next(
         script
@@ -51,6 +54,7 @@ const sandbox = {{
 }};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(TIME_UTILS)}, sandbox);
+vm.runInContext({json.dumps(ORDER_REFERENCE)}, sandbox);
 vm.runInContext({json.dumps(_inline_script())}, sandbox);
 const methods = sandbox.definition.methods;
 const state = methods.newOrderInventoryState();
@@ -65,12 +69,13 @@ const manual = {{
 const formal = {{
   manual_size_entry:false, product_id:9, product_name:"已有常用箱",
   specification:"520×350×300mm", quantity:200, unit_price:"3.68",
-  _inventory:{{...state}}, bom_component_demands:[],
+  _inventory:{{...state,finished:{{...state.finished,selected_candidates:[{{lot_id:99}}]}}}}, bom_component_demands:[],
 }};
 const context = {{
   orderForm:{{customer_id:1,items:[manual]}},
   inventoryPlanApplies:methods.inventoryPlanApplies,
   inventoryDecisionRequired:methods.inventoryDecisionRequired,
+  inventoryHasSelection:methods.inventoryHasSelection,
   manualSizeRequiredDimensionsComplete:methods.manualSizeRequiredDimensionsComplete,
   productBoxTypeRule:() => ({{required_dimensions:["length_mm","width_mm","height_mm"]}}),
   orderItemIsExternalPurchase:methods.orderItemIsExternalPurchase,
@@ -91,6 +96,8 @@ const formalValidation = methods.validateOrderForm.call(context);
 if (manualGate !== "" || manualValidation !== "") throw new Error(`manual blocked: ${{manualGate}} / ${{manualValidation}}`);
 if (formalGate !== "库存候选已过期，请重新获取并确认。" || !formalValidation.includes("库存候选已过期")) throw new Error("formal stale gate was relaxed");
 if (JSON.stringify(manualPlan) !== JSON.stringify({{finished:[],semi:[]}})) throw new Error("manual reservation plan must stay empty");
+formal._inventory.finished.selected_candidates=[];
+if(methods.inventoryDecisionRequired.call(context,formal)!=="" || methods.validateOrderForm.call(context)!=="") throw new Error("unchosen stock must not force a stale-stock decision");
 """
     result = subprocess.run(
         [node],
@@ -117,6 +124,7 @@ const sandbox = {{
 }};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(TIME_UTILS)}, sandbox);
+vm.runInContext({json.dumps(ORDER_REFERENCE)}, sandbox);
 vm.runInContext({json.dumps(_inline_script())}, sandbox);
 const methods = sandbox.definition.methods;
 const manual = {{manual_size_entry:true,product_id:null,matched_product_id:null,quantity:200,_inventory:null,_inventory_refresh_timer:null}};
@@ -186,6 +194,7 @@ const sandbox = {{
 }};
 vm.createContext(sandbox);
 vm.runInContext({json.dumps(TIME_UTILS)}, sandbox);
+vm.runInContext({json.dumps(ORDER_REFERENCE)}, sandbox);
 vm.runInContext({json.dumps(_inline_script())}, sandbox);
 const methods = sandbox.definition.methods;
 const text = methods.manualSizeQuoteText.call(
@@ -194,6 +203,14 @@ const text = methods.manualSizeQuoteText.call(
 );
 if (!text.startsWith("系统估价｜") || text.includes("estimated")) throw new Error(text);
 if (!text.includes("￥3.68")) throw new Error("estimated price changed");
+const manualRow={{unit_price:"4.50",_quote_preview:{{final_price_source:"manual_unit_price",customer_square_price:"3.25",estimated_unit_price:"4.26"}}}};
+const before=JSON.stringify(manualRow);
+const manualText=methods.manualSizeQuoteText.call({{money:value=>Number(value).toFixed(2)}},manualRow);
+if(!manualText.startsWith("人工单价｜")||manualText.includes("manual_unit_price")) throw new Error(manualText);
+if(!manualText.includes("￥4.26")||JSON.stringify(manualRow)!==before) throw new Error("manual price or estimate changed while formatting");
+const errorText=methods.manualSizeQuoteText.call({{money:value=>Number(value).toFixed(2)}},{{_quote_preview:{{final_price_source:"报价试算失败：虚构网络不可用"}}}});
+if(errorText!=="报价试算失败：虚构网络不可用") throw new Error("Chinese error guidance was hidden");
+
 """
     result = subprocess.run(
         [node],

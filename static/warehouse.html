@@ -970,6 +970,7 @@
     function readableLocation(row){return row?.employee_location_name||row?.current_address_name||row?.location_name||"位置名称待完善"}
     function readableArea(row){const projected=String(row?.employee_area_name||"").trim();if(projected)return projected;const zone=row?.address_zone_code,subzone=Number(row?.address_subzone_no||0);if(zone&&subzone)return `${zone}${subzone}区`;const name=String(row?.area_name||"").trim(),code=String(row?.area_code||"").trim();return name&&name.toUpperCase()!==code.toUpperCase()?name:"区域名称待完善"}
     function readableAssetLocation(row){const guide=row?.location_guide||{};return guide.prompt||row?.rack_location||"位置名称待完善"}
+    function moldMoveConfirmationLocation(guide){const prompt=String(guide?.prompt||"").trim();return prompt&&!/\bMCELL-/i.test(prompt)?prompt:"位置名称待完善"}
     function showPageError(message){
       $("pageError").textContent=message;
       $("pageError").classList.remove("hidden");
@@ -2024,8 +2025,10 @@
     let assetDetailRequestId=0;
     function closeAssetDetail(){assetDetailRequestId+=1;$("assetDetailMask").classList.add("hidden");$("assetDetailBody").innerHTML=""}
     function detailFact(label,value){return `<div class="asset-detail-fact"><small>${h(label)}</small><b>${h(value??"-")}</b></div>`}
+    function timelineLocationName(event,side){const name=String(event[`${side}_location_name`]||event[`${side}_location`]||"").trim();return /\bMCELL-|^[134]F-(?:M|PL)-R/i.test(name)?"位置名称待完善":name}
     function timelineEventDetail(event){
-      const places=event.from_location||event.to_location?`${event.from_location||"-"} → ${event.to_location||"-"}`:"";
+      const from=timelineLocationName(event,"from"),to=timelineLocationName(event,"to");
+      const places=from||to?`${from||"-"} → ${to||"-"}`:"";
       const quantity=event.quantity!=null?`${event.quantity} ${event.unit?labels[event.unit]||event.unit:""}`.trim():"";
       const balances=event.before_available!=null?`可用 ${event.before_available} → ${event.after_available}；预占 ${event.before_reserved} → ${event.after_reserved}；消耗 ${event.before_consumed} → ${event.after_consumed}；报损 ${event.before_damaged} → ${event.after_damaged}；报废 ${event.before_scrapped} → ${event.after_scrapped}`:"";
       const stocktake=event.counted_quantity!=null?`系统 ${event.system_quantity}，实盘 ${event.counted_quantity}，差异 ${event.difference_quantity}`:"";
@@ -2457,7 +2460,7 @@
             const preview=await api("/api/warehouse/molds/location-movement/preview",{method:"POST",body:JSON.stringify({mold_code:$("moldCode").value,target_location:payload.rack_location})});
             if(preview.same_location){toast("系统中的模具位置已经变化，请刷新后重新编辑",true);return}
             const occupants=Number(preview.co_located_count||0)?`\n该位置当前还有 ${preview.co_located_count} 件模具，同一格允许并排存放。`:"";
-            if(!window.confirm(`请确认模具实物已经搬动：\n\n原位置：${state.moldEditLocation.originalLocation}\n新位置：${preview.target_location}\n${preview.target_guide?.prompt||""}${occupants}\n\n确认后将保存位置并追加移位流水。`))return;
+            if(!window.confirm(`请确认模具实物已经搬动：\n\n原位置：${moldMoveConfirmationLocation(preview.mold?.location_guide)}\n新位置：${moldMoveConfirmationLocation(preview.target_guide)}${occupants}\n\n确认后将保存位置并追加移位流水。`))return;
             payload={...payload,expected_location_version:preview.expected_version,location_idempotency_key:createIdempotencyKey(),physical_move_confirmed:true,location_note:"模具档案编辑中确认实物移位"};
             attempt.requestPayload=payload;attempt.locationPrepared=true;state.moldEditLocation.attempt=attempt;
         }

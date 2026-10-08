@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 from functools import lru_cache
@@ -26,6 +27,15 @@ def _get(obj, key, default=None):
 @lru_cache(maxsize=1)
 def review_entries():
     path = Path(__file__).resolve().parents[1] / 'data' / 'customer_document_review_20260922.json'
+    if os.getenv('ERP_UAT_ROOT'):
+        # A fictional UAT run must never consult retained formal customer
+        # evidence in the source checkout. Missing isolated evidence fails closed.
+        from app.core.uat_isolation import canonical_path, identity_is_within
+
+        root = canonical_path(Path(os.environ['ERP_UAT_ROOT']), label='UAT root')
+        path = canonical_path(root / 'customer-document-review.json', label='UAT customer document evidence')
+        if not identity_is_within(path, root) or not path.is_file() or path.stat().st_nlink != 1:
+            raise RuntimeError('UAT customer document evidence is missing or not isolated')
     return json.loads(path.read_text(encoding='utf-8'))['entries']
 
 

@@ -1854,12 +1854,26 @@ def _receipt_auto_finished_ground_targets(
             policy is None
             or policy.status != "published"
             or policy.storage_layout not in {"pallet_ground", "mixed"}
-            or policy.published_map_revision != plan.published_map_revision
             or not plan.published_map_revision
             or not isinstance(allowed_types, list)
             or "finished" not in {str(value).strip() for value in allowed_types}
         ):
             continue
+        if policy.published_map_revision != plan.published_map_revision:
+            # The immutable original plan may have a verified current-map
+            # application receipt. Use the same authoritative contract as moves.
+            from app.services.warehouse_ground_slots import (
+                WarehouseGroundSlotError, published_ground_plan,
+            )
+            try:
+                current_plan = published_ground_plan(
+                    db, floor_code=plan.area.floor.floor_code,
+                    area_code=plan.area.area_code, required_inventory_type="finished",
+                )
+            except WarehouseGroundSlotError:
+                continue
+            if current_plan.id != plan.id:
+                continue
         valid_plan_found = True
         for slot in sorted(plan.slots, key=lambda row: (row.route_sequence, row.id)):
             location = slot.location

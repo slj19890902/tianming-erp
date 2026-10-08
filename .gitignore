@@ -73,3 +73,8 @@ migration-workfiles/
 reference_screenshots_contact_sheet.jpg
 # Drawing V2 local UAT databases, files and temporary checks.
 /.uat/
+
+# R29 signed desktop frontend assets are versioned application resources.
+!static/assets/tianming-brand-symbol.png
+!frontend-v2/dist/
+!frontend-v2/dist/**

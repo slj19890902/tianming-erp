@@ -182,6 +182,7 @@ class HSTSMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         same_origin_embedded_paths = {
+            "/frontend-v2/formal-workspace",
             "/warehouse.html",
             "/warehouse-ledger.html",
             "/incoming.html",
@@ -344,6 +345,34 @@ def create_app() -> FastAPI:
     application.state.erp_settings = current
     application.router.lifespan_context = phase2_lifespan
     index_path = Path(__file__).resolve().parents[1] / "static" / "index.html"
+    frontend_root = Path(__file__).resolve().parents[1] / "frontend-v2" / "dist"
+
+    async def formal_workspace(request: Request):
+        # Dedicated compatibility document. Original ERP routes keep their
+        # existing frame policy; this new document permits only same-origin
+        # embedding, consistently in UAT and production.
+        return conditional_file_response(request, index_path, headers={
+            "X-Frame-Options": "SAMEORIGIN" if request.query_params.get("embedded") == "1" else "DENY",
+            "Content-Security-Policy": "frame-ancestors 'self'" if request.query_params.get("embedded") == "1" else "frame-ancestors 'none'",
+        })
+
+    application.add_api_route("/frontend-v2/formal-workspace", formal_workspace, methods=["GET"], include_in_schema=False)
+
+    async def desktop_frontend(request: Request):
+        from fastapi import HTTPException
+        relative = request.path_params.get("frontend_path", "")
+        target = (frontend_root / relative).resolve()
+        if not target.is_relative_to(frontend_root.resolve()):
+            raise HTTPException(status_code=404)
+        if target.is_file():
+            return conditional_file_response(request, target)
+        # Only app navigation gets an index fallback, never missing assets.
+        if relative.startswith("assets/") or Path(relative).suffix:
+            raise HTTPException(status_code=404)
+        return conditional_file_response(request, frontend_root / "index.html")
+
+    application.add_api_route("/frontend-v2/", desktop_frontend, methods=["GET"], include_in_schema=False)
+    application.add_api_route("/frontend-v2/{frontend_path:path}", desktop_frontend, methods=["GET"], include_in_schema=False)
     # The legacy singleton registered a standalone customer client that calls
     # retired customer-management endpoints.  Remove only that endpoint before
     # route resolution, then retain the bookmark through the SPA redirect.

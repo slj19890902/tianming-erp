@@ -537,6 +537,7 @@ class ExistingOrderBomComponentDemand(BaseModel):
 
 
 class OrderItemCreate(BaseModel):
+    product_expected_version: int | None = Field(default=None, ge=1)
     client_line_id: str | None = Field(default=None, max_length=100)
     reservation_plan: OrderItemReservationPlan | None = None
     bom_component_demands: list[NewOrderBomComponentDemand] = Field(
@@ -712,6 +713,7 @@ class EstimatedCostUpdate(BaseModel):
 
 class OrderCreate(BaseModel):
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=100)
+    readback_contract: Literal["a01-v1"] | None = None
     model_config = ConfigDict(extra="ignore")
 
     email_attachment_id: int | None = Field(default=None, ge=1)
@@ -6799,6 +6801,7 @@ def get_order_detail(
     order_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
+    create_key: str | None = None,
 ) -> dict:
     display_registry = build_display_registry(db)
     order = db.scalar(
@@ -6822,7 +6825,7 @@ def get_order_detail(
         [order],
         user,
     )
-    return _order_response(
+    response = _order_response(
         order,
         user,
         db=db,
@@ -6830,6 +6833,19 @@ def get_order_detail(
         display_registry=display_registry,
         **_full_order_response_kwargs(full_response_context, int(order.id)),
     )
+    if create_key is not None:
+        if not has_permission(user, "orders.create"):
+            raise HTTPException(403, "无订单创建来源查看权限")
+        if not 8 <= len(create_key) <= 100:
+            raise HTTPException(422, "保存请求标识无效")
+        key = hashlib.sha256(f"order-create:{user.id}:{create_key}".encode()).hexdigest()
+        previous = db.scalar(select(OperationLog).where(
+            OperationLog.request_id == key, OperationLog.action == "order_create_replay"))
+        if previous is None:
+            raise HTTPException(404, "未找到当前操作者的保存来源")
+        from app.services.order_create_readback import attach_replay_evidence
+        attach_replay_evidence(response, json.loads(previous.details)["response"])
+    return response
 
 
 @router.get("/{order_id}/items/{item_id}/documents")
@@ -7748,6 +7764,8 @@ def _create_order_impl(
                 item_index=index,
             )
 
+        from app.services.order_create_readback import capture_source_lines
+        source_lines = capture_source_lines(payload, resolved_products)
         _validate_combination_group_consistency(combination_provenances)
         _set_order_save_stage(observability, "inventory_preflight")
         reservation_plan_states = _preflight_reservation_plans(
@@ -8247,6 +8265,8 @@ def _create_order_impl(
             response["items"], payload.items, strict=True
         ):
             response_item["client_line_id"] = request_item.client_line_id
+        from app.services.order_create_readback import attach_frozen_proof
+        attach_frozen_proof(response, source_lines)
         if import_source is not None:
             response["source_replay"] = False
             response["import_source_id"] = import_source.id
@@ -8392,7 +8412,13 @@ def read_order_create_attempt(
 
 def _order_create_identity(payload: OrderCreate, actor_id: int):
     key = hashlib.sha256(f"order-create:{actor_id}:{payload.idempotency_key}".encode()).hexdigest()
-    body = payload.model_dump(mode="json", exclude={"idempotency_key", "mold_repair_confirmation_token"})
+    excluded = {"idempotency_key", "mold_repair_confirmation_token"}
+    if payload.readback_contract is None:
+        excluded.add("readback_contract")
+    body = payload.model_dump(mode="json", exclude=excluded)
+    if payload.readback_contract is None:
+        for line in body.get("items") or []:
+            line.pop("product_expected_version", None)
     digest = hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     return key, digest
 
@@ -8450,6 +8476,9 @@ def create_order(
                 line_ids = {item["id"]: item.get("client_line_id") for item in record["response"].get("items", [])}
                 for item in response.get("items", []):
                     item["client_line_id"] = line_ids.get(item["id"])
+                if payload.readback_contract is not None:
+                    from app.services.order_create_readback import attach_replay_evidence
+                    attach_replay_evidence(response, record["response"])
                 db.rollback()
                 return response
         return _create_order_impl(

@@ -403,14 +403,22 @@ class Manager:
                 raise ValueError('上次迁移尚未完成，请先处理恢复')
             chain = self._plan_update_chain(package, nas / 'releases')
             if not chain:
+                from desktop_assistant.retention import after_update
+                after_update(self, package.parent)
                 return '已经是该版本'
             for candidate in chain:
                 self._update_locked(self.root / 'packages' / (candidate['id'] + '.zip'), password, nas)
+            from desktop_assistant.retention import after_update
+            after_update(self, package.parent)
             return chain[-1]['version']
 
     def update(self, package: Path, password: str, nas: Path, *, rollback=False):
         with self.lock():
-            return self._update_locked(package, password, nas, rollback=rollback)
+            result = self._update_locked(package, password, nas, rollback=rollback)
+            from desktop_assistant.retention import after_update
+            archive_dir = nas.parent / 'releases' if nas.name == 'backups' else nas / 'releases'
+            after_update(self, archive_dir)
+            return result
 
     def _update_locked(self, package: Path, password: str, nas: Path, *, rollback=False):
         candidate = self.stage_release(package)

@@ -173,4 +173,15 @@ def rehearse(manager, package):
     except Exception as error:
         report.update(status='failed',error=str(error));write_json(report_path,report);raise
     write_json(report_path,report)
+    # Version-2 reports contain the schema proof needed for interrupted-update
+    # recovery; successful rehearsal payloads are no longer needed afterward.
+    from desktop_assistant.cleanup import remove_owned_tree
+    cleanup = {}
+    for name in ('release', 'shared'):
+        try:
+            cleanup[name] = {'deleted_bytes': remove_owned_tree(job/name, job)}
+        except (OSError, ValueError) as error:
+            cleanup[name] = {'retained': str(error)}
+    report['temporary_cleanup'] = cleanup
+    write_json(report_path,report)
     return report

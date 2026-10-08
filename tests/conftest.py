@@ -119,9 +119,15 @@ def pytest_configure(config: pytest.Config) -> None:
     os.environ["ERP_DATABASE_PATH"] = str(
         database_path or (_TEST_ROOT / "carton_erp.sqlite3")
     )
-    os.environ["ERP_BACKUP_DIR"] = str(_TEST_ROOT / "backups")
-    os.environ["ERP_SECRET_KEY_FILE"] = str(_TEST_ROOT / "session_secret.key")
-    os.environ["ERP_SECRET_KEY"] = "pytest-isolated-only"
+    if os.getenv("ERP_UAT_ROOT"):
+        # The managed task runner already binds every writer and the secret
+        # to its copy. Do not replace those paths with conflicting test globals.
+        from app.core.uat_isolation import validate_uat_environment
+        validate_uat_environment()
+    else:
+        os.environ["ERP_BACKUP_DIR"] = str(_TEST_ROOT / "backups")
+        os.environ["ERP_SECRET_KEY_FILE"] = str(_TEST_ROOT / "session_secret.key")
+        os.environ["ERP_SECRET_KEY"] = "pytest-isolated-only"
     os.environ["ERP_ENVIRONMENT"] = "test"
     _install_processing_settings_test_seed()
 

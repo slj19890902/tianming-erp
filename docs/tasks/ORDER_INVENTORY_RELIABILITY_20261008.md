@@ -44,3 +44,7 @@ Ownership extension approved during concrete dependency review: order_inventory_
 ## Exclusions
 
 No permission relaxation, universal fuzzy matches, automatic customer/material substitutions beyond existing approved rules, guessing processed shape from bounding dimensions, silently migrating old physical stock, full ERP rewrite, or unrelated UI features. Unrelated failures found during audit must be recorded separately unless they directly block this flow.
+
+## Concurrent baseline reconciliation
+
+2026-10-09 release recheck found v0.22.570 running source7538d3e0fdd15c8e30d470603bb729816a04410b, package a8b0823dc09ffb5493c8fb93653cbb8d8679a92916955f15bf1a5bd9f461a01f, same eg1008sc. It changes visible page capacity and shell size notifications. Merged verified running commit (703d5703), preserving both new stock scripts and deployed shell cache keys. Subsequent preflight uses this v570 baseline; target v571 subject to another live check. No business database replacement.

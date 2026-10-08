@@ -47,4 +47,6 @@ No permission relaxation, universal fuzzy matches, automatic customer/material s
 
 ## Concurrent baseline reconciliation
 
+Release-blocking integration discovery: actual assembly from fully covered processed stock could still be rejected by the legacy material_status delivery gate. Root explicitly extends order_inventory_reliability ownership to app/api/deliveries.py and the minimum existing graph-readiness services needed to complete actual delivery and dispatch. Require real API regression through delivery creation/dispatch, exact stock consumption, insufficient-stock rejection and used-output reversal denial; do not manufacture receipt facts or weaken gates. This is part of the authorized order-stock-to-delivery closed loop.
+
 2026-10-09 release recheck found v0.22.570 running source7538d3e0fdd15c8e30d470603bb729816a04410b, package a8b0823dc09ffb5493c8fb93653cbb8d8679a92916955f15bf1a5bd9f461a01f, same eg1008sc. It changes visible page capacity and shell size notifications. Merged verified running commit (703d5703), preserving both new stock scripts and deployed shell cache keys. Subsequent preflight uses this v570 baseline; target v571 subject to another live check. No business database replacement.

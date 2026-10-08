@@ -365,6 +365,23 @@ def virtual_composite_replenishment_components(
     }
 
 
+def _cutting_signature(snapshot, supplier_length, supplier_width, output):
+    """NULL legacy means unsplit supplier sheets with the frozen total yield.
+
+    Only explicit 1x1 contracts have that same physical meaning.  A split
+    contract must match both direction factors and theoretical dimensions.
+    Extra plan/route metadata never participates in stock compatibility.
+    """
+    if not snapshot:
+        return (sheet_dimension_number(supplier_length), sheet_dimension_number(supplier_width),
+                1, 1, int(output))
+    from app.services.sheet_cutting_contract import SheetCuttingContract
+    contract = SheetCuttingContract.from_snapshot(snapshot)
+    return (sheet_dimension_number(contract.theoretical_length_mm),
+            sheet_dimension_number(contract.theoretical_width_mm),
+            contract.length_parts, contract.width_parts, contract.mold_count)
+
+
 def product_replenishment_signature(
     product: Product,
     *,
@@ -391,7 +408,8 @@ def product_replenishment_signature(
         *crease_segments,
         int(output_per_sheet or defaults["output_per_sheet"]),
         int(defaults["pieces_per_box"]),
-        json.dumps(defaults["sheet_cutting_snapshot"], sort_keys=True, separators=(",", ":")) if defaults.get("sheet_cutting_snapshot") else "",
+        _cutting_signature(defaults.get("sheet_cutting_snapshot"), defaults["report_length_mm"],
+                           defaults["report_width_mm"], output_per_sheet or defaults["output_per_sheet"]),
     )
 
 
@@ -821,6 +839,8 @@ def _replenishment_item_signature(
         *crease_segments,
         int(item.stock_yield_per_sheet or 1),
         int(item.pieces_per_box or 1),
+        _cutting_signature(item.sheet_cutting_snapshot, item.report_length_mm,
+                           item.report_width_mm, item.stock_yield_per_sheet or 1),
     )
 
 
@@ -1128,6 +1148,7 @@ def virtual_composite_replenishment_demand_plan(
     *,
     product: Product,
     finished_quantity: int,
+    manual_quantity: bool = False,
 ) -> dict | None:
     """Build component-level board demand for a virtual finished set."""
 
@@ -1160,13 +1181,13 @@ def virtual_composite_replenishment_demand_plan(
             # Complete free sets already reduced the parent's shortfall. Only
             # unmatched surplus pieces may reduce this remaining demand again.
             + max(free_coverage["pieces"].get(component.id, 0)
-                  - free_coverage["sets"] * quantity_per_set, 0)
+                  - (0 if manual_quantity else free_coverage["sets"] * quantity_per_set), 0)
         )
         outstanding_pieces = max(required_pieces - covered_pieces, 0)
         output_per_sheet = int(row["output_per_sheet"])
         pieces_per_unit = max(int(defaults["pieces_per_box"]), 1)
         free_surplus = max(free_coverage["pieces"].get(component.id, 0)
-                           - free_coverage["sets"] * quantity_per_set, 0)
+                           - (0 if manual_quantity else free_coverage["sets"] * quantity_per_set), 0)
         required_board_pieces = max((required_pieces - free_surplus) * pieces_per_unit
             - int(coverage.get("available_auto_cover_piece_quantity", 0))
             - int(coverage.get("incoming_auto_cover_piece_quantity", 0))
@@ -1502,7 +1523,9 @@ def replenishment_item_dict(
     db: Session | None = None,
 ) -> dict:
     from app.services.stock_warning_drafts import physical_demand_contract
-    quantity_contract = physical_demand_contract(item)
+    from app.services.stock_replenishment_plan import frozen_bom_plan
+    bom_plan = frozen_bom_plan(item)
+    quantity_contract = None if bom_plan else physical_demand_contract(item)
     location = item.location
     lot = item.inventory_lot
     location_context = projection_context or {}
@@ -1523,6 +1546,8 @@ def replenishment_item_dict(
         "id": item.id,
         "stock_policy_id": item.stock_policy_id,
         "quantity_contract": quantity_contract,
+        "replenishment_plan": bom_plan,
+        "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
         "target_inventory_type": item.target_inventory_type,
         "product_id": item.product_id,
         "reference_product_id": item.reference_product_id,

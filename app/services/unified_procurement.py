@@ -185,6 +185,7 @@ def pending_stock_rows(db, user):
         customer = db.get(Customer, snapshot["source_customer_id"]) if snapshot["source_customer_id"] else None
         result.append({
             "source_type": "stock_replenishment", "stock_replenishment_item_id": item.id,
+            "created_at": str(order.created_at or ''),
             "item_id": f"sr{item.id}", "id": f"sr{item.id}", "source_id": order.id,
             "source_fingerprint": fingerprint(snapshot), "is_merge_group": False,
             "item_order_number": order.order_number, "order_number": order.order_number,
@@ -201,8 +202,13 @@ def pending_stock_rows(db, user):
             "flute_type": item.flute_type, "layer_count": item.layer_count,
             "supplier_name": order.supplier_name, "snapshot_supplier_name": order.supplier_name,
             "source_snapshot": snapshot, "requisition_status": "未报料",
+            "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
         })
-        if item.quantity_contract_json is not None:
+        from app.services.stock_replenishment_plan import frozen_bom_plan
+        bom_plan = frozen_bom_plan(item)
+        if bom_plan:
+            result[-1]['replenishment_plan'] = bom_plan
+        if item.quantity_contract_json is not None and not bom_plan:
             from app.services.stock_warning_drafts import physical_demand_contract
             contract = physical_demand_contract(item)
             result[-1].update(procurement_mode='external_purchase',

@@ -992,7 +992,7 @@ class ProductionPrintBatchItem(BaseModel):
                 and self.supplier_order_id != self.document_id
             ):
                 raise ValueError("供应商报料单编号不一致")
-            if not self.task_versions:
+            if not self.task_versions and not self.source_identity.startswith('supplier_stock:'):
                 raise ValueError("供应商报料生产任务版本不能为空")
             self.supplier_order_id = resolved
             self.document_id = resolved
@@ -1712,6 +1712,8 @@ class StockReplenishmentItemPayload(BaseModel):
 
 
 class StockReplenishmentCreatePayload(BaseModel):
+    replenishment_plan: dict | None = None
+    replenishment_plans: list[dict] = Field(default_factory=list)
     source_type: str = "manual_history"
     idempotency_key: str | None = Field(default=None, max_length=80)
     supplier_name: str | None = Field(default=None, max_length=200)
@@ -10024,6 +10026,7 @@ def _pending_requisition_eligible_rows(db: Session, user: User) -> list[dict]:
                 "product_code": " / ".join(_unique_text(product_codes)),
                 "delivery_date": None,
                 "created_at": None,
+                "_sort_created_at": str(group.created_at or ''),
                 "_supplier_name": (
                     str(group.supplier_name or "").strip()
                     or "未设置供应商"
@@ -10061,6 +10064,7 @@ def _pending_requisition_eligible_rows(db: Session, user: User) -> list[dict]:
                 # The public pending row does not expose created_at.  Keeping the
                 # same null fallback preserves dashboard todo ordering exactly.
                 "created_at": None,
+                "_sort_created_at": str(order.created_at or ''),
                 "_supplier_name": str(
                     item.snapshot_supplier_name or "未设置供应商"
                 ).strip(),
@@ -10073,7 +10077,7 @@ def dashboard_pending_requisition_rows(db: Session, user: User) -> list[dict]:
     """Return the P1-36J dashboard contract without pagination-only metadata."""
 
     return [
-        {key: value for key, value in row.items() if key != "_supplier_name"}
+        {key: value for key, value in row.items() if key not in {"_supplier_name", "_sort_created_at"}}
         for row in _pending_requisition_eligible_rows(db, user)
     ]
 
@@ -10567,6 +10571,18 @@ def _pending_supplier_counts(rows: list[dict]) -> list[dict]:
     ]
 
 
+def _pending_requisition_sort_key(row):
+    value = str(row.get('_sort_created_at') or row.get('created_at') or '')
+    try:
+        created = datetime.fromisoformat(value.replace('Z', '+00:00')).replace(tzinfo=None)
+        seconds = (created - datetime(1970, 1, 1)).total_seconds()
+    except ValueError:
+        seconds = 0
+    source_id = int(row.get('source_id') or row.get('merge_group_id') or row.get('order_item_id') or 0)
+    child_id = int(row.get('stock_replenishment_item_id') or row.get('order_item_id') or 0)
+    return (-seconds, -source_id, child_id)
+
+
 @router.get("/pending")
 def pending_requisitions(
     db: Session = Depends(get_db),
@@ -10581,9 +10597,15 @@ def pending_requisitions(
     if page is None and page_size is None and supplier_name is None:
         result = _pending_requisitions_full_payload(db, user)
         result["items"].extend(stock_rows)
+        eligible = _pending_requisition_eligible_rows(db, user) + stock_rows
+        by_id = {str(row['item_id']): row for row in eligible}
+        result['items'].sort(key=lambda row: _pending_requisition_sort_key(by_id.get(str(row['item_id']), row)))
+        result['total'] = result['overall_total'] = len(result['items'])
+        result['supplier_counts'] = _pending_supplier_counts(eligible)
         return result
 
     eligible_rows = _pending_requisition_eligible_rows(db, user) + stock_rows
+    eligible_rows.sort(key=_pending_requisition_sort_key)
     overall_total = len(eligible_rows)
     supplier_counts = _pending_supplier_counts(eligible_rows)
     normalized_supplier_name = (
@@ -15145,6 +15167,7 @@ def stock_policy_replenishment_draft(
     policy_id: int,
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
+    finished_quantity: Annotated[int | None, Query(gt=0)] = None,
 ) -> dict:
     policy = db.scalar(_stock_policy_query().where(InventoryStockPolicy.id == policy_id))
     if policy is None:
@@ -15349,9 +15372,14 @@ def stock_policy_replenishment_draft(
     composite_plan = virtual_composite_replenishment_demand_plan(
         db,
         product=product,
-        finished_quantity=int(summary["suggested_replenishment_quantity"] or 0),
+        finished_quantity=(finished_quantity if finished_quantity is not None
+                           else int(summary["suggested_replenishment_quantity"] or 0)),
+        manual_quantity=finished_quantity is not None,
     )
     if composite_plan is not None:
+        from app.services.stock_replenishment_plan import composite_plan_contract
+        frozen_plan = composite_plan_contract(policy, product, composite_plan)
+        frozen_plan['manual_quantity'] = finished_quantity is not None
         component_items: list[dict] = []
         compatible_board_products: list[dict] = []
         for demand in composite_plan["component_demands"]:
@@ -15378,6 +15406,7 @@ def stock_policy_replenishment_draft(
                 {
                     "stock_policy_id": policy.id,
                     "target_inventory_type": "semi_finished",
+                    "sheet_cutting_snapshot": component_defaults.get("sheet_cutting_snapshot"),
                     "product_id": component.id,
                     "reference_product_id": component.id,
                     "customer_id": component.customer_id,
@@ -15447,6 +15476,7 @@ def stock_policy_replenishment_draft(
             "compatible_board_products": compatible_board_products,
             "policy_summary": summary,
             "is_virtual_composite_parent": True,
+            "replenishment_plan": frozen_plan,
         }
 
     primary_item = draft_item(policy, summary, product)
@@ -15874,6 +15904,13 @@ def create_stock_replenishment_order(
             raise StockReplenishmentError(
                 "库存预警报料草稿缺少防重复标识，请关闭后重新打开再保存。"
             )
+        if payload.replenishment_plan or payload.replenishment_plans:
+            # Serialize plan revalidation and the new pending-coverage fact.
+            # Otherwise two different request keys could both consume one preview.
+            connection = db.connection()
+            if connection.dialect.name == 'sqlite' and not connection.connection.driver_connection.in_transaction:
+                connection.exec_driver_sql('BEGIN IMMEDIATE')
+            db.expire_all()
         if payload.idempotency_key:
             key_digest = hashlib.sha256(
                 payload.idempotency_key.encode("utf-8")
@@ -16073,6 +16110,32 @@ def create_stock_replenishment_order(
             )
             assert order is not None
             return _replenishment_order_response(db, order)
+        validated_bom_plans = {}
+        submitted_plans = payload.replenishment_plans or ([payload.replenishment_plan] if payload.replenishment_plan else [])
+        plan_component_ids = set()
+        for submitted in submitted_plans:
+            if payload.source_type != 'stock_warning' or type(submitted.get('finished_quantity')) is not int or submitted['finished_quantity'] <= 0:
+                raise StockReplenishmentError('本次补库套数必须为正整数，请重新生成草稿。', 409)
+            policy_id = submitted.get('policy_id')
+            if type(policy_id) is not int or policy_id in validated_bom_plans or not any(row.stock_policy_id == policy_id for row in payload.items):
+                raise StockReplenishmentError('本次BOM补库来源与预警不一致，请重新生成草稿。', 409)
+            if payload.customer_id not in (None, submitted.get('customer_id')):
+                raise StockReplenishmentError('本次BOM补库客户与预警不一致。', 409)
+            current = stock_policy_replenishment_draft(policy_id, db=db, _user=user,
+                finished_quantity=submitted['finished_quantity'] if submitted.get('manual_quantity') else None)
+            if current.get('replenishment_plan') != submitted:
+                raise StockReplenishmentError('本次BOM配方、数量、库存或在途已变化，请重新计算后保存。', 409)
+            expected_lines = {row['reference_product_id']: row['quantity'] for row in current['items']}
+            component_ids = {row['product_id'] for row in submitted.get('components', [])}
+            if plan_component_ids & component_ids:
+                raise StockReplenishmentError('多个BOM补库预警共享子件，请分开生成并重新计算，避免重复抵扣库存。', 409)
+            plan_component_ids.update(component_ids)
+            policy_items = [row for row in payload.items if row.stock_policy_id == policy_id]
+            if len(policy_items) != len(expected_lines) or any(
+                    expected_lines.get(row.reference_product_id or row.product_id) != row.quantity
+                    for row in policy_items):
+                raise StockReplenishmentError('本次BOM采购数量与权威计算不一致，请重新生成草稿。', 409)
+            validated_bom_plans[policy_id] = submitted
         items = [
             _build_replenishment_item(
                 db,
@@ -16101,12 +16164,15 @@ def create_stock_replenishment_order(
                 ):
                     continue
                 policy_summary = stock_policy_dict(db, item_policy)
+                validated_bom_plan = validated_bom_plans.get(policy_id)
                 plan = virtual_composite_replenishment_demand_plan(
                     db,
                     product=policy_product,
                     finished_quantity=int(
-                        policy_summary["suggested_replenishment_quantity"] or 0
+                        validated_bom_plan['finished_quantity'] if validated_bom_plan
+                        else policy_summary["suggested_replenishment_quantity"] or 0
                     ),
+                    manual_quantity=bool(validated_bom_plan and validated_bom_plan.get('manual_quantity')),
                 )
                 if plan is None or not plan["draft_ready"]:
                     details = "、".join(
@@ -16254,6 +16320,21 @@ def create_stock_replenishment_order(
                             f"{minimum_sheets}张；可多报但不能少于BOM需求。",
                             409,
                         )
+                if policy_id not in validated_bom_plans:
+                    # Legacy default clients may omit the preview envelope;
+                    # still freeze today's authoritative default and explicit
+                    # extra purchase quantities rather than lose parent identity.
+                    from app.services.stock_replenishment_plan import composite_plan_contract
+                    default_policy = db.get(InventoryStockPolicy, policy_id)
+                    default_product = db.get(Product, default_policy.product_id)
+                    frozen = composite_plan_contract(default_policy, default_product, plan)
+                    frozen['manual_quantity'] = False
+                    frozen['purchase_quantities'] = {str(row.reference_product_id): row.quantity for row in actual_rows}
+                    validated_bom_plans[policy_id] = frozen
+        for item in items:
+            if item.stock_policy_id in validated_bom_plans:
+                item.quantity_contract_json = json.dumps(validated_bom_plans[item.stock_policy_id], ensure_ascii=False,
+                    sort_keys=True, separators=(',', ':'))
         material_suppliers = {
             material.supplier_name.strip()
             for item in items

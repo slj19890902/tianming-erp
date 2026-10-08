@@ -96,7 +96,10 @@ def canonical_batch_items(items: list[dict]) -> list[dict]:
                 "库存补库计划不能冒充订单生产任务",
                 status_code=422,
             )
-        if source_type != "stock_replenishment" and not versions:
+        supplier_stock = source_type == 'supplier_order' and source_identity.startswith('supplier_stock:')
+        if supplier_stock and versions:
+            raise ProductionPrintBatchError('库存补库计划不能冒充订单生产任务', status_code=422)
+        if source_type != "stock_replenishment" and not supplier_stock and not versions:
             raise ProductionPrintBatchError(
                 "生产任务版本不完整，请刷新后重新勾选",
                 status_code=422,

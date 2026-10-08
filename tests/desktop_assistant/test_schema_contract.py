@@ -66,7 +66,8 @@ def test_current_models_have_complete_static_contract_including_implicit_columns
         for table in Base.metadata.tables.values()
     }
 
-    assert len(contract["tables"]) == 263
+    assert len(contract["tables"]) == len(runtime_tables)
+    assert "quotation_mutations" in contract["tables"]
     assert contract["tables"] == {name: runtime_tables[name] for name in sorted(runtime_tables)}
     assert "tax_included" in contract["tables"]["finance_delivery_graph_cost_portions"]
     assert "tax_included" in contract["tables"]["raw_purchase_delivery_cost_portions"]

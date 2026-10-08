@@ -147,7 +147,9 @@ class CrossRevisionTests(unittest.TestCase):
         self.assertEqual(self.manager.state['operation'],'migration_failed')
 
     def test_legacy_schema_report_recovers_without_rewriting_evidence(self):
-        self.interrupted()
+        # Old reports retained their isolated copy; v2 correctly cleans it.
+        with patch('desktop_assistant.cleanup.remove_owned_tree', side_effect=ValueError('legacy fixture retains proof')):
+            self.interrupted()
         from pathlib import Path
         from desktop_assistant.storage import read_json,write_json
         from desktop_assistant.migration import schema
@@ -162,7 +164,8 @@ class CrossRevisionTests(unittest.TestCase):
         self.assertEqual(sha(self.database),before)
 
     def test_legacy_report_rejects_changed_isolated_schema(self):
-        self.interrupted()
+        with patch('desktop_assistant.cleanup.remove_owned_tree', side_effect=ValueError('legacy fixture retains proof')):
+            self.interrupted()
         from pathlib import Path
         from desktop_assistant.storage import read_json,write_json
         from desktop_assistant.migration import schema

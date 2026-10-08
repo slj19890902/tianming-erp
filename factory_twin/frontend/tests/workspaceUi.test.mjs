@@ -39,14 +39,21 @@ test('all workspace modules parse; component templates compile',()=>{
  for(const [name,def] of definitions)if(def.template)sandbox.Vue.compile(def.template,{decodeEntities:s=>s,onError:e=>{throw new Error(`${name}: ${e.message}`);}});
 });
 
-test('PDF pagination retains the original drafts and exact candidates come first in each material tab',()=>{
+test('PDF pagination retains drafts and uses shared inventory candidate ordering',()=>{
  const sandbox={};vm.runInNewContext(fs.readFileSync(new URL('../../../static/ui/pdf-workspace.js',import.meta.url),'utf8'),sandbox);
  let definition;sandbox.ERPPdfWorkspace.install({mixin(d){definition=d;}});
  const ctx={...definition.methods,pdfFitCapacity:2,inventoryCandidateNeedsManualConfirmation:c=>!!c.needs_check};
- const items=[{id:1},{id:2},{id:3}],draft={items,_product_page:2};
- assert.equal(ctx.pdfPageItems(draft)[0],items[2]);assert.equal(items.length,3);
+ const candidateStart=html.indexOf('          rankSemiStockCandidates(');
+ const candidateMethods=html.slice(candidateStart,html.indexOf('          semiStockMoreCount(',candidateStart)).trim().replace(/,$/,'');
+ Object.assign(ctx,vm.runInNewContext(`({${candidateMethods}})`));
+ const items=Array.from({length:35},(_,i)=>({id:i+1})),draft={items,_product_page:2};
+ assert.equal(ctx.pdfPageItems(draft)[0],items[30]);assert.equal(items.length,35);
+ ctx.pdfFitCapacity=1;
+ assert.equal(ctx.pdfPageItems(draft)[0],items[30]);
+ ctx.pdfPageItems(draft)[0].quantity=17;
+ assert.equal(items[30].quantity,17);
  assert.equal(sandbox.ERPPdfWorkspace.amount({quantity:5,unit_price:''}),null);
- const exact={lot_id:1,sheet_type:'net_sheet',signature_differences:[],warning_codes:[]},partial={lot_id:2,sheet_type:'net_sheet',signature_differences:['尺寸']},raw={lot_id:3,sheet_type:'raw_board'};
+ const exact={lot_id:1,available_stock_quantity:10,sheet_type:'net_sheet',signature_differences:[],warning_codes:[]},partial={lot_id:2,available_stock_quantity:10,dimension_distance:1,sheet_type:'net_sheet',signature_differences:['尺寸']},raw={lot_id:3,available_stock_quantity:10,sheet_type:'raw_board'};
  const item={_inventory:{semi:{whole:{candidates:[partial,exact,raw],manual_candidates:[exact]}}}};
  assert.deepEqual([...ctx.pdfMaterialCandidates(item,'whole','semi')].map(r=>r.lot_id),[1,2]);
  assert.deepEqual([...ctx.pdfMaterialCandidates(item,'whole','raw')].map(r=>r.lot_id),[3]);

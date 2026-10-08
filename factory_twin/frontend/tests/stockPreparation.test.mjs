@@ -6,9 +6,13 @@ const html=fs.readFileSync(new URL('../../../static/index.html',import.meta.url)
 const start=html.indexOf('          async stockPrepAction(');
 const end=html.indexOf('          async loadProduction()',start);
 const method=html.slice(start,end).trim().replace(/,$/,'');
+const mixinSandbox={};
+vm.runInNewContext(fs.readFileSync(new URL('../../../static/ui/production-workspace.js',import.meta.url),'utf8'),mixinSandbox);
+let processingMethods={};mixinSandbox.ERPProductionWorkspace.install({mixin(d){Object.assign(processingMethods,d.methods);},component(){}});
 test('uncertain POST retries the same key; changed quantity uses a new key',async()=>{
  const calls=[];
  const ctx=vm.runInNewContext(`({stockPrepBusy:false,productionLocations:[],${method}})`,{axios:{post:async(url,body)=>{calls.push({...body});throw new Error('network');}},window:{confirm:()=>true}});
+ Object.assign(ctx,processingMethods);
  const row={receipt_item_id:386,lot_version:1,available:20,_quantity:5};
  await ctx.stockPrepAction(row,'plan');await ctx.stockPrepAction(row,'plan');
  assert.equal(calls.length,2);assert.equal(calls[0].operation_key,calls[1].operation_key);
@@ -18,6 +22,7 @@ test('uncertain POST retries the same key; changed quantity uses a new key',asyn
 test('invalid quantities, missing actual location and cancelled confirmation do not POST',async()=>{
  let calls=0;
  const ctx=vm.runInNewContext(`({stockPrepBusy:false,productionLocations:[],${method}})`,{axios:{post:async()=>{calls++;}},window:{confirm:()=>false}});
+ Object.assign(ctx,processingMethods);
  const row={receipt_item_id:386,lot_version:1,available:20,_quantity:21};
  await ctx.stockPrepAction(row,'plan');
  await ctx.stockPrepAction(row,'complete',{id:1,version:1,_actual:5,_location:null});

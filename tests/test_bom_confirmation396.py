@@ -14,6 +14,17 @@ def command(row, key='confirm-physical-assembly'):
         target_locations={o['product_id']: o['location_id'] for o in row['outputs']})
 
 
+def seed_priced_graph(factory, **kwargs):
+    from app.models.material import Material
+    material_id, snapshots = seed_graph(factory, **kwargs)
+    with factory() as db:
+        # Manual stock entry requires an actual area-price contract. The receipt
+        # fixture's per-sheet price cannot stand in for that material quote.
+        db.get(Material, material_id).price_unit = '元/㎡'
+        db.commit()
+    return material_id, snapshots
+
+
 def test_receipts_wait_then_explicit_assembly_and_history(composite_requisition_app, _p181_published_map_identity, monkeypatch):
     app, factory = composite_requisition_app
     from app.api.deliveries import router as delivery_router
@@ -123,7 +134,7 @@ def test_old_finished_stock_reserved_not_assembled(composite_requisition_app, _p
     from app.services.multilevel_bom_requirements import read_graph_requirements
     from app.core.time_contract import beijing_today
     app, factory = composite_requisition_app
-    seed_graph(factory)
+    seed_priced_graph(factory)
     with factory() as db:
         ids = []
         for pid, qty in [(2,32),(3,38)]:
@@ -179,7 +190,7 @@ def test_real_new_order_automatically_reserves_exact_stock(composite_requisition
     from app.services.multilevel_bom_requirements import read_graph_requirements
     from app.models.warehouse_inventory import InventoryReservation
     app, factory = composite_requisition_app
-    seed_graph(factory)
+    seed_priced_graph(factory)
     with factory() as db:
         target = _receipt_auto_finished_ground_target(db,claim=True,customer_id=1,product_id=2)
         lot = manual_finished_in(db,customer_id=1,product_id=2,location_id=target.location.id,

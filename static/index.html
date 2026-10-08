@@ -4920,7 +4920,7 @@
                 </div>
               </div>
               <section v-if="productionTab==='assembly'" class="panel">
-                <div class="toolbar-group"><span>插合完成后确认，余片保留原位</span><button class="btn small" @click="loadPendingAssemblies(assemblyPage)">刷新</button><pager :page="assemblyPage" :total="assemblyTotal" :page-size="30" :always="true" @change="loadPendingAssemblies($event)"></pager></div>
+                <div class="toolbar-group"><span>实际组装（插合或粘合）完成后确认，余片保留原位</span><button class="btn small" @click="loadPendingAssemblies(assemblyPage)">刷新</button><pager :page="assemblyPage" :total="assemblyTotal" :page-size="30" :always="true" @change="loadPendingAssemblies($event)"></pager></div>
                 <div v-if="assemblyError" class="status orange">{{assemblyError}}</div>
                 <div v-if="assemblyLoading" class="muted">正在核对配套库存…</div>
                 <div v-else-if="!pendingAssemblies.length" class="empty">暂无未组套子件</div>
@@ -7339,7 +7339,7 @@
                   <button type="button" class="btn small" :disabled="bomLabor.busy" @click="bomLabor.product_id=null">收起</button>
                 </div>
               </div>
-              <div v-if="productForm.box_style==='BOM组合'" class="notice">每 1 套填写子件用量；父件不报料，组装确认后扣子件、入成套库存。按套计价，可选打印标签。</div>
+              <div v-if="productForm.box_style==='BOM组合'" class="notice">每 1 {{productForm.unit}}填写子件用量；父件不报料。两片异形箱可选“只”，两种片料分别维护规格和模具；实际粘合或插合完成后确认，扣子件、入成品库存。按父件单位计价，可选打印标签。</div>
               <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
                 <div class="bom-editor-heading">
                   <div class="bom-editor-heading-controls">
@@ -7355,9 +7355,9 @@
                       </select>
                     </label>
                     <label class="remember-line">父件单位
-                      <select class="select" aria-label="产品库存单位" v-model="productForm.unit" :disabled="productForm.box_style==='BOM组合'">
+                      <select class="select" aria-label="产品库存单位" v-model="productForm.unit">
                         <option v-if="productForm.unit && !['只','套','片'].includes(productForm.unit)" :value="productForm.unit">{{ productForm.unit }}</option>
-                        <option v-for="unit in ['只','套','片']" :key="unit" :value="unit">{{ unit }}</option>
+                        <option v-for="unit in (productForm.box_style==='BOM组合' ? ['只','套'] : ['只','套','片'])" :key="unit" :value="unit">{{ unit }}</option>
                       </select>
                     </label>
                     <details v-if="productForm.box_style!=='BOM组合'" class="bom-more-settings"><summary>更多设置</summary><div class="bom-more-settings-body">
@@ -27734,7 +27734,7 @@
           },
           validateProductBom() {
             const mode = this.bomEditor.inventory_mode || "legacy";
-            if (this.productForm.box_style === "BOM组合" && (mode !== "assembled" || this.productForm.unit !== "套" || this.productForm.combination_mode !== "parent_priced_set" || this.productForm.is_virtual_composite_parent)) return "BOM组合须按套组装、整套计价，请重新选择BOM组合箱型";
+            if (this.productForm.box_style === "BOM组合" && (mode !== "assembled" || !["只", "套"].includes(this.productForm.unit) || this.productForm.combination_mode !== "parent_priced_set" || this.productForm.is_virtual_composite_parent)) return "BOM组合请选择只或套，按父件组装计价，请重新核对BOM组合箱型";
             if (mode === "assembled" && this.productForm.composite_fulfillment_mode !== "parent_delivery") return "组装成套后按父件交货；如需子件实发，请选择子件分存";
             if (mode === "assembled" && (!this.bomEditor.enabled || !this.bomEditor.components.some(row => row.inventory_relation === "assembly"))) return "组套成品至少需要一个组装子件";
             if (!this.bomEditor.enabled) return "";

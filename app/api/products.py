@@ -590,7 +590,11 @@ class ProductPayload(BaseModel):
         if self.box_style == "BOM组合":
             if self.is_virtual_composite_parent or self.supply_mode == "external_purchase":
                 raise ValueError("BOM组合是实际组套成品，不是虚拟分存或直接外购产品")
-            self.unit = "套"
+            if "unit" not in self.model_fields_set:
+                self.unit = "套"
+            self.unit = str(self.unit or "").strip()
+            if self.unit not in {"只", "套"}:
+                raise ValueError("BOM组合成品单位请选择只或套")
             self.combination_mode = "parent_priced_set"
             self.composite_fulfillment_mode = "parent_delivery"
             _clear_virtual_composite_parent_fields(self)
@@ -2318,7 +2322,7 @@ def update_product_bom(
     return _update_product_bom(product_id, payload, db, user)
 
 
-def _update_product_bom(product_id, payload, db, user, *, commit=True) -> dict:
+def _update_product_bom(product_id, payload, db, user, *, commit=True, preserve_parent_unit=False) -> dict:
     product = _product_or_404(db, product_id)
     require_customer_access(product.customer_id, current_user=user, db=db)
     try:
@@ -2332,6 +2336,7 @@ def _update_product_bom(product_id, payload, db, user, *, commit=True) -> dict:
             inventory_mode=payload.inventory_mode,
             material_mode=payload.material_mode,
             delivery_mode=payload.delivery_mode,
+            preserve_parent_unit=preserve_parent_unit,
         )
         from app.services.bom_subkits import read_subkit, save_subkit, SubkitError
         from app.services.composite_bom_execution import CompositeBOMExecutionError
@@ -2746,7 +2751,7 @@ def _save_product_with_bom(payload, db, user, product_id=None):
                      _update_product(product_id, payload.product, db, user, commit=False))
             product = _product_or_404(db, saved["id"])
             bom_payload = payload.bom.model_copy(update={"expected_version": product.version})
-            bom = _update_product_bom(product.id, bom_payload, db, user, commit=False)
+            bom = _update_product_bom(product.id, bom_payload, db, user, commit=False, preserve_parent_unit=True)
             db.flush()
             db.refresh(product)
             result = {"product": _response(product, user), "bom": bom}

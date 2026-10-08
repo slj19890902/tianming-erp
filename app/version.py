@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.571"
-APP_VERSION_NAME = "货架首次读取与货位显示修复"
+APP_VERSION = "v0.22.572"
+APP_VERSION_NAME = "两片异形箱组装单位与历史显示衔接"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5429,3 +5429,7 @@ APP_CHANGELOG = [*(f"v0.22.570：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["货架首次读取库存时显示加载状态，读取失败明确提示并可重试，不再误报未建立正式货位。", "按正式货架层格显示现存货位；位置待核对时保留库存查看，继续限制添货和未发布草稿操作。", "旧请求不能覆盖新库存结果；本版不改变库存、货位绑定或数据库结构。"]
 APP_VERIFICATION_STEPS = ["刷新仓库地图后直接点击货架，无需进入区域规划，核对已有货位和产品正常显示。", "读取过程中应提示正在读取；读取失败可重试，实际未建的格位仍明确提示未建。", "核对位置待确认和未发布草稿不能添货，库存数量、权限及货位绑定保持。"]
 APP_CHANGELOG = [*(f"v0.22.571：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["BOM组合可按只或套维护成品，两片异形箱按只保存；后续修改配方不会把单位改回套。", "两种片料分别维护规格和模具，实际粘合或插合后确认组装；余片、冻结订单、数量和撤销保护保持。", "组装历史按冻结的成品单位显示；无数据库迁移，不自动修改既有产品、订单或库存。"]
+APP_VERIFICATION_STEPS = ["刷新常用箱，在BOM组合中选择只，设置两种片料各一片；保存重开及修改配方后核对单位保持。", "按实际粘合数量确认组装，核对两个子件的消耗与原位余片，以及成品和历史按只显示。", "成品送货只扣成品，不再重复扣子件；已送货的组装记录不能直接撤销。正式操作与实物结果由管理员验收。"]
+APP_CHANGELOG = [*(f"v0.22.572：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

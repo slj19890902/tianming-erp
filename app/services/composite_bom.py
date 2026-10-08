@@ -455,12 +455,14 @@ def replace_product_bom(
     expected_version: int, user: User, change_reason: str | None = None,
     inventory_mode: str | None = None,
     material_mode: str | None = None, delivery_mode: str | None = None,
+    preserve_parent_unit: bool = False,
 ) -> dict[str, Any]:
     with atomic_bom(db):
         return _replace_product_bom(db, parent_product_id=parent_product_id,
             components=components, expected_version=expected_version, user=user,
             change_reason=change_reason, inventory_mode=inventory_mode,
-            material_mode=material_mode, delivery_mode=delivery_mode)
+            material_mode=material_mode, delivery_mode=delivery_mode,
+            preserve_parent_unit=preserve_parent_unit)
 
 
 def _replace_product_bom(
@@ -473,6 +475,7 @@ def _replace_product_bom(
     change_reason: str | None = None,
     inventory_mode: str | None = None,
     material_mode: str | None = None, delivery_mode: str | None = None,
+    preserve_parent_unit: bool = False,
 ) -> dict[str, Any]:
     """Atomically replace one parent BOM and advance the parent version."""
 
@@ -787,7 +790,10 @@ def _replace_product_bom(
     if hasattr(Product, "is_composite"):
         product_updates["is_composite"] = bool(normalized)
     if mode == "assembled":
-        product_updates.update(unit="套", is_virtual_composite_parent=False)
+        # The combined master transaction has already validated the selected
+        # physical unit. Later recipe edits must retain it and frozen orders.
+        unit = parent.unit if preserve_parent_unit or before["inventory_mode"] == "assembled" else "套"
+        product_updates.update(unit=unit, is_virtual_composite_parent=False)
     if mode == "separate":
         product_updates.update(is_virtual_composite_parent=True)
     if delivery_mode is not None:

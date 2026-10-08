@@ -87,3 +87,29 @@ def apply_label_overrides(
         field: str(overrides.get(field) or auto_fields.get(field) or "")
         for field in LABEL_OVERRIDE_FIELDS
     }
+
+
+def mold_count_facts(product) -> list[dict]:
+    """Only explicit component settings prove a mold's per-sheet die yield."""
+    from app.services.sheet_cutting_settings import normalize_settings
+    from app.services.sheet_cutting_contract import SheetCuttingContractError
+    try:
+        settings = normalize_settings(getattr(product, "sheet_cutting_settings", None))
+    except SheetCuttingContractError:
+        settings = None
+    if settings is None:
+        return [{"component_type": "whole", "mold_count": None, "display": "几模待核"}]
+    labels = {"whole": "", "cover": "盖", "base": "底"}
+    return [{"component_type": key, "mold_count": part["mold_count"],
+             "display": f"{labels[key]}{part['mold_count']}模"}
+            for key, part in settings.items() if key != "schema_version" and part["is_die_cut"]] or [
+                {"component_type": "whole", "mold_count": None, "display": "几模待核"}]
+
+
+def mold_count_projection(products) -> dict:
+    facts = [{"product_id": product.id, "product_code": str(product.product_code or ""), **fact}
+             for product in products for fact in mold_count_facts(product)]
+    counts = {fact["mold_count"] for fact in facts}
+    display = f"{next(iter(counts))}模" if len(counts) == 1 and None not in counts else "几模待核"
+    return {"label_mold_count": display, "label_mold_count_facts": facts,
+            "label_mold_count_consistent": bool(facts) and len(counts) == 1 and None not in counts}

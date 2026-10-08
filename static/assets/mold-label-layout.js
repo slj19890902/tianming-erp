@@ -31,6 +31,8 @@
   const V7_CATALOG_VERSION = "p1-118-v1";
   const V8_CATALOG_VERSION = "p1-119-v1";
   const V9_CATALOG_VERSION = "mold-edge-v1";
+  const V10_CATALOG_VERSION = "mold-count-v1";
+  const isEdgeCatalog = (value) => [V9_CATALOG_VERSION,V10_CATALOG_VERSION].includes(value);
   const V9_ELEMENT_LABELS = Object.freeze({inventory_code_top:"首行存货编码",rack_location:"模具货架位置",cutting_mode:"开料方式",inventory_code_side:"侧面存货编码",customer_name:"客户名称",custom_note:"侧面内容",mold_qr:"模具二维码",report_specification:"片料尺寸"});
   const V9_MIN_FONT_SIZE_MM = Object.freeze({inventory_code_top:3.2,rack_location:2.8,cutting_mode:2.8,inventory_code_side:2.8,customer_name:2.4,custom_note:2.2,report_specification:2.4});
   const V9_BANDS = Object.freeze({inventory_code_top:[.6,9.4],rack_location:[9.8,15.6],cutting_mode:[9.8,15.6],inventory_code_side:[16.6,22.9],customer_name:[23,27.8],custom_note:[27.9,31.6],report_specification:[33,39.4]});
@@ -148,7 +150,7 @@
     if (!Number.isInteger(version) || version < 0 || !layout || typeof layout !== "object") {
       throw new Error("40×80模具标签布局版本无效");
     }
-    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION, V3_CATALOG_VERSION, V4_CATALOG_VERSION, V5_CATALOG_VERSION, V6_CATALOG_VERSION, V7_CATALOG_VERSION, V8_CATALOG_VERSION, V9_CATALOG_VERSION].includes(layout.catalog_version)) {
+    if (![V1_CATALOG_VERSION, V2_CATALOG_VERSION, V3_CATALOG_VERSION, V4_CATALOG_VERSION, V5_CATALOG_VERSION, V6_CATALOG_VERSION, V7_CATALOG_VERSION, V8_CATALOG_VERSION, V9_CATALOG_VERSION, V10_CATALOG_VERSION].includes(layout.catalog_version)) {
       throw new Error("40×80模具标签元素目录不受支持");
     }
     if (
@@ -158,7 +160,7 @@
       throw new Error("40×80模具标签内容区尺寸无效");
     }
     const currentCatalog = [V4_CATALOG_VERSION, V5_CATALOG_VERSION].includes(layout.catalog_version);
-    const catalogLabels = layout.catalog_version === V9_CATALOG_VERSION ? V9_ELEMENT_LABELS : [V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(layout.catalog_version)
+    const catalogLabels = isEdgeCatalog(layout.catalog_version) ? {...V9_ELEMENT_LABELS, cutting_mode:layout.catalog_version === V10_CATALOG_VERSION ? "几模" : "开料方式"} : [V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(layout.catalog_version)
       ? V7_ELEMENT_LABELS
       : layout.catalog_version === V6_CATALOG_VERSION
       ? V6_ELEMENT_LABELS
@@ -201,7 +203,7 @@
         throw new Error(`${catalogLabels[element.id]}不能隐藏`);
       }
       if (element.kind === "qr") {
-        const currentQrSize = [V8_CATALOG_VERSION,V9_CATALOG_VERSION].includes(layout.catalog_version) ? 15 : 14.2;
+        const currentQrSize = [V8_CATALOG_VERSION,V9_CATALOG_VERSION,V10_CATALOG_VERSION].includes(layout.catalog_version) ? 15 : 14.2;
         if (width !== currentQrSize || height !== currentQrSize) {
           throw new Error(`模具二维码必须保持${currentQrSize}毫米正方形`);
         }
@@ -287,7 +289,7 @@
         throw new Error("片料尺寸必须独占底部5毫米段");
       }
     }
-    if (layout.catalog_version === V9_CATALOG_VERSION) {
+    if (isEdgeCatalog(layout.catalog_version)) {
       for (const element of layout.elements) {
         if (element.kind !== (element.id === "mold_qr" ? "qr" : "text")) throw new Error("标签元素类型无效");
         const band = V9_BANDS[element.id];
@@ -301,7 +303,7 @@
 
   function valueForElement(row, elementId, catalogVersion = V3_CATALOG_VERSION) {
     const product = Array.isArray(row?.products) ? row.products[0] : null;
-    if (catalogVersion === V9_CATALOG_VERSION) {
+    if (isEdgeCatalog(catalogVersion)) {
       const products=Array.isArray(row?.products)?row.products:[];
       const codes=[...new Set((row?.label_inventory_codes?.length ? row.label_inventory_codes : products.map(p=>p.product_code)).map(x=>String(x||"").trim()).filter(Boolean))];
       const code=codes.join(" / ") || String(row?.label_inventory_code||"待完善");
@@ -314,7 +316,7 @@
       }
       const values={inventory_code_top:code,inventory_code_side:code,customer_name:customer,
         rack_location:String(row?.label_rack_location||"待完善"),
-        cutting_mode:String(row?.label_display_cutting_mode ?? row?.label_cutting_mode ?? product?.default_cutting_mode ?? "待完善"),
+        cutting_mode:catalogVersion === V10_CATALOG_VERSION ? String(row?.label_mold_count || "几模待核") : String(row?.label_display_cutting_mode ?? row?.label_cutting_mode ?? product?.default_cutting_mode ?? "待完善"),
         custom_note:[...new Set(notes.map(x=>String(x).trim()).filter(Boolean))].join(" · "),
         report_specification:`片料尺寸：${sizes.replace(/\s*[×x*]\s*/g,"×").replace(/mm\s*$/i,"")}mm`};
       return values[elementId]||"";
@@ -460,7 +462,7 @@
       const identityClass = envelope.layout.catalog_version === V6_CATALOG_VERSION && element.id === "mold_identity"
         ? " mold-layout-identity-line"
         : "";
-      const minFontSize = envelope.layout.catalog_version === V9_CATALOG_VERSION ? V9_MIN_FONT_SIZE_MM[element.id] : envelope.layout.catalog_version === V8_CATALOG_VERSION
+      const minFontSize = isEdgeCatalog(envelope.layout.catalog_version) ? V9_MIN_FONT_SIZE_MM[element.id] : envelope.layout.catalog_version === V8_CATALOG_VERSION
         ? V8_MIN_FONT_SIZE_MM[element.id]
         : envelope.layout.catalog_version === V7_CATALOG_VERSION
         ? V7_MIN_FONT_SIZE_MM[element.id]
@@ -492,7 +494,7 @@
       }
       node.dataset.appliedFontMm = String(size);
       if (!overflowing()) continue;
-      if ([V8_CATALOG_VERSION,V9_CATALOG_VERSION].includes(node.closest('.mold-label-page')?.dataset.layoutCatalog)) {
+      if ([V8_CATALOG_VERSION,V9_CATALOG_VERSION,V10_CATALOG_VERSION].includes(node.closest('.mold-label-page')?.dataset.layoutCatalog)) {
         failures.push(node.dataset.layoutLabel || "文字");
         continue;
       }
@@ -603,7 +605,7 @@
     byId("moldLayoutStage").innerHTML = visibleElements.map(stageElementHtml).join("");
     const select = byId("moldLayoutElement");
     select.innerHTML = visibleElements.map((element) => (
-      `<option value="${escapeHtml(element.id)}">${escapeHtml(ELEMENT_LABELS[element.id])}</option>`
+      `<option value="${escapeHtml(element.id)}">${escapeHtml(element.id === "cutting_mode" && editorLayout.catalog_version === V10_CATALOG_VERSION ? "几模" : ELEMENT_LABELS[element.id])}</option>`
     )).join("");
     select.value = selectedElementId;
     const element = currentElement();
@@ -624,7 +626,7 @@
     const fixedLeft = editorLayout.catalog_version === V6_CATALOG_VERSION
       && ["mold_identity", "mold_chinese_short_name"].includes(element.id);
     byId("moldLayoutAlignField").hidden = !isText || fixedLeft;
-    byId("moldLayoutFont").max = editorLayout.catalog_version === V9_CATALOG_VERSION ? "9.2" : "8";
+    byId("moldLayoutFont").max = isEdgeCatalog(editorLayout.catalog_version) ? "9.2" : "8";
     byId("moldLayoutFont").value = isText ? element.font_size_mm : "";
     byId("moldLayoutAlign").value = isText ? element.text_align : "center";
     byId("moldLayoutVersion").textContent = `当前已发布 v${adminState.published.version}`;
@@ -632,7 +634,7 @@
   }
 
   function verticalBounds(element) {
-    if(editorLayout?.catalog_version===V9_CATALOG_VERSION){const b=V9_BANDS[element.id];return b?[b[0],b[1]-Number(element.height_mm)]:[17,17];}
+    if(isEdgeCatalog(editorLayout?.catalog_version)){const b=V9_BANDS[element.id];return b?[b[0],b[1]-Number(element.height_mm)]:[17,17];}
     if (![V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(editorLayout?.catalog_version)) {
       return [0, PAPER_HEIGHT_MM - Number(element.height_mm)];
     }
@@ -658,7 +660,7 @@
   }
 
   function heightLimit(element) {
-    if(editorLayout?.catalog_version===V9_CATALOG_VERSION){const b=V9_BANDS[element.id];return b?b[1]-Number(element.y_mm):15;}
+    if(isEdgeCatalog(editorLayout?.catalog_version)){const b=V9_BANDS[element.id];return b?b[1]-Number(element.y_mm):15;}
     if (![V7_CATALOG_VERSION, V8_CATALOG_VERSION].includes(editorLayout?.catalog_version)) {
       return PAPER_HEIGHT_MM - Number(element.y_mm);
     }
@@ -684,7 +686,7 @@
       }
       if (field === "width_mm" && element.kind === "text") element.width_mm = rounded(clipped(value, .5, widthLimit(element)));
       if (field === "height_mm" && element.kind === "text") element.height_mm = rounded(clipped(value, .5, heightLimit(element)));
-      if (field === "font_size_mm" && element.kind === "text") element.font_size_mm = rounded(clipped(value, MIN_TEXT_SIZE_MM, editorLayout.catalog_version === V9_CATALOG_VERSION ? 9.2 : 8));
+      if (field === "font_size_mm" && element.kind === "text") element.font_size_mm = rounded(clipped(value, MIN_TEXT_SIZE_MM, isEdgeCatalog(editorLayout.catalog_version) ? 9.2 : 8));
     }
     mutationAttempt = null;
     showStatus("布局有未保存修改。保存后只影响之后新登记的打印任务。");
@@ -785,7 +787,7 @@
     mutationAttempt = null;
     if (draftPreviewTimer !== null) global.clearTimeout(draftPreviewTimer);
     draftPreviewTimer = null;
-    const qrSize = [V8_CATALOG_VERSION,V9_CATALOG_VERSION].includes(editorLayout.catalog_version) ? 15 : 14.2;
+    const qrSize = [V8_CATALOG_VERSION,V9_CATALOG_VERSION,V10_CATALOG_VERSION].includes(editorLayout.catalog_version) ? 15 : 14.2;
     showStatus(`按住元素拖动，或输入毫米坐标、宽高和字号；二维码尺寸固定为${qrSize}mm。`)
     renderEditor();
     byId("moldLayoutEditor").hidden = false;

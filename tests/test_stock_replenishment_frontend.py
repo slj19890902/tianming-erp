@@ -42,7 +42,9 @@ def test_replenishment_save_and_print_paths_are_wired() -> None:
     assert "/api/requisition/stock-replenishment/orders/${data.id}/print" in INDEX
     assert "openStockReplenishmentPrint(printable)" in INDEX
     assert "补库单已保存，库存批次已生成" not in INDEX
-    assert "补库报料草稿已保存；到料确认后进入客户专用纸板备料" in INDEX
+    assert "stockReplenishmentSavedNotice" in INDEX
+    assert "查看待报料" in INDEX
+    assert "查看来料待入库" in INDEX
 
 
 def test_stock_policy_can_be_saved_from_a_replenishment_line() -> None:

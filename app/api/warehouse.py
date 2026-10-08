@@ -403,6 +403,8 @@ from app.services.mold_label_content import (
     LABEL_OVERRIDE_FIELDS,
     MoldLabelContentError,
     apply_label_overrides,
+    mold_count_facts,
+    mold_count_projection,
     canonical_label_overrides,
     normalize_label_override_text,
     parse_label_overrides,
@@ -19457,6 +19459,7 @@ def _mold_binding_dict(row: MoldTool, product: Product) -> dict:
             or (material.flute_type if material is not None else None)
         ),
         "production_process": product.production_process,
+        "mold_count_display": " / ".join(fact["display"] for fact in mold_count_facts(product)),
         "direction_note": product.report_notes,
     }
 
@@ -19480,6 +19483,7 @@ def _mold_live_binding_dict(row: MoldTool, product: Product) -> dict:
                 "material_composition",
                 "layer_count",
                 "flute_type",
+                "mold_count_display",
             )
         },
     }
@@ -20855,6 +20859,7 @@ def _mold_label_content_projection(row: MoldTool, products: list[Product]) -> di
     auto_fields = _mold_label_auto_fields(row, products)
     effective = apply_label_overrides(auto_fields, overrides)
     return {
+        **mold_count_projection(products),
         "label_overrides": overrides,
         "label_auto_fields": auto_fields,
         "label_display_identity": effective["display_identity"],

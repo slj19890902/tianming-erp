@@ -100,6 +100,11 @@ def previously_verified_area_features(db, *, floor_layout, previous_floor_layout
 
 
 def record_map_applications(db, *, floor_layout, actor, operation_key, request=None, previous_floor_layout=None, coordinate_adjustments=None, retired_location_ids=(), isolated_area_feature_id=None):
+    # Receipt staging uses existing functional locations, not ground-layout
+    # plans. Include its independent publication contract in this transaction.
+    from app.services.receipt_staging_map import carry_staging_during_map_publish
+    carry_staging_during_map_publish(db, source_floor=previous_floor_layout,
+        target_floor=floor_layout, actor=actor, operation_key=operation_key, request=request)
     plans = _published_floor_plans(db, floor_layout)
     previous = load_map_applications(db, [p.id for p in plans])
     changed = 0

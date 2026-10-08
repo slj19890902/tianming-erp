@@ -20221,7 +20221,9 @@
             const form = this.stockReplenishmentForm;
             try {
               const params = {};
-              if (policy.is_virtual_composite_parent) {
+              // The suggested number is already net of inventory/incoming.
+              // Only a real input edit is a new gross plan for the backend.
+              if (policy.is_virtual_composite_parent && Object.prototype.hasOwnProperty.call(this.stockPolicyDraftQuantities, String(policy.id || policy.policy_id))) {
                 const quantity = Number(this.stockPolicyDraftQuantity(policy));
                 if (!Number.isSafeInteger(quantity) || quantity < 1) throw new Error("本次补库套数须为正整数");
                 params.finished_quantity = quantity;

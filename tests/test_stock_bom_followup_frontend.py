@@ -160,3 +160,41 @@ def test_eight_steps_and_cutting_facts_fit_half_a4_in_isolated_chrome(tmp_path, 
     assert 'data-route-count="8"' in output
     assert 'data-final-disabled="false"' in output
     assert "每张产出16片" in output
+
+
+def test_default_bom_with_incoming_omits_manual_quantity_until_user_edits():
+    node(r'''const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const source=fs.readFileSync('static/index.html','utf8');
+const a=source.indexOf('          stockPolicyDraftQuantity(policy)'),b=source.indexOf('          async addCompatibleStockDraft(',a);
+const calls=[];
+const methods=vm.runInNewContext('({' + source.slice(a,b) + '})', {
+ createIdempotencyKey:()=> 'frozen-key',
+ axios:{get:async(url,options)=>{
+  calls.push(options.params);
+  // Target1800 / assembled360 / incoming720: the authoritative default
+  // uses gross1440 and returns net720. Explicit1800 returns net1080.
+  const gross=options.params.finished_quantity ?? 1440;
+  const net=Math.max(gross-720,0);
+  return {data:{draft_ready:true,is_virtual_composite_parent:true,replenishment_plan:{policy_id:10,finished_quantity:gross},items:net ? [{stock_policy_id:10,product_id:3771,quantity:Math.ceil(net*3/4)},{stock_policy_id:10,product_id:3783,quantity:net}] : []}};
+ }},console,
+});
+function state(){return {stockPolicyDraftQuantities:{},stockReplenishmentForm:{items:[]},modal:{type:'stockReplenishment'},beginLatestRequest:()=>({signal:{aborted:false}}),finishLatestRequest:()=>{},isCancelledRequest:()=>false,errorMessage:error=>error.message,showToast:()=>{},loadStockProducts:async()=>{},syncStockReplenishmentSupplier:()=>{},...methods};}
+(async()=>{
+ const policy={id:10,is_virtual_composite_parent:true,suggested_new_requisition_finished_quantity:720};
+ const untouched=state();
+ assert.equal(untouched.stockPolicyDraftQuantity(policy),720);
+ assert.equal(untouched.stockPolicyDraftQuantity({...policy,suggested_new_requisition_finished_quantity:600}),600);
+ assert.equal(Object.keys(untouched.stockPolicyDraftQuantities).length,0);
+ await untouched.addStockPolicyDraft(policy);
+ assert.equal(Object.prototype.hasOwnProperty.call(calls[0],'finished_quantity'),false);
+ assert.deepEqual(Array.from(untouched.stockReplenishmentForm.items,line=>line.quantity),[540,720]);
+ assert.equal(untouched.stockReplenishmentForm.replenishment_plans[0].finished_quantity,1440);
+ assert.equal(Object.keys(untouched.stockPolicyDraftQuantities).length,0);
+ const edited=state();edited.setStockPolicyDraftQuantity(policy,'1800');
+ await edited.addStockPolicyDraft(policy);
+ assert.equal(calls[1].finished_quantity,1800);
+ assert.deepEqual(Array.from(edited.stockReplenishmentForm.items,line=>line.quantity),[810,1080]);
+ const sameAsSuggested=state();sameAsSuggested.setStockPolicyDraftQuantity(policy,'720');
+ await sameAsSuggested.addStockPolicyDraft(policy);
+ assert.equal(calls[2].finished_quantity,720);
+})().catch(error=>{console.error(error);process.exitCode=1;});''')

@@ -20,15 +20,13 @@ from tests.test_semi_finished_order_reservation import b1_app, login, order_item
 def _ready_product(factory) -> None:
     with factory() as db:
         supplier = db.scalar(select(Supplier).where(Supplier.is_active.is_(True)))
-        material = Material(
-            code="A416D",
-            supplier_name=supplier.standard_name,
-            is_active=True,
-            layer_count=3,
-            flute_type="B",
-        )
-        db.add(material)
-        db.flush()
+        # b1_app supplies this priced material for its isolated stock fixture.
+        # Reuse that identity rather than violating the supplier/code unique key.
+        material = db.scalar(select(Material).where(
+            Material.code == "A416D",
+            Material.supplier_name == supplier.standard_name,
+        ))
+        assert material is not None and material.is_active
         for product_id in (1, 2):
             db.get(Product, product_id).material_id = material.id
         db.commit()

@@ -663,8 +663,13 @@ def test_dashboard_keeps_native_units_and_hides_unconfirmed_capacity_metrics(
     mapped = next(row for row in payload["locations"] if row["location_code"] == "A1-L01")
     assert mapped["map_position"]["version"] == 1
     assert mapped["map_position"]["z_index"] == 0
-    assert mapped["current_address_name"] == "三楼 右区A1·成品区·A1-1"
-    assert mapped["employee_location_name"] == "三楼 右区A1·成品区·A1-1"
+    # Current shared employee address uses the published area sequence.
+    # Do not restore the retired legacy slot label or expose the internal code.
+    assert mapped["current_address_name"] == "三楼 右区A1·成品区-01"
+    assert mapped["employee_location_name"] == "三楼 右区A1·成品区-01"
+    assert mapped["area_sequence"] == 1
+    assert mapped["current_address_code"] == mapped["location_code"]
+    assert mapped["employee_location_name"] != mapped["location_code"]
     assert mapped["pallets"][0]["items"][0]["customer_short_name"] == "思迈尔"
     assert [row["inventory_code"] for row in mapped["loose_items"]] == [
         "TM-FG-001-LOOSE"
@@ -834,14 +839,33 @@ def test_inventory_code_search_returns_all_real_and_unplaced_matches(
     assert payload["result_count"] == 3
     assert {row["position_status"] for row in payload["items"]} == {"mapped", "unplaced"}
     assert {row["location_code"] for row in payload["items"]} == {"A1-L01", "A1-PENDING"}
+    # A registered, unplaced location with nominal floor 3 is still unlocated.
+    # Keep its stable location identity; grouping must not fabricate a map point.
     assert payload["floor_summaries"] == [
         {
             "floor_code": "3F",
-            "lot_count": 3,
-            "quantities": {"finished:boxes": 140},
-            "location_count": 2,
-        }
+            "lot_count": 2,
+            "quantities": {"finished:boxes": 125},
+            "location_count": 1,
+        },
+        {
+            "floor_code": "UNLOCATED",
+            "lot_count": 1,
+            "quantities": {"finished:boxes": 15},
+            "location_count": 1,
+        },
     ]
+    assert sum(row["lot_count"] for row in payload["floor_summaries"]) == 3
+    assert sum(row["quantities"]["finished:boxes"] for row in payload["floor_summaries"]) == 140
+    assert sum(row["location_count"] for row in payload["floor_summaries"]) == 2
+    unplaced = next(row for row in payload["items"] if row["position_status"] == "unplaced")
+    assert unplaced["floor_code"] == "UNLOCATED"
+    assert unplaced["pending_relocation"] is True
+    assert unplaced["location_name"] == "待归位"
+    assert unplaced["map_position"] is None
+    assert unplaced["location_code"] == "A1-PENDING"
+    assert unplaced["location_id"] > 0
+    assert all(row["floor_code"] == "3F" for row in payload["items"] if row["position_status"] == "mapped")
     assert "不生成虚假地图点" in payload["notice"]
 
 

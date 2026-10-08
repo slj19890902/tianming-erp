@@ -32,6 +32,7 @@ from app.services.location_candidates import (
     load_warehouse_location_projection_contexts,
 )
 from app.services.warehouse_location_address import employee_location_name
+from app.services.mold_location import describe_mold_location
 
 
 _PLATE_FIELDS = (
@@ -1056,6 +1057,8 @@ def build_mold_detail_timeline(
                 "movement_id": movement.id,
                 "from_location": movement.from_location,
                 "to_location": movement.to_location,
+                "from_location_name": describe_mold_location(movement.from_location).get("prompt"),
+                "to_location_name": describe_mold_location(movement.to_location).get("prompt"),
                 "source": movement.source,
                 "note": movement.note if allowed_customer_ids is None else None,
                 "operator_id": movement.actor_id,

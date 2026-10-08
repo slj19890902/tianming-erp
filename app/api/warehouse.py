@@ -12070,6 +12070,7 @@ def _publish_twin_layout_draft_locked(
             db, floor_layout=load_warehouse_twin_floor(floor_code), actor=user,
             operation_key=payload.operation_key, request=request, previous_floor_layout=published_floor_before,
             coordinate_adjustments=coordinate_adjustments,
+            isolated_area_feature_id=isolated_area_feature_id,
         )
         legacy_name_update_count = int(
             getattr(published_policies, "legacy_name_update_count", 0)

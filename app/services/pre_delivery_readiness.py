@@ -199,6 +199,29 @@ def allocate_readiness(requested, selections, facts, used):
     return result
 
 
+def _refresh_bound_match_projection(db, batch, row):
+    """Refresh display fields with the original matcher, never rebind or persist."""
+    from app.services.tianhua_pre_delivery import (
+        GENERATABLE, STATUS_LABELS, RecognizedRow, preprocess_row,
+    )
+    if row.get("status") not in GENERATABLE or not row.get("order_item_id"):
+        return
+    fresh = preprocess_row(db, RecognizedRow(
+        row["row_no"], row.get("raw_text") or "", row.get("stock_code"),
+        row.get("image_qty"), row.get("image_order_no"),
+    ), batch.pre_delivery_date, batch.customer_id)
+    # A newly preferred candidate is not permission to change the saved choice.
+    if (fresh.get("order_item_id") != row["order_item_id"]
+            or fresh.get("product_id") != row.get("product_id")):
+        return
+    for key in ("status", "warning", "available_qty", "system_pending_qty"):
+        row[key] = fresh[key]
+    row["status_label"] = STATUS_LABELS.get(row["status"], row["status"])
+    # Workbook quantity/format issues are immutable source warnings.
+    issues = (row.get("source_payload") or {}).get("issues") or []
+    row["warning"] = "；".join(dict.fromkeys(filter(None, [row["warning"], *issues])))
+
+
 def refresh_excel_readiness(db, batch, payload, overrides=None):
     """Recompute existing uploads without persisting a diagnostic or selections."""
     from app.models.tianhua_pre_delivery import PreDeliverySourceAllocation
@@ -241,11 +264,35 @@ def refresh_excel_readiness(db, batch, payload, overrides=None):
         scoped_facts = {oid: facts[oid] for oid in allowed}
         diagnostic = allocate_readiness(requested, selections, scoped_facts, used)
         if change is not None or len(selections) > 1:
-            # Old bound-order locations cannot describe a new multi-order plan.
+            # Re-read positions only for the unchanged, scoped single binding.
+            # Alternative/multi-order choices still cannot inherit old positions.
             row["pick_locations"] = []
+            if (len(selections) == 1 and selections[0][0] in allowed
+                    and selections[0][0] == row.get("order_item_id")
+                    and diagnostic["finished_available"] > 0):
+                from app.api.deliveries import _inventory_sources_for_order_item
+                sources = _inventory_sources_for_order_item(
+                    db, order_item=db.get(OrderItem, selections[0][0]),
+                    planned_delivery_quantity=min(requested, diagnostic["finished_available"]),
+                    delivery_item_id=row.get("delivery_item_id"), dispatched=False,
+                )
+                row["pick_locations"] = [
+                    {"location_id": source.get("location_id"),
+                     "location_code": source.get("location_code"),
+                     "location_name": source.get("location_name"),
+                     "quantity": int(source.get("quantity_to_pick_stock") or 0),
+                     "source_type": source.get("source_type")}
+                    for source in sources
+                    if source.get("source_type") == "finished"
+                    and int(source.get("quantity_to_pick_stock") or 0) > 0
+                ]
         for candidate in candidates:
             candidate["_selected"] = any(oid == candidate["order_item_id"] for oid, _ in selections) if saved.get(row["item_id"]) else False
             candidate["_qty"] = next((q for oid, q in selections if oid == candidate["order_item_id"]), None)
+        # Only refresh the original single binding; preview allocations must
+        # not silently replace its match, quantities, warnings or selections.
+        if len(selections) == 1 and selections[0][0] == row.get("order_item_id"):
+            _refresh_bound_match_projection(db, batch, row)
         source_payload.update(candidates=candidates, shortage_diagnostic=diagnostic)
         if diagnostic["pending_review"]:
             status, label = "needs_review", "采购数量/订单分配待核对"

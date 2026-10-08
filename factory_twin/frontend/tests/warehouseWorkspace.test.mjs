@@ -38,8 +38,8 @@ test('map and elevation have separate close behavior and guarded target selectio
 function moveHarness(mutate,refresh=async()=>{}) {
   const state={drafts:[],key:'initial',busy:false,message:'',target:'9',source:{operation:'lot_transfer'}};
   let serial=0;
-  const deps={moveDrafts:state.drafts,moveBatchIdempotencyKey:state.key,moveBatchBusy:false,moveSubmitLock:{current:false},moveQuantity:'2',
-    setMoveDrafts:v=>{state.drafts=v;deps.moveDrafts=v},
+  const deps={productionMapContext:false,productionMoveUncertain:false,moveDrafts:state.drafts,moveBatchIdempotencyKey:state.key,moveBatchBusy:false,moveSubmitLock:{current:false},moveQuantity:'2',
+    setProductionMoveUncertain:()=>{},setMoveDrafts:v=>{state.drafts=v;deps.moveDrafts=v},
     setMoveBatchIdempotencyKey:v=>{state.key=v;deps.moveBatchIdempotencyKey=v},
     setMoveBatchBusy:v=>{state.busy=v;deps.moveBatchBusy=v},
     setMoveSource:v=>state.source=v,setMoveQuantity:()=>{},setMoveDraftTargetLocationId:v=>state.target=v,
@@ -99,7 +99,7 @@ test('warehouse parent header compiles using the shipped Vue compiler',()=>{
   const header=html.slice(html.indexOf('<header class="topbar">'),html.indexOf('<div class="layout">'));
   const context={console};vm.createContext(context);
   vm.runInContext(fs.readFileSync(new URL('../../../static/vendor/vue-3.5.40.global.prod.js',import.meta.url),'utf8'),context);
-  const render=context.Vue.compile(header);
+  const render=context.Vue.compile(header,{decodeEntities:raw=>raw});
   assert.equal(typeof render,'function');
   assert.match(header,/warehouse-account-menu/);assert.ok(!header.includes('warehouse-top-shortcuts'));
 });

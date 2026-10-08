@@ -2479,11 +2479,15 @@ def export_customer_statement_excel(
     for cell in sheet[total_row]:
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="F5F8F8")
-    for column, width in zip("ABCDEFGH", (13, 20, 20, 19, 32, 12, 14, 16)):
+    for column, width in zip("ABCDEFGH", (13, 22, 36, 24, 32, 12, 14, 16)):
         sheet.column_dimensions[column].width = width
     sheet.freeze_panes = "A5"
     sheet.auto_filter.ref = f"A4:H{max(4, sheet.max_row - 1)}"
     for row in range(5, sheet.max_row + 1):
+        for column in (2, 3, 4, 5):
+            sheet.cell(row, column).alignment = Alignment(wrap_text=True, vertical="center")
+        for column in (2, 3, 4):
+            sheet.cell(row, column).number_format = "@"
         sheet.cell(row, 7).number_format = "0.0000"
         sheet.cell(row, 8).number_format = "0.00"
     output = BytesIO()

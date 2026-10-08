@@ -91,7 +91,8 @@ def test_void_keeps_one_confirmation_and_no_reason_input() -> None:
         "voidSupplierOrder",
     ):
         body = _method_body(name)
-        assert body.count("confirm(") == 1, name
+        assert body.count("confirmOriginalBusinessAction(") == 1, name
+        assert "confirm(" not in body, name
         assert "prompt(" not in body, name
 
 

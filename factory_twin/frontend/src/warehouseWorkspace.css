@@ -125,7 +125,10 @@
  .warehouse-twin-shell .twin-stage.rack-focused .twin-map-pane { min-height:0; }
 }
 @media(max-width:880px) {
- .warehouse-twin-shell > .twin-toolbar { flex-wrap:wrap!important; }
+ .warehouse-twin-shell > .twin-toolbar,
+ .warehouse-twin-shell.embedded-shell > .twin-toolbar { flex-wrap:wrap!important; }
+ .warehouse-twin-shell .twin-floor-area-row,
+ .warehouse-twin-shell .twin-top-search { flex:1 1 100%; min-width:0; }
  #warehouse-twin-root .twin-workspace,
  #warehouse-twin-root .twin-workspace.context-open:not(.rack-focused),
  #warehouse-twin-root .twin-workspace.context-collapsed:has(> .twin-inspector > :not([hidden])) { display:grid!important; grid-template-columns:minmax(0,1fr)!important; grid-template-rows:minmax(0,1fr)!important; overflow:hidden; }

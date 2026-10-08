@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>天明包装ERP</title>
-    <link rel="icon" type="image/x-icon" href="/static/assets/logo.ico" />
+    <link rel="icon" type="image/png" href="/static/assets/tianming-brand-symbol.png" />
     <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260926-cost-column" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <script src="/static/ui/order-context.js?v=round-experience-d1b"></script>
@@ -2329,6 +2329,26 @@
       .order-detail-row td { padding: 0; background: #f7f7fa; }
       .order-detail-box { padding: 12px 16px 16px; }
       .warning-row { background: #fff7ed !important; }
+      body:has(.pre-delivery-table) { min-width:0; overflow:hidden; }
+      .modal-mask:has(.pre-delivery-table) { overflow:hidden; }
+      .modal-mask:has(.pre-delivery-table) > .modal { width:100%; max-width:100%; min-width:0; max-height:100%; display:flex; flex-direction:column; overflow:hidden; }
+      .modal-mask:has(.pre-delivery-table) .modal-head,
+      .modal-mask:has(.pre-delivery-table) .modal-foot { flex-shrink:0; }
+      .modal-mask:has(.pre-delivery-table) .modal-body { min-height:0; overflow-y:auto; overflow-x:hidden; }
+      .modal .pre-delivery-table-wrap { max-height:none; overflow-x:auto; overflow-y:hidden; max-width:100%; }
+      .modal .pre-delivery-table { width:2496px; min-width:2496px; table-layout:fixed; }
+      .modal .pre-delivery-table th { white-space:nowrap; overflow-wrap:normal; }
+      .modal .pre-delivery-table td { overflow-wrap:normal; vertical-align:top; }
+      .modal .pre-delivery-table td:nth-child(3),
+      .modal .pre-delivery-table td:nth-child(4),
+      .modal .pre-delivery-table td:nth-child(5),
+      .modal .pre-delivery-table td:nth-child(10),
+      .modal .pre-delivery-table td:nth-child(12),
+      .modal .pre-delivery-table td:nth-child(13),
+      .modal .pre-delivery-table td:nth-child(15) { white-space:nowrap; }
+      .modal .pre-delivery-table .compact-input { width:100%; min-width:0 !important; }
+      .modal .pre-delivery-table td.toolbar-group { display:table-cell; }
+      .modal .pre-delivery-table td.toolbar-group .btn { margin:0 0 6px; }
       .tianhua-row-ok { background: #ecfdf3 !important; }
       .tianhua-row-duplicate_warning { background: #fef9c3 !important; }
       .tianhua-row-qty_mismatch { background: #ffedd5 !important; }
@@ -3143,18 +3163,26 @@
       .delivery-row-disabled { opacity:.65; }
       .delivery-selection-quantity { width:96px; }
       .delivery-unified-table td { vertical-align:middle; }
+      .original-business-confirm { width:min(440px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); padding:0; border:1px solid #cbd5e1; border-radius:12px; color:#142438; box-shadow:0 18px 55px #152b4540; }
+      .original-business-confirm::backdrop { background:#14243866; }
+      .original-business-confirm section { padding:20px; }
+      .original-business-confirm header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+      .original-business-confirm h2 { margin:0; font-size:18px; }
+      .original-business-confirm p { margin:18px 0; line-height:1.65; white-space:pre-wrap; overflow-wrap:anywhere; }
+      .original-business-confirm footer { display:flex; justify-content:flex-end; gap:10px; }
 </style>
     <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260928">
     <link rel="stylesheet" href="/static/product-editor-compact.css?v=20260913-bomui002" />
     <link rel="stylesheet" href="/static/ui/workspace.css?v=c63fcfd14771" />
     <link rel="stylesheet" href="/static/ui/order-reference.css?v=423" />
     <script src="/static/ui/order-reference.js?v=423"></script>
+    <script src="/static/js/frontend-shell-bridge.js"></script>
   </head>
   <body>
     <div id="app" v-cloak>
       <div v-if="!user" class="login-shell">
         <form class="login-card" @submit.prevent="login">
-          <h1><img src="/static/assets/logo.png" alt="天明包装ERP" style="width:40px;height:40px;vertical-align:middle;margin-right:8px;object-fit:contain" />天明包装ERP</h1>
+          <h1><img src="/static/assets/tianming-brand-symbol.png" alt="天明包装ERP" style="width:40px;height:40px;vertical-align:middle;margin-right:8px;object-fit:contain" />天明包装ERP</h1>
           <p>订单、来料、送货、回单、对账、开票与应付支出</p>
           <div class="field"><label for="erp-login-username">用户名</label><input id="erp-login-username" class="input" v-model.trim="loginForm.username" autocomplete="username" :aria-describedby="loginError ? 'erp-login-error' : null" :aria-invalid="!!loginError" /></div>
           <div class="field"><label for="erp-login-password">密码</label><input id="erp-login-password" class="input" v-model="loginForm.password" type="password" autocomplete="current-password" :aria-describedby="loginError ? 'erp-login-error' : null" :aria-invalid="!!loginError" /></div>
@@ -3167,7 +3195,7 @@
 
       <div v-else :class="['app-shell', 'erp-enterprise-ui', `role-${user.role}`, {'ui-large': isLargeUi, 'ui-standard': !isLargeUi, 'role-no-sales-amounts': !canViewSalesAmounts, 'role-no-costs': !canViewCosts}]">
         <header class="topbar">
-          <div class="brand"><img class="brand-logo" src="/static/assets/logo.png" alt="天明包装ERP" /><span>天明包装ERP</span></div>
+          <div class="brand"><img class="brand-logo" src="/static/assets/tianming-brand-symbol.png" alt="天明包装ERP" /><span>天明包装ERP</span></div>
           <div class="top-actions">
             <details v-if="activePage==='warehouse' && warehouseView==='map'" class="warehouse-top-overview"><summary>{{ warehouseTwinFloor }} 地图概况<span v-if="warehouseTwinMetrics.unlocated_finished || warehouseTwinMetrics.column_conflicts" class="status warning">需处理 {{ warehouseTwinMetrics.unlocated_finished + warehouseTwinMetrics.column_conflicts }}</span></summary><div class="warehouse-top-metrics" aria-label="仓库当前楼层状态">
               <span><b>{{ warehouseTwinMetrics.active_lots }}</b>有效批次</span>
@@ -3271,12 +3299,11 @@
             <section v-if="incomingNextStepGuide.visible && activePage === 'incoming' && (incomingWorkspace || 'board') === 'board'" class="order-next-step-guide incoming-next-step-guide" aria-live="polite">
               <div class="order-next-step-copy">
                 <strong>{{ incomingNextStepGuideTitle }}</strong>
-                <span v-if="incomingNextStepGuide.pendingBalance">已收部分已自动形成成品并可送货，未到齐的继续留在待入库。</span>
-                <span v-else>纸板已实收并自动形成成品，下一步直接去送货。</span>
+                <span>{{ incomingNextStepGuideMessage }}</span>
               </div>
               <div class="order-next-step-actions">
-                <button v-if="canDelivery && pageAllowed('deliveries')" type="button" class="btn primary" @click="goToDeliveryFromIncomingGuide">下一步：去送货</button>
-                <span v-else class="muted">请交给有送货权限的账号继续</span>
+                <button v-if="incomingNextStepGuide.hasFinished !== false && canDelivery && pageAllowed('deliveries')" type="button" class="btn primary" @click="goToDeliveryFromIncomingGuide">下一步：去送货</button>
+                <span v-else-if="incomingNextStepGuide.hasFinished !== false" class="muted">请交给有送货权限的账号继续</span>
                 <button type="button" class="btn" @click="continueIncomingFromGuide">继续收料</button>
                 <button type="button" class="btn" @click="dismissIncomingNextStepGuide">关闭</button>
               </div>
@@ -4845,7 +4872,7 @@
                           <button v-if="hasPermission('incoming.execute') && row.purpose_status==='legacy_unset' && row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">短收结单</button>
                         </details>
                       </template>
-                      <template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" @click="revertIncoming(row)">撤销</button></div><info-note v-if="!canPrintIncomingProductLabel(row)" label="标签说明">{{ incomingProductLabelBlockMessage(row) }}</info-note></template>
+                      <template v-else><div class="incoming-history-action-line"><span :class="['status',row.receipt_status==='reversed'?'muted':row.variance_type==='matched'?'green':'orange']">{{ row.receipt_status==='reversed' ? '已撤销' : incomingVarianceLabel(row) }}</span><button v-if="canAdmin && row.receipt_status==='posted'" class="btn small danger" :disabled="incomingRevertBusy" @click="revertIncoming(row)">撤销</button></div><info-note v-if="!canPrintIncomingProductLabel(row)" label="标签说明">{{ incomingProductLabelBlockMessage(row) }}</info-note></template>
                     </td>
                   </tr></tbody>
                 </table>
@@ -9355,6 +9382,10 @@
                 </div>
                 <div class="delivery-flow-message">{{ deliveryGuideMessage }}</div>
               </div>
+              <div v-if="deliveryForm.pre_delivery_batch && deliveryForm.editing_status==='pending'" class="toolbar-group" style="margin-bottom:10px">
+                <button class="btn" :disabled="loading || deliveryFormIsDirty()" @click="openSavedPreDeliveryBatch">返回预送货核对</button>
+                <span v-if="deliveryFormIsDirty()" class="muted">请先保存或取消当前送货单修改，再返回原预送货批次。</span>
+              </div>
               <div class="form-grid delivery-header-grid">
                 <div :class="['field',{'delivery-guide-target':deliveryGuideStage === 'customer'}]"><label>客户</label><search-select v-model="deliveryForm.customer_id" :options="deliveryCustomerOptions" label-key="_delivery_label" value-key="id" placeholder="输入客户名称、缩写或拼音首字母" :disabled="!!deliveryForm.editingId || deliveryCandidateLoading" @change="onDeliveryCustomerChange"></search-select><div v-if="!deliveryForm.editingId && deliveryCandidateLoading" class="muted">正在加载可送货客户…</div><div v-else-if="!deliveryForm.editingId && deliveryCandidateError" class="status orange" style="white-space:normal">客户候选加载失败：{{ deliveryCandidateError }} <button class="btn small" type="button" @click="loadDeliveryCustomerOptions">重试</button></div><div v-else-if="!deliveryForm.editingId && !deliveryCustomerOptions.length" class="muted">当前没有待送订单或可送成品库存</div></div>
                 <div class="field"><label>业务类型</label><label v-if="!deliveryForm.editingId" class="delivery-customer-source-option"><input type="checkbox" v-model="deliveryForm.historical_backfill" @change="onDeliveryHistoricalBackfillChange" />补录历史送货</label><span v-else :class="['status',deliveryForm.historical_backfill?'blue':'green']">{{ deliveryForm.historical_backfill ? '历史补录' : '普通送货' }}</span><div class="muted">普通送货自动使用服务器当天，不增加输入。</div></div>
@@ -9480,8 +9511,9 @@
                   <button class="btn small" :disabled="!tianhuaSelectedCount()" @click="selectTianhuaRows('none')">取消全选</button>
                 </div>
               </div>
-              <div class="table-wrap">
-                <table>
+              <div class="table-wrap pre-delivery-table-wrap" tabindex="0" aria-label="预送货明细，可横向滚动查看全部17列">
+                <table class="pre-delivery-table">
+                  <colgroup><col style="width:64px" /><col style="width:88px" /><col style="width:142px" /><col style="width:84px" /><col style="width:110px" /><col style="width:112px" /><col style="width:268px" /><col style="width:160px" /><col style="width:244px" /><col style="width:76px" /><col style="width:210px" /><col style="width:116px" /><col style="width:116px" /><col style="width:144px" /><col style="width:168px" /><col style="width:230px" /><col style="width:164px" /></colgroup>
                   <thead><tr><th><input type="checkbox" :checked="tianhuaAllGeneratableSelected()" :disabled="!tianhuaGeneratableCount()" title="全选或取消当前可生成行" @change="toggleAllTianhuaRows($event.target.checked)" /> 勾选</th><th>状态</th><th>存货编码</th><th>预送数量</th><th>系统未送数量</th><th>建议送货数量</th><th>备货结论 / 位置</th><th>产品名称</th><th>订单号</th><th>候选数</th><th>匹配说明</th><th>手机拿货状态</th><th>实际拿货数量</th><th>拿货备注</th><th>拿货时间</th><th>风险提示</th><th>操作</th></tr></thead>
                   <tbody>
                     <tr v-for="row in tianhuaPreimport.items" :key="row.row_no" :class="'tianhua-row-'+row.status">
@@ -10192,6 +10224,13 @@
           </div>
         </div>
       </div>
+      <dialog v-if="originalBusinessConfirmation.visible" ref="originalBusinessConfirmation" class="original-business-confirm" aria-modal="true" aria-labelledby="originalBusinessConfirmationTitle" aria-describedby="originalBusinessConfirmationMessage" @cancel.prevent="finishOriginalBusinessConfirmation(false)" @close="finishOriginalBusinessConfirmation(false)" @click.self="finishOriginalBusinessConfirmation(false)">
+        <section>
+          <header><h2 id="originalBusinessConfirmationTitle">{{ originalBusinessConfirmation.title }}</h2><button type="button" class="btn small" aria-label="关闭确认窗口" @click="finishOriginalBusinessConfirmation(false)">关闭</button></header>
+          <p id="originalBusinessConfirmationMessage">{{ originalBusinessConfirmation.message }}</p>
+          <footer><button type="button" class="btn" autofocus @click="finishOriginalBusinessConfirmation(false)">取消</button><button type="button" class="btn danger" @click="finishOriginalBusinessConfirmation(true)">{{ originalBusinessConfirmation.confirmLabel }}</button></footer>
+        </section>
+      </dialog>
       <div v-if="toast.message" :class="['toast', {error: toast.error}]">{{ toast.message }}</div>
     </div>
 
@@ -10593,6 +10632,8 @@
             orderHistoryOpening:null,
             requisitionNextStepGuide: {visible:false, documentNo:"", count:0, source:""},
             incomingNextStepGuide: {visible:false, count:0, pendingBalance:false},
+            originalBusinessConfirmation: {visible:false,title:"",message:"",confirmLabel:""},
+            incomingRevertBusy:false,
             productionNextStepGuide: {visible:false, mode:"", count:0, locations:""},
             pageCacheUpdatedAt: {},
             warehouseFrameUrl: "", warehouseFrameRevision: 0, warehouseTwinFloor: "3F", warehouseTwinFloors: [{code:"1F",label:"生产车间"},{code:"3F",label:"成品仓库"},{code:"4F",label:"成品仓库"}],
@@ -11049,7 +11090,15 @@
           },
           incomingNextStepGuideTitle() {
             const count = Number(this.incomingNextStepGuide?.count || 0);
-            return count > 1 ? `${count} 条订单来料已实收` : "订单来料已实收";
+            const label = this.incomingNextStepGuide?.hasFinished === false ? "来料" : "订单来料";
+            return count > 1 ? `${count} 条${label}已实收` : `${label}已实收`;
+          },
+          incomingNextStepGuideMessage() {
+            const guide = this.incomingNextStepGuide || {};
+            const message = guide.hasFinished === false
+              ? (guide.hasReserve ? "片料已按所选用途入库备库，本次未形成成品。" : "本次实收已记录，请在历史入库中核对用途分配。")
+              : (guide.hasReserve ? "订单用途已形成成品并可送货，备库片料已进入对应位置。" : "已收部分已自动形成成品并可送货。");
+            return message + (guide.pendingBalance ? "未到齐的继续留在待入库。" : "");
           },
           productionNextStepGuideTitle() {
             const mode = String(this.productionNextStepGuide?.mode || "");
@@ -12295,6 +12344,7 @@
         },
         async mounted() {
           window.erpAuthRequired = () => {
+            this.finishOriginalBusinessConfirmation(false);
             window.TmDesktopDeliveryMargin?.destroy?.();
             this.authGeneration += 1;
             this.clearFinanceManualMutationSessionState();
@@ -12318,6 +12368,11 @@
           // ESC 关闭弹层（含防呆检查）
           document.addEventListener("keydown", (e) => {
             if (e.key !== "Escape") return;
+            if (this.originalBusinessConfirmation.visible) {
+              e.preventDefault();
+              this.finishOriginalBusinessConfirmation(false);
+              return;
+            }
             if (this.pdfWarehouseLocator.visible) {
               this.closePdfWarehouseLocator();
               return;
@@ -12330,6 +12385,7 @@
           window.addEventListener("message", this.handleWarehouseFrameMessage);
         },
         beforeUnmount() {
+          this.finishOriginalBusinessConfirmation(false);
           window.TmDesktopDeliveryMargin?.destroy?.();
           window.clearInterval(this.emailQueueTimer);
           window.removeEventListener("popstate", this.handlePdfWarehousePopState);
@@ -16021,6 +16077,7 @@
             }
           },
           async logout() {
+            this.finishOriginalBusinessConfirmation(false);
             window.TmDesktopDeliveryMargin?.destroy?.();
             this.authGeneration += 1;
             this.clearFinanceManualMutationSessionState();
@@ -16530,11 +16587,13 @@
             await this.go("incoming");
             return true;
           },
-          showIncomingNextStepGuide({count=1,pendingBalance=false}={}) {
+          showIncomingNextStepGuide({count=1,pendingBalance=false,receipts=[]}={}) {
             this.incomingNextStepGuide = {
               visible:true,
               count:Math.max(1,Number(count || 1)),
               pendingBalance:!!pendingBalance,
+              hasFinished:!receipts.length || receipts.some(result => !result?.purpose_allocation || Number(result.purpose_allocation.theoretical_finished_delta || 0)>0),
+              hasReserve:receipts.some(result => Number(result?.purpose_allocation?.reserve_sheet_delta || 0)>0),
             };
           },
           dismissIncomingNextStepGuide() {
@@ -16545,6 +16604,7 @@
             this.incomingTab = "pending";
           },
           async goToDeliveryFromIncomingGuide() {
+            if (this.incomingNextStepGuide?.hasFinished === false) return false;
             if (!this.canDelivery || !this.pageAllowed("deliveries")) {
               this.showToast("当前账号没有送货权限", true);
               return false;
@@ -19724,10 +19784,11 @@
           },
           async voidReportedItem(row) {
             if (!row?.can_void_item || row.source_type !== "supplier_order") return false;
+            row = {...row};
             const key = String(row.stable_id || "");
             const existing = this.reportedItemVoidAttempt(row);
             if (existing?.saving) return false;
-            if (!existing && !confirm(`确认撤销本明细？\n\n请先联系供应商。系统不会自动通知供应商。\n采购单：${row.document_number || '-'}\n尺寸：${row.report_length_mm || '-'} × ${row.report_width_mm || '-'} mm\n材质：${row.material_code || '-'} / ${row.flute_type || '-'}\n数量：${row.requisition_qty || 0} ${row.unit || '张'}\n\n只撤销这一行，不删除其它报料、收料、库存、生产或审计历史。`)) return false;
+            if (!existing && !await this.confirmOriginalBusinessAction(`确认撤销本明细？\n\n请先联系供应商。系统不会自动通知供应商。\n采购单：${row.document_number || '-'}\n尺寸：${row.report_length_mm || '-'} × ${row.report_width_mm || '-'} mm\n材质：${row.material_code || '-'} / ${row.flute_type || '-'}\n数量：${row.requisition_qty || 0} ${row.unit || '张'}\n\n只撤销这一行，不删除其它报料、收料、库存、生产或审计历史。`,{title:"撤销本明细",confirmLabel:"确认撤销"})) return false;
             const attempt = existing || {
               stableId:key,itemId:Number(row.item_id),documentId:Number(row.document_id),version:Number(row.version),
               idempotencyKey:`reported-item-void-${createIdempotencyKey()}`,row:{...row},saving:false,uncertain:false,committed:false,
@@ -19744,7 +19805,11 @@
               this.reportedItemVoidAttempts = {...this.reportedItemVoidAttempts,[key]:{...attempt,saving:true,uncertain:false,committed:true}};
               const selections = {...this.reportedItemSelections}; delete selections[key]; this.reportedItemSelections = selections;
               if (this.reportedItemDetail?.stable_id === key) this.reportedItemDetail = {...this.reportedItemDetail,status:"voided",can_void_item:false,version:attempt.version+1};
-              const refreshed = await this.loadReportedDocuments();
+              const refreshResults = await Promise.allSettled([
+                this.loadReportedDocuments(),
+                this.loadRequisitionPendingPage({clearSelection:false}),
+              ]);
+              const refreshed = refreshResults.every(result => result.status === "fulfilled" && result.value !== false);
               if (!refreshed) {
                 this.showToast("本明细已经撤销，但列表刷新失败。请勿重复提交，点击刷新核对。",true);
                 return true;
@@ -22019,9 +22084,18 @@
             const serverProjection = selected === "finished"
               ? row.finished_disposition_expected_finished_output_qty
               : row.semi_finished_reserve_expected_finished_output_qty;
-            let finishedOutput = Number.isFinite(Number(serverProjection)) && serverProjection !== null && serverProjection !== ""
-              ? Number(serverProjection)
-              : null;
+            const serverOrderSheets = selected === "finished"
+              ? row.finished_disposition_expected_order_purpose_sheet_qty
+              : row.semi_finished_reserve_expected_order_purpose_sheet_qty;
+            // A server result is valid only for the order-purpose quantity it projected.
+            // Do not infer piece conversion from a different receipt quantity.
+            let finishedOutput = orderSheets === 0 ? 0 : (
+              serverOrderSheets !== null && serverOrderSheets !== undefined
+              && Number(serverOrderSheets) === orderSheets
+              && Number.isFinite(Number(serverProjection)) && serverProjection !== null && serverProjection !== ""
+                ? Number(serverProjection)
+                : null
+            );
             if (finishedOutput === null) {
               const baseFinished = Number(row.expected_finished_output_qty || 0);
               const baseSheets = Number(row.expected_order_purpose_sheet_qty || 0);
@@ -22308,11 +22382,15 @@
             const reserveNeeded=Number(projection.reserveSheets || 0)>0;
             if (finishedNeeded && row?.finished_location_ready === false) return String(row?.finished_location_issue || row?.purpose_issue || "成品入库位置尚未准备好，请先发布可用库位");
             if (reserveNeeded && row?.reserve_location_ready === false) return String(row?.reserve_location_issue || row?.purpose_issue || "片料备库位置尚未准备好，请先发布可用库位");
+            const unavailableDestinationIsUnused =
+              (!finishedNeeded && row?.finished_location_ready === false)
+              || (!reserveNeeded && row?.reserve_location_ready === false);
             if (
               row?.receipt_execution_ready === false
-              && row?.reserve_location_ready === false
-              && !reserveNeeded
-              && row?.finished_location_ready !== false
+              && unavailableDestinationIsUnused
+              && (!finishedNeeded || row?.finished_location_ready !== false)
+              && (!reserveNeeded || row?.reserve_location_ready !== false)
+              && row?.receipt_location_ready !== false
             ) return "";
             if (row?.receipt_execution_ready !== false && row?.receipt_location_ready !== false && row?.finished_location_ready !== false) return "";
             const purposeIssue=String(row?.purpose_issue || "").trim();
@@ -22369,6 +22447,7 @@
               }
               preparation={saving:true,committed:false,preparing:true};
               this.incomingBatchReceiveAttempt=preparation;
+              preparation=this.incomingBatchReceiveAttempt;
               const quantitySnapshot=new Map(selectedRows.map(row => [String(row.item_id),Number(row.incoming_quantity)]));
               for (const row of selectedRows) {
                 const label=String(row.product_code || row.product_name || `第${row.item_id}条`);
@@ -22449,6 +22528,7 @@
               if (successfulOrderItemIds.size) {
                 this.showIncomingNextStepGuide({
                   count:successfulOrderItemIds.size,
+                  receipts:successfulResults.filter(result => successfulOrderItemIds.has(String(result.item_id))).map(result => result.item),
                   pendingBalance:successfulResults.some(result =>
                     successfulOrderItemIds.has(String(result.item_id))
                     && result.item?.material_status === "pending"
@@ -22511,9 +22591,11 @@
               this.showToast(executionIssue,true);
               return;
             }
-            const preparation=previousAttempt || {saving:true,committed:false,preparing:true};
+            let preparation=previousAttempt || {saving:true,committed:false,preparing:true};
             preparation.saving=true;
             this.incomingReceiveAttempts[attemptKey]=preparation;
+            // Keep the same Vue proxy for identity checks after async readback.
+            preparation=this.incomingReceiveAttempts[attemptKey];
             let nextPayload;
             try {
               await this.ensureAutomaticPurchaseReceiptFact(row);
@@ -22556,6 +22638,7 @@
               if (row.source_type !== "stock_replenishment") {
                 this.showIncomingNextStepGuide({
                   count:1,
+                  receipts:[data],
                   pendingBalance:data.material_status === "pending",
                 });
               }
@@ -22597,10 +22680,46 @@
               this.showToast("已按当前实收数量完成短收结单");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
-          async revertIncoming(row) {
-            if (!confirm("确认撤销本次纸板收料并回到已报料状态吗？系统会自动记录操作人、时间和前后状态。")) return;
+          async confirmOriginalBusinessAction(message, options) {
+            if (this._originalBusinessConfirmationPending || !this.user?.id) return false;
+            options=options || {};
+            let resolveAnswer;
+            const answer=new Promise(resolve => { resolveAnswer=resolve; });
+            const pending={resolve:resolveAnswer,authGeneration:this.authGeneration,userId:this.user.id,previousFocus:document.activeElement};
+            this._originalBusinessConfirmationPending=pending;
+            this.originalBusinessConfirmation={visible:true,title:String(options.title || "确认操作"),message:String(message || ""),confirmLabel:String(options.confirmLabel || "确认")};
             try {
-              const url=row.receipt_item_id ? `/api/incoming/receipt-items/${row.receipt_item_id}/revert` : `/api/incoming/revert/${row.item_id}`;
+              await this.$nextTick();
+              if (this._originalBusinessConfirmationPending !== pending) return answer;
+              const dialog=this.$refs.originalBusinessConfirmation;
+              if (!dialog || typeof dialog.showModal !== "function") throw new Error("confirmation unavailable");
+              dialog.showModal();
+            } catch (_error) {
+              this.finishOriginalBusinessConfirmation(false);
+              this.showToast("确认窗口无法打开，请刷新页面后重试",true);
+            }
+            return answer;
+          },
+          finishOriginalBusinessConfirmation(confirmed) {
+            const pending=this._originalBusinessConfirmationPending;
+            if (!pending) return;
+            this._originalBusinessConfirmationPending=null;
+            const accepted=confirmed === true && this.originalBusinessConfirmation.visible && this.authGeneration === pending.authGeneration && this.user?.id === pending.userId;
+            this.originalBusinessConfirmation={visible:false,title:"",message:"",confirmLabel:""};
+            const dialog=this.$refs.originalBusinessConfirmation;
+            if (dialog?.open) dialog.close();
+            if (pending.previousFocus?.isConnected) pending.previousFocus.focus({preventScroll:true});
+            pending.resolve(accepted);
+          },
+          async revertIncoming(row) {
+            if (!this.canAdmin || this.incomingRevertBusy) return false;
+            const receiptItemId=row?.receipt_item_id;
+            const itemId=row?.item_id;
+            if (!receiptItemId && !itemId) return false;
+            this.incomingRevertBusy=true;
+            try {
+              if (!await this.confirmOriginalBusinessAction("确认撤销本次纸板收料并回到已报料状态吗？系统会自动记录操作人、时间和前后状态。",{title:"撤销本次收料",confirmLabel:"确认撤销"})) return false;
+              const url=receiptItemId ? `/api/incoming/receipt-items/${receiptItemId}/revert` : `/api/incoming/revert/${itemId}`;
               row._revert_idempotency_key=row._revert_idempotency_key || createIdempotencyKey();
               await axios.put(url,{idempotency_key:row._revert_idempotency_key});
               const pendingRefresh=this.loadIncomingPendingPage({
@@ -22615,7 +22734,9 @@
                 await Promise.all([pendingRefresh, this.loadKpi()]);
               }
               this.showToast("已撤回来料入库");
-            } catch(error) { this.showToast(this.errorMessage(error),true); }
+              return true;
+            } catch(error) { this.showToast(this.errorMessage(error),true); return false; }
+            finally { this.incomingRevertBusy=false; }
           },
           async openSelectedIncomingProductionCards() {
             return await this.openSelectedIncomingProductLabels();
@@ -30704,13 +30825,13 @@
               this.showToast("补库报料单不存在，无法撤销", true);
               return false;
             }
-            if (!confirm("确认撤销尚未收货的补库报料单 "+documentNumber+"？")) return false;
             this.stockReplenishmentVoidState = {
               ...this.stockReplenishmentVoidState,
               orderId,
               documentNumber,
             };
             try {
+              if (!await this.confirmOriginalBusinessAction("确认撤销尚未收货的补库报料单 "+documentNumber+"？",{title:"撤销补库报料",confirmLabel:"确认撤销"})) return false;
               let result;
               try {
                 const response = await axios.put("/api/requisition/stock-replenishment/orders/"+orderId+"/void");
@@ -30754,11 +30875,12 @@
             }
           },
           async voidReportedCompositeRequisition(row) {
+            if (!this.canAdmin || this.requisitionVoidActionBlocked?.()) return false;
             const targetId = Number(row?.document_id || row?.id || 0);
             const orderItemId = Number(row?.order_item_id || 0);
             const documentNumber = String(row?.document_number || `#${targetId}`);
             const targetLabel = orderItemId ? `${row.composite_parent_product_code || '组合父件'} 整组` : `组合 BOM 报料单 ${documentNumber}`;
-            if (!targetId || !confirm(`确认作废${targetLabel}？对应父件和全部子件将自动回到待报料。`)) return false;
+            if (!targetId || !await this.confirmOriginalBusinessAction(`确认作废${targetLabel}？对应父件和全部子件将自动回到待报料。`,{title:"作废组合报料",confirmLabel:"确认作废"})) return false;
             return await this.executeRequisitionVoidAction({
               action:"void_composite_batch",
               sourceType:"composite_bom_requisition",
@@ -30777,10 +30899,11 @@
             });
           },
           async voidReportedCompositeLine(row, line) {
+            if (!this.canAdmin || this.requisitionVoidActionBlocked?.()) return false;
             const label = `${line.component_label || "组件"} ${line.product_code || line.product_name || ""}`.trim();
             const targetId = Number(line?.id || 0);
             const documentNumber = String(row?.document_number || `#${targetId}`);
-            if (!targetId || !confirm(`确认只撤销 ${label}？同一报料单里的其他明细不受影响。`)) return false;
+            if (!targetId || !await this.confirmOriginalBusinessAction(`确认只撤销 ${label}？同一报料单里的其他明细不受影响。`,{title:"撤销报料明细",confirmLabel:"确认撤销"})) return false;
             return await this.executeRequisitionVoidAction({
               action:"void_composite_line",
               sourceType:"composite_bom_requisition_item",
@@ -30881,10 +31004,10 @@
             setTimeout(() => { w.print(); w.close(); }, 300);
           },
           async voidSupplierOrder(so) {
-            if (!this.canAdmin) return false;
+            if (!this.canAdmin || this.requisitionVoidActionBlocked?.()) return false;
             const targetId = Number(so?.id || 0);
             const documentNumber = String(so?.order_number || `#${targetId}`);
-            if (!targetId || !confirm(`确定作废报料单 ${documentNumber}？关联的订单明细将恢复为待报料。`)) return false;
+            if (!targetId || !await this.confirmOriginalBusinessAction(`确定作废报料单 ${documentNumber}？关联的订单明细将恢复为待报料。`,{title:"作废报料单",confirmLabel:"确认作废"})) return false;
             return await this.executeRequisitionVoidAction({
               action:"void_supplier_order",
               sourceType:"supplier_order",
@@ -32557,6 +32680,7 @@
             try {
               await axios.post(`/api/email-intake/queue/${draft.email_attachment_id}/disposition`,{sha256:draft.file_hash,action});
               this.orderImportDrafts=this.orderImportDrafts.filter(d=>d.file_hash!==draft.file_hash);
+              if (!this.orderImportDrafts.length) this.pdfQueueVisible=true;
               this.emailQueueExcluded.push({filename:draft.source_name,reason:action,customer_po:draft.customer_po});
               await this.refreshEmailQueueCount();
               this.showToast('已处理，相同附件不会再次进入待处理列表');
@@ -33770,7 +33894,7 @@
             const preview = item?._quote_preview;
             if (!preview) return "选择材质、楞型并填写尺寸后自动试算";
             const rawSource = preview.final_price_source || preview.price_source || "客户报价偏好";
-            const source = rawSource === "estimated" ? "系统估价" : rawSource;
+            const source = ({ estimated:"系统估价", manual_unit_price:"人工单价", customer_preference:"客户报价偏好" })[rawSource] || rawSource;
             const price = preview.customer_square_price;
             const estimate = preview.estimated_unit_price;
             return `${source}${price == null ? "" : `｜平方价 ￥${this.money(price)}/㎡`}${estimate == null ? "" : `｜估价 ￥${this.money(estimate)}`}`;
@@ -33926,7 +34050,6 @@
               product_code: item.product_code,
               product_name: item.product_name,
               material_id: item.material_id || null,
-              _original_material_id: item.material_id || null,
               material: item.material,
               original_material_code: item.original_material_code || null,
               specification: item.specification,
@@ -34910,6 +35033,7 @@
                 production_required_qty:Number(itemSnapshot.production_required_qty ?? itemSnapshot.quantity),
                 cost_status:itemSnapshot.cost_status || "pending", estimated_cost:itemSnapshot.estimated_cost || null,
                 material_id: itemSnapshot.material_id || null,
+                _original_material_id: itemSnapshot.material_id || null,
                 layer_count: itemSnapshot.layer_count || null,
                 flute_type: itemSnapshot.flute_type || null,
                 box_style:this.normalizeBoxTypeDisplay(product.box_style || itemSnapshot.snapshot_box_style || ""),
@@ -36511,10 +36635,10 @@
             this.closeModal();
           },
           async cancelRequisition(row) {
-            if (!this.canAdmin) return false;
+            if (!this.canAdmin || this.requisitionVoidActionBlocked?.()) return false;
             const targetId = Number(row?.item_id || 0);
             const documentNumber = String(row?.document_number || row?.order_number || `明细 #${targetId}`);
-            if (!targetId || !confirm("确认撤销该报料并回到待报料吗？系统会自动记录本次管理员操作。")) return false;
+            if (!targetId || !await this.confirmOriginalBusinessAction("确认撤销该报料并回到待报料吗？系统会自动记录本次管理员操作。",{title:"撤销报料",confirmLabel:"确认撤销"})) return false;
             return await this.executeRequisitionVoidAction({
               action:"cancel_requisition_item",
               sourceType:"requisition_item",
@@ -38299,6 +38423,9 @@
                 for (const row of state.items) {
                   const fresh = data.items.find(value=>value.item_id===row.item_id);
                   if (!fresh) continue;
+                  for (const key of ["status", "status_label", "warning", "available_qty", "system_pending_qty"]) {
+                    row[key] = fresh[key];
+                  }
                   row.source_payload.shortage_diagnostic = fresh.source_payload.shortage_diagnostic;
                   row.fulfillment_status = fresh.fulfillment_status;
                   row.fulfillment_label = fresh.fulfillment_label;
@@ -38314,6 +38441,24 @@
                   state.items.forEach(row=>{row._readinessLoading=false;});
               }
             }, 300);
+          },
+          async openSavedPreDeliveryBatch() {
+            const form = this.deliveryForm, modal = this.modal, authGeneration = this.authGeneration;
+            const reference = form.pre_delivery_batch;
+            if (!reference || form.editing_status !== "pending" || this.deliveryFormIsDirty()) return;
+            this.loading = true;
+            try {
+              const {data} = await axios.get(`/api/deliveries/tianhua-preimport/${reference.batch_id}`);
+              if (form !== this.deliveryForm || modal !== this.modal || authGeneration !== this.authGeneration) return;
+              this.tianhuaPreimport = { sourceMode:data.source_type === "excel_upload" ? "excel" : "image",
+                files:[], preDeliveryDate:data.pre_delivery_date || plusDays(1), batchId:data.batch_id,
+                batchNumber:data.batch_number, items:data.items || [], draft:data.draft || null,
+                mobileToken:null, remark:data.draft?.remark || "" };
+              this.modal = {type:"tianhuaPreimport", title:"导入预送货"};
+            } catch (error) {
+              if (form === this.deliveryForm && modal === this.modal && authGeneration === this.authGeneration)
+                this.showToast(this.errorMessage(error), true);
+            } finally { this.loading = false; }
           },
           async loadTianhuaBatch() {
             if (!this.tianhuaPreimport.batchId) return;
@@ -39949,9 +40094,9 @@
                 is_composite_bom: !!(pending?.is_composite_bom || it.is_composite_bom || (it.component_lines || []).length),
                 kit_availability: pending?.kit_availability || null,
                 component_lines: it.component_lines || [],
-                remaining_quantity: Number(it.delivered_quantity || 0) + Number(pending?.remaining_quantity || 0),
-                order_remaining_quantity: Number(it.delivered_quantity || 0) + Number(pending?.order_remaining_quantity || 0),
-                deliverable_quantity: Number(it.delivered_quantity || 0) + Number(pending?.deliverable_quantity || 0),
+                remaining_quantity: row.status === "dispatched" ? Number(it.delivered_quantity || 0) + Number(pending?.remaining_quantity || 0) : Number(pending?.remaining_quantity || 0),
+                order_remaining_quantity: row.status === "dispatched" ? Number(it.delivered_quantity || 0) + Number(pending?.order_remaining_quantity || 0) : Number(pending?.order_remaining_quantity || 0),
+                deliverable_quantity: row.status === "dispatched" ? Number(it.delivered_quantity || 0) + Number(pending?.deliverable_quantity || 0) : Number(pending?.deliverable_quantity || 0),
                 over_delivery_quantity: pending?.over_delivery_quantity ?? it.over_delivery_quantity ?? 0,
                 delivered_quantity: it.delivered_quantity,
                 over_delivery_confirmed: Number(it.over_delivery_quantity || 0) > 0,
@@ -39964,7 +40109,7 @@
                 candidate_error: false,
               });
             });
-            this.deliveryForm = { editingId:row.id, editing_status:row.status || "pending", delivery_number:row.delivery_number || "", source_mode:sourceMode, source_tab:hasOrderLines ? "order" : "unordered_finished", customer_id:row.customer_id, delivery_date:row.delivery_date, historical_backfill:!!row.is_historical_backfill, version:Number(row.version || 1), idempotency_key:null, vehicle_number:row.vehicle_number || "", lines, saved_signature:"", pick_task:row.pick_task || null };
+            this.deliveryForm = { editingId:row.id, pre_delivery_batch:row.pre_delivery_batch || null, editing_status:row.status || "pending", delivery_number:row.delivery_number || "", source_mode:sourceMode, source_tab:hasOrderLines ? "order" : "unordered_finished", customer_id:row.customer_id, delivery_date:row.delivery_date, historical_backfill:!!row.is_historical_backfill, version:Number(row.version || 1), idempotency_key:null, vehicle_number:row.vehicle_number || "", lines, saved_signature:"", pick_task:row.pick_task || null };
             this.deliveryForm.saved_signature = this.deliveryFormSignature();
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
@@ -41618,7 +41763,8 @@
       window.ERPProductionMap?.install(app);
       window.ERPWarehouseWorkspace?.install(app);
       window.ERPFinanceWorkspace?.install(app);
-      app.mount("#app");
+      const formalWorkspaceInstance = app.mount("#app");
+      window.ERPFrontendShell?.install(formalWorkspaceInstance);
     </script>
   </body>
 </html>

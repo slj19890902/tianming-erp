@@ -85,6 +85,7 @@ const sandbox = {{
   clearTimeout,
 }};
 vm.createContext(sandbox);
+vm.runInContext({json.dumps((Path(__file__).parents[1] / "static/ui/order-reference.js").read_text(encoding="utf-8"))}, sandbox);
 vm.runInContext({json.dumps(_inline_script())}, sandbox);
 const methods = sandbox.definition.methods;
 {assertions}
@@ -101,9 +102,11 @@ const context = {
   deliveryForm: { lines: [] },
   deliveryBatchPicker: {
     visible: true,
-    selected: { 101: { order_item_id: 101, order_remaining_quantity: 12, product_code: "P1-15" } },
-    items: [{ order_item_id: 101, order_remaining_quantity: 12, product_code: "P1-15" }],
+    selected: { 101: { order_item_id: 101, order_remaining_quantity: 12, product_code: "P1-15", _quantity: 12, deliverable_quantity: 12 } },
+    items: [{ order_item_id: 101, order_remaining_quantity: 12, product_code: "P1-15", _quantity: 12, deliverable_quantity: 12 }],
   },
+  unorderedFinishedPicker: { selected: {} },
+  deliveryUnifiedMax: methods.deliveryUnifiedMax,
   isDeliveryItemAlreadyInForm() { return false; },
   emptyDeliveryLine() { return null; },
   createDeliveryLine() { return { key: "local-line" }; },

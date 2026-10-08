@@ -68,6 +68,7 @@ const pending=[];const messages=[];
 global.confirm=()=>true;
 global.axios={{put:(url)=>new Promise((resolve,reject)=>pending.push({{url,resolve,reject}}))}};
 const vm={{
+  confirmOriginalBusinessAction:async()=>true,
   stockReplenishmentVoidState:{{orderId:null,documentNumber:"",uncertainIds:{{}}}},
   loadRequisition:async()=>true,loadReportedDocuments:async()=>true,
   showToast(message,isError){{messages.push({{message,isError}});}},
@@ -115,6 +116,7 @@ def test_void_success_survives_refresh_failure_and_network_unknown_is_locked(
   vm.loadRequisition=async()=>{throw new Error("刷新失败");};
   vm.loadReportedDocuments=async()=>false;
   const request=vm.voidReportedReplenishment(saved);
+  await Promise.resolve();
   pending[0].resolve({data:{id:21,status:"voided"}});
   const result=await request;
   expect(result._refresh_failed===true,"refresh failure hid successful void");
@@ -124,6 +126,7 @@ def test_void_success_survives_refresh_failure_and_network_unknown_is_locked(
   const unknown={id:22,document_number:"CBR-22",status:"confirmed",can_void:true,incoming_status:"待入库"};
   vm.loadRequisition=async()=>true;vm.loadReportedDocuments=async()=>true;
   const unknownRequest=vm.voidReportedReplenishment(unknown);
+  await Promise.resolve();
   pending[1].reject(new Error("连接中断"));
   const unknownResult=await unknownRequest;
   expect(unknownResult===false&&vm.stockReplenishmentVoidUncertain(unknown),"unknown result was not locked for refresh");
@@ -142,6 +145,7 @@ def test_known_4xx_void_failure_can_retry(tmp_path: Path) -> None:
 (async()=>{
   const row={id:31,document_number:"CBR-31",status:"confirmed",can_void:true,incoming_status:"待入库"};
   const request=vm.voidReportedReplenishment(row);
+  await Promise.resolve();
   const error=new Error("已经收货");error.response={status:409,data:{detail:"已经收货"}};
   pending[0].reject(error);
   const result=await request;

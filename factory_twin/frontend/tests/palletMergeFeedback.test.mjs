@@ -27,7 +27,7 @@ test('failed merge keeps same retry key and draft; successful merge clears once'
     const target={pallet_id:2,expected_version:1,location_id:20,floor_code:'3F',location_name:'主货位'};
     const ctx={mergeSources:[{pallet_id:1,expected_version:1,client_item_id:'src'},target],mergeTarget:target,mergeBatchBusy:false,mergeBatchIdempotencyKey:'stable-key',window:{confirm:()=>true},buildPalletMergeBatchPayload,
       mutateJson:async(p,m,b)=>{calls.push(b);if(fail)throw new Error('校验失败');},
-      setMergeBatchBusy:()=>{},setWarehouseOperationMessage:m=>messages.push(m),setMergeSources:v=>clears.push(v),setMergeTarget:()=>{},setMergeBatchIdempotencyKey:v=>clears.push(v),operationKey:()=> 'new-key',isWarehouseOperationalFloorCode:()=>true,setFloorCode:()=>{},setSelected:()=>{},refreshDashboard:async()=>{}};
+      setMergeBatchUncertain:()=>{},setMergeBatchBusy:()=>{},setWarehouseOperationMessage:m=>messages.push(m),setMergeSources:v=>clears.push(v),setMergeTarget:()=>{},setMergeBatchIdempotencyKey:v=>clears.push(v),operationKey:()=> 'new-key',isWarehouseOperationalFloorCode:()=>true,setFloorCode:()=>{},setSelected:()=>{},refreshDashboard:async()=>{}};
     vm.createContext(ctx);vm.runInContext(code+'\nglobalThis.submit=confirmPalletMergeBatch;',ctx);await ctx.submit();
     assert.equal(calls.length,1);assert.equal(calls[0].idempotency_key,'stable-key');
     assert.equal(clears.length,fail?0:2);assert.ok(messages.at(-1).includes(fail?'失败':'已一次并入'));

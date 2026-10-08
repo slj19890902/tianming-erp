@@ -25,8 +25,11 @@ def test_pdf_committed_response_lost_replays_one_order_and_reservation(b1_app, p
     app, factory = b1_app
     with factory() as db:
         supplier = db.scalar(select(Supplier).where(Supplier.is_active.is_(True)))
-        material = Material(code='A416D', supplier_name=supplier.standard_name, is_active=True, layer_count=3, flute_type='B')
-        db.add(material); db.flush(); db.get(Product, 1).material_id = material.id; db.commit()
+        # b1_app already supplies the priced material used by its stock fixture.
+        material = db.scalar(select(Material).where(
+            Material.code == 'A416D', Material.supplier_name == supplier.standard_name))
+        assert material is not None and material.is_active
+        db.get(Product, 1).material_id = material.id; db.commit()
     lot, version = add_finished_lot(factory, product_id=1, quantity=10, key='pdf-retry-stock')
     payload = dict(customer_id=1, customer_po=po, idempotency_key='pdf-retry-operation', import_draft=True,
                    import_integrity_status='passed', import_integrity_errors=[],
@@ -61,3 +64,38 @@ def test_pdf_committed_response_lost_replays_one_order_and_reservation(b1_app, p
         client.cookies.clear(); login(client, 'sales')
         assert client.get(url).status_code == 403
         client.cookies.clear(); assert client.get(url).status_code == 401
+
+
+def test_pdf_recovery_control_is_not_natively_disabled_with_locked_draft():
+    # HTML fieldset disables descendant buttons regardless of their own Vue guard.
+    # Keep result lookup available while the source fields stay immutable.
+    from html.parser import HTMLParser
+
+    class Controls(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.fieldsets = []
+            self.recovery = []
+            self.source_fields = []
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == "fieldset":
+                self.fieldsets.append(attrs.get(":disabled", ""))
+            if attrs.get("@click") == "retryFailedImportDraft(draft)":
+                self.recovery.append(tuple(self.fieldsets))
+            if any(attrs.get(key) in {"draft.customer_po", "draft.delivery_date", "draft.matched_customer_id"}
+                   for key in ("v-model", "v-model.trim")):
+                self.source_fields.append(tuple(self.fieldsets))
+
+        def handle_endtag(self, tag):
+            if tag == "fieldset":
+                assert self.fieldsets, "unbalanced fieldset"
+                self.fieldsets.pop()
+
+    controls = Controls()
+    controls.feed((Path(__file__).resolve().parents[1] / "static/index.html").read_text("utf-8"))
+    assert controls.recovery == [()], "result lookup must not inherit the locked draft's native disabled state"
+    assert len(controls.source_fields) == 3
+    assert all("isImportDraftLocked(draft)" in parents for parents in controls.source_fields)
+    assert controls.fieldsets == []

@@ -4034,13 +4034,19 @@ def _late_semi_inventory_options(
                 customer_bound_only=False,
                 exact_flute_only=True,
                 exclude_exact_dimensions=True,
+                include_equal_dimensions_piece_review=True,
                 eligible_only=True,
                 visible_customer_ids=visible_customer_ids,
                 page=manual_page,
                 page_size=10,
                 page_info=page_info,
                 )
-                if row.cut_plan is not None
+                if row.cut_plan is not None or (
+                    row.lot.semi_finished_detail.sheet_type == "net_sheet"
+                    and row.lot.semi_finished_detail.board_length_mm == int(length)
+                    and row.lot.semi_finished_detail.board_width_mm == int(width)
+                    and row.signature_differences == ("pieces_per_box",)
+                )
             ]
         projection_contexts = load_warehouse_location_projection_contexts(
             db,
@@ -10667,11 +10673,17 @@ def _supplier_item_snapshot_values(
         if order_item is not None and order_item.layer_count is not None
         else material.layer_count if material is not None else fallback_layer_count
     )
-    material_code = _clean_supplier_material_code(
-        material.code
+    # A bound material is an identity, not legacy display text.  Cleaning its
+    # code here can freeze a different code and make an unchanged receipt look
+    # like an unapproved material substitution.  Keep cleanup for unbound legacy
+    # text only; existing frozen purchases and receipt permission gates stay intact.
+    material_code = (
+        str(material.code or "").strip()
         if material is not None
-        else order_item.snapshot_material if order_item is not None else None,
-        layer_count,
+        else _clean_supplier_material_code(
+            order_item.snapshot_material if order_item is not None else None,
+            layer_count,
+        )
     ) or None
     supplier_name = (
         (material.supplier_name if material is not None else None)
@@ -23802,6 +23814,9 @@ def void_supplier_order(
     affected_items: list[dict[str, object]] = []
     order.status = "voided"
     order.voided_at = beijing_now_naive()
+    # Runtime sessions disable autoflush. Remaining-source queries must see
+    # this void within the same transaction before projecting order status.
+    db.flush()
 
     for item in order.items:
         if item.order_item_id:

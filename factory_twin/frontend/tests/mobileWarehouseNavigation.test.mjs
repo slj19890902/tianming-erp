@@ -8,10 +8,12 @@ function fn(name, context) {
   let start = html.indexOf(`      function ${name}(`);
   if (start < 0) start = html.indexOf(`      async function ${name}(`);
   const end = html.indexOf('\n      }', start) + 8;
-  return vm.runInNewContext(`(${html.slice(start, end)})`, context);
+  return vm.runInNewContext(goodsHelpers+`;(${html.slice(start, end)})`, context);
 }
+const goodsHelpers=html.slice(html.indexOf('      function groupWarehouseRackGoods('),html.indexOf('      function renderWarehouseLocationGoods('));
 class Element {
   constructor(tag) { this.tag = tag; this.children = []; this.style = {}; this.dataset = {}; this.events = {}; this.classList = { add() {} }; this.parentElement = { clientWidth: 360 }; }
+  querySelector() { return {scrollTop:0}; }
   append(...items) { this.children.push(...items); }
   replaceChildren(...items) { this.children = items; }
   setAttribute() {}
@@ -62,7 +64,7 @@ test('rack levels appear inside a clickable front elevation, not overlapping map
 test('return from a location restores its area instead of closing warehouse map', () => {
   const state = {warehouseLocationPage: true, warehouseMapFocusLocationId: 4};
   let restored = 0;
-  fn('closeWarehouseMap', {state, showWarehouseArea: () => restored++, byId: () => { throw Error('must not close map'); }})();
+  fn('closeWarehouseMap', {state, showWarehouseArea: () => restored++, byId: () => ({querySelector:()=>({scrollTop:0})})})();
   assert.equal(restored, 1);
   assert.equal(state.warehouseMapFocusLocationId, null);
   assert.match(stocktake, /return_floor/);

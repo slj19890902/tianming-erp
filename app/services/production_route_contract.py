@@ -18,6 +18,7 @@ def production_route_contract(snapshot, *, process=(), printing=False, joining=N
         add('printing', '印刷')
     # Preserve the recorded relative order of explicit processing facts.
     facts = [('slotting', '开槽'), ('creasing', '压线'), ('die_cutting', '模切'),
+             ('clearing', '清废'),
              ('corner_cutting', '切角'), ('punching', '冲孔'), ('folding', '折叠'),
              ('laminating', '裱合'), ('binding', '捆扎')]
     present = [(text.index(label), code, label) for code, label in facts if label in text]

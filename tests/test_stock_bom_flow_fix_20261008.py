@@ -180,3 +180,15 @@ def test_signature_legacy_null_compatibility_is_unsplit_only():
     legacy = _cutting_signature(None, 100, 200, 4)
     assert legacy == _cutting_signature(SheetCuttingContract(100, 200, 1, 1, True, 4).to_snapshot(), 100, 200, 4)
     assert legacy != _cutting_signature(SheetCuttingContract(50, 200, 2, 1, True, 2).to_snapshot(), 100, 200, 4)
+
+
+def test_backend_route_preserves_clearing_after_die_cutting():
+    # Exercise the production route builder used by the actual print projection,
+    # rather than supplying hand-authored frontend route.steps.
+    unsplit = SheetCuttingContract(100, 200, 1, 1, True, 4).to_snapshot()
+    route = production_route_contract(unsplit, process=['模切、清废'])
+    assert [(row['code'], row['label']) for row in route['steps']] == [
+        ('die_cutting', '模切'), ('clearing', '清废')]
+    split = SheetCuttingContract(100, 200, 2, 1, True, 4).to_snapshot()
+    route = production_route_contract(split, process=['印刷、模切、清废'])
+    assert [row['label'] for row in route['steps']] == ['分切', '印刷', '模切', '清废']

@@ -81,6 +81,7 @@ FINDING_CODES = frozenset(
         "P015_COMMON_BOX_VERSION_SNAPSHOT_DRIFT",
         "P015_DUPLICATE_RECEIPT_FINISHED_OUTPUT",
         "P015_COMPLETION_INPUT_EXCEEDS_EFFECTIVE_RECEIPT",
+        "P015_COMPLETION_INPUT_BASIS_REVIEW",
         "P015_RECEIVED_AWAITING_MANUAL_PRODUCTION",
         "P015_ORDER_STATUS_SNAPSHOT_DIVERGENCE",
         "P015_PURCHASE_PURPOSE_ALLOCATION_UNBALANCED",
@@ -1257,6 +1258,8 @@ def _purchase_purpose_rows(
                 PurchasePurposeSourceSnapshot.reserve_purpose_sheet_qty,
                 PurchasePurposeSourceSnapshot.group_authoritative_order_sheet_qty_snapshot,
                 PurchasePurposeSourceSnapshot.snapshot_version,
+                PurchasePurposeSourceSnapshot.yield_per_sheet_snapshot,
+                PurchasePurposeSourceSnapshot.pieces_per_finished_snapshot,
             ).where(or_(*filters))
         ).mappings()
         for row in rows:
@@ -2462,41 +2465,15 @@ def audit_incomplete_order_chains(
                     )
                 )
             if has_receipt and None in item_tasks and item_completions:
-                received_total = sum(
-                    int(row["received_quantity"] or 0) for row in item_receipts
-                )
-                latest_receipt = max(item_receipts, key=lambda row: int(row["id"]))
-                planned = max(
-                    int(latest_receipt["planned_quantity"] or item.quantity or 0), 0
-                )
-                action = latest_receipt["resolution_action"]
-                allowed_input = (
-                    received_total
-                    if action == "all_to_production"
-                    else min(received_total, planned)
-                )
-                used_input = sum(
-                    int(row["material_input_quantity"] or 0)
-                    for row in item_completions
-                )
-                if used_input > allowed_input:
-                    findings.append(
-                        _finding(
-                            code="P015_COMPLETION_INPUT_EXCEEDS_EFFECTIVE_RECEIPT",
-                            severity="error",
-                            order=order,
-                            item=item,
-                            key=anonymization_key,
-                            summary="正式完工累计投入超过当前有效来料可用于生产的数量。",
-                            evidence={
-                                "received_quantity": received_total,
-                                "allowed_production_input": allowed_input,
-                                "completion_material_input": used_input,
-                                "latest_resolution_action": action,
-                            },
-                            focus_terms=normalized_focus,
-                        )
-                    )
+                from app.services.completion_input_audit import input_evidence
+                result = input_evidence(item_receipts, item_completions,
+                    active_receipt_purpose_rows, purchase_purpose_by_id,
+                    independent_cutting=bool(item.sheet_cutting_settings_snapshot))
+                if result:
+                    findings.append(_finding(
+                        code="P015_COMPLETION_INPUT_EXCEEDS_EFFECTIVE_RECEIPT" if result['severity']=='error' else "P015_COMPLETION_INPUT_BASIS_REVIEW",
+                        order=order, item=item, key=anonymization_key,
+                        focus_terms=normalized_focus, **result))
             for delivery_item in deliveries.get(item_id, []):
                 delivery_item_id = int(delivery_item["id"])
                 rows = allocations.get(delivery_item_id, [])

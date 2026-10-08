@@ -2,7 +2,7 @@
 
 用户已授权：更新器增加版本保留规则，测试任务结束后自动清理对应副本。
 
-- 基线：实时 origin/factory-current-baseline d7c68cb3；独立分支 codex/storage-retention-20261008。
+- 起始基线：实时 origin/factory-current-baseline d7c68cb3；构建时核验正式已运行且 NAS 已发布的 v565 / 75f1b613，并对齐；交付分支 codex/storage-retention-v565-20261008。
 - 范围：desktop_assistant 的更新收尾、隔离演练副本；受管测试任务入口；pytest 临时目录保留；对应定向测试及操作说明。
 - 成功条件：成功更新后只保留受保护/运行中/修改过的解压版本；旧安装包须有已同步且校验通过的 NAS 副本才删除；测试成功后删除本任务登记的临时副本，保留报告，失败或使用中的现场保留。
 - 不变量：正式数据库、shared、附件、当前/previous/schema_authority/migration_target、更新链中间版本、已有未提交修改不受删除影响；不跟随链接，不根据目录名字推断任务已完成；清理失败不把成功更新变成失败，也不触发回退。

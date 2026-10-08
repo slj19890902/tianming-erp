@@ -145,6 +145,16 @@ def test_failed_start_does_not_call_retention(installed, monkeypatch):
     run.assert_not_called()
 
 
+def test_direct_update_uses_configured_feed_and_ignores_bad_preferences(installed,monkeypatch):
+    from unittest.mock import Mock
+    feed=installed.nas/'desktop-assistant/releases'
+    write_json(installed.manager.root/'control/setup-defaults.json',{'release_feed':str(feed)})
+    (installed.manager.root/'preferences.json').write_text('invalid settings')
+    run=Mock();monkeypatch.setattr(retention,'after_update',run)
+    assert installed.manager.update(installed.release('two'),PASSWORD,installed.nas)=='two'
+    run.assert_called_once_with(installed.manager,feed)
+
+
 def test_idle_guard_detects_database_in_child_environment(monkeypatch,tmp_path):
     fake=SimpleNamespace(pid=123,info={'name':'python.exe'},exe=lambda:'python.exe',cwd=lambda:'C:/other',
                          cmdline=lambda:['python.exe','main.py'],environ=lambda:{'ERP_DATABASE_PATH':str(tmp_path/'copy.db')})

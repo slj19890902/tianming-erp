@@ -417,6 +417,13 @@ class Manager:
             result = self._update_locked(package, password, nas, rollback=rollback)
             from desktop_assistant.retention import after_update
             archive_dir = nas.parent / 'releases' if nas.name == 'backups' else nas / 'releases'
+            for settings_path in (self.root / 'control/setup-defaults.json', self.root / 'preferences.json'):
+                try:
+                    configured = read_json(settings_path).get('release_feed') if settings_path.is_file() else None
+                    if isinstance(configured, str) and configured:
+                        archive_dir = Path(configured)
+                except (OSError, ValueError, AttributeError):
+                    pass  # Cleanup configuration cannot fail an activated update.
             after_update(self, archive_dir)
             return result
 

@@ -99,7 +99,8 @@ def main():
     code_sha, sources = source_snapshot(root, args.version, args.revision)
     reader_sources = {'app/services/processed_component_stock.py',
                       'app/services/stock_preparation_processing.py',
-                      'app/services/stock_preparation_assembly.py'}
+                      'app/services/stock_preparation_assembly.py',
+                      'app/services/quotation_mutations.py', 'app/api/quotations.py'}
     if not reader_sources <= sources.keys():
         raise ValueError('库存业务读取契约的实现不完整，禁止签名发布')
     schema_contract = schema_contract_from_sources(sources, args.revision)
@@ -142,7 +143,7 @@ def main():
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration,
                             'schema_contract': schema_contract,
-                            'reader_capabilities': {'order_inventory_v1': 1},
+                            'reader_capabilities': {'order_inventory_v1': 1, 'quotation_write_v1': 1},
                             'offline_ocr_models': models}, key)
     if args.package_only:
         write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,

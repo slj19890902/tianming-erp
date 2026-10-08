@@ -41,6 +41,7 @@ from app.services.box_type_rules import (
 )
 from app.services.flute_mapping import normalize_flute_type, validate_flute_consistency
 from app.services.report_crease import crease_width_error
+from app.services.quotation_mutations import command, claim_version, finish
 
 
 router = APIRouter()
@@ -87,13 +88,18 @@ class QuotationItemPayload(QuotationPreviewPayload):
     remarks: str | None = None
 
 
-class QuotationPayload(BaseModel):
+class MutationPayload(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
+    expected_version: int | None = Field(default=None, gt=0)
+
+
+class QuotationPayload(MutationPayload):
     quotation_date: date = Field(default_factory=date.today)
     remarks: str | None = None
     items: list[QuotationItemPayload] = Field(min_length=1, max_length=100)
 
 
-class ConvertPayload(BaseModel):
+class ConvertPayload(MutationPayload):
     product_code: str = Field(min_length=1, max_length=150)
     product_name: str | None = Field(default=None, max_length=250)
     flute_type: str | None = Field(default=None, max_length=20)
@@ -541,6 +547,7 @@ def _quotation_dict(quotation: QuotationOrder, user: User) -> dict:
         "customer_name": quotation.customer_name,
         "quotation_date": quotation.quotation_date,
         "status": quotation.status,
+        "version": quotation.version,
         "status_label": STATUS_LABELS.get(quotation.status, quotation.status),
         "total_amount": quotation.total_amount,
         "remarks": quotation.remarks,
@@ -559,6 +566,18 @@ def _quotation_or_404(db: Session, quotation_id: int) -> QuotationOrder:
     if quotation is None:
         raise HTTPException(status_code=404, detail="报价单不存在")
     return quotation
+
+
+def _replay_for_user(data: dict, user: User) -> dict:
+    # A retry must respect the caller's current cost permissions as well.
+    if "items" in data:
+        data = {**data, "items": [_redact_internal_pricing(row, user) for row in data["items"]]}
+    return data
+
+
+def _finish_quotation(db, mutation, quotation, user):
+    db.flush()
+    return finish(db, mutation, quotation, user, _quotation_dict(quotation, user))
 
 
 @router.post("/preview")
@@ -612,20 +631,21 @@ def create_quotation(
     require_customer_access(customer_id, current_user=user, db=db)
     if customer is None or not customer.is_active:
         raise HTTPException(status_code=404, detail="客户不存在或已停用")
-    quotation = QuotationOrder(
-        quotation_no=_next_number(db, payload.quotation_date),
-        customer_id=customer.id,
-        customer_name=customer.name,
-        quotation_date=payload.quotation_date,
-        status="draft",
-        remarks=(payload.remarks or "").strip() or None,
-        created_by=user.id,
-    )
-    _replace_items(db, quotation, payload.items, customer_id=quotation.customer_id)
-    db.add(quotation)
-    db.commit()
-    db.refresh(quotation)
-    return _quotation_dict(_quotation_or_404(db, quotation.id), user)
+    with command(db, user, "create", customer.id, None, payload) as (mutation, replay):
+        if replay is not None:
+            return _replay_for_user(replay, user)
+        quotation = QuotationOrder(
+            quotation_no=_next_number(db, payload.quotation_date),
+            customer_id=customer.id,
+            customer_name=customer.name,
+            quotation_date=payload.quotation_date,
+            status="draft",
+            remarks=(payload.remarks or "").strip() or None,
+            created_by=user.id,
+        )
+        _replace_items(db, quotation, payload.items, customer_id=quotation.customer_id)
+        db.add(quotation)
+        return _finish_quotation(db, mutation, quotation, user)
 
 
 @router.get("/{quotation_id}")
@@ -648,63 +668,70 @@ def update_quotation(
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
     require_customer_access(quotation.customer_id, current_user=user, db=db)
-    if quotation.status not in {"draft", "quoted"}:
-        raise HTTPException(status_code=409, detail="客户已接受、已转常用箱或已作废报价不能修改")
-    quotation.quotation_date = payload.quotation_date
-    quotation.remarks = (payload.remarks or "").strip() or None
-    quotation.status = "draft"
-    _replace_items(db, quotation, payload.items, customer_id=quotation.customer_id)
-    db.commit()
-    return _quotation_dict(_quotation_or_404(db, quotation.id), user)
+    with command(db, user, "update", quotation.customer_id, quotation.id, payload) as (mutation, replay):
+        if replay is not None:
+            return _replay_for_user(replay, user)
+        claim_version(db, quotation, payload.expected_version, {"draft", "quoted"})
+        quotation.quotation_date = payload.quotation_date
+        quotation.remarks = (payload.remarks or "").strip() or None
+        quotation.status = "draft"
+        _replace_items(db, quotation, payload.items, customer_id=quotation.customer_id)
+        return _finish_quotation(db, mutation, quotation, user)
 
 
 @router.post("/{quotation_id}/generate")
 def generate_quotation(
     quotation_id: int,
+    payload: MutationPayload,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
     require_customer_access(quotation.customer_id, current_user=user, db=db)
-    if quotation.status not in {"draft", "quoted"}:
-        raise HTTPException(status_code=409, detail="当前报价状态不能重新生成")
-    if not quotation.items:
-        raise HTTPException(status_code=400, detail="报价单至少需要一条明细")
-    quotation.status = "quoted"
-    db.commit()
-    return _quotation_dict(_quotation_or_404(db, quotation.id), user)
+    with command(db, user, "generate", quotation.customer_id, quotation.id, payload) as (mutation, replay):
+        if replay is not None:
+            return _replay_for_user(replay, user)
+        claim_version(db, quotation, payload.expected_version, {"draft", "quoted"})
+        if not quotation.items:
+            raise HTTPException(status_code=400, detail="报价单至少需要一条明细")
+        quotation.status = "quoted"
+        return _finish_quotation(db, mutation, quotation, user)
 
 
 @router.post("/{quotation_id}/accept")
 def accept_quotation(
     quotation_id: int,
+    payload: MutationPayload,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
     require_customer_access(quotation.customer_id, current_user=user, db=db)
-    if quotation.status != "quoted":
-        raise HTTPException(status_code=409, detail="只有已报价状态可以标记客户接受")
-    quotation.status = "accepted"
-    db.commit()
-    return _quotation_dict(_quotation_or_404(db, quotation.id), user)
+    with command(db, user, "accept", quotation.customer_id, quotation.id, payload) as (mutation, replay):
+        if replay is not None:
+            return _replay_for_user(replay, user)
+        claim_version(db, quotation, payload.expected_version, {"quoted"})
+        quotation.status = "accepted"
+        return _finish_quotation(db, mutation, quotation, user)
 
 
 @router.post("/{quotation_id}/void")
 def void_quotation(
     quotation_id: int,
+    payload: MutationPayload,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
     quotation = _quotation_or_404(db, quotation_id)
     require_customer_access(quotation.customer_id, current_user=user, db=db)
-    if quotation.status == "converted" or any(
-        item.converted_product_id is not None for item in quotation.items
-    ):
-        raise HTTPException(status_code=409, detail="已有明细转入常用箱，报价不能作废")
-    quotation.status = "voided"
-    db.commit()
-    return _quotation_dict(_quotation_or_404(db, quotation.id), user)
+    with command(db, user, "void", quotation.customer_id, quotation.id, payload) as (mutation, replay):
+        if replay is not None:
+            return _replay_for_user(replay, user)
+        claim_version(db, quotation, payload.expected_version, {"draft", "quoted", "accepted"})
+        if any(item.converted_product_id is not None for item in quotation.items):
+            raise HTTPException(status_code=409, detail="已有明细转入常用箱，报价不能作废")
+        quotation.status = "voided"
+        return _finish_quotation(db, mutation, quotation, user)
 
 
 @router.post("/items/{item_id}/convert-to-product", status_code=status.HTTP_201_CREATED)
@@ -720,119 +747,125 @@ def convert_to_product(
         raise HTTPException(status_code=404, detail="报价明细不存在")
     quotation = _quotation_or_404(db, item.quotation_id)
     require_customer_access(quotation.customer_id, current_user=user, db=db)
-    if quotation.status != "accepted":
-        raise HTTPException(status_code=409, detail="请先将报价标记为客户接受")
-    if item.converted_product_id is not None:
-        raise HTTPException(status_code=409, detail="该报价明细已经转入常用箱")
-    product_code = payload.product_code.strip()
-    product_name = (payload.product_name or item.product_name).strip()
-    duplicate = db.scalar(
-        select(Product.id).where(
-            Product.customer_id == quotation.customer_id,
-            Product.product_name == product_name,
-            or_(
-                Product.product_code == product_code,
-                Product.customer_material_code == product_code,
-            ),
+    with command(db, user, "convert", quotation.customer_id, item.id, payload) as (mutation, replay):
+        if replay is not None:
+            return replay
+        claim_version(db, quotation, payload.expected_version, {"accepted"})
+        if quotation.status != "accepted":
+            raise HTTPException(status_code=409, detail="请先将报价标记为客户接受")
+        if item.converted_product_id is not None:
+            raise HTTPException(status_code=409, detail="该报价明细已经转入常用箱")
+        product_code = payload.product_code.strip()
+        product_name = (payload.product_name or item.product_name).strip()
+        duplicate = db.scalar(
+            select(Product.id).where(
+                Product.customer_id == quotation.customer_id,
+                Product.product_name == product_name,
+                or_(
+                    Product.product_code == product_code,
+                    Product.customer_material_code == product_code,
+                ),
+            )
         )
-    )
-    if duplicate is not None:
-        raise HTTPException(
-            status_code=409,
-            detail="该客户已存在相同存货编码和产品名称",
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="该客户已存在相同存货编码和产品名称",
+            )
+        material = _material_or_none(db, item.material_id)
+        if material is None:
+            raise HTTPException(status_code=400, detail="请先在报价明细中选择材质")
+        if not (material.supplier_name or "").strip():
+            raise HTTPException(status_code=400, detail="所选材质缺少供应商，请先完善材质资料")
+        if material.layer_count not in {1, 3, 5, 7}:
+            raise HTTPException(status_code=400, detail="所选材质缺少有效层数，请先完善材质资料")
+        flute_type = _validated_quotation_flute(
+            material.layer_count,
+            payload.flute_type or item.flute_type,
         )
-    material = _material_or_none(db, item.material_id)
-    if material is None:
-        raise HTTPException(status_code=400, detail="请先在报价明细中选择材质")
-    if not (material.supplier_name or "").strip():
-        raise HTTPException(status_code=400, detail="所选材质缺少供应商，请先完善材质资料")
-    if material.layer_count not in {1, 3, 5, 7}:
-        raise HTTPException(status_code=400, detail="所选材质缺少有效层数，请先完善材质资料")
-    flute_type = _validated_quotation_flute(
-        material.layer_count,
-        payload.flute_type or item.flute_type,
-    )
-    if not flute_type:
-        expected = {
-            3: "A、B 或 E",
-            5: "AB 或 BE",
-            7: "AAA 或 ABC",
-        }[material.layer_count]
-        raise HTTPException(
-            status_code=400,
-            detail=f"报价明细缺少有效楞型，请先选择{expected}后再转入常用箱",
+        if not flute_type:
+            expected = {
+                3: "A、B 或 E",
+                5: "AB 或 BE",
+                7: "AAA 或 ABC",
+            }[material.layer_count]
+            raise HTTPException(
+                status_code=400,
+                detail=f"报价明细缺少有效楞型，请先选择{expected}后再转入常用箱",
+            )
+        if item.final_unit_price is None:
+            raise HTTPException(status_code=400, detail="报价明细缺少最终单价，不能转入常用箱")
+        report_values = _quotation_report_values(item, payload)
+        cost_values = (
+            {
+                "cost_unit_price": item.estimated_unit_cost,
+                "board_price": material.quote_price,
+                "suggested_price": item.suggested_unit_price,
+            }
+            if has_permission(user, "cost.view")
+            else {}
         )
-    if item.final_unit_price is None:
-        raise HTTPException(status_code=400, detail="报价明细缺少最终单价，不能转入常用箱")
-    report_values = _quotation_report_values(item, payload)
-    cost_values = (
-        {
-            "cost_unit_price": item.estimated_unit_cost,
-            "board_price": material.quote_price,
-            "suggested_price": item.suggested_unit_price,
-        }
-        if has_permission(user, "cost.view")
-        else {}
-    )
-    product = Product(
-        customer_id=quotation.customer_id,
-        product_code=product_code,
-        customer_material_code=product_code,
-        product_name=product_name,
-        material_id=item.material_id,
-        legacy_material_text=item.material_code,
-        length_mm=item.length_mm,
-        width_mm=item.width_mm,
-        height_mm=item.height_mm,
-        box_category="die_cut" if "异形" in item.box_type else "normal",
-        box_style=canonical_box_style(item.box_type),
-        unit="只",
-        sale_unit_price=item.final_unit_price,
-        **cost_values,
-        flute_type=flute_type,
-        layer_count=material.layer_count,
-        report_length_mm=report_values["report_length_mm"],
-        report_width_mm=report_values["report_width_mm"],
-        crease_type=report_values["crease_type"],
-        crease_left_mm=report_values["crease_left_mm"],
-        crease_middle_mm=report_values["crease_middle_mm"],
-        crease_right_mm=report_values["crease_right_mm"],
-        report_notes=report_values["report_notes"],
-        base_report_length_mm=report_values["base_report_length_mm"],
-        base_report_width_mm=report_values["base_report_width_mm"],
-        base_crease_type=report_values["base_crease_type"],
-        base_crease_left_mm=report_values["base_crease_left_mm"],
-        base_crease_middle_mm=report_values["base_crease_middle_mm"],
-        base_crease_right_mm=report_values["base_crease_right_mm"],
-        base_report_notes=report_values["base_report_notes"],
-        splice_mode=report_values["splice_mode"],
-        pieces_per_box=report_values["pieces_per_box"],
-        flap_mm=report_values["flap_mm"],
-        remark=item.remarks,
-        is_active=True,
-    )
-    db.add(product)
-    db.flush()
-    from app.services.master_data_versioning import record_versioned_create
+        product = Product(
+            customer_id=quotation.customer_id,
+            product_code=product_code,
+            customer_material_code=product_code,
+            product_name=product_name,
+            material_id=item.material_id,
+            legacy_material_text=item.material_code,
+            length_mm=item.length_mm,
+            width_mm=item.width_mm,
+            height_mm=item.height_mm,
+            box_category="die_cut" if "异形" in item.box_type else "normal",
+            box_style=canonical_box_style(item.box_type),
+            unit="只",
+            sale_unit_price=item.final_unit_price,
+            **cost_values,
+            flute_type=flute_type,
+            layer_count=material.layer_count,
+            report_length_mm=report_values["report_length_mm"],
+            report_width_mm=report_values["report_width_mm"],
+            crease_type=report_values["crease_type"],
+            crease_left_mm=report_values["crease_left_mm"],
+            crease_middle_mm=report_values["crease_middle_mm"],
+            crease_right_mm=report_values["crease_right_mm"],
+            report_notes=report_values["report_notes"],
+            base_report_length_mm=report_values["base_report_length_mm"],
+            base_report_width_mm=report_values["base_report_width_mm"],
+            base_crease_type=report_values["base_crease_type"],
+            base_crease_left_mm=report_values["base_crease_left_mm"],
+            base_crease_middle_mm=report_values["base_crease_middle_mm"],
+            base_crease_right_mm=report_values["base_crease_right_mm"],
+            base_report_notes=report_values["base_report_notes"],
+            splice_mode=report_values["splice_mode"],
+            pieces_per_box=report_values["pieces_per_box"],
+            flap_mm=report_values["flap_mm"],
+            remark=item.remarks,
+            is_active=True,
+        )
+        db.add(product)
+        db.flush()
+        from app.services.master_data_versioning import record_versioned_create
 
-    record_versioned_create(
-        db,
-        object_type="product",
-        entity=product,
-        user=user,
-        reason="报价转常用箱创建主档",
-        source="quotations.convert-to-product",
-    )
-    item.converted_product_id = product.id
-    if all(row.converted_product_id is not None for row in quotation.items):
-        quotation.status = "converted"
-    db.commit()
-    return {
-        "product_id": product.id,
-        "product_code": product.product_code,
-        "quotation_id": quotation.id,
-        "quotation_status": quotation.status,
-    }
+        record_versioned_create(
+            db,
+            object_type="product",
+            entity=product,
+            user=user,
+            reason="报价转常用箱创建主档",
+            source="quotations.convert-to-product",
+        )
+        item.converted_product_id = product.id
+        if all(row.converted_product_id is not None for row in quotation.items):
+            quotation.status = "converted"
+        db.flush()
+        response = {
+            "product_id": product.id,
+            "product_code": product.product_code,
+            "quotation_id": quotation.id,
+            "quotation_status": quotation.status,
+            "version": quotation.version,
+        }
+        return finish(db, mutation, quotation, user, response)
 
 
 @router.get("/{quotation_id}/print")

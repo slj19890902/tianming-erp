@@ -1,7 +1,7 @@
 """Single-host maintenance engine. Data rollback is never an update fallback."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
@@ -60,6 +60,17 @@ class Manager:
         return read_json(self.root / 'releases' / (release or self.state['current']) / 'manifest.json')
 
     def compatible(self, release, revision, authority=None):
+        # Preserve rollback metadata, but never run a writer which ignores the
+        # active quotation version/idempotency contract. This check is read-only.
+        import sqlite3
+        database = self.root / 'shared/data/carton_erp.sqlite3'
+        if database.is_file():
+            with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+                quotation_contract = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='quotation_mutations'"
+                ).fetchone()
+            if quotation_contract and not self._quotation_writer(release):
+                return False
         # Additive JSON business facts can change semantics without an Alembic
         # revision change. Check the signed reader contract before that shortcut.
         activation = self.state.get('order_inventory_activation')
@@ -77,7 +88,7 @@ class Manager:
             # business using the independent mold/supplier-cutting semantics.
             import sqlite3
             database = self.root / 'shared/data/carton_erp.sqlite3'
-            with sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True) as db:
+            with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
                 for table, column in (
                     ('products', 'sheet_cutting_settings'),
                     ('sales_order_items', 'sheet_cutting_settings_snapshot'),
@@ -109,6 +120,17 @@ class Manager:
             return (capabilities.get(ORDER_INVENTORY_READER) == 1
                     and type(capabilities.get(ORDER_INVENTORY_READER)) is int
                     and manifest == self.manifest(release))
+        except Exception:
+            return False
+
+    def _quotation_writer(self, release):
+        package = self.root / 'packages' / (release + '.zip')
+        try:
+            if not package.is_file() or sha(package) != release:
+                return False
+            manifest = signed_release_manifest(package, self.public_key)
+            capability = (manifest.get('reader_capabilities') or {}).get('quotation_write_v1')
+            return type(capability) is int and capability == 1 and manifest == self.manifest(release)
         except Exception:
             return False
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from quotation_contract_client import QuotationContractClient as TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 

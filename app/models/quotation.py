@@ -45,6 +45,7 @@ class QuotationOrder(Base):
     customer_name: Mapped[str] = mapped_column(String(250), nullable=False)
     quotation_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     total_amount: Mapped[Decimal] = mapped_column(
         Numeric(14, 2), nullable=False, default=Decimal("0")
     )
@@ -64,6 +65,23 @@ class QuotationOrder(Base):
         cascade="all, delete-orphan",
         order_by="QuotationItem.id",
     )
+
+
+class QuotationMutation(Base):
+    __tablename__ = "quotation_mutations"
+    __table_args__ = (
+        UniqueConstraint("actor_id", "idempotency_key", name="uq_quotation_mutation_actor_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False)
+    quotation_id: Mapped[int | None] = mapped_column(ForeignKey("quotation_orders.id", ondelete="RESTRICT"), nullable=True)
+    action: Mapped[str] = mapped_column(String(24), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.current_timestamp())
 
 
 class QuotationItem(Base):

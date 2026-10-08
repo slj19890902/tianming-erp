@@ -81,6 +81,8 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
   expect(closeCount===1,"successful conversion did not close original modal");
 }})().catch(error=>{{console.error(error);process.exit(1);}});
 """
+    command = _method_body("quotationCommand(owner, action, body) {", "quotationCommandFailed(owner, action, pending, error) {")
+    script = script.replace("quotationConversionState:", "quotationCommand: new Function('owner','action','body'," + json.dumps(command) + "), quotationConversionState:")
     _run_node(script, tmp_path, "quotation-conversion-duplicate.js")
 
 
@@ -104,6 +106,8 @@ const vm={{
   if(toasts.length!==1||!toasts[0].message.includes("常用箱已创建")||!toasts[0].message.includes("不要重复提交"))throw new Error("partial success truth was hidden");
 }})().catch(error=>{{console.error(error);process.exit(1);}});
 """
+    command = _method_body("quotationCommand(owner, action, body) {", "quotationCommandFailed(owner, action, pending, error) {")
+    script = script.replace("quotationConversionState:", "quotationCommand: new Function('owner','action','body'," + json.dumps(command) + "), quotationConversionState:")
     _run_node(script, tmp_path, "quotation-conversion-refresh.js")
 
 
@@ -135,6 +139,8 @@ const makeVm=()=>({{
   }}
 }})().catch(error=>{{console.error(error);process.exit(1);}});
 """
+    command = _method_body("quotationCommand(owner, action, body) {", "quotationCommandFailed(owner, action, pending, error) {")
+    script = script.replace("quotationConversionState:", "quotationCommand: new Function('owner','action','body'," + json.dumps(command) + "), quotationConversionState:")
     _run_node(script, tmp_path, "quotation-conversion-errors.js")
 
 

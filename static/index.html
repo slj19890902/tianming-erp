@@ -3541,32 +3541,32 @@
               <div v-if="quotationCustomer" class="panel" style="margin-bottom:14px">
                 <div class="form-grid" style="margin-bottom:10px">
                   <div class="field"><label>客户</label><div><strong>{{ quotationCustomer.name }}</strong></div></div>
-                  <div class="field"><label>报价日期</label><input class="input" type="date" v-model="quotationDraft.quotation_date" :disabled="!quotationEditable" /></div>
-                  <div class="field wide"><label>报价备注</label><input class="input" v-model.trim="quotationDraft.remarks" :disabled="!quotationEditable" /></div>
+                  <div class="field"><label>报价日期</label><input class="input" type="date" v-model="quotationDraft.quotation_date" :disabled="loading || quotationActionBusy() || !quotationEditable" /></div>
+                  <div class="field wide"><label>报价备注</label><input class="input" v-model.trim="quotationDraft.remarks" :disabled="loading || quotationActionBusy() || !quotationEditable" /></div>
                 </div>
                 <div class="table-wrap">
                   <table class="quotation-edit-table">
                     <thead><tr><th>产品名称</th><th>临时编码</th><th>箱型</th><th>长</th><th>宽</th><th>高</th><th>材质</th><th>楞型</th><th>数量</th><th class="cost-sensitive">预估成本</th><th class="cost-sensitive">毛利率%</th><th class="cost-sensitive">建议单价</th><th>最终单价</th><th>备注</th><th>操作</th></tr></thead>
                     <tbody><tr v-for="(line,index) in quotationDraft.items" :key="line._key || line.id || index">
-                      <td><input class="input compact-input" v-model.trim="line.product_name" placeholder="产品名称" :disabled="!quotationEditable" /></td>
-                      <td><input class="input compact-input" v-model.trim="line.temporary_code" placeholder="仅供参考" :disabled="!quotationEditable" /></td>
-                      <td><select class="select" v-model="line.box_type" :disabled="!quotationEditable" @change="refreshQuotationLine(line)"><option v-for="boxType in productBoxStyleOptions" :key="boxType" :value="boxType">{{ boxType }}</option></select></td>
-                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.length_mm" :disabled="!quotationEditable" @change="refreshQuotationLine(line)" /></td>
-                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.width_mm" :disabled="!quotationEditable" @change="refreshQuotationLine(line)" /></td>
-                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.height_mm" :disabled="!quotationEditable" @change="refreshQuotationLine(line)" /></td>
-                      <td style="min-width:190px"><search-select v-model="line.material_id" :options="materialSelectOptions('',null,null)" label-key="_label" value-key="id" placeholder="搜索材质" :disabled="!quotationEditable" @change="onQuotationMaterialSelected(line)"></search-select><div class="muted" style="font-size:11px">{{ line.material_supplier || '-' }}｜{{ line.material_code || '-' }}</div></td>
-                      <td><select class="select" v-model="line.flute_type" :disabled="!quotationEditable" @change="onQuotationFluteChange(line)"><option value="">请选择</option><option v-for="opt in quotationFluteOptions(line)" :key="opt" :value="opt">{{ opt === "NONE" ? "卡纸" : opt }}</option></select></td>
-                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.quantity" :disabled="!quotationEditable" /></td>
+                      <td><input class="input compact-input" v-model.trim="line.product_name" placeholder="产品名称" :disabled="loading || quotationActionBusy() || !quotationEditable" /></td>
+                      <td><input class="input compact-input" v-model.trim="line.temporary_code" placeholder="仅供参考" :disabled="loading || quotationActionBusy() || !quotationEditable" /></td>
+                      <td><select class="select" v-model="line.box_type" :disabled="loading || quotationActionBusy() || !quotationEditable" @change="refreshQuotationLine(line)"><option v-for="boxType in productBoxStyleOptions" :key="boxType" :value="boxType">{{ boxType }}</option></select></td>
+                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.length_mm" :disabled="loading || quotationActionBusy() || !quotationEditable" @change="refreshQuotationLine(line)" /></td>
+                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.width_mm" :disabled="loading || quotationActionBusy() || !quotationEditable" @change="refreshQuotationLine(line)" /></td>
+                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.height_mm" :disabled="loading || quotationActionBusy() || !quotationEditable" @change="refreshQuotationLine(line)" /></td>
+                      <td style="min-width:190px"><search-select v-model="line.material_id" :options="materialSelectOptions('',null,null)" label-key="_label" value-key="id" placeholder="搜索材质" :disabled="loading || quotationActionBusy() || !quotationEditable" @change="onQuotationMaterialSelected(line)"></search-select><div class="muted" style="font-size:11px">{{ line.material_supplier || '-' }}｜{{ line.material_code || '-' }}</div></td>
+                      <td><select class="select" v-model="line.flute_type" :disabled="loading || quotationActionBusy() || !quotationEditable" @change="onQuotationFluteChange(line)"><option value="">请选择</option><option v-for="opt in quotationFluteOptions(line)" :key="opt" :value="opt">{{ opt === "NONE" ? "卡纸" : opt }}</option></select></td>
+                      <td><input class="input quotation-number-input" type="number" min="1" step="1" v-model.number="line.quantity" :disabled="loading || quotationActionBusy() || !quotationEditable" /></td>
                       <td class="cost-sensitive"><strong>{{ line.estimated_unit_cost == null ? '待计算' : money(line.estimated_unit_cost) }}</strong></td>
-                      <td class="cost-sensitive"><input class="input quotation-number-input" type="number" min="0" max="99" step="0.1" v-model.number="line.margin_rate" :disabled="!quotationEditable" @change="refreshQuotationLine(line)" /></td>
+                      <td class="cost-sensitive"><input class="input quotation-number-input" type="number" min="0" max="99" step="0.1" v-model.number="line.margin_rate" :disabled="loading || quotationActionBusy() || !quotationEditable" @change="refreshQuotationLine(line)" /></td>
                       <td class="cost-sensitive"><strong>{{ line.suggested_unit_price == null ? '待计算' : money(line.suggested_unit_price) }}</strong><div class="muted" style="font-size:11px">{{ line._message || '' }}</div></td>
-                      <td><input class="input quotation-price-input" type="number" min="0" step="0.0001" v-model.number="line.final_unit_price" :disabled="!quotationEditable" @input="line._final_manual=true" /><div v-if="line.customer_square_price != null" class="muted" style="font-size:11px">{{ line.price_source || '客户平方价' }}：￥{{ money(line.customer_square_price) }}/㎡</div></td>
-                      <td><input class="input compact-input" v-model.trim="line.remarks" :disabled="!quotationEditable" /></td>
-                      <td><button class="btn small danger" :disabled="!quotationEditable || quotationDraft.items.length===1" @click="removeQuotationLine(index)">删除</button></td>
+                      <td><input class="input quotation-price-input" type="number" min="0" step="0.0001" v-model.number="line.final_unit_price" :disabled="loading || quotationActionBusy() || !quotationEditable" @input="line._final_manual=true" /><div v-if="line.customer_square_price != null" class="muted" style="font-size:11px">{{ line.price_source || '客户平方价' }}：￥{{ money(line.customer_square_price) }}/㎡</div></td>
+                      <td><input class="input compact-input" v-model.trim="line.remarks" :disabled="loading || quotationActionBusy() || !quotationEditable" /></td>
+                      <td><button class="btn small danger" :disabled="loading || quotationActionBusy() || !quotationEditable || quotationDraft.items.length===1" @click="removeQuotationLine(index)">删除</button></td>
                     </tr></tbody>
                   </table>
                 </div>
-                <div class="toolbar" style="margin-top:10px"><button class="btn" :disabled="!quotationEditable" @click="addQuotationLine">增加一行</button><strong>预计报价合计：￥ {{ money(quotationDraftTotal) }}</strong></div>
+                <div class="toolbar" style="margin-top:10px"><button class="btn" :disabled="loading || quotationActionBusy() || !quotationEditable" @click="addQuotationLine">增加一行</button><strong>预计报价合计：￥ {{ money(quotationDraftTotal) }}</strong></div>
               </div>
               <div class="panel">
                 <div class="toolbar"><strong>报价历史</strong><button class="btn" :disabled="loading || quotationActionBusy()" @click="loadQuotationHistory">刷新</button></div>
@@ -27102,6 +27102,8 @@
             this.contractDraft.items.splice(index, 1);
           },
           async openCustomerQuotations(row) {
+            if (this.loading || this.quotationActionBusy()) return;
+            this.quotationHistory = [];
             this.quotationCustomer = { id:row.id, name:row.name };
             this.newQuotationDraft();
             this.activePage = "quotations";
@@ -27138,8 +27140,15 @@
           },
           async loadQuotationHistory() {
             if (!this.quotationCustomer?.id) return;
-            const {data} = await axios.get("/api/quotations", {params:{customer_id:this.quotationCustomer.id}});
-            this.quotationHistory = data.items || [];
+            const customerId = this.quotationCustomer.id;
+            const request = this._quotationHistoryRequest = Number(this._quotationHistoryRequest || 0) + 1;
+            const generation = this.authGeneration, page = this.activePage;
+            const current = () => this._quotationHistoryRequest === request && this.quotationCustomer?.id === customerId
+              && this.authGeneration === generation && this.activePage === page;
+            try {
+              const {data} = await axios.get("/api/quotations", {params:{customer_id:customerId}});
+              if (current()) this.quotationHistory = data.items || [];
+            } catch (error) { if (current()) throw error; }
           },
           onQuotationMaterialSelected(line) {
             const material = this._findMaterial(line.material_id);
@@ -27149,7 +27158,6 @@
             const allowed = this.orderItemFluteOptions(line.layer_count);
             const current = String(line.flute_type || "").toUpperCase();
             line.flute_type = allowed.includes(current) ? current : (this.getDefaultFluteByLayer(line.layer_count) || "");
-            line._final_manual = false;
             this.refreshQuotationLine(line);
           },
           quotationFluteOptions(line) {
@@ -27161,10 +27169,8 @@
             if (value && !allowed.includes(value)) line.flute_type = "";
             this.refreshQuotationLine(line);
           },
-          async refreshQuotationLine(line) {
-            if (!line.box_type) return;
-            try {
-              const {data} = await axios.post("/api/quotations/preview", {
+          quotationPreviewInput(line) {
+            return {
                 customer_id:this.quotationCustomer?.id || null,
                 box_type:line.box_type,
                 length_mm:line.length_mm || null,
@@ -27173,19 +27179,44 @@
                 material_id:line.material_id || null,
                 flute_type:line.flute_type || null,
                 margin_rate:Number(line.margin_rate ?? 20),
-              });
+            };
+          },
+          async refreshQuotationLine(line) {
+            const draft = this.quotationDraft;
+            const generation = this.authGeneration, page = this.activePage;
+            const sequence = line._previewSequence = Number(line._previewSequence || 0) + 1;
+            const input = this.quotationPreviewInput(line);
+            const fingerprint = JSON.stringify(input);
+            const current = () => this.quotationDraft === draft && draft.items.includes(line)
+              && this.authGeneration === generation && this.activePage === page
+              && line._previewSequence === sequence && JSON.stringify(this.quotationPreviewInput(line)) === fingerprint;
+            line._previewPending = true;
+            line._previewReady = "";
+            line.estimated_unit_cost = null;
+            line.suggested_unit_price = null;
+            line.customer_square_price = null;
+            line.price_source = "";
+            if (!line._final_manual) line.final_unit_price = null;
+            try {
+              if (!line.box_type) return;
+              const {data} = await axios.post("/api/quotations/preview", input);
+              if (!current()) return;
               line.estimated_unit_cost = data.estimated_unit_cost;
               line.suggested_unit_price = data.suggested_unit_price;
               line.customer_square_price = data.customer_square_price ?? null;
               line.price_source = data.price_source || "";
               line._message = [data.message, data.price_source].filter(Boolean).join("｜");
+              line._previewReady = fingerprint;
               if (!line._final_manual && data.suggested_unit_price != null) {
                 line.final_unit_price = Number(data.suggested_unit_price);
               }
             } catch(error) {
+              if (!current()) return;
               line.estimated_unit_cost = null;
               line.suggested_unit_price = null;
               line._message = this.errorMessage(error);
+            } finally {
+              if (line._previewSequence === sequence) line._previewPending = false;
             }
           },
           quotationPayload() {
@@ -27195,6 +27226,9 @@
               remarks:this.quotationDraft.remarks || null,
               items:this.quotationDraft.items.map((line,index) => {
                 if (!String(line.product_name || "").trim()) throw new Error(`第${index+1}条请填写产品名称`);
+                if (!line._final_manual && (line._previewPending || line._previewReady !== JSON.stringify(this.quotationPreviewInput(line)))) {
+                  throw new Error(`第${index+1}条单价尚未完成计算，请稍后保存或手工确认最终单价`);
+                }
                 if (line.final_unit_price === null || line.final_unit_price === undefined || line.final_unit_price === "") throw new Error(`第${index+1}条请确认最终单价`);
                 return {
                   product_name:String(line.product_name).trim(),
@@ -27217,10 +27251,21 @@
           },
           async persistQuotation(showMessage=true, refreshHistory=true) {
             if (!this.quotationCustomer?.id) throw new Error("请先选择客户");
-            const payload = this.quotationPayload();
-            const response = this.quotationDraft.id
-              ? await axios.put(`/api/quotations/${this.quotationDraft.id}`, payload)
-              : await axios.post("/api/quotations", payload, {params:{customer_id:this.quotationCustomer.id}});
+            const draft = this.quotationDraft;
+            const customerId = this.quotationCustomer.id;
+            const body = {...this.quotationPayload(), expected_version:draft.id ? draft.version : null};
+            const pending = this.quotationCommand(draft, "save", body);
+            let response;
+            try {
+              response = draft.id
+                ? await axios.put(`/api/quotations/${draft.id}`, pending.payload)
+                : await axios.post("/api/quotations", pending.payload, {params:{customer_id:customerId}});
+            } catch (error) {
+              this.quotationCommandFailed(draft, "save", pending, error);
+              throw error;
+            }
+            delete draft._commands.save;
+            if (this.quotationDraft !== draft || this.quotationCustomer?.id !== customerId) return response.data;
             this.quotationDraft = this.hydrateQuotation(response.data);
             if (refreshHistory) {
               if (showMessage) {
@@ -27232,6 +27277,31 @@
               this.showToast(`报价草稿 ${response.data.quotation_no} 已保存`);
             }
             return response.data;
+          },
+          quotationCommand(owner, action, body) {
+            owner._commands ||= {};
+            const fingerprint = JSON.stringify(body);
+            const previous = owner._commands[action];
+            if (previous?.fingerprint === fingerprint) return previous;
+            if (previous?.uncertain) throw new Error("上次提交结果尚未核实，请先恢复原提交内容重试或刷新报价历史核对");
+            const key = globalThis.crypto?.randomUUID?.() || `quote-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            return owner._commands[action] = {fingerprint, payload:{...JSON.parse(fingerprint),idempotency_key:key},uncertain:false};
+          },
+          quotationCommandFailed(owner, action, pending, error) {
+            if (!error?.response || Number(error.response.status) >= 500) pending.uncertain = true;
+            else if (owner._commands?.[action] === pending) delete owner._commands[action];
+          },
+          async submitQuotationAction(row, action) {
+            const pending = this.quotationCommand(row, action, {expected_version:row.version});
+            try {
+              const {data} = await axios.post(`/api/quotations/${row.id}/${action}`, pending.payload);
+              delete row._commands[action];
+              if (this.quotationDraft.id === row.id) this.quotationDraft = this.hydrateQuotation(data);
+              return data;
+            } catch (error) {
+              this.quotationCommandFailed(row, action, pending, error);
+              throw error;
+            }
           },
           async saveQuotationDraft() {
             if (this.loading || this.quotationActionBusy()) return false;
@@ -27246,8 +27316,8 @@
             this.loading = true;
             this.quotationDraftAction = "generate";
             try {
-              const saved = await this.persistQuotation(false, false);
-              const {data} = await axios.post(`/api/quotations/${saved.id}/generate`);
+              if (!this.quotationDraft._commands?.generate?.uncertain) await this.persistQuotation(false, false);
+              const data = await this.submitQuotationAction(this.quotationDraft, "generate");
               this.quotationDraft = this.hydrateQuotation(data);
               window.open(`/quotation-print.html?id=${data.id}`,"_blank");
               await this.refreshQuotationHistoryAfterMutation(`报价单 ${data.quotation_no} 已生成`);
@@ -27311,7 +27381,7 @@
               quotationNo:target.quotationNo,
               confirmMessage:`确认客户已接受报价单 ${target.quotationNo} 吗？`,
               task:async() => {
-                await axios.post(`/api/quotations/${target.id}/accept`);
+                await this.submitQuotationAction(row, "accept");
                 await this.refreshQuotationHistoryAfterMutation("已标记为客户接受，可以转入常用箱");
                 return true;
               },
@@ -27332,7 +27402,7 @@
               quotationNo:target.quotationNo,
               confirmMessage:`确认作废报价单 ${target.quotationNo} 吗？`,
               task:async() => {
-                await axios.post(`/api/quotations/${target.id}/void`);
+                await this.submitQuotationAction(row, "void");
                 await this.refreshQuotationHistoryAfterMutation("报价单已作废");
                 return true;
               },
@@ -27351,6 +27421,7 @@
             const allowedFlutes = this.orderItemFluteOptions(layerCount);
             const currentFlute = String(item.flute_type || "").trim().toUpperCase();
             this.quotationConvertForm = {
+              expected_version:quotation.version,
               quotation_item_id:item.id,
               product_code:String(item.temporary_code || "").trim(),
               product_name:String(item.product_name || "").trim(),
@@ -27448,6 +27519,7 @@
             const integerOrNull = value => value === null || value === undefined || value === ""
               ? null : this.normalizeMmInteger(value);
             return {
+              expected_version:form.expected_version,
               product_code:String(form.product_code).trim(),
               product_name:String(form.product_name).trim(),
               flute_type:String(form.flute_type).trim().toUpperCase(),
@@ -27472,7 +27544,8 @@
             if (state.saving || state.committed || state.outcomeUncertain) return {_in_flight:true};
             const itemId = Number(this.quotationConvertForm?.quotation_item_id || 0);
             if (!Number.isInteger(itemId) || itemId <= 0) throw new Error("报价明细不存在，不能转入常用箱");
-            const payload = JSON.parse(JSON.stringify(this.quotationConvertPayload()));
+            const pending = this.quotationCommand(this.quotationConvertForm, "convert", this.quotationConvertPayload());
+            const payload = pending.payload;
             this.quotationConversionState = {saving:true,committed:false,outcomeUncertain:false,itemId,productId:null};
             let data;
             try {

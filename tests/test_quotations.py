@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from quotation_contract_client import QuotationContractClient as TestClient
 from sqlalchemy.orm import sessionmaker
 
 
@@ -470,7 +470,7 @@ def test_seven_layer_quotation_converts_to_product_without_material_flute_backfi
 
         result = convert_to_product(
             item.id,
-            ConvertPayload(product_code=f"Q7-{flute_type}"),
+            ConvertPayload(expected_version=1, idempotency_key="seven-layer-convert", product_code=f"Q7-{flute_type}"),
             db=db,
             user=user,
             _product_creator=user,
@@ -582,7 +582,7 @@ def test_seven_layer_quotation_rejects_invalid_flute_on_save_and_conversion(
         with pytest.raises(HTTPException) as conversion_error:
             convert_to_product(
                 item.id,
-                ConvertPayload(product_code=f"Q7-BAD-{suffix}"),
+                ConvertPayload(expected_version=1, idempotency_key="seven-layer-convert", product_code=f"Q7-BAD-{suffix}"),
                 db=db,
                 user=user,
                 _product_creator=user,

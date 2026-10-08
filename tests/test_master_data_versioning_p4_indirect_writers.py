@@ -321,7 +321,7 @@ def test_quotation_convert_to_product_records_v1(db: Session) -> None:
 
     result = convert_to_product(
         item.id,
-        ConvertPayload(product_code="QUOTE-P4-001", flute_type="B"),
+        ConvertPayload(product_code="QUOTE-P4-001", flute_type="B", expected_version=1, idempotency_key="indirect-quote-convert"),
         db=db,
         user=user,
         _product_creator=user,

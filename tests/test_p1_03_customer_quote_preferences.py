@@ -4,7 +4,7 @@ from collections.abc import Generator
 from decimal import Decimal
 
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from quotation_contract_client import QuotationContractClient as TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 

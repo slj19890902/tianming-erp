@@ -21,9 +21,14 @@ def pending_stock(db, scope):
         if lot.finished_detail:
             product_ids = [lot.finished_detail.product_id]
         else:
-            from app.services.processed_component_stock import output_identity
-            identity=output_identity(db,lot)
-            product_ids=[identity[0]] if identity else []
+            profile=db.get(WarehouseGoodsProfile,lot.id)
+            try:
+                data=json.loads(profile.data_json) if profile else {}
+            except (ValueError,TypeError):
+                continue
+            # Reference counts describe identified physical pieces. The strict
+            # action preview below separately verifies identity and ownership.
+            product_ids=data.get('product_ids',[]) if data.get('output_piece') and data.get('processing') in {'cut','die_cut','printed'} else []
         for pid in product_ids:
             lots_by_product[pid].append(lot)
     if not lots_by_product:
@@ -73,12 +78,13 @@ def pending_stock(db, scope):
         # Show the shortage for the next possible set, never invent a purchase quantity.
         for child in children:
             child['reference_quantity']=child['quantity']
-            child['quantity']=(verified or {}).get('component_availability',{}).get(child['product_id'],0)
-            child['missing_next_set'] = max(0, (verified_capacity+1)*child['per_set']-child['quantity'])
+            child['verified_quantity']=(verified or {}).get('component_availability',{}).get(child['product_id'],0)
+            child['missing_next_set'] = max(0, (capacity+1)*child['per_set']-child['quantity'])
         result.append(dict(key=f'stock:{parent_id}', source_kind='stock', customer_id=parent.customer_id,
             parent_product_id=parent_id,can_assemble_stock=can_assemble,assembly_block=assembly_block,
             customer_name=parent.customer.chinese_short_name or parent.customer.name,
             order_number='备库 · '+parent.product_code, product_name=parent.product_name,
-            available_sets=verified_capacity,reference_available_sets=capacity,children=children, sources=sources, outputs=[],
+            available_sets=capacity,reference_available_sets=capacity,verified_available_sets=verified_capacity,
+            children=children, sources=sources, outputs=[],
             notice='未预占子件，配套数仅供参考；组装仍需核实本体、实物身份及实际数量。'))
     return result

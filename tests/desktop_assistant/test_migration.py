@@ -31,6 +31,12 @@ class MigrationRehearsalTests(unittest.TestCase):
         self.assertEqual(report['source_revision'],'r1');self.assertEqual(report['target_revision'],'r2')
         self.assertEqual(sha(self.database),before);self.assertEqual(self.manager.state,state)
         self.assertTrue(report['source_unchanged']);self.assertEqual(report['attachments_verified'],2)
+        job=Path(report['report_path']).parent
+        self.assertTrue((job/'report.json').is_file())
+        self.assertTrue((job/'migration.log').is_file())
+        self.assertFalse((job/'shared').exists())
+        self.assertFalse((job/'release').exists())
+        self.assertIn('deleted_bytes',report['temporary_cleanup']['shared'])
 
     def test_equal_counts_do_not_hide_changed_business_values(self):
         before=sha(self.database)

@@ -516,6 +516,9 @@ def main():
         import tempfile
         from types import SimpleNamespace
         from desktop_assistant.onboarding import self_test_powershell
+        from desktop_assistant.cleanup import remove_owned_tree
+        from desktop_assistant.retention import cleanup_releases
+        assert callable(cleanup_releases)
         assert browser_url({'ERP_PORT': '18000', 'ERP_BROWSER_URL': 'https://example.com/',
                             'ERP_LAN_HTTP_ORIGIN': 'http://192.168.3.80:8000'}) == 'http://192.168.3.80:8000/'
         if getattr(sys, 'frozen', False):
@@ -524,6 +527,10 @@ def main():
         with tempfile.TemporaryDirectory(prefix='tm-assistant-ui-check-') as temp:
             root = Path(temp)
             (root / 'control').mkdir()
+            copies = root / 'self-test-copies'
+            copies.mkdir()
+            (copies / 'disposable.txt').write_text('synthetic')
+            assert remove_owned_tree(copies, root) > 0 and not copies.exists()
             probe = SimpleNamespace(root=root, state={'current': None, 'previous': None})
             window = tk.Tk()
             window.withdraw()

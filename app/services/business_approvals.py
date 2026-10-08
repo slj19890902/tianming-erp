@@ -1,5 +1,6 @@
 """Typed customer-scoped requests. No business writes occur before review."""
 from datetime import datetime
+from decimal import Decimal
 import hashlib
 import json
 from fastapi import HTTPException
@@ -25,6 +26,13 @@ def encoded(value):
 
 def digest(value):
     return hashlib.sha256(encoded(value).encode()).hexdigest()
+
+
+def field_value(value):
+    # Compare the persisted numeric value, not JSON float/Decimal formatting.
+    if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+        return Decimal(str(value))
+    return value
 
 def specs(action):
     from app.api import customers, products, orders, requisition, deliveries, finance, invoice_tasks
@@ -189,8 +197,18 @@ def review(db,user,request_id,body):
             payload=json.loads(row.payload_json)
             if basis(db,row.action,row.target_id,row.customer_id,payload,applicant)!=row.basis_hash:
                 raise HTTPException(409,"关联资料已变化，请重新提交核对后的申请")
-            schema,_,fn,arg=specs(row.action)
+            schema,model,fn,arg=specs(row.action)
             validated=hydrate(db,row.action,row.target_id,payload) if row.action in FIELDS else schema.model_validate(payload)
+            expected_fields = {}
+            before_fields = {}
+            if row.action in FIELDS:
+                entity = db.get(model, row.target_id)
+                for key in payload.keys() & FIELDS[row.action].keys():
+                    expected = getattr(validated, key)
+                    if key in {"customer_drawing_number", "customer_category", "customer_model"} and isinstance(expected, str):
+                        expected = expected.strip()
+                    expected_fields[key] = expected
+                    before_fields[key] = getattr(entity, key)
             if row.action in {"customer_update","product_update"} and body.confirmation_token:
                 validated.confirmation_token=body.confirmation_token
             kwargs={"payload":validated,"db":db,"user":user}
@@ -209,7 +227,19 @@ def review(db,user,request_id,body):
                 event.remove(db,"before_commit",forbid_early_commit)
             if hasattr(result,"model_dump"): result=result.model_dump(mode="json")
             # Only store the business identity, never an admin's full response.
-            row.result_json=encoded({k:result[k] for k in ("id","order_number","delivery_number","statement_number","status") if isinstance(result,dict) and k in result})
+            outcome = {k:result[k] for k in ("id","order_number","delivery_number","statement_number","status") if isinstance(result,dict) and k in result}
+            if row.action in FIELDS:
+                db.flush()
+                db.refresh(entity)
+                applied = {}
+                for key, expected in expected_fields.items():
+                    actual = getattr(entity, key)
+                    if field_value(actual) != field_value(expected):
+                        raise HTTPException(409, f"{FIELDS[row.action][key]}未按申请保存，本次审批未生效，请核对后重新提交")
+                    if field_value(before_fields[key]) != field_value(actual):
+                        applied[key] = {"before": before_fields[key], "after": actual}
+                outcome.update(applied_fields=applied, no_change=not bool(applied))
+            row.result_json=encoded(outcome)
             row.status="applied"
         else:
             if not body.note.strip(): raise HTTPException(422,"请填写拒绝原因")

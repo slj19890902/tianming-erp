@@ -8,7 +8,7 @@ FIELDS = {
     },
     "product_update": {
         "product_name":"产品名称", "customer_material_code":"存货编码", "customer_model":"客户型番",
-        "customer_product_name":"客户用途", "material_id":"材质代码", "flute_type":"楞型",
+        "customer_drawing_number":"客户图号", "customer_category":"客户类别", "material_id":"材质代码", "flute_type":"楞型",
         "layer_count":"层数", "length_mm":"长 mm", "width_mm":"宽 mm", "height_mm":"高 mm",
         "sale_unit_price":"销售单价", "report_length_mm":"报料长 mm", "report_width_mm":"报料宽 mm",
         "production_notes":"生产备注", "remark":"备注",
@@ -23,8 +23,9 @@ def hydrate(db, action, target_id, patch):
     obj = db.get(model, target_id)
     if obj is None:
         raise HTTPException(404, "申请关联资料不存在")
-    if set(patch) - set(FIELDS[action]) - {"expected_version"}:
-        raise HTTPException(422, "申请包含不支持修改的字段")
+    supported = set(FIELDS[action]) & set(schema.model_fields)
+    if set(patch) - supported - {"expected_version"}:
+        raise HTTPException(422, "申请包含已停用或不支持修改的字段，请按当前资料重新提交")
     if hasattr(obj, "version") and patch.get("expected_version") != obj.version:
         raise HTTPException(409, "资料版本已变化，请重新打开申请")
     data = {key:getattr(obj,key) for key in schema.model_fields if hasattr(obj,key)}

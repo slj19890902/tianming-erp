@@ -147,9 +147,9 @@ def assemble_subkit_inventory(
             elif pid not in member_ids or (lot.finished_detail is not None and lot.finished_detail.is_general):
                 raise SubkitError("组套原片产品、客户或集货状态不匹配")
             if not is_body and lot.inventory_type=='semi_finished':
-                from app.services.processed_component_stock import matches_output
+                from app.services.processed_component_stock import eligible_output
                 from app.services.finished_stock_identity import compiled_product_bases
-                if (graph_product_id is None or not matches_output(db,lot,product_id=pid,
+                if (graph_product_id is None or not eligible_output(db,lot,product_id=pid,
                         customer_id=order.customer_id,expected_basis=compiled_product_bases(compiled)[pid])
                         or any(r.reservation_type!='semi_order' or r.semi_requirement_id is not None
                             or r.yield_factor!=1 or r.credited_requirement_quantity!=r.reserved_stock_quantity

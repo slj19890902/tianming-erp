@@ -108,3 +108,29 @@ def test_processed_output_never_reuses_source_board_as_rectangle(eligibility_db)
             lots=[SemiFinishedLotVersion(lot.id,lot.version)], operator_id=data['admin'].id,
             idempotency_key='unknown-output',confirmed=True,override=True,
             warning_acknowledged_codes=[CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,SIGNATURE_OVERRIDE_WARNING])
+
+
+def test_processed_800x600_output_with_mold_four_is_one_to_one_when_saved(eligibility_db):
+    from app.services.finished_stock_identity import product_basis
+    db,data=eligibility_db;p,lot,profile,facts,item,r=prepare(db,data)
+    p.length_mm=p.report_length_mm=400;p.width_mm=p.report_width_mm=300
+    p.default_cutting_mode='一开四'
+    r.board_length_mm=item.snapshot_report_length_mm=400
+    r.board_width_mm=item.snapshot_report_width_mm=300;r.stock_yield_per_sheet=4
+    lot.semi_finished_detail.board_length_mm=800;lot.semi_finished_detail.board_width_mm=600
+    lot.semi_finished_detail.owner_customer_id=p.customer_id
+    facts.update(scope='customers',customer_ids=[p.customer_id],product_ids=[p.id],
+        output_piece=True,dimension_basis='source_board',physical_basis=product_basis(p))
+    profile.data_json=json.dumps(facts);db.commit()
+    assert rectangular_cut_plan(db,lot,p,requirement_signature(r)) is None
+    rows=semi_finished_candidates_for_product(db,product_id=p.id,customer_id=p.customer_id,
+        board_length_mm=400,board_width_mm=300,material_code='A416D',flute_type='B',
+        component_type='whole',pieces_per_box=1,stock_yield_per_sheet=4)
+    assert rows[0].deductible_requirement_quantity==6 and rows[0].cut_plan is None
+    assert next(c for c in candidate_items(db,lot) if c['product_id']==p.id)['selectable']
+    result=reserve_semi_finished_inventory(db,requirement_id=r.id,requested_requirement_quantity=5,
+        lots=[SemiFinishedLotVersion(lot.id,lot.version)],operator_id=data['admin'].id,
+        idempotency_key='processed-mold-four',confirmed=True,override=True,
+        warning_acknowledged_codes=[CUSTOMER_GENERIC_SEMI_FINISHED_STOCK,SIGNATURE_OVERRIDE_WARNING])
+    assert result.reservations[0].reserved_stock_quantity==result.reservations[0].credited_requirement_quantity==5
+    assert result.reservations[0].yield_factor==1

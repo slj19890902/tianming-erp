@@ -125,6 +125,10 @@ def test_old_finished_stock_reserved_not_assembled(composite_requisition_app, _p
     app, factory = composite_requisition_app
     seed_graph(factory)
     with factory() as db:
+        from app.models.product import Product
+        material=db.get(Product,2).material
+        material.quote_price=2;material.price_unit='元/㎡'
+        material.purchase_currency='CNY';material.purchase_tax_included=True
         ids = []
         for pid, qty in [(2,32),(3,38)]:
             target = _receipt_auto_finished_ground_target(db, claim=True, customer_id=1, product_id=pid)
@@ -181,6 +185,10 @@ def test_real_new_order_automatically_reserves_exact_stock(composite_requisition
     app, factory = composite_requisition_app
     seed_graph(factory)
     with factory() as db:
+        from app.models.product import Product
+        material=db.get(Product,2).material
+        material.quote_price=2;material.price_unit='元/㎡'
+        material.purchase_currency='CNY';material.purchase_tax_included=True
         target = _receipt_auto_finished_ground_target(db,claim=True,customer_id=1,product_id=2)
         lot = manual_finished_in(db,customer_id=1,product_id=2,location_id=target.location.id,
             quantity=80,stock_date=beijing_today(),source_type='manual',remarks='已加工',operator_id=1,

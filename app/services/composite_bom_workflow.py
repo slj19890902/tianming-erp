@@ -1143,6 +1143,31 @@ def kit_available_sets_by_order_item_ids(
     return result
 
 
+def _validate_graph_component_stock(db, *, reservation, snapshot_id, lot):
+    """Validate the exact physical FIFO source against its frozen rule."""
+    from app.models.multilevel_bom import OrderBomGraph
+    from app.services.multilevel_bom_orders import read_order_bom_source_contract
+    from app.services.multilevel_bom_plan import BomPlanError
+    from app.services.finished_stock_identity import compiled_product_bases, matches_stock_identity
+    snapshot=db.get(SalesOrderItemBomComponent,snapshot_id)
+    if snapshot is None:
+        raise CompositeBomWorkflowError('送货组件来源快照已失效')
+    if db.get(OrderBomGraph,snapshot.sales_order_item_id) is None:
+        return  # Ordinary legacy BOM retains its existing contract.
+    try:
+        compiled=read_order_bom_source_contract(db,snapshot.sales_order_item_id,snapshot_id)
+        expected=compiled_product_bases(compiled)[snapshot.component_product_id]
+    except (BomPlanError,KeyError) as error:
+        raise CompositeBomWorkflowError('送货组件缺少可靠冻结实物身份') from error
+    detail=lot.finished_detail if lot else None
+    if (not lot or lot.inventory_type!='finished' or lot.status!='active' or not detail
+            or reservation.order_item_id!=snapshot.sales_order_item_id
+            or detail.product_id!=snapshot.component_product_id
+            or (detail.owner_customer_id!=compiled.graph.customer_id and not detail.is_general)
+            or not matches_stock_identity(detail.physical_basis_json,expected)):
+        raise CompositeBomWorkflowError('所选送货批次与冻结BOM实物身份不一致')
+
+
 def build_delivery_component_consumption_plan(
     db: Session,
     *,
@@ -1174,6 +1199,8 @@ def build_delivery_component_consumption_plan(
         for reservation in _stock_reservations(db, demand.snapshot_id):
             quantity = min(_remaining_reservation_quantity(reservation), remaining)
             if quantity:
+                _validate_graph_component_stock(db,reservation=reservation,snapshot_id=demand.snapshot_id,
+                    lot=db.get(InventoryLot,reservation.inventory_lot_id))
                 parts.append(ConsumptionPart("stock", demand.snapshot_id, reservation.id, quantity))
                 remaining -= quantity
             if not remaining:
@@ -1311,6 +1338,7 @@ def execute_delivery_component_consumption(
                 lot = db.get(InventoryLot, reservation.inventory_lot_id)
                 if lot is None or _remaining_reservation_quantity(reservation) < part.quantity:
                     raise CompositeBomWorkflowError("组件成品预占数量不足，请刷新后重试")
+                _validate_graph_component_stock(db,reservation=reservation,snapshot_id=part.snapshot_id,lot=lot)
                 from app.services.bom_inventory_contract import is_body_lot
                 if is_body_lot(lot):
                     raise CompositeBomWorkflowError("未组装本体不能作为完整产品送货，请先完成组装")

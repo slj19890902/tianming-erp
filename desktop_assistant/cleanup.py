@@ -23,9 +23,9 @@ def local_path(path: Path) -> Path:
                 raise ValueError('清理路径包含链接或重解析点')
         except FileNotFoundError:
             pass
-    if path.resolve() != path:
-        raise ValueError('清理路径解析不一致')
-    return path
+    # Windows may expand ADMINI~1 and other 8.3 names. Resolve after rejecting
+    # every reparse component; callers compare canonical parent boundaries.
+    return path.resolve()
 
 
 def assert_idle(root: Path) -> None:
@@ -41,7 +41,7 @@ def assert_idle(root: Path) -> None:
                 values.extend(value for key, value in proc.environ().items()
                               if key.startswith(('ERP_', 'TM_ERP_'))
                               and key.endswith(('_PATH', '_DIR', '_ROOT', '_CONTROL')))
-            if any(prefix in str(value).casefold() for value in values if value):
+            if any(prefix in str(value).replace('/', os.sep).casefold() for value in values if value):
                 raise ValueError('目录仍被运行进程引用')
         except psutil.NoSuchProcess:
             continue

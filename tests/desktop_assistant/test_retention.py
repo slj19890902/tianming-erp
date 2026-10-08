@@ -172,6 +172,18 @@ def test_owned_tree_rejects_escape_git_and_links(tmp_path,monkeypatch):
     assert child.exists()
 
 
+def test_windows_short_names_still_use_canonical_boundary(tmp_path,monkeypatch):
+    import ctypes
+    buffer=ctypes.create_unicode_buffer(32768)
+    assert ctypes.windll.kernel32.GetShortPathNameW(str(tmp_path),buffer,len(buffer))
+    short=Path(buffer.value)
+    assert cleanup.local_path(short)==tmp_path.resolve()
+    child=short/'copies';child.mkdir();(child/'fixture').write_text('owned')
+    monkeypatch.setattr(cleanup,'assert_idle',lambda p:None)
+    assert cleanup.remove_owned_tree(child,short)==5
+    assert not child.exists()
+
+
 def test_fuse_upload_queue_never_counts_as_synced(monkeypatch):
     import io
     class Kernel:

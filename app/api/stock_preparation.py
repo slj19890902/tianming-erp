@@ -145,7 +145,7 @@ def post_group_action(body:GroupAction,db:Session=Depends(get_db),user:User=Depe
         if not parent:
             raise HTTPException(404,'组合产品不存在')
         require_customer_access(parent.customer_id,user,db)
-        if body.action!='plan':
+        if body.action not in {'plan','assemble_stock'}:
             from app.models.stock_preparation import StockPreparationJob
             import json
             for job in db.scalars(select(StockPreparationJob)):
@@ -200,14 +200,22 @@ def post_action(receipt_id:int,body:Action,db:Session=Depends(get_db),user:User=
     try:
         _,item,_=service.source(db,receipt_id)
         require_customer_access(item.customer_id,user,db)
+        output_kind=body.output_kind
+        if 'output_kind' not in body.model_fields_set:
+            from app.models.stock_preparation import StockPreparationJob
+            import json
+            job=db.get(StockPreparationJob,body.job_id) if body.job_id else None
+            if body.action=='process' or (job and json.loads(job.product_snapshot).get('auto_planned')):
+                output_kind='semi'
         with atomic_bom(db):
             if body.action == 'process' or (body.action == 'complete' and body.actual_input_quantity is not None):
                 from app.services.stock_preparation_processing import process
-                result=process(db,receipt_id,body.model_dump(),user)
+                result=process(db,receipt_id,dict(body.model_dump(),output_kind=output_kind),user)
             else:
                 legacy_payload=body.model_dump()
                 legacy_payload.pop('actual_input_quantity',None)
-                result=service.mutate(db,receipt_id=receipt_id,payload=legacy_payload,actor=user,output_kind=body.output_kind)
+                legacy_payload['output_kind']=output_kind
+                result=service.mutate(db,receipt_id=receipt_id,payload=legacy_payload,actor=user,output_kind=output_kind)
                 if body.action=='complete':
                     result.update(completed_job_id=result['job_id'],continuation_job_id=None,remaining_input_quantity=0)
         db.commit()

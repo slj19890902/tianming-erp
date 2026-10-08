@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.567"
-APP_VERSION_NAME = "独立模数与供应商开料"
+APP_VERSION = "v0.22.568"
+APP_VERSION_NAME = "补库套数与来料任务修复"
 APP_BUILD_DATE = "2026-10-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5395,3 +5395,16 @@ APP_VERIFICATION_STEPS = [
     "抽查旧送货打印图号和顺序；实体打印与现场生产尺寸由管理员验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.567：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "库存BOM预警可直接修改本次报料套数，按有效库存与在途抵扣后计算子件张数；新增报料按新到旧排列。",
+    "补库保存后显示原单号和查看入口，修正库存入口误报列表刷新失败；原补库采购单可按真实来源打印来料任务单。",
+    "模具标签显示独立模数；需要一开多的任务把分切列为第一道工序，并保留完整后续流程。",
+    "待入库区域在地图无实物变化时核验承接新版本，避免收料因过期地图关联被拒绝。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新ERP确认v0.22.568，在库存BOM预警将000205本次套数改为1800，核对已有库存和在途抵扣后的子件数量。",
+    "从原已报料单SRO-20261008-0001打开来料任务单；收料时按实际到货登记，无需重复报料。",
+    "核对模具标签显示几模；有一开多的任务第一步显示分切，实体打印由管理员验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.568：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

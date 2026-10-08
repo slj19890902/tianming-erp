@@ -30,16 +30,26 @@ def fail(message):
 
 
 def source(db, receipt_id):
+    cache = db.info.get('stock_preparation_projection')
+    if cache is None:
+        return _source(db, receipt_id)
+    if receipt_id not in cache.sources:
+        cache.sources[receipt_id] = _source(db, receipt_id)
+    return cache.sources[receipt_id]
+
+
+def _source(db, receipt_id):
     receipt = db.get(IncomingReceiptItem, receipt_id)
     item = db.get(StockReplenishmentOrderItem, receipt.stock_replenishment_item_id) if receipt and receipt.stock_replenishment_item_id else None
     if item:
-        from app.models.raw_purchase_plan import RawPurchasePlan
-        if db.scalar(select(RawPurchasePlan.id).where(RawPurchasePlan.stock_item_id==item.id)):
+        from app.services.stock_preparation_read import has_raw_plan
+        if has_raw_plan(db, item.id):
             fail('统一原片已按订单分配，请从订单片料加工入口确认，不得重复安排备库生产')
         return receipt, item, db.get(InventoryLot, receipt.received_inventory_lot_id) if receipt.received_inventory_lot_id else None
-    purpose = db.scalar(select(IncomingReceiptPurposeAllocation).where(
+    cache = db.info.get('stock_preparation_projection')
+    purpose = (cache.purposes_by_receipt.get(receipt_id) if cache else db.scalar(select(IncomingReceiptPurposeAllocation).where(
         IncomingReceiptPurposeAllocation.incoming_receipt_item_id == receipt_id
-    )) if receipt else None
+    ))) if receipt else None
     if (not purpose or purpose.status != "posted"
             or purpose.purpose_contract_status_snapshot != "frozen"
             or purpose.surplus_disposition != "semi_finished_reserve"
@@ -97,8 +107,18 @@ def location_name(db, lot):
 
 
 def job_dict(db, job):
+    cache = db.info.get('stock_preparation_projection')
+    if cache is None:
+        return _job_dict(db, job)
+    if job.id not in cache.job_results:
+        cache.job_results[job.id] = _job_dict(db, job)
+    return cache.job_results[job.id]
+
+
+def _job_dict(db, job):
+    cache = db.info.get('stock_preparation_projection')
     output = db.get(InventoryLot, job.output_lot_id) if job.output_lot_id else None
-    outputs = list(db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type == "stock_preparation", InventoryLot.source_ref_id == job.id))) if output else []
+    outputs = (cache.outputs[job.id] if cache else list(db.scalars(select(InventoryLot).where(InventoryLot.source_ref_type == "stock_preparation", InventoryLot.source_ref_id == job.id)))) if output else []
     active_outputs = [lot for lot in outputs if lot.status == 'active' and
                       lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged > 0]
     locations = [dict(lot_id=lot.id, location_id=lot.warehouse_location_id,
@@ -118,30 +138,35 @@ def job_dict(db, job):
         output_location_id=locations[0]['location_id'] if len({v['location_id'] for v in locations}) == 1 else None)
 
 
-def list_rows(db, *, scope=None, query=""):
-    stmt = select(StockReplenishmentOrderItem).join(StockReplenishmentOrder).where(StockReplenishmentOrder.status != "draft")
-    if scope is not None:
-        stmt = stmt.where(StockReplenishmentOrderItem.customer_id.in_(scope))
+def list_rows(db, *, scope=None, query="", include_movements=True):
+    from app.services.stock_preparation_read import projection
+    with projection(db, scope) as cache:
+        rows = _list_rows(db, cache, query)
+        if include_movements:
+            cache.attach_movements(rows)
+        return rows
+
+
+def _list_rows(db, cache, query):
     rows = []
-    for item in db.scalars(stmt.order_by(StockReplenishmentOrderItem.id.desc())):
-        receipts = list(db.scalars(select(IncomingReceiptItem).where(IncomingReceiptItem.stock_replenishment_item_id == item.id).order_by(IncomingReceiptItem.id)))
-        from app.services.replenishment_receipt_progress import receipt_progress
-        pending = receipt_progress(db, item)['remaining_quantity']
+    for item in cache.items:
+        receipts = cache.receipts[item.id]
+        posted = [r for r in receipts if r.status == 'posted']
+        actual = sum(r.received_quantity for r in posted) if posted else int(item.stocked_quantity or 0)
+        closed = any(r.resolution_action == 'accept_short' and r.resolution_status == 'resolved' for r in posted)
+        pending = 0 if closed else max(0, item.quantity - actual)
         sources = receipts + ([None] if pending or not receipts else [])
         for receipt in sources:
             # Pre-receipt-ledger replenishments already have a real stock lot.
             # Preserve that source; absence of a newer receipt is not waiting for goods.
             legacy_lot = db.get(InventoryLot, item.inventory_lot_id) if not receipts and item.inventory_lot_id else None
             lot = db.get(InventoryLot, receipt.received_inventory_lot_id) if receipt and receipt.received_inventory_lot_id else legacy_lot
-            jobs = list(db.scalars(select(Job).where(Job.receipt_item_id == receipt.id).order_by(Job.id))) if receipt else []
-            commands = list(db.scalars(select(Command).where(Command.receipt_item_id == receipt.id).order_by(Command.created_at, Command.operation_key))) if receipt else []
+            jobs = cache.jobs[receipt.id] if receipt else []
+            commands = cache.commands[receipt.id] if receipt else []
             keep = next((json.loads(c.request_json)["action"] for c in reversed(commands) if json.loads(c.request_json)["action"].startswith("keep_")), None)
             lot_family = [lot] if lot else []
             if legacy_lot and legacy_lot.source_ref_type and legacy_lot.source_ref_id:
-                lot_family = list(db.scalars(select(InventoryLot).where(
-                    InventoryLot.source_ref_type == legacy_lot.source_ref_type,
-                    InventoryLot.source_ref_id == legacy_lot.source_ref_id,
-                    InventoryLot.inventory_type == legacy_lot.inventory_type)))
+                lot_family = cache.families[(legacy_lot.source_ref_type, legacy_lot.source_ref_id, legacy_lot.inventory_type)]
                 owner = (legacy_lot.finished_detail or legacy_lot.semi_finished_detail)
                 lot_family = [l for l in lot_family if (l.finished_detail or l.semi_finished_detail) and owner
                     and (l.finished_detail or l.semi_finished_detail).owner_customer_id == owner.owner_customer_id
@@ -168,26 +193,17 @@ def list_rows(db, *, scope=None, query=""):
                 product_id=item.reference_product_id or item.product_id, factor=item.stock_yield_per_sheet, pieces_per_box=item.pieces_per_box,
                 jobs=[job_dict(db,j) for j in jobs],
                 history=[dict(at=utc_naive_to_api(c.created_at), action=json.loads(c.request_json)["action"], actor_id=c.actor_id) for c in commands],
-                movements=[dict(at=utc_naive_to_api(m.created_at),reason=m.reason,quantity=m.quantity,unit='张' if m.unit=='sheets' else '只',order_item_id=m.related_order_item_id,lot_id=m.inventory_lot_id,available_before=m.before_available,available_after=m.after_available) for m in db.scalars(select(InventoryMovement).where(InventoryMovement.inventory_lot_id.in_([l.id for l in lot_family]+[j.output_lot_id for j in jobs if j.output_lot_id])).order_by(InventoryMovement.id))] if lot else [])
+                movements=[])
+            cache.row_lots[row['key']] = [l.id for l in lot_family]+[j.output_lot_id for j in jobs if j.output_lot_id] if lot else []
             if query.casefold() in " ".join(str(row[k] or "") for k in ("code","name","customer_name","order_number","lot_number")).casefold():
                 rows.append(row)
-    purpose_stmt = select(IncomingReceiptPurposeAllocation).where(
-        IncomingReceiptPurposeAllocation.status == "posted",
-        IncomingReceiptPurposeAllocation.purpose_contract_status_snapshot == "frozen",
-        IncomingReceiptPurposeAllocation.surplus_disposition == "semi_finished_reserve",
-        IncomingReceiptPurposeAllocation.receipt_reserve_purpose_sheet_qty > 0,
-        IncomingReceiptPurposeAllocation.source_kind == "order_item",
-        IncomingReceiptPurposeAllocation.component_type == "whole",
-    )
-    if scope is not None:
-        purpose_stmt = purpose_stmt.where(IncomingReceiptPurposeAllocation.customer_id.in_(scope))
-    for purpose in db.scalars(purpose_stmt.order_by(IncomingReceiptPurposeAllocation.id.desc())):
+    for purpose in cache.purposes:
         try:
             receipt, item, lot = source(db, purpose.incoming_receipt_item_id)
         except WarehouseInventoryError:
             continue
-        jobs = list(db.scalars(select(Job).where(Job.receipt_item_id == receipt.id).order_by(Job.id)))
-        commands = list(db.scalars(select(Command).where(Command.receipt_item_id == receipt.id).order_by(Command.created_at, Command.operation_key)))
+        jobs = cache.jobs[receipt.id]
+        commands = cache.commands[receipt.id]
         keep = next((json.loads(c.request_json)["action"] for c in reversed(commands)
                      if json.loads(c.request_json)["action"].startswith("keep_")), None)
         physical = lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged
@@ -226,15 +242,9 @@ def list_rows(db, *, scope=None, query=""):
             history=[dict(at=utc_naive_to_api(c.created_at),
                           action=json.loads(c.request_json)["action"], actor_id=c.actor_id)
                      for c in commands],
-            movements=[dict(
-                at=utc_naive_to_api(m.created_at), reason=m.reason, quantity=m.quantity,
-                unit='张' if m.unit == 'sheets' else '只',
-                order_item_id=m.related_order_item_id, lot_id=m.inventory_lot_id,
-                available_before=m.before_available, available_after=m.after_available,
-            ) for m in db.scalars(select(InventoryMovement).where(
-                InventoryMovement.inventory_lot_id.in_(related_lot_ids)
-            ).order_by(InventoryMovement.id))],
+            movements=[],
         )
+        cache.row_lots[row['key']] = related_lot_ids
         if query.casefold() in " ".join(str(row[k] or "") for k in (
             "code", "name", "customer_name", "order_number", "lot_number"
         )).casefold():

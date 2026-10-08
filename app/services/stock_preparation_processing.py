@@ -17,7 +17,8 @@ def processing_block(db, item, lot):
         return '通用多送备料沿原用途保留，需要时另行安排'
     if not lot or lot.inventory_type != 'semi_finished':
         return '这批来料不属于待加工原纸'
-    if db.scalar(select(RawPurchasePlan.id).where(RawPurchasePlan.stock_item_id == item.id)):
+    from app.services.stock_preparation_read import has_raw_plan
+    if has_raw_plan(db, item.id):
         return '统一原片已按订单分配，请使用订单加工入口'
     if not (item.reference_product_id or item.product_id):
         return '通用备料未指定加工产品'

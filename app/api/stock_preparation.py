@@ -179,20 +179,24 @@ def post_group_action(body:GroupAction,db:Session=Depends(get_db),user:User=Depe
 def get_rows(q:str=Query('',max_length=150), state:str='', workspace:bool=False, page:int=Query(1,ge=1),page_size:int=Query(20,ge=1,le=100),
              db:Session=Depends(get_db),user:User=Depends(PermissionChecker('orders.view'))):
     scope=None if has_unrestricted_customer_access(user,db) else customer_scope_ids(user,db)
-    rows=service.list_rows(db,scope=scope,query='' if workspace else q)
-    counts={key:sum(row['status']==key for row in rows) for key in ['arrange','pending','waiting','keep','stock','history']}
-    filtered=group_service.workspace_rows(db,rows,state) if workspace else ([row for row in rows if row['status']==state] if state else [row for row in rows if row['status']!='history'])
-    if workspace and q.strip():
-        filtered=[row for row in filtered if q.strip().casefold() in group_service.encode(row).casefold()]
-    pending_keys=set()
-    for row in rows:
-        if row['status']=='arrange' and row['can_plan'] and row['available']>0:
-            pending_keys.add('legacy:'+str(row['receipt_item_id']))
-        for job in row['jobs']:
-            if job['status']=='pending':
-                group=job['product'].get('preparation_group')
-                pending_keys.add('group:'+group['key'] if group else 'job:'+str(job['id']))
-    return dict(items=filtered[(page-1)*page_size:page*page_size],total=len(filtered),counts=counts,page=page,page_size=page_size,workspace_pending_count=len(pending_keys))
+    from app.services.stock_preparation_read import projection
+    with projection(db,scope) as cache:
+        rows=service.list_rows(db,scope=scope,query='' if workspace else q,include_movements=bool(q.strip()))
+        counts={key:sum(row['status']==key for row in rows) for key in ['arrange','pending','waiting','keep','stock','history']}
+        filtered=group_service.workspace_rows(db,rows,state) if workspace else ([row for row in rows if row['status']==state] if state else [row for row in rows if row['status']!='history'])
+        if workspace and q.strip():
+            filtered=[row for row in filtered if q.strip().casefold() in group_service.encode(row).casefold()]
+        pending_keys=set()
+        for row in rows:
+            if row['status']=='arrange' and row['can_plan'] and row['available']>0:
+                pending_keys.add('legacy:'+str(row['receipt_item_id']))
+            for job in row['jobs']:
+                if job['status']=='pending':
+                    group=job['product'].get('preparation_group')
+                    pending_keys.add('group:'+group['key'] if group else 'job:'+str(job['id']))
+        selected=filtered[(page-1)*page_size:page*page_size]
+        if not q.strip():cache.attach_movements(selected)
+        return dict(items=selected,total=len(filtered),counts=counts,page=page,page_size=page_size,workspace_pending_count=len(pending_keys))
 
 
 @router.post('/stock-preparation/{receipt_id}/actions')

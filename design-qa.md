@@ -25,7 +25,7 @@ State: standard display, isolated administrator, 3F E racks, G1 elevation open. 
 
 ## Verification evidence
 
-`chrome-modules.json`: 15 module/view states, 1920 and 1366 large mode; no horizontal document overflow, footer inside viewport, original topbar hidden, outer tabs absent. `chrome-tools.json`: separate approval page, workspace preservation, refresh, password form, draft action guard, narrow sidebar, logout; zero script exceptions in final normal run.
+`chrome-modules.json`: 16 module/view states, 1920 and 1366 large mode; no horizontal document overflow, footer inside viewport, original topbar hidden, outer tabs absent. `chrome-tools.json`: separate approval page, workspace preservation, refresh, password form, draft action guard, narrow sidebar, logout; zero script exceptions in final normal run.
 History/cache check used real Chrome text input in a disposable password form, browser forward/back, and verified the input remained; canceled without submitting a password change. A preliminary DOM-value-only test did not emit input and was corrected; it is not counted as a product failure.
 An artificial randomUUID-removal probe initially affected every nested document and exposed the unchanged map bundle's dependency; it was discarded as a visual run. The new navigation helper is independently tested with getRandomValues only (no randomUUID). Normal final Chrome runs have no script exceptions.
 Browser extension was unavailable. Verification used a separate headless Google Chrome profile through its local DevTools interface against `http://127.0.0.1:18569` only. No IAB, Playwright CLI/MCP, or production page automation.

@@ -56,6 +56,7 @@ def processed_lots(factory, quantities=((2,32),(3,38))):
                 expected_layout_version=target.layout_version)
             db.add(WarehouseGoodsProfile(lot_id=lot.id,data_json=json.dumps(dict(scope='customers',
                 customer_ids=[1],product_ids=[pid],processing='cut',output_piece=True,
+                mold_tool_id=None,verified_material_id=None,face_paper='unknown',material_code=material.code,
                 dimension_basis='source_board',quantity_unit='pieces',remaining_processes=[],
                 physical_basis=bases[pid]))))
             ids.append(lot.id)
@@ -66,6 +67,8 @@ def processed_lots(factory, quantities=((2,32),(3,38))):
 @pytest.mark.parametrize('dispatch_output',[False,True])
 def test_processed_children_reserve_once_assemble_api_reverse_and_release(composite_requisition_app,_p181_published_map_identity,dispatch_output):
     app,factory=composite_requisition_app;seed_physical_graph(factory)
+    from app.api.deliveries import router
+    app.include_router(router,prefix='/api/deliveries')
     ids=processed_lots(factory,((2,32),(3,40 if dispatch_output else 38)))
     with factory() as db:
         assert len(reserve_new_order_stock(db,order_item_id=1,operator_id=1))==2
@@ -79,6 +82,11 @@ def test_processed_children_reserve_once_assemble_api_reverse_and_release(compos
         db.commit()
     with TestClient(app) as client:
         _login(client)
+        from app.core.time_contract import beijing_today
+        delivery_payload={'customer_id':1,'delivery_date':beijing_today().isoformat(),
+            'items':[{'order_item_id':1,'delivered_quantity':1}]}
+        # Completed child pieces alone are never parent delivery stock.
+        assert client.post('/api/deliveries',json=delivery_payload).status_code==400
         pending=client.get('/api/production/pending-assemblies')
         assert pending.status_code==200,pending.text
         row=next(r for r in pending.json()['items'] if r.get('order_item_id')==1)
@@ -97,22 +105,38 @@ def test_processed_children_reserve_once_assemble_api_reverse_and_release(compos
             old_cost=output.estimated_unit_cost_snapshot
             assert old_cost>0
         if dispatch_output:
-            from app.core.time_contract import beijing_today
-            from app.models.delivery import Delivery,DeliveryItem
             from app.models.order import OrderItem
-            from app.services.delivery_snapshots import build_order_delivery_snapshot
-            from app.services.composite_bom_workflow import execute_delivery_component_consumption
+            from app.models.delivery import Delivery
             with factory() as db:
                 item=db.get(OrderItem,1)
-                delivery=Delivery(delivery_number='PROCESSED-OUTPUT-DISPATCH',customer_id=1,
-                    delivery_date=beijing_today(),status='dispatched')
-                db.add(delivery);db.flush()
-                line=DeliveryItem(delivery_id=delivery.id,order_item_id=item.id,delivered_quantity=1,
-                    **build_order_delivery_snapshot(db,item,1))
-                db.add(line);db.flush()
-                execute_delivery_component_consumption(db,delivery_item_id=line.id,delivery_sets=1,
-                    operator_id=1,operation_key='processed-output-dispatch')
-                item.delivered_quantity=1;db.commit()
+                assert item.material_status=='pending'
+                output=db.get(InventoryLot,conversion.output_lot_id)
+                basis=output.finished_detail.physical_basis_json
+                output.finished_detail.physical_basis_json=None;db.commit()
+            assert client.post('/api/deliveries',json=delivery_payload).status_code==400
+            with factory() as db:
+                db.get(InventoryLot,conversion.output_lot_id).finished_detail.physical_basis_json=basis;db.commit()
+            delivery=client.post('/api/deliveries',json=delivery_payload)
+            assert delivery.status_code==201,delivery.text
+            did=delivery.json()['id']
+            with factory() as db:
+                db.get(InventoryLot,conversion.output_lot_id).finished_detail.physical_basis_json=None;db.commit()
+            refused=client.put(f'/api/deliveries/{did}/dispatch')
+            assert refused.status_code==409,refused.text
+            with factory() as db:
+                assert db.get(Delivery,did).status=='pending'
+                assert db.get(InventoryLot,conversion.output_lot_id).quantity_consumed==0
+                db.get(InventoryLot,conversion.output_lot_id).finished_detail.physical_basis_json=basis;db.commit()
+            sent=client.put(f'/api/deliveries/{did}/dispatch')
+            assert sent.status_code==200,sent.text
+            with factory() as db:
+                assert db.get(InventoryLot,conversion.output_lot_id).quantity_consumed==1
+                assert db.get(OrderItem,1).delivered_quantity==1
+        else:
+            # Nine physically assembled parents cannot ship ten sets.
+            refused=client.post('/api/deliveries',json={**delivery_payload,
+                'items':[{'order_item_id':1,'delivered_quantity':10}]})
+            assert refused.status_code==409,refused.text
         reversed_result=client.post(f'/api/production/assemblies/{cid}/reverse',json={'confirm_reverse':True})
         if dispatch_output:
             assert reversed_result.status_code==409,reversed_result.text
@@ -201,3 +225,65 @@ def test_processed_children_and_real_body_assemble_together(composite_requisitio
         assert {r.output_product_id:r.quantity for r in made}=={4:10,1:4}
         assert body.quantity_consumed==4
         assert [db.get(InventoryLot,lid).quantity_consumed for lid in ids]==[20,60]
+
+
+def test_replenishment_counts_processed_pieces_once_not_source_boards(composite_requisition_app,_p181_published_map_identity):
+    app,factory=composite_requisition_app;seed_physical_graph(factory)
+    ids=processed_lots(factory)
+    from app.services.stock_replenishment import free_bom_component_coverage,customer_board_preparation_coverage
+    with factory() as db:
+        parent=db.get(Product,1);parent.unit='套'
+        assert free_bom_component_coverage(db,parent)=={'sets':9,'pieces':{2:32,3:38}}
+        for pid in (2,3):
+            board=customer_board_preparation_coverage(db,product=db.get(Product,pid),output_per_sheet=1)
+            assert board['available_auto_cover_piece_quantity']==0
+        reserve_new_order_stock(db,order_item_id=1,operator_id=1)
+        assert free_bom_component_coverage(db,parent)=={'sets':0,'pieces':{2:2,3:0}}
+
+
+@pytest.mark.parametrize('bad_first',[True,False])
+def test_delivery_does_not_skip_bad_fifo_identity_for_later_good_stock(composite_requisition_app,_p181_published_map_identity,bad_first):
+    app,factory=composite_requisition_app;seed_physical_graph(factory)
+    from app.api.deliveries import router
+    app.include_router(router,prefix='/api/deliveries')
+    from app.services.production_workflow import _receipt_auto_finished_ground_target
+    from app.services.warehouse_inventory import manual_finished_in
+    from app.core.time_contract import beijing_today
+    with factory() as db:
+        target=_receipt_auto_finished_ground_target(db,claim=True,customer_id=1,product_id=1)
+        ids=[]
+        for index in (1,2):
+            lot=manual_finished_in(db,customer_id=1,product_id=1,location_id=target.location.id,
+                quantity=1,stock_date=beijing_today(),source_type='manual',remarks=None,operator_id=1,
+                expected_layout_version=target.layout_version,idempotency_key=f'fifo-parent-{index}')
+            ids.append(lot.id)
+        reserve_new_order_stock(db,order_item_id=1,operator_id=1)
+        db.commit()
+    with TestClient(app) as client:
+        _login(client)
+        payload={'customer_id':1,'delivery_date':beijing_today().isoformat(),
+            'items':[{'order_item_id':1,'delivered_quantity':1 if bad_first else 2}]}
+        response=client.post('/api/deliveries',json=payload)
+        assert response.status_code==201,response.text
+        did=response.json()['id']
+        if bad_first:
+            with factory() as db:
+                db.get(InventoryLot,ids[0]).finished_detail.physical_basis_json=None;db.commit()
+            assert client.post('/api/deliveries',json=payload).status_code==400
+            # The real FIFO planner/executor also fails, independently of the
+            # delivery page readiness gate. A later good lot cannot mask it.
+            from app.models.delivery import DeliveryItem
+            from app.services.composite_bom_workflow import (build_delivery_component_consumption_plan,
+                execute_delivery_component_consumption,CompositeBomWorkflowError)
+            with factory() as db:
+                line=db.scalar(select(DeliveryItem).where(DeliveryItem.delivery_id==did))
+                with pytest.raises(CompositeBomWorkflowError):
+                    build_delivery_component_consumption_plan(db,delivery_item_id=line.id,delivery_sets=1)
+                with pytest.raises(CompositeBomWorkflowError):
+                    execute_delivery_component_consumption(db,delivery_item_id=line.id,delivery_sets=1,
+                        operator_id=1,operation_key='bad-first-dispatch')
+        dispatched=client.put(f'/api/deliveries/{did}/dispatch')
+        assert dispatched.status_code==(409 if bad_first else 200),dispatched.text
+    with factory() as db:
+        assert [db.get(InventoryLot,lid).quantity_reserved for lid in ids]==([1,1] if bad_first else [0,0])
+        assert [db.get(InventoryLot,lid).quantity_consumed for lid in ids]==([0,0] if bad_first else [1,1])

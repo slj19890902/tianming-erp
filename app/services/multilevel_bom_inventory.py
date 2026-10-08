@@ -91,7 +91,7 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
         snapshot_ids = {r.id for r in compiled.snapshots}
         from app.services.composite_bom_workflow import _remaining_reservation_quantity
         reserved = defaultdict(int)
-        from app.services.processed_component_stock import processed_reservations, matches_output
+        from app.services.processed_component_stock import processed_reservations, eligible_output
         from app.services.finished_stock_identity import compiled_product_bases
         processed = processed_reservations(db,compiled,item.id)
         for r in processed:
@@ -131,7 +131,7 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
                     or (not is_body and lot.finished_detail is not None and lot.finished_detail.is_general) or staging_owner(db, lid)
                     or (owner is not None and owner != item.id)):
                 raise SubkitError("逐层组装来源产品、客户、订单或集货状态不匹配")
-            if not is_body and lot.inventory_type=='semi_finished' and not matches_output(db,lot,product_id=pid,
+            if not is_body and lot.inventory_type=='semi_finished' and not eligible_output(db,lot,product_id=pid,
                     customer_id=order.customer_id,expected_basis=compiled_product_bases(compiled)[pid]):
                 raise SubkitError('已加工子件与订单冻结身份不一致')
             if reserved[lid] > lot.quantity_reserved:

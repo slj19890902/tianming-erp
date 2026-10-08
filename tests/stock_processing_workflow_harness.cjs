@@ -25,6 +25,9 @@ const context=()=>({...sandbox.definition.methods,...sandbox.mix.methods,authGen
  await a.saveStockAssembly();const key=payload.operation_key;assert.equal(payload.jobs[0].lot_id,5);
  await a.saveStockAssembly();assert.equal(payload.operation_key,key);
  a.stockAssemblyDialog.sets=3;payload=null;await a.saveStockAssembly();assert.equal(payload,null,'edited sets require a fresh preview');
+ const opening=context();opening.ensureStockLocations=async()=>true;opening.stockLastLocation=()=>7;opening.previewStockAssembly=async()=>{};
+ await opening.openStockAssembly({parent_product_id:9,available_sets:20,verified_available_sets:3});
+ assert.equal(opening.stockAssemblyDialog.sets,3,'reference stock is not the actionable assembly quantity');
  const b=context();b.loadStockPreparation=async()=>{throw Error('must not refresh old login');};
  sandbox.axios.post=async()=>{b.authGeneration++;return {};};
  assert.equal(await b.stockPrepAction(row,'complete',job),false,'late results do not update a new login');

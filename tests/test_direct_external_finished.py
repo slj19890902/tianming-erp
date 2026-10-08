@@ -1,6 +1,7 @@
 from decimal import Decimal
 from fastapi.testclient import TestClient
 from sqlalchemy import select, func
+from app.core.time_contract import beijing_today
 import pytest
 
 from test_p1_40b_external_packaging_routing import routing_app, p1_40a_app, _login, _seed_price, _order_payload_for
@@ -175,7 +176,7 @@ def test_order_delivery_print_keeps_customer_quantity_and_projects_physical(rout
             physical_unit = item.external_packaging_purchase_unit_snapshot
         request = {
             'customer_id': routing_app.state.fixture['customer_a'],
-            'delivery_date': '2026-09-26',
+                'delivery_date': beijing_today().isoformat(),
             'lines': [{'order_item_id': item_id, 'delivered_quantity': customer_quantity}],
         }
         too_many = client.post('/api/deliveries', json={**request,

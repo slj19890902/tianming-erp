@@ -14,6 +14,27 @@ def processed_match(db, lot, product, expected):
     detail = lot.semi_finished_detail
     if not detail:
         return None
+    if profile and (profile.get('output_piece') or profile.get('dimension_basis') == 'source_board'):
+        from app.services.finished_stock_identity import product_basis, matches_stock_identity
+        from app.services.sheet_cutting_settings import theoretical_product_yield
+        # A completed physical part is a single piece. Its source dimensions and
+        # mold yield describe input, and must never create additional output.
+        known = bool(profile.get('output_piece') is True
+            and profile.get('scope') == 'customers'
+            and profile.get('customer_ids') == [product.customer_id]
+            and profile.get('product_ids') == [product.id]
+            and detail.owner_customer_id == product.customer_id
+            and detail.component_type == expected.component_type
+            and detail.pieces_per_box == detail.stock_yield_per_sheet == 1
+            and detail.flute_type == expected.flute_type
+            and not qualification_issues(db, lot, product, expected_material_code=expected.normalized_material_code)
+            and matches_stock_identity(profile.get('physical_basis'), product_basis(product))
+            and (expected.board_length_mm, expected.board_width_mm) == (
+                product.base_report_length_mm if expected.component_type == 'base' else product.report_length_mm,
+                product.base_report_width_mm if expected.component_type == 'base' else product.report_width_mm)
+            and expected.stock_yield_per_sheet == theoretical_product_yield(product, expected.component_type))
+        return dict(known=known, automatic=False, score=100 if known else 0,
+            reason='已加工专用子件，按实际片数使用' if known else '已加工子件身份或冻结规格需核对')
     if (profile or {}).get('processing') == 'dedicated_component':
         from app.services.unfinished_components import component_match
         return component_match(db,lot,product,expected,profile)

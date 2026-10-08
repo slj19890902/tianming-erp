@@ -12,6 +12,7 @@ const rack = {id: "rack-f9", rack_code: "F9", levels: 3, level_cell_counts: [3, 
 const locations = Array.from({length: 9}, (_, index) => ({
   location_id: 101 + index, map_rack_id: rack.id, level_no: Math.floor(index / 3) + 1,
   slot_no: index % 3 + 1, location_name: `F9第${Math.floor(index / 3) + 1}层第${index % 3 + 1}格`, items: [],
+  position_status: 'mapped',
 }));
 const sandbox = {
   window: {addEventListener() {}, removeEventListener() {}},
@@ -42,6 +43,42 @@ function render(overrides = {}) {
   const emptyControls = nodes(tree).filter(node => node.props.className?.includes("mold-rack-empty-spine"));
   return {selected, inspected, selectedLots, emptyControls, nodes: nodes(tree)};
 }
+
+test('first rack read and failed read never claim that formal locations are absent', () => {
+  for (const state of [{inventoryLoading: true}, {inventoryError: '读取超时'}]) {
+    const {nodes, emptyControls} = render({locations: [], ...state});
+    const text = nodes.flatMap(node => node.children.filter(child => typeof child === 'string')).join(' ');
+    assert.doesNotMatch(text, /未建正式货位|暂无已建空货位/);
+    assert.match(text, state.inventoryLoading ? /正在读取货架库存/ : /货架库存读取失败/);
+    assert.equal(emptyControls.length, 0);
+  }
+  let retried = 0;
+  const {nodes} = render({locations: [], inventoryError: '读取超时', onRetryInventory: () => retried++});
+  nodes.find(node => node.type === 'button' && node.children.includes('重新读取')).props.onClick();
+  assert.equal(retried, 1);
+});
+
+test('an existing rack cell with invalid map position remains visible and read-only', () => {
+  const {nodes, selected, inspected} = render({locations: locations.map(row => ({...row, position_status: 'unlocated'}))});
+  const text = nodes.flatMap(node => node.children.filter(child => typeof child === 'string')).join(' ');
+  assert.match(text, /货位位置待核对/);
+  assert.doesNotMatch(text, /未建正式货位/);
+  for (const button of nodes.filter(node => node.props.className === 'mold-rack-empty-spine')) button.props.onClick();
+  assert.deepEqual(selected, []);
+  assert.equal(inspected.length, 9);
+});
+
+test('formal rack identity survives an unmapped position or an unrelated local draft', () => {
+  const start = source.indexOf('  const focusedRackLocations =');
+  const end = source.indexOf('  const unboundRackLocationCount', start);
+  const code = ts.transpileModule(source.slice(start, end), {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText;
+  const row = {...locations[0], floor_code: '3F', address_kind: 'rack_slot', storage_type: 'rack', is_active: true, position_status: 'unplaced'};
+  const rows = [row, {...row, location_id: 102, map_rack_id: 'another'}, {...row, location_id: 103, is_active: false}];
+  const context = {useMemo: fn => fn(), dashboard: {locations: rows}, visualLocations: rows, focusedRack: rack,
+    floorCode: '3F', locationDrafts: {[row.location_id]: {}}, normalizeInventoryLocationProjection: value => value};
+  const found = vm.runInNewContext(code + '\nfocusedRackLocations;', context);
+  assert.deepEqual(Array.from(found, item => item.location_id), [101]);
+});
 
 test('search highlights only matching products and exact cells, and replaces old highlights for another product', () => {
   const stocked = locations.map((row,index) => ({...row, items:[{lot_id:index+1,product_id:index+1,inventory_code:`CODE-${index+1}`,unit:'pcs'}]}));
@@ -232,6 +269,7 @@ test("the selected empty cell opens its stocktake inspector without writing inve
   for (const allowed of [true, false]) {
     const actions = [];
     const context = {canStocktake: allowed, mapMode: "move", moveSource: null, spatialEditBusy: false,
+      focusedRackLocations: locations, dashboardLoading: false, dashboardError: '', locationDrafts: {},
       cameraFocusSequenceRef: {current: 0}, inspectorRef: {current: {scrollIntoView() {}}},
       requestAnimationFrame: fn => fn(),
       ...Object.fromEntries(["setRackFocusId", "setViewMode", "setMoveAction", "setSelected", "setLocationDetailOpen", "setCameraFocusTarget"].map(name => [name, value => actions.push([name, value])])),
@@ -242,6 +280,19 @@ test("the selected empty cell opens its stocktake inspector without writing inve
       assert.ok(actions.some(([name, value]) => name === "setSelected" && value.id === "erp-location-107"));
       assert.ok(actions.some(([name, value]) => name === "setLocationDetailOpen" && value === false));
     } else assert.deepEqual(actions, []);
+  }
+});
+
+test("rack add callback rejects stale reads, unplaced cells and unpublished drafts", () => {
+  const callback = source.slice(source.indexOf("  const chooseRackEmptyLocation ="), source.indexOf("  const switchWarehouseFloor ="));
+  const code = ts.transpileModule(callback, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText;
+  for (const override of [{dashboardLoading:true}, {dashboardError:'读取失败'},
+    {focusedRackLocations:locations.map(row => ({...row,position_status:'unplaced'}))},
+    {locationDrafts:{107:{}}}, {focusedRackLocations:[]}]) {
+    const context = {canStocktake:true, mapMode:'move', moveSource:null, spatialEditBusy:false,
+      focusedRackLocations:locations, dashboardLoading:false, dashboardError:'', locationDrafts:{},
+      setViewMode() { assert.fail('blocked rack must not open stock entry'); }, ...override};
+    vm.runInNewContext(code + '\nchooseRackEmptyLocation(107);',context);
   }
 });
 

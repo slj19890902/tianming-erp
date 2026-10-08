@@ -21,8 +21,8 @@ def test_incoming_success_guide_is_short_permission_scoped_and_truthful() -> Non
         '<section v-if="incomingNextStepGuide.visible',
         '<section v-if="warehouseFrameUrl || warehouseLedgerUrl"',
     )
-    assert "纸板已实收并自动形成成品，下一步直接去送货。" in guide
-    assert "已收部分已自动形成成品并可送货，未到齐的继续留在待入库。" in guide
+    assert "{{ incomingNextStepGuideMessage }}" in guide
+    assert "incomingNextStepGuide.hasFinished !== false && canDelivery" in guide
     assert "下一步：去送货" in guide
     assert "继续收料" in guide
     assert "canDelivery && pageAllowed('deliveries')" in guide

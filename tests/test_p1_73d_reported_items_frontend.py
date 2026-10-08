@@ -166,9 +166,10 @@ global.confirm=()=>true;global.createIdempotencyKey=()=> 'same-key';
 const calls=[];let first=true;
 global.axios={{put:async(url,payload)=>{{calls.push({{url,payload}});if(first){{first=false;throw new Error('network lost');}}return {{data:{{status:'voided'}}}};}}}};
 const row={{stable_id:'supplier_order:5:51',source_type:'supplier_order',document_id:5,document_number:'SRO-5',item_id:51,version:3,can_void_item:true,report_length_mm:600,report_width_mm:400,material_code:'A+B',flute_type:'B',requisition_qty:20,unit:'张'}};
-const vm={{reportedItemVoidAttempts:{{}},reportedItemSelections:{{[row.stable_id]:row}},reportedItemDetail:null,authGeneration:2,user:{{id:8}},toasts:[],
+const vm={{confirmOriginalBusinessAction:async()=>true,reportedItemVoidAttempts:{{}},reportedItemSelections:{{[row.stable_id]:row}},reportedItemDetail:null,authGeneration:2,user:{{id:8}},toasts:[],
   showToast(message){{this.toasts.push(String(message));}},errorMessage(error){{return error.message;}},resetPagePerformanceState(){{throw new Error('unexpected reset');}},
   async loadReportedDocuments(){{return true;}},
+  async loadRequisitionPendingPage(){{return true;}},
 }};
 const methods={json.dumps(bodies, ensure_ascii=False)};
 vm.reportedItemVoidAttempt=new Function('row',methods.reportedItemVoidAttempt).bind(vm);

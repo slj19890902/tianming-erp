@@ -1031,6 +1031,7 @@ def browse_semi_finished_inventory_for_product(
     customer_bound_only: bool = False,
     exact_flute_only: bool = False,
     exclude_exact_dimensions: bool = False,
+    include_equal_dimensions_piece_review: bool = False,
     eligible_only: bool = False,
     layer_count: int | None = None,
     crease_type: str | None = None,
@@ -1081,6 +1082,12 @@ def browse_semi_finished_inventory_for_product(
             or_(
                 SemiFinishedInventoryDetail.board_length_mm != expected.board_length_mm,
                 SemiFinishedInventoryDetail.board_width_mm != expected.board_width_mm,
+                and_(
+                    include_equal_dimensions_piece_review,
+                    SemiFinishedInventoryDetail.sheet_type == "net_sheet",
+                    SemiFinishedInventoryDetail.pieces_per_box != expected.pieces_per_box,
+                    SemiFinishedInventoryDetail.stock_yield_per_sheet == expected.stock_yield_per_sheet,
+                ),
             ) if exclude_exact_dimensions else True,
         )
         .order_by(*inventory_fifo_order_columns(), InventoryLot.id)
@@ -2802,12 +2809,22 @@ def consume_semi_finished_reservation(
                 raise WarehouseInventoryError("裁切分配资料已变化，请核对冻结方案", 409)
         from app.services.raw_purchase_plans import validate_reservation
         if not validate_reservation(db,reservation,lot,requirement,delivery=delivery_item_id is not None):
+            expected = requirement_signature(requirement)
+            if (delivery_item_id is not None
+                    and detail.normalized_material_code != expected.normalized_material_code
+                    and reservation.warning_acknowledged_by is not None):
+                # Only an already eligible direct liner delivery may keep its
+                # accepted actual material. Coverage rechecks every reservation,
+                # source, scope, face and one-to-one physical constraint first.
+                from app.services.liner_direct_delivery import liner_direct_coverage
+                if liner_direct_coverage(db, order_item) > 0:
+                    expected = replace(expected, normalized_material_code=detail.normalized_material_code)
             ensure_semi_finished_lot_eligibility(
                 db,
                 lot=lot,
                 product_id=requirement_product_id,
                 customer_id=order.customer_id,
-                expected=requirement_signature(requirement),
+                expected=expected,
             )
         if lot.version != expected_version:
             raise WarehouseInventoryError("库存已被其他人修改，请刷新后重试", 409)

@@ -1,0 +1,1 @@
+function n(e,r){if(typeof e!="number"||!Number.isSafeInteger(e)||e<=0||r!=="finished"&&r!=="semi_finished")return;const t=`/warehouse-ledger.html?${new URLSearchParams({readonly:"1",mode:"lookup",tab:r,inventory_type:r,lot_id:String(e)}).toString()}`;return`/static/index.html?${new URLSearchParams({page:"warehouse",warehouse_target:t}).toString()}`}export{n as b};

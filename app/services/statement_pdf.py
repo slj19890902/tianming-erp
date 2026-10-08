@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
@@ -31,21 +32,24 @@ def render_customer_statement_pdf(
         topMargin=10 * mm,
         bottomMargin=10 * mm,
     )
-    normal = ParagraphStyle("statement-normal", fontName=font_name, fontSize=8, leading=10)
+    normal = ParagraphStyle(
+        "statement-normal", fontName=font_name, fontSize=8, leading=10,
+        wordWrap="CJK", splitLongWords=True,
+    )
     heading = ParagraphStyle(
         "statement-heading", fontName=font_name, fontSize=15, leading=18, alignment=1
     )
-    story = [Paragraph(title, heading), Paragraph(subtitle, normal), Spacer(1, 4 * mm)]
+    story = [Paragraph(escape(title), heading), Paragraph(escape(subtitle), normal), Spacer(1, 4 * mm)]
     headers = ["送货日期", "送货单号", "客户单号", "存货编码", "产品名称", "数量", price_label, amount_label]
     data = [headers]
     for row in rows:
         data.append(
             [
-                str(row.get("delivery_date") or ""),
-                str(row.get("delivery_number") or ""),
-                str(row.get("customer_po") or ""),
-                str(row.get("product_code") or ""),
-                Paragraph(str(row.get("product_name") or ""), normal),
+                Paragraph(escape(str(row.get("delivery_date") or "")), normal),
+                Paragraph(escape(str(row.get("delivery_number") or "")), normal),
+                Paragraph(escape(str(row.get("customer_po") or "")), normal),
+                Paragraph(escape(str(row.get("product_code") or "")), normal),
+                Paragraph(escape(str(row.get("product_name") or "")), normal),
                 str(row.get("quantity") or 0),
                 f"{row.get('unit_price', 0):.4f}",
                 f"{row.get('amount', 0):.2f}",
@@ -55,7 +59,8 @@ def render_customer_statement_pdf(
     table = Table(
         data,
         repeatRows=1,
-        colWidths=[22 * mm, 29 * mm, 31 * mm, 31 * mm, 55 * mm, 20 * mm, 25 * mm, 28 * mm],
+        colWidths=[22 * mm, 33 * mm, 60 * mm, 36 * mm, 54 * mm, 19 * mm, 24 * mm, 27 * mm],
+        rowSplitRange=(1, -2),
     )
     table.setStyle(
         TableStyle(

@@ -19,19 +19,27 @@ def search_lot_page(db: Session, query, *, keyword: str, as_of: date,
         raise ValueError("Invalid inventory search page")
     cursor = after_lot_id or 0
     matches = []
+    previous_batch_had_match = True
     # Keep the incoming scope/status filters. Only the ordering is replaced.
     while len(matches) <= page_size:
+        # Do not materialize 200 rows when only a few more matches are needed.
+        # Sparse matching still advances in bounded batches without dropping
+        # late matches; one additional match decides the next-page cursor.
+        batch_size = (min(SEARCH_BATCH_SIZE, page_size + 1 - len(matches))
+                      if previous_batch_had_match else SEARCH_BATCH_SIZE)
         batch = db.scalars(query.where(InventoryLot.id > cursor)
-            .order_by(None).order_by(InventoryLot.id).limit(SEARCH_BATCH_SIZE)).unique().all()
+            .order_by(None).order_by(InventoryLot.id).limit(batch_size)).unique().all()
         if not batch:
             break
+        matched_before = len(matches)
         for row in batch:
             cursor = row.id
             if not keyword or inventory_search_matches(row, keyword, as_of):
                 matches.append(row)
                 if len(matches) > page_size:
                     break
-        if len(batch) < SEARCH_BATCH_SIZE:
+        previous_batch_had_match = len(matches) > matched_before
+        if len(batch) < batch_size:
             break
     has_more = len(matches) > page_size
     rows = matches[:page_size]

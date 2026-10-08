@@ -10,7 +10,7 @@ function fixture(){
  const focus={isConnected:true,focus(){this.focused=true;}},doc={activeElement:focus,querySelectorAll:()=>[],querySelector:()=>null};
  let product={id:7,customer_id:1,product_code:'P7',product_name:'更新产品',material_id:3,material_code:'R4',flute_type:'B',report_width_mm:100,production_notes:'新说明',sale_unit_price:'99',common_box_readiness:{ready:true},version:2};
  const axios={async get(url){reads.push(url);return {data:product};},async post(url,body){writes.push([url,body]);return {data:{cost_status:'calculated',estimated_cost:3}};}};
- const sandbox={axios,document:doc,console,URLSearchParams,window:{location:{href:'http://example.test/',origin:'http://example.test'},history:{pushState(){},back(){}}}};
+ const sandbox={axios,document:doc,console,URLSearchParams,window:{scrollTo(){},location:{href:'http://example.test/',origin:'http://example.test'},history:{pushState(){},back(){}}}};
  vm.runInNewContext(script,sandbox);sandbox.window.ERPOrderContext.install({component(n,d){components[n]=d;},mixin(d){parts.push(d);}});
  const ctx={...parts[0].methods,...vm.runInNewContext(`({${rootMethod('          async returnFromCommonBoxEditor(', '          async openProductStockPolicy(')},${rootMethod('          pdfWarehouseLocatorCanOpen(', '          inventorySourceLabel(')}})`,sandbox),
   user:{id:1},authGeneration:1,canEditProducts:true,canViewCosts:false,orderContextOpening:false,masterSavePending:false,

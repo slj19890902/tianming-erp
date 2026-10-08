@@ -13,6 +13,7 @@ from app.models import Base
 from app.models.warehouse_inventory import (
     Floor3LocationLayout,
     InventoryLocationMovement,
+    InventoryLot,
     InventoryPallet,
     WarehouseArea,
     WarehouseFloor,
@@ -563,7 +564,8 @@ def test_inventory_search_accepts_old_alias_and_current_chinese_name(session_fac
         _assign_rack_location(db, area, location, key="p186-search-location")
         db.refresh(location)
         assert location.address_aliases
-        lot = SimpleNamespace(
+        lot = InventoryLot(
+            warehouse_location_id=location.id,
             id=1,
             lot_number="LOT-P186",
             inventory_type="finished",

@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.565"
+APP_VERSION = "v0.22.566"
 APP_VERSION_NAME = "待定位库存整栈板归位入口"
 APP_BUILD_DATE = "2026-10-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5363,6 +5363,21 @@ APP_CHANGES = ["常用箱客户送货资料只保留客户图号、客户类别�
 APP_VERIFICATION_STEPS = ["Ctrl+F5刷新常用箱，确认客户送货资料只显示三个输入框。", "关闭旧打印预览，重开YG-20261007-001，核对80012158等七项图号及82020083的0632264、80012632的9620185；无需重新建单。"]
 APP_CHANGELOG = [*(f"v0.22.564：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
+
+APP_CHANGES = [
+    "电脑默认进入统一工作区，保留原订单、报料、来料、送货、仓库及财务表单、权限与历史打印。",
+    "整合R28已核验的订单回读、报料与收料状态、预送货恢复、仓库位置及模具标签修复。",
+    "天明包装新标志统一用于登录页、页头和浏览器图标，移除候选预览与旧基线标识。",
+    "本版无数据库迁移，不自动修改订单、库存、金额、权限或历史业务事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "Ctrl+F5刷新电脑ERP，确认新标志和统一工作区，系统版本为v0.22.565。",
+    "按平常入口打开订单、报料和送货页，核对原表单、未保存草稿与客户打印预览正常。",
+    "打开仓库及模具标签预览，并用原手机入口确认页面正常；实体打印由管理员验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.565：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
 APP_CHANGES = ["待定位库存列表增加整栈板归位入口，可将真实栈板放入有效空地面货位。", "沿用原移货事务，保留订单预占、库存数量、入库日期和成本；异常来源不猜测对应栈板。"]
 APP_VERIFICATION_STEPS = ["Ctrl+F5刷新仓库地图，在待定位成品列表找到22000109或22000110，点击整栈板归位。", "按实物选择目标楼层、区域及空地面货位，确认移动后核对库存数量和订单预占保持。"]
-APP_CHANGELOG = [*(f"v0.22.565：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.566：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

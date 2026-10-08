@@ -145,3 +145,49 @@ def test_open_order_item_preserves_existing_read_only_load_contracts() -> None:
     assert "axios.post" not in body
     assert "axios.patch" not in body
     assert "axios.delete" not in body
+
+
+def test_open_editor_retains_material_baseline_and_explicit_sync_choice(tmp_path: Path) -> None:
+    body = _method_body("async openOrderItem(order, item) {", "async loadFinishedInventoryCandidates(")
+    script = _open_order_item_runtime(body) + """
+(async()=>{
+  itemA.material_id=7;
+  const request=vm.openOrderItem(orderA,itemA);
+  pending[0].resolve({data:{id:101,box_style:"A1",version:5}});
+  expect(await request===true,"editor did not finish");
+  expect(vm.orderItemForm.material_id===7,"selected material changed on open");
+  expect(vm.orderItemForm._original_material_id===7,"original material was not retained");
+  expect(vm.orderItemForm.sync_product===false,"editor silently selected master sync");
+})().catch(error=>{console.error(error);process.exit(1);});
+"""
+    _run_node(script, tmp_path, "order-item-material-baseline.js")
+
+
+def test_order_item_save_syncs_only_changed_material_or_explicit_selection(tmp_path: Path) -> None:
+    start = 'if (this.modal.type === "orderItem") {'
+    end = 'if (this.modal.type === "requisitionMaterial") {'
+    assert INDEX.count(start) == 1
+    branch = INDEX.split(start, 1)[1].split(end, 1)[0].rsplit("}", 1)[0]
+    script = f"""
+const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
+const saved=[];
+const vm={{orderItemForm:null,saveCurrentOrderItem:async(id,payload)=>{{saved.push({{id,payload}});return {{ok:true}};}}}};
+vm.saveItem=new AsyncFunction({json.dumps(branch,ensure_ascii=False)}).bind(vm);
+const expect=(value,message)=>{{if(!value)throw new Error(message)}};
+const base={{id:11,product_id:101,material_id:7,_original_material_id:7,quantity:9,
+  production_notes:"order only",product_version:5,sync_product:false,bom_component_demands:[]}};
+(async()=>{{
+  vm.orderItemForm={{...base}};expect(await vm.saveItem()===true,"unchanged material save failed");
+  expect(saved[0].payload.sync_product===false,"order-only notes silently synced master");
+  expect(!("product_expected_version" in saved[0].payload),"order-only save carried master mutation version");
+  expect(saved[0].payload.production_notes==="order only","order note was lost");
+  vm.orderItemForm={{...base,material_id:8}};await vm.saveItem();
+  expect(saved[1].payload.sync_product===true&&saved[1].payload.product_expected_version===5,"real material change lost guarded sync");
+  vm.orderItemForm={{...base,sync_product:true}};await vm.saveItem();
+  expect(saved[2].payload.sync_product===true&&saved[2].payload.product_expected_version===5,"explicit master sync lost version guard");
+  vm.orderItemForm={{...base,material_id:8,product_version:null}};
+  let blocked=false;try{{await vm.saveItem();}}catch(error){{blocked=error.message.includes("版本读取失败");}}
+  expect(blocked&&saved.length===3,"missing master version was not blocked");
+}})().catch(error=>{{console.error(error);process.exit(1);}});
+"""
+    _run_node(script, tmp_path, "order-item-save-sync-choice.js")

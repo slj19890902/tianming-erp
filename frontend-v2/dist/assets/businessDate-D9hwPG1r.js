@@ -1,0 +1,1 @@
+const n=new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit"});function t(e=new Date){return n.format(e)}function a(e=new Date){return t(e).slice(0,7)}export{a,t as b};

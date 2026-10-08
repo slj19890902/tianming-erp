@@ -1,0 +1,312 @@
+/* ERP v2 · 浅色显示基础。保留 html.dark 的既有显式入口，不存储主题偏好。 */
+:root {
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", Arial, sans-serif;
+  font-size: 15px;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+  color: var(--tm-text);
+  background: var(--tm-bg-0);
+
+  --tm-bg-0: #f3f6fb;
+  --tm-bg-1: #ffffff;
+  --tm-bg-2: #f8fafc;
+  --tm-bg-3: #e8eef6;
+  --tm-line: #cbd5e1;
+  --tm-line-strong: #76849a;
+  --tm-text: #18263a;
+  --tm-text-dim: #475569;
+  --tm-text-faint: #526176;
+  --tm-title: #18263a;
+  --tm-accent-a: #0369a1;
+  --tm-accent-b: #1d4ed8;
+  --tm-accent-hover: #075985;
+  --tm-accent-soft: #eaf4fb;
+  --tm-accent-border: #7398c3;
+  --tm-accent-gradient: linear-gradient(135deg, #0369a1 0%, #1d4ed8 100%);
+  --tm-on-accent: #ffffff;
+  --tm-selected-text: #1d4ed8;
+  --tm-selected-bg: #eaf2fc;
+  --tm-selected-surface: var(--tm-selected-bg);
+  --tm-danger: #b91c1c;
+  --tm-danger-hover: #991b1b;
+  --tm-danger-bg: #fef2f2;
+  --tm-danger-line: #d38c8c;
+  --tm-danger-gradient: linear-gradient(135deg, #b91c1c, #991b1b);
+  --tm-warn: #92400e;
+  --tm-warn-hover: #78350f;
+  --tm-warn-bg: #fff7e6;
+  --tm-warn-line: #b68a4e;
+  --tm-warn-gradient: linear-gradient(135deg, #92400e, #b45309);
+  --tm-ok: #166534;
+  --tm-ok-hover: #14532d;
+  --tm-ok-bg: #f0fdf4;
+  --tm-ok-line: #80ad8e;
+  --tm-ok-gradient: linear-gradient(135deg, #166534, #0369a1);
+  --tm-test-bg: #f59e0b;
+  --tm-test-text: #1f2937;
+  --tm-panel-bg: var(--tm-bg-1);
+  --tm-header-bg: var(--tm-bg-1);
+  --tm-sidebar-bg: var(--tm-bg-1);
+  --tm-body-bg: var(--tm-bg-0);
+  --tm-input-bg: var(--tm-bg-1);
+  --tm-table-header-bg: var(--tm-bg-3);
+  --tm-table-header-text: #243a53;
+  --tm-table-stripe-bg: var(--tm-bg-2);
+  --tm-table-hover-bg: var(--tm-selected-bg);
+  --tm-grid-line: #dce5f0;
+  --tm-orb-a: rgba(3, 105, 161, 0.08);
+  --tm-orb-b: rgba(29, 78, 216, 0.08);
+  --tm-decoration: rgba(3, 105, 161, 0.05);
+  --tm-panel-shadow: 0 8px 28px rgba(15, 23, 42, 0.08);
+  --tm-dialog-shadow: 0 24px 70px rgba(15, 23, 42, 0.2);
+  --tm-glow: 0 0 16px rgba(3, 105, 161, 0.1);
+  --tm-focus-shadow: 0 0 0 1px var(--tm-accent-a);
+  --tm-mask: rgba(15, 23, 42, 0.48);
+  --tm-loading-mask: rgba(248, 250, 252, 0.9);
+  --tm-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --tm-radius: 10px;
+}
+
+/* 显式 dark class 仍可消费同一套 tokens；不新增切换器或存储偏好。 */
+html.dark {
+  color-scheme: dark;
+  --tm-bg-0: #070b14;
+  --tm-bg-1: #0b1220;
+  --tm-bg-2: #101a2e;
+  --tm-bg-3: #16233c;
+  --tm-line: rgba(120, 170, 230, 0.16);
+  --tm-line-strong: rgba(120, 170, 230, 0.32);
+  --tm-text: #dbe7f5;
+  --tm-text-dim: #8ea3bf;
+  --tm-text-faint: #5c6f8c;
+  --tm-title: #f0f6ff;
+  --tm-accent-a: #22d3ee;
+  --tm-accent-b: #3b82f6;
+  --tm-accent-hover: #7dd3fc;
+  --tm-accent-soft: rgba(34, 211, 238, 0.12);
+  --tm-accent-border: rgba(34, 211, 238, 0.4);
+  --tm-accent-gradient: linear-gradient(135deg, #22d3ee 0%, #3b82f6 100%);
+  --tm-on-accent: #04121f;
+  --tm-selected-text: #a5f3fc;
+  --tm-selected-bg: rgba(34, 211, 238, 0.18);
+  --tm-selected-surface: linear-gradient(135deg, rgba(34, 211, 238, 0.18), rgba(59, 130, 246, 0.14));
+  --tm-danger: #f87171;
+  --tm-danger-hover: #fca5a5;
+  --tm-danger-bg: rgba(248, 113, 113, 0.07);
+  --tm-danger-line: rgba(248, 113, 113, 0.5);
+  --tm-danger-gradient: linear-gradient(135deg, #f87171, #ef4444);
+  --tm-warn: #fbbf24;
+  --tm-warn-hover: #fde68a;
+  --tm-warn-bg: rgba(251, 191, 36, 0.09);
+  --tm-warn-line: rgba(251, 191, 36, 0.55);
+  --tm-warn-gradient: linear-gradient(135deg, #fbbf24, #f97316);
+  --tm-ok: #34d399;
+  --tm-ok-hover: #6ee7b7;
+  --tm-ok-bg: rgba(52, 211, 153, 0.09);
+  --tm-ok-line: rgba(52, 211, 153, 0.4);
+  --tm-ok-gradient: linear-gradient(135deg, #34d399, #22d3ee);
+  --tm-panel-bg: linear-gradient(180deg, rgba(22, 35, 60, 0.72), rgba(11, 18, 32, 0.86));
+  --tm-header-bg: linear-gradient(180deg, rgba(16, 26, 46, 0.96), rgba(11, 18, 32, 0.96));
+  --tm-sidebar-bg: rgba(11, 18, 32, 0.72);
+  --tm-body-bg: radial-gradient(1100px 500px at 85% -10%, rgba(59, 130, 246, 0.14), transparent 60%), radial-gradient(900px 480px at -10% 110%, rgba(34, 211, 238, 0.1), transparent 60%), var(--tm-bg-0);
+  --tm-input-bg: rgba(7, 11, 20, 0.72);
+  --tm-table-header-bg: linear-gradient(180deg, #16233c, #101a2e);
+  --tm-table-header-text: #a5f3fc;
+  --tm-table-stripe-bg: rgba(22, 35, 60, 0.38);
+  --tm-table-hover-bg: rgba(56, 189, 248, 0.1);
+  --tm-grid-line: rgba(120, 170, 230, 0.055);
+  --tm-orb-a: rgba(34, 211, 238, 0.16);
+  --tm-orb-b: rgba(59, 130, 246, 0.18);
+  --tm-decoration: rgba(34, 211, 238, 0.16);
+  --tm-panel-shadow: 0 8px 28px rgba(2, 6, 16, 0.55);
+  --tm-dialog-shadow: 0 24px 70px rgba(2, 6, 16, 0.8);
+  --tm-glow: 0 0 24px rgba(56, 189, 248, 0.28);
+  --tm-focus-shadow: 0 0 0 1px rgba(34, 211, 238, 0.45), var(--tm-glow);
+  --tm-mask: rgba(4, 8, 18, 0.72);
+  --tm-loading-mask: rgba(7, 11, 20, 0.72);
+}
+
+/* 库变量桥接位于库 CSS 之后，表格固定列、弹出层与原生输入共用同一色值。 */
+:root, html.dark {
+  --el-bg-color: var(--tm-bg-1);
+  --el-bg-color-page: var(--tm-bg-0);
+  --el-bg-color-overlay: var(--tm-bg-1);
+  --el-text-color-primary: var(--tm-text);
+  --el-text-color-regular: var(--tm-text);
+  --el-text-color-secondary: var(--tm-text-dim);
+  --el-text-color-placeholder: var(--tm-text-faint);
+  --el-text-color-disabled: var(--tm-text-faint);
+  --el-border-color: var(--tm-line-strong);
+  --el-border-color-light: var(--tm-line);
+  --el-border-color-lighter: var(--tm-line);
+  --el-border-color-extra-light: var(--tm-line);
+  --el-border-color-dark: var(--tm-line-strong);
+  --el-border-color-darker: var(--tm-line-strong);
+  --el-fill-color: var(--tm-bg-3);
+  --el-fill-color-light: var(--tm-bg-2);
+  --el-fill-color-lighter: var(--tm-bg-2);
+  --el-fill-color-extra-light: var(--tm-bg-2);
+  --el-fill-color-blank: var(--tm-bg-1);
+  --el-fill-color-dark: var(--tm-bg-3);
+  --el-fill-color-darker: var(--tm-bg-3);
+  --el-mask-color: var(--tm-mask);
+  --el-mask-color-extra-light: var(--tm-loading-mask);
+  --el-disabled-bg-color: var(--tm-bg-3);
+  --el-disabled-text-color: var(--tm-text-faint);
+  --el-disabled-border-color: var(--tm-line);
+  --el-color-primary: var(--tm-accent-a);
+  --el-color-primary-dark-2: var(--tm-accent-hover);
+  --el-color-primary-light-3: var(--tm-accent-hover);
+  --el-color-primary-light-5: var(--tm-accent-border);
+  --el-color-primary-light-7: var(--tm-line);
+  --el-color-primary-light-8: var(--tm-accent-soft);
+  --el-color-primary-light-9: var(--tm-accent-soft);
+  --el-color-success: var(--tm-ok);
+  --el-color-success-dark-2: var(--tm-ok-hover);
+  --el-color-success-light-3: var(--tm-ok-hover);
+  --el-color-success-light-5: var(--tm-ok-line);
+  --el-color-success-light-7: var(--tm-ok-line);
+  --el-color-success-light-8: var(--tm-ok-bg);
+  --el-color-success-light-9: var(--tm-ok-bg);
+  --el-color-warning: var(--tm-warn);
+  --el-color-warning-dark-2: var(--tm-warn-hover);
+  --el-color-warning-light-3: var(--tm-warn-hover);
+  --el-color-warning-light-5: var(--tm-warn-line);
+  --el-color-warning-light-7: var(--tm-warn-line);
+  --el-color-warning-light-8: var(--tm-warn-bg);
+  --el-color-warning-light-9: var(--tm-warn-bg);
+  --el-color-danger: var(--tm-danger);
+  --el-color-danger-dark-2: var(--tm-danger-hover);
+  --el-color-danger-light-3: var(--tm-danger-hover);
+  --el-color-danger-light-5: var(--tm-danger-line);
+  --el-color-danger-light-7: var(--tm-danger-line);
+  --el-color-danger-light-8: var(--tm-danger-bg);
+  --el-color-danger-light-9: var(--tm-danger-bg);
+  --el-color-error: var(--tm-danger);
+  --el-color-error-dark-2: var(--tm-danger-hover);
+  --el-color-error-light-3: var(--tm-danger-hover);
+  --el-color-error-light-5: var(--tm-danger-line);
+  --el-color-error-light-7: var(--tm-danger-line);
+  --el-color-error-light-8: var(--tm-danger-bg);
+  --el-color-error-light-9: var(--tm-danger-bg);
+  --el-color-info: var(--tm-text-dim);
+  --el-color-info-dark-2: var(--tm-text);
+  --el-color-info-light-3: var(--tm-text);
+  --el-color-info-light-5: var(--tm-line-strong);
+  --el-color-info-light-7: var(--tm-line);
+  --el-color-info-light-8: var(--tm-bg-2);
+  --el-color-info-light-9: var(--tm-bg-2);
+  --vxe-ui-font-color: var(--tm-text);
+  --vxe-ui-font-lighten-color: var(--tm-text-dim);
+  --vxe-ui-font-darken-color: var(--tm-title);
+  --vxe-ui-font-disabled-color: var(--tm-text-faint);
+  --vxe-ui-font-placeholder-color: var(--tm-text-faint);
+  --vxe-ui-font-primary-color: var(--tm-accent-a);
+  --vxe-ui-font-primary-hover-color: var(--tm-accent-hover);
+  --vxe-ui-font-primary-darken-color: var(--tm-accent-hover);
+  --vxe-ui-font-primary-lighten-color: var(--tm-accent-border);
+  --vxe-ui-font-primary-tinge-color: var(--tm-accent-soft);
+  --vxe-ui-base-hover-background-color: var(--tm-table-hover-bg);
+  --vxe-ui-base-active-background-color: var(--tm-selected-bg);
+  --vxe-ui-base-popup-border-color: var(--tm-line-strong);
+  --vxe-ui-base-popup-box-shadow: var(--tm-panel-shadow);
+  --vxe-ui-layout-background-color: var(--tm-bg-1);
+  --vxe-ui-input-border-color: var(--tm-line-strong);
+  --vxe-ui-input-placeholder-color: var(--tm-text-faint);
+  --vxe-ui-input-disabled-background-color: var(--tm-bg-3);
+  --vxe-ui-input-disabled-color: var(--tm-text-faint);
+  --vxe-ui-loading-background-color: var(--tm-loading-mask);
+  --vxe-ui-loading-color: var(--tm-accent-a);
+  --vxe-ui-status-success-color: var(--tm-ok);
+  --vxe-ui-status-warning-color: var(--tm-warn);
+  --vxe-ui-status-danger-color: var(--tm-danger);
+  --vxe-ui-status-error-color: var(--tm-danger);
+  --vxe-ui-status-info-color: var(--tm-text-dim);
+  --vxe-ui-table-border-color: var(--tm-line);
+  --vxe-ui-table-header-background-color: var(--tm-bg-3);
+  --vxe-ui-table-header-font-color: var(--tm-table-header-text);
+  --vxe-ui-table-footer-background-color: var(--tm-bg-2);
+  --vxe-ui-table-footer-font-color: var(--tm-text);
+  --vxe-ui-table-row-striped-background-color: var(--tm-table-stripe-bg);
+  --vxe-ui-table-row-hover-background-color: var(--tm-table-hover-bg);
+  --vxe-ui-table-row-hover-striped-background-color: var(--tm-table-hover-bg);
+  --vxe-ui-table-row-current-background-color: var(--tm-selected-bg);
+  --vxe-ui-table-row-hover-current-background-color: var(--tm-table-hover-bg);
+  --vxe-ui-table-row-checkbox-checked-background-color: var(--tm-selected-bg);
+  --vxe-ui-table-row-hover-checkbox-checked-background-color: var(--tm-table-hover-bg);
+  --vxe-ui-table-row-radio-checked-background-color: var(--tm-selected-bg);
+  --vxe-ui-table-row-hover-radio-checked-background-color: var(--tm-table-hover-bg);
+  --vxe-ui-table-column-current-background-color: var(--tm-selected-bg);
+  --vxe-ui-table-column-hover-background-color: var(--tm-table-hover-bg);
+  --vxe-ui-table-column-hover-current-background-color: var(--tm-table-hover-bg);
+  --vxe-ui-table-column-to-row-background-color: var(--tm-bg-3);
+  --vxe-ui-table-validate-error-color: var(--tm-danger);
+  --vxe-ui-table-validate-error-cell-background-color: var(--tm-danger-bg);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; min-height: 100vh; background: var(--tm-body-bg); color: var(--tm-text); }
+.tm-grid-bg { background-image: linear-gradient(var(--tm-grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--tm-grid-line) 1px, transparent 1px); background-size: 34px 34px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+#app { min-height: 100vh; }
+.tm-page { display: flex; flex-direction: column; gap: 14px; min-height: 100%; }
+.tm-card { background: var(--tm-panel-bg); border: 1px solid var(--tm-line); border-radius: var(--tm-radius); box-shadow: var(--tm-panel-shadow); backdrop-filter: blur(10px); }
+.tm-card.tm-section { padding: 16px; }
+.tm-card.tm-section > .tm-toolbar { padding: 0 0 12px; }
+.tm-toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
+.tm-section-title { margin: 0; font-size: 17px; font-weight: 800; letter-spacing: 0.5px; color: var(--tm-title); }
+.tm-section-title::before { content: ""; display: inline-block; width: 4px; height: 16px; margin-right: 8px; border-radius: 2px; background: var(--tm-accent-gradient); box-shadow: var(--tm-glow); vertical-align: -2px; }
+.tm-muted { color: var(--tm-text-dim); font-size: 13px; }
+.tm-mono { font-family: var(--tm-mono); font-variant-numeric: tabular-nums; }
+
+.el-card { background: var(--tm-panel-bg); border-color: var(--tm-line); }
+.el-dialog, .el-message-box { background: var(--tm-bg-1); border: 1px solid var(--tm-line-strong); box-shadow: var(--tm-dialog-shadow); }
+.el-dialog__title, .el-drawer__header { color: var(--tm-title); font-weight: 800; }
+.el-drawer { background: var(--tm-bg-1); border-left: 1px solid var(--tm-line-strong); }
+.el-tabs--border-card { background: transparent; border: 1px solid var(--tm-line); }
+.el-tabs--border-card > .el-tabs__header { background: var(--tm-bg-2); border-bottom-color: var(--tm-line); }
+.el-tabs--border-card > .el-tabs__header .el-tabs__item.is-active { background: var(--tm-selected-surface); border-bottom: 2px solid var(--tm-accent-a); color: var(--tm-selected-text); }
+.el-input__wrapper, .el-textarea__inner, .el-select__wrapper { background: var(--tm-input-bg); }
+.el-input__wrapper.is-focus, .el-select__wrapper.is-focused { box-shadow: var(--tm-focus-shadow); }
+.el-input__inner, .el-textarea__inner { color: var(--tm-text); }
+.el-form-item__label { color: var(--tm-text-dim); }
+.el-button--primary:not(.is-plain):not(.is-link):not(.is-text),
+.el-button--success:not(.is-plain):not(.is-link):not(.is-text),
+.el-button--warning:not(.is-plain):not(.is-link):not(.is-text),
+.el-button--danger:not(.is-plain):not(.is-link):not(.is-text) { --el-button-text-color: var(--tm-on-accent); --el-button-hover-text-color: var(--tm-on-accent); --el-button-active-text-color: var(--tm-on-accent); font-weight: 700; }
+.el-empty__description p { color: var(--tm-text-dim); }
+.el-loading-mask { background: var(--tm-loading-mask); backdrop-filter: blur(2px); }
+.el-alert--error.is-light { background: var(--tm-danger-bg); color: var(--tm-danger); }
+.el-alert--warning.is-light { background: var(--tm-warn-bg); color: var(--tm-warn); }
+.el-alert--success.is-light { background: var(--tm-ok-bg); color: var(--tm-ok); }
+.el-alert--info.is-light { background: var(--tm-bg-2); color: var(--tm-text-dim); }
+.el-alert__description { color: inherit; }
+
+.vxe-table { background: var(--tm-bg-1); color: var(--tm-text); }
+.vxe-table .vxe-header--column { background: var(--tm-table-header-bg); color: var(--tm-table-header-text); font-weight: 800; border-bottom: 1px solid var(--tm-line-strong); }
+.vxe-table .vxe-body--column { border-bottom: 1px solid var(--tm-line); color: var(--tm-text); }
+.vxe-table .vxe-table--border-line { border-color: var(--tm-line); }
+.vxe-pager { background: transparent; color: var(--tm-text-dim); }
+.vxe-pager .vxe-pager--jump .vxe-input__inner { background: var(--tm-input-bg); color: var(--tm-text); border-color: var(--tm-line-strong); }
+.vxe-table .vxe-loading--spinner { border-color: var(--tm-accent-a); }
+
+.tm-kpi { position: relative; overflow: hidden; padding: 16px 18px; border-radius: var(--tm-radius); background: var(--tm-panel-bg); border: 1px solid var(--tm-line); }
+.tm-kpi::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(320px 120px at 90% 0%, var(--tm-decoration), transparent 70%); }
+.tm-kpi .kpi-label { color: var(--tm-text-dim); font-size: 13px; letter-spacing: 1px; }
+.tm-kpi .kpi-value { margin-top: 6px; font-family: var(--tm-mono); font-size: 30px; font-weight: 700; background: var(--tm-accent-gradient); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.tm-kpi.warn .kpi-value { background: var(--tm-warn-gradient); -webkit-background-clip: text; background-clip: text; }
+.tm-kpi.danger .kpi-value { background: var(--tm-danger-gradient); -webkit-background-clip: text; background-clip: text; }
+
+/* 原打印规则保持；业务文档及标签色值不随显示主题改写。 */
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}

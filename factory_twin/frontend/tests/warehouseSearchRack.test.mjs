@@ -70,7 +70,7 @@ test('pending rack search waits for the matching floor then opens once, without 
   const state = {};
   const setters = ['Selected','CameraFocusTarget','PendingLocationId','PendingLotId','RackFocusId','PendingRackSearchLocationId',
     'TraceDeepLinkMessage','TraceFocusedLotId','LocationItemsExpanded','SearchError'];
-  const context = {pendingLocationId:91,pendingLotId:null,pendingRackSearchLocationId:91,floorCode:'3F',
+  const context = {productionMapContext:false,pendingLocationId:91,pendingLotId:null,pendingRackSearchLocationId:91,floorCode:'3F',
     dashboard:{},layout:{floor_code:'4F',racks:[rack]},loading:false,visualLocations:[location],
     selected:{kind:'pallet',id:'erp-location-91'},selectedLocationItems:[],traceReadOnly:false,
     focusedSearchItem:{lot_id:15},cameraFocusSequenceRef:{current:0},
@@ -108,7 +108,7 @@ test('order location opens the exact physical batch label and rack, with a persi
   const begin=source.lastIndexOf('  useEffect(() => {',body),end=source.indexOf('  useEffect(() => {',body);
   const state={},lot={lot_id:15,product_id:7,quantity:20,unit:'个',inventory_code:'P7'};
   const names=['Selected','CameraFocusTarget','PendingLocationId','PendingLotId','RackFocusId','PendingRackSearchLocationId','TraceDeepLinkMessage','TraceFocusedLotId','LocationItemsExpanded','SearchError','SidebarLabelLotId','FocusedSearchItem','FocusedSearchProductKey'];
-  const context={pendingLocationId:91,pendingLotId:15,pendingRackSearchLocationId:null,floorCode:'3F',dashboard:{},layout:{floor_code:'3F',racks:[rack]},loading:false,visualLocations:[location],selected:{kind:'pallet',id:'erp-location-91'},selectedLocationItems:[lot],traceReadOnly:true,focusedSearchItem:null,cameraFocusSequenceRef:{current:0},
+  const context={productionMapContext:false,pendingLocationId:91,pendingLotId:15,pendingRackSearchLocationId:null,floorCode:'3F',dashboard:{},layout:{floor_code:'3F',racks:[rack]},loading:false,visualLocations:[location],selected:{kind:'pallet',id:'erp-location-91'},selectedLocationItems:[lot],traceReadOnly:true,focusedSearchItem:null,cameraFocusSequenceRef:{current:0},
     useEffect:fn=>fn(),searchRackForLocation:resolver(),rackLocationInventoryItems:r=>r.items,inventoryHasPhysicalQuantity:r=>r.quantity>0,employeeLocationName:()=> '三楼 A1 2层3格',inventoryLabelQuantity:r=>r.quantity,inventoryUnitLabel:s=>s,formatNumber:n=>String(n),searchProductKey:r=>`p-${r.product_id}`,
     ...Object.fromEntries(names.map(name=>['set'+name,value=>{state[name]=value;}]))};
   const code=compile(source.slice(begin,end));vm.runInNewContext(code,context);

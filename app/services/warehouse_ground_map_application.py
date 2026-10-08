@@ -99,7 +99,7 @@ def previously_verified_area_features(db, *, floor_layout, previous_floor_layout
             receipts.get(plan.id) or {}, [s for s in plan.slots if s.location.is_active])}
 
 
-def record_map_applications(db, *, floor_layout, actor, operation_key, request=None, previous_floor_layout=None, coordinate_adjustments=None, retired_location_ids=()):
+def record_map_applications(db, *, floor_layout, actor, operation_key, request=None, previous_floor_layout=None, coordinate_adjustments=None, retired_location_ids=(), isolated_area_feature_id=None):
     plans = _published_floor_plans(db, floor_layout)
     previous = load_map_applications(db, [p.id for p in plans])
     changed = 0
@@ -111,9 +111,28 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
         slots = [s for s in plan.slots if s.location.is_active]
         if not slots:
             continue
-        if policy.published_map_revision != floor_layout["revision"]:
-            raise WarehouseAreaActivationError("区域与应用地图版本不一致，未确认旧货位", status_code=409)
         feature = next((f for f in floor_layout.get("features", []) if f["id"] == policy.map_feature_id), None)
+        carried_policy_revision = None
+        if policy.published_map_revision != floor_layout["revision"]:
+            old_feature = next((f for f in (previous_floor_layout or {}).get("features", [])
+                                if f["id"] == policy.map_feature_id), None)
+            receipt = previous.get(plan.id) or {}
+            source_verified = bool(previous_floor_layout and (
+                plan.published_map_revision == previous_floor_layout.get("revision")
+                or (receipt.get("policy_version") == policy.version and _previously_verified(
+                    plan, feature, previous_floor_layout, receipt, slots))))
+            # A one-area publish keeps sibling geometry and business policy intact.
+            # Carry only an already published, unchanged physical area's revision;
+            # the full geometry checks below and the caller's transaction still apply.
+            from app.services.warehouse_area_activation import policy_inventory_types
+            if not (isolated_area_feature_id and policy.map_feature_id != isolated_area_feature_id
+                    and feature and feature == old_feature and source_verified
+                    and policy.published_map_revision == previous_floor_layout.get("revision")
+                    and not policy.draft_map_revision
+                    and sorted(policy_inventory_types(policy)) == sorted(feature.get("allowed_inventory_types") or [])
+                    and policy.storage_layout == feature.get("storage_layout")):
+                raise WarehouseAreaActivationError("区域与应用地图版本不一致，未确认旧货位", status_code=409)
+            carried_policy_revision = policy.published_map_revision
         if feature is None or any(s.location.floor3_layout is None for s in slots):
             raise WarehouseAreaActivationError("旧排位缺少区域或货位几何，不能应用地图", status_code=409)
         payloads = [{"location_id": s.location_id,
@@ -192,6 +211,10 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
         if not direct and not legacy_reflected and not authorized_adjustment and not previously_verified and not unchanged_feature_geometry:
             raise WarehouseAreaActivationError(
                 f"区域 {plan.area.area_code} 保留货位与原排位物理坐标不一致，不能随地图应用", status_code=409)
+        if carried_policy_revision is not None:
+            from app.services.warehouse_area_activation import _advance_policy_version
+            _advance_policy_version(db, policy=policy, operator_id=actor.id,
+                                    published_map_revision=floor_layout["revision"])
         details = {"plan_id": plan.id, "plan_version": plan.version, "area_id": plan.area_id,
             "original_map_revision": plan.published_map_revision, "map_revision": floor_layout["revision"],
             "legacy_y_reflection": bool(legacy_reflected),
@@ -204,6 +227,13 @@ def record_map_applications(db, *, floor_layout, actor, operation_key, request=N
                 sort_keys=True, default=str).encode()).hexdigest(),
             "policy_version": policy.version, "map_feature_id": policy.map_feature_id,
             "locations": {str(s.location_id): location_signature(s.location, s.location.floor3_layout) for s in slots}}
+        if carried_policy_revision is not None:
+            details["carried_unchanged_policy_revision"] = carried_policy_revision
+        elif (previous.get(plan.id, {}).get("map_revision") == floor_layout["revision"]
+              and previous.get(plan.id, {}).get("policy_version") == policy.version
+              and "carried_unchanged_policy_revision" in previous.get(plan.id, {})):
+            # Rechecking this same applied snapshot must not duplicate its receipt.
+            details["carried_unchanged_policy_revision"] = previous[plan.id]["carried_unchanged_policy_revision"]
         if previous.get(plan.id) == details:
             continue
         saved = append_audit_event(db, actor=actor, request=request, event_category="business", result="success",

@@ -19,6 +19,7 @@ from app.models import Base
 from app.models.customer import Customer
 from app.models.order import Order, OrderItem
 from app.models.product import Product
+from app.models.material import Material
 from app.models.user import User
 from app.models.warehouse_inventory import (
     InventoryLot,
@@ -38,6 +39,19 @@ from app.services.warehouse_inventory import (
 )
 
 
+@pytest.fixture(autouse=True)
+def fictional_document_evidence(tmp_path: Path, monkeypatch):
+    from app.services import customer_document_fields
+    # This suite verifies inventory transactions, not retained customer files.
+    # Supply an explicit empty test-only document source without changing the
+    # shared database environment or weakening UAT isolation configuration.
+    original = customer_document_fields.review_entries
+    original.cache_clear()
+    monkeypatch.setattr(customer_document_fields, "review_entries", lambda: [])
+    yield
+    original.cache_clear()
+
+
 @pytest.fixture()
 def b1_app(tmp_path: Path, seed_supplier_master):
     from app.api.auth import router as auth_router
@@ -45,12 +59,21 @@ def b1_app(tmp_path: Path, seed_supplier_master):
     from app.api.orders import router as orders_router
     from app.api.requisition import router as requisition_router
     from app.api.warehouse import router as warehouse_router
+    from app.api.external_packaging_purchases import router as external_purchase_router
 
     engine = create_sqlite_engine(tmp_path / "semi-order-b1.sqlite3")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     seed_supplier_master(factory, "测试供应商", "B1-TEST")
     with factory() as db:
+        # Current stock entry requires an explicit priced material and CNY tax
+        # basis. These are temporary test facts, not a bypass of valuation.
+        material = Material(code="A416D", supplier_name="测试供应商", layer_count=3,
+                            flute_type="B", quote_price=Decimal("2.20"), price_unit="元/㎡",
+                            purchase_currency="CNY", purchase_tax_included=True,
+                            purchase_tax_rate=Decimal("0.13"), is_active=True)
+        db.add(material)
+        db.flush()
         users = [
             User(
                 username=role,
@@ -161,6 +184,8 @@ def b1_app(tmp_path: Path, seed_supplier_master):
             warehouse_type="finished",
         )
         db.add_all([*products, semi_location, finished_location])
+        for product in products:
+            product.material_id = material.id
         db.commit()
 
     app = FastAPI()
@@ -168,6 +193,7 @@ def b1_app(tmp_path: Path, seed_supplier_master):
     app.include_router(orders_router, prefix="/api/orders")
     app.include_router(requisition_router, prefix="/api/requisition")
     app.include_router(warehouse_router, prefix="/api/warehouse")
+    app.include_router(external_purchase_router, prefix="/api")
 
     def override_get_db() -> Generator[Session, None, None]:
         with factory() as db:
@@ -1500,7 +1526,13 @@ def test_requisition_preview_rechecks_late_semi_stock_and_recalculates_purchase(
         assert option["requirement_id"] is None
         assert option["remaining_requirement_quantity"] == 40
         assert option["recommended_candidates"] == []
-        manual = option["review_candidates"][0]
+        # Browsing is explicit in the current API; a preview never silently
+        # adopts the different single/double-piece recipe or writes a reservation.
+        assert option["review_candidates"] == []
+        lookup = client.get(f"/api/requisition/pending/{item_id}/semi-inventory-options")
+        assert lookup.status_code == 200, lookup.text
+        assert lookup.json()["total"] == 1
+        manual = lookup.json()["candidates"][0]
         assert manual["lot_id"] == lot_id
         assert manual["lot_number"].startswith("SI-")
         assert manual["deductible_requirement_quantity"] == 30
@@ -1876,6 +1908,46 @@ def test_external_packaging_new_order_can_reserve_finished_stock_before_purchase
         product.external_packaging_default_order_quantity_basis = 1
         product.external_packaging_default_purchase_quantity_basis = 1
         db.commit()
+    # Existing external stock needs a genuine prior confirmed purchase reference,
+    # not a cost bypass or a merely fabricated candidate ID.
+    from app.models.supplier import ExternalPackagingProduct
+    from test_p1_33c3_external_packaging_purchase_confirmation import _price
+    with factory() as db:
+        product = db.get(Product, 1)
+        external = ExternalPackagingProduct(
+            supplier_id=1, category_code="honeycomb_board",
+            supplier_product_code="HC-TEST", normalized_supplier_product_code="HC-TEST",
+            product_name="蜂窝板", purchase_unit="片",
+            specification_json=product.external_packaging_specification_json,
+            specification_summary=product.external_packaging_specification_summary,
+            is_active=True, version=1)
+        db.add(external); db.flush()
+        assert external.id == 1
+        db.add(_price(external, unit_price="1.20", created_by=1))
+        from app.models.supplier import SupplierSupplyCategory
+        from app.models.stock_replenishment import InventoryStockPolicy
+        db.add(SupplierSupplyCategory(supplier_id=1, category_code="honeycomb_board", is_active=True))
+        policy = InventoryStockPolicy(policy_name="虚构外购成本参考备库", target_inventory_type="finished",
+                                      product_id=1, customer_id=1, warning_quantity=1, target_quantity=30,
+                                      active=True, created_by=1, updated_by=1)
+        db.add(policy); db.flush(); policy_id = policy.id
+        db.commit()
+    with TestClient(app) as client:
+        login(client, "admin")
+        preview = client.get(f"/api/requisition/stock-policies/{policy_id}/replenishment-draft")
+        assert preview.status_code == 200, preview.text
+        draft = preview.json()
+        assert draft["draft_ready"] is True and draft["missing_fields"] == []
+        confirmed = client.post("/api/requisition/stock-replenishment/orders", json=dict(
+            source_type="stock_warning", idempotency_key="external-prior-cost-confirm",
+            customer_id=1, supplier_name=draft["supplier_name"], stock_now=False, items=draft["items"]))
+        assert confirmed.status_code == 201, confirmed.text
+        from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem
+        with factory() as db:
+            reference = db.scalar(select(ExternalPackagingPurchaseItem).where(
+                ExternalPackagingPurchaseItem.customer_product_id_snapshot == 1))
+            assert reference is not None and reference.unit_price == Decimal("1.20")
+            assert reference.order_quantity_basis_snapshot == reference.purchase_quantity_basis_snapshot == 1
     lot_id, version = add_finished_lot(factory, product_id=1, quantity=30, key="external-ready-stock")
     with TestClient(app) as client:
         login(client, "admin")
@@ -1892,3 +1964,48 @@ def test_external_packaging_new_order_can_reserve_finished_stock_before_purchase
         db.flush()
         with pytest.raises(WarehouseInventoryError, match="订单已进入报料"):
             finished_inventory_candidates(db, item_id)
+
+
+@pytest.mark.parametrize("blocked_by", ["customer_scope", "product_scope", "mold", "face", "flute", "layer", "dimensions"])
+def test_accepted_liner_material_keeps_hard_eligibility_and_cost(b1_app, blocked_by):
+    from app.services.liner_direct_delivery import liner_direct_coverage
+    from app.models.warehouse_goods import WarehouseGoodsProfile
+    app, factory = b1_app
+    lot_id, version = add_semi_lot(factory, quantity=12, key="liner-accepted-guards")
+    with factory() as db:
+        product = db.get(Product, 1); product.box_style = "衬板"; product.crease_type = "净料"
+        db.get(InventoryLot, lot_id).semi_finished_detail.crease_type = "净料"
+        db.commit()
+    with TestClient(app) as client:
+        login(client)
+        saved = post_order(client, [order_item(1, 5, {"semi": [semi_plan(lot_id, version, 5)]})], "LINER-ACCEPTED-GUARDS")
+        assert saved.status_code == 201, saved.text
+    with factory() as db:
+        item = db.get(OrderItem, saved.json()["items"][0]["id"])
+        lot = db.get(InventoryLot, lot_id); detail = lot.semi_finished_detail
+        reservation = db.scalar(select(InventoryReservation).where(InventoryReservation.order_item_id == item.id))
+        detail.owner_customer_id = None
+        detail.normalized_material_code = "CCC"; detail.material_code_snapshot = "CCC"; detail.crease_type = None
+        reservation.warning_acknowledged_by = 1
+        profile = dict(scope="public", customer_ids=[], product_ids=[], processing="cut", mold_tool_id=None,
+                       verified_material_id=None, material_code="CCC")
+        row = WarehouseGoodsProfile(lot_id=lot.id, data_json=json.dumps(profile)); db.add(row); db.flush()
+        before = (lot.estimated_unit_cost_snapshot, lot.cost_snapshot_detail_json, lot.warehouse_location_id,
+                  lot.quantity_available, lot.quantity_reserved, lot.version, detail.material_code_snapshot)
+        assert liner_direct_coverage(db, item) == 5
+        assert before == (lot.estimated_unit_cost_snapshot, lot.cost_snapshot_detail_json, lot.warehouse_location_id,
+                          lot.quantity_available, lot.quantity_reserved, lot.version, detail.material_code_snapshot)
+        if blocked_by == "customer_scope": profile.update(scope="customers", customer_ids=[2])
+        elif blocked_by == "product_scope": profile["product_ids"] = [2]
+        elif blocked_by == "mold": profile["mold_tool_id"] = 999
+        elif blocked_by == "face":
+            white = Material(code="W417D", supplier_name="测试供应商", layer_count=3, flute_type="B", is_white_face=True)
+            db.add(white); db.flush()
+            profile.update(verified_material_id=white.id, material_code=white.code)
+            detail.material_id = white.id; detail.normalized_material_code = white.code; detail.material_code_snapshot = white.code
+        elif blocked_by == "flute": detail.flute_type = "E"
+        elif blocked_by == "layer":
+            product = db.get(Product, item.product_id); product.layer_count = 5; product.flute_type = "AB"
+        elif blocked_by == "dimensions": detail.board_width_mm = 601
+        row.data_json = json.dumps(profile); db.flush()
+        assert liner_direct_coverage(db, item) == 0

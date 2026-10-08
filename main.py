@@ -1949,7 +1949,14 @@ def create_order(payload: OrderCreateRequest) -> JSONResponse:
 
 @app.get("/")
 def index(request: Request):
-    return conditional_file_response(request, index_html_path())
+    # Keep mobile access and explicitly requested legacy bookmarks intact.
+    # The iframe uses its dedicated document, so the desktop entry cannot loop.
+    mobile = any(marker in request.headers.get("user-agent", "").lower()
+                 for marker in ("iphone", "ipad", "android", "mobile", "micromessenger"))
+    if (request.query_params.get("legacy") == "1" or request.query_params.get("embedded") == "1"
+            or any(key in request.query_params for key in ("page", "redirect", "next", "mobile_page")) or mobile):
+        return conditional_file_response(request, index_html_path())
+    return RedirectResponse("/frontend-v2/", status_code=307, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/customers")

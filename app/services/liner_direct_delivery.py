@@ -3,6 +3,7 @@
 No completion or destination is invented: the existing semi reservation is
 consumed (and reversed) by the normal delivery transaction at its source lot.
 """
+from dataclasses import replace
 from sqlalchemy import select
 from app.models.order import OrderItem
 from app.models.product import Product
@@ -59,8 +60,15 @@ def liner_direct_coverage(db, item: OrderItem, *, product: Product | None = None
             return 0
         from app.services.warehouse_inventory import WarehouseInventoryError
         try:
+            expected = requirement_signature(requirement)
+            # This existing one-to-one reservation already records acceptance of
+            # the actual material. Recheck its scope, face and physical eligibility
+            # against that material without changing the product, lot or cost.
+            if (detail.normalized_material_code != expected.normalized_material_code
+                    and reservation.warning_acknowledged_by is not None):
+                expected = replace(expected, normalized_material_code=detail.normalized_material_code)
             ensure_semi_finished_lot_eligibility(db, lot=lot, product_id=item.product_id,
-                customer_id=requirement.customer_id, expected=requirement_signature(requirement))
+                customer_id=requirement.customer_id, expected=expected)
         except WarehouseInventoryError:
             return 0
         covered += credit

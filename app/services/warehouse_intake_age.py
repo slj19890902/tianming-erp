@@ -9,7 +9,7 @@ from datetime import date
 import hashlib
 import json
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.warehouse_inventory import (
@@ -92,8 +92,25 @@ def build_intake_age_projection(
         InventoryLotTransfer.target_lot_id.in_(selected_ids)).cte("intake_ancestors", recursive=True)
     ancestors = ancestors.union(select(InventoryLotTransfer.source_lot_id).join(
         ancestors, InventoryLotTransfer.target_lot_id == ancestors.c.source_lot_id))
+    # A product's many stock rows are not all inbound history. Keep selected
+    # rows for unknown-date output, but only materialize other rows that can
+    # contribute a genuine inbound or an inherited transfer date. Reversal and
+    # business-status checks below still decide whether these candidates count.
+    genuine_inbound_ids = select(InventoryMovement.inventory_lot_id).where(
+        InventoryMovement.movement_type == "manual_in",
+        InventoryMovement.quantity > 0,
+        InventoryMovement.after_available + InventoryMovement.after_reserved
+        + InventoryMovement.after_damaged > InventoryMovement.before_available
+        + InventoryMovement.before_reserved + InventoryMovement.before_damaged)
+    relevant_history = or_(
+        InventoryLot.id.in_([lot.id for lot in lots]),
+        InventoryLot.id.in_(genuine_inbound_ids),
+        and_(InventoryLot.source_type.in_(("manual", "stocktake")),
+             InventoryLot.source_ref_type == "inventory_onboarding_line"),
+        InventoryLot.id.in_(select(InventoryLotTransfer.target_lot_id)))
     query = select(InventoryLot).where(or_(*conditions,
-        InventoryLot.id.in_(select(ancestors.c.source_lot_id)))).options(
+        InventoryLot.id.in_(select(ancestors.c.source_lot_id))),
+        relevant_history).options(
         joinedload(InventoryLot.finished_detail), joinedload(InventoryLot.semi_finished_detail),
         selectinload(InventoryLot.allowed_products))
     # Filter BEFORE deriving identities or latest dates. An invisible inbound

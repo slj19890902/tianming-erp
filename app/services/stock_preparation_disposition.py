@@ -46,7 +46,8 @@ def semi_output(db, job, source, item, quantity, place, payload, actor):
     db.add(WarehouseGoodsProfile(lot_id=lot.id,data_json=encode(dict(scope='customers',customer_ids=[item.customer_id],
         product_ids=[job.product_id],processing='cut',mold_tool_id=None,verified_material_id=None,
         material_code=detail.material_code_snapshot,face_paper='unknown',usage_confirmed=True,
-        output_piece=True,physical_basis=snapshot['physical_basis'],dimension_basis='source_board'))))
+        output_piece=True,quantity_unit='pieces',remaining_processes=[],
+        physical_basis=snapshot['physical_basis'],dimension_basis='source_board'))))
     return lot
 
 

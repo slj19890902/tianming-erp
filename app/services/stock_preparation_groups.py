@@ -151,6 +151,13 @@ def workspace_rows(db, rows, state):
             for job in row['jobs']:
                 if job['status']=='pending' and not job['product'].get('preparation_group'):
                     result.append(dict(row,key='job:'+str(job['id']),entry_type='single_job',job=job))
+            if row['status']=='arrange' and row['can_plan'] and row['available']>0:
+                from app.services.stock_preparation_processing import processing_block
+                _, item, lot = prep.source(db,row['receipt_item_id'])
+                result.append(dict(row,entry_type='legacy_material',
+                    processing_expected_output=row['available']*row['factor']//row['pieces_per_box'],
+                    processing_yield_per_sheet=row['factor'],processing_pieces_per_product=row['pieces_per_box'],
+                    processing_block=processing_block(db,item,lot)))
         return result
     if state == 'stock':
         stocked_groups = [dict(key='stock-group:'+g['group']['key'],entry_type='group_stock',task=g)

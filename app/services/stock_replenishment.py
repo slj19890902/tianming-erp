@@ -943,6 +943,11 @@ def customer_board_preparation_coverage(
             stock_yield_per_sheet=effective_output_per_sheet,
         )
         for row in candidates:
+            # Completed physical pieces belong to the 1:1 component channel;
+            # their source-board dimensions never cover material demand again.
+            from app.services.warehouse_goods import goods_profile
+            if (goods_profile(db,row.lot) or {}).get('output_piece') is True:
+                continue
             detail = row.lot.semi_finished_detail
             customer_generic = bool(
                 detail is not None and detail.customer_generic_eligible
@@ -1138,6 +1143,9 @@ def free_bom_component_coverage(db: Session, product: Product) -> dict:
                     FinishedGoodsInventoryDetail.is_general.is_(True)),
                 or_(WarehouseLocation.source_version.is_(None), WarehouseLocation.source_version != "V11",
                     WarehouseLocation.warehouse_floor == 3))) or 0)
+        from app.services.processed_component_stock import available_outputs
+        quantity += sum(lot.quantity_available for lot in available_outputs(db,
+            product_id=component.id, customer_id=product.customer_id, expected_basis=product_basis(component)))
         pieces[component.id] = quantity
         capacities.append(quantity // int(ratio))
     return {"sets": min(capacities) if capacities else 0, "pieces": pieces}

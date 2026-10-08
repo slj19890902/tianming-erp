@@ -14,6 +14,9 @@ def reserve_new_order_stock(db, *, order_item_id, operator_id):
             return []
         _, _, topology = requirements.compiled.graph.validated()
         snapshots = {s.component_product_id: s.id for s in requirements.compiled.snapshots}
+        from app.services.processed_component_stock import available_outputs, reserve_output
+        from app.services.finished_stock_identity import compiled_product_bases
+        completed_child_ids = {e.child_id for e in requirements.compiled.graph.edges if e.relation=='assembly'}
         reserved = []
         for pid in topology:
             # Parent stock reduces assembly-child demand, never accompanying goods.
@@ -40,6 +43,16 @@ def reserve_new_order_stock(db, *, order_item_id, operator_id):
                 need -= take
                 if not need:
                     break
+            if need and pid in completed_child_ids:
+                for lot in available_outputs(db, product_id=pid,
+                        customer_id=requirements.compiled.graph.customer_id,
+                        expected_basis=compiled_product_bases(requirements.compiled)[pid]):
+                    take=min(need,lot.quantity_available)
+                    reservation=reserve_output(db,compiled=requirements.compiled,order_item_id=order_item_id,
+                        snapshot_id=snapshots[pid],lot=lot,quantity=take,expected_version=lot.version,
+                        operator_id=operator_id,key=f'processed-bom-auto:{order_item_id}:{snapshots[pid]}:{lot.id}')
+                    reserved.append(reservation.id);need-=take
+                    if not need:break
         from app.services.bom_inventory_contract import body_product_ids
         for pid in body_product_ids(requirements.compiled.graph):
             requirements = read_graph_requirements(db, order_item_id)

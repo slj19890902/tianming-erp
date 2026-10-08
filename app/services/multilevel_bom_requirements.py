@@ -76,6 +76,12 @@ def read_graph_requirements(db, order_item_id):
     finished, pieces = {}, {}
     from app.services.multilevel_bom_carried_material import carried_semi_pieces
     inherited_semi = carried_semi_pieces(db, compiled)
+    from app.services.processed_component_stock import processed_reservations
+    completed_children = {}
+    for reservation in processed_reservations(db, compiled, item.id):
+        pid=product_by_snapshot[reservation.sales_order_item_bom_component_id]
+        completed_children[pid]=completed_children.get(pid,0)+max(0,
+            reservation.credited_requirement_quantity-reservation.released_requirement_quantity)
     for node in graph.nodes:
         row = snapshots[node.product_id]
         if node.source == "separate":
@@ -96,8 +102,10 @@ def read_graph_requirements(db, order_item_id):
             finished[node.product_id] = sum(max(int(r.credited_requirement_quantity or 0)
                 - int(r.released_requirement_quantity or 0), 0) for r in reserves
                 if r.sales_order_item_bom_component_id == row.id)
+        finished[node.product_id] += completed_children.get(node.product_id,0)
         for route in node.routes:
             coverage = component_inventory_coverage(db, row.id, component_type=route.key)
-            pieces[node.product_id, route.key] = coverage["semi_piece_quantity"] + inherited_semi.get((node.product_id, route.key), 0)
+            pieces[node.product_id, route.key] = max(coverage["semi_piece_quantity"]
+                - completed_children.get(node.product_id,0),0) + inherited_semi.get((node.product_id, route.key), 0)
     return GraphRequirements(quantity, compiled, plan_bom(graph, quantity,
         eligible_stock=finished, eligible_pieces=pieces, eligible_bodies=bodies), finished, pieces)

@@ -85,6 +85,14 @@ def test_direct_receipt_posts_real_finished_and_idempotent(routing_app, physical
         assert decode(line.quantity_contract_json)['physical_quantity'] == 1000 * physical_ratio
         db.add(line)
         db.flush()
+        from app.services.order_stock_reference import stock_reference
+        reference_args=dict(customer_id=delivery.customer_id,product_id=item.product_id,
+            product_code=item.snapshot_product_code,quantity_unit=item.external_packaging_purchase_unit_snapshot,
+            remaining_quantity=1000*physical_ratio)
+        assert stock_reference(db,**reference_args)['status']=='green'
+        contract=line.quantity_contract_json;line.quantity_contract_json=None;db.flush()
+        assert stock_reference(db,**reference_args)['status']=='unknown'
+        line.quantity_contract_json=contract;db.flush()
         consume_delivery_item_inventory(db, delivery_item_id=line.id, delivered_quantity_after_dispatch=1000,
             operator_id=operator_id, operation_key='direct-dispatch')
         item.delivered_quantity = 1000

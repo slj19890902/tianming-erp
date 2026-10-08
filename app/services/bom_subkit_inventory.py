@@ -144,8 +144,17 @@ def assemble_subkit_inventory(
                 if (pid != body_product_id or body.order_item_id != item.id
                         or lot.quantity_reserved or reserved_qty.get(lot.id, 0)):
                     raise SubkitError("组装本体与订单不一致或存在异常预占")
-            elif pid not in member_ids or lot.finished_detail.is_general:
+            elif pid not in member_ids or (lot.finished_detail is not None and lot.finished_detail.is_general):
                 raise SubkitError("组套原片产品、客户或集货状态不匹配")
+            if not is_body and lot.inventory_type=='semi_finished':
+                from app.services.processed_component_stock import matches_output
+                from app.services.finished_stock_identity import compiled_product_bases
+                if (graph_product_id is None or not matches_output(db,lot,product_id=pid,
+                        customer_id=order.customer_id,expected_basis=compiled_product_bases(compiled)[pid])
+                        or any(r.reservation_type!='semi_order' or r.semi_requirement_id is not None
+                            or r.yield_factor!=1 or r.credited_requirement_quantity!=r.reserved_stock_quantity
+                            for r in reserved_by_lot.get(lot.id,[]))):
+                    raise SubkitError('已加工子件缺少本订单冻结身份或1:1预占')
             from app.services.bom_subkits import active_subkit_order
             owner = active_subkit_order(db, lot)
             if owner is not None and owner != item.id:

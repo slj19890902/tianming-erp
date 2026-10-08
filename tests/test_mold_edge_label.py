@@ -5,7 +5,7 @@ from app.services import mold_label_layout as layout
 def test_edge_default_and_historical_snapshot_are_independent():
     current = layout.normalize_layout(layout.default_layout())
     fields = {e["id"]:e for e in current["elements"]}
-    assert current["catalog_version"] == "mold-edge-v1"
+    assert current["catalog_version"] == "mold-count-v1"
     assert fields["inventory_code_top"]["font_size_mm"] == 8.8
     assert fields["mold_qr"]["width_mm"] == fields["mold_qr"]["height_mm"] == 15
     for key in ("inventory_code_side", "customer_name", "custom_note"):
@@ -14,7 +14,7 @@ def test_edge_default_and_historical_snapshot_are_independent():
     old = layout._default_layout_v8()
     frozen = deepcopy(old)
     assert layout._normalize_snapshot_layout(old)["catalog_version"] == "p1-119-v1"
-    assert layout._upgrade_to_current_catalog(old)["catalog_version"] == "mold-edge-v1"
+    assert layout._upgrade_to_current_catalog(old)["catalog_version"] == "mold-count-v1"
     assert old == frozen
 
 @pytest.mark.parametrize("mutation", ["missing", "hidden", "overlap", "outside", "small_qr"])
@@ -47,7 +47,7 @@ def test_new_jobs_freeze_edge_layout_and_permissions_remain(mold_app):
         assert replay.json()["replayed"] is True
         assert replay.json()["published"]==first.json()["published"]
         frozen=client.get("/api/warehouse/molds/label-layout").json()
-        assert frozen["layout"]["catalog_version"]=="mold-edge-v1"
+        assert frozen["layout"]["catalog_version"]=="mold-count-v1"
         assert len(frozen["layout"]["elements"])==8
 
         print_payload=dict(mold_ids=[mold_id],source="single",template_version="mold_80x40_v1",idempotency_key="edge-print-20260928")

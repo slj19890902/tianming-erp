@@ -3270,6 +3270,16 @@
               </div>
             </section>
 
+            <section v-if="stockReplenishmentSavedNotice.visible" class="order-next-step-guide" aria-live="polite">
+              <div class="order-next-step-copy"><strong>已保存 {{ stockReplenishmentSavedNotice.result?.document_number || stockReplenishmentSavedNotice.result?.order_number || ('补库单 #' + stockReplenishmentSavedNotice.result?.id) }}</strong><span v-if="stockReplenishmentSavedNotice.readError">列表读取失败：{{ stockReplenishmentSavedNotice.readError }}</span></div>
+              <div class="order-next-step-actions">
+                <button class="btn primary" type="button" @click="viewSavedStockReplenishment()">{{ stockReplenishmentSavedNotice.result?.status==='draft' ? '查看待报料' : stockReplenishmentSavedNotice.result?.procurement_mode==='external_purchase' ? '查看包材采购历史' : '查看已报料' }}</button>
+                <button v-if="stockReplenishmentSavedNotice.result?.status!=='draft' && hasPermission('incoming.execute') && pageAllowed('incoming')" class="btn" type="button" @click="viewSavedStockReplenishment('incoming')">查看来料待入库</button>
+                <button v-if="stockReplenishmentSavedNotice.readError" class="btn" type="button" @click="viewSavedStockReplenishment()">重试读取</button>
+                <button class="btn" type="button" @click="stockReplenishmentSavedNotice.visible=false">关闭</button>
+              </div>
+            </section>
+
             <section v-if="orderNextStepGuide.visible && ['orders','orders_legacy'].includes(activePage)" class="order-next-step-guide" aria-live="polite">
               <div class="order-next-step-copy">
                 <strong>{{ orderNextStepGuideTitle }}</strong>
@@ -3290,6 +3300,7 @@
                 <span>材料到厂后，再去来料入库确认实收。</span>
               </div>
               <div class="order-next-step-actions">
+                <button v-if="pageAllowed('requisition')" type="button" class="btn" @click="goToReportedFromRequisitionGuide">查看本次已报料</button>
                 <button v-if="hasPermission('incoming.execute') && pageAllowed('incoming')" type="button" class="btn primary" @click="goToIncomingFromRequisitionGuide">材料到厂后：去来料入库</button>
                 <span v-else class="muted">材料到厂后，请交给有来料入库权限的账号确认实收</span>
                 <button type="button" class="btn" @click="continueRequisitionFromGuide">继续报料</button>
@@ -3433,10 +3444,10 @@
                             <span v-else-if="item.customer_board_preparation_available_sheet_quantity">同规格备料 <strong>{{ item.customer_board_preparation_available_sheet_quantity }}</strong> 张（已计入另一款，不重复计算）</span>
                             <span v-if="item.incoming_board_preparation_sheet_quantity && item.incoming_board_preparation_auto_cover_capacity">已报料待到 <strong>{{ item.incoming_board_preparation_sheet_quantity }}</strong> 张</span>
                             <span v-else-if="item.incoming_board_preparation_sheet_quantity">同规格在途 <strong>{{ item.incoming_board_preparation_sheet_quantity }}</strong> 张（已计入另一款，不重复计算）</span>
-                            <span v-if="item.is_virtual_composite_parent">本次补料 {{ item.suggested_new_requisition_finished_quantity }} 套 · 子件纸板 {{ item.suggested_new_requisition_sheet_quantity }} 张</span><span v-else-if="item.procurement_mode==='external_purchase'">本次建议备库 <strong>{{ item.suggested_new_requisition_finished_quantity }}</strong> 个成品</span><span v-else>本次新报 <strong>{{ item.suggested_new_requisition_sheet_quantity }}</strong> 张</span>
+                            <span v-if="item.is_virtual_composite_parent">本次补库 <input class="input" type="number" min="1" step="1" style="width:88px;display:inline-block" aria-label="本次补库套数" :value="stockPolicyDraftQuantity(item)" @input="setStockPolicyDraftQuantity(item,$event.target.value)" /> 套 <button type="button" class="btn small" aria-label="本次补库说明" @click="explainStockPolicyDraftQuantity(item)">!</button></span><span v-else-if="item.procurement_mode==='external_purchase'">本次建议备库 <strong>{{ item.suggested_new_requisition_finished_quantity }}</strong> 个成品</span><span v-else>本次新报 <strong>{{ item.suggested_new_requisition_sheet_quantity }}</strong> 张</span>
                           </div>
                           <div class="low-stock-detail-actions">
-                            <button v-if="(canRequisition || canSubmitBusinessRequest) && (canSubmitBusinessRequest || item.procurement_mode!=='external_purchase' || (canAdmin && canViewCosts))" class="btn small success" :disabled="!item.draft_ready || !Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0)" @click="openLowStockReplenishment(item)">{{ Number(item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0) ? (item.is_virtual_composite_parent ? `建议报料 ${item.suggested_new_requisition_finished_quantity} 套` : item.procurement_mode==='external_purchase' ? `建议采购备库 ${item.suggested_new_requisition_finished_quantity} 个` : `建议报料 ${item.suggested_new_requisition_sheet_quantity} 张`) : item.replenishment_state==='board_preparation_ready' ? '已有备料，待生产' : item.replenishment_state==='already_ordered' ? (item.procurement_mode==='external_purchase' ? '已采购，待到货' : '已报料，待到货') : '无需再报料' }}</button>
+                            <button v-if="(canRequisition || canSubmitBusinessRequest) && (canSubmitBusinessRequest || item.procurement_mode!=='external_purchase' || (canAdmin && canViewCosts))" class="btn small success" :disabled="!item.draft_ready || !Number(item.is_virtual_composite_parent ? stockPolicyDraftQuantity(item) : item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0)" @click="openLowStockReplenishment(item)">{{ Number(item.is_virtual_composite_parent ? stockPolicyDraftQuantity(item) : item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0) ? (item.is_virtual_composite_parent ? "按预警补库" : item.procurement_mode==='external_purchase' ? `建议采购备库 ${item.suggested_new_requisition_finished_quantity} 个` : `建议报料 ${item.suggested_new_requisition_sheet_quantity} 张`) : item.replenishment_state==='board_preparation_ready' ? '已有备料，待生产' : item.replenishment_state==='already_ordered' ? (item.procurement_mode==='external_purchase' ? '已采购，待到货' : '已报料，待到货') : '无需再报料' }}</button>
                             <button class="btn small primary" @click="openLowStockLocations(item)">查看库存位置</button>
                             <button v-if="canRequisition || canEditStockAlerts" class="btn small" @click="openProductStockPolicy(item)">修改预警</button>
                           </div>
@@ -9125,7 +9136,7 @@
                     <td><strong>{{ policy.policy_name }}</strong><div class="muted">{{ policy.product_code || policy.material_code || '-' }}</div></td>
                     <td>{{ policy.target_inventory_type === 'finished' ? '成品' : '半成品' }}</td>
                     <td>{{ policy.available_quantity }} / {{ policy.warning_quantity }} / {{ policy.target_quantity }} {{ policy.is_virtual_composite_parent ? '套' : '' }}<div v-if="policy.is_virtual_composite_parent" class="muted">已成套 {{ policy.assembled_quantity || 0 }} · 未组装可配 {{ policy.unassembled_available_set_quantity || 0 }} 套</div></td>
-                    <td><strong>{{ policy.is_virtual_composite_parent ? policy.suggested_new_requisition_finished_quantity : (policy.suggested_new_requisition_sheet_quantity ?? policy.suggested_replenishment_quantity) }}</strong> {{ policy.is_virtual_composite_parent ? '套' : '张' }}</td>
+                    <td><template v-if="policy.is_virtual_composite_parent"><input class="input" type="number" min="1" step="1" style="width:88px;display:inline-block" aria-label="本次补库套数" :value="stockPolicyDraftQuantity(policy)" @input="setStockPolicyDraftQuantity(policy,$event.target.value)" /> 套 <button class="btn small" type="button" @click="explainStockPolicyDraftQuantity(policy)">!</button></template><template v-else><strong>{{ policy.suggested_new_requisition_sheet_quantity ?? policy.suggested_replenishment_quantity }}</strong> 张</template></td>
                     <td>{{ policy.default_location ? inventoryLocation(policy.default_location) : '未设置' }}</td>
                     <td><button class="btn small success" type="button" @click="addStockPolicyDraft(policy)">按预警补库</button></td>
                   </tr>
@@ -10848,6 +10859,8 @@
             supplierPreview:{orders:[],index:0,loading:false,error:'',showInternal:false,trace:null,traceLoading:false,traceError:''},
             supplierRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null},
             compositeRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null, requestKey:"", draftSignature:""},
+            stockPolicyDraftQuantities:{},
+            stockReplenishmentSavedNotice:{visible:false,result:null,readError:""},
             stockReplenishmentSaveState:{saving:false, committed:false, uncertain:false, result:null},
             stockReplenishmentVoidState:{orderId:null, documentNumber:"", uncertainIds:{}},
             stockPolicyWarnings: [], stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
@@ -16291,6 +16304,8 @@
             this.compositeRequisitionSaveState = {saving:false,committed:false,uncertain:false,result:null,requestKey:"",draftSignature:""};
             this.stockReplenishmentSaveState = {saving:false,committed:false,uncertain:false,result:null};
             this.stockReplenishmentVoidState = {orderId:null,documentNumber:"",uncertainIds:{}};
+            this.stockPolicyDraftQuantities = {};
+            this.stockReplenishmentSavedNotice = {visible:false,result:null,readError:""};
             this.stockPolicyWarnings = [];
             this.stockReplenishmentProducts = [];
             this.stockReplenishmentCompanions = [];
@@ -16613,6 +16628,18 @@
           continueRequisitionFromGuide() {
             this.dismissRequisitionNextStepGuide();
             this.requisitionTab = "pending";
+          },
+          async goToReportedFromRequisitionGuide() {
+            if (!this.pageAllowed("requisition")) return false;
+            const number = this.requisitionNextStepGuide.documentNo;
+            this.requisitionWorkspace = "board";
+            this.requisitionTab = "submitted";
+            this.pages.requisitionReported = 1;
+            this.reportedSort = {by:"reported_at",direction:"desc"};
+            if (number) this.reportedFilters.document_number = number;
+            this.invalidatePageCache("requisition");
+            await this.go("requisition");
+            return await this.loadReportedDocuments();
           },
           async goToIncomingFromRequisitionGuide() {
             if (!this.hasPermission("incoming.execute") || !this.pageAllowed("incoming")) {
@@ -20124,7 +20151,7 @@
           },
           async openLowStockReplenishment(item) {
             if (this.canSubmitBusinessRequest && !this.canRequisition) { this.openBusinessRequests(item); return; }
-            if (!Number(item?.suggested_new_requisition_sheet_quantity || 0)) {
+            if (!Number(item?.is_virtual_composite_parent ? this.stockPolicyDraftQuantity(item) : item?.suggested_new_requisition_sheet_quantity || 0)) {
               const message = item?.replenishment_state === "board_preparation_ready"
                 ? "已有客户专用纸板备料，当前无需重复报料，请按订单安排生产"
                 : item?.replenishment_state === "already_ordered"
@@ -20135,7 +20162,7 @@
             }
             await this.go("requisition");
             await this.openStockReplenishment({ warningOnly:true });
-            await this.addStockPolicyDraft({ id:item.policy_id });
+            await this.addStockPolicyDraft({...item,id:item.policy_id});
           },
           async openLowStockLocations(item) {
             const keyword = encodeURIComponent(String(item.product_code || item.product_name || "").trim());
@@ -20177,9 +20204,30 @@
               quantity:null, location_id:null, remark:"",
             });
           },
+          stockPolicyDraftQuantity(policy) {
+            const key = String(policy.id || policy.policy_id);
+            return Object.prototype.hasOwnProperty.call(this.stockPolicyDraftQuantities, key)
+              ? this.stockPolicyDraftQuantities[key] : (policy.suggested_new_requisition_finished_quantity ?? 0);
+          },
+          setStockPolicyDraftQuantity(policy, value) {
+            this.stockPolicyDraftQuantities[String(policy.id || policy.policy_id)] = value;
+          },
+          explainStockPolicyDraftQuantity(policy) {
+            this.showToast(`建议 ${policy.suggested_new_requisition_finished_quantity || 0} 套；填写本次计划补库套数，系统按BOM、库存及在途重算子件张数，不修改预警目标，也不重复扣成品库存。`);
+          },
           async addStockPolicyDraft(policy) {
+            const requestKey = `requisition:stock-policy-draft:${policy.id}`;
+            const controller = this.beginLatestRequest(requestKey);
+            const form = this.stockReplenishmentForm;
             try {
-              const { data } = await axios.get(`/api/requisition/stock-policies/${policy.id}/replenishment-draft`);
+              const params = {};
+              if (policy.is_virtual_composite_parent) {
+                const quantity = Number(this.stockPolicyDraftQuantity(policy));
+                if (!Number.isSafeInteger(quantity) || quantity < 1) throw new Error("本次补库套数须为正整数");
+                params.finished_quantity = quantity;
+              }
+              const { data } = await axios.get(`/api/requisition/stock-policies/${policy.id}/replenishment-draft`, {params,signal:controller.signal});
+              if (controller.signal.aborted || this.stockReplenishmentForm !== form || this.modal?.type !== "stockReplenishment") return;
               const lines = (data.items || []).filter(line => Number(line.quantity || 0) > 0);
               if (!lines.length) {
                 if (!data.draft_ready) this.showToast(`报料资料还缺：${(data.missing_fields || []).join("、")}`, true);
@@ -20191,6 +20239,7 @@
                 this.showToast("该款已经在本次报料草稿中", true);
                 return;
               }
+              if (data.replenishment_plan) this.stockReplenishmentForm.replenishment_plans = [...(this.stockReplenishmentForm.replenishment_plans || []),data.replenishment_plan];
               this.stockReplenishmentForm.source_type = "stock_warning";
               this.stockReplenishmentForm.idempotency_key = this.stockReplenishmentForm.idempotency_key || createIdempotencyKey();
               this.stockReplenishmentForm.stock_now = false;
@@ -20205,7 +20254,8 @@
               this.syncStockReplenishmentSupplier();
               if (!data.draft_ready) this.showToast(`报料资料还缺：${(data.missing_fields || []).join("、")}`, true);
               else if (data.is_virtual_composite_parent) this.showToast(`已按BOM生成 ${lines.length} 条组件报料明细`);
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            } catch(error) { if (!this.isCancelledRequest(error)) this.showToast(this.errorMessage(error), true); }
+            finally { this.finishLatestRequest(requestKey,controller); }
           },
           async addCompatibleStockDraft(companion) {
             const line = companion?.draft_item;
@@ -20339,6 +20389,8 @@
           },
           removeStockReplenishmentLine(index) {
             this.stockReplenishmentForm.items.splice(index,1);
+            const activePolicies = new Set(this.stockReplenishmentForm.items.map(line => Number(line.stock_policy_id)));
+            this.stockReplenishmentForm.replenishment_plans = (this.stockReplenishmentForm.replenishment_plans || []).filter(plan => activePolicies.has(Number(plan.policy_id)));
             this.syncStockReplenishmentSupplier();
           },
           onStockLayerChanged(line) {
@@ -35956,13 +36008,60 @@
               } catch (error) {
                 printFailed = true;
               }
+              this.pages.requisitionPending = 1;
+              this.pages.requisitionReported = 1;
+              this.reportedSort = {by:"reported_at",direction:"desc"};
               const refreshResults = await Promise.allSettled([this.loadRequisition()]);
-              const refreshFailed = refreshResults.some(result =>
-                result.status === "rejected" || result.value === false
-              );
+              const refreshFailed = refreshResults.some(result => result.status === "rejected");
               return {...data, _refresh_failed:refreshFailed, _print_failed:printFailed};
             } finally {
               state.saving = false;
+            }
+          },
+          async viewSavedStockReplenishment(target="") {
+            const notice = this.stockReplenishmentSavedNotice;
+            const saved = notice.result;
+            if (!saved) return false;
+            notice.readError = "";
+            try {
+              if (target === "incoming") {
+                if (!this.hasPermission("incoming.execute") || !this.pageAllowed("incoming")) return false;
+                this.incomingWorkspace = saved.procurement_mode === "external_purchase" ? "packaging" : "board";
+                this.incomingTab = "pending";
+                this.invalidatePageCache("incoming");
+                await this.go("incoming");
+                return true;
+              }
+              if (!this.pageAllowed("requisition")) return false;
+              this.requisitionWorkspace = saved.procurement_mode === "external_purchase" ? "packaging" : "board";
+              this.requisitionTab = saved.status === "draft" ? "pending" : "submitted";
+              this.pages.requisitionPending = 1;
+              this.pages.requisitionReported = 1;
+              this.reportedSort = {by:"reported_at",direction:"desc"};
+              this.invalidatePageCache("requisition");
+              await this.go("requisition");
+              if (this.requisitionWorkspace === "board") {
+                if (saved.status === "draft") await this.loadRequisition({skipAutoRelease:true});
+                else {
+                  await this.loadReportedDocuments();
+                  if (this.reportedItemError) throw new Error(this.reportedItemError);
+                }
+              }
+              await this.$nextTick();
+              const rows = this.requisitionTab === "pending" ? this.filteredRequisitionPending : this.requisitionItems;
+              const row = (rows || []).find(row => Number(row.stock_replenishment_order_id || row.source_document_id) === Number(saved.id) || [row.order_number,row.document_number,row.source_document_number].includes(saved.order_number || saved.document_number));
+              if (!row && this.requisitionWorkspace === "board") this.showToast("单据已保存；当前筛选或客户范围内未显示，请核对筛选。客户范围保持原设置。");
+              if (row) {
+                const number = saved.order_number || saved.document_number;
+                const cell = [...document.querySelectorAll("td")].find(cell => number && cell.textContent.includes(number));
+                cell?.scrollIntoView({block:"center",behavior:"smooth"});
+                cell?.closest("tr")?.animate([{background:"#fff4b8"},{background:"transparent"}],{duration:2000});
+              }
+              return true;
+            } catch (error) {
+              if (this.isCancelledRequest(error)) return false;
+              notice.readError = this.errorMessage(error);
+              return false;
             }
           },
           async saveStockReplenishmentDraft() {
@@ -35983,6 +36082,7 @@
               customer_id:this.stockReplenishmentForm.customer_id || null,
               remark:this.stockReplenishmentForm.remark || null,
               stock_now:false,
+              replenishment_plans:this.stockReplenishmentForm.replenishment_plans || [],
               items:this.stockReplenishmentForm.items.map(line => {
                 const item={...line};
                 delete item._key;
@@ -36039,10 +36139,26 @@
                 } catch (error) {
                   printFailed = true;
               }
-              const refreshResults = await Promise.allSettled([this.loadRequisition()]);
-              const refreshFailed = refreshResults.some(result =>
-                result.status === "rejected" || result.value === false
-              );
+              this.pages.requisitionPending = 1;
+              this.pages.requisitionReported = 1;
+              this.reportedSort = {by:"reported_at",direction:"desc"};
+              this.invalidatePageCache("requisition");
+              this.stockReplenishmentSavedNotice = {visible:true,result:data,readError:""};
+              let refreshFailed = false;
+              if (this.activePage === "requisition" && (this.requisitionWorkspace || "board") === "board") {
+                try {
+                  if (data.status === "draft") await this.loadRequisition({skipAutoRelease:true});
+                  else if (this.requisitionTab === "submitted") {
+                    await this.loadReportedDocuments();
+                    if (this.reportedItemError) throw new Error(this.reportedItemError);
+                  }
+                } catch (error) {
+                  if (!this.isCancelledRequest(error)) {
+                    refreshFailed = true;
+                    this.stockReplenishmentSavedNotice.readError = this.errorMessage(error);
+                  }
+                }
+              }
               return {...data, _refresh_failed:refreshFailed, _print_failed:printFailed};
             } finally {
               state.saving = false;
@@ -36183,6 +36299,9 @@
               this.requisitionSelected = {};
               this.selectedPendingKeys = [];
               this.supplierRequisitionSelections = [];
+              this.pages.requisitionPending = 1;
+              this.pages.requisitionReported = 1;
+              this.reportedSort = {by:"reported_at",direction:"desc"};
               const refreshResults = await Promise.allSettled([
                 this.loadRequisition(),
                 this.loadSupplierOrders(),
@@ -39810,21 +39929,9 @@
               if (this.modal.type === "stockReplenishment") {
                 const data = await this.saveStockReplenishmentDraft();
                 if (data?._in_flight) return false;
-                if (data.status !== "draft") this.showRequisitionNextStepGuide({
-                  documentNo:data?.document_number || data?.order_number || "",
-                  count:1,
-                  source:"stock_replenishment",
-                });
-                if (data?._refresh_failed || data?._print_failed) {
-                  const details = [
-                    data._refresh_failed ? "已报料列表刷新失败" : "",
-                    data._print_failed ? "打印页未打开" : "",
-                  ].filter(Boolean).join("、");
-                  this.showToast(`${data?.procurement_mode==='external_purchase' ? '外购备库采购单' : '补库报料草稿'}已经保存；${details}。请从“包材采购历史/来料待入库”核对，不要重复提交。`, true);
-                } else {
-                  this.requisitionTab = data.status === "draft" ? "pending" : this.requisitionTab;
-                  this.showToast(data?.procurement_mode==='external_purchase' ? "外购备库采购单已生成；收料按常用箱比例累计，凑足一套后自动增加客户专属成品库存" : "补库需求已保存到待报料；请勾选需求，按供应商统一生成采购单");
-                }
+                const number = data?.document_number || data?.order_number || `#${data.id}`;
+                const destination = data.status === "draft" ? "待报料" : data.procurement_mode === "external_purchase" ? "包材采购历史" : "已报料";
+                this.showToast(`已保存 ${number}；${data?._refresh_failed ? destination + "读取失败，可单独重试读取" : "点击“查看" + destination + "”继续"}${data?._print_failed ? "；打印页未打开，可从原单重开" : ""}。`);
                 return true;
               }
               if (this.modal.type === "supplierRequisitionDraft") {

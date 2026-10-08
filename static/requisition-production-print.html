@@ -63,8 +63,8 @@
     .field-value { display:block; margin-top:.5mm; font-weight:800; font-size:9.5pt; overflow-wrap:anywhere; }
     .production-key-value,.detail-row.production-key-fact .value { font-size:12pt; line-height:1.15; font-weight:800; }
     .process-title { margin:1.6mm 0 .8mm; color:#333; font-size:7.5pt; font-weight:700; }
-    .process-route { display:flex; gap:1.2mm; margin:0; padding:0; list-style:none; }
-    .process-route li { flex:1 1 0; min-width:0; border:.3mm solid #111; border-radius:3mm; padding:1.1mm 1.5mm; text-align:center; font-size:8pt; font-weight:700; overflow-wrap:anywhere; }
+    .process-route { display:flex; flex-wrap:wrap; gap:1.2mm; margin:0; padding:0; list-style:none; }
+    .process-route li { flex:1 1 14mm; min-width:0; border:.3mm solid #111; border-radius:3mm; padding:1.1mm 1.5mm; text-align:center; font-size:8pt; font-weight:700; overflow-wrap:anywhere; }
     .detail-grid { display:grid; grid-template-columns:1fr; margin-top:1.2mm; border:.3mm solid #555; border-radius:2mm; overflow:hidden; min-height:25mm; }
     .detail-list { padding:2mm 2.5mm; }
     .detail-row { display:grid; grid-template-columns:23mm 1fr; gap:2mm; padding:.8mm 0; font-size:8pt; line-height:1.25; }
@@ -300,7 +300,7 @@
       }
 
       function titleFor(card) {
-        if (card.source_type === "stock_replenishment") return "库存补库待来料任务单";
+        if (card.source_type === "stock_replenishment" || card.stock_replenishment_item_id) return "库存补库待来料任务单";
         if (card.layout_kind === "die_cut") return "模切内盒生产任务单";
         if (card.layout_kind === "liner") return "衬板生产任务单";
         if (card.box_type_code === "a1_0201") return "A1 型纸箱生产任务单";
@@ -329,19 +329,38 @@
       }
 
       function processSteps(card) {
-        if (card.layout_kind === "liner") return ["无需后加工", "计数", "捆扎"];
-        const text = textList(card.production_steps || []);
+        const route = card.production_route;
+        if (Array.isArray(route?.steps)) return route.steps.map(step => String(step.label || "")).filter(Boolean);
+        const components = card.components || [];
+        const frozenSteps = components.flatMap(line => Array.isArray(line.production_route?.steps) ? line.production_route.steps.map(step => step.label) : []);
+        if (frozenSteps.length) return unique(frozenSteps);
+        // Historical paper can use its frozen process sequence. Explicit geometry
+        // and die-cut facts still control splitting and die-cutting.
+        const snapshots = [card.sheet_cutting_snapshot,...components.map(line => line.sheet_cutting_snapshot)].filter(Boolean);
         const steps = [];
-        const add = (value) => { if (!steps.includes(value)) steps.push(value); };
-        if ((card.components || []).some((line) => line.mold_display_name || line.mold_name || line.mold_code)) add("模具");
-        if (text.includes("印刷") || firstValues(card, "print_content").some((value) => !["无印刷", "无", "否", "不印刷"].includes(value))) add("印刷");
-        if (card.joining_method && card.joining_method.includes("粘贴")) add("粘贴");
+        const add = (value) => { if (value && !steps.includes(value)) steps.push(value); };
+        if (snapshots.some(value => Number(value.length_parts) * Number(value.width_parts) > 1) && card.material_processing_type !== "cut_sheet") add("分切");
+        if (components.some(line => line.needs_printing === true || (line.print_content && !["无印刷","无","否","不印刷"].includes(line.print_content)))) add("印刷");
+        const text = textList(card.production_steps || []);
         if (text.includes("开槽")) add("开槽");
         if (text.includes("压线")) add("压线");
-        if (!(card.components || []).some((line) => line.mold_display_name || line.mold_name || line.mold_code) && (card.layout_kind === "die_cut" || text.includes("模切"))) add("模切");
+        if (card.needs_die_cut === true || card.layout_kind === "die_cut" || snapshots.some(value => value.is_die_cut === true) || components.some(line => line.needs_die_cut === true)) add("模切");
         if (text.includes("清废")) add("清废");
-        if (card.joining_method) card.joining_method.split(" / ").filter((value) => !["粘贴", "无需结合"].includes(value)).forEach(add);
-        return steps.length ? steps.slice(0, 6) : ["无需后加工"];
+        if (card.joining_method) card.joining_method.split(" / ").filter(value => value !== "无需结合").forEach(add);
+        if (!steps.length) add("无需后加工");
+        if (card.layout_kind === "liner") { add("计数"); add("捆扎"); }
+        return steps;
+      }
+
+      function cuttingFacts(card) {
+        const components = card.components || [];
+        const rows = components.filter(line => line.sheet_cutting_snapshot);
+        const facts = rows.length ? rows : card.sheet_cutting_snapshot ? [card] : [];
+        return facts.map(line => {
+          const value = line.sheet_cutting_snapshot;
+          const prefix = facts.length > 1 ? `${line.component_label || line.component_type || "组件"}：` : "";
+          return `${prefix}大纸 ${numberText(value.supplier_length_mm)}×${numberText(value.supplier_width_mm)}mm → 长${value.length_parts}×宽${value.width_parts}分切 → 每片${numberText(value.theoretical_length_mm)}×${numberText(value.theoretical_width_mm)}mm；${value.mold_count}模；每张产出${value.yield_per_supplier_sheet}片`;
+        }).join("；");
       }
 
       function processHtml(card, fitLevel = "normal") {
@@ -455,7 +474,7 @@
         const materials = unique((card.components || []).map((line) => line.material_code));
         const flute = unique((card.components || []).map((line) => [line.flute_type, line.layer_count ? `${line.layer_count}层` : null].filter(Boolean).join(" / ")));
         const crease = textList(firstValues(card, "crease_display"));
-        const cutting = textList(firstValues(card, "cutting_mode"));
+        const cutting = cuttingFacts(card) || textList(firstValues(card, "cutting_mode"));
         const fit = (value, limit = 42) => fitLevel === "ultra" ? paperText(value, limit) : value;
         if (card.layout_kind === "liner") {
           const quantityUnit = card.output_unit || "张";
@@ -464,23 +483,24 @@
           return [
             detailRow("成品尺寸", fit(finishedSize(card))),
             detailRow("材质 / 楞型", fit(`${textList(materials)} / ${textList(flute)}`)),
-            detailRow("开料方式", fit(cutting)),
+            detailRow("开料 / 几模", cutting),
             detailRow("总数量", `${card.planned_finished_quantity || 0} ${card.output_unit || "张"}`),
             detailRow("每捆数量", perBundle),
             detailRow("预计捆数", bundleCount),
-            detailRow("加工要求", "无需加工，齐边捆扎"),
+            detailRow("加工要求", processSteps(card).join(" → ")),
           ].join("");
         }
         if (card.layout_kind === "die_cut") {
           return [
             detailRow("纸板尺寸", fit(sizes)),
             detailRow("材质 / 楞型", fit(`${textList(materials)} / ${textList(flute)}`)),
-            detailRow("开料方式", fit(cutting)),
+            detailRow("开料 / 几模", cutting),
             ...(card.joining_method && card.joining_method.includes("粘贴") ? [] : [detailRow("结合方式", fit(card.joining_method || "无需结合"), "production-key-fact")]),
           ].join("");
         }
         return [
           detailRow("纸板尺寸", fit(sizes)),
+          ...(cuttingFacts(card) ? [detailRow("分切 / 几模", cuttingFacts(card))] : []),
           detailRow("材质 / 楞型", fit(`${textList(materials)} / ${textList(flute)}`)),
           detailRow("压线尺寸", fit(crease), "production-key-fact"),
           ...(card.joining_method && card.joining_method.includes("粘贴") ? [] : [detailRow("结合方式", fit(card.joining_method || "无需结合"), "production-key-fact")]),

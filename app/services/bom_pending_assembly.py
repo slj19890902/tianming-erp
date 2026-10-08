@@ -54,6 +54,9 @@ def source_selection(db, item_id, compiled):
         InventoryReservation.reservation_type == 'finished_order',
         current_finished_reservation_condition(db, compiled),
         InventoryReservation.status.in_(('active', 'partial')))))
+    from app.services.processed_component_stock import processed_reservations
+    reserved.update(r.inventory_lot_id for r in processed_reservations(db,compiled,item_id)
+        if r.status in ('active','partial'))
     lots = list(db.scalars(select(InventoryLot).where(InventoryLot.id.in_(own | reserved),
         InventoryLot.status == 'active', InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0)))
     return lots, sorted(own.intersection(lot.id for lot in lots))
@@ -92,7 +95,7 @@ def preview(db, item_id):
     child_ids |= body_product_ids(compiled.graph)
     reserved_by_lot = {}
     for reservation in db.scalars(select(InventoryReservation).where(
-        InventoryReservation.order_item_id == item_id, InventoryReservation.reservation_type == 'finished_order',
+        InventoryReservation.order_item_id == item_id, InventoryReservation.reservation_type.in_(('finished_order','semi_order')),
         InventoryReservation.status.in_(('active', 'partial')))):
         remaining = max(0, reservation.reserved_stock_quantity - reservation.consumed_stock_quantity - reservation.released_stock_quantity)
         reserved_by_lot[reservation.inventory_lot_id] = reserved_by_lot.get(reservation.inventory_lot_id, 0) + remaining
@@ -163,6 +166,10 @@ def confirm(db, *, item_id, command, actor):
         reserved = set(db.scalars(select(InventoryReservation.inventory_lot_id).where(
             InventoryReservation.order_item_id == item_id,
             InventoryReservation.reservation_type == 'finished_order')))
+        from app.services.processed_component_stock import processed_reservations
+        # Historical consumed sources remain owned by this order for exact
+        # idempotent replay; assembly computes spendable balances separately.
+        reserved.update(r.inventory_lot_id for r in processed_reservations(db,compiled,item_id))
         if (not set(command['available_lot_ids']).issubset(own)
                 or not set(command['source_lot_versions']).issubset(own | reserved)):
             raise SubkitError('组套来源不属于当前订单，不能消耗其他货物')

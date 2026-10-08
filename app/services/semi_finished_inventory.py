@@ -76,6 +76,7 @@ class SemiFinishedSignature:
     component_type: str
     pieces_per_box: int
     stock_yield_per_sheet: int
+    order_item_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -292,6 +293,7 @@ def requirement_signature(
         component_type=requirement.component_type,
         pieces_per_box=requirement.pieces_per_box,
         stock_yield_per_sheet=requirement.stock_yield_per_sheet,
+        order_item_id=requirement.order_item_id,
     )
 
 

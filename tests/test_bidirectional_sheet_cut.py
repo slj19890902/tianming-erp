@@ -90,7 +90,7 @@ def test_processed_output_never_reuses_source_board_as_rectangle(eligibility_db)
     from app.services.finished_stock_identity import product_basis
     db,data=eligibility_db;p,lot,profile,facts,item,r=prepare(db,data)
     facts.update(scope='customers', customer_ids=[p.customer_id], product_ids=[p.id],
-        output_piece=True, dimension_basis='source_board', physical_basis=product_basis(p))
+        processing='cut',output_piece=True, dimension_basis='source_board', physical_basis=product_basis(p))
     lot.semi_finished_detail.owner_customer_id=p.customer_id
     profile.data_json=json.dumps(facts);db.flush()
     assert rectangular_cut_plan(db,lot,p,requirement_signature(r)) is None

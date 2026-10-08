@@ -4,7 +4,7 @@ from sqlalchemy import select, func
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.order import OrderItem
 from app.services.delivery_quantities import (
-    QuantityContractError, for_item, physical_for, order_basis,
+    QuantityContractError, for_item,
 )
 
 
@@ -37,11 +37,9 @@ def stock_reference(db, *, customer_id, product_id, product_code, quantity_unit,
                     raise QuantityContractError('历史送货单位或产品身份不一致')
                 quantity = frozen['physical_quantity']
             elif order_item is not None and order_item.supply_mode_snapshot == 'external_purchase':
-                # Only explicit order snapshots may repair a missing delivery ratio.
-                basis = order_basis(order_item, customer_id)
-                if basis['physical_unit'] != quantity_unit:
-                    raise QuantityContractError('历史送货实物单位不一致')
-                quantity = physical_for(basis, line.delivered_quantity)
+                # An order ratio cannot prove which physical accounting basis an
+                # older dispatched delivery used. Never repair it during a read.
+                raise QuantityContractError('外购历史送货缺少冻结实物数量快照')
             else:
                 frozen_unit = line.unit_snapshot or (order_item.sales_unit_snapshot if order_item else None)
                 if frozen_unit != quantity_unit:

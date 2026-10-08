@@ -2,12 +2,14 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { useDateFormat, useNow } from '@vueuse/core'
-import { ElMessage, ElMessageBox, type TabPaneName, type TabsPaneContext } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown, Refresh, Lock, SwitchButton, Checked } from '@element-plus/icons-vue'
 import { useTabsStore } from './stores/tabs'
 import { useAuthStore } from './stores/auth'
 import { authApi } from './api/client'
 import { currentFormalFrame } from './utils/formalOrderEntry'
 import FormalWorkspaceView from './views/FormalWorkspaceView.vue'
+import { navigationRequestId, parseShellUi, type ShellUi } from './utils/unifiedNavigation'
 
 const router = useRouter()
 const route = useRoute()
@@ -55,12 +57,36 @@ const menus: MenuItem[] = [
 // personal menu order. The shell only renders that safe navigation projection.
 const formalMenus = ref<MenuItem[]>([])
 const formalActive = ref('')
+const shellUi = ref<ShellUi | null>(null)
+const pendingCommand = ref<{ requestId: string; key: string } | null>(null)
+let commandTimer: ReturnType<typeof setTimeout> | undefined
+const primaryItems = computed(() => shellUi.value?.items.filter(item => !item.more) || [])
+const moreItems = computed(() => shellUi.value?.items.filter(item => item.more) || [])
+const moreActive = computed(() => moreItems.value.find(item => item.active))
+const toolsBusy = computed(() => !!pendingCommand.value || (isFormalWorkspace.value && (!shellUi.value || shellUi.value.busy)))
+const toolsHint = computed(() => shellUi.value?.busy ? '请先完成或关闭当前表单，等待当前操作完成' : '')
+const accountName = computed(() => shellUi.value?.name || authStore.displayName())
+const accountRole = computed(() => shellUi.value?.role || ({ admin: '管理员', boss: '老板', sales: '业务', finance: '财务', workshop: '车间', delivery_picker: '送货拿货员' }[authStore.user?.role || ''] || ''))
+watch(() => route.path, () => { shellUi.value = null; pendingCommand.value = null; clearTimeout(commandTimer) })
 function formalFrame() {
   return currentFormalFrame(document, route.path)
 }
 function receiveFormalNavigation(event: MessageEvent) {
   if (event.origin !== location.origin || event.source !== formalFrame()) return
+  if (event.data?.type === 'tianming-unified-command-result-v1') {
+    if (!pendingCommand.value || event.data.requestId !== pendingCommand.value.requestId || event.data.key !== pendingCommand.value.key) return
+    const messages: Record<string, string> = {
+      done: '', busy: '请先完成或关闭当前表单，等待当前操作完成。',
+      denied: '此入口当前不可用，请核对登录状态和权限。', failed: '操作未能完成，请查看工作区提示后重试。',
+    }
+    if (typeof event.data.status !== 'string' || !Object.hasOwn(messages, event.data.status)) return
+    clearTimeout(commandTimer)
+    pendingCommand.value = null
+    if (messages[event.data.status]) ElMessage.warning(messages[event.data.status])
+    return
+  }
   if (event.data?.type !== 'tianming-formal-navigation-v1') return
+  shellUi.value = event.data.ready === true ? parseShellUi(event.data.shellUi, authStore.user?.id) : null
   if (event.data.authenticated === false) {
     formalMenus.value = []
     authStore.handleUnauthorized()
@@ -80,7 +106,32 @@ function receiveFormalNavigation(event: MessageEvent) {
   if (isFormalWorkspace.value && activeMenu && activeTab) activeTab.title = activeMenu.title
 }
 onMounted(() => window.addEventListener('message', receiveFormalNavigation))
-onBeforeUnmount(() => window.removeEventListener('message', receiveFormalNavigation))
+onBeforeUnmount(() => { window.removeEventListener('message', receiveFormalNavigation); clearTimeout(commandTimer) })
+
+function runCommand(key: string) {
+  const ui = shellUi.value
+  const frame = formalFrame()
+  if (!ui || !frame || pendingCommand.value) return
+  const requestId = navigationRequestId()
+  pendingCommand.value = { key, requestId }
+  frame.postMessage({ type: 'tianming-unified-command-v1', key, requestId, actorId: ui.actorId, generation: ui.generation }, location.origin)
+  commandTimer = setTimeout(() => {
+    pendingCommand.value = null
+    ElMessage.warning('操作尚未确认，请先查看当前工作区结果；不会自动重复操作。')
+  }, 30000)
+}
+
+function accountAction(key: string) {
+  mobileMenuOpen.value = false
+  if (isFormalWorkspace.value) { runCommand(key); return }
+  if (key === 'action:password') openPasswordDialog()
+  if (key === 'action:logout') void handleLogout()
+}
+
+function openApprovalLink(event: MouseEvent) {
+  if (toolsBusy.value) event.preventDefault()
+  else mobileMenuOpen.value = false
+}
 
 const menuGroups = computed(() => {
   if (isFormalWorkspace.value) return formalMenus.value.length ? [{ title: '业务中心', items: formalMenus.value }] : []
@@ -101,37 +152,14 @@ const menuGroups = computed(() => {
   return groups
 })
 
-// Only a user tab click may navigate. Initial pane registration can emit a
-// model update for the home pane before the intended route pane is registered.
-function activateTab(pane: TabsPaneContext) {
-  activateTabPath(String(pane.props.name))
-}
-function activateTabPath(path: string) {
-  const target = tabsStore.tabs.find((item) => item.path === path)
-  if (target && target.path !== route.path) void router.push(target.path)
-}
-
 function openMenu(menu: MenuItem) {
   mobileMenuOpen.value = false
   if (isFormalWorkspace.value) {
-    formalFrame()?.postMessage({ type: 'tianming-formal-menu-v1', key: menu.name }, location.origin)
+    runCommand('menu:' + menu.name)
     return
   }
   tabsStore.openTab({ name: menu.name, title: menu.title, path: menu.path })
   void router.push(menu.path)
-}
-
-async function closeTab(name: TabPaneName) {
-  const path = String(name)
-  if (tabsStore.dirtyPaths[path]) {
-    try {
-      await ElMessageBox.confirm('此页有未保存的输入，关闭后会丢弃。确认关闭？', '丢弃工作草稿', {
-        type: 'warning', confirmButtonText: '关闭并丢弃', cancelButtonText: '继续编辑',
-      })
-    } catch { return }
-  }
-  tabsStore.closeTab(path)
-  if (route.path === path) void router.push(tabsStore.activePath)
 }
 
 const passwordDialog = ref(false)
@@ -186,7 +214,7 @@ onMounted(() => {
 <template>
   <el-config-provider>
     <RouterView v-if="isLogin || isMobileReceive" />
-    <div v-else class="erp-shell" @keydown.esc="mobileMenuOpen = false">
+    <div v-else class="erp-shell" :class="{ 'shell-large': shellUi?.uiMode === 'large' }" @keydown.esc="mobileMenuOpen = false">
       <header class="erp-header">
         <button v-if="menuGroups.length" class="mobile-menu-toggle" type="button"
           :aria-label="mobileMenuOpen ? '关闭业务菜单' : '打开业务菜单'"
@@ -199,29 +227,43 @@ onMounted(() => {
             <div class="brand-subtitle">TIANMING PACKAGING</div>
           </div>
         </div>
-        <div class="header-status">
-          <span class="tm-mono time">{{ nowText }}</span>
-          <el-dropdown trigger="click">
-            <span class="user-chip">
-              <span class="user-avatar">{{ authStore.displayName().slice(0, 1) || '用' }}</span>
-              <span>{{ authStore.displayName() }}</span>
-              <span class="role-tag">{{ authStore.user?.role }}</span>
-            </span>
+        <time class="tm-mono time">{{ nowText }}</time>
+        <nav class="module-navigation" :aria-label="shellUi?.label || '当前模块'">
+          <span v-if="shellUi?.flow" class="flow-label">按顺序做</span>
+          <template v-for="(item, index) in primaryItems" :key="item.key">
+            <span v-if="shellUi?.flow && index" class="flow-arrow" aria-hidden="true">→</span>
+            <button type="button" class="module-link" :class="{ active: item.active }" :aria-current="item.active ? 'page' : undefined"
+              :disabled="toolsBusy" :title="toolsHint" @click="runCommand(item.key)">{{ item.label }}</button>
+          </template>
+          <el-dropdown v-if="moreItems.length" trigger="click" @command="runCommand">
+            <button type="button" class="module-link more-link" :class="{ active: !!moreActive }" :disabled="toolsBusy" :title="toolsHint">
+              {{ moreActive?.label || '更多' }}<el-icon><ArrowDown /></el-icon>
+            </button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item @click="openPasswordDialog">修改密码</el-dropdown-item>
-                <el-dropdown-item divided @click="handleLogout">退出登录</el-dropdown-item>
+                <el-dropdown-item v-for="item in moreItems" :key="item.key" :command="item.key" :disabled="toolsBusy">{{ item.label }}</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-        </div>
+          <span v-if="!shellUi" class="module-placeholder">{{ isFormalWorkspace ? '正在连接工作区…' : String(route.meta.title || '业务工作台') }}</span>
+        </nav>
+        <el-popover v-if="shellUi?.overview" placement="bottom-end" :width="260" trigger="click">
+          <template #reference><button type="button" class="overview-button">{{ shellUi.overview.floor }} 地图概况
+            <span v-if="shellUi.overview.unlocated + shellUi.overview.conflicts" class="overview-alert">需处理 {{ shellUi.overview.unlocated + shellUi.overview.conflicts }}</span>
+            <el-icon><ArrowDown /></el-icon></button></template>
+          <div class="overview-details"><strong>仓库当前楼层状态</strong>
+            <span>有效批次 <b>{{ shellUi.overview.lots }}</b></span><span>占用库位 <b>{{ shellUi.overview.occupied }}</b></span>
+            <span>地图库位 <b>{{ shellUi.overview.locations }}</b></span><span>待定位成品 <b>{{ shellUi.overview.unlocated }}</b></span>
+            <span>柱子冲突 <b>{{ shellUi.overview.conflicts }}</b></span></div>
+        </el-popover>
       </header>
 
       <section class="erp-body" :class="{ 'mobile-menu-open': mobileMenuOpen }">
         <button v-if="menuGroups.length && mobileMenuOpen" class="mobile-menu-backdrop"
           type="button" aria-label="关闭业务菜单遮罩" @click="mobileMenuOpen = false"></button>
-        <aside v-if="menuGroups.length" id="erp-business-menu" class="erp-menu" aria-label="业务导航">
+        <aside id="erp-business-menu" class="erp-menu" aria-label="业务导航">
           <button class="mobile-menu-close" type="button" @click="mobileMenuOpen = false">收起业务菜单</button>
+          <div class="menu-scroll">
           <template v-for="group in menuGroups" :key="group.title">
             <div class="menu-group-title">{{ group.title }}</div>
             <template v-for="menu in group.items" :key="menu.path">
@@ -244,6 +286,8 @@ onMounted(() => {
                 class="menu-button"
                 :class="{ active: (isFormalWorkspace ? formalActive === menu.name : route.path === menu.path) }"
                 type="button"
+                :disabled="isFormalWorkspace && toolsBusy"
+                :title="toolsHint"
                 @click="openMenu(menu)"
               >
                 <span class="menu-icon">{{ menu.icon }}</span>
@@ -252,25 +296,28 @@ onMounted(() => {
               </button>
             </template>
           </template>
+          </div>
+          <section class="account-tools" aria-label="账号与常用工具">
+            <div class="account-identity"><span class="user-avatar">{{ accountName.slice(0, 1) || '用' }}</span>
+              <div class="account-text"><strong>{{ accountName }} <span>· {{ accountRole }}</span></strong><small>{{ shellUi?.username || authStore.user?.username }}</small></div>
+            </div>
+            <div v-if="shellUi" class="display-mode" role="group" aria-label="显示模式">
+              <span>显示模式</span><div class="mode-options">
+                <button v-for="mode in (['standard', 'large'] as const)" :key="mode" type="button" :aria-pressed="shellUi.uiMode === mode"
+                  :disabled="!!pendingCommand || shellUi.uiModeSaving" @click="runCommand('ui:' + mode)">{{ mode === 'standard' ? '标准' : '大字' }}</button>
+              </div>
+            </div>
+            <div class="account-actions" :title="toolsHint">
+              <a v-if="shellUi?.canApprove" href="/static/business-approvals.html" target="_blank" rel="noopener noreferrer"
+                :aria-disabled="toolsBusy" :tabindex="toolsBusy ? -1 : 0" title="在新标签打开，保留当前工作区" @click="openApprovalLink"><el-icon><Checked /></el-icon>{{ shellUi.approvalLabel }}</a>
+              <button v-if="shellUi" type="button" :disabled="toolsBusy" @click="accountAction('action:refresh')"><el-icon><Refresh /></el-icon>刷新</button>
+              <button type="button" :disabled="toolsBusy" @click="accountAction('action:password')"><el-icon><Lock /></el-icon>修改密码</button>
+              <button type="button" class="logout-action" :disabled="toolsBusy" @click="accountAction('action:logout')"><el-icon><SwitchButton /></el-icon>退出登录</button>
+            </div>
+          </section>
         </aside>
 
         <main class="erp-main">
-          <el-tabs
-            :model-value="tabsStore.activePath"
-            type="card"
-            class="work-tabs"
-            @tab-remove="closeTab"
-            @tab-click="activateTab"
-          >
-            <el-tab-pane
-              v-for="tab in tabsStore.tabs"
-              :key="tab.path"
-              :label="tab.title"
-              :name="tab.path"
-              :closable="tab.path !== '/'"
-            ><template #label><button type="button" class="work-tab-label" @click.stop="activateTabPath(tab.path)">{{ tab.title }}</button></template></el-tab-pane>
-          </el-tabs>
-
           <div class="work-panel" :class="{ 'formal-work-panel': isFormalWorkspace }">
             <!-- Keep iframe documents attached: moving them through KeepAlive's
                  detached cache destroys their browser document and draft state. -->
@@ -321,7 +368,7 @@ onMounted(() => {
   height: 64px;
   flex-shrink: 0;
   display: flex;
-  justify-content: space-between;
+  gap: 24px;
   align-items: center;
   padding: 0 20px;
   background: var(--tm-header-bg);
@@ -347,6 +394,7 @@ onMounted(() => {
   display: flex;
   gap: 12px;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .brand-logo {
@@ -382,33 +430,26 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.header-status {
-  display: flex;
-  gap: 18px;
-  align-items: center;
-}
-
 .time {
   color: var(--tm-text-dim);
-  font-size: 13px;
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.user-chip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px 6px 6px;
-  border: 1px solid var(--tm-line);
-  border-radius: 24px;
-  background: var(--tm-bg-2);
-  cursor: pointer;
-  font-size: 14px;
-  color: var(--tm-text);
-}
-
-.user-chip:hover {
-  border-color: var(--tm-accent-a);
-}
+.module-navigation { display:flex; align-items:center; gap:6px; flex:1; min-width:0; white-space:nowrap; }
+.module-link { min-height:38px; border:1px solid var(--tm-line); border-radius:7px; padding:8px 16px; background:var(--tm-bg-2); color:var(--tm-text-dim); font:inherit; font-size:14px; font-weight:600; cursor:pointer; }
+.module-link:hover { background:var(--tm-table-hover-bg); color:var(--tm-selected-text); }
+.module-link.active { background:var(--tm-accent-gradient); color:var(--tm-on-accent); }
+.more-link { display:flex; align-items:center; gap:6px; }
+.flow-label, .module-placeholder { font-size:13px; color:var(--tm-text-faint); margin-right:6px; }
+.flow-arrow { font-size:14px; color:var(--tm-text-faint); }
+.overview-button { display:flex; align-items:center; gap:7px; border:1px solid var(--tm-line); border-radius:7px; background:var(--tm-bg-2); min-height:36px; padding:6px 10px; color:var(--tm-text-dim); font:inherit; font-size:12px; cursor:pointer; white-space:nowrap; }
+.overview-alert { color:#92400e; background:#fff3d6; border-radius:10px; padding:2px 6px; }
+.overview-details { display:flex; flex-direction:column; gap:10px; }
+.overview-details span { display:flex; justify-content:space-between; }
+.erp-shell button:focus-visible { outline:2px solid var(--tm-accent-a); outline-offset:2px; }
+.erp-shell button:disabled { cursor:default; opacity:.6; }
 
 .user-avatar {
   width: 28px;
@@ -420,15 +461,6 @@ onMounted(() => {
   color: var(--tm-on-accent);
   font-weight: 900;
   font-size: 14px;
-}
-
-.role-tag {
-  font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 12px;
-  background: var(--tm-accent-soft);
-  border: 1px solid var(--tm-accent-border);
-  color: var(--tm-selected-text);
 }
 
 .mobile-menu-toggle, .mobile-menu-close, .mobile-menu-backdrop { display: none; }
@@ -443,11 +475,34 @@ onMounted(() => {
 .erp-menu {
   width: 216px;
   flex-shrink: 0;
-  padding: 14px 12px 20px;
+  padding: 14px 12px 12px;
   background: var(--tm-sidebar-bg);
   border-right: 1px solid var(--tm-line);
-  overflow-y: auto;
+  display:flex;
+  flex-direction:column;
+  min-height:0;
 }
+.menu-scroll { flex:1; min-height:0; overflow:auto; }
+.account-tools { flex-shrink:0; padding:14px 0 0; border-top:1px solid var(--tm-line); margin-top:10px; }
+.account-identity { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
+.account-identity .user-avatar { width:32px; height:32px; flex-shrink:0; }
+.account-text { min-width:0; }
+.account-text strong { display:block; font-size:13px; font-weight:600; color:var(--tm-text); line-height:1.5; overflow-wrap:anywhere; }
+.account-text strong span { color:var(--tm-text-dim); font-weight:400; }
+.account-text small { display:block; color:var(--tm-text-faint); font-size:11px; }
+.display-mode { display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:12px; color:var(--tm-text-dim); margin-bottom:10px; }
+.mode-options { display:flex; padding:2px; background:var(--tm-bg-2); border:1px solid var(--tm-line); border-radius:7px; }
+.mode-options button { background:transparent; color:var(--tm-text-dim); padding:4px 9px; border:0; border-radius:4px; font:inherit; cursor:pointer; }
+.mode-options button[aria-pressed="true"] { background:var(--tm-accent-gradient); color:var(--tm-on-accent); }
+.account-actions { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+.account-actions button, .account-actions a { min-height:34px; padding:6px 4px; display:flex; justify-content:center; align-items:center; gap:5px; font:inherit; font-size:12px; border:1px solid var(--tm-line); border-radius:6px; color:var(--tm-text-dim); background:var(--tm-bg-2); cursor:pointer; text-decoration:none; }
+.account-actions button:hover, .account-actions a:hover { border-color:var(--tm-accent-border); color:var(--tm-selected-text); background:var(--tm-selected-surface); }
+.account-actions a[aria-disabled="true"] { cursor:default; opacity:.6; }
+.account-actions a:focus-visible { outline:2px solid var(--tm-accent-a); outline-offset:2px; }
+.account-actions .logout-action { color:#a83f48; }
+.shell-large .module-link, .shell-large .menu-button { font-size:17px; }
+.shell-large .account-actions button, .shell-large .account-actions a, .shell-large .account-text strong { font-size:14px; }
+.shell-large .module-link { padding-inline:13px; }
 
 .menu-group-title {
   margin: 14px 8px 8px;
@@ -527,42 +582,18 @@ onMounted(() => {
   flex-direction: column;
 }
 
-.work-tabs {
-  flex-shrink: 0;
-  padding: 10px 14px 0;
-}
-
-.work-tabs :deep(.el-tabs__header) {
-  border-bottom: 1px solid var(--tm-line);
-  margin-bottom: 0;
-}
-
-.work-tabs :deep(.el-tabs--card > .el-tabs__header .el-tabs__item) {
-  background: var(--tm-bg-2);
-  border: 1px solid var(--tm-line);
-  color: var(--tm-text-dim);
-}
-
-.work-tabs :deep(.el-tabs--card > .el-tabs__header .el-tabs__item.is-active) {
-  background: var(--tm-selected-surface);
-  border-bottom-color: transparent;
-  color: var(--tm-selected-text);
-  font-weight: 700;
-}
-
 .work-panel {
   flex: 1;
   min-height: 0;
   padding: 14px;
   overflow: auto;
 }
-.work-tab-label {border:0;padding:0;background:transparent;color:inherit;font:inherit;cursor:pointer;min-height:28px}
-.formal-work-panel { overflow: hidden; }
+.formal-work-panel { overflow: hidden; padding:0; }
 .persistent-formal-workspace { height:100%; min-height:0; display:flex; flex-direction:column; }
 /* The original business iframe remains attached while the navigation drawer
    changes visibility. Small screens use the complete content width. */
 @media (max-width: 960px) {
-  .erp-header { height: auto; min-height: 64px; padding: 6px 10px; gap: 10px; }
+  .erp-header { height: auto; min-height: 64px; padding: 6px 10px; gap: 8px; flex-wrap:wrap; }
   .mobile-menu-toggle, .mobile-menu-close {
     display: block; min-height: 42px; padding: 6px 10px;
     border: 1px solid var(--tm-line); border-radius: 7px;
@@ -571,23 +602,29 @@ onMounted(() => {
   }
   .mobile-menu-close { width: 100%; margin-bottom: 10px; }
   .erp-menu { display: none; position: absolute; inset: 0 auto 0 0; z-index: 21; width: min(280px, 85%); }
-  .mobile-menu-open .erp-menu { display: block; }
+  .mobile-menu-open .erp-menu { display: flex; }
   .mobile-menu-open .mobile-menu-backdrop {
     display: block; position: absolute; inset: 0; z-index: 20;
     border: 0; padding: 0; background: rgba(15, 23, 42, 0.28);
   }
   .brand { min-width: 0; flex: 1; gap: 8px; }
-  .header-status { gap: 0; flex-shrink: 0; }
-  .header-status .time { display: none; }
-  .work-tabs { padding: 6px 4px 0; }
+  .time { display:none; }
+  .module-navigation { order:5; flex-basis:100%; overflow-x:auto; padding:2px 0; }
+  .module-link { padding:7px 11px; }
+  .overview-button { font-size:11px; }
   .work-panel { padding: 4px; }
+  .formal-work-panel { padding:0; }
+}
+@media (min-width:961px) and (max-width:1400px) {
+  .erp-header { gap:14px; padding-inline:16px; }
+  .module-link { padding-inline:12px; }
+  .shell-large .module-link { padding-inline:10px; }
 }
 @media (max-width: 640px) {
-  .v2-badge, .user-avatar { display: none; }
+  .v2-badge { display: none; }
   .brand-logo { width: 34px; height: 34px; }
   .brand-title { font-size: 15px; letter-spacing: 0; }
   .brand-subtitle { font-size: 10px; }
-  .user-chip { max-width: 160px; padding: 6px 8px; gap: 4px; font-size: 12px; }
   .mobile-menu-toggle { padding: 6px 8px; font-size: 13px; }
 }
 </style>

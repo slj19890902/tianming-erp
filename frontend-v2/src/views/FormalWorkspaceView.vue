@@ -23,7 +23,7 @@ const sentRequests = new Set<string>()
 let responseTimer: ReturnType<typeof setTimeout> | undefined
 function connect() {
   navigationReady = false
-  frame.value?.contentWindow?.postMessage({type:'tianming-formal-shell-v1'}, location.origin)
+  frame.value?.contentWindow?.postMessage({type:'tianming-formal-shell-v1',unifiedNavigation:true,active:active.value}, location.origin)
 }
 function sendEntry() {
   if (!active.value || page !== 'orders' || !navigationReady) return
@@ -70,6 +70,7 @@ function receive(event: MessageEvent) {
     void router.replace({ path: routePath, query })
   }
 }
+watch(active, () => frame.value?.contentWindow?.postMessage({type:'tianming-formal-shell-v1',unifiedNavigation:true,active:active.value}, location.origin))
 watch(() => [route.path, route.query.order_entry, route.query.order_request], sendEntry)
 onMounted(() => window.addEventListener('message', receive))
 onBeforeUnmount(() => { clearTimeout(responseTimer); window.removeEventListener('message', receive) })

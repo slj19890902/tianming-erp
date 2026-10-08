@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.568"
-APP_VERSION_NAME = "补库套数与来料任务修复"
+APP_VERSION = "v0.22.569"
+APP_VERSION_NAME = "全模块统一导航与左下工具区"
 APP_BUILD_DATE = "2026-10-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5408,3 +5408,16 @@ APP_VERIFICATION_STEPS = [
     "核对模具标签显示几模；有一开多的任务第一步显示分切，实体打印由管理员验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.568：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "订单、报料、来料、生产、送货、仓库、财务、主数据和系统管理共用统一顶栏，时间位于标志右侧。",
+    "显示模式、账号身份、审批入口、刷新、修改密码和退出登录固定在左下角，移除重复页签和内层页头。",
+    "保留业务状态筛选、页面缓存、未完成表单和原权限检查；审批另开标签保留当前工作区。",
+    "本版无数据库迁移，不修改订单、库存、金额或历史业务事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "Ctrl+F5刷新，切换订单主链、仓库、对账与开票，确认顶部入口与当前模块对应。",
+    "在左下角切换标准/大字、打开审批中心和修改密码；取消表单后继续切换模块。",
+    "核对常用箱与系统管理导航、仓库更多入口，确认原查询、业务状态和打印入口保留。",
+]
+APP_CHANGELOG = [*(f"v0.22.569：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

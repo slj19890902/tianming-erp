@@ -31,6 +31,8 @@ Formal database D:/TianmingERP/shared/data/carton_erp.sqlite3 must never be edit
 
 ## Invariants and acceptance
 
+Ownership extension approved during concrete dependency review: order_inventory_reliability additionally owns processed_component_stock.py, stock_replenishment.py (coverage), bom_auto_reservation.py, multilevel_bom_requirements.py, multilevel_bom_inventory.py, bom_subkit_inventory.py, bom_pending_assembly.py, multilevel_bom_body_inventory.py. stock_workflow_simplification additionally owns bom_stock_pending.py. Root owns desktop_assistant/build.py, manager.py and targeted reader-contract tests: same Alembic revision does not authorize an older program to read newly introduced processed-component/processing/assembly facts. Signed reader capability and persisted activation are required, and unsafe previous code-only rollback is cleared before startup.
+
 - Preserve permissions, customer boundaries, true product IDs, frozen BOM and procurement snapshots, transaction rollback, version checks, idempotency and audit.
 - Preview is read-only; save reserves exactly once; actual processing consumes exact inputs; cancellations release only their own unconsumed reservation; delivery/reversal preserve source cost and quantities.
 - Never count raw input and its processed output simultaneously or count consumed children alongside an assembled parent. Never multiply processed pieces by mold count again.

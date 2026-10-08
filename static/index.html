@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260926-cost-column" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
     <script src="/static/ui/order-context.js?v=round-experience-d1b"></script>
-    <script src="/static/ui/workspace.js?v=5b8c66172ec5"></script>
+    <script src="/static/ui/workspace.js?v=71e4c13edadc"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
     <link rel="stylesheet" href="/static/ui/workflow-continuity.css?v=431e9b0f41d3" />
     <script src="/static/ui/pdf-workspace.js?v=20260926-physical-quantity"></script>
@@ -3174,11 +3174,11 @@
 </style>
     <link rel="stylesheet" href="/static/warehouse-workspace-shell.css?v=20260928">
     <link rel="stylesheet" href="/static/product-editor-compact.css?v=20261008-cutting-v2" />
-    <link rel="stylesheet" href="/static/ui/workspace.css?v=c63fcfd14771" />
+    <link rel="stylesheet" href="/static/ui/workspace.css?v=5555873a9b80" />
     <link rel="stylesheet" href="/static/ui/order-reference.css?v=423" />
     <script src="/static/ui/order-reference.js?v=423"></script>
     <script src="/static/js/unified-navigation.js"></script>
-    <script src="/static/js/frontend-shell-bridge.js"></script>
+    <script src="/static/js/frontend-shell-bridge.js?v=1772ba8dbd39"></script>
   </head>
   <body>
     <div id="app" v-cloak>
@@ -3511,14 +3511,14 @@
                 <div class="toolbar-group"><button class="btn" :disabled="customerPhoneGovernanceExporting" @click="exportCustomerPhoneGovernance">{{ customerPhoneGovernanceExporting ? '生成清单中…' : '导出电话待核对清单' }}</button><label><input type="checkbox" v-model="filters.showInactive" @change="runExplicitPageListLoad('customers',{resetPage:true})" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @input="queuePageSearch('customers')" @keyup.enter="runExplicitPageListLoad('customers',{resetPage:true})" /><button class="btn" @click="runExplicitPageListLoad('customers',{resetPage:true})">查询</button></div>
               </div>
               <data-panel :empty="!customers.length">
-                <table class="customer-list-table"><colgroup><col class="customer-col-number" /><col class="customer-col-code" /><col class="customer-col-label-short" /><col class="customer-col-name" /><col class="customer-col-contact" /><col class="customer-col-phone" /><col class="customer-col-term" /><col class="customer-col-delivery" /><col class="customer-col-status" /><col class="customer-col-actions" /></colgroup><thead><tr><th>客户编号</th><th>客户缩写</th><th>标签中文简称</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th v-if="orderListColumnVisible('status')">状态</th><th>操作</th></tr></thead>
+                <table class="customer-list-table" data-viewport-page="customers"><colgroup><col class="customer-col-number" /><col class="customer-col-code" /><col class="customer-col-label-short" /><col class="customer-col-name" /><col class="customer-col-contact" /><col class="customer-col-phone" /><col class="customer-col-term" /><col class="customer-col-delivery" /><col class="customer-col-status" /><col class="customer-col-actions" /></colgroup><thead><tr><th>客户编号</th><th>客户缩写</th><th>标签中文简称</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th v-if="orderListColumnVisible('status')">状态</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in customers" :key="row.id">
                   <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td><span :class="row.chinese_short_name ? '' : 'status orange'">{{ row.chinese_short_name || "待补录" }}</span></td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td><span>{{ customerPhoneDisplay(row.phone) || "-" }}</span><span v-if="customerPhoneAnalysis(row.phone).needs_review" class="phone-review-note">疑似占位，待核对</span></td>
                   <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
                   <td class="toolbar-group customer-list-actions"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button v-if="canViewContracts" class="btn small primary" @click="openCustomerContracts(row)">合同</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="customerLifecycleBusy()" @click="toggleCustomerStatus(row)">{{ customerLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button></td>
                 </tr></tbody></table>
               </data-panel>
-              <pager :page="pages.customers" :total="customersTotal" :page-size="pageSize" @change="pages.customers=$event; runExplicitPageListLoad('customers')"></pager>
+              <pager :page="pages.customers" :total="customersTotal" :page-size="desktopListPageSize()" :always="true" @change="pages.customers=$event; runExplicitPageListLoad('customers')"></pager>
             </template>
 
             <template v-else-if="activePage === 'quotations'">
@@ -3724,13 +3724,13 @@
                 </div>
                 <template v-if="!selectedProductCustomer">
                   <div class="toolbar"><input class="input" style="min-width:360px" placeholder="输入客户名称、编号或缩写" v-model.trim="productCustomerSearch" @input="pages.productCustomers=1" /><span class="muted">共 {{ filteredProductCustomers.length }} 家客户</span></div>
-                  <div class="customer-product-master-list">
+                  <div class="customer-product-master-list" data-viewport-page="productCustomers">
                     <div v-for="row in pagedProductCustomers" :key="row.id" class="customer-master-row" @click="selectProductCustomer(row)">
                       <strong>{{ row.customer_number || "-" }}</strong><span>{{ row.name }}</span><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag><strong>›</strong>
                     </div>
                     <div v-if="!filteredProductCustomers.length" class="empty">没有匹配客户</div>
                   </div>
-                  <pager :page="pages.productCustomers" :total="filteredProductCustomers.length" :page-size="pageSize" @change="pages.productCustomers=$event"></pager>
+                  <pager :page="pages.productCustomers" :total="filteredProductCustomers.length" :page-size="desktopListPageSize()" :always="true" @change="pages.productCustomers=$event"></pager>
                 </template>
                 <template v-else>
                   <div class="toolbar">
@@ -3783,7 +3783,7 @@
                   <div v-if="productsLoading" class="panel empty">正在读取该客户的常用箱…</div>
                   <div v-else-if="productsError" class="notice error">{{ productsError }} <button class="btn small" @click="runExplicitPageListLoad('products')">重试</button></div>
                   <div v-else-if="!products.length" class="panel empty">该客户当前没有符合条件的常用箱</div>
-                  <div v-else class="table-wrap"><table><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div><span v-if="row.customer_document?.missing_labels?.length" class="status orange">{{ row.customer_document.missing_labels.join('、') }}待核对</span><span v-else class="status green">送货资料已具备</span></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
+                  <div v-else class="table-wrap"><table data-viewport-page="products"><thead><tr><th>品号</th><th v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)">客户料号／客户送货资料</th><th>产品名称</th><th>分类</th><th>规格</th><th>材质</th><th v-if="canViewSalesAmounts" class="sensitive-price">{{ commonBoxPriceLabel(selectedProductCustomer?.id) }}</th><th>资料状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in products" :key="row.id"><td><strong>{{ plainProductText(row.product_code) }}</strong></td><td v-if="['YG','GY','YL'].includes(selectedProductCustomer?.customer_code)" style="min-width:155px;white-space:normal"><strong>{{ plainProductText(row.customer_material_code) }}</strong><div v-if="row.customer_document?.customer_drawing_number">图号：{{ row.customer_document.customer_drawing_number }}</div><div v-if="row.customer_document?.customer_category">类别：{{ row.customer_document.customer_category }}</div><div v-if="row.customer_document?.customer_model">型番：{{ row.customer_document.customer_model }}</div><span v-if="row.customer_document?.missing_labels?.length" class="status orange">{{ row.customer_document.missing_labels.join('、') }}待核对</span><span v-else class="status green">送货资料已具备</span></td><td :title="plainProductText(row.product_name)" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ plainProductText(row.product_name) }}</td><td :title="row.classification?.legacy_name" style="white-space:nowrap">{{ row.classification?.label || "待核对" }}</td><td style="white-space:nowrap">{{ spec(row) }}</td><td :class="{muted: productMaterialCell(row).muted}" :title="materialFullStructure(row)" style="white-space:nowrap">{{ productMaterialCell(row).text }}</td><td v-if="canViewSalesAmounts" class="sensitive-price">{{ money(row.sale_unit_price) }}</td><td><span :class="['status',commonBoxReadiness(row).ready ? 'green' : 'orange']" :title="commonBoxReadinessTitle(row)">{{ commonBoxReadiness(row).ready ? '资料已完善' : '待完善' }}</span><div v-if="row.manual_modified" class="muted" style="font-size:11px;margin-top:3px">已人工编辑（版本事实）</div></td><td class="toolbar-group"><button class="btn small" @click="openProduct(row)">{{ canEditProducts ? "编辑" : "查看" }}</button><button class="btn small" @click="previewProductDrawing(row)">图片/图纸</button><button v-if="(canRequisition || canEditStockAlerts) && row.is_active" class="btn small" @click="openProductStockPolicy(row)">库存预警</button><button class="btn small" @click="openMasterVersionHistory('product',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateProducts" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="productLifecycleBusy()" @click="toggleProductStatus(row)">{{ productLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button><button v-if="canDeleteProducts" class="btn small danger" :disabled="productLifecycleBusy()" @click="deleteProduct(row)">{{ productLifecyclePending('delete',row.id) ? '处理中…' : '移入垃圾站' }}</button></td></tr></tbody></table></div>
                 </template>
               </div>
               <data-panel v-else-if="productTab === 'suppliers'" :empty="false">
@@ -4816,7 +4816,7 @@
               <div v-if="incomingTab==='pending' && incomingLocationsLoading" class="status blue" style="display:block;margin:8px 0">正在读取余量转半成品所需库位…</div>
               <div v-if="incomingTab==='pending' && incomingLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingLocationsError }} <button class="btn small" @click="ensureIncomingLocations()">重试</button></div>
               <data-panel :loading="incomingTab==='history'?incomingHistoryLoading:(incomingTab==='received'?incomingReceivedLoading:false)" :error="incomingTab==='history'?incomingHistoryError:(incomingTab==='received'?incomingReceivedError:'')" :loading-text="'正在读取第 '+incomingCurrentPage()+' 页…'" @retry="incomingTab==='history'?loadIncomingHistory():loadIncomingReceived({force:true})" :empty="!incomingRowsForTab().length && !(incomingTab==='pending' && (incomingPendingLoading || incomingPendingError))">
-                <table class="incoming-table incoming-compact-table">
+                <table class="incoming-table incoming-compact-table" :data-viewport-page="incomingTab==='history' ? 'incomingHistory' : null">
                   <thead><tr><th class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="allIncomingProductionCardsSelected" @change="toggleIncomingProductionCardPage($event.target.checked)" /> 序号</th><th>报料长(mm)</th><th class="incoming-times-cell">×</th><th>报料宽(mm)</th><th>压线尺寸</th><th>材质楞型</th><th>客户简称 / 存货编码 / 产品名称</th><th>{{ incomingTab==='pending' ? '报料日期' : '实收时间' }}</th><th>图纸</th><th>计划 / 已收 / 待收</th><th>{{ incomingTab==='pending' ? '本次实收' : '实收数量' }}</th><th>收料结果 / 操作</th></tr></thead>
                   <tbody><tr v-for="(row,index) in incomingRowsForTab()" :key="row.history_key || row.receipt_item_id || row.item_id" :data-workflow-row="'incoming:'+(row.history_key || row.receipt_item_id || row.item_id)" :class="{'workflow-current':workflowRowSelected('incoming:'+(row.history_key || row.receipt_item_id || row.item_id))}" tabindex="0">
                     <td class="incoming-sequence-cell"><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /><input v-else-if="incomingTab!=='pending'" type="checkbox" :checked="incomingProductionCardSelected(row)" :disabled="!canPrintIncomingProductLabel(row)" :title="incomingProductLabelBlockMessage(row)" @change="toggleIncomingProductionCard(row,$event.target.checked)" /> {{ (incomingCurrentPage()-1)*incomingListPageSize()+index+1 }}</td>
@@ -12164,7 +12164,7 @@
               .some(value => String(value || "").toLowerCase().includes(keyword)));
           },
           pagedProductCustomers() {
-            const pageSize = Math.max(1, Number(this.pageSize || DESKTOP_LIST_PAGE_SIZE_STANDARD));
+            const pageSize = Math.max(1, Number(this.desktopListPageSize() || DESKTOP_LIST_PAGE_SIZE_STANDARD));
             const page = Math.max(1, Number(this.pages.productCustomers || 1));
             return this.filteredProductCustomers.slice((page - 1) * pageSize, page * pageSize);
           },
@@ -17064,7 +17064,7 @@
               const { data } = await axios.get("/api/master/customers", {
                 params: {
                   keyword: this.filters.customerKeyword, include_inactive:this.filters.showInactive,
-                  page: this.pages.customers, page_size: this.pageSize
+                  page: this.pages.customers, page_size: this.desktopListPageSize()
                 },
                 signal: controller.signal,
               });

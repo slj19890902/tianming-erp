@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.569"
-APP_VERSION_NAME = "全模块统一导航与左下工具区"
+APP_VERSION = "v0.22.570"
+APP_VERSION_NAME = "资料与历史入库整页显示修复"
 APP_BUILD_DATE = "2026-10-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5421,3 +5421,7 @@ APP_VERIFICATION_STEPS = [
     "核对常用箱与系统管理导航、仓库更多入口，确认原查询、业务状态和打印入口保留。",
 ]
 APP_CHANGELOG = [*(f"v0.22.569：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["客户资料、常用箱及历史入库按各自可用高度计算每页行数，查询和切换不再共用其他页面的行数。", "缓存页面重新显示、窗口及字号变化后自动校准；保留完整记录、分页与原查询权限。"]
+APP_VERIFICATION_STEPS = ["Ctrl+F5刷新，分别打开客户资料、常用箱和来料历史入库，确认表格及分页在一屏内。", "重复查询、翻页后返回，并切换标准/大字或调整窗口，确认行数稳定且自动适配。"]
+APP_CHANGELOG = [*(f"v0.22.570：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

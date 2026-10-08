@@ -161,3 +161,6 @@
 }
 
 @media(min-width:1000px){.finance-task-nav{grid-template-columns:repeat(6,minmax(0,1fr));}}
+
+/* These server-paged lists fit the viewport; do not add an inner vertical scrollbar. */
+@media(min-width:1000px){.main .table-wrap:has(> table[data-viewport-page]){max-height:none;overflow-y:visible;}}

@@ -44,6 +44,7 @@ def pending_stock(db, scope):
             structure = load_master_structure(db, parent_id)
         except BomPlanError as error:
             result.append(dict(key=f'stock:{parent_id}', source_kind='stock', customer_name=parent.customer.chinese_short_name or parent.customer.name,
+                parent_product_id=parent_id,can_assemble_stock=False,assembly_block=str(error),
                 order_number='备库 · '+parent.product_code, error=str(error), outputs=[], sources=[]))
             continue
         edges = [e for e in structure['edges'] if e['parent_id'] == parent_id and e['relation'] == 'assembly']
@@ -62,10 +63,19 @@ def pending_stock(db, scope):
         if not sources:
             continue
         capacity = min(capacities, default=0)
+        from app.services.stock_preparation_assembly import preview
+        from app.services.warehouse_inventory import WarehouseInventoryError
+        try:
+            verified = preview(db,parent_id,1)
+            can_assemble=verified['available_sets']>0
+            assembly_block=None if can_assemble else '实物子件不足或身份待核对'
+        except WarehouseInventoryError as error:
+            can_assemble=False;assembly_block=str(error)
         # Show the shortage for the next possible set, never invent a purchase quantity.
         for child in children:
             child['missing_next_set'] = max(0, (capacity+1)*child['per_set']-child['quantity'])
         result.append(dict(key=f'stock:{parent_id}', source_kind='stock', customer_id=parent.customer_id,
+            parent_product_id=parent_id,can_assemble_stock=can_assemble,assembly_block=assembly_block,
             customer_name=parent.customer.chinese_short_name or parent.customer.name,
             order_number='备库 · '+parent.product_code, product_name=parent.product_name,
             available_sets=capacity, children=children, sources=sources, outputs=[],

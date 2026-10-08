@@ -2,7 +2,7 @@ import copy
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-from test_stock_replenishment_flow import stock_replenishment_app
+from stock_preparation_legacy_fixture import stock_replenishment_app, base_stock_replenishment_app
 from test_stock_preparation_groups import prepare, plan, action_body
 from app.api.stock_preparation import router
 from app.models.stock_preparation import StockPreparationJob as Job, StockPreparationCommand as Command

@@ -63,13 +63,14 @@ def reverse_preparation(key:str,body:Reversal,db:Session=Depends(get_db),user:Us
 
 
 class Action(BaseModel):
-    action: Literal['keep_raw','keep_semi','plan','complete','cancel','store_output']
+    action: Literal['keep_raw','keep_semi','plan','complete','process','cancel','store_output']
     operation_key: str = Field(min_length=8,max_length=70)
     lot_version: int = Field(gt=0,strict=True)
     quantity: int = Field(default=0,ge=0,strict=True)
     job_id: int | None = None
     job_version: int | None = None
     actual_output: int = Field(default=0,ge=0,strict=True)
+    actual_input_quantity: int | None = Field(default=None,gt=0,strict=True)
     location_id: int | None = None
     layout_version: int | None = None
     confirm_overproduction: bool = False
@@ -84,6 +85,7 @@ class GroupJobAction(BaseModel):
     actual_output: int = Field(default=0,ge=0,strict=True)
     output_version: int = Field(default=0,ge=0,strict=True)
     location_id: int | None = None
+    lot_id: int | None = Field(default=None,gt=0,strict=True)
     layout_version: int | None = None
 
 
@@ -93,7 +95,7 @@ class AssemblySource(BaseModel):
 
 
 class GroupAction(BaseModel):
-    action: Literal['plan','complete','cancel','dispose','assemble','unassemble','store_outputs']
+    action: Literal['plan','complete','cancel','dispose','assemble','assemble_stock','unassemble','store_outputs']
     disposition: Literal['finished','semi'] = 'finished'
     operation_key: str = Field(min_length=8,max_length=70)
     parent_id: int = Field(gt=0,strict=True)
@@ -154,7 +156,15 @@ def post_group_action(body:GroupAction,db:Session=Depends(get_db),user:User=Depe
                     _,item,_=service.source(db,job.receipt_item_id)
                     require_customer_access(item.customer_id,user,db)
         with atomic_bom(db):
-            result=group_service.mutate_group(db,body.model_dump(),user)
+            if body.action == 'assemble_stock':
+                from app.services.stock_preparation_assembly import assemble_stock
+                result=assemble_stock(db,body.model_dump(),user)
+            else:
+                legacy_payload=body.model_dump()
+                for job in legacy_payload['jobs']:
+                    if job.get('lot_id') is None:
+                        job.pop('lot_id',None)
+                result=group_service.mutate_group(db,legacy_payload,user)
         db.commit()
         return result
     except WarehouseInventoryError as exc:
@@ -176,6 +186,8 @@ def get_rows(q:str=Query('',max_length=150), state:str='', workspace:bool=False,
         filtered=[row for row in filtered if q.strip().casefold() in group_service.encode(row).casefold()]
     pending_keys=set()
     for row in rows:
+        if row['status']=='arrange' and row['can_plan'] and row['available']>0:
+            pending_keys.add('legacy:'+str(row['receipt_item_id']))
         for job in row['jobs']:
             if job['status']=='pending':
                 group=job['product'].get('preparation_group')
@@ -189,7 +201,15 @@ def post_action(receipt_id:int,body:Action,db:Session=Depends(get_db),user:User=
         _,item,_=service.source(db,receipt_id)
         require_customer_access(item.customer_id,user,db)
         with atomic_bom(db):
-            result=service.mutate(db,receipt_id=receipt_id,payload=body.model_dump(),actor=user,output_kind=body.output_kind)
+            if body.action == 'process' or (body.action == 'complete' and body.actual_input_quantity is not None):
+                from app.services.stock_preparation_processing import process
+                result=process(db,receipt_id,body.model_dump(),user)
+            else:
+                legacy_payload=body.model_dump()
+                legacy_payload.pop('actual_input_quantity',None)
+                result=service.mutate(db,receipt_id=receipt_id,payload=legacy_payload,actor=user,output_kind=body.output_kind)
+                if body.action=='complete':
+                    result.update(completed_job_id=result['job_id'],continuation_job_id=None,remaining_input_quantity=0)
         db.commit()
         return result
     except WarehouseInventoryError as exc:
@@ -198,3 +218,17 @@ def post_action(receipt_id:int,body:Action,db:Session=Depends(get_db),user:User=
     except Exception:
         db.rollback()
         raise
+
+
+@router.get('/stock-preparation/assembly/{parent_id}/preview')
+def preview_stock_assembly(parent_id:int,sets:int=Query(1,gt=0,le=10000000),db:Session=Depends(get_db),user:User=Depends(PermissionChecker('orders.view'))):
+    from app.models.product import Product
+    from app.services.stock_preparation_assembly import preview
+    parent=db.get(Product,parent_id)
+    if not parent:
+        raise HTTPException(404,'组合产品不存在')
+    require_customer_access(parent.customer_id,user,db)
+    try:
+        return preview(db,parent_id,sets)
+    except WarehouseInventoryError as exc:
+        raise HTTPException(exc.status_code,str(exc)) from exc

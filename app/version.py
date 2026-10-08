@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.570"
-APP_VERSION_NAME = "资料与历史入库整页显示修复"
-APP_BUILD_DATE = "2026-10-08"
+APP_VERSION = "v0.22.571"
+APP_VERSION_NAME = "货架首次读取与货位显示修复"
+APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -5425,3 +5425,7 @@ APP_CHANGELOG = [*(f"v0.22.569：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["客户资料、常用箱及历史入库按各自可用高度计算每页行数，查询和切换不再共用其他页面的行数。", "缓存页面重新显示、窗口及字号变化后自动校准；保留完整记录、分页与原查询权限。"]
 APP_VERIFICATION_STEPS = ["Ctrl+F5刷新，分别打开客户资料、常用箱和来料历史入库，确认表格及分页在一屏内。", "重复查询、翻页后返回，并切换标准/大字或调整窗口，确认行数稳定且自动适配。"]
 APP_CHANGELOG = [*(f"v0.22.570：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["货架首次读取库存时显示加载状态，读取失败明确提示并可重试，不再误报未建立正式货位。", "按正式货架层格显示现存货位；位置待核对时保留库存查看，继续限制添货和未发布草稿操作。", "旧请求不能覆盖新库存结果；本版不改变库存、货位绑定或数据库结构。"]
+APP_VERIFICATION_STEPS = ["刷新仓库地图后直接点击货架，无需进入区域规划，核对已有货位和产品正常显示。", "读取过程中应提示正在读取；读取失败可重试，实际未建的格位仍明确提示未建。", "核对位置待确认和未发布草稿不能添货，库存数量、权限及货位绑定保持。"]
+APP_CHANGELOG = [*(f"v0.22.571：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

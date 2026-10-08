@@ -1,3 +1,7 @@
+## 2026-10-08 全模块统一导航 v0.22.569
+
+正式运行11c4474b，签名包b7452621，eg1008sc无迁移。顶部标志/时间/模块入口，左下账号工具，去掉可见工作页签与重复页头；保留缓存草稿、权限与原业务操作。16项定向测试、隔离Chrome及NAS完整备份、健康/20项只读资源与匿名接口检查通过。app业务与alembic文件和v568一致，保留BOM/模数reader；previous为兼容v568，不回退更早旧语义。正式主分支071cfa27仍滞后，未强推。技术发布完成待管理员人工验收，详见docs/release_reports/UI_UNIFIED_NAV_20261008.md及NAS同名v569回执。
+
 ## 2026-10-08 补库BOM/收料/任务单/模数标签 v0.22.568
 
 正式运行1375363c，签名包683062a0，仍eg1008sc无迁移；源339df606接续实际v567，远端factory-current-baseline071cfa27含未运行storage分支不能直接覆盖。BOM套数可改且避免默认重复抵扣，跨来源新到旧、原SRO补库打印、M标签与分切首工序；仅核验更新一楼4区域30功能位的地图发布关联及审计。两份NAS完整备份、全表变更范围、完整性/FK与只读资源核对通过。新bom_stock_plan与mold-count-v1不兼容完整v567，启动前已撤state.previous、schema_authority为空；下次发布必须承接两类reader，旧助手并非持久语义门禁。技术发布完成待管理员人工验收；详见docs/release_reports/STOCK_BOM_FLOW_FIX_20261008.md及NAS同名v568回执。

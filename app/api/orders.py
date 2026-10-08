@@ -4089,6 +4089,7 @@ def preview_order_inventory_draft(
 
     used_stock_by_lot: dict[int, int] = {}
     response_items: list[dict] = []
+    finished_lots_by_product: dict[int, list] = {}
     preflight_by_line = {row.client_line_id: row for row in preflight_items}
     for draft_item, product in zip(payload.items, products, strict=True):
         order_quantity = int(draft_item.quantity)
@@ -4147,6 +4148,7 @@ def preview_order_inventory_draft(
                 continue
             verified_candidates.append(lot)
         candidates = verified_candidates
+        finished_lots_by_product[product.id] = candidates
         finished_stock_on_hand_quantity = sum(
             max(int(lot.quantity_available or 0), 0) + max(int(lot.quantity_reserved or 0), 0)
             for lot in stock_projection_lots
@@ -4338,6 +4340,24 @@ def preview_order_inventory_draft(
                 "requisition_components": component_rows,
             }
         )
+
+    # Apply the entire confirmed draft before showing a future-stock reference.
+    # Existing reservations are already excluded from quantity_available.
+    from app.services.order_stock_reference import stock_reference
+    references = {}
+    product_map = {product.id: product for product in products}
+    for row in response_items:
+        if row.get('coverage_state') == 'unsupported':
+            continue
+        product_id = row['product_id']
+        remaining = sum(max(int(lot.quantity_available or 0) - used_stock_by_lot.get(lot.id, 0), 0)
+            for lot in finished_lots_by_product[product_id])
+        row['finished_stock_batch_remaining_quantity'] = remaining
+        if product_id not in references:
+            references[product_id] = stock_reference(db, customer_id=payload.customer_id,
+                product_id=product_id, product_code=product_map[product_id].product_code,
+                quantity_unit=row['finished_stock_unit'], remaining_quantity=remaining)
+        row['finished_stock_reference'] = references[product_id]
 
     return {
         "customer_id": payload.customer_id,

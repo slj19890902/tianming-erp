@@ -1,6 +1,7 @@
 from decimal import Decimal
 from fastapi.testclient import TestClient
 from sqlalchemy import select, func
+from app.core.time_contract import beijing_today
 import pytest
 
 from test_p1_40b_external_packaging_routing import routing_app, p1_40a_app, _login, _seed_price, _order_payload_for
@@ -84,6 +85,14 @@ def test_direct_receipt_posts_real_finished_and_idempotent(routing_app, physical
         assert decode(line.quantity_contract_json)['physical_quantity'] == 1000 * physical_ratio
         db.add(line)
         db.flush()
+        from app.services.order_stock_reference import stock_reference
+        reference_args=dict(customer_id=delivery.customer_id,product_id=item.product_id,
+            product_code=item.snapshot_product_code,quantity_unit=item.external_packaging_purchase_unit_snapshot,
+            remaining_quantity=1000*physical_ratio)
+        assert stock_reference(db,**reference_args)['status']=='green'
+        contract=line.quantity_contract_json;line.quantity_contract_json=None;db.flush()
+        assert stock_reference(db,**reference_args)['status']=='unknown'
+        line.quantity_contract_json=contract;db.flush()
         consume_delivery_item_inventory(db, delivery_item_id=line.id, delivered_quantity_after_dispatch=1000,
             operator_id=operator_id, operation_key='direct-dispatch')
         item.delivered_quantity = 1000
@@ -175,7 +184,7 @@ def test_order_delivery_print_keeps_customer_quantity_and_projects_physical(rout
             physical_unit = item.external_packaging_purchase_unit_snapshot
         request = {
             'customer_id': routing_app.state.fixture['customer_a'],
-            'delivery_date': '2026-09-26',
+                'delivery_date': beijing_today().isoformat(),
             'lines': [{'order_item_id': item_id, 'delivered_quantity': customer_quantity}],
         }
         too_many = client.post('/api/deliveries', json={**request,

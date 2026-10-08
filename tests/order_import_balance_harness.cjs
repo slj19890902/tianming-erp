@@ -6,26 +6,39 @@ const sandbox={axios:{defaults:{},interceptors:{response:{use(){}}}},Vue:{create
 vm.createContext(sandbox);vm.runInContext(script,sandbox);
 const ctx={...sandbox.definition.methods,canViewSalesAmounts:true};
 const line={matched_product_id:1,quantity:60,_inventory:ctx.newOrderInventoryState()};
-line._inventory.authoritative={finished_stock_on_hand_quantity:100,finished_stock_reserved_quantity:20,finished_stock_available_quantity:80,finished_stock_line_allocated_quantity:60,finished_stock_allocated_quantity:60,finished_stock_remaining_quantity:20,finished_stock_unit:'只'};
+line._inventory.authoritative={finished_stock_on_hand_quantity:100,finished_stock_reserved_quantity:20,finished_stock_available_quantity:80,finished_stock_line_allocated_quantity:60,finished_stock_allocated_quantity:60,finished_stock_remaining_quantity:20,finished_stock_batch_remaining_quantity:20,finished_stock_unit:'只'};
 assert.equal(ctx.pdfInventoryBalanceText(line),'20 只');
 assert.match(ctx.pdfInventoryBalanceHint(line),/实存 100 只/);
 assert.match(ctx.pdfInventoryBalanceHint(line),/已预占 20 只/);
 line._inventory.finished.skipped=true;
-assert.equal(ctx.pdfInventoryBalanceText(line),'100 只');
-assert.match(ctx.pdfInventoryBalanceHint(line),/不抵扣/);
+assert.equal(ctx.pdfInventoryBalanceText(line),'20 只');
+assert.match(ctx.pdfInventoryBalanceHint(line),/本行未抵扣/);
 line._inventory.finished._batch_auto_skipped=true;
-line._inventory.authoritative.finished_stock_remaining_quantity=0;
+line._inventory.authoritative.finished_stock_batch_remaining_quantity=0;
 assert.equal(ctx.pdfInventoryBalanceText(line),'0 只');
 assert.equal(ctx.pdfFinishedInventoryExplicitlySkipped(line),false);
 line._inventory.finished._batch_auto_skipped=false;
 for(const [key,value,text] of [['loading',true,'计算中'],['stale',true,'待刷新'],['api_error',true,'查询失败'],['authoritative_loading',true,'计算中'],['authoritative_error','failed','查询失败']]){
  line._inventory[key]=value;assert.equal(ctx.pdfInventoryBalanceText(line),text);line._inventory[key]=typeof value==='boolean'?false:'';
 }
-line._inventory.authoritative.finished_stock_on_hand_quantity=null;
+line._inventory.authoritative.finished_stock_batch_remaining_quantity=null;
 assert.equal(ctx.pdfInventoryBalanceText(line),'待核对');
-line._inventory.authoritative.finished_stock_on_hand_quantity=0;
+line._inventory.authoritative.finished_stock_batch_remaining_quantity=0;
 assert.equal(ctx.pdfInventoryBalanceText(line),'0 只');
-line.matched_product_id=null;assert.equal(ctx.pdfInventoryBalanceText(line),'待匹配');
+line._inventory.authoritative.finished_stock_reference={status:'red',min_quantity:30,max_quantity:50,sample_count:3,quantity_unit:'只',samples:[{delivery_number:'D1',delivery_date:'2026-10-01',quantity:30}]};
+assert.equal(ctx.pdfInventoryReserveLevel(line),'red');
+assert.equal(ctx.pdfInventoryReferenceText(line),'近期单次 30～50 只');
+assert.match(ctx.pdfInventoryBalanceHint(line),/D1：30 只/);
+for(const [quantity,status] of [[29,'red'],[30,'yellow'],[49,'yellow'],[50,'green']]){
+ line._inventory.authoritative.finished_stock_batch_remaining_quantity=quantity;
+ line._inventory.authoritative.finished_stock_reference.status=status;
+ assert.equal(ctx.pdfInventoryReserveLevel(line),status);
+}
+line._inventory.authoritative.finished_stock_reference.quantity_unit='箱';assert.equal(ctx.pdfInventoryReserveLevel(line),'unknown');
+line._inventory.authoritative.finished_stock_reference.quantity_unit='只';
+line._inventory.stale=true;assert.equal(ctx.pdfInventoryReserveLevel(line),'unknown');line._inventory.stale=false;
+line._inventory.authoritative.finished_stock_reference={status:'unknown',reason:'暂无参考'};assert.equal(ctx.pdfInventoryReferenceText(line),'暂无参考');
+line.matched_product_id=null;assert.equal(ctx.pdfInventoryBalanceText(line),'待匹配');assert.equal(ctx.pdfInventoryReserveLevel(line),'unknown');
 assert.equal(ctx.pdfDraftColumnCount({}),10);ctx.canViewSalesAmounts=false;assert.equal(ctx.pdfDraftColumnCount({}),8);
 let reallocations=0;
 const draft={items:[line]};
@@ -44,6 +57,9 @@ console.log('PASS: balance, skipped/zero/missing/error states, units, colspan, d
  assert.equal(sent.items.length,2);assert.equal(new Set(sent.items.map(i=>i.client_line_id)).size,2);
  assert.equal(second.items[0]._inventory.authoritative.finished_stock_remaining_quantity,70);
  assert.equal(first.items[0]._inventory.authoritative,null);
+ await context.loadPdfDraftInventoryAuthority(first);
+ assert.equal(sent.items.length,2,'the first document also includes later same-customer demand');
+ assert.equal(first.items[0]._inventory.authoritative.finished_stock_remaining_quantity,80);
  let resolve;
  sandbox.axios.post=()=>new Promise(r=>resolve=r);
  const old=context.loadPdfDraftInventoryAuthority(second);

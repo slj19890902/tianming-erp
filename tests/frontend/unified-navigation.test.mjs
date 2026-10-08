@@ -84,7 +84,7 @@ test('flow, master data and system tabs respect visible pages and same-page clic
   await s.execute('page:products'); assert.deepEqual(s.calls,[['go','products']]);
 });
 test('open drafts and in-flight warehouse guards block navigation, refresh and logout', async () => {
-  for (const state of [{modal:{type:'order'}},{productionEntry:{}},{loading:true},{warehouseNavigating:true}]) {
+  for (const state of [{modal:{type:'order'}},{productionEntry:{}},{stockPrepDialog:{}},{stockAssemblyDialog:{}},{loading:true},{warehouseNavigating:true}]) {
     const s=setup(state);
     for(const key of ['menu:workbench','warehouse:ledger','action:refresh','action:logout']) assert.equal(await s.execute(key),'busy');
     assert.equal(s.calls.length,0);

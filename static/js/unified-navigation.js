@@ -35,7 +35,7 @@
       role:vm.roleLabel(vm.user.role), uiMode:vm.uiMode === 'large' ? 'large' : 'standard',
       uiModeSaving:!!vm.uiModeSaving, canApprove:!!(admin || vm.canSubmitBusinessRequest),
       approvalLabel:admin ? '审批中心' : '业务申请',
-      busy:!!(vm.loading || vm.modal?.type || vm.productionEntry || vm.warehouseNavigating),
+      busy:!!(vm.loading || vm.modal?.type || vm.productionEntry || vm.stockPrepDialog || vm.stockAssemblyDialog || vm.warehouseNavigating),
       overview:vm.activePage === 'warehouse' && vm.warehouseView === 'map' ? {
         floor:String(vm.warehouseTwinFloor || ''),
         lots:Number(metrics.active_lots || 0), occupied:Number(metrics.occupied_locations || 0),

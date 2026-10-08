@@ -11,27 +11,30 @@ function state(cards=[]){return {
   pagePermission:()=>true,pageAllowed:()=>true,warehouseNavigationMenus:rows=>rows,
 };}
 const cold=menus.call(state());
-assert.equal(cold.find(x=>x.key==='production').count,undefined,'an unloaded count must not claim zero work');
+assert.equal(cold.find(x=>x.key==='requisition').count,undefined,'an unloaded count must not claim zero work');
 const cards=[{key:'pending_material',title:'待报料',count:4,count_unit:'项'}, {key:'pending_production',title:'待生产',count:3,count_unit:'任务'}, {key:'pending_delivery',title:'待送货',count:2,count_unit:'客户'}];
 const vm=state(cards);const loaded=menus.call(vm);
 assert.equal(loaded.find(x=>x.key==='workbench').count,4,'do not add overlapping orders and material stages');
-assert.equal(loaded.find(x=>x.key==='production').count,3,'use production tasks rather than putaway list size');
+assert.equal(loaded.find(x=>x.key==='requisition').count,4,'the material entry uses the material workload');
+assert.ok(!loaded.some(x=>x.key==='production'),'production remains in the process navigation');
 assert.equal(loaded.find(x=>x.key==='deliveries').count,2,'use customer workload rather than filtered/history delivery count');
 vm.deliveriesTotal=0;assert.equal(menus.call(vm).find(x=>x.key==='deliveries').count,2);
 assert.equal(loaded.find(x=>x.key==='deliveries').countUnit,'客户');
-const zero=state([{key:'pending_production',count:0,count_unit:'任务'}]);
-assert.equal(menus.call(zero).find(x=>x.key==='production').count,0,'a measured zero remains visible');
+const zero=state([{key:'pending_material',count:0,count_unit:'项'}]);
+assert.equal(menus.call(zero).find(x=>x.key==='requisition').count,0,'a measured zero remains visible');
 for(const invalid of [null,undefined,-1,NaN,'bad']) {
- const bad=state([{key:'pending_production',count:invalid,count_unit:'任务'}]);
- assert.equal(menus.call(bad).find(x=>x.key==='production').count,undefined);
+ const bad=state([{key:'pending_material',count:invalid,count_unit:'项'}]);
+ assert.equal(menus.call(bad).find(x=>x.key==='requisition').count,undefined);
 }
 const failure=state(cards);failure.overviewError='unavailable';
-assert.equal(menus.call(failure).find(x=>x.key==='production').count,undefined);
+assert.equal(menus.call(failure).find(x=>x.key==='requisition').count,undefined);
 const loading=state(cards);loading.overviewLoading=true;
-assert.equal(menus.call(loading).find(x=>x.key==='production').count,undefined);
-const noUnit=state([{key:'pending_production',count:3}]);
-assert.equal(menus.call(noUnit).find(x=>x.key==='production').count,undefined,'unknown units must not be presented as a known workload');
-assert.match(loaded.find(x=>x.key==='production').countDetails,/首页.*刷新/);
+assert.equal(menus.call(loading).find(x=>x.key==='requisition').count,undefined);
+const noUnit=state([{key:'pending_material',count:3}]);
+assert.equal(menus.call(noUnit).find(x=>x.key==='requisition').count,undefined,'unknown units must not be presented as a known workload');
+assert.match(loaded.find(x=>x.key==='requisition').countDetails,/首页.*刷新/);
 const denied=state(cards);denied.pageAllowed=key=>key!=='production';
 assert.ok(!menus.call(denied).some(x=>x.key==='production'));
+const worker=state(cards);worker.pageAllowed=key=>key==='production';
+const workerMenus=menus.call(worker);assert.equal(workerMenus.find(x=>x.key==='production').count,3);assert.ok(!workerMenus.some(x=>x.key==='requisition'));
 console.log('navigation unknown state, authoritative units and independence from page filters passed');

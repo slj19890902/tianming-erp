@@ -91,6 +91,12 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
         snapshot_ids = {r.id for r in compiled.snapshots}
         from app.services.composite_bom_workflow import _remaining_reservation_quantity
         reserved = defaultdict(int)
+        from app.services.processed_component_stock import processed_reservations, eligible_output
+        from app.services.finished_stock_identity import compiled_product_bases
+        processed = processed_reservations(db,compiled,item.id)
+        for r in processed:
+            if r.inventory_lot_id in source_lot_versions:
+                reserved[r.inventory_lot_id] += _remaining_reservation_quantity(r)
         for r in db.scalars(select(InventoryReservation).where(
             InventoryReservation.order_item_id == item.id,
             or_(InventoryReservation.sales_order_item_bom_component_id.in_(snapshot_ids),
@@ -122,9 +128,12 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
                     raise SubkitError("组装本体与订单不一致或存在异常预占")
             owner = active_subkit_order(db, lot)
             if (pid not in nodes or customer_id != order.customer_id
-                    or (not is_body and lot.finished_detail.is_general) or staging_owner(db, lid)
+                    or (not is_body and lot.finished_detail is not None and lot.finished_detail.is_general) or staging_owner(db, lid)
                     or (owner is not None and owner != item.id)):
                 raise SubkitError("逐层组装来源产品、客户、订单或集货状态不匹配")
+            if not is_body and lot.inventory_type=='semi_finished' and not eligible_output(db,lot,product_id=pid,
+                    customer_id=order.customer_id,expected_basis=compiled_product_bases(compiled)[pid]):
+                raise SubkitError('已加工子件与订单冻结身份不一致')
             if reserved[lid] > lot.quantity_reserved:
                 raise SubkitError("组装预占余额不一致")
             eligible = (lot.quantity_available if lid in free_ids else 0) + reserved[lid]
@@ -166,7 +175,7 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
         for pid in product_ids:
             child_ids = {e.child_id for e in children[pid] if e.relation == "assembly"}
             inputs = {lid: lot.version for lid, lot in lots.items()
-                      if (not is_body_lot(lot) and lot.inventory_type == "finished" and identities[lid] in child_ids)
+                      if (not is_body_lot(lot) and lot.inventory_type in {"finished","semi_finished"} and identities[lid] in child_ids)
                       or (is_body_lot(lot) and identities[lid] == pid)}
             expected = steps[pid].produced_units if pid in steps else 0
             result = assemble_subkit_inventory(db, order_item_id=item.id, graph_product_id=pid,

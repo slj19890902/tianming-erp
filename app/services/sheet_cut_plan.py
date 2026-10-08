@@ -8,6 +8,8 @@ from app.services.sheet_measurement import crease_match
 def rectangular_cut_plan(db, lot, product, expected):
     detail = lot.semi_finished_detail
     profile = goods_profile(db, lot)
+    if profile and (profile.get("output_piece") or profile.get("dimension_basis") == "source_board"):
+        return None  # These dimensions describe consumed input, not usable output geometry.
     if detail and ((profile or {}).get("processing") == "creased" or detail.sheet_type == "creased_sheet"):
         match = crease_match(db,lot,product,expected)
         if not match or not match["known"]:

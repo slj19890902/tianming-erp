@@ -15,7 +15,7 @@
     <script src="/static/ui/purchase-workspace.js?v=66709867c608"></script>
     <script src="/static/ui/production-map.js?v=20260922-map-return"></script>
     <script src="/static/ui/warehouse-workspace.js?v=20260928"></script>
-    <script src="/static/ui/production-workspace.js?v=20260922-desk"></script>
+    <script src="/static/ui/production-workspace.js?v=20261008-inventory-flow"></script>
     <script src="/static/ui/production-desk.js?v=round-experience-d2"></script>
     <link rel="stylesheet" href="/static/ui/production-desk.css?v=20260922-map-return">
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
@@ -962,6 +962,11 @@
       .pdf-inventory-state.partial { color:#9a3412; background:#ffedd5; border-color:#fdba74; }
       .pdf-inventory-state.exception { color:#991b1b; background:#fee2e2; border-color:#fca5a5; }
       .pdf-inventory-state.neutral { color:#475569; background:#f1f5f9; border-color:#cbd5e1; }
+      .pdf-stock-level { display:inline-flex; align-items:center; padding:3px 7px; border-radius:5px; font-weight:700; border:1px solid #cbd5e1; background:#f1f5f9; color:#475569; }
+      .pdf-stock-level.green { color:#166534; background:#dcfce7; border-color:#86efac; }
+      .pdf-stock-level.yellow { color:#854d0e; background:#fef9c3; border-color:#eab308; }
+      .pdf-stock-level.red { color:#991b1b; background:#fee2e2; border-color:#fca5a5; }
+      .pdf-stock-reference { font-size:11px; margin-top:3px; white-space:normal; color:#475569; }
       .pdf-shortage-line { margin-top:3px; color:#9a3412; font-size:11px; line-height:1.3; }
       .pdf-requisition-value { font-weight:800; color:#1d4ed8; }
       .pdf-advanced-summary {
@@ -3177,7 +3182,7 @@
     <link rel="stylesheet" href="/static/ui/workspace.css?v=5555873a9b80" />
     <link rel="stylesheet" href="/static/ui/order-reference.css?v=423" />
     <script src="/static/ui/order-reference.js?v=423"></script>
-    <script src="/static/js/unified-navigation.js"></script>
+    <script src="/static/js/unified-navigation.js?v=20261008-inventory-flow"></script>
     <script src="/static/js/frontend-shell-bridge.js?v=1772ba8dbd39"></script>
   </head>
   <body>
@@ -4897,11 +4902,11 @@
               <div class="production-compact-command-bar">
                 <div class="toolbar-group production-tab-strip">
                   <h2>生产工作台</h2>
-                  <button :class="['btn',{primary:productionTab==='preparation'||productionTab==='stock'}]" @click="selectStockProductionTab('preparation')">备库安排 {{stockPrepCounts.arrange||0}}</button>
-                  <button :class="['btn',{primary:productionTab==='pending'}]" :disabled="productionBusy" @click="selectStockProductionTab('pending')">待生产 {{productionPendingTotal + stockPrepPendingCount}}</button>
-                  <button :class="['btn',{primary:productionTab==='assembly'}]" @click="productionTab='assembly'; loadPendingAssemblies(1)">待组套</button>
-                  <button :class="['btn',{primary:productionTab==='placement'}]" @click="productionTab='placement'; loadProductionPlacement()">成品与归位<span v-if="productionPlacementPendingTotal"> · 待归位 {{productionPlacementPendingTotal}}</span></button>
-                  <button :class="['btn',{primary:productionTab==='history'}]" @click="productionTab='history'; loadProductionHistory()">生产记录</button>
+                  <button :class="['btn',{primary:productionTab==='pending'}]" :disabled="productionBusy" @click="selectStockProductionTab('pending')">待加工 {{productionPendingTotal + stockPrepPendingCount}}</button>
+                  <button :class="['btn',{primary:productionTab==='assembly'}]" @click="productionTab='assembly'; loadPendingAssemblies(1)">子件与组套</button>
+                  <button :class="['btn',{primary:productionTab==='placement'}]" @click="productionTab='placement'; loadProductionPlacement()">已入库<span v-if="productionPlacementPendingTotal"> · 待归位 {{productionPlacementPendingTotal}}</span></button>
+                  <button :class="['btn',{primary:productionTab==='history'}]" @click="productionTab='history'; loadProductionHistory()">加工记录</button>
+                  <details class="toolbar-more"><summary class="btn">更多</summary><button class="btn small" @click="selectStockProductionTab('preparation')">材料与来料记录</button><button class="btn small" @click="selectStockProductionTab('stock')">子件库存位置</button></details>
                 </div>
                 <div v-if="productionTab==='pending' && productionPendingSource!=='stock'" class="production-tab-actions">
                   <pager :page="pages.productionPending" :total="productionPendingTotal" :page-size="productionPendingPageSize()" :always="true" :compact="true" @change="loadProductionPage($event)"></pager>
@@ -4927,14 +4932,15 @@
                 <article v-for="row in pendingAssemblies" :key="row.key || row.order_item_id" class="panel" style="margin-top:10px;background:#f0f8f5">
                   <strong>{{row.customer_name}}</strong> <order-reference :row="row"></order-reference>
                   <div v-if="row.error" class="status orange">{{row.error}}</div>
-                  <div v-if="row.source_kind==='stock'" class="toolbar-group"><strong>{{row.product_name}}</strong><span>子件配比参考 {{row.available_sets}} 套</span><span class="muted">{{row.notice}}</span></div>
+                  <div v-if="row.source_kind==='stock'" class="toolbar-group"><strong>{{row.product_name}}</strong><span>子件配比参考 {{row.available_sets}} {{row.unit||'单位待核对'}}</span><span class="muted">{{row.notice}}</span></div>
                   <div v-for="child in row.children" :key="child.product_id" class="toolbar-group" style="margin-top:6px"><strong>{{child.product_code}}</strong><span>{{child.product_name}} · {{child.quantity}} {{child.unit}}</span><span v-if="child.required!==undefined">需 {{child.required}}</span><span v-if="child.missing" class="status orange">缺 {{child.missing}}</span><span v-if="row.source_kind==='stock' && child.missing_next_set" class="muted">再配一套缺 {{child.missing_next_set}}</span></div>
                   <div v-for="output in row.outputs" :key="output.product_id" class="toolbar-group" style="margin-top:8px">
                     <strong>{{output.product_name}}</strong><input class="input" type="number" min="0" :max="row.expected_outputs[output.product_id]" step="1" v-model.number="output.quantity" :aria-label="output.product_name+'实际组套数量'" style="width:90px" /><span>{{output.unit}}（最多{{row.expected_outputs[output.product_id]}}）</span>
                     <select v-model="output.location_id" class="select" :aria-label="output.product_name+'成套位置'" style="max-width:360px"><option :value="null">选择成套实际位置</option><option v-for="loc in assemblyLocations" :key="loc.id" :value="loc.id">{{loc.name}}</option></select>
                   </div>
-                  <details open v-if="row.sources?.length" style="margin:8px 0"><summary>本次组套子件与位置</summary><div v-for="source in row.sources" :key="source.lot_id">{{source.product_code}} · {{source.product_name}} · {{source.quantity}} {{source.unit}} · {{source.location}}</div></details>
-                  <button v-if="row.source_kind!=='stock' && !row.error && canProductionExecute" class="btn success" :disabled="assemblyLoading || productionBusy || !row.outputs.some(o=>Number(o.quantity)>0) || row.outputs.some(o=>!o.location_id)" @click="confirmPendingAssembly(row)">组套完成并入库</button>
+                  <details open v-if="row.sources?.length" style="margin:8px 0"><summary>{{row.source_kind==='stock'?'子件库存与位置':'本次组套子件与位置'}}</summary><div v-for="source in row.sources" :key="source.lot_id">{{source.product_code}} · {{source.product_name}} · {{source.quantity}} {{source.unit}} · {{source.location}}</div></details>
+                   <button v-if="row.source_kind!=='stock' && !row.error && canProductionExecute" class="btn success" :disabled="assemblyLoading || productionBusy || !row.outputs.some(o=>Number(o.quantity)>0) || row.outputs.some(o=>!o.location_id)" @click="confirmPendingAssembly(row)">组套完成并入库</button>
+                   <button v-if="row.source_kind==='stock' && row.parent_product_id && canAdmin" class="btn success" :disabled="assemblyLoading || productionBusy || !row.can_assemble_stock" @click="openStockAssembly(row)">组套入库</button><span v-if="row.source_kind==='stock' && row.assembly_block" class="status orange">{{row.assembly_block}}</span>
                 </article>
               </section>
               <div v-if="productionTab==='pending'" class="toolbar-group production-desk-filters" style="margin-bottom:10px">
@@ -4942,7 +4948,7 @@
                 <input class="input" v-model.trim="productionQuery" placeholder="客户 / 订单 / 存货编码 / 产品" @keyup.enter="searchProduction"><button class="btn small" @click="searchProduction">查找</button>
                 <button class="btn small" :disabled="productionMaterialsBusy || !selectedProductionMaterialIds().length" @click="showProductionMaterials(selectedProductionMaterialIds().map(id=>({id})))">合并用料清单（{{selectedProductionMaterialIds().length}}）</button><button v-if="selectedProductionMaterialIds().length" class="btn small" @click="productionMaterialsSelected={}">清空选择</button>
               </div>
-              <div v-if="productionTab==='preparation'||productionTab==='stock'" class="toolbar-group" style="margin-bottom:10px"><button v-for="(label,key) in {arrange:'待安排',waiting:'待来料',materials:'保留材料 / 余料'}" :class="['btn','small',{primary:stockPrepState===key}]" @click="choosePreparationState(key)">{{label}}</button></div>
+              <div v-if="productionTab==='preparation'||productionTab==='stock'" class="toolbar-group" style="margin-bottom:10px"><button v-for="(label,key) in {arrange:'已到材料',waiting:'待来料',materials:'材料与余料'}" :class="['btn','small',{primary:stockPrepState===key}]" @click="choosePreparationState(key)">{{label}}</button></div>
               <div v-if="productionTab==='placement'" class="toolbar-group" style="margin-bottom:10px"><button v-for="(label,key) in {all:'全部成品',pending:'待归位',placed:'已定位'}" :class="['btn','small',{primary:productionPlacementState===key}]" @click="productionPlacementState=key;pages.productionPlacement=1;loadProductionPlacement()">{{label}}</button></div>
 
               <div v-if="stockLocationMap" class="stock-map-mask" @keydown.esc.stop="closeStockLocationMap">
@@ -4979,9 +4985,9 @@
                     </template>
                     <template v-else>
                       <template v-if="['group_job','single_job','group_stock'].includes(stockPrepDialog.row.entry_type)">
-                        <label>用途 <select class="select" v-model="stockPrepDialog.disposition" ><option value="finished">{{stockPrepDialog.row.entry_type==='single_job'?'成品入库':'成套成品'}}</option><option value="semi" :disabled="stockPrepDialog.row.entry_type==='group_stock' && stockPrepDialog.jobs.some(j=>j.output_kind!=='semi')">半成品分存</option></select></label>
+                        <label>入库方式 <select class="select" v-model="stockPrepDialog.disposition" ><option value="semi" :disabled="stockPrepDialog.row.entry_type==='group_stock' && stockPrepDialog.jobs.some(j=>j.output_kind!=='semi')">按子件存放</option><option value="finished">{{stockPrepDialog.row.entry_type==='single_job'?'完整成品入库':'已组好整套入库'}}</option></select></label>
                         <label v-if="stockPrepDialog.row.entry_type!=='single_job' && stockPrepDialog.disposition==='finished'">实际成套数量 <input class="input compact-input" type="number" min="1" v-model.number="stockPrepDialog.sets" /> 套</label>
-                        <label v-if="stockPrepDialog.job">实际产出 <input class="input compact-input" type="number" min="1" v-model.number="stockPrepDialog.job._actual" /> 个</label>
+                        <div v-if="stockPrepDialog.job" class="toolbar-group"><label>本次加工 <input class="input compact-input" type="number" min="1" :max="stockPrepDialog.job.input_quantity" v-model.number="stockPrepDialog.inputQuantity" @input="updateStockProcessingQuantity" /> 张</label><span>从 {{stockPrepDialog.job.source_location||stockPrepDialog.row.location}} 取料</span><label>实际产出 <input class="input compact-input" type="number" min="1" v-model.number="stockPrepDialog.job._actual" /> 只</label><info-note>填本次实际加工投入和产出，未加工材料继续留在待加工中；不要把损耗当成未加工材料。</info-note></div>
                         <info-note v-if="stockPrepDialog.disposition==='finished' && stockPrepDialog.jobs">每套按冻结用量扣减子件，多余子件保留半成品；保存表示已实际组装完成。</info-note>
                         <details :open="stockPrepDialog.disposition==='semi'"><summary v-if="stockPrepDialog.jobs">子件数量与位置</summary>
                           <div v-for="job in (stockPrepDialog.jobs||[]).slice((stockPrepDialog.page-1)*3,stockPrepDialog.page*3)" :key="job.id" class="stock-source-summary"><strong>{{job.product.name}}</strong>
@@ -4997,17 +5003,31 @@
                         </div>
                         <div v-if="stockPrepDialog.row.physical>0 || !stockOutputQuantity(stockPrepDialog.row)">{{stockPrepDialog.row.specification}} · {{stockPrepDialog.row.material}} · 可用 {{stockPrepDialog.row.available}} {{stockPrepDialog.row.unit}}<div>当前位置：{{stockPrepDialog.row.location}}</div></div>
                         <details v-else><summary>原料历史（已用完）</summary>{{stockPrepDialog.row.specification}} · {{stockPrepDialog.row.material}} · {{stockPrepDialog.row.location}}</details>
-                        <select v-if="stockPrepDialog.row.can_plan" class="select" v-model="stockPrepDialog.keepKind"><option value="keep_raw">原料存放</option><option value="keep_semi">半成品存放</option></select>
+                        <div v-if="stockPrepDialog.row.entry_type==='legacy_material'" class="toolbar-group"><span v-if="stockPrepDialog.row.processing_block" class="status red">{{stockPrepDialog.row.processing_block}}</span><label>本次加工 <input class="input compact-input" type="number" min="1" :max="stockPrepDialog.row.available" v-model.number="stockPrepDialog.inputQuantity" @input="updateStockProcessingQuantity" /> 张</label><label>实际产出 <input class="input compact-input" type="number" min="1" v-model.number="stockPrepDialog.actualOutput" /> 只</label><span>默认按子件入库</span></div>
+                        <details v-else-if="stockPrepDialog.row.can_plan"><summary>调整材料位置</summary><select class="select" v-model="stockPrepDialog.keepKind"><option value="keep_raw">原纸留库</option><option value="keep_semi">片料留库</option></select><info-note>这里只登记材料存放位置，不代表已经加工。</info-note></details>
                       </template>
-                      <div v-if="stockPrepDialog.row.status!=='waiting' && (stockPrepDialog.row.can_plan && stockPrepDialog.row.available>0 || ['group_job','group_stock','single_output','single_job'].includes(stockPrepDialog.row.entry_type))" class="stock-location-field"><label>{{stockPrepDialog.disposition==='semi'?'默认半成品位置':'存放位置'}}</label><location-picker v-model="stockPrepDialog.location" :locations="stockLocations" :disabled="stockPrepDialog.loading"></location-picker><button class="btn" :disabled="stockPrepDialog.loading" @click="openStockLocationMap()">地图选位</button></div>
+                      <div v-if="stockPrepDialog.row.status!=='waiting' && (stockPrepDialog.row.can_plan && stockPrepDialog.row.available>0 || ['group_job','group_stock','single_output','single_job','legacy_material'].includes(stockPrepDialog.row.entry_type))" class="stock-location-field"><label>{{stockPrepDialog.disposition==='semi'?'子件实际货位':'实际存放货位'}}</label><location-picker v-model="stockPrepDialog.location" :locations="stockLocations" :disabled="stockPrepDialog.loading"></location-picker><button class="btn" :disabled="stockPrepDialog.loading" @click="openStockLocationMap()">地图选位</button></div>
                       <div class="toolbar-group" style="margin-top:12px">
                         <button v-if="['group_job','group_stock'].includes(stockPrepDialog.row.entry_type)" class="btn primary" :disabled="!canAdmin||stockPrepDialog.loading" @click="saveStockDialog(stockPrepDialog.row.entry_type==='group_job'?'dispose':stockPrepDialog.disposition==='semi'?'store_outputs':'assemble')">保存入库</button>
                         <button v-else-if="stockPrepDialog.row.entry_type==='single_output'" class="btn primary" :disabled="!canAdmin||stockPrepDialog.loading" @click="saveStockDialog('store_output')">保存位置</button><button v-else-if="stockPrepDialog.row.entry_type==='single_job'" class="btn primary" :disabled="!canAdmin||stockPrepDialog.loading" @click="saveStockDialog('complete')">保存入库</button>
-                        <button v-if="stockPrepDialog.row.entry_type==='receipt' && stockPrepDialog.row.can_plan && stockPrepDialog.row.available>0" class="btn primary" :disabled="!canAdmin||stockPrepDialog.loading" @click="saveStockDialog('plan')">按填写数量转待生产</button><button v-if="stockPrepDialog.row.entry_type==='receipt' && stockPrepDialog.row.can_plan && stockPrepDialog.row.available>0" class="btn primary" :disabled="!canAdmin||stockPrepDialog.loading" @click="saveStockDialog(stockPrepDialog.keepKind)">保存位置</button>
+                        <button v-if="stockPrepDialog.row.entry_type==='legacy_material'" class="btn primary" :disabled="!canAdmin||stockPrepDialog.loading||!!stockPrepDialog.row.processing_block" @click="saveStockDialog('process')">加工完成并入库</button>
+                        <button v-if="stockPrepDialog.row.entry_type==='receipt' && stockPrepDialog.row.can_plan && stockPrepDialog.row.available>0" class="btn" :disabled="!canAdmin||stockPrepDialog.loading" @click="saveStockDialog(stockPrepDialog.keepKind)">仅保存材料位置</button>
                         <button v-if="['group_job','single_job'].includes(stockPrepDialog.row.entry_type)" class="btn" :disabled="!canAdmin||stockPrepDialog.loading" @click="saveStockDialog('cancel')">取消安排</button>
                       </div>
                     </template>
                   </template>
+                </section>
+              </div>
+              <div v-if="stockAssemblyDialog" class="workspace-dialog-mask" @keydown.esc.stop="stockAssemblyDialog.saving?null:(stockAssemblyDialog=null)">
+                <section class="workspace-dialog stock-production-dialog" role="dialog" aria-modal="true" aria-label="子件组套入库">
+                  <div class="toolbar"><strong>{{stockAssemblyDialog.row.product_name}} · 组套入库</strong><button class="btn" :disabled="stockAssemblyDialog.saving" @click="stockAssemblyDialog=null">关闭</button></div>
+                  <div v-if="stockAssemblyDialog.error" class="status red" role="alert">{{stockAssemblyDialog.error}}</div>
+                  <label>本次实际组好 <input class="input compact-input" type="number" min="1" v-model.number="stockAssemblyDialog.sets" :disabled="stockAssemblyDialog.saving" @input="stockAssemblyDialog.preview=null" @change="previewStockAssembly" /> {{stockAssemblyDialog.preview?.output_unit||stockAssemblyDialog.row.verified_output_unit||'单位待核对'}}</label>
+                  <span v-if="stockAssemblyDialog.loading">正在核对子件…</span><button v-else-if="!stockAssemblyDialog.preview" class="btn small" :disabled="stockAssemblyDialog.saving" @click="previewStockAssembly">核对子件</button>
+                  <div v-for="source in stockAssemblyDialog.preview?.sources||[]" :key="source.lot_id" class="stock-source-summary">{{source.product_code||'子件'}} {{source.product_name||''}} · 取 {{source.quantity}} {{source.unit||'只'}} · {{source.location}}</div>
+                  <div v-for="short in stockAssemblyDialog.preview?.shortages||[]" class="status orange">{{short.name||short.product_name}} 还缺 {{short.missing}} {{short.unit||'单位待核对'}}</div>
+                  <div class="stock-location-field"><label>组好成品实际货位</label><location-picker v-model="stockAssemblyDialog.location" :locations="stockLocations" :disabled="stockAssemblyDialog.saving"></location-picker></div>
+                  <button class="btn success" :disabled="stockAssemblyDialog.loading||stockAssemblyDialog.saving||!stockAssemblyDialog.preview||!!stockAssemblyDialog.preview?.shortages?.length||!stockAssemblyDialog.location" @click="saveStockAssembly">{{stockAssemblyDialog.saving?'正在保存…':'组套完成并入库'}}</button>
                 </section>
               </div>
               <div v-if="productionTab==='history' && productionHistoryFilterVisible" class="production-filter-panel">
@@ -5045,7 +5065,7 @@
                 </tbody></table>
               </data-panel>
               <section v-if="productionTab==='preparation' || productionTab==='stock' || (productionTab==='pending' && productionPendingSource!=='orders')" class="stock-preparation-panel">
-                <div class="toolbar stock-workspace-toolbar"><div class="toolbar-group"><input class="input" v-model="stockPrepQuery" placeholder="客户 / 存货编码 / 产品 / 批次" @keyup.enter="loadStockPreparation(1)"><button class="btn small" :disabled="stockPrepBusy" @click="loadStockPreparation(1)">查询</button><info-note>转待生产只预占材料；安排用途时选择成套入库或半成品分存。</info-note></div><pager :page="stockPrepPage" :total="stockPrepTotal" :page-size="screenPageSize(12)" :always="true" @change="loadStockPreparation($event)"></pager></div>
+                <div class="toolbar stock-workspace-toolbar"><div class="toolbar-group"><input class="input" v-model="stockPrepQuery" placeholder="客户 / 存货编码 / 产品 / 批次" @keyup.enter="loadStockPreparation(1)"><button class="btn small" :disabled="stockPrepBusy" @click="loadStockPreparation(1)">查询</button><info-note>按来源货位领取材料，实际加工后登记产出和子件货位；需要整套时再到“子件与组套”登记。</info-note></div><pager :page="stockPrepPage" :total="stockPrepTotal" :page-size="screenPageSize(12)" :always="true" @change="loadStockPreparation($event)"></pager></div>
                 <data-panel :loading="stockPrepBusy" :error="stockPrepError" :empty="!stockPrepRows.length" @retry="loadStockPreparation(stockPrepPage)">
                   <table class="stock-workspace-table"><thead><tr><th>存货编码 / 产品</th><th>实物数量</th><th>位置</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in stockPrepRows" :key="row.key">
                     <td><strong>{{stockEntryName(row).code}}</strong><div>{{stockEntryName(row).name}}</div><small>{{stockEntryName(row).customer_name}}</small></td>
@@ -5058,7 +5078,7 @@
                     <td v-else-if="row.entry_type==='assembled_stock'">{{row.assembly.location}}</td><td v-else-if="row.entry_type==='group_stock'">{{[...new Set(row.task.jobs.map(j=>j.output_location).filter(Boolean))].join(' / ')}}</td><td v-else-if="row.entry_type==='single_job'">{{row.location}}</td>
                     <td v-else><div v-if="stockOutputQuantity(row)">{{stockOutputLocations(row)}}</div><div v-if="row.physical||!stockOutputQuantity(row)">{{row.location}}</div><info-note>{{row.lot_number||row.order_number}}</info-note></td>
                     <td><span :class="['status',row.status==='waiting'?'orange':'green']">{{stockEntryStatus(row)}}</span><div v-if="row.keep">{{row.keep==='keep_raw'?'原料备货':'半成品备货'}}</div></td>
-                    <td><button v-if="canAdmin && (row.entry_type==='kit' || (row.entry_type==='receipt' && row.can_plan && row.available>0))" class="btn small primary" :disabled="stockPrepBusy" @click="openStockDialog(row)">安排生产</button> <button class="btn small" :class="canAdmin && row.status!=='waiting'?'primary':''" @click="openStockDialog(row)">{{row.entry_type==='kit'?'明细 / 存放':['group_job','single_job','group_stock'].includes(row.entry_type)?'安排用途':row.status==='waiting'?'查看来源':canAdmin&&row.can_plan&&row.available>0?'存放':'查看去向'}}</button></td>
+                    <td><span v-if="row.processing_block" class="status orange">{{row.processing_block}}</span><button class="btn small" :class="canAdmin && row.status!=='waiting'?'primary':''" :disabled="stockPrepBusy" @click="openStockDialog(row)">{{['group_job','single_job','legacy_material'].includes(row.entry_type)?'加工入库':row.entry_type==='group_stock'?'子件存放 / 组套':row.entry_type==='kit'?'查看材料':row.status==='waiting'?'查看来源':canAdmin&&row.can_plan&&row.available>0?'材料移位':'查看去向'}}</button></td>
                   </tr></tbody></table>
                 </data-panel>
               </section>
@@ -7826,8 +7846,9 @@
                         </div>
                       </td>
                       <td class="pdf-stock-balance">
-                        {{ pdfInventoryBalanceText(item) }}<info-note v-if="pdfInventoryBalanceHint(item)" label="库存数量说明">{{ pdfInventoryBalanceHint(item) }}</info-note>
-                        <span v-if="pdfFinishedInventoryExplicitlySkipped(item) && pdfInventoryBalanceHint(item)" class="status neutral">实存</span>
+                        <span :class="['pdf-stock-level',pdfInventoryReserveLevel(item)]">{{ pdfInventoryBalanceText(item) }}</span><info-note v-if="pdfInventoryBalanceHint(item)" label="库存余量与送货参考">{{ pdfInventoryBalanceHint(item) }}</info-note>
+                        <div class="pdf-stock-reference">{{ pdfInventoryReferenceText(item) }}</div>
+                        <span v-if="pdfFinishedInventoryExplicitlySkipped(item) && pdfInventoryBalanceHint(item)" class="status neutral">本行未抵扣</span>
                       </td>
                       <td style="font-size:11px;white-space:normal" :title="pdfInventoryIssueText(item)">
                         <button v-if="item.matched_product_id && !item.is_new_product && !commonBoxReadiness(item).ready && canEditProducts && !isImportDraftLocked(draft)" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" @click.stop="openCommonBoxEditorFromPdf(draftIndex,item)">常用箱资料待完善</button><span v-else-if="pdfInventoryIssueText(item)" :class="['status',pdfInventoryDisplayState(item)==='exception'?'red':'orange']">{{ pdfInventoryIssueText(item) }}</span>
@@ -11993,7 +12014,8 @@
             const items = [
               { key: "dashboard", label: "首页" },
               { key: "workbench", label: "订单主链", ...workload("pending_material", "待报料") },
-              { key: "production", label: "生产与成品", ...workload("pending_production", "待生产") },
+              { key: "requisition", label: "报料", ...workload("pending_material", "待报料") },
+              ...(!this.pageAllowed('requisition') && this.pageAllowed('production') ? [{key:"production",label:"生产",...workload("pending_production","待加工")}] : []),
               { key: "warehouse", label: "仓库" },
               { key: "deliveries", label: "送货与回单", ...workload("pending_delivery", "待送货") },
               { key: "finance", label: "对账与开票" },
@@ -14876,7 +14898,7 @@
             if (state.authoritative_loading) return "计算中";
             const authority = state.authoritative;
             if (authority?.finished_stock_balance_unavailable_reason) return "分批查看";
-            const value = this.pdfFinishedInventoryExplicitlySkipped(line) ? authority?.finished_stock_on_hand_quantity : authority?.finished_stock_remaining_quantity;
+            const value = authority?.finished_stock_batch_remaining_quantity;
             if (value === null || value === undefined || !Number.isFinite(Number(value)) || Number(value) < 0 || !authority?.finished_stock_unit) return "待核对";
             return `${Number(value)} ${authority.finished_stock_unit}`;
           },
@@ -14887,7 +14909,26 @@
             if (!authority || ["待匹配", "计算中", "待刷新", "查询失败", "待核对"].includes(this.pdfInventoryBalanceText(line))) return "";
             const unit = authority.finished_stock_unit;
             const quantity = (key) => authority[key] === null || authority[key] === undefined ? "待核对" : `${Number(authority[key])} ${unit}`;
-            return `同产品有效成品实存 ${quantity("finished_stock_on_hand_quantity")}；已预占 ${quantity("finished_stock_reserved_quantity")}；其他不可用 ${quantity("finished_stock_unavailable_quantity")}；导入前可用 ${quantity("finished_stock_available_quantity")}；本行拟抵扣 ${quantity("finished_stock_line_allocated_quantity")}。${this.pdfFinishedInventoryExplicitlySkipped(line) ? "本行不抵扣，显示实存；实存包含已预占及已集货部分，不代表全部可用。" : "显示按本批导入顺序至本行的可用余量；预览不会实际扣库，保存时重新校验。"}`;
+            const reference = authority.finished_stock_reference;
+            const samples = (reference?.samples || []).map(row => `${row.delivery_date} ${row.delivery_number}：${row.quantity} ${unit}`).join('；');
+            const history = samples ? `最近${reference.sample_count}次有效送货：${samples}。余量达到最高单次量为绿色，达到最低量但不足最高量为黄色，低于最低量为红色。` : reference?.reason || '暂无有效送货参考';
+            return `同产品有效成品实存 ${quantity("finished_stock_on_hand_quantity")}；已预占 ${quantity("finished_stock_reserved_quantity")}；其他不可用 ${quantity("finished_stock_unavailable_quantity")}；导入前可用 ${quantity("finished_stock_available_quantity")}；本行拟抵扣 ${quantity("finished_stock_line_allocated_quantity")}。显示本批全部明细抵扣后的可用余量；预览不会实际扣库，保存时重新校验。${this.pdfFinishedInventoryExplicitlySkipped(line) ? '本行未抵扣，其他行已安排的数量仍扣除。' : ''}${history}`;
+          },
+          pdfInventoryReserveLevel(line) {
+            const state = line?._inventory, authority = state?.authoritative;
+            if (!Number(line?.matched_product_id || line?.product_id || 0) || !state || state.loading || state.stale || state.api_error || state.authoritative_loading || state.authoritative_error || authority?.finished_stock_balance_unavailable_reason) return 'unknown';
+            const reference = authority?.finished_stock_reference;
+            const remaining = authority?.finished_stock_batch_remaining_quantity;
+            if (remaining == null || !Number.isFinite(Number(remaining)) || Number(remaining) < 0 || reference?.quantity_unit !== authority?.finished_stock_unit) return 'unknown';
+            return ['green','yellow','red'].includes(reference?.status) ? reference.status : 'unknown';
+          },
+          pdfInventoryReferenceText(line) {
+            const state = line?._inventory;
+            if (!state || state.loading || state.stale || state.api_error || state.authoritative_loading || state.authoritative_error) return '参考待核对';
+            const authority = state.authoritative, reference = authority?.finished_stock_reference;
+            if (authority?.finished_stock_balance_unavailable_reason) return '请分批核对';
+            if (this.pdfInventoryReserveLevel(line) === 'unknown') return reference?.reason || '暂无参考';
+            return `近期单次 ${reference.min_quantity}～${reference.max_quantity} ${reference.quantity_unit}`;
           },
           pdfInventoryShortageText(line) {
             const authority = line?._inventory?.authoritative;
@@ -15660,6 +15701,7 @@
             }, 100);
           },
           async loadPdfDraftInventoryAuthority(draft) {
+            const auth = this.authGeneration;
             const customerId = Number(draft?.matched_customer_id || 0);
             const items = (draft?.items || []).filter(line => (
               Number(line?.matched_product_id || line?.product_id || 0) > 0
@@ -15667,18 +15709,16 @@
               && Number(line.quantity) > 0
             ));
             const sequence = this.pdfInventoryDraftSequence();
-            const position = sequence.indexOf(draft);
-            const preceding = position < 0 ? [] : sequence.slice(0, position).filter(row => Number(row.matched_customer_id) === customerId);
-            const priorItems = preceding.flatMap(row => (row.items || []).filter(line => (
+            const sameCustomer = sequence.includes(draft) ? sequence.filter(row => Number(row.matched_customer_id) === customerId) : [draft];
+            const batchItems = sameCustomer.flatMap(row => (row.items || []).filter(line => (
               Number(line?.matched_product_id || line?.product_id || 0) > 0
               && Number.isInteger(Number(line?.quantity)) && Number(line.quantity) > 0
             )));
-            const batchItems = [...priorItems, ...items];
             // Retain the existing per-document workflow beyond the endpoint's
             // limit, but never label a partial calculation as a batch balance.
             const balanceUnavailable = batchItems.length > 200;
             const previewItems = balanceUnavailable ? items : batchItems;
-            const unavailable = !customerId ? "请先选择客户" : !items.length ? "请先填写有效产品和数量" : items.length > 200 ? "本单超过200行，请分批核对库存" : batchItems.some(line => !line._inventory || line._inventory.loading || line._inventory.stale || line._inventory.api_error) ? "本批前序或当前明细库存未就绪，请刷新库存后重算" : "";
+            const unavailable = !customerId ? "请先选择客户" : !items.length ? "请先填写有效产品和数量" : items.length > 200 ? "本单超过200行，请分批核对库存" : batchItems.some(line => !line._inventory || line._inventory.loading || line._inventory.stale || line._inventory.api_error) ? "本批明细库存未就绪，请刷新库存后重算" : "";
             if (unavailable) {
               draft._inventory_authority_generation = Number(draft._inventory_authority_generation || 0) + 1;
               (draft.items || []).forEach(line => {
@@ -15711,7 +15751,7 @@
                 })),
               };
               const { data } = await axios.post("/api/orders/inventory-draft-preview", payload, {timeout:10000});
-              if (Number(draft._inventory_authority_generation) !== generation) return;
+              if (this.authGeneration !== auth || !this.orderImportDrafts.includes(draft) || Number(draft._inventory_authority_generation) !== generation) return;
               const byLineId = new Map((data?.items || []).map(row => [String(row.client_line_id), row]));
               items.forEach(line => {
                 const authority = byLineId.get(`preview-${previewItems.indexOf(line)}`);
@@ -15720,14 +15760,14 @@
                 line._inventory.authoritative_error = authority ? "" : "系统未返回本行库存计算结果";
               });
             } catch (error) {
-              if (Number(draft._inventory_authority_generation) !== generation) return;
+              if (this.authGeneration !== auth || !this.orderImportDrafts.includes(draft) || Number(draft._inventory_authority_generation) !== generation) return;
               const message = `库存与报料数量计算失败：${this.errorMessage(error)}`;
               items.forEach(line => {
                 line._inventory.authoritative = null;
                 line._inventory.authoritative_error = message;
               });
             } finally {
-              if (Number(draft._inventory_authority_generation) === generation) {
+              if (this.authGeneration === auth && this.orderImportDrafts.includes(draft) && Number(draft._inventory_authority_generation) === generation) {
                 items.forEach(line => { line._inventory.authoritative_loading = false; });
               }
             }
@@ -16711,6 +16751,7 @@
             return true;
           },
           isMenuActive(menuKey) {
+            if (menuKey === 'workbench' && this.activePage === 'requisition') return false;
             const group = this.navigationGroups.find(item => item.key === menuKey);
             return group ? group.pages.some(page => page.key === this.activePage) : this.activePage === menuKey;
           },
@@ -20502,23 +20543,37 @@
               this.showToast("库存预警模板已保存");
             } catch(error) { this.showToast(this.errorMessage(error),true); }
           },
-          stockPrepLabels() { return {arrange:'已到料·待安排',pending:'待生产',waiting:'待来料',keep:'备料中',stock:'成品待送',history:'历史'}; },
+          stockPrepLabels() { return {arrange:'已到材料',pending:'待加工',waiting:'待来料',keep:'材料留库',stock:'已入库',history:'加工记录'}; },
           stockPrepActionLabel(action) { return {keep_raw:'保留原料备货',keep_semi:'保留半成品备货',plan:'安排生产',complete:'确认产出入库',cancel:'取消生产安排'}[action] || action; },
           async loadStockPreparation(page=1) { return this.loadStockWorkspace(page); },
           async stockPrepAction(row,action,job=null) {
             if(this.stockPrepBusy) return;
             const payload={action,lot_version:row.lot_version,quantity:action==='plan'?Number(row._quantity):0,job_id:job?.id || null,job_version:job?.version || null,actual_output:action==='complete'?Number(job?._actual):0,output_kind:row._outputKind||'finished',output_version:row._outputVersion||0,location_id:job?._location || row._location || null,layout_version:row._layoutVersion ?? this.productionLocations.find(loc=>loc.id===(job?._location || row._location))?.layout_version ?? null,confirm_overproduction:false};
+            if (['complete','process'].includes(action)) {
+              payload.actual_input_quantity = Number(row._actualInput);
+              if (action === 'process') payload.actual_output = Number(row._actualOutput);
+              const maximum = Number(job?.input_quantity || row.available || 0);
+              if (row.processing_block || !Number.isInteger(payload.actual_input_quantity) || payload.actual_input_quantity <= 0 || payload.actual_input_quantity > maximum) { this.stockPrepError=row.processing_block || '请填写本次实际加工张数，不能超过待加工材料'; return false; }
+            }
             if(action==='plan' && (!Number.isInteger(payload.quantity) || payload.quantity<=0 || payload.quantity>row.available)) { this.stockPrepError='请输入不超过可用量的正整数投入张数'; return; }
-            if(action==='complete' && (!Number.isInteger(payload.actual_output) || payload.actual_output<=0 || !payload.location_id)) { this.stockPrepError='请填写实际成品数量并选择实际入库位置'; return; }
+            if(['complete','process'].includes(action) && (!Number.isInteger(payload.actual_output) || payload.actual_output<=0 || !payload.location_id)) { this.stockPrepError='请填写实际产出数量并选择实际入库货位'; return; }
             if(action==='cancel' && !window.confirm('取消这次生产安排，将材料恢复为可用备料？')) return;
-            if(action==='complete' && payload.actual_output>job.expected_output) { if(!window.confirm('实际成品超过理论产出，确认数量正确？')) return; payload.confirm_overproduction=true; }
+            const expectedOutput = this.stockProcessingExpected(row,job,payload.actual_input_quantity);
+            if(['complete','process'].includes(action) && expectedOutput===null) { this.stockPrepError='加工倍率缺失，请刷新核对任务后再提交'; return false; }
+            if(['complete','process'].includes(action) && payload.actual_output>expectedOutput) { if(!window.confirm('本次实际产出超过理论，确认已核对数量？')) return; payload.confirm_overproduction=true; }
             const signature=JSON.stringify(payload);
             if(row._requestSignature!==signature) { row._requestSignature=signature; row._requestKey='prep-'+Date.now()+'-'+Math.random().toString(36).slice(2); }
             payload.operation_key=row._requestKey;
+            const auth=this.authGeneration;
             this.stockPrepBusy=true; this.stockPrepError='';
-            try { await axios.post('/api/production/stock-preparation/'+row.receipt_item_id+'/actions',payload); await this.loadStockPreparation(this.stockPrepPage); return true; }
-            catch(error) { this.stockPrepError=error.response?.data?.detail || '操作结果暂未确认，请保持内容重试或刷新核对'; }
-            finally { this.stockPrepBusy=false; }
+            try {
+              await axios.post('/api/production/stock-preparation/'+row.receipt_item_id+'/actions',payload);
+              if(auth!==this.authGeneration)return false;
+              try { await this.loadStockPreparation(this.stockPrepPage); } catch(error) { if(auth===this.authGeneration)this.stockPrepError='列表刷新失败'; }
+              if(auth!==this.authGeneration)return false;
+              this.showToast(this.stockPrepError?'已保存；列表刷新失败，请点击刷新核对，不要再次建单':'已保存，本次库存已更新',!!this.stockPrepError); return true;
+            } catch(error) { if(auth===this.authGeneration)this.stockPrepError=error.response?.data?.detail || '操作结果暂未确认，请保持内容重试或刷新核对'; return false; }
+            finally { if(auth===this.authGeneration)this.stockPrepBusy=false; }
           },
           async loadProduction() {
             const entryUrl = new URL(window.location.href);

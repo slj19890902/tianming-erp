@@ -16,6 +16,7 @@ import {
   warehouseWorkspaceNavigateMessage
 } from "./warehouseWorkspaceBridge.mjs";
 import { MaterialCandidates } from "./MaterialCandidates";
+import { unlocatedPalletChoice } from "./unlocatedPutaway.mjs";
 import { StocktakeObservationPanel } from "./StocktakeObservationPanel";
 // Also render these exact components in the isolated visual acceptance fixture.
 export { MoldRackElevation, WarehouseRackElevation };
@@ -3776,6 +3777,20 @@ export function WarehouseTwinApp() {
     );
   };
 
+  const prepareUnlocatedPutaway = async (item: SearchItem) => {
+    if (!canExecuteWarehouse || traceReadOnly || moveBatchBusy || moveSubmitLock.current) return;
+    const choice = unlocatedPalletChoice(item, visualLocations);
+    if (!choice.location || !choice.pallet) { setWarehouseOperationMessage(choice.error); return; }
+    const source = palletMoveSource(choice.location, choice.pallet);
+    if (!source) { setWarehouseOperationMessage("来源栈板已变化，请刷新核对。"); return; }
+    if (mapMode !== "move" && !await enterWarehouseMoveMode()) return;
+    setRackFocusId(null); setSearchPanelOpen(false); setMoveAction("relocate");
+    chooseMoveSource(source);
+    setMoveTargetFloorCode(isWarehouseOperationalFloorCode(floorCode) ? floorCode : "3F");
+    setMoveTargetAreaCode(""); setMoveDraftTargetLocationId("");
+    setWarehouseOperationMessage(`已选 ${item.inventory_code || item.product_name} 所在整栈板（${choice.pallet.items.length}款）；请选择空地面货位。板内货物及订单预占一并归位。`);
+  };
+
   const focusDelayedDispatchCandidate = (candidate: DelayedDispatchCandidate) => {
     setSearchPanelOpen(false);
     setPendingAreaCode(null);
@@ -6543,12 +6558,13 @@ export function WarehouseTwinApp() {
           {unlocatedFinishedCount > 0 && <div className="twin-unlocated-finished-blocker">
             <div><b>待定位成品 {unlocatedFinishedCount} 批</b><span>账上有货，但没有已发布实测格位；不会借用其他区域坐标。</span></div>
             <div className="twin-unlocated-finished-list">
-              {unlocatedFinishedItems.map((item) => <button type="button" key={item.lot_id} onClick={() => focusSearchItem(item)}>
+              {unlocatedFinishedItems.map((item) => <div className="twin-unlocated-row" key={item.lot_id}><button type="button" className="twin-unlocated-detail" onClick={() => focusSearchItem(item)}>
                 <b>{item.inventory_code || item.lot_number || `批次 ${item.lot_id}`}</b>
                 <strong>{item.product_name || "产品名称待补充"}</strong>
                 <span>{item.location_name || "尚未绑定正式位置"} · {item.unlocated_reason || "缺少已发布实测格位"}</span>
                 <small>实存 {formatNumber(inventoryPhysicalQuantity(item))} {inventoryUnitLabel(item.unit)}{Number(item.reserved_quantity || 0) > 0 ? ` · 已预占 ${formatNumber(item.reserved_quantity)}` : ""}{Number(item.damaged_quantity || 0) > 0 ? ` · 质量冻结 ${formatNumber(item.damaged_quantity)}` : ""} · {item.lot_number || "批次待补充"}</small>
-              </button>)}
+              </button>{!traceReadOnly && canExecuteWarehouse && <button type="button" disabled={moveBatchBusy || spatialEditBusy || Boolean(unlocatedPalletChoice(item, visualLocations).error)} title={unlocatedPalletChoice(item, visualLocations).error || "选择空地面货位，整栈板归位"} onClick={() => void prepareUnlocatedPutaway(item)}>整栈板归位</button>}
+              {!traceReadOnly && canExecuteWarehouse && unlocatedPalletChoice(item, visualLocations).error && <small role="status">{unlocatedPalletChoice(item, visualLocations).error}</small>}</div>)}
             </div>
           </div>}
           <div className="twin-search-type-grid" role="tablist" aria-label="查货类型">

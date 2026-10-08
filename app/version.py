@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.564"
-APP_VERSION_NAME = "客户图号打印修复与资料简化"
-APP_BUILD_DATE = "2026-10-07"
+APP_VERSION = "v0.22.565"
+APP_VERSION_NAME = "待定位库存整栈板归位入口"
+APP_BUILD_DATE = "2026-10-08"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -5362,3 +5362,7 @@ APP_CHANGELOG = [*(f"v0.22.563：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["常用箱客户送货资料只保留客户图号、客户类别、使用型番，取消客户品名/用途和图号栏显示文字。", "送货打印直接使用冻结客户图号，旧空白覆盖值不再隐藏已填图号；真实缺失时提示行号和编码，编号前导零保留。"]
 APP_VERIFICATION_STEPS = ["Ctrl+F5刷新常用箱，确认客户送货资料只显示三个输入框。", "关闭旧打印预览，重开YG-20261007-001，核对80012158等七项图号及82020083的0632264、80012632的9620185；无需重新建单。"]
 APP_CHANGELOG = [*(f"v0.22.564：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["待定位库存列表增加整栈板归位入口，可将真实栈板放入有效空地面货位。", "沿用原移货事务，保留订单预占、库存数量、入库日期和成本；异常来源不猜测对应栈板。"]
+APP_VERIFICATION_STEPS = ["Ctrl+F5刷新仓库地图，在待定位成品列表找到22000109或22000110，点击整栈板归位。", "按实物选择目标楼层、区域及空地面货位，确认移动后核对库存数量和订单预占保持。"]
+APP_CHANGELOG = [*(f"v0.22.565：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

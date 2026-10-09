@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.603"
-APP_VERSION_NAME = "生产加工保存结果恢复"
+APP_VERSION = "v0.22.604"
+APP_VERSION_NAME = "整组加工保存结果恢复"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5801,3 +5801,17 @@ APP_VERIFICATION_STEPS = [
     "无需为验收额外提交真实加工或调整库存；实际浏览器显示和现场操作仍待管理员确认。",
 ]
 APP_CHANGELOG = [*(f"v0.22.603：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "整组加工保存前保留原子件、数量和货位；结果未确认时，刷新或重新打开仍可查询原记录。",
+    "同组原保存结果未核清前，保护后续子件存放和组套操作；其他组仍可正常处理。",
+    "子件加工、成套入库和本次完成后余片分别显示，同一子件来自多批材料时保持各自来源。",
+    "空白或不完整返回不会误报成功；入库结果、列表刷新及加工记录读取失败分别提示。",
+    "本版无数据库迁移，不调整正式历史订单、库存、单价或权限。",
+]
+APP_VERIFICATION_STEPS = [
+    "在生产待加工中查看既有整组待核对记录，点击“查询原结果”，核对子件产出、成套数量和货位。",
+    "余片显示为本次完成后的数量；加工记录或列表读取失败时，已确认的原保存结果应保留。",
+    "无需为验收额外提交真实加工或组套；实际浏览器显示和现场操作仍待管理员确认。",
+]
+APP_CHANGELOG = [*(f"v0.22.604：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

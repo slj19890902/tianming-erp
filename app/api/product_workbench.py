@@ -15,6 +15,7 @@ from app.models.product import Product
 from app.models.material import Material
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryLot
+from app.models.warehouse_inventory import SemiFinishedLotAllowedProduct
 from app.services.material_candidates import candidate_items
 from app.services.mobile_product_drawings import product_drawing_metadata
 from app.services.product_workbench import (
@@ -78,7 +79,7 @@ def reverse_products(response: Response,
                      material_code: str | None = Query(default=None, max_length=100),
                      flute_type: str | None = Query(default=None, max_length=20),
                      layer_count: int | None = Query(default=None, ge=1, le=7),
-                     processed_state: Literal["raw", "printed", "creased", "die_cut"] = "raw",
+                     processed_state: Literal["raw", "printed", "creased", "die_cut", "output_piece"] = "raw",
                      known_customer_id: int | None = Query(default=None, gt=0),
                      lot_id: int | None = Query(default=None, gt=0),
                      page: int = Query(default=1, ge=1),
@@ -92,7 +93,25 @@ def reverse_products(response: Response,
     if lot_id is not None:
         if not has_permission(user, "warehouse.view"):
             raise HTTPException(403, "当前账号无权查看实际库存批次")
-        lot = _require_lot_customer_access(db, lot_id, user)
+        lot = db.get(InventoryLot, lot_id)
+        if lot is None or lot.inventory_type != "semi_finished":
+            raise HTTPException(404, "片料批次不存在或无权查看")
+        if lot.status != "active" or not (lot.quantity_available or lot.quantity_reserved):
+            raise HTTPException(404, "片料批次不存在或无权查看")
+        owner_id = lot.semi_finished_detail.owner_customer_id if lot.semi_finished_detail else None
+        owner_visible = scope is None or owner_id in scope
+        if owner_visible:
+            lot = _require_lot_customer_access(db, lot_id, user)
+        else:
+            # A confirmed use permits this product reader to inspect physical
+            # dimensions without exposing the original customer's identity.
+            allowed = db.scalar(select(SemiFinishedLotAllowedProduct.product_id).join(
+                Product, Product.id == SemiFinishedLotAllowedProduct.product_id).where(
+                SemiFinishedLotAllowedProduct.inventory_lot_id == lot_id,
+                Product.deleted_at.is_(None), Product.is_active.is_(True),
+                Product.customer_id.in_(scope or set())).limit(1))
+            if allowed is None:
+                raise HTTPException(404, "片料批次不存在或无权查看")
         detail = lot.semi_finished_detail
         if detail is None or lot.inventory_type != "semi_finished":
             raise HTTPException(422, "请选择实际片料批次")
@@ -106,7 +125,7 @@ def reverse_products(response: Response,
             raise HTTPException(422, "层数与所选批次登记事实不一致")
         from app.services.warehouse_goods import goods_profile
         profile = goods_profile(db, lot)
-        actual_state = (profile or {}).get("processing") or {
+        actual_state = "output_piece" if (profile or {}).get("output_piece") is True else (profile or {}).get("processing") or {
             "raw_board": "raw", "creased_sheet": "creased"}.get(detail.sheet_type)
         if actual_state == "cut":
             actual_state = "raw"  # An intact rectangular pre-cut sheet remains unprinted raw stock.
@@ -139,7 +158,7 @@ def reverse_products(response: Response,
             items.append(item)
         return {"items": items, "total": total, "page": page, "page_size": page_size,
                 "has_more": page * page_size < total, "source": "actual_lot",
-                "registered_owner_customer_id": detail.owner_customer_id}
+                "registered_owner_customer_id": detail.owner_customer_id if owner_visible else None}
     # A free measurement has no real material, processing, identity, or quantity
     # evidence. Use dimensions for discovery only; never claim a cut plan.
     from sqlalchemy import func, or_, case

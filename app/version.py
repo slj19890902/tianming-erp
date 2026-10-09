@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.594"
-APP_VERSION_NAME = "首页客户预警与提醒安排、跨月待结款"
-APP_BUILD_DATE = "2026-10-09"
+APP_VERSION = "v0.22.595"
+APP_VERSION_NAME = "手机产品图纸预览与收料可靠性"
+APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -5680,3 +5680,16 @@ APP_VERIFICATION_STEPS = [
     "核对待结款金额和财务明细；补库分析依据为历史规则参考，资料不足不自动改预警。",
 ]
 APP_CHANGELOG = [*(f"v0.22.594：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "手机查询及仓库产品支持展开工程图纸缩略图和PDF首页，保留原件查看及生产任务冻结图纸。",
+    "图纸按当前权限和客户范围读取；缺档、损坏、超时可清楚提示并重试，小屏长编码及横屏按钮保持可见。",
+    "修复同一采购通过旧订单编号和供应商编号重复收料的问题，重复行完整回滚，库存、成本与产出只记一次。",
+    "减少批量收料中多余的历史成品查询，保留分批备库收料的正确货位；无迁移，不调整正式业务数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机刷新后搜索有工程图片的产品，展开图纸并查看原图；再核对一个PDF产品的首页与完整文件。",
+    "切换搜索产品，确认不会显示上一产品的图纸；在横屏及字大模式下核对编码、库存位置和原图按钮。",
+    "正常分批收料后核对成功条数、成品位置与库存；无需为验收重复收料或改动真实附件。",
+]
+APP_CHANGELOG = [*(f"v0.22.595：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

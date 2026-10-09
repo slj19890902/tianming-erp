@@ -11,6 +11,28 @@ from app.services.stock_preparation_groups import encode
 from app.core.time_contract import utc_naive_to_api, utc_now_naive, utc_naive_to_beijing_date, BEIJING_UTC_OFFSET
 from app.services.audit_log import append_audit_event
 from app.models.user import User
+from app.models.customer import Customer
+
+
+def _source_restore_block(db, source):
+    """The original material may only return to its still-valid placement."""
+    pallet = source.pallet_item.pallet if source.pallet_item else None
+    if pallet and (not pallet.is_current or pallet.status != 'active'
+                   or pallet.location_id != source.warehouse_location_id):
+        return '原材料栈板已清空或变更，请先核对实际存放位置'
+    from app.services.warehouse_inventory import _location
+    try:
+        # Receipts can legitimately originate in the published raw staging
+        # area. Keep its existing source-backed exception, never grant it to
+        # an arbitrary lot or write a new location during reversal.
+        _location(db, source.warehouse_location_id, source.inventory_type,
+                  allow_raw_material_staging=True,
+                  raw_material_staging_source_type=source.source_type,
+                  raw_material_staging_source_ref_type=source.source_ref_type,
+                  raw_material_staging_source_ref_id=source.source_ref_id)
+    except prep.WarehouseInventoryError as error:
+        return f'原材料位置不可恢复：{error}'
+    return None
 
 
 def completed_groups(db, scope=None):
@@ -38,6 +60,9 @@ def reverse_block(db, jobs):
                 or not reservation.consumed_at or reservation.consumed_stock_quantity != job.input_quantity or source.quantity_consumed < job.input_quantity
                 or source.inventory_type != 'semi_finished'):
             return '原生产消耗记录已变化'
+        source_block = _source_restore_block(db, source)
+        if source_block:
+            return source_block
         if (not output or output.source_ref_type != 'stock_preparation' or output.source_ref_id != job.id
                 or output.status != 'active' or output.inventory_type not in {'finished','semi_finished'}
                 or output.quantity_available != job.actual_output
@@ -120,9 +145,15 @@ def rows(db, scope=None, **filters):
         if filters.get('order_keyword'):continue
         if any(str(filters.get(k) or '').strip().casefold() not in recipe[field].casefold() for k,field in [('product_code','code'),('product_name','name')]):continue
         block=unassemble_block(db,a)
+        # Independent/frozen BOM recipes historically stored customer_id but
+        # no display name. Resolve that label by the actual customer ID while
+        # preserving any frozen name and the append-only assembly command.
+        customer = db.get(Customer, recipe['customer_id'])
+        customer_name = recipe.get('customer_name') or (
+            customer.chinese_short_name or customer.name if customer else '客户资料未找到')
         result.append(dict(id='assembly:'+a['key'],origin='stock_assembly',assembly=a,preparation_key=a['group_key'],status=state,
             completed_by_name=users.get(db.get(Command, a['key']).actor_id),
-            customer_name=recipe['customer_name'],customer_short_name=recipe['customer_name'],customer_order_number='成套入库',
+            customer_id=recipe['customer_id'],customer_name=customer_name,customer_short_name=customer_name,customer_order_number='成套入库',
             product_code=recipe['code'],product_name=recipe['name'],completed_at=a['completed_at'],actual_output_quantity=a['sets'],planned_output_quantity=a['sets'],
             output_unit='套',current_warehouse_location_name=a['location'],current_inventory_status='located',can_revert=not block,reversal_block=block,
             can_adjust_actual_quantity=False,is_fully_delivered=False,can_transfer_to_stock=False))
@@ -184,6 +215,13 @@ def reverse(db, *, key, payload, actor):
     versions = {v['job_id']:v for v in payload['jobs']}
     if len(versions) != len(payload['jobs']) or set(versions) != {j.id for j in jobs}:
         prep.fail('必须整组撤销全部子件')
+    # Serialize with map/pallet changes before checking the original physical
+    # placement. A failed claim must roll back the complete reversal.
+    from app.services.warehouse_inventory import _claim_inventory_restore_destination
+    locations = {prep.source(db, job.receipt_item_id)[2].warehouse_location_id
+                 for job in jobs if prep.source(db, job.receipt_item_id)[2] is not None}
+    for location_id in sorted(locations):
+        _claim_inventory_restore_destination(db, location_id)
     block = reverse_block(db, jobs)
     if block:
         prep.fail(block)

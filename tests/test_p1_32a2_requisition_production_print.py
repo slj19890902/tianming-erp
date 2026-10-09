@@ -721,7 +721,7 @@ def test_legacy_missing_process_snapshot_uses_current_common_box_joining_method(
         assert frozen_card["joining_method_source"] == "frozen_snapshot"
 
 
-def test_task_version_change_marks_preprint_for_review(production_print_app):
+def test_task_state_update_does_not_create_permanent_preprint_warning(production_print_app):
     from app.models.production import ProductionTask
     from app.models.supplier_requisition_order import SupplierRequisitionOrder
     from app.services.requisition_production_print import (
@@ -743,8 +743,8 @@ def test_task_version_change_marks_preprint_for_review(production_print_app):
         db.commit()
         package = build_supplier_requisition_production_package(db, order)
 
-    assert package["review_required"] is True
-    assert any("生产任务版本已变化" in text for text in package["review_messages"])
+    assert not any("生产任务版本已变化" in text for text in package["review_messages"])
+    assert package['cards'][0]['production_task_versions'][0]['version'] == task.version
 
 
 def test_posted_receipt_marks_preprint_for_review(production_print_app):
@@ -941,54 +941,15 @@ def test_print_page_and_erp_entry_use_one_layout_for_plan_and_receipt_phases():
     assert "receiptMode" in print_html
     assert "/api/incoming/receipt-items/${encodeURIComponent(receiptItemId)}/production-card" in print_html
     assert "待来料计划版" in print_html
-    assert "每个生产任务固定半张 A4" in print_html
-    assert "@page { size:A4 portrait;" in print_html
-    assert "grid-template-rows:140.5mm 140.5mm" in print_html
-    assert 'class="task-card half-card blank"' in print_html
-    assert 'class="page batch-page"' in print_html
-    assert "single-page" not in print_html
-    assert "cardNeedsFullPage" not in print_html
-    assert "每页上下两款" in print_html
-    assert "A1 型纸箱生产任务单" in print_html
-    assert "模切内盒生产任务单" in print_html
-    assert "衬板生产任务单" in print_html
-    assert (
-        ".production-key-value,.detail-row.production-key-fact .value { font-size:12pt;"
-        in print_html
-    )
-    assert (
-        ".task-card.printing-heavy .production-key-value,\n    .task-card.printing-heavy .detail-row.production-key-fact .value { font-size:9.5pt;"
-        in print_html
-    )
-    assert 'detailRow("压线尺寸", fit(crease), "production-key-fact")' in print_html
-    assert (
-        'detailRow("结合方式", fit(card.joining_method || "无需结合"), "production-key-fact")'
-        in print_html
-    )
-    assert 'detailRow("是否粘贴", "不需要 / 待确认")' not in print_html
-    assert '["工艺待确认"]' not in print_html
-    liner_layout = print_html.split('if (card.layout_kind === "liner") {', 1)[1].split(
-        'if (card.layout_kind === "die_cut") {', 1
-    )[0]
-    assert 'detailRow("开料方式", fit(cutting))' in liner_layout
-    assert "drawingReferenceText(card)" in print_html
-    assert "有图纸，扫码查看" in print_html
-    assert 'class="structure-body"' not in print_html
-    assert '<object data="${escapeHtml(drawing.url)}"' not in print_html
-    assert "请核对后再打印" in print_html
-    assert "card.scrollHeight > card.clientHeight + 1" in print_html
-    assert "任务内容超过页面容量，已停止打印" not in print_html
-    assert "function renderPages(packageData, ultraKeys = new Set())" in print_html
-    assert 'credentials:"include"' in print_html
-    assert 'cache:"no-store"' in print_html
-    assert "customer-safe" in print_html
-    assert "internal-only" in print_html
-    assert "window.opener" not in print_html
-    assert "method: \"POST\"" not in print_html
-    assert "method: \"PUT\"" not in print_html
-    assert "method: \"DELETE\"" not in print_html
-    for forbidden in ("单价", "成本", "库存批次", "可用库存"):
-        assert forbidden not in print_html
+    layout = Path('static/ui/production-task-paper.js').read_text(encoding='utf-8')
+    css = Path('static/ui/production-task-paper.css').read_text(encoding='utf-8')
+    assert 'ProductionTaskPaper.render(pagesHost' in print_html
+    assert 'grid-template-rows:140.5mm 140.5mm' in css
+    assert 'font-size:13pt' in css
+    assert 'customer-safe' in print_html and 'internal-only' in layout
+    assert 'verifyAndPrint' in print_html and 'fetchCurrentPackage' in print_html
+    assert 'window.opener' not in print_html
+    assert '单价' not in layout and '成本' not in layout
 
 
 def test_package_projects_explicit_box_layout_current_mold_and_secure_drawing(
@@ -1070,32 +1031,13 @@ def test_package_projects_explicit_box_layout_current_mold_and_secure_drawing(
         assert liner_card["estimated_bundle_count"] == 4
 
 
-def test_p1_67_task_sheet_prioritizes_identity_fields_and_process_order() -> None:
-    source = Path("static/requisition-production-print.html").read_text(
-        encoding="utf-8"
-    )
-    card = source[source.index("function cardHtml"):source.index("function applyMode")]
-    assert card.index("<span>存货编码</span>") < card.index("<span>产品名称</span>")
-    strip = card[card.index('<div class="product-strip">'):]
-    assert strip.index("成品内尺寸") < strip.index("<span class=\"field-label\">图纸")
-    assert strip.index("<span class=\"field-label\">图纸") < strip.index("<span class=\"field-label\">交期")
-    facts = source[source.index("function orderFactsHtml"):source.index("function productionNotesHtml")]
-    assert facts.index("客户订单号") < facts.index("订单数量")
-    assert facts.index("订单数量") < facts.index("库存抵扣")
-    assert facts.index("库存抵扣") < facts.index("计划生产")
-    assert facts.index("计划生产") < facts.index("采购张数")
-    assert "生产数量" not in card
-    assert "产品 / 存货编码" not in card
-
-    process_steps = source[source.index("function processSteps"):source.index("function processHtml")]
-    assert process_steps.index('add("模具")') < process_steps.index('add("印刷")')
-    assert process_steps.index('add("印刷")') < process_steps.index('add("粘贴")')
-    process_details = source[source.index("function processDetailsHtml"):source.index("function cardHtml")]
-    assert process_details.index("moldHtml(card, fitLevel)") < process_details.index("printingHtml(card, fitLevel)")
-    assert process_details.index("printingHtml(card, fitLevel)") < process_details.index("joiningHtml(card, fitLevel)")
-    assert "模具名称与现场位置" in source
-    assert "扫描模具上的固定二维码" in source
-    assert "扫码不会自动开工" in source
+def test_task_sheet_prioritizes_five_columns_and_separate_operations():
+    source = Path('static/ui/production-task-paper.js').read_text(encoding='utf-8')
+    assert '<th>存货编码</th><th>产品名称</th><th>订单数</th><th>成品抵扣</th><th>需生产数</th>' in source
+    assert source.index("add('分切'") < source.index("add('模切'")
+    assert "add('结合', ['打钉'])" in source
+    assert "add('结合', ['粘贴'])" in source
+    assert "add('结合', ['无需结合'])" not in source
 
 
 def test_production_packaging_labels_deduplicate_split_rows_and_keep_remainder(

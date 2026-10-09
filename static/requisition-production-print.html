@@ -213,7 +213,7 @@
       body.print-blocked .message { display:block !important; }
     }
   </style>
-<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script><link rel="stylesheet" href="/static/ui/production-task-paper.css?v=580"><script src="/static/ui/production-task-paper.js?v=580"></script></head>
 <body>
   <div class="toolbar">
     <button id="retryButton" type="button">重新加载</button>
@@ -796,14 +796,10 @@
         return String(card.paper_version_key || card.paper_fingerprint || card.source_identity || card.supplier_order_item_id || `card:${index}`);
       }
 
-      function renderPages(packageData, ultraKeys = new Set()) {
-        const layouts = printPageLayouts(packageData.cards || []);
-        let cardIndex = 0;
-        pagesHost.innerHTML = layouts.map((layout, index) => {
-          const topKey = cardKey(layout.top, cardIndex++);
-          const bottomKey = layout.bottom ? cardKey(layout.bottom, cardIndex++) : "";
-          return `<article class="page batch-page" data-page="${index + 1}">${cardHtml(layout.top, packageData, ultraKeys.has(topKey) ? "ultra" : "normal", topKey)}${cardHtml(layout.bottom, packageData, ultraKeys.has(bottomKey) ? "ultra" : "normal", bottomKey)}</article>`;
-        }).join("") + (packageData.cards || []).flatMap(card => (card.managed_drawings || []).map(drawing => drawingAppendixHtml(card, drawing))).join("");
+      function renderPages(packageData) {
+        const layouts = ProductionTaskPaper.render(pagesHost, packageData.cards || []);
+        pagesHost.insertAdjacentHTML('beforeend', (packageData.cards || []).flatMap(card =>
+          (card.managed_drawings || []).map(drawing => drawingAppendixHtml(card, drawing))).join(''));
         return layouts;
       }
 
@@ -817,38 +813,62 @@
 
       async function render(packageData) {
         printButton.disabled = true;
-        let layouts = renderPages(packageData);
+        applyMode();
+        if (document.fonts?.ready) await document.fonts.ready;
+        const layouts = renderPages(packageData);
         applyProductionLabelActions(packageData);
         await waitForProductQrImages();
-        toolbarNote.textContent = receiptBatchMode
-          ? `已核验 ${packageData.card_count || 0} 项实收生产卡 · 每款固定半张 A4 · 共 ${layouts.length} 页`
-          : batchMode
-          ? `已冻结 ${packageData.card_count || 0} 项人工选择 · 每个生产任务固定半张 A4 · 共 ${layouts.length} 页`
-          : receiptMode
-          ? (packageData.reuses_planned_card
-            ? "实收与计划完全一致 · 沿用原计划卡即可，不强制重复打印"
-            : `${packageData.paper_phase_label || "实收版"} · 每个生产任务固定半张 A4`)
-          : "黑白打印 · 每个生产任务固定半张 A4 · 每页上下两款";
-        applyMode();
-        const initialOverflow = overflowingCards();
-        if (initialOverflow.length) {
-          const ultraKeys = new Set(initialOverflow.map((card) => card.dataset.cardKey).filter(Boolean));
-          layouts = renderPages(packageData, ultraKeys);
-          applyMode();
-          await waitForProductQrImages();
-          const remainingOverflow = overflowingCards();
-          if (remainingOverflow.length) {
-            // This is deliberately non-blocking: every dynamic value is already
-            // capped in the ultra layout, so the print action remains available.
-            remainingOverflow.forEach((card) => card.classList.add("ultra-compact"));
-          }
-          toolbarNote.textContent += ` · 已自动紧凑 ${ultraKeys.size} 项`;
-        }
         await waitForDrawingImages();
         assertDrawingAppendicesFit();
-        if ((packageData.cards || []).some(card => (card.managed_drawings || []).length)) toolbarNote.textContent += ' · 另有同版附页，按内容续页';
+        if (overflowingCards().length) throw new Error('任务单排版超出纸面，请刷新后重试');
+        toolbarNote.textContent = `A4 · 大字双联 · 共 ${layouts.length} 页`;
         message.hidden = true;
         printButton.disabled = !layouts.length || packageData.printable === false;
+      }
+
+      function packageEndpoint() {
+        return receiptBatchMode
+          ? `/api/incoming/production-card-batch?${receiptItemIds.map(value => `receipt_item_id=${encodeURIComponent(value)}`).join('&')}`
+          : batchMode ? `/api/requisition/production-print-batches/${encodeURIComponent(batchId)}`
+          : receiptMode ? `/api/incoming/receipt-items/${encodeURIComponent(receiptItemId)}/production-card`
+          : `/api/requisition/supplier-orders/${encodeURIComponent(orderId)}/production-print-package`;
+      }
+      async function fetchCurrentPackage(signal) {
+        const response = await fetch(packageEndpoint(), {method:'GET', credentials:'include', cache:'no-store', headers:{Accept:'application/json'}, signal});
+        let payload = null;
+        try { payload = await response.json(); } catch (_) {}
+        if (!response.ok) throw new Error(errorMessage(response.status, payload));
+        if (!payload || !Array.isArray(payload.cards) || !Array.isArray(payload.pages)) throw new Error('任务单数据不完整，请重试');
+        return payload;
+      }
+      let printVerified = false;
+      let printChecking = false;
+      async function verifyAndPrint() {
+        if (!loadedPackage || printButton.disabled || printChecking) return;
+        printChecking = true;
+        printVerified = false;
+        const generation = loadGeneration;
+        const previous = loadedPackage;
+        try {
+          const fresh = await fetchCurrentPackage(activeController?.signal);
+          if (generation !== loadGeneration) return;
+          const changed = JSON.stringify(fresh.cards) !== JSON.stringify(previous.cards);
+          loadedPackage = fresh;
+          await render(fresh);
+          if (changed) {
+            message.hidden = false;
+            message.className = 'message';
+            message.textContent = '任务内容已更新，请核对当前预览后再次点击打印';
+            return;
+          }
+          if (!printButton.disabled && checkDrawingPrintReadiness()) { printVerified = true; window.print(); }
+        } catch (error) {
+          if (generation !== loadGeneration || error.name === 'AbortError') return;
+          printButton.disabled = true;
+          message.hidden = false;
+          message.className = 'message error';
+          message.textContent = error.message || '打印前核对失败，请刷新后重试';
+        } finally { printChecking = false; }
       }
 
       async function loadPackage() {
@@ -856,6 +876,7 @@
         if (activeController) activeController.abort();
         activeController = new AbortController();
         loadedPackage = null;
+        printVerified = false;
         printButton.disabled = true;
         labelButton.disabled = true;
         labelRefreshButton.disabled = true;
@@ -869,21 +890,8 @@
           return;
         }
         try {
-          const endpoint = receiptBatchMode
-            ? `/api/incoming/production-card-batch?${receiptItemIds.map((value) => `receipt_item_id=${encodeURIComponent(value)}`).join("&")}`
-            : batchMode
-            ? `/api/requisition/production-print-batches/${encodeURIComponent(batchId)}`
-            : receiptMode
-            ? `/api/incoming/receipt-items/${encodeURIComponent(receiptItemId)}/production-card`
-            : `/api/requisition/supplier-orders/${encodeURIComponent(orderId)}/production-print-package`;
-          const response = await fetch(endpoint, {
-            method:"GET", credentials:"include", cache:"no-store", headers:{"Accept":"application/json"}, signal:activeController.signal,
-          });
-          let payload = null;
-          try { payload = await response.json(); } catch (_error) { payload = null; }
-          if (!response.ok) throw Object.assign(new Error(errorMessage(response.status, payload)), {status:response.status});
+          const payload = await fetchCurrentPackage(activeController.signal);
           if (generation !== loadGeneration) return;
-          if (!payload || typeof payload !== "object" || !Array.isArray(payload.pages) || !Array.isArray(payload.cards)) throw new Error("服务器返回的统一任务单数据不完整，请重试");
           loadedPackage = payload;
           await render(payload);
         } catch (error) {
@@ -897,17 +905,17 @@
       }
 
       retryButton.addEventListener("click", loadPackage);
-      printButton.addEventListener("click", () => { if (loadedPackage && !printButton.disabled && checkDrawingPrintReadiness()) window.print(); });
+      printButton.addEventListener("click", verifyAndPrint);
       window.addEventListener('beforeprint', () => {
-        const ready = loadedPackage && !printButton.disabled && checkDrawingPrintReadiness();
+        const ready = printVerified && loadedPackage && !printButton.disabled && checkDrawingPrintReadiness();
         document.body.classList.toggle('print-blocked', !ready);
         if (!ready) {
           message.hidden = false;
           if (!message.textContent || message.className !== 'message error') message.textContent = '任务单尚未完成加载或排版核验，已停止打印，请返回页面重试';
         }
       });
-      window.addEventListener('afterprint', () => document.body.classList.remove('print-blocked'));
-      modeButton.addEventListener("click", () => { customerSafe = !customerSafe; applyMode(); checkDrawingPrintReadiness(); });
+      window.addEventListener('afterprint', () => { printVerified = false; document.body.classList.remove('print-blocked'); });
+      modeButton.addEventListener("click", async () => { customerSafe = !customerSafe; printVerified = false; try { if (loadedPackage) await render(loadedPackage); } catch (error) { printButton.disabled = true; message.hidden = false; message.textContent = error.message; } });
       labelButton.addEventListener("click", () => {
         const supplierOrderId = Number(loadedPackage && loadedPackage.supplier_order_id);
         if (loadedPackage && !batchMode && !receiptBatchMode && Number.isInteger(supplierOrderId) && supplierOrderId > 0) {

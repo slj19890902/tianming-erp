@@ -23,7 +23,7 @@ def test_plan_and_receipt_urls_share_one_physical_print_template() -> None:
     assert "待来料计划版" in PRINT_PAGE
     assert "本次实收" in PRINT_PAGE
     assert "本批最多生产" in PRINT_PAGE
-    assert "实收与计划完全一致" in PRINT_PAGE
+    assert "ProductionTaskPaper.render" in PRINT_PAGE
 
 
 def test_unified_paper_contract_keeps_plan_and_actual_quantities_separate() -> None:
@@ -56,7 +56,7 @@ def test_receipt_projection_is_read_only_and_legacy_facts_fail_closed() -> None:
 
 
 def test_unified_page_only_allows_explicit_audited_label_plan_refresh() -> None:
-    assert 'method:"GET"' in PRINT_PAGE
+    assert "method:'GET'" in PRINT_PAGE
     assert "window.print()" in PRINT_PAGE
     assert PRINT_PAGE.count('method:"POST"') == 1
     assert "/api/production/tasks/${encodeURIComponent(row.task_id)}/label-plan-refresh" in PRINT_PAGE

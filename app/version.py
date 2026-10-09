@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.598"
-APP_VERSION_NAME = "整板移位库存并发保护"
+APP_VERSION = "v0.22.599"
+APP_VERSION_NAME = "手机盘点保存结果核对"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5731,3 +5731,17 @@ APP_VERIFICATION_STEPS = [
     "如提示库存已变化，刷新后重新核对；无需为验收额外移动或重复提交真实库存。",
 ]
 APP_CHANGELOG = [*(f"v0.22.598：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "手机盘点收到完整单号、原数量和审核结果后才提示成功，避免空回执或响应读取失败误报保存结果。",
+    "提交前保留原账号、货位和实盘数量；网络异常后可核对原盘点，明确重试时沿用同一请求，防止重复建单。",
+    "待核对记录只限制原货位，其他货位仍可正常盘点；成功后的库存刷新失败只重新读取库存。",
+    "员工上报、审核通过及退回显示真实状态；换账号和过期响应受保护，盘亏预占释放及原权限规则保持。",
+    "本版无数据库迁移，不修改正式历史库存；未查到原结果仍需继续核对，不能据此删除原请求。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机正常盘点后核对单号和状态；管理员确认更新库存，普通员工上报等待审核。",
+    "如出现待核对盘点，点击“核对这笔盘点”；可换库位继续工作，原数量保留，不另建重复请求。",
+    "盘点成功但列表未刷新时点击“重新读取库存”；无需为验收额外调整真实库存。",
+]
+APP_CHANGELOG = [*(f"v0.22.599：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

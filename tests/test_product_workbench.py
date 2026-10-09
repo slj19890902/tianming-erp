@@ -12,6 +12,7 @@ from app.models.access_control import UserPermissionOverride, UserCustomerScope
 from app.models.product import Product
 from app.models.mold_tool import MoldTool
 from app.models.material import Material
+from app.models.warehouse_goods import WarehouseGoodsProfile
 from app.models.order import Order, OrderItem
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryLot, SemiFinishedLotAllowedProduct
@@ -83,7 +84,7 @@ def test_free_reverse_is_review_only_and_lot_dimensions_must_match(mobile_erp_ap
         assert match["match_class"] == "review" and match["deductible"] is False
         actual = client.get("/api/product-workbench/reverse", params={
             "length": 420, "width": 310, "lot_id": ids["finished_lot"]})
-        assert actual.status_code == 422
+        assert actual.status_code == 404
     with factory() as db:
         lot = db.get(InventoryLot, ids["finished_lot"])
         assert before == (lot.quantity_available, lot.quantity_reserved)
@@ -239,6 +240,10 @@ def test_explicit_cross_customer_semi_binding_is_visible_once_without_owner_code
     app, ids, factory = _app(mobile_erp_app)
     with factory() as db:
         lot = db.scalar(select(InventoryLot).where(InventoryLot.lot_number == "SF-MOBILE-001"))
+        product = db.get(Product, ids["other_product"])
+        product.report_length_mm, product.report_width_mm = 800, 600
+        product.flute_type, product.layer_count = "B", 3
+        product.default_material_code = "K=A"
         scoped = db.scalar(select(User).where(User.username == "mobile-scoped"))
         scope_row = db.scalar(select(UserCustomerScope).where(UserCustomerScope.user_id == scoped.id))
         scope_row.customer_id = db.get(Product, ids["other_product"]).customer_id
@@ -258,4 +263,46 @@ def test_explicit_cross_customer_semi_binding_is_visible_once_without_owner_code
         assert len(rows) == 1 and rows[0]["shared_confirmed"] is True
         assert "lot_number" not in rows[0]
         assert body["inventory"]["items"][0]["location_id"] is not None
+        reverse = rows[0]["reverse_source"]
+        assert reverse["lot_id"] == lot.id and reverse["processed_state"] == "raw"
+        found = client.get("/api/product-workbench/reverse", params=reverse)
+        assert found.status_code == 200, found.text
+        assert found.json()["registered_owner_customer_id"] is None
+        assert all(item["customer_id"] == product.customer_id for item in found.json()["items"])
         assert client.get(f"/api/product-workbench/products/{ids['product']}").status_code == 404
+
+
+def test_processed_output_is_counted_as_pieces_not_sheets(mobile_erp_app):
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        lot = db.scalar(select(InventoryLot).where(InventoryLot.lot_number == "SF-MOBILE-001"))
+        db.add(WarehouseGoodsProfile(lot_id=lot.id, data_json='{"output_piece":true,"processing":"cut"}'))
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        response = client.get(f"/api/product-workbench/products/{ids['product']}")
+        assert response.status_code == 200, response.text
+        stock = response.json()["inventory"]
+        assert stock["summary"]["processed_component"] == {
+            "actual": 10, "available": 8, "reserved": 2, "unit": "片"}
+        assert stock["summary"]["semi_finished"]["actual"] == 0
+        row = next(x for x in stock["items"] if x["inventory_type"] == "processed_component")
+        assert row["reverse_source"]["processed_state"] == "output_piece"
+
+
+def test_report_placeholder_blocks_draft_without_falsely_claiming_stock_only(mobile_erp_app):
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        product = db.get(Product, ids["product"])
+        product.report_length_mm = product.report_width_mm = 100
+        product.default_material_code = "K=A"
+        product.sale_unit_price = Decimal("1")
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        response = client.get(f"/api/product-workbench/products/{ids['product']}")
+        assert response.status_code == 200, response.text
+        actions = response.json()["actions"]
+        assert actions["can_requisition"] is False
+        assert actions["stock_only"] is False
+        assert "占位" in actions["action_reason"]

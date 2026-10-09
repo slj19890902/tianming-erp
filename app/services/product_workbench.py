@@ -112,6 +112,8 @@ def inventory_summary(db: Session, products: list[Product]):
         "unit": row[kind]["unit"],
     } for kind in ("finished", "semi_finished")} for pid, row in originals.items()}
     for product in products:
+        result[product.id]["processed_component"] = {"actual": 0, "available": 0,
+                                                      "reserved": 0, "unit": "片"}
         for lot in _shared_finished_lots(db, product):
             detail = lot.finished_detail
             if (detail and detail.product_id == product.id and
@@ -122,11 +124,25 @@ def inventory_summary(db: Session, products: list[Product]):
             group["actual"] += int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)
             group["available"] += int(lot.quantity_available or 0)
             group["reserved"] += int(lot.quantity_reserved or 0)
-        for lot in _cross_customer_bound_semi_lots(db, product):
-            group = result[product.id]["semi_finished"]
-            group["actual"] += int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)
-            group["available"] += int(lot.quantity_available or 0)
-            group["reserved"] += int(lot.quantity_reserved or 0)
+        from app.services.warehouse_goods import goods_profile
+        for lot in _bound_semi_lots(db, product):
+            profile = goods_profile(db, lot) or {}
+            output_piece = profile.get("output_piece") is True
+            owner_is_product = lot.semi_finished_detail.owner_customer_id == product.customer_id
+            if owner_is_product and not output_piece:
+                continue  # Already counted in the mobile semi-finished group.
+            group = result[product.id]["processed_component" if output_piece else "semi_finished"]
+            direction = -1 if output_piece and owner_is_product else 1
+            # A confirmed processed piece was counted as a sheet by the old
+            # mobile summary; move it to the physical-piece group.
+            if output_piece and owner_is_product:
+                group = result[product.id]["semi_finished"]
+            for field, quantity in (("actual", int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)),
+                                    ("available", int(lot.quantity_available or 0)),
+                                    ("reserved", int(lot.quantity_reserved or 0))):
+                group[field] += direction * quantity
+                if output_piece and owner_is_product:
+                    result[product.id]["processed_component"][field] += quantity
     return result
 
 
@@ -143,7 +159,7 @@ def _shared_finished_lots(db: Session, product: Product) -> list[InventoryLot]:
     return [lot for lot in lots if lot.id in ids]
 
 
-def _cross_customer_bound_semi_lots(db: Session, product: Product) -> list[InventoryLot]:
+def _bound_semi_lots(db: Session, product: Product) -> list[InventoryLot]:
     """Only explicit lot/product facts, never a code or dimension guess."""
     from app.api.mobile_erp import _lot_load_options
     return list(db.scalars(select(InventoryLot).join(
@@ -153,8 +169,6 @@ def _cross_customer_bound_semi_lots(db: Session, product: Product) -> list[Inven
            SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
     ).options(*_lot_load_options()).where(
         SemiFinishedLotAllowedProduct.product_id == product.id,
-        or_(SemiFinishedInventoryDetail.owner_customer_id != product.customer_id,
-            SemiFinishedInventoryDetail.owner_customer_id.is_(None)),
         InventoryLot.inventory_type == "semi_finished", InventoryLot.status == "active",
         or_(InventoryLot.quantity_available > 0, InventoryLot.quantity_reserved > 0))))
 
@@ -260,6 +274,12 @@ def production_card(db: Session, product: Product, scope: set[int] | None,
                       "location_label": location.get("prompt"),
                       "map_url": f"/mobile/mold-lookup?mold_id={mold.id}&readonly=1" if can_see_mold_location else None})
     return {
+        "box_style": product.box_style,
+        "net_specification": (f"{product.length_mm}×{product.width_mm}mm"
+                              if rule and rule.code in {"liner", "divider", "die_cut_partition"}
+                              and product.length_mm and product.width_mm else None),
+        "joining_method": joining,
+        "cutting_summary": route.get("cutting_instruction") if snapshot and snapshot["cutting_factor"] > 1 else None,
         "report_length_mm": product.report_length_mm,
         "report_width_mm": product.report_width_mm,
         "base_report_length_mm": product.base_report_length_mm,
@@ -300,21 +320,27 @@ def inventory_details(db: Session, product: Product):
         SemiFinishedLotAllowedProduct.product_id == product.id,
         SemiFinishedInventoryDetail.owner_customer_id == product.customer_id)))
     own_semi_ids = {lot.id for lot in semi}
-    cross_semi = [lot for lot in _cross_customer_bound_semi_lots(db, product) if lot.id not in own_semi_ids]
+    cross_semi = [lot for lot in _bound_semi_lots(db, product) if lot.id not in own_semi_ids]
     semi.extend(cross_semi)
+    from app.services.warehouse_goods import goods_profile
+    profiles = {lot.id: goods_profile(db, lot) or {} for lot in semi}
+    processed = [lot for lot in semi if profiles[lot.id].get("output_piece") is True]
+    semi = [lot for lot in semi if lot.id not in {row.id for row in processed}]
     own_finished_ids = {lot.id for lot in finished}
     shared = [lot for lot in _shared_finished_lots(db, product) if lot.id not in own_finished_ids]
     finished.extend(shared)
-    context = load_warehouse_location_projection_contexts(db, [x.location for x in [*finished, *semi] if x.location])
+    context = load_warehouse_location_projection_contexts(db, [x.location for x in [*finished, *semi, *processed] if x.location])
     groups = {
         "finished": _inventory_group(finished, unit=product_unit_label(product) or product.unit,
                                      pending_pick_by_lot=_pending_pick_by_lot(db, [x.id for x in finished]),
                                      projection_contexts=context),
         "semi_finished": _inventory_group(semi, unit="张", projection_contexts=context),
+        "processed_component": _inventory_group(processed, unit="片", projection_contexts=context),
     }
     items = []
     shared_ids = {lot.id for lot in shared}
     cross_semi_ids = {lot.id for lot in cross_semi}
+    semi_lots = {lot.id: lot for lot in [*semi, *processed]}
     for kind, group in groups.items():
         for row in group["positions"]:
             if row["lot_id"] in (shared_ids if kind == "finished" else cross_semi_ids):
@@ -324,12 +350,26 @@ def inventory_details(db: Session, product: Product):
                 row["shared_confirmed"] = True
                 row["map_url"] = None
                 row["map_issue"] = "共用批次按显示库位核对；原批次地图入口受归属权限限制"
+            if kind in {"semi_finished", "processed_component"}:
+                lot = semi_lots[row["lot_id"]]
+                detail = lot.semi_finished_detail
+                profile = profiles[lot.id]
+                state = "output_piece" if profile.get("output_piece") is True else (
+                    "raw" if profile.get("processing") == "cut" else profile.get("processing") or
+                    {"raw_board": "raw", "creased_sheet": "creased"}.get(detail.sheet_type, "raw"))
+                row["reverse_source"] = {
+                    "length": detail.board_length_mm, "width": detail.board_width_mm,
+                    "material_code": detail.material_code_snapshot,
+                    "flute_type": detail.flute_type, "layer_count": detail.layer_count,
+                    "processed_state": state, "lot_id": lot.id,
+                }
             items.append({"inventory_type": kind, "actual": row["quantity_total"],
                           "available": row["quantity_available"], "reserved": row["quantity_reserved"],
                           "unit": row["unit"], "location_id": row["location_id"],
                           "location_label": row.get("employee_location_name"),
                           "lot_id": row["lot_id"], "floor": row.get("floor"),
-                          "mapped": row.get("map_status") == "mapped", "url": row.get("map_url")})
+                          "mapped": row.get("map_status") == "mapped", "url": row.get("map_url"),
+                          "reverse_source": row.get("reverse_source")})
     return {"summary": {k: {"actual": v["quantity_total"], "available": v["quantity_available"],
                               "reserved": v["quantity_reserved"], "unit": v["unit"]} for k, v in groups.items()},
             "groups": groups, "items": items}
@@ -365,8 +405,12 @@ def order_card(db: Session, product: Product, *, include_history: bool = False):
 def action_card(db: Session, product: Product, *, can_edit_requisition: bool, can_request: bool):
     # No durable "inventory only" marker exists on Product. Dimensions and
     # price are only a warning signature; they cannot establish that status.
-    suspected_placeholder = (product.length_mm == 100 and product.width_mm == 100 and
-                             product.sale_unit_price == 1 and not product.production_process)
+    note = f"{product.production_notes or ''} {product.remark or ''}"
+    suspected_placeholder = bool(
+        (product.report_length_mm == 100 and product.report_width_mm == 100 and
+         product.sale_unit_price == 1)
+        or (re.search(r"临时.*(?:现货|档案|占位)|仅现货|只交付现货", note) is not None)
+    )
     stock_only = not product.is_active or product.deleted_at is not None
     missing_material = not (product.default_material_code or product.material_id)
     missing_report = not product.report_length_mm or not product.report_width_mm

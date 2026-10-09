@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>天明 ERP 手机版</title>
   <link rel="stylesheet" href="/static/ui/mobile-delivery-margin.css?v=20260913-mobilemargin001">
+  <link rel="stylesheet" href="/static/ui/mobile-product-drawings.css?v=20261009-1">
   <script defer src="/factory-twin-assets/warehouse-costs.js?v=20261006-cost-read"></script>
   <style>
     :root {
@@ -506,7 +507,8 @@
     </div>
   </section>
 
-  <script src="/static/ui/mobile-dimension-stock.js?v=20260916-1"></script>
+  <script src="/static/ui/mobile-product-drawings.js?v=20261009-1"></script>
+  <script src="/static/ui/mobile-dimension-stock.js?v=20261009-drawings1"></script>
   <script src="/static/ui/mobile-delivery-margin.js?v=20260915-costcontract428"></script>
   <script>
     (() => {
@@ -651,6 +653,7 @@
       }
 
       function clearMobilePortalState() {
+        window.TmProductDrawings?.disposeWithin(document.body);
         state.lookupController?.abort();
         state.lookupGeneration += 1;
         state.lookupQuery = "";
@@ -832,6 +835,7 @@
       }
 
       function setPage(page, { updateLocation = true, incomingPerformanceStarted = false } = {}) {
+        window.TmProductDrawings?.disposeWithin(document.body);
         if (!state.allowedPages.has(page)) {
           page = document.querySelector(".nav-btn:not([hidden])")?.dataset.page || "";
         }
@@ -1071,6 +1075,10 @@
       }
 
       function appendLookupAction(card, groupId, item) {
+        if (groupId !== "production") {
+          window.TmProductDrawings?.append(card, item);
+          if (groupId === "molds") (item.products || []).forEach(product => window.TmProductDrawings?.append(card, product, {label: `${product.product_code || product.product_name || "关联产品"} · 工程图纸`}));
+        }
         if (groupId === "orders") {
           if (item.dimension_match) {
             const match = item.dimension_match;
@@ -1088,6 +1096,7 @@
           const body = node("div", ""); details.append(body);
           details.addEventListener("toggle", async () => {
             if (details.open) state.expandedOrderItems.add(item.order_item_id); else state.expandedOrderItems.delete(item.order_item_id);
+            if (!details.open) window.TmProductDrawings?.disposeWithin(body);
             persistMobilePortalState();
             if (!details.open || details.dataset.loaded) return;
             details.dataset.loaded = "loading";
@@ -1101,6 +1110,7 @@
                 if (line.order_item_id === item.order_item_id) row.style.borderColor = "#0f766e";
                 lookupItemFacts("orders", line).lines.filter(Boolean).forEach(value => row.append(node("span", "", value)));
                 if (line.progress) { const label = node("strong", "", `● ${line.progress.label}`); label.style.color = line.progress.color; row.append(label); }
+                window.TmProductDrawings?.append(row, line);
                 body.append(row);
               });
               details.dataset.loaded = "yes";
@@ -1151,6 +1161,7 @@
         const groups = Array.isArray(data.groups) ? data.groups : [];
         state.lookupGroups = groups;
         const container = byId("lookupResults");
+        window.TmProductDrawings?.disposeWithin(container);
         container.replaceChildren();
         let visibleItems = 0;
         groups.forEach(group => {
@@ -1189,6 +1200,7 @@
       }
 
       async function runUnifiedSearch(page = 1) {
+        window.TmProductDrawings?.disposeWithin(byId("lookupResults"));
         const query = byId("lookupInput").value.trim();
         const orderSearch = byId("lookupCategory").value === "orders";
         const unfulfilled = orderSearch && Boolean(byId("lookupUnfulfilled")?.checked);
@@ -1237,6 +1249,7 @@
       }
 
       function clearLookup() {
+        window.TmProductDrawings?.disposeWithin(byId("lookupResults"));
         state.lookupController?.abort();
         state.lookupGeneration += 1;
         state.lookupQuery = "";
@@ -1251,6 +1264,12 @@
       }
 
       function queueSearch() {
+        window.TmProductDrawings?.disposeWithin(byId("candidateList"));
+        window.TmProductDrawings?.disposeWithin(byId("productResult"));
+        state.searchController?.abort();
+        state.detailController?.abort();
+        state.searchGeneration += 1;
+        state.detailGeneration += 1;
         window.clearTimeout(state.searchTimer);
         const query = byId("searchInput").value.trim();
         if (!query) {
@@ -1266,6 +1285,10 @@
       }
 
       async function runSearch() {
+        window.TmProductDrawings?.disposeWithin(byId("candidateList"));
+        window.TmProductDrawings?.disposeWithin(byId("productResult"));
+        state.detailController?.abort();
+        state.detailGeneration += 1;
         const query = byId("searchInput").value.trim();
         if (!query) return queueSearch();
         state.searchController?.abort();
@@ -1294,6 +1317,7 @@
 
       function renderCandidates(data) {
         const container = byId("candidateList");
+        window.TmProductDrawings?.disposeWithin(container);
         container.replaceChildren();
         if (!state.candidates.length) {
           container.hidden = true;
@@ -1333,13 +1357,18 @@
           }
           button.append(totals, node("span", "candidate-action", "查看位置"));
           button.addEventListener("click", () => loadInventory(product.id));
-          container.append(button);
+          const group = node("div", `product-candidate${summary.has_stock === false ? " zero-stock" : ""}`);
+          group.append(button);
+          window.TmProductDrawings?.append(group, product);
+          container.append(group);
         });
         byId("searchState").hidden = true;
         container.hidden = false;
       }
 
       async function loadInventory(productId) {
+        window.TmProductDrawings?.disposeWithin(byId("candidateList"));
+        window.TmProductDrawings?.disposeWithin(byId("productResult"));
         state.detailController?.abort();
         state.detailController = new AbortController();
         const generation = ++state.detailGeneration;
@@ -1411,6 +1440,7 @@
         const data = state.selectedInventory;
         const product = data.product;
         const result = byId("productResult");
+        window.TmProductDrawings?.disposeWithin(result);
         result.replaceChildren();
         const header = node("section", "card");
         const headerRow = node("div", "result-head");
@@ -1432,6 +1462,7 @@
         actions.append(refresh);
         headerRow.append(title, actions);
         header.append(headerRow, node("p", "muted", `数据时间：${data.as_of || data.last_updated_at || "刚刚"}`));
+        window.TmProductDrawings?.append(header, product);
         result.append(
           header,
           stockCard("成品库存", "finished", data.inventory.finished),

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.596"
-APP_VERSION_NAME = "采购撤销保护与手机取用恢复"
+APP_VERSION = "v0.22.597"
+APP_VERSION_NAME = "整板合并库存并发保护"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5707,3 +5707,15 @@ APP_VERIFICATION_STEPS = [
     "取用成功但库存刷新失败时点击“刷新库存”；换账号后核对显示账号和待确认操作归属。",
 ]
 APP_CHANGELOG = [*(f"v0.22.596：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "旧整板合并同时核对栈板和库存批次；期间发生预占、释放或成员变化时，明确提示刷新，避免写回旧版本。",
+    "合并取得写入保护后重新读取数量和货位，移库流水记录真实的可用与占用数量。",
+    "保留正常已有预占、历史栈板明细、精确重试和批量合并规则；不新增库存，不改历史流水。",
+    "本版无数据库迁移或正式数据修正；整板移位的相邻并发问题已单独登记，继续修复。",
+]
+APP_VERIFICATION_STEPS = [
+    "正常整理栈板时，核对合并后的总数、订单占用、实际位置及移库流水前后数量一致。",
+    "如提示库存已变化，刷新后重新核对再操作；不要为验收额外移货、合并或重复提交真实库存。",
+]
+APP_CHANGELOG = [*(f"v0.22.597：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -75,7 +75,7 @@ async function test(name,fn){await fn();passed++}
     const c=context(),row=c.manager.prepare(1,'approve');const reload=recovery.create({storage:c.storage,actor:()=>1,newKey:()=> 'reload',request:async()=>found(row)});assert.equal(reload.forOrder(1).length,1);
     c.storage.setItem('tianming:stocktake-review:v1:1:9:bad','{');assert(reload.prepare(2,'reject'));assert.equal((await reload.resolve(row)).status,'completed');
   });
-  const html=fs.readFileSync(require('node:path').join(__dirname,'../static/warehouse.html'),'utf8');
+  const html=fs.readFileSync(process.env.STOCKTAKE_REVIEW_HTML||require('node:path').join(__dirname,'../static/warehouse.html'),'utf8');
   function inlineFunction(name){
     const marker=new RegExp(`^    (?:async )?function ${name}\\(`,'m'),match=marker.exec(html);assert(match,name);
     const after=html.slice(match.index),firstLine=after.split(/\r?\n/)[0];if(firstLine.trim().endsWith('}'))return firstLine;
@@ -120,6 +120,26 @@ async function test(name,fn){await fn();passed++}
     assert.equal(confirmations,scenario==='readonly'?0:1);
   }
   for(const scenario of ['cancel','readonly','empty','refresh-failed','late-detail','late-actor','other-pending'])await test(`actual desktop ${scenario}`,()=>desktop(scenario));
+  async function detailRace(scenario){
+    let selected=null,rendered=null,closed=0,notes=[];const requests=new Map();
+    const context={state:{user:{id:1},stocktakeReviewSelectedId:null,stocktakeReviewDetail:null},
+      canViewStocktakes:()=>true,selectStocktakeReview:id=>{context.state.stocktakeReviewSelectedId=Number(id)},
+      ensureStocktakeReviewModal:()=>{},$:()=>({innerHTML:'',classList:{remove(){},add(){closed++}}}),
+      renderStocktakeDetail:data=>{rendered=data.id;context.state.stocktakeReviewDetail=data},
+      toast:message=>notes.push(message),stocktakeDrift:()=>false,
+      api:url=>new Promise((resolve,reject)=>requests.set(Number(url.match(/\/(\d+)$/)[1]),{resolve,reject}))};
+    vm.createContext(context);
+    vm.runInContext('let stocktakeReviewDetailGeneration=0;\n'+['openStocktakeReview','closeStocktakeReview'].map(inlineFunction).join('\n'),context);
+    const first=context.openStocktakeReview(1);
+    if(scenario==='closed')context.closeStocktakeReview();
+    else if(scenario==='actor')context.state.user={id:2};
+    else {const second=context.openStocktakeReview(2);requests.get(2).resolve({id:2});await second;assert.equal(rendered,2)}
+    if(scenario==='late-failure')requests.get(1).reject(Error('late A error'));else requests.get(1).resolve({id:1});
+    await first;
+    if(['closed','actor'].includes(scenario))assert.equal(rendered,null);else assert.equal(rendered,2);
+    assert.equal(notes.length,0);assert.equal(closed,scenario==='closed'?1:0);
+  }
+  for(const scenario of ['switched','closed','actor','late-failure'])await test(`actual detail generation ${scenario}`,()=>detailRace(scenario));
   const fixtureDir=process.env.STOCKTAKE_REVIEW_EVIDENCE;
   if(fixtureDir){
     for(const file of fs.readdirSync(fixtureDir).filter(file=>file.endsWith('-receipt.json'))){const data=JSON.parse(fs.readFileSync(`${fixtureDir}/${file}`,'utf8'));const row={version:1,state:'unknown',ownerId:data.ownerId,orderId:data.receipt.id,action:data.action,body:data.body};assert(recovery.validReceipt(data.receipt,row),file);passed++}

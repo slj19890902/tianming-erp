@@ -20,7 +20,8 @@
     <script src="/static/ui/warehouse-workspace.js?v=20260928"></script>
     <script src="/static/ui/stock-preparation-completion-recovery.js?v=20261010-completion1"></script>
     <script src="/static/ui/stock-preparation-group-recovery.js?v=72b124d276b5"></script>
-    <script src="/static/ui/production-workspace.js?v=a60efd2d46f6"></script>
+    <script src="/static/ui/stock-preparation-assembly-recovery.js?v=a11f3ee39242"></script>
+    <script src="/static/ui/production-workspace.js?v=fe58b8dee03a"></script>
     <script src="/static/ui/production-desk.js?v=round-experience-d2"></script>
     <link rel="stylesheet" href="/static/ui/production-desk.css?v=20260922-map-return">
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
@@ -4865,7 +4866,8 @@
                   <div v-if="stockPrepDialog.error" class="status red" role="alert">{{stockPrepDialog.error}}</div>
                   <stock-completion-results v-if="stockPrepDialog.row.entry_type==='single_job'" :records="stockCompletionRows.filter(r=>r.receiptId===stockPrepDialog.row.receipt_item_id)" :error="stockCompletionError" :requests="stockCompletionRequests" @reload="reloadStockCompletionRecovery" @resolve="resolveStockCompletion" @continue="sendStockCompletion" @view="viewStockCompletionTrace" @refresh="refreshStockCompletionList"></stock-completion-results>
                   <stock-group-results v-if="['group_job','group_stock'].includes(stockPrepDialog.row.entry_type)" :records="stockGroupRows.filter(r=>r.groupKey===stockGroupKey(stockPrepDialog.row))" :error="stockGroupError" :requests="stockGroupRequests" @reload="reloadStockGroupRecovery" @resolve="resolveStockGroupCompletion" @continue="sendStockGroupCompletion" @view="viewStockGroupTrace" @refresh="refreshStockGroupList"></stock-group-results>
-                  <div v-if="stockLocationsError" class="status orange">{{stockLocationsError}}<button class="btn small" @click="ensureStockLocations({force:true,groupCompletion:!!stockPrepDialog.groupCompletionActor})">重试货位</button></div>
+                  <stock-assembly-results v-if="['group_job','group_stock'].includes(stockPrepDialog.row.entry_type)" :records="stockAssembleRows.filter(r=>r.groupKey===stockAssembleKey(stockPrepDialog.row))" :error="stockAssembleError" :requests="stockAssembleRequests" @reload="reloadStockAssembleRecovery" @resolve="resolveStockAssembleCompletion" @continue="sendStockAssembleCompletion" @view="viewStockAssembleTrace" @refresh="refreshStockAssembleList"></stock-assembly-results>
+                  <div v-if="stockLocationsError" class="status orange">{{stockLocationsError}}<button class="btn small" @click="ensureStockLocations({force:true,groupCompletion:!!stockPrepDialog.groupCompletionActor,assemblyCompletion:stockPrepDialog.row.entry_type==='group_stock'})">重试货位</button></div>
                   <div v-for="source in stockPrepDialog.sources||[]" :key="source.key" class="stock-source-summary" v-if="stockPrepDialog.row.entry_type==='receipt'">
                     <strong>{{source.name}} · 实收 {{source.source_trace?.received_quantity}} {{source.unit}} · 生产投入 {{source.source_trace?.production_consumed}} {{source.unit}} · 现余 {{source.source_trace?.remaining}} {{source.unit}}</strong>
                     <div v-if="source.source_trace?.received_at">收料 {{formatDateTime(source.source_trace.received_at)}} <info-note>补库单 {{source.order_number}} · {{source.source_trace?.supplier||''}} · 报料 {{formatDateTime(source.source_trace?.ordered_at)}} · 原批次 {{source.lot_number}}</info-note></div>
@@ -4973,6 +4975,7 @@
                 <div class="toolbar stock-workspace-toolbar"><div class="toolbar-group"><input class="input" v-model="stockPrepQuery" placeholder="客户 / 存货编码 / 产品 / 批次" @keyup.enter="loadStockPreparation(1)"><button class="btn small" :disabled="stockPrepBusy" @click="loadStockPreparation(1)">查询</button><info-note>按来源货位领取材料，实际加工后登记产出和子件货位；需要整套时再到“子件与组套”登记。</info-note></div><pager :page="stockPrepPage" :total="stockPrepTotal" :page-size="screenPageSize(12)" :always="true" @change="loadStockPreparation($event)"></pager></div>
                 <stock-completion-results :records="stockCompletionRows" :error="stockCompletionError" :requests="stockCompletionRequests" @reload="reloadStockCompletionRecovery" @resolve="resolveStockCompletion" @continue="sendStockCompletion" @view="viewStockCompletionTrace" @refresh="refreshStockCompletionList"></stock-completion-results>
                 <stock-group-results :records="stockGroupRows" :error="stockGroupError" :requests="stockGroupRequests" @reload="reloadStockGroupRecovery" @resolve="resolveStockGroupCompletion" @continue="sendStockGroupCompletion" @view="viewStockGroupTrace" @refresh="refreshStockGroupList"></stock-group-results>
+                  <stock-assembly-results :records="stockAssembleRows" :error="stockAssembleError" :requests="stockAssembleRequests" @reload="reloadStockAssembleRecovery" @resolve="resolveStockAssembleCompletion" @continue="sendStockAssembleCompletion" @view="viewStockAssembleTrace" @refresh="refreshStockAssembleList"></stock-assembly-results>
                 <data-panel :loading="stockPrepBusy" :error="stockPrepError" :empty="!stockPrepRows.length" @retry="loadStockPreparation(stockPrepPage)">
                   <table class="stock-workspace-table"><thead><tr><th>存货编码 / 产品</th><th>实物数量</th><th>位置</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="row in stockPrepRows" :key="row.key">
                     <td><strong>{{stockEntryName(row).code}}</strong><div>{{stockEntryName(row).name}}</div><small>{{stockEntryName(row).customer_name}}</small></td>
@@ -42339,6 +42342,7 @@
       window.ERPPurchaseWorkspace?.install(app);
       window.ERPStockCompletionRecovery?.install(app);
       window.ERPStockGroupRecovery?.install(app);
+      window.ERPStockAssemblyRecovery?.install(app);
       window.ERPProductionWorkspace?.install(app);
       window.ERPProductionDesk?.install(app);
       window.ERPProductionMap?.install(app);

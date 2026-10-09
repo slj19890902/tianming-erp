@@ -30,6 +30,7 @@ from reportlab.platypus import (
     Spacer,
     Table,
     TableStyle,
+    Image,
 )
 
 from app.core.config import PROJECT_ROOT
@@ -198,6 +199,7 @@ class _ContractCanvas(Canvas):
         *args,
         font_name: str,
         contract_version: int,
+        template_version: str = CONTRACT_PDF_TEMPLATE_VERSION,
         **kwargs,
     ) -> None:
         kwargs["invariant"] = 1
@@ -205,6 +207,7 @@ class _ContractCanvas(Canvas):
         super().__init__(*args, **kwargs)
         self._font_name = font_name
         self._contract_version = contract_version
+        self._template_version = template_version
         self._saved_page_states: list[dict] = []
 
     def showPage(self) -> None:  # noqa: N802 - ReportLab API name
@@ -221,7 +224,7 @@ class _ContractCanvas(Canvas):
             footer = (
                 f"第 {self._pageNumber} / {page_count} 页　"
                 f"合同版本 v{self._contract_version}　"
-                f"模板 {CONTRACT_PDF_TEMPLATE_VERSION}"
+                f"模板 {self._template_version}"
             )
             self.drawCentredString(A4[0] / 2, 7 * mm, footer)
             self.restoreState()
@@ -291,6 +294,7 @@ def _header_story(
     contract: CustomerContract,
     company: CompanyConfig | None,
     styles: dict[str, ParagraphStyle],
+    seal=None,
 ) -> list:
     company_name = (
         (company.company_name or "").strip()
@@ -308,6 +312,8 @@ def _header_story(
         "confirmed": "已确认（未盖章）",
         "converted": "已转订单（未盖章）",
     }.get(contract.status, f"{contract.status}（未盖章）")
+    if seal is not None:
+        status_label = status_label.replace("未盖章", "甲方已盖章")
     supplier = [
         f"<b>甲方（供方）：{_xml_text(company_name)}</b>",
         f"地址：{_xml_text(company.address if company is not None else None)}",
@@ -436,6 +442,7 @@ def _terms_and_signatures(
     contract: CustomerContract,
     company: CompanyConfig | None,
     styles: dict[str, ParagraphStyle],
+    seal=None,
 ) -> list:
     payment_terms = _payment_terms(contract.payment_terms)
     terms = []
@@ -452,14 +459,24 @@ def _terms_and_signatures(
         if company is not None
         else ""
     ) or "苏州天明包装有限公司"
+    seller = Paragraph(
+        f"<b>甲方（供方）：{_xml_text(company_name)}</b><br/>"
+        "授权代表：<br/>盖章：<br/>签署日期：", styles["body"])
+    if seal is not None:
+        height = seal.size_mm * mm
+        width = height * seal.width_px / seal.height_px
+        if width > 66 * mm:
+            height *= 66 * mm / width
+            width = 66 * mm
+        stamp = Image(BytesIO(seal.image_png), width=width, height=height)
+        stamp.hAlign = "LEFT"
+        seller = [Paragraph(f"<b>甲方（供方）：{_xml_text(company_name)}</b><br/>"
+                            "授权代表：<br/>盖章：", styles["body"]),
+                  stamp, Paragraph("签署日期：", styles["body"])]
     signatures = Table(
         [
             [
-                Paragraph(
-                    f"<b>甲方（供方）：{_xml_text(company_name)}</b><br/>"
-                    "授权代表：<br/>盖章：<br/>签署日期：",
-                    styles["body"],
-                ),
+                seller,
                 Paragraph(
                     f"<b>乙方（需方）：{_xml_text(contract.customer_name)}</b><br/>"
                     "授权代表：<br/>盖章：<br/>签署日期：",
@@ -469,7 +486,7 @@ def _terms_and_signatures(
         ],
         colWidths=[84 * mm, 84 * mm],
         hAlign="CENTER",
-        rowHeights=[27 * mm],
+        rowHeights=[(seal.size_mm + 28 if seal is not None else 27) * mm],
     )
     signatures.setStyle(
         TableStyle(
@@ -493,12 +510,14 @@ def _terms_and_signatures(
 def render_contract_pdf(
     contract: CustomerContract,
     company: CompanyConfig | None,
+    *, seal=None,
 ) -> ContractPdfDocument:
-    """Render a deterministic, unsealed PDF from persisted contract snapshots."""
+    """Render persisted snapshots; an explicit private seal is opt-in only."""
 
     font_name, font_sha256 = _registered_font()
     styles = _styles(font_name)
     output = BytesIO()
+    template_version = CONTRACT_PDF_TEMPLATE_VERSION + ("-seal-v1" if seal is not None else "")
     doc = BaseDocTemplate(
         output,
         pagesize=A4,
@@ -510,14 +529,14 @@ def render_contract_pdf(
         author=(company.company_name if company is not None else "") or "天明 ERP",
         subject=(
             f"合同版本 v{contract.version}; "
-            f"模板 {CONTRACT_PDF_TEMPLATE_VERSION}; 未盖章"
+            f"模板 {template_version}; " + ("甲方已盖章" if seal is not None else "未盖章")
         ),
     )
     def draw_repeated_header(canvas: Canvas, _doc: BaseDocTemplate) -> None:
         header = KeepInFrame(
             doc.width,
             40 * mm,
-            _header_story(contract, company, styles),
+            _header_story(contract, company, styles, seal),
             mode="shrink",
         )
         _width, height = header.wrapOn(canvas, doc.width, 40 * mm)
@@ -564,7 +583,7 @@ def render_contract_pdf(
     if len(contract.items) > 4:
         story.append(PageBreak())
     story.append(
-        KeepTogether(_terms_and_signatures(contract, company, styles))
+        KeepTogether(_terms_and_signatures(contract, company, styles, seal))
     )
 
     def canvas_maker(*args, **kwargs) -> _ContractCanvas:
@@ -572,6 +591,7 @@ def render_contract_pdf(
             *args,
             font_name=font_name,
             contract_version=contract.version,
+            template_version=template_version,
             **kwargs,
         )
 
@@ -580,6 +600,6 @@ def render_contract_pdf(
     return ContractPdfDocument(
         content=content,
         sha256=hashlib.sha256(content).hexdigest(),
-        template_version=CONTRACT_PDF_TEMPLATE_VERSION,
+        template_version=template_version,
         font_sha256=font_sha256,
     )

@@ -3594,15 +3594,32 @@
                 <div class="toolbar-group">
                   <button class="btn" @click="go('customers')">返回客户管理</button>
                   <button v-if="canEditContracts" class="btn primary" :disabled="loading || contractActionBusy()" @click="newContractDraft">新建合同</button>
+                  <button v-if="user.role==='admin'" class="btn" :disabled="contractSealBusy" @click="openContractSeal">管理电子章</button>
                 </div>
                 <div class="toolbar-group" v-if="contractCustomer">
                   <button class="btn" :disabled="loading || contractActionBusy() || !contractEditable" @click="saveContractDraft">{{ loading ? '保存中…' : '保存合同草稿' }}</button>
                   <button class="btn primary" :disabled="!contractDraft.id || contractPdfExportBusy()" @click="exportContractPdf(contractDraft)">{{ contractPdfExportBusy(contractDraft.id) ? '正在导出…' : '导出 PDF（未盖章）' }}</button>
+                  <button v-if="user.role==='admin'" class="btn" :disabled="!contractDraft.id || contractPdfExportBusy()" @click="exportContractPdf(contractDraft,true)">导出盖章 PDF</button>
                   <button class="btn" :disabled="!contractDraft.id" @click="printContract(contractDraft)">网页预览/自助打印</button>
                   <button v-if="contractDraft.id && contractDraft.status === 'draft' && canEditContracts" class="btn success" :disabled="loading || contractActionBusy()" @click="confirmContract(contractDraft)">{{ contractActionPending('confirm',contractDraft.id) ? '确认中…' : '客户确认合同' }}</button>
                   <button v-if="contractDraft.status === 'confirmed' && canConvertContracts" class="btn success" :disabled="loading || contractActionBusy()" @click="convertContract(contractDraft)">{{ contractActionPending('convert',contractDraft.id) ? '转单中…' : '确认并转订单' }}</button>
                   <button v-if="contractDraft.id && contractDraft.status === 'draft' && canEditContracts" class="btn danger" :disabled="loading || contractActionBusy()" @click="deleteContract(contractDraft)">{{ contractActionPending('delete',contractDraft.id) ? '删除中…' : '删除草稿' }}</button>
                 </div>
+              </div>
+              <div v-if="user.role==='admin' && contractSealOpen" class="panel" style="margin-bottom:14px" aria-label="电子章管理">
+                <h3>合同电子章</h3>
+                <p>仅管理员可使用，每次导出自行选择是否盖章。章图用于甲方盖章区。</p>
+                <p v-if="contractSealError" role="alert">{{ contractSealError }}</p>
+                <template v-if="contractSealSettings">
+                  <img v-if="contractSealSettings.available" :src="`/api/contracts/seal/image?version=${contractSealSettings.version}`" alt="当前合同电子章" style="max-width:160px;max-height:160px;background:#fff" />
+                  <p v-else>当前未启用电子章，普通未盖章 PDF 可正常导出。</p>
+                  <div class="toolbar-group">
+                    <label>章图高度（毫米）<input class="input" type="number" min="20" max="50" v-model.number="contractSealSize" style="width:85px" :disabled="contractSealBusy" /></label>
+                    <label class="btn">{{ contractSealBusy ? '保存中…' : '上传章图（PNG/JPEG）' }}<input type="file" accept="image/png,image/jpeg" :disabled="contractSealBusy" @change="uploadContractSeal($event)" style="display:none" /></label>
+                    <button v-if="contractSealSettings.available" class="btn danger" :disabled="contractSealBusy" @click="disableContractSeal">停用电子章</button>
+                  </div>
+                </template>
+                <button class="btn" :disabled="contractSealBusy" @click="contractSealOpen=false">关闭</button>
               </div>
               <div v-if="contractCustomer" class="panel contract-panel" style="margin-bottom:14px;overflow:visible">
                 <div class="contract-header-grid">
@@ -3645,7 +3662,7 @@
                     <td><strong>{{ row.contract_no }}</strong></td><td>{{ row.contract_date || '-' }}</td><td>{{ row.customer_po || '-' }}</td><td>{{ row.delivery_date || '-' }}</td>
                     <td><span :class="['status','contract-status',contractStatusTone(row.status)]">{{ contractStatusText(row.status) }}</span></td>
                     <td><div v-for="item in row.items || []" :key="item.id || item.product_id">{{ item.product_code || '-' }}｜{{ item.product_name || '-' }} × {{ item.quantity || 0 }}</div></td><td>￥ {{ money(row.total_amount) }}</td>
-                    <td class="toolbar-group"><button class="btn small" :disabled="loading || contractActionBusy()" @click="editContract(row)">{{ row.status === 'draft' ? '查看/编辑' : '查看' }}</button><button class="btn small primary" :disabled="contractPdfExportBusy()" @click="exportContractPdf(row)">{{ contractPdfExportBusy(row.id) ? '正在导出…' : '导出 PDF（未盖章）' }}</button><button class="btn small" @click="printContract(row)">网页预览/自助打印</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="confirmContract(row)">{{ contractActionPending('confirm',row.id) ? '确认中…' : '客户确认' }}</button><button v-if="row.status === 'confirmed' && canConvertContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="convertContract(row)">{{ contractActionPending('convert',row.id) ? '转单中…' : '转订单' }}</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small danger" :disabled="loading || contractActionBusy()" @click="deleteContract(row)">{{ contractActionPending('delete',row.id) ? '删除中…' : '删除' }}</button></td>
+                    <td class="toolbar-group"><button class="btn small" :disabled="loading || contractActionBusy()" @click="editContract(row)">{{ row.status === 'draft' ? '查看/编辑' : '查看' }}</button><button class="btn small primary" :disabled="contractPdfExportBusy()" @click="exportContractPdf(row)">{{ contractPdfExportBusy(row.id) ? '正在导出…' : '导出 PDF（未盖章）' }}</button><button v-if="user.role==='admin'" class="btn small" :disabled="contractPdfExportBusy()" @click="exportContractPdf(row,true)">导出盖章 PDF</button><button class="btn small" @click="printContract(row)">网页预览/自助打印</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="confirmContract(row)">{{ contractActionPending('confirm',row.id) ? '确认中…' : '客户确认' }}</button><button v-if="row.status === 'confirmed' && canConvertContracts" class="btn small success" :disabled="loading || contractActionBusy()" @click="convertContract(row)">{{ contractActionPending('convert',row.id) ? '转单中…' : '转订单' }}</button><button v-if="row.status === 'draft' && canEditContracts" class="btn small danger" :disabled="loading || contractActionBusy()" @click="deleteContract(row)">{{ contractActionPending('delete',row.id) ? '删除中…' : '删除' }}</button></td>
                   </tr>
                 </tbody></table></div>
               </div>
@@ -10738,6 +10755,7 @@
             contractProducts: [],
             contractAction:{action:"",contractId:null},
             contractPdfExportState:{contractId:null,requestId:0},
+            contractSealOpen:false,contractSealBusy:false,contractSealSettings:null,contractSealSize:40,contractSealError:"",contractSealExportKeys:{},
             materialLayerFilter: 3,
             materialLayerTabs: [
               { value: 1, label: "卡纸" }, { value: 3, label: "三层" },
@@ -27177,7 +27195,36 @@
             if (requestId) parts.push(`请求编号 ${requestId}`);
             return parts.join(" · ");
           },
-          async exportContractPdf(row) {
+          async openContractSeal() {
+            if (this.user?.role !== "admin" || this.contractSealBusy) return;
+            this.contractSealOpen=true; this.contractSealBusy=true; this.contractSealError=""; this.contractSealSettings=null;
+            try {
+              this.contractSealSettings=(await axios.get("/api/contracts/seal/settings")).data;
+              this.contractSealSize=this.contractSealSettings.size_mm;
+            } catch(error) { this.contractSealError=error.response?.data?.detail || "电子章读取失败，请关闭后重试"; }
+            finally { this.contractSealBusy=false; }
+          },
+          async uploadContractSeal(event) {
+            const file=event.target.files?.[0]; event.target.value="";
+            if (!file || this.contractSealBusy || !this.contractSealSettings || this.user?.role!=="admin") return;
+            if (file.size>2000000 || !["image/png","image/jpeg"].includes(file.type)) { this.showToast("请选择2MB以内的PNG或JPEG章图",true); return; }
+            this.contractSealBusy=true; this.contractSealError="";
+            try {
+              const encoded=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]);reader.onerror=()=>reject(new Error("章图读取失败"));reader.readAsDataURL(file);});
+              this.contractSealSettings=(await axios.post("/api/contracts/seal/settings",{expected_version:this.contractSealSettings.version,image_base64:encoded,size_mm:this.contractSealSize})).data;
+              this.showToast("电子章已保存，导出合同时可选择盖章");
+            } catch(error) { this.contractSealError=error.response?.data?.detail || error.message || "上传失败，请重新读取后重试"; }
+            finally { this.contractSealBusy=false; }
+          },
+          async disableContractSeal() {
+            if (this.contractSealBusy || this.user?.role!=="admin" || !this.contractSealSettings?.available) return;
+            if (!window.confirm("停用后不能生成新的盖章合同，已导出的合同和用章记录保留。确定停用？")) return;
+            this.contractSealBusy=true; this.contractSealError="";
+            try { this.contractSealSettings=(await axios.post("/api/contracts/seal/disable",{expected_version:this.contractSealSettings.version})).data; this.showToast("电子章已停用"); }
+            catch(error) { this.contractSealError=error.response?.data?.detail || "停用失败，请重新读取后重试"; }
+            finally { this.contractSealBusy=false; }
+          },
+          async exportContractPdf(row,sealed=false) {
             if (this.contractPdfExportBusy()) return false;
             const target = {
               id:Number(row?.id || 0),
@@ -27192,7 +27239,18 @@
             this.contractPdfExportState = {contractId:target.id,requestId};
             let objectUrl = "";
             try {
-              const response = await fetch(`/api/contracts/${target.id}/pdf?expected_version=${encodeURIComponent(target.version)}`,{
+              let sealedRequest=null, sealKey="";
+              if (sealed) {
+                if (this.user?.role!=="admin") throw new Error("仅管理员可导出盖章合同");
+                const settings=(await axios.get("/api/contracts/seal/settings")).data;
+                if (!settings.available) throw new Error("请先在管理电子章中上传章图");
+                sealKey=`${target.id}:${target.version}:${settings.version}`;
+                this.contractSealExportKeys[sealKey] ||= this.contractIdempotencyKey();
+                sealedRequest={expected_version:target.version,seal_version:settings.version,operation_key:this.contractSealExportKeys[sealKey]};
+              }
+              const response = sealed ? await fetch(`/api/contracts/seal/${target.id}/pdf`,{
+                method:"POST",credentials:"same-origin",headers:{Accept:"application/pdf","Content-Type":"application/json"},body:JSON.stringify(sealedRequest),
+              }) : await fetch(`/api/contracts/${target.id}/pdf?expected_version=${encodeURIComponent(target.version)}`,{
                 method:"GET",
                 credentials:"same-origin",
                 headers:{Accept:"application/pdf"},
@@ -27215,7 +27273,8 @@
               document.body.appendChild(anchor);
               anchor.click();
               anchor.remove();
-              this.showToast(`合同 ${target.contractNo || target.id} 的未盖章 PDF 已下载`);
+              this.showToast(`合同 ${target.contractNo || target.id} 的${sealed ? '盖章' : '未盖章'} PDF 已下载`);
+              if (sealKey) delete this.contractSealExportKeys[sealKey];
               return true;
             } catch (error) {
               const message = error instanceof TypeError

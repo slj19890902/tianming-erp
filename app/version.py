@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.583"
-APP_VERSION_NAME = "研光光洋共用库存及后续入库维护"
+APP_VERSION = "v0.22.584"
+APP_VERSION_NAME = "管理员按次选择合同电子章"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5554,3 +5554,16 @@ APP_VERIFICATION_STEPS = [
     "后续新编码在库存共用中选两客户产品，核对实物后建组；BOM及待核对现货按提示单独处理。",
 ]
 APP_CHANGELOG = [*(f"v0.22.583：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "客户合同增加管理员电子章管理，章图私有保存，可上传和停用。",
+    "普通导出保持未盖章；管理员可单独选择导出盖章PDF，章图仅放在甲方盖章区。",
+    "用章保留合同版本、章版本、操作员和文件记录；重复请求不重复用章，合同内容与状态保持。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员从客户管理进入合同，打开管理电子章并上传自己的正式章图。",
+    "分别导出未盖章和盖章PDF，核对甲方盖章区及合同内容；普通账号应看不到盖章入口。",
+    "需要停用时在管理电子章中操作，停用后普通未盖章导出继续可用。",
+]
+APP_CHANGELOG = [*(f"v0.22.584：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -29,6 +29,8 @@ from app.services.contract_pdf import ContractPdfFontError, render_contract_pdf
 
 
 router = APIRouter()
+from app.api.contract_seals import router as seal_router
+router.include_router(seal_router, prefix="/seal")
 contract_pdf_logger = logging.getLogger("erp.contract_pdf")
 can_read = PermissionChecker("contracts.view")
 can_edit = PermissionChecker("contracts.edit")

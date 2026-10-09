@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.588"
-APP_VERSION_NAME = "共用成品库存预警数量一致"
+APP_VERSION = "v0.22.589"
+APP_VERSION_NAME = "产品单位及待完善工艺编辑保护"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5611,3 +5611,12 @@ APP_VERIFICATION_STEPS = [
     "研光预警线仍为50，库存20继续提示不足；常用箱预警设置里的库存与预警页保持一致。",
 ]
 APP_CHANGELOG = [*(f"v0.22.588：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "沿用片、只、套统一规则，缺工艺保留原单位并显示待完善。",
+    "缺结合工艺时，单独修改模切也能正常保存，不丢失模切操作、不自动补造无需结合。",
+]
+APP_VERIFICATION_STEPS = [
+    "在常用箱核对片、只、套及待完善提示。缺结合工艺时修改模切并保存，重新打开核对模切及单位。",
+]
+APP_CHANGELOG = [*(f"v0.22.589：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

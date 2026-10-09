@@ -118,6 +118,9 @@ let input='';process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>{
  const unknown={id:1,unit:'只',unit_needs_review:true,production_process:null,_production_processes:['无需结合']};
  if(!api.info(unknown,true).review || api.info(unknown,true).label!=='只') throw Error('unknown process default guessed');
  if(api.info({...unknown,_joining_choice_manual:true},true).label!=='片') throw Error('explicit process ignored');
+ if(api.pendingProcess({...unknown,_production_processes:['模切']})!=='模切') throw Error('mold edit lost');
+ if(api.pendingProcess({...unknown,_production_processes:[]})!==null) throw Error('empty original changed');
+ if(api.pendingProcess({production_process:'开槽,模切',_production_processes:[]})!=='开槽') throw Error('mold removal lost other process');
  console.log('front and backend unit names agree');
 });
 """
@@ -136,3 +139,22 @@ def test_unrelated_edit_preserves_unknown_process_and_original_unit(reservation_
     assert updates['production_process']==process
     assert updates['unit']==p.unit
     assert product_unit_info(p)['unit_needs_review']
+
+
+def test_nonjoining_edit_preserves_unknown_joining_and_mold_validation(reservation_db):
+    from fastapi import HTTPException
+    from app.api.products import ProductUpdatePayload, _response, _validated_product_versioned_updates
+    db,data=reservation_db;p=data['product'];p.production_process=None;db.commit()
+    raw=_response(p,data['admin'])
+    payload=ProductUpdatePayload.model_validate({**raw,'expected_version':p.version,'production_process':'开槽'})
+    updates=_validated_product_versioned_updates(db,product=p,payload=payload,user=data['admin'])
+    assert updates['production_process']=='开槽'
+    mold=ProductUpdatePayload.model_validate({**raw,'expected_version':p.version,'production_process':'模切'})
+    with pytest.raises(HTTPException, match='必须选择已登记的生产模具'):
+        _validated_product_versioned_updates(db,product=p,payload=mold,user=data['admin'])
+    assert mold.production_process=='模切'
+    from app.models.mold_tool import MoldTool
+    registered=MoldTool(mold_code='UNIT-MOLD',mold_name='虚构模切',rack_location='3F-M-R02-L2-G02')
+    db.add(registered);db.flush();mold.mold_tool_id=registered.id
+    saved=_validated_product_versioned_updates(db,product=p,payload=mold,user=data['admin'])
+    assert saved['production_process']=='模切' and saved['mold_tool_id']==registered.id

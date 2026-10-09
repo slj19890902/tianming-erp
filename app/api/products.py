@@ -1381,9 +1381,11 @@ def _validated_product_versioned_updates(
         )
     supply_updates = _normalize_product_external_supply(db, payload=payload, existing=product)
     from app.services.product_unit_labels import product_unit_info
+    joining_tokens = _GLUE_PROCESS_TOKENS | _STAPLE_PROCESS_TOKENS | _NO_JOINING_PROCESS_TOKENS
     preserve_unknown_joining = product_unit_info(product)["unit_needs_review"] and (
-        str(payload.production_process or "").strip() == str(product.production_process or "").strip())
-    if preserve_unknown_joining:
+        _production_process_tokens(payload.production_process) & joining_tokens
+        == _production_process_tokens(product.production_process) & joining_tokens)
+    if preserve_unknown_joining and str(payload.production_process or "").strip() == str(product.production_process or "").strip():
         payload.production_process = product.production_process
     if not (
         product.supply_mode == "external_purchase"

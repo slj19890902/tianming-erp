@@ -25,7 +25,7 @@
     <link rel="stylesheet" href="/static/drawing-workbench.css?v=20260930-543" />
     <script src="/static/drawing-workbench.js?v=20260930-543"></script>
     <script src="/static/js/sheet-cutting.js?v=20261008-v2"></script>
-    <script src="/static/js/product-unit-labels.js?v=20261009"></script>
+    <script src="/static/js/product-unit-labels.js?v=6733f6a35088"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
     <script src="/static/assets/phone-display.js?v=b9c44d142168"></script>
     <style>
@@ -13208,7 +13208,7 @@
             delete payload._external_ratio_mode;
             delete payload.id;
             payload.production_process = this.productForm.id && this.productForm.unit_needs_review && !this.productForm._joining_choice_manual
-              ? this.productForm.production_process : this.serializeProductionProcesses(
+              ? window.ERPProductUnits.pendingProcess(this.productForm) : this.serializeProductionProcesses(
               payload._production_processes,
               payload._production_process_legacy
             );

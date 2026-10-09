@@ -18,7 +18,14 @@
     const noJoin = has(["无需结合","无需","不需结合","不需要结合"]);
     return (glue || staple) !== noJoin ? {label:noJoin?"片":"只",review:false} : {label:fallback,review:true};
   }
-  const api = {info, label:(p,form=false)=>info(p,form).label || "单位待完善"};
+  function pendingProcess(form) {
+    const original = form.production_process;
+    const tokens = String(original || "").split(/[,，、;；]+/).map(x=>x.trim()).filter(Boolean);
+    const mold = (form._production_processes || []).includes("模切");
+    if (mold === tokens.includes("模切")) return original;
+    return [...tokens.filter(x=>x!=="模切"), ...(mold?["模切"]:[])].join(",") || null;
+  }
+  const api = {info, pendingProcess, label:(p,form=false)=>info(p,form).label || "单位待完善"};
   root.ERPProductUnits = api;
   if (typeof module !== "undefined") module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);

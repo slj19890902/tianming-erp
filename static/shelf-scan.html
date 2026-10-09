@@ -9,10 +9,11 @@ article,form{background:white;padding:12px;margin:10px 0;border:1px solid #dbe3e
 small{color:#64748b}details{margin-top:10px}summary{padding:8px 0;cursor:pointer}a{color:#1768ba}input{display:block;width:100%;padding:10px;margin:8px 0;font-size:16px}
 [hidden]{display:none!important}#message{padding:8px 0;color:#9a3412}
 header button{flex:none;white-space:nowrap}header h1{min-width:0;overflow-wrap:anywhere}.quantity{white-space:nowrap;font-size:clamp(18px,5.5vw,25px)}
-.scan-actions{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:8px 0}.stocktake-link{padding:10px 14px;border-radius:7px;background:#2563eb;color:white;text-decoration:none;white-space:nowrap}.scan-note{font-size:12px;color:#64748b}
+.scan-actions{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:8px 0}.stocktake-link{display:inline-flex;align-items:center;min-height:44px;padding:10px 14px;border-radius:7px;background:#2563eb;color:white;text-decoration:none;white-space:nowrap}.scan-note{font-size:12px;color:#64748b}
+.field-link{display:inline-flex;align-items:center;min-height:44px;padding:8px 0}summary{min-height:44px}
 </style><link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script></head><body>
 <header><h1 id="address">货位库存</h1><button id="refresh">刷新</button></header><main>
 <div id="message" role="status">读取当前库存…</div>
 <form id="login" hidden><b>请登录</b><input id="username" autocomplete="username" placeholder="账号" required><input id="password" type="password" autocomplete="current-password" placeholder="密码" required><label class="remember"><input id="remember" type="checkbox" checked>此手机30天免登录（公用手机勿选）</label><button id="loginButton">登录</button></form>
-<div class="scan-actions"><small id="updated"></small><a id="stocktake" class="stocktake-link" hidden>盘点本货位</a></div><div class="scan-note">不自动刷新 · 数量或产品不符请盘点</div><section id="items"></section><a href="/mobile/#warehouse">仓库地图</a>
-<p><a href="/mobile/scan">开启摄像头连续扫码</a></p></main><script src="/static/shelf-scan.js"></script></body></html>
+<div class="scan-actions"><small id="updated"></small><a id="stocktake" class="stocktake-link" hidden>盘点本货位</a></div><div class="scan-note">不自动刷新 · 数量或产品不符请盘点</div><section id="items"></section><a class="field-link" href="/mobile/#warehouse">仓库地图</a>
+<p><a class="field-link" href="/mobile/scan">开启摄像头连续扫码</a></p></main><script src="/static/shelf-scan.js?v=20261010-field1"></script></body></html>

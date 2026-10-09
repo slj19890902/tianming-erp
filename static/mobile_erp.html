@@ -507,6 +507,7 @@
     </div>
   </section>
 
+  <script src="/static/ui/mobile-field-return.js?v=20261010"></script>
   <script src="/static/ui/mobile-product-drawings.js?v=20261009-1"></script>
   <script src="/static/ui/mobile-dimension-stock.js?v=20261010-recovery1"></script>
   <script src="/static/ui/mobile-delivery-margin.js?v=20260915-costcontract428"></script>
@@ -525,6 +526,7 @@
         searchTimer: null,
         searchController: null,
         detailController: null,
+        fieldGeneration: 0, fieldAuthGeneration: 0, fieldMapGeneration: 0, warehouseAuthPending: false, warehouseMapOrigin: "map",
         searchGeneration: 0,
         detailGeneration: 0,
         lookupQuery: "",
@@ -815,6 +817,7 @@
       }
 
       async function logout() {
+        fieldIntent(); state.fieldAuthGeneration++;
         window.TmMobileDeliveryMargin?.destroy?.();
         state.searchController?.abort();
         state.detailController?.abort();
@@ -850,6 +853,11 @@
         }
         if (!page || !state.allowedPages.has(page)) return;
         const previousPage = state.activePage;
+        if (previousPage !== page) fieldIntent();
+        if (page !== "warehouse") {
+          byId("warehouseMapLayer").hidden = true;
+          state.warehouseMapController?.abort(); state.warehouseMapGeneration++; state.fieldMapGeneration++;
+        }
         if (state.activePage && state.activePage !== "incoming") state.scrollByPage.set(state.activePage, window.scrollY);
         state.activePage = page;
         window.TmMobileDeliveryMargin?.onPageChange?.(page);
@@ -1276,7 +1284,95 @@
         persistMobilePortalState();
       }
 
+      function warehouseActor() { return state.shell?.user?.id; }
+      function fieldIntent() { state.fieldGeneration += 1; }
+      function clearWarehouseFacts() {
+        state.searchController?.abort(); state.detailController?.abort(); state.warehouseMapController?.abort();
+        state.searchGeneration++; state.detailGeneration++; state.warehouseMapGeneration++; state.fieldMapGeneration++;
+        window.clearTimeout(state.searchTimer);
+        state.selectedInventory = null; state.selectedProductId = null; state.candidates = []; state.searchMeta = null;
+        state.warehouseMapData = null; state.warehouseMapFloors = []; state.warehouseMapSource = null; state.warehouseMapTarget = null;
+        state.warehouseLocationPage = false; byId("warehouseAreaOverview").hidden = false;
+        window.TmProductDrawings?.disposeWithin(byId("candidateList")); window.TmProductDrawings?.disposeWithin(byId("productResult"));
+        for (const id of ["candidateList", "productResult", "warehouseMapGoods", "warehouseMapStage", "warehouseRackList", "warehouseFloorOverview"]) { byId(id).replaceChildren(); byId(id).hidden = true; }
+        byId("warehouseMapMoveForm").hidden = true;
+      }
+      function warehouseReturnValues(kind) {
+        return {kind, query:kind === "search" ? byId("searchInput").value.trim().slice(0,200) : "",
+          includeZero:kind === "search" && state.shell?.user?.role === "admin" && byId("includeZeroStock").checked,
+          selectedProductId:kind === "search" ? Number(state.selectedProductId) || null : null,
+          locationId:Number(state.warehouseMapFocusLocationId) || null,
+          floorCode:state.warehouseMapFloor || "", areaCode:state.warehouseMapArea || "", scrollY:Math.max(0,window.scrollY || 0)};
+      }
+      function launchMobileStocktake(params) {
+        if (state.warehouseAuthPending || !state.allowedPages.has("warehouse")) return;
+        const kind = state.warehouseMapOrigin === "search" ? "search" : "map";
+        params.set("return_source", kind);
+        try { const token = window.TmMobileFieldReturn?.capture(window.sessionStorage, warehouseActor(), warehouseReturnValues(kind)); if (token) params.set("return_context", token); } catch (_) { /* Navigation can degrade without affecting a business request. */ }
+        window.location.assign(`/mobile/stocktake.html?${params}`);
+      }
+      async function restoreWarehouseSearch(record) {
+        const actor = warehouseActor(), generation = state.fieldGeneration;
+        const current = () => actor === warehouseActor() && generation === state.fieldGeneration && state.activePage === "warehouse" && !state.warehouseAuthPending;
+        byId("warehouseMapLayer").hidden = true;
+        byId("searchInput").value = record.query;
+        byId("includeZeroStock").checked = state.shell?.user?.role === "admin" && record.includeZero === true;
+        if (!record.query) { showStatus("searchState", "请输入关键词重新查货。", "empty"); return; }
+        if (!await runSearch({restoring:true,current}) || !current()) return;
+        if (record.selectedProductId) {
+          if (!await loadInventory(record.selectedProductId,{restoring:true,current}) || !current()) return;
+        }
+        window.requestAnimationFrame(() => { if (current()) window.scrollTo({top:record.scrollY || 0}); });
+      }
+      async function restoreWarehouseLaunch(params) {
+        let record = null;
+        try { record = window.TmMobileFieldReturn?.read(window.sessionStorage, warehouseActor(), params.get("return_context")); } catch (_) {}
+        if (record?.kind === "search") return restoreWarehouseSearch(record);
+        clearWarehouseFacts(); byId("searchInput").value = ""; byId("includeZeroStock").checked = false;
+        showStatus("searchState", "原查货条件无法恢复，请重新查询。", "empty");
+      }
+      async function refreshWarehouseAfterBack(event, original = null) {
+        if (!event.persisted || state.activePage !== "warehouse" || state.initializing) return;
+        // An unfinished move owns its original body/key; this navigation refresh never replaces that operation.
+        if (state.warehouseMapSource && state.warehouseMapMoveRequestKey) return;
+        const actor = warehouseActor(), generation = ++state.fieldGeneration, authGeneration = ++state.fieldAuthGeneration;
+        const mapOpen = !byId("warehouseMapLayer").hidden;
+        const saved = original && !byId("searchInput").value.trim() ? original.saved : warehouseReturnValues(mapOpen ? state.warehouseMapOrigin || "map" : "search");
+        const map = original?.map || {floorCode:state.warehouseMapFloor,areaCode:state.warehouseMapArea,locationId:state.warehouseMapFocusLocationId,focusOnly:true,origin:state.warehouseMapOrigin};
+        clearWarehouseFacts(); byId("searchInput").value = ""; byId("includeZeroStock").checked = false;
+        state.warehouseAuthPending = true;
+        showStatus(mapOpen ? "warehouseMapState" : "searchState", "正在核对账号并重新读取库存…", "");
+        try {
+          const shell = await apiGet("/api/mobile/erp/shell", {isCurrent:() => authGeneration === state.fieldAuthGeneration});
+          if (authGeneration !== state.fieldAuthGeneration) return;
+          if (!Number.isSafeInteger(shell?.user?.id) || shell.user.id <= 0) throw new Error("账号回执不完整，请重新核对");
+          const untouched = generation === state.fieldGeneration && state.activePage === "warehouse";
+          state.warehouseAuthPending = false;
+          await initialize({verifiedShell:shell,skipFieldLaunch:true});
+          if (authGeneration !== state.fieldAuthGeneration || state.activePage !== "warehouse") return;
+          if (shell.user.id !== actor) {
+            byId("warehouseMapLayer").hidden = true;
+            byId("searchInput").value = "";
+            showStatus("searchState", "账号已变化，请重新查货。", "empty"); return;
+          }
+          if (!untouched || generation !== state.fieldGeneration) { if (byId("searchInput").value.trim()) await runSearch(); return; }
+          if (mapOpen) {
+            if (saved.kind === "search") await restoreWarehouseSearch(saved);
+            if (generation === state.fieldGeneration && actor === warehouseActor() && state.activePage === "warehouse") await openWarehouseMap({...map,restoring:true});
+          }
+          else await restoreWarehouseSearch(saved);
+        } catch (error) {
+          if (authGeneration !== state.fieldAuthGeneration || error.name === "AbortError") return;
+          // Do not permit requests against stale identity after an incomplete authentication read.
+          const retry = () => refreshWarehouseAfterBack({persisted:true},{saved,map});
+          const message = `账号核对失败：${error.message || "请检查网络"}`;
+          showStatus("searchState", message, "error", retry);
+          if (!byId("warehouseMapLayer").hidden) showStatus("warehouseMapState", message, "error", retry);
+        }
+      }
+
       function queueSearch() {
+        fieldIntent();
         window.TmProductDrawings?.disposeWithin(byId("candidateList"));
         window.TmProductDrawings?.disposeWithin(byId("productResult"));
         state.searchController?.abort();
@@ -1294,10 +1390,14 @@
           showStatus("searchState", "请输入关键词开始查找。", "empty");
           return;
         }
+        if (state.warehouseAuthPending) return;
         state.searchTimer = window.setTimeout(runSearch, 280);
       }
 
-      async function runSearch() {
+      async function runSearch(options = {}) {
+        if (!options.restoring) fieldIntent();
+        if (state.warehouseAuthPending || state.activePage !== "warehouse") return false;
+        const actor = warehouseActor(), current = () => actor === warehouseActor() && state.activePage === "warehouse" && !state.warehouseAuthPending && (!options.current || options.current());
         window.TmProductDrawings?.disposeWithin(byId("candidateList"));
         window.TmProductDrawings?.disposeWithin(byId("productResult"));
         state.detailController?.abort();
@@ -1314,16 +1414,18 @@
         byId("productResult").hidden = true;
         showStatus("searchState", "正在查找产品…", "");
         try {
-          const includeZero = byId("includeZeroStock").checked;
+          const includeZero = state.shell?.user?.role === "admin" && byId("includeZeroStock").checked;
           const data = await apiGet(`/api/mobile/erp/products?q=${encodeURIComponent(query)}&limit=20&include_zero=${includeZero}`, {
             signal: state.searchController.signal,
+            isCurrent: () => generation === state.searchGeneration && current(),
           });
-          if (generation !== state.searchGeneration) return;
+          if (generation !== state.searchGeneration || !current()) return false;
           state.candidates = Array.isArray(data.items) ? data.items : [];
           state.searchMeta = data;
           renderCandidates(data);
+          return true;
         } catch (error) {
-          if (error.name === "AbortError" || generation !== state.searchGeneration) return;
+          if (error.name === "AbortError" || generation !== state.searchGeneration || !current()) return;
           showStatus("searchState", error.message || "产品查找失败", "error", runSearch);
         }
       }
@@ -1379,7 +1481,11 @@
         container.hidden = false;
       }
 
-      async function loadInventory(productId) {
+      async function loadInventory(productId, options = {}) {
+        if (!options.restoring) fieldIntent();
+        if (state.warehouseAuthPending || state.activePage !== "warehouse") return false;
+        const actor = warehouseActor(), current = () => actor === warehouseActor() && state.activePage === "warehouse" && !state.warehouseAuthPending && (!options.current || options.current());
+        state.selectedInventory = null;
         window.TmProductDrawings?.disposeWithin(byId("candidateList"));
         window.TmProductDrawings?.disposeWithin(byId("productResult"));
         state.detailController?.abort();
@@ -1391,12 +1497,14 @@
         try {
           const data = await apiGet(`/api/mobile/erp/products/${productId}/inventory`, {
             signal: state.detailController.signal,
+            isCurrent: () => generation === state.detailGeneration && current(),
           });
-          if (generation !== state.detailGeneration) return;
+          if (generation !== state.detailGeneration || !current()) return false;
           state.selectedInventory = data;
           renderInventory();
+          return true;
         } catch (error) {
-          if (error.name === "AbortError" || generation !== state.detailGeneration) return;
+          if (error.name === "AbortError" || generation !== state.detailGeneration || !current()) return;
           showStatus("searchState", error.message || "库存读取失败", "error", () => loadInventory(productId));
         }
       }
@@ -1551,18 +1659,25 @@
       }
 
       async function openWarehouseMap(preferred = {}) {
+        if (state.warehouseAuthPending) return;
+        if (!preferred.restoring) fieldIntent();
+        const actor = warehouseActor(), generation = ++state.fieldMapGeneration;
+        const current = () => generation === state.fieldMapGeneration && actor === warehouseActor() && state.activePage === "warehouse" && !byId("warehouseMapLayer").hidden && !state.warehouseAuthPending;
+        state.warehouseMapOrigin = preferred.origin === "search" ? "search" : "map";
         byId("warehouseMapLayer").hidden = false;
         byId("closeWarehouseMap").textContent = "返回仓库搜索";
         byId("warehouseDiscrepancyListButton").hidden = !state.warehouseMapCanCorrect;
         if (!state.warehouseMapFloors.length) {
           showStatus("warehouseMapState", "正在读取仓库楼层与区域…", "");
           try {
-            const data = await apiGet("/api/mobile/erp/warehouse/map/floors");
+            const data = await apiGet("/api/mobile/erp/warehouse/map/floors", {isCurrent:current});
+            if (!current()) return;
             state.warehouseMapFloors = Array.isArray(data.floors) ? data.floors : [];
             state.warehouseMapCanExecute = data.can_execute === true;
             state.warehouseMapCanCorrect = data.can_correct === true;
             byId("warehouseDiscrepancyListButton").hidden = !state.warehouseMapCanCorrect;
           } catch (error) {
+            if (!current()) return;
             showStatus("warehouseMapState", error.message || "仓库地图读取失败", "error", () => openWarehouseMap(preferred));
             return;
           }
@@ -1570,7 +1685,8 @@
         let resolvedPreferred = preferred;
         if (preferred.lotId && !preferred.locationId) {
           try {
-            const identity = await apiGet(`/api/mobile/erp/warehouse/map/lots/${encodeURIComponent(preferred.lotId)}`);
+            const identity = await apiGet(`/api/mobile/erp/warehouse/map/lots/${encodeURIComponent(preferred.lotId)}`, {isCurrent:current});
+            if (!current()) return;
             resolvedPreferred = {
               ...preferred,
               floorCode: identity.floor_code,
@@ -1579,6 +1695,7 @@
               rackId: identity.rack_id || preferred.rackId,
             };
           } catch (error) {
+            if (!current()) return;
             showStatus("warehouseMapState", error.message || "目标库存批次不存在或当前账号无权查看", "error", () => openWarehouseMap(preferred));
             return;
           }
@@ -1587,7 +1704,8 @@
           try {
             const floorCode = resolvedPreferred.floorCode || preferred.floorCode;
             if (!floorCode) throw new Error("货架二维码缺少楼层身份");
-            const identity = await apiGet(`/api/mobile/erp/warehouse/map/racks/${encodeURIComponent(floorCode)}/${encodeURIComponent(resolvedPreferred.rackId)}`);
+            const identity = await apiGet(`/api/mobile/erp/warehouse/map/racks/${encodeURIComponent(floorCode)}/${encodeURIComponent(resolvedPreferred.rackId)}`, {isCurrent:current});
+            if (!current()) return;
             resolvedPreferred = {
               ...resolvedPreferred,
               floorCode: identity.floor_code,
@@ -1595,19 +1713,22 @@
               rackId: identity.rack_id,
             };
           } catch (error) {
+            if (!current()) return;
             showStatus("warehouseMapState", error.message || "目标货架不存在或尚未启用", "error", () => openWarehouseMap(preferred));
             return;
           }
         }
         if (resolvedPreferred.locationId && (!resolvedPreferred.floorCode || !resolvedPreferred.areaCode)) {
           try {
-            const identity = await apiGet(`/api/mobile/erp/warehouse/map/locations/${encodeURIComponent(resolvedPreferred.locationId)}`);
+            const identity = await apiGet(`/api/mobile/erp/warehouse/map/locations/${encodeURIComponent(resolvedPreferred.locationId)}`, {isCurrent:current});
+            if (!current()) return;
             resolvedPreferred = {
               ...resolvedPreferred,
               floorCode: identity.floor_code,
               areaCode: identity.area_code,
             };
           } catch (error) {
+            if (!current()) return;
             showStatus("warehouseMapState", error.message || "目标货位不存在或尚未启用", "error", () => openWarehouseMap(preferred));
             return;
           }
@@ -1644,6 +1765,8 @@
       }
 
       async function loadWarehouseFloorOverview() {
+        if (state.warehouseAuthPending) return;
+        const actor = warehouseActor();
         showWarehouseArea();
         state.warehouseMapOverview = true;
         ["warehouseMapFit", "warehouseMapZoomOut", "warehouseMapZoomIn"].forEach(id => { byId(id).disabled = true; });
@@ -1657,7 +1780,7 @@
         byId("warehouseFloorOverview").hidden = false;
         showStatus("warehouseMapState", "正在读取楼层区域总览…", "");
         try {
-          const data = await apiGet(`/api/mobile/erp/warehouse/map/overview/${encodeURIComponent(state.warehouseMapFloor)}`, {signal: controller.signal});
+          const data = await apiGet(`/api/mobile/erp/warehouse/map/overview/${encodeURIComponent(state.warehouseMapFloor)}`, {signal: controller.signal, isCurrent:() => generation === state.warehouseMapGeneration && actor === warehouseActor() && state.activePage === "warehouse" && !state.warehouseAuthPending});
           if (generation !== state.warehouseMapGeneration) return;
           const container = byId("warehouseFloorOverview"); container.replaceChildren();
           byId("warehouseMapTitle").textContent = `${data.floor_name}｜楼层总览`;
@@ -1697,6 +1820,8 @@
       }
 
       async function loadWarehouseMapArea({ preferredLotId = null, preferredLocationId = null, preserveMove = false, focusOnly = false } = {}) {
+        if (state.warehouseAuthPending) return;
+        const actor = warehouseActor();
         if (!state.warehouseMapArea) return loadWarehouseFloorOverview();
         state.warehouseMapOverview = false;
         byId("warehouseFloorOverview").hidden = true;
@@ -1712,7 +1837,7 @@
         if (!preserveMove) byId("warehouseMapMoveForm").hidden = true;
         try {
           const url = `/api/mobile/erp/warehouse/map/floors/${encodeURIComponent(state.warehouseMapFloor)}?area_code=${encodeURIComponent(state.warehouseMapArea)}`;
-          const data = await apiGet(url, { signal: controller.signal });
+          const data = await apiGet(url, { signal: controller.signal, isCurrent:() => generation === state.warehouseMapGeneration && actor === warehouseActor() && state.activePage === "warehouse" && !state.warehouseAuthPending });
           if (generation !== state.warehouseMapGeneration) return;
           state.warehouseMapData = data;
           byId("warehouseMapOptions").open = false;
@@ -1959,7 +2084,7 @@
         });
         if (!goods.length && !discrepantGoods.length) {
           const params = new URLSearchParams({location_id: location.location_id, return_floor: state.warehouseMapFloor, return_area: state.warehouseMapArea});
-          window.location.assign(`/mobile/stocktake.html?${params}`);
+          launchMobileStocktake(params);
           return;
         }
         const addPanel = node("section", "warehouse-label-operation");
@@ -1968,7 +2093,7 @@
           stocktake.type = "button";
           stocktake.addEventListener("click", () => {
             const params = new URLSearchParams({ location_id: location.location_id, return_floor: state.warehouseMapFloor, return_area: state.warehouseMapArea });
-            window.location.assign(`/mobile/stocktake.html?${params}`);
+            launchMobileStocktake(params);
           });
           addPanel.append(stocktake);
 
@@ -2018,7 +2143,7 @@
           stocktake.type = "button";
           stocktake.addEventListener("click", () => {
             const params = new URLSearchParams({ location_id: location.location_id, return_floor: state.warehouseMapFloor, return_area: state.warehouseMapArea });
-            window.location.assign(`/mobile/stocktake.html?${params}`);
+            launchMobileStocktake(params);
           });
           actions.append(move, stocktake);
           if (good.inventory_type === "semi_finished") {
@@ -2210,7 +2335,7 @@
                   const params = new URLSearchParams({location_id: location.location_id, return_floor: state.warehouseMapFloor,
                     return_area: state.warehouseMapArea, product_id: product.product_id, customer_id: product.customer_id,
                     product_code: product.product_code, product_name: product.product_name, customer_name: product.customer_name, counted_quantity: count});
-                  window.location.assign(`/mobile/stocktake.html?${params}`);
+                  launchMobileStocktake(params);
                   return;
                 }
                 button.disabled = true;
@@ -2489,12 +2614,13 @@
           return;
         }
         state.warehouseMapController?.abort();
-        state.warehouseMapGeneration += 1;
+        state.warehouseMapGeneration += 1; state.fieldMapGeneration++; fieldIntent();
         byId("warehouseMapLayer").hidden = true;
       }
 
       function openMap(position) {
         openWarehouseMap({
+          origin: "search",
           floorCode: position.floor ? `${position.floor}F` : "",
           areaCode: position.area_code || "",
           locationId: position.location_id,
@@ -2506,7 +2632,7 @@
         const groups = [data.inventory?.finished, data.inventory?.semi_finished];
         const position = groups.flatMap(group => group?.positions || []).find(item => item.map_status === "mapped");
         if (position) openMap(position);
-        else openWarehouseMap();
+        else openWarehouseMap({origin:"search"});
       }
 
       function closeMap() {
@@ -2904,7 +3030,7 @@
         // Production cards and scroll position remain untouched behind the overlay.
       }
 
-      async function initialize() {
+      async function initialize(options = {}) {
         if (state.initializing) return;
         state.initializing = true;
         byId("bottomNav").hidden = true;
@@ -2912,7 +3038,7 @@
         const requestedIncoming = requestedPage === "incoming";
         if (requestedIncoming) startIncomingPerformance();
         try {
-          state.shell = await apiGet("/api/mobile/erp/shell");
+          state.shell = options.verifiedShell || await apiGet("/api/mobile/erp/shell");
           if (state.incomingPerformanceActive) markIncomingPerformance("shell-ready");
           const user = state.shell.user || {};
           if ((state.shell.search_categories || []).includes("orders")) await loadDimensionSettings();
@@ -2959,16 +3085,19 @@
             navContainer.append(button);
           });
           byId("zeroStockControl").hidden = !allowedEntryIds.has("warehouse") || user.role !== "admin";
+          if (user.role !== "admin") byId("includeZeroStock").checked = false;
           let visibleNav = [...document.querySelectorAll(".nav-btn")].filter(button => !button.hidden);
           state.allowedPages = new Set(["home", ...entryIds, ...(state.moreEntryIds.length ? ["more"] : [])]);
           document.querySelector(".bottom-inner").style.setProperty("--nav-count", visibleNav.length || 1);
           byId("bottomNav").hidden = false;
           renderEntryHome();
-          const firstPage = state.allowedPages.has(requestedPage)
-            ? requestedPage
+          const targetPage = options.skipFieldLaunch ? safeRequestedPage() : requestedPage;
+          const firstPage = state.allowedPages.has(targetPage)
+            ? targetPage
             : (state.allowedPages.has(restoredPage) ? restoredPage : "home");
           setPage(firstPage, {incomingPerformanceStarted: requestedIncoming});
-          const launchParams = new URLSearchParams(window.location.search);
+          const launchParams = new URLSearchParams(options.skipFieldLaunch ? "" : window.location.search);
+          if (firstPage === "warehouse" && launchParams.get("return_source") === "search") await restoreWarehouseLaunch(launchParams);
           if (firstPage === "production" && /^[1-9]\d*$/.test(launchParams.get("task_id") || "")) {
             byId("productionLookupInput").value = "TMPT:" + launchParams.get("task_id");
             await runProductionLookup();
@@ -3067,6 +3196,7 @@
       byId("includeZeroStock").addEventListener("change", () => {
         if (byId("searchInput").value.trim()) runSearch();
       });
+      document.addEventListener("click", event => { if (state.warehouseAuthPending && event.target.closest?.("#warehouseMapLayer")) fieldIntent(); }, true);
       byId("warehouseMapButton").addEventListener("click", () => openWarehouseMap());
       byId("closeWarehouseMap").addEventListener("click", closeWarehouseMap);
       byId("warehouseFloorOverviewButton").addEventListener("click", () => { state.warehouseMapArea = ""; renderWarehouseMapSelectors(); loadWarehouseFloorOverview(); });
@@ -3097,14 +3227,7 @@
           });
         }
       });
-      window.addEventListener("pageshow", () => {
-        if (!byId("warehouseMapLayer").hidden && state.warehouseMapArea) {
-          loadWarehouseMapArea({
-            preferredLocationId: state.warehouseMapFocusLocationId,
-            preserveMove: Boolean(state.warehouseMapSource)
-          });
-        }
-      });
+      window.addEventListener("pageshow", refreshWarehouseAfterBack);
       byId("warehouseMapTitle").addEventListener("click", () => { byId("warehouseMapOptions").open = !byId("warehouseMapOptions").open; });
       window.addEventListener("resize", () => {
         if (!byId("warehouseMapLayer").hidden && state.warehouseMapData && !state.warehouseMapOverview && !state.warehouseLocationPage) renderWarehouseMap();

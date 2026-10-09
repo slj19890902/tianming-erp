@@ -41,10 +41,11 @@
 
     #finishedGoods{display:flex;flex-direction:column;max-height:calc(100dvh - 150px)}#inboundFields{overflow:auto;min-height:0}#finishedGoods .inbound-actions{flex-shrink:0;padding-top:5px;background:#edf9f5}#inboundCandidates{max-height:130px}
     fieldset{min-inline-size:0;min-width:0}#stocktakePanel,#initialInbound,#finishedGoods,#sheetGoods{min-width:0;max-width:100%}.goods-heading .actions{flex-wrap:nowrap}.goods-heading h2{white-space:nowrap}#selectedLocationCode{overflow-wrap:anywhere}.location-head>div:first-child{flex:1}input,select{min-width:0}
-    body>header{display:none}main{padding:6px}.card{padding:8px;margin-bottom:6px}#stocktakePanel>.location-head{align-items:center;gap:6px}#stocktakePanel>.location-head .muted,#selectedLocationName,#backToLocations{display:none}#selectedLocationCode{font-size:15px;line-height:1.35}#openCurrentMap{font-size:12px;min-height:32px;padding:5px;white-space:nowrap}.summary{margin:3px 0 7px;gap:10px;font-size:12px}.summary strong{font-size:14px}#initialInbound{margin-top:4px!important;padding:8px}.goods-heading{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-bottom:8px}.goods-heading h2{font-size:16px;margin:0}.goods-heading .actions{gap:3px}#initialInbound .goods-heading .btn{font-size:13px;padding:6px;min-height:36px}#initialInbound .field{margin-bottom:6px}#inboundContext:empty{display:none}#inboundNotListed{width:100%;margin:4px 0}.inbound-candidates{max-height:180px;overflow:auto;display:grid;gap:4px}.inbound-candidates .btn{text-align:left;white-space:normal!important;background:#fff;border:1px solid #cde2dc}.inbound-candidates small{display:block;color:#52676a;font-size:12px}#inboundProduct{grid-column:1/-1}.search-pair{grid-template-columns:minmax(0,1fr) 44px}.search-pair label{margin:0}.inbound-actions{gap:5px}#sheetGoods{max-height:calc(100dvh - 145px);overflow:auto}#lotList:not(:empty){max-height:220px;overflow:auto;margin-bottom:6px}.lot-label-code-row{font-size:17px}.lot-label-summary{font-size:14px}.lot-actions .btn{font-size:13px;min-height:34px;padding:5px 9px}
+    body>header{display:none}main{padding:6px}.card{padding:8px;margin-bottom:6px}#stocktakePanel>.location-head{align-items:center;gap:6px}#stocktakePanel>.location-head .muted,#selectedLocationName,#backToLocations{display:none}#selectedLocationCode{font-size:15px;line-height:1.35}#openCurrentMap{font-size:12px;min-height:44px;padding:8px;white-space:nowrap}.summary{margin:3px 0 7px;gap:10px;font-size:12px}.summary strong{font-size:14px}#initialInbound{margin-top:4px!important;padding:8px}.goods-heading{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-bottom:8px}.goods-heading h2{font-size:16px;margin:0}.goods-heading .actions{gap:3px}#initialInbound .goods-heading .btn{font-size:13px;padding:6px;min-height:44px}#initialInbound .field{margin-bottom:6px}#inboundContext:empty{display:none}#inboundNotListed{width:100%;margin:4px 0}.inbound-candidates{max-height:180px;overflow:auto;display:grid;gap:4px}.inbound-candidates .btn{text-align:left;white-space:normal!important;background:#fff;border:1px solid #cde2dc}.inbound-candidates small{display:block;color:#52676a;font-size:12px}#inboundProduct{grid-column:1/-1}.search-pair{grid-template-columns:minmax(0,1fr) 44px}.search-pair label{margin:0}.inbound-actions{gap:5px}#sheetGoods{max-height:calc(100dvh - 145px);overflow:auto}#lotList:not(:empty){max-height:none;overflow:visible;margin-bottom:6px}.lot-label-code-row{font-size:17px}.lot-label-summary{font-size:14px}.lot-actions .btn{font-size:13px;min-height:44px;padding:5px 9px}
     .search-pair{grid-template-columns:minmax(0,1fr) 44px minmax(0,1.15fr)}#inboundProduct{grid-column:auto}.search-pair select{overflow:hidden;text-overflow:ellipsis}
     .embedded-stocktake #initialInbound,.embedded-stocktake #openCurrentMap,.embedded-stocktake .relocate{display:none!important}
     .embedded-stocktake #lotList:not(:empty){max-height:none;overflow:visible}
+    .lot-meta summary{min-height:44px;display:flex;align-items:center}.location-head{flex-wrap:wrap}.location-head>div:first-child{min-width:0;overflow-wrap:anywhere}.goods-heading{flex-wrap:wrap}.goods-heading .btn{min-width:44px}
   </style>
 <!-- mobile-goods-assets:start -->
 <script type="module" crossorigin src="/factory-twin-assets/assets/mobileGoods-DBpHY-8d.js"></script>
@@ -83,6 +84,7 @@
       <div id="lotSummary" class="summary"></div>
       <warehouse-costs id="locationCosts" location-id="0"></warehouse-costs>
       <div id="lotList" class="lot-list"></div>
+      <div id="submitArea" class="sticky-submit hidden"><button id="fillAllButton" class="btn" type="button">全部与系统一致</button><button id="submitButton" class="btn primary" type="button" style="margin-top:8px">提交盘点</button></div>
       <section id="initialInbound" class="card hidden" style="margin-top:12px">
         <div class="goods-heading"><h2>添加货物</h2><div id="goodsTypes" class="actions"><button class="btn primary" data-goods-type="finished">成品</button><button class="btn" data-goods-type="semi">半成品</button><button class="btn" data-goods-type="raw">原材料</button><button class="btn" data-goods-type="unassigned">客户待认领成品</button></div></div><div id="sheetGoods" class="hidden"></div><div id="finishedGoods">
         <fieldset id="inboundFields" style="border:0;padding:0;margin:0">
@@ -105,10 +107,10 @@
         <button id="inboundRefresh" class="btn" type="button">刷新</button></div>
         <div id="inboundResult" aria-live="polite"></div></div>
       </section>
-      <div id="submitArea" class="sticky-submit hidden"><button id="fillAllButton" class="btn" type="button">全部与系统一致</button><button id="submitButton" class="btn primary" type="button" style="margin-top:8px">提交盘点</button></div>
       <div id="lockedResult" class="success hidden" style="margin-top:12px"><div>盘点已提交并锁定</div><div class="number" id="stocktakeNumber"></div><div class="muted" style="margin-top:4px">如需更正，请由仓库审核人员处理。</div></div>
     </section>
   </main>
+  <script src="/static/ui/mobile-field-return.js?v=20261010"></script>
   <script src="/static/ui/mobile-stocktake-recovery.js?v=20261010"></script>
   <script>
     const $=id=>document.getElementById(id);
@@ -147,9 +149,13 @@
     function locationFloor(location){const value=Number(pick(location,["warehouse_floor","floor_number"],0));return Number.isInteger(value)&&value>0?value:null}
     function locationFloorLabel(location){const floor=locationFloor(location),name=pick(location,["floor_name"],"");return name?`${name}（${floor} 楼）`:(floor?`${floor} 楼`:"未登记楼层")}
     function warehouseMapHref(lotId=null){const location=state.selectedLocation||{},params=new URLSearchParams({warehouse_map:"1"}),origin=new URLSearchParams(window.location.search);const floorCode=String(pick(location,["floor_code"],origin.get('return_floor')||"")).trim(),areaCode=String(pick(location,["area_code"],origin.get('return_area')||"")).trim(),locationId=pick(location,["id","location_id"],origin.get("location_id"));if(floorCode)params.set("floor_code",floorCode);if(areaCode)params.set("area_code",areaCode);if(locationId)params.set("location_id",String(locationId));if(lotId)params.set("lot_id",String(lotId));else params.set("focus_only","1");return `/mobile/?${params.toString()}#warehouse`}
-    function openWarehouseMap(lotId=null){if(typeof stocktakeRecoveryBlocked==="function"&&stocktakeRecoveryBlocked())return;if(state.submitting||(typeof inbound!=="undefined"&&(inbound.busy||inbound.attempt)))return;window.location.assign(warehouseMapHref(lotId))}
-    function returnToWarehouseContext(){if(embeddedStocktake)return false;openWarehouseMap();return true;}
-    function renderSelectedLocationIdentity(){const location=state.selectedLocation||{};$("openCurrentMap").textContent=location.map_rack_id?"返回货架":"返回区域";const rack=String(pick(location,["rack_display_name"],"")).trim(),level=Number(pick(location,["level_no"],0)),slot=Number(pick(location,["slot_no"],0));$("selectedRackIdentity").textContent=rack&&level&&slot?`${rack} · 第 ${level} 层 · 第 ${slot} 格`:"地图位置与当前货位使用同一条库存台账";$("locationCosts").setAttribute("location-id",String(pick(location,["id","location_id"],0)));$("locationCosts").setAttribute("revision",String(Date.now()))}
+    // Navigation may leave a durable unknown request; editing and sending remain locked by recovery.
+    function stocktakeNavigationBlocked(){const recovery=typeof stocktakeRecoveryState==='undefined'?{}:stocktakeRecoveryState;return state.submitting||recovery.busy||recovery.accountChanged||Boolean(recovery.issue)||(typeof inbound!=='undefined'&&Boolean(inbound.busy||inbound.attempt))}
+    function fieldReturnTarget(){return window.TmMobileFieldReturn?.target(new URLSearchParams(window.location.search))}
+    function openWarehouseMap(lotId=null){if(stocktakeNavigationBlocked())return false;window.location.assign(!lotId&&fieldReturnTarget()?.href||warehouseMapHref(lotId));return true}
+    function returnToWarehouseContext(){if(embeddedStocktake)return false;return openWarehouseMap();}
+    function applyFieldReturnLabel(){const target=fieldReturnTarget();if(!target)return;$("openCurrentMap").textContent=target.label;$("backToLocations").textContent=target.label;const link=document.querySelector('.header-link');link.href=target.href;link.textContent=target.label;}
+    function renderSelectedLocationIdentity(){const location=state.selectedLocation||{};$("openCurrentMap").textContent=location.map_rack_id?"返回货架":"返回区域";const rack=String(pick(location,["rack_display_name"],"")).trim(),level=Number(pick(location,["level_no"],0)),slot=Number(pick(location,["slot_no"],0));$("selectedRackIdentity").textContent=rack&&level&&slot?`${rack} · 第 ${level} 层 · 第 ${slot} 格`:"地图位置与当前货位使用同一条库存台账";$("locationCosts").setAttribute("location-id",String(pick(location,["id","location_id"],0)));$("locationCosts").setAttribute("revision",String(Date.now()));applyFieldReturnLabel()}
     function listItems(data,keys=["items","locations","results"]){for(const key of keys)if(Array.isArray(data?.[key]))return data[key];return Array.isArray(data)?data:[]}
     function renderFloors(){const rows=new Map();state.locations.forEach(location=>{const floor=locationFloor(location);if(floor)rows.set(floor,locationFloorLabel(location))});const previous=$("floorFilter").value;$("floorFilter").innerHTML='<option value="">请选择楼层</option>'+[...rows].sort((a,b)=>a[0]-b[0]).map(([value,label])=>`<option value="${h(value)}">${h(label)}</option>`).join("");if(rows.has(Number(previous)))$("floorFilter").value=previous;else if(rows.size===1)$("floorFilter").value=String([...rows.keys()][0])}
     function renderAreas(){const floor=Number($("floorFilter").value),values=[...new Set(state.locations.filter(location=>!floor||locationFloor(location)===floor).map(locationArea))].sort((a,b)=>a.localeCompare(b,"zh-CN",{numeric:true})),previous=$("areaFilter").value;$("areaFilter").innerHTML='<option value="">'+(floor?"请选择区域":"请先选择楼层")+'</option>'+values.map(value=>`<option value="${h(value)}">${h(value)}</option>`).join("");if(values.includes(previous))$("areaFilter").value=previous;$("areaFilter").disabled=!floor||!values.length}
@@ -176,20 +182,10 @@
     function showLogin(){if(typeof destroyStocktakeRecovery==='function')destroyStocktakeRecovery();invalidateLocationList();invalidateLocationDetail();state.user=null;state.selectedLocation=null;state.lots=[];state.locked=false;resetMobileSubmitAttempt();$('loginPanel').classList.remove('hidden');$('locationPanel').classList.add('hidden');$('stocktakePanel').classList.add('hidden')}
     async function login(event){event.preventDefault();if($('loginButton').disabled)return;let generation=++stocktakeAuthGeneration;$('loginButton').disabled=true;$('loginButton').textContent='登录中…';showMessage('');try{const data=await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:$('loginUsername').value.trim(),password:$('loginPassword').value})});if(generation!==stocktakeAuthGeneration)return;const user=data?.user||data;if(!Number.isInteger(user?.id)||user.id<=0)throw Error('登录回执不完整，请重试');state.user=user;mountStocktakeRecovery();generation=stocktakeAuthGeneration;$('loginPassword').value='';$('loginPanel').classList.add('hidden');if(!stocktakeRecoveryBlocked()){showMessage('登录成功','success');await loadLocations()}}catch(error){if(generation===stocktakeAuthGeneration)showMessage(`登录失败：${error.message}`)}finally{if(generation===stocktakeAuthGeneration){$('loginButton').disabled=false;$('loginButton').textContent='登录'}}}
     function restoreWarehouseAreaReturn(){
-      const params=new URLSearchParams(window.location.search),floor=params.get('return_floor'),area=params.get('return_area');
-      if(params.get('return_scan')==='1'){
-        const scanLocationId=params.get('location_id')||'';
-        if(!/^[1-9]\d*$/.test(scanLocationId))return;
-        const target='/q/'+scanLocationId;
-        const link=document.querySelector('.header-link');link.href=target;link.textContent='返回扫码页';
-        $('backToLocations').textContent='返回扫码页';
-        const back=event=>{event.preventDefault();event.stopImmediatePropagation();if(state.submitting||(typeof inbound!=='undefined'&&(inbound.busy||inbound.attempt)))return;window.location.assign(target)};
-        link.addEventListener('click',back,true);$('backToLocations').addEventListener('click',back,true);
-        return;
-      }
-      if(!floor||!area)return;
-      const link=document.querySelector('.header-link');link.href=warehouseMapHref();link.textContent='返回货架 / 区域';
-      $('backToLocations').textContent='返回货架 / 区域';
+      const params=new URLSearchParams(window.location.search),target=fieldReturnTarget();
+      if(!target&&(!params.get('return_floor')||!params.get('return_area')))return;
+      const link=document.querySelector('.header-link');link.href=target?.href||warehouseMapHref();link.textContent=target?.label||'返回货架 / 区域';
+      $('backToLocations').textContent=link.textContent;applyFieldReturnLabel();
       const back=event=>{event.preventDefault();event.stopImmediatePropagation();openWarehouseMap()};
       link.addEventListener('click',back,true);$('backToLocations').addEventListener('click',back,true);
     }

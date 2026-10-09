@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.585"
-APP_VERSION_NAME = "管理员按次选择合同电子章"
+APP_VERSION = "v0.22.586"
+APP_VERSION_NAME = "共用成品库存预警数量一致"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5577,3 +5577,14 @@ APP_VERIFICATION_STEPS = [
     "需要停用时在管理电子章中操作，停用后普通未盖章导出继续可用。",
 ]
 APP_CHANGELOG = [*(f"v0.22.585：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "库存预警与常用箱预警设置纳入已确认共用的成品批次，两客户读取同一批实物余额。",
+    "同一批次只计算一次，保留实际库存、可分配和已占用数量的区别；未共用、暂停或资料变化仍遵循原门禁。",
+    "仅修正库存读取，不新增库存，不改变货位、归属、订单、送货及客户各自的预警线。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新库存预警，分别查看研光、光洋80012149，核对库存均为同一实际余额，发布核对时为20。",
+    "研光预警线仍为50，库存20继续提示不足；常用箱预警设置里的库存与预警页保持一致。",
+]
+APP_CHANGELOG = [*(f"v0.22.586：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

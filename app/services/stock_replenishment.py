@@ -467,8 +467,26 @@ def _finished_inventory_quantity_summary(
     *,
     customer_id: int,
     product_condition,
+    shared_lot_ids: list[int] | None = None,
 ) -> dict[str, int]:
     from app.services.bom_inventory_contract import complete_stock_condition
+    owned_stock = and_(
+        Product.customer_id == customer_id,
+        product_condition,
+        or_(
+            and_(
+                FinishedGoodsInventoryDetail.is_general.is_(False),
+                FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
+            ),
+            FinishedGoodsInventoryDetail.is_general.is_(True),
+        ),
+    )
+    # One row per real lot: an owner's approved shared lot must not be added
+    # twice. Cross-customer access comes only from the frozen sharing contract.
+    eligible_stock = (
+        or_(owned_stock, InventoryLot.id.in_(shared_lot_ids))
+        if shared_lot_ids else owned_stock
+    )
     row = db.execute(
         select(
             func.coalesce(func.sum(InventoryLot.quantity_available), 0),
@@ -512,15 +530,7 @@ def _finished_inventory_quantity_summary(
             complete_stock_condition(),
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
-            Product.customer_id == customer_id,
-            product_condition,
-            or_(
-                and_(
-                    FinishedGoodsInventoryDetail.is_general.is_(False),
-                    FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
-                ),
-                FinishedGoodsInventoryDetail.is_general.is_(True),
-            ),
+            eligible_stock,
             or_(
                 WarehouseLocation.source_version.is_(None),
                 WarehouseLocation.source_version != "V11",
@@ -740,6 +750,10 @@ def finished_product_quantity_summary(
             inventory_code=inventory_code,
             product_id=product_id,
         )
+    from app.services.shared_finished_stock import candidate_lot_ids
+    shared_lot_ids = candidate_lot_ids(
+        db, product_id=product_id, customer_id=customer_id,
+    )
     return _finished_inventory_quantity_summary(
         db,
         customer_id=customer_id,
@@ -749,6 +763,7 @@ def finished_product_quantity_summary(
             )
             == inventory_code
         ),
+        shared_lot_ids=shared_lot_ids,
     )
 
 

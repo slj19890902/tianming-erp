@@ -63,7 +63,8 @@ def test_default_remaining_replenishment_receipt_replays_after_partial(stock_rep
         assert [r.received_quantity for r in db.scalars(select(IncomingReceiptItem).order_by(IncomingReceiptItem.id))] == [60, 40]
 
 
-def test_batch_cannot_receive_same_stock_source_under_numeric_aliases(stock_replenishment_app):
+@pytest.mark.parametrize('invalid_first', [False, True])
+def test_batch_cannot_receive_same_stock_source_under_numeric_aliases(stock_replenishment_app, invalid_first):
     app, factory = stock_replenishment_app
     with TestClient(app) as client:
         _login(client)
@@ -71,14 +72,57 @@ def test_batch_cannot_receive_same_stock_source_under_numeric_aliases(stock_repl
         assert created.status_code == 201, created.text
         item_id = created.json()["items"][0]["id"]
         _confirm_stock(client, factory, item_id)
+        keys = (f"sr {item_id}", f"sr{item_id}") if invalid_first else (f"sr{item_id}", f"sr0{item_id}")
         response = client.put("/api/incoming/batch-receive", json={"items": [
             {"item_id": key, "received_quantity": 10, "resolution_action": "await_supplier", "idempotency_key": f"alias-{idx}"}
-            for idx, key in enumerate((f"sr{item_id}", f"sr0{item_id}"))]})
+            for idx, key in enumerate(keys)]})
         assert response.status_code == 200, response.text
         assert response.json()["succeeded"] == 1, response.text
     from app.models.incoming_receipt import IncomingReceiptItem
     with factory() as db:
         assert sum(r.received_quantity for r in db.scalars(select(IncomingReceiptItem))) == 10
+
+
+@pytest.mark.parametrize("keys", [("+1", "1"), ("1", "+1")])
+def test_batch_cannot_receive_same_order_source_under_signed_numeric_aliases(requisition_app, keys):
+    from test_p1_81_receipt_purpose_flow import _seed_material_and_staging, _create_frozen_sources, _freeze_receipt_fact
+    from app.models.incoming_receipt import IncomingReceiptItem
+
+    app, factory = requisition_app
+    _seed_material_and_staging(factory)
+    with TestClient(app) as client:
+        _legacy_login(client, "admin")
+        source = _create_frozen_sources(client, factory, order_quantity=500,
+            purchase_total=600, order_purpose=500, stock_purpose=100)[0]
+        frozen = _freeze_receipt_fact(client, source, idempotency_key="signed-alias-price")
+        assert frozen.status_code == 200, frozen.text
+        fact = frozen.json()
+        response = client.put("/api/incoming/batch-receive", json={
+            "idempotency_key": "signed-alias-batch",
+            "items": [{
+                "item_id": key, "received_quantity": 40,
+                "idempotency_key": f"signed-alias-line-{idx}",
+                "expected_receipt_fact_version": fact["receipt_fact_version"],
+                "purchase_purpose_source_snapshot_id": source.purpose_snapshot_id,
+                "expected_purpose_snapshot_version": source.purpose_snapshot_version,
+                "receipt_plan_fingerprint": fact["receipt_plan_fingerprint"],
+                "expected_actual_material_version": fact["actual_material_version"],
+                "actual_material_fingerprint": fact["actual_material_fingerprint"],
+            } for idx, key in enumerate(keys)],
+        })
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["succeeded"] == 1, response.text
+        assert result["results"][0]["success"] is True, response.text
+        assert result["results"][1]["success"] is False, response.text
+        assert result["results"][1]["message"] == "同一明细不能重复提交", response.text
+
+    with factory() as db:
+        receipts = db.scalars(select(IncomingReceiptItem)).all()
+        assert len(receipts) == 1
+        assert receipts[0].order_item_id == 1
+        assert receipts[0].supplier_order_item_id == source.supplier_item_id
+        assert receipts[0].received_quantity == 40
 
 
 @pytest.mark.parametrize("header_status,row_status", [("reversed", "reversed"), ("posted", "reversed")])

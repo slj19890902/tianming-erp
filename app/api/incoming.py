@@ -4769,11 +4769,17 @@ def batch_receive_items(
         # sr1 / sr01). They must not create two receipts in one selection.
         item_text = str(line.item_id)
         item_identity: tuple[str, int] | str = item_text
-        for prefix in ("sr", "so", "r", ""):
-            suffix = item_text[len(prefix):] if item_text.startswith(prefix) else ""
-            if suffix.strip().isdigit():
-                item_identity = (prefix, int(suffix))
-                break
+        if _is_stock_replenishment_key(line.item_id):
+            item_identity = ("sr", int(item_text[2:]))
+        elif _is_supplier_order_item_key(line.item_id):
+            item_identity = ("so", _supplier_order_item_route_id(line.item_id))
+        elif _is_component_key(line.item_id):
+            item_identity = ("r", _component_id(line.item_id))
+        else:
+            try:
+                item_identity = ("", int(line.item_id))
+            except (TypeError, ValueError):
+                pass  # The receipt resolver reports this invalid row normally.
         if item_identity in seen:
             results.append(
                 {

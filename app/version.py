@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.592"
-APP_VERSION_NAME = "首页今日工作台与库存优先待办"
+APP_VERSION = "v0.22.593"
+APP_VERSION_NAME = "订单至送货后端可靠性修复"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5655,3 +5655,16 @@ APP_VERIFICATION_STEPS = [
     "切换标准/大字模式，核对列表清晰完整；受限账号仅出现获授权客户及允许的数据。",
 ]
 APP_CHANGELOG = [*(f"v0.22.592：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "订单入口增加状态、客户和数量校验，修复完全匹配片料被误判不匹配的问题，跨行抵扣保持数量守恒。",
+    "报料在终止或已实收后冻结；收料重试重新核验权限、有效事实和来源，避免重复、错报成功及成本越权。",
+    "修复独立组套完工历史读取及失效位置撤销保护；送货保存支持同请求重试，旧版本不能覆盖实际拿货数量。",
+    "五环节完成51类风险检查，修复21类已确认问题；保留共用库存、成本、历史单据和全部正式数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新系统，在正常业务中核对订单导入、相同库存跨行抵扣及普通待发货编辑保存。",
+    "核对分批收料查询结果与独立组套完工历史；网络结果未知时先查原单，避免另建重复请求。",
+    "已关闭订单、已收料报料和失效原货位应给出明确阻断提示；无需为验收撤销有效单据或停用真实货位。",
+]
+APP_CHANGELOG = [*(f"v0.22.593：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

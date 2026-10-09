@@ -14,6 +14,34 @@ from app.models.warehouse_inventory import WarehouseLocation
 from app.models.user import User
 
 
+@pytest.mark.parametrize('scenario',['surplus','no-difference','shortfall'])
+def test_first_confirm_receipt_includes_flushed_review_and_matches_resolve(stocktake_api,scenario):
+    app,factory,ids=stocktake_api
+    if scenario=='shortfall':
+        from tests.test_mobile_stocktake_confirm import _seed_count_reservations
+        _seed_count_reservations(factory,ids)
+    counts=None if scenario=='no-difference' else {ids['lot1']:9 if scenario=='shortfall' else 15}
+    with TestClient(app) as client:
+        _login(client,'n035-admin')
+        body=_submission_payload(client,ids['location'],key=f'first-full-review-{scenario}',counts=counts)
+        body['expected_actor_id']=ids['admin']
+        saved=client.post(write_url('confirm'),json=body)
+        assert saved.status_code==201
+        receipt=saved.json()
+        assert len(receipt['reviews'])==1
+        review=receipt['reviews'][0]
+        assert review['action']=='approve' and review['from_status']=='submitted' and review['to_status']=='approved'
+        assert review['reviewed_by']==receipt['reviewed_by']==ids['admin']
+        assert review['reviewed_at']==receipt['reviewed_at'] and review['reviewed_at']
+        assert review['reviewed_by_name']==receipt['reviewed_by_name'] and review['reviewed_by_name']
+        assert review['details']['adjustments'] and len(review['details']['adjustments'])==len(body['items'])
+        before=facts(factory)
+        resolved=resolve(client,'confirm',body)
+        assert resolved.status_code==200 and resolved.json()['status']=='found'
+        assert receipt==resolved.json()['order']
+        assert facts(factory)==before
+
+
 def write_url(action):
     return '/api/warehouse/stocktakes/confirm' if action=='confirm' else '/api/warehouse/stocktakes'
 

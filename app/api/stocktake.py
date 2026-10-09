@@ -342,6 +342,10 @@ def confirm_mobile_stocktake(
             idempotency_key=command_key, reason=_CONFIRM_REASON, reviewer=user,
             ip_address=ip_address, user_agent=user_agent)
         db.flush()
+        # Approval reads reviews to allocate its sequence, so that collection
+        # can still cache the pre-approval empty list after the review is flushed.
+        # Reload only the changed relationships before materializing the receipt.
+        db.expire(order, ["reviews", "reviewer"])
         result = _receipt(db, stocktake_service.get_order(db, order.id),
                           action="confirm", key=payload.idempotency_key, user=user)
         db.commit()

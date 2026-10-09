@@ -68,6 +68,11 @@ from app.services.product_specification import (
     product_dimension_specification,
 )
 from app.services.secure_uploads import resolve_stored_reference, stored_file_metadata
+from app.services.mobile_product_drawings import (
+    HEADERS as PRODUCT_DRAWING_HEADERS, attach_product_drawings, can_preview_product,
+    drawing_file, drawing_preview, failure as drawing_failure,
+    original_media_type, require_drawing_source,
+)
 from app.services.ui_layout_settings import LAYOUT_ROLES, effective_layout
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail,
@@ -391,6 +396,7 @@ def _safe_production_task(db: Session, task: dict, *, drawing_path: str | None, 
         "order_number": task.get("order_number"),
         "customer_po": task.get("customer_po") or task.get("customer_order_number"),
         "item_order_number": task.get("item_order_number"),
+        "product_id": task.get("product_id"),
         "product_code": task.get("product_code"),
         "product_name": task.get("product_name"),
         "carton_specification": task.get("specification"),
@@ -632,6 +638,7 @@ def _production_station_task_payloads(
             "order_number": task.get("order_number"),
             "customer_po": task.get("customer_po") or task.get("customer_order_number"),
             "item_order_number": task.get("item_order_number"),
+            "product_id": task.get("product_id"),
             "product_code": task.get("product_code"),
             "product_name": task.get("product_name"),
             "carton_specification": task.get("specification"),
@@ -848,6 +855,7 @@ def _product_specification(product: Product) -> str:
 def _product_payload(product: Product, *, inventory_summary: dict | None = None) -> dict:
     payload = {
         "id": product.id,
+        "product_id": product.id,
         "customer_id": product.customer_id,
         "customer_name": product.customer.name,
         "customer_code": product.customer.customer_code,
@@ -1096,6 +1104,43 @@ def _require_visible_product(
         # A direct ID must not reveal whether an inaccessible product exists.
         raise HTTPException(status_code=404, detail="产品不存在或当前账号无权查看")
     return product
+
+
+def _attach_mobile_product_drawings(db: Session, user: User, items: list[dict]) -> list[dict]:
+    return attach_product_drawings(db, items, user=user,
+                                  visible_customer_ids=_visible_customer_ids(user, db))
+
+
+def _mobile_drawing_user(request: Request, db: Session = Depends(get_db)) -> User:
+    try:
+        return get_current_user(request, db)
+    except HTTPException as error:
+        error.headers = {**(error.headers or {}), **PRODUCT_DRAWING_HEADERS}
+        raise
+
+
+@router.get("/products/{product_id}/drawings/{drawing_key}/{mode}")
+def mobile_product_drawing_content(
+    product_id: int, drawing_key: str, mode: str,
+    db: Session = Depends(get_db), user: User = Depends(_mobile_drawing_user),
+):
+    if not can_preview_product(user):
+        raise drawing_failure(403, "当前账号没有产品图纸查看权限")
+    if not 0 < product_id <= 2_147_483_647:
+        raise drawing_failure(404, "产品不存在或当前账号无权查看")
+    if mode not in {"preview", "original"}:
+        raise drawing_failure(404, "图纸查看方式不存在")
+    try:
+        product = _require_visible_product(db, product_id=product_id,
+                                          visible_customer_ids=_visible_customer_ids(user, db))
+    except HTTPException as error:
+        error.headers = PRODUCT_DRAWING_HEADERS
+        raise
+    source = require_drawing_source(db, product, drawing_key)
+    path = drawing_file(source)
+    if mode == "preview":
+        return Response(drawing_preview(source, path), media_type="image/webp", headers=PRODUCT_DRAWING_HEADERS)
+    return FileResponse(path, media_type=original_media_type(path), headers=PRODUCT_DRAWING_HEADERS)
 
 
 def _lot_load_options():
@@ -1948,6 +1993,8 @@ def product_production_overview(
         "read_only": True,
         "product": {
             "id": int(product.id),
+            "product_id": int(product.id),
+            "drawings": _attach_mobile_product_drawings(db, user, [{"product_id": product.id}])[0]["drawings"],
             "version": int(product.version),
             "customer_id": int(product.customer_id),
             "customer_name": product.customer.name,
@@ -2175,6 +2222,7 @@ def _mobile_order_search_group(
         {
             "order_id": order.id,
             "order_item_id": item.id,
+            "product_id": item.product_id,
             "order_number": order.order_number,
             "item_order_number": item.item_order_number,
             "customer_po": order.customer_po,
@@ -2248,6 +2296,7 @@ def _mobile_material_search_group(
     items = [
         {
             "route_id": str(route.get("item_id")),
+            "product_id": route.get("product_id"),
             "customer_name": route.get("customer_name"),
             "customer_code": route.get("customer_code"),
             "order_number": route.get("order_number"),
@@ -2617,6 +2666,12 @@ def search_mobile_portal(
         )
         for group in requested_categories
     ]
+    product_items = []
+    for group in groups:
+        for item in group["items"]:
+            product_items.append(item)
+            product_items.extend(item.get("products") or [])
+    _attach_mobile_product_drawings(db, user, product_items)
     return {
         "query": keyword,
         "category": category,
@@ -2629,6 +2684,12 @@ def search_mobile_portal(
 
 def _dimension_order_progress(db, user, items):
     """Use the shared production projection, never a guessed order status."""
+    item_ids = {row["order_item_id"] for row in items}
+    if item_ids:
+        products = dict(db.execute(select(OrderItem.id, OrderItem.product_id).where(OrderItem.id.in_(item_ids))).all())
+        for row in items:
+            row["product_id"] = products.get(row["order_item_id"])
+        _attach_mobile_product_drawings(db, user, items)
     if not items or not has_permission(user, "incoming.view") or not (has_permission(user, "production.printing.view") or has_permission(user, "production.die_cut.view")):
         return
     ids = [row["order_item_id"] for row in items]
@@ -2781,6 +2842,9 @@ def search_products(
         ).all()
     )
     summaries = _product_inventory_summaries(db, products)
+    drawing_items = _attach_mobile_product_drawings(db, user, [
+        _product_payload(product, inventory_summary=summaries[product.id]) for product in products
+    ])
     return {
         "query": keyword,
         "count": len(products),
@@ -2792,13 +2856,7 @@ def search_products(
         "include_zero_allowed": user.role == "admin",
         "requires_selection": len(products) > 1,
         "auto_selected": False,
-        "items": [
-            _product_payload(
-                product,
-                inventory_summary=summaries[product.id],
-            )
-            for product in products
-        ],
+        "items": drawing_items,
         "as_of": datetime.now(_BEIJING).isoformat(timespec="seconds"),
     }
 
@@ -2916,7 +2974,7 @@ def product_inventory(
             }
         )
     return {
-        "product": _product_payload(product),
+        "product": _attach_mobile_product_drawings(db, user, [_product_payload(product)])[0],
         "inventory": {
             "finished": finished_group,
             "semi_finished": semi_finished_group,
@@ -3745,6 +3803,7 @@ def mobile_warehouse_map_area(
         )
     has_geometry = any(item["geometry"] is not None for item in location_payloads)
     floor_name = rows[0].floor.floor_name if rows[0].floor else "楼层名称待完善"
+    _attach_mobile_product_drawings(db, user, [goods for location in location_payloads for goods in location["goods"]])
     return {
         "floor_code": normalized_floor,
         "floor_name": floor_name,
@@ -3913,6 +3972,7 @@ def search_mobile_warehouse_physical_inventory(
                 },
             }
         )
+    _attach_mobile_product_drawings(db, user, items)
     return {
         "items": items,
         "total": total,

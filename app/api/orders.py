@@ -29,7 +29,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, load_only, selectinload
@@ -729,6 +729,8 @@ class EstimatedCostUpdate(BaseModel):
 
 class OrderCreate(BaseModel):
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=100)
+    # Authentication owns identity; this optional UI guard is never a business signature.
+    expected_actor_id: StrictInt | None = Field(default=None, gt=0, exclude=True)
     readback_contract: Literal["a01-v1"] | None = None
     model_config = ConfigDict(extra="ignore")
 
@@ -7381,6 +7383,115 @@ def _create_wait_previous_batch_holds(
                      "snapshot_warnings": mismatches, "selected_by_operator": requested_previous_id is not None})
 
 
+def _order_save_actor_guard(expected_actor_id, user):
+    if expected_actor_id is not None and expected_actor_id != user.id:
+        raise HTTPException(409, "当前账号与原保存账号不一致，请保留原请求并切回原账号核对。",
+            headers={"Cache-Control": "no-store", "X-Order-Save-Preserve": "1",
+                "X-Order-Save-Actor-Mismatch": "1"})
+
+
+def _order_save_record(db, payload, user, response, observability, *, frozen_order=None,
+                       source=None, source_replay=False):
+    if not payload.idempotency_key:
+        return response
+    from fastapi.encoders import jsonable_encoder
+    from app.services import order_import_save_recovery as recovery
+    key, digest = observability["create_identity"] if observability and "create_identity" in observability else _order_create_identity(payload, user.id)
+    request_echo = observability["save_request_echo"] if observability and "save_request_echo" in observability else recovery.echo(payload)
+    if frozen_order is not None:
+        try:
+            proof = recovery.build(request_echo=request_echo, frozen_order=frozen_order,
+                key=payload.idempotency_key, digest=digest, actor_id=user.id,
+                source=source, source_replay=source_replay)
+        except HTTPException:
+            # An additive receipt must not reject an otherwise valid legacy create.
+            frozen_order = None
+    if frozen_order is None:
+        # Historical email/source records without sufficient frozen facts are trace-only.
+        proof = recovery.legacy({"digest": digest, "response": {"id": response["id"],
+            "order_number": response.get("order_number"), "customer_id": response["customer_id"],
+            "customer_po": response.get("customer_po"), "items": []}},
+            key=payload.idempotency_key, actor_id=user.id, pricing_visible=True)
+        proof["source_replay"] = source_replay
+        proof["source"] = source
+    db.add(OperationLog(user_id=user.id, action="order_create_replay", resource="orders",
+        request_id=key, entity_type="order", entity_id=response["id"],
+        details=json.dumps({"digest": digest, "response": jsonable_encoder(response),
+            "save_customer_id": request_echo.get("customer_id") or proof["order"]["customer_id"],
+            "save_recovery": jsonable_encoder(proof)}, ensure_ascii=False),
+        event_category="business", module_code="orders", action_code="create_replay_record", result="success"))
+    response["current_actor_id"] = user.id
+    response["save_receipt"] = recovery.public(proof,
+        pricing_visible=_can_view_order_sales_amount(user), matched=True)
+    return response
+
+
+def _order_source_replay(db, payload, user, response, source, observability, *, commit):
+    from app.services import order_import_save_recovery as recovery
+    from app.models.order_import_source import OrderImportSourceLine
+    if not payload.idempotency_key:
+        return response
+    if observability is None:
+        observability = {"save_request_echo": recovery.echo(payload),
+            "create_identity": _order_create_identity(payload, user.id)}
+    frozen = None
+    source_trace = None
+    if source is not None:
+        require_customer_access(source.customer_id, current_user=user, db=db)
+        source_trace = dict(id=source.id, kind=source.source_kind,
+            hash=source.source_hash, name=source.source_name_snapshot)
+        rows = list(db.scalars(select(OrderImportSourceLine).where(
+            OrderImportSourceLine.source_id == source.id).order_by(OrderImportSourceLine.source_position)))
+        try:
+            frozen = recovery.source_snapshot(source, rows, response.get("order_number"))
+            # Prefer a matching initial proof of actual persisted prices; source confirmation
+            # prices alone can retain more than the database's six decimal places.
+            originals = db.scalars(select(OperationLog).where(
+                OperationLog.action == "order_create_replay", OperationLog.entity_id == source.order_id,
+                OperationLog.user_id == source.created_by).order_by(OperationLog.id))
+            for log in originals:
+                try:
+                    record = json.loads(log.details)
+                    candidate = record["save_recovery"]
+                    if (candidate.get("proof_status") != "complete"
+                        or (candidate.get("source") or {}).get("id") != source.id
+                        or candidate.get("order", {}).get("id") != source.order_id
+                        or candidate.get("actor_id") != log.user_id
+                        or candidate.get("payload_digest") != record["digest"]):
+                        continue
+                    check = recovery.build(request_echo=candidate["request"], frozen_order=candidate["order"],
+                        key=candidate["request_key"], digest=record["digest"], actor_id=log.user_id,
+                        source=candidate["source"], source_replay=candidate["source_replay"])
+                    if check["lines"] != candidate["lines"] or len(check["lines"]) != len(frozen["items"]):
+                        continue
+                    proven_prices = {}
+                    for confirmed, saved in zip(frozen["items"], check["lines"], strict=True):
+                        if (confirmed["id"] != saved["order_item_id"]
+                            or confirmed["product_id"] != saved["product_id"]
+                            or recovery.number(confirmed["quantity"]) != recovery.number(saved["quantity"])
+                            or recovery.number(confirmed["unit_price"]) != recovery.number(saved["requested_unit_price"])):
+                            raise recovery.conflict()
+                        proven_prices[confirmed["id"]] = saved["unit_price"]
+                    for confirmed in frozen["items"]:
+                        confirmed["unit_price"] = proven_prices[confirmed["id"]]
+                    break
+                except (KeyError, TypeError, ValueError, HTTPException):
+                    continue
+            # Verify before deciding that this historical record can carry a complete proof.
+            recovery.build(request_echo=observability["save_request_echo"], frozen_order=frozen,
+                key=payload.idempotency_key, digest=observability["create_identity"][1],
+                actor_id=user.id, source=source_trace, source_replay=True)
+        except HTTPException:
+            frozen = None
+    response = _order_save_record(db, payload, user, response, observability,
+        frozen_order=frozen, source=source_trace, source_replay=True)
+    if commit and payload.idempotency_key:
+        _set_order_save_stage(observability, "commit")
+        db.commit()
+    _set_order_save_stage(observability, "completed")
+    return response
+
+
 def _create_order_impl(
     payload: OrderCreate,
     db: Session,
@@ -7476,7 +7587,11 @@ def _create_order_impl(
             existing_order = db.get(Order, email_existing.order_id)
             if existing_order is None:
                 raise HTTPException(409, "邮件关联订单不存在，请核对来源记录")
-            return _order_response(existing_order, user, db=db)
+            require_customer_access(existing_order.customer_id, current_user=user, db=db)
+            from app.models.order_import_source import OrderImportSource
+            source = db.scalar(select(OrderImportSource).where(OrderImportSource.order_id == existing_order.id))
+            return _order_source_replay(db, payload, user,
+                _order_response(existing_order, user, db=db), source, observability, commit=commit)
         import_source_context, existing_import_source = prepare_import_source(
             db,
             payload,
@@ -7488,13 +7603,15 @@ def _create_order_impl(
             existing_order = db.get(Order, existing_import_source.order_id)
             if existing_order is None:
                 raise HTTPException(409, "PDF 来源关联订单不存在，请核对来源记录")
+            require_customer_access(existing_order.customer_id, current_user=user, db=db)
             response = _order_response(existing_order, user, db=db)
             line_ids = replay_client_line_ids(existing_import_source)
             for item in response.get("items", []):
                 item["client_line_id"] = line_ids.get(item["id"])
             response["source_replay"] = True
             response["import_source_id"] = existing_import_source.id
-            return response
+            return _order_source_replay(db, payload, user, response,
+                existing_import_source, observability, commit=commit)
         _set_order_save_stage(observability, "validate_customer")
         customer = db.get(Customer, payload.customer_id)
         if customer is None:
@@ -8302,12 +8419,18 @@ def _create_order_impl(
                 for row in related_orders
             ]
         if payload.idempotency_key:
-            from fastapi.encoders import jsonable_encoder
-            key, digest = observability["create_identity"] if observability and "create_identity" in observability else _order_create_identity(payload, user.id)
-            db.add(OperationLog(user_id=user.id, action="order_create_replay", resource="orders",
-                request_id=key, entity_type="order", entity_id=order.id,
-                details=json.dumps({"digest":digest,"response":jsonable_encoder(response)}, ensure_ascii=False),
-                event_category="business", module_code="orders", action_code="create_replay_record", result="success"))
+            from app.services.order_import_save_recovery import snapshot
+            frozen = snapshot(response)
+            for item in created_items:
+                db.refresh(item, attribute_names=["unit_price"])
+            prices = {item.id: item.unit_price for item in created_items}
+            for row in frozen["items"]:
+                row["unit_price"] = str(prices[row["id"]])
+            source_trace = (dict(id=import_source.id, kind=import_source.source_kind,
+                hash=import_source.source_hash, name=import_source.source_name_snapshot)
+                if import_source is not None else None)
+            response = _order_save_record(db, payload, user, response, observability,
+                frozen_order=frozen, source=source_trace)
         if commit:
             _set_order_save_stage(observability, "commit")
             db.commit()
@@ -8433,7 +8556,131 @@ def read_order_create_attempt(
     order = db.get(Order, record["response"]["id"])
     if order is None:
         raise HTTPException(409, "原订单已不存在，请核对历史记录，不能重复创建。")
+    require_customer_access(order.customer_id, current_user=user, db=db)
     return {"status": "completed", "order": {"id": order.id, "customer_id": order.customer_id}}
+
+
+class OrderSaveResolve(BaseModel):
+    expected_actor_id: StrictInt | None = Field(default=None, gt=0)
+    original_request: OrderCreate | None = None
+    source_preview_token: str | None = Field(default=None, min_length=1, max_length=1024 * 1024)
+
+
+def _order_save_proof_from_record(previous, record, raw_key, user, db, *, matched):
+    from app.services import order_import_save_recovery as recovery
+    if previous.user_id != user.id or not isinstance(record.get("response"), dict):
+        raise recovery.conflict()
+    proof = record.get("save_recovery")
+    if proof is None:
+        return recovery.legacy(record, key=raw_key, actor_id=previous.user_id,
+            pricing_visible=_can_view_order_sales_amount(user))
+    if (not isinstance(proof, dict) or proof.get("schema") != recovery.SCHEMA
+        or proof.get("request_key") != raw_key or proof.get("actor_id") != previous.user_id
+        or proof.get("payload_digest") != record.get("digest")
+        or proof.get("order", {}).get("id") != record["response"].get("id")):
+        raise recovery.conflict()
+    require_customer_access(proof["order"]["customer_id"], current_user=user, db=db)
+    if proof.get("proof_status") == "complete":
+        check = recovery.build(request_echo=proof["request"], frozen_order=proof["order"],
+            key=raw_key, digest=record["digest"], actor_id=previous.user_id,
+            source=proof.get("source"), source_replay=proof.get("source_replay", False))
+        if check["lines"] != proof.get("lines") or check["line_count"] != proof.get("line_count"):
+            raise recovery.conflict()
+    return recovery.public(proof, pricing_visible=_can_view_order_sales_amount(user), matched=matched)
+
+
+def resolve_order_save(idempotency_key: str, payload: OrderSaveResolve,
+                       db: Session = Depends(get_db), user: User = Depends(can_create)):
+    from app.services import order_import_save_recovery as recovery
+    from app.models.order_import_source import OrderImportSource
+    _order_save_actor_guard(payload.expected_actor_id, user)
+    if not 8 <= len(idempotency_key) <= 100:
+        raise HTTPException(422, "保存请求标识无效", headers=recovery.HEADERS)
+    original = payload.original_request
+    if original is not None:
+        _order_save_actor_guard(original.expected_actor_id, user)
+        if original.idempotency_key != idempotency_key:
+            raise recovery.conflict("原请求标识与核对标识不一致，请保留原请求。")
+        if original.customer_id is not None:
+            require_customer_access(original.customer_id, current_user=user, db=db)
+    result = dict(status="not_found", current_actor_id=user.id, request_key=idempotency_key,
+        proof_status=None, save_receipt=None, order=None,
+        message="当前未查到原键完成记录；原请求可能仍在途，请保留原请求，必要时请管理员核对。")
+    key = hashlib.sha256(f"order-create:{user.id}:{idempotency_key}".encode()).hexdigest()
+    with db.no_autoflush:
+        previous = db.scalar(select(OperationLog).where(OperationLog.request_id == key,
+            OperationLog.action == "order_create_replay"))
+        if previous is not None:
+            try:
+                record = json.loads(previous.details)
+                frozen = record["response"]
+                require_customer_access(record.get("save_customer_id", frozen["customer_id"]), current_user=user, db=db)
+                require_customer_access(frozen["customer_id"], current_user=user, db=db)
+                order = db.get(Order, frozen["id"])
+                if order is None:
+                    raise recovery.conflict("原订单已不存在，请保留请求并核对历史记录。")
+                require_customer_access(order.customer_id, current_user=user, db=db)
+                if original is not None and _order_create_identity(original, user.id)[1] != record["digest"]:
+                    raise recovery.conflict("原键已完成，但请求内容不一致，请保留原请求核对。")
+                proof = _order_save_proof_from_record(previous, record, idempotency_key, user, db,
+                    matched=original is not None)
+            except (ValueError, TypeError, KeyError, AttributeError):
+                raise recovery.conflict() from None
+            result.update(status="completed", proof_status=proof["proof_status"], save_receipt=proof,
+                order=dict(id=order.id, order_number=order.order_number, customer_id=order.customer_id,
+                    customer_po=order.customer_po),
+                message="已找到原键完成记录。" if proof["request_match"] else "已找到历史完成记录；旧记录缺少完整原请求匹配证明，仅供追溯。")
+        elif payload.source_preview_token:
+            claims = _decode_pdf_preview_safety_token(payload.source_preview_token, user)
+            require_customer_access(claims["matched_customer_id"], current_user=user, db=db)
+            kind = "excel_upload" if claims.get("source_format") in {"xls", "xlsx"} else "pdf_upload"
+            source = db.scalar(select(OrderImportSource).where(
+                OrderImportSource.source_kind == kind, OrderImportSource.source_hash == claims["source_hash"],
+                OrderImportSource.customer_id == claims["matched_customer_id"]))
+            if source is not None and source.order_id is not None:
+                require_customer_access(source.customer_id, current_user=user, db=db)
+                order = db.get(Order, source.order_id)
+                if order is None:
+                    raise recovery.conflict("原来源关联订单已不存在，请管理员核对。")
+                require_customer_access(order.customer_id, current_user=user, db=db)
+                result.update(status="source_located", proof_status="legacy",
+                    order=dict(id=order.id, order_number=order.order_number, customer_id=order.customer_id,
+                        customer_po=order.customer_po),
+                    source=dict(id=source.id, kind=source.source_kind, hash=source.source_hash,
+                        name=source.source_name_snapshot),
+                    message="找到此可信来源的原订单，但未证明当前请求键已执行；请保留旧记录并由管理员核对。")
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+# Only this read-only result route wraps dependency/validation errors for no-store.
+from fastapi.routing import APIRoute
+from fastapi.exceptions import RequestValidationError
+
+
+class _OrderSaveResultRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+        async def no_store(request):
+            try:
+                response = await handler(request)
+                response.headers["Cache-Control"] = "no-store"
+                return response
+            except HTTPException as error:
+                error.headers = {**(error.headers or {}), "Cache-Control": "no-store",
+                    "X-Order-Save-Preserve": "1"}
+                raise
+            except RequestValidationError:
+                # Do not echo opaque tokens or original prices in schema diagnostics.
+                return JSONResponse({"detail": "原请求格式无效，请保留原请求并核对。"},
+                    status_code=422, headers={"Cache-Control": "no-store", "X-Order-Save-Preserve": "1"})
+            except Exception:
+                return JSONResponse({"detail": "暂时无法核对保存结果，请保留原请求并稍后重试。"},
+                    status_code=500, headers={"Cache-Control": "no-store", "X-Order-Save-Preserve": "1"})
+        return no_store
+
+
+router.add_api_route("/create-attempts/{idempotency_key}/resolve", resolve_order_save,
+    methods=["POST"], route_class_override=_OrderSaveResultRoute)
 
 
 def _order_create_identity(payload: OrderCreate, actor_id: int):
@@ -8479,7 +8726,12 @@ def create_order(
         "item_count": len(payload.items or []),
         "failure_stage": "entry",
     }
+    from app.services import order_import_save_recovery as recovery
+    from fastapi.encoders import jsonable_encoder
+    # Freeze before manual/new-product normalization can mutate the parsed request.
+    observability["save_request_echo"] = recovery.echo(payload)
     try:
+        _order_save_actor_guard(payload.expected_actor_id, user)
         if payload.idempotency_key or payload.pdf_import_confirmation is not None:
             connection = db.connection()
             if connection.dialect.name == "sqlite" and not connection.connection.driver_connection.in_transaction:
@@ -8491,13 +8743,16 @@ def create_order(
                 OperationLog.action == "order_create_replay",
             ))
             if previous:
+                observability["previous_found"] = True
                 record = json.loads(previous.details)
+                require_customer_access(record.get("save_customer_id", record["response"]["customer_id"]), current_user=user, db=db)
                 require_customer_access(record["response"]["customer_id"], current_user=user, db=db)
                 if record["digest"] != digest:
                     raise HTTPException(409, "此保存请求已完成，不能以同一请求标识提交不同内容；请核对原订单。")
                 order = db.get(Order, record["response"]["id"])
                 if order is None:
                     raise HTTPException(409, "原订单已不存在，请核对历史记录，不能重复创建。")
+                require_customer_access(order.customer_id, current_user=user, db=db)
                 response = _order_response(order, user, db=db)
                 line_ids = {item["id"]: item.get("client_line_id") for item in record["response"].get("items", [])}
                 for item in response.get("items", []):
@@ -8505,9 +8760,13 @@ def create_order(
                 if payload.readback_contract is not None:
                     from app.services.order_create_readback import attach_replay_evidence
                     attach_replay_evidence(response, record["response"])
+                response["current_actor_id"] = user.id
+                response["save_receipt"] = _order_save_proof_from_record(previous, record,
+                    payload.idempotency_key, user, db, matched=True)
                 db.rollback()
-                return response
-        return _create_order_impl(
+                return JSONResponse(jsonable_encoder(response), status_code=201,
+                    headers={"Cache-Control": "no-store"})
+        result = _create_order_impl(
             payload,
             db,
             user,
@@ -8515,11 +8774,22 @@ def create_order(
             observability=observability,
             request=request,
         )
+        if isinstance(result, Response):
+            result.headers["Cache-Control"] = "no-store"
+            return result
+        return JSONResponse(jsonable_encoder(result), status_code=201,
+            headers={"Cache-Control": "no-store"})
     except HTTPException as error:
         # Validation may run after an explicit manual-size common-box flush.
         # The product is part of this order transaction and must never survive
         # when a later line rejects the order.
         db.rollback()
+        safe_rejection = (error.status_code in {400, 409, 422}
+            and not observability.get("previous_found")
+            and observability["failure_stage"] not in {"commit", "finalize_drawing", "completed"}
+            and not (error.headers or {}).get("X-Order-Save-Preserve"))
+        error.headers = {**(error.headers or {}), "Cache-Control": "no-store",
+            ("X-Order-Save-Rejected" if safe_rejection else "X-Order-Save-Preserve"): "1"}
         _log_order_save_failure(
             error=error,
             observability=observability,
@@ -8535,6 +8805,7 @@ def create_order(
         )
         raise HTTPException(
             status_code=500,
+            headers={"Cache-Control": "no-store", "X-Order-Save-Preserve": "1"},
             detail={
                 "message": "订单保存失败：服务器内部错误",
                 "code": "ORDER_SAVE_INTERNAL_ERROR",

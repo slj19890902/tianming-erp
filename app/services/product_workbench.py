@@ -42,7 +42,8 @@ def find_products(db: Session, scope: set[int] | None, *, q: str,
         # pieces. A carton footprint is never silently treated as net sheet.
         from app.services.box_type_rules import BOX_TYPE_RULES
         net_aliases = [alias for rule in BOX_TYPE_RULES if rule.code in
-                       {"liner", "divider", "die_cut_partition"} for alias in rule.aliases]
+                       {"liner", "divider", "die_cut_partition"}
+                       for alias in (*rule.aliases, rule.display_name)]
         query = query.where(Product.box_style.in_(net_aliases))
     dims = {
         "finished": (Product.length_mm, Product.width_mm, Product.height_mm),

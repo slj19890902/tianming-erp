@@ -4355,7 +4355,7 @@ export function WarehouseTwinApp() {
 
   const focusSearchItem = (item: SearchItem) => {
     setRackFocusId(null);
-    setSearchPanelOpen(false);
+    setSearchPanelOpen(true);
     setSearchError("");
     setPendingLocateResource(null);
     setPendingAreaCode(null);
@@ -6647,11 +6647,11 @@ export function WarehouseTwinApp() {
               {!selectedQuantities.order_totals.length && <span>当前没有该产品的有效未结订单</span>}
               <small>全仓包含其他楼层及待归位库存；订单数与实存数量分别统计。</small>
               <details><summary>客户订单数量</summary>{selectedQuantities.orders.map((row) => <div key={row.order_item_id}>{row.order_number} · 订购 {row.ordered_quantity} {row.unit} · 未送 {row.remaining_quantity} {row.unit}</div>)}</details>
-              <details><summary>各栈板／货位明细</summary>{Object.values(selectedQuantities.items.reduce<Record<string, {item: SearchItem; quantity: number; reserved: number}>>((groups, item) => {
+              <details open><summary>各栈板／货位明细（点击切换）</summary>{Object.values(selectedQuantities.items.reduce<Record<string, {item: SearchItem; quantity: number; reserved: number}>>((groups, item) => {
                 const key = `${item.location_id || 'unlocated'}:${item.pallet_id || 'loose'}`;
                 const group = groups[key] ||= {item, quantity: 0, reserved: 0};
                 group.quantity += inventoryPhysicalQuantity(item); group.reserved += Number(item.reserved_quantity || 0); return groups;
-              }, {})).map(({item, quantity, reserved}) => <button type="button" key={`${item.location_id}:${item.pallet_id}`} onClick={() => focusSearchItem(item)}>
+              }, {})).map(({item, quantity, reserved}) => <button type="button" key={`${item.location_id}:${item.pallet_id}`} aria-pressed={focusedSearchItem?.location_id === item.location_id && focusedSearchItem?.pallet_id === item.pallet_id} onClick={() => focusSearchItem(item)}>
                 {item.location_name} · {item.pallet_code || '未绑栈板'} · 实存 {formatNumber(quantity)} {inventoryUnitLabel(item.unit)} · 已占用 {formatNumber(reserved)}
               </button>)}</details>
             </>}

@@ -377,3 +377,28 @@ def test_resolve_wrong_outer_key_and_duplicate_jobs_are_conflicts(grouped):
         duplicate=deepcopy(body);duplicate['jobs'].append(duplicate['jobs'][0])
         assert resolve(client,duplicate).status_code==409
         assert facts(factory)==before
+
+
+def test_fresh_rolled_back_rejection_has_no_unknown_preserve_header(grouped):
+    app,factory=grouped
+    with TestClient(app) as client:
+        body=prepared(client,app,factory);before=facts(factory)
+        stale=deepcopy(body);stale['jobs'][0]['lot_version']+=100
+        rejected=client.post(URL,json=stale)
+        assert rejected.status_code==409 and rejected.headers['cache-control']=='no-store'
+        assert rejected.headers.get('x-production-group-rejected')=='1'
+        assert 'x-production-group-preserve' not in rejected.headers
+        assert facts(factory)==before
+        rejection_counts={k:len(v) for k,v in facts(factory).items()}
+        # Query-time absence still preserves; no durable cancellation is inferred.
+        missing=resolve(client,stale)
+        assert missing.status_code==200 and missing.json()['status']=='not_recorded'
+        first=client.post(URL,json=body);assert first.status_code==200,first.text
+        after=facts(factory)
+        existing=client.post(URL,json=stale)
+        assert existing.status_code==409 and existing.headers.get('x-production-group-preserve')=='1'
+        assert 'x-production-group-rejected' not in existing.headers and facts(factory)==after
+        archive('fresh-rejected',client,stale,rejected,missing,
+            beforeCounts={k:len(v) for k,v in before.items()},afterRejectionCounts=rejection_counts,
+            correctedOriginalBody=body,correctedWrite=dict(status=first.status_code,body=first.json(),headers=dict(first.headers)),
+            existingConflict=dict(status=existing.status_code,body=existing.json(),headers=dict(existing.headers)))

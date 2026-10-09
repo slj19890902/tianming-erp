@@ -508,7 +508,7 @@
   </section>
 
   <script src="/static/ui/mobile-product-drawings.js?v=20261009-1"></script>
-  <script src="/static/ui/mobile-dimension-stock.js?v=20261009-drawings1"></script>
+  <script src="/static/ui/mobile-dimension-stock.js?v=20261010-recovery1"></script>
   <script src="/static/ui/mobile-delivery-margin.js?v=20260915-costcontract428"></script>
   <script>
     (() => {
@@ -653,6 +653,7 @@
       }
 
       function clearMobilePortalState() {
+        window.TmDimensionStock?.destroy();
         window.TmProductDrawings?.disposeWithin(document.body);
         state.lookupController?.abort();
         state.lookupGeneration += 1;
@@ -745,6 +746,9 @@
           if (error && error.name === "AbortError") throw error;
           throw new Error("无法连接 ERP 服务，请检查网络后重试");
         }
+        if (options.isCurrent?.() === false) {
+          const error = new Error("原页面请求已结束"); error.name = "AbortError"; throw error;
+        }
         if (response.status === 401) {
           window.TmMobileDeliveryMargin?.destroy?.();
           clearMobilePortalState();
@@ -785,6 +789,9 @@
           if (error && error.name === "AbortError") throw error;
           throw new Error("无法连接 ERP 服务，请检查网络后重试");
         }
+        if (options.isCurrent?.() === false) {
+          const error = new Error("原页面请求已结束"); error.name = "AbortError"; throw error;
+        }
         if (response.status === 401) {
           clearMobilePortalState();
           window.location.replace("/?redirect=/mobile/&mobile_page=warehouse");
@@ -800,6 +807,8 @@
           const error = new Error(typeof detail === "string" ? detail : `操作失败（HTTP ${response.status}）`);
           error.status = response.status;
           error.requestRejected = response.headers.get("X-Stock-Take-Rejected") === "1";
+          error.preservePending = response.headers.get("X-Stock-Take-Preserve") === "1";
+          error.actorMismatch = response.headers.get("X-Stock-Take-Actor-Mismatch") === "1";
           throw error;
         }
         return data;
@@ -846,6 +855,10 @@
         window.TmMobileDeliveryMargin?.onPageChange?.(page);
         const isHome = page === "home";
         const isLookup = page === "lookup";
+        if (isLookup && state.shell?.user?.id) {
+          const user = state.shell.user;
+          window.TmDimensionStock?.mount({apiGet, apiPost, userId:user.id, displayName:user.display_name || user.real_name || user.username || "当前账号"});
+        } else window.TmDimensionStock?.destroy();
         const isIncoming = page === "incoming";
         const isWarehouse = page === "warehouse";
         const isMore = page === "more";
@@ -3171,7 +3184,6 @@
           window.history.replaceState(null, "", `#${state.activePage}`);
         }
       });
-      window.TmDimensionStock?.mount({apiGet, apiPost});
       initialize();
     })();
   </script>

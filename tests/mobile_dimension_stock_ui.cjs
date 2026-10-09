@@ -22,13 +22,13 @@ const ctx=vm.createContext({window:{},document:{getElementById:id=>elements.get(
 vm.runInContext(script,ctx);
 const get=id=>elements.get(id);
 (async()=>{
- ctx.window.TmDimensionStock.mount({apiGet:async url=>{
+ ctx.window.TmDimensionStock.mount({userId:1,apiGet:async url=>{
    requests.push(url);
    if(url.endsWith('/history'))return {items:[]};
    if(url.endsWith('/detail'))return {item,can_execute:true};
    get('dsResults').buttons=[Object.assign(new Element('result'),{dataset:{index:'0'}})];
    return {total:61,items:[item],can_execute:true};
- },apiPost:async(url,body)=>{posts.push({url,body:JSON.parse(JSON.stringify(body))});if(failPost)throw new Error('网络中断');return {quantity:body.quantity,movement_id:1};}});
+ },apiPost:async(url,body)=>{posts.push({url,body:JSON.parse(JSON.stringify(body))});if(failPost)throw new Error('网络中断');return {quantity:body.quantity,movement_id:1,replayed:false};}});
  assert.equal(ctx.window.TmDimensionStock.digits('12x345678'),'12345');
  get('dsKind').value='box';get('dsFlute').value='';
  for(const axis of ['length','width','height']){get('ds-'+axis).value=axis==='length'?'500':'';get('ds-'+axis+'-op').value='ge';}

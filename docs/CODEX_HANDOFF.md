@@ -6124,3 +6124,5 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 源码 ab0467a38342ad109284d044fd86135bf4b9c078，无迁移，eh1009qr。补齐单区域发布时未变化货架区域的版本承接；C货架在执行前已被期间正常地图发布修复，本轮307张表、库存与位置不变。技术发布完成，管理员实体打印待验收。详见 docs/reports/PRODUCT_LABEL_2457_20261009.md。
 
 - 2026-10-09 PRODUCTION-TASK-PAPER：v581 / be73c2573612f547adf95ab96bc4e5ee6e4443b8 / ei1009ss已正式发布，保留v580共用库存及读取门禁，无DDL、311业务表不变。大字双联/合并续页/真实打印前核对；NAS更新源已同步，待实体试印。未push上游明确保留本地的提交，远端旧基线不能覆盖正式。见docs/release_reports/PRODUCTION_TASK_PAPER_20261009.md及NAS同名独立回执。
+
+- 2026-10-09 WH-AGE-REFERENCE：v582 / 4cb568464f71c83a2911dfd5d32f8addd1344f9e / ei1009ss技术发布完成；图例默认收起、货架编号按最久一档着色，无迁移，311业务表不变，NAS更新源同步，待管理员页面验收。保留上游不push约束及v581回退。见docs/release_reports/WAREHOUSE_AGE_REFERENCE_20261009.md与NAS独立回执。

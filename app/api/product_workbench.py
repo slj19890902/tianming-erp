@@ -12,6 +12,7 @@ from app.api.deps import get_db, get_current_user, has_permission, require_custo
 from app.api.mobile_erp import _visible_customer_ids
 from app.api.warehouse import _require_lot_customer_access
 from app.models.product import Product
+from app.models.material import Material
 from app.models.user import User
 from app.models.warehouse_inventory import InventoryLot
 from app.services.material_candidates import candidate_items
@@ -107,6 +108,8 @@ def reverse_products(response: Response,
         profile = goods_profile(db, lot)
         actual_state = (profile or {}).get("processing") or {
             "raw_board": "raw", "creased_sheet": "creased"}.get(detail.sheet_type)
+        if actual_state == "cut":
+            actual_state = "raw"  # An intact rectangular pre-cut sheet remains unprinted raw stock.
         if actual_state and actual_state != processed_state:
             raise HTTPException(422, "加工状态与所选批次登记事实不一致")
         matches = candidate_items(db, lot, scope)
@@ -124,8 +127,14 @@ def reverse_products(response: Response,
             if product is None:
                 continue
             item = product_card(product, summaries[product.id], drawings[product.id])
-            item.update({"match_class": row["match_kind"], "match_reasons": [row["match_reason"]],
+            match_class = {"confirmed_use": "confirmed", "cuttable": "cut_candidate"}.get(
+                row["match_kind"], "review")
+            item.update({"match_class": match_class, "match_kind": row["match_kind"],
+                         "match_reasons": [row["match_reason"]],
                          "check_items": row.get("warnings", []), "actual_lot_id": lot.id,
+                         "cut_plan": row.get("cut_plan"),
+                         "lot_available_quantity": int(lot.quantity_available or 0),
+                         "lot_unit": "张",
                          "deductible": False, "selection_requires_existing_validation": True})
             items.append(item)
         return {"items": items, "total": total, "page": page, "page_size": page_size,
@@ -133,27 +142,49 @@ def reverse_products(response: Response,
                 "registered_owner_customer_id": detail.owner_customer_id}
     # A free measurement has no real material, processing, identity, or quantity
     # evidence. Use dimensions for discovery only; never claim a cut plan.
-    query = visible_products(db, scope).where(Product.is_active.is_(True))
+    from sqlalchemy import func, or_, case
+    query = visible_products(db, scope).outerjoin(Material, Material.id == Product.material_id).where(
+        Product.is_active.is_(True), Product.supply_mode == "corrugated_production",
+        Product.is_composite.is_(False), Product.is_virtual_composite_parent.is_(False))
     if known_customer_id is not None:
         query = query.where(Product.customer_id == known_customer_id)
     if flute_type:
-        query = query.where(Product.flute_type == flute_type.strip().upper())
+        query = query.where(func.coalesce(Product.flute_type, Material.flute_type) == flute_type.strip().upper())
     if layer_count:
-        query = query.where(Product.layer_count == layer_count)
+        query = query.where(func.coalesce(Product.layer_count, Material.layer_count) == layer_count)
     if material_code:
-        query = query.where(Product.default_material_code == material_code.strip().upper())
-    query = query.where(Product.report_length_mm == length, Product.report_width_mm == width)
-    from sqlalchemy import func
+        code = material_code.strip().upper()
+        query = query.where(or_(func.upper(Product.default_material_code) == code,
+                                func.upper(Material.code) == code,
+                                func.upper(Product.legacy_material_text) == code))
+    query = query.where(Product.report_length_mm > 0, Product.report_width_mm > 0,
+                        Product.report_length_mm <= length, Product.report_width_mm <= width)
+    if processed_state != "raw":
+        query = query.where(Product.report_length_mm == length, Product.report_width_mm == width)
     total = int(db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0)
-    products = list(db.scalars(query.order_by(Product.customer_id, Product.id)
+    exact_rank = case((Product.report_length_mm == length, 0), else_=1) + case(
+        (Product.report_width_mm == width, 0), else_=1)
+    products = list(db.scalars(query.order_by(exact_rank,
+        (Product.report_length_mm * Product.report_width_mm).desc(), Product.customer_id, Product.id)
                                .offset((page - 1) * page_size).limit(page_size)))
     summaries = inventory_summary(db, products) if has_permission(user, "warehouse.view") else {}
     drawings = product_drawing_metadata(db, [p.id for p in products], user=user, visible_customer_ids=scope)
     items = []
     for product in products:
         item = product_card(product, summaries.get(product.id, {"visibility": "hidden_by_permission"}), drawings[product.id])
-        item.update({"match_class": "needs_review", "match_reasons": ["报料尺寸相同，仅供查找用途"],
-                     "check_items": ["核对实际批次、材质、楞型、加工状态、客户及用途"],
+        exact = Decimal(product.report_length_mm) == length and Decimal(product.report_width_mm) == width
+        check_items = ["核对实际批次、楞向、压线、面纸与客户用途"]
+        if not material_code:
+            check_items.append("补录或核对实际材质")
+        if not flute_type or not layer_count:
+            check_items.append("补录或核对实际楞型和层数")
+        if processed_state != "raw":
+            check_items.append("已加工片料需核对印刷/压线/模具形状，不按矩形分切")
+        item.update({"match_class": "review" if exact or processed_state != "raw" else "cut_candidate",
+                     "match_kind": "free_measurement", "cut_plan": None,
+                     "match_reasons": ["报料尺寸相同，仅供查找用途" if exact else
+                                       "原片尺寸可容纳目标报料尺寸，裁切方向与产出待核"],
+                     "check_items": check_items,
                      "actual_lot_id": None, "deductible": False,
                      "selection_requires_existing_validation": True})
         items.append(item)

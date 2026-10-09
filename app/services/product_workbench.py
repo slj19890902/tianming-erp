@@ -105,15 +105,63 @@ def inventory_summary(db: Session, products: list[Product]):
     # semi-finished bindings. A common code alone never shares a lot.
     from app.api.mobile_erp import _product_inventory_summaries
     originals = _product_inventory_summaries(db, products)
-    return {pid: {kind: {
+    result = {pid: {kind: {
         "actual": row[kind]["quantity_total"],
         "available": row[kind]["quantity_available"],
         "reserved": row[kind]["quantity_reserved"],
         "unit": row[kind]["unit"],
     } for kind in ("finished", "semi_finished")} for pid, row in originals.items()}
+    for product in products:
+        for lot in _shared_finished_lots(db, product):
+            detail = lot.finished_detail
+            if (detail and detail.product_id == product.id and
+                detail.owner_customer_id == product.customer_id and not detail.is_general and
+                detail.inventory_code_snapshot == product.product_code):
+                continue  # Already counted by the ordinary mobile identity query.
+            group = result[product.id]["finished"]
+            group["actual"] += int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)
+            group["available"] += int(lot.quantity_available or 0)
+            group["reserved"] += int(lot.quantity_reserved or 0)
+        for lot in _cross_customer_bound_semi_lots(db, product):
+            group = result[product.id]["semi_finished"]
+            group["actual"] += int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)
+            group["available"] += int(lot.quantity_available or 0)
+            group["reserved"] += int(lot.quantity_reserved or 0)
+    return result
+
+
+def _shared_finished_lots(db: Session, product: Product) -> list[InventoryLot]:
+    from app.services.shared_finished_stock import candidate_lot_ids
+    ids = candidate_lot_ids(db, product_id=product.id, customer_id=product.customer_id)
+    if not ids:
+        return []
+    from app.api.mobile_erp import _lot_load_options
+    lots = list(db.scalars(select(InventoryLot).options(*_lot_load_options()).where(
+        InventoryLot.id.in_(ids), InventoryLot.status == "active",
+        InventoryLot.inventory_type == "finished",
+        or_(InventoryLot.quantity_available > 0, InventoryLot.quantity_reserved > 0))))
+    return [lot for lot in lots if lot.id in ids]
+
+
+def _cross_customer_bound_semi_lots(db: Session, product: Product) -> list[InventoryLot]:
+    """Only explicit lot/product facts, never a code or dimension guess."""
+    from app.api.mobile_erp import _lot_load_options
+    return list(db.scalars(select(InventoryLot).join(
+        SemiFinishedLotAllowedProduct,
+        SemiFinishedLotAllowedProduct.inventory_lot_id == InventoryLot.id,
+    ).join(SemiFinishedInventoryDetail,
+           SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id,
+    ).options(*_lot_load_options()).where(
+        SemiFinishedLotAllowedProduct.product_id == product.id,
+        or_(SemiFinishedInventoryDetail.owner_customer_id != product.customer_id,
+            SemiFinishedInventoryDetail.owner_customer_id.is_(None)),
+        InventoryLot.inventory_type == "semi_finished", InventoryLot.status == "active",
+        or_(InventoryLot.quantity_available > 0, InventoryLot.quantity_reserved > 0))))
 
 
 def product_card(product: Product, summary: dict, drawings: dict) -> dict:
+    if not product.is_active and drawings.get("status") == "none":
+        drawings = {"status": "unavailable_inactive", "items": []}
     return {
         "id": product.id, "product_id": product.id,
         "customer_id": product.customer_id,
@@ -134,19 +182,59 @@ def product_card(product: Product, summary: dict, drawings: dict) -> dict:
 
 def production_card(db: Session, product: Product, scope: set[int] | None,
                     *, can_see_mold_location: bool) -> dict:
+    from app.services.box_type_rules import get_box_type_rule
+    from app.services.sheet_cutting_settings import component_settings, theoretical_product_yield
+    from app.services.production_route_contract import production_route_contract
     code = product.default_material_code or (product.material.code if product.material else None) or product.legacy_material_text
-    steps = []
+    rule = get_box_type_rule(product.box_style)
+    setting = component_settings(product.sheet_cutting_settings) if product.sheet_cutting_settings else None
+    snapshot = setting.contract(product.report_length_mm, product.report_width_mm).to_snapshot() if (
+        setting and product.report_length_mm and product.report_width_mm) else None
+    cutting_components = {}
     if product.sheet_cutting_settings:
-        steps.append({"label": "分切", "detail": "见当前开料设置"})
-    if product.print_content or product.printing_colors:
-        steps.append({"label": "印刷", "detail": product.print_content or product.printing_colors})
-    if product.mold_tool_id:
-        steps.append({"label": "模切", "detail": product.mold_tool.mold_name if product.mold_tool else "模具资料待核"})
-    if product.crease_type == "压线":
-        steps.append({"label": "压线", "detail": " / ".join(str(x) if x is not None else "待完善" for x in
-                      (product.crease_left_mm, product.crease_middle_mm, product.crease_right_mm))})
-    if product.production_process:
-        steps.append({"label": "结合/工艺", "detail": product.production_process})
+        for component in ("whole", "cover", "base"):
+            if component not in product.sheet_cutting_settings:
+                continue
+            values = ((product.base_report_length_mm, product.base_report_width_mm)
+                      if component == "base" else (product.report_length_mm, product.report_width_mm))
+            component_setting = component_settings(product.sheet_cutting_settings, component)
+            cutting_components[component] = (
+                component_setting.contract(*values).to_snapshot()
+                if all(value is not None and value > 0 for value in values) else None)
+    def work_text(value):
+        text = (value or "").strip()
+        return None if re.search(r"成本|利润|采购价|供应商价|单价|报价|毛利", text) else text or None
+
+    printing = bool((product.print_content or "").strip() not in {"", "无", "无印刷", "无需印刷", "不印刷"}
+                    or (product.printing_colors or "").strip() not in {"", "无", "无印刷", "无需印刷", "不印刷"})
+    process = work_text(product.production_process) or ""
+    joining = next((value for value in ("打钉", "粘贴") if value in process), None)
+    route = production_route_contract(snapshot, process=(process,), printing=printing, joining=joining)
+    steps = []
+    for row in route["steps"]:
+        kind = row["code"]
+        if kind == "sheet_cutting":
+            detail = (f"供应商纸 {snapshot['supplier_length_mm']}×{snapshot['supplier_width_mm']}mm → "
+                      f"长向{snapshot['length_parts']}份、宽向{snapshot['width_parts']}份 → "
+                      f"每片 {snapshot['theoretical_length_mm']}×{snapshot['theoretical_width_mm']}mm")
+        elif kind == "printing":
+            detail = work_text(product.print_content) or work_text(product.printing_colors) or "印刷资料待完善"
+        elif kind == "die_cutting":
+            detail = product.mold_tool.mold_name if product.mold_tool else "模具关联待完善"
+        elif kind in {"slotting", "creasing"}:
+            if not rule or rule.code != "a1_0201":
+                continue
+            detail = " / ".join(str(x) if x is not None else "待完善" for x in
+                              (product.crease_left_mm, product.crease_middle_mm, product.crease_right_mm))
+        elif kind == "joining":
+            detail = joining
+        else:
+            detail = row["label"]
+        steps.append({"label": row["label"], "detail": detail})
+    if ((rule and rule.code in {"die_cut_partition", "die_cut_inner_box", "irregular"})
+            or product.box_category == "die_cut" or (setting and setting.is_die_cut)):
+        if not any(row["label"] == "模切" for row in steps):
+            steps.append({"label": "模切", "detail": product.mold_tool.mold_name if product.mold_tool else "模具关联待完善"})
     bom = []
     for edge in db.scalars(select(ProductBomComponent).where(
             ProductBomComponent.parent_product_id == product.id).order_by(ProductBomComponent.display_order)):
@@ -166,9 +254,11 @@ def production_card(db: Session, product: Product, scope: set[int] | None,
         from app.services.mold_location import describe_mold_location
         location = describe_mold_location(mold.rack_location) if can_see_mold_location else {}
         molds.append({"id": mold.id, "name": mold.mold_name, "is_active": bool(mold.is_active),
+                      "mold_id": mold.id,
                       "location": mold.rack_location if can_see_mold_location else None,
-                      "location_id": location.get("location_id"), "floor": location.get("floor"),
-                      "location_label": location.get("prompt")})
+                      "mold_cell_id": location.get("location_id"), "floor": location.get("floor"),
+                      "location_label": location.get("prompt"),
+                      "map_url": f"/mobile/mold-lookup?mold_id={mold.id}&readonly=1" if can_see_mold_location else None})
     return {
         "report_length_mm": product.report_length_mm,
         "report_width_mm": product.report_width_mm,
@@ -176,14 +266,17 @@ def production_card(db: Session, product: Product, scope: set[int] | None,
         "base_report_width_mm": product.base_report_width_mm,
         "material_code": code, "flute_type": product.flute_type or (product.material.flute_type if product.material else None),
         "layer_count": product.layer_count or (product.material.layer_count if product.material else None),
-        "production_process": product.production_process,
-        "production_notes": product.production_notes,
-        "printing_colors": product.printing_colors,
-        "print_content": product.print_content,
+        "production_process": work_text(product.production_process),
+        "production_notes": work_text(product.production_notes),
+        "printing_colors": work_text(product.printing_colors),
+        "print_content": work_text(product.print_content),
         "crease_type": product.crease_type,
         "crease_values_mm": [product.crease_left_mm, product.crease_middle_mm, product.crease_right_mm],
         "default_cutting_mode": product.default_cutting_mode,
         "sheet_cutting_settings": product.sheet_cutting_settings,
+        "cutting": snapshot,
+        "cutting_components": cutting_components,
+        "mold_count": setting.mold_count if setting else theoretical_product_yield(product),
         "process_steps": steps, "molds": molds, "bom": bom,
     }
 
@@ -206,6 +299,12 @@ def inventory_details(db: Session, product: Product):
         or_(InventoryLot.quantity_available > 0, InventoryLot.quantity_reserved > 0),
         SemiFinishedLotAllowedProduct.product_id == product.id,
         SemiFinishedInventoryDetail.owner_customer_id == product.customer_id)))
+    own_semi_ids = {lot.id for lot in semi}
+    cross_semi = [lot for lot in _cross_customer_bound_semi_lots(db, product) if lot.id not in own_semi_ids]
+    semi.extend(cross_semi)
+    own_finished_ids = {lot.id for lot in finished}
+    shared = [lot for lot in _shared_finished_lots(db, product) if lot.id not in own_finished_ids]
+    finished.extend(shared)
     context = load_warehouse_location_projection_contexts(db, [x.location for x in [*finished, *semi] if x.location])
     groups = {
         "finished": _inventory_group(finished, unit=product_unit_label(product) or product.unit,
@@ -214,8 +313,17 @@ def inventory_details(db: Session, product: Product):
         "semi_finished": _inventory_group(semi, unit="张", projection_contexts=context),
     }
     items = []
+    shared_ids = {lot.id for lot in shared}
+    cross_semi_ids = {lot.id for lot in cross_semi}
     for kind, group in groups.items():
         for row in group["positions"]:
+            if row["lot_id"] in (shared_ids if kind == "finished" else cross_semi_ids):
+                # The approved use may belong to another customer's original
+                # lot. Show physical availability without exposing its code.
+                row.pop("lot_number", None)
+                row["shared_confirmed"] = True
+                row["map_url"] = None
+                row["map_issue"] = "共用批次按显示库位核对；原批次地图入口受归属权限限制"
             items.append({"inventory_type": kind, "actual": row["quantity_total"],
                           "available": row["quantity_available"], "reserved": row["quantity_reserved"],
                           "unit": row["unit"], "location_id": row["location_id"],
@@ -233,13 +341,20 @@ def order_card(db: Session, product: Product, *, include_history: bool = False):
     if not include_history:
         query = query.where(Order.status.notin_(("completed", "archived", "closed", "dead", "cancelled")))
     rows = list(db.execute(query.order_by(Order.order_date.desc(), OrderItem.id.desc()).limit(50)))
-    return {"items": [{"id": item.id, "order_id": order.id, "customer_po": order.customer_po,
+    return {"items": [{"id": item.id, "order_id": order.id, "product_id": product.id,
+                       "customer_po": order.customer_po,
                        "order_number": order.order_number, "quantity": item.quantity,
                        "delivered_quantity": item.delivered_quantity, "status": order.status,
                        "deducted_quantity": None, "production_quantity": None,
                        "remaining_quantity": None,
                        "undelivered_quantity": max(item.quantity - item.delivered_quantity, 0),
                        "unit": item.sales_unit_snapshot,
+                       "frozen_product": {"product_code": item.snapshot_product_code,
+                                          "product_name": item.snapshot_product_name,
+                                          "specification": item.snapshot_spec,
+                                          "material": item.snapshot_material,
+                                          "report_length_mm": item.snapshot_report_length_mm,
+                                          "report_width_mm": item.snapshot_report_width_mm},
                        "delivery_date": order.delivery_date,
                        "snapshot_notice": "订单数量与资料按下单时冻结事实；当前生产资料不回写历史"}
                       for item, order in rows], "has_more": len(rows) == 50,

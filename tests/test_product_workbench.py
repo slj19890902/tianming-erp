@@ -1,18 +1,22 @@
 """The workbench is a scoped reader, not a new inventory ledger."""
 from decimal import Decimal
-from datetime import date
+from datetime import date, datetime
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.api.product_workbench import router
-from app.models.access_control import UserPermissionOverride
+from app.api.deps import get_db, get_current_user
+from app.models.access_control import UserPermissionOverride, UserCustomerScope
 from app.models.product import Product
 from app.models.mold_tool import MoldTool
+from app.models.material import Material
 from app.models.order import Order, OrderItem
 from app.models.user import User
-from app.models.warehouse_inventory import InventoryLot
+from app.models.warehouse_inventory import InventoryLot, SemiFinishedLotAllowedProduct
 from test_p1_21b_mobile_admin_product_search import _login, mobile_erp_app
+from test_bidirectional_sheet_cut import eligibility_db, prepare as prepare_cut
 
 
 def _app(mobile_erp_app):
@@ -37,7 +41,7 @@ def test_zero_stock_inactive_exact_dimensions_and_no_price(mobile_erp_app):
         assert item["id"] == ids["product_two"]
         assert item["is_active"] is False
         assert item["inventory"]["finished"]["actual"] == 0
-        assert item["drawings"]["status"] in ("none", "available")
+        assert item["drawings"]["status"] == "unavailable_inactive"
         assert client.get("/api/product-workbench/search", params={
             "length": "120.25", "width": "80.50", "dimension_basis": "report"}).json()["total"] == 1
         detail = client.get(f"/api/product-workbench/products/{ids['product_two']}")
@@ -76,7 +80,7 @@ def test_free_reverse_is_review_only_and_lot_dimensions_must_match(mobile_erp_ap
         free = client.get("/api/product-workbench/reverse", params={"length": 420, "width": 310})
         assert free.status_code == 200, free.text
         match = next(x for x in free.json()["items"] if x["id"] == ids["product"])
-        assert match["match_class"] == "needs_review" and match["deductible"] is False
+        assert match["match_class"] == "review" and match["deductible"] is False
         actual = client.get("/api/product-workbench/reverse", params={
             "length": 420, "width": 310, "lot_id": ids["finished_lot"]})
         assert actual.status_code == 422
@@ -106,6 +110,8 @@ def test_actual_lot_reverse_reuses_matcher_without_reserving(mobile_erp_app):
         assert payload["source"] == "actual_lot"
         assert payload["total"] >= 1
         assert all(item["deductible"] is False for item in payload["items"])
+        assert all(item["match_class"] in {"confirmed", "cut_candidate", "review"} for item in payload["items"])
+        assert all(item["lot_available_quantity"] == 8 for item in payload["items"])
         assert all(item["customer_id"] == payload["registered_owner_customer_id"] for item in payload["items"])
     with factory() as db:
         lot = db.get(InventoryLot, lot_id)
@@ -143,4 +149,113 @@ def test_search_order_mold_and_detail_are_price_free(mobile_erp_app):
         assert body["inventory"]["summary"]["finished"]["actual"] > 0
         assert body["inventory"]["items"][0]["location_id"] is not None
         assert body["orders"]["items"][0]["customer_po"] == "PO-WORKBENCH-1"
+        assert body["orders"]["items"][0]["product_id"] == ids["product"]
         assert "unit_price" not in detail.text and "cost_unit_price" not in detail.text
+
+
+def test_real_cutting_projection_and_free_measurement_review(mobile_erp_app):
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        product = db.get(Product, ids["product"])
+        material = Material(code="K=A", layer_count=3, flute_type="B", quote_price=Decimal("999"))
+        db.add(material)
+        db.flush()
+        product.material_id = material.id
+        product.default_material_code = None
+        product.flute_type = None
+        product.layer_count = None
+        product.report_length_mm = 318
+        product.report_width_mm = 540
+        product.sheet_cutting_settings = {"schema_version": 2, "whole": {
+            "length_parts": 3, "width_parts": 1, "mold_count": 2, "is_die_cut": True}}
+        product.production_notes = "生产备注：采购价999，仅内部核对"
+        product.production_process = "无需结合，模切"
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        detail = client.get(f"/api/product-workbench/products/{ids['product']}")
+        assert detail.status_code == 200, detail.text
+        production = detail.json()["production"]
+        assert production["cutting"]["supplier_length_mm"] == "954"
+        assert production["cutting"]["supplier_width_mm"] == "540"
+        assert production["mold_count"] == 2
+        assert any("954×540" in x["detail"] for x in production["process_steps"])
+        assert not any(x["label"] == "无需结合" for x in production["process_steps"])
+        assert production["production_notes"] is None
+        assert "999" not in detail.text
+        free = client.get("/api/product-workbench/reverse", params={
+            "length": 954, "width": 540, "material_code": "K=A", "flute_type": "B", "layer_count": 3})
+        assert free.status_code == 200, free.text
+        hit = next(x for x in free.json()["items"] if x["id"] == ids["product"])
+        assert hit["match_class"] == "cut_candidate" and hit["deductible"] is False
+        assert hit["cut_plan"] is None
+        processed = client.get("/api/product-workbench/reverse", params={
+            "length": 954, "width": 540, "material_code": "K=A", "processed_state": "die_cut"})
+        assert processed.status_code == 200
+        assert ids["product"] not in {x["id"] for x in processed.json()["items"]}
+
+
+def test_products_reader_without_warehouse_grant_hides_stock(mobile_erp_app):
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        user = db.scalar(select(User).where(User.username == "mobile-scoped"))
+        db.add_all([
+            UserPermissionOverride(user_id=user.id, permission_code="products.view", is_allowed=True),
+            UserPermissionOverride(user_id=user.id, permission_code="warehouse.view", is_allowed=False),
+        ])
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "mobile-scoped")
+        search = client.get("/api/product-workbench/search", params={"q": "MB001"})
+        assert search.status_code == 200, search.text
+        assert search.json()["items"][0]["inventory"] == {"visibility": "hidden_by_permission"}
+        detail = client.get(f"/api/product-workbench/products/{ids['product']}")
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["inventory"]["visibility"] == "hidden_by_permission"
+
+
+def test_actual_cut_plan_is_exposed_as_reviewable_not_reserved(eligibility_db):
+    db, data = eligibility_db
+    product, lot, _profile, _facts, _item, _requirement = prepare_cut(db, data)
+    app = FastAPI()
+    app.include_router(router, prefix="/api/product-workbench")
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_current_user] = lambda: data["admin"]
+    before = (lot.quantity_available, lot.quantity_reserved, lot.version)
+    with TestClient(app) as client:
+        response = client.get("/api/product-workbench/reverse", params={
+            "length": 1120, "width": 440, "lot_id": lot.id, "processed_state": "raw"})
+        assert response.status_code == 200, response.text
+        row = next(x for x in response.json()["items"] if x["product_id"] == product.id)
+        assert row["match_class"] == "cut_candidate"
+        assert row["cut_plan"]["yield_factor"] == 2
+        assert row["cut_plan"]["rotated"] is False
+        assert row["deductible"] is False
+    db.refresh(lot)
+    assert before == (lot.quantity_available, lot.quantity_reserved, lot.version)
+
+
+def test_explicit_cross_customer_semi_binding_is_visible_once_without_owner_code(mobile_erp_app):
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        lot = db.scalar(select(InventoryLot).where(InventoryLot.lot_number == "SF-MOBILE-001"))
+        scoped = db.scalar(select(User).where(User.username == "mobile-scoped"))
+        scope_row = db.scalar(select(UserCustomerScope).where(UserCustomerScope.user_id == scoped.id))
+        scope_row.customer_id = db.get(Product, ids["other_product"]).customer_id
+        db.add(UserPermissionOverride(user_id=scoped.id, permission_code="warehouse.view", is_allowed=True))
+        db.add(SemiFinishedLotAllowedProduct(inventory_lot_id=lot.id,
+                                             product_id=ids["other_product"],
+                                             confirmed_at=datetime(2026, 10, 10)))
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "mobile-scoped")
+        response = client.get(f"/api/product-workbench/products/{ids['other_product']}")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["inventory"]["summary"]["semi_finished"]["actual"] == 10
+        rows = [x for x in body["inventory"]["groups"]["semi_finished"]["positions"]
+                if x["lot_id"] == lot.id]
+        assert len(rows) == 1 and rows[0]["shared_confirmed"] is True
+        assert "lot_number" not in rows[0]
+        assert body["inventory"]["items"][0]["location_id"] is not None
+        assert client.get(f"/api/product-workbench/products/{ids['product']}").status_code == 404

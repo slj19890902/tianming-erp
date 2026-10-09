@@ -66,8 +66,8 @@
   const order=data?.order;if(data?.current_actor_id!==record.actorId||data.request_key!==record.key||!order||!positive(order.id)||!positive(order.customer_id)||typeof order.order_number!=='string'||!order.order_number.trim()||!['legacy','restricted'].includes(data.proof_status))bad();
   if(data.status==='source_located'){
    if(data.save_receipt!==null||!data.source||!positive(data.source.id)||data.source.hash!==record.fileHash||typeof data.source.kind!=='string'||!data.source.kind||typeof data.source.name!=='string')bad();
-  }else if(data.status==='completed'&&record.legacy){
-   const p=data.save_receipt;if(!p||p.schema!=='order-import-save-v1'||p.actor_id!==record.actorId||p.request_key!==record.key||p.proof_status!==data.proof_status||p.request_match!==false||p.request!==null||typeof p.pricing_visible!=='boolean'||!/^[a-f0-9]{64}$/.test(p.payload_digest||'')||p.order?.id!==order.id||!Array.isArray(p.order?.items)||!Array.isArray(p.lines)||p.line_count!==p.lines.length||p.line_count!==p.order.items.length)bad();
+  }else if(data.status==='completed'){
+   const p=data.save_receipt;if(!p||p.schema!=='order-import-save-v1'||p.actor_id!==record.actorId||p.request_key!==record.key||p.proof_status!==data.proof_status||p.request_match!==false||p.request!==null||typeof p.pricing_visible!=='boolean'||!/^[a-f0-9]{64}$/.test(p.payload_digest||'')||p.order?.id!==order.id||!Array.isArray(p.order?.items)||!Array.isArray(p.lines)||!Number.isSafeInteger(p.line_count)||p.line_count<0||p.line_count!==p.order.items.length||(p.lines.length!==0&&p.line_count!==p.lines.length))bad();
    if(p.source!==null&&(!p.source||p.source.hash!==record.fileHash||!positive(p.source.id)))bad();
   }else bad();
   return {id:order.id,orderNumber:order.order_number};

@@ -33776,10 +33776,10 @@
                 if(draft){draft._save_message=record.message;draft._save_continue_allowed=record.canContinue;}
                 return;
               }
-              if(mode==="resolve"&&(data.status==="source_located"||(data.status==="completed"&&record.legacy))){
+              if(mode==="resolve"&&(data.status==="source_located"||(data.status==="completed"&&["legacy","restricted"].includes(data.proof_status)))){
                 window.ERPOrderImportSaveRecovery.validateTrace(data,record);
                 record.traceOrderId=data.order.id;record.traceOrderNumber=data.order.order_number;
-                record.message=`已找到历史订单 ${data.order.order_number}。旧记录缺少原请求内容${data.status==='source_located'?'，仅定位来源，尚未证明原请求键已执行':''}；请查看原订单并按文件名、客户单号、原账号核对。旧记录保留，不能自动重发。`;
+                record.message=`已找到历史订单 ${data.order.order_number}。${record.legacy?'旧记录缺少原请求内容':'原保存证明不足以确认全部原内容'}${data.status==='source_located'?'，仅定位来源，尚未证明原请求键已执行':''}；请查看原订单并按文件名、客户单号、原账号核对。原请求保留，不能自动重发。`;
                 if(draft){draft._saved_order_id=data.order.id;draft._save_message=record.message;}
                 return;
               }

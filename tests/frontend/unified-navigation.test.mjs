@@ -7,13 +7,16 @@ import { webcrypto } from 'node:crypto';
 
 const source = readFileSync(new URL('../../static/js/unified-navigation.js', import.meta.url), 'utf8');
 const bridge = readFileSync(new URL('../../static/js/frontend-shell-bridge.js', import.meta.url), 'utf8');
-function setup(overrides = {}) {
+function setup(overrides = {}, bootstrap = {}) {
   const calls = [], messages = [], listeners = {};
   const parent = {postMessage: data => messages.push(data)};
   const classes = new Set();
   const classList = {add: (...names) => names.forEach(n => classes.add(n)), remove: (...names) => names.forEach(n => classes.delete(n)), toggle: (n, on) => on ? classes.add(n) : classes.delete(n)};
   const window = {parent, addEventListener: (type, fn) => {listeners[type] = fn}, setInterval: fn => {listeners.tick = fn; return 1}};
+  window.erpCheckingSession = bootstrap.checking === true;
   const location = {origin:'http://127.0.0.1:18569', search:'?embedded=1&frontend_shell=1'};
+  if (bootstrap.unified) location.search += '&unified_navigation=1';
+  if (bootstrap.standalone) window.parent = window;
   const document = {documentElement:{classList}, head:{appendChild:()=>{}}, createElement:()=>({})};
   runInNewContext(source, {window});
   const vm = {
@@ -27,13 +30,37 @@ function setup(overrides = {}) {
     ...overrides,
   };
   runInNewContext(bridge, {window, document, location, URLSearchParams, clearInterval:()=>{}});
-  window.ERPFrontendShell.install(vm);
+  window.ERPFrontendShell?.install(vm);
   const send = data => listeners.message({source:parent,origin:location.origin,data});
   const connect = (more = {}) => send({type:'tianming-formal-shell-v1', unifiedNavigation:true, ...more});
   const command = (key, extra = {}) => send({type:'tianming-unified-command-v1', requestId:'11111111-1111-4111-8111-111111111111',actorId:1,generation:3,key,...extra});
   return {vm,window,classes,messages,calls,listeners,parent,send,connect,command,ui:()=>window.ERPUnifiedNavigation.describe(vm),execute:key=>window.ERPUnifiedNavigation.execute(vm,key)};
 }
 const flush = () => new Promise(resolve=>setImmediate(resolve));
+
+test('cold embedded layout is stable while business data loads; menus project but commands stay blocked', async () => {
+  const s=setup({}, {unified:true,checking:true});
+  assert.equal(s.classes.has('frontend-shell-layout'),true);
+  assert.equal(s.messages.at(-1).type,'tianming-formal-bridge-ready-v1');
+  s.connect();
+  assert.equal(s.messages.at(-1).ready,false);
+  assert.equal(s.messages.at(-1).menus[0].label,'仓库');
+  s.command('action:logout'); await flush();
+  assert.equal(s.calls.length,0); assert.equal(s.messages.at(-1).status,'denied');
+  s.window.erpCheckingSession=false;s.listeners.tick();
+  assert.equal(s.messages.at(-1).ready,true);
+  s.vm.user.must_change_password=true;s.listeners.tick();
+  assert.equal(s.classes.has('frontend-shell-layout'),true);
+  assert.equal(s.messages.at(-1).menus.length,0);
+  s.vm.user=null;s.listeners.tick();
+  assert.equal(s.messages.at(-1).authenticated,false);
+});
+
+test('standalone pages and old shell do not opt into prepaint layout', () => {
+  const direct=setup({}, {unified:true,standalone:true});
+  assert.equal(direct.classes.size,0);assert.equal(direct.window.ERPFrontendShell,undefined);
+  const legacy=setup();assert.equal(legacy.classes.has('frontend-shell-layout'),false);
+});
 
 test('showing a cached workspace remeasures locally; inactive and foreign messages cannot trigger it',()=>{
   let measured=0;const f=setup({queueViewportPageMeasure:()=>measured++});

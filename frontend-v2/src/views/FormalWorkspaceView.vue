@@ -15,7 +15,7 @@ const auth = useAuthStore()
 const page = props.workspacePage
 const routePath = props.workspacePath
 const active = computed(() => route.path === routePath)
-const source = '/frontend-v2/formal-workspace?embedded=1&frontend_shell=1&page=' + encodeURIComponent(page)
+const source = '/frontend-v2/formal-workspace?embedded=1&frontend_shell=1&unified_navigation=1&page=' + encodeURIComponent(page)
 const entryMessage = ref('')
 let navigationReady = false
 let pending: ReturnType<typeof parseFormalOrderEntry> = null
@@ -40,6 +40,7 @@ function sendEntry() {
 }
 function receive(event: MessageEvent) {
   if (event.origin !== location.origin || event.source !== frame.value?.contentWindow) return
+  if (event.data?.type === 'tianming-formal-bridge-ready-v1') { connect(); return }
   if (event.data?.type === 'tianming-formal-orders-changed-v1') {
     if (page === 'orders' && navigationReady && Number.isSafeInteger(event.data.actorId) && event.data.actorId === auth.user?.id) {
       window.dispatchEvent(new CustomEvent('tianming-orders-changed', {detail:{actorId:event.data.actorId}}))

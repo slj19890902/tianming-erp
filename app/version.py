@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.574"
-APP_VERSION_NAME = "报价可靠提交、审批核验与备库查询优化"
+APP_VERSION = "v0.22.575"
+APP_VERSION_NAME = "工作台加载导航稳定显示"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5461,3 +5461,7 @@ APP_VERIFICATION_STEPS = [
     "查看备库各工作区并翻页和搜索，核对数量、位置、完整BOM组及历史保持；管理员页面与实际操作验收待反馈。",
 ]
 APP_CHANGELOG = [*(f"v0.22.574：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = ["修复加载时业务中心短暂右移及重复页头：嵌入工作区首次显示即采用统一布局。", "菜单连接提前到工作区脚本就绪；加载期间仍禁止业务操作，保留登录、权限、草稿和直接原页面。"]
+APP_VERIFICATION_STEPS = ["刷新ERP，观察加载期间业务中心保持左侧，不再先显示第二套菜单和页头。", "加载后切换订单与仓库，确认导航、左下工具正常；无需新增或保存业务单据。"]
+APP_CHANGELOG = [*(f"v0.22.575：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -1,6 +1,10 @@
 (() => {
   'use strict';
   if (window.parent === window || new URLSearchParams(location.search).get('frontend_shell') !== '1') return;
+  // This opt-in belongs to the current outer shell. Apply layout before the
+  // business app paints; connection/authentication still gate every command.
+  const unifiedLayout = new URLSearchParams(location.search).get('unified_navigation') === '1';
+  if (unifiedLayout) document.documentElement.classList.add('frontend-shell-layout');
   window.ERPFrontendShell = {
     install(vm) {
       let connected = false;
@@ -11,7 +15,7 @@
       const publish = () => {
         if (!connected || !ready()) {
           document.documentElement.classList.remove('frontend-shell-connected','frontend-shell-unified');
-          if (connected && vm.user) window.parent.postMessage({type:'tianming-formal-navigation-v1',menus:[],ready:false}, location.origin);
+          if (connected && vm.user) window.parent.postMessage({type:'tianming-formal-navigation-v1',menus:vm.user.must_change_password ? [] : (vm.menus || []).map(item => ({key:String(item.key),label:String(item.label)})),ready:false}, location.origin);
           if (connected && !vm.user && !window.erpCheckingSession) {
             window.parent.postMessage({type:'tianming-formal-navigation-v1',menus:[],active:'',authenticated:false}, location.origin);
           }
@@ -107,10 +111,14 @@
       const timer = window.setInterval(publish, 500);
       window.addEventListener('pagehide', () => {stop();clearInterval(timer);window.removeEventListener('message',receive);if(interceptor!==undefined)responseHook.eject(interceptor);}, {once:true});
       publish();
+      // Do not wait for the iframe load event (images and other resources may
+      // still be pending). The parent validates this exact frame and origin.
+      window.parent.postMessage({type:'tianming-formal-bridge-ready-v1'}, location.origin);
     }
   };
   const style = document.createElement('style');
   style.textContent = '.frontend-shell-connected .app-shell > .layout > .sidebar{display:none}.frontend-shell-connected .app-shell > .layout{grid-template-columns:minmax(0,1fr)}';
   style.textContent += '.frontend-shell-unified .app-shell{grid-template-rows:minmax(0,1fr)}.frontend-shell-unified .app-shell>.topbar,.frontend-shell-unified .business-flow-guide,.frontend-shell-unified .workbench-nav,.frontend-shell-unified .warehouse-workspace-nav,.frontend-shell-unified .finance-task-nav{display:none!important}';
+  style.textContent += '.frontend-shell-layout .app-shell>.layout>.sidebar{display:none}.frontend-shell-layout .app-shell>.layout{grid-template-columns:minmax(0,1fr)}.frontend-shell-layout .app-shell{grid-template-rows:minmax(0,1fr)}.frontend-shell-layout .app-shell>.topbar,.frontend-shell-layout .business-flow-guide,.frontend-shell-layout .workbench-nav,.frontend-shell-layout .warehouse-workspace-nav,.frontend-shell-layout .finance-task-nav{display:none!important}';
   document.head.appendChild(style);
 })();

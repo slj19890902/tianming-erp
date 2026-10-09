@@ -1,0 +1,19 @@
+# 手机盘点回执恢复合同（实施中）
+
+任务卡MOBILE_STOCKTAKE_RECOVERY_20261010，根于2026-10-10审核API/UI协议。本文件为已批准实施方案，不代表候选或发布完成。正式基线v598/c010d20facef331f5a3de317d2e839c677b22d6f/en1009hp，本轮无迁移或历史数据补正。
+
+两条原写入口保持201及完整原order，增加request_action（submit/confirm）、request_idempotency_key（原wire key）和current_actor_id（本次认证）。请求新增可选strict正整数expected_actor_id，仅防旧页面切账号后误写；它不进入原持久业务签名，不证明历史请求归属。错配返回STOCKTAKE_ACTOR_MISMATCH并标明保留请求，不执行业务写。
+
+新增只读POST /api/warehouse/stocktakes/resolve，请求{action,body:完整原StocktakeCreateRequest}，响应200 {status:found/not_found,request_action,request_idempotency_key,current_actor_id,observed_at,order:真实完整order或null}。沿对应动作现行权限和全部客户范围要求，confirm仍需submit/review及admin角色；允许现有安全拒绝审计，不写盘点、审核、库存或业务流水。
+
+原confirm持久key为mobile-confirm-加原wire key的SHA256，submit存原key。核对复用持久原快照，不跑当前位置或库存的新提交资格；当前实物变化不抹掉既有结果。confirm必须存在对应approved审核事实、命令键/动作/理由及真实审核身份自洽，否则冲突且保留。submit可能已经submitted/approved/rejected，按真实状态显示。not_found只是当前时点未见，不能清key、注销或假定原请求永不执行。
+
+成功返回前先在同一事务内完成flush及plain回执构造，再commit；成功后不重复读取投影/ORM来构造业务回执。响应构造失败应全部回滚；commit或传输仍可能结果未知，由原请求核对恢复，不以HTTP状态猜测是否写入。员工IntegrityError后的精确重放同样保留原合同并返回相同echo。所有新增成功/冲突结果no-store。
+
+UI完整回执对比原key/动作、当前认证、历史submitted_by与本地owner、正整数单id/非空单号、原货位/布局/地址/地图及唯一批次集合、实盘/原库存/原版本快照。实际行字段是lot_version_snapshot、quantity_available_snapshot、quantity_reserved_snapshot、counted_quantity、inventory_lot_id；client_line_id不在原回执/业务签名，不误要求回显。原完整body仍保存以便重试；行顺序可变，重复lot不得通过字典折叠冒充精确匹配。无差额合法盘点不要求有adjustment_movement_id。
+
+发送前持久保存当前账号、动作、原key/完整body和输入；失败不发送。未知锁住改数量/换请求的入口，先只读核对；用户明确继续才重发同key同body。401/403/409/422不能抹掉更早未知。完整成功与库存列表刷新分离；清缓存失败保留confirmed并只读核对，禁止重复新建。页面生命周期和账号切换后的旧响应不能修改新账号状态。
+
+HTTP局域网非安全上下文不能依赖crypto.subtle/Web Locks；confirm摘要采用可靠可用实现并与可信SHA256交叉验证。localStorage读后写不冒称跨页原子锁，同账号多个原请求必须各自保留、不能覆盖/删除另一笔。多个待核对时阻止新建，明确逐笔核对；实现细节须有双控制器/共享storage证据。
+
+手机跨页返回丢查货条件、触控32～36px及长编码卡片内部截断另为P2后续，本卡不混改。旧未知取用注销/回退兼容也不属于本卡。所有验收在合成隔离环境；正式数据、真实手机、扫码硬件及员工现场仍按管理员验收边界。

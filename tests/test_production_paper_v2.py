@@ -35,6 +35,8 @@ assert(p.operations({...component,joining_method:'打钉'},card).some(x=>x.text=
 assert(p.operations({...component,joining_method:'粘贴'},card).some(x=>x.text==='粘贴'));
 assert(p.operations({...component,box_type_code:'a1_0201',crease_display:'100/200/100'},card).some(x=>x.label==='开槽' && x.text.includes('100/200/100')));
 assert.deepEqual(p.atoms(p.groups([card,card])[0])[0].quantities,[200,16,184]);
+const sameTask={...card,components:[{...component,order_item_id:20,production_task_id:30}]};
+assert.deepEqual(p.atoms(p.groups([sameTask,sameTask])[0])[0].quantities,[100,8,92]);
 const html=p.body(p.atoms(p.groups([card,other])[0]));
 assert.equal((html.match(/<th>/g)||[]).length,5);
 assert(html.includes('80011946') && html.includes('80011947'));
@@ -69,3 +71,31 @@ def test_reservations_are_exact_and_exclude_new_output(production_print_app):
         assert not component_picks(paper_inventory_sources(db,[item],cutoff=cutoff),order_item_id=item+999)
         assert not component_picks(paper_inventory_sources(db,[item],cutoff=cutoff),order_item_id=item,bom_id=999)
         assert 'cost' not in json.dumps(rows)
+        # Second-resolution timestamps cannot make this task's new output old coverage.
+        from sqlalchemy import select
+        from app.models.production import ProductionTask, ProductionCompletion, ProductionCompletionBatch
+        task=db.scalar(select(ProductionTask).where(ProductionTask.order_item_id==item))
+        batch=ProductionCompletionBatch(idempotency_key='paper-output',request_hash='a'*64,item_count=1,completed_at=cutoff)
+        db.add(batch); db.flush()
+        completion=ProductionCompletion(batch_id=batch.id,task_id=task.id,order_item_id=item,
+            expected_version=1,quantity=10,initial_disposition='stock',warehouse_location_id=location.id,
+            inventory_lot_id=lot.id,completed_at=cutoff)
+        db.add(completion); db.flush()
+        lot.source_ref_type='production_completion'; lot.source_ref_id=completion.id
+        db.commit()
+        assert not paper_inventory_sources(db,[item],cutoff=cutoff)
+
+
+def test_employee_quantity_unit_uses_frozen_sales_unit(production_print_app):
+    from app.models.order import OrderItem
+    from app.models.product import Product
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+    from app.services.requisition_production_print import build_supplier_requisition_production_package
+    with production_print_app['session_factory']() as db:
+        item=db.get(OrderItem,production_print_app['order_item_id'])
+        item.sales_unit_snapshot='套'
+        db.get(Product,production_print_app['product_id']).unit='只'
+        db.commit()
+        package=build_supplier_requisition_production_package(db,db.get(SupplierRequisitionOrder,production_print_app['supplier_order_id']))
+        components=[c for card in package['cards'] for c in card['components'] if c.get('order_item_id')==item.id]
+        assert components and all(c['finished_unit']=='套' for c in components)

@@ -20,5 +20,8 @@
 .paper-operation { display:flex; gap:3mm; padding:1.2mm 0; border-bottom:1px solid #aaa; overflow-wrap:anywhere; }
 .paper-operation b { flex:0 0 auto; max-width:47%; }
 .paper-operation span { min-width:0; }
+.paper-qrs { display:grid; grid-template-columns:repeat(5,1fr); gap:2mm; padding-top:2mm; }
+.paper-qrs>div { display:flex; flex-direction:column; align-items:center; gap:1mm; font-size:10pt; overflow-wrap:anywhere; }
+.paper-qrs img { width:16mm; height:16mm; }
 .paper-foot { position:absolute; bottom:2mm; left:0; right:0; display:flex; justify-content:space-between; font-size:9pt; color:#333; }
 @media print { .paper-v2.page { margin:0; box-shadow:none; break-after:page; } .paper-v2:last-child { break-after:auto; } }

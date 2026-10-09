@@ -64,7 +64,7 @@
   function atoms(group) {
     const rows = [], blocks = [], reservations = new Set();
     const multiple = group.cards.reduce((n,c) => n + (c.components || []).length, 0) > 1;
-    for (const card of group.cards) {
+    for (const [cardIndex, card] of group.cards.entries()) {
       for (const c of card.components || [card]) {
         const code = c.product_code || card.product_code || '编码待核对';
         const unit = c.finished_unit || card.output_unit || '只';
@@ -74,11 +74,14 @@
           c.finished_deduction_quantity ?? card.stock_deduction_quantity,
           c.planned_finished_quantity ?? card.planned_finished_quantity].map(v=>Number(v || 0));
         const rowKey = JSON.stringify([code, name, unit]);
+        const orderKey = c.order_item_id != null ? JSON.stringify([c.order_item_id,c.bom_component_id]) : (card.source_identity || `entry:${cardIndex}`);
+        const taskKey = c.production_task_id != null ? `${c.production_task_id}:${c.component_label || ''}` : orderKey;
         const previousRow = rows.find(row => row.rowKey === rowKey);
         if (previousRow) {
-          previousRow.quantities = previousRow.quantities.map((v,i)=>v+quantities[i]);
+          previousRow.quantities = previousRow.quantities.map((v,i)=>v+((i===2 ? previousRow.taskKeys.has(taskKey) : previousRow.orderKeys.has(orderKey)) ? 0 : quantities[i]));
+          previousRow.orderKeys.add(orderKey); previousRow.taskKeys.add(taskKey);
           previousRow.cells = [code,name,...previousRow.quantities.map(v=>`${num(v)}${unit}`)];
-        } else rows.push({kind:'row',rowKey,quantities,cells:[code,name,...quantities.map(v=>`${num(v)}${unit}`)]});
+        } else rows.push({kind:'row',rowKey,quantities,orderKeys:new Set([orderKey]),taskKeys:new Set([taskKey]),cells:[code,name,...quantities.map(v=>`${num(v)}${unit}`)]});
         if (c.quantity_per_set) blocks.push({kind:'block', label:code, text:`每套 ${c.quantity_per_set}片 · ${num(c.order_set_quantity)}套`, internal:false});
         const prefix = multiple ? `${code}${label} ` : '';
         for (const op of operations(c, card)) blocks.push({kind:'block', ...op, label:prefix+op.label});
@@ -106,8 +109,15 @@
         blocks.push({kind:'block', label:'工艺要求', text:note, internal:false});
       }
     }
-    const seen = new Set();
-    return rows.concat(blocks.filter(b => { const key = JSON.stringify(b); if (seen.has(key)) return false; seen.add(key); return true; }));
+    const seen = new Set(), qrRows = [];
+    if (group.cards.length > 1) {
+      const codes = new Map();
+      for (const card of group.cards) if (card.product_qr?.qr_data_url && card.product_qr.product_id)
+        codes.set(card.product_qr.product_id,{code:card.product_code,src:card.product_qr.qr_data_url});
+      const values = [...codes.values()];
+      for (let i=0;i<values.length;i+=5) qrRows.push({kind:'qrs',values:values.slice(i,i+5)});
+    }
+    return rows.concat(blocks.filter(b => { const key = JSON.stringify(b); if (seen.has(key)) return false; seen.add(key); return true; }),qrRows);
   }
 
   function header(group) {
@@ -128,7 +138,8 @@
         html += `<tr>${a.cells.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`;
       } else {
         if (inTable) { html += '</tbody></table>'; inTable = false; }
-        html += `<div class="paper-operation${a.internal ? ' internal-only' : ''}"><b>${esc(a.label)}</b><span>${esc(a.text)}</span></div>`;
+        html += a.kind === 'qrs' ? `<div class="paper-qrs">${a.values.map(v=>`<div><img src="${esc(v.src)}" alt="扫码查看当前产品资料"><span>${esc(v.code)}</span></div>`).join('')}</div>`
+          : `<div class="paper-operation${a.internal ? ' internal-only' : ''}"><b>${esc(a.label)}</b><span>${esc(a.text)}</span></div>`;
       }
     }
     return html + (inTable ? '</tbody></table>' : '');

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.580"
-APP_VERSION_NAME = "已确认同实物成品共用库存"
+APP_VERSION = "v0.22.581"
+APP_VERSION_NAME = "生产任务单大字双联与工艺分块"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5524,3 +5524,10 @@ APP_VERIFICATION_STEPS = [
     "正常办理订单时核对本客户编码、名称及价格；实际送货、撤销和现场货架由管理员验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.580：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "生产任务单采用大字双联，统一订单号，按存货编码列出订单数、成品抵扣和需生产数；长报料组整张A4续接。",
+    "分切、模切、开槽、印刷按工序显示参数与位置，只显示打钉或粘贴，不显示无需结合和一开一的空工序。",
+    "修复正常收料导致任务版本永久误报；打印前重读当前内容，保留真实版本冲突、权限及库存事实保护。",
+]
+APP_CHANGELOG = [*(f"v0.22.581：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

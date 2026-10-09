@@ -773,8 +773,7 @@ def build_supplier_requisition_production_package(
             "customer_order_quantity": (int(component_snapshot.required_piece_quantity)
                 if component_snapshot is not None else int(order_item.quantity) if order_item is not None
                 else int(item.quantity or 0) + int(item.stock_deduction_qty or 0)),
-            "finished_deduction_quantity": (max(0, int(component_snapshot.required_piece_quantity) - int(item.quantity or 0))
-                if component_snapshot is not None else int(item.stock_deduction_qty or 0)),
+            "finished_deduction_quantity": int(item.stock_deduction_qty or 0),
             "quantity_per_set": int(component_snapshot.quantity_per_set) if component_snapshot is not None else None,
             "order_set_quantity": int(component_snapshot.order_set_quantity) if component_snapshot is not None else None,
             "task_status": task.status if task is not None else None,
@@ -795,7 +794,10 @@ def build_supplier_requisition_production_package(
             "product_name": item.product_name,
             "specification": specification,
             "planned_finished_quantity": int(item.quantity or 0),
-            "finished_unit": "片" if component_snapshot is not None else ("张" if layout_kind == "liner" else "只"),
+            "finished_unit": "片" if component_snapshot is not None else (
+                (order_item.sales_unit_snapshot if order_item is not None else None)
+                or (product.unit if product is not None else None)
+                or ("张" if layout_kind == "liner" else "只")),
             "requisition_quantity": int(item.requisition_qty or 0),
             "requisition_unit": "张",
             "report_length_mm": item.report_length_mm or order.report_length_mm,

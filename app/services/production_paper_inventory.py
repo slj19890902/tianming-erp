@@ -6,9 +6,12 @@ from sqlalchemy.orm import selectinload
 
 from app.models.warehouse_inventory import (
     InventoryLot, InventoryPalletItem, InventoryReservation, OrderItemSemiRequirement,
+    FinishedGoodsInventoryDetail,
 )
 from app.services.location_candidates import load_warehouse_location_projection_contexts
 from app.services.production_inventory_locations import lot_location
+from app.services.warehouse_display_units import lot_display_unit
+from app.models.production import ProductionCompletion
 
 
 def paper_inventory_sources(db, order_item_ids, *, cutoff):
@@ -19,8 +22,14 @@ def paper_inventory_sources(db, order_item_ids, *, cutoff):
         .outerjoin(OrderItemSemiRequirement,
                    OrderItemSemiRequirement.id == InventoryReservation.semi_requirement_id)
         .where(InventoryReservation.order_item_id.in_(order_item_ids),
-               InventoryReservation.status.in_(['active', 'partial', 'consumed']))
+               InventoryReservation.status.in_(['active', 'partial', 'consumed']),
+               ~select(ProductionCompletion.id).where(
+                   ProductionCompletion.id == InventoryLot.source_ref_id,
+                   InventoryLot.source_ref_type == 'production_completion',
+                   ProductionCompletion.order_item_id == InventoryReservation.order_item_id,
+               ).exists())
         .options(selectinload(InventoryLot.location),
+                 selectinload(InventoryLot.finished_detail).selectinload(FinishedGoodsInventoryDetail.product),
                  selectinload(InventoryLot.pallet_item).selectinload(InventoryPalletItem.pallet))
         .order_by(InventoryReservation.id))
     # Newly produced finished goods are not pre-production stock deductions.
@@ -46,7 +55,7 @@ def paper_inventory_sources(db, order_item_ids, *, cutoff):
             'requisition_item_id': reservation.requisition_item_id,
             'quantity': remaining,
             'consumed_quantity': consumed,
-            'unit': '张' if lot.unit == 'sheets' else '只',
+            'unit': {'boxes': '只', 'sheets': '张', 'pieces': '片'}.get(lot_display_unit(lot), lot_display_unit(lot)),
             'location_name': address.get('current_warehouse_location_name') or ('位置待确认' if remaining else None),
             'location_id': address.get('current_warehouse_location_id'),
             'location_issue': address.get('current_location_issue'),

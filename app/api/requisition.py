@@ -14108,6 +14108,39 @@ def supplier_schedule(
     return _item_response(item, db)
 
 
+def _live_supplier_orders_for_items(db: Session, item_ids: set[int]) -> dict[int, set[str]]:
+    """Follow typed direct, purpose and BOM links, never display-number text."""
+    from app.models.procurement_source import ProcurementSourceLink
+    if not item_ids:
+        return {}
+    direct_id = SupplierRequisitionOrderItem.order_item_id
+    purpose_id = PurchasePurposeSourceSnapshot.source_order_item_id
+    bom_id = RequisitionItem.order_item_id
+    rows = db.execute(
+        select(direct_id, purpose_id, bom_id, SupplierRequisitionOrder.order_number)
+        .select_from(SupplierRequisitionOrder)
+        .join(SupplierRequisitionOrderItem,
+              SupplierRequisitionOrderItem.supplier_order_id == SupplierRequisitionOrder.id)
+        .outerjoin(PurchasePurposeSourceSnapshot,
+                   PurchasePurposeSourceSnapshot.supplier_requisition_order_item_id
+                   == SupplierRequisitionOrderItem.id)
+        .outerjoin(ProcurementSourceLink, and_(
+            ProcurementSourceLink.supplier_item_id == SupplierRequisitionOrderItem.id,
+            ProcurementSourceLink.status == "active"))
+        .outerjoin(RequisitionItem,
+                   RequisitionItem.id == ProcurementSourceLink.material_requisition_item_id)
+        .where(SupplierRequisitionOrder.status != "voided",
+               SupplierRequisitionOrderItem.status == "active",
+               or_(direct_id.in_(item_ids), purpose_id.in_(item_ids), bom_id.in_(item_ids)))
+        .distinct()
+    ).all()
+    result: dict[int, set[str]] = {}
+    for direct, purpose, bom, number in rows:
+        for item_id in {direct, purpose, bom} & item_ids:
+            result.setdefault(item_id, set()).add(number)
+    return result
+
+
 @router.put("/items/{item_id}/cancel")
 def cancel_requisition(
     item_id: int,
@@ -14118,6 +14151,16 @@ def cancel_requisition(
     reason = (payload.reason or "").strip() or "取消报料并退回待报料（系统记录）"
     item = _item_or_404(db, item_id)
     _require_order_item_customer_access(db, item, user)
+    from app.services.production_workflow import (
+        lock_order_rows_for_production_transition,
+        ProductionWorkflowError,
+    )
+    try:
+        lock_order_rows_for_production_transition(db, [item.order_id])
+    except ProductionWorkflowError as error:
+        db.rollback()
+        raise HTTPException(error.status_code, str(error)) from error
+    db.refresh(item)
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细禁止修改报料")
     if item.requisition_status == "未报料":
@@ -14134,6 +14177,16 @@ def cancel_requisition(
         raise HTTPException(
             status_code=409,
             detail="该订单已有实际收货，必须先撤销来料实收",
+        )
+    # This legacy action only cancels unfrozen requisition rows. Clearing the
+    # order pointer must not leave a live supplier contract (or its frozen
+    # purpose allocation) behind while releasing the order's stock reservations.
+    supplier_numbers = sorted(_live_supplier_orders_for_items(db, {item.id}).get(item.id, set()))
+    if supplier_numbers:
+        raise HTTPException(
+            409,
+            "该明细已关联正式采购单 " + "、".join(supplier_numbers)
+            + "，不能从旧订单入口撤销。请到“报料 → 已报料”按对应采购单核对并作废；本次未改变报料或库存。",
         )
     before_requisition = {
         "requisition_status": item.requisition_status,
@@ -24206,9 +24259,13 @@ def void_supplier_order(
     try:
         from app.services.unified_procurement import release_stock_sources
         release_stock_sources(db, order, user)
-        if order_item_ids:
+        # Stock reservations belong to the sales demand, not to this supplier
+        # document. Other live purchases still use the frozen stock deduction.
+        remaining_supplier_item_ids = set(_live_supplier_orders_for_items(db, order_item_ids))
+        release_order_item_ids = order_item_ids - remaining_supplier_item_ids
+        if release_order_item_ids:
             active_requisition_ids = select(RequisitionItem.id).where(
-                RequisitionItem.order_item_id.in_(order_item_ids),
+                RequisitionItem.order_item_id.in_(release_order_item_ids),
                 RequisitionItem.status == "有效",
             )
             db.execute(
@@ -24221,7 +24278,7 @@ def void_supplier_order(
                 .where(
                     RequisitionItemBomSource.requisition_item_id.in_(
                         select(RequisitionItem.id).where(
-                            RequisitionItem.order_item_id.in_(order_item_ids)
+                            RequisitionItem.order_item_id.in_(release_order_item_ids)
                         )
                     )
                 )
@@ -24229,14 +24286,14 @@ def void_supplier_order(
             )
             release_active_finished_reservations_for_items(
                 db,
-                order_item_ids=sorted(order_item_ids),
+                order_item_ids=sorted(release_order_item_ids),
                 operator_id=user.id,
                 reason="作废供应商报料单，自动释放成品库存预占",
                 idempotency_prefix=f"void-supplier-order-{order.id}-finished",
             )
             release_active_semi_reservations_for_items(
                 db,
-                order_item_ids=sorted(order_item_ids),
+                order_item_ids=sorted(release_order_item_ids),
                 operator_id=user.id,
                 reason="作废供应商报料单，自动释放半成品库存预占",
                 idempotency_prefix=f"void-supplier-order-{order.id}-semi",

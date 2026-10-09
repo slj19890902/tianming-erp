@@ -33,7 +33,8 @@ def visible_products(db: Session, scope: set[int] | None):
 def find_products(db: Session, scope: set[int] | None, *, q: str,
                   customer_id: int | None, dimension_basis: str,
                   length: Decimal | None, width: Decimal | None,
-                  height: Decimal | None, page: int, page_size: int):
+                  height: Decimal | None, page: int, page_size: int,
+                  allow_order_search: bool):
     query = visible_products(db, scope).outerjoin(MoldTool, MoldTool.id == Product.mold_tool_id)
     if customer_id is not None:
         query = query.where(Product.customer_id == customer_id)
@@ -70,19 +71,23 @@ def find_products(db: Session, scope: set[int] | None, *, q: str,
             Customer.name.ilike(pattern, escape="\\"),
             Customer.chinese_short_name.ilike(pattern, escape="\\"),
             Customer.customer_code.ilike(pattern, escape="\\"),
-            exists(select(1).select_from(OrderItem).join(Order, Order.id == OrderItem.order_id)
-                   .where(OrderItem.product_id == Product.id,
-                          Order.customer_id == Product.customer_id,
-                          or_(Order.order_number.ilike(pattern, escape="\\"),
-                              Order.customer_po.ilike(pattern, escape="\\")))) ,
         ]
+        if allow_order_search:
+            matching.append(exists(
+                select(1).select_from(OrderItem).join(Order, Order.id == OrderItem.order_id)
+                .where(OrderItem.product_id == Product.id,
+                       Order.customer_id == Product.customer_id,
+                       or_(Order.order_number.ilike(pattern, escape="\\"),
+                           Order.customer_po.ilike(pattern, escape="\\")))))
         if compact and compact != token.lower():
             matching.extend([
                 func.replace(func.lower(Product.product_code), ".", "").contains(compact),
                 func.replace(func.lower(Product.customer_material_code), ".", "").contains(compact),
             ])
         dimension_tokens = re.split(r"[xX×*]", token.removesuffix("mm"))
-        if len(dimension_tokens) in (2, 3):
+        if len(dimension_tokens) in (2, 3) and not (
+            dimension_basis == "report" and len(dimension_tokens) == 3
+        ):
             try:
                 values = [Decimal(part) for part in dimension_tokens]
             except Exception:

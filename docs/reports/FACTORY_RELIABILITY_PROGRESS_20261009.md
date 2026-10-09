@@ -56,3 +56,5 @@
 整组group_job保存恢复审查及独立方案完成：8真实HTTP及3实际页面方法确认同类空回执误成功/unknown原请求丢失，原幂等/版本/事务有效。下一GROUP_PREPARATION_SAVE_RECOVERY_FIX_20261010已批准，两个新managed树从已发布v603/5b167953创建，API/UI按白名单并行、合同先行，尚未修复发布。必须保留多receipt/job同子件ID映射、原数组签名、semi少产仍全投入、finished少套余片及非零assembly.inputs，首次INSERT冻结证明与readonly身份/权限分离。Chrome/旧PID拒绝不绕过，采用真实HTTP/实际页面及离线Vue验证，现场pending。持续Goal active。
 
 2026-10-10 v604技术发布完成，待管理员人工验收。整组dispose原请求持久保存、父首次INSERT冻结证明和只读恢复；同组group_stock后续入口保护，多job/少套余片及原单位规则保留。源75129569ed5ff0bf454d075471c9b4fd902b070f，包077c2cde0a2d54932987baa2a960aa5934f66dfb17194b273bd21051e9fa6081，en1009hp无迁移。根整组UI57、原single49、真实HTTP及独立复核通过；冷备恢复、323表/附件保持、健康/资源通过。此前Chrome/旧PID审批拒绝未绕过，现场pending；历史入口限制、手机永久结束reader/回退门禁仍保留。Goal active。
+
+2026-10-10 v604后下一GROUP_ASSEMBLY_SAVE_RECOVERY_AUDIT_20261010已启动，只读审实际group_stock/assemble保存、数量/幂等/回滚及未知恢复。API固定4d、UI固定e578并先核与正式751受影响源等价，仅artifact探针，无源码/正式写；完整报告后由根先定最小方案再实施。原dispose闭环已发布，不混称其余组套动作已修复。持续Goal active。

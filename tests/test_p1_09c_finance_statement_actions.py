@@ -16,14 +16,11 @@ def _method_body(signature: str, next_signature: str) -> str:
 
 
 def test_finance_statement_actions_show_busy_labels_and_disable_parallel_actions() -> None:
-    finance = INDEX[
-        INDEX.index("<template v-if=\"financeView==='current'\"") :
-        INDEX.index("<template v-else-if=\"financeView==='reports'\"")
-    ]
+    finance = next(line for line in INDEX.splitlines() if '@click="confirmAndDownloadStatement(statement)"' in line)
     assert "financeStatementOperationState.action" in finance
     assert "financeStatementOperationState.statementId" in finance
-    assert "确认中…" in finance
-    assert "生成中…" in finance
+    assert "办理中…" in finance
+    assert "下载中…" in finance
     assert finance.count(":disabled=") >= 2
 
 
@@ -121,7 +118,7 @@ vm.generateInvoiceTask = new AsyncFunction("row", {json.dumps(generate_body, ens
 
 def test_export_and_confirm_never_confirms_after_export_failure(tmp_path: Path) -> None:
     export_confirm_body = _method_body(
-        "async exportAndConfirmStatement(row) {", "invoiceBuyerRemark(task) {"
+        "async exportAndConfirmStatement(row) {", "async confirmAndDownloadStatement(row) {"
     )
     script = f"""
 const AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;

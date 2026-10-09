@@ -665,7 +665,14 @@ def test_fin001_missing_data_fails_closed_then_freezes_exports_and_registers(fin
         assert confirm.status_code == 200, confirm.text
         missing = client.post("/api/finance/statements/1/invoice-tasks", json={"expected_version":2,"idempotency_key":"fin001-missing-key"})
         assert missing.status_code == 409
-        assert "缺少" in str(missing.json()) or "资料" in str(missing.json())
+        assert missing.json()["detail"]["missing_items"] == ["客户开票档案", "默认销方主体"]
+        stale = client.post("/api/finance/statements/1/confirm", json={"expected_version":1})
+        assert stale.status_code == 409
+        assert stale.json()["detail"]["current_version"] == 2
+        with factory() as db:
+            assert db.get(Statement, 1).confirmation_status == "confirmed"
+            assert db.get(Statement, 1).version == 2
+            assert db.scalar(select(FinanceInvoiceTask)) is None
         _complete_invoice_profile(client)
         created = client.post("/api/finance/statements/1/invoice-tasks", json={"expected_version":2,"idempotency_key":"fin001-create-key"})
         assert created.status_code == 201, created.text

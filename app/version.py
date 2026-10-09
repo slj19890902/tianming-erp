@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.578"
-APP_VERSION_NAME = "全地图货架正式版本统一"
+APP_VERSION = "v0.22.579"
+APP_VERSION_NAME = "对账确认与开票下载恢复"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5500,3 +5500,16 @@ APP_VERIFICATION_STEPS = [
     "打开原产品标签及模具货架标签，核对当前位置和二维码；实体出纸由管理员确认。",
 ]
 APP_CHANGELOG = [*(f"v0.22.578：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+# 2026-10-09 对账确认与开票下载恢复
+APP_CHANGES = [
+    "对账确认成功后立即更新详情与列表，开票资料未齐或下载失败时可继续办理，不重复确认。",
+    "已确认对账单增加继续下载入口；已就绪任务直接下载，真实版本冲突仍须核对。",
+    "明确提示缺少的客户开票档案及默认销方；保留原金额、版本、权限及审计。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新并打开已确认的对账单，核对确认状态和继续下载开票文件按钮。",
+    "补齐客户开票资料后继续下载，核对文件金额；下载重试不重复生成开票任务。",
+]
+APP_CHANGELOG = [*(f"v0.22.579：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -1413,7 +1413,8 @@ def _create_invoice_task(statement_id, payload, db, user, *, commit=True):
     )
     seller = db.get(InvoiceSellerEntity, seller_id) if seller_id else None
     if seller is None:
-        raise HTTPException(status_code=409, detail={"message": "客户缺少默认销方主体", "missing_items": ["默认销方主体"]})
+        missing = ["客户开票档案", "默认销方主体"] if profile is None else ["默认销方主体"]
+        raise HTTPException(status_code=409, detail={"message": "开票资料不完整，不能生成可导出任务", "missing_items": missing})
     active = db.scalar(select(FinanceInvoiceTask).where(FinanceInvoiceTask.statement_id == statement.id, FinanceInvoiceTask.statement_version == statement.version, FinanceInvoiceTask.seller_entity_id == seller.id, FinanceInvoiceTask.status != "voided").order_by(FinanceInvoiceTask.id.desc()).limit(1))
     snapshot, lines, missing = _snapshot_for_statement(db, statement, seller)
     source_hash = _snapshot_hash(snapshot) if snapshot else ""

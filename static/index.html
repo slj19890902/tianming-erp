@@ -5375,7 +5375,7 @@
                         <tr v-for="statement in localRows(row.statements,'finance-detail-0'+':'+financeGroupKey(row))" :key="statement.id">
                           <td><a href="#" @click.prevent="openStatementDetail(statement)">{{ statement.statement_number }}</a><div v-if="row.settlement_entity_id" class="muted">{{ statement.customer_name }}</div></td><td class="sensitive-price">¥ {{ money(statement.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(statement.pending_invoice_amount) }}</td>
                           <td><span v-if="statement.dispute_pending" class="status orange">异议待修改</span><span v-else-if="statement.task_void_pending" class="status orange">待修改</span><span v-else-if="statement.invoice_task_pending" class="status blue">开票处理中</span><span v-else-if="statement.invoice_status==='invoiced'" class="status green">已开票</span><status-tag v-else :value="statement.status"></status-tag><div class="muted">{{ financeConfirmationText(statement) }}</div><div class="muted">已开票 ¥{{ money(statement.invoiced_amount) }} · 已收 ¥{{ money(statement.settled_amount) }} · 未收 ¥{{ money(statement.pending_payment_amount) }}</div></td>
-                          <td class="toolbar-group"><button v-if="financeView==='current' && statement.confirmation_status!=='confirmed'" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="exportStatement(statement,'xlsx')">导出对账单</button><button v-if="financeView==='current' && canConfirmStatement && canGenerateInvoiceTask && !statement.financially_completed && statement.confirmation_status!=='confirmed'" class="btn small" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statement)">{{ financeStatementOperationState.action==='confirm_download' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '办理中…' : '确认并下载开票文件' }}</button><button v-else-if="financeView==='current' && canGenerateInvoiceTask && statement.confirmation_status==='confirmed' && !statement.invoice_task_pending && Number(statement.pending_invoice_amount)>0" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="generateInvoiceTask(statement)">{{ financeStatementOperationState.action==='generate' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '生成中…' : '生成开票任务' }}</button><button v-if="financeView==='collections' && canFinance && Number(statement.pending_payment_action_amount)>0" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementSettlement(statement)">确认收款</button><button class="btn small" @click="openCustomerStatementCheck(statement)">核对客户Excel</button><button class="btn small" @click="exportStatement(statement,'pdf')">PDF</button><button v-if="canFinance && financeView==='current'" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementDispute(statement)">{{ statement.confirmation_status==='confirmed' ? '客户异议' : '调整' }}</button></td>
+                          <td class="toolbar-group"><button v-if="financeView==='current' && statement.confirmation_status!=='confirmed'" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="exportStatement(statement,'xlsx')">导出对账单</button><button v-if="financeView==='current' && canConfirmStatement && canGenerateInvoiceTask && !statement.financially_completed && statement.confirmation_status!=='confirmed'" class="btn small" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statement)">{{ financeStatementOperationState.action==='confirm_download' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '办理中…' : '确认并下载开票文件' }}</button><button v-else-if="financeView==='current' && canGenerateInvoiceTask && statement.confirmation_status==='confirmed' && !statement.invoice_task_pending && Number(statement.pending_invoice_amount)>0" class="btn small primary" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statement)">{{ financeStatementOperationState.action==='confirm_download' && Number(financeStatementOperationState.statementId)===Number(statement.id) ? '下载中…' : '继续下载开票文件' }}</button><button v-if="financeView==='collections' && canFinance && Number(statement.pending_payment_action_amount)>0" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementSettlement(statement)">确认收款</button><button class="btn small" @click="openCustomerStatementCheck(statement)">核对客户Excel</button><button class="btn small" @click="exportStatement(statement,'pdf')">PDF</button><button v-if="canFinance && financeView==='current'" class="btn small" :disabled="!!financeStatementOperationState.action" @click="openStatementDispute(statement)">{{ statement.confirmation_status==='confirmed' ? '客户异议' : '调整' }}</button></td>
                         </tr>
                       </tbody></table></div><local-pager :rows="row.statements" :list-key="'finance-detail-0'+':'+financeGroupKey(row)"></local-pager>
                     </section></div></td></tr>
@@ -9698,6 +9698,7 @@
               </div>
               <div v-if="statementDetail.merged_into_statement_id" class="notice">本单已合并，原下载文件已停用。<button class="btn small primary" @click="openStatementDetail({id:statementDetail.merged_into_statement_id})">查看合并后的对账单</button></div>
               <div v-if="statementDetail.merge_sources?.length" class="muted">合并来源：<button v-for="source in statementDetail.merge_sources" :key="source.id" class="btn small" @click="openStatementDetail(source)">{{ source.statement_number }}</button>；导出按送货日期排序。</div>
+              <div v-if="statementDetail._invoiceDownloadError" class="notice danger" role="alert">{{ statementDetail._invoiceDownloadError }} <button v-if="canManageInvoiceProfiles && statementDetail._invoiceMissingItems?.length" class="btn small" @click="openCustomerInvoiceProfile(statementDetail.customer_id)">客户开票资料</button></div>
               <div v-if="statementDetail.confirmation_status!=='cancelled'" class="toolbar-group" style="margin:10px 0">
                 <button v-if="canFinance" class="btn" @click="openStatementMerge(statementDetail)">合并对账单</button>
                 <button class="btn" @click="exportStatement(statementDetail,'xlsx')">仅导出 Excel</button>
@@ -10104,6 +10105,7 @@
             <button v-if="modal?.type==='statementDetail' && !['confirmed','cancelled'].includes(statementDetail?.confirmation_status)" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="exportStatement(statementDetail,'xlsx')">导出对账单</button>
             <button v-if="modal?.type==='statementDetail' && !['confirmed','cancelled'].includes(statementDetail?.confirmation_status) && canConfirmStatement && canGenerateInvoiceTask" class="btn" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statementDetail)">{{ financeStatementOperationState.action==='confirm_download' ? '确认并下载中…' : '确认并下载开票文件' }}</button>
             <button v-else-if="modal?.type==='statementDetail' && statementDetail?.confirmation_status!=='cancelled'" class="btn primary" @click="exportStatement(statementDetail,'xlsx')">重新导出 Excel</button>
+            <button v-if="modal?.type==='statementDetail' && statementDetail?.confirmation_status==='confirmed' && canGenerateInvoiceTask && Number(statementDetail.total_receivable)>Number(statementDetail.invoiced_amount||0)" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statementDetail)">{{ financeStatementOperationState.action==='confirm_download' ? '下载中…' : '继续下载开票文件' }}</button>
             <button v-if="modal?.type==='statementSettlement'" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="saveStatementSettlement">{{ financeStatementOperationState.action==='settle' ? '确认中…' : '确认收款' }}</button>
             <template v-if="modal?.type === 'orderPdfImport' && orderImportDrafts.length">
               <button class="btn" :disabled="pdfImportSelectionBusy || !confirmableImportDraftCount" @click="toggleConfirmableImportDrafts">{{ confirmedImportDraftCount ? "取消加入批量保存" : "加入批量保存" }}</button>
@@ -25083,41 +25085,87 @@
             if (this.financeStatementOperationState.action) return false;
             const statementId=Number(row.id);
             const expectedVersion=Number(row.version||1);
+            const alreadyConfirmed=row.confirmation_status==="confirmed";
+            if (row.confirmation_status==="cancelled" || !this.canGenerateInvoiceTask || (!alreadyConfirmed && !this.canConfirmStatement)) return false;
             const idempotencyKey=createIdempotencyKey();
-            this.financeStatementOperationState.action="confirm_download";
-            this.financeStatementOperationState.statementId=statementId;
-            try {
-              let confirmedStatement;
+            const state=this.financeStatementOperationState, generation=this.authGeneration, actorId=this.user?.id;
+            const isCurrent=()=>this.financeStatementOperationState===state && this.authGeneration===generation && this.user?.id===actorId;
+            const syncStatement=(data)=>{
+              if (!isCurrent() || Number(data?.id)!==statementId) return;
+              const targets=[row,this.statementDetail,...(this.statements||[]),...(this.financeCurrentRows||[]).flatMap(group=>group.statements||[])];
+              for (const target of targets) {
+                if (Number(target?.id)===statementId && Number(target.version||1)<=Number(data.version)) Object.assign(target,data);
+              }
+            };
+            const reloadAfterConflict=async()=>{
               try {
-                const {data}=await axios.post(`/api/finance/statements/${statementId}/confirm`,{expected_version:expectedVersion});
-                confirmedStatement=data;
-              } catch(error) {
-                this.showToast(`对账确认未完成：${this.errorMessage(error)}。请刷新后核对，勿重复确认。`,true);
-                return false;
+                const {data}=await axios.get(`/api/finance/statements/${statementId}`);
+                syncStatement(data);
+                return isCurrent() ? data : null;
+              } catch { return null; }
+            };
+            const feedback=(message,missingItems=[])=>{
+              if (!isCurrent()) return;
+              syncStatement({id:statementId,version:Number(row.version||expectedVersion),_invoiceDownloadError:message,_invoiceMissingItems:missingItems});
+              this.showToast(message,true);
+            };
+            state.action="confirm_download";
+            state.statementId=statementId;
+            syncStatement({id:statementId,version:expectedVersion,_invoiceDownloadError:"",_invoiceMissingItems:[]});
+            try {
+              let confirmedStatement={id:statementId,version:expectedVersion,confirmation_status:"confirmed"};
+              if (!alreadyConfirmed) {
+                try {
+                  const {data}=await axios.post(`/api/finance/statements/${statementId}/confirm`,{expected_version:expectedVersion});
+                  if (!isCurrent()) return false;
+                  confirmedStatement=data;
+                  // Confirmation is committed independently of task generation/download.
+                  // Synchronize the open detail immediately; a list reload cannot do this.
+                  syncStatement(data);
+                } catch(error) {
+                  if (!isCurrent()) return false;
+                  const status=error?.response?.status;
+                  const latest=(!status || status===409 || status>=500) ? await reloadAfterConflict() : null;
+                  feedback(latest?.confirmation_status==="confirmed"
+                    ? "对账已确认，请核对当前明细后点击“继续下载开票文件”。"
+                    : `对账确认未完成：${this.errorMessage(error)}。${latest ? "已读取最新明细，请核对后重新确认。" : "请刷新后核对。"}`);
+                  return false;
+                }
               }
               let task;
               try {
                 const {data}=await axios.post(`/api/finance/statements/${statementId}/invoice-tasks`,{expected_version:Number(confirmedStatement?.version||expectedVersion),idempotency_key:idempotencyKey});
+                if (!isCurrent()) return false;
                 task=data;
               } catch(error) {
-                this.showToast(`对账已确认，但开票任务未生成：${this.errorMessage(error)}。请刷新后重试生成，不要重复确认。`,true);
-                await this.loadFinance();
+                if (!isCurrent()) return false;
+                const detail=error?.response?.data?.detail;
+                if (detail?.current_version) await reloadAfterConflict();
+                feedback(`开票文件未生成：${this.errorMessage(error)}`,Array.isArray(detail?.missing_items) ? detail.missing_items : []);
                 return false;
               }
-              const confirmed=await this.confirmInvoiceTask(task);
+              // The server reuses the existing task on retry. Never reconfirm a
+              // ready/exported task or create a second invoice to recover a download.
+              if (["issued","voided"].includes(task.status)) {
+                feedback("该开票任务已开具或撤销，请到开票办理查看。");
+                return false;
+              }
+              const confirmed=["ready","exported"].includes(task.status) ? task : await this.confirmInvoiceTask(task);
+              if (!isCurrent()) return false;
               if (!confirmed) {
-                this.showToast("对账已确认且开票任务已生成；请在开票办理中确认任务后下载。",true);
-                await this.loadFinance();
+                feedback("开票任务已生成，请在开票办理中核对任务后下载。");
                 return false;
               }
               const downloaded=await this.downloadInvoiceTaxTemplate(confirmed);
+              if (!isCurrent()) return false;
               if (downloaded) this.showToast("已下载开票文件，待在税局实际开具后登记结果");
-              await this.loadFinance();
+              try { await this.loadFinance(); }
+              catch { if (downloaded && isCurrent()) this.showToast("开票文件已获取，列表刷新失败，请刷新查看。",true); }
               return downloaded;
             } finally {
-              if (this.financeStatementOperationState.action==="confirm_download" && Number(this.financeStatementOperationState.statementId)===statementId) {
-                this.financeStatementOperationState.action="";
-                this.financeStatementOperationState.statementId=null;
+              if (this.financeStatementOperationState===state && state.action==="confirm_download" && Number(state.statementId)===statementId) {
+                state.action="";
+                state.statementId=null;
               }
             }
           },

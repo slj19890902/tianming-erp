@@ -261,6 +261,7 @@ def _dispose_group(body,response,db,user):
         db.rollback()
         headers=_group_headers()
         if entered and not existing and not commit_started:
+            headers.pop('X-Production-Group-Preserve',None)
             headers['X-Production-Group-Rejected']='1'
         raise HTTPException(exc.status_code,str(exc),headers=headers) from exc
     except HTTPException as exc:

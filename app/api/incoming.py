@@ -4761,6 +4761,7 @@ def batch_receive_items(
     for line in payload.items:
         _preflight_item_customer_access(db, item_id=line.item_id, user=user)
     seen: set[tuple[str, int] | str] = set()
+    received_sources: set[tuple[str, int]] = set()
     batch_id = batch_key or uuid4().hex
     results: list[dict] = []
     succeeded = 0
@@ -4822,6 +4823,20 @@ def batch_receive_items(
                     idempotency_key=line.idempotency_key,
                     audit_context={"request": request, "batch_id": batch_id},
                 )
+                # Legacy order keys can resolve to the same formal supplier
+                # line as an so-key. Use the actual locked receipt source;
+                # a repeated source rolls back this entire line's savepoint.
+                if fact.stock_replenishment_item_id is not None:
+                    physical_source = ("stock", fact.stock_replenishment_item_id)
+                elif fact.requisition_item_id is not None:
+                    physical_source = ("requisition", fact.requisition_item_id)
+                elif fact.supplier_order_item_id is not None:
+                    physical_source = ("supplier", fact.supplier_order_item_id)
+                else:
+                    physical_source = ("order", fact.order_item_id)
+                if physical_source in received_sources:
+                    raise IncomingReceiptError("同一明细不能重复提交", 409)
+            received_sources.add(physical_source)
             results.append(
                 {
                     "item_id": line.item_id,

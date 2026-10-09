@@ -1760,10 +1760,14 @@ def serialize_receipt_purpose_allocations(
             )
         ).all()
     }
+    # Only reserve-only allocations need the latest finished-lot fallback.
+    # Explicit finished lots already identify their historical receipt output.
     order_ids = {
-        int(row.order_item_id)
-        for row in receipt_items.values()
-        if row.order_item_id is not None
+        int(receipt_item.order_item_id)
+        for allocation in allocations
+        if allocation.finished_inventory_lot_id is None
+        and (receipt_item := receipt_items.get(allocation.incoming_receipt_item_id)) is not None
+        and receipt_item.order_item_id is not None
     }
     latest_finished_by_order: dict[int, IncomingReceiptPurposeAllocation] = {}
     if order_ids:

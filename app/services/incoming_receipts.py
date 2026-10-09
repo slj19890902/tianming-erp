@@ -1424,6 +1424,8 @@ def _idempotent_receipt_item(
     if len(receipt.items) != 1:
         raise IncomingReceiptError("幂等键已用于其他入库操作", 409)
     row = receipt.items[0]
+    if receipt.status != "posted" or row.status != "posted":
+        raise IncomingReceiptError("该实收已撤销，请核对原收料记录；再次收料需使用新的提交标识", 409)
     allocation = db.scalar(
         select(IncomingReceiptPurposeAllocation).where(
             IncomingReceiptPurposeAllocation.incoming_receipt_item_id == row.id
@@ -1572,6 +1574,12 @@ def _idempotent_receipt_item(
     expected_quantity = (
         row.planned_quantity if received_quantity is None else int(received_quantity)
     )
+    if requested_stock_item_id is not None and received_quantity is None:
+        # Replenishment's omitted quantity means the remainder at the original
+        # submission, not the full purchase plan or today's remaining balance.
+        expected_quantity = row.planned_quantity - (
+            row.cumulative_received_quantity - row.received_quantity
+        )
     same_location = True
     if requested_stock_item_id is not None:
         lot = (

@@ -13985,6 +13985,27 @@ def edit_requisition(
 ) -> dict:
     item = _item_or_404(db, item_id)
     _require_order_item_customer_access(db, item, user)
+    # Serialize this legacy editing path with receipt/production transitions,
+    # then validate the live facts rather than only the cached material flag.
+    from app.services.production_workflow import (
+        lock_order_rows_for_production_transition,
+        ProductionWorkflowError,
+    )
+    try:
+        orders = lock_order_rows_for_production_transition(db, [item.order_id])
+    except ProductionWorkflowError as error:
+        db.rollback()
+        raise HTTPException(error.status_code, str(error)) from error
+    db.refresh(item)
+    order = orders.get(item.order_id)
+    if (order is None or order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES
+            or item.is_force_closed or int(item.delivered_quantity or 0) > 0):
+        raise HTTPException(status_code=409, detail="订单已终止、结档或已有送货，不能修改原报料")
+    if db.scalar(select(IncomingReceiptItem.id).where(
+        IncomingReceiptItem.order_item_id == item.id,
+        IncomingReceiptItem.status == "posted",
+    ).limit(1)) is not None:
+        raise HTTPException(status_code=409, detail="已有实际收料记录（含分批来料），不能修改原报料尺寸或数量")
     if item.material_status == "received":
         raise HTTPException(status_code=409, detail="已入库明细禁止修改报料")
     if item.requisition_status == "未报料":

@@ -13,7 +13,8 @@
     <script src="/static/ui/workspace.js?v=71e4c13edadc"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
     <link rel="stylesheet" href="/static/ui/workflow-continuity.css?v=431e9b0f41d3" />
-    <script src="/static/ui/pdf-workspace.js?v=20260926-physical-quantity"></script>
+    <script src="/static/ui/order-import-save-recovery.js?v=20261010-save1"></script>
+    <script src="/static/ui/pdf-workspace.js?v=20261010-save1"></script>
     <script src="/static/ui/purchase-workspace.js?v=66709867c608"></script>
     <script src="/static/ui/production-map.js?v=20260922-map-return"></script>
     <script src="/static/ui/warehouse-workspace.js?v=20260928"></script>
@@ -7519,6 +7520,16 @@
                 <button v-if="emailQueueMode" class="btn small" @click="pdfQueueVisible=true">返回单据列表</button>
                 <div class="toolbar-group"><button class="btn small" :disabled="pdfDraftPosition()<=1" @click="pdfMoveDraft(-1)">上一份</button><strong>第 {{pdfDraftPosition()}} / {{pdfQueueDrafts().length}} 份</strong><button class="btn small" :disabled="pdfDraftPosition()>=pdfQueueDrafts().length" @click="pdfMoveDraft(1)">下一份</button></div>
               </div>
+              <div v-if="orderImportRecoveryError" class="notice error">恢复存储不可用：{{orderImportRecoveryError}}。首次保存未发出，请保留此浏览器并检查存储设置。</div>
+              <div v-for="r in pdfRecoveryDetachedRows()" :key="r.storageKey" class="notice warning" style="margin-bottom:12px">
+                <strong>{{r.phase==="confirmed"?"已确认原保存":"原保存内容 / 待核对"}}：{{pdfRecoveryLabel(r)}}</strong>
+                <div>{{r.message || (r.legacy?'旧记录缺少原请求内容，请识别原文件后查询来源；不能重新生成旧请求。':'原保存请求已保留，库存版本是当时内容，不代表当前库存。')}}</div>
+                <div v-for="item in pdfOriginalSaveItems(r)" :key="item.client_line_id">{{item.product_code || item.product_name || '原订单行'}} · 原数量 {{item.quantity}}<span v-if="canViewSalesAmounts"> · 原单价 {{item.unit_price}}</span></div>
+                <button v-if="!r.cacheCleared" class="btn small" :disabled="loading" @click="runPdfRecovery(r,'resolve')">查询原结果</button>
+                <button v-if="r.canContinue && r.bodyJson && r.phase!=='confirmed'" class="btn small" :disabled="loading" @click="runPdfRecovery(r,'continue')">按原内容继续保存</button>
+                <a v-if="r.traceOrderId" class="btn small" :href="`/?page=orders&email_order=${r.traceOrderId}`" target="_blank" rel="noopener">查看已找到原订单 {{r.traceOrderNumber}}</a>
+                <details><summary>管理员核对依据</summary>原账号 {{r.actorId}}；请求键 {{r.key}}；文件 {{r.summary?.fileName||'请识别原文件核对'}}；客户单号 {{r.summary?.customerPO||'旧记录未保存'}}。请在订单页核对对应文件来源与订单，不要换键绕过。</details>
+              </div>
               <div v-for="(draft,draftIndex) in orderImportDrafts" :key="draft.file_hash || draft.source_name" v-show="(!emailQueueMode || !pdfQueueVisible) && pdfCurrentDraft(draft)" class="order-group-detail-card" style="margin-bottom:12px">
                 <div v-if="emailQueueMode && draft.email_attachment_id && draft._show_advanced_details" class="toolbar-group" style="margin-bottom:8px">
                   <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'processed')">已人工处理</button>
@@ -7538,16 +7549,19 @@
                     style="margin-left:8px"
                     :disabled="loading || (draft._save_status !== 'unknown' && (!draft.confirmed || !canConfirmImportDraft(draft)))"
                     @click="retryFailedImportDraft(draft)"
-                  >{{ draft._save_status === 'unknown' ? '查询并恢复保存' : '重试此文件' }}</button>
+                  >{{ draft._save_status === 'unknown' ? '查询原结果' : '重试此文件' }}</button>
+                  <button v-if="draft._save_continue_allowed" class="btn small" :disabled="loading" @click="continuePdfSaveAttempt(draft)">按原内容继续保存</button>
                   <button
                     v-if="draft._save_status === 'idle' && draft._save_message"
                     class="btn primary small" type="button" style="margin-left:8px"
                     :disabled="loading || isImportDraftLocked(draft) || !canConfirmImportDraft(draft)"
                     @click="confirmAndSavePdf(draft)"
                   >核对无误并保存</button>
+                  <div v-if="draft._save_status==='unknown' && draft._save_record"><strong>原保存内容 / 待核对：{{pdfRecoveryLabel(draft._save_record,draft)}}</strong><div v-for="item in pdfOriginalSaveItems(draft._save_record)" :key="item.client_line_id">{{item.product_code||item.product_name||'原订单行'}} · 原数量 {{item.quantity}}<span v-if="canViewSalesAmounts"> · 原单价 {{item.unit_price}}</span></div><details><summary>管理员核对依据</summary>文件 {{draft.source_name}}；{{draft._save_record.legacy?'本次识别客户单号（仅供定位）':'原客户单号'}} {{draft._save_record.summary?.customerPO||draft.customer_po||'未记录'}}；原账号 {{draft._save_actor_id}}；请求键 {{draft._create_key}}。请查询原结果或在订单页核对来源，不能换键绕过。</details></div>
                   <a v-if="draft._saved_order_id" class="btn small" style="margin-left:8px" :href="`/?page=orders&email_order=${draft._saved_order_id}`" target="_blank" rel="noopener">查看已保存订单</a>
                 </div>
                 <fieldset
+                  v-if="draft._save_status !== 'unknown'"
                   class="pdf-import-draft-fields"
                   :disabled="isImportDraftLocked(draft)"
                   style="border:0;margin:0;padding:0;min-width:0"
@@ -11033,6 +11047,7 @@
             orderNumberPreview: "",
             orderImportBatch: { files: [], status: "idle", retryDraft: null },
             orderImportDrafts: [],
+            orderImportRecoveryRows: [], orderImportRecoveryError:"",
             orderImportReminderCache: {},
             pdfWarehouseLocator: {
               visible:false, url:"", title:"", draftKey:"", focusId:"",
@@ -11690,7 +11705,7 @@
           confirmableImportDraftCount() {
             return this.orderImportDrafts.filter(
               draft => (!this.emailQueueMode || draft.email_queue_status === this.emailQueueFilter) && this.canConfirmImportDraft(draft)
-                && !["saving","success"].includes(draft._save_status)
+                && !this.isImportDraftLocked(draft)
             ).length;
           },
           pdfImportSelectionBusy() {
@@ -11701,7 +11716,7 @@
             return this.orderImportDrafts.filter(
               draft => draft.confirmed
                 && this.canConfirmImportDraft(draft)
-                && !["saving","success"].includes(draft._save_status)
+                && !this.isImportDraftLocked(draft)
             ).length;
           },
           successfulImportDraftCount() {
@@ -32914,6 +32929,7 @@
             this.orderImportDrafts = [];
             this.orderImportReminderCache = {};
             this.modal = { type:"orderPdfImport", title:"导入客户订单（PDF / Excel）" };
+            this.reloadPdfSaveRecovery();
           },
           pdfCorrectionItemFromDraft(item, index) {
             const quantity = item?.quantity ?? "";
@@ -33256,7 +33272,7 @@
             if (this.pdfImportSelectionBusy) return;
             const confirmable = this.orderImportDrafts.filter(
               draft => (!this.emailQueueMode || draft.email_queue_status === this.emailQueueFilter) && this.canConfirmImportDraft(draft)
-                && !["saving","success"].includes(draft._save_status)
+                && !this.isImportDraftLocked(draft)
             );
             if (!confirmable.length) {
               this.showToast("当前没有可以加入批量保存的完整草稿", true);
@@ -33647,91 +33663,50 @@
             this.reallocateAllDraftInventory();
             await this.refreshOrderNumberPreview();
           },
-          pdfSaveStorageKey(draft) {
-            if (!this.user?.id || !draft?.file_hash) throw new Error("无法保存恢复凭据，请重新登录并识别原 PDF。");
-            return `erp.pdf-save.v1:${this.user.id}:${draft.file_hash}`;
+          pdfSaveStore() { return window.ERPOrderImportSaveRecovery.createStore(localStorage,this.user?.id); },
+          pdfSaveHttp() { return axios.create({withCredentials:true,timeout:60000}); },
+          reloadPdfSaveRecovery() {
+            try {
+              const old=new Map((this.orderImportRecoveryRows||[]).map(r=>[r.storageKey,r]));
+              const rows=this.pdfSaveStore().all().map(record=>Object.assign(old.get(record.storageKey)||{},record));
+              this.orderImportRecoveryRows=[...rows,...[...old.values()].filter(r=>r.actorId===this.user?.id&&r.phase==="confirmed"&&r.cacheCleared&&r.traceOrderId&&!rows.some(row=>row.storageKey===r.storageKey))];
+              this.orderImportRecoveryError="";
+            } catch(error) { this.orderImportRecoveryRows=[];this.orderImportRecoveryError=String(error.message||error); }
           },
           restorePdfSaveAttempt(draft) {
-            if (!this.user?.id || !draft?.file_hash || draft._create_key) return;
+            if(!draft?.file_hash || !this.user?.id)return;
             try {
-              const key = localStorage.getItem(this.pdfSaveStorageKey(draft));
-              if (key) {
-                draft._create_key = key;
-                draft._save_actor_id = this.user.id;
-                draft._save_status = "unknown";
-                draft._save_message = "此文件有过保存请求，请点击“查询并恢复保存”；查到原订单后可直接打开，未保存则返回核对。";
-              }
-            } catch (_) {
-              // The save path checks storage again and blocks before any POST.
-            }
+              const rows=this.pdfSaveStore().find(draft.file_hash);
+              if(!rows.length)return;
+              draft._save_status="unknown";draft.confirmed=false;
+              if(rows.length===1){const r=rows[0];draft._save_record=r;draft._create_key=r.key;draft._save_actor_id=r.actorId;draft._save_payload=r.bodyJson;}
+              draft._save_message=rows.length>1?"此文件有多笔原保存请求，请在待核对列表逐笔查询；不能覆盖原记录。":"原保存结果待核对。请查询原结果；当前识别内容不会替换原请求。";
+            } catch(error) {draft._save_status="unknown";draft._save_storage_error=true;draft._save_message=String(error.message||error);}
           },
-          rememberPdfSaveAttempt(draft) {
-            const storageKey = this.pdfSaveStorageKey(draft);
-            const existing = localStorage.getItem(storageKey);
-            if (existing && existing !== draft._create_key) throw new Error("此文件已有保存请求，请重新打开原 PDF 查询结果。");
-            draft._create_key ||= createIdempotencyKey();
-            draft._save_actor_id = this.user.id;
-            localStorage.setItem(storageKey, draft._create_key);
-            if (localStorage.getItem(storageKey) !== draft._create_key) throw new Error("浏览器无法保存恢复凭据，请检查存储设置后重试。");
+          pdfRecoveryDetachedRows() {return (this.orderImportRecoveryRows||[]).filter(r=>!(this.orderImportDrafts||[]).some(d=>d._save_record?.storageKey===r.storageKey));},
+          pdfRecoveryLabel(r,draft=null) {
+            const body=r?.bodyJson?JSON.parse(r.bodyJson):null;
+            return `${r?.summary?.fileName||draft?.source_name||'旧文件记录（请识别原文件核对来源）'} · ${r?.legacy?'本次识别客户单号（供定位）':'原客户单号'} ${body?.customer_po||r?.summary?.customerPO||draft?.customer_po||'未记录'} · 原账号 ${r?.actorId||draft?._save_actor_id||'未记录'}`;
           },
-          async saveConfirmedImportDrafts(targetDraft=null) {
-            if (this.loading) return;
-            const retryDraft = this.orderImportBatch.retryDraft;
-            const candidates = retryDraft ? [retryDraft] : targetDraft?.items ? [targetDraft] : this.orderImportDrafts;
-            const drafts = candidates.filter(
-              draft => (draft._save_status === "unknown" || (draft.confirmed
-                && this.canConfirmImportDraft(draft)))
-                && !["saving","success"].includes(draft._save_status)
-            );
-            if (!drafts.length) { this.showToast("请先确认至少一份完整草稿", true); return; }
-            this.loading = true;
-            const succeeded = [];
-            const recovered = [];
-            const failed = [];
-            try {
-              for (const draft of drafts) {
-                let requestStarted = false;
-                let resolving = false;
-                try {
-                  const recovering = draft._save_status === "unknown";
-                  draft._save_status = "saving";
-                  let savedOrder = null;
-                  if (draft._create_key) {
-                    requestStarted = true;
-                    resolving = true;
-                    if (draft._save_actor_id !== this.user?.id) throw new Error("请使用原保存账号查询结果。");
-                    const {data} = await axios.get(`/api/orders/create-attempts/${encodeURIComponent(draft._create_key)}`);
-                    if (data.status === "completed") {
-                      savedOrder = data.order;
-                      if (recovering) recovered.push(draft);
-                    }
-                    else if (data.status !== "not_found") throw new Error("保存结果无法确认，请稍后查询。");
-                    requestStarted = false;
-                    resolving = false;
-                    if (!savedOrder && recovering && !draft._save_payload) {
-                      draft._save_status = "idle";
-                      draft.confirmed = false;
-                      draft._save_message = "未查到已保存订单。请核对下方客户、数量和单价，再点击“核对无误并保存”。如按钮不可用，请展开下方“无法保存”查看待处理项。";
-                      continue;
-                    }
-                  }
-                  if (!savedOrder) {
-                    if (!draft._save_payload) {
+          pdfOriginalSaveItems(r) { try{return r?.bodyJson?JSON.parse(r.bodyJson).items:[]}catch{return []} },
+          pdfRecoveryCurrent(operation,draft=null) {return this.user?.id===operation.actor && this.authGeneration===operation.auth && this.modal===operation.modal && this.pdfActiveDraftKey===operation.active && (!draft||(this.orderImportDrafts||[]).includes(draft));},
+          async buildPdfSavePayload(draft,key,actor,current) {
                       const repairConfirmation = await this.prepareMoldRepairConfirmation({
                         product_ids:(draft.items || []).map(item => item.is_new_product ? null : item.matched_product_id),
                       });
-                      if (!repairConfirmation.confirmed) { draft._save_status = "idle"; continue; }
+                      if (!current()) return null;
+                      if (!repairConfirmation.confirmed) return null;
                       draft._save_message = "正在刷新库存并保存正式订单…";
                       await this.refreshImportDraftInventoryForSave(draft);
+                      if (!current()) return null;
                       const inventoryError = (draft.items || []).map((item, index) => {
                         this.refreshPdfPriceConflict(item);
                         const reason = this.inventoryDecisionRequired(item);
                         return reason ? `第${index + 1}条${reason}` : "";
                       }).find(Boolean);
                       if (inventoryError) throw new Error(inventoryError);
-                      this.rememberPdfSaveAttempt(draft);
-                      draft._save_payload = JSON.stringify({
-                        idempotency_key:draft._create_key,
+                      return JSON.stringify({
+                        idempotency_key:key, expected_actor_id:actor,
                         customer_id:draft.matched_customer_id, customer_po:draft.customer_po,
                         order_date:draft.order_date || today(), delivery_date:draft.delivery_date || null,
                         remark:`PDF识别草稿：${draft.source_name}`,
@@ -33770,56 +33745,112 @@
                           };
                         })
                       });
-                    }
-                    draft._save_message = "正在确认原保存请求结果…";
-                    requestStarted = true;
-                    const {data} = await axios.post("/api/orders", JSON.parse(draft._save_payload));
-                    savedOrder = data;
+
+          },
+          async queryPdfSaveAttempt(draft) {if(draft?._save_record)await this.runPdfRecovery(draft._save_record,"resolve",draft);else this.showToast(draft?._save_message||"请在待核对列表选择原请求查询。",true);},
+          async continuePdfSaveAttempt(draft) {if(draft?._save_record)await this.runPdfRecovery(draft._save_record,"continue",draft);},
+          async runPdfRecovery(record,mode="resolve",draft=null) {
+            if(this.loading||record.actorId!==this.user?.id)return;
+            if(mode==="continue"&&(!record.bodyJson||!record.canContinue||record.phase==="confirmed"))return;
+            const operation={actor:this.user.id,auth:this.authGeneration,modal:this.modal,active:this.pdfActiveDraftKey};
+            const current=()=>this.pdfRecoveryCurrent(operation,draft);
+            this._pdfSaveOperation=operation;this.loading=true;record.canContinue=false;
+            if(draft){draft._save_status="unknown";draft._save_continue_allowed=false;}
+            try {
+              let data;
+              if(mode==="continue"){
+                this.pdfSaveStore().current(record);
+                ({data}=await this.pdfSaveHttp().post("/api/orders",JSON.parse(record.bodyJson)));
+              }else{
+                const body={expected_actor_id:operation.actor};
+                if(record.bodyJson)body.original_request=JSON.parse(record.bodyJson);
+                else if(draft?.preview_safety_token)body.source_preview_token=draft.preview_safety_token;
+                ({data}=await this.pdfSaveHttp().post(`/api/orders/create-attempts/${encodeURIComponent(record.key)}/resolve`,body));
+              }
+              if(!current())return;
+              if(!data||data.current_actor_id!==operation.actor||(mode==="resolve"&&data.request_key!==record.key))throw Error("保存核对回执不完整或账号已变化，请使用原账号再次查询；原请求已保留。");
+              if(mode==="resolve"&&data.status==="not_found"){
+                if(data.proof_status!==null||data.order!==null||data.save_receipt!==null)throw Error("查询回执不完整，请再次查询原结果。");
+                record.canContinue=!!record.bodyJson&&record.phase!=="confirmed";
+                record.message=record.legacy?"当前未查到原键结果。旧记录缺少原请求内容，请识别原文件后查询来源；仍无法确认时，用文件名、客户单号、原账号和请求键交管理员核对，不能重新保存绕过。":"当前未查到原结果，不代表原请求已取消。原内容仍冻结；可按原内容继续保存。若库存版本或权限已变化，请交管理员核对原请求。";
+                if(draft){draft._save_message=record.message;draft._save_continue_allowed=record.canContinue;}
+                return;
+              }
+              if(mode==="resolve"&&(data.status==="source_located"||(data.status==="completed"&&record.legacy))){
+                window.ERPOrderImportSaveRecovery.validateTrace(data,record);
+                record.traceOrderId=data.order.id;record.traceOrderNumber=data.order.order_number;
+                record.message=`已找到历史订单 ${data.order.order_number}。旧记录缺少原请求内容${data.status==='source_located'?'，仅定位来源，尚未证明原请求键已执行':''}；请查看原订单并按文件名、客户单号、原账号核对。旧记录保留，不能自动重发。`;
+                if(draft){draft._saved_order_id=data.order.id;draft._save_message=record.message;}
+                return;
+              }
+              if(mode==="resolve"&&data.status!=="completed")throw Error("查询结果无法确认，请再次查询原结果。");
+              if(mode==="resolve"&&data.proof_status!=="complete")throw Error("原保存证明不足以确认当前原内容，请查看已找到原订单或联系管理员核对，原请求保留。");
+              const result=window.ERPOrderImportSaveRecovery.validateComplete(data,record);
+              await this.finishPdfSave(record,result,draft,current);
+            }catch(error){
+              if(!current())return;
+              record.message=`原保存结果仍待核对。${this.normalizeOrderSaveError(error)} 请查询原结果；原内容已保留。`;
+              if(draft){draft._save_status="unknown";draft._save_message=record.message;}
+              if(error?.response?.status===401)window.erpAuthRequired?.();
+            }finally{if(this._pdfSaveOperation===operation&&this.user?.id===operation.actor&&this.authGeneration===operation.auth)this.loading=false;}
+          },
+          async finishPdfSave(record,result,draft,current) {
+            if(!current())return;
+            this.pdfSaveStore().current(record);
+            const cleanup=this.pdfSaveStore().complete(record,result.id);
+            record.phase="confirmed";record.cacheCleared=!cleanup.retained;record.traceOrderId=result.id;record.traceOrderNumber=result.orderNumber;record.canContinue=false;
+            record.message=`订单 ${result.orderNumber} 已保存。${result.priceNormalized?'单价按系统6位精度保存。':''}${cleanup.retained?'恢复缓存未清理，请查询原结果；不要再次保存。':''}`;
+            if(draft){draft._saved_order_id=result.id;draft._saved_order_number=result.orderNumber;draft._save_status="success";draft._save_payload=null;draft._save_message=record.message;draft.confirmed=false;draft._save_continue_allowed=false;}
+            this.reloadPdfSaveRecovery();
+            this.showToast(record.message);
+            this.showOrderNextStepGuide({orderNo:result.orderNumber,count:1,source:"pdf"});
+            try {await Promise.all([this.loadOrders(),this.loadKpi()]);}
+            catch(_){if(current()){record.message=`订单 ${result.orderNumber} 已保存；${result.priceNormalized?'单价按系统6位精度保存。':''}订单列表未刷新，请点击查看已保存订单。`;if(draft)draft._save_message=record.message;this.showToast(record.message,true);}}
+          },
+          async saveConfirmedImportDrafts(targetDraft=null) {
+            if(this.loading)return;
+            if(targetDraft?._save_status==="unknown"){await this.queryPdfSaveAttempt(targetDraft);return;}
+            const candidates=this.orderImportBatch?.retryDraft?[this.orderImportBatch.retryDraft]:targetDraft?.items?[targetDraft]:this.orderImportDrafts;
+            const drafts=candidates.filter(d=>d.confirmed&&this.canConfirmImportDraft(d)&&!this.isImportDraftLocked(d));
+            if(!drafts.length){this.showToast("请先核对至少一份完整草稿；待核对请求请查询原结果。",true);return;}
+            const operation={actor:this.user?.id,auth:this.authGeneration,modal:this.modal,active:this.pdfActiveDraftKey};
+            this._pdfSaveOperation=operation;this.loading=true;
+            try {
+              for(const draft of drafts){
+                const current=()=>this.pdfRecoveryCurrent(operation,draft);
+                if(!current())break;
+                let record=null;
+                try {
+                  this.restorePdfSaveAttempt(draft);
+                  if(this.isImportDraftLocked(draft))continue;
+                  const store=this.pdfSaveStore();
+                  if(store.find(draft.file_hash).length)throw Error("此文件已有原保存请求，请先查询原结果。");
+                  draft._save_status="saving";
+                  const key=draft._create_key||createIdempotencyKey();
+                  const bodyJson=await this.buildPdfSavePayload(draft,key,operation.actor,current);
+                  if(!current())break;
+                  if(!bodyJson){draft._save_status="idle";continue;}
+                  record=store.prepare(draft.file_hash,bodyJson,{fileName:draft.source_name,customerPO:draft.customer_po,actorName:this.user?.username||this.user?.name||""});
+                  draft._save_record=record;draft._create_key=record.key;draft._save_actor_id=record.actorId;draft._save_payload=record.bodyJson;draft._save_status="unknown";draft._save_message="原内容已保留，正在保存…";
+                  this.reloadPdfSaveRecovery();
+                  const {data}=await this.pdfSaveHttp().post("/api/orders",JSON.parse(bodyJson));
+                  if(!current())break;
+                  const result=window.ERPOrderImportSaveRecovery.validateComplete(data,record);
+                  await this.finishPdfSave(record,result,draft,current);
+                }catch(error){
+                  if(!current())break;
+                  draft._save_status=record?"unknown":"failed";
+                  const headers=error?.response?.headers;
+                  const marker=name=>headers?.get?.(name)??headers?.[name.toLowerCase()]??headers?.[name];
+                  if(record && marker('X-Order-Save-Rejected')==='1' && marker('X-Order-Save-Preserve')!=='1' && marker('X-Order-Save-Actor-Mismatch')!=='1' && [400,409,422].includes(error?.response?.status)){
+                    try{this.pdfSaveStore().releaseRejected(record);draft._save_record=null;draft._save_payload=null;draft._save_status='failed';draft.confirmed=false;record=null;this.reloadPdfSaveRecovery();}
+                    catch(_){draft._save_status='unknown';}
                   }
-                  draft._saved_order_id = savedOrder.id;
-                  succeeded.push(draft.source_name || "草稿");
-                  draft._save_status = "success";
-                  draft._save_payload = null;
-                  if (draft.email_attachment_id) this.refreshEmailQueueCount();
-                  draft._save_message = "保存成功，请点击“查看已保存订单”继续处理。";
-                  draft.confirmed = false;
-                } catch (error) {
-                  const message = this.normalizeOrderSaveError(error);
-                  // Only an explicit validation rejection permits editing. Network,
-                  // server and auth errors leave the original request frozen.
-                  const rejected = !resolving && [400,409,422].includes(error?.response?.status);
-                  const unknown = requestStarted && !rejected;
-                  draft._save_status = unknown ? "unknown" : "failed";
-                  if (!unknown) draft._save_payload = null;
-                  draft._save_message = unknown ? `保存结果尚未确认，请点击“查询并恢复保存”。${message}` : message;
-                  failed.push(`${draft.source_name || "草稿"}：${message}`);
+                  draft._save_message=record?`原保存结果待核对。${this.normalizeOrderSaveError(error)} 请查询原结果；原内容已保留。`:this.normalizeOrderSaveError(error);
+                  if(error?.response?.status===401)window.erpAuthRequired?.();
                 }
               }
-              await Promise.all([this.loadOrders(),this.loadKpi()]);
-              if (succeeded.length) {
-                this.showOrderNextStepGuide({count:succeeded.length,source:"pdf"});
-              }
-              const remainingFailed = this.orderImportDrafts.filter(
-                draft => ["failed","unknown"].includes(draft._save_status)
-              );
-              const remainingPending = this.orderImportDrafts.filter(
-                draft => (drafts.includes(draft) || (draft.confirmed && this.canConfirmImportDraft(draft)))
-                  && draft._save_status !== "success"
-              );
-              if (!remainingFailed.length && !remainingPending.length) {
-                if (recovered.length) {
-                  this.showToast("已找到原订单，请点击“查看已保存订单”继续处理。");
-                } else {
-                  this.modal=null;
-                  this.showToast(`已保存 ${succeeded.length} 份确认草稿`);
-                }
-              } else {
-                const failedSummary = remainingFailed.map(
-                  draft => `${draft.source_name || "草稿"}：${draft._save_message || "订单保存失败"}`
-                );
-                this.showToast(`本次成功 ${succeeded.length} 份；待处理 ${remainingPending.length} 份 — ${failedSummary.join("｜") || "请核对草稿上的保存提示"}`, true);
-              }
-            } finally { this.loading=false; }
+            }finally{if(this._pdfSaveOperation===operation&&this.user?.id===operation.actor&&this.authGeneration===operation.auth)this.loading=false;}
           },
           async openOrderEditor(group) {
             const requestKey = "orders:read-detail-modal";

@@ -140,16 +140,27 @@ def drawing_file(source: DrawingSource) -> Path:
         raise failure(404, "产品图纸文件不存在，请联系管理员核对") from None
 
 
-def _pdf(path: Path, *, preview: bool):
+def _read_drawing_bytes(path: Path) -> bytes:
+    try:
+        with path.open("rb") as handle:
+            content = handle.read(MAX_BYTES + 1)
+    except OSError:
+        raise failure(404, "产品图纸文件不存在，请联系管理员核对") from None
+    if len(content) > MAX_BYTES:
+        raise failure(413, "图纸文件过大，请在电脑端查看")
+    return content
+
+
+def _pdf(source: Path | bytes, *, preview: bool):
+    content = _read_drawing_bytes(source) if isinstance(source, Path) else source
     try:
         import fitz
     except ImportError:
         raise failure(422, "PDF图纸暂无法读取，请联系管理员") from None
     try:
-        with path.open("rb") as handle:
-            if not handle.read(1024).lstrip().startswith(b"%PDF-"):
-                raise ValueError
-        with fitz.open(path) as document:
+        if not content[:1024].lstrip().startswith(b"%PDF-"):
+            raise ValueError
+        with fitz.open(stream=content, filetype="pdf") as document:
             if document.needs_pass or document.page_count < 1:
                 raise ValueError
             page = document[0]
@@ -166,9 +177,10 @@ def _pdf(path: Path, *, preview: bool):
         raise failure(422, "PDF图纸损坏、加密或页面过大，无法预览") from None
 
 
-def _image(path: Path) -> Image.Image:
+def _image(source: Path | bytes) -> Image.Image:
+    content = _read_drawing_bytes(source) if isinstance(source, Path) else source
     try:
-        with Image.open(path) as image:
+        with Image.open(BytesIO(content)) as image:
             if image.format not in {"JPEG", "PNG", "WEBP"} or image.width * image.height > MAX_PIXELS:
                 raise ValueError
             image.load()
@@ -185,19 +197,22 @@ def _image(path: Path) -> Image.Image:
         raise failure(422, "图片图纸损坏或像素过大，无法预览") from None
 
 
-def original_media_type(path: Path) -> str:
-    if path.suffix.lower() == ".pdf":
+def original_media_type(content: bytes, suffix: str) -> str:
+    if suffix == ".pdf":
         # Never serve HTML/SVG disguised as a PDF. Parse only on explicit
         # preview/download requests, keeping search metadata independent of IO.
-        try:
-            with path.open("rb") as handle:
-                if not handle.read(1024).lstrip().startswith(b"%PDF-"):
-                    raise failure(422, "PDF图纸无法识别")
-        except OSError:
-            raise failure(404, "产品图纸文件不存在，请联系管理员核对") from None
-        return _pdf(path, preview=False)
-    _image(path)
-    return {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}[path.suffix.lower()]
+        if not content[:1024].lstrip().startswith(b"%PDF-"):
+            raise failure(422, "PDF图纸无法识别")
+        return _pdf(content, preview=False)
+    _image(content)
+    return {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}[suffix]
+
+
+def drawing_original(path: Path) -> tuple[bytes, str]:
+    # Validate and send the same bounded snapshot. A FileResponse would defer
+    # its stat/open until after validation and could send a replaced file or 500.
+    content = _read_drawing_bytes(path)
+    return content, original_media_type(content, path.suffix.lower())
 
 
 def drawing_preview(source: DrawingSource, path: Path) -> bytes:

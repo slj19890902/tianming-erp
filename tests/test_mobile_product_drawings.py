@@ -220,6 +220,47 @@ def test_original_deleted_during_read_returns_readable_404(drawing_app, monkeypa
         assert "no-store" in response.headers["cache-control"] and str(root) not in response.text
 
 
+@pytest.mark.parametrize("pdf", [False, True])
+@pytest.mark.parametrize("change", ["delete", "replace"])
+def test_original_after_media_validation_sends_same_verified_bytes(drawing_app, monkeypatch, pdf, change):
+    app, ids, _, root = drawing_app
+    path = root / ("engineering.pdf" if pdf else "engineering.png")
+    expected = path.read_bytes()
+    real_media_type = drawings.original_media_type
+    def mutate_after_validation(content, suffix):
+        result = real_media_type(content, suffix)
+        if change == "delete":
+            path.unlink()
+        else:
+            path.write_bytes(b"<svg onload='alert(1)'></svg>")
+        return result
+    monkeypatch.setattr(drawings, "original_media_type", mutate_after_validation)
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        response = client.get(urls(ids, pdf=pdf) + "/original")
+        assert response.status_code == 200, response.text
+        assert response.content == expected
+        assert response.headers["content-type"] == ("application/pdf" if pdf else "image/png")
+        assert "no-store" in response.headers["cache-control"]
+
+
+@pytest.mark.parametrize("pdf", [False, True])
+def test_original_growth_after_stat_still_uses_bounded_read(drawing_app, monkeypatch, pdf):
+    from app.api import mobile_erp
+    app, ids, _, _ = drawing_app
+    real_resolve = mobile_erp.drawing_file
+    def grow_after_stat(source):
+        path = real_resolve(source)
+        with path.open("wb") as handle:
+            handle.truncate(drawings.MAX_BYTES + 1)
+        return path
+    monkeypatch.setattr(mobile_erp, "drawing_file", grow_after_stat)
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        response = client.get(urls(ids, pdf=pdf) + "/original")
+        assert response.status_code == 413 and "no-store" in response.headers["cache-control"]
+
+
 @pytest.mark.parametrize("kind", ["damaged", "encrypted", "oversize-page", "oversize-file"])
 def test_pdf_bounds_and_failures(drawing_app, kind):
     app, ids, _, root = drawing_app

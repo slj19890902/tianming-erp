@@ -6831,12 +6831,17 @@ def apply_delivery_pick_task(
         # and then reads the adjusted draft quantities.
         claimed = db.execute(
             update(Delivery)
-            .where(Delivery.id == delivery.id, Delivery.status == "pending")
-            .values(total_quantity=Delivery.total_quantity)
+            .where(
+                Delivery.id == delivery.id,
+                Delivery.status == "pending",
+                Delivery.version == int(delivery.version or 1),
+            )
+            .values(total_quantity=Delivery.total_quantity, version=Delivery.version + 1)
             .execution_options(synchronize_session=False)
         )
         if claimed.rowcount != 1:
             raise HTTPException(status_code=409, detail="送货单状态已变化，请刷新后重试")
+        db.refresh(delivery, attribute_names=["version"])
         applied_changes: list[dict] = []
         for item in list(task.items):
             delivery_item = db.get(DeliveryItem, item.delivery_item_id)

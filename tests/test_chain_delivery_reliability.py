@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event, select, func
 
 from tests.test_phase7_deliveries import delivery_api_app, _create_payload, _login
+from tests.test_n036_delivery_pick import pick_app
 
 
 def test_ordinary_create_replays_same_request_without_duplicate(delivery_api_app):
@@ -134,3 +135,28 @@ apply(changed);
 assert.notEqual(first.idempotency_key,changed.idempotency_key);
 """
     _run_node(script, tmp_path, 'ordinary-delivery-idempotency.js')
+
+
+def test_applied_pick_result_invalidates_open_delivery_edit(pick_app):
+    from tests.test_n036_delivery_pick import _create_task, _login as pick_login
+    app, factory, ids, _ = pick_app
+    with TestClient(app) as client:
+        pick_login(client, 'admin')
+        before = client.get(f"/api/deliveries/{ids['delivery']}").json()
+        task = _create_task(client, ids['delivery'])
+        pick_login(client, 'delivery_picker')
+        for index, row in enumerate(task['items']):
+            response = client.put(f"/api/delivery-picks/{task['id']}/items/{row['id']}",
+                                  json={'pick_status':'partial' if index == 0 else 'picked',
+                                        'picked_quantity':80 if index == 0 else 50})
+            assert response.status_code == 200, response.text
+        assert client.post(f"/api/delivery-picks/{task['id']}/submit").status_code == 200
+        pick_login(client, 'admin')
+        applied = client.post(f"/api/delivery-picks/{task['id']}/apply")
+        assert applied.status_code == 200, applied.text
+        assert applied.json()['version'] == before['version'] + 1
+        stale = client.put(f"/api/deliveries/{ids['delivery']}",json={
+            'expected_version':before['version'],
+            'items':[{'order_item_id':row['order_item_id'],'delivered_quantity':row['delivered_quantity']} for row in before['items']]})
+        assert stale.status_code == 409, stale.text
+        assert client.get(f"/api/deliveries/{ids['delivery']}").json()['total_quantity'] == 130

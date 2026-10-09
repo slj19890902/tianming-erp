@@ -152,8 +152,9 @@ def test_dashboard_frontend_carries_deterministic_filters_and_clears_stale_data(
         Path(__file__).resolve().parents[1] / "static" / "index.html"
     ).read_text(encoding="utf-8")
 
-    assert "openDashboardTarget(card)" in source
-    assert "openDashboardTarget(todo)" in source
+    workbench = (Path(__file__).resolve().parents[1] / "static/ui/home-workbench.js").read_text(encoding="utf-8")
+    assert "vm.homeOpenTask(r)" in workbench
+    assert "this.openDashboardTarget(row)" in workbench
     assert 'status:"dispatched", return_status:"waiting_receipt"' in source
     assert 'deliveryDashboardMode = "pending_customers"' in source
     assert "const rawFinanceFilters = {...this.financeFilters}" in source
@@ -163,11 +164,8 @@ def test_dashboard_frontend_carries_deterministic_filters_and_clears_stale_data(
     assert "{{ financeCurrentTotal }} 个结算对象账期" in source
     loading_index = source.index("async loadOverview()")
     request_index = source.index('axios.get("/api/dashboard/overview",', loading_index)
-    clear_index = source.index(
-        "this.overview = { cards: [], todos: [], summary: {} };",
-        loading_index,
-    )
-    assert clear_index < request_index
+    assert "this.overview = { cards: [], todos: [], summary: {} };" not in source[loading_index:request_index]
+    assert "以下保留上次数据" in workbench
 
 
 def test_pending_delivery_customer_summary_matches_page_without_item_n_plus_one(

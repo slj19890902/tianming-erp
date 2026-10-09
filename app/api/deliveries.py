@@ -8464,6 +8464,7 @@ def pending_delivery_customer_summaries(
     db: Session,
     *,
     user: User,
+    include_workbench: bool = False,
 ) -> list[dict]:
     """Return the exact pending-delivery customer set without item payload N+1.
 
@@ -8503,6 +8504,11 @@ def pending_delivery_customer_summaries(
         group["item_count"] += 1
         group["pending_quantity"] += int(remaining_quantity)
         group["order_item_ids"].append(int(mapping["order_item_id"]))
+        if include_workbench:
+            group.setdefault("workbench_items", []).append({
+                "item_id": int(order_item.id),
+                "ready_quantity": int(remaining_quantity),
+            })
         candidate_date = mapping["delivery_date"]
         if candidate_date is not None and (
             group["delivery_date"] is None

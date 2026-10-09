@@ -46,3 +46,9 @@ test('session change rejects overview and optional capacity results',async()=>{
  const capacity=vm.loadWarehouseCapacitySummary();vm.user={id:2};requests[1].resolve({data:{secret:1}});await capacity;
  assert.equal(vm.warehouseCapacitySummary,null);
 });
+
+test('failed refresh preserves last snapshot and its timestamp, never turns counts into zero',async()=>{
+ const {vm,requests}=fixture();vm.overview={as_of:'2026-10-09T19:00:00+08:00',cards:[{count:6}]};
+ const p=vm.loadOverview();requests[0].reject(new Error('offline'));await p;
+ assert.equal(vm.overview.cards[0].count,6);assert.equal(vm.overview.as_of,'2026-10-09T19:00:00+08:00');assert.equal(vm.overviewError,'offline');
+});

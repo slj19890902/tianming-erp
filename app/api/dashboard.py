@@ -479,6 +479,7 @@ def _common_box_low_stock_warnings_in_scope(
                 "customer_name": item["customer_name"],
                 "product_code": item["product_code"],
                 "product_name": item["product_name"],
+                "unit_label": item.get("unit_label") or "单位待核",
                 "available_quantity": item["available_quantity"],
                 "is_virtual_composite_parent": item["is_virtual_composite_parent"],
                 "assembled_quantity": item["assembled_quantity"],
@@ -809,12 +810,12 @@ def _authoritative_dashboard_data(
     )
 
     pending_material_rows = (
-        dashboard_pending_requisition_rows(db=db, user=user)
+        dashboard_pending_requisition_rows(db=db, user=user, include_workbench=True)
         if can_view_requisition
         else []
     )
     pending_incoming_rows = (
-        dashboard_pending_incoming_rows(db=db, user=user)
+        dashboard_pending_incoming_rows(db=db, user=user, include_workbench=True)
         if can_view_incoming
         else []
     )
@@ -828,7 +829,7 @@ def _authoritative_dashboard_data(
         else []
     )
     pending_delivery_rows = (
-        pending_delivery_customer_summaries(db=db, user=user)
+        pending_delivery_customer_summaries(db=db, user=user, include_workbench=True)
         if can_view_deliveries
         else []
     )
@@ -838,6 +839,7 @@ def _authoritative_dashboard_data(
         receipt_query = (
             select(
                 Delivery.id.label("delivery_id"),
+                Delivery.delivery_number,
                 Delivery.customer_id,
                 Customer.name.label("customer_name"),
                 Delivery.delivery_date,
@@ -1921,4 +1923,10 @@ def dashboard_overview(
         )
         if low_stock_warnings:
             result["low_stock_warnings"] = low_stock_warnings
+    from app.services.dashboard_workbench import build_workbench
+    result["workbench"] = build_workbench(
+        raw_db, user=user, data=authoritative_data,
+        warnings=result.get("low_stock_warnings", []), today=today,
+        visible_customer_ids=visible_customer_ids,
+    )
     return result

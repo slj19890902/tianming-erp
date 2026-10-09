@@ -1,43 +1,37 @@
-# UI-UNIFIED-NAV-20261008 visual verification
-
-The previous baseline QA report is preserved in `docs/release_reports/DESIGN_QA_BASELINE_20a53068.md`.
+# 首页今日工作台设计核验
 
 final result: passed
 
-Source visual truth: `D:/.codex/workspace_artifacts/erp-unified-nav-preview-20261008/统一导航-仓库预览.png` (1810 × 869 pixels).
-Implementation: `D:/.codex/workspace_artifacts/erp-unified-nav-preview-20261008/implementation-warehouse-final-reference-size.png` (1810 × 869 pixels, CSS viewport 1810 × 869, deviceScaleFactor 1).
-Also captured 1920 × 960, 1366 × 768 and narrow 760 × 800. No image rescaling was used for the matching-size comparison.
-State: standard display, isolated administrator, 3F E racks, G1 elevation open. The source is a generated layout reference; its business rows are illustrative. Implementation uses a current isolated database copy with actual shelf stock. Formal database was not used for browser actions.
+## 比较依据
 
-## Findings and comparison history
+- 方案视觉源：`D:/纸箱厂erp软件搭建/.codex-tmp/home-ui-plan-20261009/首页UI视觉样稿.png`，1672×941，示例内容、管理员、标准模式。
+- 实现：实际安装 Chrome，隔离服务 `/frontend-v2/`，正式数据库的独立副本；源码基线 bd8e7d7f，候选 v0.22.592。无正式页面自动点击。
+- 截图目录：`D:/纸箱厂erp软件搭建/.codex-tmp/home-ui-plan-20261009/`。`home-final-1920.png` 为1920×1080；`home-final-large.png`为相同视口大字；`home-final-1366.png`为1366×768；`home-panels-detail.png`为中间双栏原像素截图。deviceScaleFactor=1，没有高密度缩放。
+- 全图与源图在同次图片查看中并列输入比较；双栏细节也与源图同次查看。源图是设计示意，保留现有ERP外层导航和顶部栏，实际业务数据取代示例，不能把像素尺寸、客户或数值差异当作缺陷。按去除外层导航后的工作区和同一标准/未筛选状态判断版式。
 
-1. Initial full-view comparison (`implementation-warehouse-r1.png`, source image opened together in one comparison input) showed unbordered inactive top navigation, unlike the selected bordered controls. P2. Added the existing ERP border/background tokens. The initial map showed the whole floor; it was not used to judge rack proportions.
-2. Approval interaction initially replaced the embedded workspace, leaving the outer navigation disconnected. P1. Replaced the footer action with an ordinary permission-filtered new-tab link; this preserves the original ERP frame and user activation. `chrome-tools.json` verifies the separate approval target and subsequent inventory navigation.
-3. Final source and implementation were opened together at 1810 × 869 with G1 selected, along with focused captures `implementation-header.png` and `implementation-tools.png`. No remaining actionable P0/P1/P2 mismatch in the approved navigation scope.
+## 已修复问题和复验
 
-## Required fidelity surfaces
+1. [P2，已修复] 初版待办纵向堆叠导致1080屏幕的业务进度落出首屏。状态改为左列，客户/编码和数量在右列，双栏压缩至约621px。最终1920截图业务进度底部在工作区958.4/1016px以内。
+2. [P2，已修复] 1366屏幕继承旧页面1180px最小宽度导致水平溢出。仅首页解除最小宽度，保留双栏断点；最终工作区1150px，无横向溢出。高度较小时每栏3条，业务进度随主页面滚动，预警/待办及翻页可见。
+3. [P2，已修复] 大字模式祖先选择器与实际外层位置不符。匹配`.ui-large`祖先，并固定每页3条。最终大字截图无溢出，层次和按钮完整。
 
-- Fonts and typography: original Chinese system font stack retained, header navigation 14 px, standard sidebar 14 px; large mode navigation/sidebar 17 px. Source generated text is somewhat larger/bolder; preserving production standard/large sizing is intentional. No clipped navigation or footer labels. Real account name replaces the illustrative boss account.
-- Spacing and layout: 64 px global header; 216 px persistent desktop sidebar; scrollable business menu and fixed footer; no visible outer work tabs or duplicate inner module header. Actual workspace top is y=64 at both 1920 and 1366 widths. Original warehouse canvas/rack split remains its responsive business layout; reference's artificial rack proportions are not imposed on it.
-- Colors and tokens: existing white/light-blue surfaces, blue selected controls, thin cool borders. Map age and stock colors remain unchanged. Active and hover styles are consistent between module families.
-- Image quality and assets: actual Tianming brand PNG retained, no reconstructed logo. Existing map renderer retained. Footer icons use the existing Element Plus icon package. No new bitmap assets or custom illustration approximations.
-- Copy/content: flow sequence and warehouse/finance/master/system labels match the approved plan. Permission-filtered extra entries remain under More. Warehouse metrics remain available in a compact top-right popover; this intentional position keeps the complete metrics without changing the nested map toolbar.
+## 五项表面核验
 
-## Verification evidence
+- 字体：沿用ERP中文系统字体；客户、产品编码和数量加重。编码20px左右、主标题28px，辅助文本较小但不承担主要判断；长名称正常换行，大字模式可用。
+- 布局：左侧库存预警约60%，右侧具体待办约40%；统一边框、白底、紧凑分页。顶部重点指标、筛选和导入入口均可用。
+- 颜色：蓝色操作、橙色库存缺口、红色逾期，均有文字，不单靠颜色。浅灰页面与白色面板边界清楚。
+- 图片：保留原天明品牌资产，无生成占位、无假图表；首页不需要新增摄影或装饰图。
+- 文案：客户/编码/数量/动作优先，去掉旧版解释段落。今日交期按不同订单去重，具体事项可多于订单数；库存实存、可用、BOM可配套明确区分。草稿与申请按钮不伪装成已经报料。
 
-`chrome-modules.json`: 16 module/view states, 1920 and 1366 large mode; no horizontal document overflow, footer inside viewport, original topbar hidden, outer tabs absent. `chrome-tools.json`: separate approval page, workspace preservation, refresh, password form, draft action guard, narrow sidebar, logout; zero script exceptions in final normal run.
-History/cache check used real Chrome text input in a disposable password form, browser forward/back, and verified the input remained; canceled without submitting a password change. A preliminary DOM-value-only test did not emit input and was corrected; it is not counted as a product failure.
-An artificial randomUUID-removal probe initially affected every nested document and exposed the unchanged map bundle's dependency; it was discarded as a visual run. The new navigation helper is independently tested with getRandomValues only (no randomUUID). Normal final Chrome runs have no script exceptions.
-Browser extension was unavailable. Verification used a separate headless Google Chrome profile through its local DevTools interface against `http://127.0.0.1:18569` only. No IAB, Playwright CLI/MCP, or production page automation.
+## 交互和剩余验收
 
-## Implementation checklist
+Chrome已验证客户/编码查找、连续翻页稳定、今日指标与事项对应、回单精确定位和返回首页、大小字体、空结果、网络失败保留上次数据并禁用待办动作；浏览器错误0，业务写请求0。仅独立副本的显示偏好切换2次。
 
-- [x] Unified header and footer on all main business modules.
-- [x] Preserve original permissions, workflow filters, inventory guard and attached frame cache.
-- [x] Supported handshake required before suppressing original navigation.
-- [x] Validate message source, active frame, actor/generation and command allowlist; deduplicate commands.
-- [x] Build and static resource reference verification; 12 behavior tests and 4 adjacent warehouse tests.
-- [x] Final full-view and focused visual comparison after fixes.
-- [ ] Administrator's formal workstation acceptance remains external; physical printing and mobile receipt screens were not changed.
+没有未解决的P0/P1/P2项。正式页面由管理员核对实际操作感受；自动核验不替代人工业务验收。1366×768下底部业务进度允许主页面滚动，不强行压小核心内容。
 
-Follow-up polish: none required for the approved scope. Existing business tables retain their own dense layouts; this change unifies the system navigation rather than replacing every business form.
+## 交付检查
+
+- [x] 视觉源、全图、重点双栏比较
+- [x] 修复后二次截图和断点核验
+- [x] 客户隔离及首页只读数据核验
+- [ ] 正式管理员实际页面验收

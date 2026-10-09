@@ -2086,11 +2086,12 @@ def _pending_incoming_route_rows(db: Session, user: User) -> list[dict]:
     return rows
 
 
-def dashboard_pending_incoming_rows(db: Session, user: User) -> list[dict]:
+def dashboard_pending_incoming_rows(db: Session, user: User, *, include_workbench: bool = False) -> list[dict]:
     """Return the stable narrow projection consumed by the dashboard."""
 
+    keys = _DASHBOARD_PENDING_INCOMING_KEYS + (("product_name", "customer_po", "requisition_qty") if include_workbench else ())
     projection = [
-        {key: row.get(key) for key in _DASHBOARD_PENDING_INCOMING_KEYS}
+        {key: row.get(key) for key in keys}
         for row in _pending_incoming_route_rows(db, user)
     ]
     # Preserve the historical dashboard contract: ordinary order-item routes
@@ -4322,12 +4323,13 @@ def pending_items(
     user: User = Depends(can_read),
     page: Annotated[int | None, Query(ge=1)] = None,
     page_size: Annotated[int | None, Query(ge=1, le=200)] = None,
+    home_item_id: Annotated[str | None, Query(max_length=100)] = None,
 ) -> dict:
     response.headers["X-ERP-Session-Identity"] = f"{user.id}:{user.auth_version}"
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["Pragma"] = "no-cache"
     response.headers["Vary"] = "Cookie"
-    if page is None and page_size is None:
+    if page is None and page_size is None and home_item_id is None:
         return {
             "items": [
                 _incoming_row_response(row)
@@ -4336,6 +4338,8 @@ def pending_items(
         }
 
     eligible_routes = dashboard_pending_incoming_rows(db, user)
+    if home_item_id is not None:
+        eligible_routes = [r for r in eligible_routes if str(r.get("item_id")) == home_item_id]
     total = len(eligible_routes)
     resolved_page_size = min(max(int(page_size or 25), 1), 200)
     requested_page = max(int(page or 1), 1)

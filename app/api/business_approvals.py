@@ -1,3 +1,4 @@
+from typing import Annotated
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, ValidationError
@@ -100,13 +101,14 @@ def prepare(action:str,customer_id:int,target_id:int,db:Session=Depends(get_db),
     return {"fields":FIELDS[action],"payload":{key:getattr(obj,key) for key in FIELDS[action]},"labels":{"material_id":material.code if material else None},"expected_version":getattr(obj,"version",None)}
 
 @router.get("")
-def list_requests(status:str="pending",page:int=Query(1,ge=1),db:Session=Depends(get_db),user:User=Depends(get_current_user)):
+def list_requests(status:str="pending",page:int=Query(1,ge=1),request_id:Annotated[int|None,Query(gt=0)]=None,db:Session=Depends(get_db),user:User=Depends(get_current_user)):
     if user.role not in {"admin","boss"} and not has_permission(user,"business_requests.submit"): raise HTTPException(403,"没有申请查看权限")
     q=select(BusinessApproval)
     if user.role=="boss": q=q.where(BusinessApproval.action=="stock_replenishment")
     elif user.role!="admin": q=q.where(BusinessApproval.applicant_id==user.id)
     if not has_unrestricted_customer_access(user,db): q=q.where(BusinessApproval.customer_id.in_(customer_scope_ids(user,db)))
     if status: q=q.where(BusinessApproval.status==status)
+    if request_id is not None: q=q.where(BusinessApproval.id==request_id)
     total=db.scalar(select(func.count()).select_from(q.subquery()))
     rows=db.scalars(q.order_by(BusinessApproval.id.desc()).offset((page-1)*20).limit(20)).all()
     return {"items":[service.view(row,db) for row in rows],"total":total,"page":page,"can_review":user.role in {"admin","boss"}}

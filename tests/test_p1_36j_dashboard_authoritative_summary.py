@@ -57,7 +57,7 @@ def test_dashboard_uses_light_projections_without_full_page_payloads(
 
     calls: list[tuple[str, object]] = []
 
-    def pending_material_rows(*, db, user):
+    def pending_material_rows(*, db, user, include_workbench=False):
         calls.append(("requisition", int(user.id)))
         return [
             {
@@ -73,7 +73,7 @@ def test_dashboard_uses_light_projections_without_full_page_payloads(
             }
         ]
 
-    def pending_incoming_rows(*, db, user):
+    def pending_incoming_rows(*, db, user, include_workbench=False):
         calls.append(("incoming", int(user.id)))
         return [
             {
@@ -213,11 +213,11 @@ def test_dashboard_projection_calls_follow_role_permissions(
 
     calls: set[str] = set()
 
-    def requisition_rows(*, db, user):
+    def requisition_rows(*, db, user, include_workbench=False):
         calls.add("requisition")
         return []
 
-    def incoming_rows(*, db, user):
+    def incoming_rows(*, db, user, include_workbench=False):
         calls.add("incoming")
         return []
 
@@ -370,15 +370,15 @@ def test_combined_dashboard_matches_legacy_full_sources_with_fewer_queries(
     original_production = production_workflow.list_production_task_dashboard_rows
     active_user: dict[str, User] = {}
 
-    def legacy_requisition(*, db, user):
+    def legacy_requisition(*, db, user, include_workbench=False):
         return requisition_api.pending_requisitions(db=db, _user=user)["items"]
 
-    def legacy_incoming(*, db, user):
+    def legacy_incoming(*, db, user, include_workbench=False):
         return incoming_api.pending_items(response=Response(), db=db, user=user)["items"]
 
     def legacy_production(db, *, allowed_customer_ids, status="pending"):
         return production_api.get_production_tasks(
-            task_status=status,
+            q="", task_status=status,
             db=db,
             user=active_user["value"],
         )["items"]
@@ -437,13 +437,18 @@ def test_combined_dashboard_matches_legacy_full_sources_with_fewer_queries(
     def normalize(value):
         if isinstance(value, dict):
             return {
-                key: "NORMALIZED" if key == "as_of" else normalize(item)
+                # The legacy summary no longer carries the pending projection's
+                # display-only sort date; eligibility, identity and counts remain equal.
+                key: "NORMALIZED" if key in {"as_of", "sort_date"} else normalize(item)
                 for key, item in value.items()
             }
         if isinstance(value, list):
             return [normalize(item) for item in value]
         return value
 
+    # The legacy comparison covers legacy fields; detailed workbench fields have their own tests.
+    legacy.pop("workbench", None)
+    optimized.pop("workbench", None)
     legacy_json = json.dumps(
         normalize(legacy),
         ensure_ascii=False,
@@ -459,7 +464,7 @@ def test_combined_dashboard_matches_legacy_full_sources_with_fewer_queries(
         separators=(",", ":"),
     ).encode("utf-8")
 
-    assert optimized_json == legacy_json
+    assert normalize(optimized) == normalize(legacy)
     assert sum(row.startswith("select") for row in optimized_sql) < sum(
         row.startswith("select") for row in legacy_sql
     )

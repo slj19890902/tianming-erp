@@ -406,10 +406,19 @@ def get_production_tasks(
     | None = Query(default=None, alias="status"),
     page: Annotated[int | None, Query(ge=1)] = None,
     page_size: Annotated[int | None, Query(ge=1, le=200)] = None,
+    home_task_id: Annotated[int | None, Query(gt=0)] = None,
     user: User = Depends(can_read),
     db: Session = Depends(get_db),
 ) -> dict:
     allowed_customer_ids = _allowed_customer_ids(user, db)
+    if home_task_id is not None:
+        items = list_production_tasks(db, allowed_customer_ids=allowed_customer_ids,
+                                      status=task_status, q=q, task_ids=[home_task_id])
+        total = len(items)
+        if (page or 1) > 1:
+            items = []
+        return {"items": annotate_production_reminders(db, annotate_task_label_plans(db, items, hydrate=False)),
+                "total": total, "page": page or 1, "page_size": page_size or 25}
     if page is None and page_size is None:
         items = list_production_tasks(
                 db,

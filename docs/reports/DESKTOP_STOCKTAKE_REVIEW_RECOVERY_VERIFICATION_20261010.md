@@ -36,3 +36,5 @@ approve/reject在flush后、commit前定向刷新reviews/reviewer并构造完整
 根在v600完成正式与NAS发布后整合为14a743f5、0bda7868，活动分支codex/desktop-stocktake-review-release-20261010。运行及测试6文件与5215c5fa逐项Git比较一致；因此复用该精确候选33新API及相邻接口证据，不重复跑无改动的后端集合。根整合后重新执行完整Node47场景（含4真实API回执），全部通过；模块/内联源码解析和测试时文件SHA另存 `D:/.codex/visualizations/2026/10/10/desktop-review-release-v601`，最终发布验证再核对文件未变。
 
 独立Chrome真实页面已完成1920×1080最短链，证据在 `desktop-stocktake-review-recovery/visual-ui`：04的未知A显示原单号、货位、动作与核对入口；06通过一次原生确认审核B，真实POST返回完整matched_review=2，A本地原请求字节保持；07核对A仅调用只读review-result，found匹配原key/历史审核1后清记录，未向A发送approve。根独立查看04/06/07，确认布局、B成功归属、A卡保留/清理正常。无横向溢出、Runtime异常0。数据来自合成pytest库和真实auth/stocktake API，辅助楼层/客户/模具仅最小空启动数据，不当作真实仓库地图验收。未访问正式页面或写正式数据。
+
+v601技术发布完成，待管理员人工验收。源108de0681c73fc213f94dd123d077eec395a8186，包f7f06e6481db538cc4d7ee6fbf46fb520a90117a805e10f1c2f3f84c04a36205；备份恢复、业务/附件保持、健康及资源通过，详见FACTORY_RELIABILITY_RELEASE_V601_20261010.md。

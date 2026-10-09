@@ -155,7 +155,8 @@ def _apply_confirmed(db, *, product_ids, lot_ids, preview_hash, operation_key, e
         for row in value["lots"]:
             locked = db.execute(update(InventoryLot).where(InventoryLot.id == row["lot_id"],
                 InventoryLot.version == row["version"], InventoryLot.quantity_reserved == 0,
-                InventoryLot.status == "active").values(version=InventoryLot.version + 1))
+                InventoryLot.status == "active").values(version=InventoryLot.version + 1,
+                    updated_at=InventoryLot.updated_at))
             if locked.rowcount != 1:
                 raise _error("库存已变化，请重新预览")
         group = SharedFinishedGroup(operation_key=operation_key, request_json=request,

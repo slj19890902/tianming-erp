@@ -228,7 +228,8 @@ def test_reviewed_maintenance_requires_backup_and_exact_pilot_and_is_idempotent(
     data['product'].customer_id=137
     data['product'].product_code='80012043';data['product'].product_name='T1K-08B'
     target,item,lot=setup_pair(db,data,legacy_mold=True)
-    target.product_name='T1K-08B';db.commit()
+    from datetime import datetime
+    target.product_name='T1K-08B';lot.updated_at=datetime(2020,1,1);db.commit()
     monkeypatch.setattr(job,'PRODUCT_IDS',[data['product'].id,target.id])
     monkeypatch.setattr(job,'LOT_IDS',[lot.id])
     value=job.prepare(db);version=lot.version;identity=shared.lot_identity(lot)
@@ -244,6 +245,7 @@ def test_reviewed_maintenance_requires_backup_and_exact_pilot_and_is_idempotent(
     assert result['replayed'] is False
     assert job.apply_reviewed(db,**args)==dict(group_id=result['group_id'],replayed=True)
     assert lot.quantity_available==50 and lot.quantity_reserved==0 and lot.version==version+1
+    assert lot.updated_at==datetime(2020,1,1)
     assert shared.lot_identity(lot)==identity
     assert db.get(SharedFinishedGroup,result['group_id']).actor_id is None
 

@@ -1638,6 +1638,16 @@ def _merge_target_idempotency_key(idempotency_key: str) -> str:
     return f"{idempotency_key}:target"
 
 
+def _merge_member_snapshot(pallet: InventoryPallet) -> tuple[tuple, ...]:
+    # Legacy pallets can still contain unlinked snapshots.  Freeze their
+    # membership too, without imposing the newer formal-lot-only profile.
+    return tuple(sorted(
+        (item.id, item.pallet_id, item.inventory_lot_id, item.customer_id,
+         item.product_id, item.item_type, item.unit, item.match_status, item.quantity)
+        for item in pallet.items
+    ))
+
+
 def _remaining_pallet_items(pallet: InventoryPallet) -> list[InventoryPalletItem]:
     remaining: list[InventoryPalletItem] = []
     for item in pallet.items:
@@ -2001,6 +2011,61 @@ def merge_pallet_remaining_goods(
         raise Floor3LocationError("只能合并同一库存类型的零散货", status_code=409)
 
     try:
+        if source.version != expected_source_version or target.version != expected_target_version:
+            raise Floor3LocationError("栈板已被其他操作更新，请刷新后重试", status_code=409)
+        expected_members = {
+            pallet.id: _merge_member_snapshot(pallet) for pallet in (source, target)
+        }
+        expected_lots = {
+            item.inventory_lot_id: (
+                lot.version, lot.warehouse_location_id, lot.inventory_type,
+                lot.status, lot.unit, lot.quantity_available, lot.quantity_reserved,
+                lot.quantity_consumed, lot.quantity_damaged, lot.quantity_scrapped,
+                lot.last_movement_at,
+            )
+            for pallet in (source, target)
+            for item in pallet.items
+            if item.inventory_lot_id is not None
+            and (lot := item.inventory_lot) is not None
+        }
+        locked_lots = lock_pallet_inventory_lots(
+            db, [source.id, target.id],
+            expected_pallets={
+                source.id: (expected_source_version, source.location_id),
+                target.id: (expected_target_version, target.location_id),
+            },
+            expected_lots=expected_lots,
+        )
+        if {lot.id for lot in locked_lots} != set(expected_lots):
+            raise Floor3LocationError("栈板关联批次在合并预检期间发生变化，请刷新后重试", status_code=409)
+
+        # The lock helper expires cached ORM rows.  Rebuild both relationships
+        # and the remaining-item lists under that lock before changing them.
+        source = _pallet(db, source_pallet_id, refresh=True)
+        target = _pallet(db, target_pallet_id, refresh=True)
+        if any(_merge_member_snapshot(pallet) != expected_members[pallet.id]
+               for pallet in (source, target)):
+            raise Floor3LocationError("栈板成员在合并预检期间发生变化，请刷新后重试", status_code=409)
+        source_location = _operational_pallet_location(
+            db, source.location_id, require_published=require_published_locations,
+            required_inventory_type=(expected_profile.inventory_type if expected_profile else None),
+        )
+        target_location = _operational_pallet_location(
+            db, target.location_id, require_published=require_published_locations,
+            required_inventory_type=(expected_profile.inventory_type if expected_profile else None),
+        )
+        if source_location.storage_type == "rack" or target_location.storage_type == "rack":
+            raise Floor3LocationError("零散货合并只适用于真实木栈板", status_code=409)
+        source_customer, source_type, moved_items = _pallet_merge_signature(source)
+        target_customer, target_type, target_items = _pallet_merge_signature(target)
+        if source_customer != target_customer:
+            raise Floor3LocationError("只能合并同一客户的零散货", status_code=409)
+        if source_type != target_type:
+            raise Floor3LocationError("只能合并同一库存类型的零散货", status_code=409)
+        if expected_profile is not None and any(
+            strict_pallet_merge_profile(pallet) != expected_profile for pallet in (source, target)
+        ):
+            raise Floor3LocationError("栈板内容在合并预检期间发生变化，请刷新后重试", status_code=409)
         claims = sorted(
             (
                 (source, expected_source_version),

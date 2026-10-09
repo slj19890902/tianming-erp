@@ -28,7 +28,7 @@
    pdfDraftKey(draft){return String(draft.file_hash || draft.source_name || '');},
    pdfQueueDrafts(){return this.orderImportDrafts.filter(d=>!this.emailQueueMode || d.email_queue_status===this.emailQueueFilter);},
    pdfCurrentDraft(draft){const all=this.pdfQueueDrafts();return this.pdfDraftKey(draft)===(all.some(d=>this.pdfDraftKey(d)===this.pdfActiveDraftKey)?this.pdfActiveDraftKey:this.pdfDraftKey(all[0]||{}));},
-   pdfOpenDraft(draft){this.pdfActiveDraftKey=this.pdfDraftKey(draft);this.pdfQueueVisible=false;this.pdfFitCapacity=0;},
+   pdfOpenDraft(draft){this.pdfActiveDraftKey=this.pdfDraftKey(draft);this.pdfQueueVisible=false;this.pdfFitCapacity=0;this.restorePdfSaveAttempt?.(draft);if(!this.loading&&draft._save_status==='saving'&&!draft._save_record&&!draft._save_payload){draft._save_status='idle';draft.confirmed=false;draft._save_message='保存尚未发出，请重新核对后保存。';}},
    pdfMoveDraft(step){const all=this.pdfQueueDrafts();const index=all.findIndex(d=>this.pdfCurrentDraft(d));if(all[index+step])this.pdfOpenDraft(all[index+step]);},
    pdfDraftPosition(){const all=this.pdfQueueDrafts();return Math.max(1,all.findIndex(d=>this.pdfCurrentDraft(d))+1);},
    pdfCustomerShort(draft){const customer=(this.customerOptions||[]).find(c=>Number(c.id)===Number(draft.matched_customer_id));return customer?.chinese_short_name || customer?.short_name || customer?.abbreviation || customer?.name || draft.customer_name || draft.customer_name_raw || '客户待确认';},

@@ -61,7 +61,7 @@
         ['箱型',v.box_style],['净片尺寸',v.net_specification],['开料方式',v.cutting_summary],
         ['模切开数',cut?.is_die_cut||molds.length?`${number(v.mold_count)} 模`:null],
         ['每张采购纸产出',cut&&Number(cut.yield_per_supplier_sheet)>1?`${number(cut.yield_per_supplier_sheet)} 片`:null],
-        ['压线',list(v.crease_values_mm).length?v.crease_values_mm.map(x=>x??'待核').join(' / ')+' mm':v.crease_text],
+        ['压线',list(v.crease_values_mm).some(x=>x!==null&&x!==undefined)||steps.some(s=>/开槽|压线/.test(s.label))?list(v.crease_values_mm).map(x=>x??'待核').join(' / ')+' mm':v.crease_text],
         ['印刷',v.print_content],['印刷颜色',Array.isArray(v.printing_colors)?v.printing_colors.join(' / '):v.printing_colors],
         ['结合方式',['无需结合','无','其他'].includes(v.joining_method)?null:v.joining_method]])}
         ${steps.length?`<ol class="pw-process">${steps.map(s=>`<li><b>${esc(s.label||s.name)}</b><span>${esc(s.detail||s.description)}</span></li>`).join('')}</ol>`:''}
@@ -122,7 +122,7 @@
       all('[data-reverse]',e=>{const source=detail.inventory.items[Number(e.dataset.reverse)].reverse_source;mode='reverse';params={...source};search(1);});
       const history=container.querySelector('[data-history]');
       if(history)history.addEventListener('change',async()=>{includeHistory=history.checked;const id=pid(detail.product);await show(id);if(detail){tab='orders';store();render();}});
-      container.querySelectorAll('img').forEach(img=>img.addEventListener('error',()=>{const span=document.createElement('span');span.className='pw-warning';span.textContent='图纸加载失败';img.replaceWith(span);}));
+      container.querySelectorAll('img').forEach(img=>img.addEventListener('error',()=>{const retry=document.createElement('button');retry.type='button';retry.className='pw-warning';retry.textContent='图纸加载失败 · 重试';retry.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();render();});img.replaceWith(retry);}));
     }
     async function act(kind,data){if(actionBusy||!onAction)return;actionBusy=true;store();render();try{await onAction(kind,data);}catch(e){if(live)error=e.message||'无法打开，请重试';}finally{actionBusy=false;if(live)render();}}
     render();if(savedId)show(savedId).then(()=>{if(detail){tab=initialState.tab||'production';store();render();}});else if(Object.keys(params).length)search(page);

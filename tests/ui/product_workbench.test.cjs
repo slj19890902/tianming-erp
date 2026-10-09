@@ -54,3 +54,25 @@ test('desktop and mobile entrypoints load the same search assets',()=>{
  for(const file of ['index.html','mobile_erp.html']){const html=fs.readFileSync(require.resolve('../../static/'+file),'utf8');assert.match(html,/ui\/product-workbench\.js/);assert.match(html,/ui\/product-workbench\.css/);}
  const mobile=fs.readFileSync(require.resolve('../../static/mobile_erp.html'),'utf8');assert.match(mobile,/mountMobile/);assert.match(mobile,/destroyMobile/);
 });
+test('mold IDs use their own route and hidden shared-lot links cannot be reconstructed',()=>{
+ const h=harness(async()=>details);
+ assert.equal(h.module.locationUrl({mold_id:22,location_id:5,floor:'1F',map_url:'/mobile/mold-lookup?mold_id=22&readonly=1'}),'/mobile/mold-lookup?mold_id=22&readonly=1');
+ assert.equal(h.module.locationUrl({mold_id:22,map_url:null}),null);
+ assert.equal(h.module.locationUrl({...details.inventory.items[0],url:null}),null);
+ assert.equal(h.module.locationUrl({...details.inventory.items[0],mapped:false}),null);h.instance.destroy();
+});
+test('actual processed stock reverses with original lot identity and retains measured conditions',async()=>{
+ const paths=[],reverse_source={length:400,width:300,material_code:'TEST',flute_type:'B',layer_count:3,processed_state:'die_cut',lot_id:97};
+ const h=harness(async path=>{paths.push(path);return path.includes('/reverse?')?{items:[],total:0,source:'actual_lot'}:{...details,inventory:{...details.inventory,items:[{...details.inventory.items[0],reverse_source}]}};});
+ await h.instance.show(17);click(h,'[data-tab="inventory"]');click(h,'[data-reverse="0"]');await tick();
+ const url=new URL(paths.at(-1),'http://localhost');assert.equal(url.searchParams.get('lot_id'),'97');assert.equal(url.searchParams.get('processed_state'),'die_cut');assert.equal(h.root.querySelector('[name="lot_id"]').value,'97');h.instance.destroy();
+});
+test('requisition purpose selection does not submit and existing orders remain available',async()=>{
+ const h=harness(async()=>({...details,actions:{can_requisition:true}}));await h.instance.show(17);
+ click(h,'[data-requisition]');assert.match(h.root.textContent,/本次报料用途/);click(h,'[data-purpose="order"]');
+ assert.equal(h.instance.snapshot().tab,'orders');assert.equal(h.root.querySelector('.pw-purpose'),null);h.instance.destroy();
+});
+test('drawing failure offers a local retry without losing the selected product',async()=>{
+ const h=harness(async()=>details);await h.instance.show(17);const img=h.root.querySelector('img');img.dispatchEvent(new h.window.Event('error'));
+ assert.match(h.root.textContent,/图纸加载失败 · 重试/);click(h,'.pw-engineering button');assert.ok(h.root.querySelector('img'));assert.equal(h.instance.snapshot().productId,17);h.instance.destroy();
+});

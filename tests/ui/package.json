@@ -1,0 +1,10 @@
+{
+  "name": "tianming-workbench-ui-tests",
+  "private": true,
+  "scripts": {
+    "test:workbench": "node --test product_workbench.test.cjs home_workbench.test.cjs"
+  },
+  "devDependencies": {
+    "linkedom": "0.18.13"
+  }
+}

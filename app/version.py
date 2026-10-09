@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.586"
+APP_VERSION = "v0.22.587"
 APP_VERSION_NAME = "共用成品库存预警数量一致"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5579,6 +5579,18 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.585：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 APP_CHANGES = [
+    "普通货架正视图精简顶部，修正格号字体撑高，三层优先完整展示，保留混放产品、查找定位及异常提示。",
+    "库存流水支持客户、存货编码、名称、日期筛选，显示实存前后、位置与原因，技术编号收进明细。",
+    "延期待送改为更多中的待送积压整理，继续由人工确认移货。数量、位置、历史记录和权限不变。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，点开M1等三层货架，核对三层展示、混放产品及格位操作。",
+    "打开库存流水，按客户和存货编码查询，核对时间、数量前后、移库位置与原因，展开明细和切换下一页。",
+    "在地图更多中打开待送积压整理，核对仅展示建议，没有自动移货。",
+]
+APP_CHANGELOG = [*(f"v0.22.586：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
     "库存预警与常用箱预警设置纳入已确认共用的成品批次，两客户读取同一批实物余额。",
     "同一批次只计算一次，保留实际库存、可分配和已占用数量的区别；未共用、暂停或资料变化仍遵循原门禁。",
     "仅修正库存读取，不新增库存，不改变货位、归属、订单、送货及客户各自的预警线。",
@@ -5587,4 +5599,4 @@ APP_VERIFICATION_STEPS = [
     "刷新库存预警，分别查看研光、光洋80012149，核对库存均为同一实际余额，发布核对时为20。",
     "研光预警线仍为50，库存20继续提示不足；常用箱预警设置里的库存与预警页保持一致。",
 ]
-APP_CHANGELOG = [*(f"v0.22.586：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.587：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

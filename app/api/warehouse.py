@@ -25019,6 +25019,8 @@ def get_finished_goods_label(
 @router.get("/movements")
 def list_movements(
     lot_number: str | None = None,
+    customer_id: int | None = None,
+    keyword: str | None = Query(default=None, max_length=150),
     inventory_type: str | None = None,
     movement_type: str | None = None,
     date_from: date | None = None,
@@ -25028,6 +25030,11 @@ def list_movements(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
+    from app.services.warehouse_movement_read import customer_condition, keyword_condition, movement_load_options, enrich_movements
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+    if customer_id is not None:
+        require_customer_access(customer_id, user, db)
     query = (
         select(InventoryMovement)
         .join(InventoryLot)
@@ -25036,11 +25043,15 @@ def list_movements(
             WarehouseLocation.id == InventoryLot.warehouse_location_id,
         )
         .where(_formal_inventory_location_condition())
-        .options(selectinload(InventoryMovement.lot))
+        .options(*movement_load_options())
     )
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is not None:
         query = query.where(_visible_lot_condition(visible_customer_ids))
+    if customer_id is not None:
+        query = query.where(customer_condition(customer_id))
+    if keyword and keyword.strip():
+        query = query.where(keyword_condition(keyword, visible_customer_ids))
     if lot_number:
         query = query.where(InventoryLot.lot_number.contains(lot_number.strip()))
     if inventory_type:
@@ -25059,7 +25070,7 @@ def list_movements(
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
-    return {"items": [_movement_dict(row) for row in rows], "total": total}
+    return {"items": enrich_movements(db, rows, _movement_dict, visible_customer_ids=visible_customer_ids), "total": total, "page": page, "page_size": page_size}
 
 
 @router.post("/finished/manual-in")

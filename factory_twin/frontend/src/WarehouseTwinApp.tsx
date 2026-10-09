@@ -1333,10 +1333,6 @@ function WarehouseRackElevation({
     () => locations.flatMap((location) => rackLocationInventoryItems(location)),
     [locations]
   );
-  const emptyLocationCount = useMemo(
-    () => locations.filter((location) => rackLocationInventoryItems(location).length === 0).length,
-    [locations]
-  );
   useEffect(() => {
     elevationRef.current?.querySelector<HTMLElement>('[data-search-current="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [rack.id, searchLotId, searchLocationId]);
@@ -1360,7 +1356,7 @@ function WarehouseRackElevation({
   </section>;
   return <section className="twin-rack-focus-panel twin-rack-stage" role="region" aria-label={`${rack.rack_code} 参数化正视图`}>
       <header>
-      <div><small>仓储货架正视图</small><h2>{moldRackEmployeeName(rack)}</h2><p>{formatNumber(rack.width_mm)} × {formatNumber(rack.depth_mm)} × {formatNumber(rack.height_mm)} mm · {rack.levels} 层 · 同区货架 {rackIndex + 1}/{rackCount}</p><p>{items.length} 个批次 · {emptyLocationCount} 个正式空货位{unboundLocationCount ? ` · ${unboundLocationCount} 个有货旧货位未绑定货架层格，请先转入盘点待归位` : ""}{area?.quantities.length ? ` · ${area.quantities.map(item => `${formatNumber(item.available)} ${inventoryUnitLabel(item.unit)}`).join(" / ")}` : ""}</p>{items.some((item) => searchLotIds.has(item.lot_id)) && <p className="twin-rack-search-marker" role="status">蓝边格有此产品，选中为黄边{searchLocation ? ` · 当前第 ${searchLocation.level_no} 层 · 第 ${searchLocation.slot_no} 格` : ""}</p>}</div>
+      <div className="shelf-compact-title"><h2>{moldRackEmployeeName(rack)}</h2>{unboundLocationCount > 0 && <span className="shelf-location-warning" role="status">{unboundLocationCount} 个货位位置待核</span>}{items.some((item) => searchLotIds.has(item.lot_id)) && <span className="twin-rack-search-marker" role="status">{searchLocation ? `当前 ${searchLocation.level_no}层${searchLocation.slot_no}格` : "蓝边格有此产品"}</span>}</div>
         <button type="button" disabled={!allCellsPrintable} title="80×40货位标签，不含产品信息" onClick={() => window.open(`/static/shelf-label.html?location_ids=${printableLocationIds.join(',')}`, '_blank', 'noopener')}>打印货架标签</button>
         <button type="button" onClick={onRefocus}>重新定位</button>
         <button type="button" onClick={onClose}>收起货架</button>
@@ -1372,11 +1368,7 @@ function WarehouseRackElevation({
           <div className="twin-elevation-frame" ref={elevationRef}>
             {levels.map((level) => {
               const cellCount = levelCellCounts[level - 1] || 0;
-              const visibleProductRows = Math.min(2, Math.max(0, ...Array.from({ length: cellCount }, (_, bay) => {
-                const rows = rackCells.get(rackCellIdentityKey(rack.id, level, bay + 1) || "") || [];
-                return Math.min(2, groupShelfProducts(rows.flatMap(rackLocationInventoryItems)).length);
-              })));
-              return <div className="twin-elevation-level" key={level} style={visibleProductRows > 1 ? { minHeight: visibleProductRows * 92 + 56 } : undefined}>
+              return <div className="twin-elevation-level" key={level}>
               <span>第 {level} 层 · {cellCount ? `${cellCount} 格` : "尚未分格"}</span>
               <div className={cellCount ? "" : "unpartitioned"}>{cellCount === 0 ? <i className="twin-unpartitioned-cell">本层尚未分格</i> : Array.from({ length: cellCount }, (_, bay) => {
                 const cellKey = rackCellIdentityKey(rack.id, level, bay + 1);
@@ -6515,6 +6507,7 @@ export function WarehouseTwinApp() {
           {!traceReadOnly && canEditLocations && <button type="button" disabled={spatialEditBusy} onClick={toggleLayoutEditor}>{locationEditMode ? "结束区域规划" : "区域规划"}</button>}
           {!traceReadOnly && canExecuteWarehouse && P1_49C_ENABLED && <button type="button" disabled={spatialEditBusy} onClick={openAutomaticMerge}>合并同款栈板</button>}
           {!traceReadOnly && canExecuteWarehouse && <button type="button" disabled={spatialEditBusy} onClick={async () => {if(await enterWarehouseMoveMode()) {setMoveAction("ground");setMoveSource(null);setGroundStorageMessage("请选择区域，办理特殊地堆入库或大件转位。");}}}>特殊地堆 / 大件存放</button>}
+          {!traceReadOnly && dashboard?.delayed_dispatch_relocation && <button type="button" className="twin-delayed-toggle" aria-expanded={delayedDispatchOpen} onClick={(event) => {setDelayedDispatchOpen(value => !value); event.currentTarget.closest("details")?.removeAttribute("open");}}>待送积压整理 {dashboard.delayed_dispatch_relocation.candidate_count || ""}</button>}
           <button type="button" onClick={() => setMapHelpOpen(value => !value)}>操作帮助</button>
           <button type="button" onClick={() => setLayerPanelOpen(value => !value)}>图层</button>
           <button type="button" disabled={locationEditMode || mapMode === "move"} onClick={() => setViewMode(value => value === "2d" ? "25d" : "2d")}>{viewMode === "2d" ? "等距视图" : "二维地图"}</button>
@@ -6574,7 +6567,6 @@ export function WarehouseTwinApp() {
       </div>}
       <button type="button" className="twin-reset" onClick={() => { setCameraPreset("fit"); setViewResetToken((value) => value + 1); }}>全图复位</button>
       </div>
-      {!traceReadOnly && !!dashboard?.delayed_dispatch_relocation?.candidate_count && <button type="button" className={`twin-delayed-toggle ${delayedDispatchOpen ? "active" : ""}`} aria-expanded={delayedDispatchOpen} onClick={() => setDelayedDispatchOpen((value) => !value)}>延期待送 {dashboard.delayed_dispatch_relocation.candidate_count}</button>}
       {mapMode === "planning" && floorCode === "1F" && viewMode === "2d" && canEditLocations && !locationEditMode && <button type="button" className={`twin-floor1-candidate-toggle ${floor1CandidatePlan ? "active" : ""}`} disabled={floor1CandidateBusy} onClick={previewFloor1FormalCandidates}>{floor1CandidateBusy ? "正在测算…" : "一楼区域自动生成"}</button>}
       {mapMode === "planning" && locationEditMode && (advancedAreaMaintenanceOpen || locationPointEditAreaCode) && <><button type="button" className="twin-save-location-layout" disabled={locationEditBusy || layoutMapToolsOpen || !activeLocationDraftCount} onClick={() => void saveLocationDrafts()}>{locationPointEditAreaCode ? "保存货位调整" : "保存货位调整"} {activeLocationDraftCount || ""}</button><button type="button" className="twin-cancel-location-layout" disabled={locationEditBusy || (advancedAreaMaintenanceOpen && !activeLocationDraftCount)} onClick={locationPointEditAreaCode ? cancelLocationPointEditing : () => { setLocationDrafts({}); setSwapSourceLocationId(null); setLocationEditMessage("已取消未保存的库位位置草稿。"); }}>{locationPointEditAreaCode ? "取消点位调整" : "取消位置草稿"}</button></>}
       {mapMode === "planning" && locationEditMode && advancedAreaMaintenanceOpen && <div className="twin-layout-draft-workflow">
@@ -6955,12 +6947,13 @@ export function WarehouseTwinApp() {
           <p>保存时自动校验并只应用当前货架；成功后同步本货架正式层格，其他草稿和库存数量不改变。</p>
         </section>}
         {!traceReadOnly && delayedDispatchOpen && dashboard?.delayed_dispatch_relocation && <section className="twin-location-card twin-delayed-dispatch-board">
-          <div className="twin-location-card-title"><div><small>三楼左区 · 延期待送整理</small><b>超过几天未送货</b></div><em className={dashboard.delayed_dispatch_relocation.candidate_count ? "occupied" : "empty"}>{dashboard.delayed_dispatch_relocation.candidate_count} 块</em></div>
+          <div className="twin-location-card-title"><div><small>待送积压整理</small><b>一楼待送区久未发货</b></div><em className={dashboard.delayed_dispatch_relocation.candidate_count ? "occupied" : "empty"}>{dashboard.delayed_dispatch_relocation.candidate_count} 块</em></div>
+          <p>将一楼久未发货的货物移至三楼空位，腾出待送空间。仅提示，需手动确认移货。</p>
           <label className="twin-delayed-days"><span>未送货天数</span><select value={dispatchIdleDays} onChange={(event) => setDispatchIdleDays(Number(event.target.value))}>{Array.from({ length: 30 }, (_, index) => index + 1).map((value) => <option value={value} key={value}>{value} 天</option>)}</select></label>
           <div className="twin-dispatch-summary"><b>{dashboard.delayed_dispatch_relocation.available_target_count}</b><span>个左区可用空栈板位</span><small>{dashboard.delayed_dispatch_relocation.policy.notice}</small></div>
           <div className="twin-dispatch-label-list">
             {dashboard.delayed_dispatch_relocation.items.map((candidate) => <article key={`delayed-dispatch-${candidate.pallet_id}`}>
-              <button type="button" className="twin-delayed-focus" aria-label={`延期待送地图定位 ${candidate.product_names.join("、")}`} onClick={() => focusDelayedDispatchCandidate(candidate)}>
+              <button type="button" className="twin-delayed-focus" aria-label={`待送积压地图定位 ${candidate.product_names.join("、")}`} onClick={() => focusDelayedDispatchCandidate(candidate)}>
                 <small><OrderReference row={candidate} /> · 已等待 {candidate.idle_days} 天</small>
                 <b>{formatNumber(candidate.quantity)} {inventoryUnitLabel(candidate.unit)}</b>
                 <strong>{candidate.product_names.join("、")}</strong>

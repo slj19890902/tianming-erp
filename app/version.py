@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.599"
-APP_VERSION_NAME = "手机盘点保存结果核对"
+APP_VERSION = "v0.22.600"
+APP_VERSION_NAME = "手机查货返回与现场触控"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5745,3 +5745,17 @@ APP_VERIFICATION_STEPS = [
     "盘点成功但列表未刷新时点击“重新读取库存”；无需为验收额外调整真实库存。",
 ]
 APP_CHANGELOG = [*(f"v0.22.599：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "手机从查货进入盘点后可直接返回原查询和产品；库存数量重新读取，不使用旧页面数量。",
+    "扫码进入盘点后可返回原扫码货位，保留产品筛选；浏览器后退重新核对当前账号和权限。",
+    "长编码完整换行，现场常用按钮放大；盘点确认按钮移到批次列表后、添加货物表单前。",
+    "待核对盘点可以返回查货，原货位数量和请求仍保留；账号变化、存储失败和迟到响应继续受保护。",
+    "本版无数据库迁移，不调整正式库存、订单、成本或历史事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机查货后进入一个货位的盘点页面，点“返回查货”，核对原关键词、产品和最新库存仍可查看。",
+    "扫描货位标签进入盘点，点“返回扫码货位”，确认回到原货位；无需为验收额外提交盘点。",
+    "在小屏手机核对长编码、数量和按钮完整可见；现场手机和扫码硬件仍需人工确认。",
+]
+APP_CHANGELOG = [*(f"v0.22.600：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

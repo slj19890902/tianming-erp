@@ -31,11 +31,11 @@
    beforeUnmount(){if(!this.$parent)global.removeEventListener('message',this.acceptStockLocation);},
    data(){return this.$parent?{}:{stockPrepDialog:null,stockAssemblyDialog:null,stockLocations:[],stockLocationsLoading:false,stockLocationsError:'',stockPrepPendingCount:0,productionPendingSource:'all',stockDialogSequence:0,stockLocationMap:null};},
    methods:{
-    async ensureStockLocations({force=false}={}){
+    async ensureStockLocations({force=false,completion=false}={}){
      if(this.stockLocationsLoading)return false;if(!force&&this.stockLocations.length)return true;
-     const auth=this.authGeneration;this.stockLocationsLoading=true;this.stockLocationsError='';
-     try{const {data}=await axios.get('/api/production/stock-preparation/locations');if(auth!==this.authGeneration)return false;this.stockLocations=data.items||[];return true;}
-     catch(e){if(auth===this.authGeneration)this.stockLocationsError='货位读取失败，请重试';return false;}finally{if(auth===this.authGeneration)this.stockLocationsLoading=false;}
+     const auth=this.authGeneration,actor=this.user?.id;this.stockLocationsLoading=true;this.stockLocationsError='';
+     try{const {data}=await (completion?this.stockCompletionHttp():axios).get('/api/production/stock-preparation/locations');if(auth!==this.authGeneration||actor!==this.user?.id)return false;this.stockLocations=data.items||[];return true;}
+     catch(e){if(auth===this.authGeneration&&actor===this.user?.id){this.stockLocationsError='货位读取失败，请重试';if(completion)this.stockCompletionAuthError(e,{actor,auth});}return false;}finally{if(auth===this.authGeneration&&actor===this.user?.id)this.stockLocationsLoading=false;}
     },
     stockLastLocation(){try{const id=Number(localStorage.getItem('erp-stock-place:'+this.user?.id));return this.stockLocations.some(l=>l.id===id)?id:null;}catch{return null;}},
     rememberStockLocation(id){if(id)try{localStorage.setItem('erp-stock-place:'+this.user?.id,String(id));}catch{}},
@@ -65,8 +65,8 @@
      }catch(e){if(auth===this.authGeneration)this.stockPrepError=this.errorMessage(e);}finally{if(auth===this.authGeneration)this.stockPrepBusy=false;}
     },
     stockOperationKey(){const bytes=new Uint8Array(16);global.crypto.getRandomValues(bytes);return 'group-'+Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');},
-    async openStockLocationMap(target=null){const d=this.stockPrepDialog;if(!d||d.loading||!this.canAdmin||!this.hasPermission('warehouse.view'))return;d.error='';
-     try{if(!await this.ensureStockLocations({force:true})||this.stockPrepDialog!==d)return;
+    async openStockLocationMap(target=null){const d=this.stockPrepDialog;if(!d||d.loading||(d.row.entry_type==='single_job'&&this.stockCompletionLocked(d.row))||!this.canAdmin||!this.hasPermission('warehouse.view'))return;d.error='';
+     try{if(!await this.ensureStockLocations({force:true,completion:d.row.entry_type==='single_job'})||this.stockPrepDialog!==d)return;
       const token=this.stockOperationKey();const params=new URLSearchParams({embedded:'1',readonly:'1',source:'production-location-picker',tab:'map',floor:'3F',mode:'lookup',view:'2d',picker_token:token});
       this.stockLocationMap={token,target,dialog:d,auth:this.authGeneration,url:'/warehouse.html?'+params};
      }catch(e){d.error=this.errorMessage(e);}
@@ -76,18 +76,18 @@
      if(!picker||event.origin!==global.location.origin||event.source!==this.$refs.stockLocationFrame?.contentWindow||event.data?.type!=='erp-production-location'||event.data.token!==picker.token||picker.auth!==this.authGeneration||picker.dialog!==this.stockPrepDialog||!this.canAdmin||!this.hasPermission('warehouse.view'))return;
      const id=Number(event.data.location_id);if(!Number.isInteger(id)||id<=0)return;
      const d=this.stockPrepDialog;d.error='';
-     if(!await this.ensureStockLocations({force:true})){d.error='货位核对失败，请重试';return;}
+     if(!await this.ensureStockLocations({force:true,completion:d.row.entry_type==='single_job'})){if(picker.auth===this.authGeneration&&this.stockPrepDialog===d)d.error='货位核对失败，请重试';return;}
      if(this.stockLocationMap!==picker||this.stockPrepDialog!==d||picker.auth!==this.authGeneration)return;
      const location=this.stockLocations.find(l=>Number(l.id)===id);
      if(!location){d.error='此货位当前不可存放，请重新选位';this.closeStockLocationMap();return;}
      if(picker.target)picker.target._location=Number(location.id);else d.location=Number(location.id);this.closeStockLocationMap();
     },
     async selectStockProductionTab(tab){this.productionTab=tab;this.stockPrepState=tab==='pending'?'pending':tab==='stock'?'materials':'arrange';await this.loadStockPreparation(1);if(tab==='pending'){await this.loadProductionPage(1);if(!['orders','stock','all'].includes(this.productionPendingSource))this.productionPendingSource='all';}},
-    async loadStockWorkspace(page=1){const sequence=++this.stockPrepSequence,auth=this.authGeneration;this.stockPrepBusy=true;this.stockPrepRows=[];this.stockPrepError='';this.stockPrepPage=page;
-     try {const {data}=await axios.get('/api/production/stock-preparation',{params:{workspace:true,q:this.stockPrepQuery,state:this.stockPrepState,page,page_size:this.screenPageSize(12)}});
+    async loadStockWorkspace(page=1,{completion=false}={}){this.reloadStockCompletionRecovery();const sequence=++this.stockPrepSequence,auth=this.authGeneration,actor=this.user?.id;this.stockPrepBusy=true;this.stockPrepRows=[];this.stockPrepError='';this.stockPrepPage=page;
+     try {const {data}=await (completion?this.stockCompletionHttp():axios).get('/api/production/stock-preparation',{params:{workspace:true,q:this.stockPrepQuery,state:this.stockPrepState,page,page_size:this.screenPageSize(12)}});
       if(sequence!==this.stockPrepSequence||auth!==this.authGeneration)return;
       this.stockPrepRows=data.items;this.stockPrepTotal=data.total;this.stockPrepCounts=data.counts;this.stockPrepPendingCount=data.workspace_pending_count||0;
-     }catch(e){if(sequence===this.stockPrepSequence&&auth===this.authGeneration)this.stockPrepError=this.errorMessage(e);}finally{if(sequence===this.stockPrepSequence)this.stockPrepBusy=false;}
+     }catch(e){if(sequence===this.stockPrepSequence&&auth===this.authGeneration){this.stockPrepError=this.errorMessage(e);if(completion)this.stockCompletionAuthError(e,{actor,auth});}}finally{if(sequence===this.stockPrepSequence&&auth===this.authGeneration)this.stockPrepBusy=false;}
     },
     stockEntryName(row){if(row.entry_type==='assembled_stock')return row.assembly.recipe;return row.entry_type==='kit'?row.plan.recipe:['group_job','group_stock'].includes(row.entry_type)?row.task.group.recipe:row;},
     stockEntryStatus(row){
@@ -123,16 +123,17 @@
      try{await axios.post('/api/production/stock-preparation/completions/'+encodeURIComponent(row.preparation_key)+'/revert',payload);if(auth!==this.authGeneration)return;await this.loadProductionHistory();this.showToast('备库误报已撤销，投入材料恢复待安排');}
      catch(e){if(auth===this.authGeneration)this.showToast('撤销失败：'+this.errorMessage(e),true);}finally{if(auth===this.authGeneration)this.productionBusy=false;}
     },
-    async openStockDialog(row){this.stockPrepError='';this.stockPrepDialog={row,loading:true,error:'',sets:row.task?.remaining_sets||row.task?.group?.sets||row.plan?.available_sets||1,disposition:row.entry_type==='group_stock'&&row.task?.jobs?.some(j=>j.output_kind!=='semi')?'finished':'semi',keepKind:row.keep||'keep_raw',location:null,preview:null,jobs:[],job:row.job?{...row.job,_actual:row.job.expected_output}:null,inputQuantity:row.job?.input_quantity||row.available||0,actualOutput:row.processing_expected_output||0,quantity:row.available||0,view:'action',page:1,sources:[row]};
+    async openStockDialog(row,{completion=false}={}){this.reloadStockCompletionRecovery();this.stockPrepError='';this.stockPrepDialog={row,completionActor:row.entry_type==='single_job'||completion?this.user?.id:null,loading:true,error:'',sets:row.task?.remaining_sets||row.task?.group?.sets||row.plan?.available_sets||1,disposition:row.entry_type==='group_stock'&&row.task?.jobs?.some(j=>j.output_kind!=='semi')?'finished':'semi',keepKind:row.keep||'keep_raw',location:null,preview:null,jobs:[],job:row.job?{...row.job,_actual:row.job.expected_output}:null,inputQuantity:row.job?.input_quantity||row.available||0,actualOutput:row.processing_expected_output||0,quantity:row.available||0,view:'action',page:1,sources:[row]};
      const dialog=this.stockPrepDialog;
-     try {await this.ensureStockLocations();if(this.stockPrepDialog!==dialog)return;dialog.location=this.stockLastLocation();
+     try {await this.ensureStockLocations({completion:completion||row.entry_type==='single_job'});if(this.stockPrepDialog!==dialog)return;dialog.location=this.stockLastLocation();
       if(row.entry_type==='kit')await this.previewStockGroup();
       if(['group_job','group_stock'].includes(row.entry_type)){dialog.location=dialog.location||row.task.group.planned_location?.id||null;dialog.jobs=row.task.jobs.map(j=>({...j,_actual:j.expected_output,_location:null}));}
       if(['single_job','single_output'].includes(row.entry_type))dialog.location=row.job.output_location_id||dialog.location||row.job.product.planned_location?.id||null;
-     }catch(e){dialog.error=this.errorMessage(e);}finally{dialog.loading=false;this.$nextTick(()=>document.querySelector('.stock-production-dialog .toolbar button')?.focus());}
+      this.restoreStockCompletionDialog(dialog);
+     }catch(e){if(this.stockPrepDialog===dialog)dialog.error=this.errorMessage(e);}finally{dialog.loading=false;if(this.stockPrepDialog===dialog)this.$nextTick(()=>document.querySelector('.stock-production-dialog .toolbar button')?.focus());}
     },
     stockProcessingExpected(row,job,input){const factor=Number(job?.product?.factor??row.processing_yield_per_sheet),pieces=Number(job?.product?.pieces_per_box??row.processing_pieces_per_product);return Number.isInteger(factor)&&factor>0&&Number.isInteger(pieces)&&pieces>0?Math.floor(Number(input)*factor/pieces):null;},
-    updateStockProcessingQuantity(){const d=this.stockPrepDialog;if(!d)return;const count=this.stockProcessingExpected(d.row,d.job,d.inputQuantity);if(count===null)return;if(d.job)d.job._actual=count;else d.actualOutput=count;},
+    updateStockProcessingQuantity(){const d=this.stockPrepDialog;if(!d||(d.row.entry_type==='single_job'&&this.stockCompletionLocked(d.row)))return;const count=this.stockProcessingExpected(d.row,d.job,d.inputQuantity);if(count===null)return;if(d.job)d.job._actual=count;else d.actualOutput=count;},
     async openStockAssembly(row){if(!this.canAdmin||!row.parent_product_id)return;const d={row,sets:Math.max(1,Number(row.verified_available_sets||1)),location:null,preview:null,loading:true,saving:false,error:'',sequence:0};this.stockAssemblyDialog=d;const auth=this.authGeneration;try{await this.ensureStockLocations();if(this.stockAssemblyDialog!==d||auth!==this.authGeneration)return;d.location=this.stockLastLocation();await this.previewStockAssembly();}catch(e){if(this.stockAssemblyDialog===d)d.error=this.errorMessage(e);}finally{d.loading=false;}},
     async previewStockAssembly(){const d=this.stockAssemblyDialog;if(!d||d.saving)return;const sequence=++d.sequence,auth=this.authGeneration;d.preview=null;d.error='';if(!Number.isInteger(Number(d.sets))||Number(d.sets)<=0){d.error='请填写实际组套数量';return;}d.loading=true;try{const {data}=await axios.get('/api/production/stock-preparation/assembly/'+d.row.parent_product_id+'/preview',{params:{sets:Number(d.sets)}});if(this.stockAssemblyDialog===d&&sequence===d.sequence&&auth===this.authGeneration)d.preview=data;}catch(e){if(this.stockAssemblyDialog===d&&sequence===d.sequence&&auth===this.authGeneration)d.error=this.errorMessage(e);}finally{if(sequence===d.sequence)d.loading=false;}},
     async saveStockAssembly(){const d=this.stockAssemblyDialog;if(!d||d.loading||d.saving||!this.canAdmin)return;const p=d.preview,location=this.stockLocations.find(l=>l.id===d.location);if(!p?.basis_hash||Number(p.sets)!==Number(d.sets)||p.shortages?.length||!location){d.error='请核对实际组套数量、可用子件及成套货位';return;}const payload={action:'assemble_stock',parent_id:d.row.parent_product_id,sets:Number(d.sets),basis_hash:p.basis_hash,jobs:p.sources.map(s=>({job_id:s.job_id,job_version:s.job_version,output_version:s.output_version,lot_version:s.lot_version||0,lot_id:s.lot_id,quantity:s.quantity})),location_id:d.location,layout_version:location.layout_version};const signature=JSON.stringify(payload);if(d.attempt?.signature!==signature)d.attempt={signature,key:this.stockOperationKey()};payload.operation_key=d.attempt.key;d.saving=true;d.error='';const auth=this.authGeneration;try{await axios.post('/api/production/stock-preparation/group-actions',payload);if(auth!==this.authGeneration)return;if(this.stockAssemblyDialog===d)this.stockAssemblyDialog=null;this.rememberStockLocation(d.location);try{await this.loadPendingAssemblies(this.assemblyPage);if(auth!==this.authGeneration)return;this.showToast(this.assemblyError?'组套已保存；列表刷新失败，请刷新核对，不要重复组套':'组套已入库，余下子件保留原货位',!!this.assemblyError);}catch(e){this.showToast('组套已保存；列表刷新失败，请刷新核对，不要重复组套',true);}}catch(e){if(auth===this.authGeneration)d.error=this.errorMessage(e);}finally{d.saving=false;}},

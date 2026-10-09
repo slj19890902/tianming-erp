@@ -29,6 +29,7 @@ export const routes: RouteRecordRaw[] = [
   { path: '/warehouse', name: 'formal-warehouse', component: DashboardView, meta: { title: '仓库', permission: 'warehouse.view', formalCompatibility: true, formalPage: 'warehouse' } },
   { path: '/statements', name: 'formal-finance', component: DashboardView, meta: { title: '对账与开票', permission: 'finance.view', formalCompatibility: true, formalPage: 'finance' } },
   { path: '/master-data', name: 'formal-master-data', component: DashboardView, meta: { title: '主数据', permissionAny: ['customers.view', 'products.view'], formalCompatibility: true, formalPage: 'customers' } },
+  { path: '/shared-stock', name: 'shared-stock', component: () => import('./views/SharedStockView.vue'), meta: { title: '库存共用', permission: 'products.view' } },
   { path: '/orders/new', redirect: () => ({ path: '/orders', query: formalOrderEntryQuery('new') }) },
   { path: '/review/master-data', name: 'master-data', component: MasterDataView, meta: { title: '基础资料', permissionAny: ['customers.view', 'products.view'] } },
   { path: '/review/orders', name: 'orders', component: OrdersWorkspaceView, meta: { title: '订单列表', permission: 'orders.view' } },

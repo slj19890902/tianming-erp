@@ -320,4 +320,5 @@ from app.models.delivery_print_template import DeliveryPrintTemplateRevision  # 
 
 from app.models.business_approval import BusinessApproval  # noqa: E402,F401
 from app.models.shared_finished_stock import (SharedFinishedGroup, SharedFinishedMember,
-    SharedFinishedLot, SharedFinishedReservation)  # noqa: E402,F401
+    SharedFinishedLot, SharedFinishedReservation, SharedFinishedPolicy, SharedFinishedMutation,
+    SharedFinishedOrderBasis)  # noqa: E402,F401

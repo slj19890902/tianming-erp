@@ -3659,6 +3659,7 @@
                   <button v-if="canAdmin" :class="['btn', {primary: productTab === 'suppliers'}]" @click="selectProductTab('suppliers')">供应商</button>
                   <button v-if="canCreateProducts && productTab === 'products' && selectedProductCustomer" class="btn success" @click="openProduct()">新增产品</button>
                   <button v-if="canDeleteProducts && productTab === 'products'" class="btn" @click="toggleProductTrash()">产品垃圾站</button>
+                  <a v-if="canAdmin && productTab === 'products'" class="btn" href="/frontend-v2/shared-stock" target="_blank" rel="noopener">库存共用</a>
                   <button v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn" :disabled="productWorkbookImport.loading" @click="downloadProductWorkbookTemplate">下载样品 Excel</button>
                   <button v-if="canAdmin && productTab === 'products' && selectedProductCustomer" class="btn primary" :disabled="productWorkbookImport.loading" @click="productWorkbookImport.visible=!productWorkbookImport.visible">样品 Excel 导入</button>
                   <button v-if="canAdmin && productTab === 'products'" class="btn primary" :disabled="mixedSampleImport.loading" @click="mixedSampleImport.visible=!mixedSampleImport.visible">混合样品整理</button>

@@ -599,3 +599,36 @@ def recommend_box_type(
             crease_right_mm=None,
         )
     return result
+
+
+def order_snapshot_box_configuration(product) -> dict[str, object]:
+    """Normalize recognized types while preserving unknown historical values."""
+    from app.services.sheet_cutting_settings import product_yield_mode
+    if get_box_type_rule(product.box_style) is None:
+        splice_mode = (product.splice_mode or "single").strip().lower()
+        return {
+            "recognized": False,
+            "code": None,
+            "box_style": (product.box_style or "").strip() or None,
+            "splice_mode": splice_mode,
+            "pieces_per_box": (
+                product.pieces_per_box
+                if product.pieces_per_box is not None
+                else (2 if splice_mode == "double" else 1)
+            ),
+            "flap_mm": product.flap_mm,
+            "default_cutting_mode": (
+                product_yield_mode(product)
+            ),
+        }
+    configuration = normalize_box_configuration(
+        box_style=product.box_style,
+        splice_mode=product.splice_mode,
+        pieces_per_box=product.pieces_per_box,
+        flap_mm=product.flap_mm,
+        default_cutting_mode=product.default_cutting_mode,
+        crease_type=product.crease_type,
+    )
+    if getattr(product, "sheet_cutting_settings", None):
+        configuration["default_cutting_mode"] = product_yield_mode(product)
+    return configuration

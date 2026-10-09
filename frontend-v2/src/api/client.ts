@@ -47,7 +47,7 @@ export function onUnauthorized(handler: () => void) {
   unauthorizedHandler = handler
 }
 
-async function request<T>(path: string, init?: RequestInit, responseType: 'json' | 'blob' = 'json'): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit, responseType: 'json' | 'blob' = 'json'): Promise<T> {
   const writing = !['GET','HEAD'].includes(String(init?.method || 'GET').toUpperCase())
   return withRequestDeadline(async signal => {
   const response = await fetch(`${API_BASE}${path}`, {

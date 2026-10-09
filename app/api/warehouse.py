@@ -25202,7 +25202,7 @@ class FinishedIdentityConfirmation(BaseModel):
 
 class SharedFinishedPreview(BaseModel):
     product_ids: list[int] = Field(min_length=2, max_length=20)
-    lot_ids: list[int] = Field(min_length=1, max_length=100)
+    lot_ids: list[int] = Field(default_factory=list, max_length=100)
 
 
 class SharedFinishedConfirmation(SharedFinishedPreview):
@@ -25240,6 +25240,127 @@ def confirm_shared_finished(payload: SharedFinishedConfirmation, db: Session = D
     from app.services.shared_finished_stock import confirm
     try:
         result = confirm(db, actor=user, **payload.model_dump(exclude={"physical_match_confirmed"}))
+        db.commit()
+        return result
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except Exception:
+        db.rollback()
+        raise
+
+
+class SharedFinishedChange(BaseModel):
+    action: Literal["add_lots", "configure"]
+    expected_version: int = Field(ge=1)
+    lot_ids: list[int] = Field(default_factory=list, max_length=100)
+    enabled: bool | None = None
+    auto_enroll: bool | None = None
+
+
+class SharedFinishedChangeConfirmation(SharedFinishedChange):
+    preview_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operation_key: str = Field(min_length=1, max_length=100)
+    evidence: str = Field(min_length=1, max_length=1000)
+    physical_match_confirmed: Literal[True]
+
+
+def _require_shared_group_access(db, user, group_id, lot_ids=()):
+    from app.services.shared_finished_management import member_ids
+    from types import SimpleNamespace
+    _require_shared_confirmation_access(db, user,
+        SimpleNamespace(product_ids=member_ids(db, group_id), lot_ids=lot_ids))
+
+
+@router.get("/finished/shared-stock/groups")
+def list_shared_finished_groups(keyword: str = "", db: Session = Depends(get_db), user: User = Depends(admin_only)):
+    from app.models.shared_finished_stock import SharedFinishedGroup, SharedFinishedMember
+    from app.services.shared_finished_management import detail
+    query = select(SharedFinishedGroup.id).order_by(SharedFinishedGroup.id)
+    if keyword.strip():
+        product_groups = select(SharedFinishedMember.group_id).join(Product,
+            Product.id == SharedFinishedMember.product_id).where(
+                or_(Product.product_code.contains(keyword.strip(), autoescape=True),
+                    Product.product_name.contains(keyword.strip(), autoescape=True)))
+        query = query.where(SharedFinishedGroup.id.in_(product_groups))
+    items = []
+    for gid in db.scalars(query.limit(200)):
+        try:
+            _require_shared_group_access(db, user, gid)
+        except HTTPException as error:
+            if error.status_code == 403:
+                continue
+            raise
+        row = detail(db, gid)
+        row["batch_count"] = sum(lot["shared"] for lot in row["lots"])
+        row["pending_count"] = sum(not lot["shared"] for lot in row["lots"])
+        row.pop("lots")
+        items.append(row)
+    return dict(items=items)
+
+
+@router.get("/finished/shared-stock/products")
+def search_shared_products(keyword: str = "", db: Session = Depends(get_db), user: User = Depends(admin_only)):
+    if not keyword.strip():
+        return dict(items=[])
+    products = db.scalars(select(Product).where(Product.is_active.is_(True),
+        Product.deleted_at.is_(None), Product.purged_at.is_(None),
+        or_(Product.product_code.contains(keyword.strip(), autoescape=True),
+            Product.product_name.contains(keyword.strip(), autoescape=True))).order_by(Product.id).limit(50)).all()
+    items = []
+    for product in products:
+        try:
+            require_customer_access(product.customer_id, user, db)
+        except HTTPException as error:
+            if error.status_code == 403:
+                continue
+            raise
+        items.append(dict(id=product.id, customer_id=product.customer_id,
+            customer_name=product.customer.name if product.customer else "",
+            product_code=product.product_code, product_name=product.product_name))
+    return dict(items=items)
+
+
+@router.get("/finished/shared-stock/groups/{group_id}")
+def read_shared_finished_group(group_id: int, db: Session = Depends(get_db), user: User = Depends(admin_only)):
+    from app.services.shared_finished_management import detail
+    try:
+        _require_shared_group_access(db, user, group_id)
+        return detail(db, group_id)
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.get("/finished/shared-stock/product-lots/{product_id}")
+def read_shared_product_lots(product_id: int, db: Session = Depends(get_db), user: User = Depends(admin_only)):
+    from app.services.shared_finished_management import product_lots
+    from types import SimpleNamespace
+    _require_shared_confirmation_access(db, user, SimpleNamespace(product_ids=[product_id], lot_ids=[]))
+    items = product_lots(db, [product_id])
+    for lot in items:
+        _require_lot_customer_access(db, lot["lot_id"], user)
+    return dict(items=items)
+
+
+@router.post("/finished/shared-stock/groups/{group_id}/preview")
+def preview_shared_finished_change(group_id: int, payload: SharedFinishedChange,
+        db: Session = Depends(get_db), user: User = Depends(admin_only)):
+    from app.services.shared_finished_management import preview_change
+    try:
+        _require_shared_group_access(db, user, group_id, payload.lot_ids)
+        return preview_change(db, group_id=group_id, **payload.model_dump())
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.post("/finished/shared-stock/groups/{group_id}/confirm")
+def confirm_shared_finished_change(group_id: int, payload: SharedFinishedChangeConfirmation,
+        db: Session = Depends(get_db), user: User = Depends(admin_only)):
+    from app.services.shared_finished_management import change
+    try:
+        _require_shared_group_access(db, user, group_id, payload.lot_ids)
+        result = change(db, actor=user, group_id=group_id,
+            **payload.model_dump(exclude={"physical_match_confirmed"}))
         db.commit()
         return result
     except WarehouseInventoryError as error:

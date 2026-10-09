@@ -3304,6 +3304,9 @@ def _stock_completion_lot(
             idempotency_key=_stable_key(idempotency_prefix, "component-finished-reserve"),
             reserve_quantity=(completion.order_reserved_quantity if snapshot.snapshot_schema_version == 5 else None),
         )
+    if snapshot is None:
+        from app.services.shared_finished_management import enroll_production_receipt
+        enroll_production_receipt(db, lot, completion=completion, item=item, operator_id=operator_id)
     return lot
 
 

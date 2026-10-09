@@ -2851,6 +2851,8 @@ def manual_finished_in(
         from app.services.receipt_putaway import remember_stocktake
         remember_stocktake(db, lot, operator_id)
     db.flush()
+    from app.services.shared_finished_management import enroll_new_lot
+    enroll_new_lot(db, lot, operator_id=operator_id)
     return lot
 
 

@@ -126,3 +126,64 @@ def test_unrelated_product_cannot_take_confirmed_lot(shared_api):
     with factory() as db:
         assert db.get(InventoryLot,ids['shared_lot']).quantity_available==5
         assert list(db.scalars(select(InventoryReservation)))==[]
+
+
+def test_management_real_login_preview_save_readback_pause_and_scope(shared_api):
+    from app.models.shared_finished_stock import SharedFinishedGroup
+    app,factory,ids=shared_api
+    base='/api/warehouse/finished/shared-stock'
+    with TestClient(app) as client:
+        _login(client,'shared-admin')
+        request=dict(product_ids=[ids['shared_product'],ids['target']],lot_ids=[])
+        value=client.post(base+'/preview',json=request);assert value.status_code==200,value.text
+        saved=client.post(base+'/confirm',json={**request,'preview_hash':value.json()['preview_hash'],
+            'operation_key':'api-empty-group','physical_match_confirmed':True,'evidence':'虚构实物已核对'})
+        assert saved.status_code==200,saved.text
+        gid=saved.json()['group_id'];path=base+'/groups/'+str(gid)
+        assert client.get(base+'/groups').json()['items'][0]['group_id']==gid
+        view=client.get(path);assert view.status_code==200,view.text
+        assert view.json()['lots'][0]['eligible']
+        assert client.get(base+'/product-lots/'+str(ids['shared_product'])).status_code==200
+        args=dict(action='add_lots',expected_version=1,lot_ids=[ids['shared_lot']])
+        preview=client.post(path+'/preview',json=args);assert preview.status_code==200,preview.text
+        body={**args,'preview_hash':preview.json()['preview_hash'],'operation_key':'api-append',
+            'physical_match_confirmed':True,'evidence':'核对旧批次'}
+        assert client.post(path+'/confirm',json={**body,'physical_match_confirmed':False}).status_code==422
+        response=client.post(path+'/confirm',json=body);assert response.status_code==200,response.text
+        assert client.post(path+'/confirm',json=body).json()['replayed']
+        view=client.get(path).json();assert view['version']==2 and view['lots'][0]['shared']
+        args=dict(action='configure',expected_version=2,enabled=False,auto_enroll=True)
+        preview=client.post(path+'/preview',json=args);assert preview.status_code==200,preview.text
+        assert client.post(path+'/confirm',json={**args,'preview_hash':preview.json()['preview_hash'],
+            'operation_key':'api-pause','physical_match_confirmed':True,'evidence':'暂停核对'}).status_code==200
+        view=client.get(path).json();assert view['enabled'] is False and view['auto_enroll'] is True
+        _login(client,'preview-other-customer')
+        for endpoint in (base+'/groups',path,base+'/product-lots/'+str(ids['shared_product'])):
+            assert client.get(endpoint).status_code==403
+        assert client.post(path+'/preview',json=args).status_code==403
+        assert client.post(path+'/confirm',json=body).status_code==403
+    with factory() as db:
+        assert db.get(SharedFinishedGroup,gid).version==3
+
+
+def test_real_order_creation_captures_automatic_receipt_basis(shared_api):
+    from app.models.shared_finished_stock import SharedFinishedGroup,SharedFinishedOrderBasis
+    from app.services import shared_finished_management as management
+    from app.core.time_contract import beijing_today
+    app,factory,ids=shared_api
+    with TestClient(app) as client:
+        _login(client,'shared-admin');confirm(client,ids)
+        with factory() as db:
+            group=db.scalar(select(SharedFinishedGroup))
+            admin=db.scalar(select(User).where(User.username=='shared-admin'))
+            args=dict(group_id=group.id,action='configure',expected_version=group.version,enabled=True,auto_enroll=True)
+            value=management.preview_change(db,**args)
+            management.change(db,**args,preview_hash=value['preview_hash'],operation_key='enable-order-capture',
+                evidence='虚构实物共用',actor=admin);db.commit()
+        _login(client,'preview-other-customer')
+        item=_preview_item(line='new-auto-order',product_id=ids['target'],quantity=5,finished=[])
+        saved=client.post('/api/orders',json=dict(customer_id=ids['other_customer'],customer_po='FICTION-AUTO-PO',
+            idempotency_key='fixture-auto-order',order_date=beijing_today().isoformat(),items=[{**item,'unit_price':'9'}]))
+        assert saved.status_code==201,saved.text
+        with factory() as db:
+            assert db.get(SharedFinishedOrderBasis,saved.json()['items'][0]['id']) is not None

@@ -189,4 +189,3 @@ def test_unified_bom_legacy_cancel_cannot_leave_active_contract(composite_requis
         evidence={'status':response.status_code,'response':response.json(),'before':before,'after':after}
         assert response.status_code==409,evidence
         assert before==after
-

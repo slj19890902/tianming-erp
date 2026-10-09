@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.595"
-APP_VERSION_NAME = "手机产品图纸预览与收料可靠性"
+APP_VERSION = "v0.22.596"
+APP_VERSION_NAME = "采购撤销保护与手机取用恢复"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5693,3 +5693,17 @@ APP_VERIFICATION_STEPS = [
     "正常分批收料后核对成功条数、成品位置与库存；无需为验收重复收料或改动真实附件。",
 ]
 APP_CHANGELOG = [*(f"v0.22.595：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "旧订单取消先核对真实正式采购关系，避免订单退回待报料而采购仍然有效；统一BOM的间接来源同样受保护。",
+    "同订单分多张采购时，撤销其中一张保留其他有效采购仍需使用的库存预占，全部撤回后按原规则释放。",
+    "手机取用只有完整回执才显示成功；网络不明保留原请求，成功后列表刷新失败只重试查询。",
+    "手机待确认取用按账号隔离，可精确核对原流水；旧无账号记录先核对再明确继续，防止换账号误接手。",
+    "保留原数量、权限、客户范围、版本、审计和图纸；无迁移，不调整正式历史业务数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "正常使用报料撤销时核对对应采购单；若订单还有其他有效采购，原库存预占应保留。无需为验收撤销真实有效采购。",
+    "手机正常取用后核对成功数量与流水；遇到待确认记录，点击“核对上次取用”查看结果，勿另建重复取用。",
+    "取用成功但库存刷新失败时点击“刷新库存”；换账号后核对显示账号和待确认操作归属。",
+]
+APP_CHANGELOG = [*(f"v0.22.596：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

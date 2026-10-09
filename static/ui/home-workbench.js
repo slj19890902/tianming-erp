@@ -63,7 +63,7 @@
       homeCustomer:'', homeQuery:'', homeStockTab:'all', homeTaskMode:'all', homeWorkspace:'stock',
       homeStockPage:1, homeCustomerPage:1, homeTaskPage:1, homeExpandedPolicy:null, homeAnalyticsOpen:false,
       homeEntry:null, homeActionBusy:false, homeViewportHeight:global.innerHeight || 1080,
-      homeAvailableHeight:420, homeStockCustomer:null, homeWorkCustomer:null, homeExpandedTaskGroup:null, homeShowPriorityAll:false, homeSearchSummary:false, homeAttentionTab:'active', homePreferenceForm:null,
+      homeAvailableHeight:420, homeRowHeight:64, homeStockCustomer:null, homeWorkCustomer:null, homeExpandedTaskGroup:null, homeShowPriorityAll:false, homeSearchSummary:false, homeAttentionTab:'active', homePreferenceForm:null,
       homePreferenceBusy:false, homePreferenceError:'', homeAdvice:null, homeAdviceBusy:false,
     }; },
     computed: {
@@ -75,7 +75,7 @@
       homeStockGroups() {const visible=new Set(this.homeVisibleWarnings.map(r=>Number(r.customer_id)));return customerGroups(this.homeWarnings).filter(g=>visible.has(g.id));},
       homeStockCounts() { const groups=this.homeStockGroups;return {customers:groups.length,action:groups.reduce((n,g)=>n+g.action,0),arranged:groups.reduce((n,g)=>n+g.arranged,0),approval:groups.reduce((n,g)=>n+g.approval,0),all:groups.reduce((n,g)=>n+g.rows.length,0)}; },
       homeStockRows() { return this.homeVisibleWarnings.filter(r => this.homeStockTab==='all' || (this.homeStockTab==='action' ? actionable(r) : this.homeStockTab==='approval' ? stockState(r)==='approval' : !actionable(r)&&stockState(r)!=='approval')); },
-      homePageSize() { return listSize(this.homeAvailableHeight,this.isLargeUi?74:60); },
+      homePageSize() { return listSize(this.homeAvailableHeight,this.homeRowHeight); },
       homeCustomerSize() { return listSize(this.homeAvailableHeight,this.isLargeUi?70:55); },
       homeQueueGroups() {if(this.homeWorkspace==='stock')return this.homeStockGroups;const keys=this.homeWorkspace==='approval'?['approval']:workKeys[this.homeWorkspace]||[];const rows=this.homeFilteredTasks.filter(r=>keys.includes(r.key));const groups=new Map();for(const row of rows){const id=Number(row.customer_id||row.customer_ids?.[0]);if(!groups.has(id))groups.set(id,{id,label:row.customer_label,rows:[]});groups.get(id).rows.push(row);}return [...groups.values()].sort((a,b)=>b.rows.length-a.rows.length||a.id-b.id);},
       homeSelectedCustomer() {const chosen=Number(this.homeCustomer|| (this.homeWorkspace==='stock'?this.homeStockCustomer:this.homeWorkCustomer));return this.homeQueueGroups.some(g=>g.id===chosen)?chosen:this.homeQueueGroups[0]?.id||null;},
@@ -106,7 +106,8 @@
     beforeUnmount() {if(this._homeResize)global.removeEventListener('resize',this._homeResize);if(this._homeObserver)this._homeObserver.disconnect();},
     watch: {
       homeCustomer() { this.homeResetPages(); }, homeQuery() { this.homeResetPages(); },
-      homeStockTab() { this.homeStockPage=1; this.homeExpandedPolicy=null; },
+      homeStockTab() { this.homeStockPage=1; this.homeExpandedPolicy=null;this.$nextTick(()=>this.homeMeasure()); },
+      homeSelectedCustomer(){this.$nextTick(()=>this.homeMeasure());},
       homeWorkspace() {this.homeCustomerPage=1;this.homeTaskPage=1;this.homeTaskMode='all';this.homeExpandedTaskGroup=null;this.$nextTick(()=>this.homeMeasure());},
       'overview.as_of'(){this.$nextTick(()=>this.homeMeasure());},
       productWorkbenchOpen(){this.$nextTick(()=>this.homeMeasure());},
@@ -121,7 +122,17 @@
       homeChooseCustomer(id){if(this.homeWorkspace==='stock')this.homeStockCustomer=id;else this.homeWorkCustomer=id;this.homeStockPage=1;this.homeTaskPage=1;this.homeExpandedPolicy=null;this.homeExpandedTaskGroup=null;this.homeAdvice=null;},
       homeChooseStockCustomer(id){this.homeChooseCustomer(id);},
       homeFocusPriority(group){if(group.rows.length===1)return this.homeOpenTask(group.rows[0]);this.homeWorkspace=group.kind==='approval'?'approval':workKeys.production.includes(group.kind)?'production':workKeys.finance.includes(group.kind)?'finance':'delivery';this.homeAttentionTab='active';this.$nextTick(()=>{this.homeWorkCustomer=group.customer_id;this.homeExpandedTaskGroup=group.key;this.homeTaskPage=1;});},
-      homeMeasure(){const host=this.$el?.querySelector?.('.home-main');if(!host)return;const top=host.getBoundingClientRect().top;const bottom=global.innerHeight||1080;this.homeAvailableHeight=Math.max(150,bottom-top-115);},
+      homeMeasure(){
+        const host=this.$el?.querySelector?.('.home-main');if(!host)return;
+        const detail=host.querySelector('.home-detail');if(!detail)return;
+        const heading=detail.querySelector('.home-stock-head,.home-attention-tabs,.home-panel-heading');
+        const row=detail.querySelector('.home-stock-row,.home-task-group');
+        const footer=detail.querySelector('.home-pagination');
+        const rowTop=heading?.getBoundingClientRect().bottom||detail.getBoundingClientRect().top;
+        const reserve=(footer?.getBoundingClientRect().height||34)+12;
+        this.homeAvailableHeight=Math.max(0,(global.innerHeight||1080)-rowTop-reserve);
+        this.homeRowHeight=Math.max(48,Math.ceil(row?.getBoundingClientRect().height||(this.isLargeUi?72:62)));
+      },
       async homeLoadAdvice(row){
         const request={actor:this.user?.id,generation:this.authGeneration,policy:row.policy_id};
         this._homeAdviceRequest=request;this.homeAdviceBusy=true;this.homeAdvice={policy_id:row.policy_id};
@@ -278,7 +289,7 @@
         <button v-if="vm.homeFinanceCard" :class="{active:vm.homeWorkspace==='finance'}" @click="vm.homeWorkspace='finance'"><span>已开票未收款 · 全部账期</span><strong>¥{{vm.homeNumber(vm.homeFinanceCard.amount)}}<small>{{vm.homeFinanceCard.count}}个结算对象</small></strong></button>
       </nav>
       <section class="home-priority" aria-label="今日优先"><strong>今日优先</strong><span v-if="!vm.homePriorityTotal">暂无明确今日安排或待审批事项</span><span v-else>共{{vm.homePriorityTotal}}组</span><div class="home-priority-items"><article v-for="g in vm.homePriority" :key="g.key"><b>{{g.customer_label}}</b><span>{{g.kind==='approval'?'待审批':'今日交期'}} · {{g.order_label || g.rows[0].type}} · {{g.rows.length}}项</span><button class="home-link" @click="vm.homeFocusPriority(g)">{{g.rows.length>1?'查看明细':g.action_text}}</button></article></div><button v-if="vm.homePriorityTotal>3" class="home-link" @click="vm.homeShowPriorityAll=!vm.homeShowPriorityAll">{{vm.homeShowPriorityAll?'收起':'查看全部'}}</button></section>
-      <nav class="home-work-tabs" aria-label="工作区"><button v-if="vm.homeCanStock" :class="{active:vm.homeWorkspace==='stock'}" @click="vm.homeWorkspace='stock'">库存预警</button><button :class="{active:vm.homeWorkspace==='delivery'}" @click="vm.homeWorkspace='delivery'">交付安排</button><button :class="{active:vm.homeWorkspace==='production'}" @click="vm.homeWorkspace='production'">报料与生产</button><button v-if="vm.homeFinanceCard" :class="{active:vm.homeWorkspace==='finance'}" @click="vm.homeWorkspace='finance'">财务跟进</button><button v-if="vm.homeData.can_view_approvals" :class="{active:vm.homeWorkspace==='approval'}" @click="vm.homeWorkspace='approval'">审批</button></nav>
+      <nav class="home-work-tabs" aria-label="工作区"><button v-if="vm.homeCanStock" :class="{active:vm.homeWorkspace==='stock'}" @click="vm.homeWorkspace='stock'">库存预警</button><button :class="{active:vm.homeWorkspace==='delivery'}" @click="vm.homeWorkspace='delivery'">交付安排</button><button :class="{active:vm.homeWorkspace==='production'}" @click="vm.homeWorkspace='production'">报料与生产</button><button v-if="vm.homeFinanceCard" :class="{active:vm.homeWorkspace==='finance'}" @click="vm.homeWorkspace='finance'">财务跟进</button><button v-if="vm.homeData.can_view_approvals" :class="{active:vm.homeWorkspace==='approval'}" @click="vm.homeWorkspace='approval'">审批</button><button class="home-progress-toggle" :aria-expanded="vm.homeAnalyticsOpen" @click="vm.homeAnalyticsOpen=!vm.homeAnalyticsOpen">{{vm.homeAnalyticsOpen?'收起业务进度':'业务进度'}}</button></nav>
       <div class="home-columns home-main" :class="{'home-no-stock':!vm.homeCanStock}">
         <section v-if="vm.homeWorkspace==='stock' && vm.homeCanStock" class="home-panel home-stock" aria-labelledby="home-stock-title">
           <div class="home-panel-heading"><h2 id="home-stock-title">库存预警 <span class="home-badge amber">{{vm.homeStockCounts.action}}款待处理</span></h2><button class="home-link" @click="vm.homeStockTab='all'">全部预警</button></div>
@@ -289,7 +300,7 @@
               <div><strong>{{g.label}}</strong><small>{{g.rows.length}} 款预警</small></div><span class="amber">未安排{{g.action}}</span><span>已安排{{g.arranged}}</span><span>待审批{{g.approval}}</span><button class="home-button" @click="vm.homeChooseStockCustomer(g.id)">查看产品 ›</button>
             </article>
             <div v-if="!vm.homeStockGroupPage.total" class="home-empty">当前范围暂无库存预警</div>
-            <footer class="home-pagination"><span>共 {{vm.homeStockGroupPage.total}} 家客户 · {{vm.homeStockGroupPage.page}} / {{vm.homeStockGroupPage.pages}}</span><div><button :disabled="vm.homeStockGroupPage.page<=1" @click="vm.homeCustomerPage--">上一页</button><button :disabled="vm.homeStockGroupPage.page>=vm.homeStockGroupPage.pages" @click="vm.homeCustomerPage++">下一页</button></div></footer>
+            <footer v-if="vm.homeStockGroupPage.pages>1" class="home-pagination"><span>共 {{vm.homeStockGroupPage.total}} 家客户 · {{vm.homeStockGroupPage.page}} / {{vm.homeStockGroupPage.pages}}</span><div><button :disabled="vm.homeStockGroupPage.page<=1" @click="vm.homeCustomerPage--">上一页</button><button :disabled="vm.homeStockGroupPage.page>=vm.homeStockGroupPage.pages" @click="vm.homeCustomerPage++">下一页</button></div></footer>
           </div>
           <div class="home-detail">
           <div class="home-stock-back"><strong>{{vm.homeStockGroups.find(g=>g.id===vm.homeSelectedCustomer)?.label}}</strong></div>
@@ -298,7 +309,7 @@
           <article v-for="r in vm.homeStocksPage.rows" :key="r.policy_id" class="home-stock-item">
             <div class="home-stock-row"><div class="home-product"><span class="home-customer" :title="r.customer_name">{{r.customer_label || r.customer_name}}</span><strong>{{r.product_code || '无编码'}}</strong><span>{{r.product_name}}</span></div>
               <div class="home-stock-qty"><div><strong>{{vm.homeNumber(r.physical_unconsumed_quantity)}}</strong><span> {{vm.homeStockUnit(r)}}</span></div><small>实存 · 可用 {{vm.homeNumber(r.available_quantity)}}<template v-if="r.is_virtual_composite_parent">（含可配套）</template></small></div>
-              <div class="home-stock-status"><strong>预警 {{vm.homeNumber(r.warning_quantity)}} · 目标 {{vm.homeNumber(r.target_quantity)}} {{vm.homeStockUnit(r)}}</strong><span>{{vm.homeStockHeading(r)}} · {{vm.homeStockDetail(r)}}</span></div>
+              <div class="home-stock-status"><strong>预警 {{vm.homeNumber(r.warning_quantity)}} · 目标 {{vm.homeNumber(r.target_quantity)}} {{vm.homeStockUnit(r)}}</strong><span>{{vm.homeState(r)==='new'?vm.homeStockDetail(r):vm.homeStockHeading(r)}}<template v-if="vm.homeState(r)==='missing'"> · {{vm.homeStockDetail(r)}}</template></span></div>
               <div class="home-row-actions"><button class="home-button" :class="{primary:vm.homeState(r)==='new'}" :disabled="vm.homeActionBusy || !!vm.overviewError" @click="vm.homeOpenStock(r)">{{vm.homeStockAction(r)}}</button><button class="home-link" :aria-expanded="vm.homeExpandedPolicy===r.policy_id" @click="vm.homeExpandedPolicy=vm.homeExpandedPolicy===r.policy_id?null:r.policy_id">{{vm.homeExpandedPolicy===r.policy_id?'收起明细':'库存明细'}}</button></div>
             </div>
             <div v-if="vm.homeExpandedPolicy===r.policy_id" class="home-stock-expanded">
@@ -345,7 +356,7 @@
           </div>
         </section>
       </div>
-      <section class="home-panel home-progress"><div class="home-panel-heading"><h2>业务进度</h2><button v-if="vm.canViewDeliveryMargin" class="home-link" :aria-expanded="vm.homeAnalyticsOpen" @click="vm.homeAnalyticsOpen=!vm.homeAnalyticsOpen">{{vm.homeAnalyticsOpen?'收起财务分析':'财务分析'}}</button></div><nav aria-label="业务进度"><button v-for="c in vm.homeStages" :key="c.key" :class="{active:vm.homeTaskMode===c.key}" @click="vm.homeSelectMetric(c.key)">{{c.title}} <strong>{{c.count}}</strong><small>{{c.count_unit}}</small><span v-if="c.key==='pending_payment'" class="home-stage-amount">¥{{vm.homeNumber(c.amount)}}</span></button><button v-if="vm.dashboardRequisitionHoldSummary.total" @click="vm.openWaitingRequisitionFromDashboard">等候报料 <strong>{{vm.dashboardRequisitionHoldSummary.total}}</strong>条</button></nav></section>
+      <section v-if="vm.homeAnalyticsOpen" class="home-panel home-progress"><div class="home-panel-heading"><h2>业务进度</h2></div><nav aria-label="业务进度"><button v-for="c in vm.homeStages" :key="c.key" :class="{active:vm.homeTaskMode===c.key}" @click="vm.homeSelectMetric(c.key)">{{c.title}} <strong>{{c.count}}</strong><small>{{c.count_unit}}</small><span v-if="c.key==='pending_payment'" class="home-stage-amount">¥{{vm.homeNumber(c.amount)}}</span></button><button v-if="vm.dashboardRequisitionHoldSummary.total" @click="vm.openWaitingRequisitionFromDashboard">等候报料 <strong>{{vm.dashboardRequisitionHoldSummary.total}}</strong>条</button></nav></section>
       <div v-if="vm.deliveryBacklogs.items.length || vm.deliveryBacklogs.error" class="home-backlog"><button class="home-link" @click="vm.openDeliveryBacklogs">待补送与历史</button><span>{{vm.deliveryBacklogs.error || '有待补送事项，请核对交付安排'}}</span></div>
     </template>
   </section>`;

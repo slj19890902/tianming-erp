@@ -11404,7 +11404,8 @@ def get_delivery_print_data(
             detail="送货单已作废，不能打印",
         )
     customer = db.get(Customer, delivery.customer_id)
-    company = db.scalar(select(CompanyConfig).where(CompanyConfig.id == 1))
+    from app.services.company_profiles import original_company
+    company = original_company(db)
     frozen_print_header = delivery.print_snapshot_version == 1
     try:
         print_template = decode_delivery_print_template_snapshot(

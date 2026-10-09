@@ -198,6 +198,13 @@ def _login(client: TestClient, role: str = "admin") -> None:
     assert resp.status_code == 200
 
 
+def _save_company(client, payload):
+    current = client.get("/api/system/company")
+    state = current.json() if current.status_code == 200 else {}
+    return client.put("/api/system/companies/1", json=dict(payload,
+        expected_version=state.get("version", 0), selection_version=state.get("selection_version", 0)))
+
+
 # ─────────────────────────────────────────────────────────────
 # 公司信息 API
 # ─────────────────────────────────────────────────────────────
@@ -249,9 +256,7 @@ def test_put_company_rejects_blank_company_name(company_app):
     app, _ = company_app
     with TestClient(app) as client:
         _login(client, "admin")
-        resp = client.put(
-            "/api/system/company",
-            json={"company_name": "   "},
+        resp = _save_company(client, {"company_name": "   "},
         )
     assert resp.status_code == 422
 
@@ -260,9 +265,7 @@ def test_put_company_requires_admin(company_app):
     app, _ = company_app
     with TestClient(app) as client:
         _login(client, "finance")
-        resp = client.put(
-            "/api/system/company",
-            json={"company_name": "苏州天明包装有限公司"},
+        resp = _save_company(client, {"company_name": "苏州天明包装有限公司"},
         )
     assert resp.status_code == 403
 
@@ -283,7 +286,7 @@ def test_put_company_saves_all_fields(company_app):
     }
     with TestClient(app) as client:
         _login(client, "admin")
-        resp = client.put("/api/system/company", json=payload)
+        resp = _save_company(client, payload)
     assert resp.status_code == 200
     data = resp.json()
     assert data["company_name"] == "苏州天明包装有限公司"
@@ -297,9 +300,7 @@ def test_put_company_persists_and_get_reflects_update(company_app):
     app, _ = company_app
     with TestClient(app) as client:
         _login(client, "admin")
-        client.put(
-            "/api/system/company",
-            json={"company_name": "苏州天明包装有限公司", "address": "苏州市相城区"},
+        _save_company(client, {"company_name": "苏州天明包装有限公司", "address": "苏州市相城区"},
         )
         resp = client.get("/api/system/company")
     assert resp.json()["company_name"] == "苏州天明包装有限公司"
@@ -310,9 +311,7 @@ def test_put_company_strips_whitespace(company_app):
     app, _ = company_app
     with TestClient(app) as client:
         _login(client, "admin")
-        resp = client.put(
-            "/api/system/company",
-            json={"company_name": "  苏州天明  ", "phone": "  0512-123  "},
+        resp = _save_company(client, {"company_name": "  苏州天明  ", "phone": "  0512-123  "},
         )
     assert resp.json()["company_name"] == "苏州天明"
     assert resp.json()["phone"] == "0512-123"
@@ -323,9 +322,7 @@ def test_put_company_writes_audit_log(company_app):
     app, session_factory = company_app
     with TestClient(app) as client:
         _login(client, "admin")
-        client.put(
-            "/api/system/company",
-            json={"company_name": "天明包装"},
+        _save_company(client, {"company_name": "天明包装"},
         )
     with session_factory() as session:
         log = (
@@ -358,9 +355,7 @@ def test_statement_excel_row3_contains_company_name(company_app):
     app, _ = company_app
     with TestClient(app) as client:
         _login(client, "admin")
-        client.put(
-            "/api/system/company",
-            json={
+        _save_company(client, {
                 "company_name": "苏州天明包装有限公司",
                 "address": "苏州市相城区渭塘镇",
                 "tax_number": "9132059412345678XY",
@@ -381,7 +376,7 @@ def test_statement_excel_header_row_is_row5(company_app):
     app, _ = company_app
     with TestClient(app) as client:
         _login(client, "admin")
-        client.put("/api/system/company", json={"company_name": "天明"})
+        _save_company(client, {"company_name": "天明"})
         _login(client, "finance")
         resp = client.get("/api/finance/statements/1/export")
     wb = load_workbook(BytesIO(resp.content))
@@ -416,24 +411,18 @@ def test_print_endpoint_sender_empty_when_no_company(company_app):
     assert resp.json()["sender"]["company_name"] == ""
 
 
-def test_print_endpoint_sender_reflects_company_info(company_app):
-    """设置公司信息后打印接口返回最新数据。"""
-    app, _ = company_app
+def test_legacy_print_header_does_not_follow_company_switch(company_app):
+    """An old delivery without a frozen header uses the preserved original issuer."""
+    from app.models.company_config import CompanyConfig
+    app, factory = company_app
+    with factory() as db:
+        db.add(CompanyConfig(id=1, company_name="虚构原公司")); db.commit()
     with TestClient(app) as client:
         _login(client, "admin")
-        client.put(
-            "/api/system/company",
-            json={
-                "company_name": "苏州天明包装有限公司",
-                "tax_number": "9132059412345678XY",
-                "bank_name": "工商银行苏州支行",
-            },
-        )
+        result = _save_company(client, {"company_name":"虚构新公司"})
+        assert result.status_code == 200, result.text
         resp = client.get("/api/deliveries/1/print")
-    sender = resp.json()["sender"]
-    assert sender["company_name"] == "苏州天明包装有限公司"
-    assert sender["tax_number"] == "9132059412345678XY"
-    assert sender["bank_name"] == "工商银行苏州支行"
+    assert resp.json()["sender"]["company_name"] == "虚构原公司"
 
 
 def test_delivery_print_page_uses_sender_from_api():

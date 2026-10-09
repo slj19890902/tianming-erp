@@ -33,6 +33,8 @@ def fin001_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from app.models.product import Product
     from app.models.user import User
 
+    (tmp_path / "exports").mkdir()
+    (tmp_path / "attachments").mkdir()
     monkeypatch.setenv("ERP_INVOICE_EXPORT_DIR", str(tmp_path / "exports"))
     monkeypatch.setenv("ERP_INVOICE_ATTACHMENT_DIR", str(tmp_path / "attachments"))
     engine = create_sqlite_engine(tmp_path / "fin001.sqlite3")

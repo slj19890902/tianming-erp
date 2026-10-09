@@ -8,7 +8,17 @@ import pytest
 from PIL import Image, ImageDraw
 from sqlalchemy import select, func
 
-from tests.test_p1_35a_contract_pdf import contract_pdf_app, _login, _pdf_text
+from tests.test_p1_35a_contract_pdf import contract_pdf_app as original_contract_pdf_app, _login, _pdf_text
+
+
+@pytest.fixture
+def contract_pdf_app(original_contract_pdf_app):
+    from app.api.companies import router as companies
+    from app.api.contract_seals import management_router
+    client, factory, ids = original_contract_pdf_app
+    client.app.include_router(companies, prefix="/api/system")
+    client.app.include_router(management_router, prefix="/api/system/company/seal")
+    return client, factory, ids
 
 
 def _test_image():
@@ -21,13 +31,13 @@ def _test_image():
 
 
 def _upload(client, version=0):
-    return client.post("/api/contracts/seal/settings", json=dict(expected_version=version,
+    return client.post("/api/system/company/seal/settings?company_id=1", json=dict(company_version=0, expected_version=version,
         image_base64=base64.b64encode(_test_image()).decode(), size_mm=40))
 
 
 def _export(client, cid, version=3, seal_version=1, key="seal-test-operation-001"):
     return client.post(f"/api/contracts/seal/{cid}/pdf", json=dict(expected_version=version,
-        seal_version=seal_version, operation_key=key))
+        seal_version=seal_version, operation_key=key, company_id=1, company_version=0))
 
 
 def test_admin_opt_in_export_and_replay(contract_pdf_app):
@@ -35,12 +45,12 @@ def test_admin_opt_in_export_and_replay(contract_pdf_app):
     from app.models.customer_contract import CustomerContract
     client, factory, ids = contract_pdf_app
     _login(client, "p135a-admin")
-    assert client.get("/api/contracts/seal/settings").json()["available"] is False
+    assert client.get("/api/system/company/seal/settings?company_id=1").json()["available"] is False
     assert _export(client, ids["own"]).status_code == 409
     uploaded = _upload(client)
     assert uploaded.status_code == 200, uploaded.text
     assert uploaded.json()["version"] == 1
-    image = client.get("/api/contracts/seal/image?version=1")
+    image = client.get("/api/system/company/seal/image?company_id=1&version=1")
     assert image.status_code == 200 and "no-store" in image.headers["cache-control"]
     before = client.get(f'/api/contracts/{ids["own"]}').json()
     unsigned = client.get(f'/api/contracts/{ids["own"]}/pdf?expected_version=3')
@@ -72,10 +82,10 @@ def test_non_admin_cannot_read_asset_manage_or_export(contract_pdf_app, username
     client, _, ids = contract_pdf_app
     _login(client, "p135a-admin"); assert _upload(client).status_code == 200
     _login(client, username)
-    assert client.get("/api/contracts/seal/settings").status_code == 403
-    assert client.get("/api/contracts/seal/image?version=1").status_code == 403
+    assert client.get("/api/system/company/seal/settings?company_id=1").status_code == 403
+    assert client.get("/api/system/company/seal/image?company_id=1&version=1").status_code == 403
     assert _upload(client, 1).status_code == 403
-    assert client.post("/api/contracts/seal/disable", json={"expected_version": 1}).status_code == 403
+    assert client.post("/api/system/company/seal/disable?company_id=1", json={"expected_version": 1,"company_version":0}).status_code == 403
     assert _export(client, ids["own"]).status_code == 403
 
 
@@ -92,8 +102,8 @@ def test_versions_disable_and_long_document(contract_pdf_app):
     assert len(reader.pages[-1].images) == 1
     assert all(len(page.images) == 0 for page in reader.pages[:-1])
     assert "签署日期" in pages[-1] and "乙方（需方）" in pages[-1]
-    assert client.post("/api/contracts/seal/disable", json={"expected_version":1}).status_code == 200
-    assert client.get("/api/contracts/seal/image?version=1").status_code == 409
+    assert client.post("/api/system/company/seal/disable?company_id=1", json={"expected_version":1,"company_version":0}).status_code == 200
+    assert client.get("/api/system/company/seal/image?company_id=1&version=1").status_code == 409
     assert _export(client, ids["own"], seal_version=2, key="seal-test-after-disable").status_code == 409
     assert _export(client, ids["long"], version=5).content == result.content
     if os.getenv("ERP_SEAL_EVIDENCE"):
@@ -104,10 +114,10 @@ def test_versions_disable_and_long_document(contract_pdf_app):
 def test_invalid_upload_does_not_change_state(contract_pdf_app, data):
     client, _, _ = contract_pdf_app
     _login(client, "p135a-admin")
-    response = client.post("/api/contracts/seal/settings", json=dict(expected_version=0,
+    response = client.post("/api/system/company/seal/settings?company_id=1", json=dict(company_version=0, expected_version=0,
         image_base64=base64.b64encode(data).decode(), size_mm=40))
     assert response.status_code == 422
-    assert client.get("/api/contracts/seal/settings").json()["version"] == 0
+    assert client.get("/api/system/company/seal/settings?company_id=1").json()["version"] == 0
 
 
 def test_audit_failure_rolls_back_asset_and_pdf(contract_pdf_app, monkeypatch):

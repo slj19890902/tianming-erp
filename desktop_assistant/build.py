@@ -150,7 +150,8 @@ def main():
                             'reader_capabilities': {'order_inventory_v1': 1, 'quotation_write_v1': 1,
                                                     'shared_finished_v1': 1,
                                                     'shared_finished_management_v1': 1,
-                                                    'contract_seal_v1': 1},
+                                                    'contract_seal_v1': 1,
+                                                    'company_profiles_v1': 1},
                             'offline_ocr_models': models}, key)
     if args.package_only:
         write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,

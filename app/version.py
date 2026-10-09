@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.589"
-APP_VERSION_NAME = "产品单位及待完善工艺编辑保护"
+APP_VERSION = "v0.22.590"
+APP_VERSION_NAME = "公司抬头与独立电子章管理"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5620,3 +5620,15 @@ APP_VERIFICATION_STEPS = [
     "在常用箱核对片、只、套及待完善提示。缺结合工艺时修改模切并保存，重新打开核对模切及单位。",
 ]
 APP_CHANGELOG = [*(f"v0.22.589：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "电子章移至系统管理→账号与公司→公司信息，各公司独立管理一枚当前电子章，所有客户合同使用对应供方公司的章。",
+    "支持手动新增公司抬头和设为开单公司；新增公司默认无章，更改公司名称后原章停用。",
+    "新合同保存供方抬头，新送货单沿用原抬头冻结；切换公司不改历史单据和已盖章PDF。开票销方继续按原规则手动选择。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新系统管理→账号与公司，在公司信息点击管理电子章，确认原天明公司章保留；客户合同页只保留盖章导出。",
+    "需要其他公司时新增抬头，分别上传对应章图并选择开单公司；开票通过管理开票抬头维护和选择销方。",
+    "查看旧合同及送货单抬头保持原样；合同默认未盖章，管理员可另选导出盖章PDF。",
+]
+APP_CHANGELOG = [*(f"v0.22.590：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

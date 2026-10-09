@@ -3595,7 +3595,6 @@
                 <div class="toolbar-group">
                   <button class="btn" @click="go('customers')">返回客户管理</button>
                   <button v-if="canEditContracts" class="btn primary" :disabled="loading || contractActionBusy()" @click="newContractDraft">新建合同</button>
-                  <button v-if="user.role==='admin'" class="btn" :disabled="contractSealBusy" @click="openContractSeal">管理电子章</button>
                 </div>
                 <div class="toolbar-group" v-if="contractCustomer">
                   <button class="btn" :disabled="loading || contractActionBusy() || !contractEditable" @click="saveContractDraft">{{ loading ? '保存中…' : '保存合同草稿' }}</button>
@@ -3607,24 +3606,10 @@
                   <button v-if="contractDraft.id && contractDraft.status === 'draft' && canEditContracts" class="btn danger" :disabled="loading || contractActionBusy()" @click="deleteContract(contractDraft)">{{ contractActionPending('delete',contractDraft.id) ? '删除中…' : '删除草稿' }}</button>
                 </div>
               </div>
-              <div v-if="user.role==='admin' && contractSealOpen" class="panel" style="margin-bottom:14px" aria-label="电子章管理">
-                <h3>合同电子章</h3>
-                <p>仅管理员可使用，每次导出自行选择是否盖章。章图用于甲方盖章区。</p>
-                <p v-if="contractSealError" role="alert">{{ contractSealError }}</p>
-                <template v-if="contractSealSettings">
-                  <img v-if="contractSealSettings.available" :src="`/api/contracts/seal/image?version=${contractSealSettings.version}`" alt="当前合同电子章" style="max-width:160px;max-height:160px;background:#fff" />
-                  <p v-else>当前未启用电子章，普通未盖章 PDF 可正常导出。</p>
-                  <div class="toolbar-group">
-                    <label>章图高度（毫米）<input class="input" type="number" min="20" max="50" v-model.number="contractSealSize" style="width:85px" :disabled="contractSealBusy" /></label>
-                    <label class="btn">{{ contractSealBusy ? '保存中…' : '上传章图（PNG/JPEG）' }}<input type="file" accept="image/png,image/jpeg" :disabled="contractSealBusy" @change="uploadContractSeal($event)" style="display:none" /></label>
-                    <button v-if="contractSealSettings.available" class="btn danger" :disabled="contractSealBusy" @click="disableContractSeal">停用电子章</button>
-                  </div>
-                </template>
-                <button class="btn" :disabled="contractSealBusy" @click="contractSealOpen=false">关闭</button>
-              </div>
               <div v-if="contractCustomer" class="panel contract-panel" style="margin-bottom:14px;overflow:visible">
                 <div class="contract-header-grid">
                   <div class="field"><label>客户</label><div><strong>{{ contractCustomer.name }}</strong></div></div>
+                  <div class="field"><label>供方公司</label><span>{{ contractDraft.issuer_company_name || '保存时使用当前开单公司' }}</span></div>
                   <div class="field"><label>客户单号 / PO</label><input class="input" v-model.trim="contractDraft.customer_po" :placeholder="contractDraft.contract_no || '保存后自动使用天明合同号'" :disabled="!contractEditable" /></div>
                   <div class="field"><label>合同日期</label><input class="input" type="date" v-model="contractDraft.contract_date" :disabled="!contractEditable" @change="onContractDateChanged" /></div>
                   <div class="field"><label>交期</label><input class="input" type="date" v-model="contractDraft.delivery_date" :disabled="!contractEditable" @input="markContractDeliveryDateManual" /></div>
@@ -6014,26 +5999,52 @@
               <!-- 公司信息 -->
               <div class="section-title" style="margin-top:16px">公司信息</div>
               <div class="panel" style="margin-bottom:10px;padding:14px 18px">
+                <div class="toolbar-group" style="margin-bottom:12px">
+                  <label>公司抬头 <select class="select" v-model.number="companySelectedId" :disabled="companyBusy || contractSealBusy" @change="contractSealOpen=false;contractSealSettings=null">
+                    <option v-for="row in companyConfig.profiles || []" :key="row.id" :value="row.id">{{ row.company_name || '（未设置）' }}{{ row.id===companyConfig.id?' · 当前开单公司':'' }}</option>
+                  </select></label>
+                  <button class="btn small" :disabled="companyBusy || contractSealBusy" @click="openCompanyModal(true)">新增公司抬头</button>
+                  <button v-if="companySelectedId!==companyConfig.id" class="btn small primary" :disabled="companyBusy || contractSealBusy" @click="activateCompany">设为开单公司</button>
+                </div>
+                <p class="muted">当前开单公司：{{ companyConfig.company_name || '（未设置）' }}。切换后用于新合同、新送货单；历史单据保留原抬头。开票时仍按所选销方开具。</p>
                 <div style="display:flex;flex-wrap:wrap;gap:8px 32px;font-size:14px;align-items:baseline">
-                  <span><strong>公司名称：</strong>{{ companyConfig.company_name || '（未设置）' }}</span>
-                  <span v-if="companyConfig.short_name"><strong>简称：</strong>{{ companyConfig.short_name }}</span>
-                  <span v-if="companyConfig.tax_number"><strong>税号：</strong>{{ companyConfig.tax_number }}</span>
-                  <span v-if="companyConfig.phone"><strong>电话：</strong>{{ companyConfig.phone }}</span>
-                  <span v-if="companyConfig.address" style="flex-basis:100%"><strong>地址：</strong>{{ companyConfig.address }}</span>
-                  <span v-if="companyConfig.bank_name"><strong>开户行：</strong>{{ companyConfig.bank_name }}</span>
-                  <span v-if="companyConfig.bank_account"><strong>账号：</strong>{{ companyConfig.bank_account }}</span>
+                  <span><strong>公司名称：</strong>{{ selectedCompanyRecord.company_name || '（未设置）' }}</span>
+                  <span v-if="selectedCompanyRecord.short_name"><strong>简称：</strong>{{ selectedCompanyRecord.short_name }}</span>
+                  <span v-if="selectedCompanyRecord.tax_number"><strong>税号：</strong>{{ selectedCompanyRecord.tax_number }}</span>
+                  <span v-if="selectedCompanyRecord.phone"><strong>电话：</strong>{{ selectedCompanyRecord.phone }}</span>
+                  <span v-if="selectedCompanyRecord.address" style="flex-basis:100%"><strong>地址：</strong>{{ selectedCompanyRecord.address }}</span>
+                  <span v-if="selectedCompanyRecord.bank_name"><strong>开户行：</strong>{{ selectedCompanyRecord.bank_name }}</span>
+                  <span v-if="selectedCompanyRecord.bank_account"><strong>账号：</strong>{{ selectedCompanyRecord.bank_account }}</span>
                 </div>
                 <div style="margin-top:10px">
-                  <button v-if="user.role==='admin'" class="btn small" @click="openCompanyModal">编辑公司信息</button>
+                  <button v-if="user.role==='admin'" class="btn small" @click="openCompanyModal(false)" :disabled="companyBusy || contractSealBusy">编辑公司信息</button>
+                  <button class="btn small" :disabled="companyBusy || contractSealBusy || !selectedCompanyRecord.company_name" @click="openContractSeal">管理电子章</button>
+                  <button class="btn small" :disabled="companyBusy" @click="openInvoiceSellers">管理开票抬头</button>
                 </div>
               </div>
 
+              <div v-if="user.role==='admin' && contractSealOpen" class="panel" style="margin-bottom:14px" aria-label="电子章管理">
+                <h3>{{ contractSealSettings?.company_name || selectedCompanyRecord.company_name }} · 公司电子章</h3>
+                <p>此章属于该公司，所有客户共用。仅管理员可维护和选择盖章导出，默认不盖章。</p>
+                <p v-if="contractSealError" role="alert">{{ contractSealError }}</p>
+                <template v-if="contractSealSettings">
+                  <img v-if="contractSealSettings.available" :src="`/api/system/company/seal/image?company_id=${contractSealSettings.company_id}&version=${contractSealSettings.version}`" alt="当前合同电子章" style="max-width:160px;max-height:160px;background:#fff" />
+                  <p v-else>当前未启用电子章，普通未盖章 PDF 可正常导出。</p>
+                  <div class="toolbar-group">
+                    <label>章图高度（毫米）<input class="input" type="number" min="20" max="50" v-model.number="contractSealSize" style="width:85px" :disabled="contractSealBusy" /></label>
+                    <label class="btn">{{ contractSealBusy ? '保存中…' : '上传章图（PNG/JPEG）' }}<input type="file" accept="image/png,image/jpeg" :disabled="contractSealBusy" @change="uploadContractSeal($event)" style="display:none" /></label>
+                    <button v-if="contractSealSettings.available" class="btn danger" :disabled="contractSealBusy" @click="disableContractSeal">停用电子章</button>
+                  </div>
+                </template>
+                <button class="btn" :disabled="contractSealBusy" @click="contractSealOpen=false">关闭</button>
+              </div>
               <!-- 公司信息编辑弹层 -->
               <div v-if="showCompanyModal" class="modal-mask" @click.self="showCompanyModal=false">
                 <div class="modal" style="max-width:560px">
-                  <div class="modal-head"><strong>编辑公司信息</strong><button class="btn small" @click="showCompanyModal=false">关闭</button></div>
+                  <div class="modal-head"><strong>{{ companyForm.id ? '编辑公司信息' : '新增公司抬头' }}</strong><button class="btn small" @click="showCompanyModal=false">关闭</button></div>
                   <div class="modal-body">
                     <div class="form-row"><label>公司名称 *</label><input v-model="companyForm.company_name" class="input" placeholder="苏州天明包装有限公司" style="width:100%"/></div>
+                    <p class="muted">不同公司请用“新增公司抬头”分别保存；更改公司名称后，原电子章会停用，需重新上传对应章图。</p>
                     <div class="form-row"><label>简称</label><input v-model="companyForm.short_name" class="input" placeholder="天明包装" style="width:100%"/></div>
                     <div class="form-row"><label>地址</label><input v-model="companyForm.address" class="input" placeholder="苏州市相城区..." style="width:100%"/></div>
                     <div class="form-row"><label>电话</label><input v-model="companyForm.phone" class="input" placeholder="0512-66530018" style="width:180px"/></div>
@@ -6045,7 +6056,7 @@
                     <div class="form-row"><label>联系电话</label><input v-model="companyForm.contact_phone" class="input" style="width:180px"/></div>
                     <div class="toolbar-group" style="justify-content:flex-end;margin-top:12px">
                       <button class="btn" @click="showCompanyModal=false">取消</button>
-                      <button class="btn primary" @click="saveCompany" :disabled="!companyForm.company_name">保存</button>
+                      <button class="btn primary" @click="saveCompany" :disabled="companyBusy || !companyForm.company_name?.trim()">保存</button>
                     </div>
                   </div>
                 </div>
@@ -6616,7 +6627,7 @@
               <div v-else class="notice danger">读取范围失败，请关闭后重新下载。</div>
             </div>
             <div v-else-if="modal.type === 'invoiceSellers'">
-              <div class="notice">维护两个销方主体的完整开票资料；不会自动变更客户默认销方。</div>
+              <div class="notice">维护本公司各开票抬头的完整资料；开票时按所选销方开具，不自动变更客户默认销方。</div>
               <div v-if="invoiceSellerState.loading" class="empty">正在读取销方主体…</div>
               <div v-else-if="invoiceSellerState.error" class="empty"><div class="notice danger" style="margin-bottom:10px">销方主体读取失败：{{ invoiceSellerState.error }}</div><button class="btn" type="button" @click="loadInvoiceSellers">重新加载</button></div>
               <template v-else>
@@ -6714,7 +6725,7 @@
                   <div class="field"><label>开户行（选填）</label><input class="input" v-model.trim="customerInvoiceProfile.bank_name" /></div>
                   <div class="field"><label>银行账号（选填）</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div>
                   <div class="field"><label>合作模式</label><div class="toolbar-group" style="flex-wrap:nowrap"><select class="select" style="min-width:0;flex:1 1 auto" v-model.number="customerInvoiceProfile.settlement_entity_id" :disabled="settlementEntityState.loading || !settlementEntityState.loaded"><option :value="null">本客户直接对账开票</option><option v-for="row in settlementEntities.filter(item=>item.is_enabled!==false)" :key="row.id" :value="row.id">归集到 {{ row.entity_name }}</option></select><button class="btn small" type="button" @click="openSettlementEntitiesFromCustomer">维护</button></div><div class="muted">选择合作方后，新对账单按合作方汇总；历史单据不变。</div></div>
-                  <div class="field"><label>默认销方</label><div class="toolbar-group" style="flex-wrap:nowrap"><select class="select" style="min-width:0;flex:1 1 auto" v-model.number="customerInvoiceProfile.default_seller_id" :disabled="invoiceSellerState.loading || !invoiceSellerState.loaded || !!customerInvoiceProfile.settlement_entity_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_enabled!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select><button class="btn small" type="button" :disabled="invoiceSellerState.loading" @click="openInvoiceSellersFromCustomer">维护销方</button></div><div v-if="customerInvoiceProfile.settlement_entity_id" class="muted">销方由所选合作结算对象统一决定。</div><div v-else-if="invoiceSellerState.loading" class="muted">正在读取销方…</div><div v-else-if="invoiceSellerState.error" class="danger-text">销方读取失败，请点“维护销方”重试。</div><div v-else-if="invoiceSellerState.loaded && !invoiceSellers.length" class="muted">尚未维护销方主体，请先录入两个公司开票抬头。</div></div>
+                  <div class="field"><label>默认销方</label><div class="toolbar-group" style="flex-wrap:nowrap"><select class="select" style="min-width:0;flex:1 1 auto" v-model.number="customerInvoiceProfile.default_seller_id" :disabled="invoiceSellerState.loading || !invoiceSellerState.loaded || !!customerInvoiceProfile.settlement_entity_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_enabled!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select><button class="btn small" type="button" :disabled="invoiceSellerState.loading" @click="openInvoiceSellersFromCustomer">维护销方</button></div><div v-if="customerInvoiceProfile.settlement_entity_id" class="muted">销方由所选合作结算对象统一决定。</div><div v-else-if="invoiceSellerState.loading" class="muted">正在读取销方…</div><div v-else-if="invoiceSellerState.error" class="danger-text">销方读取失败，请点“维护销方”重试。</div><div v-else-if="invoiceSellerState.loaded && !invoiceSellers.length" class="muted">尚未维护销方主体，请先录入实际使用的公司开票抬头。</div></div>
                   <div class="field"><label>常用箱与订单单价口径</label><select class="select" v-model="customerInvoiceProfile.price_tax_mode"><option value="tax_inclusive">含税价</option><option value="tax_exclusive">未税价</option></select><div class="muted">只改变价格解释和以后生成的订单快照，不换算、不覆盖现有常用箱价格。</div></div>
                   <div class="field"><label>默认税率</label><input class="input" type="number" min="0" max="1" step="0.01" v-model="customerInvoiceProfile.default_tax_rate" /></div>
                   <div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceProfile.confirmation_status"><option value="pending">待确认</option><option value="confirmed">已确认</option></select></div>
@@ -10872,7 +10883,7 @@
               {value:"sales",label:"业务"}, {value:"finance",label:"财务"}, {value:"boss",label:"老板"},
               {value:"workshop",label:"车间/仓库"}, {value:"delivery_picker",label:"送货拿货员"}, {value:"admin",label:"管理员"},
             ],
-            companyConfig: {}, companyForm: {}, showCompanyModal: false,
+            companyConfig: {}, companyForm: {}, showCompanyModal: false, companySelectedId:1, companyBusy:false,
             deliveryPrintSettings: { printer_model: "EPSON SK820", orientation_mode: "driver_managed", paper_width_mm: 241, paper_height_mm: 139.5 },
             // v0.19.2-B 供应商调价 + 价格历史
             showDrawingPreview: false, drawingPreviewUrl: "",
@@ -11159,6 +11170,7 @@
           };
         },
         computed: {
+          selectedCompanyRecord() { return (this.companyConfig.profiles || []).find(row=>row.id===this.companySelectedId) || this.companyConfig; },
           businessFlowSteps() {
             return [
               {key:"orders",label:"订单",page:"orders",hint:"录入并确认客户订单"},
@@ -26410,7 +26422,7 @@
                 }
                 this.systemUsers = users.data.items || [];
                 this.versionInfo = { ...version.data, changelog:this.versionInfo.changelog || [] };
-                this.companyConfig = company.data || {};
+                this.companyConfig = company.data || {}; this.companySelectedId = Number(this.companyConfig.id || 1); this.contractSealOpen=false; this.contractSealSettings=null;
               } else if (section === "print") {
                 const {data} = await axios.get("/api/system/delivery-print-settings");
                 this.deliveryPrintSettings = { ...this.deliveryPrintSettings, ...data };
@@ -26560,19 +26572,33 @@
             if (!details?.open || this.pdfTemplatesLoaded) return;
             await this.loadPdfTemplates();
           },
-          openCompanyModal() {
-            this.companyForm = { ...this.companyConfig };
+          openCompanyModal(create=false) {
+            if (this.companyBusy || this.contractSealBusy) return;
+            this.companyForm = create ? {company_name:"",selection_version:this.companyConfig.selection_version} : {...this.selectedCompanyRecord,expected_version:this.selectedCompanyRecord.version,selection_version:this.companyConfig.selection_version};
             this.showCompanyModal = true;
           },
           async saveCompany() {
+            if (this.companyBusy) return;
+            this.companyBusy=true;
             try {
-              const { data } = await axios.put("/api/system/company", this.companyForm);
-              this.companyConfig = data;
-              this.showCompanyModal = false;
-              this.$nextTick(() => this.showToast("公司信息已保存"));
-            } catch (e) {
-              this.showToast("保存失败：" + (e.response?.data?.detail || e.message), true);
-            }
+              const editing=Boolean(this.companyForm.id);
+              const {data}= editing ? await axios.put(`/api/system/companies/${this.companyForm.id}`,this.companyForm) : await axios.post("/api/system/companies",this.companyForm);
+              this.companyConfig=editing ? data : data.settings;
+              this.companySelectedId=editing ? this.companyForm.id : data.company.id;
+              this.showCompanyModal=false;this.contractSealOpen=false;this.contractSealSettings=null;
+              this.showToast(editing ? "公司信息已保存" : "公司抬头已新增，可为它上传电子章或设为开单公司");
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+            finally { this.companyBusy=false; }
+          },
+          async activateCompany() {
+            if (this.companyBusy || this.contractSealBusy) return;
+            this.companyBusy=true;
+            try {
+              this.companyConfig=(await axios.post(`/api/system/companies/${this.companySelectedId}/activate`,{expected_version:this.selectedCompanyRecord.version,selection_version:this.companyConfig.selection_version})).data;
+              this.contractSealOpen=false;this.contractSealSettings=null;
+              this.showToast(`当前开单公司：${this.companyConfig.company_name}`);
+            } catch(error) { this.showToast(this.errorMessage(error),true); }
+            finally { this.companyBusy=false; }
           },
           async saveDeliveryPrintSettings() {
             try {
@@ -27200,7 +27226,7 @@
             if (this.user?.role !== "admin" || this.contractSealBusy) return;
             this.contractSealOpen=true; this.contractSealBusy=true; this.contractSealError=""; this.contractSealSettings=null;
             try {
-              this.contractSealSettings=(await axios.get("/api/contracts/seal/settings")).data;
+              this.contractSealSettings=(await axios.get(`/api/system/company/seal/settings?company_id=${this.companySelectedId}`)).data;
               this.contractSealSize=this.contractSealSettings.size_mm;
             } catch(error) { this.contractSealError=error.response?.data?.detail || "电子章读取失败，请关闭后重试"; }
             finally { this.contractSealBusy=false; }
@@ -27212,7 +27238,7 @@
             this.contractSealBusy=true; this.contractSealError="";
             try {
               const encoded=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]);reader.onerror=()=>reject(new Error("章图读取失败"));reader.readAsDataURL(file);});
-              this.contractSealSettings=(await axios.post("/api/contracts/seal/settings",{expected_version:this.contractSealSettings.version,image_base64:encoded,size_mm:this.contractSealSize})).data;
+              this.contractSealSettings=(await axios.post(`/api/system/company/seal/settings?company_id=${this.contractSealSettings.company_id}`,{expected_version:this.contractSealSettings.version,company_version:this.contractSealSettings.company_version,image_base64:encoded,size_mm:this.contractSealSize})).data;
               this.showToast("电子章已保存，导出合同时可选择盖章");
             } catch(error) { this.contractSealError=error.response?.data?.detail || error.message || "上传失败，请重新读取后重试"; }
             finally { this.contractSealBusy=false; }
@@ -27221,7 +27247,7 @@
             if (this.contractSealBusy || this.user?.role!=="admin" || !this.contractSealSettings?.available) return;
             if (!window.confirm("停用后不能生成新的盖章合同，已导出的合同和用章记录保留。确定停用？")) return;
             this.contractSealBusy=true; this.contractSealError="";
-            try { this.contractSealSettings=(await axios.post("/api/contracts/seal/disable",{expected_version:this.contractSealSettings.version})).data; this.showToast("电子章已停用"); }
+            try { this.contractSealSettings=(await axios.post(`/api/system/company/seal/disable?company_id=${this.contractSealSettings.company_id}`,{expected_version:this.contractSealSettings.version,company_version:this.contractSealSettings.company_version})).data; this.showToast("电子章已停用"); }
             catch(error) { this.contractSealError=error.response?.data?.detail || "停用失败，请重新读取后重试"; }
             finally { this.contractSealBusy=false; }
           },
@@ -27243,11 +27269,11 @@
               let sealedRequest=null, sealKey="";
               if (sealed) {
                 if (this.user?.role!=="admin") throw new Error("仅管理员可导出盖章合同");
-                const settings=(await axios.get("/api/contracts/seal/settings")).data;
-                if (!settings.available) throw new Error("请先在管理电子章中上传章图");
-                sealKey=`${target.id}:${target.version}:${settings.version}`;
+                const settings=(await axios.get(`/api/contracts/seal/${target.id}/settings`)).data;
+                if (!settings.available) throw new Error(settings.reason || `请在系统管理→账号与公司→公司信息，为“${settings.issuer_name || settings.company_name}”上传电子章`);
+                sealKey=`${target.id}:${target.version}:${settings.company_id}:${settings.company_version}:${settings.version}`;
                 this.contractSealExportKeys[sealKey] ||= this.contractIdempotencyKey();
-                sealedRequest={expected_version:target.version,seal_version:settings.version,operation_key:this.contractSealExportKeys[sealKey]};
+                sealedRequest={expected_version:target.version,seal_version:settings.version,company_id:settings.company_id,company_version:settings.company_version,operation_key:this.contractSealExportKeys[sealKey]};
               }
               const response = sealed ? await fetch(`/api/contracts/seal/${target.id}/pdf`,{
                 method:"POST",credentials:"same-origin",headers:{Accept:"application/pdf","Content-Type":"application/json"},body:JSON.stringify(sealedRequest),

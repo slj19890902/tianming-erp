@@ -13,13 +13,13 @@ from fastapi.responses import Response
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, object_session
 
 from app.api.deps import PermissionChecker, get_db, require_customer_access
 from app.api.orders import OrderCreate, OrderItemCreate, _create_order_impl
 from app.core.time_contract import beijing_today, utc_naive_to_api, utc_now_naive
 from app.models.audit import OperationLog
-from app.models.company_config import CompanyConfig
+from app.services.company_profiles import contract_company, freeze_contract_company
 from app.models.customer import Customer
 from app.models.customer_contract import CustomerContract, CustomerContractItem
 from app.models.order import Order
@@ -290,6 +290,7 @@ def _item_dict(item: CustomerContractItem) -> dict:
 
 
 def _contract_dict(contract: CustomerContract) -> dict:
+    company_id, issuer = contract_company(object_session(contract), contract)
     converted_order_number = (
         contract.converted_order.order_number
         if contract.converted_order is not None
@@ -298,6 +299,8 @@ def _contract_dict(contract: CustomerContract) -> dict:
     return {
         "id": contract.id,
         "contract_no": contract.contract_no,
+        "issuer_company_id": company_id,
+        "issuer_company_name": issuer.company_name,
         "customer_id": contract.customer_id,
         "customer_name": contract.customer_name,
         "customer_contact": contract.customer_contact,
@@ -389,6 +392,7 @@ def create_contract(
         _replace_items(db, contract, payload.items)
         db.add(contract)
         db.flush()
+        freeze_contract_company(db, contract)
         _audit(
             db,
             user=user,
@@ -656,7 +660,7 @@ def contract_print(
     """Return only persisted contract snapshots for the future browser print page."""
     contract = _contract_or_404(db, contract_id)
     require_customer_access(contract.customer_id, current_user=user, db=db)
-    company = db.get(CompanyConfig, 1)
+    _, company = contract_company(db, contract)
     return {
         "contract": _contract_dict(contract),
         "sender": {
@@ -686,7 +690,7 @@ def contract_pdf(
             status_code=409,
             detail="合同版本已更新，请刷新后重新导出 PDF",
         )
-    company = db.get(CompanyConfig, 1)
+    _, company = contract_company(db, contract)
     try:
         document = render_contract_pdf(contract, company)
     except ContractPdfFontError as error:

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.597"
-APP_VERSION_NAME = "整板合并库存并发保护"
+APP_VERSION = "v0.22.598"
+APP_VERSION_NAME = "整板移位库存并发保护"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5719,3 +5719,15 @@ APP_VERIFICATION_STEPS = [
     "如提示库存已变化，刷新后重新核对再操作；不要为验收额外移货、合并或重复提交真实库存。",
 ]
 APP_CHANGELOG = [*(f"v0.22.597：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "整板移位同时核对原货位、栈板成员和每批库存；期间发生预占、释放或位置变化时，明确提示刷新，避免写回旧库存版本。",
+    "保留目标货位、地图版本和占用检查；所有批次核对完成后才释放原位置，失败整笔回滚。",
+    "正常已有订单占用、旧栈板明细、重复提交、批次编辑和批量移库保持原业务规则。",
+    "本版无数据库迁移，不调整正式库存数量、历史位置或成本；手机图纸和取用恢复功能继续保留。",
+]
+APP_VERIFICATION_STEPS = [
+    "在正常移货时核对目标位置、总数和订单占用；移位前后库存数量应一致，位置历史只新增一次。",
+    "如提示库存已变化，刷新后重新核对；无需为验收额外移动或重复提交真实库存。",
+]
+APP_CHANGELOG = [*(f"v0.22.598：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

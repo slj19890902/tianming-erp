@@ -148,7 +148,7 @@ def _receipt(db: Session, order, *, action: str, key: str, user: User) -> dict:
             "request_idempotency_key": key, "current_actor_id": user.id}
 
 
-def _require_confirm_receipt(db: Session, order, key: str) -> None:
+def _require_confirm_receipt(db: Session, order, key: str, *, expected_reason: str | None = _CONFIRM_REASON) -> None:
     """A submitted row alone is not proof of an atomic mobile confirmation."""
     def conflict():
         raise stocktake_service.StocktakeError(
@@ -158,8 +158,8 @@ def _require_confirm_receipt(db: Session, order, key: str) -> None:
     review = db.scalar(select(StocktakeReview).where(StocktakeReview.idempotency_key == key))
     if (review is None or order.status != "approved" or review.order_id != order.id
             or review.action != "approve" or review.from_status != "submitted"
-            or review.to_status != "approved" or review.reason != _CONFIRM_REASON
-            or order.review_note != _CONFIRM_REASON
+            or review.to_status != "approved" or review.reason != expected_reason
+            or order.review_note != expected_reason
             or review.reviewed_by != order.reviewed_by or review.reviewed_at != order.reviewed_at):
         conflict()
     details = review.details_json
@@ -211,6 +211,7 @@ def _require_confirm_receipt(db: Session, order, key: str) -> None:
 class StocktakeApproveRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=120)
     reason: str | None = Field(default=None, max_length=1000)
+    expected_actor_id: int | None = Field(default=None, gt=0, strict=True)
 
     @field_validator("idempotency_key")
     @classmethod
@@ -231,6 +232,7 @@ class StocktakeApproveRequest(BaseModel):
 class StocktakeRejectRequest(BaseModel):
     idempotency_key: str = Field(min_length=1, max_length=120)
     reason: str | None = Field(default=None, max_length=1000)
+    expected_actor_id: int | None = Field(default=None, gt=0, strict=True)
 
     @field_validator("idempotency_key")
     @classmethod
@@ -246,6 +248,43 @@ class StocktakeRejectRequest(BaseModel):
         if value is None:
             return None
         return value.strip() or None
+
+
+class StocktakeReviewResultRequest(BaseModel):
+    action: Literal["approve", "reject"]
+    body: StocktakeApproveRequest
+
+
+def _review_reason(action: str, reason: str | None) -> str | None:
+    return ((reason or "").strip() or "驳回库存盘点单（系统记录）") if action == "reject" else reason
+
+
+def _review_receipt(db: Session, order, *, action: str, key: str, reason: str | None, user: User) -> dict:
+    review = db.scalar(select(StocktakeReview).where(StocktakeReview.idempotency_key == key))
+    target = "approved" if action == "approve" else "rejected"
+    if (review is None or review.id <= 0 or review.sequence <= 0 or review.reviewed_by <= 0
+            or review.order_id != order.id or review.action != action
+            or review.reason != reason or review.from_status != "submitted" or review.to_status != target
+            or order.status != target or not review.reviewed_at
+            or review.reviewed_by != order.reviewed_by or review.reviewed_at != order.reviewed_at
+            or order.review_note != reason):
+        raise stocktake_service.StocktakeError("原审核事实不一致，请保留请求并联系管理员核对",409,"IDEMPOTENCY_CONFLICT")
+    if action == "approve":
+        _require_confirm_receipt(db, order, key, expected_reason=reason)
+    else:
+        details = review.details_json
+        if (not isinstance(details, dict) or type(details.get("order_id")) is not int
+                or details.get("order_id") != order.id
+                or details.get("order_number") != order.order_number
+                or details.get("idempotency_key") != key or details.get("reason") != reason):
+            raise stocktake_service.StocktakeError("原驳回审核明细不一致，请保留请求并核对",409,"IDEMPOTENCY_CONFLICT")
+    receipt = _order_payload(db, order)
+    matched = next((row for row in receipt["reviews"] if row["id"] == review.id), None)
+    if matched is None:
+        raise stocktake_service.StocktakeError("原审核回执不完整，请保留请求并核对",409,"IDEMPOTENCY_CONFLICT")
+    return {**receipt, "request_action": action, "request_idempotency_key": key,
+            "request_reason": reason, "current_actor_id": user.id,
+            "matched_review": {**matched, "idempotency_key": key}}
 
 
 def _raise_service_error(error: stocktake_service.StocktakeError) -> None:
@@ -530,9 +569,7 @@ def _review_response(
     reason: str | None,
 ) -> dict[str, object]:
     ip_address, user_agent = _request_metadata(request)
-    effective_reason = reason
-    if action == "reject":
-        effective_reason = (reason or "").strip() or "驳回库存盘点单（系统记录）"
+    effective_reason = _review_reason(action, reason)
     try:
         if action == "approve":
             order = stocktake_service.approve_stocktake(
@@ -554,6 +591,10 @@ def _review_response(
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
+        db.flush()
+        db.expire(order, ["reviews", "reviewer"])
+        result = _review_receipt(db, stocktake_service.get_order(db, order.id),
+                                action=action, key=idempotency_key, reason=effective_reason, user=user)
         db.commit()
     except stocktake_service.StocktakeError as error:
         db.rollback()
@@ -571,6 +612,10 @@ def _review_response(
                 idempotency_key=idempotency_key,
                 reason=effective_reason,
             )
+            if order is not None:
+                with db.no_autoflush:
+                    result = _review_receipt(db, order, action=action, key=idempotency_key,
+                                             reason=effective_reason, user=user)
         except stocktake_service.StocktakeError as replay_error:
             _raise_service_error(replay_error)
         except OperationalError as replay_error:
@@ -581,8 +626,37 @@ def _review_response(
                 "盘点审核冲突，请刷新后重试",
                 error,
             )
-    order = stocktake_service.get_order(db, order.id)
-    return _order_payload(db, order)
+    except Exception:
+        db.rollback()
+        raise
+    return result
+
+
+@router.post("/stocktakes/{order_id}/review-result")
+def resolve_stocktake_review(
+    order_id: int, payload: StocktakeReviewResultRequest, response: Response,
+    db: Session = Depends(get_db), user: User = Depends(require_stocktake_review),
+) -> dict:
+    _require_expected_actor(payload.body, user)
+    response.headers.update(_NO_STORE)
+    reason = _review_reason(payload.action, payload.body.reason)
+    key = payload.body.idempotency_key
+    try:
+        with db.no_autoflush:
+            # Check visibility/existence even when the command key is not recorded.
+            stocktake_service.get_order(db, order_id)
+            order = stocktake_service.resolve_review_replay(
+                db, order_id=order_id, action=payload.action, idempotency_key=key, reason=reason)
+            receipt = (_review_receipt(db, order, action=payload.action, key=key, reason=reason, user=user)
+                       if order is not None else None)
+            return {"status": "found" if receipt else "not_found", "request_action": payload.action,
+                    "request_idempotency_key": key, "request_reason": reason, "current_actor_id": user.id,
+                    "observed_at": utc_naive_to_api(utc_now_naive()), "order": receipt,
+                    "matched_review": receipt["matched_review"] if receipt else None}
+    except stocktake_service.StocktakeError as error:
+        _raise_service_error(error)
+    except OperationalError as error:
+        _raise_sqlite_concurrency_error(error)
 
 
 @router.post("/stocktakes/{order_id}/approve")
@@ -590,9 +664,12 @@ def approve_stocktake(
     order_id: int,
     payload: StocktakeApproveRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     user: User = Depends(require_stocktake_review),
 ) -> dict[str, object]:
+    _require_expected_actor(payload, user)
+    response.headers.update(_NO_STORE)
     return _review_response(
         request=request,
         db=db,
@@ -609,9 +686,12 @@ def reject_stocktake(
     order_id: int,
     payload: StocktakeRejectRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     user: User = Depends(require_stocktake_review),
 ) -> dict[str, object]:
+    _require_expected_actor(payload, user)
+    response.headers.update(_NO_STORE)
     return _review_response(
         request=request,
         db=db,

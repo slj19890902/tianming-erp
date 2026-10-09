@@ -55,10 +55,36 @@ test('every new search selection closes the previous rack and replaces pending l
     assert.equal(state.PendingRackSearchLocationId,item.position_status==='mapped'?item.location_id:null);
     assert.equal(state.PendingLocationId,item.position_status==='mapped'?item.location_id:null);
     assert.equal(state.FocusedSearchProductKey,`product-${item.product_id}`);
-    assert.equal(state.SearchPanelOpen,false,'dropdown closes for map access; the top search can reopen the retained results');
+    assert.equal(state.SearchPanelOpen,true,'keep all location choices available after any result or pallet-detail click');
     assert.equal(state.PendingLocateResource,null);
   }
   assert.equal(state.PendingAreaCode,null,'a new unlocated result must clear a stale pending area');
+});
+
+test('one product can switch between every stock location without losing the search choices', () => {
+  const state = {};
+  const names = ['FocusedSearchItem','FocusedSearchProductKey','FocusedResource','AreaInventorySearch','CameraFocusTarget',
+    'PendingAreaCode','PendingLocationId','Selected','FloorCode','RackFocusId','PendingRackSearchLocationId','PendingLotId',
+    'PendingLocateResource','SearchPanelOpen','SearchError'];
+  const items = [
+    {lot_id:1163,product_id:3560,location_id:1978,floor_code:'3F',position_status:'mapped'},
+    {lot_id:1211,product_id:3560,location_id:2164,floor_code:'3F',position_status:'mapped'},
+    {lot_id:1212,product_id:3560,location_id:99,floor_code:'1F',position_status:'mapped'},
+  ];
+  const context = {items,cameraFocusSequenceRef:{current:0},searchProductKey:()=> 'same-product',
+    isWarehouseOperationalFloorCode:floor=>['1F','3F','4F'].includes(floor),
+    ...Object.fromEntries(names.map(name=>['set'+name,value=>{state[name]=value;}]))};
+  vm.createContext(context);
+  vm.runInContext(compile(source.slice(source.indexOf('  const focusSearchItem ='),source.indexOf('  const focusLocateResource ='))),context);
+  for (let i=0;i<items.length;i++) {
+    context.choice=i;
+    vm.runInContext('focusSearchLocation({key:"same-product",items}, {location_id:items[choice].location_id})',context);
+    assert.equal(state.PendingLocationId,items[i].location_id);
+    assert.equal(state.FocusedSearchItem.lot_id,items[i].lot_id);
+    assert.equal(state.FloorCode,items[i].floor_code);
+    assert.equal(state.SearchPanelOpen,true);
+    assert.equal(state.FocusedSearchProductKey,'same-product');
+  }
 });
 
 test('pending rack search waits for the matching floor then opens once, without changing deep-link behavior', () => {
@@ -103,7 +129,7 @@ test('rack focus retains the search panel and highlights current location with t
   assert.ok(source.includes('searchLocationId={focusedSearchItem?.location_id}'));
 });
 
-test('order location opens the exact physical batch label and rack, with a persistent yellow location highlight',()=>{
+test('order location focuses the exact physical batch and rack, with a persistent yellow location highlight',()=>{
   const body=source.indexOf('    if (pendingLocationId === null) return;');
   const begin=source.lastIndexOf('  useEffect(() => {',body),end=source.indexOf('  useEffect(() => {',body);
   const state={},lot={lot_id:15,product_id:7,quantity:20,unit:'个',inventory_code:'P7'};
@@ -112,6 +138,6 @@ test('order location opens the exact physical batch label and rack, with a persi
     useEffect:fn=>fn(),searchRackForLocation:resolver(),rackLocationInventoryItems:r=>r.items,inventoryHasPhysicalQuantity:r=>r.quantity>0,employeeLocationName:()=> '三楼 A1 2层3格',inventoryLabelQuantity:r=>r.quantity,inventoryUnitLabel:s=>s,formatNumber:n=>String(n),searchProductKey:r=>`p-${r.product_id}`,
     ...Object.fromEntries(names.map(name=>['set'+name,value=>{state[name]=value;}]))};
   const code=compile(source.slice(begin,end));vm.runInNewContext(code,context);
-  assert.equal(state.RackFocusId,'rack-A');assert.equal(state.SidebarLabelLotId,15);assert.equal(state.TraceFocusedLotId,15);assert.equal(state.FocusedSearchItem.location_id,91);assert.equal(state.FocusedSearchProductKey,'p-7');assert.match(state.TraceDeepLinkMessage,/黄色标记/);assert.equal(state.PendingLotId,null);
+  assert.equal(state.RackFocusId,'rack-A');assert.equal(state.SidebarLabelLotId,undefined);assert.equal(state.TraceFocusedLotId,15);assert.equal(state.FocusedSearchItem.location_id,91);assert.equal(state.FocusedSearchProductKey,'p-7');assert.match(state.TraceDeepLinkMessage,/黄色标记/);assert.equal(state.PendingLotId,null);
   for(const invalid of [[],[{...lot,quantity:0}]]){Object.keys(state).forEach(k=>delete state[k]);context.selectedLocationItems=invalid;vm.runInNewContext(code,context);assert.equal(state.SidebarLabelLotId,undefined);assert.equal(state.RackFocusId,undefined);assert.match(state.TraceDeepLinkMessage,/已移位、清零/);}
 });

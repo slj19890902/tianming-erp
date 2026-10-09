@@ -2608,6 +2608,7 @@ body.warehouse-twin-page {
 .twin-workspace.rack-focused.context-open > .twin-context-rail { display: block; }
 .twin-workspace.rack-focused.context-open .twin-global-search { overflow-y: auto; }
 .twin-workspace.rack-focused.context-open .twin-search-result-list { flex: 0 0 auto; max-height: 36vh; }
+.product-quantity-summary button[aria-pressed="true"] { border-color: #a16207; background: #fff1c7; color: #694019; }
 .twin-workspace.rack-focused.context-open .twin-stage { grid-template-columns: minmax(180px, .65fr) minmax(0, 2fr); }
 .twin-rack-stage .mold-rack-cell.occupied { background:#dbeafe; border-color:#2563eb; }
 .twin-rack-stage .mold-rack-cell.selected { background:#f59e0b; border-color:#b45309; }

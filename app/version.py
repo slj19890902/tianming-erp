@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.583"
-APP_VERSION_NAME = "研光光洋共用库存及后续入库维护"
+APP_VERSION = "v0.22.584"
+APP_VERSION_NAME = "仓库查找全部货位连续切换"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5554,3 +5554,13 @@ APP_VERIFICATION_STEPS = [
     "后续新编码在库存共用中选两客户产品，核对实物后建组；BOM及待核对现货按提示单独处理。",
 ]
 APP_CHANGELOG = [*(f"v0.22.583：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "仓库查找的各栈板／货位明细默认展开；点击一个位置后保留查找列表，可以继续切换其他货位。",
+    "当前选中货位显示底色，跨楼层、货架及具体批次定位沿用原权限和实存数量规则。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，查找有多个位置的产品；在各栈板／货位明细逐个点击，核对地图定位、数量及选中底色。",
+    "切换位置后确认查找列表保持可见；订单带批次的定位仍显示指定批次，不自动弹出打印标签。",
+]
+APP_CHANGELOG = [*(f"v0.22.584：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

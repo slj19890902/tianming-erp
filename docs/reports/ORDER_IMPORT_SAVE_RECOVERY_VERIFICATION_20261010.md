@@ -28,3 +28,5 @@
 管理员最短操作：订单导入→待核对原记录→查询原结果；完整确认时查看原单号，历史证明不足时按原文件/客户单号核对原单。不要为验收重新建单。
 
 自动审批拒绝终止旧隔离18161测试进程，仅返回“blocked by policy”，未提供具体原因；没有换工具绕过。旧18161及后续18162两个合成服务保留，详见UI/CLOSEOUT.md；专属Chrome已通过自身Browser.close正常关闭，正式ERP未受影响。
+
+v602技术发布完成，待管理员人工验收。源6640d5369e2d48ecba36be9aefae1afa9ed449db，包9420d69b7eefa3622db0a7dada1bf98bde2ca858ec8dbb932def3b6726396839；正式与NAS一致，备份恢复、业务/附件保持、健康及资源通过，详见FACTORY_RELIABILITY_RELEASE_V602_20261010.md。

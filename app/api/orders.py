@@ -606,6 +606,13 @@ class OrderItemCreate(BaseModel):
     combination_set_quantity_snapshot: int | None = Field(default=None, ge=1)
     combination_quantity_per_set_snapshot: int | None = Field(default=None, ge=1)
 
+    @field_validator("quantity", mode="before")
+    @classmethod
+    def _reject_boolean_quantity(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("订单数量必须为数字，不能使用是或否")
+        return value
+
     @model_validator(mode="before")
     @classmethod
     def _reject_client_filesystem_path(cls, value: object) -> object:
@@ -690,6 +697,13 @@ class OrderItemUpdate(BaseModel):
         default_factory=list
     )
 
+    @field_validator("quantity", mode="before")
+    @classmethod
+    def _reject_boolean_quantity(cls, value: object) -> object:
+        if isinstance(value, bool):
+            raise ValueError("订单数量必须为数字，不能使用是或否")
+        return value
+
 
 class BomComponentDemandUpdate(BaseModel):
     required_piece_quantity: int = Field(gt=0, strict=True)
@@ -763,6 +777,8 @@ class PreviousBatchSelection(BaseModel):
 
 def _validated_order_quantity(value: int | float, index: int) -> int:
     decimal_value = Decimal(str(value))
+    if not decimal_value.is_finite() or decimal_value > 2147483647:
+        raise HTTPException(status_code=400, detail=f"第{index}条明细数量无效或超出支持范围")
     if decimal_value <= 0:
         raise HTTPException(status_code=400, detail=f"第{index}条明细数量必须大于0")
     if decimal_value != decimal_value.to_integral_value():
@@ -7394,6 +7410,10 @@ def _create_order_impl(
         return _legacy_create(payload, user)
     if not payload.items:
         raise HTTPException(status_code=400, detail="订单至少需要一条明细")
+    if payload.status not in {"pending_confirmation", "pending_production"}:
+        raise HTTPException(status_code=400, detail="新订单只能是待确认或待生产，后续状态须由实际业务流转形成")
+    if payload.payment_status != "unpaid":
+        raise HTTPException(status_code=400, detail="新订单不能直接标记已收款，请通过正式收款流程登记")
     if payload.customer_id is None:
         raise HTTPException(status_code=400, detail="客户不能为空")
     if not commit and any(item.temp_drawing_token for item in payload.items):
@@ -7480,10 +7500,8 @@ def _create_order_impl(
         if customer is None:
             raise HTTPException(status_code=400, detail="客户不存在")
         price_tax_terms = resolve_customer_price_tax_terms(db, customer.id)
-        if payload.pdf_import_confirmation is not None and (
-            not customer.is_active or customer.status != "active"
-        ):
-            raise HTTPException(status_code=400, detail="PDF 草稿所选客户已停用")
+        if not customer.is_active or customer.status != "active":
+            raise HTTPException(status_code=400, detail="所选客户已停用，不能新建订单")
 
         customer_po = (payload.customer_po or "").strip() or None
 
@@ -8836,6 +8854,10 @@ def update_order_item(
         order_for_scope.customer_id, current_user=user, db=db
     )
     _lock_orders_for_production_transition(db,[item.order_id])
+    db.refresh(item)
+    from app.services.order_status_policy import order_status_allows_item_fulfillment
+    if not order_status_allows_item_fulfillment(order_for_scope.status) or item.is_force_closed:
+        raise HTTPException(status_code=409, detail="订单或明细已作废、关闭或完成，不能修改订单明细")
     require_order_mold_repair_confirmation(
         db,
         product_ids=[item.product_id] if item.product_id else [],
@@ -8990,8 +9012,7 @@ def update_order_item(
                     + "；请先释放库存预占。"
                 ),
             )
-    if payload.quantity <= 0:
-        raise HTTPException(status_code=400, detail="数量必须大于0")
+    _validated_order_quantity(payload.quantity, 1)
     unit_price = Decimal(str(payload.unit_price))
     if unit_price < 0:
         raise HTTPException(status_code=400, detail="单价不能为负数")

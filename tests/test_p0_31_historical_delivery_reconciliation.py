@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -108,31 +109,47 @@ def test_p0_31_historical_create_preserves_erp_time_and_replays(
         assert "is_historical_backfill" in audit.details
 
 
-def test_p1_89_server_month_default_and_legacy_null_compatibility(
+@pytest.mark.parametrize("delivery_day,explicit_month,expected_month", [
+    (date(2026, 6, 13), None, "2026-06"),
+    (date(2026, 6, 13), "2026-08", "2026-08"),
+    (date(2026, 8, 19), None, "2026-08"),
+    (date(2026, 8, 20), None, "2026-09"),
+])
+def test_p1_89_delivery_cycle_default_and_legacy_null_compatibility(
     finance_api_app,
     monkeypatch,
+    delivery_day,
+    explicit_month,
+    expected_month,
 ) -> None:
     from app.api import finance as finance_api
+    from app.models.customer import Customer
+    from app.models.delivery import Delivery
     from app.models.finance import ReturnReceipt
 
     app, session_factory = finance_api_app
+    with session_factory() as session:
+        session.get(Customer, 1).statement_cycle_start_day = 20
+        session.get(Delivery, 1).delivery_date = delivery_day
+        session.commit()
     monkeypatch.setattr(finance_api, "beijing_today", lambda: date(2026, 8, 28))
     modern_payload = _receipt_payload()
     modern_payload.pop("reconciliation_month", None)
+    modern_payload["actual_received_date"] = delivery_day.isoformat()
+    if explicit_month is not None:
+        modern_payload["reconciliation_month"] = explicit_month
     modern_payload["idempotency_key"] = "p1-89-server-month-default"
     with TestClient(app) as client:
         _login(client, "finance")
         options = client.get("/api/finance/reconciliation-month-options")
         created = client.post("/api/finance/return_receipts", json=modern_payload)
+        # v495 defaults to delivery date + customer cutoff, and retries retain
+        # the original frozen month after the server crosses into another month.
+        monkeypatch.setattr(finance_api, "beijing_today", lambda: date(2026, 9, 1))
         replay = client.post("/api/finance/return_receipts", json=modern_payload)
-        august = client.get(
-            "/api/finance/pending_statements",
-            params={"customer_id": 1, "statement_month": "2026-08"},
-        )
-        june = client.get(
-            "/api/finance/pending_statements",
-            params={"customer_id": 1, "statement_month": "2026-06"},
-        )
+        periods = {month: client.get("/api/finance/pending_statements",
+            params={"customer_id": 1, "statement_month": month})
+            for month in ("2026-06", "2026-08", "2026-09")}
 
     assert options.json() == {
         "previous": "2026-07",
@@ -141,21 +158,26 @@ def test_p1_89_server_month_default_and_legacy_null_compatibility(
     }
     assert created.status_code == 201, created.text
     assert replay.json() == created.json()
-    assert created.json()["reconciliation_month"] == "2026-08"
-    assert created.json()["effective_reconciliation_month"] == "2026-08"
-    assert [row["delivery_id"] for row in august.json()["deliveries"]] == [1]
-    assert june.json()["deliveries"] == []
+    assert created.json()["reconciliation_month"] == expected_month
+    assert created.json()["effective_reconciliation_month"] == expected_month
+    for month, response in periods.items():
+        assert response.status_code == 200, response.text
+        assert [row["delivery_id"] for row in response.json()["deliveries"]] == ([1] if month == expected_month else [])
     with session_factory() as session:
         receipt = session.get(ReturnReceipt, created.json()["id"])
         receipt.reconciliation_month = None
         session.commit()
     with TestClient(app) as client:
         _login(client, "finance")
-        legacy_june = client.get(
+        # Historical NULL uses the original delivery/cycle fallback, even if
+        # the modern request explicitly selected another month.
+        legacy_month = "2026-09" if delivery_day == date(2026, 8, 20) else delivery_day.strftime("%Y-%m")
+        legacy = client.get(
             "/api/finance/pending_statements",
-            params={"customer_id": 1, "statement_month": "2026-06"},
+            params={"customer_id": 1, "statement_month": legacy_month},
         )
-    assert [row["delivery_id"] for row in legacy_june.json()["deliveries"]] == [1]
+    assert legacy.status_code == 200, legacy.text
+    assert [row["delivery_id"] for row in legacy.json()["deliveries"]] == [1]
 
 
 def test_p0_31_date_and_month_adjustments_are_versioned_and_lock_after_statement(

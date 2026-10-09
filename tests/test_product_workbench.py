@@ -154,6 +154,56 @@ def test_search_order_mold_and_detail_are_price_free(mobile_erp_app):
         assert "unit_price" not in detail.text and "cost_unit_price" not in detail.text
 
 
+def test_search_does_not_reveal_order_reference_without_orders_view(mobile_erp_app):
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        user = db.scalar(select(User).where(User.username == "mobile-scoped"))
+        db.add_all([
+            UserPermissionOverride(user_id=user.id, permission_code="products.view", is_allowed=True),
+            UserPermissionOverride(user_id=user.id, permission_code="orders.view", is_allowed=False),
+        ])
+        product = db.get(Product, ids["product"])
+        order = Order(order_number="SO-PRIVATE-REF-101", customer_id=product.customer_id,
+                      customer_po="PO-PRIVATE-REF-101", order_date=date(2026, 10, 10),
+                      status="pending_production")
+        db.add(order)
+        db.flush()
+        db.add(OrderItem(order_id=order.id, product_id=product.id,
+                         quantity=1, unit_price=Decimal("1"), subtotal=Decimal("1"),
+                         snapshot_product_name=product.product_name,
+                         snapshot_product_code=product.product_code))
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "mobile-scoped")
+        assert client.get("/api/product-workbench/search", params={
+            "q": "MOBILE-BOX-001"}).json()["total"] == 1
+        for private_term in ("SO-PRIVATE-REF-101", "PO-PRIVATE-REF-101"):
+            response = client.get("/api/product-workbench/search", params={"q": private_term})
+            assert response.status_code == 200, response.text
+            assert response.json()["total"] == 0
+        _login(client, "mobile-admin")
+        assert client.get("/api/product-workbench/search", params={
+            "q": "PO-PRIVATE-REF-101"}).json()["total"] == 1
+
+
+def test_report_dimension_token_rejects_third_axis(mobile_erp_app):
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        product = db.get(Product, ids["product_two"])
+        product.report_length_mm = Decimal("120.25")
+        product.report_width_mm = Decimal("80.50")
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        two = client.get("/api/product-workbench/search", params={
+            "q": "120.25x80.50", "dimension_basis": "report"})
+        three = client.get("/api/product-workbench/search", params={
+            "q": "120.25x80.50x5", "dimension_basis": "report"})
+        assert two.status_code == three.status_code == 200
+        assert ids["product_two"] in {item["id"] for item in two.json()["items"]}
+        assert three.json()["total"] == 0
+
+
 def test_real_cutting_projection_and_free_measurement_review(mobile_erp_app):
     app, ids, factory = _app(mobile_erp_app)
     with factory() as db:

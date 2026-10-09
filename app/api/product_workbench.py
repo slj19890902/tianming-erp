@@ -62,7 +62,8 @@ def search_products(response: Response,
     scope = _visible_customer_ids(user, db)
     products, total = find_products(db, scope, q=q, customer_id=customer_id,
                                     dimension_basis=dimension_basis, length=length,
-                                    width=width, height=height, page=page, page_size=page_size)
+                                    width=width, height=height, page=page, page_size=page_size,
+                                    allow_order_search=has_permission(user, "orders.view"))
     summary = inventory_summary(db, products) if has_permission(user, "warehouse.view") else {}
     drawings = product_drawing_metadata(db, [p.id for p in products], user=user,
                                         visible_customer_ids=scope)

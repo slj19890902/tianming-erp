@@ -86,7 +86,7 @@ def auto_plan_receipt(db, receipt, lot, actor):
         payload=dict(action='plan', operation_key=key, lot_version=lot.version, quantity=planned_input))
 
 
-def process(db, receipt_id, payload, actor):
+def process(db, receipt_id, payload, actor, *, result_builder=None):
     """One submit records this batch and leaves unprocessed input reserved."""
     request = encode(dict(payload, receipt_id=receipt_id))
     key = payload['operation_key']
@@ -129,6 +129,8 @@ def process(db, receipt_id, payload, actor):
             result = prep.mutate(db, receipt_id=receipt_id, payload=child_payload, actor=actor,
                                  output_kind=payload['output_kind'])
             result.update(completed_job_id=original.id, continuation_job_id=None, remaining_input_quantity=0)
+            if result_builder is not None:
+                result = result_builder(db, receipt_id, payload, actor, result)
             db.add(Command(operation_key=key,receipt_item_id=receipt_id,request_json=request,result_json=encode(result),actor_id=actor.id))
             db.flush()
             return result
@@ -150,6 +152,8 @@ def process(db, receipt_id, payload, actor):
     result = dict(action='complete',job_id=batch.id,completed_job_id=batch.id,
         continuation_job_id=continuation,remaining_input_quantity=remaining,
         original_job_id=original.id if original else None)
+    if result_builder is not None:
+        result = result_builder(db, receipt_id, payload, actor, result)
     db.add(Command(operation_key=key,receipt_item_id=receipt_id,request_json=request,result_json=encode(result),actor_id=actor.id))
     db.flush()
     return result

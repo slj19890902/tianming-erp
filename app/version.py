@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.580"
-APP_VERSION_NAME = "已确认同实物成品共用库存"
+APP_VERSION = "v0.22.582"
+APP_VERSION_NAME = "仓库颜色参考折叠与货架库龄标识"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5524,3 +5524,20 @@ APP_VERIFICATION_STEPS = [
     "正常办理订单时核对本客户编码、名称及价格；实际送货、撤销和现场货架由管理员验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.580：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "生产任务单采用大字双联，统一订单号，按存货编码列出订单数、成品抵扣和需生产数；长报料组整张A4续接。",
+    "分切、模切、开槽、印刷按工序显示参数与位置，只显示打钉或粘贴，不显示无需结合和一开一的空工序。",
+    "修复正常收料导致任务版本永久误报；打印前重读当前内容，保留真实版本冲突、权限及库存事实保护。",
+]
+APP_CHANGELOG = [*(f"v0.22.581：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "仓库入库时间颜色参考默认折叠，点击展开；收起后地图颜色继续保留。",
+    "货架编号底色显示架内最久一档，满365天深红白字；沿用同产品最近有效入库时间和搜索范围。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，确认左侧仅显示入库时间颜色按钮；点击展开和收起，地图均可正常查看。",
+    "核对货架编号底色与其最久库存档位一致；选中特定产品查找时仅反映该产品，空架白色，未知日期灰纹。",
+]
+APP_CHANGELOG = [*(f"v0.22.582：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

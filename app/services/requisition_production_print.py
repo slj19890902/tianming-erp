@@ -342,6 +342,9 @@ def build_supplier_requisition_production_package(
         ).all():
             order_context[int(order_item.id)] = (order_item, sales_order, customer)
 
+    from app.services.production_paper_inventory import paper_inventory_sources, component_picks
+    picking_sources = paper_inventory_sources(db, order_item_ids, cutoff=order.created_at)
+
     requisition_item_ids: set[int] = set()
     for item in items:
         match = _REQUISITION_ITEM_SOURCE.fullmatch(str(item.source_key or "").strip())
@@ -659,6 +662,8 @@ def build_supplier_requisition_production_package(
         card = grouped.get(group_key)
         if card is None:
             card = {
+                "paper_group_id": f"supplier-order:{order.id}",
+                "supplier_order_number": order.order_number,
                 "supplier_order_item_id": int(item.id),
                 "source_identity": source_identity,
                 "component_label": component_label,
@@ -763,6 +768,20 @@ def build_supplier_requisition_production_package(
         cutting_instruction = cutting_work_instruction(item.sheet_cutting_snapshot)
         component = {
             "supplier_order_item_id": item.id,
+            "order_item_id": item.order_item_id,
+            "bom_component_id": component_snapshot.id if component_snapshot is not None else None,
+            "customer_order_quantity": (int(component_snapshot.required_piece_quantity)
+                if component_snapshot is not None else int(order_item.quantity) if order_item is not None
+                else int(item.quantity or 0) + int(item.stock_deduction_qty or 0)),
+            "finished_deduction_quantity": int(item.stock_deduction_qty or 0),
+            "quantity_per_set": int(component_snapshot.quantity_per_set) if component_snapshot is not None else None,
+            "order_set_quantity": int(component_snapshot.order_set_quantity) if component_snapshot is not None else None,
+            "task_status": task.status if task is not None else None,
+            "needs_die_cut": bool((item.sheet_cutting_snapshot or {}).get('is_die_cut'))
+                if item.sheet_cutting_snapshot else box_category == "die_cut",
+            "inventory_pick_lines": component_picks(picking_sources, order_item_id=item.order_item_id,
+                bom_id=component_snapshot.id if component_snapshot is not None else None,
+                component_type=component_type),
             "production_process": (component_snapshot.snapshot_component_production_process
                 if component_snapshot is not None else product.production_process if product else None),
             "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
@@ -775,7 +794,10 @@ def build_supplier_requisition_production_package(
             "product_name": item.product_name,
             "specification": specification,
             "planned_finished_quantity": int(item.quantity or 0),
-            "finished_unit": "个" if component_snapshot is not None else "只",
+            "finished_unit": "片" if component_snapshot is not None else (
+                (order_item.sales_unit_snapshot if order_item is not None else None)
+                or (product.unit if product is not None else None)
+                or ("张" if layout_kind == "liner" else "只")),
             "requisition_quantity": int(item.requisition_qty or 0),
             "requisition_unit": "张",
             "report_length_mm": item.report_length_mm or order.report_length_mm,
@@ -1007,15 +1029,9 @@ def build_supplier_requisition_production_package(
             card["review_messages"] = _unique_text(
                 [*card["review_messages"], "生产任务版本缺失，请人工核对"]
             )
-        elif (
-            order.created_at is not None
-            and task.updated_at is not None
-            and task.updated_at > order.created_at
-        ):
-            card["review_required"] = True
-            card["review_messages"] = _unique_text(
-                [*card["review_messages"], "生产任务版本已变化，请核对并重打"]
-            )
+        # This endpoint already projects the current task. Ordinary receiving/status
+        # updates after the purchase creation are not evidence of stale paper.
+        # Prepared-batch task CAS and full content fingerprints remain enforced.
 
     cards = list(grouped.values())
     reminders_by_customer = production_reminders_by_customer(
@@ -1069,11 +1085,6 @@ def build_supplier_requisition_production_package(
             if per_bundle
             else None
         )
-        if len(card["components"]) > 6:
-            card["review_required"] = True
-            card["review_messages"] = _unique_text(
-                [*card["review_messages"], "同码物理组件较多，纸面已使用紧凑摘要，请扫码核对完整任务"]
-            )
         card["components"].sort(
             key=lambda row: (
                 int(row["display_order"]),
@@ -1148,6 +1159,7 @@ def build_supplier_requisition_production_package(
     cards = [stock_cards.get(card['supplier_order_item_id'], card) for card in cards]
     from app.services.production_route_contract import production_route_contract
     for card in cards:
+        card.setdefault('paper_group_id', f'supplier-order:{order.id}')
         for component in card['components']:
             if 'production_route' not in component:
                 component['production_route'] = production_route_contract(
@@ -1216,9 +1228,7 @@ def build_supplier_requisition_production_package(
     review_messages = _unique_text(
         [message for card in cards for message in card["review_messages"]]
     )
-    # The paper renderer has an adaptive, bounded half-A4 summary.  Component
-    # count is still surfaced as a review notice above, but must never make a
-    # valid frozen task unprintable.
+    # The renderer paginates complete employee facts without shrinking or truncation.
     layout_overflow = False
     used_task_ids = {
         int(component["production_task_id"])

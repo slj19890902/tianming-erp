@@ -1,0 +1,27 @@
+/* Real paper dimensions: never scale employee instructions to fit. */
+.paper-v2.page { width:210mm; height:297mm; padding:8mm 10mm; color:#000; background:#fff; }
+.paper-v2.batch-page { display:grid; grid-template-rows:140.5mm 140.5mm; gap:0; }
+.paper-v2 .paper-half { box-sizing:border-box; height:140.5mm; padding:4mm 0 7mm; position:relative; overflow:visible; font-family:Arial,"Microsoft YaHei",sans-serif; font-size:14pt; line-height:1.24; display:block; min-height:0; }
+.paper-half + .paper-half { border-top:1px dashed #777; }
+.paper-head { display:flex; justify-content:space-between; align-items:start; gap:3mm; margin-bottom:2mm; }
+.paper-head h1 { font-size:22pt; line-height:1.16; margin:0 0 1mm; font-weight:800; overflow-wrap:anywhere; }
+.paper-title { font-size:11pt; line-height:1.2; margin-bottom:1mm; }
+.paper-title [data-part] { font-weight:800; }
+.paper-head img { width:16mm; height:16mm; flex:none; }
+.paper-orders { font-size:12pt; overflow-wrap:anywhere; }
+.paper-board { display:flex; flex-wrap:wrap; gap:1mm 5mm; align-items:baseline; border-top:2px solid #000; padding:2mm 0; }
+.paper-board strong,.paper-board b { font-size:17pt; }
+.paper-board span { font-size:12pt; }
+.paper-products { width:100%; border-collapse:collapse; table-layout:fixed; margin:0 0 2mm; font-size:13pt; }
+.paper-products th,.paper-products td { border:1px solid #333; padding:1.5mm 1mm; line-height:1.2; overflow-wrap:anywhere; vertical-align:middle; }
+.paper-products th { font-size:11.5pt; white-space:nowrap; font-weight:600; }
+.paper-products td:first-child,.paper-products td:last-child { font-weight:800; }
+.paper-products td:nth-child(n+3) { text-align:right; }
+.paper-operation { display:flex; gap:3mm; padding:1.2mm 0; border-bottom:1px solid #aaa; overflow-wrap:anywhere; }
+.paper-operation b { flex:0 0 auto; max-width:47%; }
+.paper-operation span { min-width:0; }
+.paper-qrs { display:grid; grid-template-columns:repeat(5,1fr); gap:2mm; padding-top:2mm; }
+.paper-qrs>div { display:flex; flex-direction:column; align-items:center; gap:1mm; font-size:10pt; overflow-wrap:anywhere; }
+.paper-qrs img { width:16mm; height:16mm; }
+.paper-foot { position:absolute; bottom:2mm; left:0; right:0; display:flex; justify-content:space-between; font-size:9pt; color:#333; }
+@media print { .paper-v2.page { margin:0; box-shadow:none; break-after:page; } .paper-v2:last-child { break-after:auto; } }

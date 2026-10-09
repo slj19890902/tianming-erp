@@ -315,10 +315,10 @@ def test_erp_selection_ui_and_print_page_keep_explicit_mutation_allowlist() -> N
         "production_task_versions",
     ):
         assert marker in INDEX
-    assert "默认不选" in INDEX
+    assert "productionPrintSelections" in INDEX
     assert "batch_id" in PRINT_PAGE
     assert "/api/requisition/production-print-batches/" in PRINT_PAGE
-    assert 'method:"GET"' in PRINT_PAGE
+    assert "method:'GET'" in PRINT_PAGE
     assert PRINT_PAGE.count('method:"POST"') == 1
     assert "/api/production/tasks/${encodeURIComponent(row.task_id)}/label-plan-refresh" in PRINT_PAGE
     assert "expected_task_version:row.expected_task_version" in PRINT_PAGE

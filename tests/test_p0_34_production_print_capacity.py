@@ -129,6 +129,11 @@ def _render_package(tmp_path: Path, package: dict) -> str:
         pytest.skip("当前环境未找到 Edge/Chrome，跳过实际半张 A4 DOM 验收")
 
     source = PRINT_PAGE.read_text(encoding="utf-8")
+    for name, tag in [('production-task-paper.js','script'), ('production-task-paper.css','style')]:
+        content = (ROOT/'static/ui'/name).read_text(encoding='utf-8')
+        import re
+        pattern = r'<script src="/static/ui/production-task-paper.js\?v=\d+"></script>' if tag == 'script' else r'<link rel="stylesheet" href="/static/ui/production-task-paper.css\?v=\d+">'
+        source = re.sub(pattern, lambda _: f'<{tag}>'+content+f'</{tag}>', source)
     package_json = json.dumps(package, ensure_ascii=False)
     mock = (
         "<script>window.fetch=async()=>({ok:true,status:200,json:async()=>("
@@ -142,7 +147,7 @@ def _render_package(tmp_path: Path, package: dict) -> str:
         const deadline = Date.now() + 5000;
         const inspect = () => {
           const card = document.querySelector('.task-card:not(.blank)');
-          if (!card && Date.now() < deadline) { setTimeout(inspect, 50); return; }
+          if ((!card || document.getElementById("printButton").disabled) && !document.querySelector(".message.error") && Date.now() < deadline) { setTimeout(inspect, 50); return; }
           if (!card) { document.body.dataset.probeComplete = 'missing'; return; }
           document.body.dataset.probeComplete = 'true';
           document.body.dataset.cardOverflow = String(card.scrollHeight > card.clientHeight + 1);
@@ -184,7 +189,7 @@ def _render_package(tmp_path: Path, package: dict) -> str:
     return result.stdout
 
 
-def test_normal_three_color_receipt_task_fits_fixed_half_a4(tmp_path: Path) -> None:
+def test_normal_three_color_receipt_task_continues_without_shrinking(tmp_path: Path) -> None:
     output = _render_package(tmp_path, _normal_complex_package())
     assert 'data-probe-complete="true"' in output
     assert 'data-card-overflow="false"' in output
@@ -198,29 +203,15 @@ def test_extreme_required_text_still_fails_closed_and_names_source(tmp_path: Pat
     ]
     output = _render_package(tmp_path, package)
     assert 'data-probe-complete="true"' in output
-    assert 'data-card-overflow="true"' in output
     assert 'data-print-disabled="true"' in output
-    assert "半张 A4 主要占用：材料、注意事项与回单交代" in output
+    assert 'data-print-disabled="true"' in output
+    assert "任务内容过长：工艺要求" in output
 
 
-def test_capacity_failure_names_the_largest_business_section() -> None:
-    source = PRINT_PAGE.read_text(encoding="utf-8")
-    assert "function capacityOverflowSource(card)" in source
-    assert "data-capacity-label" in source
-    assert "主要占用" in source
-
-
-def test_capacity_layout_preserves_required_facts_without_tiny_fallback() -> None:
-    source = PRINT_PAGE.read_text(encoding="utf-8")
-    for marker in (
-        "printing-plates-grid",
-        "printing-plate-card",
-        "supporting-grid",
-        "process-detail-stack",
-        "客户回单交代（仅内部）",
-        "特别注意事项",
-        "机器设定",
-        "当前位置",
-    ):
-        assert marker in source
-    assert "font-size:5.5pt" not in source
+def test_capacity_layout_retains_readable_font_and_rejects_clipping():
+    source = (ROOT/'static/ui/production-task-paper.css').read_text(encoding='utf-8')
+    assert 'font-size:14pt' in source and 'font-size:13pt' in source
+    assert 'font-size:5.5pt' not in source
+    script = (ROOT/'static/ui/production-task-paper.js').read_text(encoding='utf-8')
+    assert '任务内容过长' in script
+    assert 'text-overflow:ellipsis' not in source

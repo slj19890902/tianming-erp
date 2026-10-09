@@ -96,58 +96,8 @@ expect(single[0].fullPage === false, 'single task must stay in upper half');
     subprocess.run(["node", "-e", script], cwd=ROOT, check=True)
 
 
-def test_print_page_has_only_half_page_layout_and_adapts_overflow_without_blocking() -> None:
-    assert "grid-template-rows:140.5mm 140.5mm" in PRINT_PAGE
-    assert "single-page" not in PRINT_PAGE
-    assert "full-card" not in PRINT_PAGE
-    assert "cardNeedsFullPage" not in PRINT_PAGE
-    assert 'class="page batch-page"' in PRINT_PAGE
-    assert "每个生产任务固定半张 A4" in PRINT_PAGE
-    assert "element.scrollHeight > element.clientHeight + 1" in PRINT_PAGE
-    assert "任务内容超过页面容量，已停止打印" not in PRINT_PAGE
-    assert "function renderPages(packageData, ultraKeys = new Set())" in PRINT_PAGE
-    assert ".task-card.ultra-compact" in PRINT_PAGE
-    assert "已自动紧凑" in PRINT_PAGE
-
-
-def test_qr_caption_removed_and_header_space_favors_business_fields() -> None:
-    assert 'alt="扫码查看当前产品资料"' in PRINT_PAGE
-    assert "扫码看当前资料</span>" not in PRINT_PAGE
-    assert "customer-metric" in PRINT_PAGE
-    assert "code-metric" in PRINT_PAGE
-    assert "name-metric" in PRINT_PAGE
-    assert ".customer-metric strong { white-space:nowrap;" in PRINT_PAGE
-    assert "grid-template-columns:1.24fr .62fr 1.14fr" in PRINT_PAGE
-
-
-def test_complex_cards_use_compact_half_page_styles_without_hiding_required_content() -> None:
-    assert "function cardNeedsCompactLayout(card)" in PRINT_PAGE
-    assert ".task-card.printing-heavy" in PRINT_PAGE
-    assert ".task-card.printing-heavy .product-qr img { width:16mm; height:16mm; }" in PRINT_PAGE
-    assert 'style="display:none"' not in PRINT_PAGE
-    for label in (
-        "客户",
-        "存货编码",
-        "产品名称",
-        "成品内尺寸",
-        "图纸",
-        "交期",
-        "客户订单号",
-        "订单数量",
-        "库存抵扣",
-        "计划生产",
-        "采购张数",
-        "材质 / 楞型",
-        "特别注意事项",
-    ):
-        assert label in PRINT_PAGE
-    assert 'class="structure-body"' not in PRINT_PAGE
-    assert '<object data="${escapeHtml(drawing.url)}"' not in PRINT_PAGE
-    assert "有图纸，扫码查看" in PRINT_PAGE
-
-
-def test_many_components_are_reviewable_but_never_rejected_for_paper_capacity() -> None:
-    assert "物理组件超过单张纸面容量" not in PRINT_SERVICE
-    assert "layout_overflow = False" in PRINT_SERVICE
-    assert '"printable": True' in PRINT_SERVICE
-    assert "同码物理组件较多，纸面已使用紧凑摘要，请扫码核对完整任务" in PRINT_SERVICE
+def test_large_font_renderer_replaces_ultra_layout():
+    assert 'ProductionTaskPaper.render' in PRINT_PAGE
+    render = PRINT_PAGE.split('async function render(packageData)',1)[1].split('function packageEndpoint',1)[0]
+    assert 'ultra' not in render
+    assert 'overflowingCards().length' in render

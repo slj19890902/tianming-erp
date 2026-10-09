@@ -2619,9 +2619,15 @@ body.warehouse-twin-page {
 .twin-rack-focus-panel.twin-rack-stage header p.twin-rack-search-marker { color: #754000; background: #fff3bf; padding: 4px 6px; font-size: 12px; }
 
 /* Intake fill is independent of hover, lookup and warehouse operations. */
-.editor-canvas.with-intake-legend { display: grid; grid-template-columns: 150px minmax(0, 1fr); }
-.editor-canvas.with-intake-legend .map-viewport { position: relative; grid-column: 2; height: 100%; }
-.warehouse-intake-legend { grid-column: 1; grid-row: 1; padding: 14px 10px; background: #F3F4F6; border-right: 1px solid #D8DDE3; font-size: 12px; color: #334155; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.editor-canvas.with-intake-legend:has(.warehouse-intake-legend[open]) { display: grid; grid-template-columns: 150px minmax(0, 1fr); }
+.editor-canvas.with-intake-legend .map-viewport { position: relative; min-width: 0; height: 100%; }
+.editor-canvas.with-intake-legend:has(.warehouse-intake-legend[open]) .map-viewport { grid-column: 2; }
+.warehouse-intake-legend { position: absolute; top: 10px; left: 10px; z-index: 5; font-size: 12px; color: #334155; }
+.warehouse-intake-legend[open] { position: static; grid-column: 1; grid-row: 1; padding: 10px; background: #F3F4F6; border-right: 1px solid #D8DDE3; overflow: auto; }
+.warehouse-intake-legend summary { padding: 7px 6px; border: 1px solid #CBD5E1; border-radius: 4px; background: #FFFFFF; color: #0F172A; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.warehouse-intake-legend summary:focus-visible { outline: 2px solid #2563EB; outline-offset: 2px; }
+.intake-legend-content { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.warehouse-intake-legend small { font-size: 11px; }
 .warehouse-intake-legend b { font-size: 13px; color: #0F172A; margin-bottom: 3px; white-space: nowrap; }
 .warehouse-intake-legend span { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .warehouse-intake-legend i { display: inline-block; width: 27px; height: 17px; border: 1px solid #CBD5E1; flex: 0 0 auto; }
@@ -2640,8 +2646,8 @@ body.warehouse-twin-page {
 .intake-partial-unknown { background: #E4E7EB; color: #475569; border: 1px solid #CBD5E1; font-size: 11px; line-height: 14px; padding: 0 4px; border-radius: 2px; }
 .twin-rack-stage .twin-elevation-level:has(.intake-cell.rack-search-hit) > span { background: #F1F5F9; color: #334155; }
 @media (max-width: 600px) {
-  .editor-canvas.with-intake-legend { grid-template-columns: 118px minmax(0, 1fr); }
-  .warehouse-intake-legend { padding: 10px 6px; gap: 6px; font-size: 11px; }
+  .editor-canvas.with-intake-legend:has(.warehouse-intake-legend[open]) { grid-template-columns: 126px minmax(0, 1fr); }
+  .warehouse-intake-legend[open] { padding: 10px 6px; font-size: 11px; }
   .warehouse-intake-legend b { font-size: 11px; }
 }
 @media (max-width:880px) {

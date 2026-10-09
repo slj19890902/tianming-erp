@@ -266,7 +266,8 @@ def test_card_page_is_a4_half_page_print_and_keeps_writes_in_explicit_label_refr
         'retryButton.addEventListener("click", loadPackage)'
     )]
     refresh_body = CARD[CARD.index('labelRefreshButton.addEventListener("click"') :]
-    assert 'method:"GET"' in load_body
+    assert 'fetchCurrentPackage(activeController.signal)' in load_body
+    assert "method:'GET'" in CARD
     assert 'method:"POST"' not in load_body
     assert 'method:"POST"' in refresh_body
     assert "confirmed_not_started:true" in refresh_body

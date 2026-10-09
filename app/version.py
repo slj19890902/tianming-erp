@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.600"
-APP_VERSION_NAME = "手机查货返回与现场触控"
+APP_VERSION = "v0.22.601"
+APP_VERSION_NAME = "桌面盘点审核结果核对"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5759,3 +5759,17 @@ APP_VERIFICATION_STEPS = [
     "在小屏手机核对长编码、数量和按钮完整可见；现场手机和扫码硬件仍需人工确认。",
 ]
 APP_CHANGELOG = [*(f"v0.22.600：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "盘点审核构造完整结果后再保存，避免已经审核却因回执读取失败提示错误；库存和审核事务规则保持。",
+    "桌面审核前保留原单和原请求，网络异常可直接核对审核结果，明确重试仍沿原请求，避免重复处理。",
+    "待核对单据暂停新的审核，其他单据可以继续；成功后的列表刷新失败与保存结果分别显示。",
+    "审核只需一次必要确认；迟到的旧详情不能覆盖新单或重新打开已关闭窗口，切账号继续受保护。",
+    "本版无数据库迁移，不修改正式历史库存、订单或审核记录；未查到原结果仍保留请求。",
+]
+APP_VERIFICATION_STEPS = [
+    "进入仓库的盘点记录，正常审核只确认一次，核对实际单号、状态及差额。",
+    "若显示结果待核对，点击该原单的“核对审核结果”；不要另建重复审核，其他盘点单可正常处理。",
+    "审核成功但列表未刷新时只刷新列表；无需为验收额外调整真实库存。",
+]
+APP_CHANGELOG = [*(f"v0.22.601：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -19,7 +19,8 @@ EXTRA_FIELDS = (
     "supply_mode", "report_length_mm", "report_width_mm", "base_report_length_mm",
     "base_report_width_mm", "print_content", "printing_colors", "printing_plate_mode",
     "printing_plate_1_id", "printing_plate_2_id", "printing_plate_3_id", "surface_paper_type",
-    "mold_count", "cutting_rows", "cutting_cols", "sheet_cutting_settings",
+    "default_cutting_mode", "sheet_cutting_settings", "machine_set_length_mm",
+    "machine_set_width_mm", "machine_set_height_mm", "plate_alignment_value_mm", "plate_mount_value_mm",
 )
 
 
@@ -96,7 +97,15 @@ def preview(db, *, product_ids, lot_ids):
                 or frozen.get("assembly") or frozen.get("quantity_basis") or lot.unit != "boxes"):
             raise _error("批次单位或结构不适合普通成品共用")
         current = json.loads(product_basis(owner))
-        if any(value != current.get(key) for key, value in frozen.items()
+        def same_frozen_field(key, value):
+            if value == current.get(key):
+                return True
+            # The owner explicitly confirms the lot's interchangeability. This
+            # exact die-cut annotation adds no operation (see route contract);
+            # do not generalize it to added gluing, printing or unknown steps.
+            return (key == "production_process" and owner.box_category == "die_cut"
+                and value == "模切" and current.get(key) == "模切,无需结合")
+        if any(not same_frozen_field(key, value) for key, value in frozen.items()
                if key not in {"mold_tool_id", "quantity_basis"}):
             raise _error("批次冻结规格与产品不符；历史模具归档之外的差异须单独核实")
         lots.append(dict(lot_id=lid, version=lot.version, available=lot.quantity_available,
@@ -111,14 +120,24 @@ def preview(db, *, product_ids, lot_ids):
 
 def confirm(db, *, product_ids, lot_ids, preview_hash, operation_key, evidence, actor):
     """Only an authenticated active administrator can create a sharing fact."""
-    from app.services.bom_transactions import atomic_bom
-    from app.services.audit_log import append_audit_event
     if actor is None or not actor.is_active or actor.role != "admin":
         raise _error("仅活动管理员可确认成品共用", 403)
+    return _apply_confirmed(db, product_ids=product_ids, lot_ids=lot_ids,
+        preview_hash=preview_hash, operation_key=operation_key, evidence=evidence,
+        actor=actor, source="web")
+
+
+def _apply_confirmed(db, *, product_ids, lot_ids, preview_hash, operation_key, evidence, actor, source):
+    """Internal transaction; web authorization or reviewed offline job owns entry."""
+    from app.services.bom_transactions import atomic_bom
+    from app.services.audit_log import append_audit_event
+    if source not in {"web", "script"} or (source == "web" and actor is None):
+        raise _error("缺少共用确认的操作来源", 403)
+    actor_id = actor.id if actor is not None else None
     if not evidence or not evidence.strip() or len(evidence) > 1000:
         raise _error("请记录现场确认依据")
     request = _json(dict(product_ids=sorted(set(product_ids)), lot_ids=sorted(set(lot_ids)),
-        preview_hash=preview_hash, evidence=evidence.strip(), actor_id=actor.id))
+        preview_hash=preview_hash, evidence=evidence.strip(), actor_id=actor_id, source=source))
     with atomic_bom(db):
         previous = db.scalar(select(SharedFinishedGroup).where(SharedFinishedGroup.operation_key == operation_key))
         if previous is not None:
@@ -140,7 +159,7 @@ def confirm(db, *, product_ids, lot_ids, preview_hash, operation_key, evidence, 
             if locked.rowcount != 1:
                 raise _error("库存已变化，请重新预览")
         group = SharedFinishedGroup(operation_key=operation_key, request_json=request,
-            evidence=evidence.strip(), actor_id=actor.id)
+            evidence=evidence.strip(), actor_id=actor_id)
         db.add(group)
         db.flush()
         for row in value["products"]:
@@ -149,9 +168,10 @@ def confirm(db, *, product_ids, lot_ids, preview_hash, operation_key, evidence, 
                 product_basis_json=row["product_basis_json"]))
         for row in value["lots"]:
             db.add(SharedFinishedLot(group_id=group.id, lot_id=row["lot_id"], identity_json=row["identity_json"]))
-        append_audit_event(db, event_category="business", result="success", source="web",
+        append_audit_event(db, event_category="business", result="success", source=source,
             module_code="warehouse", action_code="confirm_shared_finished_stock", resource="inventory_lot",
             actor=actor, entity_type="shared_finished_group", entity_id=group.id,
+            operator_name="老板明确授权的发布维护任务" if source == "script" else None,
             details=dict(product_ids=sorted(set(product_ids)), lot_ids=sorted(set(lot_ids)),
                          preview_hash=preview_hash, evidence=evidence.strip()))
         db.flush()

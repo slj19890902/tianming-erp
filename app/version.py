@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.579"
-APP_VERSION_NAME = "对账确认与开票下载恢复"
+APP_VERSION = "v0.22.580"
+APP_VERSION_NAME = "已确认同实物成品共用库存"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5513,3 +5513,14 @@ APP_VERIFICATION_STEPS = [
     "补齐客户开票资料后继续下载，核对文件金额；下载重试不重复生成开票任务。",
 ]
 APP_CHANGELOG = [*(f"v0.22.579：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "明确确认的可互换成品可供组内不同客户接单和送货，共用一份库存余额；各客户名称、编码、售价和订单权限保持。",
+    "共用预占保留实物身份，支持送货撤销和移库拆分；历史库存客户、冻结模具、数量、来源和成本不改写。",
+    "首组仅按现场确认关联研光、光洋的80012043现货，其他编码及未确认批次不自动共用。",
+]
+APP_VERIFICATION_STEPS = [
+    "分别选择研光、光洋80012043，核对同一现货批次和位置、共用提示及剩余可用余额。",
+    "正常办理订单时核对本客户编码、名称及价格；实际送货、撤销和现场货架由管理员验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.580：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

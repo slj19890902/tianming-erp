@@ -100,7 +100,8 @@ def main():
     reader_sources = {'app/services/processed_component_stock.py',
                       'app/services/stock_preparation_processing.py',
                       'app/services/stock_preparation_assembly.py',
-                      'app/services/quotation_mutations.py', 'app/api/quotations.py'}
+                      'app/services/quotation_mutations.py', 'app/api/quotations.py',
+                      'app/services/shared_finished_stock.py', 'app/models/shared_finished_stock.py'}
     if not reader_sources <= sources.keys():
         raise ValueError('库存业务读取契约的实现不完整，禁止签名发布')
     schema_contract = schema_contract_from_sources(sources, args.revision)
@@ -118,7 +119,8 @@ def main():
     tree = output / 'payload'
     tree.mkdir()
     allowed = {'app', 'alembic', 'static', 'templates', 'desktop_assistant'}
-    singles = {'main.py', 'alembic.ini', 'requirements.txt', 'scripts/admin/release_erp.ps1'}
+    singles = {'main.py', 'alembic.ini', 'requirements.txt', 'scripts/admin/release_erp.ps1',
+               'scripts/admin/confirm_shared_finished_pilot.py'}
     for relative, content in sources.items():
         if not relative:
             continue

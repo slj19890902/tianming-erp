@@ -191,11 +191,13 @@ def workspace_rows(db, rows, state):
     return result
 
 
-def mutate_group(db,payload,actor,*,result_builder=None):
+def mutate_group(db,payload,actor,*,result_builder=None,assembly_result_builder=None):
     if payload['action'] in {'dispose','assemble','unassemble','store_outputs'}:
         from app.services.stock_preparation_disposition import dispose,assemble,unassemble,store_outputs
         if payload['action']=='dispose':
             return dispose(db,payload,actor,result_builder=result_builder)
+        if payload['action']=='assemble':
+            return assemble(db,payload,actor,result_builder=assembly_result_builder)
         return {'assemble':assemble,'unassemble':unassemble,'store_outputs':store_outputs}[payload['action']](db,payload,actor)
     key = payload['operation_key']
     request = encode(payload)

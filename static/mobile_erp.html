@@ -316,6 +316,7 @@
 
       <section id="lookupPage" hidden>
         <h1 class="page-title">现场查询</h1>
+        <section id="productWorkbench" aria-label="找产品与片料用途"></section>
         <section id="dimensionStock" class="card" aria-label="按尺寸找库存"></section>
         <h2>综合查询</h2>
         <p class="page-help">一次输入订单号、客户、存货编码、模具标签名称或尺寸；只返回当前账号有权限且在客户范围内的资料，不显示价格、成本或毛利。</p>
@@ -509,6 +510,8 @@
 
   <script src="/static/ui/mobile-field-return.js?v=20261010"></script>
   <script src="/static/ui/mobile-product-drawings.js?v=20261009-1"></script>
+  <link rel="stylesheet" href="/static/ui/product-workbench.css?v=20261010-product1">
+  <script src="/static/ui/product-workbench.js?v=20261010-product1"></script>
   <script src="/static/ui/mobile-dimension-stock.js?v=20261010-recovery1"></script>
   <script src="/static/ui/mobile-delivery-margin.js?v=20260915-costcontract428"></script>
   <script>
@@ -655,6 +658,7 @@
       }
 
       function clearMobilePortalState() {
+        window.ERPProductWorkbench?.destroyMobile();
         window.TmDimensionStock?.destroy();
         window.TmProductDrawings?.disposeWithin(document.body);
         state.lookupController?.abort();
@@ -817,6 +821,7 @@
       }
 
       async function logout() {
+        window.ERPProductWorkbench?.destroyMobile();
         fieldIntent(); state.fieldAuthGeneration++;
         window.TmMobileDeliveryMargin?.destroy?.();
         state.searchController?.abort();
@@ -865,6 +870,13 @@
         const isLookup = page === "lookup";
         if (isLookup && state.shell?.user?.id) {
           const user = state.shell.user;
+          window.ERPProductWorkbench?.mountMobile({container:byId('productWorkbench'),userId:user.id,onOrder:async row=>{
+            byId('lookupInput').value=row.order_number||row.customer_po||'';
+            byId('lookupCategory').value='orders';
+            byId('lookupUnfulfilled').checked=false;
+            await runUnifiedSearch(1);
+            byId('lookupResults').scrollIntoView({block:'start'});
+          }});
           window.TmDimensionStock?.mount({apiGet, apiPost, userId:user.id, displayName:user.display_name || user.real_name || user.username || "当前账号"});
         } else window.TmDimensionStock?.destroy();
         const isIncoming = page === "incoming";

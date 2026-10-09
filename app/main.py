@@ -42,6 +42,7 @@ from app.api.invoice_tasks import (
 )
 from app.api.incoming import router as incoming_router
 from app.api.mobile_erp import router as mobile_erp_router
+from app.api.product_workbench import router as product_workbench_router
 from app.api.master_data_versions import router as master_data_versions_router
 from app.api.materials import router as materials_router
 from app.api.suppliers import router as suppliers_router
@@ -1060,6 +1061,8 @@ def create_app() -> FastAPI:
     if not any(route.path == "/api/email-intake" for route in application.routes):
         from app.api.email_intake import router as email_intake_router
         application.include_router(email_intake_router, prefix="/api/email-intake", tags=["orders"])
+    if not any(route.path == "/api/product-workbench/search" for route in application.routes):
+        application.include_router(product_workbench_router, prefix="/api/product-workbench", tags=["product-workbench"])
 
     if not any(route.path == "/api/inventory-assistant" for route in application.routes):
         from app.api.inventory_assistant import router as inventory_assistant_router

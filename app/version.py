@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.605"
+APP_VERSION = "v0.22.606"
 APP_VERSION_NAME = "子件组套保存结果恢复"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5817,6 +5817,21 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.604：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 APP_CHANGES = [
+    "首页库存预警按客户排队，明细保留实存、可用、补库和审批状态；今日安排与历史积压分开展示。",
+    "首页与手机增加统一产品搜索，支持编码、客户、尺寸、模具和订单关键词；查看生产资料、图纸、BOM、库存位置和关联订单。",
+    "片料反查区分登记用途与尺寸候选，已确认共享库存及加工子件沿用原匹配规则和实际单位。",
+    "报料先选择现有订单或主动备库，沿用原草稿及审批；保留客户范围和成本权限，临时占位资料不能自动生产。",
+    "本版无数据库迁移，不修改正式库存、位置、模具、报价或历史订单事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新首页，查看不同客户的预警，再搜索 80011929、80011946 或实际存货编码，核对工艺、图纸及BOM。",
+    "进入库存与位置，核对实存/占用/可用及单位；定位地图后返回原产品。实际片料可点击查用途。",
+    "手机查货中使用找产品或片料找用途，核对图纸缩略图；有限客户账号只显示授权资料。",
+    "报料入口先选现有订单或主动备库；历史订单未提供冻结抵扣投影的字段显示待核，请进入原订单核对。无需为验收新增真实报料。",
+]
+APP_CHANGELOG = [*(f"v0.22.605：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
     "已加工子件组套前保留原账号、套数和位置；结果不明时，刷新页面仍可查回原保存结果。",
     "原组套结果未核清前保护同组后续入库，其他组可继续工作；明确继续时沿用原内容，防止误建另一笔组套。",
     "完整确认后显示本次实际消耗、成套数量和本次组套后余片，支持同子件多批来源及连续分批组套。",
@@ -5828,4 +5843,4 @@ APP_VERIFICATION_STEPS = [
     "已确认的记录应分别显示实际消耗和本次组套后余片；若列表或组套记录未刷新，只重新读取。",
     "无需为验收额外组套或调整真实库存；浏览器显示和现场操作交管理员核对。",
 ]
-APP_CHANGELOG = [*(f"v0.22.605：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.606：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

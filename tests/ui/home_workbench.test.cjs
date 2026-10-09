@@ -31,6 +31,59 @@ test('clearing homepage position also clears production search and reloads',asyn
 });
 
 const {customerGroups,fairTasks,attentionCategory}=require('../../static/ui/home-workbench.js');
+const {taskGroups,listSize,priorityTasks,template}=require('../../static/ui/home-workbench.js');
+
+test('full authorized stock population keeps approval separate from arranged after action filter',()=>{
+ const rows=[{customer_id:7,customer_label:'研光',policy_id:1,suggested_new_requisition_sheet_quantity:10,draft_ready:true},{customer_id:7,customer_label:'研光',policy_id:2,pending_request_ids:[8],replenishment_state:'already_ordered'}];
+ const groups=customerGroups(rows);assert.equal(groups[0].action,1);assert.equal(groups[0].approval,1);assert.equal(groups[0].arranged,0);
+ const vm={homeWarnings:rows,homeCustomer:'',homeQuery:'',homeStockTab:'action'};
+ vm.homeVisibleWarnings=mixin.computed.homeVisibleWarnings.call(vm);
+ vm.homeStockGroups=mixin.computed.homeStockGroups.call(vm);
+ assert.equal(mixin.computed.homeStockRows.call(vm).length,1);
+ assert.equal(mixin.computed.homeStockCounts.call(vm).approval,1);
+});
+test('old due dates remain risk but do not enter the three explicit priority actions',()=>{
+ const rows=[{id:'old',customer_id:1,key:'pending_delivery',urgency:'overdue',due_date:'2026-07-15'},{id:'today',customer_id:2,key:'pending_delivery',urgency:'today',due_date:'2026-10-10'},{id:'review',customer_id:3,key:'approval',urgency:'approval'}];
+ assert.deepEqual(priorityTasks(rows,'2026-10-10').map(g=>g.rows[0].id),['today','review']);
+});
+test('one customer and order action group retains each original task for its own operation',()=>{
+ const rows=Array.from({length:56},(_,i)=>({id:`delivery:${i}`,key:'pending_delivery',customer_id:1,order_id:10,action_text:'安排送货',product_code:`P${i}`}));
+ rows.push({id:'material',key:'pending_material',customer_id:1,order_id:10,action_text:'安排报料'});
+ const groups=taskGroups(rows);assert.equal(groups.length,2);assert.equal(groups[0].rows.length,56);assert.equal(groups[0].rows[12].id,'delivery:12');
+});
+test('page capacity follows measured usable height and preserves customer plus detail panels',()=>{
+ assert(listSize(420,60)>=6);assert(listSize(260,60)>=4);
+ assert.match(template,/product-workbench :vm="vm"/);assert.match(template,/!vm.productWorkbenchOpen/);
+ assert.match(template,/home-queue/);assert.match(template,/home-detail/);
+ assert.match(template,/v-if="vm.homeAnalyticsOpen" class="home-panel home-progress"/);
+});
+test('row count uses the rendered header, row and footer geometry',()=>{
+ const node=(top,height)=>({getBoundingClientRect:()=>({top,bottom:top+height,height})});
+ const detail={querySelector:s=>s.includes('home-stock-head')?node(401,29):s.includes('home-stock-row')?node(430,62):node(700,30),getBoundingClientRect:()=>({top:390})};
+ const vm={$el:{querySelector:()=>({querySelector:()=>detail})},isLargeUi:false,homeAvailableHeight:0,homeRowHeight:0};
+ const saved=global.innerHeight;global.innerHeight=768;
+ try{mixin.methods.homeMeasure.call(vm);assert.equal(vm.homeRowHeight,62);assert.equal(listSize(vm.homeAvailableHeight,vm.homeRowHeight),4);
+ global.innerHeight=1080;mixin.methods.homeMeasure.call(vm);assert(listSize(vm.homeAvailableHeight,vm.homeRowHeight)>=6);}
+ finally{global.innerHeight=saved;}
+});
+test('selected stock customer remains in the queue when its action row is filtered out',()=>{
+ const rows=[{customer_id:1,customer_label:'A',pending_request_ids:[5]},{customer_id:2,customer_label:'B',suggested_new_requisition_sheet_quantity:3,draft_ready:true}];
+ const vm={homeWarnings:rows,homeWorkspace:'stock',homeCustomer:'',homeQuery:'',homeStockCustomer:1};
+ vm.homeVisibleWarnings=mixin.computed.homeVisibleWarnings.call(vm);
+ vm.homeStockGroups=mixin.computed.homeStockGroups.call(vm);
+ vm.homeQueueGroups=mixin.computed.homeQueueGroups.call(vm);
+ assert.equal(mixin.computed.homeSelectedCustomer.call(vm),1);
+ assert.equal(vm.homeQueueGroups.length,2);
+});
+test('product keyword narrows visible rows while customer status totals remain complete',()=>{
+ const rows=[{customer_id:1,customer_label:'A',product_code:'P1',suggested_new_requisition_sheet_quantity:4,draft_ready:true},{customer_id:1,customer_label:'A',product_code:'P2',pending_request_ids:[6]}];
+ const vm={homeWarnings:rows,homeCustomer:'',homeQuery:'P1',homeStockTab:'all'};
+ vm.homeVisibleWarnings=mixin.computed.homeVisibleWarnings.call(vm);
+ vm.homeStockGroups=mixin.computed.homeStockGroups.call(vm);
+ assert.equal(vm.homeVisibleWarnings.length,1);
+ assert.equal(vm.homeStockGroups[0].approval,1);
+ assert.equal(mixin.computed.homeStockCounts.call(vm).all,2);
+});
 test('one hundred products occupy one customer row; a small customer stays visible',()=>{
  const rows=Array.from({length:100},(_,i)=>({customer_id:1,customer_label:'A',policy_id:i,suggested_new_requisition_sheet_quantity:1,draft_ready:true}));
  rows.push({customer_id:2,customer_label:'B',suggested_new_requisition_sheet_quantity:1,draft_ready:true});

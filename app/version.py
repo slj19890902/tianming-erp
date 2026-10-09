@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.586"
-APP_VERSION_NAME = "货架正视图与库存流水易读优化"
+APP_VERSION = "v0.22.587"
+APP_VERSION_NAME = "产品片只套单位统一及缺失工艺提示"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5589,3 +5589,14 @@ APP_VERIFICATION_STEPS = [
     "在地图更多中打开待送积压整理，核对仅展示建议，没有自动移货。",
 ]
 APP_CHANGELOG = [*(f"v0.22.586：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "组合前零件按片、BOM成品按套，无需结合按片，粘贴或打钉按只统一显示。",
+    "工艺缺失的旧产品保留原单位并提示待完善，修改无关资料不会自动补造结合工艺。",
+    "常用箱、新订单、报料生产、库存和新标签衔接统一名称；历史冻结单据与库存数量保持。",
+]
+APP_VERIFICATION_STEPS = [
+    "在常用箱查看普通平片、粘贴纸箱和BOM成品，核对片、只、套及缺工艺产品的待完善提示。",
+    "查看同产品的新订单、仓库和生产打印单位；采购纸板仍为张，历史单据沿用原冻结单位。",
+]
+APP_CHANGELOG = [*(f"v0.22.587：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -1,4 +1,5 @@
 """Actual assembly of independently processed stock, without creating GET facts."""
+from app.services.product_unit_labels import basis_unit_label
 import json
 from collections import defaultdict
 from decimal import Decimal
@@ -164,7 +165,7 @@ def preview(db,parent_id,sets):
                 quantity=take,available=lot.quantity_available,location=prep.location_name(db,lot)))
             remaining-=take
     result=dict(recipe=recipe,parent_product_id=parent_id,sets=sets,sources=sources,
-        output_unit=json.loads(recipe['parent_basis']).get('unit'),
+        output_unit=basis_unit_label(recipe['parent_basis']),
         available_sets=min(capacities,default=0),shortages=shortages,excluded_sources=excluded,
         component_availability=component_availability,excluded_recipes=recipe.get('excluded_recipes',[]))
     result['basis_hash']=digest(result)

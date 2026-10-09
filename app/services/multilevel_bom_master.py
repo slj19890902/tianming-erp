@@ -1,4 +1,5 @@
 """Read real product/BOM identities; inventory semantics live on those edges."""
+from app.services.product_unit_labels import product_unit_label
 from sqlalchemy import select
 
 from app.models.product import Product
@@ -86,5 +87,6 @@ def preview_master_structure(db, root_product_id):
             "name": structure["products"][pid].product_name,
             "code": structure["products"][pid].product_code,
             "unit": structure["products"][pid].unit,
+            "unit_label": product_unit_label(structure["products"][pid]),
             "inventory_mode": structure["profiles"].get(pid, "leaf")}
             for pid in structure["order"]], "edges": structure["edges"]}

@@ -1,4 +1,5 @@
 """Receipt-backed completions share the history page, never fake order records."""
+from app.services.product_unit_labels import basis_unit_label
 import json
 from datetime import datetime
 from collections import defaultdict
@@ -106,7 +107,7 @@ def rows(db, scope=None, **filters):
             product_code=recipe['code'], product_name=recipe['name'], completed_at=utc_naive_to_api(completed_at),
             completed_by_name=' / '.join(dict.fromkeys(users.get(operators.get(j.id)) or '未登记' for j in jobs)),
             actual_output_quantity=quantity, planned_output_quantity=group['sets'] if group else jobs[0].expected_output,
-            output_unit='套' if group else '只', current_warehouse_location_name=' / '.join(locations),
+            output_unit='套' if group else basis_unit_label(snapshot.get('physical_basis') or {}), current_warehouse_location_name=' / '.join(locations),
             current_inventory_status='located' if locations else 'empty', can_adjust_actual_quantity=False,
             is_fully_delivered=False, can_transfer_to_stock=False))
     from app.services.stock_preparation_disposition import assembly_rows,unassemble_block

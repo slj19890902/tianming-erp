@@ -571,7 +571,7 @@ onMounted(async () => {
         <vxe-column field="unit_price" title="单价" width="140">
           <template #default="{ row }"><el-input v-model="row.unit_price" :disabled="entryLocked" /></template>
         </vxe-column>
-        <vxe-column title="单位" width="75"><template #default="{ row }">{{ selectedProduct(row.product_id)?.unit || '只' }}</template></vxe-column>
+        <vxe-column title="单位" width="95"><template #default="{ row }">{{ selectedProduct(row.product_id)?.unit_label || selectedProduct(row.product_id)?.unit || '待完善' }}<small v-if="selectedProduct(row.product_id)?.unit_needs_review">待完善</small></template></vxe-column>
         <vxe-column title="总价" width="110"><template #default="{ row }">{{ lineAmount(row).toFixed(2) }}</template></vxe-column>
         <vxe-column field="production_notes" title="生产说明（行级）" min-width="190">
           <template #default="{ row }"><el-input v-model="row.production_notes" :disabled="entryLocked" /></template>

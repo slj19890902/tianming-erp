@@ -22148,6 +22148,7 @@ def _mold_live_tasks(
                 "production_quantity_unit": payload.get(
                     "production_quantity_unit"
                 ),
+                "output_unit": payload.get("output_unit"),
                 "task_status": payload.get("status"),
                 "task_status_label": (
                     "已完工待送"

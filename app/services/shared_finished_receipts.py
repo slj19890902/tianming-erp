@@ -73,7 +73,13 @@ def capture_order(connection, item):
     basis.update({key:configuration[key] for key in ("splice_mode","pieces_per_box","flap_mm")})
     if normalized_specification_text(item.snapshot_spec)!=basis["spec"]:
         return
-    if any(shared._value(getattr(item,field,None))!=shared._value(basis.get(key)) for field,key in PAIRS.items()):
+    from app.services.product_unit_labels import basis_unit_label
+    # A name-only count label uses the SAME number, member identity and ledger.
+    # Nothing else in the frozen stock identity or order eligibility is relaxed.
+    if item.sales_unit_snapshot not in {basis.get("unit"), basis_unit_label(basis)}:
+        return
+    if any(shared._value(getattr(item,field,None))!=shared._value(basis.get(key))
+           for field,key in PAIRS.items() if key != "unit"):
         return
     if any(shared._value(getattr(item,"snapshot_"+key,None))!=shared._value(getattr(product,key,None)) for key in EXTRAS):
         return

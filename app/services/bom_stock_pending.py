@@ -1,4 +1,5 @@
 """Read-only unassembled stock index. Listing never reserves or assembles stock."""
+from app.services.product_unit_labels import product_unit_label
 import json
 from collections import defaultdict
 from sqlalchemy import select
@@ -56,11 +57,11 @@ def pending_stock(db, scope):
             total = sum(l.quantity_available for l in candidates)
             capacities.append(total // edge['quantity'])
             children.append(dict(product_id=child.id, product_code=child.product_code, product_name=child.product_name,
-                per_set=edge['quantity'], quantity=total, unit=child.unit))
+                per_set=edge['quantity'], quantity=total, unit=product_unit_label(child)))
             for lot in candidates:
                 location = db.get(WarehouseLocation, lot.warehouse_location_id)
                 sources.append(dict(lot_id=lot.id, product_id=child.id, product_name=child.product_name, product_code=child.product_code,
-                    quantity=lot.quantity_available, unit=child.unit, location=location.location_name if location else '位置待核对'))
+                    quantity=lot.quantity_available, unit=product_unit_label(child), location=location.location_name if location else '位置待核对'))
         if not sources:
             continue
         capacity = min(capacities, default=0)
@@ -85,7 +86,7 @@ def pending_stock(db, scope):
             customer_name=parent.customer.chinese_short_name or parent.customer.name,
             order_number='备库 · '+parent.product_code, product_name=parent.product_name,
             available_sets=capacity,reference_available_sets=capacity,verified_available_sets=verified_capacity,
-            unit=parent.unit,verified_output_unit=(verified or {}).get('output_unit'),
+            unit=product_unit_label(parent),verified_output_unit=(verified or {}).get('output_unit'),
             children=children, sources=sources, outputs=[],
             notice='未预占子件，配套数仅供参考；组装仍需核实本体、实物身份及实际数量。'))
     return result

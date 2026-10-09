@@ -1,4 +1,5 @@
 """An explicit reminder over the original order, fulfilled only by real dispatch."""
+from app.services.product_unit_labels import order_unit_label
 import json
 from datetime import date
 from fractions import Fraction
@@ -82,7 +83,7 @@ def _quantity_context(db,item):
     from app.services.delivery_quantities import order_basis,QuantityContractError
     order=db.get(Order,item.order_id)
     product=db.get(Product,item.product_id)
-    customer_unit=str(item.sales_unit_snapshot or (product.unit if product else '') or '只').strip()
+    customer_unit=order_unit_label(item, product)
     try:
         basis=order_basis(item,order.customer_id) if eligible(db,item) else None
     except QuantityContractError as error:

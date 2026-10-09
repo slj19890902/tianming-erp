@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.product_unit_labels import product_unit_label, order_unit_label
 
 import hashlib
 import json
@@ -518,6 +519,7 @@ def build_delivery_packaging_label_package(
             "order_numbers": list(row.get("order_numbers") or []),
             "customer_pos": list(row.get("customer_pos") or []),
             "total_quantity": total_quantity,
+            "unit_label": row.get("unit") or product_unit_label(product),
             "units_per_label": units_per_label,
             "label_count": label_count,
             "label_quantities": quantities,
@@ -545,6 +547,7 @@ def build_delivery_packaging_label_package(
                     "order_numbers": list(row.get("order_numbers") or []),
                     "customer_pos": list(row.get("customer_pos") or []),
                     "quantity": quantity,
+                    "unit_label": row.get("unit") or product_unit_label(product),
                     "total_quantity": total_quantity,
                     "units_per_label": units_per_label,
                     "label_number": index,
@@ -887,6 +890,7 @@ def build_supplier_requisition_packaging_label_package(
                 "order_numbers": list(card.get("order_numbers") or []),
                 "customer_pos": list(card.get("customer_pos") or []),
                 "total_quantity": total_quantity,
+                "unit_label": "片" if component_snapshot is not None else order_unit_label(item, product),
                 "units_per_label": units_per_label,
                 "label_count": label_count,
                 "label_quantities": quantities,
@@ -919,6 +923,7 @@ def build_supplier_requisition_packaging_label_package(
                 "customer_pos": plan["customer_pos"],
                 "quantity": quantity,
                 "total_quantity": plan["total_quantity"],
+                "unit_label": plan["unit_label"],
                 "units_per_label": plan["units_per_label"],
                 "label_number": index,
                 "label_count": plan["label_count"],
@@ -1317,6 +1322,7 @@ def build_composite_requisition_packaging_label_package(
                     "production_task_id": int(task_pairs[0][0].id),
                     "production_task_version": int(task_pairs[0][0].version or 1),
                     "product_id": int(order_item.product_id),
+                    "unit_label": order_unit_label(order_item, parent_product),
                     "product_version": int(parent_product.version),
                     "label_policy_source": "product_master_current",
                     "task_label_product_version_snapshot": (
@@ -1393,6 +1399,7 @@ def build_composite_requisition_packaging_label_package(
                     "production_task_id": int(task.id),
                     "production_task_version": int(task.version or 1),
                     "product_id": int(snapshot.component_product_id),
+                    "unit_label": "片",
                     "product_version": int(product.version),
                     "label_policy_source": "product_master_current",
                     "task_label_product_version_snapshot": (
@@ -1432,7 +1439,7 @@ def build_composite_requisition_packaging_label_package(
                     "production_task_id", "production_task_version", "template_version",
                     "customer_id", "customer_name", "customer_code", "product_code",
                     "product_name", "specification", "order_numbers", "customer_pos",
-                    "total_quantity", "units_per_label",
+                    "total_quantity", "units_per_label", "unit_label",
                 )
             }
             label.update(

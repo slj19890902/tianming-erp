@@ -1052,7 +1052,7 @@
             title: `任务 ${item.task_id}｜${item.product_code || "无存货编码"}`,
             lines: [
               `${item.customer_name || "客户未填写"}`,
-              `${item.product_name || "产品未填写"}｜${item.carton_specification || "规格未填写"}｜${Number(item.order_quantity || 0)}只`,
+              `${item.product_name || "产品未填写"}｜${item.carton_specification || "规格未填写"}｜${Number(item.order_quantity || 0)}${item.output_unit || "单位待完善"}`,
               `${item.process_tags?.length ? item.process_tags.join("、") : "工艺待核对"}${item.mold_display_name || item.mold_name ? `｜模具 ${item.mold_display_name || item.mold_name} ${item.mold_location_display || item.mold_location || ""}` : ""}`,
             ],
           };
@@ -1065,7 +1065,7 @@
           lines: [
             `${item.customer_name || "客户未填写"}｜${item.product_name || "产品未填写"}`,
             item.specification || "规格未填写",
-            `成品 ${Number(finished.quantity_total || 0)}只｜片料 ${Number(semi.quantity_total || 0)}张｜${Number(summary.position_count || 0)} 个位置`,
+            `成品 ${Number(finished.quantity_total || 0)}${finished.unit || "单位待完善"}｜片料 ${Number(semi.quantity_total || 0)}张｜${Number(summary.position_count || 0)} 个位置`,
           ],
         };
       }
@@ -2146,7 +2146,7 @@
         const form = node("section", "card");
         const query = node("input"); query.placeholder = "搜索客户、存货编码或产品名称";
         query.value = inventoryKeyword || customerKeyword || "";
-        const quantity = node("input"); quantity.type = "number"; quantity.min = "1"; quantity.placeholder = "现场实际数量（只）";
+        const quantity = node("input"); quantity.type = "number"; quantity.min = "1"; quantity.placeholder = "现场实际数量";
         const results = node("div");
         const search = node("button", "search-btn", "搜索产品"); search.type = "button";
         search.addEventListener("click", async () => {
@@ -2522,7 +2522,7 @@
         const facts = node("div", "station-facts");
         if (dieCut) {
           facts.append(
-            stationFact("订单数量", `${task.order_quantity || 0}只`),
+            stationFact("订单数量", `${task.order_quantity || 0}${task.output_unit || "单位待完善"}`),
             stationFact("材质 / 楞型", [task.material, task.flute_type ? `${task.flute_type}楞` : ""].filter(Boolean).join(" / ")),
             stationFact("模具名称", task.mold_display_name || task.mold_name || "未绑定"),
             stationFact("正式模具位置", task.mold_location_display || task.mold_location || "未登记")
@@ -2531,7 +2531,7 @@
           const cartonSize = [task.carton_length_mm, task.carton_width_mm, task.carton_height_mm].filter(value => value !== null && value !== undefined && value !== "").join("×");
           const reportSize = [task.report_length_mm, task.report_width_mm].map(value => value ?? "-").join("×");
           facts.append(
-            stationFact("订单数量", `${task.order_quantity || 0}只`),
+            stationFact("订单数量", `${task.order_quantity || 0}${task.output_unit || "单位待完善"}`),
             stationFact("产品尺寸", cartonSize ? `${cartonSize}mm` : "未填写"),
             stationFact("报料长宽", `${reportSize}mm`),
             stationFact("压线", [task.crease_type, ...(task.crease_values_mm || [])].filter(Boolean).join(" / ") || "未填写")

@@ -166,7 +166,7 @@
     <div id="excludedItemsSummary" class="excluded-items-summary" hidden></div>
     <div class="print-plan-table-wrap">
       <table class="print-plan-table">
-        <thead><tr><th>客户简称</th><th>存货编码</th><th>产品名称</th><th id="totalQuantityHeading">计划成品只数</th><th id="unitsPerLabelHeading">每张只数</th><th>系统计划张数</th><th>本次打印张数</th><th>结果</th></tr></thead>
+        <thead><tr><th>客户简称</th><th>存货编码</th><th>产品名称</th><th id="totalQuantityHeading">计划成品数量</th><th id="unitsPerLabelHeading">每张数量</th><th>系统计划张数</th><th>本次打印张数</th><th>结果</th></tr></thead>
         <tbody id="printPlanBody"></tbody>
       </table>
     </div>
@@ -315,7 +315,7 @@
         product_code:"存货编码",
         product_name:"产品名称",
         specification:"规格",
-        quantity:"数量（只/捆）",
+        quantity:"数量（单位/捆）",
         product_qr:"产品二维码（暂未启用）",
       });
       const REQUIRED_LAYOUT_IDS = Object.freeze(Object.keys(LAYOUT_ELEMENT_LABELS));
@@ -342,11 +342,10 @@
         return positiveInteger(taskId) ? `task:${taskId}` : "";
       }
 
-      function quantityFixedSuffix(element) {
+      function quantityFixedSuffix(element, label = null) {
         if (!element || element.id !== "quantity") return "";
-        return hasOwn(element, "fixed_suffix")
-          ? String(element.fixed_suffix)
-          : DEFAULT_QUANTITY_FIXED_SUFFIX;
+        const suffix = hasOwn(element, "fixed_suffix") ? String(element.fixed_suffix) : DEFAULT_QUANTITY_FIXED_SUFFIX;
+        return label?.unit_label && /^(只|片|套)(\/捆)?$/.test(suffix) ? suffix.replace(/^(只|片|套)/, label.unit_label) : suffix;
       }
 
       function validFixedSuffix(value) {
@@ -643,7 +642,7 @@
           <div class="compact-row compact-code"><span class="fit-cell"><strong class="fit-value" title="${escapeHtml(label.product_code)}">${escapeHtml(label.product_code)}</strong></span></div>
           <div class="compact-row compact-detail"><span class="fit-cell"><strong class="fit-value" title="${escapeHtml(label.product_name)}">${escapeHtml(label.product_name)}</strong></span></div>
           <div class="compact-row compact-detail"><span class="fit-cell"><strong class="fit-value" title="${escapeHtml(label.specification)}">${escapeHtml(label.specification)}</strong></span></div>
-          <div class="quantity-row"><strong class="quantity-number">${escapeHtml(label.quantity)}</strong><span class="quantity-unit">只/捆</span></div>
+          <div class="quantity-row"><strong class="quantity-number">${escapeHtml(label.quantity)}</strong><span class="quantity-unit">${escapeHtml(label.unit_label || "只")}/捆</span></div>
         </article>`;
       }
 
@@ -673,7 +672,7 @@
             element.id === "product_code" ? "code" : "",
             element.id === "quantity" ? "quantity" : "",
           ].filter(Boolean).join(" ");
-          const suffix = quantityFixedSuffix(element);
+          const suffix = quantityFixedSuffix(element, label);
           const content = element.id === "quantity"
             ? `<strong>${escapeHtml(value)}</strong>${suffix ? `<span class="layout-unit">${escapeHtml(suffix)}</span>` : ""}`
             : `<strong>${escapeHtml(value)}</strong>`;
@@ -688,7 +687,7 @@
           <div class="code-row"><span class="field-name">存货编码</span><span class="fit-cell"><strong class="fit-value product-code" title="${escapeHtml(label.product_code)}">${escapeHtml(label.product_code)}</strong></span></div>
           <div class="detail-row"><span class="field-name">产品名称</span><span class="fit-cell"><strong class="fit-value detail-value" title="${escapeHtml(label.product_name)}">${escapeHtml(label.product_name)}</strong></span></div>
           <div class="detail-row"><span class="field-name">规格</span><span class="fit-cell"><strong class="fit-value detail-value" title="${escapeHtml(label.specification)}">${escapeHtml(label.specification)}</strong></span></div>
-          <div class="quantity-row"><span class="field-name">本标签数量</span><strong class="quantity-number">${escapeHtml(label.quantity)}</strong><span class="quantity-unit">只</span></div>
+          <div class="quantity-row"><span class="field-name">本标签数量</span><strong class="quantity-number">${escapeHtml(label.quantity)}</strong><span class="quantity-unit">${escapeHtml(label.unit_label || "只")}</span></div>
         </article>`;
       }
 

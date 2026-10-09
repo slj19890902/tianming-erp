@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.product_unit_labels import order_unit_label
 
 from typing import Any
 import json
@@ -62,7 +63,7 @@ def build_order_delivery_snapshot(
     """Freeze customer-facing product facts when a delivery line is created."""
 
     product = db.get(Product, order_item.product_id) if order_item.product_id else None
-    unit = _text(getattr(order_item,'sales_unit_snapshot',None)) or _text(product.unit if product else None)
+    unit = _text(order_unit_label(order_item, product))
     mode, rate = order_item.price_tax_mode_snapshot, order_item.tax_rate_snapshot
     source = {'kind':'order_at_delivery_creation','order_item_id':order_item.id,
               'unit_basis':'order_snapshot' if getattr(order_item,'sales_unit_snapshot',None) else 'product_at_delivery_creation'}

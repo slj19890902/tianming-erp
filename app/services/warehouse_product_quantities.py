@@ -1,4 +1,5 @@
 """Read-only whole-product quantities, independent of search pagination/floor."""
+from app.services.product_unit_labels import order_unit_label
 import hashlib
 import json
 from collections import defaultdict
@@ -69,7 +70,7 @@ def selected_product_quantities(db, *, seed_lot_id, visible_customer_ids):
     order_rows = []
     totals = defaultdict(lambda: dict(ordered_quantity=0, delivered_quantity=0, remaining_quantity=0))
     for item, order, product in db.execute(orders.order_by(Order.id, OrderItem.id)):
-        unit = item.sales_unit_snapshot or product.unit
+        unit = order_unit_label(item, product)
         row = dict(order_id=order.id, order_item_id=item.id, order_number=order.order_number,
             customer_po=order.customer_po, product_id=product.id, unit=unit,
             ordered_quantity=item.quantity, delivered_quantity=item.delivered_quantity,

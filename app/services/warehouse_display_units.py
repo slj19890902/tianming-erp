@@ -15,13 +15,15 @@ def lot_display_unit(lot):
         if quantity_basis.get('ledger') == 'physical' and quantity_basis.get('physical_unit'):
             return quantity_basis['physical_unit']
         if basis.get('unit'):
-            return basis['unit']
+            from app.services.product_unit_labels import basis_unit_label
+            return basis_unit_label(basis, component=lot.source_ref_type == 'subkit_receipt')
     except (ValueError, TypeError):
         pass
     detail = lot.finished_detail
     product = detail.product if detail else None
-    if product is not None and product.unit in ("套", "片"):
-        return product.unit
+    if product is not None:
+        from app.services.product_unit_labels import product_unit_label
+        return product_unit_label(product) or lot.unit
     if lot.source_ref_type == "subkit_receipt":
         return "片"
-    return lot.unit
+    return {"boxes":"只","sheets":"张","pieces":"片","sets":"套"}.get(lot.unit, lot.unit)

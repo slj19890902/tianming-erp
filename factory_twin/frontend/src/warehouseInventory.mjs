@@ -891,11 +891,11 @@ export function inventoryUnitLabel(unit) {
     boxes: "只",
     sheet: "张",
     sheets: "张",
-    piece: "件",
-    pieces: "件",
+    piece: "片",
+    pieces: "片",
     set: "套",
     sets: "套",
-    pcs: "件",
+    pcs: "片",
     set: "套",
     sets: "套"
   };

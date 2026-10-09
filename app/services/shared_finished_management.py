@@ -1,4 +1,5 @@
 """Versioned management of explicit shared finished-stock groups."""
+from app.services.product_unit_labels import product_unit_label
 import hashlib
 import json
 from sqlalchemy import select, update
@@ -31,7 +32,7 @@ def product_summary(product):
     basis = json.loads(shared.product_basis(product))
     return dict(product_id=product.id, customer_id=product.customer_id,
         customer_name=product.customer.name if product.customer else "",
-        code=product.product_code, name=product.product_name, unit=product.unit,
+        code=product.product_code, name=product.product_name, unit=product_unit_label(product),
         spec=basis["spec"], material=basis["material"], mold_id=product.mold_tool_id,
         mold_label=(product.mold_tool.label_name or product.mold_tool.mold_code) if product.mold_tool else "不使用模具",
         process=product.production_process, version=product.version)

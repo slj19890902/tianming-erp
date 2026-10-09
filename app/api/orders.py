@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.product_unit_labels import product_unit_label, order_unit_label
 from app.services.sheet_cutting_settings import theoretical_product_yield
 from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number, validate_sheet_dimensions
 
@@ -2611,6 +2612,8 @@ def _order_response(
                 "unit_price": item.unit_price,
                 "subtotal": item.subtotal,
                 "price_tax_mode_snapshot": item.price_tax_mode_snapshot,
+                "unit_label": order_unit_label(item, item.product),
+                "sales_unit_snapshot": item.sales_unit_snapshot,
                 "tax_rate_snapshot": item.tax_rate_snapshot,
                 "material_status": item.material_status,
                 "material_received_at": (
@@ -7955,7 +7958,7 @@ def _create_order_impl(
                 unit_price=unit_price,
                 subtotal=subtotal,
                 price_tax_mode_snapshot=price_tax_terms.price_tax_mode,
-                sales_unit_snapshot=(str(product.unit or '').strip() or None),
+                sales_unit_snapshot=(product_unit_label(product) or None),
                 tax_rate_snapshot=price_tax_terms.tax_rate,
                 material_status="pending",
                 snapshot_product_code=(
@@ -9614,6 +9617,8 @@ def update_order_item(
         "unit_price": item.unit_price,
         "subtotal": item.subtotal,
         "snapshot_product_code": item.snapshot_product_code,
+        "unit_label": order_unit_label(item, item.product),
+        "sales_unit_snapshot": item.sales_unit_snapshot,
         "snapshot_product_name": item.snapshot_product_name,
         "snapshot_material": item.snapshot_material,
         "snapshot_original_material_code": item.snapshot_original_material_code,

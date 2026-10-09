@@ -14,7 +14,7 @@ function locationURL(c: InventoryCandidate, part: InventoryPart) {
 <template>
   <details class="inventory-panel" :aria-label="`第${lineNumber}行库存安排`">
     <summary>第{{ lineNumber }}行 · {{ product.product_code }} · 库存安排
-      <span v-if="state.authority">：成品抵扣 {{ state.authority.finished_planned_quantity || 0 }} {{ product.unit || '只' }} · 剩余生产 {{ state.authority.production_required_quantity }} {{ product.unit || '只' }} · 需报 {{ state.authority.requisition_sheet_quantity ?? '按BOM' }} 张</span>
+      <span v-if="state.authority">：成品抵扣 {{ state.authority.finished_planned_quantity || 0 }} {{ product.unit_label || product.unit || '待完善' }} · 剩余生产 {{ state.authority.production_required_quantity }} {{ product.unit_label || product.unit || '待完善' }} · 需报 {{ state.authority.requisition_sheet_quantity ?? '按BOM' }} 张</span>
       <span v-else>（尚未核对当前库存）</span>
     </summary>
     <p v-if="state.authority">实存 {{ state.authority.finished_stock_on_hand_quantity }} / 已预占 {{ state.authority.finished_stock_reserved_quantity }} / 安排后可用余量 {{ state.authority.finished_stock_remaining_quantity }} {{ state.authority.finished_stock_unit }}。预览不扣库，保存时再次校验。</p>

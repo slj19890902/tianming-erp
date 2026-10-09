@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.services.product_unit_labels import product_unit_label
+from app.services.warehouse_display_units import lot_display_unit
+
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -969,6 +972,8 @@ def _product_inventory_summaries(
     summaries = {
         product.id: _empty_product_inventory_summary() for product in products
     }
+    for product in products:
+        summaries[product.id]["finished"]["unit"] = product_unit_label(product) or "单位待完善"
     if not product_ids:
         return summaries
 
@@ -1138,7 +1143,7 @@ def _position_payload(
             "quantity_available": lot.quantity_available,
             "quantity_reserved": lot.quantity_reserved,
             "quantity_total": lot.quantity_available + lot.quantity_reserved,
-            "unit": "只" if lot.inventory_type == "finished" else "张",
+            "unit": lot_display_unit(lot) if lot.inventory_type == "finished" else "张",
             "position_status": "unlocated",
             "map_status": "unplaced",
             "map_status_text": "尚未绑定正式位置",
@@ -1170,7 +1175,7 @@ def _position_payload(
             f"&location_view=floor3&location_id={location.id}"
             f"&lot_id={lot.id}&source=mobile-product"
         )
-    unit_label = "只" if lot.inventory_type == "finished" else "张"
+    unit_label = lot_display_unit(lot) if lot.inventory_type == "finished" else "张"
     address = location_address_payload(
         location,
         area=context.get("area"),
@@ -2022,6 +2027,7 @@ def product_production_overview(
                     "production_quantity_unit": row.get(
                         "production_quantity_unit"
                     ),
+                    "output_unit": row.get("output_unit"),
                 }
                 for row in task_rows
             ],
@@ -2879,7 +2885,7 @@ def product_inventory(
     )
     finished_group = _inventory_group(
         finished_lots,
-        unit="只",
+        unit=product_unit_label(product) or "单位待完善",
         pending_pick_by_lot=pending_pick,
         projection_contexts=projection_contexts,
     )

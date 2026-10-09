@@ -434,3 +434,22 @@ def test_email_existing_without_old_replay_log_adds_exact_same_key_mapping(b1_ap
         assert db.scalar(select(func.count()).select_from(Order)) == 1
         assert db.scalar(select(func.count()).select_from(EmailIntakeOrderLink)) == 1
         assert db.scalar(select(func.count()).select_from(OperationLog).where(OperationLog.action == 'order_create_replay')) == 1
+
+
+@pytest.mark.parametrize("modern", [False, True])
+def test_rejection_header_excludes_external_legacy_path_without_business_write(monkeypatch, modern):
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from app.api import orders
+    def reject(*args, **kwargs): raise HTTPException(409, "synthetic prewrite rejection")
+    monkeypatch.setattr(orders, "_create_order_impl", reject)
+    payload = orders.OrderCreate(customer_id=1,
+        **({"items": [{"product_id": 1, "quantity": 1, "unit_price": "1"}]} if modern else {}))
+    rolled_back = []
+    db = SimpleNamespace(rollback=lambda: rolled_back.append(True))
+    with pytest.raises(HTTPException) as caught:
+        orders.create_order(payload, db=db, user=SimpleNamespace(id=2, username="synthetic"))
+    assert rolled_back == [True]
+    assert caught.value.headers.get("X-Order-Save-Rejected") == ("1" if modern else None)
+    assert caught.value.headers.get("X-Order-Save-Preserve") == (None if modern else "1")
+    assert caught.value.headers["Cache-Control"] == "no-store"

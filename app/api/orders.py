@@ -8421,9 +8421,12 @@ def _create_order_impl(
         if payload.idempotency_key:
             from app.services.order_import_save_recovery import snapshot
             frozen = snapshot(response)
-            for item in created_items:
-                db.refresh(item, attribute_names=["unit_price"])
-            prices = {item.id: item.unit_price for item in created_items}
+            # A column query reads Numeric persistence without stale identity-map values.
+            prices = dict(db.execute(select(OrderItem.id, OrderItem.unit_price).where(
+                OrderItem.order_id == order.id)).all())
+            if (set(prices) != {item.id for item in created_items}
+                or set(prices) != {row["id"] for row in frozen["items"]}):
+                raise RuntimeError("Persisted order price identities are incomplete")
             for row in frozen["items"]:
                 row["unit_price"] = str(prices[row["id"]])
             source_trace = (dict(id=import_source.id, kind=import_source.source_kind,
@@ -8725,6 +8728,7 @@ def create_order(
         ),
         "item_count": len(payload.items or []),
         "failure_stage": "entry",
+        "modern_items": payload.items is not None,
     }
     from app.services import order_import_save_recovery as recovery
     from fastapi.encoders import jsonable_encoder
@@ -8785,6 +8789,7 @@ def create_order(
         # when a later line rejects the order.
         db.rollback()
         safe_rejection = (error.status_code in {400, 409, 422}
+            and observability["modern_items"]
             and not observability.get("previous_found")
             and observability["failure_stage"] not in {"commit", "finalize_drawing", "completed"}
             and not (error.headers or {}).get("X-Order-Save-Preserve"))

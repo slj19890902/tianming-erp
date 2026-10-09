@@ -3278,7 +3278,8 @@ def finished_bom_component_candidates(
         rows = _visible_finished_candidate_lots(
             finished_inventory_candidates_for_bom_component(
                 db, order_item_id=order_item_id, bom_snapshot_id=bom_snapshot_id
-            ), user, db
+            ), user, db,product_id=snapshot.component_product_id,
+            customer_id=db.get(Order,db.get(OrderItem,order_item_id).order_id).customer_id
         )
         return {
             "order_item_id": order_item_id,
@@ -3305,8 +3306,17 @@ def create_bom_component_finished_reservation(
     user: User = Depends(can_reserve),
 ) -> dict:
     _require_order_item_customer_access(db, payload.order_item_id, user)
-    _require_lot_customer_access(db, payload.inventory_lot_id, user)
     try:
+        snapshot=db.get(SalesOrderItemBomComponent,payload.bom_snapshot_id)
+        item=db.get(OrderItem,payload.order_item_id)
+        lot=db.get(InventoryLot,payload.inventory_lot_id)
+        from app.services.shared_finished_stock import match as shared_match
+        from app.services.finished_stock_identity import order_product_basis
+        approved=(snapshot and snapshot.sales_order_item_id==item.id and lot and shared_match(db,lot,
+            product_id=snapshot.component_product_id,customer_id=db.get(Order,item.order_id).customer_id,
+            expected_basis=order_product_basis(db,item.id,snapshot.component_product_id)))
+        if not approved:
+            _require_lot_customer_access(db,payload.inventory_lot_id,user)
         row = reserve_finished_inventory_for_bom_component(
             db, operator_id=user.id, **payload.model_dump()
         )
@@ -3315,6 +3325,14 @@ def create_bom_component_finished_reservation(
     except WarehouseInventoryError as error:
         db.rollback()
         _handle(error)
+
+
+def _bom_shared_candidate(db,lot,item,snapshot):
+    from app.services.shared_finished_stock import match
+    from app.services.finished_stock_identity import order_product_basis
+    return match(db,lot,product_id=snapshot.component_product_id,
+        customer_id=db.get(Order,item.order_id).customer_id,
+        expected_basis=order_product_basis(db,item.id,snapshot.component_product_id))
 
 
 @router.post("/finished/bom-components/{bom_snapshot_id}/auto-cover")
@@ -3376,7 +3394,7 @@ def auto_cover_bom_component_inventory(
             if (
                 detail is None
                 or detail.is_general
-                or detail.owner_customer_id != order.customer_id
+                or (detail.owner_customer_id != order.customer_id and not _bom_shared_candidate(db,lot,item,snapshot))
             ):
                 continue
             coverage = component_inventory_coverage(

@@ -103,6 +103,10 @@ def preview(db, item_id):
         detail = lot.finished_detail
         from app.services.multilevel_bom_body_inventory import stock_product_identity
         pid, _ = stock_product_identity(db, lot)
+        from app.services.shared_bom_stock import execution_identity
+        mapped=execution_identity(db,lot,compiled,item_id,allow_free=lot.id in free)
+        if mapped is not None:
+            pid=mapped[0]
         if pid not in child_ids:
             continue
         location = db.get(WarehouseLocation, lot.warehouse_location_id)
@@ -116,8 +120,10 @@ def preview(db, item_id):
     assembled_ids = {e.parent_id for e in compiled.graph.edges if e.relation == 'assembly'}
     assembled_stock = {}
     for lot in lots:
-        if lot.finished_detail and not is_body_lot(lot) and lot.finished_detail.product_id in assembled_ids:
-            pid = lot.finished_detail.product_id
+        from app.services.shared_bom_stock import execution_identity
+        mapped=execution_identity(db,lot,compiled,item_id,allow_free=lot.id in free)
+        pid=mapped[0] if mapped else None
+        if lot.finished_detail and not is_body_lot(lot) and pid in assembled_ids:
             assembled_stock[pid] = assembled_stock.get(pid,0) + (lot.quantity_available if lot.id in free else 0) + reserved_by_lot.get(lot.id,0)
     required = {p.product_id: p.required_units for p in plan_bom(compiled.graph, max(0, item.quantity-item.delivered_quantity), eligible_stock=assembled_stock).products}
     children = [dict(product_id=pid, product_code=db.get(Product,pid).product_code,

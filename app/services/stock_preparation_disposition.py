@@ -149,7 +149,10 @@ def assemble(db,payload,actor):
     db.add(Command(operation_key=key,receipt_item_id=jobs[0].receipt_item_id,
         request_json=request,result_json=encode(result),actor_id=actor.id))
     append_audit_event(db,event_category='business',result='success',source='web',module_code='production',action_code='stock_preparation.assemble',resource='production',actor=actor,entity_type='inventory_lot',entity_id=output.id,details=result)
-    db.flush();return result
+    db.flush()
+    from app.services.shared_bom_stock import enroll_completed_bom
+    enroll_completed_bom(db,output,operator_id=actor.id)
+    return result
 
 
 def dispose(db,payload,actor):

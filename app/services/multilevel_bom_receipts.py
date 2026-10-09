@@ -451,7 +451,15 @@ def refresh_graph_main_task(db, item, *, create_if_missing):
             continue
         lot = db.get(InventoryLot, reserve.inventory_lot_id)
         if lot and lot.finished_detail and not is_body_lot(lot):
-            quantities[lot.finished_detail.product_id] += max(int(reserve.credited_requirement_quantity or 0)
+            from app.models.shared_finished_stock import SharedFinishedReservation
+            from app.services.shared_bom_stock import reservation_matches
+            from app.services.finished_stock_identity import compiled_product_bases
+            fact=db.get(SharedFinishedReservation,reserve.id)
+            pid=lot.finished_detail.product_id
+            bases=compiled_product_bases(compiled)
+            if fact and fact.product_id in bases and reservation_matches(db,reserve,lot,fact.product_id,compiled.graph.customer_id,bases[fact.product_id]):
+                pid=fact.product_id
+            quantities[pid] += max(int(reserve.credited_requirement_quantity or 0)
                                                             - reserve.released_requirement_quantity, 0)
     execution_quantity = compiled.execution_window.execution_quantity if compiled.execution_window else item.quantity
     picking = plan_bom(compiled.graph, execution_quantity).picking

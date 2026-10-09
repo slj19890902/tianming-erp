@@ -39,8 +39,11 @@ def output_identity(db, lot):
 
 def matches_output(db, lot, *, product_id, customer_id, expected_basis):
     identity = output_identity(db, lot)
-    return bool(identity and expected_basis and identity[:2] == (product_id, customer_id)
-        and matches_stock_identity(identity[2], expected_basis))
+    if identity and expected_basis and identity[:2] == (product_id, customer_id) and matches_stock_identity(identity[2], expected_basis):
+        return True
+    from app.services.shared_finished_stock import match
+    return bool(identity and expected_basis and match(db,lot,product_id=product_id,
+        customer_id=customer_id,expected_basis=expected_basis))
 
 
 def eligible_output(db, lot, *, product_id, customer_id, expected_basis):
@@ -81,8 +84,8 @@ def processed_reservations(db, compiled, order_item_id):
         lot=db.get(InventoryLot,row.inventory_lot_id)
         if (pid not in child_ids or row.yield_factor!=1 or row.requirement_quantity_denominator!=1
                 or row.credited_requirement_quantity!=row.reserved_stock_quantity
-                or not matches_output(db,lot,product_id=pid,customer_id=compiled.graph.customer_id,
-                    expected_basis=bases[pid])):
+                or not (matches_output(db,lot,product_id=pid,customer_id=compiled.graph.customer_id,
+                    expected_basis=bases[pid]) or _reserved_output(db,row,lot,pid,compiled.graph.customer_id,bases[pid]))):
             raise WarehouseInventoryError('已加工子件预占的冻结身份或1:1数量关系不一致',409)
         valid.append(row)
     return valid
@@ -130,6 +133,10 @@ def reserve_output(db, *, compiled, order_item_id, snapshot_id, lot, quantity, e
             reservation_group_key=key,reservation_group_requested_quantity=quantity,idempotency_key=key,
             warning_codes='["PROCESSED_COMPONENT_OUTPUT"]',status='active')
         db.add(reservation);db.flush();db.refresh(lot)
+        from app.services.shared_finished_stock import match,freeze_reservation
+        member=match(db,lot,product_id=snapshot.component_product_id,customer_id=order.customer_id,
+            expected_basis=compiled_product_bases(compiled)[snapshot.component_product_id],lock=True)
+        freeze_reservation(db,reservation,member,lot)
         _movement(db,lot=lot,movement_type='reserve',quantity=quantity,before=before,operator_id=operator_id,
             reason='已加工子件按冻结BOM预占',idempotency_key=key,reservation_id=reservation.id,
             related_order_id=order.id,related_order_item_id=item.id)
@@ -140,3 +147,8 @@ def reserve_output(db, *, compiled, order_item_id, snapshot_id, lot, quantity, e
             entity_type='inventory_reservation',entity_id=reservation.id,customer_id=order.customer_id,
             details={'order_item_id':item.id,'snapshot_id':snapshot_id,'lot_id':lot.id,'quantity':quantity,'yield_factor':1})
         return reservation
+
+
+def _reserved_output(db,reservation,lot,pid,customer_id,basis):
+    from app.services.shared_bom_stock import reservation_matches
+    return reservation_matches(db,reservation,lot,pid,customer_id,basis)

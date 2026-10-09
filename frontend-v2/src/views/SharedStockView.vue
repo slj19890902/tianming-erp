@@ -4,7 +4,7 @@ import { ElMessage } from 'element-plus'
 import { request, type Product } from '../api/client'
 import { useAuthStore } from '../stores/auth'
 
-type Member = { product_id:number; customer_name:string; code:string; name:string; unit:string; spec:string; material:string; mold_label:string; process:string }
+type Member = { product_id:number; customer_name:string; code:string; name:string; unit:string; spec:string; material:string; mold_label:string; process:string; role_label?:string }
 type Lot = {lot_id:number;number:string;product_id:number;available:number;reserved:number;location:string;shared:boolean;eligible:boolean;reason:string|null}
 type Group = {group_id:number;version:number;enabled:boolean;auto_enroll:boolean;identity_issue:string|null;evidence:string;products:Member[];lots:Lot[];batch_count:number;pending_count:number}
 const auth = useAuthStore()
@@ -112,7 +112,7 @@ onMounted(()=>{if(auth.user?.role==='admin') void run(loadGroups)})
 
 <template>
   <section class="shared-page">
-    <div class="heading"><div><h1>库存共用</h1><p>确认可以互换的成品，两客户从同一货架取货，共用一份可用余额。</p></div><router-link to="/master-data">返回基础资料</router-link></div>
+    <div class="heading"><div><h1>库存共用</h1><p>确认可以互换的成品或 BOM 零件，两客户从同一货架取货，共用一份可用余额。</p></div><router-link to="/master-data">返回基础资料</router-link></div>
     <el-alert v-if="auth.user?.role!=='admin'" title="库存共用设置由管理员维护。" type="info" :closable="false" />
     <template v-else>
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
@@ -128,7 +128,7 @@ onMounted(()=>{if(auth.user?.role==='admin') void run(loadGroups)})
       <section v-if="current || creating" class="detail">
         <h2>{{creating?'新建共用组':'共用组 · '+current!.products.map(p=>p.code).join(' / ')}}</h2>
         <template v-if="creating">
-          <p>选择实际可互换的客户产品。编码可以不同，单位、规格、材质、印刷及模具必须一致；无库存也可以先建组。</p>
+          <p>选择实际可互换的客户产品。编码可以不同，规格、材质、印刷及模具必须一致；无库存也可以先建组。BOM 先分别建立对应零件的共用组，再建立同配比整套组。长片、短片和整套各自建组，数量按原配方计算。</p>
           <el-select :model-value="null" filterable remote :remote-method="searchProducts" placeholder="输入编码或名称搜索产品" style="width:100%" :disabled="busy" @change="selectProduct">
             <el-option v-for="p in options" :key="p.id" :value="p.id" :label="p.customer_name+' · '+p.product_code+' · '+p.product_name" />
           </el-select>
@@ -137,11 +137,12 @@ onMounted(()=>{if(auth.user?.role==='admin') void run(loadGroups)})
         <template v-else>
           <el-alert v-if="current!.identity_issue" type="warning" :closable="false" :title="current!.identity_issue" />
           <el-table :data="current!.products" border>
+            <el-table-column label="类型" prop="role_label" width="100"/>
             <el-table-column label="客户" prop="customer_name" min-width="190"/><el-table-column label="编码" prop="code" width="120"/><el-table-column label="名称" prop="name" min-width="120"/>
             <el-table-column label="规格" prop="spec" min-width="150"/><el-table-column label="材质" prop="material" width="100"/><el-table-column label="单位" prop="unit" width="65"/><el-table-column label="共用模具" prop="mold_label" min-width="120"/>
           </el-table>
           <div class="settings"><el-checkbox v-model="enabled" :disabled="busy">启用库存共用</el-checkbox><el-checkbox v-model="automatic" :disabled="busy">符合条件的新入库自动加入</el-checkbox><el-button :disabled="busy" @click="prepare('configure')">预览设置调整</el-button></div>
-          <p class="note">自动加入适用于实物资料完全一致的手工、盘点新成品，以及有完整冻结资料的普通生产入库剩余库存。订单预占保留；历史、资料变化、组合件或外购批次需另行核实。暂停后停止新的共用，已有预占仍按原单完成或撤销。</p>
+          <p class="note">符合条件的新成品、已完成加工的 BOM 零件及实际组装成套库存可自动加入。订单预占保留；历史、资料变化、未加工纸板或外购批次需另行核实。整套仅在实际组装后入库，不会因设置共用而增加。暂停后停止新的共用，已有预占仍按原单完成或撤销。</p>
         </template>
         <h3>库存批次</h3>
         <el-table :data="lots" border empty-text="当前没有成品库存，可以先建立共用关联">

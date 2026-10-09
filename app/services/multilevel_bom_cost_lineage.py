@@ -116,9 +116,10 @@ def graph_material_sources(db, lot, *, _visited=frozenset()):
             evidence = frozen.get(source.lot_id)
             child = db.get(InventoryLot, source.lot_id)
             child_identity = stock_product_identity(db, child)
+            from app.services.shared_bom_stock import verify_consumed
+            shared_input=verify_consumed(db,child,(evidence or {}).get('shared_bom'),source.product_id,identity[1])
             if (evidence is None or child is None
-                    or child_identity[0] != source.product_id
-                    or child_identity[1] != identity[1]
+                    or (not shared_input and (child_identity[0] != source.product_id or child_identity[1] != identity[1]))
                     or evidence["quantity"] != source.quantity
                     or _amount(evidence["cost"]) != source.total_cost):
                 raise SubkitError("组套材料成本投入身份不一致")

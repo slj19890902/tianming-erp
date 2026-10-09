@@ -130,9 +130,16 @@ def historical_delivery_component_demands(db, *, delivery_item_id, order_item_id
     for sid, _, lot_id in stock:
         expected_product = picked.get(sid) if sid is not None else compiled.graph.root_id
         lot = db.get(InventoryLot, lot_id)
+        from app.services.shared_bom_stock import reservation_matches
+        from app.services.finished_stock_identity import compiled_product_bases
+        reservations=db.scalars(select(InventoryReservation).join(DeliveryInventoryAllocation,
+            DeliveryInventoryAllocation.reservation_id==InventoryReservation.id).where(
+                DeliveryInventoryAllocation.delivery_item_id==line.id,InventoryReservation.inventory_lot_id==lot_id))
+        shared=bool(expected_product is not None and lot is not None and any(reservation_matches(db,r,lot,
+            expected_product,compiled.graph.customer_id,compiled_product_bases(compiled)[expected_product]) for r in reservations))
         if (expected_product is None or lot is None or lot.finished_detail is None
-                or lot.finished_detail.owner_customer_id != compiled.graph.customer_id
-                or lot.finished_detail.product_id != expected_product):
+                or (not shared and (lot.finished_detail.owner_customer_id != compiled.graph.customer_id
+                or lot.finished_detail.product_id != expected_product))):
             raise BomPlanError("历史拿货批次与冻结交付产品或客户不一致")
     if not set(direct_ids).issubset(picked):
         raise BomPlanError("历史直接交付包含不属于拿货规则的来源")

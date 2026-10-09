@@ -17,7 +17,7 @@ def pending_stock(db, scope):
     lots = db.scalars(select(InventoryLot).where(InventoryLot.status == 'active', InventoryLot.quantity_available > 0))
     for lot in lots:
         detail = lot.finished_detail or lot.semi_finished_detail
-        if not detail or (scope is not None and detail.owner_customer_id not in scope):
+        if not detail:
             continue
         if lot.finished_detail:
             product_ids = [lot.finished_detail.product_id]
@@ -30,7 +30,16 @@ def pending_stock(db, scope):
             # Reference counts describe identified physical pieces. The strict
             # action preview below separately verifies identity and ownership.
             product_ids=data.get('product_ids',[]) if data.get('output_piece') and data.get('processing') in {'cut','die_cut','printed'} else []
+        from app.models.shared_finished_stock import SharedFinishedLot,SharedFinishedMember,SharedBomMember
+        from app.services.shared_finished_stock import match
+        fact=db.get(SharedFinishedLot,lot.id)
+        if fact:
+            for member in db.scalars(select(SharedFinishedMember).where(SharedFinishedMember.group_id==fact.group_id)):
+                if db.get(SharedBomMember,member.product_id) and match(db,lot,product_id=member.product_id,customer_id=member.customer_id):
+                    product_ids=list(set(product_ids)|{member.product_id})
         for pid in product_ids:
+            product=db.get(Product,pid)
+            if product is None or (scope is not None and product.customer_id not in scope):continue
             lots_by_product[pid].append(lot)
     if not lots_by_product:
         return []
@@ -53,7 +62,8 @@ def pending_stock(db, scope):
         sources, children, capacities = [], [], []
         for edge in edges:
             child = structure['products'][edge['child_id']]
-            candidates = [l for l in lots_by_product[child.id] if (l.finished_detail or l.semi_finished_detail).owner_customer_id == parent.customer_id]
+            candidates = [l for l in lots_by_product[child.id] if (l.finished_detail or l.semi_finished_detail).owner_customer_id == parent.customer_id
+                or match(db,l,product_id=child.id,customer_id=parent.customer_id)]
             total = sum(l.quantity_available for l in candidates)
             capacities.append(total // edge['quantity'])
             children.append(dict(product_id=child.id, product_code=child.product_code, product_name=child.product_name,

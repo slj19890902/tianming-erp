@@ -129,6 +129,12 @@ def assemble_subkit_inventory(
                 raise SubkitError("组套原片库存状态或版本已变化")
             from app.services.multilevel_bom_body_inventory import stock_product_identity
             pid, customer_id = stock_product_identity(db, lot)
+            if graph_product_id is not None:
+                from app.services.shared_bom_stock import execution_identity
+                mapped=execution_identity(db,lot,compiled,item.id,
+                    allow_free=available_lot_ids is None or lot.id in available_lot_ids)
+                if mapped is not None:
+                    pid,customer_id=mapped
             from app.services.bom_inventory_contract import is_body_lot
             is_body = is_body_lot(lot)
             if is_body and lot.inventory_type == 'finished':
@@ -149,8 +155,11 @@ def assemble_subkit_inventory(
             if not is_body and lot.inventory_type=='semi_finished':
                 from app.services.processed_component_stock import eligible_output
                 from app.services.finished_stock_identity import compiled_product_bases
-                if (graph_product_id is None or not eligible_output(db,lot,product_id=pid,
-                        customer_id=order.customer_id,expected_basis=compiled_product_bases(compiled)[pid])
+                from app.services.shared_bom_stock import reservation_matches
+                shared_reserved=(graph_product_id is not None and any(reservation_matches(db,r,lot,pid,
+                    order.customer_id,compiled_product_bases(compiled)[pid]) for r in reserved_by_lot.get(lot.id,[])))
+                if (graph_product_id is None or not (shared_reserved or eligible_output(db,lot,product_id=pid,
+                        customer_id=order.customer_id,expected_basis=compiled_product_bases(compiled)[pid]))
                         or any(r.reservation_type!='semi_order' or r.semi_requirement_id is not None
                             or r.yield_factor!=1 or r.credited_requirement_quantity!=r.reserved_stock_quantity
                             for r in reserved_by_lot.get(lot.id,[]))):
@@ -212,6 +221,12 @@ def assemble_subkit_inventory(
             available_take = take - reserved_take
             from app.services.bom_subkit_costs import source_cost
             part_cost, lineage = source_cost(db, lot, take)
+            if graph_product_id is not None:
+                from app.services.shared_bom_stock import consumed_evidence
+                from app.services.finished_stock_identity import compiled_product_bases
+                evidence=consumed_evidence(db,lot,pid,order.customer_id,compiled_product_bases(compiled)[pid])
+                if evidence:
+                    lineage={**lineage,'shared_bom':evidence}
             cost_sources.append({**lineage, "lot_id": lot.id, "quantity": take, "cost": str(part_cost)})
             labour_sources.append((lot, take))
             currencies = {r["currency"] for r in cost_sources if r["currency"]}

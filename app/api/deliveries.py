@@ -680,10 +680,13 @@ def _graph_finished_stock_ready(db: Session, item: OrderItem, required_sets: int
             remaining=_remaining_reservation_quantity(row)
             if remaining<=0:
                 continue
-            if not (lot and lot.status=='active' and detail and detail.product_id==pid
-                    and (detail.owner_customer_id==compiled.graph.customer_id or detail.is_general)
+            from app.services.shared_bom_stock import reservation_matches
+            shared=bool(lot and reservation_matches(db,row,lot,pid,compiled.graph.customer_id,bases[pid]))
+            if not (lot and lot.status=='active' and detail
                     and lot.quantity_reserved>=remaining
-                    and matches_stock_identity(detail.physical_basis_json,bases[pid])):
+                    and (shared or (detail.product_id==pid
+                    and (detail.owner_customer_id==compiled.graph.customer_id or detail.is_general)
+                    and matches_stock_identity(detail.physical_basis_json,bases[pid])))):
                 # The existing consumption planner visits all FIFO sources.
                 # Never hide an incompatible earlier lot behind later good stock.
                 return False

@@ -3164,8 +3164,18 @@ def finished_inventory_candidates_for_bom_component(
             return []
         expected = body_basis(expected)
     from app.services.bom_inventory_contract import is_body_lot
+    if stock_stage=='complete' and expected is not None:
+        from app.services.shared_finished_stock import candidate_lot_ids
+        shared_ids=candidate_lot_ids(db,product_id=snapshot.component_product_id,
+            customer_id=order.customer_id,expected_basis=expected)
+        known={lot.id for lot in rows}
+        rows.extend(db.scalars(select(InventoryLot).where(InventoryLot.id.in_(set(shared_ids)-known),
+            InventoryLot.quantity_available>0,~held_for_staging_expression())))
+    from app.services.shared_finished_stock import match as shared_match
     return [lot for lot in rows if (stock_stage == 'body') == is_body_lot(lot)
-            and (expected is None or lot.finished_detail.physical_basis_json == expected)]
+            and (expected is None or lot.finished_detail.physical_basis_json == expected or
+                 (stock_stage=='complete' and shared_match(db,lot,product_id=snapshot.component_product_id,
+                     customer_id=order.customer_id,expected_basis=expected)))]
 
 
 def reserve_finished_inventory_for_bom_component(
@@ -3225,7 +3235,12 @@ def reserve_finished_inventory_for_bom_component(
     if staging_owner(db, lot.id):
         raise WarehouseInventoryError("该批次已为送货单集货，不能重复预占", 409)
     detail = lot.finished_detail
-    if detail.product_id != snapshot.component_product_id:
+    from app.services.shared_finished_stock import match as shared_match, freeze_reservation
+    from app.services.finished_stock_identity import order_product_basis
+    expected_basis=order_product_basis(db,item.id,snapshot.component_product_id)
+    shared_member=(shared_match(db,lot,product_id=snapshot.component_product_id,customer_id=order.customer_id,
+        expected_basis=expected_basis,lock=True) if stock_stage=='complete' and expected_basis is not None else None)
+    if detail.product_id != snapshot.component_product_id and shared_member is None:
         raise WarehouseInventoryError("库存产品与组件不一致", 409)
     from app.services.bom_inventory_contract import is_body_lot
     if (stock_stage == 'body') != is_body_lot(lot):
@@ -3238,14 +3253,14 @@ def reserve_finished_inventory_for_bom_component(
             validate_body_execution(db, read_compiled_order_bom(db, item.id), lot)
         except (ValueError, AttributeError) as error:
             raise WarehouseInventoryError(str(error), 409) from error
-    elif not matching_component_basis(db, snapshot, lot):
+    elif not matching_component_basis(db, snapshot, lot) and shared_member is None:
         raise WarehouseInventoryError("库存缺少匹配的冻结规格、单位或工艺依据，请先核实该批次身份", 409)
     warnings: list[str] = []
     if detail.is_general:
         warnings.append("GENERAL_FINISHED_STOCK")
         if "GENERAL_FINISHED_STOCK" not in warning_acknowledged_codes:
             raise WarehouseInventoryError("通用组件成品库存必须人工确认后才能使用", 409)
-    elif detail.owner_customer_id != order.customer_id:
+    elif detail.owner_customer_id != order.customer_id and shared_member is None:
         raise WarehouseInventoryError("客户专用组件库存不能用于其他客户订单", 409)
     physical_pieces_per_component = int(
         snapshot.snapshot_component_pieces_per_box or 0
@@ -3297,6 +3312,7 @@ def reserve_finished_inventory_for_bom_component(
         reserved_by=operator_id, reserved_at=now, idempotency_key=idempotency_key,
     )
     db.add(reservation); db.flush(); db.expire(lot)
+    freeze_reservation(db,reservation,shared_member,lot)
     refreshed = db.get(InventoryLot, lot.id)
     assert refreshed is not None
     _movement(db, lot=refreshed, movement_type="reserve", quantity=quantity, before=before,

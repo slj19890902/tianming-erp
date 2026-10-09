@@ -1160,11 +1160,13 @@ def _validate_graph_component_stock(db, *, reservation, snapshot_id, lot):
     except (BomPlanError,KeyError) as error:
         raise CompositeBomWorkflowError('送货组件缺少可靠冻结实物身份') from error
     detail=lot.finished_detail if lot else None
+    from app.services.shared_bom_stock import reservation_matches
+    shared=bool(lot and reservation_matches(db,reservation,lot,snapshot.component_product_id,compiled.graph.customer_id,expected))
     if (not lot or lot.inventory_type!='finished' or lot.status!='active' or not detail
             or reservation.order_item_id!=snapshot.sales_order_item_id
-            or detail.product_id!=snapshot.component_product_id
+            or (not shared and (detail.product_id!=snapshot.component_product_id
             or (detail.owner_customer_id!=compiled.graph.customer_id and not detail.is_general)
-            or not matches_stock_identity(detail.physical_basis_json,expected)):
+            or not matches_stock_identity(detail.physical_basis_json,expected)))):
         raise CompositeBomWorkflowError('所选送货批次与冻结BOM实物身份不一致')
 
 

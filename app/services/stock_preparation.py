@@ -386,6 +386,9 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='
                 output.cost_snapshot_source="stock_preparation"
                 output.cost_snapshot_detail_json=json.dumps(dict(source_lot_id=lot.id,input_quantity=quantity,total_cost=str(total),output_quantity=actual))
             job.output_lot_id=output.id; job.actual_output=actual; job.status="completed"
+            from app.services.shared_bom_stock import enroll_completed_bom
+            db.flush()
+            enroll_completed_bom(db,output,operator_id=actor.id)
             values.update(quantity_reserved=InventoryLot.quantity_reserved-quantity,quantity_consumed=InventoryLot.quantity_consumed+quantity)
             reservation.status="consumed"; reservation.consumed_stock_quantity=quantity
             reservation.consumed_by=actor.id; reservation.consumed_at=utc_now_naive()

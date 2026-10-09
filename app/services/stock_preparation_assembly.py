@@ -90,6 +90,9 @@ def preview(db,parent_id,sets):
     parent=db.get(Product,parent_id)
     if not parent:
         prep.fail('组合产品不存在')
+    from app.models.shared_finished_stock import SharedBomMember
+    if db.get(SharedBomMember,parent_id):
+        return shared_preview(db,parent,sets)
     jobs=[]
     from app.services.processed_component_stock import available_outputs
     eligible={}
@@ -189,7 +192,11 @@ def assemble_stock(db,payload,actor):
     for row in plan['sources']:
         lot=db.get(InventoryLot,row['lot_id']);require_inherited_entry_cost(db,lot);before=prep._balances(lot)
         from app.services.processed_component_stock import available_outputs,matches_output
-        expected_basis=json.loads(db.get(Job,row['job_id']).product_snapshot)['physical_basis']
+        expected_basis=row.get('target_basis') or json.loads(db.get(Job,row['job_id']).product_snapshot)['physical_basis']
+        if row.get('shared_stock'):
+            from app.services.shared_finished_stock import match
+            if not match(db,lot,product_id=row['product_id'],customer_id=plan['recipe']['customer_id'],expected_basis=expected_basis,lock=True):
+                prep.fail('共用关系已变化，请刷新')
         if (not matches_output(db,lot,product_id=row['product_id'],customer_id=plan['recipe']['customer_id'],expected_basis=expected_basis)
                 or lot.id not in {l.id for l in available_outputs(db,product_id=row['product_id'],
                     customer_id=plan['recipe']['customer_id'],expected_basis=expected_basis)}):
@@ -204,13 +211,15 @@ def assemble_stock(db,payload,actor):
         prep._movement(db,lot=lot,movement_type='consume',quantity=take,before=before,operator_id=actor.id,
             reason='独立加工备库子件实际组套',idempotency_key=movement_key)
         total+=Decimal(str(lot.estimated_unit_cost_snapshot))*take
-        inputs.append(dict(lot_id=lot.id,quantity=take,product_id=row['product_id'],movement_key=movement_key,version=lot.version))
+        from app.services.shared_bom_stock import consumed_evidence
+        inputs.append(dict(lot_id=lot.id,quantity=take,product_id=row['product_id'],movement_key=movement_key,version=lot.version,
+            **({'shared_bom':consumed_evidence(db,lot,row['product_id'],plan['recipe']['customer_id'],expected_basis)} if row.get('shared_stock') else {})))
     recipe=plan['recipe'];anchor=db.get(Job,plan['sources'][0]['job_id'])
     result=dict(action='assemble',sets=payload['sets'],recipe=recipe,inputs=inputs,output_lot_id=None,group_key='stock:'+str(payload['parent_id']))
     evidence_key='assembly-inputs:'+digest(key)[:45]
     db.add(Command(operation_key=evidence_key,receipt_item_id=anchor.receipt_item_id,
         request_json=encode(dict(action='assemble_inputs',operation_key=key)),result_json=encode(dict(result,final_operation_key=key)),actor_id=actor.id));db.flush()
-    bases={r['product_id']:json.loads(db.get(Job,r['job_id']).product_snapshot)['physical_basis'] for r in plan['sources']}
+    bases={r['product_id']:r.get('target_basis') or json.loads(db.get(Job,r['job_id']).product_snapshot)['physical_basis'] for r in plan['sources']}
     basis=_with_assembly(recipe['parent_basis'],[_child_basis(c['product_id'],c['per_set'],bases[c['product_id']]) for c in recipe['children']])
     output=prep.manual_finished_in(db,customer_id=recipe['customer_id'],product_id=recipe['parent_id'],
         location_id=payload['location_id'],quantity=payload['sets'],stock_date=beijing_today(),source_type='transfer',
@@ -231,4 +240,50 @@ def assemble_stock(db,payload,actor):
     prep.append_audit_event(db,event_category='business',result='success',source='web',module_code='production',
         action_code='stock_preparation.assemble_stock',resource='production',actor=actor,
         entity_type='inventory_lot',entity_id=output.id,details=result)
-    db.flush();return result
+    db.flush()
+    from app.services.shared_bom_stock import enroll_completed_bom
+    enroll_completed_bom(db,output,operator_id=actor.id)
+    return result
+
+
+def shared_preview(db,parent,sets):
+    """Use the explicitly confirmed recipe; retain each source job and owner."""
+    from app.services import shared_bom_stock as bom, shared_finished_stock as shared
+    from app.models.shared_finished_stock import SharedFinishedMember
+    from app.services.processed_component_stock import available_outputs
+    member=db.get(SharedFinishedMember,parent.id)
+    if member.identity_json!=shared.member_identity(parent):
+        prep.fail('BOM共用配方已变化，请先核对')
+    bases=bom.compiled_bases(db,parent.id)
+    recipe=_recipe(db,parent.id,[])
+    sources=[];capacities=[];shortages=[];availability={}
+    for child in recipe['children']:
+        pid=child['product_id'];expected=bases[pid]
+        valid=[]
+        for lot in available_outputs(db,product_id=pid,customer_id=parent.customer_id,expected_basis=expected):
+            if lot.source_ref_type!='stock_preparation':continue
+            job=db.get(Job,lot.source_ref_id)
+            if not job or job.status!='completed':continue
+            snapshot=json.loads(job.product_snapshot)
+            identity=bom.lot_product(db,lot)
+            if (not identity or identity[0]!=job.product_id
+                    or not matches_stock_identity(identity[2],snapshot.get('physical_basis'))):continue
+            valid.append((job,lot))
+        available=sum(l.quantity_available for _,l in valid)
+        availability[pid]=available;capacities.append(available//child['per_set'])
+        remaining=sets*child['per_set']
+        if remaining>available:shortages.append(dict(product_id=pid,name=child['name'],missing=remaining-available,unit=child['unit']))
+        for job,lot in valid:
+            take=min(remaining,lot.quantity_available)
+            if take<=0:break
+            sources.append(dict(job_id=job.id,job_version=job.version,output_version=lot.version,
+                lot_version=prep.source(db,job.receipt_item_id)[2].version,lot_id=lot.id,
+                product_id=pid,product_code=child['code'],product_name=child['name'],unit=child['unit'],
+                target_basis=expected,shared_stock=job.product_id!=pid,quantity=take,
+                available=lot.quantity_available,location=prep.location_name(db,lot)))
+            remaining-=take
+    result=dict(recipe=recipe,parent_product_id=parent.id,sets=sets,sources=sources,
+        output_unit=basis_unit_label(recipe['parent_basis']),available_sets=min(capacities,default=0),
+        shortages=shortages,excluded_sources=[],component_availability=availability,excluded_recipes=[])
+    result['basis_hash']=digest(result)
+    return result

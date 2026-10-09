@@ -70,6 +70,14 @@ class SharedFinishedOrderBasis(Base):
     order_identity_json: Mapped[str] = mapped_column(Text)
 
 
+class SharedBomMember(Base):
+    """Frozen BOM role/recipe proof; shares the existing single inventory ledger."""
+    __tablename__ = "shared_bom_members"
+    product_id: Mapped[int] = mapped_column(ForeignKey("shared_finished_members.product_id", ondelete="RESTRICT"), primary_key=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    contract_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+
 # Covers ordinary orders, PDF/email and other real creation paths equally.
 from sqlalchemy import event
 from app.models.order import OrderItem

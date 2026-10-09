@@ -116,6 +116,10 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
                 raise SubkitError("逐层组装来源库存状态或版本已变化")
             from app.services.multilevel_bom_body_inventory import stock_product_identity
             pid, customer_id = stock_product_identity(db, lot)
+            from app.services.shared_bom_stock import execution_identity
+            mapped=execution_identity(db,lot,compiled,item.id,allow_free=lid in free_ids)
+            if mapped is not None:
+                pid,customer_id=mapped
             is_body = is_body_lot(lot)
             if is_body and lot.inventory_type == 'finished':
                 from app.services.multilevel_bom_body_inventory import validate_body_execution
@@ -131,8 +135,11 @@ def assemble_order_inventory(db, *, order_item_id, source_lot_versions,
                     or (not is_body and lot.finished_detail is not None and lot.finished_detail.is_general) or staging_owner(db, lid)
                     or (owner is not None and owner != item.id)):
                 raise SubkitError("逐层组装来源产品、客户、订单或集货状态不匹配")
-            if not is_body and lot.inventory_type=='semi_finished' and not eligible_output(db,lot,product_id=pid,
-                    customer_id=order.customer_id,expected_basis=compiled_product_bases(compiled)[pid]):
+            from app.services.shared_bom_stock import reservation_matches
+            shared_reserved=any(reservation_matches(db,r,lot,pid,order.customer_id,compiled_product_bases(compiled)[pid])
+                for r in processed if r.inventory_lot_id==lid) if pid in nodes else False
+            if not is_body and lot.inventory_type=='semi_finished' and not (shared_reserved or eligible_output(db,lot,product_id=pid,
+                    customer_id=order.customer_id,expected_basis=compiled_product_bases(compiled)[pid])):
                 raise SubkitError('已加工子件与订单冻结身份不一致')
             if reserved[lid] > lot.quantity_reserved:
                 raise SubkitError("组装预占余额不一致")

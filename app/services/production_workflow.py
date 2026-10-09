@@ -3308,6 +3308,9 @@ def _stock_completion_lot(
     if snapshot is None:
         from app.services.shared_finished_management import enroll_production_receipt
         enroll_production_receipt(db, lot, completion=completion, item=item, operator_id=operator_id)
+    else:
+        from app.services.shared_bom_stock import enroll_completed_bom
+        enroll_completed_bom(db,lot,operator_id=operator_id)
     return lot
 
 

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.590"
-APP_VERSION_NAME = "公司抬头与独立电子章管理"
+APP_VERSION = "v0.22.591"
+APP_VERSION_NAME = "BOM整套与对应零件跨客户共用"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5632,3 +5632,14 @@ APP_VERIFICATION_STEPS = [
     "查看旧合同及送货单抬头保持原样；合同默认未盖章，管理员可另选导出盖章PDF。",
 ]
 APP_CHANGELOG = [*(f"v0.22.590：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "BOM对应零件和同配比整套可分别建立跨客户共用组，长片、短片与整套保持独立。",
+    "订单预占、实际组套、成套送货与撤销衔接已确认共用库存；同一批余额只计算和扣减一次。",
+    "符合冻结资料的完成加工零件和实际组装库存可自动加入，原客户、批次、成本、位置与历史配方保留。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员打开常用箱→库存共用，查询80011946，核对研光/光洋的长片、短片和整套三组及11长+6短配方。",
+    "有对应实物入库后，在另一客户订单核对可用余额、拿货位置和组套数量；原批次只扣一次。",
+]
+APP_CHANGELOG = [*(f"v0.22.591：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

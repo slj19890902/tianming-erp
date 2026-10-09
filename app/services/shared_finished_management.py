@@ -35,7 +35,8 @@ def product_summary(product):
         code=product.product_code, name=product.product_name, unit=product_unit_label(product),
         spec=basis["spec"], material=basis["material"], mold_id=product.mold_tool_id,
         mold_label=(product.mold_tool.label_name or product.mold_tool.mold_code) if product.mold_tool else "不使用模具",
-        process=product.production_process, version=product.version)
+        process=product.production_process, version=product.version,
+        role_label='BOM整套' if product.is_composite else 'BOM零件' if product.is_internal_component else '普通成品')
 
 
 def product_lots(db, product_ids, *, group_id=None):
@@ -43,6 +44,11 @@ def product_lots(db, product_ids, *, group_id=None):
     rows = db.scalars(select(InventoryLot).join(InventoryLot.finished_detail).where(
         InventoryLot.inventory_type == "finished", InventoryLot.status == "active",
         FinishedGoodsInventoryDetail.product_id.in_(product_ids)).order_by(InventoryLot.id)).all()
+    from app.services.shared_bom_stock import lot_product, role
+    if any(role(db,p) for p in products):
+        rows += [lot for lot in db.scalars(select(InventoryLot).where(
+            InventoryLot.inventory_type=='semi_finished',InventoryLot.status=='active').order_by(InventoryLot.id))
+            if (identity:=lot_product(db,lot)) and identity[0] in product_ids]
     result = []
     from app.services.warehouse_inventory import WarehouseInventoryError
     for lot in rows:
@@ -58,7 +64,7 @@ def product_lots(db, product_ids, *, group_id=None):
                 reason = str(error)
         detail = lot.finished_detail
         result.append(dict(lot_id=lot.id, number=lot.lot_number,
-            product_id=detail.product_id, available=lot.quantity_available,
+            product_id=lot_product(db,lot)[0], available=lot.quantity_available,
             reserved=lot.quantity_reserved, version=lot.version,
             location=lot.location.location_name if lot.location else "",
             shared=bool(fact and fact.group_id == group_id), reason=reason,
@@ -173,12 +179,14 @@ def enroll_new_lot(db, lot, *, operator_id, production_verified=False):
     Existing lots are never swept in by toggling the policy. Order/BOM/external
     receipts need their own frozen evidence; transfer uses the existing lineage.
     """
-    if db.get(SharedFinishedLot, lot.id) or not lot.finished_detail:
+    from app.services.shared_bom_stock import lot_product
+    identity=lot_product(db,lot)
+    if db.get(SharedFinishedLot, lot.id) or not identity:
         return False
     if not production_verified and not (
             lot.source_type in {"manual", "stocktake"} and lot.source_ref_type is None):
         return False
-    member = db.get(SharedFinishedMember, lot.finished_detail.product_id)
+    member = db.get(SharedFinishedMember, identity[0])
     if not member or not _policy(db, member.group_id):
         return False
     group = db.get(SharedFinishedGroup, member.group_id)

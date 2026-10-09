@@ -27,7 +27,11 @@ def reserve_new_order_stock(db, *, order_item_id, operator_id):
             for lot in finished_inventory_candidates_for_bom_component(
                     db, order_item_id=order_item_id, bom_snapshot_id=snapshots[pid]):
                 detail = lot.finished_detail
-                if detail.is_general or detail.owner_customer_id != requirements.compiled.graph.customer_id:
+                from app.services.shared_finished_stock import match as shared_match
+                from app.services.finished_stock_identity import compiled_product_bases
+                approved=shared_match(db,lot,product_id=pid,customer_id=requirements.compiled.graph.customer_id,
+                    expected_basis=compiled_product_bases(requirements.compiled)[pid])
+                if detail.is_general or (detail.owner_customer_id != requirements.compiled.graph.customer_id and not approved):
                     continue
                 from app.services.bom_subkits import active_subkit_order
                 if active_subkit_order(db, lot) is not None:

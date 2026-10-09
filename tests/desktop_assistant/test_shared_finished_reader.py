@@ -53,3 +53,22 @@ def test_management_contract_rejects_v580_even_with_schema_authority():
         assert not manager.compatible(ids['v580'],'r1')
     finally:
         fixture.tearDown()
+
+
+def test_bom_reader_requires_signed_capability():
+    fixture=recovery.RecoveryTests();fixture.setUp()
+    try:
+        manager=fixture.manager;old=manager.state['current']
+        fixture.release('bom-reader','r1')
+        package=fixture.root/'bom-reader-cap.zip'
+        pack_tree(fixture.root/'source-bom-reader',package,dict(type='tianming.release.v1',
+            version='bom-reader',revision='r1',reader_capabilities={'shared_bom_v1':1}),fixture.key)
+        current=manager.stage_release(package)['id']
+        with closing(sqlite3.connect(manager.root/'shared/data/carton_erp.sqlite3')) as db:
+            db.execute('CREATE TABLE shared_bom_members(product_id INTEGER PRIMARY KEY)')
+        assert manager.compatible(current,'r1')
+        assert not manager.compatible(old,'r1')
+        cached=manager.manifest(old);cached['reader_capabilities']={'shared_bom_v1':1}
+        write_json(manager.root/'releases'/old/'manifest.json',cached)
+        assert not manager.compatible(old,'r1')
+    finally:fixture.tearDown()

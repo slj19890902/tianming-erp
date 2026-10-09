@@ -38,9 +38,15 @@ def _error(message, status=409):
 def member_identity(product):
     basis = json.loads(product_basis(product))
     basis.pop("product_id")
-    return _json(dict(basis=basis, extra={
+    result=dict(basis=basis, extra={
         key: getattr(product, key, None) if key == "sheet_cutting_settings"
-        else _value(getattr(product, key, None)) for key in EXTRA_FIELDS}))
+        else _value(getattr(product, key, None)) for key in EXTRA_FIELDS})
+    from sqlalchemy.orm import object_session
+    from app.services import shared_bom_stock as bom
+    db=object_session(product)
+    if db is not None and bom.role(db,product):
+        result['bom']=bom.contract(db,product)
+    return _json(result)
 
 
 def _process_key(value):
@@ -57,12 +63,19 @@ def _process_key(value):
 
 def _interchangeability_key(identity):
     value = json.loads(identity)
+    if 'bom' in value:
+        from app.services.shared_bom_stock import comparison
+        return comparison(identity)
     value["basis"]["production_process"] = _process_key(value["basis"].get("production_process"))
     return _json(value)
 
 
 def lot_identity(lot):
     detail = lot.finished_detail
+    if detail is None:
+        from sqlalchemy.orm import object_session
+        from app.services.shared_bom_stock import processed_identity
+        return processed_identity(object_session(lot),lot)
     return _json(dict(product_id=detail.product_id, customer_id=detail.owner_customer_id,
         code=detail.inventory_code_snapshot, general=detail.is_general, unit=lot.unit,
         physical_basis=detail.physical_basis_json))
@@ -81,8 +94,9 @@ def preview(db, *, product_ids, lot_ids, group_id=None, confirmed_printed_lots=N
     if len(pids) < 2 or len(pids) > 20 or len(lids) > 100:
         raise _error("请指定2至20个可互换产品，成品批次最多100个；无库存可先建组")
     products = [db.get(Product, pid) for pid in pids]
-    if not all(_ordinary(db, p) for p in products):
-        raise _error("首期共用仅支持有效的普通自制成品，不支持组合品或外购换算")
+    from app.services.shared_bom_stock import role
+    if not all(_ordinary(db,p) or role(db,p) for p in products):
+        raise _error("仅支持有效的普通自制成品、已核实组装BOM整套或对应单片零件，不支持外购换算")
     if len({p.customer_id for p in products}) != len(products):
         raise _error("每个客户在同一共用组只能指定一个产品")
     identities = [member_identity(p) for p in products]
@@ -116,6 +130,14 @@ def _preview_lots(db, products, lids, *, automatic=False, confirmed_printed_lots
     lots = []
     for lid in lids:
         lot = db.get(InventoryLot, lid)
+        from app.services import shared_bom_stock as bom
+        identity=bom.lot_product(db,lot) if lot is not None else None
+        if identity and identity[0] in pids and bom.role(db,products[pids.index(identity[0])]):
+            if (lot.status!='active' or lot.quantity_available<=0 or (lot.quantity_reserved and not automatic)
+                    or db.get(SharedFinishedLot,lid) or confirmed_printed_lots or confirmed_lot_fields):
+                raise _error('仅可确认未预占且有可用数量的BOM实物批次；不接受普通成品补充身份')
+            lots.append(bom.validate_lot(db,lot,products[pids.index(identity[0])],automatic=automatic))
+            continue
         if (lot is None or lot.inventory_type != "finished" or lot.status != "active"
                 or lot.finished_detail is None or lot.finished_detail.is_general
                 or (lot.quantity_reserved and not automatic) or lot.quantity_available <= 0
@@ -232,6 +254,10 @@ def _apply_confirmed(db, *, product_ids, lot_ids, preview_hash, operation_key, e
             db.add(SharedFinishedMember(group_id=group.id, product_id=row["product_id"],
                 customer_id=row["customer_id"], identity_json=row["identity_json"],
                 product_basis_json=row["product_basis_json"]))
+        db.flush()
+        from app.services.shared_bom_stock import persist_contract
+        for row in value['products']:
+            persist_contract(db,row['product_id'],row['identity_json'])
         for row in value["lots"]:
             db.add(SharedFinishedLot(group_id=group.id, lot_id=row["lot_id"], identity_json=row["identity_json"]))
         append_audit_event(db, event_category="business", result="success", source=source,
@@ -256,11 +282,18 @@ def match(db, lot, *, product_id, customer_id, expected_basis=None, lock=False):
     if group is None or not group.enabled:
         return None
     product = db.get(Product, product_id)
-    if not _ordinary(db, product) or product.customer_id != customer_id or member_identity(product) != member.identity_json:
+    from app.services import shared_bom_stock as bom
+    if not (_ordinary(db, product) or bom.role(db,product)) or product.customer_id != customer_id:
         return None
-    if lot.finished_detail is None or lot_identity(lot) != approved.identity_json:
+    try:
+        if member_identity(product)!=member.identity_json:
+            return None
+    except (ValueError, RuntimeError):
         return None
-    if expected_basis is not None and not matches_stock_identity(member.product_basis_json, expected_basis):
+    if lot_identity(lot) != approved.identity_json:
+        return None
+    if expected_basis is not None and not (bom.basis_matches(db,product_id,member.product_basis_json,expected_basis)
+            if bom.role(db,product) else matches_stock_identity(member.product_basis_json, expected_basis)):
         return None
     if lock:
         result = db.execute(update(SharedFinishedGroup).where(SharedFinishedGroup.id == group.id,
@@ -298,7 +331,7 @@ def reserved_match(db, reservation, lot, *, product_id, customer_id):
     if fact is None:
         return False
     if not (fact.product_id == product_id and fact.customer_id == customer_id
-            and lot.finished_detail is not None and fact.lot_identity_json == lot_identity(lot)):
+            and fact.lot_identity_json == lot_identity(lot)):
         raise _error("共用预占与冻结批次身份不一致，请核实后再出库")
     return True
 

@@ -99,10 +99,10 @@ def test_two_piece_carton_frozen_molds_partial_gluing_delivery_and_reversal(comp
                 assert lot.warehouse_location_id==original_locations[pid]
             output=db.get(InventoryLot,assembly.output_lot_id)
             from app.services.warehouse_display_units import lot_display_unit
-            assert lot_display_unit(output)=='只'
+            assert lot_display_unit(output)=='套'
             assert output.quantity_available+output.quantity_reserved==75
         history=client.get('/api/production/completions',params={'include_stock':True}).json()['items']
-        assert next(r for r in history if r.get('bom_assembly_id')==assembly_id)['output_unit']=='只'
+        assert next(r for r in history if r.get('bom_assembly_id')==assembly_id)['output_unit']=='套'
         sent=client.post('/api/deliveries',json=dict(customer_id=1,delivery_date=beijing_today().isoformat(),items=[dict(order_item_id=1,delivered_quantity=10)]))
         assert sent.status_code==201,sent.text
         did=sent.json()['id'];dispatch=client.put(f'/api/deliveries/{did}/dispatch')

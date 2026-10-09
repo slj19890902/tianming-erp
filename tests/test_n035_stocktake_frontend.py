@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -47,14 +49,17 @@ def _assert_node_run(source: str, tmp_path: Path, name: str) -> None:
 
 
 def test_mobile_stocktake_uses_stocktake_api_and_never_direct_adjust() -> None:
+    recovery_path = "static/ui/mobile-stocktake-recovery.js"
+    assert f'src="/{recovery_path}?' in MOBILE
+    mobile_sources = MOBILE + (ROOT / recovery_path).read_text(encoding="utf-8")
     for endpoint in (
         "/api/auth/login",
         "/api/warehouse/stocktake/locations",
         "/api/warehouse/stocktake/locations/",
         "/api/warehouse/stocktakes",
     ):
-        assert endpoint in MOBILE
-    assert "/adjust" not in MOBILE
+        assert endpoint in mobile_sources
+    assert "/adjust" not in mobile_sources
     assert "inventory_lot_id" in MOBILE
     assert "client_line_id" in MOBILE
     assert "idempotency_key" in MOBILE
@@ -66,7 +71,7 @@ def test_mobile_stocktake_uses_stocktake_api_and_never_direct_adjust() -> None:
     assert "published_map_revision" in MOBILE
 
 
-def test_mobile_stocktake_renders_all_lots_and_requires_every_count() -> None:
+def test_mobile_stocktake_renders_all_lots_and_requires_every_count(tmp_path: Path) -> None:
     assert 'listItems(data,["items","lots","stocktake_items","inventory_lots"])' in MOBILE
     assert "quantity_available" in MOBILE and "quantity_reserved" in MOBILE
     assert 'step="1" inputmode="numeric"' in MOBILE
@@ -77,9 +82,24 @@ def test_mobile_stocktake_renders_all_lots_and_requires_every_count() -> None:
     assert "非负整数" in MOBILE
     submit = _function_line(MOBILE, "submitStocktake")
     assert "window.confirm" not in submit
-    assert "state.submitting=true" in submit
-    assert "resetLockedInputs" in submit
     assert "resetLockedInputs" in MOBILE
+    # Execute the actual page and its recovery component: submitting may be
+    # controlled by onChange and receipt callbacks rather than this one line.
+    node = shutil.which("node")
+    assert node is not None, "Node is required for the mobile stocktake behavior contract"
+    evidence = tmp_path / "stocktake-recovery.json"
+    environment = os.environ.copy()
+    environment.pop("TM_STOCKTAKE_BASELINE", None)
+    environment["TM_STOCKTAKE_EVIDENCE"] = str(evidence)
+    result = subprocess.run(
+        [node, str(ROOT / "tests/mobile_stocktake_recovery.cjs")],
+        env=environment, capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    observed = json.loads(evidence.read_text(encoding="utf-8"))
+    assert not observed["failures"]
+    assert "pending double click sends one immutable body" in observed["cases"]
+    assert "true cold init selectedLocation null immediately freezes recovered original inputs" in observed["cases"]
 
 
 def test_warehouse_stocktake_tab_and_review_permissions_are_gated() -> None:

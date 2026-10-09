@@ -22,6 +22,8 @@
 - UI /root/mobile_drawings_ui：从本卡SHA新建codex/mobile-stocktake-recovery-ui-20261010，独占static/mobile_stocktake.html、必要独立static/ui/mobile-stocktake-recovery.js、新tests/mobile_stocktake_recovery.cjs及必要专用Python包装；API定义只读。先复现现有函数失败，等API契约固定再实现依赖。现有取用/图纸/添加入口不改。
 - 根独占卡、版本/汇总、独立复核、合并和串行签名发布。原主目录与其他候选不动。
 
+根复核补充测试维护：本次专用恢复组件取代旧submit函数内联写法后，tests/test_n035_stocktake_frontend.py新增两条源码形态断言失败。根独占该文件，入口契约检查HTML实际引用的module、保留禁止直接adjust；提交busy及恢复禁改用完整实际HTML+module行为回归验证，不把无效字符串加回产品代码。原三个基线旧失败单列，不扩改无关测试。
+
 最短回归：真实confirm/employee submit、已完成精确重放/异载荷、位置或库存后来变化仍可核对原结果、未找到不写、当前权限/客户限制/账号切换、commit前返回构造失败全回滚/commit后或传输未知可核对、库存调整/预占/审核守恒；前端坏2xx、正确全回执、断网/双击、unknown后重载/编辑、所有错误分支、成功后刷新失败、存储异常和晚响应。原盘点关键回归只选受影响最短组；无全仓、单组小于10分钟。必要UI用隔离Chrome，禁止IAB/正式自动点击/Playwright，截图不能代替真实后端或管理员手机验收。
 
 完成后根核对候选/正式实时基线、唯一head、签名、冷备独立恢复、业务/附件保持、完整性/FK、健康及本次只读资源；普通代码正式技术交付后给1～3条最短人工入口，未收到反馈不写人工通过。NAS独立回执；持续Goal active。

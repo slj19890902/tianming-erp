@@ -82,4 +82,3 @@ async function test(name,fn){try{await fn();cases.push(name);}catch(error){failu
  if(failures.length){console.error(JSON.stringify({passed:cases.length,failed:failures},null,2));process.exitCode=1;}else console.log(`${cases.length} stocktake recovery scenarios passed`);
  if(process.env.TM_STOCKTAKE_EVIDENCE)fs.writeFileSync(process.env.TM_STOCKTAKE_EVIDENCE,JSON.stringify({cases,failures,sourceHash:crypto.createHash('sha256').update(html).digest('hex')},null,2));
 })();
-

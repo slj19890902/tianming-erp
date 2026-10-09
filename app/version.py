@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.581"
-APP_VERSION_NAME = "生产任务单大字双联与工艺分块"
+APP_VERSION = "v0.22.582"
+APP_VERSION_NAME = "仓库颜色参考折叠与货架库龄标识"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5531,3 +5531,13 @@ APP_CHANGES = [
     "修复正常收料导致任务版本永久误报；打印前重读当前内容，保留真实版本冲突、权限及库存事实保护。",
 ]
 APP_CHANGELOG = [*(f"v0.22.581：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "仓库入库时间颜色参考默认折叠，点击展开；收起后地图颜色继续保留。",
+    "货架编号底色显示架内最久一档，满365天深红白字；沿用同产品最近有效入库时间和搜索范围。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，确认左侧仅显示入库时间颜色按钮；点击展开和收起，地图均可正常查看。",
+    "核对货架编号底色与其最久库存档位一致；选中特定产品查找时仅反映该产品，空架白色，未知日期灰纹。",
+]
+APP_CHANGELOG = [*(f"v0.22.582：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

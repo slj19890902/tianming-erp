@@ -379,27 +379,25 @@ function rackNumberSprite(text: string, violated: boolean, intakeColor?: string,
   context.font = "bold 36px Microsoft YaHei, sans-serif";
   canvas.width = Math.max(60, Math.ceil(context.measureText(text).width) + 16);
   canvas.height = 54;
-  context.fillStyle = "rgba(255,255,255,.96)";
+  context.fillStyle = intakeColor || "rgba(255,255,255,.96)";
   context.fillRect(0, 0, canvas.width, canvas.height);
-  if (intakeColor) {
-    context.fillStyle = intakeColor;
-    context.fillRect(0, 0, canvas.width, 6);
-    if (unknown) {
-      context.strokeStyle = "#94A3B8";
-      context.lineWidth = 1;
-      for (let x = -6; x < canvas.width; x += 8) { context.beginPath(); context.moveTo(x, 6); context.lineTo(x + 6, 0); context.stroke(); }
-    }
+  if (intakeColor && unknown) {
+    context.strokeStyle = "#94A3B844";
+    context.lineWidth = 1;
+    for (let x = -canvas.height; x < canvas.width; x += 12) { context.beginPath(); context.moveTo(x, canvas.height); context.lineTo(x + canvas.height, 0); context.stroke(); }
   }
   context.strokeStyle = violated ? "#b91c1c" : "#334155";
   context.lineWidth = 3;
-  context.strokeRect(2, 8, canvas.width - 4, canvas.height - 10);
-  context.fillStyle = violated ? "#b91c1c" : "#0f172a";
+  context.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+  context.fillStyle = intakeColor === "#A83F46" ? "#FFFFFF" : violated ? "#b91c1c" : "#0f172a";
   context.font = "bold 36px Microsoft YaHei, sans-serif";
   context.textAlign = "center";
   context.textBaseline = "middle";
-  context.fillText(text, canvas.width / 2, 30);
+  context.fillText(text, canvas.width / 2, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: new THREE.CanvasTexture(canvas), depthTest: false, depthWrite: false, opacity: dimmed ? 0.35 : 1, transparent: true
+    map: texture, toneMapped: false, depthTest: false, depthWrite: false, opacity: dimmed ? 0.35 : 1, transparent: true
   }));
   sprite.userData.pixelWidth = canvas.width / 2;
   sprite.userData.pixelHeight = canvas.height / 2;
@@ -1906,11 +1904,16 @@ export function EditorCanvas({
   const compassCode = floor4CalibratingCompass ? "3F" : realEastCompass ? "E" : "N";
   const compassLabel = floor4CalibratingCompass ? "对齐3F" : realEastCompass ? "现实东向" : "图纸北向";
   return <div className={`editor-canvas ${visualTheme === "warehouse" ? "warehouse-theme" : ""} ${showIntakeLegend ? "with-intake-legend" : ""} ${effectiveDrawMode || measureMode ? "drawing" : ""}`}>
-    {showIntakeLegend && <aside className="warehouse-intake-legend" aria-label="入库时间图例"><b>入库时间（天）</b>
+    {showIntakeLegend && <details className="warehouse-intake-legend">
+      <summary>入库时间颜色</summary>
+      <div className="intake-legend-content" aria-label="入库时间图例">
+      <b>入库时间（天）</b>
       {[...INTAKE_AGE_BANDS].reverse().map(band => <span key={band.bucket}><i style={{backgroundColor: band.color}} />{band.label}</span>)}
+      <small>货架：按最久一档</small>
       <span><i className="legend-empty" />空位</span><span><i className="legend-unknown" />日期待核</span>
       <span><i className="legend-selected" />已选中</span><span><i className="legend-search" />查找命中</span>
-    </aside>}
+      </div>
+    </details>}
     <div className="map-viewport" ref={containerRef}>
     <div className="canvas-mount" ref={canvasMountRef} />
     {!readOnly && showInternalCodes && viewMode === "2d" && <small className="map-edit-keyboard-hint">{MAP_KEYBOARD_HINT}。货架拖近120mm内吸附，Alt取消吸附；调整后按原流程保存/应用。</small>}

@@ -12074,13 +12074,22 @@ def _publish_twin_layout_draft_locked(
             coordinate_adjustments=coordinate_adjustments,
             isolated_area_feature_id=isolated_area_feature_id,
         )
+        rack_map_application_count = 0
+        if isolated_area_feature_id is not None:
+            from app.services.warehouse_rack_map_application import carry_unchanged_rack_policies
+            rack_map_application_count = carry_unchanged_rack_policies(
+                db, previous_floor_layout=published_floor_before,
+                floor_layout=load_warehouse_twin_floor(floor_code), actor=user,
+                operation_key=payload.operation_key, request=request,
+                excluded_feature_id=isolated_area_feature_id,
+            )
         legacy_name_update_count = int(
             getattr(published_policies, "legacy_name_update_count", 0)
         )
         formal_master_changed = bool(
             published_policies or legacy_name_update_count or rack_master_changed
         )
-        if result.applied or formal_master_changed or ground_map_application_count:
+        if result.applied or formal_master_changed or ground_map_application_count or rack_map_application_count:
             _twin_layout_asset_log(
             db,
             request=request,
@@ -12092,6 +12101,7 @@ def _publish_twin_layout_draft_locked(
             details={
                 **result.value,
                 "ground_map_application_count": ground_map_application_count,
+                "rack_map_application_count": rack_map_application_count,
                 "location_coordinate_adjustments": coordinate_adjustments,
                 "formal_area_count": len(published_policies),
                 "formal_areas": [

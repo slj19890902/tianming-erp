@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.575"
-APP_VERSION_NAME = "工作台加载导航稳定显示"
+APP_VERSION = "v0.22.576"
+APP_VERSION_NAME = "货架标签地图版本关联修复"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5465,3 +5465,13 @@ APP_CHANGELOG = [*(f"v0.22.574：本次更新｜{item}" for item in APP_CHANGES)
 APP_CHANGES = ["修复加载时业务中心短暂右移及重复页头：嵌入工作区首次显示即采用统一布局。", "菜单连接提前到工作区脚本就绪；加载期间仍禁止业务操作，保留登录、权限、草稿和直接原页面。"]
 APP_VERIFICATION_STEPS = ["刷新ERP，观察加载期间业务中心保持左侧，不再先显示第二套菜单和页头。", "加载后切换订单与仓库，确认导航、左下工具正常；无需新增或保存业务单据。"]
 APP_CHANGELOG = [*(f"v0.22.575：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "单区域发布时，核验并同步其他未变化货架区域的地图版本关联，避免已发布货位被标签打印误判为未发布。",
+    "保留当前地图版本、权限、真实货位及打印校验；区域或货架改变、待发布或停用时不自动承接。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新产品标签页，核对80012646的位置为货H1-1层-2格，并检查文字及二维码后试打一张。",
+    "后续单独发布区域设置后，抽查其他未变化货架的产品标签仍可预览；实体出纸由管理员确认。",
+]
+APP_CHANGELOG = [*(f"v0.22.576：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

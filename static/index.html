@@ -7,6 +7,8 @@
     <link rel="icon" type="image/png" href="/static/assets/tianming-brand-symbol.png" />
     <link rel="stylesheet" href="/static/ui/desktop-delivery-margin.css?v=20260926-cost-column" />
     <script src="/static/vendor/vue-3.5.40.global.prod.js"></script>
+    <link rel="stylesheet" href="/static/ui/home-workbench.css?v=20261009-home1" />
+    <script src="/static/ui/home-workbench.js?v=20261009-home1"></script>
     <script src="/static/ui/order-context.js?v=round-experience-d1b"></script>
     <script src="/static/ui/workspace.js?v=71e4c13edadc"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
@@ -3256,6 +3258,7 @@
             :data-single-screen-mode="uiMode"
             :data-single-screen-expanded="singleScreenExpanded ? 'true' : 'false'"
           >
+            <div v-if="homeEntry && activePage===homeEntry.target && activePage!=='dashboard'" class="home-return"><button @click="homeReturn">返回首页</button><span>首页定位：{{homeEntry.customer_label || ''}} {{homeEntry.product_code || ''}}</span><button @click="homeClearEntry">清除定位</button></div>
             <div v-if="loading" class="loading-bar"></div>
 
             <section v-if="businessFlowCurrentStep" class="business-flow-guide" aria-label="订单到送货操作顺序">
@@ -3368,126 +3371,8 @@
             </section>
 
             <template v-if="activePage === 'dashboard'">
-              <div class="page-head"><div><h2>首页仪表盘</h2><p>一打开就能看到今天最该处理的订单、报料、送货、回单和对账事项。</p><span v-if="overview.as_of" class="muted">统计截至 {{ formatDateTime(overview.as_of) }} · 对账月份 {{ overview.statement_month }}</span></div></div>
-              <div v-if="overviewLoading" class="status blue" style="margin-bottom: 12px;">首页数据加载中……</div>
-              <div v-if="overviewError" class="status red" style="margin-bottom: 12px;">首页数据加载失败：{{ overviewError }} <button type="button" :disabled="overviewLoading" @click="loadOverview()">重新加载</button></div>
-              <div v-if="dashboardCards.length" class="dashboard-cards">
-                <div v-for="card in dashboardCards" :key="card.key" class="card dashboard-card" @click="openDashboardTarget(card)">
-                  <div class="card-label">{{ card.title }}</div>
-                  <div class="dashboard-card-value">
-                    <span class="dashboard-card-count">{{ card.count || 0 }}</span>
-                    <span class="dashboard-card-unit">{{ card.count_unit || "项" }}</span>
-                    <span v-if="card.amount !== undefined && card.amount !== null" class="dashboard-card-amount">金额 ￥ {{ money(card.amount) }}</span>
-                  </div>
-                  <div class="card-hint">{{ card.description }}</div>
-                  <div v-if="card.key==='pending_material' && dashboardRequisitionHoldSummary.total" class="dashboard-hold-summary" @click.stop="openWaitingRequisitionFromDashboard">
-                    等候 {{ dashboardRequisitionHoldSummary.total }} 条<span v-if="dashboardRequisitionHoldSummary.due_count"> · 到期 {{ dashboardRequisitionHoldSummary.due_count }} 条</span>
-                  </div>
-                  <div class="dashboard-card-actions">
-                    <button class="btn small primary" @click.stop="openDashboardTarget(card)">{{ card.button_label || "去处理" }}</button>
-                  </div>
-                </div>
-              </div>
-              <div v-else class="empty" style="margin-top: 8px;">当前没有可显示的总览数据。</div>
-              <section v-if="hasPermission('deliveries.view')" class="panel dashboard-backlog" :class="{'is-empty':!deliveryBacklogs.items.length && !deliveryBacklogs.loading && !deliveryBacklogs.error}" aria-label="持续待补送提醒">
-                <div class="toolbar"><strong>持续待补送 · 按最早交期排列</strong><button class="btn" @click="openDeliveryBacklogs">查看全部与历史</button></div>
-                <div v-if="deliveryBacklogs.error" class="status orange">{{ deliveryBacklogs.error }} <button class="btn small" @click="loadDeliveryBacklogs(1)">重试</button></div>
-                <div v-for="row in deliveryBacklogs.items.slice(0,5)" :key="row.id" style="padding:6px 0">{{ row.customer_name }} · {{ row.stock_code }} {{ row.product_name }}：待补 <strong>{{ row.remaining_quantity }}</strong>，可补送 {{ row.ready_quantity }} · 交期 {{ row.due_date || '未登记' }} · {{ row.reason }}</div>
-                <div v-if="!deliveryBacklogs.items.length && !deliveryBacklogs.error" class="muted">{{ deliveryBacklogs.loading ? '正在查询待补送…' : '暂无登记中的待补送' }}</div>
-              </section>
-              <div class="dashboard-block">
-                <div class="section-title">今日日常待办</div>
-                <div class="section-body">
-                  <div v-if="overview.todos && overview.todos.length" class="todo-list">
-                    <div v-for="todo in overview.todos" :key="`${todo.type}-${todo.customer_name}-${todo.month || ''}-${todo.first_order_no || ''}`" class="todo-item">
-                      <div class="todo-main">
-                        <div class="todo-meta">
-                          <span class="todo-type">{{ todo.type }}</span>
-                          <div class="todo-title">{{ todo.customer_name }}</div>
-                        </div>
-                        <div class="todo-detail" v-if="todo.month">
-                          {{ todo.month }}
-                          <span v-if="todo.count"> / 共 {{ todo.count }} 条</span>
-                          <span v-if="todo.amount !== undefined"> / {{ money(todo.amount) }}</span>
-                        </div>
-                        <div class="todo-detail" v-else>
-                          <span v-if="todo.count">共 {{ todo.count }} 条</span>
-                          <span v-if="todo.first_order_no"> / 最早单号 {{ todo.first_order_no }}</span>
-                          <span v-if="todo.first_item_no"> / {{ todo.first_item_no }}</span>
-                        </div>
-                      </div>
-                      <div class="todo-message">{{ todo.message }}</div>
-                      <div class="toolbar-group">
-                        <button class="btn small" @click="openDashboardTarget(todo)">{{ todo.action_text || "查看对应页面" }}</button>
-                      </div>
-                    </div>
-                    <div v-if="overview.remaining_todo_count" class="todo-more">还有 {{ overview.remaining_todo_count }} 项待办，请进入对应页面查看。</div>
-                  </div>
-                  <div v-else class="empty">当前没有紧急待办。</div>
-                </div>
-              </div>
-              <div class="dashboard-detail-summary">
-                <span>库存与业务摘要：低库存 {{ overview.low_stock_warnings?.length || 0 }} 款 · 今日日常待办 {{ overview.todos?.length || 0 }} 项</span>
-                <button class="btn small" type="button" :aria-expanded="dashboardDetailsVisible" @click="dashboardDetailsVisible=!dashboardDetailsVisible">{{ dashboardDetailsVisible ? '收起库存与摘要' : '展开库存与摘要' }}</button>
-              </div>
-              <div v-if="dashboardDetailsVisible" class="dashboard-detail-stack">
-              <div v-if="overview.low_stock_warnings && overview.low_stock_warnings.length" class="dashboard-block">
-                <div class="section-title">常用箱低库存（{{ lowStockCustomerGroups.length }} 个客户 / {{ overview.low_stock_warnings.length }} 款）</div>
-                <div class="section-body">
-                  <div class="low-stock-customer-list">
-                    <div v-for="group in lowStockCustomerGroups" :key="group.key" class="low-stock-customer-card">
-                      <button class="low-stock-customer-head" type="button" @click="toggleLowStockCustomer(group.key)">
-                        <span class="low-stock-customer-title"><strong>{{ group.customer_name }}</strong><span class="status orange">库存不足 {{ group.items.length }} 款</span></span>
-                        <span class="low-stock-customer-summary"><template v-if="group.external_count && group.external_count===group.items.length">建议外购备库 {{ group.total_external_finished_quantity }} 个成品</template><template v-else-if="group.external_count">纸板 {{ group.total_new_requisition_sheets }} 张｜外购成品 {{ group.total_external_finished_quantity }} 个</template><template v-else>本次新报 {{ group.total_new_requisition_sheets }} 张</template>　{{ lowStockExpandedCustomers[group.key] ? "收起" : "展开明细" }}</span>
-                      </button>
-                      <div v-if="lowStockExpandedCustomers[group.key]" class="low-stock-detail-list">
-                        <div v-for="item in group.items" :key="item.policy_id" class="low-stock-detail">
-                          <div>
-                            <div><strong class="low-stock-detail-code">{{ item.product_code || "无编码" }}</strong>｜{{ item.product_name }}</div>
-                            <div v-if="item.procurement_mode==='external_purchase'" class="muted">外购包材｜按常用箱采购规格、默认供应商和当前正式报价</div><div v-else-if="item.is_virtual_composite_parent" class="muted">组合成品｜按 {{ item.bom_component_count }} 项BOM组件分别报料</div><div v-else class="muted">{{ item.material_code || "材质未完善" }}｜{{ item.report_length_mm || "-" }} × {{ item.report_width_mm || "-" }} mm｜{{ fluteDisplay(item.flute_type) }}楞</div>
-                            <span v-if="item.same_spec_warning_count" class="status blue">另有 {{ item.same_spec_warning_count }} 款同规格也在预警</span>
-                            <span v-if="!item.draft_ready" class="status orange">常用箱缺：{{ (item.missing_fields || []).join("、") }}</span>
-                          </div>
-                          <div class="low-stock-detail-metrics">
-                            <span>仓库总数 <strong>{{ item.available_quantity }}</strong><template v-if="item.is_virtual_composite_parent"> 套覆盖</template></span>
-                            <span v-if="item.is_virtual_composite_parent">已成套 {{ item.assembled_quantity || 0 }} · 未组装可配 {{ item.unassembled_available_set_quantity || 0 }} · 订单已预留组件 {{ item.reserved_component_set_quantity || 0 }} 套</span>
-                            <span>预警线 <strong>{{ item.warning_quantity }}</strong></span>
-                            <span>距离目标还差 <strong>{{ item.suggested_replenishment_quantity }}</strong> {{ item.is_virtual_composite_parent ? '套' : (item.unit_label || '单位待完善') }}</span>
-                            <span v-if="item.customer_board_preparation_available_sheet_quantity && item.customer_board_preparation_auto_cover_capacity">已有客户备料 <strong>{{ item.customer_board_preparation_available_sheet_quantity }}</strong> 张</span>
-                            <span v-else-if="item.customer_board_preparation_available_sheet_quantity">同规格备料 <strong>{{ item.customer_board_preparation_available_sheet_quantity }}</strong> 张（已计入另一款，不重复计算）</span>
-                            <span v-if="item.incoming_board_preparation_sheet_quantity && item.incoming_board_preparation_auto_cover_capacity">已报料待到 <strong>{{ item.incoming_board_preparation_sheet_quantity }}</strong> 张</span>
-                            <span v-else-if="item.incoming_board_preparation_sheet_quantity">同规格在途 <strong>{{ item.incoming_board_preparation_sheet_quantity }}</strong> 张（已计入另一款，不重复计算）</span>
-                            <span v-if="item.is_virtual_composite_parent">本次补库 <input class="input" type="number" min="1" step="1" style="width:88px;display:inline-block" aria-label="本次补库套数" :value="stockPolicyDraftQuantity(item)" @input="setStockPolicyDraftQuantity(item,$event.target.value)" /> 套 <button type="button" class="btn small" aria-label="本次补库说明" @click="explainStockPolicyDraftQuantity(item)">!</button></span><span v-else-if="item.procurement_mode==='external_purchase'">本次建议备库 <strong>{{ item.suggested_new_requisition_finished_quantity }}</strong> 个成品</span><span v-else>本次新报 <strong>{{ item.suggested_new_requisition_sheet_quantity }}</strong> 张</span>
-                          </div>
-                          <div class="low-stock-detail-actions">
-                            <button v-if="(canRequisition || canSubmitBusinessRequest) && (canSubmitBusinessRequest || item.procurement_mode!=='external_purchase' || (canAdmin && canViewCosts))" class="btn small success" :disabled="!item.draft_ready || !Number(item.is_virtual_composite_parent ? stockPolicyDraftQuantity(item) : item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0)" @click="openLowStockReplenishment(item)">{{ Number(item.is_virtual_composite_parent ? stockPolicyDraftQuantity(item) : item.procurement_mode==='external_purchase' ? item.suggested_new_requisition_finished_quantity : item.suggested_new_requisition_sheet_quantity || 0) ? (item.is_virtual_composite_parent ? "按预警补库" : item.procurement_mode==='external_purchase' ? `建议采购备库 ${item.suggested_new_requisition_finished_quantity} 个` : `建议报料 ${item.suggested_new_requisition_sheet_quantity} 张`) : item.replenishment_state==='board_preparation_ready' ? '已有备料，待生产' : item.replenishment_state==='already_ordered' ? (item.procurement_mode==='external_purchase' ? '已采购，待到货' : '已报料，待到货') : '无需再报料' }}</button>
-                            <button class="btn small primary" @click="openLowStockLocations(item)">查看库存位置</button>
-                            <button v-if="canRequisition || canEditStockAlerts" class="btn small" @click="openProductStockPolicy(item)">修改预警</button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div class="section-grid">
-                <div class="panel"><div class="section-title">快捷入口</div><div class="section-body toolbar-group">
-                  <template v-for="action in dashboardQuickActions" :key="action.key">
-                    <a v-if="action.href" :class="['btn',{primary:action.primary}]" :href="action.href">{{ action.label }}</a>
-                    <button v-else type="button" :class="['btn',{primary:action.primary}]" @click="runDashboardQuickAction(action.key)">{{ action.label }}</button>
-                  </template>
-                </div></div>
-                <div class="panel"><div class="section-title">最近业务摘要</div><div class="section-body">
-                  <div>今天新增订单：{{ kpi.today_orders || 0 }}</div>
-                  <div>今天发货单：{{ kpi.today_deliveries || 0 }}</div>
-                  <div>今天回单：{{ kpi.today_receipts || 0 }}</div>
-                  <div v-if="hasPermission('finance.view')">回单确认销售额（原口径）：¥ {{ money(kpi.monthly_revenue) }}</div>
-                  <div v-if="canViewCosts">对账毛利（原口径）：¥ {{ money(kpi.monthly_gross_profit) }}</div>
-                  <div v-if="hasPermission('finance.view')">待收账款：¥ {{ money(kpi.outstanding_receivables) }}</div>
-                </div></div>
-              </div>
-              </div>
-              <section v-if="canViewDeliveryMargin" id="desktopDeliveryMarginSection" class="dashboard-delivery-margin-shell">
+              <home-workbench></home-workbench>
+              <section v-if="canViewDeliveryMargin && homeAnalyticsOpen" id="desktopDeliveryMarginSection" class="dashboard-delivery-margin-shell">
                 <div id="desktopDeliveryMarginRoot" class="panel">
                   <div class="dashboard-delivery-margin-head">
                     <div><h3>客户送货材料毛利</h3><p class="muted">按真实送货明细统计；这是送货材料毛利，不是净利。</p></div>
@@ -16878,7 +16763,7 @@
             }
             if (key === "pending_receipt" || entry?.type === "待回单") {
               this.deliveryDashboardMode = "";
-              this.deliveryListFilters = { customer_id:filter.customer_id || "", keyword:"", date_from:"", date_to:"", status:"dispatched", return_status:"waiting_receipt" };
+              this.deliveryListFilters = { customer_id:filter.customer_id || "", keyword:filter.keyword || "", date_from:"", date_to:"", status:"dispatched", return_status:"waiting_receipt" };
               this.pages.deliveries = 1;
               this.invalidatePageCache("deliveries");
               return this.go("deliveries");
@@ -17099,7 +16984,6 @@
             if(this.hasPermission('deliveries.view')) this.loadDeliveryBacklogs(1,false);
             this.overviewLoading = true;
             this.overviewError = "";
-            this.overview = { cards: [], todos: [], summary: {} };
             this.warehouseCapacitySummary = null;
             try {
               const data = (await axios.get("/api/dashboard/overview", {signal:controller.signal, timeout:20000})).data || { cards: [], todos: [], summary: {} };
@@ -17113,8 +16997,6 @@
               return true;
             } catch (error) {
               if (!isCurrent() || this.isCancelledRequest(error)) return false;
-              this.overview = { cards: [], todos: [], summary: {} };
-              this.kpi = {};
               this.overviewError = error?.code === "ECONNABORTED"
                 ? "请求超时，请点击重新加载" : this.errorMessage(error);
               return false;
@@ -20263,7 +20145,7 @@
           },
           async openLowStockReplenishment(item) {
             if (this.canSubmitBusinessRequest && !this.canRequisition) { this.openBusinessRequests(item); return; }
-            if (!Number(item?.is_virtual_composite_parent ? this.stockPolicyDraftQuantity(item) : item?.suggested_new_requisition_sheet_quantity || 0)) {
+            if (!Number(item?.is_virtual_composite_parent ? this.stockPolicyDraftQuantity(item) : item?.procurement_mode==="external_purchase" ? item?.suggested_new_requisition_finished_quantity : item?.suggested_new_requisition_sheet_quantity || 0)) {
               const message = item?.replenishment_state === "board_preparation_ready"
                 ? "已有客户专用纸板备料，当前无需重复报料，请按订单安排生产"
                 : item?.replenishment_state === "already_ordered"
@@ -20813,7 +20695,7 @@
             this.productionPendingLoading = true;
             this.productionPendingError = "";
             try {
-              pending = await axios.get("/api/production/tasks", { params: { status: "pending", q:this.productionQuery, page, page_size: this.productionPendingPageSize() }, signal:controller.signal });
+              pending = await axios.get("/api/production/tasks", { params: { status: "pending", q:this.productionQuery, home_task_id:this.homeEntry?.key==='pending_production'?this.homeEntry.task_id:undefined, page, page_size: this.productionPendingPageSize() }, signal:controller.signal });
               if (latestRequestControllers.get("production:pending") !== controller) return false;
             } catch (error) {
               if (!this.isCancelledRequest(error) && latestRequestControllers.get("production:pending") === controller) {
@@ -42419,6 +42301,7 @@
       window.ERPProductionMap?.install(app);
       window.ERPWarehouseWorkspace?.install(app);
       window.ERPFinanceWorkspace?.install(app);
+      window.ERPHomeWorkbench?.install(app);
       const formalWorkspaceInstance = app.mount("#app");
       window.ERPFrontendReliability?.install(formalWorkspaceInstance);
       window.ERPFrontendShell?.install(formalWorkspaceInstance);

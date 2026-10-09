@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.590"
-APP_VERSION_NAME = "公司抬头与独立电子章管理"
+APP_VERSION = "v0.22.591"
+APP_VERSION_NAME = "首页今日工作台与库存优先待办"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5632,3 +5632,15 @@ APP_VERIFICATION_STEPS = [
     "查看旧合同及送货单抬头保持原样；合同默认未盖章，管理员可另选导出盖章PDF。",
 ]
 APP_CHANGELOG = [*(f"v0.22.590：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "首页改为今日工作台，库存预警常显在首屏，区分需处理、已安排和待审批。",
+    "具体待办显示客户、产品、订单、关键数量和交期，支持客户/编码/订单筛选及返回首页。",
+    "按屏幕稳定分页；标准与大字模式兼容，更新失败保留上次数据并提示重试。原有权限、审批、库存和历史事实保持。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新首页，核对库存预警、实存与可用、建议补库数量；选择客户或编码筛选并翻页。",
+    "点击待办进入对应业务，再点返回首页；生成报料仅准备草稿，业务账号仍提交审批。",
+    "切换标准/大字模式，核对列表清晰完整；受限账号仅出现获授权客户及允许的数据。",
+]
+APP_CHANGELOG = [*(f"v0.22.591：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -250,10 +250,13 @@ def test_dashboard_selected_customer_scope_filters_every_aggregate(tmp_path: Pat
         "month_settled_amount": Decimal("0.00"),
     }
     assert {card["key"] for card in overview["cards"]} >= {
-        "pending_reconciliation",
         "pending_invoice",
         "pending_payment",
     }
+    from app.api.dashboard import RECONCILIATION_REMINDER_START_DAY
+    assert ("pending_reconciliation" in {c["key"] for c in overview["cards"]}) == (
+        date.fromisoformat(overview["as_of"][:10]).day >= RECONCILIATION_REMINDER_START_DAY
+    )
     assert overview["todos"]
     assert {todo["customer_name"] for todo in overview["todos"]} == {
         "Allowed customer"

@@ -9980,6 +9980,7 @@ def _pending_requisition_eligible_rows(db: Session, user: User) -> list[dict]:
         group_rows = merge_rows_by_group.get(int(group.id), [])
         customer_names: list[str | None] = []
         product_codes: list[str | None] = []
+        workbench_customer_ids: set[int] = set()
         remaining_required_piece_qty = 0
         requisition_qty = 0
         for requisition_item, item, _order, customer, product in group_rows:
@@ -10000,6 +10001,7 @@ def _pending_requisition_eligible_rows(db: Session, user: User) -> list[dict]:
             if not _requires_supplier_purchase(requirements):
                 continue
             customer_names.append(customer.name)
+            workbench_customer_ids.add(customer.id)
             product_codes.append(
                 requisition_item.product_code_snapshot
                 or item.snapshot_product_code
@@ -10022,6 +10024,7 @@ def _pending_requisition_eligible_rows(db: Session, user: User) -> list[dict]:
                 # keep it out of customer-specific todos while counting its
                 # stable merge identity in the dashboard metric.
                 "customer_id": None,
+                "_workbench_customer_ids": sorted(workbench_customer_ids),
                 "customer_name": " / ".join(_unique_text(customer_names)),
                 "order_number": "合并组",
                 "product_code": " / ".join(_unique_text(product_codes)),
@@ -10074,11 +10077,11 @@ def _pending_requisition_eligible_rows(db: Session, user: User) -> list[dict]:
     return projected
 
 
-def dashboard_pending_requisition_rows(db: Session, user: User) -> list[dict]:
+def dashboard_pending_requisition_rows(db: Session, user: User, *, include_workbench: bool = False) -> list[dict]:
     """Return the P1-36J dashboard contract without pagination-only metadata."""
 
     return [
-        {key: value for key, value in row.items() if key not in {"_supplier_name", "_sort_created_at"}}
+        {key: value for key, value in row.items() if key not in ({"_supplier_name", "_sort_created_at"} if include_workbench else {"_supplier_name", "_sort_created_at", "_workbench_customer_ids"})}
         for row in _pending_requisition_eligible_rows(db, user)
     ]
 
@@ -10594,11 +10597,12 @@ def pending_requisitions(
     page: Annotated[int | None, Query(ge=1)] = None,
     page_size: Annotated[int | None, Query(ge=1, le=200)] = None,
     supplier_name: Annotated[str | None, Query(max_length=200)] = None,
+    home_item_id: Annotated[str | None, Query(max_length=100)] = None,
 ) -> dict:
     from app.services.unified_procurement import pending_stock_rows
     user = _user
     stock_rows = pending_stock_rows(db, user)
-    if page is None and page_size is None and supplier_name is None:
+    if page is None and page_size is None and supplier_name is None and home_item_id is None:
         result = _pending_requisitions_full_payload(db, user)
         result["items"].extend(stock_rows)
         eligible = _pending_requisition_eligible_rows(db, user) + stock_rows
@@ -10609,6 +10613,8 @@ def pending_requisitions(
         return result
 
     eligible_rows = _pending_requisition_eligible_rows(db, user) + stock_rows
+    if home_item_id is not None:
+        eligible_rows = [r for r in eligible_rows if str(r.get("item_id")) == home_item_id]
     eligible_rows.sort(key=_pending_requisition_sort_key)
     overall_total = len(eligible_rows)
     supplier_counts = _pending_supplier_counts(eligible_rows)

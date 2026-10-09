@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.593"
+APP_VERSION = "v0.22.594"
 APP_VERSION_NAME = "首页客户预警与提醒安排、跨月待结款"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5657,6 +5657,19 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.592：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 APP_CHANGES = [
+    "订单入口增加状态、客户和数量校验，修复完全匹配片料被误判不匹配的问题，跨行抵扣保持数量守恒。",
+    "报料在终止或已实收后冻结；收料重试重新核验权限、有效事实和来源，避免重复、错报成功及成本越权。",
+    "修复独立组套完工历史读取及失效位置撤销保护；送货保存支持同请求重试，旧版本不能覆盖实际拿货数量。",
+    "五环节完成51类风险检查，修复21类已确认问题；保留共用库存、成本、历史单据和全部正式数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新系统，在正常业务中核对订单导入、相同库存跨行抵扣及普通待发货编辑保存。",
+    "核对分批收料查询结果与独立组套完工历史；网络结果未知时先查原单，避免另建重复请求。",
+    "已关闭订单、已收料报料和失效原货位应给出明确阻断提示；无需为验收撤销有效单据或停用真实货位。",
+]
+APP_CHANGELOG = [*(f"v0.22.593：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
     "库存预警按客户汇总，展开客户后查看产品、库存位置与补库依据。",
     "优先处理支持原因分类、延后、个人隐藏与恢复；到期或来源变化重新提醒，保留版本和操作历史。",
     "待结款覆盖全部月份，与财务收款工作台共用已开票可收余额；提醒操作不改变库存、订单或应收。",
@@ -5666,4 +5679,4 @@ APP_VERIFICATION_STEPS = [
     "在优先处理点更多，选择原因和提醒日期；已延后、已隐藏中可恢复。",
     "核对待结款金额和财务明细；补库分析依据为历史规则参考，资料不足不自动改预警。",
 ]
-APP_CHANGELOG = [*(f"v0.22.593：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.594：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

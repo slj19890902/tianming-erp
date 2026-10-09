@@ -40287,12 +40287,15 @@
                 const revisingDispatched = editingId && this.deliveryForm.editing_status === "dispatched";
                 if (this.deliveryForm.historical_backfill || revisingDispatched) {
                   if (!payload.delivery_date) throw new Error("请填写实际送货日期");
-                  if (!this.deliveryForm.idempotency_key) this.deliveryForm.idempotency_key = createIdempotencyKey();
-                  payload.idempotency_key = this.deliveryForm.idempotency_key;
-                  if (editingId) payload.expected_version = Number(this.deliveryForm.version || 1);
                 }
                 if (editingId) payload.expected_version = Number(this.deliveryForm.version || 1);
                 if (!editingId) payload.customer_id = Number(this.deliveryForm.customer_id);
+                const requestSignature = JSON.stringify(payload);
+                if (!this.deliveryForm.idempotency_key || this.deliveryForm._save_request_signature !== requestSignature) {
+                  this.deliveryForm.idempotency_key = createIdempotencyKey();
+                  this.deliveryForm._save_request_signature = requestSignature;
+                }
+                payload.idempotency_key = this.deliveryForm.idempotency_key;
                 const savedDelivery = await this.saveCurrentDeliveryDraft(editingId, payload);
                 if (savedDelivery?._in_flight) return false;
                 if (savedDelivery?._refresh_failed) {

@@ -888,4 +888,4 @@ el1009cp→em1009bs仅新增不可变shared_bom_members空表，不改原业务�
 
 ## 2026-10-09 HOME-CUSTOMER-ACTIONS 发布步骤
 
-从实时v592/em1009bs核对源码与唯一head。管理测试副本完成 en1009hp upgrade→em1009bs downgrade→en1009hp upgrade，逐表旧字段指纹不变、FK=0、完整性ok，非空提醒表降级拒绝。正式通过Manager签名跨版本包，声明 from_revision=em1009bs、rollback_package_sha256=670718b98951fbd29f68febf64fe050898f370200eb0d4b8ddca329f133bd3f6；时点冷备独立恢复验证后正式迁移，新两表必须为空，旧321表及附件/reader门禁保持。三入口健康、静态资源及匿名权限只读核验；NAS发布并写独立回执。正式页面仅管理员人工验收。
+从实时v593/em1009bs核对源码与唯一head。管理测试副本完成 en1009hp upgrade→em1009bs downgrade→en1009hp upgrade，逐表旧字段指纹不变、FK=0、完整性ok，非空提醒表降级拒绝。正式通过Manager签名跨版本包，声明 from_revision=em1009bs、rollback_package_sha256=23ca1b031e1be656d1bc9eac31f6e078752096bba50a753d38a96a9a640c2be4；时点冷备独立恢复验证后正式迁移，新两表必须为空，旧321表及附件/reader门禁保持。三入口健康、静态资源及匿名权限只读核验；NAS发布并写独立回执。正式页面仅管理员人工验收。

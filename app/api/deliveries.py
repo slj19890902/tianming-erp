@@ -798,6 +798,12 @@ class DeliveryLineCreate(BaseModel):
     over_delivery_reason: str | None = None
     remarks: str | None = None
 
+    @field_validator("source_type")
+    @classmethod
+    def normalize_source_type(cls, value: str) -> str:
+        normalized = value.strip() or "order"
+        return "unordered_finished" if normalized == "finished_stock" else normalized
+
 
 class DeliveryCreate(BaseModel):
     customer_id: int
@@ -808,6 +814,11 @@ class DeliveryCreate(BaseModel):
     source_mode: str = "order"
     items: list[DeliveryLineCreate] = Field(default_factory=list)
     lines: list[DeliveryLineCreate] = Field(default_factory=list)
+
+    @field_validator("idempotency_key", mode="before")
+    @classmethod
+    def normalize_idempotency_key(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def validate_delivery_lines(self):
@@ -821,8 +832,6 @@ class DeliveryCreate(BaseModel):
         key = (self.idempotency_key or "").strip()
         if self.historical_backfill and len(key) < 8:
             raise ValueError("补录历史送货必须提供幂等键")
-        if not self.historical_backfill and key:
-            raise ValueError("普通送货不要提交历史补录幂等键")
         self.idempotency_key = key or None
         if self.source_mode == "unordered_finished":
             for line in selected:
@@ -840,6 +849,11 @@ class DeliveryUpdate(BaseModel):
     source_mode: str = "order"
     items: list[DeliveryLineCreate] = Field(default_factory=list)
     lines: list[DeliveryLineCreate] = Field(default_factory=list)
+
+    @field_validator("idempotency_key", mode="before")
+    @classmethod
+    def normalize_idempotency_key(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def validate_delivery_lines(self):
@@ -6817,12 +6831,17 @@ def apply_delivery_pick_task(
         # and then reads the adjusted draft quantities.
         claimed = db.execute(
             update(Delivery)
-            .where(Delivery.id == delivery.id, Delivery.status == "pending")
-            .values(total_quantity=Delivery.total_quantity)
+            .where(
+                Delivery.id == delivery.id,
+                Delivery.status == "pending",
+                Delivery.version == int(delivery.version or 1),
+            )
+            .values(total_quantity=Delivery.total_quantity, version=Delivery.version + 1)
             .execution_options(synchronize_session=False)
         )
         if claimed.rowcount != 1:
             raise HTTPException(status_code=409, detail="送货单状态已变化，请刷新后重试")
+        db.refresh(delivery, attribute_names=["version"])
         applied_changes: list[dict] = []
         for item in list(task.items):
             delivery_item = db.get(DeliveryItem, item.delivery_item_id)
@@ -8958,6 +8977,24 @@ def create_delivery(
     customer = db.get(Customer, payload.customer_id)
     if customer is None:
         raise HTTPException(status_code=400, detail="客户不存在")
+    if payload.historical_backfill:
+        _require_historical_delivery_permissions(user)
+    action = "historical_delivery_create" if payload.historical_backfill else "delivery_create"
+    request_hash = _delivery_request_hash(
+        action,
+        payload.model_dump(exclude={"idempotency_key"}),
+    )
+    replay, replay_record = _delivery_idempotency_replay(
+        db,
+        idempotency_key=payload.idempotency_key,
+        request_hash=request_hash,
+        action=action,
+        actor=user,
+    )
+    if replay is not None:
+        assert replay_record is not None
+        _delivery_for_user(db, replay_record.resource_id, user)
+        return replay
     today = beijing_today()
     if payload.historical_backfill:
         _require_historical_delivery_permissions(user)
@@ -8984,21 +9021,6 @@ def create_delivery(
                 detail="非当天实际送货必须主动选择“补录历史送货”",
             )
         delivery_date = today
-    request_hash = _delivery_request_hash(
-        "historical_delivery_create",
-        payload.model_dump(exclude={"idempotency_key"}),
-    )
-    replay, replay_record = _delivery_idempotency_replay(
-        db,
-        idempotency_key=payload.idempotency_key,
-        request_hash=request_hash,
-        action="historical_delivery_create",
-        actor=user,
-    )
-    if replay is not None:
-        assert replay_record is not None
-        _delivery_for_user(db, replay_record.resource_id, user)
-        return replay
     try:
         company = db.scalar(
             select(CompanyConfig).where(CompanyConfig.id == 1)
@@ -9148,7 +9170,7 @@ def create_delivery(
             db,
             idempotency_key=payload.idempotency_key,
             request_hash=request_hash,
-            action="historical_delivery_create",
+            action=action,
             actor=user,
             delivery_id=delivery.id,
             response=response,
@@ -9167,7 +9189,7 @@ def create_delivery(
             db,
             idempotency_key=payload.idempotency_key,
             request_hash=request_hash,
-            action="historical_delivery_create",
+            action=action,
             actor=user,
         )
         if replay is not None:
@@ -9649,6 +9671,8 @@ def _update_delivery(
     revision_mode: bool = False,
 ) -> dict:
     existing_delivery = _delivery_for_user(db, delivery_id, user)
+    submitted_values = payload.model_dump(exclude={"idempotency_key"})
+    submitted_values["customer_po_supplied"] = ["customer_po" in line.model_fields_set for line in payload.items]
     previous_po = {
         (row.source_type, row.order_item_id if row.source_type == "order" else row.product_id): row.customer_po_snapshot
         for row in db.scalars(select(DeliveryItem).where(
@@ -9667,6 +9691,25 @@ def _update_delivery(
             status_code=409,
             detail="送货单保存后不能切换普通送货与历史补录模式",
         )
+    if historical_backfill:
+        _require_historical_delivery_permissions(user)
+    action = "historical_delivery_update" if historical_backfill else "delivery_update"
+    request_hash = _delivery_request_hash(
+        action,
+        {"delivery_id": delivery_id, **(payload.model_dump(exclude={"idempotency_key"}) if historical_backfill else submitted_values)},
+    )
+    if not revision_mode:
+        replay, replay_record = _delivery_idempotency_replay(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action=action,
+            actor=user,
+        )
+        if replay is not None:
+            assert replay_record is not None
+            _delivery_for_user(db, replay_record.resource_id, user)
+            return replay
     if historical_backfill:
         _require_historical_delivery_permissions(user)
         if payload.expected_version is None or payload.idempotency_key is None:
@@ -9720,24 +9763,6 @@ def _update_delivery(
                 status_code=409,
                 detail="普通送货单的实际日期不能在编辑明细时改写，请使用受控日期更正",
             )
-        if payload.idempotency_key is not None:
-            raise HTTPException(status_code=400, detail="普通送货编辑不要提交补录幂等键")
-    request_hash = _delivery_request_hash(
-        "historical_delivery_update",
-        {"delivery_id": delivery_id, **payload.model_dump(exclude={"idempotency_key"})},
-    )
-    if not revision_mode:
-        replay, replay_record = _delivery_idempotency_replay(
-            db,
-            idempotency_key=payload.idempotency_key,
-            request_hash=request_hash,
-            action="historical_delivery_update",
-            actor=user,
-        )
-        if replay is not None:
-            assert replay_record is not None
-            _delivery_for_user(db, replay_record.resource_id, user)
-            return replay
     try:
         _validate_delivery_source_contract(payload.source_mode, payload.items)
     except ValueError as error:
@@ -9750,6 +9775,7 @@ def _update_delivery(
             .where(
                 Delivery.id == delivery_id,
                 Delivery.status == "pending",
+                Delivery.version == (payload.expected_version if payload.expected_version is not None else int(existing_delivery.version or 1)),
             )
             .values(status="pending")
         )
@@ -9759,6 +9785,8 @@ def _update_delivery(
             )
             if existing_status is None:
                 raise HTTPException(status_code=404, detail="送货单不存在")
+            if existing_status == "pending":
+                raise HTTPException(status_code=409, detail={"code": "delivery_version_conflict", "message": "送货单版本已变化，请刷新后重试"})
             if existing_status == "voided":
                 raise HTTPException(
                     status_code=409,
@@ -9923,7 +9951,7 @@ def _update_delivery(
                 db,
                 idempotency_key=payload.idempotency_key,
                 request_hash=request_hash,
-                action="historical_delivery_update",
+                action=action,
                 actor=user,
                 delivery_id=delivery.id,
                 response=response,
@@ -9940,7 +9968,7 @@ def _update_delivery(
                 db,
                 idempotency_key=payload.idempotency_key,
                 request_hash=request_hash,
-                action="historical_delivery_update",
+                action=action,
                 actor=user,
             )
             if replay is not None:

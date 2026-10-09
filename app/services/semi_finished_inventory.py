@@ -3,7 +3,7 @@ from app.services.sheet_cutting_settings import theoretical_product_yield
 from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number
 
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
 from math import ceil
 
@@ -76,7 +76,9 @@ class SemiFinishedSignature:
     component_type: str
     pieces_per_box: int
     stock_yield_per_sheet: int
-    order_item_id: int | None = None
+    # Resolve frozen processing/crease facts with this context, but do not make
+    # a saved order's physical signature unequal to the same stock or rule.
+    order_item_id: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

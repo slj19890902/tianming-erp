@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.582"
-APP_VERSION_NAME = "仓库颜色参考折叠与货架库龄标识"
+APP_VERSION = "v0.22.583"
+APP_VERSION_NAME = "研光光洋共用库存及后续入库维护"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5541,3 +5541,16 @@ APP_VERIFICATION_STEPS = [
     "核对货架编号底色与其最久库存档位一致；选中特定产品查找时仅反映该产品，空架白色，未知日期灰纹。",
 ]
 APP_CHANGELOG = [*(f"v0.22.582：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "常用箱增加库存共用入口，管理员可建立共用组、追加已核实批次及暂停共用，保存后回读当前结果。",
+    "研光、光洋已确认同编码普通产品按固定清单共用；各客户名称、编码、价格及历史冻结单据保留。BOM父子件保持独立。",
+    "符合条件的新手工入库和具备完整冻结依据的普通生产余量自动加入；原订单预占不被另一客户占用。",
+    "资料变化或旧批次实物未核实会保留待核对，库存数量、位置、成本和原归属不改写；调整全程审计。",
+]
+APP_VERIFICATION_STEPS = [
+    "管理员打开常用箱中的库存共用，查询80012043等产品，核对两客户、共用批次及原货位。",
+    "分别为研光、光洋查看已确认产品的库存，核对两边引用同一实际余额；客户编码、名称和售价分别保持。",
+    "后续新编码在库存共用中选两客户产品，核对实物后建组；BOM及待核对现货按提示单独处理。",
+]
+APP_CHANGELOG = [*(f"v0.22.583：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

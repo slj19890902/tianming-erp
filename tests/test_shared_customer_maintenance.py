@@ -50,3 +50,23 @@ def test_printed_receipt_confirmation_is_hash_bound_narrow_and_offline(reservati
     confirmation={lot.id:hashlib.sha256(shared.lot_identity(lot).encode()).hexdigest()}
     with pytest.raises(WarehouseInventoryError,match='冻结规格'):
         shared.preview(db,**args,confirmed_printed_lots=confirmation)
+
+
+def test_reviewed_supplement_preserves_original_missing_spec_and_rejects_automatic_or_unrelated_fields(reservation_db):
+    db,data=reservation_db;target,item,lot=setup_pair(db,data)
+    frozen=json.loads(lot.finished_detail.physical_basis_json);expected=frozen['spec'];frozen['spec']=None
+    original=shared._json(frozen);lot.finished_detail.physical_basis_json=original;db.flush()
+    args=dict(product_ids=[data['product'].id,target.id],lot_ids=[lot.id])
+    receipt={lot.id:dict(identity_sha256=hashlib.sha256(shared.lot_identity(lot).encode()).hexdigest(),fields={'spec':expected})}
+    value=shared.preview(db,**args,confirmed_lot_fields=receipt)
+    with pytest.raises(WarehouseInventoryError,match='维护任务'):
+        shared._apply_confirmed(db,**args,confirmed_lot_fields=receipt,preview_hash=value['preview_hash'],
+            operation_key='supplement-web',evidence='test',actor=data['admin'],source='web')
+    with pytest.raises(WarehouseInventoryError,match='补充实物'):
+        shared._preview_lots(db,[data['product'],target],[lot.id],automatic=True,confirmed_lot_fields=receipt)
+    for fields in ({'material':'OTHER'},{'spec':'OTHER'},{'unit':'只'}):
+        with pytest.raises(WarehouseInventoryError,match='补充实物'):
+            shared.preview(db,**args,confirmed_lot_fields={lot.id:{**receipt[lot.id],'fields':fields}})
+    result=shared._apply_confirmed(db,**args,confirmed_lot_fields=receipt,preview_hash=value['preview_hash'],
+        operation_key='supplement-reviewed',evidence='explicit fictional physical check',actor=None,source='script')
+    assert result['group_id'] and lot.finished_detail.physical_basis_json==original

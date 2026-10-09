@@ -2204,6 +2204,84 @@ def merge_pallet_remaining_goods(
     )
 
 
+def _lock_move_source(
+    db: Session,
+    row: InventoryPallet,
+    *,
+    expected_version: int,
+    expected_location_id: int,
+    expected_status: str,
+    expected_members: tuple[tuple, ...],
+    expected_lots: dict[int, tuple],
+) -> list[InventoryLot]:
+    """After the destination lock, prove and refresh only this move's facts.
+
+    Composite callers can have unrelated pending edits in this Session.  Do
+    not expire the Session or refresh cost/detail fields that move never owns.
+    The preserving updates also provide real lot locks on SQLite.
+    """
+    lot_fields = (
+        "version", "warehouse_location_id", "inventory_type", "status", "unit",
+        "quantity_available", "quantity_reserved", "quantity_consumed",
+        "quantity_damaged", "quantity_scrapped", "last_movement_at",
+    )
+    try:
+        claimed = db.execute(
+            update(InventoryPallet).where(
+                InventoryPallet.id == row.id,
+                InventoryPallet.version == expected_version,
+                InventoryPallet.location_id == expected_location_id,
+                InventoryPallet.status == expected_status,
+                InventoryPallet.is_current.is_(True),
+            ).values(version=InventoryPallet.version, updated_at=InventoryPallet.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            raise Floor3LocationError("栈板已被其他操作更新，请刷新后重试", status_code=409)
+        for lot_id in sorted(expected_lots):
+            claimed = db.execute(
+                update(InventoryLot).where(
+                    InventoryLot.id == lot_id,
+                    *(getattr(InventoryLot, name) == value
+                      for name, value in zip(lot_fields, expected_lots[lot_id])),
+                ).values(version=InventoryLot.version, updated_at=InventoryLot.updated_at)
+                .execution_options(synchronize_session=False)
+            )
+            if claimed.rowcount != 1:
+                raise Floor3LocationError("库存批次在移位预检期间发生变化，请刷新后重试", status_code=409)
+    except OperationalError as error:
+        original = getattr(error, "orig", None)
+        code = getattr(original, "sqlite_errorcode", None)
+        if code not in {5, 6} and not any(
+            marker in str(original or error).lower() for marker in ("locked", "busy")
+        ):
+            raise
+        raise Floor3LocationError("库存批次正被其他操作处理，请稍后刷新重试", status_code=409) from error
+
+    member_fields = (
+        "id", "pallet_id", "inventory_lot_id", "customer_id", "product_id",
+        "item_type", "unit", "match_status", "quantity",
+    )
+    # Read columns, bypassing stale identity-map members and including legacy
+    # unlinked items.  Their membership is part of the move, too.
+    current_members = tuple(tuple(member) for member in db.execute(
+        select(*(getattr(InventoryPalletItem, name) for name in member_fields))
+        .where(InventoryPalletItem.pallet_id == row.id)
+        .order_by(InventoryPalletItem.id).with_for_update()
+    ))
+    if current_members != expected_members:
+        raise Floor3LocationError("栈板成员在移位预检期间发生变化，请刷新后重试", status_code=409)
+    db.refresh(row, attribute_names=["version", "location_id", "status", "is_current", "items"])
+    for item in row.items:
+        db.refresh(item, attribute_names=list(member_fields[1:]))
+    lots = _linked_inventory_lots(db, row.id)
+    if {lot.id for lot in lots} != set(expected_lots):
+        raise Floor3LocationError("栈板关联批次在移位预检期间发生变化，请刷新后重试", status_code=409)
+    for lot in lots:
+        db.refresh(lot, attribute_names=list(lot_fields))
+    return lots
+
+
 def move_pallet(
     db: Session,
     *,
@@ -2239,6 +2317,20 @@ def move_pallet(
             )
         if row.location_id == to_location_id:
             raise Floor3LocationError("目标货位与当前货位相同")
+        source_location_id = int(row.location_id)
+        expected_status = row.status
+        expected_members = _merge_member_snapshot(row)
+        expected_lots = {
+            item.inventory_lot_id: (
+                lot.version, lot.warehouse_location_id, lot.inventory_type,
+                lot.status, lot.unit, lot.quantity_available, lot.quantity_reserved,
+                lot.quantity_consumed, lot.quantity_damaged, lot.quantity_scrapped,
+                lot.last_movement_at,
+            )
+            for item in row.items
+            if item.inventory_lot_id is not None
+            and (lot := item.inventory_lot) is not None
+        }
         source = db.get(WarehouseLocation, row.location_id)
         if source is None:
             raise Floor3LocationError("栈板所在库位不存在", status_code=409)
@@ -2313,6 +2405,16 @@ def move_pallet(
                 remarks=remarks,
             )
 
+        linked_lots = _lock_move_source(
+            db, row, expected_version=expected_version,
+            expected_location_id=source_location_id,
+            expected_status=expected_status,
+            expected_members=expected_members, expected_lots=expected_lots,
+        )
+        source = db.get(WarehouseLocation, source_location_id, populate_existing=True)
+        if source is None or source.storage_type == "rack":
+            raise Floor3LocationError("栈板原货位已变化或不允许移出，请刷新后重试", status_code=409)
+
         with db.begin_nested():
             version_before = row.version
             _claim_pallet_version(db, row, expected_version=expected_version)
@@ -2332,7 +2434,6 @@ def move_pallet(
             row.status = "active"
             row.needs_relocation = _needs_relocation(target, row.items)
             row.updated_by = operator_id
-            linked_lots = _linked_inventory_lots(db, row.id)
             for lot in linked_lots:
                 lot.warehouse_location_id = target.id
                 lot.version += 1

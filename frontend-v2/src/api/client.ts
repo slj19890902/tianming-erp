@@ -1,3 +1,4 @@
+import { withRequestDeadline } from '../utils/requestLifecycle'
 import type { OrderHoldPreview } from '../utils/orderRequisitionHold'
 import { trustedDrawingPath, type DrawingSaveOption } from '../utils/orderDrawings'
 /* ============================================================
@@ -47,30 +48,18 @@ export function onUnauthorized(handler: () => void) {
 }
 
 async function request<T>(path: string, init?: RequestInit, responseType: 'json' | 'blob' = 'json'): Promise<T> {
-  const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), 30_000)
-  let response: Response
-  try {
-    response = await fetch(`${API_BASE}${path}`, {
-      ...init,
-      // 关键：携带后端 session cookie
-      credentials: 'include',
-      signal: init?.signal || controller.signal,
-      headers: {
-        ...(typeof FormData !== 'undefined' && init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-        ...(init?.headers || {}),
-      },
-    })
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new ApiError(0, '请求超时，请检查测试后端是否已启动')
-    }
-    throw error
-  } finally {
-    window.clearTimeout(timeout)
-  }
+  const writing = !['GET','HEAD'].includes(String(init?.method || 'GET').toUpperCase())
+  return withRequestDeadline(async signal => {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init, credentials:'include', signal,
+    headers: {
+      ...(typeof FormData !== 'undefined' && init?.body instanceof FormData ? {} : {'Content-Type':'application/json'}),
+      ...(init?.headers || {}),
+    },
+  })
+  if (signal.aborted) throw new DOMException('请求已取消','AbortError')
   if (response.status === 401 && !path.startsWith('/api/auth/login')) {
-    unauthorizedHandler?.()
+    if (path !== '/api/auth/me') unauthorizedHandler?.()
     throw new ApiError(401, '登录已失效，请重新登录')
   }
   if (!response.ok) {
@@ -93,7 +82,11 @@ async function request<T>(path: string, init?: RequestInit, responseType: 'json'
     throw new ApiError(response.status, message, code)
   }
   if (response.status === 204) return undefined as T
-  return (responseType === 'blob' ? response.blob() : response.json()) as Promise<T>
+  return await (responseType === 'blob' ? response.blob() : response.json()) as T
+  }, () => new ApiError(0, writing
+    ? '提交连接超时，结果待核对；请先查看原单据或使用该业务的结果查询，不要重复新建'
+    : '读取超时，请检查网络或 ERP 服务后重试', 'TIMEOUT'), init?.signal)
+
 }
 
 /* ---------------- 类型定义（以后端实际返回为准） ---------------- */

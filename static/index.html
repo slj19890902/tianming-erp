@@ -3183,7 +3183,8 @@
     <link rel="stylesheet" href="/static/ui/order-reference.css?v=423" />
     <script src="/static/ui/order-reference.js?v=423"></script>
     <script src="/static/js/unified-navigation.js?v=20261008-inventory-flow"></script>
-    <script src="/static/js/frontend-shell-bridge.js?v=20261009-startup"></script>
+    <script src="/static/js/frontend-reliability.js?v=20261009"></script>
+    <script src="/static/js/frontend-shell-bridge.js?v=20261009-reliability"></script>
   </head>
   <body>
     <div id="app" v-cloak>
@@ -3578,6 +3579,11 @@
             </template>
 
             <template v-else-if="activePage === 'contracts'">
+              <div v-for="(state,kind) in contractReadState" :key="kind" v-show="state.loading || state.error" class="save-recovery" role="status">
+                {{ ({products:'合同产品',history:'合同历史',edit:'合同详情'})[kind] }}：{{ state.loading ? '正在读取…' : state.error }}
+                <button v-if="state.error && kind!=='edit'" class="btn small" @click="readContractRows(kind)">重试读取</button>
+                <span v-if="state.error && kind==='edit'">请在合同历史中重新点选该合同。</span>
+              </div>
               <page-head title="客户合同" :desc="contractCustomer ? `当前客户：${contractCustomer.name}` : '从客户管理选择客户后创建合同。'"></page-head>
               <div class="toolbar">
                 <div class="toolbar-group">
@@ -3628,7 +3634,7 @@
               </div>
               <div class="panel">
                 <div class="toolbar"><strong>合同历史</strong><button class="btn" :disabled="contractActionBusy()" @click="loadContractHistory">刷新</button></div>
-                <div v-if="!contractHistory.length" class="empty">该客户还没有合同记录</div>
+                <div v-if="!contractHistory.length && !contractReadState.history.loading && !contractReadState.history.error" class="empty">该客户还没有合同记录</div>
                 <div v-else class="table-wrap"><table><thead><tr><th>合同号</th><th>日期</th><th>客户单号/PO</th><th>交期</th><th>状态</th><th>明细</th><th>金额</th><th>操作</th></tr></thead><tbody>
                   <tr v-for="row in contractHistory" :key="row.id">
                     <td><strong>{{ row.contract_no }}</strong></td><td>{{ row.contract_date || '-' }}</td><td>{{ row.customer_po || '-' }}</td><td>{{ row.delivery_date || '-' }}</td>
@@ -10080,6 +10086,12 @@
           </div>
           <div v-if="modal?.type === 'product'" class="modal-foot product-editor-actions">
             <span v-if="productSaveBlockReason" class="status orange" role="status" style="flex:1;white-space:normal">{{ productSaveBlockReason }}</span>
+            <div v-if="modal?.type==='product' && productSaveRecovery" class="save-recovery" role="status">
+              <strong>常用箱资料已保存，图纸尚未上传</strong>
+              <span>{{ productSaveRecovery.error }}</span>
+              <button type="button" class="btn" :disabled="masterSavePending || !drawingFile" @click="retryProductDrawing">仅重试图纸</button>
+              <details><summary>查看已保存常用箱</summary><div>编号：{{ productSaveRecovery.id }} · 存货编码：{{ productSaveRecovery.record.customer_material_code || productSaveRecovery.record.product_code }} · 品名：{{ productSaveRecovery.record.product_name }}</div></details>
+            </div>
             <button type="button" class="btn primary product-inline-save" :disabled="(!!productForm.id && !canEditProducts) || loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : (productEditReturnContext && productEditReturnContext.source!=='bom' ? (productEditReturnContext.source==='requisition' ? '保存并返回报料' : '保存并返回订单') : '保存') }}</button>
           </div>
           <div v-if="!['product','orderPdfImport'].includes(modal?.type)" class="modal-foot">
@@ -10712,6 +10724,7 @@
             quotationAction:{action:"",quotationId:null,quotationNo:""},
             quotationConversionState:{saving:false,committed:false,outcomeUncertain:false,itemId:null,productId:null},
             contractCustomer: null,
+            contractReadState: {products:{},history:{},edit:{}},
             contractDraft: blankContractDraft(),
             contractHistory: [],
             contractProducts: [],
@@ -11007,6 +11020,7 @@
             masterChangeConfirm: blankMasterChangeConfirm(),
             masterPendingSaveOptions: null,
             masterSavePending: false,
+            productSaveRecovery: null,
             masterVersionConflict: null,
             masterVersionHistory: blankMasterVersionHistory(),
             selectedProductCustomer: null, productCustomerSearch: "",
@@ -12429,7 +12443,7 @@
           await this.checkSession();
           window.erpCheckingSession = false;
           this.refreshEmailQueueCount();
-          this.emailQueueTimer = window.setInterval(()=>this.refreshEmailQueueCount(),30000);
+          this.emailQueueTimer = window.setInterval(()=>{ if (!document.hidden && window.erpWorkspaceActive !== false) this.refreshEmailQueueCount(); },30000);
           // ESC 关闭弹层（含防呆检查）
           document.addEventListener("keydown", (e) => {
             if (e.key !== "Escape") return;
@@ -16083,9 +16097,12 @@
           async checkSession() {
             const requestAuthGeneration = this.authGeneration;
             const requestIsCurrent = () => requestAuthGeneration === this.authGeneration;
+            window.erpSessionUnavailable = false;
+            let verified = false;
             try {
               const { data } = await axios.get("/api/auth/me");
               if (!requestIsCurrent()) return;
+              verified = true;
               const sessionUser = {...data.user, permissions:data.permissions || [], customer_scope:data.customer_scope || [], unrestricted_customer_access:!!data.unrestricted_customer_access};
               this.user = sessionUser;
               this.syncDesktopListPageSize(this.uiMode);
@@ -16110,6 +16127,7 @@
               if (this.user?.must_change_password) this.openChangePassword(true);
             } catch (error) {
               if (!requestIsCurrent()) return;
+              window.erpSessionUnavailable = !verified && error?.response?.status !== 401;
               if (error?.response?.status !== 401) this.loginError = this.errorMessage(error);
             }
           },
@@ -17894,10 +17912,11 @@
           async loadMaterials() {
             const requestKey = "materials:list";
             const controller = this.beginLatestRequest(requestKey);
+            const actorId = this.user?.id, generation = this.authGeneration;
             const params = { sort: this.materialSort };
             if (this.materialLayerFilter) params.layer_count = this.materialLayerFilter;
             if (this.materialSupplierFilter) params.supplier_name = this.materialSupplierFilter;
-            const shouldHydrateAll = !this.allMaterials.length;
+            const shouldHydrateAll = true; // Every successful refresh also refreshes selector facts.
             const isUnfilteredCommonView = !params.layer_count && !params.supplier_name && params.sort === "common";
             try {
               const materials = await this.fetchAllMaterials(params, controller.signal);
@@ -17908,6 +17927,7 @@
                   : await this.fetchAllMaterials({ sort: "common" }, controller.signal);
               }
               if (latestRequestControllers.get(requestKey) !== controller) return false;
+              if (actorId !== this.user?.id || generation !== this.authGeneration) return false;
               this.materials = materials;
               // 维护全量材质供选择器复用；新业务供应商选项只来自启用供应商主数据。
               this.materialSuppliers = this.activeSupplierNames;
@@ -26793,27 +26813,60 @@
             };
           },
           async openCustomerContracts(row) {
-            if (!this.canViewContracts) return;
+            if (!this.canViewContracts || this.loading || this.contractActionBusy()) return;
+            this.contractProducts = []; this.contractHistory = [];
             this.contractCustomer = { ...row };
             this.newContractDraft();
             this.activePage = "contracts";
             await Promise.all([this.loadContractProducts(), this.loadContractHistory()]);
           },
           newContractDraft() {
+            this.beginLatestRequest("contract:edit").abort();
+            this.contractReadState.edit = {loading:false,error:""};
             this.contractDraft = { ...blankContractDraft(), customer_id: this.contractCustomer?.id || null };
           },
           async loadContractProducts() {
             return this.searchContractProducts("");
           },
+          contractReadContext(kind) {
+            const key = "contract:" + kind;
+            const controller = this.beginLatestRequest(key);
+            const customer = this.contractCustomer?.id, actor = this.user?.id, auth = this.authGeneration;
+            const pageSequence = this.pageLoadSequence;
+            this.contractReadState[kind] = {loading:true,error:""};
+            return {controller, key, customer, current: () =>
+              latestRequestControllers.get(key) === controller && !controller.signal.aborted
+              && customer === this.contractCustomer?.id && actor === this.user?.id
+              && auth === this.authGeneration && pageSequence === this.pageLoadSequence
+              && this.activePage === "contracts"};
+          },
+          async readContractRows(kind, keyword="") {
+            if (!this.contractCustomer?.id) return false;
+            const request = this.contractReadContext(kind);
+            try {
+              const {data} = await axios.get(kind === "products" ? "/api/master/products" : "/api/contracts", {
+                params: kind === "products"
+                  ? {customer_id:request.customer,keyword:String(keyword || "").trim(),include_inactive:false,page:1,page_size:200}
+                  : {customer_id:request.customer},
+                signal:request.controller.signal, timeout:30000
+              });
+              if (!request.current()) return false;
+              if (kind === "products") this.contractProducts = data.items || [];
+              else this.contractHistory = data.items || data.contracts || data || [];
+              return true;
+            } catch (error) {
+              if (request.current() && !this.isCancelledRequest(error)) this.contractReadState[kind].error = this.errorMessage(error);
+              return false;
+            } finally {
+              if (request.current()) this.contractReadState[kind].loading = false;
+              this.finishLatestRequest(request.key, request.controller);
+            }
+          },
           async searchContractProducts(keyword="") {
-            if (!this.contractCustomer?.id) return;
-            const { data } = await axios.get("/api/master/products", { params:{ customer_id:this.contractCustomer.id, keyword:String(keyword || "").trim(), include_inactive:false, page:1, page_size:200 } });
-            this.contractProducts = data.items || [];
+            return this.readContractRows("products",keyword);
           },
           async loadContractHistory() {
-            if (!this.contractCustomer?.id) return;
-            const { data } = await axios.get("/api/contracts", { params:{ customer_id:this.contractCustomer.id } });
-            this.contractHistory = data.items || data.contracts || data || [];
+            return this.readContractRows("history");
           },
           contractPayload() {
             if (!this.contractCustomer?.id) throw new Error("请先选择客户");
@@ -26847,7 +26900,9 @@
               ? await axios.put(`/api/contracts/${this.contractDraft.id}`, payload)
               : await axios.post("/api/contracts", payload);
             this.contractDraft = this.hydrateContract(response.data);
-            await this.loadContractHistory();
+            window.ERPFrontendReliability?.acceptDraft?.("contract");
+            const refreshed = await this.loadContractHistory();
+            if (!refreshed) { this.showToast("合同已保存，历史列表暂未刷新；请点击合同历史的重试，不要再次新建。",true); return response.data; }
             if (showMessage) this.showToast(`合同草稿 ${response.data.contract_no || ""} 已保存`);
             return response.data;
           },
@@ -26862,11 +26917,24 @@
             return this.saveContractDraftSafe();
           },
           async editContract(row) {
+            if (this.loading || this.contractActionBusy()) return false;
+            const request = this.contractReadContext("edit");
+            const draft = this.contractDraft, snapshot = JSON.stringify(draft);
             try {
-              const { data } = await axios.get(`/api/contracts/${row.id}`);
+              const { data } = await axios.get(`/api/contracts/${row.id}`, {signal:request.controller.signal,timeout:30000});
+              if (!request.current() || this.contractDraft !== draft || JSON.stringify(draft) !== snapshot) return false;
+              if (Number(data.customer_id || data.customer?.id) !== Number(request.customer)) throw new Error("合同客户与当前客户不一致，请重新选择");
               this.contractDraft = this.hydrateContract(data);
+              window.ERPFrontendReliability?.acceptDraft?.("contract");
               window.scrollTo({ top:0, behavior:"smooth" });
-            } catch (error) { this.showToast(this.errorMessage(error), true); }
+              return true;
+            } catch (error) {
+              if (request.current() && !this.isCancelledRequest(error)) this.contractReadState.edit.error = this.errorMessage(error);
+              return false;
+            } finally {
+              if (request.current()) this.contractReadState.edit.loading = false;
+              this.finishLatestRequest(request.key, request.controller);
+            }
           },
           contractIdempotencyKey() {
             if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") return globalThis.crypto.randomUUID();
@@ -26901,7 +26969,8 @@
           },
           async refreshContractHistoryAfterMutation(successMessage) {
             try {
-              await this.loadContractHistory();
+              const refreshed = await this.loadContractHistory();
+              if (!refreshed) throw new Error(this.contractReadState.history.error || "请重试读取合同历史");
               this.showToast(successMessage);
               return true;
             } catch (error) {
@@ -28743,6 +28812,7 @@
               this.productMaterialCandidateDetailKeys = [];
               this.productMaterialCompareKeys = [];
               this.drawingFile = null;
+              this.productSaveRecovery = null;
               this.resetBomEditor();
               this.resetExternalComponentEditor(openedId);
               // 拍快照用于检测未保存更改
@@ -32941,8 +33011,10 @@
             finally {draft._email_retrying=false;}
           },
           async refreshEmailQueueCount() {
+            if (document.hidden || window.erpWorkspaceActive === false) return;
             if (!this.user || !this.canCreateOrders || !["admin","boss"].includes(this.user.role)) { this.emailQueueCount=0; return; }
-            try { const {data}=await axios.get("/api/email-intake/queue/summary"); this.emailQueueCount=data.pending||0; this.emailQueueSummary=data; }
+            const actor=this.user.id, auth=this.authGeneration;
+            try { const {data}=await axios.get("/api/email-intake/queue/summary", {timeout:15000}); if(actor!==this.user?.id || auth!==this.authGeneration) return; this.emailQueueCount=data.pending||0; this.emailQueueSummary=data; }
             catch(error) { /* Keep last successful count during a temporary connection failure. */ }
           },
           async handleEmailPdf(draft,action) {
@@ -39614,6 +39686,24 @@
             this.orderGroupSaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
             throw failedEntries[0]?.reason || new Error("订单组保存失败");
           },
+          async retryProductDrawing() {
+            const recovery = this.productSaveRecovery;
+            if (!recovery || !this.drawingFile || this.masterSavePending || Number(this.productForm.id) !== Number(recovery.id)) return false;
+            const actor = this.user?.id, auth = this.authGeneration, file = this.drawingFile;
+            this.masterSavePending = true;
+            try {
+              const form = new FormData(); form.append("file",file);
+              await axios.post(`/api/master/products/${recovery.id}/drawings`,form);
+              if (this.productSaveRecovery !== recovery || this.user?.id !== actor || this.authGeneration !== auth) return false;
+              if (this.drawingFile === file) this.drawingFile = null;
+              this.productSaveRecovery = null;
+              this.showToast("图纸已上传；常用箱资料保持原保存结果");
+              return true;
+            } catch (error) {
+              if (this.productSaveRecovery === recovery && this.user?.id === actor && this.authGeneration === auth) recovery.error = this.errorMessage(error);
+              return false;
+            } finally { if (this.user?.id === actor && this.authGeneration === auth) this.masterSavePending = false; }
+          },
           async saveModal() {
             if (this.modal?.type === "estimatedCost") return this.saveEstimatedCost();
             if (this.modal?.type === "receipt") return this.saveReceipt();
@@ -39856,13 +39946,27 @@
                     this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
                   }
                 }
-                else saved=(await axios.post("/api/master/products", payload)).data;
+                else {
+                  saved=(await axios.post("/api/master/products", payload)).data;
+                  // Fix identity before any attachment or list request can fail.
+                  this.productForm = this.hydrateProductForm(saved);
+                  this.beginMasterEdit("product",this.productForm);
+                  this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
+                }
                 if (this.productEditReturnContext && this.productEditReturnContext.source !== "bom") {
                   this.productEditReturnContext.saved = true;
                 }
                 if (this.drawingFile) {
-                  const form=new FormData(); form.append("file",this.drawingFile);
-                  await axios.post(`/api/master/products/${saved.id}/drawings`,form);
+                  try {
+                    const form=new FormData(); form.append("file",this.drawingFile);
+                    await axios.post(`/api/master/products/${saved.id}/drawings`,form);
+                    this.drawingFile = null;
+                    this.productSaveRecovery = null;
+                  } catch (error) {
+                    this.productSaveRecovery = {id:saved.id,record:{...this.productForm},error:this.errorMessage(error)};
+                    this.showToast("常用箱资料已保存，图纸未上传成功。请点“仅重试图纸”，无需重复新建。",true);
+                    return false;
+                  }
                 }
                 if (this.productEditReturnContext && this.productEditReturnContext.source !== "bom") {
                   this.invalidatePageCache(this.pageSearchCacheKey("products"));
@@ -42150,6 +42254,7 @@
       window.ERPWarehouseWorkspace?.install(app);
       window.ERPFinanceWorkspace?.install(app);
       const formalWorkspaceInstance = app.mount("#app");
+      window.ERPFrontendReliability?.install(formalWorkspaceInstance);
       window.ERPFrontendShell?.install(formalWorkspaceInstance);
     </script>
   </body>

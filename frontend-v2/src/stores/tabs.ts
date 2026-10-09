@@ -22,7 +22,7 @@ export const useTabsStore = defineStore('tabs', {
       this.activePath = tab.path
     },
     closeTab(path: string) {
-      if (path === '/') return
+      if (path === '/' || this.dirtyPaths[path]) return false
       const index = this.tabs.findIndex((item) => item.path === path)
       if (index < 0) return
       this.tabs.splice(index, 1)

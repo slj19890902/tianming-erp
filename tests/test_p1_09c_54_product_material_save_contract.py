@@ -15,7 +15,7 @@ def _method_body(signature: str, next_signature: str) -> str:
 
 
 def _business_footer() -> str:
-    start = INDEX.index('<div v-if="modal?.type !== \'product\'" class="modal-foot">')
+    start = INDEX.index('<div v-if="![\'product\',\'orderPdfImport\'].includes(modal?.type)" class="modal-foot">')
     return INDEX[start : INDEX.index("</div>", start) + 6]
 
 
@@ -43,7 +43,7 @@ def test_product_and_material_save_button_exposes_shared_single_flight_state() -
 
 
 def test_product_and_material_save_guard_starts_before_master_preflight() -> None:
-    save = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
+    save = _method_body("async saveModal() {", "async confirmStockExternalDraft(row) {")
     guard = save.index("if (masterSaveEntity && this.masterSavePending)")
     lock = save.index("this.masterSavePending = true")
     preflight = save.index("await this.prepareProductOneClickSave()")
@@ -53,7 +53,7 @@ def test_product_and_material_save_guard_starts_before_master_preflight() -> Non
 
 
 def test_product_save_runtime_blocks_duplicate_before_preflight(tmp_path: Path) -> None:
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
+    save_body = _method_body("async saveModal() {", "async confirmStockExternalDraft(row) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let preflightCalls=0,releasePreflight;
@@ -87,7 +87,7 @@ def test_successful_product_write_with_refresh_failure_is_not_reported_as_save_f
     refresh_body = _method_body(
         "handleMasterSaveRefreshFailure(entity, error) {", "moldRepairWarningText(warnings) {"
     )
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
+    save_body = _method_body("async saveModal() {", "async confirmStockExternalDraft(row) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 const FunctionCtor=Function;
@@ -98,6 +98,7 @@ const vm={{
   masterChangeConfirm:{{entity:null}},loading:false,productForm:{{id:null}},drawingFile:null,
   productEditReturnContext:null,productFormSnapshot:"dirty",
   masterCurrentForm(){{return this.productForm;}},_productFormDirty(){{return true;}},_productBomDirty(){{return false;}},
+  hydrateProductForm(data){{return data;}},beginMasterEdit(){{}},_productFormSaveFields(){{return this.productForm;}},
   buildProductWritePayload(){{return {{}};}},loadProducts:async()=>{{throw new Error("列表超时");}},
   closeModal(){{closed+=1;this.modal=null;}},showToast(message,error=false){{notices.push([message,error]);}},
   errorMessage(error){{return error?.message||String(error);}},handleMaster409(){{return false;}}
@@ -120,7 +121,7 @@ def test_successful_material_write_with_refresh_failure_uses_same_contract(
     refresh_body = _method_body(
         "handleMasterSaveRefreshFailure(entity, error) {", "moldRepairWarningText(warnings) {"
     )
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
+    save_body = _method_body("async saveModal() {", "async confirmStockExternalDraft(row) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let writes=0,closed=0;const notices=[];

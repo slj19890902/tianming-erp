@@ -50,7 +50,7 @@ global.axios={{get(url,options){{return new Promise((resolve,reject)=>pending.pu
 const vm={{
   activePage:"products",productTab:"products",selectedProductCustomer:{{id:5}},
   filters:{{productKeyword:"A",productCode:"",productName:"",productSpec:"",productMaterial:"",showInactiveProducts:false,productCustomer:null}},
-  pages:{{products:1}},pageSize:25,products:[],productsTotal:0,productsLoading:false,productsError:"",
+  productListPageSize:()=>25,pages:{{products:1}},pageSize:25,products:[],productsTotal:0,productsLoading:false,productsError:"",
   beginLatestRequest(key){{latestRequestControllers.get(key)?.abort();const controller=new AbortController();latestRequestControllers.set(key,controller);return controller;}},
   finishLatestRequest(key,controller){{if(latestRequestControllers.get(key)===controller)latestRequestControllers.delete(key);}},
   isCancelledRequest(error){{return error?.code==="ERR_CANCELED";}},errorMessage(error){{return error?.message||String(error);}}
@@ -83,7 +83,7 @@ const vm={{
   beginLatestRequest(key){{latestRequestControllers.get(key)?.abort();const controller=new AbortController();latestRequestControllers.set(key,controller);return controller;}},
   finishLatestRequest(key,controller){{if(latestRequestControllers.get(key)===controller)latestRequestControllers.delete(key);}},
   isCancelledRequest(error){{return error?.code==="ERR_CANCELED";}},
-  fetchAllMaterials(params,signal){{return new Promise((resolve,reject)=>pending.push({{params,signal,resolve,reject}}));}}
+  fetchAllMaterials(params,signal){{if(!params.supplier_name)return Promise.resolve([{{id:1}},{{id:2}}]);return new Promise((resolve,reject)=>pending.push({{params,signal,resolve,reject}}));}}
 }};
 vm.loadMaterials=new AsyncFunction({json.dumps(body, ensure_ascii=False)}).bind(vm);
 const expect=(value,message)=>{{if(!value)throw new Error(message)}};
@@ -101,7 +101,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 def test_product_save_treats_false_refresh_as_success_warning(tmp_path: Path) -> None:
     refresh_body = _method_body("handleMasterSaveRefreshFailure(entity, error) {", "moldRepairWarningText(warnings) {")
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
+    save_body = _method_body("async saveModal() {", "async confirmStockExternalDraft(row) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let closed=0;const notices=[];
@@ -110,6 +110,7 @@ const vm={{
   modal:{{type:"product"}},masterSavePending:false,masterPendingSaveOptions:null,masterChangeConfirm:{{entity:null}},loading:false,
   productForm:{{id:null}},drawingFile:null,productEditReturnContext:null,productFormSnapshot:"dirty",
   masterCurrentForm(){{return this.productForm;}},_productFormDirty(){{return true;}},_productBomDirty(){{return false;}},
+  hydrateProductForm(data){{return data;}},beginMasterEdit(){{}},_productFormSaveFields(){{return this.productForm;}},
   buildProductWritePayload(){{return {{}};}},loadProducts:async()=>false,
   closeModal(){{closed+=1;this.modal=null;}},showToast(message,error=false){{notices.push([message,error]);}},
   errorMessage(error){{return error?.message||String(error);}},handleMaster409(){{return false;}}
@@ -128,7 +129,7 @@ const expect=(value,message)=>{{if(!value)throw new Error(message)}};
 
 def test_material_save_treats_false_refresh_as_success_warning(tmp_path: Path) -> None:
     refresh_body = _method_body("handleMasterSaveRefreshFailure(entity, error) {", "moldRepairWarningText(warnings) {")
-    save_body = _method_body("async saveModal() {", "async dispatchDelivery(row, options = {}) {")
+    save_body = _method_body("async saveModal() {", "async confirmStockExternalDraft(row) {")
     script = f"""
 const AsyncFunction=Object.getPrototypeOf(async function(){{}}).constructor;
 let closed=0;const notices=[];

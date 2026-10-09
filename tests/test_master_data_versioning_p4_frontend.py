@@ -141,7 +141,7 @@ def test_customer_mutations_force_refresh_shared_customer_options() -> None:
 
 
 def test_pdf_order_save_does_not_start_post_save_default_price_sync() -> None:
-    save_imports = _method_block("async saveConfirmedImportDrafts()", "openOrderEditor(group)")
+    save_imports = _method_block("async saveConfirmedImportDrafts(targetDraft=null)", "openOrderEditor(group)")
 
     assert "this.refreshPdfPriceConflict(item)" in save_imports
     assert "priceConflictItems" not in save_imports
@@ -156,7 +156,7 @@ def test_new_order_save_does_not_offer_post_save_common_box_overwrite() -> None:
         "async dispatchDelivery(row, options = {})",
     )
 
-    assert "async openOrder() {" in INDEX
+    assert "async openOrder({customerId=null}={}) {" in INDEX
     assert "if (!this.customerOptions.length) await this.loadCustomerOptions();" in INDEX
     assert "offerSyncCommonBox" not in INDEX
     assert "const createdOrder = await this.saveNewOrder(orderPayload);" in save
@@ -204,6 +204,7 @@ const sandbox = {
   },
   localStorage: { getItem() { return ""; }, setItem() {}, removeItem() {} },
   window: {},
+  TMOrderReference: {component:{}},
   console,
   URLSearchParams,
   setTimeout,
@@ -467,7 +468,7 @@ def test_inline_javascript_is_syntactically_valid(tmp_path: Path) -> None:
 
 
 def test_material_deactivation_keeps_versioning_without_reason_prompt() -> None:
-    deactivate = _method_block("async deleteMaterial(row)", "openOrder()")
+    deactivate = _method_block("async deleteMaterial(row)", "async openOrder({customerId=null}={})")
 
     assert 'method:"delete"' in deactivate
     assert 'url:`/api/master/materials/${row.id}`' in deactivate

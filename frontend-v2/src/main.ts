@@ -2,13 +2,9 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import VxeUITable from 'vxe-table'
-import { VxePager } from 'vxe-pc-ui'
 import 'element-plus/dist/index.css'
 // 保留 Element Plus 显式 dark class 的变量支持
 import 'element-plus/theme-chalk/dark/css-vars.css'
-import 'vxe-pc-ui/lib/style.css'
-import 'vxe-table/lib/style.css'
 import './style.css'
 import App from './App.vue'
 import { router } from './router'
@@ -21,10 +17,14 @@ import { useTabsStore } from './stores/tabs'
 const app = createApp(App)
 
 app.use(createPinia())
+let tablesReady: Promise<void> | undefined
+router.beforeResolve(async to => {
+  if (!to.path.startsWith('/review/')) return
+  tablesReady ||= import('./ui/reviewTables').then(module => module.installReviewTables(app)).catch(error => {tablesReady = undefined; throw error})
+  await tablesReady
+})
 app.use(router)
 app.use(ElementPlus, { locale: zhCn, size: 'default' })
-app.use(VxeUITable)
-app.use(VxePager)
 
 // API 层 401 → 清登录态、重置标签页、跳登录
 onUnauthorized(() => {

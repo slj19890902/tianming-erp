@@ -28,7 +28,8 @@ async function load() {
     const data=await request(`/api/warehouse/locations/${id}/scan${product?'?product='+product:''}`);
     if(current!==generation)return;
     $('login').hidden=true; $('address').textContent=data.address;
-    $('stocktake').href=`/mobile/stocktake.html?location_id=${encodeURIComponent(id)}&return_scan=1`;
+    const returnParams=new URLSearchParams({location_id:id,return_scan:'1'});if(product)returnParams.set('return_product',product);
+    $('stocktake').href=`/mobile/stocktake.html?${returnParams}`;
     $('stocktake').hidden=false;
     $('message').textContent=data.items.length?'':product?'本格已无此产品或无查看权限':'本格暂无可见库存';
     $('updated').textContent='读取于 '+new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(data.refreshed_at));

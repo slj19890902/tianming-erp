@@ -40,7 +40,7 @@ test('map return expands selected rack or highlights pallet region without openi
     let goods=0,renders=0,scrolls=0;
     const location={location_id:42,map_rack_id:rackId,goods:[]};
     const state={warehouseMapArea:'C',warehouseMapFloor:'3F',warehouseMapGeneration:0};
-    const context=vm.createContext({state,AbortController,Number,encodeURIComponent,byId:node,
+    const context=vm.createContext({state,warehouseActor:()=>101,AbortController,Number,encodeURIComponent,byId:node,
       showWarehouseArea(){node('warehouseAreaOverview').hidden=false;node('warehouseMapGoods').hidden=true},showStatus(){},
       apiGet:async()=>({locations:[location]}),renderWarehouseMap(){renders++},
       renderWarehouseLocationGoods(){goods++;node('warehouseAreaOverview').hidden=true},

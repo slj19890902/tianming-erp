@@ -158,7 +158,9 @@
     .mold-label-edit-workspace{grid-column:1/-1;display:grid;grid-template-columns:minmax(360px,1fr) minmax(330px,420px);gap:14px;margin-top:8px;padding:12px;border:1px solid #cbd5e1;border-radius:9px;background:#f8fafc}.mold-label-edit-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.mold-label-edit-fields .field.full{grid-column:1/-1}.mold-label-preview-wrap{min-width:0}.mold-label-preview-wrap h3{margin:0 0 6px;font-size:15px}.mold-label-preview-paper{display:flex;justify-content:center;min-height:174px;padding:10px;border:1px solid #94a3b8;border-radius:8px;background:#e2e8f0;overflow:auto}.mold-label-preview-paper .mold-label-page{box-shadow:0 1px 6px #64748b66}.mold-label-preview-state{min-height:38px;margin-top:7px;padding:7px 9px;border-radius:6px;background:#eff6ff;color:#1e3a8a;font-size:12px}.mold-label-preview-state.error{background:#fee2e2;color:#991b1b}.mold-label-preview-state.success{background:#dcfce7;color:#166534}.mold-label-preview-tips{margin-top:8px;color:#475569;font-size:12px}.mold-label-preview-tips summary{width:max-content;color:#1d4ed8;cursor:pointer;font-weight:800}.mold-label-preview-tips p{margin:6px 0 0;line-height:1.55}.mold-label-preview-auto{display:block;margin-top:3px;color:#64748b;font-size:11px;white-space:normal}.mold-label-edit-workspace[hidden]{display:none!important}@media(max-width:980px){.mold-label-edit-workspace{grid-template-columns:1fr}.mold-label-edit-fields{grid-template-columns:1fr}.mold-label-edit-fields .field.full{grid-column:auto}}
     .mold-bound-products{grid-column:1/-1;margin-top:8px;padding:12px;border:1px solid #cbd5e1;border-radius:9px;background:#fff}.mold-bound-products h3{margin:0}.mold-bound-products-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}.mold-bound-products[hidden]{display:none!important}
   </style>
-<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><link rel="stylesheet" href="/static/assets/mold-label-layout.css?v=mold-edge-v1" /><script src="/static/ui/order-reference.js?v=423"></script><script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script><script src="/static/assets/mold-label-layout.js?v=mold-edge-v1"></script></head>
+<link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><link rel="stylesheet" href="/static/assets/mold-label-layout.css?v=mold-edge-v1" /><script src="/static/ui/order-reference.js?v=423"></script><script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script><script src="/static/assets/mold-label-layout.js?v=mold-edge-v1"></script><script src="/static/ui/warehouse-movement-view.js?v=20261009-readable"></script>
+<style>.movement-filters{flex-wrap:wrap;gap:8px}.movement-filters input,.movement-filters select{width:auto;max-width:260px}.movement-readable td{vertical-align:top;line-height:1.6;white-space:normal}.movement-code{font-size:16px}.movement-detail{margin-top:4px;font-size:12px}.movement-detail summary{cursor:pointer;color:#176497}.movement-detail div{overflow-wrap:anywhere}.movement-increase{color:#166534}.movement-decrease{color:#b91c1c}</style>
+</head>
 <body>
   <header>
     <div><h1>仓库库存管理</h1></div>
@@ -512,12 +514,16 @@
     </section>
 
     <section id="movementSection" class="hidden">
-      <div class="panel toolbar">
-        <input id="movementLot" style="width:220px" placeholder="库存批次号">
-        <select id="movementType" style="width:180px"><option value="">全部流水类型</option><option value="manual_in">手工入库</option><option value="reserve">成品预占</option><option value="release_reserve">释放预占</option><option value="adjust">库存调整</option><option value="freeze">冻结</option><option value="unfreeze">解冻</option><option value="damage">报损</option><option value="scrap">报废</option><option value="transfer_to_general">转通用库存</option></select>
+      <div class="panel toolbar movement-filters">
+        <select id="movementCustomer" aria-label="客户"><option value="">全部客户</option></select>
+        <input id="movementKeyword" placeholder="客户 / 存货编码 / 产品名称" aria-label="客户、存货编码或产品名称">
+        <input id="movementFrom" type="date" aria-label="开始日期"><span>至</span><input id="movementTo" type="date" aria-label="结束日期">
+        <select id="movementType" aria-label="操作类型"><option value="">全部操作</option><option value="manual_in">入库</option><option value="adjust">盘点 / 数量调整</option><option value="location_transfer">移库</option><option value="consume">出库 / 生产领用</option><option value="reverse_consume">撤销出库 / 退回</option><option value="reserve">订单占用</option><option value="release_reserve">解除订单占用</option><option value="damage">报损</option><option value="scrap">报废</option><option value="freeze">冻结</option><option value="unfreeze">解除冻结</option><option value="transfer_to_general">转通用</option><option value="return_in">退货入库</option><option value="return_reconsume">撤销退货</option></select>
         <button id="refreshMovements" class="btn">查询</button>
+        <details><summary>批次筛选</summary><input id="movementLot" placeholder="库存批次号" aria-label="库存批次号"></details>
       </div>
-      <div class="panel table-wrap"><table><thead><tr><th>时间</th><th>流水号</th><th>库存批次</th><th>类型</th><th>数量</th><th>可用数量变化</th><th>原因</th></tr></thead><tbody id="movementBody"></tbody></table></div>
+      <div class="panel table-wrap"><table class="movement-readable"><thead><tr><th>时间 / 操作人</th><th>客户 / 产品</th><th>操作</th><th title="本次涉及库存，非全仓合计">所涉实存：前 → 后</th><th>位置</th><th>原因 / 明细</th></tr></thead><tbody id="movementBody"></tbody></table></div>
+      <div class="panel toolbar"><span id="movementPageInfo"></span><button id="movementPrevious" class="btn">上一页</button><button id="movementNext" class="btn">下一页</button></div>
     </section>
 
     <section id="locationLabelWorkbenchSection" class="hidden">
@@ -1237,7 +1243,7 @@
       $("twinSearchClear").onclick=clearTwinInventorySearch;
       $("twinInventoryCode").oninput=scheduleTwinInventorySearch;
       $("twinInventoryCode").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();searchTwinInventory()}};
-      $("refreshLots").onclick=loadLotsFirstPage;$("refreshMovements").onclick=loadMovements;
+      $("refreshLots").onclick=loadLotsFirstPage;$("refreshMovements").onclick=()=>loadMovements(1);$("movementPrevious").onclick=()=>loadMovements(movementPage-1);$("movementNext").onclick=()=>loadMovements(movementPage+1);["movementCustomer","movementType","movementFrom","movementTo"].forEach(id=>$(id).onchange=()=>loadMovements(1));["movementKeyword","movementLot"].forEach(id=>$(id).onkeydown=event=>{if(event.key==="Enter")loadMovements(1)});
       $("lotPrevPage").onclick=async()=>{if(state.lotPage>1){state.lotPage-=1;if(await loadLots())publishWarehouseWorkspaceContext()}};
       $("lotNextPage").onclick=async()=>{const pages=Math.max(1,Math.ceil(state.lotTotal/state.lotPageSize));if(state.lotPage<pages){state.lotPage+=1;if(await loadLots())publishWarehouseWorkspaceContext()}};
       $("refreshWarehouseSpace").onclick=loadWarehouseSpace;
@@ -1755,7 +1761,7 @@
     async function loadCustomers(){
       const data=await api("/api/warehouse/references/customers");state.customers=data.items;
       state.customersLoaded=true;
-      const rows=data.items.map(x=>({id:x.id,label:x.customer_code?`${x.customer_code} · ${x.name}`:x.name}));options($("fgCustomer"),rows,"请选择客户");options($("siCustomer"),rows,"不指定客户");options($("floor3CustomerFilter"),rows,"全部客户");options($("lotEditCustomer"),rows,"请选择客户");options($("lotCustomerFilter"),rows,"全部客户");options($("printingPlateCustomer"),rows,"请选择客户");options($("printingPlateReuseCustomer"),rows,"请选择新树脂版客户");
+      const rows=data.items.map(x=>({id:x.id,label:x.customer_code?`${x.customer_code} · ${x.name}`:x.name}));options($("fgCustomer"),rows,"请选择客户");options($("siCustomer"),rows,"不指定客户");options($("floor3CustomerFilter"),rows,"全部客户");options($("lotEditCustomer"),rows,"请选择客户");options($("lotCustomerFilter"),rows,"全部客户");options($("movementCustomer"),rows,"全部客户");options($("printingPlateCustomer"),rows,"请选择客户");options($("printingPlateReuseCustomer"),rows,"请选择新树脂版客户");
       if(state.floor3.bindRows.length){syncFloor3BindRows();renderFloor3BindRows()}
     }
     async function ensureCustomers(){
@@ -2166,10 +2172,22 @@
       if(operation==="transfer-to-general"){if(!confirm("确认转为通用成品库存？后续跨客户使用仍需人工确认。"))return}
       try{await runWarehouseMutation(`lot-operation:${id}:${operation}`,()=>api(`/api/warehouse/lots/${id}/${operation}`,{method:"POST",body:JSON.stringify(body)}),async()=>{if(await loadLots()===false)throw new Error("库存列表刷新失败")},"库存操作成功")}catch(err){toast(err.message,true)}
     }
-    async function loadMovements(){
-      const p=queryString({lot_number:$("movementLot").value,movement_type:$("movementType").value,page_size:"200"});
-      const requestId=++state.loadRequests.movements;$("movementBody").innerHTML='<tr><td colspan="7" class="empty">正在加载库存流水…</td></tr>';
-      try{const data=await api("/api/warehouse/movements?"+p);if(requestId!==state.loadRequests.movements||state.tab!=="movements"||p!==queryString({lot_number:$("movementLot").value,movement_type:$("movementType").value,page_size:"200"}))return false;$("movementBody").innerHTML=(data.items||[]).map(x=>`<tr><td>${formatDateTime(x.created_at)}</td><td>${x.movement_number}</td><td>${x.lot_number}</td><td>${labels[x.movement_type]||x.movement_type}</td><td>${x.quantity} ${labels[x.unit]}</td><td>${x.before_available} → <b>${x.after_available}</b></td><td>${x.reason||"-"}</td></tr>`).join("")||`<tr><td colspan="7" class="empty">暂无库存流水</td></tr>`;return true}catch(error){if(requestId!==state.loadRequests.movements||state.tab!=="movements")return false;$("movementBody").innerHTML=`<tr><td colspan="7" class="empty error-text">库存流水加载失败：${h(error.message)}</td></tr>`;toast(`库存流水加载失败：${error.message}`,true);return false}
+    let movementPage=1,movementTotal=0;
+    function movementFilters(page){return queryString({lot_number:$("movementLot").value,customer_id:$("movementCustomer").value,keyword:$("movementKeyword").value.trim(),movement_type:$("movementType").value,date_from:$("movementFrom").value,date_to:$("movementTo").value,page:String(page),page_size:"25"})}
+    async function loadMovements(page=1){
+      page=Number.isInteger(page)&&page>0?page:1;
+      const p=movementFilters(page),requestId=++state.loadRequests.movements;
+      $("movementBody").innerHTML='<tr><td colspan="6" class="empty">正在加载库存流水…</td></tr>';
+      $("movementPrevious").disabled=true;$("movementNext").disabled=true;$("movementPageInfo").textContent="";
+      try{
+        await ensureCustomers();
+        const data=await api("/api/warehouse/movements?"+p);
+        if(requestId!==state.loadRequests.movements||state.tab!=="movements"||p!==movementFilters(page))return false;
+        movementPage=page;movementTotal=data.total||0;
+        $("movementBody").innerHTML=(data.items||[]).map(x=>WarehouseMovementView.row(x,formatDateTime)).join("")||'<tr><td colspan="6" class="empty">暂无库存流水</td></tr>';
+        $("movementPageInfo").textContent=`共 ${movementTotal} 条 · 第 ${page} / ${Math.max(1,Math.ceil(movementTotal/25))} 页`;
+        $("movementPrevious").disabled=page<=1;$("movementNext").disabled=page*25>=movementTotal;return true;
+      }catch(error){if(requestId!==state.loadRequests.movements||state.tab!=="movements")return false;$("movementBody").innerHTML=`<tr><td colspan="6" class="empty error-text">库存流水加载失败：${h(error.message)}</td></tr>`;return false}
     }
     function positionCode(value){return String(Math.max(1,Number.parseInt(value,10)||1)).padStart(2,"0")}
     function selectedMoldRack(){return state.moldLocationOptions.find(row=>row.rack_code===$("moldRackSelect").value)||null}

@@ -140,3 +140,27 @@
  .warehouse-twin-shell .twin-stage.rack-focused .twin-map-pane { flex:0 0 190px; display:flex!important; }
  .warehouse-twin-shell .twin-stage.rack-focused .twin-rack-stage { flex:1 1 auto; min-height:0; }
 }
+
+/* Fit ordinary three-level racks in the available workspace; molds keep their layout. */
+.warehouse-twin-shell .twin-rack-focus-panel:not(.twin-mold-rack-stage) > header { padding:5px 10px; gap:8px; min-height:40px; }
+.warehouse-twin-shell .shelf-compact-title { display:flex; align-items:center; gap:10px; flex:1; min-width:0; flex-wrap:wrap; }
+.warehouse-twin-shell .shelf-compact-title h2 { margin:0; }
+.shelf-location-warning { color:#9a3412; font-size:12px; }
+.warehouse-twin-shell .twin-rack-focus-panel:not(.twin-mold-rack-stage) .twin-rack-content { min-height:0; display:grid; grid-template-columns:minmax(0,1fr); padding:4px 12px; overflow:hidden; }
+.warehouse-twin-shell .twin-rack-focus-panel:not(.twin-mold-rack-stage) .twin-elevation-shell { min-height:0; height:100%; grid-template-columns:26px minmax(0,1fr); grid-template-rows:minmax(0,1fr) 18px; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .twin-elevation-frame { min-height:0; padding:3px 5px; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .twin-elevation-level { flex:1 0 130px; min-height:130px; grid-template-rows:16px minmax(0,1fr); }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .mold-rack-cell { min-height:0; grid-template-rows:auto minmax(0,1fr); overflow:hidden; align-content:start; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-cell-heading { align-items:center; align-content:start; gap:2px 5px; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-cell-heading .mold-rack-cell-summary { align-self:start; min-height:22px; height:auto; line-height:22px; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-cell-heading .mold-rack-cell-summary b { font-size:14px!important; line-height:22px; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-product-cards { overflow:auto; min-height:0; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-cell-status { display:none; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-cell-status[role="status"] { display:block; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-cell-kind { display:none; }
+
+/* Compact rack headings and readable mixed-product cards. */
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-cell-heading .mold-rack-cell-summary { width:auto; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-product-summary { flex-wrap:wrap; gap:2px 4px; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .shelf-specification { max-width:100%; }
+.warehouse-twin-shell .twin-rack-stage:not(.twin-mold-rack-stage) .mold-rack-cell[data-identity-conflict] .shelf-cell-status { display:block; color:#b91c1c; }

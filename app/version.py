@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.585"
-APP_VERSION_NAME = "管理员按次选择合同电子章"
+APP_VERSION = "v0.22.586"
+APP_VERSION_NAME = "货架正视图与库存流水易读优化"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5577,3 +5577,15 @@ APP_VERIFICATION_STEPS = [
     "需要停用时在管理电子章中操作，停用后普通未盖章导出继续可用。",
 ]
 APP_CHANGELOG = [*(f"v0.22.585：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "普通货架正视图精简顶部，修正格号字体撑高，三层优先完整展示，保留混放产品、查找定位及异常提示。",
+    "库存流水支持客户、存货编码、名称、日期筛选，显示实存前后、位置与原因，技术编号收进明细。",
+    "延期待送改为更多中的待送积压整理，继续由人工确认移货。数量、位置、历史记录和权限不变。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，点开M1等三层货架，核对三层展示、混放产品及格位操作。",
+    "打开库存流水，按客户和存货编码查询，核对时间、数量前后、移库位置与原因，展开明细和切换下一页。",
+    "在地图更多中打开待送积压整理，核对仅展示建议，没有自动移货。",
+]
+APP_CHANGELOG = [*(f"v0.22.586：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

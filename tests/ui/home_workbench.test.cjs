@@ -36,7 +36,8 @@ const {taskGroups,listSize,priorityTasks,template}=require('../../static/ui/home
 test('full authorized stock population keeps approval separate from arranged after action filter',()=>{
  const rows=[{customer_id:7,customer_label:'研光',policy_id:1,suggested_new_requisition_sheet_quantity:10,draft_ready:true},{customer_id:7,customer_label:'研光',policy_id:2,pending_request_ids:[8],replenishment_state:'already_ordered'}];
  const groups=customerGroups(rows);assert.equal(groups[0].action,1);assert.equal(groups[0].approval,1);assert.equal(groups[0].arranged,0);
- const vm={homeWarnings:rows,homeStockTab:'action'};
+ const vm={homeWarnings:rows,homeCustomer:'',homeQuery:'',homeStockTab:'action'};
+ vm.homeVisibleWarnings=mixin.computed.homeVisibleWarnings.call(vm);
  vm.homeStockGroups=mixin.computed.homeStockGroups.call(vm);
  assert.equal(mixin.computed.homeStockRows.call(vm).length,1);
  assert.equal(mixin.computed.homeStockCounts.call(vm).approval,1);
@@ -57,11 +58,21 @@ test('page capacity follows measured usable height and preserves customer plus d
 });
 test('selected stock customer remains in the queue when its action row is filtered out',()=>{
  const rows=[{customer_id:1,customer_label:'A',pending_request_ids:[5]},{customer_id:2,customer_label:'B',suggested_new_requisition_sheet_quantity:3,draft_ready:true}];
- const vm={homeWarnings:rows,homeWorkspace:'stock',homeCustomer:'',homeStockCustomer:1};
+ const vm={homeWarnings:rows,homeWorkspace:'stock',homeCustomer:'',homeQuery:'',homeStockCustomer:1};
+ vm.homeVisibleWarnings=mixin.computed.homeVisibleWarnings.call(vm);
  vm.homeStockGroups=mixin.computed.homeStockGroups.call(vm);
  vm.homeQueueGroups=mixin.computed.homeQueueGroups.call(vm);
  assert.equal(mixin.computed.homeSelectedCustomer.call(vm),1);
  assert.equal(vm.homeQueueGroups.length,2);
+});
+test('product keyword narrows visible rows while customer status totals remain complete',()=>{
+ const rows=[{customer_id:1,customer_label:'A',product_code:'P1',suggested_new_requisition_sheet_quantity:4,draft_ready:true},{customer_id:1,customer_label:'A',product_code:'P2',pending_request_ids:[6]}];
+ const vm={homeWarnings:rows,homeCustomer:'',homeQuery:'P1',homeStockTab:'all'};
+ vm.homeVisibleWarnings=mixin.computed.homeVisibleWarnings.call(vm);
+ vm.homeStockGroups=mixin.computed.homeStockGroups.call(vm);
+ assert.equal(vm.homeVisibleWarnings.length,1);
+ assert.equal(vm.homeStockGroups[0].approval,1);
+ assert.equal(mixin.computed.homeStockCounts.call(vm).all,2);
 });
 test('one hundred products occupy one customer row; a small customer stays visible',()=>{
  const rows=Array.from({length:100},(_,i)=>({customer_id:1,customer_label:'A',policy_id:i,suggested_new_requisition_sheet_quantity:1,draft_ready:true}));

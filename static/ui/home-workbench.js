@@ -70,10 +70,11 @@
       homeData() { return this.overview?.workbench || {tasks:[],customers:[]}; },
       homeCanStock() { return this.hasPermission('warehouse.view') && this.hasPermission('requisition.view'); },
       homeFilteredTasks() { return (this.homeData.tasks || []).filter(r => matches(r,this.homeCustomer,this.homeQuery)); },
-      homeWarnings() { return (this.overview?.low_stock_warnings || []).filter(r => matches(r,this.homeCustomer,this.homeQuery)); },
-      homeStockGroups() {return customerGroups(this.homeWarnings);},
-      homeStockCounts() { const groups=this.homeStockGroups;return {customers:groups.length,action:groups.reduce((n,g)=>n+g.action,0),arranged:groups.reduce((n,g)=>n+g.arranged,0),approval:groups.reduce((n,g)=>n+g.approval,0),all:this.homeWarnings.length}; },
-      homeStockRows() { return this.homeWarnings.filter(r => this.homeStockTab==='all' || (this.homeStockTab==='action' ? actionable(r) : this.homeStockTab==='approval' ? stockState(r)==='approval' : !actionable(r)&&stockState(r)!=='approval')); },
+      homeWarnings() { return this.overview?.low_stock_warnings || []; },
+      homeVisibleWarnings() {return this.homeWarnings.filter(r=>matches(r,this.homeCustomer,this.homeQuery));},
+      homeStockGroups() {const visible=new Set(this.homeVisibleWarnings.map(r=>Number(r.customer_id)));return customerGroups(this.homeWarnings).filter(g=>visible.has(g.id));},
+      homeStockCounts() { const groups=this.homeStockGroups;return {customers:groups.length,action:groups.reduce((n,g)=>n+g.action,0),arranged:groups.reduce((n,g)=>n+g.arranged,0),approval:groups.reduce((n,g)=>n+g.approval,0),all:groups.reduce((n,g)=>n+g.rows.length,0)}; },
+      homeStockRows() { return this.homeVisibleWarnings.filter(r => this.homeStockTab==='all' || (this.homeStockTab==='action' ? actionable(r) : this.homeStockTab==='approval' ? stockState(r)==='approval' : !actionable(r)&&stockState(r)!=='approval')); },
       homePageSize() { return listSize(this.homeAvailableHeight,this.isLargeUi?74:60); },
       homeCustomerSize() { return listSize(this.homeAvailableHeight,this.isLargeUi?70:55); },
       homeQueueGroups() {if(this.homeWorkspace==='stock')return this.homeStockGroups;const keys=this.homeWorkspace==='approval'?['approval']:workKeys[this.homeWorkspace]||[];const rows=this.homeFilteredTasks.filter(r=>keys.includes(r.key));const groups=new Map();for(const row of rows){const id=Number(row.customer_id||row.customer_ids?.[0]);if(!groups.has(id))groups.set(id,{id,label:row.customer_label,rows:[]});groups.get(id).rows.push(row);}return [...groups.values()].sort((a,b)=>b.rows.length-a.rows.length||a.id-b.id);},
@@ -99,7 +100,7 @@
       homeStages() { return stageCards(this.dashboardCards || [],this.homeFilteredTasks,!!this.homeCustomer || !!this.homeQuery); },
       homeReceiptCount() { return this.homeFilteredTasks.filter(t=>t.key==='pending_receipt').length; },
       homeApprovalCount() { return this.homeFilteredTasks.filter(t=>t.key==='approval').length; },
-      homeTaskLabel() { return ({all:'优先处理',today:'今日交期事项',approval:this.homeData.can_review?'待我审批':'我的申请',receipt:'待回单'})[this.homeTaskMode] || this.homeStages.find(c=>c.key===this.homeTaskMode)?.title || '优先处理'; },
+      homeTaskLabel() { if(this.homeTaskMode==='all')return ({delivery:'交付安排',production:'报料与生产',finance:'财务跟进',approval:'审批'})[this.homeWorkspace]||'工作清单';return ({all:'工作清单',today:'今日交期事项',approval:this.homeData.can_review?'待我审批':'我的申请',receipt:'待回单'})[this.homeTaskMode] || this.homeStages.find(c=>c.key===this.homeTaskMode)?.title || '优先处理'; },
     },
     mounted() {if(this.$parent)return;if(!this.homeCanStock)this.homeWorkspace='delivery';this._homeResize=()=>{this.homeViewportHeight=global.innerHeight;this.$nextTick(()=>this.homeMeasure());};global.addEventListener('resize',this._homeResize);this.$nextTick(()=>this.homeMeasure());},
     beforeUnmount() {if(this._homeResize)global.removeEventListener('resize',this._homeResize);if(this._homeObserver)this._homeObserver.disconnect();},
@@ -112,7 +113,7 @@
       homeTaskMode() { this.homeTaskPage=1; },
       homeAttentionTab(){this.homeTaskPage=1;this.homePreferenceForm=null;},
       authGeneration() { if(this.$parent)return;this.homeCustomer='';this.homeQuery='';this.homeEntry=null;this.homeResetPages();this.homeAnalyticsOpen=false;this.homeAttentionTab='active';this.homePreferenceError='';this._homeReminderAttempt=null;this._homeAdviceRequest=null; },
-      'user.id'(id) { if(this.$parent||!id)return;try{const saved=JSON.parse(sessionStorage.getItem(`erp-home-filter:${id}`)||'null');if(saved){this.homeCustomer=saved.customer||'';this.homeQuery=saved.query||'';sessionStorage.removeItem(`erp-home-filter:${id}`);}}catch(_){} },
+      'user.id'(id) { if(this.$parent||!id)return;try{const saved=JSON.parse(sessionStorage.getItem(`erp-home-filter:${id}`)||'null');if(saved){this.homeCustomer=saved.customer||'';this.homeQuery='';sessionStorage.removeItem(`erp-home-filter:${id}`);}}catch(_){} },
       homeAnalyticsOpen(value) { this.dashboardDetailsVisible=value;this.$nextTick(()=>this.syncDesktopDeliveryMargin()); },
     },
     methods: {
@@ -130,7 +131,7 @@
         finally{if(this._homeAdviceRequest===request)this.homeAdviceBusy=false;}
       },
       homeDateAfter(days){const d=new Date(`${this.homeData.today}T12:00:00`);d.setDate(d.getDate()+days);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;},
-      homeEditReminder(row){this.homePreferenceError='';this.homePreferenceForm={task_id:row.id,reason:row.attention_reason||'later',remind_on:this.homeDateAfter(3),scope:row.attention_state==='hidden'?'personal':this.homeData.can_manage_team_reminders?'team':'personal'};},
+      homeEditReminder(row){this.homePreferenceError='';this.homePreferenceForm={task_id:row.id,reason:row.attention_reason||'later',remind_on:this.homeDateAfter(3),scope:'personal'};},
       homeReminderEffect(){return this.homeData.attention_reasons?.find(r=>r.code===this.homePreferenceForm?.reason)?.effect||'';},
       async homeSaveReminder(row,action){
         if(this.homePreferenceBusy||this.overviewError)return;
@@ -261,7 +262,6 @@
   <section class="home-workbench" aria-label="今日工作台" :aria-busy="vm.overviewLoading">
     <header class="home-heading"><div><h1>今日工作台</h1><p>{{ vm.homeData.today || '' }}<span v-if="vm.overview.as_of"> · 更新于 {{ vm.formatDateTime(vm.overview.as_of) }}</span></p></div>
       <div class="home-filters"><select v-model="vm.homeCustomer" aria-label="首页客户筛选"><option value="">全部客户</option><option v-for="c in vm.homeData.customers" :key="c.id" :value="c.id">{{c.label}}</option></select>
-        <input v-model.trim="vm.homeQuery" type="search" aria-label="首页查找" placeholder="客户 / 存货编码 / 订单号" />
         <button v-if="vm.homeCustomer || vm.homeQuery" class="home-link" @click="vm.homeClearFilters">清空</button>
         <button v-if="vm.canCreateOrders" class="home-button primary" @click="vm.openOrderPdfImport">导入订单</button>
       </div>

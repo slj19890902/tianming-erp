@@ -532,6 +532,7 @@ def _common_box_low_stock_warnings_in_scope(
                 "product_name": item["product_name"],
                 "unit_label": item.get("unit_label") or "单位待核",
                 "available_quantity": item["available_quantity"],
+                "physical_unconsumed_quantity": item.get("physical_unconsumed_quantity"),
                 "is_virtual_composite_parent": item["is_virtual_composite_parent"],
                 "assembled_quantity": item["assembled_quantity"],
                 "unassembled_available_set_quantity": item["unassembled_available_set_quantity"],

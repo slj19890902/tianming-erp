@@ -273,6 +273,103 @@ def _dispose_group(body,response,db,user):
         raise HTTPException(500,'组加工结果尚未确认，请保留原请求并核对',headers=_group_headers())
 
 
+def _assembly_headers():
+    return {'Cache-Control':'no-store','X-Production-Assembly-Preserve':'1'}
+
+
+def _assembly_actor(expected,user):
+    if expected is not None and expected!=user.id:
+        raise HTTPException(409,'当前登录账号与原请求账号不一致，请保留原请求核对',
+            headers=dict(_assembly_headers(),**{'X-Production-Assembly-Actor-Mismatch':'1'}))
+
+
+def _assembly_scope(db,payload,user,proof=None,command=None):
+    from app.services import stock_preparation_assembly_recovery as recovery
+    from app.models.stock_preparation import StockPreparationJob
+    for customer_id in recovery.current_customers(db,payload):
+        require_customer_access(customer_id,user,db)
+    if command is not None:
+        if command.receipt_item_id not in {db.get(StockPreparationJob,r['job_id']).receipt_item_id for r in payload['jobs']}:
+            service.fail('原组套证明归属不一致，请保留原请求核对')
+        # A legacy result still carries its original frozen recipe customer.
+        import json
+        require_customer_access(json.loads(command.result_json)['recipe']['customer_id'],user,db)
+    if proof:
+        for customer_id in recovery.proof_customers(db,proof,command):
+            require_customer_access(customer_id,user,db)
+
+
+@router.post('/stock-preparation/group-assembly-result')
+def group_assembly_result(body:GroupCompletionResultRequest,response:Response,
+                          db:Session=Depends(get_db),user:User=Depends(_group_user)):
+    from app.services import stock_preparation_assembly_recovery as recovery
+    from app.models.stock_preparation import StockPreparationCommand
+    response.headers['Cache-Control']='no-store'
+    try:
+        _assembly_actor(body.expected_actor_id,user)
+        _assembly_actor(body.original_request.expected_actor_id,user)
+        if body.original_request.action!='assemble' or body.operation_key!=body.original_request.operation_key:
+            service.fail('请使用完整原组套保存请求核对，操作标识必须一致')
+        payload=recovery.normalized_payload(body.original_request)
+        with db.no_autoflush:
+            _assembly_scope(db,payload,user)
+            command=db.get(StockPreparationCommand,body.operation_key)
+            if command is None:return recovery.envelope(None,None,body.operation_key,user.id)
+            result,proof=recovery.checked_result(command,payload,user.id)
+            _assembly_scope(db,payload,user,proof,command)
+            return recovery.envelope(result,proof,body.operation_key,user.id)
+    except WarehouseInventoryError as exc:
+        raise HTTPException(exc.status_code,str(exc),headers=_assembly_headers()) from exc
+    except HTTPException as exc:
+        exc.headers=dict(exc.headers or {},**_assembly_headers())
+        raise
+
+
+def _assemble_group(body,response,db,user):
+    from app.services import stock_preparation_assembly_recovery as recovery
+    from app.models.stock_preparation import StockPreparationCommand, StockPreparationJob
+    response.headers['Cache-Control']='no-store'
+    entered=False;existing=True;commit_started=False
+    try:
+        _assembly_actor(body.expected_actor_id,user)
+        payload=recovery.normalized_payload(body)
+        with atomic_bom(db):
+            entered=True
+            existing=db.get(StockPreparationCommand,body.operation_key) is not None
+            _assembly_scope(db,payload,user)
+            if not existing:
+                # Fresh writes retain original qualification gates under the same lock;
+                # completed replay and readonly queries use ownership only.
+                for row in payload['jobs']:
+                    job=db.get(StockPreparationJob,row['job_id'])
+                    _,item,_=service.source(db,job.receipt_item_id)
+                    require_customer_access(item.customer_id,user,db)
+            group_service.mutate_group(db,payload,user,assembly_result_builder=recovery.build_receipt)
+            command=db.get(StockPreparationCommand,body.operation_key)
+            result,proof=recovery.checked_result(command,payload,user.id)
+            _assembly_scope(db,payload,user,proof,command)
+            reply=dict(result,current_actor_id=user.id,proof_status='complete' if proof else 'legacy_trace',
+                       assembly_completion_receipt=proof)
+            group_service.encode(reply)
+        commit_started=True
+        db.commit()
+        return reply
+    except WarehouseInventoryError as exc:
+        db.rollback()
+        headers=_assembly_headers()
+        if entered and not existing and not commit_started:
+            headers.pop('X-Production-Assembly-Preserve',None)
+            headers['X-Production-Assembly-Rejected']='1'
+        raise HTTPException(exc.status_code,str(exc),headers=headers) from exc
+    except HTTPException as exc:
+        db.rollback()
+        exc.headers=dict(exc.headers or {},**_assembly_headers())
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(500,'组套结果尚未确认，请保留原请求并核对',headers=_assembly_headers())
+
+
 @router.get('/stock-preparation/locations')
 def get_stock_locations(db:Session=Depends(get_db),user:User=Depends(PermissionChecker('orders.view'))):
     from app.services.production_workflow import list_temporary_locations
@@ -299,6 +396,8 @@ def preview_group(parent_id:int,sets:int=Query(1,gt=0,le=10000000),db:Session=De
 def post_group_action(body:GroupAction,response:Response,db:Session=Depends(get_db),user:User=Depends(_group_user)):
     if body.action=='dispose':
         return _dispose_group(body,response,db,user)
+    if body.action=='assemble':
+        return _assemble_group(body,response,db,user)
     try:
         if body.action=='unassemble' and user.role!='admin':
             raise HTTPException(403,'仅管理员可撤销组装')

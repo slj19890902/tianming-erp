@@ -92,7 +92,7 @@ def assert_assembly_evidence(db,key,product_id,customer_id,quantity):
         prep.fail('组装数量与冻结配比不符')
 
 
-def assemble(db,payload,actor):
+def assemble(db,payload,actor,*,result_builder=None):
     key=payload['operation_key'];request=encode(payload);old=db.get(Command,key)
     if old:
         if old.actor_id!=actor.id or old.request_json!=request:prep.fail('操作标识已用于其他内容')
@@ -146,6 +146,8 @@ def assemble(db,payload,actor):
     output.cost_snapshot_source='stock_preparation_assembly';output.cost_snapshot_detail_json=encode(dict(inputs=inputs,total_cost=str(total_cost) if cost_known else None,**labour))
     for source in inputs:release_empty_output_pallet(db,db.get(InventoryLot,source['lot_id']),actor)
     result['output_lot_id']=output.id;result['placed_at_utc']=utc_now_naive().isoformat()
+    if result_builder is not None:
+        result=result_builder(db,payload,actor,result)
     db.add(Command(operation_key=key,receipt_item_id=jobs[0].receipt_item_id,
         request_json=request,result_json=encode(result),actor_id=actor.id))
     append_audit_event(db,event_category='business',result='success',source='web',module_code='production',action_code='stock_preparation.assemble',resource='production',actor=actor,entity_type='inventory_lot',entity_id=output.id,details=result)

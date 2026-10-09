@@ -45,3 +45,5 @@ API 初候选 28 项通过，加 3 项邻近/替代运行，合计 30 个不同�
 根证据目录 D:/.codex/visualizations/2026/10/10/group-preparation-recovery-release-v604；作者证据在 group-preparation-save-recovery-fix/api 和 ui；独立证据在 group-preparation-save-recovery-review。初候选/旧 HTTP/旧页面观察单独保留。
 
 发布必须核精确源码、运行包及 NAS 基线、唯一迁移头和签名文件白名单；新冷备独立恢复、停服期间业务表/附件保持、完整性/外键、本机及 LAN 健康、实际静态文件与签名包一致。实际部署结果另由 FACTORY_RELIABILITY_RELEASE_V604_20261010.md 和 NAS 发布回执确认。
+
+v604技术发布完成，待管理员人工验收。源75129569ed5ff0bf454d075471c9b4fd902b070f，包077c2cde0a2d54932987baa2a960aa5934f66dfb17194b273bd21051e9fa6081；正式/NAS一致，备份恢复、业务和附件保持、健康/资源通过，详见FACTORY_RELIABILITY_RELEASE_V604_20261010.md。

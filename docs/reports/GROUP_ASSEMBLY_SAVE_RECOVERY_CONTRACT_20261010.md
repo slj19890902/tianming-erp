@@ -41,4 +41,3 @@ Input={job_id,product_id,output_lot_id,movement_id:positive,movement_key:string,
 trace_url='/api/production/stock-preparation/history/'+URL编码原group_key；历史读取失败不撤销已确认proof。readonly不跑当前来源posted/active/剩余数量/位置/当前BOM写资格，不从当前任务重造历史proof。
 
 父proof由专用builder在最终父Command首次INSERT前装配，原输入证据→输出/成本/栈板→父Command/审计/flush→enroll→commit顺序保持；任何失败整体回滚。旧Command禁止UPDATE/DELETE触发器保留。
-

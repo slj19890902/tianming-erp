@@ -47,7 +47,7 @@ def test_customer_contract_entry_and_hidden_work_page() -> None:
 
 def test_contract_form_uses_customer_products_and_payload_contract() -> None:
     for marker in (
-        'axios.get("/api/contracts"',
+        'kind === "products" ? "/api/master/products" : "/api/contracts"',
         'axios.post("/api/contracts"',
         'axios.put(`/api/contracts/${this.contractDraft.id}`',
         'axios.delete(`/api/contracts/${target.id}`',
@@ -62,7 +62,7 @@ def test_contract_form_uses_customer_products_and_payload_contract() -> None:
         '默认单价',
     ):
         assert marker in INDEX
-    assert 'customer_id:this.contractCustomer.id' in INDEX
+    assert 'customer_id:request.customer' in INDEX
     assert 'contract_date: this.contractDraft.contract_date' in INDEX
     assert 'delivery_date: this.contractDraft.delivery_date' in INDEX
 
@@ -141,18 +141,18 @@ def test_contract_print_is_safe_customer_facing_document() -> None:
 
 
 def test_contract_print_page_route_is_registered() -> None:
-    from app.main import create_app
+    from app.main import app
 
-    with TestClient(create_app()) as client:
+    with TestClient(app) as client:
         response = client.get("/contract-print.html")
     assert response.status_code == 200
     assert "客户合同" in response.text
 
 
 def test_contract_work_page_deep_link_is_registered() -> None:
-    from app.main import create_app
+    from app.main import app
 
-    with TestClient(create_app()) as client:
+    with TestClient(app) as client:
         response = client.get("/contracts")
     assert response.status_code == 200
     assert 'activePage === \'contracts\'' in response.text

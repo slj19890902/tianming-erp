@@ -17,13 +17,37 @@ const routePath = props.workspacePath
 const active = computed(() => route.path === routePath)
 const source = '/frontend-v2/formal-workspace?embedded=1&frontend_shell=1&unified_navigation=1&page=' + encodeURIComponent(page)
 const entryMessage = ref('')
+const connectionError = ref('')
+const connected = ref(false)
+const frameRevision = ref(0)
+let connectionTimer: ReturnType<typeof setTimeout> | undefined
+function armConnection() {
+  clearTimeout(connectionTimer)
+  connectionTimer = setTimeout(() => { if (!connected.value) connectionError.value = '工作区连接尚未完成。可以先重新连接；若页面未加载，可重新加载工作区。' }, 20000)
+}
+function retryConnection() {
+  connectionError.value = ''
+  connect(true)
+  armConnection()
+}
+function reloadWorkspace() {
+  const child = frame.value?.contentWindow as (Window & {ERPFrontendReliability?:{state:()=>{dirty:boolean;saving:boolean;uncertain:boolean}}}) | null
+  let state
+  try {state = child?.ERPFrontendReliability?.state()} catch { /* failed frame */ }
+  if (tabs.dirtyPaths[routePath] || state?.dirty || state?.saving || state?.uncertain) {
+    connectionError.value = '当前工作区有未保存内容或待核对的提交，请先继续处理；重新连接会保留当前内容。'
+    return
+  }
+  connectionError.value = ''; connected.value = false; navigationReady = false
+  frameRevision.value++; armConnection()
+}
 let navigationReady = false
 let pending: ReturnType<typeof parseFormalOrderEntry> = null
 const sentRequests = new Set<string>()
 let responseTimer: ReturnType<typeof setTimeout> | undefined
-function connect() {
+function connect(retrySession = false) {
   navigationReady = false
-  frame.value?.contentWindow?.postMessage({type:'tianming-formal-shell-v1',unifiedNavigation:true,active:active.value}, location.origin)
+  frame.value?.contentWindow?.postMessage({type:'tianming-formal-shell-v1',unifiedNavigation:true,active:active.value,retrySession}, location.origin)
 }
 function sendEntry() {
   if (!active.value || page !== 'orders' || !navigationReady) return
@@ -41,6 +65,13 @@ function sendEntry() {
 function receive(event: MessageEvent) {
   if (event.origin !== location.origin || event.source !== frame.value?.contentWindow) return
   if (event.data?.type === 'tianming-formal-bridge-ready-v1') { connect(); return }
+  if (event.data?.type === 'tianming-formal-draft-state-v1') {
+    if (event.data.actorId === auth.user?.id && Number.isSafeInteger(event.data.generation)
+      && ['dirty','saving','uncertain'].every(key => typeof event.data[key] === 'boolean')) {
+      tabs.markDirty(routePath,event.data.dirty || event.data.saving || event.data.uncertain)
+    }
+    return
+  }
   if (event.data?.type === 'tianming-formal-orders-changed-v1') {
     if (page === 'orders' && navigationReady && Number.isSafeInteger(event.data.actorId) && event.data.actorId === auth.user?.id) {
       window.dispatchEvent(new CustomEvent('tianming-orders-changed', {detail:{actorId:event.data.actorId}}))
@@ -48,8 +79,10 @@ function receive(event: MessageEvent) {
     return
   }
   if (event.data?.type === 'tianming-formal-navigation-v1') {
+    if (event.data.sessionUnavailable === true) connectionError.value = '暂时无法确认工作区的登录状态，请检查网络后点“重新连接”，无需修改密码。'
     if (typeof event.data.draftOpen === 'boolean') tabs.markDirty(routePath, event.data.draftOpen)
     navigationReady = event.data.ready === true
+    if (navigationReady) {connected.value = true; connectionError.value = ''; clearTimeout(connectionTimer)}
     sendEntry()
     return
   }
@@ -73,15 +106,20 @@ function receive(event: MessageEvent) {
 }
 watch(active, () => frame.value?.contentWindow?.postMessage({type:'tianming-formal-shell-v1',unifiedNavigation:true,active:active.value}, location.origin))
 watch(() => [route.path, route.query.order_entry, route.query.order_request], sendEntry)
-onMounted(() => window.addEventListener('message', receive))
-onBeforeUnmount(() => { clearTimeout(responseTimer); window.removeEventListener('message', receive) })
+onMounted(() => {window.addEventListener('message', receive); armConnection()})
+onBeforeUnmount(() => { clearTimeout(connectionTimer); clearTimeout(responseTimer); window.removeEventListener('message', receive) })
 </script>
 <template>
+  <div v-if="connectionError" class="entry-message" role="alert">{{ connectionError }}
+    <button type="button" @click="retryConnection">重新连接（保留内容）</button>
+    <button type="button" @click="reloadWorkspace">重新加载工作区</button>
+  </div>
   <p v-if="entryMessage" class="entry-message" role="status">{{ entryMessage }}</p>
-  <iframe ref="frame" :data-formal-route="routePath" class="formal-workspace"
-    :src="source" title="正式版完整业务工作区" @load="connect" />
+  <iframe :key="frameRevision" ref="frame" :data-formal-route="routePath" class="formal-workspace"
+    :src="source" title="正式版完整业务工作区" @load="connect()" @error="connectionError='工作区加载失败，请检查网络后重新加载。'" />
 </template>
 <style scoped>
 .formal-workspace { display:block; width:100%; flex:1; min-height:0; border:0; border-radius:10px; background:#fff; }
+.entry-message button { margin:4px 8px; padding:6px 10px; cursor:pointer; border:1px solid #cbd5e1; border-radius:4px; background:white; }
 .entry-message { margin:0 0 8px; padding:8px 12px; background:#fff7ed; color:#9a3412; border-radius:6px; }
 </style>

@@ -5,19 +5,32 @@
   // business app paints; connection/authentication still gate every command.
   const unifiedLayout = new URLSearchParams(location.search).get('unified_navigation') === '1';
   if (unifiedLayout) document.documentElement.classList.add('frontend-shell-layout');
+  window.erpWorkspaceActive = false;
   window.ERPFrontendShell = {
     install(vm) {
       let connected = false;
-      let unified = false, activeSurface = true, commandBusy = false;
+      let unified = false, activeSurface = false, commandBusy = false;
       const commands = new Map();
       const entryRequests = new Map();
       const ready = () => !!vm.user && !vm.user.must_change_password && !window.erpCheckingSession;
+      let lastNavigation = '';
+      const notify = data => {
+        const snapshot = JSON.stringify(data);
+        if (snapshot === lastNavigation) return;
+        lastNavigation = snapshot;
+        window.parent.postMessage(data, location.origin);
+      };
       const publish = () => {
+        if (!activeSurface || document.hidden) return;
         if (!connected || !ready()) {
           document.documentElement.classList.remove('frontend-shell-connected','frontend-shell-unified');
-          if (connected && vm.user) window.parent.postMessage({type:'tianming-formal-navigation-v1',menus:vm.user.must_change_password ? [] : (vm.menus || []).map(item => ({key:String(item.key),label:String(item.label)})),ready:false}, location.origin);
+          if (connected && vm.user) notify({type:'tianming-formal-navigation-v1',menus:vm.user.must_change_password ? [] : (vm.menus || []).map(item => ({key:String(item.key),label:String(item.label)})),ready:false});
           if (connected && !vm.user && !window.erpCheckingSession) {
-            window.parent.postMessage({type:'tianming-formal-navigation-v1',menus:[],active:'',authenticated:false}, location.origin);
+            if (window.erpSessionUnavailable) {
+              notify({type:'tianming-formal-navigation-v1',menus:[],ready:false,sessionUnavailable:true});
+              return;
+            }
+            notify({type:'tianming-formal-navigation-v1',menus:[],active:'',authenticated:false});
           }
           return;
         }
@@ -25,9 +38,10 @@
         const active = (vm.menus || []).find(item => vm.isMenuActive(item.key))?.key || '';
         document.documentElement.classList.add('frontend-shell-connected');
         document.documentElement.classList.toggle('frontend-shell-unified', unified);
-        const draftOpen = !!(vm.modal?.type || vm.productionEntry);
+        const draftState = window.ERPFrontendReliability?.state?.();
+        const draftOpen = draftState ? !!(draftState.dirty || draftState.saving || draftState.uncertain) : !!(vm.modal?.type || vm.productionEntry);
         const shellUi = unified ? window.ERPUnifiedNavigation.describe(vm) : null;
-        window.parent.postMessage({type:'tianming-formal-navigation-v1',menus,active,page:vm.activePage,ready:true,draftOpen,shellUi}, location.origin);
+        notify({type:'tianming-formal-navigation-v1',menus,active,page:vm.activePage,ready:true,draftOpen,shellUi});
       };
       // These three entries only open the original workflow. No data, save,
       // email sync, mutation method, or arbitrary method name crosses the bridge.
@@ -81,7 +95,15 @@
       };
       const receive = event => {
         if (event.source !== window.parent || event.origin !== location.origin) return;
-        if (event.data?.type === 'tianming-formal-shell-v1') { connected = true; unified = !!window.ERPUnifiedNavigation && event.data.unifiedNavigation === true; activeSurface = event.data.active !== false; publish(); if (activeSurface) vm.queueViewportPageMeasure?.(); }
+        if (event.data?.type === 'tianming-formal-shell-v1') {
+          connected = true; unified = !!window.ERPUnifiedNavigation && event.data.unifiedNavigation === true;
+          activeSurface = event.data.active !== false; window.erpWorkspaceActive = activeSurface; lastNavigation = ''; publish();
+          if (activeSurface) vm.queueViewportPageMeasure?.();
+          if (event.data.retrySession === true && !vm.user && window.erpSessionUnavailable && !window.erpCheckingSession) {
+            window.erpCheckingSession = true;
+            Promise.resolve(vm.checkSession()).finally(() => {window.erpCheckingSession=false;publish();});
+          }
+        }
         if (event.data?.type === 'tianming-unified-command-v1') { void runCommand(event.data); return; }
         if (event.data?.type === 'tianming-formal-order-entry-v1') { void openEntry(event.data); return; }
         if (event.data?.type !== 'tianming-formal-menu-v1' || !ready() || !connected) return;
@@ -108,8 +130,21 @@
         menus:(vm.menus || []).map(item => ({key:item.key,label:item.label})),
         page:vm.activePage, user:!!vm.user, forced:!!vm.user?.must_change_password,modal:vm.modal?.type
       }), publish, {flush:'post'});
-      const timer = window.setInterval(publish, 500);
-      window.addEventListener('pagehide', () => {stop();clearInterval(timer);window.removeEventListener('message',receive);if(interceptor!==undefined)responseHook.eject(interceptor);}, {once:true});
+      let lastDraft = '';
+      const publishDraft = () => {
+        if (!connected || !ready()) return;
+        const state = window.ERPFrontendReliability?.state?.();
+        if (!state) return;
+        const message = {type:'tianming-formal-draft-state-v1',actorId:vm.user.id,generation:vm.authGeneration,...state};
+        const snapshot = JSON.stringify(message);
+        if (snapshot === lastDraft) return;
+        lastDraft = snapshot; window.parent.postMessage(message,location.origin);
+      };
+      const stopDraft = vm.$watch(() => JSON.stringify(window.ERPFrontendReliability?.state?.()),publishDraft,{flush:'post'});
+      const timer = window.setInterval(publish, 1000);
+      const visible = () => {if (!document.hidden && activeSurface) {lastNavigation='';publish();vm.refreshEmailQueueCount?.();}};
+      document.addEventListener?.('visibilitychange',visible);
+      window.addEventListener('pagehide', () => {stop();stopDraft();document.removeEventListener?.('visibilitychange',visible);clearInterval(timer);window.removeEventListener('message',receive);if(interceptor!==undefined)responseHook.eject(interceptor);}, {once:true});
       publish();
       // Do not wait for the iframe load event (images and other resources may
       // still be pending). The parent validates this exact frame and origin.

@@ -19,7 +19,7 @@ const nowText = useDateFormat(useNow(), 'YYYY-MM-DD HH:mm:ss')
 const mobileMenuOpen = ref(false)
 watch(() => route.path, () => { mobileMenuOpen.value = false })
 
-const isLogin = computed(() => route.path === '/login')
+const isLogin = computed(() => ['/login','/connection'].includes(route.path))
 const isMobileReceive = computed(() => route.path === '/mobile-receive')
 const isFormalWorkspace = computed(() => route.meta.formalCompatibility === true)
 const formalWorkspaces = computed(() => tabsStore.tabs.flatMap(tab => {
@@ -105,8 +105,13 @@ function receiveFormalNavigation(event: MessageEvent) {
   const activeTab = tabsStore.tabs.find(tab => tab.path === route.path)
   if (isFormalWorkspace.value && activeMenu && activeTab) activeTab.title = activeMenu.title
 }
-onMounted(() => window.addEventListener('message', receiveFormalNavigation))
-onBeforeUnmount(() => { window.removeEventListener('message', receiveFormalNavigation); clearTimeout(commandTimer) })
+function protectDrafts(event: BeforeUnloadEvent) {
+  if (!Object.values(tabsStore.dirtyPaths).some(Boolean) && !passwordSaving.value && !(passwordDialog.value && Object.values(passwordForm.value).some(Boolean))) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+onMounted(() => { window.addEventListener('message', receiveFormalNavigation); window.addEventListener('beforeunload',protectDrafts) })
+onBeforeUnmount(() => { window.removeEventListener('message', receiveFormalNavigation); window.removeEventListener('beforeunload',protectDrafts); clearTimeout(commandTimer) })
 
 function runCommand(key: string) {
   const ui = shellUi.value

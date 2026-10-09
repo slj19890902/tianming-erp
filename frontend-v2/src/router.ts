@@ -15,6 +15,7 @@ const MobileReceiveView = () => import('./views/MobileReceiveView.vue')
 const WarehouseView = () => import('./views/WarehouseView.vue')
 
 export const routes: RouteRecordRaw[] = [
+  {path:'/connection',name:'connection',component:()=>import('./views/ConnectionView.vue'),meta:{public:true,title:'重新连接'}},
   {
     path: '/login',
     name: 'login',
@@ -57,6 +58,8 @@ router.beforeEach(async (to) => {
   if (!auth.initialized) {
     await auth.restore()
   }
+  if (to.path === '/connection') return true
+  if (auth.restoreError) return {path:'/connection',query:{redirect:to.fullPath}}
   const isPublic = to.meta.public === true
   if (isPublic) {
     if (auth.user) {

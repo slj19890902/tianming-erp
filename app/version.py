@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.577"
+APP_VERSION = "v0.22.578"
 APP_VERSION_NAME = "全地图货架正式版本统一"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5477,6 +5477,20 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.576：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 APP_CHANGES = [
+    "材质选择器随资料刷新；合同切换只接收当前客户和最后一次选择的结果，读取失败显示重试入口。",
+    "常用箱主档保存后立即保留编号及版本；图纸上传失败明确显示已保存，并可仅重试图纸。",
+    "登录恢复区分服务暂时不可用与登录失效；工作区增加连接恢复，读取超时覆盖完整响应。",
+    "桌面未保存草稿、提交中及待核对结果增加刷新关闭保护；隐藏工作区停止重复导航和邮箱轮询。",
+    "原生表格组件按需加载，保留现有布局、业务权限、历史冻结资料及库存数量；本版无数据库迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新ERP，核对导航及左下工具；新增或修改材质后，在常用箱选择器中核对最新内容。",
+    "快速切换客户合同，确认内容对应最后一次选择；图纸上传失败时使用“仅重试图纸”，核对原常用箱编号保持。",
+    "有未保存内容时刷新应提示；网络恢复后点“重新连接”，核对标准/大字和不同窗口宽度。现场页面效果待管理员验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.577：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
     "统一各楼层已发布区域的地图版本关联，一楼模具架、普通货架和功能区域同步核对，避免标签误报未发布。",
     "发布区域时同时核对整层关联；不同步即撤回，正式地图缺失时禁止回退旧底图。",
     "保留货架层格、库存数量和成本、模具位置及历史标签；版本补正全过程留痕。",
@@ -5485,4 +5499,4 @@ APP_VERIFICATION_STEPS = [
     "刷新仓库地图，切换一楼、三楼、四楼，核对货架编号、层格、模具位置与原来一致。",
     "打开原产品标签及模具货架标签，核对当前位置和二维码；实体出纸由管理员确认。",
 ]
-APP_CHANGELOG = [*(f"v0.22.577：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.578：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

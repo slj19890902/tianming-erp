@@ -4737,17 +4737,44 @@ def batch_receive_items(
                         "message": "同一批次幂等键不能由不同操作者、权限范围或载荷重放。",
                     },
                 )
-            return json.loads(replay.response_json)
+            response = json.loads(replay.response_json)
+            successful_items = [row.get("item") or {} for row in response.get("results", []) if row.get("success")]
+            receipt_ids = {int(item["receipt_item_id"]) for item in successful_items if item.get("receipt_item_id")}
+            posted_ids = set(db.scalars(select(IncomingReceiptItem.id).where(
+                IncomingReceiptItem.id.in_(receipt_ids), IncomingReceiptItem.status == "posted",
+            ))) if receipt_ids else set()
+            if len(receipt_ids) != len(successful_items) or posted_ids != receipt_ids:
+                raise HTTPException(status_code=409, detail={
+                    "code": "INCOMING_BATCH_RECEIPT_REVERSED",
+                    "message": "原批次中有收料记录已撤销或失效，请查询收料历史；再次收料需使用新的提交标识。",
+                })
+            # Cost access may have changed since this response was cached.
+            if not has_permission(user, "cost.view"):
+                for item in successful_items:
+                    if "purpose_allocation" in item:
+                        item["purpose_allocation"] = _visible_purpose_allocation(
+                            item["purpose_allocation"], can_view_cost=False
+                        )
+            return response
     # Check all targets before the first write.  A cross-customer item must not
     # turn a batch into a partial write that happens before the 403 response.
     for line in payload.items:
         _preflight_item_customer_access(db, item_id=line.item_id, user=user)
-    seen: set[int | str] = set()
+    seen: set[tuple[str, int] | str] = set()
     batch_id = batch_key or uuid4().hex
     results: list[dict] = []
     succeeded = 0
     for line in payload.items:
-        if line.item_id in seen:
+        # IDs accepted by the receipt resolver have numeric aliases (1 / "1",
+        # sr1 / sr01). They must not create two receipts in one selection.
+        item_text = str(line.item_id)
+        item_identity: tuple[str, int] | str = item_text
+        for prefix in ("sr", "so", "r", ""):
+            suffix = item_text[len(prefix):] if item_text.startswith(prefix) else ""
+            if suffix.strip().isdigit():
+                item_identity = (prefix, int(suffix))
+                break
+        if item_identity in seen:
             results.append(
                 {
                     "item_id": line.item_id,
@@ -4756,7 +4783,7 @@ def batch_receive_items(
                 }
             )
             continue
-        seen.add(line.item_id)
+        seen.add(item_identity)
         try:
             with db.begin_nested():
                 fact = receive_one(

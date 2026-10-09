@@ -568,6 +568,27 @@ def record_external_purchase_receipt(
     visible_customer_ids: set[int] | None,
 ) -> tuple[ExternalPackagingReceipt, bool]:
     fingerprint = _request_fingerprint(purchase_order_id, lines)
+    # A replay is still a read of this customer's receipt. Recheck today's
+    # scope before returning the original fact, including after access changes.
+    source_batch = db.scalar(
+        select(ExternalPackagingPurchaseBatch)
+        .join(ExternalPackagingPurchaseOrder,
+              ExternalPackagingPurchaseOrder.batch_id == ExternalPackagingPurchaseBatch.id)
+        .where(ExternalPackagingPurchaseOrder.id == purchase_order_id)
+    )
+    if source_batch is None:
+        raise ExternalPurchaseContractError("外购包装采购单不存在", status_code=404)
+    source = (
+        db.get(Order, source_batch.sales_order_id)
+        if source_batch.sales_order_id is not None
+        else db.get(StockReplenishmentOrder, source_batch.stock_replenishment_order_id)
+        if source_batch.stock_replenishment_order_id is not None
+        else None
+    )
+    if source is None or source.customer_id is None:
+        raise ExternalPurchaseContractError("采购单缺少有效客户来源")
+    if visible_customer_ids is not None and int(source.customer_id) not in visible_customer_ids:
+        raise ExternalPurchaseContractError("无权操作该客户的外购包装收料", status_code=403)
     existing = db.scalar(
         select(ExternalPackagingReceipt).where(
             ExternalPackagingReceipt.idempotency_key == idempotency_key
@@ -586,17 +607,6 @@ def record_external_purchase_receipt(
             )
         return _load_receipt(db, existing.id), False
 
-    source_batch = db.scalar(
-        select(ExternalPackagingPurchaseBatch)
-        .join(
-            ExternalPackagingPurchaseOrder,
-            ExternalPackagingPurchaseOrder.batch_id
-            == ExternalPackagingPurchaseBatch.id,
-        )
-        .where(ExternalPackagingPurchaseOrder.id == purchase_order_id)
-    )
-    if source_batch is None:
-        raise ExternalPurchaseContractError("外购包装采购单不存在", status_code=404)
     sales_order: Order | None = None
     replenishment_order: StockReplenishmentOrder | None = None
     if source_batch.sales_order_id is not None:

@@ -21,6 +21,7 @@ from app.services.audit_log import append_audit_event
 from app.services.warehouse_display_units import lot_display_unit
 from app.services.warehouse_inventory import _balances, _movement
 from app.services.warehouse_location_address import location_address_payload
+from app.services.mobile_product_drawings import attach_product_drawings
 
 router = APIRouter(prefix="/warehouse/dimension-stock")
 PURPOSES = {"cash": "现金取用", "sample": "免费打样"}
@@ -33,6 +34,7 @@ def _stock_payload(lot):
     address = location_address_payload(location)
     return {
         "id": lot.id, "version": lot.version, "lot_number": lot.lot_number,
+        "product_id": finished.product_id if finished else None,
         "location_id": location.id, "address_version": location.address_version,
         "location_name": address["employee_location_name"],
         "floor": location.warehouse_floor, "status": lot.status,
@@ -100,9 +102,10 @@ def search(
     if not isinstance(distance, int):
         query = query.order_by(distance)
     lots = db.scalars(query.order_by(InventoryLot.id).offset(offset).limit(limit)).all()
+    items = attach_product_drawings(db, [_stock_payload(lot) for lot in lots], user=user, visible_customer_ids=scope)
     return {"total": total, "offset": offset, "limit": limit,
             "can_execute": has_permission(user, "warehouse.execute"),
-            "items": [_stock_payload(lot) for lot in lots]}
+            "items": items}
 
 
 class TakeRequest(BaseModel):
@@ -196,12 +199,13 @@ def take(lot_id: int, payload: TakeRequest, request: Request,
 @router.get("/{lot_id}/detail")
 def detail(lot_id: int, response: Response, db: Session = Depends(get_db),
            user: User = Depends(PermissionChecker("warehouse.view"))):
-    from app.api.warehouse import _require_lot_customer_access
+    from app.api.warehouse import _require_lot_customer_access, _visible_customer_ids
     response.headers["Cache-Control"] = "private, no-store"
     lot = _require_lot_customer_access(db, lot_id, user)
     if not (lot.finished_detail or lot.semi_finished_detail):
         raise HTTPException(409, "库存资料不完整")
-    return {"item": _stock_payload(lot), "can_execute": has_permission(user, "warehouse.execute")}
+    item = attach_product_drawings(db, [_stock_payload(lot)], user=user, visible_customer_ids=_visible_customer_ids(user, db))[0]
+    return {"item": item, "can_execute": has_permission(user, "warehouse.execute")}
 
 
 @router.get("/{lot_id}/history")

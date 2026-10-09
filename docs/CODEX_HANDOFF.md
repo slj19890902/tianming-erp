@@ -6130,3 +6130,8 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 - 2026-10-09 PRODUCTION-TASK-PAPER：v581 / be73c2573612f547adf95ab96bc4e5ee6e4443b8 / ei1009ss已正式发布，保留v580共用库存及读取门禁，无DDL、311业务表不变。大字双联/合并续页/真实打印前核对；NAS更新源已同步，待实体试印。未push上游明确保留本地的提交，远端旧基线不能覆盖正式。见docs/release_reports/PRODUCTION_TASK_PAPER_20261009.md及NAS同名独立回执。
 
 - 2026-10-09 COMPANY-SEAL：v0.22.590 / 853dcfe27f482d74a420d051b18bdee353ca5a81 / el1009cp已技术发布，章归属开单公司；三张新增表、原317表事实与原章保持，company_profiles_v1阻止旧程序越界回退。NAS冷备/事实/健康/静态核对通过，待管理员验收；未push，旧远端不能覆盖正式。见docs/reports/COMPANY_SEAL_20261009.md及NAS回执20261009-公司抬头与电子章-v590.md。
+
+
+### 2026-10-09 BOM共用正式v591
+
+正式v0.22.591/bd8e7d7f6cc4030104124eb440b963d0eb68f2bb，包d8d86cae463bd1d29c73af3bc0a38c19b0934f7366e43164af0c6cde3a2c7808，迁移em1009bs。研光/光洋80011946长/短/整套三组51/52/53启用，11+6不变；不改原库存/主档/成本。83项、Chrome、320表迁移及冷备验证通过；签名shared_bom_v1拒绝旧程序读取新契约。待管理员人工验收、无push。只读详情docs/reports/BOM_SHARED_STOCK_20261009.md和NAS独立回执20261009-BOM跨客户共用-v591.md；不把远端ec60eb1当正式。

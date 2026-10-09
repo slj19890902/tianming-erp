@@ -115,16 +115,92 @@ class TakeRequest(BaseModel):
     location_id: int = Field(gt=0, strict=True)
     address_version: int = Field(ge=0, strict=True)
     idempotency_key: str = Field(min_length=16, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    expected_actor_id: int | None = Field(default=None, gt=0, strict=True)
+
+
+def _take_signature(payload: TakeRequest, actor_id: int, lot_id: int) -> str:
+    # Client ownership protects stale tabs, but is not a new business payload:
+    # old requests must still replay the original authenticated-actor signature.
+    return json.dumps({**payload.model_dump(exclude={"idempotency_key", "expected_actor_id"}),
+                       "actor_id": actor_id, "lot_id": lot_id}, sort_keys=True)
+
+
+def _preserve_conflict(detail: str, *, actor_mismatch: bool = False) -> HTTPException:
+    headers = {"X-Stock-Take-Preserve": "1", "Cache-Control": "private, no-store"}
+    if actor_mismatch:
+        headers["X-Stock-Take-Actor-Mismatch"] = "1"
+    return HTTPException(409, detail, headers=headers)
+
+
+def _continue_reason(lot: InventoryLot, payload: TakeRequest, user: User) -> str | None:
+    if not has_permission(user, "warehouse.execute"):
+        return "当前账号没有取用权限，可保留原请求并联系管理员"
+    if payload.expected_actor_id is not None and payload.expected_actor_id != user.id:
+        return "账号已变化，请切回原账号核对；保留原请求"
+    if lot.inventory_type not in {"finished", "semi_finished"} or not (lot.finished_detail or lot.semi_finished_detail):
+        return "该批次不支持直接取用"
+    if (lot.warehouse_location_id != payload.location_id or lot.location is None
+            or not lot.location.is_active or lot.location.address_version != payload.address_version):
+        return "货位已变化，请查看库存核对并保留原请求"
+    if lot.status != "active":
+        return "该库存已冻结或关闭，请查看库存并保留原请求"
+    if lot.version != payload.expected_version:
+        return "库存版本已变化，请查看库存核对并保留原请求"
+    if payload.quantity > lot.quantity_available:
+        return "取用不能超过可用数量，已预占数量不能取用；请保留原请求"
+    pallet_item = lot.pallet_item
+    if pallet_item is not None and pallet_item.pallet.is_current and pallet_item.pallet.location_id != lot.warehouse_location_id:
+        return "栈板位置与库存不一致，请先核对位置并保留原请求"
+    return None
+
+
+@router.post("/{lot_id}/resolve")
+def resolve_take(lot_id: int, payload: TakeRequest, response: Response,
+                 db: Session = Depends(get_db), user: User = Depends(PermissionChecker("warehouse.view"))):
+    """Observe one exact receipt; never probe by executing or clearing a key."""
+    from app.api.warehouse import _require_lot_customer_access
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        with db.no_autoflush:
+            # Current scope is authoritative even if the requested key belongs
+            # to a previously completed operation by another account.
+            lot = _require_lot_customer_access(db, lot_id, user)
+            previous = db.scalar(select(InventoryMovement).where(
+                InventoryMovement.idempotency_key == "mobile-take:" + payload.idempotency_key))
+            observed_at = utc_naive_to_api(utc_now_naive())
+            if previous is not None:
+                try:
+                    signed = json.loads(previous.remarks or "")
+                    canonical = json.dumps(signed, sort_keys=True)
+                except (TypeError, ValueError):
+                    canonical = None
+                if (previous.movement_type != "consume" or previous.inventory_lot_id != lot_id
+                        or previous.quantity != payload.quantity or previous.reason != PURPOSES[payload.purpose]
+                        or previous.operator_id is None
+                        or canonical != _take_signature(payload, previous.operator_id, lot_id)):
+                    raise _preserve_conflict("该原请求的流水与保存内容不一致，请保留请求并核对")
+                operator = db.get(User, previous.operator_id)
+                return {"status": "completed", "movement_id": previous.id, "quantity": previous.quantity,
+                        "replayed": True, "actor_id": previous.operator_id,
+                        "current_actor_id": user.id,
+                        "account": operator.username if operator else "历史账号", "observed_at": observed_at}
+            reason = _continue_reason(lot, payload, user)
+            return {"status": "not_recorded", "observed_at": observed_at, "current_actor_id": user.id,
+                    "can_continue": reason is None, "continue_reason": reason}
+    except HTTPException as error:
+        error.headers = {**(error.headers or {}), "Cache-Control": "private, no-store", "X-Stock-Take-Preserve": "1"}
+        raise
 
 
 @router.post("/{lot_id}/take")
 def take(lot_id: int, payload: TakeRequest, request: Request,
          db: Session = Depends(get_db), user: User = Depends(PermissionChecker("warehouse.execute"))):
     from app.api.warehouse import _require_lot_customer_access
-    signature = json.dumps({**payload.model_dump(exclude={"idempotency_key"}),
-                            "actor_id": user.id, "lot_id": lot_id}, sort_keys=True)
+    signature = _take_signature(payload, user.id, lot_id)
     key = "mobile-take:" + payload.idempotency_key
     try:
+        if payload.expected_actor_id is not None and payload.expected_actor_id != user.id:
+            raise _preserve_conflict("账号已变化，请切回原账号核对；原取用请求已保留", actor_mismatch=True)
         # Serialize receipt lookup and deduction on SQLite, including simultaneous
         # retries after a lost response. No business row is changed by this lock.
         if db.bind.dialect.name == "sqlite":
@@ -133,7 +209,7 @@ def take(lot_id: int, payload: TakeRequest, request: Request,
         previous = db.scalar(select(InventoryMovement).where(InventoryMovement.idempotency_key == key))
         if previous:
             if previous.remarks != signature or previous.movement_type != "consume":
-                raise HTTPException(409, "该取用请求已用于其他内容，请刷新后重试")
+                raise _preserve_conflict("该取用请求已用于其他内容，请保留原请求并核对")
             return {"movement_id": previous.id, "replayed": True, "quantity": previous.quantity}
         if lot.inventory_type not in {"finished", "semi_finished"} or not (lot.finished_detail or lot.semi_finished_detail):
             raise HTTPException(409, "该批次不支持直接取用")
@@ -186,7 +262,8 @@ def take(lot_id: int, payload: TakeRequest, request: Request,
         return {"movement_id": movement.id, "replayed": False, "quantity": payload.quantity}
     except HTTPException as error:
         db.rollback()
-        error.headers = {**(error.headers or {}), "X-Stock-Take-Rejected": "1"}
+        if not (error.headers or {}).get("X-Stock-Take-Preserve"):
+            error.headers = {**(error.headers or {}), "X-Stock-Take-Rejected": "1"}
         raise
     except (IntegrityError, OperationalError) as error:
         db.rollback()

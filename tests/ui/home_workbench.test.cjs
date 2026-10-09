@@ -29,3 +29,27 @@ test('clearing homepage position also clears production search and reloads',asyn
  const vm={homeEntry:{target:'production'},activePage:'production',productionQuery:'PO-9',stockPrepQuery:'8001',invalidatePageCache(){},async loadPage(p){assert.equal(p,'production');}};
  await mixin.methods.homeClearEntry.call(vm);assert.equal(vm.homeEntry,null);assert.equal(vm.productionQuery,'');assert.equal(vm.stockPrepQuery,'');
 });
+
+const {customerGroups,fairTasks,attentionCategory}=require('../../static/ui/home-workbench.js');
+test('one hundred products occupy one customer row; a small customer stays visible',()=>{
+ const rows=Array.from({length:100},(_,i)=>({customer_id:1,customer_label:'A',policy_id:i,suggested_new_requisition_sheet_quantity:1,draft_ready:true}));
+ rows.push({customer_id:2,customer_label:'B',suggested_new_requisition_sheet_quantity:1,draft_ready:true});
+ const groups=customerGroups(rows);assert.equal(groups.length,2);assert.equal(groups[0].action,100);assert.equal(groups[1].action,1);
+});
+test('customer rotation does not put normal work ahead of an urgent order',()=>{
+ const rows=[{id:1,customer_id:1,urgency:'overdue'},{id:2,customer_id:1,urgency:'overdue'},{id:3,customer_id:2,urgency:'overdue'},{id:4,customer_id:3,urgency:'normal'}];
+ assert.deepEqual(fairTasks(rows).map(r=>r.id),[1,3,2,4]);assert.equal(attentionCategory({attention_state:'cancel_review'}),'review');
+});
+test('hidden payment contact does not reduce totals; shared settlement count is unique',()=>{
+ const tasks=[{key:'pending_payment',id:1,customer_id:1,settlement_identity:'entity:1',amount:'100',attention_state:'hidden'},{key:'pending_payment',id:2,customer_id:2,settlement_identity:'entity:1',amount:'50'}];
+ const cards=stageCards([{key:'pending_payment',count_unit:'客户',amount:'150'}],tasks,true);assert.equal(cards[0].count,1);assert.equal(cards[0].amount,150);
+});
+test('reminder retry keeps idempotency key; new payload creates a new one',async()=>{
+ const payloads=[];global.axios={async post(url,payload){payloads.push(payload);throw {response:{data:{detail:'failed'}}};}};
+ const vm={homePreferenceBusy:false,overviewError:'',homePreferenceForm:{reason:'later',scope:'personal',remind_on:'2026-10-12'},homeData:{attention_reasons:[{code:'later',state:'snoozed'}]},user:{id:1},authGeneration:1};
+ const row={id:'task:1',source_hash:'a'.repeat(64),attention_versions:{personal:0}};
+ await mixin.methods.homeSaveReminder.call(vm,row);await mixin.methods.homeSaveReminder.call(vm,row);
+ assert.equal(payloads[0].idempotency_key,payloads[1].idempotency_key);assert.equal(vm.homePreferenceError,'failed');
+ vm.homePreferenceForm.remind_on='2026-10-13';await mixin.methods.homeSaveReminder.call(vm,row);assert.notEqual(payloads[1].idempotency_key,payloads[2].idempotency_key);
+ delete global.axios;
+});

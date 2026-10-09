@@ -5105,6 +5105,19 @@ def current_customer_months(
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
+    return project_customer_months(
+        statement_month=statement_month, balance_type=balance_type,
+        customer_id=customer_id, all_open=all_open, through_month=through_month,
+        workspace=workspace, page=page, page_size=page_size, db=db, user=user,
+    )
+
+
+def project_customer_months(
+    *, db: Session, user: User, statement_month: str | None = None,
+    balance_type: str | None = None, customer_id: int | None = None,
+    all_open: bool = False, through_month: bool = False, workspace: str = "all",
+    page: int = 1, page_size: int = 50, paginate: bool = True,
+) -> dict:
     """Return a stable, customer-month finance workbench.
 
     `all_open` is opt-in for callers that want the workbench's all-month queue;
@@ -5817,7 +5830,7 @@ def current_customer_months(
         "summary": summary,
         "queue_counts": {key: len(value) for key, value in queue_customer_ids.items()},
         "customer_options": customer_options,
-        "items": items[start : start + page_size],
+        "items": items[start : start + page_size] if paginate else items,
     }
 
 

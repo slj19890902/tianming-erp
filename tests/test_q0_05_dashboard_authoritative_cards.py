@@ -11,7 +11,7 @@ from sqlalchemy import event
 from sqlalchemy.orm import Session, sessionmaker
 
 
-def test_finance_cards_use_current_month_balances_instead_of_status(
+def test_finance_cards_use_issued_collectible_balances_instead_of_status(
     tmp_path: Path,
 ) -> None:
     from app.api.auth import router as auth_router
@@ -116,13 +116,14 @@ def test_finance_cards_use_current_month_balances_instead_of_status(
     assert cards["pending_invoice"]["count"] == 1
     assert Decimal(cards["pending_invoice"]["amount"]) == Decimal("80.00")
     assert cards["pending_payment"]["count"] == 1
-    assert Decimal(cards["pending_payment"]["amount"]) == Decimal("100.00")
+    assert Decimal(cards["pending_payment"]["amount"]) == Decimal("20.00")
     assert cards["pending_payment"]["count_unit"] == "客户"
-    assert cards["pending_payment"]["identity_key"] == "customer_id"
+    assert cards["pending_payment"]["identity_key"] == "settlement_entity_id or customer_id"
     assert cards["pending_payment"]["statement_month"] == statement_month
     assert cards["pending_payment"]["target_filter"] == {
         "balance_type": "pending_payment",
-        "statement_month": statement_month,
+        "statement_month": "",
+        "all_open": True,
     }
     assert body["statement_month"] == statement_month
     assert body["timezone"] == "Asia/Shanghai"
@@ -140,7 +141,7 @@ def test_finance_cards_use_current_month_balances_instead_of_status(
     current_payment_page = current_payment_response.json()
     assert current_payment_page["total"] == cards["pending_payment"]["count"]
     assert Decimal(
-        str(current_payment_page["summary"]["pending_payment_amount"])
+        str(current_payment_page["summary"]["pending_payment_action_amount"])
     ) == Decimal(cards["pending_payment"]["amount"])
     assert [
         row["customer_id"] for row in current_payment_page["items"]

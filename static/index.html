@@ -16778,7 +16778,7 @@
             if (["pending_invoice", "pending_payment"].includes(key) || ["待开票", "待结款"].includes(entry?.type)) {
               const balanceType = filter.balance_type || (entry?.type === "待开票" ? "pending_invoice" : "pending_payment");
               this.financeView = balanceType === "pending_payment" ? "collections" : "current";
-              this.financeFilters = { statement_month:filter.statement_month || this.overview.statement_month || month(), balance_type:balanceType, customer_id:filter.customer_id || "" };
+              this.financeFilters = { statement_month:filter.all_open ? "" : (filter.statement_month || this.overview.statement_month || month()), balance_type:balanceType, customer_id:filter.customer_id || "" };
               this.pages.financeCurrent = 1;
               this.invalidatePageCache("finance");
               return this.go("finance");

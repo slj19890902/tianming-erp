@@ -885,3 +885,7 @@ ek1009cs→el1009cp只新增company_profiles、company_selection、contract_comp
 ## 2026-10-09 BOM跨客户共用 em1009bs（待正式发布候选）
 
 el1009cp→em1009bs仅新增不可变shared_bom_members空表，不改原业务事实。320张原表副本升降升、原schema保持、完整性/FK及非空有损降级拒绝通过。独立固定清单仅研光/光洋80011946长/短/整套3组，11长+6短不变；副本关联演练保持库存/成本/货位/主档/历史。正式须先安装签名shared_bom_v1读取门禁、Manager冷备恢复验证及签名包再演练；备份SHA及清单SHA进入事务审计。出现共用事实后保留现库向前修复，禁止删事实或恢复旧库覆盖新业务。证据、人工验收及最终发布状态见docs/reports/BOM_SHARED_STOCK_20261009.md。
+
+## 2026-10-09 HOME-CUSTOMER-ACTIONS 发布步骤
+
+从实时v592/em1009bs核对源码与唯一head。管理测试副本完成 en1009hp upgrade→em1009bs downgrade→en1009hp upgrade，逐表旧字段指纹不变、FK=0、完整性ok，非空提醒表降级拒绝。正式通过Manager签名跨版本包，声明 from_revision=em1009bs、rollback_package_sha256=670718b98951fbd29f68febf64fe050898f370200eb0d4b8ddca329f133bd3f6；时点冷备独立恢复验证后正式迁移，新两表必须为空，旧321表及附件/reader门禁保持。三入口健康、静态资源及匿名权限只读核验；NAS发布并写独立回执。正式页面仅管理员人工验收。

@@ -311,6 +311,7 @@ from app.models.inventory_cost_rule import InventoryCostRule, InventoryCostMutat
 from app.models.email_intake import EmailIntakeSettings, EmailIntakeMessage, EmailIntakeAttachment, EmailIntakeOrderLink  # noqa: E402,F401
 from app.models.email_intake import EmailPdfWorkingDraft  # noqa: E402,F401
 from app.models.receipt_putaway import ProductStoragePreference, ReceiptStagingArea  # noqa: E402,F401
+from app.models.home_task import HomeTaskPreference, HomeTaskMutation  # noqa: E402,F401
 
 from app.models.stock_preparation import StockPreparationJob, StockPreparationCommand  # noqa: E402,F401
 from app.models.procurement_source import ProcurementSourceLink  # noqa: E402,F401

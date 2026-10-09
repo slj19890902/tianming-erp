@@ -81,7 +81,7 @@ def build_workbench(db, *, user, data, warnings, today, visible_customer_ids):
     production = {}
     if production_ids:
         query = (select(ProductionTask.id, ProductionTask.order_item_id,
-                        ProductionTask.planned_quantity, ProductionTask.sales_order_item_bom_component_id,
+                        ProductionTask.planned_quantity, ProductionTask.version, ProductionTask.sales_order_item_bom_component_id,
                         SalesOrderItemBomComponent.snapshot_component_product_name.label("component_name"))
                  .join(OrderItem, OrderItem.id == ProductionTask.order_item_id)
                  .join(Order, Order.id == OrderItem.order_id)
@@ -98,7 +98,7 @@ def build_workbench(db, *, user, data, warnings, today, visible_customer_ids):
     if item_ids:
         query = (select(OrderItem.id, OrderItem.order_id, Order.customer_id, Order.customer_po,
                         Order.order_number, Order.delivery_date, OrderItem.quantity,
-                        OrderItem.delivered_quantity, OrderItem.snapshot_product_code.label("product_code"),
+                        OrderItem.delivered_quantity, Order.updated_at.label("item_updated_at"), OrderItem.snapshot_product_code.label("product_code"),
                         OrderItem.snapshot_product_name.label("product_name"), OrderItem.sales_unit_snapshot,
                         Product.unit, Product.production_process, Product.is_composite,
                         Product.is_internal_component, Product.box_style, Product.supply_mode,
@@ -153,8 +153,11 @@ def build_workbench(db, *, user, data, warnings, today, visible_customer_ids):
             if key == "pending_incoming" and row.get("requisition_qty") is not None:
                 unit = detail.get("purchase_unit") or "张"
                 message = f"报料 {quantity(row['requisition_qty'])}{unit} · 核对实际到货"
-            add(key, row, row.get("merge_group_id") or item_id, detail=detail, message=message,
-                source_item_id=str(row.get("item_id") or ""))
+            identity = f"merge:{row['merge_group_id']}" if row.get("merge_group_id") else f"source:{row.get('item_id') or item_id}"
+            add(key, row, identity, detail=detail, message=message,
+                source_item_id=str(row.get("item_id") or ""),
+                source_basis={**{k:row.get(k) for k in ('version','requisition_item_id','supplier_order_item_id','requisition_qty','received_quantity','remaining_quantity','merge_group_id')},
+                    'item_updated_at':str(detail.get('item_updated_at'))})
     for row in sources.get("pending_production", []):
         task = production.get(row["id"])
         if not task:
@@ -165,7 +168,7 @@ def build_workbench(db, *, user, data, warnings, today, visible_customer_ids):
         unit = "片" if component else detail.get("sales_unit_snapshot") or detail.get("unit") or "（单位待核）"
         add("pending_production", row, row["id"], detail=detail,
             name=task["component_name"] if component else None,
-            message=f"计划生产 {quantity(task['planned_quantity'])}{unit}", task_id=row["id"])
+            message=f"计划生产 {quantity(task['planned_quantity'])}{unit}", task_id=row["id"], source_basis=task["version"])
     for group in sources.get("pending_delivery", []):
         for row in group.get("workbench_items", []):
             detail = details.get(row["item_id"])
@@ -174,7 +177,7 @@ def build_workbench(db, *, user, data, warnings, today, visible_customer_ids):
             unit = detail.get("sales_unit_snapshot") or detail.get("unit") or "（单位待核）"
             remaining = max(int(detail["quantity"]) - int(detail["delivered_quantity"] or 0), 0)
             add("pending_delivery", group, row["item_id"], detail=detail,
-                message=f"待交 {remaining}{unit} · 可送 {row['ready_quantity']}{unit}", order_item_id=row["item_id"])
+                message=f"待交 {remaining}{unit} · 可送 {row['ready_quantity']}{unit}", order_item_id=row["item_id"], source_basis=str(detail.get('item_updated_at')))
     for row in sources.get("pending_receipt", []):
         task = add("pending_receipt", row, row["delivery_id"], code=row.get("delivery_number") or "送货单",
             message=f"{day(row.get('delivery_date')) or '日期待核'}送货 · 待回单", delivery_id=row["delivery_id"])
@@ -183,10 +186,17 @@ def build_workbench(db, *, user, data, warnings, today, visible_customer_ids):
     for key in ("pending_reconciliation", "pending_invoice", "pending_payment"):
         for row in sources.get(key, []):
             amount = row.get("amount")
-            task = add(key, row, row.get("statement_id") or row["customer_id"],
-                code=month, name=STAGES[key][0], message=f"{month} · ¥{float(amount):,.2f}" if amount is not None else f"{month} · 核对明细")
+            row_month = row.get("statement_month") or month
+            identity = row.get("settlement_identity") or row.get("statement_id") or row["customer_id"]
+            task = add(key, row, f"{row_month}:{identity}",
+                code=row_month, name=STAGES[key][0], message=f"{row_month} · ¥{float(amount):,.2f}" if amount is not None else f"{row_month} · 核对明细",
+                source_basis=row.get("source_basis"), amount=str(amount) if amount is not None else None,
+                settlement_identity=row.get("settlement_identity"))
             if task:
                 task["target_filter"]["balance_type"] = key
+                task["target_filter"]["statement_month"] = row_month
+                if row.get("settlement_identity", "").startswith("entity:"):
+                    task["customer_label"] = task["customer_name"] = row["customer_name"]
 
     from app.services.business_approvals import ACTIONS
     applicant_ids = {r.applicant_id for r in requests}

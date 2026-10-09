@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.592"
-APP_VERSION_NAME = "首页今日工作台与库存优先待办"
+APP_VERSION = "v0.22.593"
+APP_VERSION_NAME = "首页客户预警与提醒安排、跨月待结款"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5655,3 +5655,15 @@ APP_VERIFICATION_STEPS = [
     "切换标准/大字模式，核对列表清晰完整；受限账号仅出现获授权客户及允许的数据。",
 ]
 APP_CHANGELOG = [*(f"v0.22.592：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "库存预警按客户汇总，展开客户后查看产品、库存位置与补库依据。",
+    "优先处理支持原因分类、延后、个人隐藏与恢复；到期或来源变化重新提醒，保留版本和操作历史。",
+    "待结款覆盖全部月份，与财务收款工作台共用已开票可收余额；提醒操作不改变库存、订单或应收。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新首页，库存预警先按客户显示；点查看产品可返回客户汇总。",
+    "在优先处理点更多，选择原因和提醒日期；已延后、已隐藏中可恢复。",
+    "核对待结款金额和财务明细；补库分析依据为历史规则参考，资料不足不自动改预警。",
+]
+APP_CHANGELOG = [*(f"v0.22.593：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

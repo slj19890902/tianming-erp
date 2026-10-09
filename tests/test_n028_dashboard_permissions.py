@@ -246,7 +246,7 @@ def test_dashboard_selected_customer_scope_filters_every_aggregate(tmp_path: Pat
         "today_orders": 1,
         "today_deliveries": 1,
         "today_receipts": 1,
-        "month_unsettled_amount": Decimal("11.00"),
+        "month_unsettled_amount": Decimal("0.00"),  # Draft, unissued statements are not actionable collections.
         "month_settled_amount": Decimal("0.00"),
     }
     assert {card["key"] for card in overview["cards"]} >= {

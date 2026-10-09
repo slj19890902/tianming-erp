@@ -4,6 +4,9 @@ from collections import Counter
 from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
+from typing import Literal
+from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import and_, case, exists, func, or_, select
@@ -57,6 +60,54 @@ from app.services.inventory_read_scope import inventory_summary_read_scope
 router = APIRouter()
 can_read = PermissionChecker("dashboard.view")
 RECONCILIATION_REMINDER_START_DAY = 18
+
+
+class HomeTaskPreferenceRequest(BaseModel):
+    task_id: str = Field(min_length=1, max_length=180)
+    source_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    scope: Literal["personal", "team"] = "personal"
+    state: str = Field(max_length=30)
+    reason: str = Field(default="", max_length=40)
+    remind_on: date | None = None
+    expected_version: int = Field(ge=0)
+    idempotency_key: str = Field(pattern=r"^[A-Za-z0-9_-]{8,120}$")
+
+
+@router.get("/stock-advice/{policy_id}")
+def stock_advice(policy_id: int, db: Session = Depends(get_db), user: User = Depends(can_read)):
+    if not all(has_permission(user, p) for p in ("warehouse.view", "requisition.view")):
+        raise HTTPException(403, "需要库存及报料查看权限")
+    from app.services.home_stock_advice import build_stock_advice
+    visible = None if has_unrestricted_customer_access(user, db) else customer_scope_ids(user, db)
+    warning = next((w for w in _common_box_low_stock_warnings(db, visible) if w['policy_id'] == policy_id), None)
+    if warning is None:
+        raise HTTPException(404, "预警已解除或不在当前可见范围")
+    return build_stock_advice(db, warning=warning, today=beijing_today())
+
+
+@router.post("/task-preferences")
+def update_home_task_preference(payload: HomeTaskPreferenceRequest,
+    db: Session = Depends(get_db), user: User = Depends(can_read)):
+    from app.services.home_task_preferences import replay_mutation, save_preference
+    values = payload.model_dump()
+    visible = None if has_unrestricted_customer_access(user, db) else customer_scope_ids(user, db)
+    try:
+        replay = replay_mutation(db, user=user, payload=values, visible_customer_ids=visible)
+        if replay is not None:
+            return replay
+        overview = dashboard_overview(db=db, user=user)
+        task = next((t for t in overview["workbench"]["tasks"] if t["id"] == payload.task_id), None)
+        if task is None:
+            raise HTTPException(404, "事项已完成或不在当前可见范围，请刷新首页")
+        result = save_preference(db, user=user, payload=values, task=task, today=beijing_today())
+        db.commit()
+        return result
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(409, "提醒已被更新，请刷新后重试") from error
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _customer_delivery_margin_access(
@@ -778,7 +829,8 @@ def _dashboard_target_filter(metric_key: str, statement_month: str) -> dict:
         },
         "pending_payment": {
             "balance_type": "pending_payment",
-            "statement_month": statement_month,
+            "statement_month": "",
+            "all_open": True,
         },
     }
     return dict(filters[metric_key])
@@ -802,7 +854,7 @@ def _authoritative_dashboard_data(
     # the exact page eligibility rules and stable identities without building
     # each page's full, display-heavy payload merely to count pending work.
     from app.api.deliveries import pending_delivery_customer_summaries
-    from app.api.finance import pending_statement_customer_summaries
+    from app.api.finance import pending_statement_customer_summaries, project_customer_months
     from app.api.incoming import dashboard_pending_incoming_rows
     from app.api.requisition import dashboard_pending_requisition_rows
     from app.services.production_workflow import (
@@ -878,7 +930,8 @@ def _authoritative_dashboard_data(
         statement_query = (
             select(Statement, Customer.name.label("customer_name"))
             .join(Customer, Customer.id == Statement.customer_id)
-            .where(Statement.statement_month == statement_month)
+            .where(Statement.statement_month == statement_month,
+                   Statement.confirmation_status == "confirmed")
             .order_by(Statement.id)
         )
         if visible_customer_ids is not None:
@@ -921,6 +974,35 @@ def _authoritative_dashboard_data(
                 int(row["customer_id"]), "未命名客户"
             )
             row["statement_month"] = statement_month
+
+    # Use the same eligibility, frozen settlement party and source-customer
+    # scope as the collections workbench. No month or pagination truncation.
+    payment_rows = []
+    if can_view_finance:
+        finance = project_customer_months(
+            db=db, user=user, all_open=True, workspace="collections",
+            balance_type="pending_payment", paginate=False,
+        )
+        for group in finance["items"]:
+            identity = (f"entity:{group['settlement_entity_id']}" if group.get("settlement_entity_id")
+                        else f"customer:{group['customer_id']}")
+            payment_rows.append({
+                "customer_id": group["customer_id"], "customer_name": group["customer_name"],
+                "_workbench_customer_ids": group["source_customer_ids"],
+                "settlement_identity": identity, "statement_month": group["statement_month"],
+                "amount": group["pending_payment_action_amount"],
+                "source_basis": [(s["id"], str(s.get("pending_payment_action_amount")),
+                                  s.get("version"), s.get("ledger_version")) for s in group["statements"]],
+            })
+    payment_metric = snapshot["metrics"]["pending_payment"]
+    payment_metric.update(
+        identities=sorted({r["settlement_identity"] for r in payment_rows}),
+        count=len({r["settlement_identity"] for r in payment_rows}),
+        amount=str(_money(sum((r["amount"] for r in payment_rows), Decimal("0")))),
+        authoritative_source="finance.current-customer-months / collections / all_open",
+        identity_key="settlement_entity_id or customer_id",
+        amount_formula="confirmed: max(min(invoiced_amount,total_receivable)-settled_amount,0)",
+    )
 
     waiting_count = 0
     due_waiting_count = 0
@@ -1020,7 +1102,7 @@ def _authoritative_dashboard_cards(
         "pending_receipt": ("已正式送货但还没有有效回单的客户", "去回单"),
         "pending_reconciliation": ("按客户结转周期归入本月的待对账客户", "去对账"),
         "pending_invoice": ("本月应收减去已登记发票后的余额", "去开票"),
-        "pending_payment": ("本月应收减去已核销收款后的余额", "去收款"),
+        "pending_payment": ("全部账期已开票、尚未收款的余额", "去收款"),
     }
     result = []
     snapshot = data["snapshot"]
@@ -1929,4 +2011,6 @@ def dashboard_overview(
         warnings=result.get("low_stock_warnings", []), today=today,
         visible_customer_ids=visible_customer_ids,
     )
+    from app.services.home_task_preferences import annotate_tasks
+    annotate_tasks(raw_db, user=user, workbench=result["workbench"], today=today)
     return result

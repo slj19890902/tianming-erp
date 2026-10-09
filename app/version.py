@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.602"
-APP_VERSION_NAME = "订单导入保存结果恢复"
+APP_VERSION = "v0.22.603"
+APP_VERSION_NAME = "生产加工保存结果恢复"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5787,3 +5787,17 @@ APP_VERIFICATION_STEPS = [
     "列表未刷新时只刷新列表；无需为验收重复提交订单或调整真实库存。",
 ]
 APP_CHANGELOG = [*(f"v0.22.602：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "单项加工保存入库前保留原投入、产出和货位；结果未确认时，刷新或重新打开仍可查询原记录。",
+    "同一批来料的原加工结果未核清前，阻止重新提交加工；其他批次仍可正常操作。",
+    "完整确认后显示本次入库数量、位置及加工记录入口；列表读取失败与入库结果分别提示。",
+    "保留部分加工、子件与库存单位换算；空白或不完整返回不会误报成功，切账号后的迟到响应继续受保护。",
+    "本版无数据库迁移，不调整正式历史订单、库存、单价或权限。",
+]
+APP_VERIFICATION_STEPS = [
+    "在报料/生产待加工中查看已有待核对记录，点击“查询原结果”，核对原投入、产出和货位。",
+    "完整确认后查看加工记录；若列表未刷新，只刷新列表。历史证明不足时保留原记录交管理员核对。",
+    "无需为验收额外提交真实加工或调整库存；实际浏览器显示和现场操作仍待管理员确认。",
+]
+APP_CHANGELOG = [*(f"v0.22.603：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

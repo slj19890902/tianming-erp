@@ -1,8 +1,8 @@
 # PRODUCTION-COMPLETION-RESULT-AUDIT-20261010
 
-持续 Goal 的下一最小只读闭环：核对桌面报料/生产中的备库“加工完成、子件入库”保存结果恢复，主入口 static/ui/production-workspace.js 的 group-actions（action=complete；只读比较相邻process/dispose/assemble，不同时改所有流程）。先证据和方案，不实施、不发布。原五环节51检查/21类缺陷已按v593交付，本轮不能重复计数或凑十个Bug。
+持续 Goal 的下一最小只读闭环：核对桌面报料/生产中的备库“加工完成、子件入库”保存结果恢复。实际主入口是 index.html single_job“保存入库”→production-workspace.js saveStockDialog('complete')→stockPrepAction→POST /api/production/stock-preparation/{receipt_item_id}/actions，含actual_input_quantity，默认output_kind=semi。group_job当前按钮是dispose→group-actions，只作为相邻对照；没有页面按钮的group complete不能当主业务缺陷。先证据和方案，不实施、不发布。原五环节51检查/21类缺陷已按v593交付，本轮不能重复计数或凑十个Bug。
 
-按 CODEX_START→NAS AI_START→本卡→ORDER_FLOW→总需求7/14/17及执行章程3～9最小读取。根当前订单恢复候选6640d5369e2d48ecba36be9aefae1afa9ed449db / v602正在串行发布；运行正式以state实时证实，不把候选当已发布。所选生产模块应先与该候选及v601正式108de068比对，变更则报告，不在旧树猜新实现。只读审查现有干净分支，禁止checkout/修改被保留隔离服务引用的树。
+按 CODEX_START→NAS AI_START→本卡→ORDER_FLOW→总需求7/14/17及执行章程3～9最小读取。根订单恢复6640d5369e2d48ecba36be9aefae1afa9ed449db / v602已于本轮完成正式/NAS发布，包9420d69b7eefa3622db0a7dada1bf98bde2ca858ec8dbb932def3b6726396839；后续仍以state实时证实。所选生产模块应先与该正式提交及v601正式108de068比对，变更则报告，不在旧树猜新实现。只读审查现有干净分支，禁止checkout/修改被保留隔离服务引用的树。
 
 主目标：实际完成动作在后端已提交但网络回执丢失、坏回执、列表刷新失败或重复点击/刷新/切账号后，是否会误报、遗失原请求、重复加工/消耗/新增产出。验证数量、流水、冻结用料、版本、客户权限、幂等原key及异载荷。已完成后的只读状态不自动等于当前原请求完整证明；not_found不等于取消。首先定位实际页面按钮→方法→端点→事务的精确调用链。
 

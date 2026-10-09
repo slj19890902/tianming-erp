@@ -27,3 +27,5 @@
 相邻旧测试发现三条基线源码断言过期，当前单列，不冒充全绿：test_p1_21b_mobile_admin_product_search硬数method POST为2但通用请求改为options.method；test_p1_76_mobile_portal期待固定/mobile/回跳但现实现保留path/query/hash；test_p1_128_mobile_warehouse_simple_ui期待桌面3个tab但已有权限控制的盘点审核第4项。均在v594源码存在，相关实现本轮未新增；不为这些旧计数删除既有权限/盘点或扫码回跳能力。后续按当前功能合同维护回归。
 
 2026-10-10 00:04候选v595：整合后mobile-factory-integrated.xml 40项通过（81.15秒），手机图纸、尺寸取用、位置返回三项JS脚本通过。图纸读取只使用已验证的同一份有界字节，缺档/损坏/超限可读4xx；生产任务原冻结图入口不变。签名、NAS新冷备恢复、正式保持与服务资源核验尚须执行，未将候选写为已发布。完整隔离截图报告见mobile-factory-20261009/AUDIT_REPORT.md，320/360/390及短横屏/合成大字已查；真实手机与系统字大仍待现场。
+
+2026-10-10 v595技术发布完成，待管理员人工验收。源码def62a0888be1c4425759f13556768de6d3cd193，包22aadcdfb536b1a85d434039b7f9a1bb66d143d72370ca5ed86d0c2303021300；新冷备独立恢复、323张业务表及附件保持、完整性/FK、健康和静态资源通过。无迁移和正式数据补正。详见FACTORY_RELIABILITY_RELEASE_V595_20261010.md；总Goal继续。

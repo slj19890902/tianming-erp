@@ -70,8 +70,8 @@ from app.services.product_specification import (
 from app.services.secure_uploads import resolve_stored_reference, stored_file_metadata
 from app.services.mobile_product_drawings import (
     HEADERS as PRODUCT_DRAWING_HEADERS, attach_product_drawings, can_preview_product,
-    drawing_file, drawing_preview, failure as drawing_failure,
-    original_media_type, require_drawing_source,
+    drawing_file, drawing_original, drawing_preview, failure as drawing_failure,
+    require_drawing_source,
 )
 from app.services.ui_layout_settings import LAYOUT_ROLES, effective_layout
 from app.models.warehouse_inventory import (
@@ -1140,7 +1140,8 @@ def mobile_product_drawing_content(
     path = drawing_file(source)
     if mode == "preview":
         return Response(drawing_preview(source, path), media_type="image/webp", headers=PRODUCT_DRAWING_HEADERS)
-    return FileResponse(path, media_type=original_media_type(path), headers=PRODUCT_DRAWING_HEADERS)
+    content, media_type = drawing_original(path)
+    return Response(content, media_type=media_type, headers=PRODUCT_DRAWING_HEADERS)
 
 
 def _lot_load_options():

@@ -103,3 +103,33 @@ def test_reverse_processing_rejects_unusable_original_storage(stock_replenishmen
             assert {lot.id: (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed, lot.version)
                     for lot in db.scalars(select(InventoryLot))} == expected
             assert not rows(db)[0]['can_revert']
+
+
+def test_group_reversal_missing_source_location_is_business_conflict(stock_replenishment_app, monkeypatch):
+    """Fail closed if an old/incomplete source projection lacks its location."""
+    from types import SimpleNamespace
+    from test_preparation_history import completed
+    from app.services import stock_preparation, stock_preparation_processing
+
+    app, factory = stock_replenishment_app
+    app.include_router(router, prefix='/api/production')
+    monkeypatch.setattr(stock_preparation_processing, 'auto_plan_receipt', lambda *args: None)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        history, payload = completed(app, factory, client)
+        with factory() as db:
+            first_receipt = db.scalars(select(Job).order_by(Job.id)).first().receipt_item_id
+            before = {lot.id: (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed, lot.version)
+                      for lot in db.scalars(select(InventoryLot))}
+        original = stock_preparation.source
+        def incomplete_source(db, receipt_id):
+            receipt, item, material = original(db, receipt_id)
+            if receipt_id == first_receipt:
+                material = SimpleNamespace(**{**material.__dict__, 'warehouse_location_id': None, 'pallet_item': None})
+            return receipt, item, material
+        monkeypatch.setattr(stock_preparation, 'source', incomplete_source)
+        response = client.post('/api/production/stock-preparation/completions/' + history['preparation_key'] + '/revert', json=payload)
+        assert response.status_code == 409, response.text
+        with factory() as db:
+            assert db.get(Command, payload['operation_key']) is None
+            assert {lot.id: (lot.quantity_available, lot.quantity_reserved, lot.quantity_consumed, lot.version)
+                    for lot in db.scalars(select(InventoryLot))} == before

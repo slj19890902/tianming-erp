@@ -155,7 +155,7 @@ def assemble(db,payload,actor):
     return result
 
 
-def dispose(db,payload,actor):
+def dispose(db,payload,actor,*,result_builder=None):
     key=payload['operation_key'];request=encode(payload);old=db.get(Command,key)
     if old:
         if old.actor_id!=actor.id or old.request_json!=request:prep.fail('操作标识已用于其他内容')
@@ -171,6 +171,8 @@ def dispose(db,payload,actor):
     result=dict(action='dispose',group_key=payload['group_key'],disposition=payload['disposition'],job_ids=[j.id for j in jobs])
     if payload['disposition']=='finished':
         result['assembly']=assemble(db,dict(action='assemble',operation_key=digest([key,'assemble'])[:60],group_key=payload['group_key'],sets=payload['sets'],location_id=payload['location_id'],layout_version=payload['layout_version'],jobs=[dict(job_id=j.id,job_version=j.version,output_version=db.get(InventoryLot,j.output_lot_id).version) for j in jobs]),actor)
+    if result_builder is not None:
+        result=result_builder(db,payload,actor,result)
     db.add(Command(operation_key=key,receipt_item_id=jobs[0].receipt_item_id,request_json=request,result_json=encode(result),actor_id=actor.id));db.flush()
     return result
 

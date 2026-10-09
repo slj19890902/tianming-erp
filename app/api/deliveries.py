@@ -9671,6 +9671,8 @@ def _update_delivery(
     revision_mode: bool = False,
 ) -> dict:
     existing_delivery = _delivery_for_user(db, delivery_id, user)
+    submitted_values = payload.model_dump(exclude={"idempotency_key"})
+    submitted_values["customer_po_supplied"] = ["customer_po" in line.model_fields_set for line in payload.items]
     previous_po = {
         (row.source_type, row.order_item_id if row.source_type == "order" else row.product_id): row.customer_po_snapshot
         for row in db.scalars(select(DeliveryItem).where(
@@ -9689,6 +9691,25 @@ def _update_delivery(
             status_code=409,
             detail="送货单保存后不能切换普通送货与历史补录模式",
         )
+    if historical_backfill:
+        _require_historical_delivery_permissions(user)
+    action = "historical_delivery_update" if historical_backfill else "delivery_update"
+    request_hash = _delivery_request_hash(
+        action,
+        {"delivery_id": delivery_id, **(payload.model_dump(exclude={"idempotency_key"}) if historical_backfill else submitted_values)},
+    )
+    if not revision_mode:
+        replay, replay_record = _delivery_idempotency_replay(
+            db,
+            idempotency_key=payload.idempotency_key,
+            request_hash=request_hash,
+            action=action,
+            actor=user,
+        )
+        if replay is not None:
+            assert replay_record is not None
+            _delivery_for_user(db, replay_record.resource_id, user)
+            return replay
     if historical_backfill:
         _require_historical_delivery_permissions(user)
         if payload.expected_version is None or payload.idempotency_key is None:
@@ -9742,23 +9763,6 @@ def _update_delivery(
                 status_code=409,
                 detail="普通送货单的实际日期不能在编辑明细时改写，请使用受控日期更正",
             )
-    action = "historical_delivery_update" if historical_backfill else "delivery_update"
-    request_hash = _delivery_request_hash(
-        action,
-        {"delivery_id": delivery_id, **payload.model_dump(exclude={"idempotency_key"})},
-    )
-    if not revision_mode:
-        replay, replay_record = _delivery_idempotency_replay(
-            db,
-            idempotency_key=payload.idempotency_key,
-            request_hash=request_hash,
-            action=action,
-            actor=user,
-        )
-        if replay is not None:
-            assert replay_record is not None
-            _delivery_for_user(db, replay_record.resource_id, user)
-            return replay
     try:
         _validate_delivery_source_contract(payload.source_mode, payload.items)
     except ValueError as error:

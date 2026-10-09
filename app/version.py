@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.601"
-APP_VERSION_NAME = "桌面盘点审核结果核对"
+APP_VERSION = "v0.22.602"
+APP_VERSION_NAME = "订单导入保存结果恢复"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5773,3 +5773,17 @@ APP_VERIFICATION_STEPS = [
     "审核成功但列表未刷新时只刷新列表；无需为验收额外调整真实库存。",
 ]
 APP_CHANGELOG = [*(f"v0.22.601：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "导入订单在保存前保留原文件、账号和完整请求；网络异常或空回执后，刷新页面仍可核对原保存结果。",
+    "查询原结果与按原内容继续保存分别显示，未查到结果不会自动重建订单；同来源重放仍只扣一次库存。",
+    "只有原内容与完整保存证明相符才确认成功，单号和查看入口持续显示，列表刷新失败不会重复提交。",
+    "旧保存记录提供原订单追溯入口；证明不足时保留原请求，切账号和迟到响应继续受保护。",
+    "本版无数据库迁移，不调整正式历史订单、库存、单价或权限。",
+]
+APP_VERIFICATION_STEPS = [
+    "打开订单导入；如有待核对记录，确认显示原文件和内容，点击“查询原结果”查看原订单。",
+    "已确认成功时核对单号及查看入口；若只提示历史记录，则查看原单并核对，勿重复导入建单。",
+    "列表未刷新时只刷新列表；无需为验收重复提交订单或调整真实库存。",
+]
+APP_CHANGELOG = [*(f"v0.22.602：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

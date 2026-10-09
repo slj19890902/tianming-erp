@@ -31,7 +31,7 @@
     try { pending = JSON.parse(sessionStorage.getItem(pendingKey) || "null"); } catch (_) {}
     const status = text => { get("dsStatus").textContent = text; };
     const qtyText = item => `可用 ${item.available}${item.unit} · 预占 ${item.reserved}${item.unit}`;
-    const close = () => { if (busy) return; selected = null; detailSerial++; get("dsDetail").hidden = true; };
+    const close = () => { if (busy) return; window.TmProductDrawings?.disposeWithin(get("dsDetail")); selected = null; detailSerial++; get("dsDetail").hidden = true; };
     function readCriteria() {
       const params = new URLSearchParams({kind: get("dsKind").value});
       for (const axis of ["length","width",...(params.get("kind")==="box"?["height"]:[])]) {
@@ -50,13 +50,14 @@
       const token = ++serial;
       try {
         if (reset || !criteria) { criteria = readCriteria(); offset = 0; }
-        close(); status("查询中…"); get("dsResults").replaceChildren(); get("dsPager").hidden=true;
+        close(); status("查询中…"); window.TmProductDrawings?.disposeWithin(get("dsResults")); get("dsResults").replaceChildren(); get("dsPager").hidden=true;
         const params = new URLSearchParams(criteria); params.set("offset",offset); params.set("limit",30);
         const data = await apiGet(base+"?"+params);
         if (token!==serial) return;
         items = data.items; status(`找到 ${data.total} 个库存批次 · 按尺寸接近度排列`);
-        get("dsResults").innerHTML = items.map((item,index)=>`<button class="ds-result" type="button" data-index="${index}"><strong>${esc(item.code || item.name)}</strong>　${esc(item.dimensions.filter(v=>v!=null).join("×"))} mm<br>${esc(item.name)} · ${esc(item.customer)}<br><small>${esc(qtyText(item))}${item.status==="frozen"?" · 冻结":""}　查看位置 ›</small></button>`).join("");
+        get("dsResults").innerHTML = items.map((item,index)=>`<div class="ds-result-group" data-index="${index}"><button class="ds-result" type="button" data-index="${index}"><strong>${esc(item.code || item.name)}</strong>　${esc(item.dimensions.filter(v=>v!=null).join("×"))} mm<br>${esc(item.name)} · ${esc(item.customer)}<br><small>${esc(qtyText(item))}${item.status==="frozen"?" · 冻结":""}　查看位置 ›</small></button></div>`).join("");
         get("dsResults").querySelectorAll("button").forEach(button=>button.onclick=()=>detail(items[Number(button.dataset.index)],data.can_execute));
+        get("dsResults").querySelectorAll(".ds-result-group").forEach(group=>window.TmProductDrawings?.append(group,items[Number(group.dataset.index)]));
         get("dsPager").hidden=data.total<=30; get("dsPrev").disabled=offset===0; get("dsNext").disabled=offset+30>=data.total;
         get("dsPage").textContent=`${Math.floor(offset/30)+1} / ${Math.max(1,Math.ceil(data.total/30))}`;
       } catch (error) { if(token===serial) status(error.message); }
@@ -65,6 +66,7 @@
       if (busy) return;
       selected = item; const token = ++detailSerial;
       const restore = pending?.lotId===item.id;
+      window.TmProductDrawings?.disposeWithin(get("dsDetail"));
       get("dsDetail").hidden=false;
       get("dsDetail").innerHTML=`<strong>${esc(item.code)} · ${esc(item.name)}</strong><p>${esc(item.location_name || "位置待核实")}</p>
         <p>${esc(qtyText(item))} · 实物 ${item.physical}${esc(item.unit)}${item.damaged?` · 损坏 ${item.damaged}${esc(item.unit)}`:""}</p>
@@ -72,6 +74,7 @@
         <div class="ds-grid"><label>取用数量（${esc(item.unit)}）<input id="dsQuantity" inputmode="numeric" type="text" maxlength="10" placeholder="数量"></label><label>用途<select id="dsPurpose"><option value="cash">现金取用</option><option value="sample">免费打样</option></select></label></div>
         <div class="ds-actions"><button class="ds-take" id="dsTake" type="button" ${!canExecute||(!item.can_take&&!restore)?"disabled":""}>${restore?"重试取用":"取用"}</button><button class="ds-cancel" id="dsCancel" type="button">取消</button></div>
         <p id="dsTakeStatus" role="status"></p><details><summary>最近取用记录</summary><div id="dsHistory">加载中…</div></details>`;
+      window.TmProductDrawings?.append(get("dsDetail"), item);
       if (restore) {get("dsQuantity").value=pending.body.quantity;get("dsPurpose").value=pending.body.purpose;}
       get("dsQuantity").disabled=restore;get("dsPurpose").disabled=restore;
       get("dsCancel").onclick=close;
@@ -115,7 +118,7 @@
     get("dsForm").onsubmit=event=>{event.preventDefault();search(true);};
     get("dsPrev").onclick=()=>{if(!busy){offset=Math.max(0,offset-30);search();}};
     get("dsNext").onclick=()=>{if(!busy){offset+=30;search();}};
-    get("dsClear").onclick=()=>{if(busy)return;serial++;criteria=null;offset=0;get("dsForm").reset();get("ds-height-row").hidden=true;get("dsResults").replaceChildren();get("dsPager").hidden=true;close();status("");};
+    get("dsClear").onclick=()=>{if(busy)return;serial++;criteria=null;offset=0;get("dsForm").reset();get("ds-height-row").hidden=true;window.TmProductDrawings?.disposeWithin(get("dsResults"));get("dsResults").replaceChildren();get("dsPager").hidden=true;close();status("");};
     get("dsRecover").onclick=async()=>{
       if(busy||!pending)return;
       try{const data=await apiGet(base+"/"+pending.lotId+"/detail");await detail(data.item,data.can_execute);}

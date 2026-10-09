@@ -218,8 +218,12 @@ def reverse(db, *, key, payload, actor):
     # Serialize with map/pallet changes before checking the original physical
     # placement. A failed claim must roll back the complete reversal.
     from app.services.warehouse_inventory import _claim_inventory_restore_destination
-    locations = {prep.source(db, job.receipt_item_id)[2].warehouse_location_id
-                 for job in jobs if prep.source(db, job.receipt_item_id)[2] is not None}
+    locations = set()
+    for job in jobs:
+        source = prep.source(db, job.receipt_item_id)[2]
+        if source is None or source.warehouse_location_id is None:
+            prep.fail('原材料位置缺失，请先核对实际存放位置')
+        locations.add(source.warehouse_location_id)
     for location_id in sorted(locations):
         _claim_inventory_restore_destination(db, location_id)
     block = reverse_block(db, jobs)

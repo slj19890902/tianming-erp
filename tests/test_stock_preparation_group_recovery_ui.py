@@ -14,5 +14,5 @@ def test_actual_group_preparation_recovery_page():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     evidence = json.loads(result.stdout)
-    assert evidence["total"] >= 55
+    assert evidence["total"] >= 57
     assert evidence["passed"] == evidence["total"]

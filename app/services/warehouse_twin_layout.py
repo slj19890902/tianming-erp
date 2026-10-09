@@ -83,8 +83,8 @@ def resolve_warehouse_twin_layout_path(path: Path | None = None) -> Path:
         return path
     if TWIN_LAYOUT_RUNTIME_PATH.exists():
         return TWIN_LAYOUT_RUNTIME_PATH
-    if os.getenv("ERP_UAT_ROOT"):
-        # A UAT run must never fall back to a shared code-tree layout.
+    if os.getenv("ERP_UAT_ROOT") or os.getenv("ERP_ENVIRONMENT", "").strip().lower() == "production":
+        # Formal operation and UAT must never silently revive the seed map.
         return TWIN_LAYOUT_RUNTIME_PATH
     return TWIN_LAYOUT_PATH
 

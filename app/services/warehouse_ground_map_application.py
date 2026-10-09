@@ -18,7 +18,7 @@ from app.models.warehouse_inventory import (
     WarehouseGroundLayoutSlot, WarehouseLocation,
 )
 from app.services.audit_log import append_audit_event
-from app.services.warehouse_area_activation import WarehouseAreaActivationError
+from app.services.warehouse_area_activation import WarehouseAreaActivationError, warehouse_floor_for_code
 from app.services.warehouse_floor1_candidate_planner import (
     Floor1CandidatePlanningError, _percent_round_trip_epsilon, validate_capacity_layout_slots_for_zone,
 )
@@ -58,10 +58,14 @@ def application_matches(receipt, *, plan_id, plan_version, area_id, policy,
 
 
 def _published_floor_plans(db, floor_layout):
+    floor = warehouse_floor_for_code(db, floor_layout["floor_code"])
+    if floor is None or floor.construction_status != "enabled":
+        return []
     return list(db.scalars(select(WarehouseGroundLayoutPlan)
         .join(WarehouseArea, WarehouseArea.id == WarehouseGroundLayoutPlan.area_id)
         .join(WarehouseFloor, WarehouseFloor.id == WarehouseArea.floor_id)
-        .where(WarehouseFloor.floor_code == floor_layout["floor_code"],
+        .where(WarehouseFloor.id == floor.id,
+               WarehouseArea.construction_status == "enabled",
                WarehouseGroundLayoutPlan.status == "published")
         .options(selectinload(WarehouseGroundLayoutPlan.area).selectinload(WarehouseArea.storage_policy),
                  selectinload(WarehouseGroundLayoutPlan.slots)

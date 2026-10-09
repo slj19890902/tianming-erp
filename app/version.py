@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.576"
-APP_VERSION_NAME = "货架标签地图版本关联修复"
+APP_VERSION = "v0.22.577"
+APP_VERSION_NAME = "全地图货架正式版本统一"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5475,3 +5475,14 @@ APP_VERIFICATION_STEPS = [
     "后续单独发布区域设置后，抽查其他未变化货架的产品标签仍可预览；实体出纸由管理员确认。",
 ]
 APP_CHANGELOG = [*(f"v0.22.576：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "统一各楼层已发布区域的地图版本关联，一楼模具架、普通货架和功能区域同步核对，避免标签误报未发布。",
+    "发布区域时同时核对整层关联；不同步即撤回，正式地图缺失时禁止回退旧底图。",
+    "保留货架层格、库存数量和成本、模具位置及历史标签；版本补正全过程留痕。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，切换一楼、三楼、四楼，核对货架编号、层格、模具位置与原来一致。",
+    "打开原产品标签及模具货架标签，核对当前位置和二维码；实体出纸由管理员确认。",
+]
+APP_CHANGELOG = [*(f"v0.22.577：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

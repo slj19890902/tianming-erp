@@ -12083,13 +12083,23 @@ def _publish_twin_layout_draft_locked(
                 operation_key=payload.operation_key, request=request,
                 excluded_feature_id=isolated_area_feature_id,
             )
+        from app.services.warehouse_map_publication import (
+            carry_unchanged_area_policies, assert_current_floor_bindings,
+        )
+        area_map_application_count = carry_unchanged_area_policies(
+            db, previous_floor_layout=published_floor_before,
+            floor_layout=load_warehouse_twin_floor(floor_code), actor=user,
+            operation_key=payload.operation_key, request=request,
+            excluded_feature_id=isolated_area_feature_id,
+        )
+        assert_current_floor_bindings(db, load_warehouse_twin_floor(floor_code))
         legacy_name_update_count = int(
             getattr(published_policies, "legacy_name_update_count", 0)
         )
         formal_master_changed = bool(
             published_policies or legacy_name_update_count or rack_master_changed
         )
-        if result.applied or formal_master_changed or ground_map_application_count or rack_map_application_count:
+        if result.applied or formal_master_changed or ground_map_application_count or rack_map_application_count or area_map_application_count:
             _twin_layout_asset_log(
             db,
             request=request,
@@ -12102,6 +12112,7 @@ def _publish_twin_layout_draft_locked(
                 **result.value,
                 "ground_map_application_count": ground_map_application_count,
                 "rack_map_application_count": rack_map_application_count,
+                "area_map_application_count": area_map_application_count,
                 "location_coordinate_adjustments": coordinate_adjustments,
                 "formal_area_count": len(published_policies),
                 "formal_areas": [

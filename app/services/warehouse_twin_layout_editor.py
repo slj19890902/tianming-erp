@@ -158,9 +158,9 @@ def _published_layout_paths(explicit_path: Path | None = None) -> _PublishedLayo
     runtime_target = TWIN_LAYOUT_PATH
     if runtime_target.exists():
         return _PublishedLayoutPaths(source=runtime_target, target=runtime_target)
-    if os.getenv("ERP_UAT_ROOT"):
+    if os.getenv("ERP_UAT_ROOT") or os.getenv("ERP_ENVIRONMENT", "").strip().lower() == "production":
         raise WarehouseTwinLayoutEditNotFoundError(
-            "隔离 UAT 运行态地图不存在，拒绝回退共享代码树基线"
+            "正式运行态地图不存在，拒绝回退旧底图"
         )
     return _PublishedLayoutPaths(source=TWIN_LAYOUT_BASELINE_PATH, target=runtime_target)
 

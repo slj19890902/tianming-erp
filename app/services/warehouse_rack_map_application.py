@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 from app.models.warehouse_inventory import WarehouseArea, WarehouseFloor
 from app.services.audit_log import append_audit_event
 from app.services.warehouse_area_activation import (
-    WarehouseAreaActivationError, _advance_policy_version, policy_inventory_types,
+    WarehouseAreaActivationError, _advance_policy_version, policy_inventory_types, warehouse_floor_for_code,
 )
 
 
@@ -63,9 +63,11 @@ def carry_unchanged_rack_policies(db, *, previous_floor_layout, floor_layout,
                                 actor, operation_key, request=None,
                                 excluded_feature_id=None, area_ids=None, audit_source="web"):
     """No commit: caller owns map/SQL rollback and the publication transaction."""
-    query = (select(WarehouseArea).join(WarehouseFloor)
-             .where(WarehouseFloor.floor_code == floor_layout["floor_code"],
-                    WarehouseFloor.construction_status == "enabled")
+    floor = warehouse_floor_for_code(db, floor_layout["floor_code"])
+    if floor is None or floor.construction_status != "enabled":
+        return 0
+    query = (select(WarehouseArea)
+             .where(WarehouseArea.floor_id == floor.id)
              .options(selectinload(WarehouseArea.storage_policy)))
     if area_ids is not None:
         query = query.where(WarehouseArea.id.in_(area_ids))

@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from app.services.product_unit_labels import product_unit_label
 from app.core.sheet_dimensions import sheet_dimension_number
 
 from app.services.replenishment_receipt_progress import receipt_progress
@@ -1398,6 +1400,7 @@ def stock_policy_dict(
         "customer_name": policy.customer.name if policy.customer else None,
         "product_code": policy.product.product_code if policy.product else None,
         "product_name": policy.product.product_name if policy.product else None,
+        "unit_label": product_unit_label(policy.product) if policy.product else "",
         "material_code": policy.material_code_snapshot,
         "layer_count": policy.layer_count,
         "flute_type": policy.flute_type,

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.product_unit_labels import order_unit_label
 from app.services.sheet_cutting_settings import theoretical_order_yield, order_yield_mode
 from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number, validate_sheet_dimensions
 
@@ -5230,7 +5231,7 @@ def _requisition_hold_requirement_preview(
         "live_order_item_exists": False,
         "can_restore_to_pending": False,
         "order_quantity": int(hold.quantity_snapshot or 0),
-        "order_unit_label": "只",
+        "order_unit_label": "单位待完善",
         "physical_required_piece_qty": None,
         "physical_requisition_qty": None,
         "component_requirements": [],
@@ -5340,7 +5341,7 @@ def _requisition_hold_requirement_preview(
         "live_order_item_exists": True,
         "can_restore_to_pending": True,
         "order_quantity": live_quantity,
-        "order_unit_label": "套" if is_split_box else "只",
+        "order_unit_label": order_unit_label(item, product),
         "physical_required_piece_qty": int(
             summary.get("required_piece_qty") or 0
         ),
@@ -10145,6 +10146,7 @@ def _pending_requisitions_full_payload(
                         fallback_text=item.snapshot_material,
                     ),
                     "quantity": item.quantity,
+                    "order_unit_label": order_unit_label(item, product),
                     "delivery_date": order.delivery_date,
                     "inventory_deducted_qty": 0,
                     "legacy_inventory_deducted_qty": item.inventory_deducted_qty,
@@ -10282,6 +10284,7 @@ def _pending_requisitions_full_payload(
                         fallback_text=item.snapshot_material,
                     ),
                     "quantity": item.quantity,
+                    "order_unit_label": order_unit_label(item, product),
                     "delivery_date": order.delivery_date,
                     "inventory_deducted_qty": 0,
                     "legacy_inventory_deducted_qty": item.inventory_deducted_qty,
@@ -10386,6 +10389,7 @@ def _pending_requisitions_full_payload(
                     fallback_text=item.snapshot_material,
                 ),
                 "quantity": item.quantity,
+                "order_unit_label": order_unit_label(item, product),
                 "delivery_date": order.delivery_date,
                 "inventory_deducted_qty": 0,
                 "legacy_inventory_deducted_qty": item.inventory_deducted_qty,
@@ -12693,6 +12697,7 @@ def list_requisition_items(
                 "specification": resolved_product_specification(item.snapshot_spec, product),
                 "material": item.snapshot_material,
                 "quantity": item.quantity,
+                "order_unit_label": order_unit_label(item, product),
                 "delivery_date": order.delivery_date,
                 "material_status": item.material_status,
             }

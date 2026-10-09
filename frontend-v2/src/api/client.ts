@@ -146,6 +146,8 @@ export interface Product {
   customer_material_code?: string | null
   product_name: string
   unit?: string | null
+  unit_label?: string | null
+  unit_needs_review?: boolean
   material_id?: number | null
   material_code?: string | null
   default_material_text?: string | null
@@ -266,6 +268,7 @@ export interface HistorySuggestion {
  * requisition_status ∈ {已报料, 供应商已排单} 且 material_status=pending。
  */
 export interface IncomingItem {
+  order_unit_label?: string | null
   item_id: number
   order_id: number
   order_number: string

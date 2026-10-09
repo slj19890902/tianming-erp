@@ -48,7 +48,7 @@ def _print_styles(source: str) -> str:
     return "\n".join(styles)
 
 
-def _render_labels(layout: dict, quantities: list[int]) -> str:
+def _render_labels(layout: dict, quantities: list[int], unit_label: str | None = None) -> str:
     source = PRINT_PAGE.read_text(encoding="utf-8")
     suffix_body = _function_source(
         source,
@@ -77,7 +77,7 @@ const escapeHtml = (value) => String(value ?? "")
 const requiredText = (value) => typeof value === "string" && value.trim() ? value.trim() : "";
 const DEFAULT_QUANTITY_FIXED_SUFFIX = "只/捆";
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
-function quantityFixedSuffix(element) {{{suffix_body}
+function quantityFixedSuffix(element, label = null) {{{suffix_body}
 function layoutElementValue(label, elementId) {{{value_body}
 function layoutDrivenLabelHtml(label, layout) {{{renderer_body}
 const layout = {json.dumps(layout, ensure_ascii=False)};
@@ -90,6 +90,7 @@ const labels = quantities.map((quantity, index) => ({{
   product_name:"HIDDEN-PRODUCT-NAME",
   specification:"380x260x220mm",
   quantity,
+  unit_label:{json.dumps(unit_label, ensure_ascii=False)},
 }}));
 process.stdout.write(labels.map((label) => layoutDrivenLabelHtml(label, layout)).join(""));
 """
@@ -103,9 +104,9 @@ process.stdout.write(labels.map((label) => layoutDrivenLabelHtml(label, layout))
     return result.stdout
 
 
-def _write_fixture(path: Path, layout: dict, quantities: list[int]) -> None:
+def _write_fixture(path: Path, layout: dict, quantities: list[int], unit_label: str | None = None) -> None:
     source = PRINT_PAGE.read_text(encoding="utf-8")
-    markup = _render_labels(layout, quantities)
+    markup = _render_labels(layout, quantities, unit_label)
     path.write_text(
         f"""<!doctype html>
 <html lang="zh-CN" data-template="current_40x30_v2">
@@ -176,10 +177,12 @@ def _write_preflight_fixture(path: Path) -> None:
         "runReleaseOperation",
     )
     layout = copy.deepcopy(default_layout())
-    product_code = next(
-        element for element in layout["elements"] if element["id"] == "product_code"
-    )
-    product_code["width_mm"] = 1.2
+    # Product text now auto-fits. Quantity stays at its selected size, so it
+    # exercises the actual non-shrinking overflow guard instead of old behavior.
+    quantity = next(element for element in layout["elements"] if element["id"] == "quantity")
+    quantity["width_mm"] = 1.2
+    fit_body = _function_source(source, "fitElement", "fitLayoutText")
+    fit_layout_body = _function_source(source, "fitLayoutText", "validateRenderedLabels")
     document = f"""<!doctype html>
 <html lang="zh-CN" data-template="current_40x30_v2">
 <head><meta charset="utf-8">{_print_styles(source)}</head>
@@ -195,9 +198,9 @@ const escapeHtml = (value) => String(value ?? "")
 const requiredText = (value) => typeof value === "string" && value.trim() ? value.trim() : "";
 const DEFAULT_QUANTITY_FIXED_SUFFIX = "只/捆";
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
-const LAYOUT_ELEMENT_LABELS = {{product_code:"存货编码"}};
+const LAYOUT_ELEMENT_LABELS = {{product_code:"存货编码",quantity:"数量"}};
 const deepClone = (value) => JSON.parse(JSON.stringify(value));
-function quantityFixedSuffix(element) {{{suffix_body}
+function quantityFixedSuffix(element, label = null) {{{suffix_body}
 function layoutElementValue(label, elementId) {{{value_body}
 function layoutDrivenLabelHtml(label, layout) {{{renderer_body}
 let editorLayout = {json.dumps(layout, ensure_ascii=False)};
@@ -219,6 +222,8 @@ const showLayoutStatus = (message, kind="") => {{
   document.body.dataset.status = message;
   document.body.dataset.kind = kind;
 }};
+function fitElement(element) {{{fit_body}
+function fitLayoutText(surface) {{{fit_layout_body}
 async function preflightEditorLayout() {{{preflight_body}
 async function saveLayoutDraft({{quiet=false}} = {{}}) {{{save_body}
 (async () => {{
@@ -310,7 +315,7 @@ def test_editor_preflight_blocks_overflow_before_any_layout_write(
     assert 'data-saved="false"' in dom
     assert 'data-post-calls="0"' in dom
     assert 'data-kind="error"' in dom
-    assert "存货编码在当前宽高和字号下无法完整显示" in dom
+    assert "数量在当前宽高和字号下无法完整显示" in dom
 
 
 @pytest.mark.parametrize("label_count", (1, 2, 30, 300))
@@ -373,3 +378,17 @@ def test_production_layout_pdf_uses_explicit_empty_and_legacy_suffix_semantics(
     if fixed_suffix == "":
         assert "只" not in text
         assert "捆" not in text
+
+
+@pytest.mark.parametrize('unit', ['片','套','只'])
+def test_new_label_snapshot_prints_its_frozen_unit(unit, headless_browser, tmp_path):
+    if PdfReader is None:
+        pytest.skip('pypdf required')
+    fixture=tmp_path/f'unit-{unit}.html'; output=tmp_path/f'unit-{unit}.pdf'
+    _write_fixture(fixture,_quantity_layout('只/捆'),[50],unit)
+    _print_to_pdf(headless_browser,fixture,output,tmp_path)
+    reader=PdfReader(output)
+    assert len(reader.pages)==1
+    assert f'50{unit}/捆' in re.sub(r'\s+','',reader.pages[0].extract_text() or '')
+    # An explicit custom suffix remains the administrator's chosen text.
+    assert '箱装' in _render_labels(_quantity_layout('箱装'),[50],unit)

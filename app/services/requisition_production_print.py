@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.product_unit_labels import product_unit_label, order_unit_label
 from app.core.sheet_dimensions import sheet_dimension_number
 
 import hashlib
@@ -795,9 +796,7 @@ def build_supplier_requisition_production_package(
             "specification": specification,
             "planned_finished_quantity": int(item.quantity or 0),
             "finished_unit": "片" if component_snapshot is not None else (
-                (order_item.sales_unit_snapshot if order_item is not None else None)
-                or (product.unit if product is not None else None)
-                or ("张" if layout_kind == "liner" else "只")),
+                order_unit_label(order_item, product) or "单位待完善"),
             "requisition_quantity": int(item.requisition_qty or 0),
             "requisition_unit": "张",
             "report_length_mm": item.report_length_mm or order.report_length_mm,
@@ -1395,7 +1394,7 @@ def build_stock_replenishment_production_package(
         remaining_quantity = progress['remaining_quantity']
         output_factor = max(int(item.stock_yield_per_sheet or 0), 1)
         is_semi_finished = item.target_inventory_type == "semi_finished"
-        output_unit = "张" if is_semi_finished else "只"
+        output_unit = "张" if is_semi_finished else (product_unit_label(product) or "单位待完善")
         # The replenishment line is already stored in its target inventory
         # unit: board sheets for semi-finished stock and finished pieces for a
         # direct-finished line.  Never multiply that frozen plan by yield.

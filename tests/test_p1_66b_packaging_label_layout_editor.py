@@ -491,13 +491,9 @@ def test_hidden_element_and_fixed_suffix_are_frozen_without_deleting_business_da
             first_payload["label_layout"]["layout"], "quantity"
         )["fixed_suffix"] == "只"
         assert all(label["product_name"] for label in first_payload["labels"])
-        assert [label["quantity"] for label in first_payload["labels"]] == [
-            5,
-            5,
-            5,
-            5,
-            3,
-        ]
+        # The four live orders contain 200 + 210 + 220 + 230 units. The
+        # current planner ignores the obsolete 23-unit task label snapshot.
+        assert [label["quantity"] for label in first_payload["labels"]] == [5] * 172
 
         prepared = client.post(
             "/api/requisition/supplier-orders/"
@@ -673,7 +669,7 @@ const escapeHtml = (value) => String(value ?? "")
 const requiredText = (value) => typeof value === "string" && value.trim() ? value.trim() : "";
 const DEFAULT_QUANTITY_FIXED_SUFFIX = "只/捆";
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
-function quantityFixedSuffix(element) {{{suffix_body}
+function quantityFixedSuffix(element, label = null) {{{suffix_body}
 function layoutElementValue(label, elementId) {{{value_body}
 function layoutDrivenLabelHtml(label, layout) {{{renderer_body}
 const label = {{

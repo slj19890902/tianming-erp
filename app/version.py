@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.587"
+APP_VERSION = "v0.22.588"
 APP_VERSION_NAME = "共用成品库存预警数量一致"
 APP_BUILD_DATE = "2026-10-09"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5591,6 +5591,17 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.586：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 APP_CHANGES = [
+    "组合前零件按片、BOM成品按套，无需结合按片，粘贴或打钉按只统一显示。",
+    "工艺缺失的旧产品保留原单位并提示待完善，修改无关资料不会自动补造结合工艺。",
+    "常用箱、新订单、报料生产、库存和新标签衔接统一名称；历史冻结单据与库存数量保持。",
+]
+APP_VERIFICATION_STEPS = [
+    "在常用箱查看普通平片、粘贴纸箱和BOM成品，核对片、只、套及缺工艺产品的待完善提示。",
+    "查看同产品的新订单、仓库和生产打印单位；采购纸板仍为张，历史单据沿用原冻结单位。",
+]
+APP_CHANGELOG = [*(f"v0.22.587：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
     "库存预警与常用箱预警设置纳入已确认共用的成品批次，两客户读取同一批实物余额。",
     "同一批次只计算一次，保留实际库存、可分配和已占用数量的区别；未共用、暂停或资料变化仍遵循原门禁。",
     "仅修正库存读取，不新增库存，不改变货位、归属、订单、送货及客户各自的预警线。",
@@ -5599,4 +5610,4 @@ APP_VERIFICATION_STEPS = [
     "刷新库存预警，分别查看研光、光洋80012149，核对库存均为同一实际余额，发布核对时为20。",
     "研光预警线仍为50，库存20继续提示不足；常用箱预警设置里的库存与预警页保持一致。",
 ]
-APP_CHANGELOG = [*(f"v0.22.587：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.588：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

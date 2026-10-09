@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.product_unit_labels import order_unit_label
 from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number
 
 import hashlib
@@ -1624,6 +1625,7 @@ def _stock_replenishment_pending_rows(
                     clean_supplier_flute_type(item.flute_type),
                 ),
                 "quantity": item.quantity,
+                "order_unit_label": "张",
                 "delivery_date": None,
                 "order_status": order.status,
                 "material_status": "pending",
@@ -2326,6 +2328,7 @@ def _rows(
                 "material": req.material_snapshot or item.snapshot_material,
                 "flute_type": item.flute_type,
                 "quantity": item.quantity,
+                "order_unit_label": order_unit_label(item, product),
                 "delivery_date": order.delivery_date,
                 "order_status": order.status,
                 "material_status": item.material_status,
@@ -3110,6 +3113,7 @@ def _stock_replenishment_receipt_row(
             clean_supplier_flute_type(item.flute_type),
         ),
         "quantity": item.quantity,
+        "order_unit_label": "张",
         "delivery_date": None,
         "order_status": order.status,
         "material_status": "received",
@@ -3536,6 +3540,7 @@ def _receipt_fact_rows(
                 flute_type,
             ),
             "quantity": item.quantity,
+            "order_unit_label": order_unit_label(item, product),
             "delivery_date": order.delivery_date,
             "order_status": order.status,
             "material_status": item.material_status,

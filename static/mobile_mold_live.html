@@ -80,7 +80,7 @@
       return status;
     }
     function task(row,allowChoice){
-      const quantity=row.is_component_task?`${row.order_quantity} 片（父单 ${row.parent_order_quantity} 套）`:`${row.order_quantity} 只`;
+      const quantity=row.is_component_task?`${row.order_quantity} 片（父单 ${row.parent_order_quantity} 套）`:`${row.order_quantity} ${h(row.output_unit || "单位待完善")}`;
       const action=allowChoice&&!scanEvent?`<div class="task-actions"><button class="scan-button" type="button" data-scan-task="${h(row.production_task_id)}" ${scanPending?"disabled":""}>登记本次扫码到该任务</button></div>`:"";
       return `<div class="task"><div class="row"><div class="title">${h(row.customer_name||"客户待完善")}</div><span class="tag ${row.task_status==="completed"?"green":""}">${h(row.task_status_label)}</span></div><div class="muted">${h(row.product_name||row.product_code||"")}${row.delivery_date?` · 交期 ${h(row.delivery_date)}`:""}</div><div class="grid task-overview">${TMOrderReference.html(row)}${field("存货编码",row.product_code)}${field("该存货编码订单数量",quantity)}${field("具体进度状态",taskProgress(row))}</div>${taskDetail(row)}${materialBlock(row.material)}${action}</div>`;
     }

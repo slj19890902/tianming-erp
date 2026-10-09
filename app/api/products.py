@@ -1380,10 +1380,15 @@ def _validated_product_versioned_updates(
             detail="虚拟组合套装已有 BOM，不能直接改为实体产品；请保留虚拟父件标记",
         )
     supply_updates = _normalize_product_external_supply(db, payload=payload, existing=product)
+    from app.services.product_unit_labels import product_unit_info
+    preserve_unknown_joining = product_unit_info(product)["unit_needs_review"] and (
+        str(payload.production_process or "").strip() == str(product.production_process or "").strip())
+    if preserve_unknown_joining:
+        payload.production_process = product.production_process
     if not (
         product.supply_mode == "external_purchase"
         and not _external_supply_requested(payload)
-    ):
+    ) and not preserve_unknown_joining:
         _normalize_product_joining_method(payload)
     _normalize_product_mold_binding(payload)
     _validate_product_sheet_cutting(payload)
@@ -1470,10 +1475,12 @@ def _product_or_404(db: Session, product_id: int) -> Product:
 
 
 def _response(product: Product, user: User, *, bom_profiles: dict | None = None) -> dict:
+    from app.services.product_unit_labels import product_unit_info
     from app.services.legacy_product_classification import classification
     from app.services.customer_document_fields import document_snapshot, source_candidates
     data = {
         **_product_payload_snapshot(product),
+        **product_unit_info(product),
         "classification": classification(product),
         "customer_document": document_snapshot(product),
         "customer_document_candidates": source_candidates(product),
@@ -1563,11 +1570,14 @@ def _response(product: Product, user: User, *, bom_profiles: dict | None = None)
 
 def _summary_response(product: Product, user: User, *, bom_profiles: dict | None = None) -> dict:
     """Return only fields used by the paginated common-box list."""
+    from app.services.product_unit_labels import product_unit_info
     material = product.material
     from app.services.legacy_product_classification import classification
     from app.services.customer_document_fields import document_snapshot
     data = {
         "id": product.id,
+        "unit": product.unit,
+        **product_unit_info(product),
         "classification": classification(product),
         "customer_id": product.customer_id,
         "product_code": product.product_code,
@@ -2639,6 +2649,10 @@ def _create_product(payload, db, user, *, commit=True) -> dict:
         manual_modified_at=beijing_now_naive(),
     )
     data.update(supply_updates)
+    from app.services.product_unit_labels import product_unit_info
+    unit_info = product_unit_info(data)
+    if not unit_info["unit_needs_review"] and unit_info["unit_label"]:
+        data["unit"] = unit_info["unit_label"]
     product = Product(**data)
     try:
         db.add(product)

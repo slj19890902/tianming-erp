@@ -137,7 +137,7 @@ onUnmounted(() => {
           </div>
           <div class="receive-meta">
             <span>客户：{{ item.customer_name || '—' }}</span>
-            <span>订单：<strong class="tm-mono">{{ item.quantity ?? '—' }} 只</strong></span>
+            <span>订单：<strong class="tm-mono">{{ item.quantity ?? '—' }} {{ item.order_unit_label || '单位待完善' }}</strong></span>
             <span>报料：<strong class="tm-mono">{{ item.planned_quantity ?? item.requisition_qty ?? '—' }} 张</strong></span>
             <span>已收：{{ item.cumulative_received_quantity ?? 0 }} 张</span>
             <span>待收：<strong class="tm-mono">{{ item.remaining_quantity ?? item.incoming_quantity ?? '—' }} 张</strong></span>
@@ -172,7 +172,7 @@ onUnmounted(() => {
             <el-tag type="success">已收</el-tag>
           </div>
           <div class="receive-meta tm-muted">
-            <span>订单：{{ item.quantity ?? '—' }} 只</span>
+            <span>订单：{{ item.quantity ?? '—' }} {{ item.order_unit_label || '单位待完善' }}</span>
             <span>本次实收：{{ item.incoming_quantity ?? '—' }} 张</span>
             <span>{{ item.material_received_at || '' }}</span>
             <span v-if="item.received_by_name">经手：{{ item.received_by_name }}</span>

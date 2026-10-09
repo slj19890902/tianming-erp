@@ -1,4 +1,5 @@
 """Placement is a projection of live staging stock, not completion history."""
+from app.services.warehouse_display_units import lot_display_unit
 from sqlalchemy import select, func, or_, exists
 from app.models.warehouse_inventory import (
     InventoryLot, FinishedGoodsInventoryDetail, WarehouseLocation, WarehouseArea,
@@ -69,7 +70,7 @@ def page(db, *, allowed_customer_ids, page=1, page_size=20, customer_id=None,
             customer_order_number=' / '.join(dict.fromkeys(o.customer_po for o in orders if o.customer_po)),
             order_number=' / '.join(dict.fromkeys(o.order_number for o in orders)),
             product_code=detail.inventory_code_snapshot or product.customer_material_code or product.product_code,
-            product_name=detail.product_name_snapshot or product.product_name,output_unit=product.unit or '只',
+            product_name=detail.product_name_snapshot or product.product_name,output_unit=lot_display_unit(lot),
             quantity=lot.quantity_available+lot.quantity_reserved+lot.quantity_damaged,
             available_quantity=lot.quantity_available,reserved_quantity=lot.quantity_reserved,
             placement_pending=pending,

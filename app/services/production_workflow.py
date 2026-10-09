@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.product_unit_labels import product_unit_label
 
 from dataclasses import asdict, dataclass
 from datetime import date
@@ -6150,7 +6151,7 @@ def _ordinary_pending_task_fast_payload(
         "customer_id": order.customer_id,
         "customer_name": customer.name,
         "delivery_date": order.delivery_date,
-        "output_unit": product.unit or "个",
+        "output_unit": product_unit_label(product) or "单位待完善",
         "posted_output_quantity": 0,
         "order_coverage_remaining": max(target_quantity - finished_coverage, 0),
         **_item_product_snapshot(item, product),
@@ -6424,7 +6425,7 @@ def list_production_tasks(
             "customer_id": order.customer_id,
             "customer_name": customer.name,
             "delivery_date": order.delivery_date,
-            "output_unit": "片" if is_component_task else (product.unit or "个"),
+            "output_unit": "片" if is_component_task else (product_unit_label(product) or "单位待完善"),
             "posted_output_quantity": posted_output,
             "order_coverage_remaining": _production_order_remaining(db, task, target_quantity) if posted_output else max(target_quantity - int(task.finished_coverage_snapshot or 0), 0),
             **_task_product_snapshot(

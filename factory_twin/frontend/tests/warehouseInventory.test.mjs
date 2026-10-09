@@ -262,7 +262,7 @@ test("inventory age labels distinguish confirmed long age and unknown age", () =
 test("inventory units use employee-friendly factory labels without changing quantities", () => {
   assert.equal(inventoryUnitLabel("boxes"), "只");
   assert.equal(inventoryUnitLabel("sheets"), "张");
-  assert.equal(inventoryUnitLabel("pieces"), "件");
+  assert.equal(inventoryUnitLabel("pieces"), "片");
   assert.equal(inventoryUnitLabel("sets"), "套");
   assert.equal(inventoryUnitLabel("kg"), "kg");
 });

@@ -3,6 +3,8 @@
 Lists are projections of purchase/receipt facts: merely viewing old receipts
 never creates inventory or infers that production has happened.
 """
+from app.services.product_unit_labels import basis_unit_label, product_unit_label
+from app.services.warehouse_display_units import lot_display_unit
 import json
 from decimal import Decimal
 from types import SimpleNamespace
@@ -129,6 +131,7 @@ def _job_dict(db, job):
                  for lot in active_outputs if lot.warehouse_location_id]
     return dict(id=job.id, receipt_item_id=job.receipt_item_id, version=job.version, status=job.status, input_quantity=job.input_quantity,
         expected_output=job.expected_output, actual_output=job.actual_output,
+        output_unit=basis_unit_label(json.loads(job.product_snapshot).get("physical_basis") or {}),
         product=json.loads(job.product_snapshot), output_lot_number=" / ".join(lot.lot_number for lot in outputs) if output else None,
         output_location=" / ".join(dict.fromkeys(location_name(db,lot) for lot in outputs if lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged)) if output else None,
         output_remaining=sum(lot.quantity_available + lot.quantity_reserved + lot.quantity_damaged for lot in outputs),
@@ -179,7 +182,7 @@ def _list_rows(db, cache, query):
                 customer_name=((item.customer.chinese_short_name or item.customer.name) if item.customer else "通用备料"), code=item.product_code_snapshot,
                 name=item.product_name_snapshot, specification=f"{item.report_length_mm or '-'} × {item.report_width_mm or '-'} mm",
                 material=item.material_code_snapshot, order_number=item.order.order_number,
-                quantity=receipt.received_quantity if receipt else item.stocked_quantity if legacy_lot else pending, unit="个" if (lot and lot.inventory_type == "finished") or (not lot and item.target_inventory_type == "finished") else "张", available=sum(l.quantity_available for l in lot_family),
+                quantity=receipt.received_quantity if receipt else item.stocked_quantity if legacy_lot else pending, unit=lot_display_unit(lot) if lot and lot.inventory_type == "finished" else product_unit_label(db.get(Product, item.reference_product_id or item.product_id)) if not lot and item.target_inventory_type == "finished" else "张", available=sum(l.quantity_available for l in lot_family),
                 reserved=sum(l.quantity_reserved for l in lot_family), physical=physical, lot_version=lot.version if lot else 0,
                 lot_number=" / ".join(l.lot_number for l in lot_family if l.quantity_available+l.quantity_reserved+l.quantity_damaged) or (lot.lot_number if lot else None), location=" / ".join(dict.fromkeys(location_name(db,l) for l in lot_family if l.quantity_available+l.quantity_reserved+l.quantity_damaged)) or location_name(db,lot), status=status, keep=keep,
                 source_kind="legacy_stock" if legacy_lot else "receipt" if receipt else "purchase",

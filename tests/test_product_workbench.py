@@ -268,6 +268,7 @@ def test_explicit_cross_customer_semi_binding_is_visible_once_without_owner_code
         found = client.get("/api/product-workbench/reverse", params=reverse)
         assert found.status_code == 200, found.text
         assert found.json()["registered_owner_customer_id"] is None
+        assert found.json()["items"]
         assert all(item["customer_id"] == product.customer_id for item in found.json()["items"])
         assert client.get(f"/api/product-workbench/products/{ids['product']}").status_code == 404
 

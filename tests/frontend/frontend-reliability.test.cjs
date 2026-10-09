@@ -177,6 +177,15 @@ test('legacy read deadline does not add write timeout or retry an operation',()=
   assert.equal(hook({method:'post'}).timeout,undefined);
 });
 
+test('standalone session failure shows connection recovery instead of password entry',async()=>{
+  global.window={};let status=503;
+  global.axios={get:async()=>{throw {response:{status}}}};
+  const page={authGeneration:1,errorMessage:()=>String(status)};
+  const check=method('async checkSession() {','async login() {');
+  await check.call(page);assert.equal(page.sessionUnavailable,true);assert.equal(page.sessionRestoring,false);
+  status=401;await check.call(page);assert.equal(page.sessionUnavailable,false);assert.equal(page.sessionRestoring,false);
+});
+
 test('workspace startup failure exposes retry; reloading never discards a known dirty or saving frame',()=>{
   const timers=new Map();let count=0,mount;
   const frameWindow={postMessage(){},ERPFrontendReliability:{state:()=>({dirty:true,saving:false,uncertain:false})}};

@@ -3189,7 +3189,12 @@
   <body>
     <div id="app" v-cloak>
       <div v-if="!user" class="login-shell">
-        <form class="login-card" @submit.prevent="login">
+        <div v-if="sessionRestoring || sessionUnavailable" class="login-card" role="status">
+          <h1>{{ sessionRestoring ? '正在确认登录状态…' : '暂时无法确认登录状态' }}</h1>
+          <p>{{ sessionRestoring ? '请稍候，正在连接ERP。' : 'ERP服务暂时未能响应，请检查网络后重试连接，无需修改密码。' }}</p>
+          <button v-if="!sessionRestoring" type="button" class="btn primary" @click="retrySession">重试连接</button>
+        </div>
+        <form v-else class="login-card" @submit.prevent="login">
           <h1><img src="/static/assets/tianming-brand-symbol.png" alt="天明包装ERP" style="width:40px;height:40px;vertical-align:middle;margin-right:8px;object-fit:contain" />天明包装ERP</h1>
           <p>订单、来料、送货、回单、对账、开票与应付支出</p>
           <div class="field"><label for="erp-login-username">用户名</label><input id="erp-login-username" class="input" v-model.trim="loginForm.username" autocomplete="username" :aria-describedby="loginError ? 'erp-login-error' : null" :aria-invalid="!!loginError" /></div>
@@ -10697,7 +10702,7 @@
         data() {
           return {
             pendingAssemblies: [], assemblyLocations: [], assemblyLoading: false, assemblyError: '', assemblyPage: 1, assemblyTotal: 0,
-            user: null, loading: false, loginError: "", activePage: "dashboard", uiModeSaving: false, authGeneration: 0, loginAttemptSequence: 0, pageLoadSequence: 0,
+            user: null, loading: false, loginError: "", sessionRestoring:true, sessionUnavailable:false, activePage: "dashboard", uiModeSaving: false, authGeneration: 0, loginAttemptSequence: 0, pageLoadSequence: 0,
             uiLayoutEffective:null, uiLayoutAdminBusy:"", uiLayoutAdminPreview:false, uiLayoutAdminDirty:false, uiLayoutAdminLoadGeneration:0,
             uiLayoutAdmin:{role_code:"admin",display_mode:"standard",catalog:null,draft:{version:0,base_release_version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},published:{version:0,layout:{catalog_version:"",menus:[],dashboard_cards:[],quick_actions:[]}},history:[],can_rollback:false},
             orderNextStepGuide: {visible:false, orderNo:"", count:0, source:""},
@@ -16094,10 +16099,18 @@
             this._productBoxTypeRulesPromise = request;
             return request;
           },
+          async retrySession() {
+            if (this.sessionRestoring) return;
+            window.erpCheckingSession = true;
+            try { await this.checkSession(); }
+            finally { window.erpCheckingSession = false; }
+          },
           async checkSession() {
             const requestAuthGeneration = this.authGeneration;
             const requestIsCurrent = () => requestAuthGeneration === this.authGeneration;
             window.erpSessionUnavailable = false;
+            this.sessionRestoring = true;
+            this.sessionUnavailable = false;
             let verified = false;
             try {
               const { data } = await axios.get("/api/auth/me");
@@ -16128,7 +16141,10 @@
             } catch (error) {
               if (!requestIsCurrent()) return;
               window.erpSessionUnavailable = !verified && error?.response?.status !== 401;
+              this.sessionUnavailable = window.erpSessionUnavailable;
               if (error?.response?.status !== 401) this.loginError = this.errorMessage(error);
+            } finally {
+              if (requestIsCurrent()) this.sessionRestoring = false;
             }
           },
           async login() {

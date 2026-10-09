@@ -55,6 +55,16 @@ test('page capacity follows measured usable height and preserves customer plus d
  assert(listSize(420,60)>=6);assert(listSize(260,60)>=4);
  assert.match(template,/product-workbench :vm="vm"/);assert.match(template,/!vm.productWorkbenchOpen/);
  assert.match(template,/home-queue/);assert.match(template,/home-detail/);
+ assert.match(template,/v-if="vm.homeAnalyticsOpen" class="home-panel home-progress"/);
+});
+test('row count uses the rendered header, row and footer geometry',()=>{
+ const node=(top,height)=>({getBoundingClientRect:()=>({top,bottom:top+height,height})});
+ const detail={querySelector:s=>s.includes('home-stock-head')?node(401,29):s.includes('home-stock-row')?node(430,62):node(700,30),getBoundingClientRect:()=>({top:390})};
+ const vm={$el:{querySelector:()=>({querySelector:()=>detail})},isLargeUi:false,homeAvailableHeight:0,homeRowHeight:0};
+ const saved=global.innerHeight;global.innerHeight=768;
+ try{mixin.methods.homeMeasure.call(vm);assert.equal(vm.homeRowHeight,62);assert.equal(listSize(vm.homeAvailableHeight,vm.homeRowHeight),4);
+ global.innerHeight=1080;mixin.methods.homeMeasure.call(vm);assert(listSize(vm.homeAvailableHeight,vm.homeRowHeight)>=6);}
+ finally{global.innerHeight=saved;}
 });
 test('selected stock customer remains in the queue when its action row is filtered out',()=>{
  const rows=[{customer_id:1,customer_label:'A',pending_request_ids:[5]},{customer_id:2,customer_label:'B',suggested_new_requisition_sheet_quantity:3,draft_ready:true}];

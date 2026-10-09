@@ -31,7 +31,7 @@ function locationURL(c: InventoryCandidate, part: InventoryPart) {
           <thead><tr v-if="part==='finished'"><th>成品可用实物</th><th>位置</th><th>本次拟用</th><th>采用/不采用</th></tr>
             <tr v-else><th>货物名称</th><th>纸板长</th><th>纸板宽</th><th>楞型</th><th>材质</th><th>加工类型</th><th>数量</th><th>位置</th><th>采用/不采用</th></tr></thead>
           <tbody><tr v-for="c in [...state.parts[part].candidates,...state.parts[part].manual.filter(c=>!state.parts[part].candidates.some(p=>p.lot_id===c.lot_id))]" :key="c.lot_id">
-            <template v-if="part==='finished'"><td>{{ c.quantity_available }} {{ c.quantity_contract?.physical_unit || '实物' }}</td>
+            <template v-if="part==='finished'"><td>{{ c.quantity_available }} {{ c.quantity_contract?.physical_unit || '实物' }}<p v-if="c.shared_stock">{{ c.shared_stock_notice }}</p></td>
               <td>{{ inventoryLocation(c) }} <a v-if="locationURL(c,part)" :href="locationURL(c,part)" target="_blank" rel="noopener">地图定位</a></td>
               <td>{{ state.allocations.filter(a=>a.part===part&&a.lot_id===c.lot_id).reduce((s,a)=>s+a.stock_quantity,0) }} {{ c.quantity_contract?.physical_unit || '实物' }}</td></template>
             <template v-else><td>{{ c.internal_name || '未登记' }}</td><td>{{ c.board_length_mm || '未登记' }}</td><td>{{ c.board_width_mm || '未登记' }}</td><td>{{ c.flute_type || '未登记' }}</td><td>{{ c.material_code || '未登记' }}</td><td>{{ processingName(c) }}</td><td>{{ c.available_stock_quantity }} 张

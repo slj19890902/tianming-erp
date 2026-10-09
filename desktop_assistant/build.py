@@ -143,7 +143,8 @@ def main():
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration,
                             'schema_contract': schema_contract,
-                            'reader_capabilities': {'order_inventory_v1': 1, 'quotation_write_v1': 1},
+                            'reader_capabilities': {'order_inventory_v1': 1, 'quotation_write_v1': 1,
+                                                    'shared_finished_v1': 1},
                             'offline_ocr_models': models}, key)
     if args.package_only:
         write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,

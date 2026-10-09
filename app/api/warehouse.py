@@ -2190,7 +2190,18 @@ def _require_reservation_customer_access(
     reservation = db.get(InventoryReservation, reservation_id)
     if reservation is None:
         return
-    _require_lot_customer_access(db, reservation.inventory_lot_id, user)
+    from app.models.shared_finished_stock import SharedFinishedReservation
+    shared_fact = db.get(SharedFinishedReservation, reservation.id)
+    if shared_fact is None:
+        _require_lot_customer_access(db, reservation.inventory_lot_id, user)
+    else:
+        # A frozen reservation grants access only in its actual order scope.
+        item = db.get(OrderItem, reservation.order_item_id)
+        order = db.get(Order, reservation.order_id)
+        if (item is None or order is None or item.order_id != order.id
+                or item.product_id != shared_fact.product_id or order.customer_id != shared_fact.customer_id):
+            raise HTTPException(status_code=409, detail="共用预占的订单依据不完整")
+        require_customer_access(shared_fact.customer_id, user, db)
     customer_id = None
     if reservation.order_id is not None:
         customer_id = db.scalar(
@@ -3091,7 +3102,7 @@ def _semi_candidate_dict(
 
 
 def _visible_finished_candidate_lots(
-    rows: list[InventoryLot], user: User, db: Session
+    rows: list[InventoryLot], user: User, db: Session, *, product_id=None, customer_id=None
 ) -> list[InventoryLot]:
     visible_customer_ids = _visible_customer_ids(user, db)
     if visible_customer_ids is None:
@@ -3113,6 +3124,10 @@ def _visible_finished_candidate_lots(
             )
         ).all()
     )
+    if customer_id is not None and product_id is not None and customer_id in visible_customer_ids:
+        from app.services.shared_finished_stock import match as shared_match
+        visible_lot_ids.update(lot.id for lot in rows if shared_match(db, lot,
+            product_id=product_id, customer_id=customer_id))
     return [lot for lot in rows if lot.id in visible_lot_ids]
 
 
@@ -3144,7 +3159,10 @@ def finished_candidates(
             raise WarehouseInventoryError("订单明细不存在", 404)
         reserved = active_finished_reserved_qty(db, order_item_id)
         rows = finished_inventory_candidates(db, order_item_id)
-        rows = _visible_finished_candidate_lots(rows, user, db)
+        order = db.get(Order, item.order_id)
+        from app.services.shared_finished_stock import candidate_projection
+        rows = _visible_finished_candidate_lots(rows, user, db,
+            product_id=item.product_id, customer_id=order.customer_id)
         projection_contexts = load_warehouse_location_projection_contexts(
             db,
             [lot.location for lot in rows],
@@ -3210,6 +3228,7 @@ def finished_candidates(
                         if lot.finished_detail.is_general
                         else []
                     ),
+                    **candidate_projection(db, lot, product_id=item.product_id, customer_id=order.customer_id),
                 }
                 for lot in rows
             ],
@@ -3225,7 +3244,12 @@ def create_finished_reservation(
     user: User = Depends(can_reserve),
 ) -> dict:
     _require_order_item_customer_access(db, payload.order_item_id, user)
-    _require_lot_customer_access(db, payload.inventory_lot_id, user)
+    from app.services.shared_finished_stock import match as shared_match
+    item = db.get(OrderItem, payload.order_item_id)
+    order = db.get(Order, item.order_id)
+    lot = db.get(InventoryLot, payload.inventory_lot_id)
+    if lot is None or not shared_match(db, lot, product_id=item.product_id, customer_id=order.customer_id):
+        _require_lot_customer_access(db, payload.inventory_lot_id, user)
     try:
         row = reserve_finished_inventory(
             db,
@@ -3579,7 +3603,9 @@ def finished_product_candidates(
             customer_id=customer_id,
             product_id=product_id,
         )
-        rows = _visible_finished_candidate_lots(rows, user, db)
+        rows = _visible_finished_candidate_lots(rows, user, db,
+            product_id=product_id, customer_id=customer_id)
+        from app.services.shared_finished_stock import candidate_projection
         from app.services.delivery_quantities import product_basis, require_physical_stock, available_customer_quantity, QuantityContractError
         try:
             basis = product_basis(db.get(Product, product_id))
@@ -3627,6 +3653,7 @@ def finished_product_candidates(
                         if lot.finished_detail.is_general
                         else []
                     ),
+                    **candidate_projection(db, lot, product_id=product_id, customer_id=customer_id),
                 }
                 for lot in rows
             ],
@@ -25171,6 +25198,56 @@ class FinishedIdentityConfirmation(BaseModel):
     preview_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     operation_key: str = Field(min_length=1, max_length=64)
     physical_match_confirmed: Literal[True]
+
+
+class SharedFinishedPreview(BaseModel):
+    product_ids: list[int] = Field(min_length=2, max_length=20)
+    lot_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class SharedFinishedConfirmation(SharedFinishedPreview):
+    preview_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    operation_key: str = Field(min_length=1, max_length=100)
+    evidence: str = Field(min_length=1, max_length=1000)
+    physical_match_confirmed: Literal[True]
+
+
+def _require_shared_confirmation_access(db, user, payload):
+    for pid in payload.product_ids:
+        product = db.get(Product, pid)
+        if product is None:
+            raise HTTPException(status_code=404, detail="产品不存在")
+        require_customer_access(product.customer_id, user, db)
+    for lid in payload.lot_ids:
+        _require_lot_customer_access(db, lid, user)
+
+
+@router.post("/finished/shared-stock/preview")
+def preview_shared_finished(payload: SharedFinishedPreview, db: Session = Depends(get_db),
+                            user: User = Depends(admin_only)):
+    _require_shared_confirmation_access(db, user, payload)
+    from app.services.shared_finished_stock import preview
+    try:
+        return preview(db, **payload.model_dump())
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.post("/finished/shared-stock/confirm")
+def confirm_shared_finished(payload: SharedFinishedConfirmation, db: Session = Depends(get_db),
+                            user: User = Depends(admin_only)):
+    _require_shared_confirmation_access(db, user, payload)
+    from app.services.shared_finished_stock import confirm
+    try:
+        result = confirm(db, actor=user, **payload.model_dump(exclude={"physical_match_confirmed"}))
+        db.commit()
+        return result
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except Exception:
+        db.rollback()
+        raise
 
 
 @router.get("/lots/{lot_id}/physical-identity/preview")

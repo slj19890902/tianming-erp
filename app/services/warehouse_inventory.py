@@ -2397,8 +2397,7 @@ def _transfer_finished_lot_location(
                 "location-transfer",
                 key,
             )
-            db.add(
-                InventoryReservation(
+            transferred_reservation = InventoryReservation(
                     reservation_number=_number("RS"),
                     inventory_lot_id=target_lot.id,
                     reservation_type=reservation.reservation_type,
@@ -2423,7 +2422,10 @@ def _transfer_finished_lot_location(
                     reservation_group_requested_quantity=take,
                     idempotency_key=_transfer_key("location-transfer", key, reservation.id),
                 )
-            )
+            db.add(transferred_reservation)
+            db.flush()
+            from app.services.shared_finished_stock import inherit_reservation
+            inherit_reservation(db, reservation, transferred_reservation)
             remaining_reserved -= take
         if remaining_reserved:
             raise WarehouseInventoryError("待送批次预占明细与库存余额不一致", 409)
@@ -2549,6 +2551,8 @@ def _transfer_finished_lot_location(
     db.flush()
     from app.services.fixed_shelf import copy_lot_state
     copy_lot_state(db, lot, target_lot)
+    from app.services.shared_finished_stock import inherit_lot
+    inherit_lot(db, lot, target_lot)
     db.flush()
     return FinishedLotLocationTransferResult(transfer, lot, target_lot, False)
 
@@ -3328,6 +3332,11 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
         )
     if not _finished_reservation_pre_requisition(item):
         raise WarehouseInventoryError("订单已进入报料，请先取消报料后再抵扣成品库存", 409)
+    from app.services.shared_finished_stock import candidate_lot_ids
+    from app.services.finished_stock_identity import order_product_basis
+    expected = order_product_basis(db, item.id, item.product_id)
+    shared_ids = candidate_lot_ids(db, product_id=item.product_id,
+        customer_id=order.customer_id, expected_basis=expected)
     rows = db.scalars(
         select(InventoryLot)
         .join(
@@ -3338,12 +3347,12 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
-            FinishedGoodsInventoryDetail.product_id == item.product_id,
             ~held_for_staging_expression(),
-            or_(
-                FinishedGoodsInventoryDetail.owner_customer_id == order.customer_id,
-                FinishedGoodsInventoryDetail.is_general.is_(True),
-            ),
+            or_(InventoryLot.id.in_(shared_ids), and_(
+                FinishedGoodsInventoryDetail.product_id == item.product_id,
+                or_(FinishedGoodsInventoryDetail.owner_customer_id == order.customer_id,
+                    FinishedGoodsInventoryDetail.is_general.is_(True)),
+            )),
         )
         .order_by(
             FinishedGoodsInventoryDetail.is_general,
@@ -3362,7 +3371,8 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
         raise WarehouseInventoryError(str(error), 409) from error
     candidates = []
     for lot in rows:
-        if is_body_lot(lot) or not matches_stock_identity(lot.finished_detail.physical_basis_json, expected):
+        if is_body_lot(lot) or (lot.id not in shared_ids
+                and not matches_stock_identity(lot.finished_detail.physical_basis_json, expected)):
             continue
         try:
             if basis:
@@ -3397,6 +3407,8 @@ def finished_inventory_candidates_for_product(
     if product.is_virtual_composite_parent or (profile and profile.source == "separate"):
         return []
     from app.services.fixed_shelf_staging import held_for_staging_expression
+    from app.services.shared_finished_stock import candidate_lot_ids
+    shared_ids = candidate_lot_ids(db, product_id=product_id, customer_id=customer_id)
     rows = db.scalars(
         select(InventoryLot)
         .join(
@@ -3415,11 +3427,12 @@ def finished_inventory_candidates_for_product(
                 else InventoryLot.quantity_available > 0
             ),
             ~held_for_staging_expression() if not include_held else True,
-            FinishedGoodsInventoryDetail.product_id == product_id,
-            FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
-            FinishedGoodsInventoryDetail.is_general.is_(False),
-            FinishedGoodsInventoryDetail.inventory_code_snapshot
-            == product.product_code,
+            or_(InventoryLot.id.in_(shared_ids), and_(
+                FinishedGoodsInventoryDetail.product_id == product_id,
+                FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
+                FinishedGoodsInventoryDetail.is_general.is_(False),
+                FinishedGoodsInventoryDetail.inventory_code_snapshot == product.product_code,
+            )),
         )
         .order_by(*inventory_fifo_order_columns())
     ).all()
@@ -3565,10 +3578,13 @@ def reserve_finished_inventory(
     from app.services.fixed_shelf_staging import staging_owner
     if staging_owner(db, lot.id):
         raise WarehouseInventoryError('该批次已集货待送，不能再抵扣其他订单', 409)
-    if detail.product_id != item.product_id:
-        raise WarehouseInventoryError("库存产品与订单产品不一致")
     from app.services.finished_stock_identity import order_product_basis
     expected_basis = order_product_basis(db, item.id, item.product_id)
+    from app.services.shared_finished_stock import match as shared_match, freeze_reservation
+    shared_member = shared_match(db, lot, product_id=item.product_id,
+        customer_id=order.customer_id, expected_basis=expected_basis, lock=True)
+    if detail.product_id != item.product_id and shared_member is None:
+        raise WarehouseInventoryError("库存产品与订单产品不一致")
     from app.services.direct_external_finished import eligible
     from app.services.delivery_quantities import order_basis, physical_for, require_physical_stock
     try:
@@ -3584,9 +3600,9 @@ def reserve_finished_inventory(
         identity_matches = matches_stock_identity(detail.physical_basis_json, expected_basis)
     except (QuantityContractError, ValueError, TypeError) as error:
         raise WarehouseInventoryError(str(error), 409) from error
-    if not identity_matches:
+    if not identity_matches and shared_member is None:
         raise WarehouseInventoryError("库存缺少匹配的冻结规格、单位或工艺依据，请先核实该批次身份", 409)
-    if not detail.is_general and detail.owner_customer_id != order.customer_id:
+    if not detail.is_general and detail.owner_customer_id != order.customer_id and shared_member is None:
         raise WarehouseInventoryError("客户专用库存不能用于其他客户订单")
     warning_codes: list[str] = []
     if detail.is_general:
@@ -3642,6 +3658,7 @@ def reserve_finished_inventory(
     )
     db.add(reservation)
     db.flush()
+    freeze_reservation(db, reservation, shared_member, lot)
     db.expire(lot)
     lot = db.get(InventoryLot, lot.id)
     assert lot is not None
@@ -4263,9 +4280,12 @@ def consume_finished_reservation(
         if is_body_lot(lot):
             raise WarehouseInventoryError("未组装本体不能作为完整成品送货，请先完成组装", 409)
         detail = lot.finished_detail
-        if detail.product_id != order_item.product_id:
+        from app.services.shared_finished_stock import reserved_match
+        shared = reserved_match(db, reservation, lot,
+            product_id=order_item.product_id, customer_id=order.customer_id)
+        if detail.product_id != order_item.product_id and not shared:
             raise WarehouseInventoryError("成品库存与订单产品不一致", 409)
-        if not detail.is_general and detail.owner_customer_id != order.customer_id:
+        if not detail.is_general and detail.owner_customer_id != order.customer_id and not shared:
             raise WarehouseInventoryError("其他客户专用成品库存不能用于当前订单", 409)
         if lot.version != expected_version:
             raise WarehouseInventoryError("库存已被其他人修改，请刷新后重试", 409)

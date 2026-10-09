@@ -69,7 +69,12 @@ class Manager:
                 quotation_contract = db.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='quotation_mutations'"
                 ).fetchone()
+                shared_stock_contract = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='shared_finished_groups'"
+                ).fetchone()
             if quotation_contract and not self._quotation_writer(release):
+                return False
+            if shared_stock_contract and not self._shared_finished_reader(release):
                 return False
         # Additive JSON business facts can change semantics without an Alembic
         # revision change. Check the signed reader contract before that shortcut.
@@ -130,6 +135,17 @@ class Manager:
                 return False
             manifest = signed_release_manifest(package, self.public_key)
             capability = (manifest.get('reader_capabilities') or {}).get('quotation_write_v1')
+            return type(capability) is int and capability == 1 and manifest == self.manifest(release)
+        except Exception:
+            return False
+
+    def _shared_finished_reader(self, release):
+        package = self.root / 'packages' / (release + '.zip')
+        try:
+            if not package.is_file() or sha(package) != release:
+                return False
+            manifest = signed_release_manifest(package, self.public_key)
+            capability = (manifest.get('reader_capabilities') or {}).get('shared_finished_v1')
             return type(capability) is int and capability == 1 and manifest == self.manifest(release)
         except Exception:
             return False

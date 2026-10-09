@@ -1247,13 +1247,16 @@ def _preflight_reservation_plans(
                         "新建订单不能使用通用成品库存，请选择同客户同存货编码的专用库存",
                         409,
                     )
-                if detail.owner_customer_id != customer_id:
+                from app.services.shared_finished_stock import match as shared_match
+                shared_member = shared_match(db, lot, product_id=product.id, customer_id=customer_id)
+                if detail.owner_customer_id != customer_id and shared_member is None:
                     raise WarehouseInventoryError(
                         "其他客户专用成品库存不能用于当前订单", 409
                     )
                 if (
-                    detail.product_id != product.id
-                    or detail.inventory_code_snapshot != product.product_code
+                    (detail.product_id != product.id
+                    or detail.inventory_code_snapshot != product.product_code)
+                    and shared_member is None
                 ):
                     raise WarehouseInventoryError(
                         "成品库存与订单存货编码不一致", 409

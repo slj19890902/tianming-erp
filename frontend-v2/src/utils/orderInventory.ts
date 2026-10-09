@@ -10,7 +10,7 @@ export interface InventoryCandidate {
   source?: string; recommendation_source?: string; recommendation_tier?: string
   automatic_recommendation?: boolean; direct_deduction_eligible?: boolean; selectable?: boolean
   requires_override?: boolean; override_required?: boolean; requires_confirmation?: boolean
-  is_general?: boolean; warning_codes?: string[]; warning_messages?: string[]; signature_differences?: string[]
+  is_general?: boolean; shared_stock?: boolean; shared_stock_notice?: string; warning_codes?: string[]; warning_messages?: string[]; signature_differences?: string[]
   internal_name?: string; board_length_mm?: number; board_width_mm?: number; material_code?: string; flute_type?: string
   processing?: string; stock_yield_per_sheet?: number; component_type?: InventoryComponent; match_rule_id?: number | null
   manual_page?: number

@@ -26,7 +26,7 @@
 本卡明确授权两个执行代理和一个独审并行。执行者从本卡最终提交建立自己的新codex分支，保留旧候选；各自既有独立worktree可在确认clean且无运行引用后复用。
 
 - /root/mobile_drawings_api：app/api/deliveries.py、新app/services/delivery_dispatch_commands.py、新tests/test_delivery_dispatch_commands.py和tests/test_delivery_dispatch_revision_compat.py；必要的定向既有送货测试更新先报根列文件，不能全局改conftest或通用自动补body。只写artifact/delivery-atomic-dispatch/api。
-- /root/mobile_drawings_ui：static/index.html、新static/ui/delivery-dispatch-recovery.js、新tests/ui/delivery_dispatch_recovery.test.cjs及实际方法/DOM定向测试。只写artifact/delivery-atomic-dispatch/ui。保留v615 index原资源hash及其他模块。
+- /root/mobile_drawings_ui：static/index.html、新static/ui/delivery-dispatch-recovery.js、新tests/ui/delivery_dispatch_recovery.test.cjs及实际方法/DOM定向测试；tests/fixtures/delivery-dispatch-recovery/只保存最小真实合成HTTP JSON及生成来源/SHA，不存认证Cookie/token/header，不手造或补写成功证明。只写artifact/delivery-atomic-dispatch/ui。保留v615 index原资源hash及其他模块。
 - 根：desktop_assistant/manager.py、build.py、server_entry.py、onboarding.py，新desktop_assistant/delivery_dispatch_contract.py，tests/desktop_assistant/test_delivery_dispatch_reader.py，任务/报告/版本及发布资产。API调用新模块require_managed_dispatch_activation(database_path, control=None)，传真实db.get_bind().url.database，模块自动核TM_ERP_CONTROL/真实共享路径；失败ValueError转503禁止写，彼此不互改。
 - /root/order_recovery_review：只写artifact/delivery-atomic-dispatch/review，独立检查真实反例→修复、数量/权限/回滚及helper恢复，发现缺陷交owner；不改候选源码。
 

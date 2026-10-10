@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from decimal import Decimal
 
 from sqlalchemy import and_, case, exists, func, or_, select
@@ -34,6 +35,71 @@ def visible_products(db: Session, scope: set[int] | None):
     if scope is not None:
         query = query.where(Product.customer_id.in_(scope))
     return query.options(selectinload(Product.customer), selectinload(Product.material))
+
+
+def _source_stock_priority_ids(db: Session, candidate_products) -> list[int]:
+    """Validate active source lots and transfer descendants for search ranking.
+
+    Collect all three formal FK paths in batches, then invoke the same
+    provenance selector used by product details. The recursive CTE is compiled
+    once per source-linked candidate, with a concrete owner and root ID set;
+    it never implicitly correlates to the outer Product search row.
+    """
+    from app.services.product_activity import source_lot_descendant_ids
+
+    candidate_ids = select(candidate_products.c.id)
+    roots: dict[tuple[int, int | None], set[int]] = defaultdict(set)
+
+    def add_stock_rows(rows):
+        for reference_id, product_id, customer_id, lot_id in rows:
+            if lot_id is None:
+                continue
+            for candidate_id in {reference_id, product_id} - {None}:
+                roots[(int(candidate_id), customer_id)].add(int(lot_id))
+
+    add_stock_rows(db.execute(select(
+        StockItem.reference_product_id, StockItem.product_id,
+        StockItem.customer_id, Receipt.received_inventory_lot_id).select_from(StockItem).join(
+        Receipt, Receipt.stock_replenishment_item_id == StockItem.id).join(
+        StockOrder, StockOrder.id == StockItem.replenishment_order_id).where(
+        or_(StockItem.reference_product_id.in_(candidate_ids),
+            StockItem.product_id.in_(candidate_ids)),
+        StockOrder.status != "voided", Receipt.status == "posted")))
+    add_stock_rows(db.execute(select(
+        StockItem.reference_product_id, StockItem.product_id,
+        StockItem.customer_id, StockItem.inventory_lot_id).select_from(StockItem).join(
+        StockOrder, StockOrder.id == StockItem.replenishment_order_id).where(
+        or_(StockItem.reference_product_id.in_(candidate_ids),
+            StockItem.product_id.in_(candidate_ids)),
+        StockOrder.status.notin_(("draft", "voided")))))
+    for product_id, customer_id, lot_id in db.execute(select(
+            OrderItem.product_id, Order.customer_id,
+            Receipt.received_inventory_lot_id).select_from(OrderItem).join(
+            Order, Order.id == OrderItem.order_id).join(
+            Receipt, Receipt.order_item_id == OrderItem.id).where(
+            OrderItem.product_id.in_(candidate_ids), Receipt.status == "posted")):
+        if lot_id is not None:
+            roots[(int(product_id), customer_id)].add(int(lot_id))
+    if not roots:
+        return []
+    owners = {product_id: customer_id for product_id, customer_id in db.execute(
+        select(Product.id, Product.customer_id).where(
+            Product.id.in_({product_id for product_id, _ in roots})))}
+    ranked = set()
+    for (product_id, customer_id), root_ids in roots.items():
+        if customer_id is None or owners.get(product_id) != customer_id:
+            continue
+        descendants = source_lot_descendant_ids(root_ids, customer_id)
+        has_live_lot = db.scalar(select(InventoryLot.id).join(
+            SemiFinishedInventoryDetail,
+            SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id).where(
+            InventoryLot.id.in_(descendants),
+            InventoryLot.status == "active", InventoryLot.inventory_type == "semi_finished",
+            SemiFinishedInventoryDetail.owner_customer_id == customer_id,
+            InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0).limit(1))
+        if has_live_lot is not None:
+            ranked.add(product_id)
+    return sorted(ranked)
 
 
 def find_products(db: Session, scope: set[int] | None, *, q: str,
@@ -147,40 +213,12 @@ def find_products(db: Session, scope: set[int] | None, *, q: str,
             SemiFinishedLotAllowedProduct.product_id == Product.id,
             InventoryLot.status == "active", InventoryLot.inventory_type == "semi_finished",
             InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0))
-        live_sheet = (InventoryLot.status == "active",
-                      InventoryLot.inventory_type == "semi_finished",
-                      InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0,
-                      SemiFinishedInventoryDetail.owner_customer_id == Product.customer_id)
-        stock_receipt_sheet = exists(select(1).select_from(InventoryLot).join(
-            SemiFinishedInventoryDetail,
-            SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id).join(
-            Receipt, Receipt.received_inventory_lot_id == InventoryLot.id).join(
-            StockItem, StockItem.id == Receipt.stock_replenishment_item_id).join(
-            StockOrder, StockOrder.id == StockItem.replenishment_order_id).where(
-            *live_sheet, Receipt.status == "posted", StockOrder.status != "voided",
-            StockItem.customer_id == Product.customer_id,
-            or_(StockItem.reference_product_id == Product.id, StockItem.product_id == Product.id)))
-        order_receipt_sheet = exists(select(1).select_from(InventoryLot).join(
-            SemiFinishedInventoryDetail,
-            SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id).join(
-            Receipt, Receipt.received_inventory_lot_id == InventoryLot.id).join(
-            OrderItem, OrderItem.id == Receipt.order_item_id).join(
-            Order, Order.id == OrderItem.order_id).where(
-            *live_sheet, Receipt.status == "posted", Order.customer_id == Product.customer_id,
-            OrderItem.product_id == Product.id))
-        legacy_sheet = exists(select(1).select_from(InventoryLot).join(
-            SemiFinishedInventoryDetail,
-            SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id).join(
-            StockItem, StockItem.inventory_lot_id == InventoryLot.id).join(
-            StockOrder, StockOrder.id == StockItem.replenishment_order_id).where(
-            *live_sheet, StockOrder.status.notin_(("draft", "voided")),
-            StockItem.customer_id == Product.customer_id,
-            or_(StockItem.reference_product_id == Product.id, StockItem.product_id == Product.id)))
+        candidate_products = query.with_only_columns(Product.id).order_by(None).subquery()
+        valid_source_ids = _source_stock_priority_ids(db, candidate_products)
         # Shared-stock eligibility is frozen against both the current product
         # and the actual lot identity. Validate only matching members of groups
         # with physical stock; a same-code/group SQL join alone is insufficient.
         from app.services.shared_finished_stock import candidate_lot_ids
-        candidate_products = query.with_only_columns(Product.id).order_by(None).subquery()
         possible_shared_ids = db.scalars(select(SharedFinishedMember.product_id).join(
             SharedFinishedGroup, SharedFinishedGroup.id == SharedFinishedMember.group_id).join(
             SharedFinishedLot, SharedFinishedLot.group_id == SharedFinishedGroup.id).join(
@@ -198,8 +236,9 @@ def find_products(db: Session, scope: set[int] | None, *, q: str,
                     InventoryLot.id.in_(lot_ids), InventoryLot.status == "active",
                     InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0).limit(1)):
                 valid_shared_ids.append(product_id)
-        stock_predicates = [direct_finished, bound_sheet, stock_receipt_sheet,
-                            order_receipt_sheet, legacy_sheet]
+        stock_predicates = [direct_finished, bound_sheet]
+        if valid_source_ids:
+            stock_predicates.append(Product.id.in_(valid_source_ids))
         if valid_shared_ids:
             stock_predicates.append(Product.id.in_(valid_shared_ids))
         order_terms.append(case((or_(*stock_predicates), 0), else_=1))

@@ -67,7 +67,8 @@ def test_stock_print_uses_purchase_mold_and_current_short_location(stock_repleni
         assert after['cards'][0]['selection_fingerprint'] != before['cards'][0]['selection_fingerprint']
 
 
-@pytest.mark.parametrize('condition', ['unbound', 'missing_location', 'inactive', 'bad_snapshot'])
+@pytest.mark.parametrize('condition', ['unbound', 'missing_location', 'inactive', 'bad_snapshot',
+                                       'list_identity', 'list_fields', 'list_physical_basis'])
 def test_stock_print_does_not_invent_mold_facts(stock_replenishment_print_app, monkeypatch, condition):
     from app.models.mold_tool import MoldTool
     from app.models.stock_replenishment import StockReplenishmentOrderItem
@@ -82,6 +83,14 @@ def test_stock_print_does_not_invent_mold_facts(stock_replenishment_print_app, m
         elif condition == 'bad_snapshot':
             frozen['customer_id'] = 999999
             item.production_snapshot_json = json.dumps(frozen)
+        elif condition.startswith('list_'):
+            if condition == 'list_identity':
+                frozen = []
+            elif condition == 'list_fields':
+                frozen['fields'] = []
+            else:
+                frozen['physical_basis'] = '[]'
+            item.production_snapshot_json = json.dumps(frozen)
         elif condition == 'missing_location':
             db.get(MoldTool, mold_id).rack_location = ''
         else:
@@ -89,7 +98,7 @@ def test_stock_print_does_not_invent_mold_facts(stock_replenishment_print_app, m
         db.commit()
         result = package(db, fixture)
         c = result['cards'][0]['components'][0]
-        if condition in ('unbound', 'bad_snapshot'):
+        if condition in ('unbound', 'bad_snapshot') or condition.startswith('list_'):
             assert c['mold_tool_id'] is None
             assert c['mold_location_display'] is None
         elif condition == 'missing_location':
@@ -100,6 +109,8 @@ def test_stock_print_does_not_invent_mold_facts(stock_replenishment_print_app, m
             assert c['mold_is_active'] is False
         if condition == 'bad_snapshot':
             assert any('冻结身份' in x for x in result['cards'][0]['review_messages'])
+        if condition.startswith('list_'):
+            assert any('资料格式异常' in x for x in result['cards'][0]['review_messages'])
 
 
 def test_mold_move_invalidates_prepared_stock_print_selection(stock_replenishment_print_app, monkeypatch):

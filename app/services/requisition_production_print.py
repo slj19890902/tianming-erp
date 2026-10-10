@@ -1368,6 +1368,8 @@ def _stock_print_mold(db: Session, item, product, customer, *, requires_mold: bo
         if mold_id is None:
             return result, None
         mold_id = int(mold_id)
+    except AttributeError:
+        return result, '模具待核对：报料时的产品资料格式异常，请核对原单' if requires_mold else None
     except (WarehouseInventoryError, ValueError, TypeError, KeyError) as error:
         # Missing/invalid historical evidence is still visibly unresolved;
         # do not substitute today's mold or mutate the source to make it pass.

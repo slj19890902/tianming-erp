@@ -90,6 +90,17 @@ def test_dot_matrix_print_uses_driver_managed_physical_orientation() -> None:
     assert "天明ERP送货单-" not in source
 
 
+def test_page_number_is_hidden_when_printing() -> None:
+    source = _source()
+
+    assert re.search(
+        r"@media print\s*\{.*?\.page-number\s*\{"
+        r"[^}]*display:\s*none\s*!important;?[^}]*\}",
+        source,
+        re.S,
+    )
+
+
 def test_delivery_print_inline_javascript_is_syntactically_valid(
     tmp_path: Path,
 ) -> None:

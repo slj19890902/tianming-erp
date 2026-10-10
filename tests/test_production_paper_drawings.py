@@ -317,3 +317,89 @@ def test_incoming_only_permission_requires_exact_posted_source_for_preview_and_o
             fact.status = "posted"; scope.customer_id = other_customer_id; db.commit()
             assert client.get(drawing["preview_url"]).status_code == 403
             assert client.get(drawing["original_url"]).status_code == 403
+
+
+@pytest.mark.parametrize("managed", [False, True, "bom"])
+def test_legacy_unlinked_receipt_projects_figures_without_changing_body_or_facts(production_print_app, tmp_path, monkeypatch, managed):
+    from app.api.incoming import incoming_production_card
+    from app.api.drawing_design import DesignWrite, PublishWrite, save_design, publish_design
+    from app.services.drawing_binding import bind_new_task_drawing
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.production import ProductionTask
+    from app.models.user import User
+    fixture = production_print_app
+    root = tmp_path / "files"
+    monkeypatch.setenv("ERP_FILE_STORAGE_DIR", str(root))
+    with fixture["session_factory"]() as db:
+        item = db.get(OrderItem, fixture["order_item_id"])
+        product = db.get(Product, item.product_id)
+        task = db.scalar(select(ProductionTask).where(ProductionTask.order_item_id == item.id))
+        admin = db.scalar(select(User).where(User.role == "admin"))
+        is_managed = managed is True
+        fact_source = {}
+        db.get(SupplierRequisitionOrder, fixture["supplier_order_id"]).status = "cancelled"
+        item.drawing_file = None if is_managed else save_file(root, "legacy-receipt.pdf", pdf_bytes())
+        if managed == "bom":
+            child = Product(customer_id=item.order.customer_id, product_code="LEGACY-CHILD",
+                customer_material_code="LEGACY-CHILD", product_name="历史子件", box_category="normal")
+            db.add(child); db.flush()
+            component = SalesOrderItemBomComponent(sales_order_item_id=item.id, component_product_id=child.id,
+                order_set_quantity=200, quantity_per_set=1, required_piece_quantity=200, display_order=1,
+                internal_component_code="LEGACY-CHILD", is_die_cut=False,
+                snapshot_die_cut_path=save_file(root, "legacy-child.png", image_bytes()),
+                spare_sheet_quantity=0, display_mode="internal_only", is_required=True,
+                snapshot_component_product_code="LEGACY-CHILD", snapshot_component_product_name="历史子件",
+                snapshot_component_box_category="normal", snapshot_component_report_length_mm=600,
+                snapshot_component_report_width_mm=400)
+            requisition = Requisition(requisition_number="UAT-LEGACY-CHILD", requisition_date=date(2026, 10, 10))
+            db.add_all([component, requisition]); db.flush()
+            source = RequisitionItem(requisition_id=requisition.id, order_item_id=item.id, requisition_qty=200,
+                cardboard_len=600, cardboard_width=400, product_name_snapshot="历史子件", status="作废")
+            db.add(source); db.flush()
+            db.add(RequisitionItemBomSource(requisition_item_id=source.id, sales_order_item_bom_component_id=component.id,
+                order_set_quantity=200, quantity_per_set=1, required_piece_quantity=200,
+                spare_sheet_quantity=0, calculated_purchase_quantity=200))
+            fact_source = dict(requisition_id=requisition.id, requisition_item_id=source.id)
+        if is_managed:
+            save_design(product.id, DesignWrite(expected_product_version=product.version, template_key="liner_v1",
+                parameters={}, thickness_mm=3, thickness_source="UAT"), db, admin)
+            release = publish_design(product.id, PublishWrite(expected_product_version=product.version,
+                expected_design_version=1, idempotency_key="uat-legacy-receipt-drawing"), db, admin)
+            bind_new_task_drawing(db, task, product, source_is_new=True)
+        receipt = IncomingReceipt(receipt_number="UAT-UNLINKED-PAPER", received_at=datetime(2026, 10, 10),
+            received_by=admin.id, idempotency_key="uat-unlinked-paper")
+        db.add(receipt); db.flush()
+        fact = IncomingReceiptItem(receipt_id=receipt.id, order_id=item.order_id, order_item_id=item.id,
+            planned_quantity=200, received_quantity=200, cumulative_received_quantity=200,
+            variance_quantity=0, variance_type="matched", resolution_status="not_required", status="posted", **fact_source)
+        db.add(fact); db.commit()
+        before = (item.quantity, item.drawing_file, task.version, fact.status, fact.received_quantity, product.version)
+        with monkeypatch.context() as patch:
+            patch.setattr("app.services.production_paper_drawings.order_paper_drawings", lambda *_: [])
+            baseline = incoming_production_card(fact.id, db, admin)
+        result = incoming_production_card(fact.id, db, admin)
+        assert result["supplier_order_id"] is None and result["paper_phase"] == "actual_receipt"
+        paper_component = result["cards"][0]["components"][0]
+        drawings = paper_component.pop("paper_drawings")
+        baseline["cards"][0]["components"][0].pop("paper_drawings")
+        assert result["cards"] == baseline["cards"]
+        assert result["paper_fingerprint"] == baseline["paper_fingerprint"]
+        assert len(drawings) == 1
+        assert drawings[0]["basis"] == ("task_release" if is_managed else "order_bom_snapshot" if managed == "bom" else "order_attachment")
+        if managed == "bom":
+            assert drawings[0]["product_id"] == child.id
+            assert f"/bom-component/{component.id}/" in drawings[0]["preview_url"]
+        if is_managed:
+            assert drawings[0]["key"] == f"release-{release['id']}"
+            assert drawings[0]["preview_url"].startswith("data:image/svg+xml;base64,")
+            assert result["cards"][0]["managed_drawings"][0]["release_id"] == release["id"]
+        else:
+            with TestClient(fixture["app"]) as client:
+                _login(client, "p132a2-admin")
+                assert client.get(drawings[0]["preview_url"]).status_code == 200
+                assert client.get(drawings[0]["original_url"]).status_code == 200
+                fact.status = "reversed"; db.commit()
+                assert client.get(drawings[0]["preview_url"]).status_code == 404
+                assert client.get(drawings[0]["original_url"]).status_code == 404
+                fact.status = "posted"; db.commit()
+        assert (item.quantity, item.drawing_file, task.version, fact.status, fact.received_quantity, product.version) == before

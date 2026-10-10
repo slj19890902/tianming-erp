@@ -22359,7 +22359,8 @@ def read_production_paper_drawing(
     from app.services.mobile_product_drawings import HEADERS, drawing_file, drawing_original, drawing_preview, failure
 
     requisition_reader = has_permission(user, "requisition.view")
-    if not requisition_reader and not has_permission(user, "incoming.view"):
+    incoming_reader = has_permission(user, "incoming.view")
+    if not requisition_reader and not incoming_reader:
         can_read(request=request, current_user=user, db=db)  # Preserve the existing denial audit.
     if not 0 < owner_id <= 2_147_483_647 or len(drawing_key) > 64 or mode not in {"preview", "original"}:
         raise failure(404, "生产图纸不存在")
@@ -22385,10 +22386,12 @@ def read_production_paper_drawing(
         if item is None or item.order is None:
             raise failure(404, "订单图纸来源不存在")
         require_customer_access(item.order.customer_id, user, db)
-        if not requisition_reader and not has_posted_paper_receipt(db, item=item, component=component):
+        printable_source = requisition_reader and has_printable_order_source(db, item, component)
+        posted_source = incoming_reader and has_posted_paper_receipt(db, item=item, component=component)
+        if not printable_source and not posted_source:
+            if requisition_reader:
+                raise failure(404, "当前来源没有有效报料或实收任务图纸")
             raise failure(403, "当前账号只能查看已实收来源的图纸")
-        if requisition_reader and not has_printable_order_source(db, item, component):
-            raise failure(404, "当前来源没有有效报料任务图纸")
         drawings = order_sources(db, item, component,
                                  managed=order_has_managed_drawing(db, item, component))
     else:

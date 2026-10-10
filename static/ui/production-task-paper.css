@@ -29,7 +29,7 @@
 .paper-drawing img { display:block; width:100%; height:40mm; object-fit:contain; margin:1mm 0; }
 .paper-drawing-name { font-size:10pt; line-height:1.2; overflow-wrap:anywhere; }
 .paper-drawing-unavailable { height:40mm; display:flex; align-items:center; font-size:12pt; }
-.paper-many-drawings .paper-drawing img,.paper-many-drawings .paper-drawing-unavailable { height:32mm; }
+.paper-many-drawings .paper-drawing img,.paper-many-drawings .paper-drawing-unavailable { height:28mm; }
 body.customer-safe .paper-work.with-drawings { display:block; }
 .paper-qrs { display:grid; grid-template-columns:repeat(5,1fr); gap:2mm; padding-top:2mm; }
 .paper-qrs>div { display:flex; flex-direction:column; align-items:center; gap:1mm; font-size:10pt; overflow-wrap:anywhere; }

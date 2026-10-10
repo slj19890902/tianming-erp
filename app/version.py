@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.618"
-APP_VERSION_NAME = "周需求库存预览、真实货位与简易报料条单"
+APP_VERSION = "v0.22.619"
+APP_VERSION_NAME = "生产任务单右侧图纸缩略图"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6009,3 +6009,17 @@ APP_VERIFICATION_STEPS = [
     "已报料生产任务单→切换简易报料条单，核对12列、同款多组件分行、订纸或领料位置，再用A4横向实物打印裁切验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.618：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "完整生产任务单在工艺右侧显示对应存货编码的图纸缩略图，保持大字号、半页A4双联及多图续页。",
+    "普通报料、BOM子件和补库图纸按真实来源读取；任务冻结图优先，当前常用箱上传资料明确标为参考图，PDF显示首页缩略图。",
+    "图纸加载失败或权限不足时停止打印，重新加载后可重试；客户随货版隐藏内部图纸，原同版附页及简易报料条单保留。",
+    "本版无迁移和正式业务数据变更，不改生产数量、库存、工艺或历史图纸记录。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新后打开有图纸的完整生产任务单，核对右侧缩略图与存货编码对应，左侧工艺和模具位置清楚可读。",
+    "抽查补库、合并报料或多图任务，核对续页图纸归属；A4按100%打印一张检查实物效果。",
+    "确认简易报料条单仍可切换；任务图与参考图标识正确，客户随货版不带内部图纸。",
+]
+APP_CHANGELOG = [*(f"v0.22.619：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

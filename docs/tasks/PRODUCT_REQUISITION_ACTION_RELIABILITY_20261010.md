@@ -28,3 +28,5 @@
 UI实施补边：正常go仍加载原目标页列表，不跳过loadPage。允许在index现有axios拦截器增加请求时只读actor/authGeneration快照，旧会话错误不触发当前会话的退出/403提示/修复弹窗，错误仍reject。必须实际执行拦截器证明旧401及当前401/403边界；不把此错误副作用保护称作所有页面数据赋值均完成会话保护。局部动作读继续按原表单和页面保护，禁止复制第二套全局页面加载器。
 
 API实施补边：原外购新建无明确创建审计，本轮允许真实INSERT分支增加最小外购备库创建事件（稳定order/batch ID、actor、request_hash、key摘要），与采购/哈希同事务，审计失败整单回滚，重放不重复记创建。审计不保存完整敏感body或重复成本，不充作未持久化的原始请求/回执证明。旧null提示须附原单号与实际页面核对路径，不只给裸API地址。
+
+UI测试白名单补充：仅允许 `tests/ui/mobile_product_workbench_reliability.test.cjs` 的actual-entry源码提取正则适配onOrder新增可选当前身份参数。原29行为断言不变，不删用例或放宽业务预期；其余旧测试不改。

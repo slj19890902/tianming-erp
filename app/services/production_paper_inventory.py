@@ -59,6 +59,10 @@ def paper_inventory_sources(db, order_item_ids, *, cutoff):
             'location_name': address.get('current_warehouse_location_name') or ('位置待确认' if remaining else None),
             'location_id': address.get('current_warehouse_location_id'),
             'location_issue': address.get('current_location_issue'),
+            'report_length_mm': lot.semi_finished_detail.board_length_mm if lot.semi_finished_detail else None,
+            'report_width_mm': lot.semi_finished_detail.board_width_mm if lot.semi_finished_detail else None,
+            'material_code': lot.semi_finished_detail.material_code_snapshot if lot.semi_finished_detail else None,
+            'flute_type': lot.semi_finished_detail.flute_type if lot.semi_finished_detail else None,
         })
     return dict(result)
 

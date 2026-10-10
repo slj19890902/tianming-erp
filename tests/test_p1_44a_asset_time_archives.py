@@ -365,13 +365,11 @@ def test_inventory_and_asset_time_archives_use_formal_facts_without_writes(tmp_p
     engine.dispose()
 
 
-def test_time_archive_frontend_distinguishes_order_and_actual_production():
+def test_time_archive_frontend_keeps_asset_detail_without_expanding_finished_age_rows():
     from pathlib import Path
 
     source = Path("static/warehouse.html").read_text(encoding="utf-8")
-    assert "形成：" in source
     assert "入当前位置：" in source
-    assert "最近盘点：" in source
     assert "最近下单：" in source
     assert "最近实际生产：" in source
     assert "距实际生产：" in source
@@ -379,3 +377,6 @@ def test_time_archive_frontend_distinguishes_order_and_actual_production():
     assert "历史未建立/待确认" in source
     assert "latest_customer_order_use" in source
     assert "latest_actual_production_use" in source
+    assert "inventoryTimeArchiveHtml" not in source
+    assert 'return `<tr class="compact-ledger-row">${common}' in source
+    assert '<td>${w}</td><td class="lot-actions">${actionButtons(row)}</td>' in source

@@ -796,6 +796,23 @@ def test_inventory_lot_actions_stay_on_one_compact_row() -> None:
     assert 'product_id:productId' in save
 
 
+def test_mold_status_and_finished_age_rows_do_not_render_explanation_blocks() -> None:
+    assert ".compact-lines-3{display:-webkit-box;max-height:4.05em;overflow:hidden;" in WAREHOUSE_HTML
+    assert "-webkit-line-clamp:3" in WAREHOUSE_HTML
+    assert 'return `<tr class="compact-ledger-row">${common}' in WAREHOUSE_HTML
+    assert '<td>${w}</td><td class="lot-actions">${actionButtons(row)}</td>' in WAREHOUSE_HTML
+    assert "inventoryTimeArchiveHtml" not in WAREHOUSE_HTML
+    assert "age_warning_text" not in WAREHOUSE_HTML
+
+    molds = WAREHOUSE_HTML.split("function renderMolds(){", 1)[1].split(
+        "function renderMoldPager", 1
+    )[0]
+    assert 'return `<tr class="compact-ledger-row">' in molds
+    assert "assetTimeArchiveHtml(row)" not in molds
+    assert "archiveMeta" not in molds
+    assert "可人工封存（不会自动执行）" not in molds
+
+
 def test_finished_lot_editor_requires_explicit_edit_and_keeps_stock_age_derived() -> None:
     editor = WAREHOUSE_HTML.split('<div id="lotEditMask"', 1)[1].split(
         '<div id="assignmentPanel"', 1

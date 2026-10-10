@@ -628,6 +628,13 @@
         byId("dimensionNear").value = settings.near_mm; byId("dimensionExpanded").value = settings.expanded_mm;
       }
 
+      function resetFieldConditions() {
+        byId("fieldTolerance").value = "5";
+        byId("fieldMaterial").value = "";
+        byId("fieldFlute").value = "";
+        byId("fieldBoardState").value = "raw";
+      }
+
       function persistMobilePortalState() {
         if (!state.lookupUserId) return;
         try {
@@ -637,6 +644,8 @@
             lookup_query: state.lookupQuery,
             lookup_category: state.lookupCategory,
             field_intent: state.fieldIntent, field_location_page: state.fieldLocationPage,
+            field_tolerance: byId("fieldTolerance").value, field_material: byId("fieldMaterial").value.trim().slice(0,60),
+            field_flute: byId("fieldFlute").value, field_board_state: byId("fieldBoardState").value,
             dimension_mode: byId("lookupDimensionMode").value, dimension_customer: byId("dimensionCustomer").value,
             dimension_axis: byId("dimensionAxis").value, dimension_tolerance: byId("dimensionTolerance").value,
             lookup_page: state.lookupPage,
@@ -652,12 +661,18 @@
         try { saved = JSON.parse(sessionStorage.getItem(mobilePortalStorageKey) || "null"); } catch (_error) { saved = null; }
         if (!saved || Number(saved.user_id) !== state.lookupUserId) {
           try { sessionStorage.removeItem(mobilePortalStorageKey); } catch (_error) { /* ignore */ }
+          resetFieldConditions();
           return "";
         }
         state.lookupQuery = String(saved.lookup_query || "").slice(0, 100);
         state.lookupCategory = String(saved.lookup_category || "all");
         state.fieldIntent = ["product","board","location"].includes(saved.field_intent) ? saved.field_intent : "product";
         state.fieldLocationPage = Math.max(1, Number(saved.field_location_page) || 1);
+        byId("fieldTolerance").value = ["0","5","10"].includes(saved.field_tolerance) ? saved.field_tolerance : "5";
+        const material = typeof saved.field_material === "string" ? saved.field_material.trim() : "";
+        byId("fieldMaterial").value = material.length <= 60 && !/[\x00-\x1f\x7f]/.test(material) ? material : "";
+        byId("fieldFlute").value = ["","A","B","E","AB","BE","ABC","AAA","NONE"].includes(saved.field_flute) ? saved.field_flute : "";
+        byId("fieldBoardState").value = ["raw","net_raw","creased","printed","die_cut"].includes(saved.field_board_state) ? saved.field_board_state : "raw";
         setFieldIntent(state.fieldIntent, false);
         byId("lookupDimensionMode").value = saved.dimension_mode || "text";
         byId("dimensionCustomer").value = saved.dimension_customer || "";
@@ -676,6 +691,7 @@
       }
 
       function clearMobilePortalState() {
+        resetFieldConditions();
         window.ERPProductWorkbench?.destroyMobile();
         window.TmDimensionStock?.destroy();
         window.TmProductDrawings?.disposeWithin(document.body);
@@ -1483,7 +1499,9 @@
           locationId:Number(state.warehouseMapFocusLocationId) || null,
           floorCode:state.warehouseMapFloor || "",areaCode:state.warehouseMapArea || "",scrollY:Math.max(0,window.scrollY || 0),
           intent:state.fieldIntent,page:state.fieldIntent === "location" ? state.fieldLocationPage : Math.max(1,Number(product?.page) || 1),
-          category:state.lookupCategory,lookupPage:Math.max(1,Number(state.lookupPage)||1),nearPage:Math.max(1,Number(state.fieldNearbyPage)||1)};
+          category:state.lookupCategory,lookupPage:Math.max(1,Number(state.lookupPage)||1),nearPage:Math.max(1,Number(state.fieldNearbyPage)||1),
+          fieldTolerance:byId("fieldTolerance").value,fieldMaterial:byId("fieldMaterial").value.trim().slice(0,60),
+          fieldFlute:byId("fieldFlute").value,fieldBoardState:byId("fieldBoardState").value};
       }
       function launchMobileStocktake(params) {
         if (state.warehouseAuthPending || !state.allowedPages.has("warehouse")) return;
@@ -1496,7 +1514,14 @@
         let record = null;
         try { record = window.TmMobileFieldReturn?.read(window.sessionStorage, warehouseActor(), params.get("return_context")); } catch (_) {}
         if (record?.kind !== "field") { clearLookup(); showStatus("lookupState", "原查询条件无法恢复，请重新查询。", "empty"); return; }
-        setFieldIntent(record.intent); byId("lookupInput").value = record.query;
+        setFieldIntent(record.intent, false); byId("lookupInput").value = record.query;
+        byId("fieldTolerance").value = record.fieldTolerance;
+        byId("fieldMaterial").value = record.fieldMaterial;
+        byId("fieldFlute").value = record.fieldFlute;
+        byId("fieldBoardState").value = record.fieldBoardState;
+        state.lookupQuery = record.query; state.lookupCategory = record.category; state.lookupPage = record.lookupPage;
+        state.fieldNearbyPage = record.nearPage; state.fieldLocationPage = record.intent === "location" ? record.page : state.fieldLocationPage;
+        persistMobilePortalState();
         await runFieldSearch(record.page,record.selectedProductId,record.category,record.lookupPage);
         if (record.intent === "board" && record.nearPage > 1 && state.activePage === "lookup") {
           const dimensions = window.TmMobileFieldSearch.dimensions(record.query);

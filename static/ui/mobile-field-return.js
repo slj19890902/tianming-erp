@@ -4,6 +4,10 @@
   const positive = n => Number.isSafeInteger(n) && n > 0;
   const tokenValid = token => typeof token === "string" && /^[a-f0-9]{32}$/.test(token);
   const labelValid = value => typeof value === "string" && value.length <= 40 && !/[\x00-\x1f\x7f]/.test(value);
+  const fieldTolerance = value => value === undefined ? "5" : value;
+  const fieldMaterial = value => value === undefined ? "" : value;
+  const fieldFlute = value => value === undefined ? "" : value;
+  const fieldBoardState = value => value === undefined ? "raw" : value;
   function clean(value, owner, now) {
     if (!value || value.version !== 1 || value.actorId !== owner || !positive(owner) || !["search", "map", "field"].includes(value.kind) ||
         !Number.isSafeInteger(value.createdAt) || value.createdAt > now + 60000 || value.createdAt < now - lifetime ||
@@ -15,11 +19,16 @@
           !Number.isSafeInteger(value.page) || value.page < 1 || value.page > 10000 ||
           !["all", "orders", "materials", "molds", "production", "inventory"].includes(value.category) ||
           !Number.isSafeInteger(value.lookupPage) || value.lookupPage < 1 || value.lookupPage > 10000 ||
-          (value.nearPage !== undefined && (!Number.isSafeInteger(value.nearPage) || value.nearPage < 1 || value.nearPage > 10000))))) return null;
+          (value.nearPage !== undefined && (!Number.isSafeInteger(value.nearPage) || value.nearPage < 1 || value.nearPage > 10000)) ||
+          !["0", "5", "10"].includes(fieldTolerance(value.fieldTolerance)) ||
+          typeof fieldMaterial(value.fieldMaterial) !== "string" || fieldMaterial(value.fieldMaterial).length > 60 || /[\x00-\x1f\x7f]/.test(fieldMaterial(value.fieldMaterial)) ||
+          !["", "A", "B", "E", "AB", "BE", "ABC", "AAA", "NONE"].includes(fieldFlute(value.fieldFlute)) ||
+          !["raw", "net_raw", "creased", "printed", "die_cut"].includes(fieldBoardState(value.fieldBoardState))))) return null;
     // Only navigation/input survives. Inventory responses and quantities are never cached.
     return {version:1,actorId:owner,createdAt:value.createdAt,kind:value.kind,query:value.query,includeZero:value.includeZero,
       selectedProductId:value.selectedProductId,locationId:value.locationId,floorCode:value.floorCode,areaCode:value.areaCode,scrollY:value.scrollY,
-      ...(value.kind === "field" ? {intent:value.intent,page:value.page,category:value.category,lookupPage:value.lookupPage,nearPage:value.nearPage||1} : {})};
+      ...(value.kind === "field" ? {intent:value.intent,page:value.page,category:value.category,lookupPage:value.lookupPage,nearPage:value.nearPage||1,
+        fieldTolerance:fieldTolerance(value.fieldTolerance),fieldMaterial:fieldMaterial(value.fieldMaterial),fieldFlute:fieldFlute(value.fieldFlute),fieldBoardState:fieldBoardState(value.fieldBoardState)} : {})};
   }
   function randomToken() {
     const bytes = new Uint8Array(16);

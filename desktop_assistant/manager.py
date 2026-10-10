@@ -503,22 +503,26 @@ class Manager:
         shutil.rmtree(job)
         return final
 
+    def _backup_locked(self, password: str, nas: Path):
+        """Caller holds the existing maintenance lock for the whole operation."""
+        from desktop_assistant.nas_probe import check_before_stop
+        check_before_stop(nas)
+        running = bool(self._process())
+        self.stop()
+        try:
+            return self._backup_stopped(password, nas)
+        except Exception as error:
+            state = self.state
+            state['backup_error'] = str(error)
+            write_json(self.root / 'state.json', state)
+            raise
+        finally:
+            if running:
+                self.start()
+
     def backup(self, password: str, nas: Path):
         with self.lock():
-            from desktop_assistant.nas_probe import check_before_stop
-            check_before_stop(nas)
-            running = bool(self._process())
-            self.stop()
-            try:
-                return self._backup_stopped(password, nas)
-            except Exception as error:
-                state = self.state
-                state['backup_error'] = str(error)
-                write_json(self.root / 'state.json', state)
-                raise
-            finally:
-                if running:
-                    self.start()
+            return self._backup_locked(password, nas)
 
     def preview_update(self, package: Path):
         from desktop_assistant.migration import rehearse

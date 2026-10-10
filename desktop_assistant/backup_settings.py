@@ -1,11 +1,32 @@
 """Persist local backup settings without opening a Windows shell folder dialog."""
 from pathlib import Path
 import os
+import sys
 import uuid
 
 from desktop_assistant.storage import read_json, write_json
 from desktop_assistant.credential_store import protect_backup as protect, unprotect_backup as unprotect
-from desktop_assistant.windows import register_nightly
+
+
+def register_nightly(manager, executable):
+    if sys.platform == 'darwin':
+        identity = manager.state.get('current')
+        if not identity:
+            return {'registered':False,'reason':'native-runtime-pending'}
+        from desktop_assistant.storage import sha, signed_release_manifest
+        package = manager.root/'packages'/(identity+'.zip')
+        if sha(package) != identity:
+            raise ValueError('原备份运行包身份不一致')
+        manifest = signed_release_manifest(package, manager.public_key)
+        if manifest.get('runtime_platform', 'windows') == 'windows':
+            # Imported Windows data needs a Mac NAS/password configuration in
+            # order to back up before installing the native release. Persist the
+            # configuration, but never claim an unusable scheduler was created.
+            return {'registered':False,'reason':'native-runtime-pending'}
+        from desktop_assistant.mac_nightly import register_locked
+        return register_locked(manager)
+    from desktop_assistant.windows import register_nightly as register_windows
+    return register_windows(manager.root, executable)
 
 
 def load_preferences(root):
@@ -72,11 +93,16 @@ def save_backup_settings(manager, directory, password, confirmation, executable)
             raise ValueError('备份文件夹无法写入，请检查NAS连接和该文件夹的写入权限') from None
         # Do not overwrite working preferences when task registration fails.
         try:
-            register_nightly(manager.root, executable)
+            registration = register_nightly(manager, executable)
         except Exception:
-            raise ValueError('Windows自动备份任务未设置成功，原备份设置保留；请重试或联系维护人员') from None
+            raise ValueError('自动备份任务未设置成功，原备份设置保留；请重试或联系维护人员') from None
         saved.update(nas=str(nas), protected_password=protected)
+        if isinstance(registration, dict):
+            saved['nightly_schedule'] = {'registered':bool(registration.get('registered')),
+                                         'requires_user_login':True}
         write_json(manager.root / 'preferences.json', saved)
+    if isinstance(registration, dict) and not registration.get('registered'):
+        return '备份路径和凭据已安全保存；Mac原生运行包核验启用后须登记自动备份，当前尚未安排定时任务。'
     if not manager.state.get('current'):
         return '自动备份已设置。请返回工厂电脑页，点“首次接入并启用”。'
     return '已设置每天晚上11点自动备份。请返回工厂电脑页，点“现在备份一次”核对。'

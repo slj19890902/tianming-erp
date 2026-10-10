@@ -75,8 +75,12 @@ def test_failed_full_backup_blocks_start_and_can_finish_after_repair(example):
         with pytest.raises(ValueError, match='NAS disconnected'):
             onboard(target, source, case.package, PASSWORD, case.nas)
     assert target.state['onboarding_pending']
-    with pytest.raises(ValueError, match='首次接入'):
-        Manager.start(target)
+    # This synthetic Windows fixture checks the onboarding gate, not host
+    # compatibility. Keep runtime hash verification while skipping host match.
+    original_runtime = target._runtime_python
+    with patch.object(target, '_runtime_python', lambda identity: original_runtime(identity, runnable=False)):
+        with pytest.raises(ValueError, match='首次接入'):
+            Manager.start(target)
     finish_onboarding(target, PASSWORD, case.nas)
     assert not target.state['onboarding_pending']
 

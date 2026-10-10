@@ -23,7 +23,7 @@ def signed_case(monkeypatch):
     try:
         source = instance.root/'native-service-source'
         for name in ('main.py','app/main.py','desktop_assistant/server_entry.py',
-                     'desktop_assistant/service_supervisor.py'):
+                     'desktop_assistant/service_supervisor.py','desktop_assistant/nightly_entry.py'):
             path = source/name
             path.parent.mkdir(parents=True,exist_ok=True)
             path.write_text('# synthetic signed-file fixture only\n')

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
 from pathlib import Path
 import queue
@@ -30,21 +30,8 @@ def preferences(manager):
 
 
 def nightly(manager):
-    if not manager.state.get('current') or manager.state.get('manual_stop') or manager.state.get('onboarding_pending'):
-        return
-    settings = preferences(manager)
-    now = datetime.now(CN)
-    due = now.replace(hour=23, minute=0, second=0, microsecond=0)
-    if now < due:
-        due -= timedelta(days=1)
-    latest = manager.state.get('last_backup_at')
-    if latest and datetime.fromisoformat(latest) >= due:
-        with manager.lock():
-            manager.start()
-        return
-    manager.backup(unprotect(settings['protected_password']), Path(settings['nas']))
-    with manager.lock():
-        manager.start()
+    from desktop_assistant.nightly import run_once
+    return run_once(manager, resume_when_stopped=sys.platform == 'win32')
 
 
 class App:

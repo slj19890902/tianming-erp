@@ -121,3 +121,12 @@ Mac 默认使用系统 STHeiti Medium.ttc 的 Heiti SC（face 1），合同和�
 来源为本机launchd.plist手册及Apple官方 Creating Launch Daemons and Agents（https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html）。这是当前用户登录会话能力；不冒充专用非管理员账户、注销后运行、FileVault解锁前冷启动或工厂断电恢复已通过。服务入口固定到已签名包，更新入口需先核验停用、归档配置再登记，不覆盖运行定义；完整ERP原生服务/真实库/自动备份调度仍待验证。
 
 服务完整性复核扩展：mac_service准备时另拒绝整个发布目录链接、被改写的缓存manifest、未签名额外文件及非本安装数据链接，防止额外json.py等导入遮蔽；仅允许四种已绑定shared目标的数据链接。范围补入manager.py和migration.py：受管家庭服务及Mac迁移不生成未签名字节码，监护解释器使用-I -B；Windows正式分支不改变。服务/家庭隔离/原生迁移进程联合30项通过，含额外模块和错误链接拒绝，证据mac-service-integrity-tests.log。未删除任何未知文件来通过门禁，未接管正式服务。
+
+第十五个闭环：mac_nightly.py、nightly.py、nightly_entry.py、mac_service.py共用验签入口、backup_settings.py宿主分派、gui.py调用及manager.py备份锁内函数抽取，配套定向测试。Mac用户LaunchAgent每小时检查本地23点到期，登记不立即运行；钥匙串读取和NAS可用性核对在停服前，所有到期复核/完整备份共用维护锁。Mac不启动原本未运行的服务；Windows原“到期备份后启动/已有备份时启动”保留。原备份失败恢复原运行状态、加密回读和人工暂停门禁不删。只做合成验证，不登记正式计划。
+
+
+自动备份闭环验证：夜间到期检查、完整备份/恢复和首次接入回归44项通过、1项Windows专用实机检查跳过；备份设置定向9项通过；共享签名入口/服务/家庭隔离回归20项通过、1项需显式启用的launchd实机检查跳过（此前第十四闭环已有独立合成launchd实证）。证据mac-nightly-tests.log、mac-nightly-settings-tests.log、mac-nightly-service-regression.log。新增合成全备份往返验证未运行状态不会被自动启动，并发到期检查由原维护锁拒绝重复执行；NAS不可用时先拒绝再停服。
+
+Mac计划每小时整点检查北京时间23点的备份是否已完成，错过时在后续运行补做；当前实现需要该用户保持登录，睡眠/注销不冒充连续后台运行。未运行原生包时可先安全保存NAS及备份凭据，明确显示定时任务尚未安排，以便先备份再安装原生包。运行包升级后旧计划不自动覆盖，须在维护锁内核验停用、归档原配置，再为新签名运行时登记；同一版本改密码可复用经指纹和归属核验的已登记计划。没有登记实际ERP备份任务。
+
+原首次接入测试使用Windows合成发布包，在Mac先被宿主运行器门禁拒绝，已以原提交604e2cf4复现同样行为（self-service-platform-baseline.json）。仅调整该测试的运行器模拟以单独验证首次接入门禁，生产Manager.start及Windows运行器拒绝保持。真实正式备份、真实钥匙串凭据、正式调度及工厂最终停写同步仍未执行。

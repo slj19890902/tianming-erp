@@ -8,8 +8,35 @@ from app.models.stock_preparation import StockPreparationJob as Job
 from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.product_bom import ProductBomComponent
-from app.models.warehouse_inventory import InventoryLot, SemiFinishedInventoryDetail
+from app.models.warehouse_inventory import InventoryLot, InventoryLotTransfer, SemiFinishedInventoryDetail
 from app.services.product_unit_labels import product_unit_label
+
+
+def source_lot_descendant_ids(root_lot_ids, owner_customer_id):
+    """SQL selector for roots and real transfer descendants of the same source.
+
+    Accepts a set of root IDs or a scalar SELECT. Callers apply their own live
+    quantity predicate; closed intermediate lots must remain traversable.
+    """
+    descendants = select(InventoryLot.id.label('lot_id'),
+                         InventoryLot.source_ref_type.label('source_ref_type'),
+                         InventoryLot.source_ref_id.label('source_ref_id')).join(
+        SemiFinishedInventoryDetail).where(
+        InventoryLot.id.in_(root_lot_ids),
+        InventoryLot.inventory_type == 'semi_finished',
+        SemiFinishedInventoryDetail.owner_customer_id == owner_customer_id).cte(
+            'product_source_lot_descendants', recursive=True)
+    descendants = descendants.union(select(
+        InventoryLot.id, InventoryLot.source_ref_type, InventoryLot.source_ref_id).select_from(
+        descendants).join(InventoryLotTransfer,
+            InventoryLotTransfer.source_lot_id == descendants.c.lot_id).join(
+        InventoryLot, InventoryLot.id == InventoryLotTransfer.target_lot_id).join(
+        SemiFinishedInventoryDetail).where(
+        InventoryLot.inventory_type == 'semi_finished',
+        SemiFinishedInventoryDetail.owner_customer_id == owner_customer_id,
+        InventoryLot.source_ref_type.is_not_distinct_from(descendants.c.source_ref_type),
+        InventoryLot.source_ref_id.is_not_distinct_from(descendants.c.source_ref_id)))
+    return select(descendants.c.lot_id)
 
 
 def source_lots(db, product):
@@ -30,7 +57,8 @@ def source_lots(db, product):
         return []
     from app.api.mobile_erp import _lot_load_options
     return list(db.scalars(select(InventoryLot).join(SemiFinishedInventoryDetail).options(*_lot_load_options()).where(
-        InventoryLot.id.in_(ids - {None}), InventoryLot.status == 'active',
+        InventoryLot.id.in_(source_lot_descendant_ids(ids - {None}, product.customer_id)),
+        InventoryLot.status == 'active',
         InventoryLot.inventory_type == 'semi_finished', SemiFinishedInventoryDetail.owner_customer_id == product.customer_id,
         or_(InventoryLot.quantity_available > 0, InventoryLot.quantity_reserved > 0))))
 

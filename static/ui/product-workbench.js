@@ -65,7 +65,7 @@
     if(validId(row.lot_id))q.set('lot_id',String(row.lot_id));
     return '/warehouse.html?'+q;
   }
-  function mount({container,request,onOpen=()=>{},onState=()=>{},onAction,initialState={},lazyDrawings=false}){
+  function mount({container,request,onOpen=()=>{},onState=()=>{},onAction,initialState={},lazyDrawings=false,externalSearch=false}){
     let live=true,serial=0,operation=null,actionBusy=false,action=null;
     let mode=initialState.mode==='reverse'?'reverse':'search',params=initialState.params||{},page=initialState.page||1;
     let draft={...(initialState.draft||params)},resetDraft=false;
@@ -98,14 +98,29 @@
       const loaded=await get('/api/product-workbench/'+mode+'?'+q);
       if(loaded&&loaded.token===serial){result=loaded.body;store();}if(live)render();
     }
-    async function show(id,activityPage=1){if(!validId(id))return;lastProductId=Number(id);detail=null;mapRow=null;purpose=false;onOpen(true);
+    async function show(id,activityPage=1){if(!validId(id))return;const sameProduct=lastProductId===Number(id),previousTab=tab;lastProductId=Number(id);detail=null;mapRow=null;purpose=false;onOpen(true);
       const query=new URLSearchParams();if(activityPage>1)query.set('activity_page',String(activityPage));if(includeHistory)query.set('include_history','true');
       const loaded=await get('/api/product-workbench/products/'+Number(id)+(query.size?'?'+query:''),Number(id));
-      if(loaded&&loaded.token===serial){detail=loaded.body;tab=detail.activity?'activity':'production';store();}if(live)render();
+      if(loaded&&loaded.token===serial){detail=loaded.body;tab=sameProduct&&(['production','inventory','orders'].includes(previousTab)||(previousTab==='activity'&&detail.activity))?previousTab:externalSearch?'production':detail.activity?'activity':'production';store();}if(live)render();
       return loaded?{token:loaded.token,id:Number(id)}:null;
     }
     function image(p,small=false){if(lazyDrawings)return `<div class="pw-lazy-drawing" data-drawing-product="${pid(p)}"></div>`;const d=drawingItems(p)[0];return d?`<a class="pw-drawing ${small?'pw-thumb':''}" href="${esc(d.original_url)}" target="_blank" rel="noopener noreferrer"><img src="${esc(d.preview_url)}" alt="${esc(d.name||'工程图纸')}" loading="lazy"><span>${small?'图纸':'查看原图 / PDF'}</span></a>`:`<span class="pw-muted">${p?.drawings?.status==='forbidden'?'无图纸权限':'未附图纸'}</span>`;}
     function facts(entries){return `<dl class="pw-facts">${entries.filter(([,v])=>v!==null&&v!==undefined&&v!=='').map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>`;}
+    function fieldMolds(production,product){
+      const found=new Map();
+      const add=(m,owner)=>{const id=Number(m.mold_id||m.id),key=validId(id)?`id:${id}`:`name:${m.name||m.mold_name||m.mold_code||'unknown'}:${m.short_label||m.location_label||''}`;
+        if(!found.has(key))found.set(key,{...m,owners:[]});
+        const row=found.get(key);if(owner&&!row.owners.includes(owner))row.owners.push(owner);};
+      list(production.molds).forEach(m=>add(m,product.product_code||'当前产品'));
+      list(production.bom).forEach(b=>list(b.molds).forEach(m=>add(m,b.product_code||b.product_name||'子件')));
+      return [...found.values()];
+    }
+    function fieldSummary(){
+      const p=detail.product||{},v=detail.production||{},molds=fieldMolds(v,p),rows=list(detail.inventory?.items);
+      const places=detail.inventory?.visibility==='hidden_by_permission'?null:[...new Set(rows.map(r=>r.location_label||r.location_name).filter(Boolean))];
+      return `<div class="pw-field-summary"><div><small>存货编码</small><strong>${esc(p.product_code||'待核')}</strong>${p.customer_material_code?`<small>客户编码 ${esc(p.customer_material_code)}</small>`:''}</div><div><small>模具 · 位置</small>${molds.length?molds.map(m=>`<span class="pw-field-mold"><b>${esc(moldPlace(m))}</b><small>${esc(m.owners.join('、'))} · ${esc(m.name||m.mold_name||m.mold_code||'模具待核')}${m.location_visibility==='hidden_by_permission'?'':m.location_label?` · ${esc(m.location_label)}`:''}</small></span>`).join(''):'<strong>无关联模具</strong>'}</div><div><small>实存货位</small>${places===null?'<strong>无库存查看权限</strong>':places.length?places.map(x=>`<strong>${esc(x)}</strong>`).join(''):'<strong>未查到实存货位</strong>'}</div></div>`;
+    }
+    function moldPlace(m){return m.location_visibility==='hidden_by_permission'?'无位置查看权限':m.short_label||m.location_label||'位置待核';}
     function productionView(){
       const p=detail.product||{},v=detail.production||{},steps=list(v.process_steps),molds=list(v.molds),bom=list(v.bom),cut=v.cutting;
       return `<div class="pw-production"><div><h3>生产资料 <small>当前常用箱</small></h3>${facts([
@@ -119,8 +134,8 @@
         ['结合方式',['无需结合','无','其他'].includes(v.joining_method)?null:v.joining_method]])}
         ${steps.length?`<ol class="pw-process">${steps.map(s=>`<li><b>${esc(s.label||s.name)}</b><span>${esc(s.detail||s.description)}</span></li>`).join('')}</ol>`:''}
         ${list(v.missing_fields).length?`<p class="pw-warning">待补：${esc(v.missing_fields.join('、'))}</p>`:''}
-        ${molds.length?`<h3>模具</h3>${molds.map((m,i)=>`<div class="pw-mold"><b>${esc(m.name||m.mold_name||m.mold_code)}</b><span>${esc(m.location_label||m.location||'位置待核')}</span>${locationUrl(m)?`<button type="button" data-mold="${i}">查看位置</button>`:''}</div>`).join('')}`:''}
-        ${bom.length?`<h3>每套用料</h3><div class="pw-bom">${bom.map(b=>`<button type="button" data-product="${Number(b.product_id)}"><b>${esc(b.product_code)}</b><span>${esc(b.product_name)}</span><strong>${number(b.quantity)} ${esc(b.unit||'片')}</strong></button>`).join('')}</div>`:''}
+        ${molds.length?`<h3>模具</h3>${molds.map((m,i)=>`<div class="pw-mold"><b>${esc(m.name||m.mold_name||m.mold_code)}</b><span>${esc(moldPlace(m))}</span>${locationUrl(m)?`<button type="button" data-mold="${i}">查看位置</button>`:''}</div>`).join('')}`:''}
+        ${bom.length?`<h3>每套用料</h3><div class="pw-bom">${bom.map(b=>`<button type="button" data-product="${Number(b.product_id)}"><b>${esc(b.product_code)}</b><span>${esc(b.product_name)}${list(b.molds).map(m=>`<small>${esc(m.name||m.mold_name||m.mold_code||'模具')} · ${esc(moldPlace(m))}</small>`).join('')}</span><strong>${number(b.quantity)} ${esc(b.unit||'片')}</strong></button>`).join('')}</div>`:''}
       </div><aside class="pw-engineering">${image(p)}${(lazyDrawings?[]:drawingItems(p).slice(1)).map(d=>`<a href="${esc(d.original_url)}" target="_blank" rel="noopener noreferrer">${esc(d.name||'更多工程图')}</a>`).join('')}</aside></div>`;
     }
     function inventoryView(){const inventory=detail.inventory;
@@ -146,12 +161,13 @@
     function render(){if(!live)return;
       if(!resetDraft)captureDraft();resetDraft=false;disposeDrawings();
       container.classList.add('product-workbench');
+      container.classList.toggle('pw-external-search',externalSearch);
       container.innerHTML=`<form class="pw-search" aria-label="统一产品搜索"><div class="pw-search-main"><div class="pw-modes">${[['search','找产品'],['reverse','片料找用途']].map(([k,v])=>`<button type="button" data-mode="${k}" aria-pressed="${mode===k}" class="${mode===k?'active':''}">${v}</button>`).join('')}</div>${mode==='search'?`<input name="q" type="search" maxlength="100" aria-label="产品关键词" placeholder="客户、存货编码、名称、模具号…" value="${esc(draft.q||'')}">`:'<strong class="pw-reverse-title">实测片料</strong>'}<button class="pw-primary" type="submit" ${busy?'disabled':''}>${busy?'查询中…':'搜索'}</button>${result||detail||busy||error?'<button type="button" data-close>返回工作台</button>':''}</div>
       <details class="pw-conditions" ${mode==='reverse'?'open':''}><summary>${mode==='reverse'?'尺寸与工艺条件':'按尺寸查找'}</summary><div class="pw-inputs">${mode==='search'?`<label>尺寸类型<select name="dimension_basis">${[['finished','成品尺寸'],['net','净片尺寸'],['report','报料尺寸']].map(([k,v])=>`<option value="${k}" ${draft.dimension_basis===k?'selected':''}>${v}</option>`).join('')}</select></label>`:''}${[['length','长'],['width','宽'],...(mode==='search'?[['height','高']]:[])].map(([k,v])=>`<label>${v}（mm）<input name="${k}" aria-label="${v}毫米" type="number" min="0.01" step="0.01" value="${esc(draft[k]||'')}"></label>`).join('')}${mode==='reverse'?`<label>材质代码<input name="material_code" maxlength="60" value="${esc(draft.material_code||'')}" placeholder="可不填"></label><label>楞型<select name="flute_type"><option value="">待核</option>${['A','B','E','AB','BE','ABC','AAA','NONE'].map(x=>`<option ${draft.flute_type===x?'selected':''}>${x}</option>`).join('')}</select></label><label>现状<select name="processed_state">${[['raw','未加工片料'],['creased','已压线'],['printed','已印刷'],['die_cut','已模切'],['output_piece','已加工子件']].map(([k,v])=>`<option value="${k}" ${draft.processed_state===k?'selected':''}>${v}</option>`).join('')}</select></label>`:''}</div></details></form>
       ${error?`<div class="pw-error" role="alert">${esc(error)} <button type="button" data-retry>重试</button></div>`:''}
       ${busy?'<p class="pw-loading" role="status">正在读取产品资料…</p>':''}
-      ${detail?`<section class="pw-detail"><header><div><button type="button" data-back>← 搜索结果</button><span class="pw-customer">${esc(detail.product.customer_name||detail.product.label)}</span><h2>${esc(detail.product.customer_material_code||detail.product.product_code)} <small>${esc(detail.product.product_name)}</small></h2><span>${esc(detail.product.specification)} · ${esc(detail.product.status_label||'')}</span></div><div class="pw-actions">${detail.actions?.can_requisition||detail.actions?.can_request?`<button type="button" class="pw-primary" data-requisition ${actionBusy?'disabled':''}>${detail.actions.can_requisition?'报料':'申请报料'}</button>`:''}<button type="button" data-tab="inventory">库存与位置</button></div></header><nav class="pw-tabs">${[...(detail.activity?[['activity','全程状态']]:[]),['production','生产资料'],['inventory','库存与位置'],['orders','订单与交付']].map(([k,v])=>`<button type="button" data-tab="${k}" class="${tab===k?'active':''}">${v}</button>`).join('')}</nav>${detail.actions?.stock_only?'<p class="pw-warning">仅现货交付</p>':''}${tab==='activity'?activityView():tab==='production'?productionView():tab==='inventory'?inventoryView():ordersView()}</section>`:''}
-      ${!detail&&result?`<section class="pw-results"><div class="pw-result-heading"><h2>${mode==='reverse'?'可能用途':'搜索结果'} <small>${number(result.total)} 款</small></h2><span>${mode==='reverse'?'候选不改变片料归属':'包含零库存产品'}</span></div>${list(result.items).length?`<div class="pw-table-scroll"><table><thead><tr><th>客户 / 存货编码 / 产品</th><th>成品尺寸</th><th>${mode==='reverse'?'匹配依据':'成品实存 / 可用'}</th><th>图纸</th><th></th></tr></thead><tbody>${result.items.map(p=>`<tr><td><span class="pw-muted">${esc(p.customer_name||p.label)}</span><b class="pw-code">${esc(p.customer_material_code||p.product_code)}</b><span>${esc(p.product_name)}</span>${p.status_label?`<small>${esc(p.status_label)}</small>`:''}</td><td>${esc(p.specification||'未登记')}</td><td>${mode==='reverse'?`<b>${esc(({confirmed:'已确认用途',cut_candidate:'可分切候选',review:'用途待核',incompatible:'不适用'})[p.match_class]||p.match_class)}</b><span>${esc(list(p.match_reasons).join('；'))}</span>${list(p.check_items).length?`<small>待核：${esc(p.check_items.join('、'))}</small>`:''}`:`<strong>${esc(stockText(p))}</strong><small>可用 ${p.inventory?.finished?number(p.inventory.finished.available):'无权限'}</small>${p.inventory?.semi_finished?.actual?`<small>材料实存 ${number(p.inventory.semi_finished.actual)} 张 · 查看全程状态</small>`:''}`}</td><td>${image(p,true)}</td><td><button type="button" data-product="${pid(p)}">查看资料</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="pw-empty">没有匹配产品，请核对编码或调整尺寸条件</p>'}<footer class="pw-pager"><button type="button" data-page="${page-1}" ${page<=1?'disabled':''}>上一页</button><span>第 ${page} 页</span><button type="button" data-page="${page+1}" ${!result.has_more?'disabled':''}>下一页</button></footer></section>`:''}
+      ${detail?`<section class="pw-detail"><header><div><button type="button" data-back>← 搜索结果</button><span class="pw-customer">${esc(detail.product.customer_name||detail.product.label)}</span><h2>${esc(detail.product.product_code||detail.product.customer_material_code)} <small>${esc(detail.product.product_name)}</small></h2><span>${esc(detail.product.specification)} · ${esc(detail.product.status_label||'')}</span></div><div class="pw-actions">${detail.actions?.can_requisition||detail.actions?.can_request?`<button type="button" class="pw-primary" data-requisition ${actionBusy?'disabled':''}>${detail.actions.can_requisition?'报料':'申请报料'}</button>`:''}<button type="button" data-tab="inventory">库存与位置</button></div></header>${externalSearch?fieldSummary():''}<nav class="pw-tabs">${[...(detail.activity?[['activity','全程状态']]:[]),['production','生产资料'],['inventory','库存与位置'],['orders','订单与交付']].map(([k,v])=>`<button type="button" data-tab="${k}" class="${tab===k?'active':''}">${v}</button>`).join('')}</nav>${detail.actions?.stock_only?'<p class="pw-warning">仅现货交付</p>':''}${tab==='activity'?activityView():tab==='production'?productionView():tab==='inventory'?inventoryView():ordersView()}</section>`:''}
+      ${!detail&&result?`<section class="pw-results"><div class="pw-result-heading"><h2>${mode==='reverse'?'可能用途':'搜索结果'} <small>${number(result.total)} 款</small></h2><span>${mode==='reverse'?'候选不改变片料归属':'包含零库存产品'}</span></div>${list(result.items).length?`<div class="pw-table-scroll"><table><thead><tr><th>客户 / 存货编码 / 产品</th><th>成品尺寸</th><th>${mode==='reverse'?'匹配依据':'成品实存 / 可用'}</th><th>图纸</th><th></th></tr></thead><tbody>${result.items.map(p=>`<tr><td><span class="pw-muted">${esc(p.customer_name||p.label)}</span><b class="pw-code">${esc(externalSearch?p.product_code||p.customer_material_code:p.customer_material_code||p.product_code)}</b><span>${esc(p.product_name)}</span>${p.status_label?`<small>${esc(p.status_label)}</small>`:''}</td><td>${esc(p.specification||'未登记')}</td><td>${mode==='reverse'?`<b>${esc(({confirmed:'已确认用途',cut_candidate:'可分切候选',review:'用途待核',incompatible:'不适用'})[p.match_class]||p.match_class)}</b><span>${esc(list(p.match_reasons).join('；'))}</span>${list(p.check_items).length?`<small>待核：${esc(p.check_items.join('、'))}</small>`:''}`:`<strong>${esc(stockText(p))}</strong><small>可用 ${p.inventory?.finished?number(p.inventory.finished.available):'无权限'}</small>${p.inventory?.semi_finished?.actual?`<small>材料实存 ${number(p.inventory.semi_finished.actual)} 张 · 查看全程状态</small>`:''}${p.dimension_match?`<small>尺寸差 ${esc(Object.values(p.dimension_match.delta_mm||{}).filter(x=>x!==null).map(x=>`${x}mm`).join(' / ')||'待核')}</small>`:''}`}</td><td>${image(p,true)}</td><td><button type="button" data-product="${pid(p)}">查看资料</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="pw-empty">没有匹配产品，请核对编码或调整尺寸条件</p>'}<footer class="pw-pager"><button type="button" data-page="${page-1}" ${page<=1?'disabled':''}>上一页</button><span>第 ${page} 页</span><button type="button" data-page="${page+1}" ${!result.has_more?'disabled':''}>下一页</button></footer></section>`:''}
       ${mapRow?`<section class="pw-map" aria-label="产品位置"><header><strong>${esc(mapRow.location_label||mapRow.location_name||'地图位置')}</strong><button type="button" data-close-map>返回产品资料</button></header><iframe src="${esc(locationUrl(mapRow))}" title="产品当前库存位置"></iframe></section>`:''}`;
       if(mode==='search'){const dimensions=document.createElement('button');dimensions.type='button';dimensions.className='pw-dimensions-toggle';dimensions.textContent='尺寸';dimensions.setAttribute('aria-expanded','false');dimensions.addEventListener('click',()=>{const d=container.querySelector('.pw-conditions');d.open=!d.open;dimensions.setAttribute('aria-expanded',String(d.open));});container.querySelector('.pw-search-main .pw-primary').before(dimensions);}
       if(mode==='reverse'){const extra=document.createElement('label');extra.textContent='层数';extra.innerHTML+='<select name="layer_count"><option value="">待核</option>'+[1,3,5,7].map(n=>`<option value="${n}" ${Number(draft.layer_count)===n?'selected':''}>${n}层</option>`).join('')+'</select>';container.querySelector('.pw-inputs').append(extra);if(validId(params.lot_id)){const input=document.createElement('input');input.type='hidden';input.name='lot_id';input.value=params.lot_id;container.querySelector('form').append(input);}}
@@ -206,7 +222,7 @@
       finally{clearTimeout(timer);if(action===origin){action=null;actionBusy=false;if(live)render();}}
     }
     render();if(savedId)show(savedId).then(loaded=>{if(current(loaded)){tab=initialState.tab||'production';store();render();}});else if(Object.keys(params).length)search(page);
-    return {search,show,destroy(){live=false;stop(true);disposeDrawings();container.replaceChildren();onOpen(false);},snapshot:()=>({mode,params:{...params},draft:{...draft},page,tab,productId:detail?pid(detail.product):null})};
+    return {search,show,query(nextParams,nextPage=1,nextMode='search'){mode=nextMode==='reverse'?'reverse':'search';params={...nextParams};draft={...nextParams};resetDraft=true;return search(nextPage);},destroy(){live=false;stop(true);disposeDrawings();container.replaceChildren();onOpen(false);},snapshot:()=>({mode,params:{...params},draft:{...draft},page,tab,productId:detail?pid(detail.product):null})};
   }
   async function read(url,{signal}={}){
     const response=await fetch(url,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'},signal});
@@ -216,11 +232,11 @@
   }
   let mobile=null;
   function destroyMobile(){mobile?.instance.destroy();mobile=null;}
-  function mountMobile({container,userId,onOrder}){
-    if(mobile?.userId===userId)return;
+  function mountMobile({container,userId,onOrder,externalSearch=container?.dataset?.externalSearch==='1'}){
+    if(mobile?.userId===userId&&mobile.container===container)return mobile.instance;
     destroyMobile();
     if(!container||!validId(userId))return;
-    const instance=mount({container,request:read,lazyDrawings:true,onAction:async(kind,data,origin)=>{
+    const instance=mount({container,request:read,lazyDrawings:true,externalSearch,onAction:async(kind,data,origin)=>{
       const productId=kind==='order'?data.product_id:pid(data.product);
       if(kind==='order'&&onOrder){await onOrder(data,origin.current);return;}
       if(kind==='requisition'&&data.actions?.can_request&&!data.actions?.can_requisition&&validId(data.actions.policy_id)){
@@ -229,7 +245,7 @@
       if(!validId(productId))throw Error('请在订单主链查看对应订单');
       global.location.href='/?page=dashboard&workbench_product='+Number(productId);
     }});
-    mobile={userId,instance};
+    mobile={userId,instance,container};return instance;
   }
   function install(app){
     app.mixin({
@@ -283,7 +299,8 @@
     const original=app._component.methods.openLowStockLocations;
     app._component.methods.openLowStockLocations=function(row){if(validId(row?.product_id))return this.openProductWorkbench(row.product_id,'inventory');return original.call(this,row);};
   }
-  const exported={mount,install,navigationIntent,read,mountMobile,destroyMobile,criteria,locationUrl,drawingItems,esc};
+  const snapshotMobile=()=>mobile?.instance.snapshot()||null;
+  const exported={mount,install,navigationIntent,read,mountMobile,destroyMobile,snapshotMobile,criteria,locationUrl,drawingItems,esc};
   if(typeof module!=='undefined'&&module.exports)module.exports=exported;
   global.ERPProductWorkbench=exported;
 })(typeof window==='undefined'?globalThis:window);

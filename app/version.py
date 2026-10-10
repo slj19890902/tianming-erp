@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.614"
-APP_VERSION_NAME = "补库保存核对与原单恢复"
+APP_VERSION = "v0.22.615"
+APP_VERSION_NAME = "手机现场查询与库存来源追溯"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5954,3 +5954,18 @@ APP_VERIFICATION_STEPS = [
     "切换账号或关闭后重开表单，确认旧请求不会覆盖当前内容；核对手机图纸与原报料加工规格仍正常。",
 ]
 APP_CHANGELOG = [*(f"v0.22.614：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "库存流水显示可追溯的报料来源编码，并与片料适用款号分开；拆分移库后仍能找到原产品和实际位置。",
+    "手机现场查询统一找产品、认纸板、查货位入口；支持近似成品尺寸、材质楞型筛选与原单据模具查询。",
+    "产品首屏放大编码、模具短格号和实存货位，默认进入生产资料；组合子件分别显示模具位置。",
+    "货位默认规划与实际存货分开，沿用原盘点移货操作并返回现场查询；保留全部上传图纸、全程状态和客户权限。",
+    "本版无数据库迁移，不回填历史记录，不改变库存数量、成本、预占或片料适用资格。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新库存流水，搜索80012273，核对报料来源编码及500张实存、500张预占，不把来源当成适用绑定。",
+    "手机现场查询按存货编码或长×宽×高找产品，核对放大的模具格号、实存位置和生产资料，展开查看全部图纸。",
+    "手机切换查货位，查看默认规划和实存；从原盘点或移货页面返回后，应回到原查询。实际操作由管理员验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.615：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

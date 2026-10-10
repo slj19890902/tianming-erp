@@ -316,14 +316,24 @@
 
       <section id="lookupPage" hidden>
         <h1 class="page-title">现场查询</h1>
-        <section id="productWorkbench" aria-label="找产品与片料用途"></section>
-        <section id="dimensionStock" class="card" aria-label="按尺寸找库存"></section>
-        <h2>综合查询</h2>
-        <p class="page-help">一次输入订单号、客户、存货编码、模具标签名称或尺寸；只返回当前账号有权限且在客户范围内的资料，不显示价格、成本或毛利。</p>
-        <div class="searchbar">
-          <input id="lookupInput" maxlength="100" autocomplete="off" inputmode="search" placeholder="输入订单、客户、产品、模具或尺寸">
-          <button id="lookupButton" class="search-btn" type="button">查询</button>
+        <div class="field-intents" role="group" aria-label="查询目的">
+          <button type="button" data-field-intent="product" aria-pressed="true">找产品</button>
+          <button type="button" data-field-intent="board" aria-pressed="false">认纸板</button>
+          <button type="button" data-field-intent="location" aria-pressed="false">查货位</button>
         </div>
+        <div class="searchbar field-searchbar">
+          <input id="lookupInput" maxlength="100" autocomplete="off" inputmode="search" placeholder="产品、客户、订单、模具或收料号">
+          <button id="lookupButton" class="search-btn" type="button">查询</button>
+          <a href="/mobile/scan" aria-label="扫码查询">扫码</a>
+        </div>
+        <div id="fieldToleranceOptions" class="field-query-options"><label>范围<select id="fieldTolerance" aria-label="尺寸查询范围"><option value="5">接近 ±5mm</option><option value="0">仅精确</option><option value="10">接近 ±10mm</option></select></label></div>
+        <div id="fieldBoardOptions" class="field-query-options" hidden><label>纸板现状<select id="fieldBoardState" aria-label="纸板当前状态"><option value="raw">大纸 / 未加工</option><option value="net_raw">净片 / 未加工</option><option value="creased">已压线</option><option value="printed">已印刷</option><option value="die_cut">已模切</option></select></label><label>材质<input id="fieldMaterial" maxlength="60" placeholder="可不填"></label><label>楞型<select id="fieldFlute"><option value="">待核</option><option value="A">A</option><option value="B">B</option><option value="E">E</option><option value="AB">AB</option><option value="BE">BE</option><option value="ABC">ABC</option><option value="AAA">AAA</option><option value="NONE">无楞</option></select></label></div>
+        <section id="productWorkbench" data-external-search="1" aria-label="产品资料与纸板用途"></section>
+        <details id="fieldNearbyDetails" class="field-more" hidden><summary>接近尺寸的产品（用途待核）</summary><section id="fieldNearby" class="field-location-list"></section><div id="fieldNearbyPager" class="pager" hidden><button id="fieldNearbyPrev" class="small-btn" type="button">上一页</button><span id="fieldNearbyPageText"></span><button id="fieldNearbyNext" class="small-btn" type="button">下一页</button></div></details>
+        <div id="fieldLocationResults" class="field-location-list" hidden></div>
+        <div id="fieldLocationState" class="card status empty" hidden></div>
+        <div id="fieldLocationPager" class="pager" hidden><button id="fieldLocationPrev" class="small-btn" type="button">上一页</button><span id="fieldLocationPageText"></span><button id="fieldLocationNext" class="small-btn" type="button">下一页</button></div>
+        <details id="fieldOtherResults" class="field-more"><summary>订单 / 收料 / 生产 / 模具等查询结果</summary>
         <div class="lookup-filter">
           <select id="lookupCategory" aria-label="查询类别"></select>
           <button id="unfulfilledOrders" class="small-btn" type="button">未送齐订单</button>
@@ -354,6 +364,8 @@
           <span id="lookupPageText">第 1 页</span>
           <button id="lookupNext" class="small-btn" type="button">下一页</button>
         </div>
+        </details>
+        <details id="fieldStockTools" class="field-more"><summary>按尺寸查实存 / 取用</summary><section id="dimensionStock" class="card" aria-label="按尺寸找库存"></section></details>
       </section>
 
       <section id="searchPage" hidden>
@@ -508,10 +520,11 @@
     </div>
   </section>
 
-  <script src="/static/ui/mobile-field-return.js?v=20261010"></script>
+  <script src="/static/ui/mobile-field-return.js?v=e18709881402"></script>
+  <script src="/static/ui/mobile-field-search.js?v=b4b8bc07588e"></script>
   <script src="/static/ui/mobile-product-drawings.js?v=20261010-all"></script>
-  <link rel="stylesheet" href="/static/ui/product-workbench.css?v=0a4c3d1478c0">
-  <script src="/static/ui/product-workbench.js?v=a738096bce6f"></script>
+  <link rel="stylesheet" href="/static/ui/product-workbench.css?v=dbd8b4a62a34">
+  <script src="/static/ui/product-workbench.js?v=d955b9c2cc11"></script>
   <script src="/static/ui/mobile-dimension-stock.js?v=20261010-recovery1"></script>
   <script src="/static/ui/mobile-delivery-margin.js?v=20260915-costcontract428"></script>
   <script>
@@ -534,6 +547,7 @@
         detailGeneration: 0,
         lookupQuery: "",
         lookupCategory: "all",
+        fieldIntent: "product", fieldLocationPage: 1, fieldLocationController: null, fieldLocationGeneration: 0, fieldNearbyGeneration: 0, fieldNearbyPage: 1, fieldSearchGeneration: 0, fieldSourceActive: false,
         lookupGroups: [],
         lookupPage: 1,
         lookupController: null,
@@ -614,6 +628,13 @@
         byId("dimensionNear").value = settings.near_mm; byId("dimensionExpanded").value = settings.expanded_mm;
       }
 
+      function resetFieldConditions() {
+        byId("fieldTolerance").value = "5";
+        byId("fieldMaterial").value = "";
+        byId("fieldFlute").value = "";
+        byId("fieldBoardState").value = "raw";
+      }
+
       function persistMobilePortalState() {
         if (!state.lookupUserId) return;
         try {
@@ -622,6 +643,9 @@
             active_page: state.activePage,
             lookup_query: state.lookupQuery,
             lookup_category: state.lookupCategory,
+            field_intent: state.fieldIntent, field_location_page: state.fieldLocationPage,
+            field_tolerance: byId("fieldTolerance").value, field_material: byId("fieldMaterial").value.trim().slice(0,60),
+            field_flute: byId("fieldFlute").value, field_board_state: byId("fieldBoardState").value,
             dimension_mode: byId("lookupDimensionMode").value, dimension_customer: byId("dimensionCustomer").value,
             dimension_axis: byId("dimensionAxis").value, dimension_tolerance: byId("dimensionTolerance").value,
             lookup_page: state.lookupPage,
@@ -637,10 +661,19 @@
         try { saved = JSON.parse(sessionStorage.getItem(mobilePortalStorageKey) || "null"); } catch (_error) { saved = null; }
         if (!saved || Number(saved.user_id) !== state.lookupUserId) {
           try { sessionStorage.removeItem(mobilePortalStorageKey); } catch (_error) { /* ignore */ }
+          resetFieldConditions();
           return "";
         }
         state.lookupQuery = String(saved.lookup_query || "").slice(0, 100);
         state.lookupCategory = String(saved.lookup_category || "all");
+        state.fieldIntent = ["product","board","location"].includes(saved.field_intent) ? saved.field_intent : "product";
+        state.fieldLocationPage = Math.max(1, Number(saved.field_location_page) || 1);
+        byId("fieldTolerance").value = ["0","5","10"].includes(saved.field_tolerance) ? saved.field_tolerance : "5";
+        const material = typeof saved.field_material === "string" ? saved.field_material.trim() : "";
+        byId("fieldMaterial").value = material.length <= 60 && !/[\x00-\x1f\x7f]/.test(material) ? material : "";
+        byId("fieldFlute").value = ["","A","B","E","AB","BE","ABC","AAA","NONE"].includes(saved.field_flute) ? saved.field_flute : "";
+        byId("fieldBoardState").value = ["raw","net_raw","creased","printed","die_cut"].includes(saved.field_board_state) ? saved.field_board_state : "raw";
+        setFieldIntent(state.fieldIntent, false);
         byId("lookupDimensionMode").value = saved.dimension_mode || "text";
         byId("dimensionCustomer").value = saved.dimension_customer || "";
         byId("dimensionAxis").value = saved.dimension_axis || "any";
@@ -658,6 +691,7 @@
       }
 
       function clearMobilePortalState() {
+        resetFieldConditions();
         window.ERPProductWorkbench?.destroyMobile();
         window.TmDimensionStock?.destroy();
         window.TmProductDrawings?.disposeWithin(document.body);
@@ -668,6 +702,8 @@
         state.expandedOrderItems.clear();
         state.lookupPage = 1;
         state.lookupCategory = "all";
+        state.fieldIntent = "product"; state.fieldLocationController?.abort(); state.fieldLocationGeneration++; state.fieldNearbyGeneration++; state.fieldSearchGeneration++; state.fieldSourceActive = false;
+        byId("fieldLocationResults").replaceChildren(); byId("fieldNearby").replaceChildren();
         state.scrollByPage.clear();
         try { sessionStorage.removeItem(mobilePortalStorageKey); } catch (_error) { /* ignore */ }
       }
@@ -863,6 +899,7 @@
           byId("warehouseMapLayer").hidden = true;
           state.warehouseMapController?.abort(); state.warehouseMapGeneration++; state.fieldMapGeneration++;
         }
+        if (page !== "warehouse" && page !== "lookup") state.fieldSourceActive = false;
         if (state.activePage && state.activePage !== "incoming") state.scrollByPage.set(state.activePage, window.scrollY);
         state.activePage = page;
         window.TmMobileDeliveryMargin?.onPageChange?.(page);
@@ -1158,6 +1195,7 @@
           button.type = "button";
           button.addEventListener("click", () => {
             byId("searchInput").value = item.customer_material_code || item.product_code || "";
+            state.fieldSourceActive = true;
             persistMobilePortalState();
             setPage("warehouse");
             runSearch();
@@ -1214,6 +1252,12 @@
             section.append(card);
           });
           if (!items.length) section.append(node("div", "card muted", "没有匹配资料。"));
+          if (data.category === "all" && Number(group.total || 0) > items.length) {
+            const more = node("button", "small-btn", `查看全部 ${group.label || "资料"}（${Number(group.total)}）`);
+            more.type = "button";
+            more.addEventListener("click", () => { byId("lookupCategory").value = group.id; state.lookupCategory = group.id; byId("orderLookupFilters").hidden = group.id !== "orders"; byId("fieldOtherResults").open = true; runUnifiedSearch(1); });
+            section.append(more);
+          }
           container.append(section);
         });
         container.hidden = false;
@@ -1281,8 +1325,140 @@
         }
       }
 
+      function setFieldIntent(intent, save = true) {
+        state.fieldIntent = ["product", "board", "location"].includes(intent) ? intent : "product";
+        document.querySelectorAll("[data-field-intent]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.fieldIntent === state.fieldIntent)));
+        byId("fieldBoardOptions").hidden = state.fieldIntent !== "board";
+        syncFieldControls();
+        byId("productWorkbench").hidden = state.fieldIntent === "location";
+        byId("fieldNearbyDetails").hidden = state.fieldIntent !== "board" || !byId("fieldNearbyDetails").dataset.available;
+        if (state.fieldIntent !== "board") { byId("fieldNearby").replaceChildren(); delete byId("fieldNearbyDetails").dataset.available; state.fieldNearbyGeneration++; }
+        byId("fieldLocationResults").hidden = state.fieldIntent !== "location";
+        byId("fieldLocationState").hidden = state.fieldIntent !== "location";
+        byId("fieldLocationPager").hidden = state.fieldIntent !== "location" || !byId("fieldLocationPager").dataset.available;
+        byId("lookupInput").placeholder = state.fieldIntent === "board" ? "纸板实测长×宽 mm" : state.fieldIntent === "location" ? "货位名称、短码或楼层" : "产品、客户、订单、模具或收料号";
+        if (save) persistMobilePortalState();
+      }
+
+      function syncFieldControls() {
+        byId("fieldToleranceOptions").hidden = state.fieldIntent === "location" || (state.fieldIntent === "product" && !window.TmMobileFieldSearch?.dimensions(byId("lookupInput").value.trim())?.height);
+      }
+
+      async function runFieldLocation(page = 1) {
+        const query = byId("lookupInput").value.trim();
+        const actor = state.shell?.user?.id;
+        state.fieldLocationController?.abort();
+        const controller = new AbortController(); state.fieldLocationController = controller;
+        const generation = ++state.fieldLocationGeneration;
+        state.fieldLocationPage = Math.max(1, Number(page) || 1);
+        byId("fieldLocationResults").replaceChildren(); byId("fieldLocationResults").hidden = false;
+        byId("fieldLocationPager").hidden = true; delete byId("fieldLocationPager").dataset.available;
+        if (!query) { showStatus("fieldLocationState", "输入货位名称或短码。", "empty"); return; }
+        showStatus("fieldLocationState", "正在查询货位…", "");
+        try {
+          const params = new URLSearchParams({q:query,page:String(state.fieldLocationPage),page_size:"12"});
+          const body = await apiGet(`/api/mobile/erp/warehouse/map/locations-search?${params}`, {signal:controller.signal});
+          if (generation !== state.fieldLocationGeneration || actor !== state.shell?.user?.id || state.activePage !== "lookup" || state.fieldIntent !== "location") return;
+          const rows = window.TmMobileFieldSearch.locations(body), host = byId("fieldLocationResults");
+          rows.forEach(row => {
+            const card = node("article", "field-location-card");
+            card.append(node("strong", "", row.name));
+            const place = [row.floor,row.area].filter(Boolean).join(" · ");
+            if (place) card.append(node("small", "", place));
+            if (row.issue) card.append(node("small", "", row.issue));
+            const actual = node("div", "field-default");
+            actual.append(node("small", "", "实存货物"));
+            const inspect = node("button", "small-btn", "查看实存 / 盘点移货"); inspect.type = "button";
+            inspect.addEventListener("click", () => {
+              state.fieldSourceActive = true; persistMobilePortalState(); setPage("warehouse");
+              openWarehouseMap({floorCode:row.floor,areaCode:row.area,locationId:row.id,origin:"search"});
+            });
+            actual.append(inspect); card.append(actual);
+            const binding = node("div", "field-default");
+            binding.append(node("small", "", row.binding?.is_active === false ? "原默认绑定（产品已停用，仅核对）" : "默认规划位置"));
+            const bindingText = row.binding ? [row.binding.product_code,row.binding.product_name].filter(Boolean).join(" · ") : row.bindingVisibility === "hidden_by_permission" ? "无默认绑定查看权限" : row.bindingVisibility === "none" ? "未登记默认绑定" : "默认绑定待核";
+            binding.append(node("span", "", bindingText));
+            card.append(binding);
+            host.append(card);
+          });
+          byId("fieldLocationState").hidden = !!rows.length;
+          if (!rows.length) showStatus("fieldLocationState", "未查到可查看的货位。", "empty");
+          byId("fieldLocationPageText").textContent = `第 ${body.page} 页 · 共 ${body.total} 处`;
+          byId("fieldLocationPrev").disabled = body.page <= 1;
+          byId("fieldLocationNext").disabled = !body.has_more;
+          byId("fieldLocationPager").hidden = body.page <= 1 && !body.has_more;
+          if (!byId("fieldLocationPager").hidden) byId("fieldLocationPager").dataset.available = "1";
+          persistMobilePortalState();
+        } catch (error) {
+          if (error.name === "AbortError" || generation !== state.fieldLocationGeneration) return;
+          showStatus("fieldLocationState", error.message || "货位查询失败", "error", () => runFieldLocation(state.fieldLocationPage));
+        }
+      }
+
+      async function runFieldSearch(productPage = 1, selectedProductId = null, legacyCategory = "all", legacyPage = 1) {
+        const query = byId("lookupInput").value.trim();
+        syncFieldControls();
+        const actor = state.shell?.user?.id, generation = ++state.fieldSearchGeneration;
+        state.lookupQuery = query;
+        if (!query) { clearLookup(); return; }
+        byId("fieldNearby").replaceChildren(); byId("fieldNearbyDetails").hidden = true; delete byId("fieldNearbyDetails").dataset.available; state.fieldNearbyGeneration++;
+        const category = Array.from(byId("lookupCategory").options).some(option => option.value === legacyCategory) ? legacyCategory : "all";
+        byId("lookupCategory").value = category; state.lookupCategory = category;
+        byId("orderLookupFilters").hidden = category !== "orders";
+        const legacy = runUnifiedSearch(legacyPage);
+        if (state.fieldIntent === "location") { await Promise.allSettled([legacy, runFieldLocation(productPage)]); return; }
+        const workbench = window.ERPProductWorkbench?.mountMobile({container:byId("productWorkbench"),userId:state.shell?.user?.id,externalSearch:true});
+        if (!workbench) { await legacy; return; }
+        let productRequest;
+        if (state.fieldIntent === "board") {
+          const dimensions = window.TmMobileFieldSearch.dimensions(query);
+          if (!dimensions || dimensions.height) { byId("productWorkbench").replaceChildren(node("p", "card status empty", "请输入纸板长×宽，例如 800×600")); await legacy; return; }
+          productRequest = workbench.query({...dimensions,processed_state:byId("fieldBoardState").value,...(byId("fieldMaterial").value.trim()?{material_code:byId("fieldMaterial").value.trim()}:{}),...(byId("fieldFlute").value?{flute_type:byId("fieldFlute").value}:{})},productPage,"reverse");
+          runFieldNearby(dimensions,1);
+        } else {
+          const sizes = window.TmMobileFieldSearch.dimensions(query);
+          productRequest = workbench.query(sizes?.height?{...sizes,dimension_basis:"finished",tolerance_mm:byId("fieldTolerance").value}:{q:query},productPage,"search");
+        }
+        persistMobilePortalState();
+        await Promise.allSettled([legacy,productRequest]);
+        if (selectedProductId && generation === state.fieldSearchGeneration && actor === state.shell?.user?.id && state.activePage === "lookup" && byId("lookupInput").value.trim() === query) await workbench.show(selectedProductId);
+      }
+
+      async function runFieldNearby(dimensions,page = 1) {
+        const host = byId("fieldNearby"); host.replaceChildren(); state.fieldNearbyPage = Math.max(1,Number(page)||1);
+        const actor = state.shell?.user?.id;
+        const generation = ++state.fieldNearbyGeneration;
+        const basis = byId("fieldBoardState").value === "raw" ? "report" : "net";
+        const params = new URLSearchParams({...dimensions,dimension_basis:basis,tolerance_mm:byId("fieldTolerance").value,page:String(state.fieldNearbyPage),page_size:"12",...(byId("fieldMaterial").value.trim()?{material_code:byId("fieldMaterial").value.trim()}:{}),...(byId("fieldFlute").value?{flute_type:byId("fieldFlute").value}:{})});
+        try {
+          const data = await apiGet(`/api/product-workbench/search?${params}`);
+          if (generation !== state.fieldNearbyGeneration || actor !== state.shell?.user?.id || state.fieldIntent !== "board" || state.activePage !== "lookup") return;
+          byId("fieldNearbyDetails").hidden = false; byId("fieldNearbyDetails").dataset.available = "1";
+          if (!Array.isArray(data.items)) throw Error("尺寸候选回执不完整");
+          data.items.forEach(item => {
+            const card = node("article", "field-location-card");
+            card.append(node("strong", "", item.product_code || "存货编码待核"));
+            card.append(node("small", "", [item.customer_name,item.product_name,item.specification].filter(Boolean).join(" · ")));
+            const match = item.dimension_match, delta = match?.delta_mm;
+            card.append(node("small", "", match ? `${match.exact ? "精确尺寸" : "接近尺寸"} · 差值 ${Object.values(delta || {}).filter(value => value !== null).map(value => `${value}mm`).join(" / ") || "待核"} · 用途仍需核对` : "尺寸差待核 · 用途仍需核对"));
+            const open = node("button", "small-btn", "查看产品资料"); open.type = "button";
+            open.addEventListener("click", () => window.ERPProductWorkbench?.mountMobile({container:byId("productWorkbench"),userId:state.shell?.user?.id,externalSearch:true})?.show(item.product_id || item.id));
+            card.append(open); host.append(card);
+          });
+          if (!data.items.length) host.append(node("p", "card status empty", "暂无接近尺寸产品"));
+          byId("fieldNearbyPageText").textContent = `第 ${data.page} 页 · 共 ${data.total} 款`;
+          byId("fieldNearbyPrev").disabled = data.page <= 1; byId("fieldNearbyNext").disabled = !data.has_more;
+          byId("fieldNearbyPager").hidden = data.page <= 1 && !data.has_more;
+        } catch (error) {
+          if (generation === state.fieldNearbyGeneration) host.append(node("p", "card status error", error.message || "尺寸候选查询失败"));
+        }
+      }
+
       function clearLookup() {
         window.TmProductDrawings?.disposeWithin(byId("lookupResults"));
+        window.ERPProductWorkbench?.destroyMobile();
+        state.fieldLocationController?.abort(); state.fieldLocationGeneration++; state.fieldNearbyGeneration++; state.fieldSearchGeneration++;
+        byId("fieldLocationResults").replaceChildren(); byId("fieldNearby").replaceChildren(); byId("fieldNearbyDetails").hidden = true; delete byId("fieldNearbyDetails").dataset.available;
         state.lookupController?.abort();
         state.lookupGeneration += 1;
         state.lookupQuery = "";
@@ -1316,12 +1492,42 @@
           locationId:Number(state.warehouseMapFocusLocationId) || null,
           floorCode:state.warehouseMapFloor || "", areaCode:state.warehouseMapArea || "", scrollY:Math.max(0,window.scrollY || 0)};
       }
+      function fieldReturnValues() {
+        const product = window.ERPProductWorkbench?.snapshotMobile?.();
+        return {kind:"field",query:byId("lookupInput").value.trim().slice(0,200),includeZero:false,
+          selectedProductId:Number(product?.productId || state.selectedProductId) || null,
+          locationId:Number(state.warehouseMapFocusLocationId) || null,
+          floorCode:state.warehouseMapFloor || "",areaCode:state.warehouseMapArea || "",scrollY:Math.max(0,window.scrollY || 0),
+          intent:state.fieldIntent,page:state.fieldIntent === "location" ? state.fieldLocationPage : Math.max(1,Number(product?.page) || 1),
+          category:state.lookupCategory,lookupPage:Math.max(1,Number(state.lookupPage)||1),nearPage:Math.max(1,Number(state.fieldNearbyPage)||1),
+          fieldTolerance:byId("fieldTolerance").value,fieldMaterial:byId("fieldMaterial").value.trim().slice(0,60),
+          fieldFlute:byId("fieldFlute").value,fieldBoardState:byId("fieldBoardState").value};
+      }
       function launchMobileStocktake(params) {
         if (state.warehouseAuthPending || !state.allowedPages.has("warehouse")) return;
-        const kind = state.warehouseMapOrigin === "search" ? "search" : "map";
+        const kind = state.fieldSourceActive ? "field" : state.warehouseMapOrigin === "search" ? "search" : "map";
         params.set("return_source", kind);
-        try { const token = window.TmMobileFieldReturn?.capture(window.sessionStorage, warehouseActor(), warehouseReturnValues(kind)); if (token) params.set("return_context", token); } catch (_) { /* Navigation can degrade without affecting a business request. */ }
+        try { const token = window.TmMobileFieldReturn?.capture(window.sessionStorage, warehouseActor(), kind === "field" ? fieldReturnValues() : warehouseReturnValues(kind)); if (token) params.set("return_context", token); } catch (_) { /* Navigation can degrade without affecting a business request. */ }
         window.location.assign(`/mobile/stocktake.html?${params}`);
+      }
+      async function restoreFieldLaunch(params) {
+        let record = null;
+        try { record = window.TmMobileFieldReturn?.read(window.sessionStorage, warehouseActor(), params.get("return_context")); } catch (_) {}
+        if (record?.kind !== "field") { clearLookup(); showStatus("lookupState", "原查询条件无法恢复，请重新查询。", "empty"); return; }
+        setFieldIntent(record.intent, false); byId("lookupInput").value = record.query;
+        byId("fieldTolerance").value = record.fieldTolerance;
+        byId("fieldMaterial").value = record.fieldMaterial;
+        byId("fieldFlute").value = record.fieldFlute;
+        byId("fieldBoardState").value = record.fieldBoardState;
+        state.lookupQuery = record.query; state.lookupCategory = record.category; state.lookupPage = record.lookupPage;
+        state.fieldNearbyPage = record.nearPage; state.fieldLocationPage = record.intent === "location" ? record.page : state.fieldLocationPage;
+        persistMobilePortalState();
+        await runFieldSearch(record.page,record.selectedProductId,record.category,record.lookupPage);
+        if (record.intent === "board" && record.nearPage > 1 && state.activePage === "lookup") {
+          const dimensions = window.TmMobileFieldSearch.dimensions(record.query);
+          if (dimensions && !dimensions.height) { byId("fieldNearbyDetails").open = true; runFieldNearby(dimensions,record.nearPage); }
+        }
+        if (state.activePage === "lookup" && state.shell?.user?.id === record.actorId) window.requestAnimationFrame(() => window.scrollTo({top:record.scrollY || 0}));
       }
       async function restoreWarehouseSearch(record) {
         const actor = warehouseActor(), generation = state.fieldGeneration;
@@ -1677,7 +1883,7 @@
         const current = () => generation === state.fieldMapGeneration && actor === warehouseActor() && state.activePage === "warehouse" && !byId("warehouseMapLayer").hidden && !state.warehouseAuthPending;
         state.warehouseMapOrigin = preferred.origin === "search" ? "search" : "map";
         byId("warehouseMapLayer").hidden = false;
-        byId("closeWarehouseMap").textContent = "返回仓库搜索";
+        byId("closeWarehouseMap").textContent = state.fieldSourceActive ? "返回现场查询" : "返回仓库搜索";
         byId("warehouseDiscrepancyListButton").hidden = !state.warehouseMapCanCorrect;
         if (!state.warehouseMapFloors.length) {
           showStatus("warehouseMapState", "正在读取仓库楼层与区域…", "");
@@ -2615,7 +2821,7 @@
         state.warehouseLocationPage = false;
         byId("warehouseAreaOverview").hidden = false;
         byId("warehouseMapGoods").hidden = true;
-        byId("closeWarehouseMap").textContent = "返回仓库搜索";
+        byId("closeWarehouseMap").textContent = state.fieldSourceActive ? "返回现场查询" : "返回仓库搜索";
       }
 
       function closeWarehouseMap() {
@@ -2628,6 +2834,7 @@
         state.warehouseMapController?.abort();
         state.warehouseMapGeneration += 1; state.fieldMapGeneration++; fieldIntent();
         byId("warehouseMapLayer").hidden = true;
+        if (state.fieldSourceActive && state.allowedPages.has("lookup")) setPage("lookup");
       }
 
       function openMap(position) {
@@ -3124,7 +3331,8 @@
               focusOnly: launchParams.get("focus_only") === "1",
             });
           }
-          if (firstPage === "lookup" && state.lookupQuery) runUnifiedSearch(state.lookupPage);
+          if (firstPage === "lookup" && launchParams.get("return_source") === "field") await restoreFieldLaunch(launchParams);
+          else if (firstPage === "lookup" && state.lookupQuery) runFieldSearch();
           if (firstPage !== "incoming") state.incomingPerformanceActive = false;
         } catch (error) {
           byId("bottomNav").hidden = true;
@@ -3142,10 +3350,23 @@
       byId("lookupInput").addEventListener("keydown", event => {
         if (event.key === "Enter") {
           event.preventDefault();
-          runUnifiedSearch(1);
+          runFieldSearch();
         }
       });
-      byId("lookupButton").addEventListener("click", () => runUnifiedSearch(1));
+      byId("lookupButton").addEventListener("click", () => runFieldSearch());
+      document.querySelectorAll("[data-field-intent]").forEach(button => button.addEventListener("click", () => {
+        if (state.fieldIntent === button.dataset.fieldIntent) return;
+        state.fieldLocationController?.abort(); state.fieldLocationGeneration++;
+        setFieldIntent(button.dataset.fieldIntent);
+        if (byId("lookupInput").value.trim()) runFieldSearch();
+      }));
+      byId("fieldBoardState").addEventListener("change", () => { if (state.fieldIntent === "board" && byId("lookupInput").value.trim()) runFieldSearch(); });
+      for (const id of ["fieldTolerance", "fieldFlute"]) byId(id).addEventListener("change", () => { if (byId("lookupInput").value.trim() && state.fieldIntent !== "location") runFieldSearch(); });
+      byId("fieldMaterial").addEventListener("change", () => { if (state.fieldIntent === "board" && byId("lookupInput").value.trim()) runFieldSearch(); });
+      byId("fieldNearbyPrev").addEventListener("click", () => { const sizes = window.TmMobileFieldSearch.dimensions(byId("lookupInput").value.trim()); if (sizes && !sizes.height) runFieldNearby(sizes,state.fieldNearbyPage - 1); });
+      byId("fieldNearbyNext").addEventListener("click", () => { const sizes = window.TmMobileFieldSearch.dimensions(byId("lookupInput").value.trim()); if (sizes && !sizes.height) runFieldNearby(sizes,state.fieldNearbyPage + 1); });
+      byId("fieldLocationPrev").addEventListener("click", () => runFieldLocation(state.fieldLocationPage - 1));
+      byId("fieldLocationNext").addEventListener("click", () => runFieldLocation(state.fieldLocationPage + 1));
       byId("saveDimensionSettings").addEventListener("click", async () => {
         const button = byId("saveDimensionSettings"); button.disabled = true;
         try {
@@ -3169,6 +3390,7 @@
       let dimensionTimer;
       byId("lookupInput").addEventListener("input", () => {
         state.lookupController?.abort(); state.lookupGeneration += 1;
+        syncFieldControls();
         clearTimeout(dimensionTimer);
         if (byId("lookupCategory").value === "orders" && byId("lookupDimensionMode").value !== "text" && byId("lookupInput").value.trim()) dimensionTimer = setTimeout(() => runUnifiedSearch(1), 400);
       });

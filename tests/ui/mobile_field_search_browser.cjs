@@ -1,0 +1,62 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const {chromium}=require(process.env.PLAYWRIGHT_NODE_MODULE||'C:/Users/Administrator/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+(async()=>{
+ const output=process.env.ERP_FIELD_SEARCH_BROWSER_EVIDENCE,base=process.env.ERP_FIELD_SEARCH_BROWSER_BASE;
+ assert(output&&/^http:\/\/127\.0\.0\.1:\d+$/.test(base));fs.mkdirSync(output,{recursive:true});
+ const browser=await chromium.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});
+ const context=await browser.newContext({viewport:{width:390,height:844}}),page=await context.newPage();
+ const errors=[],writes=[];page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(!['GET','HEAD'].includes(r.method()))writes.push(r.url());});
+ try{
+  const login=await context.request.post(base+'/api/auth/login',{data:{username:'mobile-admin',password:'123456'}});assert.equal(login.status(),200);
+  await page.goto(base+'/mobile/#lookup');await page.locator('#lookupButton').waitFor({state:'visible'});
+  assert.equal(await page.locator('[data-field-intent]').count(),3);
+  assert.equal(await page.locator('#lookupPage input[type="search"]:visible, #lookupPage input[inputmode="search"]:visible').count(),1);
+  await page.locator('#lookupInput').fill('MB001');await page.locator('#lookupButton').click();
+  await page.locator(`[data-product="${process.env.ERP_FIELD_SEARCH_PRODUCT_ID}"]`).first().click();
+  const summary=page.locator('.pw-field-summary');await summary.waitFor();
+  assert.match(await summary.innerText(),/MB001/);assert.match(await summary.innerText(),/B7/);
+  assert.match(await summary.innerText(),/实存货位/);
+  const typography=await summary.locator(':scope > div').evaluateAll(cards=>cards.slice(0,2).map(c=>parseFloat(getComputedStyle(c.querySelector('strong,b')).fontSize)));
+  await page.screenshot({path:path.join(output,'mobile-product-390.png'),fullPage:true});
+  assert(typography.every(n=>n>=22),JSON.stringify(typography));assert(Math.abs(typography[0]-typography[1])<=1,JSON.stringify(typography));
+  for(const width of [320,390]){
+   await page.setViewportSize({width,height:844});
+   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`horizontal overflow at ${width}`);
+  }
+  await page.locator('[data-back]').click();
+  await page.locator('#lookupInput').fill('421×311×261');await page.locator('#lookupButton').click();
+  await page.locator(`[data-product="${process.env.ERP_FIELD_SEARCH_PRODUCT_ID}"]`).first().waitFor();
+  await page.screenshot({path:path.join(output,'mobile-near-dimensions.png'),fullPage:true});
+  await page.locator('[data-field-intent="board"]').click();
+  await page.locator('#lookupInput').fill('800×600');
+  await Promise.all([page.waitForResponse(r=>r.url().includes('/api/product-workbench/reverse?')&&r.status()===200),page.locator('#lookupButton').click()]);
+  await page.locator('#productWorkbench .pw-loading').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#productWorkbench .pw-error').count(),0);
+  await page.screenshot({path:path.join(output,'mobile-board-query.png'),fullPage:true});
+  await page.locator('#fieldMaterial').fill('VIK');
+  await page.locator('#fieldTolerance').selectOption('10');
+  await page.locator('#fieldFlute').selectOption('B');
+  await page.locator('#fieldBoardState').selectOption('net_raw');
+  await Promise.all([page.waitForResponse(r=>r.url().includes('/api/product-workbench/reverse?')&&r.url().includes('net_raw')&&r.url().includes('VIK')&&r.status()===200),page.locator('#lookupButton').click()]);
+  await page.locator('#productWorkbench .pw-loading').waitFor({state:'hidden'});
+  await page.reload();await page.locator('#lookupInput').waitFor({state:'visible'});
+  assert.equal(await page.locator('#fieldMaterial').inputValue(),'VIK');
+  assert.equal(await page.locator('#fieldTolerance').inputValue(),'10');
+  assert.equal(await page.locator('#fieldFlute').inputValue(),'B');
+  assert.equal(await page.locator('#fieldBoardState').inputValue(),'net_raw');
+  assert.equal(await page.locator('#lookupInput').inputValue(),'800×600');
+  await page.locator('[data-field-intent="location"]').click();
+  await page.locator('#lookupInput').fill('C1');await page.locator('#lookupButton').click();
+  await page.locator('#fieldLocationResults').waitFor({state:'visible'});
+  await page.screenshot({path:path.join(output,'mobile-location-query.png'),fullPage:true});
+  await page.getByRole('button',{name:'查看实存 / 盘点移货',exact:true}).first().click();
+  await page.locator('#closeWarehouseMap').waitFor({state:'visible'});
+  assert.equal(await page.locator('#closeWarehouseMap').innerText(),'返回现场查询');
+  await page.locator('#closeWarehouseMap').click();
+  await page.locator('#lookupInput').waitFor({state:'visible'});
+  assert.equal(await page.locator('#lookupInput').inputValue(),'C1');
+  assert.equal(await page.locator('[data-field-intent="location"]').getAttribute('aria-pressed'),'true');
+  assert.deepEqual(errors,[]);assert.deepEqual(writes,[]);
+  fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({passed:true,isolated:true,realMobilePage:true,realApi:true,browser:'installed Chrome',typography,widths:[320,390],warehouseReturn:true,filtersSurviveReload:true,writes,errors},null,2));
+ }finally{await browser.close();}
+})().catch(e=>{console.error(e.stack);process.exitCode=1;});

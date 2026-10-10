@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from decimal import Decimal
 
 from sqlalchemy import and_, case, exists, func, or_, select
@@ -13,7 +14,13 @@ from app.models.order import Order, OrderItem
 from app.models.mold_tool import MoldTool
 from app.models.product import Product
 from app.models.product_bom import ProductBomComponent
+from app.models.shared_finished_stock import SharedFinishedGroup, SharedFinishedLot, SharedFinishedMember
 from app.models.stock_replenishment import InventoryStockPolicy
+from app.models.stock_replenishment import (
+    StockReplenishmentOrderItem as StockItem,
+    StockReplenishmentOrder as StockOrder,
+)
+from app.models.incoming_receipt import IncomingReceiptItem as Receipt
 from app.models.warehouse_inventory import (
     FinishedGoodsInventoryDetail, InventoryLot, SemiFinishedInventoryDetail,
     SemiFinishedLotAllowedProduct,
@@ -30,11 +37,78 @@ def visible_products(db: Session, scope: set[int] | None):
     return query.options(selectinload(Product.customer), selectinload(Product.material))
 
 
+def _source_stock_priority_ids(db: Session, candidate_products) -> list[int]:
+    """Validate active source lots and transfer descendants for search ranking.
+
+    Collect all three formal FK paths in batches, then invoke the same
+    provenance selector used by product details. The recursive CTE is compiled
+    once per source-linked candidate, with a concrete owner and root ID set;
+    it never implicitly correlates to the outer Product search row.
+    """
+    from app.services.product_activity import source_lot_descendant_ids
+
+    candidate_ids = select(candidate_products.c.id)
+    roots: dict[tuple[int, int | None], set[int]] = defaultdict(set)
+
+    def add_stock_rows(rows):
+        for reference_id, product_id, customer_id, lot_id in rows:
+            if lot_id is None:
+                continue
+            for candidate_id in {reference_id, product_id} - {None}:
+                roots[(int(candidate_id), customer_id)].add(int(lot_id))
+
+    add_stock_rows(db.execute(select(
+        StockItem.reference_product_id, StockItem.product_id,
+        StockItem.customer_id, Receipt.received_inventory_lot_id).select_from(StockItem).join(
+        Receipt, Receipt.stock_replenishment_item_id == StockItem.id).join(
+        StockOrder, StockOrder.id == StockItem.replenishment_order_id).where(
+        or_(StockItem.reference_product_id.in_(candidate_ids),
+            StockItem.product_id.in_(candidate_ids)),
+        StockOrder.status != "voided", Receipt.status == "posted")))
+    add_stock_rows(db.execute(select(
+        StockItem.reference_product_id, StockItem.product_id,
+        StockItem.customer_id, StockItem.inventory_lot_id).select_from(StockItem).join(
+        StockOrder, StockOrder.id == StockItem.replenishment_order_id).where(
+        or_(StockItem.reference_product_id.in_(candidate_ids),
+            StockItem.product_id.in_(candidate_ids)),
+        StockOrder.status.notin_(("draft", "voided")))))
+    for product_id, customer_id, lot_id in db.execute(select(
+            OrderItem.product_id, Order.customer_id,
+            Receipt.received_inventory_lot_id).select_from(OrderItem).join(
+            Order, Order.id == OrderItem.order_id).join(
+            Receipt, Receipt.order_item_id == OrderItem.id).where(
+            OrderItem.product_id.in_(candidate_ids), Receipt.status == "posted")):
+        if lot_id is not None:
+            roots[(int(product_id), customer_id)].add(int(lot_id))
+    if not roots:
+        return []
+    owners = {product_id: customer_id for product_id, customer_id in db.execute(
+        select(Product.id, Product.customer_id).where(
+            Product.id.in_({product_id for product_id, _ in roots})))}
+    ranked = set()
+    for (product_id, customer_id), root_ids in roots.items():
+        if customer_id is None or owners.get(product_id) != customer_id:
+            continue
+        descendants = source_lot_descendant_ids(root_ids, customer_id)
+        has_live_lot = db.scalar(select(InventoryLot.id).join(
+            SemiFinishedInventoryDetail,
+            SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id).where(
+            InventoryLot.id.in_(descendants),
+            InventoryLot.status == "active", InventoryLot.inventory_type == "semi_finished",
+            SemiFinishedInventoryDetail.owner_customer_id == customer_id,
+            InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0).limit(1))
+        if has_live_lot is not None:
+            ranked.add(product_id)
+    return sorted(ranked)
+
+
 def find_products(db: Session, scope: set[int] | None, *, q: str,
                   customer_id: int | None, dimension_basis: str,
                   length: Decimal | None, width: Decimal | None,
-                  height: Decimal | None, page: int, page_size: int,
-                  allow_order_search: bool):
+                  height: Decimal | None, tolerance_mm: Decimal = Decimal(0),
+                  material_code: str | None = None, flute_type: str | None = None,
+                  page: int, page_size: int,
+                  allow_order_search: bool, allow_inventory_rank: bool = False):
     query = visible_products(db, scope).outerjoin(MoldTool, MoldTool.id == Product.mold_tool_id)
     if customer_id is not None:
         query = query.where(Product.customer_id == customer_id)
@@ -46,14 +120,28 @@ def find_products(db: Session, scope: set[int] | None, *, q: str,
                        {"liner", "divider", "die_cut_partition"}
                        for alias in (*rule.aliases, rule.display_name)]
         query = query.where(Product.box_style.in_(net_aliases))
+    if material_code:
+        normalized = material_code.strip().upper()
+        query = query.outerjoin(Material, Material.id == Product.material_id).where(or_(
+            func.upper(Product.default_material_code) == normalized,
+            func.upper(Material.code) == normalized,
+            func.upper(Product.legacy_material_text) == normalized))
+    if flute_type:
+        normalized = flute_type.strip().upper()
+        if not material_code:
+            query = query.outerjoin(Material, Material.id == Product.material_id)
+        query = query.where(func.upper(func.coalesce(Product.flute_type, Material.flute_type)) == normalized)
     dims = {
         "finished": (Product.length_mm, Product.width_mm, Product.height_mm),
         "net": (Product.length_mm, Product.width_mm, Product.height_mm),
         "report": (Product.report_length_mm, Product.report_width_mm, None),
     }[dimension_basis]
+    dimension_deltas = []
     for value, column in zip((length, width, height), dims):
         if value is not None and column is not None:
-            query = query.where(column == value)
+            delta = func.abs(column - value)
+            dimension_deltas.append(delta)
+            query = query.where(column.is_not(None), delta <= tolerance_mm)
         elif value is not None:
             query = query.where(False)
     tokens = q.strip().split()
@@ -98,11 +186,86 @@ def find_products(db: Session, scope: set[int] | None, *, q: str,
         query = query.where(or_(*matching))
     total = int(db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0)
     exact = q.strip().lower()
-    rank = case((func.lower(Product.product_code) == exact, 0),
-                (func.lower(Product.customer_material_code) == exact, 1), else_=2)
-    rows = list(db.scalars(query.order_by(rank, Customer.name, Product.id)
+    code_rank = case((func.lower(Product.product_code) == exact, 0),
+                     (func.lower(Product.customer_material_code) == exact, 1), else_=2)
+    order_terms = []
+    if dimension_deltas:
+        order_terms.append(case((and_(*(delta == 0 for delta in dimension_deltas)), 0), else_=1))
+    order_terms.append(code_rank)
+    if allow_inventory_rank:
+        # Rank physical lots via direct identity, explicit allowed binding,
+        # formal source FKs, or validated shared-stock membership. Never infer
+        # stock from matching codes or dimensions.
+        direct_finished = exists(select(1).select_from(InventoryLot).join(
+            FinishedGoodsInventoryDetail,
+            FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id).where(
+            FinishedGoodsInventoryDetail.product_id == Product.id,
+            FinishedGoodsInventoryDetail.owner_customer_id == Product.customer_id,
+            FinishedGoodsInventoryDetail.is_general.is_(False),
+            FinishedGoodsInventoryDetail.inventory_code_snapshot == Product.product_code,
+            InventoryLot.status == "active", InventoryLot.inventory_type == "finished",
+            InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0))
+        bound_sheet = exists(select(1).select_from(InventoryLot).join(
+            SemiFinishedInventoryDetail,
+            SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id).join(
+            SemiFinishedLotAllowedProduct,
+            SemiFinishedLotAllowedProduct.inventory_lot_id == InventoryLot.id).where(
+            SemiFinishedLotAllowedProduct.product_id == Product.id,
+            InventoryLot.status == "active", InventoryLot.inventory_type == "semi_finished",
+            InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0))
+        candidate_products = query.with_only_columns(Product.id).order_by(None).subquery()
+        valid_source_ids = _source_stock_priority_ids(db, candidate_products)
+        # Shared-stock eligibility is frozen against both the current product
+        # and the actual lot identity. Validate only matching members of groups
+        # with physical stock; a same-code/group SQL join alone is insufficient.
+        from app.services.shared_finished_stock import candidate_lot_ids
+        possible_shared_ids = db.scalars(select(SharedFinishedMember.product_id).join(
+            SharedFinishedGroup, SharedFinishedGroup.id == SharedFinishedMember.group_id).join(
+            SharedFinishedLot, SharedFinishedLot.group_id == SharedFinishedGroup.id).join(
+            InventoryLot, InventoryLot.id == SharedFinishedLot.lot_id).where(
+            SharedFinishedMember.product_id.in_(select(candidate_products.c.id)),
+            SharedFinishedGroup.enabled.is_(True), InventoryLot.status == "active",
+            InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0).distinct()).all()
+        valid_shared_ids = []
+        for product_id in possible_shared_ids:
+            member = db.get(SharedFinishedMember, product_id)
+            if member is None:
+                continue
+            lot_ids = candidate_lot_ids(db, product_id=product_id, customer_id=member.customer_id)
+            if lot_ids and db.scalar(select(InventoryLot.id).where(
+                    InventoryLot.id.in_(lot_ids), InventoryLot.status == "active",
+                    InventoryLot.quantity_available + InventoryLot.quantity_reserved > 0).limit(1)):
+                valid_shared_ids.append(product_id)
+        stock_predicates = [direct_finished, bound_sheet]
+        if valid_source_ids:
+            stock_predicates.append(Product.id.in_(valid_source_ids))
+        if valid_shared_ids:
+            stock_predicates.append(Product.id.in_(valid_shared_ids))
+        order_terms.append(case((or_(*stock_predicates), 0), else_=1))
+    if dimension_deltas:
+        order_terms.append(sum(dimension_deltas))
+    rows = list(db.scalars(query.order_by(*order_terms, Customer.name, Product.id)
                            .offset((page - 1) * page_size).limit(page_size)))
     return rows, total
+
+
+def dimension_match(product: Product, *, basis: str, length: Decimal | None,
+                    width: Decimal | None, height: Decimal | None) -> dict | None:
+    if all(value is None for value in (length, width, height)):
+        return None
+    columns = ((product.report_length_mm, product.report_width_mm, None) if basis == "report"
+               else (product.length_mm, product.width_mm, product.height_mm))
+    queried = dict(zip(("length", "width", "height"), (length, width, height)))
+    actual = dict(zip(("length", "width", "height"), columns))
+    delta = {axis: (float(Decimal(actual[axis]) - value)
+                    if value is not None and actual[axis] is not None else None)
+             for axis, value in queried.items()}
+    return {"basis": basis, "query_mm": {axis: float(value) if value is not None else None
+                                          for axis, value in queried.items()},
+            "product_mm": {axis: float(value) if value is not None else None
+                           for axis, value in actual.items()},
+            "delta_mm": delta,
+            "exact": all(value == 0 for value in delta.values() if value is not None)}
 
 
 def inventory_summary(db: Session, products: list[Product]):
@@ -264,30 +427,58 @@ def production_card(db: Session, product: Product, scope: set[int] | None,
             or product.box_category == "die_cut" or (setting and setting.is_die_cut)):
         if not any(row["label"] == "模切" for row in steps):
             steps.append({"label": "模切", "detail": product.mold_tool.mold_name if product.mold_tool else "模具关联待完善"})
+    from app.services.mold_location import describe_mold_location
+
+    def mold_card(mold: MoldTool) -> dict:
+        location = describe_mold_location(mold.rack_location) if can_see_mold_location else {}
+        return {"id": mold.id, "mold_id": mold.id, "name": mold.mold_name,
+                "code": mold.mold_code,
+                "short_name": mold.chinese_short_name or None,
+                "is_active": bool(mold.is_active),
+                "location": mold.rack_location if can_see_mold_location else None,
+                "location_visibility": ("visible" if mold.rack_location else "not_recorded")
+                                       if can_see_mold_location else "hidden_by_permission",
+                "mold_cell_id": location.get("location_id"), "floor": location.get("floor"),
+                "location_label": location.get("prompt"),
+                "short_label": location.get("short_label"),
+                "location_short_label": location.get("short_label"),
+                "map_url": f"/mobile/mold-lookup?mold_id={mold.id}&readonly=1" if can_see_mold_location else None}
+
     bom = []
-    for edge in db.scalars(select(ProductBomComponent).where(
-            ProductBomComponent.parent_product_id == product.id).order_by(ProductBomComponent.display_order)):
-        child = db.get(Product, edge.component_product_id)
-        if child is None or child.deleted_at is not None or child.customer_id != product.customer_id:
+    # Multi-level BOMs are legitimate. Keep an explicit path so the phone can
+    # identify each component's own mold without mistaking it for its parent.
+    frontier = [(product.id, (product.id,), 1)]
+    while frontier and len(bom) < 200:
+        parent_id, parent_path, depth = frontier.pop(0)
+        if depth > 8:
             continue
-        if scope is not None and child.customer_id not in scope:
-            continue
-        bom.append({"product_id": child.id, "product_code": child.product_code,
-                    "product_name": child.product_name, "quantity": float(edge.quantity_per_set),
-                    "unit": product_unit_label(child) or child.unit,
-                    "specification": product_dimension_specification(child) or "",
-                    "mold_name": child.mold_tool.mold_name if child.mold_tool else None})
+        for edge in db.scalars(select(ProductBomComponent).where(
+                ProductBomComponent.parent_product_id == parent_id).order_by(
+                    ProductBomComponent.display_order, ProductBomComponent.component_product_id)):
+            child = db.get(Product, edge.component_product_id)
+            if (child is None or child.deleted_at is not None or child.purged_at is not None
+                    or child.customer_id != product.customer_id
+                    or (scope is not None and child.customer_id not in scope)):
+                continue
+            path = (*parent_path, child.id)
+            loop = child.id in parent_path
+            selected_mold = db.get(MoldTool, edge.mold_tool_id) if edge.mold_tool_id else child.mold_tool
+            child_molds = [mold_card(selected_mold)] if selected_mold is not None else []
+            bom.append({"product_id": child.id, "product_code": child.product_code,
+                        "product_name": child.product_name, "quantity": float(edge.quantity_per_set),
+                        "unit": product_unit_label(child) or child.unit,
+                        "specification": product_dimension_specification(child) or "",
+                        "mold_name": selected_mold.mold_name if selected_mold else None,
+                        "molds": child_molds, "depth": depth,
+                        "parent_product_id": parent_id, "path_product_ids": list(path),
+                        "cycle_detected": loop})
+            if len(bom) >= 200:
+                break
+            if not loop:
+                frontier.append((child.id, path, depth + 1))
     molds = []
     if product.mold_tool:
-        mold = product.mold_tool
-        from app.services.mold_location import describe_mold_location
-        location = describe_mold_location(mold.rack_location) if can_see_mold_location else {}
-        molds.append({"id": mold.id, "name": mold.mold_name, "is_active": bool(mold.is_active),
-                      "mold_id": mold.id,
-                      "location": mold.rack_location if can_see_mold_location else None,
-                      "mold_cell_id": location.get("location_id"), "floor": location.get("floor"),
-                      "location_label": location.get("prompt"),
-                      "map_url": f"/mobile/mold-lookup?mold_id={mold.id}&readonly=1" if can_see_mold_location else None})
+        molds.append(mold_card(product.mold_tool))
     return {
         "box_style": product.box_style,
         "net_specification": (f"{product.length_mm}×{product.width_mm}mm"

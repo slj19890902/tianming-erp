@@ -43,6 +43,7 @@ from app.core.time_contract import (
     utc_naive_to_api,
 )
 from app.models.customer import Customer
+from app.models.fixed_shelf import ShelfBinding
 from app.models.mold_tool import MoldTool, MoldToolCustomer
 from app.models.order import Order, OrderItem
 from app.models.product import Product
@@ -3463,6 +3464,87 @@ def mobile_warehouse_floor_overview(
             "map_status": "ready" if areas else "unmeasured"}
 
 
+def _mobile_default_bindings(
+    db: Session, location_ids: list[int], visible_customer_ids: set[int] | None,
+) -> dict[int, dict]:
+    """Shelf intent is independent of physical goods and quantity."""
+    if not location_ids:
+        return {}
+    result = {}
+    rows = db.execute(select(ShelfBinding, Product, Customer).join(
+        Product, Product.id == ShelfBinding.product_id).join(
+        Customer, Customer.id == Product.customer_id).where(
+        ShelfBinding.location_id.in_(location_ids))).all()
+    for binding, product, customer in rows:
+        location_id = int(binding.location_id)
+        if product.deleted_at is not None or product.purged_at is not None:
+            continue
+        if visible_customer_ids is not None and product.customer_id not in visible_customer_ids:
+            result[location_id] = {"default_binding": None,
+                                   "default_binding_visibility": "hidden_by_permission"}
+            continue
+        result[location_id] = {"default_binding": {
+            "product_id": product.id, "product_code": product.product_code,
+            "customer_name": customer.chinese_short_name or customer.name,
+            "product_name": product.product_name, "priority": binding.priority,
+            "capacity": binding.capacity, "is_active": bool(product.is_active),
+        }, "default_binding_visibility": "visible"}
+    return result
+
+
+@router.get("/warehouse/map/locations-search")
+def mobile_warehouse_location_search(
+    response: Response,
+    q: str = Query(min_length=1, max_length=100),
+    page: int = Query(default=1, ge=1, le=100000),
+    page_size: int = Query(default=20, ge=1, le=50),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_read_inventory),
+) -> dict:
+    """Search only published operational employee-facing locations."""
+    _no_store(response)
+    needle = q.strip().casefold()
+    if not needle:
+        raise HTTPException(status_code=422, detail="请输入货位名称或编码")
+    matches = []
+    for row in list_operational_locations(db):
+        location = row.location
+        canonical = operational_location_payload(row)
+        if canonical["position_status"] != "mapped":
+            continue
+        floor_code = _mobile_floor_code(row)
+        area_code = str(location.area_code or "").strip().upper()
+        searchable = (location.location_code, location.location_name,
+                      canonical["employee_location_name"],
+                      canonical["current_address_name"], floor_code,
+                      area_code, canonical["rack_display_name"])
+        if not any(needle in str(value or "").casefold() for value in searchable):
+            continue
+        matches.append((row, canonical, floor_code, area_code))
+    matches.sort(key=lambda item: (item[2], item[3],
+                                   str(item[1]["employee_location_name"] or ""), item[0].location.id))
+    total = len(matches)
+    selected = matches[(page - 1) * page_size:page * page_size]
+    defaults = _mobile_default_bindings(db, [int(row.location.id) for row, *_ in selected],
+                                         _visible_customer_ids(user, db))
+    items = []
+    for row, canonical, floor_code, area_code in selected:
+        location = row.location
+        items.append({"location_id": int(location.id), "location_code": location.location_code,
+                      "location_name": location.location_name,
+                      "employee_location_name": canonical["employee_location_name"],
+                      "short_location_label": _mobile_short_location_label(
+                          location, canonical=canonical, area_code=area_code),
+                      "floor_code": floor_code, "area_code": area_code,
+                      "map_rack_id": canonical["map_rack_id"],
+                      "position_status": canonical["position_status"],
+                      "map_issue": canonical["map_issue"],
+                      **defaults.get(int(location.id), {"default_binding": None,
+                          "default_binding_visibility": "none"})})
+    return {"items": items, "total": total, "page": page, "page_size": page_size,
+            "has_more": page * page_size < total, "read_only": True}
+
+
 @router.get("/warehouse/map/locations/{location_id}")
 def mobile_warehouse_map_location_identity(
     location_id: int,
@@ -3610,6 +3692,7 @@ def mobile_warehouse_map_area(
         ).all()
     )
     visible_customer_ids = _visible_customer_ids(user, db)
+    default_bindings = _mobile_default_bindings(db, location_ids, visible_customer_ids)
     unmatched_counts = {
         int(location_id): int(count or 0)
         for location_id, count in db.execute(
@@ -3790,6 +3873,9 @@ def mobile_warehouse_map_area(
                 if unrestricted
                 else ("visible_goods" if goods else "not_disclosed"),
                 "goods": goods,
+                **(default_bindings.get(int(location.id), {"default_binding": None,
+                    "default_binding_visibility": "none"}) if is_mapped else {
+                    "default_binding": None, "default_binding_visibility": "unmapped"}),
                 "has_unmatched_inventory_observation": bool(
                     unmatched_counts.get(int(location.id), 0)
                 ),

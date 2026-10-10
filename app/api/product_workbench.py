@@ -19,7 +19,7 @@ from app.models.warehouse_inventory import SemiFinishedLotAllowedProduct
 from app.services.material_candidates import candidate_items
 from app.services.mobile_product_drawings import product_drawing_metadata
 from app.services.product_workbench import (
-    action_card, find_products, inventory_details, inventory_summary,
+    action_card, dimension_match, find_products, inventory_details, inventory_summary,
     order_card, product_card, production_card, visible_products,
 )
 
@@ -61,6 +61,9 @@ def search_products(response: Response,
                     length: Decimal | None = Query(default=None, gt=0, decimal_places=2),
                     width: Decimal | None = Query(default=None, gt=0, decimal_places=2),
                     height: Decimal | None = Query(default=None, gt=0, decimal_places=2),
+                    tolerance_mm: Decimal = Query(default=Decimal(0), ge=0, le=100, decimal_places=2),
+                    material_code: str | None = Query(default=None, max_length=100),
+                    flute_type: str | None = Query(default=None, max_length=20),
                     page: int = Query(default=1, ge=1),
                     page_size: int = Query(default=20, ge=1, le=50),
                     db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
@@ -75,13 +78,23 @@ def search_products(response: Response,
     scope = _visible_customer_ids(user, db)
     products, total = find_products(db, scope, q=q, customer_id=customer_id,
                                     dimension_basis=dimension_basis, length=length,
-                                    width=width, height=height, page=page, page_size=page_size,
-                                    allow_order_search=has_permission(user, "orders.view"))
+                                    width=width, height=height, tolerance_mm=tolerance_mm,
+                                    material_code=material_code, flute_type=flute_type,
+                                    page=page, page_size=page_size,
+                                    allow_order_search=has_permission(user, "orders.view"),
+                                    allow_inventory_rank=has_permission(user, "warehouse.view"))
     summary = inventory_summary(db, products) if has_permission(user, "warehouse.view") else {}
     drawings = product_drawing_metadata(db, [p.id for p in products], user=user,
                                         visible_customer_ids=scope)
-    items = [product_card(p, summary.get(p.id, {"visibility": "hidden_by_permission"}),
-                          drawings.get(p.id, {"status": "none", "items": []})) for p in products]
+    items = []
+    for product in products:
+        card = product_card(product, summary.get(product.id, {"visibility": "hidden_by_permission"}),
+                            drawings.get(product.id, {"status": "none", "items": []}))
+        match = dimension_match(product, basis=dimension_basis,
+                                length=length, width=width, height=height)
+        if match is not None:
+            card["dimension_match"] = match
+        items.append(card)
     return {"items": items, "total": total, "page": page, "page_size": page_size,
             "has_more": page * page_size < total}
 
@@ -93,7 +106,7 @@ def reverse_products(response: Response,
                      material_code: str | None = Query(default=None, max_length=100),
                      flute_type: str | None = Query(default=None, max_length=20),
                      layer_count: int | None = Query(default=None, ge=1, le=7),
-                     processed_state: Literal["raw", "printed", "creased", "die_cut", "output_piece"] = "raw",
+                     processed_state: Literal["raw", "net_raw", "printed", "creased", "die_cut", "output_piece"] = "raw",
                      known_customer_id: int | None = Query(default=None, gt=0),
                      lot_id: int | None = Query(default=None, gt=0),
                      page: int = Query(default=1, ge=1),
@@ -142,11 +155,19 @@ def reverse_products(response: Response,
             raise HTTPException(422, "层数与所选批次登记事实不一致")
         from app.services.warehouse_goods import goods_profile
         profile = goods_profile(db, lot)
-        actual_state = "output_piece" if (profile or {}).get("output_piece") is True else (profile or {}).get("processing") or {
-            "raw_board": "raw", "creased_sheet": "creased"}.get(detail.sheet_type)
-        if actual_state == "cut":
-            actual_state = "raw"  # An intact rectangular pre-cut sheet remains unprinted raw stock.
-        if actual_state and actual_state != processed_state:
+        processing = (profile or {}).get("processing")
+        if (profile or {}).get("output_piece") is True:
+            actual_state = "output_piece"
+        elif processing in {"cut", None, "raw"} and detail.sheet_type == "net_sheet":
+            actual_state = "net_raw"
+        elif processing == "cut":
+            actual_state = "net_raw"
+        else:
+            actual_state = processing or {
+                "raw_board": "raw", "creased_sheet": "creased"}.get(detail.sheet_type)
+        net_identity_unverified = actual_state == "raw" and processed_state == "net_raw"
+        if actual_state and actual_state != processed_state and not (
+                actual_state == "net_raw" and processed_state == "raw") and not net_identity_unverified:
             raise HTTPException(422, "加工状态与所选批次登记事实不一致")
         matches = candidate_items(db, lot, scope)
         if known_customer_id is not None:
@@ -165,13 +186,20 @@ def reverse_products(response: Response,
             item = product_card(product, summaries[product.id], drawings[product.id])
             match_class = {"confirmed_use": "confirmed", "cuttable": "cut_candidate"}.get(
                 row["match_kind"], "review")
+            if processed_state == "net_raw":
+                # A supplier may deliver an already sized net sheet without a
+                # cutting marker. Dimensions alone cannot prove that identity.
+                match_class = "review"
             item.update({"match_class": match_class, "match_kind": row["match_kind"],
                          "match_reasons": [row["match_reason"]],
-                         "check_items": row.get("warnings", []), "actual_lot_id": lot.id,
-                         "cut_plan": row.get("cut_plan"),
+                         "check_items": [*row.get("warnings", []), *(
+                             ["净片身份未由库存加工事实确认，请核对供应商来料和实物"]
+                             if net_identity_unverified else [])], "actual_lot_id": lot.id,
+                         "cut_plan": None if processed_state == "net_raw" else row.get("cut_plan"),
                          "lot_available_quantity": int(lot.quantity_available or 0),
                          "lot_unit": "片" if (profile or {}).get("output_piece") is True else "张",
-                         "deductible": False, "selection_requires_existing_validation": True})
+                         "deductible": False, "selection_requires_existing_validation": True,
+                         "source_processed_state": actual_state})
             items.append(item)
         return {"items": items, "total": total, "page": page, "page_size": page_size,
                 "has_more": page * page_size < total, "source": "actual_lot",
@@ -214,7 +242,9 @@ def reverse_products(response: Response,
             check_items.append("补录或核对实际材质")
         if not flute_type or not layer_count:
             check_items.append("补录或核对实际楞型和层数")
-        if processed_state != "raw":
+        if processed_state == "net_raw":
+            check_items.append("净片需核对实际来源、楞向、压线及客户用途；不能凭尺寸认定适用")
+        elif processed_state != "raw":
             check_items.append("已加工片料需核对印刷/压线/模具形状，不按矩形分切")
         item.update({"match_class": "review" if exact or processed_state != "raw" else "cut_candidate",
                      "match_kind": "free_measurement", "cut_plan": None,

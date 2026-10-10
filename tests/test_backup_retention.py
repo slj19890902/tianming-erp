@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import sqlite3
 from pathlib import Path
 
@@ -72,6 +73,26 @@ def test_backup_retention_plan_keeps_latest_five_regular_backups(tmp_path: Path)
     assert protected in plan.protected_files
     assert regular_files[0] in plan.regular_delete
     assert regular_files[1] in plan.regular_delete
+
+
+def test_backup_retention_supports_mapped_drive_without_resolve(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.core.backup_retention import build_cleanup_plan
+
+    backup_dir = tmp_path / "mapped-backups"
+    _make_backup_file(backup_dir / "carton_erp_20260720_120000.sqlite3")
+
+    def unavailable_resolve(self: Path, strict: bool = False) -> Path:
+        raise OSError(1005, "mapped filesystem does not support resolve")
+
+    monkeypatch.setattr(Path, "resolve", unavailable_resolve)
+
+    plan = build_cleanup_plan(backup_dir=backup_dir, keep=5)
+
+    assert plan.backup_dir == Path(os.path.abspath(backup_dir))
+    assert plan.regular_count == 1
 
 
 def test_backup_retention_apply_deletes_only_extra_regular_backups(tmp_path: Path) -> None:

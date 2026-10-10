@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -78,7 +79,15 @@ def classify_backup_file(path: Path) -> BackupFileInfo:
 
 
 def build_cleanup_plan(*, backup_dir: Path, keep: int = 5) -> CleanupPlan:
-    directory = Path(backup_dir).resolve()
+    raw_directory = Path(backup_dir).expanduser()
+    try:
+        directory = raw_directory.resolve(strict=False)
+    except OSError:
+        # Some mapped NAS filesystems (for example FUSE/rclone drives on
+        # Windows) support normal file I/O but not GetFinalPathNameByHandle,
+        # which pathlib.resolve() uses. Keep cleanup available by falling back
+        # to an absolute path that does not require that filesystem feature.
+        directory = Path(os.path.abspath(raw_directory))
     if keep < 0:
         raise ValueError("keep 不能小于 0")
     if not directory.exists():

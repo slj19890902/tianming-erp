@@ -35,7 +35,7 @@ def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_
         fields["production_notes"] = "本次原子保存备注"
         fields["unit"] = parent_unit
         if create:
-            fields.update(product_code="ATOMIC-NEW", customer_material_code="ATOMIC-NEW", box_style="BOM组合")
+            fields.update(product_code="ATOMIC-NEW", customer_material_code="ATOMIC-NEW", box_style="BOM组合", product_name="原子保存组合成品")
         else:
             fields["expected_version"] = root.version
         body = jsonable_encoder({"product": fields, "bom": {
@@ -64,14 +64,17 @@ def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_
             assert state() == before
             return
         saved = response.json()["product"]
-        assert saved["production_notes"] == fields["production_notes"]
+        # A BOM-only parent has no own production fields; normal existing bodies keep theirs.
+        expected_notes = None if create else fields["production_notes"]
+        assert saved["production_notes"] == expected_notes
+        assert saved["product_name"] == fields["product_name"]
         expected_unit = "套" if create else parent_unit
         assert saved["unit"] == expected_unit
         bom = response.json()["bom"]
         assert bom["version"] == saved["version"]
         assert sorted(Decimal(row["quantity_per_set"]) for row in bom["components"]) == [5, 6]
         with factory() as db:
-            assert db.get(Product, saved["id"]).production_notes == fields["production_notes"]
+            assert db.get(Product, saved["id"]).production_notes == expected_notes
             assert db.get(Product, saved["id"]).unit == expected_unit
             assert dump_graph(read_compiled_order_bom(db, 1).graph) == before[-1]
 

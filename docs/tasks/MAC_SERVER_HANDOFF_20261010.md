@@ -38,7 +38,9 @@ Python socket审计钩子阻止主动连接、UDP发送和外部DNS，仅允许�
 
 新增--signing-request-only模式，输出release.unsigned.zip与含包/清单/git哈希、原公钥指纹的请求。未签名包不能通过原安装验签。工厂原用户用既有DPAPI发布身份、本次已审阅git SHA和manifest SHA签名，私钥不离开旧机、不自动生成替代正式身份；Mac用已有可信公钥验签合包，重新逐文件核验，输出拒绝覆盖。签名清单允许记录可执行文件，解包只给其中已验证文件普通0755，不使用ZIP携带的setuid等权限；未签名执行权限清单拒绝。
 
-定向验证36项中35通过、1项Windows DPAPI明确跳过，覆盖签名请求/错误身份/错误审阅哈希/文件损坏/坏签名/权限升级拒绝/内部链接实体化，以及原源码构建、OCR模型与恢复安全回归。证据native-build-unit-tests.log。真实Mac候选包构建及工厂签名尚待执行；单元测试使用临时测试身份，未改变正式公钥或创建替代正式私钥。
+定向验证36项中35通过、1项Windows DPAPI明确跳过，覆盖签名请求/错误身份/错误审阅哈希/文件损坏/坏签名/权限升级拒绝/内部链接实体化，以及原源码构建、OCR模型与恢复安全回归。证据native-build-unit-tests.log。单元测试使用临时测试身份，未改变正式公钥或创建替代正式私钥；工厂正式签名尚待执行。
+
+实际构建结果：源提交46477f6a0cee3efb97a20a6591477c53a2cd0904，Mac arm64候选release.unsigned.zip为535144540字节，SHA256 e52982a6e3568544fca8ddb31a3b3ea0e3f376e5c15334e6faf180eedfd59afb；29295文件逐项核验，403项执行权限声明，11项reader能力及schema_contract与已验签Windows v625完全一致，head仍ep1010md。复制后的Python3.12.15及核心依赖隔离导入成功，证据native-runtime-verification.json、native-release-contract-verification.json。包/请求/既有公钥/源码增量bundle已归档NAS mac-candidate-20261011/runtime-candidate-46477f6a，读取副本SHA一致；bundle依赖原b9a077bc，不是独立全历史。此包仅为运行时构建验证候选，未签名不可安装，不是最终迁移验收候选；打印/凭据/服务后续变更后需重新构建最终候选。未启动真实ERP或执行真实库迁移。
 
 后续依次闭合：原生签名运行包与服务、家庭出站/收单隔离、凭据安全重封装、完整路径审计映射、全量真实恢复与事实比对、中文打印/OCR、备份及故障恢复，再在工厂停写同步与人工验收。密码、私钥、完整数据不得进入Git、聊天或日志；任何阶段不自行清空旧机。
 

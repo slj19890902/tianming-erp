@@ -98,10 +98,10 @@
       const loaded=await get('/api/product-workbench/'+mode+'?'+q);
       if(loaded&&loaded.token===serial){result=loaded.body;store();}if(live)render();
     }
-    async function show(id,activityPage=1){if(!validId(id))return;lastProductId=Number(id);detail=null;mapRow=null;purpose=false;onOpen(true);
+    async function show(id,activityPage=1){if(!validId(id))return;const sameProduct=lastProductId===Number(id),previousTab=tab;lastProductId=Number(id);detail=null;mapRow=null;purpose=false;onOpen(true);
       const query=new URLSearchParams();if(activityPage>1)query.set('activity_page',String(activityPage));if(includeHistory)query.set('include_history','true');
       const loaded=await get('/api/product-workbench/products/'+Number(id)+(query.size?'?'+query:''),Number(id));
-      if(loaded&&loaded.token===serial){detail=loaded.body;tab=detail.activity?'activity':'production';store();}if(live)render();
+      if(loaded&&loaded.token===serial){detail=loaded.body;tab=sameProduct&&(['production','inventory','orders'].includes(previousTab)||(previousTab==='activity'&&detail.activity))?previousTab:externalSearch?'production':detail.activity?'activity':'production';store();}if(live)render();
       return loaded?{token:loaded.token,id:Number(id)}:null;
     }
     function image(p,small=false){if(lazyDrawings)return `<div class="pw-lazy-drawing" data-drawing-product="${pid(p)}"></div>`;const d=drawingItems(p)[0];return d?`<a class="pw-drawing ${small?'pw-thumb':''}" href="${esc(d.original_url)}" target="_blank" rel="noopener noreferrer"><img src="${esc(d.preview_url)}" alt="${esc(d.name||'工程图纸')}" loading="lazy"><span>${small?'图纸':'查看原图 / PDF'}</span></a>`:`<span class="pw-muted">${p?.drawings?.status==='forbidden'?'无图纸权限':'未附图纸'}</span>`;}

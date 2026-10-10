@@ -13,3 +13,13 @@
 - 根：核当前正式/源码，整合复现，先固定可实现方案与文件owner，再授权最小开发与发布；独立审者待合同方案完成后接入。根不改正式库存、采购、成本或历史业务；当前无Git push。普通验证后发布长期授权延续，仍实时CAS、备份实际恢复、事实/附件/健康及人工验收门禁。
 
 输出：复现与正常门禁、精确接口/字段/旧数据边界、最小修复方案、NAS回执。不得以测试次数充Bug数；保存未知的持久安全终止属于另一个reader/回退合同问题，本卡不虚构永久注销功能。Goal保持active。
+
+架构复核接入：/root/order_recovery_review只写artifact/review，独立判断原完整actor+payload request_hash与稳定来源行能否作为原保存证明、是否需新增专用持久字段。禁止为免迁移把完整proof塞进quantity_contract/sheet_cutting/审计extra_json等相异合同；如果真实需要migration，先提出最小方案，由根按专项门禁执行。physical来源的专用external-purchase接口是相邻边界，不与本卡plain保存共用hash语义。原字段首次写入、后续合法更新/删除和历史NULL必须精确追查；对方案先审，不实施。
+
+实施授权（2026-10-10）：上述只读阶段已完成，4类页面根因、10项页面观察、5项真实HTTP及独立架构复核支持最小无迁移闭环。采用 docs/reports/STOCK_REPLENISHMENT_SAVE_RECOVERY_PLAN_20261010.md 与同目录 STOCK_REPLENISHMENT_SAVE_RECOVERY_API_CONTRACT_20261010.md v1。当前阶段允许下列并行开发， supersede 上文只读限制；禁止边做边扩为全ERP重构。
+
+- API唯一写入负责人 /root/mobile_drawings_api：app/api/requisition.py、新 app/services/stock_replenishment_save_recovery.py、其专属 tests。若不得不改其他已有服务，先报根确认文件owner。独立候选树须清洁并从本卡实施授权提交新建分支；保存旧分支，不使用旧候选基线。实现只读resolver、原hash兼容、完整成功回执、严格actor/scope/namespace与安全首次拒绝合同，无migration。
+- UI唯一写入负责人 /root/mobile_drawings_ui：新 static/ui/stock-replenishment-save-recovery.js、static/index.html中本卡补库保存/恢复/账号边界接入及其专属 tests。保留611 go/action、提速、pending draft、员工审批分流。主保存只在完整回执成立后确认，任何已unknown请求后来拒绝仍保留。用API作者实际回包做最终跨端验证。
+- 独立审者 /root/order_recovery_review：仅artifact/review；待候选成形后独立3～5项最关键反例，不改运行源码。根独占版本、文档、整合及发布；当前无Git push。
+
+每名开发者只在自己的隔离候选树编辑白名单，实际HTTP测试使用合成隔离库，不启新服务/Chrome，不触碰旧PID。API_CONTRACT若需改变状态或字段须先通知根及另一负责人，双方一致再落码。422没有服务端绑定证明时不能按状态码清未知；当前记录必须可见且可查询，不伪造永久注销。条件证据不能替代候选验证和正式发布门禁。

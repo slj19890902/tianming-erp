@@ -67,6 +67,7 @@ from app.middleware.performance import (
     PerformanceObservabilityMiddleware,
     slow_request_threshold_ms,
 )
+from app.middleware.mold_private import MoldPrivateNoStoreMiddleware
 from app.middleware.private_uploads import PrivateUploadGuardMiddleware
 from app.web_assets import SelectiveGZipMiddleware, conditional_file_response
 
@@ -74,6 +75,23 @@ from app.web_assets import SelectiveGZipMiddleware, conditional_file_response
 def _conditional_file_endpoint(path: Path):
     async def endpoint(request: Request):
         return conditional_file_response(request, path)
+
+    return endpoint
+
+
+def _private_no_store_file_endpoint(path: Path):
+    async def endpoint(request: Request):
+        return conditional_file_response(
+            request,
+            path,
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Referrer-Policy": "no-referrer",
+                "X-Robots-Tag": "noindex, nofollow",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     return endpoint
 
@@ -404,6 +422,18 @@ def create_app() -> FastAPI:
         application.add_api_route(
             "/mobile/mold-lookup",
             lambda: FileResponse(mobile_mold_path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+    if not any(route.path == "/M/{mold_id}" for route in application.routes):
+        mold_live_path = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "mobile_mold_live.html"
+        )
+        application.add_api_route(
+            "/M/{mold_id}",
+            _private_no_store_file_endpoint(mold_live_path),
             methods=["GET"],
             include_in_schema=False,
         )
@@ -740,6 +770,7 @@ def create_app() -> FastAPI:
         SelectiveGZipMiddleware,
         PrivateUploadGuardMiddleware,
         PerformanceObservabilityMiddleware,
+        MoldPrivateNoStoreMiddleware,
     }
     application.user_middleware = [
         middleware
@@ -768,6 +799,7 @@ def create_app() -> FastAPI:
         slow_request_ms=slow_request_threshold_ms(),
     )
     application.add_middleware(PrivateUploadGuardMiddleware)
+    application.add_middleware(MoldPrivateNoStoreMiddleware)
     return application
 
 

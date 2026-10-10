@@ -58,6 +58,70 @@ def mold_customer_short_name(
     return None
 
 
+def mold_label_display_number(
+    mold_name: str | None,
+    mold_code: str | None,
+    customer_name: str | None,
+    customer_code: str | None,
+) -> str:
+    """Return the operator-maintained mold number used on a compact label.
+
+    The formal mold name already follows ``customer Chinese label + inventory
+    code`` for newly maintained molds.  Prefer that explicit identity because
+    legacy mold-code prefixes are not always identical to the customer code
+    (for example ``JCD-61452621`` belongs to customer code ``JSD``).  Only fall
+    back to stripping a mold-code prefix when it is proven to equal the current
+    customer code; never split an arbitrary code at the first hyphen.
+    """
+
+    name = str(mold_name or "").strip()
+    short_name = mold_customer_short_name(
+        name,
+        customer_name,
+        customer_code,
+    )
+    match = _MOLD_NAME_PATTERN.fullmatch(name)
+    if match is not None and short_name:
+        maintained_customer = match.group("customer").strip(" -_:：")
+        inventory_code = match.group("inventory").strip()
+        if maintained_customer == short_name and inventory_code:
+            return inventory_code
+
+    code = str(mold_code or "").strip()
+    normalized_customer_code = str(customer_code or "").strip()
+    prefix = f"{normalized_customer_code}-"
+    if (
+        code
+        and normalized_customer_code
+        and code.upper().startswith(prefix.upper())
+        and len(code) > len(prefix)
+    ):
+        return code[len(prefix) :]
+    return code or "待完善"
+
+
+def mold_label_display_identity(
+    mold_name: str | None,
+    mold_code: str | None,
+    customer_name: str | None,
+    customer_code: str | None,
+) -> str:
+    """Return ``customer label + mold number`` without guessing either part."""
+
+    customer = mold_customer_short_name(
+        mold_name,
+        customer_name,
+        customer_code,
+    ) or "待完善"
+    number = mold_label_display_number(
+        mold_name,
+        mold_code,
+        customer_name,
+        customer_code,
+    )
+    return f"{customer}{number}"
+
+
 def parse_mold_identity(
     mold_name: str,
     customer_initials: str,

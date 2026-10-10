@@ -65,7 +65,19 @@ def test_mold_label_keeps_formal_and_prototype_sources() -> None:
     assert "sourceRows=batchMode?(data.items||[]):[data]" in LABEL
     assert "打印匿名测试标签" in LABEL
     assert "40×30 mm 匿名样例" in LABEL
-    assert "完整资料仍在 ERP 模具档案查询" in LABEL
+    assert "扫码后登录 ERP 查看实时订单、收料和材料位置" in LABEL
+
+
+def test_batch_controls_cannot_unlock_print_before_current_data_and_qr_are_ready() -> None:
+    assert 'id="batchSort" disabled' in LABEL
+    assert 'id="copyCount" type="number"' in LABEL
+    assert 'value="1" disabled' in LABEL
+    assert "let sourceRows=[],labelRows=[],labelDataReady=false" in LABEL
+    assert "if(!labelDataReady||!sourceRows.length)return" in LABEL
+    assert "generation===renderGeneration&&labelDataReady" in LABEL
+    assert '$("batchSort").disabled=true' in LABEL
+    assert '$("copyCount").disabled=true' in LABEL
+    assert "await refreshRenderedLabels()" in LABEL
 
 
 def test_shared_recovery_redirects_unauthorized_and_labels_render_failures(

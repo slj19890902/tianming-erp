@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+import base64
+from io import BytesIO
 import re
 import shutil
 import subprocess
@@ -68,6 +70,9 @@ def mold_app(tmp_path: Path):
     app.include_router(products_router, prefix="/api/master/products")
     app.include_router(warehouse_router, prefix="/api/warehouse")
     app.include_router(orders_router, prefix="/api/orders")
+    from app.middleware.mold_private import MoldPrivateNoStoreMiddleware
+
+    app.add_middleware(MoldPrivateNoStoreMiddleware)
 
     def override_get_db() -> Generator[Session, None, None]:
         with factory() as db:
@@ -630,20 +635,14 @@ def test_scoped_account_only_reads_allowed_mold_products_and_labels(mold_app) ->
             f"/api/warehouse/molds/{denied_mold_id}/label"
         )
         assert denied_label.status_code == 403, denied_label.text
-        assert denied_label.json()["detail"] == "无客户访问权限"
+        assert "全客户范围" in denied_label.json()["detail"]
 
         allowed_batch = scoped_client.get(
             "/api/warehouse/molds/labels",
             params={"mold_ids": str(shared_mold_id)},
         )
-        assert allowed_batch.status_code == 200, allowed_batch.text
-        assert [row["id"] for row in allowed_batch.json()["items"]] == [
-            shared_mold_id,
-        ]
-        assert [
-            product["product_code"]
-            for product in allowed_batch.json()["items"][0]["products"]
-        ] == ["SHARED-ALLOW"]
+        assert allowed_batch.status_code == 403, allowed_batch.text
+        assert "全客户范围" in allowed_batch.json()["detail"]
         denied_batch = scoped_client.get(
             "/api/warehouse/molds/labels",
             params={"mold_ids": f"{allowed_mold_id},{denied_mold_id}"},
@@ -751,7 +750,11 @@ def test_workshop_can_open_structured_location_label_and_qr(
     from app.models.mold_tool import MoldTool
     from app.models.product import Product
 
-    monkeypatch.setattr(warehouse, "_lan_ip", lambda: "192.168.3.80")
+    monkeypatch.setattr(
+        warehouse,
+        "load_settings",
+        lambda: type("Settings", (), {"browser_url": "http://192.168.3.80:8000/"})(),
+    )
     with factory() as db:
         mold = MoldTool(
             mold_code="MJ-MOBILE-001",
@@ -792,12 +795,1325 @@ def test_workshop_can_open_structured_location_label_and_qr(
         assert label.status_code == 200, label.text
         data = label.json()
         assert data["lookup_url"] == (
-            "http://192.168.3.80:18045/mobile/mold-lookup?mold=MJ-MOBILE-001"
+            f"HTTP://192.168.3.80:8000/M/{mold_id}"
         )
+        assert label.headers["cache-control"] == "private, no-store, max-age=0"
         assert data["qr_data_url"].startswith("data:image/png;base64,")
-        assert data["products"][0]["customer_code"] == "MOLD-C"
-        assert data["products"][0]["customer_short_name"] == "模具联动测试客户"
-        assert data["products"][0]["product_code"] == "MOBILE-P001"
+        from PIL import Image
+        import qrcode
+
+        qr_bytes = base64.b64decode(data["qr_data_url"].split(",", 1)[1])
+        with Image.open(BytesIO(qr_bytes)) as qr_image:
+            assert qr_image.size == (99, 99)
+            try:
+                import cv2
+                import numpy as np
+            except ImportError:
+                cv2 = None
+            if cv2 is not None:
+                decoded, _points, _straight = cv2.QRCodeDetector().detectAndDecode(
+                    np.asarray(qr_image.convert("RGB"))
+                )
+                assert decoded == data["lookup_url"]
+        qr_contract = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=3,
+            border=4,
+        )
+        qr_contract.add_data(data["lookup_url"])
+        qr_contract.make(fit=True)
+        assert qr_contract.version == 2
+        assert len(qr_contract.get_matrix()) == 33
+        assert data["label_identity"].endswith("MJ-MOBILE-001")
+        assert set(data) == {
+            "mold_code",
+            "rack_location",
+            "location_guide",
+            "is_active",
+            "product_count",
+            "label_identity",
+            "label_product_specification",
+            "label_report_specification",
+            "lookup_url",
+            "qr_data_url",
+        }
+        assert "id" not in data
+        assert "public_lookup_token" not in data
+
+
+
+        live = client.get(f"/api/warehouse/molds/live/{mold_id}")
+        assert live.status_code == 200, live.text
+        assert live.headers["cache-control"] == "private, no-store, max-age=0"
+        assert live.headers["pragma"] == "no-cache"
+        assert live.json()["mode"] == "mold_master"
+        assert live.json()["read_only"] is True
+        serialized_live = live.text.lower()
+        for forbidden in (
+            "public_lookup_token",
+            "unit_price",
+            "subtotal",
+            "supplier",
+            "remarks",
+            "lot_number",
+            "remaining_sheet_quantity",
+        ):
+            assert forbidden not in serialized_live
+
+
+def test_mold_label_dimensions_are_complete_and_printing_fails_closed(
+    mold_app,
+) -> None:
+    from app.models.mold_tool import MoldTool
+    from app.models.product import Product
+
+    app, factory = mold_app
+    with factory() as db:
+        complete = MoldTool(
+            mold_code="MOLD-DIM-COMPLETE",
+            mold_name="模具联动测试客户DIM001",
+            rack_location="1F-M-R01-L2-G01",
+        )
+        long_identity = MoldTool(
+            mold_code="MOLD-LONG-IDENTITY-001",
+            mold_name="未按简称规范维护的旧模具",
+            rack_location="1F-M-R01-L2-G02",
+        )
+        long_location = MoldTool(
+            mold_code="MOLD-LONG-LOCATION",
+            mold_name="模具联动测试客户LOC001",
+            rack_location="这是一条超过二十个字符且无法完整打印的历史自由文本模具位置",
+        )
+        archived = MoldTool(
+            mold_code="MOLD-ARCHIVED-LABEL",
+            mold_name="模具联动测试客户ARC001",
+            rack_location="3F-M-R01-L1-G01",
+            is_active=False,
+            archive_status="archived",
+            archived_at=datetime.now(),
+            archived_by=1,
+            archive_reason="测试归档",
+            pre_archive_location="3F-M-R01-L1-G01",
+        )
+        db.add_all([complete, long_identity, long_location, archived])
+        db.flush()
+        db.add_all(
+            [
+                Product(
+                    customer_id=1,
+                    product_code="DIM-001",
+                    customer_material_code="DIM-001",
+                    product_name="二维模切件",
+                    length_mm=Decimal("430.5"),
+                    width_mm=Decimal("68"),
+                    report_length_mm=880,
+                    report_width_mm=425,
+                    mold_tool_id=complete.id,
+                ),
+                Product(
+                    customer_id=1,
+                    product_code="DIM-002",
+                    customer_material_code="DIM-002",
+                    product_name="同尺寸模切件",
+                    length_mm=Decimal("430.5"),
+                    width_mm=Decimal("68"),
+                    report_length_mm=880,
+                    report_width_mm=None,
+                    mold_tool_id=complete.id,
+                ),
+                Product(
+                    customer_id=1,
+                    product_code="LONG-001",
+                    customer_material_code="LONG-001",
+                    product_name="旧模具长标题",
+                    length_mm=430,
+                    width_mm=68,
+                    report_length_mm=880,
+                    report_width_mm=425,
+                    mold_tool_id=long_identity.id,
+                ),
+                Product(
+                    customer_id=1,
+                    product_code="LOC-001",
+                    customer_material_code="LOC-001",
+                    product_name="旧位置长文本",
+                    length_mm=430,
+                    width_mm=68,
+                    report_length_mm=880,
+                    report_width_mm=425,
+                    mold_tool_id=long_location.id,
+                ),
+                Product(
+                    customer_id=1,
+                    product_code="ARC-001",
+                    customer_material_code="ARC-001",
+                    product_name="归档模具",
+                    length_mm=430,
+                    width_mm=68,
+                    report_length_mm=880,
+                    report_width_mm=425,
+                    mold_tool_id=archived.id,
+                ),
+            ]
+        )
+        db.commit()
+        complete_id = complete.id
+        long_identity_id = long_identity.id
+        long_location_id = long_location.id
+        archived_id = archived.id
+
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        label = client.get(f"/api/warehouse/molds/{complete_id}/label")
+        assert label.status_code == 200, label.text
+        assert label.json()["label_product_specification"] == "430.5 × 68"
+        assert label.json()["label_report_specification"] == "多款见扫码"
+
+        long_title = client.get(
+            f"/api/warehouse/molds/{long_identity_id}/label"
+        )
+        assert long_title.status_code == 409, long_title.text
+        assert "客户名称+模具编号过长" in long_title.json()["detail"]
+
+        manual_location = client.get(
+            f"/api/warehouse/molds/{long_location_id}/label"
+        )
+        assert manual_location.status_code == 409, manual_location.text
+        assert "手工位置过长" in manual_location.json()["detail"]
+
+        inactive = client.get(f"/api/warehouse/molds/{archived_id}/label")
+        assert inactive.status_code == 409, inactive.text
+        assert "停用或归档" in inactive.json()["detail"]
+
+
+def _material_live_context(
+    db: Session,
+    suffix: str,
+    *,
+    quantity: int = 10,
+    material_status: str = "pending",
+    supplier_order_number: str | None = None,
+):
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+
+    product = Product(
+        customer_id=1,
+        product_code=f"MAT-LIVE-{suffix}",
+        customer_material_code=f"MAT-LIVE-{suffix}",
+        product_name=f"收料聚合测试-{suffix}",
+        box_category="die_cut",
+        production_process="模切",
+    )
+    db.add(product)
+    db.flush()
+    order = Order(
+        order_number=f"SO-MAT-LIVE-{suffix}",
+        customer_id=1,
+        order_date=date.today(),
+        status="pending_production",
+        total_amount=Decimal("0"),
+    )
+    db.add(order)
+    db.flush()
+    item = OrderItem(
+        order_id=order.id,
+        product_id=product.id,
+        quantity=quantity,
+        delivered_quantity=0,
+        unit_price=Decimal("0"),
+        subtotal=Decimal("0"),
+        material_status=material_status,
+        requisition_status="已入库" if material_status == "received" else "已报料",
+        requisition_qty=quantity,
+        supplier_order_number=supplier_order_number,
+        snapshot_product_name=product.product_name,
+        snapshot_product_code=product.product_code,
+    )
+    db.add(item)
+    db.flush()
+    task = ProductionTask(
+        order_item_id=item.id,
+        status="pending",
+        planned_quantity=quantity,
+        ordered_quantity_snapshot=quantity,
+        material_received_quantity=0,
+        material_input_quantity=0,
+    )
+    db.add(task)
+    db.flush()
+    return product, order, item, task
+
+
+def _material_live_requisition(
+    db: Session,
+    *,
+    item,
+    suffix: str,
+    quantity: int,
+    requisition_status: str = "已报料",
+    item_status: str = "有效",
+):
+    from app.models.requisition import Requisition, RequisitionItem
+
+    requisition = Requisition(
+        requisition_number=f"MR-MAT-LIVE-{suffix}",
+        requisition_date=date.today(),
+        status=requisition_status,
+    )
+    db.add(requisition)
+    db.flush()
+    row = RequisitionItem(
+        requisition_id=requisition.id,
+        order_item_id=item.id,
+        requisition_qty=quantity,
+        cardboard_len=Decimal("880"),
+        cardboard_width=Decimal("425"),
+        product_name_snapshot=f"收料来源-{suffix}",
+        status=item_status,
+    )
+    db.add(row)
+    db.flush()
+    return requisition, row
+
+
+def _material_live_receipt(
+    db: Session,
+    *,
+    order,
+    item,
+    suffix: str,
+    planned: int,
+    received: int,
+    requisition=None,
+    requisition_item=None,
+    status: str = "posted",
+    parent_status: str | None = None,
+    resolution_action: str | None = None,
+):
+    from app.core.time_contract import utc_now_naive
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+
+    receipt = IncomingReceipt(
+        receipt_number=f"IR-MAT-LIVE-{suffix}",
+        status=parent_status or status,
+        received_at=utc_now_naive(),
+        idempotency_key=f"ir-mat-live-{suffix}",
+    )
+    db.add(receipt)
+    db.flush()
+    fact = IncomingReceiptItem(
+        receipt_id=receipt.id,
+        order_id=order.id,
+        order_item_id=item.id,
+        requisition_id=requisition.id if requisition is not None else None,
+        requisition_item_id=(
+            requisition_item.id if requisition_item is not None else None
+        ),
+        planned_quantity=planned,
+        received_quantity=received,
+        cumulative_received_quantity=received,
+        variance_quantity=received - planned,
+        variance_type=(
+            "matched" if received == planned else "short" if received < planned else "over"
+        ),
+        resolution_status=(
+            "resolved"
+            if resolution_action == "accept_short"
+            else "not_required"
+            if received == planned
+            else "pending"
+        ),
+        resolution_action=resolution_action,
+        status=status,
+    )
+    db.add(fact)
+    db.flush()
+    return receipt, fact
+
+
+def test_mold_live_status_reads_current_order_receipt_and_material_location(
+    mold_app,
+) -> None:
+    from app.core.time_contract import utc_now_naive
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.master_data_object_version import MasterDataObjectVersion
+    from app.models.mold_tool import MoldTool
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryReservation,
+        WarehouseLocation,
+    )
+    import hashlib
+    import json
+
+    app, factory = mold_app
+    now = utc_now_naive()
+    with factory() as db:
+        mold = MoldTool(
+            mold_code="JCD-61452621",
+            mold_name="模具联动测试客户61452621",
+            rack_location="1F-M-R01-L2-G01",
+        )
+        db.add(mold)
+        db.flush()
+        product = Product(
+            customer_id=1,
+            product_code="61452621R1F",
+            customer_material_code="61452621R1F",
+            product_name="模切内盒",
+            box_category="die_cut",
+            production_process="模切",
+            length_mm=430,
+            width_mm=68,
+            report_length_mm=880,
+            report_width_mm=425,
+            flute_type="E",
+            mold_tool_id=mold.id,
+        )
+        db.add(product)
+        db.flush()
+        snapshot = json.dumps(
+            {"mold_tool_id": mold.id},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        db.add(
+            MasterDataObjectVersion(
+                object_type="product",
+                object_id=product.id,
+                version=1,
+                action="create",
+                snapshot_schema_version=1,
+                snapshot_json=snapshot,
+                snapshot_sha256=hashlib.sha256(snapshot.encode()).hexdigest(),
+                changed_fields_json="{}",
+                change_set_id="mold-live-test",
+                source="test",
+                created_at=now,
+            )
+        )
+        order = Order(
+            order_number="SO-MOLD-LIVE-001",
+            customer_id=1,
+            order_date=date.today(),
+            status="pending_production",
+            total_amount=Decimal("0"),
+        )
+        db.add(order)
+        db.flush()
+        item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=1000,
+            delivered_quantity=0,
+            unit_price=Decimal("0"),
+            subtotal=Decimal("0"),
+            material_status="pending",
+            requisition_qty=1000,
+            snapshot_product_name="模切内盒",
+            snapshot_product_code="61452621R1F",
+            snapshot_spec="430 × 68",
+        )
+        db.add(item)
+        db.flush()
+        task = ProductionTask(
+            order_item_id=item.id,
+            status="pending",
+            planned_quantity=1000,
+            ordered_quantity_snapshot=1000,
+            material_received_quantity=400,
+            material_input_quantity=400,
+            created_at=now,
+        )
+        db.add(task)
+        location = WarehouseLocation(
+            location_code="1F-RAW-01",
+            location_name="一楼原料备料区",
+            warehouse_type="semi_finished",
+            is_active=True,
+        )
+        db.add(location)
+        db.flush()
+        lot = InventoryLot(
+            lot_number="SF-MOLD-LIVE-001",
+            inventory_type="semi_finished",
+            warehouse_location_id=location.id,
+            quantity_available=0,
+            quantity_reserved=400,
+            quantity_consumed=0,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit="sheets",
+            status="active",
+            source_type="manual",
+            stock_date=date.today(),
+            stock_date_accuracy="exact",
+            last_movement_at=now,
+        )
+        db.add(lot)
+        db.flush()
+        db.add(
+            InventoryReservation(
+                reservation_number="RSV-MOLD-LIVE-001",
+                inventory_lot_id=lot.id,
+                reservation_type="semi_order",
+                order_id=order.id,
+                order_item_id=item.id,
+                reserved_stock_quantity=400,
+                credited_requirement_quantity=400,
+                consumed_stock_quantity=0,
+                released_stock_quantity=0,
+                consumed_requirement_quantity=0,
+                released_requirement_quantity=0,
+                status="active",
+                reservation_group_key="MOLD-LIVE-001",
+                idempotency_key="mold-live-reservation",
+            )
+        )
+        receipt = IncomingReceipt(
+            receipt_number="IN-MOLD-LIVE-001",
+            status="posted",
+            received_at=now,
+            idempotency_key="mold-live-receipt",
+        )
+        db.add(receipt)
+        db.flush()
+        db.add(
+            IncomingReceiptItem(
+                receipt_id=receipt.id,
+                order_id=order.id,
+                order_item_id=item.id,
+                planned_quantity=1000,
+                received_quantity=400,
+                cumulative_received_quantity=400,
+                variance_quantity=-600,
+                variance_type="short",
+                resolution_status="pending",
+                status="posted",
+            )
+        )
+        db.commit()
+        mold_id = mold.id
+
+    before = _protected_business_state(factory)
+    with TestClient(app) as client:
+        _login(client, "workshop")
+        response = client.get(
+            f"/api/warehouse/molds/live/{mold_id}"
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["mode"] == "current_orders"
+        assert data["mold"]["label_identity"] == "模具联动测试客户61452621"
+        task = data["current_orders"]["items"][0]
+        assert task["order_number"] == "SO-MOLD-LIVE-001"
+        assert task["order_quantity"] == 1000
+        assert task["material"]["state"] == "partially_received"
+        assert task["material"]["received_quantity"] == 400
+        assert task["material"]["locations"][0]["location_code"] == "1F-RAW-01"
+    assert _protected_business_state(factory) == before
+
+
+def test_mold_live_material_facts_keep_physical_sources_separate_and_accept_short(
+    mold_app,
+) -> None:
+    from app.api.warehouse import _material_facts_for_task
+    from app.core.time_contract import utc_now_naive
+    from app.models.incoming_receipt import IncomingReceipt, IncomingReceiptItem
+    from app.models.mold_tool import MoldTool
+    from app.models.product import Product
+    from app.models.order import Order, OrderItem
+    from app.models.product_bom import (
+        RequisitionItemBomSource,
+        SalesOrderItemBomComponent,
+    )
+    from app.models.production import ProductionTask
+    from app.models.requisition import Requisition, RequisitionItem
+
+    _app, factory = mold_app
+    now = utc_now_naive()
+    with factory() as db:
+        mold = MoldTool(
+            mold_code="BOM-LIVE-MOLD",
+            mold_name="组合模切组件模具",
+            rack_location="1F-M-R01-L1-G01",
+        )
+        db.add(mold)
+        db.flush()
+        product = Product(
+            customer_id=1,
+            product_code="BOM-LIVE-COMP",
+            customer_material_code="BOM-LIVE-COMP",
+            product_name="组合模切组件",
+            box_category="die_cut",
+            production_process="模切",
+            mold_tool_id=mold.id,
+        )
+        db.add(product)
+        db.flush()
+        order = Order(
+            order_number="SO-BOM-LIVE-001",
+            customer_id=1,
+            order_date=date.today(),
+            status="pending_production",
+            total_amount=Decimal("0"),
+        )
+        db.add(order)
+        db.flush()
+        item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=10,
+            delivered_quantity=0,
+            unit_price=Decimal("0"),
+            subtotal=Decimal("0"),
+            material_status="pending",
+            snapshot_product_name="组合模切组件",
+            snapshot_product_code="BOM-LIVE-COMP",
+        )
+        db.add(item)
+        db.flush()
+        snapshot = SalesOrderItemBomComponent(
+            sales_order_item_id=item.id,
+            component_product_id=product.id,
+            order_set_quantity=10,
+            quantity_per_set=Decimal("1"),
+            required_piece_quantity=Decimal("10"),
+            display_order=1,
+            internal_component_code="BOM-LIVE-COMP",
+            is_die_cut=True,
+            snapshot_mold_tool_id=mold.id,
+            snapshot_mold_tool_code=mold.mold_code,
+            snapshot_mold_tool_name=mold.mold_name,
+            spare_sheet_quantity=0,
+            display_mode="internal_only",
+            is_required=True,
+            snapshot_component_product_code=product.product_code,
+            snapshot_component_product_name=product.product_name,
+            snapshot_component_spec="430 × 68",
+            snapshot_component_material="A=A",
+            snapshot_component_box_category="die_cut",
+        )
+        db.add(snapshot)
+        db.flush()
+        task = ProductionTask(
+            order_item_id=item.id,
+            sales_order_item_bom_component_id=snapshot.id,
+            status="pending",
+            planned_quantity=10,
+            ordered_quantity_snapshot=10,
+            material_received_quantity=18,
+            material_input_quantity=18,
+        )
+        db.add(task)
+        requisition = Requisition(
+            requisition_number="MR-BOM-LIVE-001",
+            requisition_date=date.today(),
+            status="已报料",
+        )
+        db.add(requisition)
+        db.flush()
+        cover = RequisitionItem(
+            requisition_id=requisition.id,
+            order_item_id=item.id,
+            requisition_qty=10,
+            cardboard_len=Decimal("880"),
+            cardboard_width=Decimal("425"),
+            product_name_snapshot="组合模切组件-盖",
+            status="有效",
+        )
+        base = RequisitionItem(
+            requisition_id=requisition.id,
+            order_item_id=item.id,
+            requisition_qty=10,
+            cardboard_len=Decimal("870"),
+            cardboard_width=Decimal("415"),
+            product_name_snapshot="组合模切组件-底",
+            status="有效",
+        )
+        sibling = RequisitionItem(
+            requisition_id=requisition.id,
+            order_item_id=item.id,
+            requisition_qty=99,
+            cardboard_len=Decimal("999"),
+            cardboard_width=Decimal("999"),
+            product_name_snapshot="父产品普通报料",
+            status="有效",
+        )
+        db.add_all([cover, base, sibling])
+        db.flush()
+        for row, kind in ((cover, "cover"), (base, "base")):
+            db.add(
+                RequisitionItemBomSource(
+                    requisition_item_id=row.id,
+                    sales_order_item_bom_component_id=snapshot.id,
+                    component_type=kind,
+                    order_set_quantity=10,
+                    quantity_per_set=Decimal("1"),
+                    required_piece_quantity=Decimal("10"),
+                    demand_basis="order_sets",
+                    spare_sheet_quantity=0,
+                    calculated_purchase_quantity=Decimal("10"),
+                )
+            )
+        receipt = IncomingReceipt(
+            receipt_number="IR-BOM-LIVE-001",
+            status="posted",
+            received_at=now,
+            idempotency_key="ir-bom-live-001",
+        )
+        db.add(receipt)
+        db.flush()
+        db.add_all(
+            [
+                IncomingReceiptItem(
+                    receipt_id=receipt.id,
+                    order_id=order.id,
+                    order_item_id=item.id,
+                    requisition_id=requisition.id,
+                    requisition_item_id=cover.id,
+                    planned_quantity=10,
+                    received_quantity=8,
+                    cumulative_received_quantity=8,
+                    variance_quantity=-2,
+                    variance_type="short",
+                    resolution_status="resolved",
+                    resolution_action="accept_short",
+                    status="posted",
+                ),
+                IncomingReceiptItem(
+                    receipt_id=receipt.id,
+                    order_id=order.id,
+                    order_item_id=item.id,
+                    requisition_id=requisition.id,
+                    requisition_item_id=base.id,
+                    planned_quantity=10,
+                    received_quantity=10,
+                    cumulative_received_quantity=10,
+                    variance_quantity=0,
+                    variance_type="matched",
+                    resolution_status="not_required",
+                    status="posted",
+                ),
+                IncomingReceiptItem(
+                    receipt_id=receipt.id,
+                    order_id=order.id,
+                    order_item_id=item.id,
+                    requisition_id=requisition.id,
+                    requisition_item_id=sibling.id,
+                    planned_quantity=99,
+                    received_quantity=99,
+                    cumulative_received_quantity=99,
+                    variance_quantity=0,
+                    variance_type="matched",
+                    resolution_status="not_required",
+                    status="posted",
+                ),
+            ]
+        )
+        db.flush()
+        material = _material_facts_for_task(db, task=task, item=item)
+
+    assert material["state"] == "received_accept_short"
+    assert material["planned_quantity"] == 20
+    assert material["received_quantity"] == 18
+    assert material["remaining_quantity"] == 0
+    assert material["physical_shortage_quantity"] == 2
+    assert material["quantity_unit"] == "sheets"
+
+
+def test_mold_live_material_facts_fail_closed_on_direct_and_requisition_conflict(
+    mold_app,
+) -> None:
+    from app.api.warehouse import _material_facts_for_task
+
+    _app, factory = mold_app
+    with factory() as db:
+        _product, order, item, task = _material_live_context(
+            db, "DIRECT-CONFLICT", quantity=10
+        )
+        requisition, requisition_item = _material_live_requisition(
+            db,
+            item=item,
+            suffix="DIRECT-CONFLICT",
+            quantity=10,
+        )
+        _material_live_receipt(
+            db,
+            order=order,
+            item=item,
+            suffix="DIRECT-CONFLICT-REQ",
+            planned=10,
+            received=4,
+            requisition=requisition,
+            requisition_item=requisition_item,
+        )
+        _material_live_receipt(
+            db,
+            order=order,
+            item=item,
+            suffix="DIRECT-CONFLICT-OLD",
+            planned=10,
+            received=6,
+        )
+
+        material = _material_facts_for_task(db, task=task, item=item)
+
+    assert material["state"] == "source_conflict"
+    assert material["receipt_source"] == "conflicting_sources"
+    assert material["planned_quantity"] is None
+    assert material["received_quantity"] is None
+    assert material["remaining_quantity"] is None
+    assert material["physical_shortage_quantity"] is None
+    assert "来源冲突" in material["warning"]
+
+
+def test_mold_live_material_facts_keep_latest_supplier_source_and_posted_history(
+    mold_app,
+) -> None:
+    from app.api.warehouse import _material_facts_for_task
+    from app.models.supplier_requisition_order import (
+        SupplierRequisitionOrder,
+        SupplierRequisitionOrderItem,
+    )
+
+    _app, factory = mold_app
+    with factory() as db:
+        product, order, item, task = _material_live_context(
+            db,
+            "SUPPLIER-LINEAGE",
+            quantity=12,
+            supplier_order_number="SRO-MAT-LIVE-001",
+        )
+        old_req, old_item = _material_live_requisition(
+            db,
+            item=item,
+            suffix="SUPPLIER-OLD",
+            quantity=99,
+            requisition_status="supplier_requisition_created",
+            item_status="supplier_requisition_created",
+        )
+        current_req, _current_item = _material_live_requisition(
+            db,
+            item=item,
+            suffix="SUPPLIER-CURRENT",
+            quantity=12,
+            requisition_status="supplier_requisition_created",
+            item_status="supplier_requisition_created",
+        )
+        supplier_order = SupplierRequisitionOrder(
+            order_number=item.supplier_order_number,
+            status="confirmed",
+            total_quantity=12,
+            requisition_qty=12,
+        )
+        db.add(supplier_order)
+        db.flush()
+        db.add(
+            SupplierRequisitionOrderItem(
+                supplier_order_id=supplier_order.id,
+                order_item_id=item.id,
+                product_id=product.id,
+                quantity=12,
+                requisition_qty=12,
+            )
+        )
+        # A posted historical fact remains authoritative even when its source is
+        # no longer the current supplier group.
+        _material_live_receipt(
+            db,
+            order=order,
+            item=item,
+            suffix="SUPPLIER-OLD-FACT",
+            planned=5,
+            received=5,
+            requisition=old_req,
+            requisition_item=old_item,
+        )
+
+        material = _material_facts_for_task(db, task=task, item=item)
+
+    assert current_req.id > old_req.id
+    assert material["state"] == "partially_received"
+    assert material["planned_quantity"] == 17
+    assert material["received_quantity"] == 5
+    assert material["remaining_quantity"] == 12
+
+
+def test_mold_live_material_facts_exclude_reversed_receipt(
+    mold_app,
+) -> None:
+    from app.api.warehouse import _material_facts_for_task
+
+    _app, factory = mold_app
+    with factory() as db:
+        _product, order, item, task = _material_live_context(
+            db, "REVERSED", quantity=10
+        )
+        requisition, requisition_item = _material_live_requisition(
+            db,
+            item=item,
+            suffix="REVERSED",
+            quantity=10,
+        )
+        _material_live_receipt(
+            db,
+            order=order,
+            item=item,
+            suffix="REVERSED",
+            planned=10,
+            received=10,
+            requisition=requisition,
+            requisition_item=requisition_item,
+            status="reversed",
+            parent_status="reversed",
+        )
+
+        material = _material_facts_for_task(db, task=task, item=item)
+
+    assert material["state"] == "not_received"
+    assert material["planned_quantity"] == 10
+    assert material["received_quantity"] == 0
+    assert material["remaining_quantity"] == 10
+    assert material["receipt_source"] == "no_receipt_fact"
+
+
+def test_mold_live_material_facts_expose_known_legacy_received_quantity(
+    mold_app,
+) -> None:
+    from app.api.warehouse import _material_facts_for_task
+
+    _app, factory = mold_app
+    with factory() as db:
+        _product, _order, item, task = _material_live_context(
+            db, "LEGACY", quantity=10, material_status="received"
+        )
+        _requisition, requisition_item = _material_live_requisition(
+            db,
+            item=item,
+            suffix="LEGACY",
+            quantity=8,
+            item_status="已入库",
+        )
+
+        material = _material_facts_for_task(db, task=task, item=item)
+
+    assert requisition_item.requisition_qty == 8
+    assert material["state"] == "legacy_received"
+    assert material["planned_quantity"] is None
+    assert material["received_quantity"] == 8
+    assert material["remaining_quantity"] is None
+    assert material["physical_shortage_quantity"] is None
+    assert "历史实收 8 张" in material["state_label"]
+
+
+def test_mold_live_material_facts_mark_unattributed_parent_legacy_bom(
+    mold_app,
+) -> None:
+    from app.api.warehouse import _material_facts_for_task
+    from app.models.product_bom import SalesOrderItemBomComponent
+
+    _app, factory = mold_app
+    with factory() as db:
+        product, _order, item, task = _material_live_context(
+            db, "LEGACY-BOM", quantity=10, material_status="received"
+        )
+        snapshot = SalesOrderItemBomComponent(
+            sales_order_item_id=item.id,
+            component_product_id=product.id,
+            order_set_quantity=10,
+            quantity_per_set=Decimal("1"),
+            required_piece_quantity=Decimal("10"),
+            display_order=1,
+            internal_component_code="LEGACY-BOM",
+            is_die_cut=True,
+            snapshot_mold_tool_id=1,
+            snapshot_mold_tool_code="LEGACY-MOLD",
+            snapshot_mold_tool_name="历史模具",
+            spare_sheet_quantity=0,
+            display_mode="internal_only",
+            is_required=True,
+            snapshot_component_product_code=product.product_code,
+            snapshot_component_product_name=product.product_name,
+            snapshot_component_box_category="die_cut",
+        )
+        db.add(snapshot)
+        db.flush()
+        task.sales_order_item_bom_component_id = snapshot.id
+        db.flush()
+
+        material = _material_facts_for_task(db, task=task, item=item)
+
+    assert material["state"] == "legacy_received_unattributed"
+    assert material["planned_quantity"] is None
+    assert material["received_quantity"] is None
+    assert material["remaining_quantity"] is None
+    assert material["receipt_source"] == "legacy_status_unattributed"
+    assert "无法归属" in material["warning"]
+
+
+def test_mold_live_bom_ignores_superseded_whole_when_current_sources_are_split(
+    mold_app,
+) -> None:
+    from app.api.warehouse import _material_facts_for_task
+    from app.models.product_bom import (
+        RequisitionItemBomSource,
+        SalesOrderItemBomComponent,
+    )
+
+    _app, factory = mold_app
+    with factory() as db:
+        product, _order, item, task = _material_live_context(
+            db, "BOM-SUPERSEDED", quantity=10
+        )
+        snapshot = SalesOrderItemBomComponent(
+            sales_order_item_id=item.id,
+            component_product_id=product.id,
+            order_set_quantity=10,
+            quantity_per_set=Decimal("1"),
+            required_piece_quantity=Decimal("10"),
+            display_order=1,
+            internal_component_code="BOM-SUPERSEDED",
+            is_die_cut=True,
+            snapshot_mold_tool_id=1,
+            snapshot_mold_tool_code="BOM-MOLD",
+            snapshot_mold_tool_name="BOM模具",
+            spare_sheet_quantity=0,
+            display_mode="internal_only",
+            is_required=True,
+            snapshot_component_product_code=product.product_code,
+            snapshot_component_product_name=product.product_name,
+            snapshot_component_box_category="die_cut",
+        )
+        db.add(snapshot)
+        db.flush()
+        task.sales_order_item_bom_component_id = snapshot.id
+        old_req, old_item = _material_live_requisition(
+            db,
+            item=item,
+            suffix="BOM-SUPERSEDED-OLD",
+            quantity=99,
+            item_status="已取消",
+        )
+        cover_req, cover_item = _material_live_requisition(
+            db,
+            item=item,
+            suffix="BOM-SUPERSEDED-COVER",
+            quantity=6,
+        )
+        base_req, base_item = _material_live_requisition(
+            db,
+            item=item,
+            suffix="BOM-SUPERSEDED-BASE",
+            quantity=4,
+        )
+        for requisition_item, component_type, active_guard, quantity in (
+            (old_item, "whole", None, 99),
+            (cover_item, "cover", 1, 6),
+            (base_item, "base", 1, 4),
+        ):
+            db.add(
+                RequisitionItemBomSource(
+                    requisition_item_id=requisition_item.id,
+                    sales_order_item_bom_component_id=snapshot.id,
+                    component_type=component_type,
+                    active_guard=active_guard,
+                    order_set_quantity=10,
+                    quantity_per_set=Decimal("1"),
+                    required_piece_quantity=Decimal("10"),
+                    demand_basis="order_sets",
+                    spare_sheet_quantity=0,
+                    calculated_purchase_quantity=Decimal(quantity),
+                )
+            )
+        db.flush()
+
+        material = _material_facts_for_task(db, task=task, item=item)
+
+    assert cover_req.id > old_req.id
+    assert base_req.id > cover_req.id
+    assert material["state"] == "not_received"
+    assert material["planned_quantity"] == 10
+    assert material["received_quantity"] == 0
+    assert material["remaining_quantity"] == 10
+    assert material["warning"] is None
+
+
+def test_mold_live_material_facts_do_not_show_exhausted_or_finished_lot(
+    mold_app,
+) -> None:
+    from app.api.warehouse import _material_locations_for_task
+    from app.core.time_contract import utc_now_naive
+    from app.models.order import Order, OrderItem
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryReservation,
+        WarehouseLocation,
+    )
+
+    _app, factory = mold_app
+    now = utc_now_naive()
+    with factory() as db:
+        product = Product(
+            customer_id=1,
+            product_code="LOCATION-GATE",
+            customer_material_code="LOCATION-GATE",
+            product_name="库位证据门禁",
+        )
+        db.add(product)
+        db.flush()
+        order = Order(
+            order_number="SO-LOCATION-GATE",
+            customer_id=1,
+            order_date=date.today(),
+            status="pending_production",
+            total_amount=Decimal("0"),
+        )
+        db.add(order)
+        db.flush()
+        item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=10,
+            delivered_quantity=0,
+            unit_price=Decimal("0"),
+            subtotal=Decimal("0"),
+            material_status="pending",
+            snapshot_product_name=product.product_name,
+            snapshot_product_code=product.product_code,
+        )
+        db.add(item)
+        db.flush()
+        task = ProductionTask(
+            order_item_id=item.id,
+            status="waiting_material",
+            planned_quantity=0,
+            ordered_quantity_snapshot=10,
+            material_received_quantity=0,
+            material_input_quantity=0,
+        )
+        db.add(task)
+        location = WarehouseLocation(
+            location_code="1F-FIN-01",
+            location_name="成品区",
+            warehouse_type="finished",
+            is_active=True,
+        )
+        db.add(location)
+        db.flush()
+        lot = InventoryLot(
+            lot_number="FG-NOT-MATERIAL",
+            inventory_type="finished",
+            warehouse_location_id=location.id,
+            quantity_available=0,
+            quantity_reserved=5,
+            quantity_consumed=0,
+            quantity_damaged=0,
+            quantity_scrapped=0,
+            unit="boxes",
+            status="active",
+            source_type="manual",
+            stock_date=date.today(),
+            stock_date_accuracy="exact",
+            last_movement_at=now,
+        )
+        db.add(lot)
+        db.flush()
+        db.add(
+            InventoryReservation(
+                reservation_number="RSV-NOT-MATERIAL",
+                inventory_lot_id=lot.id,
+                reservation_type="semi_order",
+                order_id=order.id,
+                order_item_id=item.id,
+                reserved_stock_quantity=5,
+                credited_requirement_quantity=5,
+                consumed_stock_quantity=0,
+                released_stock_quantity=0,
+                consumed_requirement_quantity=5,
+                released_requirement_quantity=0,
+                status="partial",
+                reservation_group_key="NOT-MATERIAL",
+                idempotency_key="not-material",
+            )
+        )
+        db.flush()
+        assert _material_locations_for_task(db, task=task, item=item) == []
+
+
+def test_mold_live_status_requires_login_and_customer_scope(mold_app) -> None:
+    from app.models.customer import Customer
+    from app.models.mold_tool import MoldTool
+    from app.models.product import Product
+    from app.models.user import User
+    from app.models.access_control import UserCustomerScope
+    from sqlalchemy import select
+
+    app, factory = mold_app
+    with factory() as db:
+        denied_customer = Customer(
+            customer_number=9915,
+            customer_code="DENY-LIVE",
+            name="扫码越权客户",
+            payment_term_days=30,
+            credit_limit=Decimal("100000"),
+        )
+        db.add(denied_customer)
+        db.flush()
+        mold = MoldTool(
+            mold_code="DENY-LIVE-001",
+            mold_name="扫码越权客户001",
+            rack_location="1F-M-R02-L1-G01",
+        )
+        db.add(mold)
+        db.flush()
+        db.add(
+            Product(
+                customer_id=denied_customer.id,
+                product_code="DENY-LIVE-P001",
+                customer_material_code="DENY-LIVE-P001",
+                product_name="扫码越权产品",
+                box_category="die_cut",
+                production_process="模切",
+                mold_tool_id=mold.id,
+            )
+        )
+        sales = db.scalar(select(User).where(User.username == "sales"))
+        sales.customer_access_mode = "selected"
+        db.add(UserCustomerScope(user_id=sales.id, customer_id=1))
+        db.commit()
+        mold_id = mold.id
+
+    with TestClient(app) as client:
+        unauthenticated = client.get(
+            f"/api/warehouse/molds/live/{mold_id}"
+        )
+        assert unauthenticated.status_code == 401
+        for key, expected in {
+            "cache-control": "private, no-store, max-age=0",
+            "pragma": "no-cache",
+            "x-robots-tag": "noindex, nofollow",
+            "referrer-policy": "no-referrer",
+        }.items():
+            assert unauthenticated.headers[key] == expected
+        assert "Cookie" in unauthenticated.headers["vary"]
+        _login(client, "sales")
+        denied = client.get(
+            f"/api/warehouse/molds/live/{mold_id}"
+        )
+        assert denied.status_code == 404
+        assert "DENY-LIVE-P001" not in denied.text
+        assert denied.headers["cache-control"] == "private, no-store, max-age=0"
+        assert denied.headers["pragma"] == "no-cache"
+
+
+def test_scoped_customer_can_read_current_bom_snapshot_after_product_unbind(
+    mold_app,
+) -> None:
+    from app.models.order import Order, OrderItem
+    from app.models.mold_tool import MoldTool
+    from app.models.product import Product
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.models.production import ProductionTask
+    from app.models.user import User
+    from app.models.access_control import UserCustomerScope
+    from sqlalchemy import select
+
+    app, factory = mold_app
+    with factory() as db:
+        mold = MoldTool(
+            mold_code="SNAPSHOT-UNBOUND-MOLD",
+            mold_name="模具联动测试客户SNAP001",
+            rack_location="1F-M-R01-L2-G01",
+        )
+        product = Product(
+            customer_id=1,
+            product_code="SNAPSHOT-UNBOUND-P",
+            customer_material_code="SNAPSHOT-UNBOUND-P",
+            product_name="已解绑快照组件",
+            box_category="die_cut",
+            production_process="模切",
+        )
+        db.add_all([mold, product])
+        db.flush()
+        order = Order(
+            order_number="SO-SNAPSHOT-UNBOUND",
+            customer_id=1,
+            order_date=date.today(),
+            status="pending_production",
+            total_amount=Decimal("0"),
+        )
+        db.add(order)
+        db.flush()
+        item = OrderItem(
+            order_id=order.id,
+            product_id=product.id,
+            quantity=5,
+            delivered_quantity=0,
+            unit_price=Decimal("0"),
+            subtotal=Decimal("0"),
+            material_status="pending",
+            snapshot_product_name=product.product_name,
+            snapshot_product_code=product.product_code,
+        )
+        db.add(item)
+        db.flush()
+        snapshot = SalesOrderItemBomComponent(
+            sales_order_item_id=item.id,
+            component_product_id=product.id,
+            order_set_quantity=5,
+            quantity_per_set=Decimal("1"),
+            required_piece_quantity=Decimal("5"),
+            display_order=1,
+            internal_component_code=product.product_code,
+            is_die_cut=True,
+            snapshot_mold_tool_id=mold.id,
+            snapshot_mold_tool_code=mold.mold_code,
+            snapshot_mold_tool_name=mold.mold_name,
+            spare_sheet_quantity=0,
+            display_mode="internal_only",
+            is_required=True,
+            snapshot_component_product_code=product.product_code,
+            snapshot_component_product_name=product.product_name,
+            snapshot_component_box_category="die_cut",
+        )
+        db.add(snapshot)
+        db.flush()
+        db.add(
+            ProductionTask(
+                order_item_id=item.id,
+                sales_order_item_bom_component_id=snapshot.id,
+                status="pending",
+                planned_quantity=5,
+                ordered_quantity_snapshot=5,
+                material_received_quantity=0,
+                material_input_quantity=0,
+            )
+        )
+        sales = db.scalar(select(User).where(User.username == "sales"))
+        sales.customer_access_mode = "selected"
+        db.add(UserCustomerScope(user_id=sales.id, customer_id=1))
+        db.commit()
+        mold_id = mold.id
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        response = client.get(
+            f"/api/warehouse/molds/live/{mold_id}"
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["mode"] == "restricted"
+        assert response.json()["task_visibility"] == "hidden_by_permission"
+        assert response.json()["bindings"]["items"] == []
 
 
 @pytest.mark.parametrize(
@@ -1255,6 +2571,7 @@ def test_double_code_move_is_versioned_idempotent_and_does_not_touch_business_da
     from app.core.time_contract import utc_now_naive
     from app.models.mold_tool import MoldLocationMovement, MoldTool
     from app.models.order import Order
+    from app.models.product import Product
     from app.models.requisition import Requisition
     from app.models.warehouse_inventory import InventoryLot, WarehouseLocation
     from app.models.audit import OperationLog
@@ -1276,6 +2593,17 @@ def test_double_code_move_is_versioned_idempotent_and_does_not_touch_business_da
         db.flush()
         db.add_all(
             [
+                Product(
+                    customer_id=1,
+                    product_code="MOVE-LABEL-P001",
+                    customer_material_code="MOVE-LABEL-P001",
+                    product_name="双码移动标签测试产品",
+                    length_mm=430,
+                    width_mm=68,
+                    report_length_mm=880,
+                    report_width_mm=425,
+                    mold_tool_id=mold.id,
+                ),
                 InventoryLot(
                     lot_number="FG-GUARD-LOT-01",
                     inventory_type="finished",
@@ -1744,6 +3072,7 @@ def test_batch_mold_labels_preserve_selection_order_and_are_read_only(
 
     from app.api import warehouse as warehouse_api
     from app.models.mold_tool import MoldTool
+    from app.models.product import Product
 
     app, factory = mold_app
     monkeypatch.setattr(warehouse_api, "_lan_ip", lambda: "192.168.3.80")
@@ -1762,6 +3091,23 @@ def test_batch_mold_labels_preserve_selection_order_and_are_read_only(
             assert response.status_code == 201, response.text
             created.append(response.json())
 
+        with factory() as db:
+            for index, mold in enumerate(created, start=1):
+                db.add(
+                    Product(
+                        customer_id=1,
+                        product_code=f"BATCH-P-{index:03d}",
+                        customer_material_code=f"BATCH-P-{index:03d}",
+                        product_name=f"批量标签产品 {index}",
+                        length_mm=430,
+                        width_mm=68,
+                        report_length_mm=880,
+                        report_width_mm=425,
+                        mold_tool_id=mold["id"],
+                    )
+                )
+            db.commit()
+
         before = _protected_business_state(factory)
         response = client.get(
             "/api/warehouse/molds/labels",
@@ -1774,10 +3120,11 @@ def test_batch_mold_labels_preserve_selection_order_and_are_read_only(
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["count"] == 2
-        assert [item["id"] for item in body["items"]] == [
-            created[2]["id"],
-            created[0]["id"],
+        assert [item["mold_code"] for item in body["items"]] == [
+            created[2]["mold_code"],
+            created[0]["mold_code"],
         ]
+        assert response.headers["cache-control"] == "private, no-store, max-age=0"
         assert all(item["qr_data_url"].startswith("data:image/png;base64,") for item in body["items"])
         assert _protected_business_state(factory) == before
         with factory() as db:

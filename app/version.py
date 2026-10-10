@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.610"
+APP_VERSION = "v0.22.611"
 APP_VERSION_NAME = "报料入口与补库校验"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5886,6 +5886,20 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.609：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 
+APP_CHANGES = [
+    "首页库存预警生成报料草稿时优先读取本款明细，不再等待整页报料数据及不显示的全部预警计算。",
+    "客户和材质选项随后补齐；保留手动补库、BOM套数、数量编辑和保存校验，增加读取提示及过期响应保护。",
+    "本版无数据库迁移，不修改正式订单、库存、常用箱或历史报料事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "强制刷新首页，点一个库存预警款的生成报料草稿，核对明细和数量优先显示。",
+    "核对客户、材质和报料张数；有真实业务需要时再保存，核对生成单号及回读数量。",
+    "进入系统版本确认 v0.22.610；正式页面等待管理员人工验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.610：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+
 
 APP_CHANGES = [
     "从产品资料打开订单或报料时，切换账号、页面或重新打开草稿后，旧读取不会继续打开旧窗口或覆盖新表单。",
@@ -5899,4 +5913,4 @@ APP_VERIFICATION_STEPS = [
     "连续切换产品、页面或关闭后重新打开草稿，核对当前资料不被旧读取覆盖；弱网超时后按提示重新打开。",
     "从报料的外购包材采购历史查看已有采购单，核对原单号与数量；无需重复报料或改动真实库存。",
 ]
-APP_CHANGELOG = [*(f"v0.22.610：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.611：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

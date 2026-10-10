@@ -9093,6 +9093,7 @@
               <div style="margin-top:10px"><a :href="mobileEntry.url" target="_blank">{{ mobileEntry.url }}</a></div>
             </div>
             <div v-else-if="modal.type === 'stockReplenishment'">
+              <div v-if="stockReplenishmentForm._pendingDrafts" class="status blue" role="status" aria-live="polite">正在读取本款报料明细…</div>
               <div v-if="stockReplenishmentForm.source_type==='stock_warning' && stockReplenishmentCompanions.length" class="stock-warning-companions">
                 <strong>同客户、同材质和同报料尺寸的其他款</strong>
                 <info-note>印刷内容不同，不会自动增加各款成品。多报纸板统一作为客户专用纸板备料，可供下列同规格款号共用；只有点击“同时加入”才增加该款的计划补货。</info-note>
@@ -16552,7 +16553,7 @@
               await this.runExplicitPageListLoad(page, {resetPage:true});
             }, 300));
           },
-          async go(page, {productAction=null}={}) {
+          async go(page, {load=true, productAction=null}={}) {
             window.ERPProductWorkbench?.navigationIntent(this, productAction);
             if (productAction && !productAction.current()) return;
             if (this.activePage === "warehouse" && page !== "warehouse" && !await this.checkWarehouseNavigation()) return;
@@ -16600,7 +16601,8 @@
             if (productAction && !productAction.arrive(page)) return;
             this.activePage = page;
             if (leavingWarehouse) this.leaveWarehouseWorkspaceUrl(page);
-            await this.loadPage(page);
+            if (load) await this.loadPage(page);
+            return true;
           },
           async openBusinessFlowStep(step) {
             const page = step?.page;
@@ -20195,9 +20197,12 @@
               this.showToast(message);
               return;
             }
-            await this.go("requisition");
-            await this.openStockReplenishment({ warningOnly:true });
-            await this.addStockPolicyDraft({...item,id:item.policy_id});
+            const actorId = this.user?.id, generation = this.authGeneration;
+            // Show the requested draft before loading the unrelated workbench.
+            if (!await this.go("requisition", {load:false})) return;
+            if (this.activePage !== "requisition" || actorId !== this.user?.id || generation !== this.authGeneration) return;
+            await this.openStockReplenishment({ warningOnly:true, policy:{...item,id:item.policy_id} });
+            if (this.activePage === "requisition" && actorId === this.user?.id && generation === this.authGeneration) await this.loadPage("requisition");
           },
           async openLowStockLocations(item) {
             const keyword = encodeURIComponent(String(item.product_code || item.product_name || "").trim());
@@ -20211,25 +20216,29 @@
             if (productAction && !productAction.current()) return;
             const warningOnly = !!options.warningOnly;
             const controller = this.beginLatestRequest("requisition:stock-replenishment-bootstrap");
+            const actorId = this.user?.id, generation = this.authGeneration;
             this.stockReplenishmentSaveState = {saving:false, committed:false, uncertain:false, result:null};
-            this.stockReplenishmentForm = { source_type:warningOnly ? "stock_warning" : "customer_request", idempotency_key:createIdempotencyKey(), supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] };
+            this.stockReplenishmentForm = { source_type:warningOnly ? "stock_warning" : "customer_request", idempotency_key:createIdempotencyKey(), supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[], _pendingDrafts:0 };
             this.stockReplenishmentProducts = [];
             this.stockReplenishmentCompanions = [];
             this.modal = { type:"stockReplenishment", title:warningOnly ? "按库存预警生成报料草稿" : "手动库存补库报料" };
             const form = this.stockReplenishmentForm, modal = this.modal;
             productAction?.bind(form, modal);
-            const current = () => !controller.signal.aborted && this.stockReplenishmentForm === form && this.modal === modal && (!productAction || productAction.current());
+            const current = () => !controller.signal.aborted && this.stockReplenishmentForm === form && this.modal === modal && actorId === this.user?.id && generation === this.authGeneration && (!productAction || productAction.current());
             const http = productAction || axios;
             try {
+              if (options.policy) await this.addStockPolicyDraft(options.policy, {productAction});
+              if (!current()) return;
+              // Warning drafts hide the all-policy table; only manual entry needs it.
               const tasks = [
-                http.get("/api/requisition/stock-policies", {params:{warning_only:true}, signal:controller.signal}),
+                warningOnly ? Promise.resolve(null) : http.get("/api/requisition/stock-policies", {params:{warning_only:true}, signal:controller.signal}),
               ];
               if (!this.customerOptions.length) tasks.push(this.loadCustomerOptions(false, {productAction}));
               // 补库详细参数中的材质 search-select 需要完整材质集合；只在实际打开弹窗时补齐。
               if (!this.allMaterials.length) tasks.push(this.loadMaterials({productAction}));
               const [policies] = await Promise.all(tasks);
               if (!current()) return;
-              this.stockPolicyWarnings = policies.data.items || [];
+              if (policies) this.stockPolicyWarnings = policies.data.items || [];
             } catch (error) {
               if (productAction) throw error;
               if (current() && !this.isCancelledRequest(error)) this.showToast("补库基础数据加载失败：" + this.errorMessage(error), true);
@@ -20263,6 +20272,9 @@
             const requestKey = `requisition:stock-policy-draft:${policy.id}`;
             const controller = this.beginLatestRequest(requestKey);
             const form = this.stockReplenishmentForm;
+            const actorId = this.user?.id, generation = this.authGeneration;
+            const isCurrent = () => !controller.signal.aborted && this.stockReplenishmentForm === form && this.modal?.type === "stockReplenishment" && actorId === this.user?.id && generation === this.authGeneration && (!productAction || productAction.current());
+            form._pendingDrafts = (form._pendingDrafts || 0) + 1;
             try {
               const params = {};
               // The suggested number is already net of inventory/incoming.
@@ -20273,7 +20285,7 @@
                 params.finished_quantity = quantity;
               }
               const { data } = await (productAction || axios).get(`/api/requisition/stock-policies/${policy.id}/replenishment-draft`, {params,signal:controller.signal});
-              if (controller.signal.aborted || this.stockReplenishmentForm !== form || this.modal?.type !== "stockReplenishment" || (productAction && !productAction.current())) return;
+              if (!isCurrent()) return;
               const lines = (data.items || []).filter(line => Number(line.quantity || 0) > 0);
               if (!lines.length) {
                 if (!data.draft_ready) this.showToast(`报料资料还缺：${(data.missing_fields || []).join("、")}`, true);
@@ -20297,13 +20309,13 @@
               this.stockReplenishmentCompanions = data.compatible_products || [];
               const customerIds = [...new Set(lines.map(line => line.customer_id).filter(Boolean))];
               await Promise.all(customerIds.map(customerId => this.loadStockProducts(customerId, "", {productAction})));
-              if (productAction && !productAction.current()) return;
+              if (!isCurrent()) return;
               this.syncStockReplenishmentSupplier();
               if (!data.draft_ready) this.showToast(`报料资料还缺：${(data.missing_fields || []).join("、")}`, true);
               else if (data.is_virtual_composite_parent) this.showToast(`已按BOM生成 ${lines.length} 条组件报料明细`);
             } catch(error) { if (productAction) throw error;
-              if (!this.isCancelledRequest(error)) this.showToast(this.errorMessage(error), true); }
-            finally { this.finishLatestRequest(requestKey,controller); }
+              if (isCurrent() && !this.isCancelledRequest(error)) this.showToast(this.errorMessage(error), true); }
+            finally { form._pendingDrafts = Math.max(0,(form._pendingDrafts || 1)-1); this.finishLatestRequest(requestKey,controller); }
           },
           async addCompatibleStockDraft(companion) {
             const line = companion?.draft_item;
@@ -20348,14 +20360,16 @@
           async loadStockProducts(customerId, query="", {productAction=null}={}) {
             if (productAction && !productAction.current()) return;
             if (!customerId) return;
+            const form = this.stockReplenishmentForm, actorId = this.user?.id, generation = this.authGeneration;
+            const isCurrent = () => this.stockReplenishmentForm === form && this.modal?.type === "stockReplenishment" && actorId === this.user?.id && generation === this.authGeneration && (!productAction || productAction.current());
             try {
               const keyword=String(query||"").trim();
               const {data} = await (productAction || axios).get("/api/requisition/stock-replenishment/products", {params:{customer_id:customerId,q:keyword||undefined,limit:keyword?100:2000}});
-              if (productAction && !productAction.current()) return;
+              if (!isCurrent()) return;
               const existing = new Map((this.stockReplenishmentProducts || []).map(row=>[row.id,row]));
               (data.items || []).forEach(row=>existing.set(row.id,row));
               this.stockReplenishmentProducts = [...existing.values()];
-            } catch(error) { if (productAction) throw error; this.showToast(this.errorMessage(error), true); }
+            } catch(error) { if (productAction) throw error; if (isCurrent()) this.showToast(this.errorMessage(error), true); }
           },
           searchStockProducts(customerId, query) {
             if (!customerId || !String(query||"").trim()) return;
@@ -20491,6 +20505,7 @@
             return total === reportWidth ? "" : `压线不符：三段合计 ${total}mm，报料宽 ${reportWidth}mm；两者必须相等`;
           },
           validateStockReplenishmentForm() {
+            if (this.stockReplenishmentForm._pendingDrafts) return "正在读取报料明细，请稍候";
             if (!this.stockReplenishmentForm.items.length) return "至少添加一条补库明细";
             if (this.stockReplenishmentForm.stock_now) return "库存补库只能先生成报料草稿，不能保存后直接写入库存";
             const suppliers=this.stockReplenishmentMaterialSuppliers();

@@ -1,6 +1,6 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const {parseHTML}=require('linkedom');
-const code=fs.readFileSync(require.resolve('../../static/ui/product-workbench.js'),'utf8'),html=fs.readFileSync(require.resolve('../../static/index.html'),'utf8');
+const code=fs.readFileSync(require.resolve('../../static/ui/product-workbench.js'),'utf8'),html=fs.readFileSync(process.env.PRODUCT_ACTION_HTML||require.resolve('../../static/index.html'),'utf8');
 const tick=()=>new Promise(r=>setImmediate(r)),deferred=()=>{let resolve,reject;const promise=new Promise((r,j)=>{resolve=r;reject=j});return {promise,resolve,reject}};
 const stocks=()=>({summary:Object.fromEntries(['finished','semi_finished','processed_component'].map(k=>[k,{actual:0,available:0,reserved:0,unit:'张'}])),groups:Object.fromEntries(['finished','semi_finished','processed_component'].map(k=>[k,{positions:[]}]))});
 const detail=(id=1,policy=null)=>({product:{id,product_id:id,customer_id:7,customer_name:'合成客户',product_code:'TEST-'+id,drawings:{status:'none',items:[]}},production:{molds:[],bom:[],process_steps:[]},inventory:{...stocks(),items:[]},orders:{items:[{order_id:71,product_id:id,order_number:'SYNTHETIC-71'}]},actions:{can_requisition:true,stock_only:false,policy_id:policy}});
@@ -69,3 +69,31 @@ test('actual go handoff after component unmount shows a current failure once in 
  const h=harness(async()=>({data:{items:[]}})),instance=mount(h);h.c.loadPage=async()=>instance.destroy();await start(h,instance);await tick();assert.equal(h.c.activePage,'requisition');assert.equal(h.root.textContent,'');assert.equal(h.c.toasts.length,1);assert.match(h.c.toasts[0][0],/此产品当前不能生成报料草稿/);assert.match(h.c.toasts[0][0],/重新打开/);
 });
 test('current permission refusal never fills an old form even if an old stock modal remains',async()=>{const h=harness(),old=h.c.stockReplenishmentForm;h.c.modal={type:'stockReplenishment'};h.c.canRequisition=false;await h.c.productWorkbenchAction('requisition',detail());assert.equal(h.c.stockReplenishmentForm,old);assert.equal(old.items.length,0);assert.equal(h.requests.length,0)});
+
+// Merge611: execute both formal target-first loading and action-owned continuations.
+test('merge611 actual home warning entry reads target before options then loads original page',async()=>{
+ const target=deferred(),options=deferred(),h=harness(async p=>p.endsWith('/replenishment-draft')?target.promise:{data:{items:[]}});
+ h.c.openLowStockReplenishment=h.actual('openLowStockReplenishment');h.c.stockPolicyDraftQuantity=h.actual('stockPolicyDraftQuantity');h.c.validateStockReplenishmentForm=h.actual('validateStockReplenishmentForm');h.c.canSubmitBusinessRequest=false;h.c.allMaterials=[];h.c.loadMaterials=()=>options.promise;
+ const p=h.c.openLowStockReplenishment({policy_id:31,suggested_new_requisition_sheet_quantity:8});await tick();const original=h.c.stockReplenishmentForm;
+ assert.deepEqual(h.nav,[]);assert.equal(h.requests.length,1);assert.match(h.requests[0].p,/31\/replenishment-draft$/);assert.equal(original._pendingDrafts,1);assert.match(h.c.validateStockReplenishmentForm(),/正在读取/);
+ target.resolve({data:{items:[{stock_policy_id:31,quantity:8}],draft_ready:true}});await tick();assert.equal(original.items[0].quantity,8);assert.equal(original._pendingDrafts,0);assert.deepEqual(h.nav,[]);assert.equal(h.requests.some(r=>r.p==='/api/requisition/stock-policies'),false);
+ options.resolve();await p;assert.deepEqual(h.nav,['requisition']);
+});
+test('merge611 bootstrap target policy forwards exact current context and handles null warnings',async()=>{
+ const h=harness();let used=0;const context={current:()=>true,bind(){},async get(p){used++;return {data:{items:[],draft_ready:true}}}};
+ await h.c.openStockReplenishment({warningOnly:true,policy:{id:31},productAction:context});assert.equal(used,1);assert.equal(h.requests.length,0);assert.equal(h.c.stockReplenishmentForm._pendingDrafts,0);assert.equal(h.c.stockReplenishmentForm.items.length,0);
+});
+for(const change of ['close-reopen','account'])test('merge611 pending belongs to original form after '+change,async()=>{
+ const target=deferred(),h=harness(()=>target.promise);const p=h.c.openStockReplenishment({warningOnly:true,policy:{id:31}});await tick();const original=h.c.stockReplenishmentForm;assert.equal(original._pendingDrafts,1);
+ if(change==='close-reopen'){h.c.modal=null;await h.c.openStockReplenishment({warningOnly:true});}else{h.c.user={id:2};h.c.authGeneration++;h.c.stockReplenishmentForm={items:[],_pendingDrafts:7};h.c.modal={type:'stockReplenishment'};}
+ const newer=h.c.stockReplenishmentForm;const pending=newer._pendingDrafts;target.resolve({data:{items:[{stock_policy_id:31,quantity:8,customer_id:7}],draft_ready:true}});await p;
+ assert.equal(original._pendingDrafts,0);assert.equal(original.items.length,0);assert.equal(newer._pendingDrafts,pending);assert.equal(newer.items.length,0);assert.equal(h.c.toasts.length,0);
+});
+test('merge611 empty and failed target clear pending without creating a line',async()=>{
+ for(const failed of [false,true]){const h=harness(async()=>{if(failed)throw Error('target unavailable');return {data:{items:[],draft_ready:true}}});await h.c.openStockReplenishment({warningOnly:true,policy:{id:31}});assert.equal(h.c.stockReplenishmentForm._pendingDrafts,0);assert.equal(h.c.stockReplenishmentForm.items.length,0);if(failed)assert.match(h.c.toasts[0][0],/target unavailable/);}
+});
+
+test('merge611 home permission wait changing account cannot reopen an old target form',async()=>{
+ const allowed=deferred(),h=harness();h.c.activePage='warehouse';h.c.checkWarehouseNavigation=()=>allowed.promise;h.c.openLowStockReplenishment=h.actual('openLowStockReplenishment');h.c.stockPolicyDraftQuantity=h.actual('stockPolicyDraftQuantity');h.c.canSubmitBusinessRequest=false;
+ const p=h.c.openLowStockReplenishment({policy_id:31,suggested_new_requisition_sheet_quantity:8});await tick();const b={items:[{quantity:99}],idempotency_key:'B'};h.c.user={id:2};h.c.authGeneration++;h.c.stockReplenishmentForm=b;h.c.modal={type:'B'};allowed.resolve(true);await p;assert.equal(h.c.stockReplenishmentForm,b);assert.equal(h.c.modal.type,'B');assert.equal(h.requests.length,0);
+});

@@ -46,3 +46,13 @@ API兼容最终判据：旧NULL请求，或确有外购采购batch且整来源�
 因另一任务曾遇D盘满，其恢复临时副本转C后空间已恢复；本轮增加C/D峰值容量预检。根旧模板_backup_stopped仅证明NAS解密/副本哈希，不能冒充实际restore；610在同锁同次冷备后实际Manager.restore到本任务C盘唯一UUID空目录，核全业务事实/附件及明确PDF路径重绑，确认不启动服务，先归档证据再精确清理成功演练目录。失败停止升级，旧服务按Manager机制恢复。原备份和正式数据不清理。
 
 根现有28API/74UI/图纸证据与本任务源码保持一致；新正式仓库整合无受检文件交叠，补2条真实API启动/事务冒烟并独立核无交叉，避免无理由宽跑。原迁移文件链相对两正式基线不变。
+
+## 2026-10-10 09:55 承接正式报料提速610的交叉整合
+
+正式已由其他任务发布v610/f99bb014835e6ac40b1834ddcadb7aad2745c25a，包5baf123d7d9936ca371fd0ae9ac69436b36e2efec4da9a1aed7c967db8e879f6。本任务610仅已构建af88b80c，没有执行deploy；版本顺延611。归属root的API3文件原候选保持，新正式改index的go/openLowStockReplenishment/openStockReplenishment/addStockPolicyDraft/loadStockProducts/加载状态与保存门禁与本任务身份保护有交叠，必须真实合并和针对交集测试，不以机械选ours/theirs丢任一侧行为。
+
+本补段明确允许UI负责人/root/mobile_drawings_ui在根factory-reliability-20261009工作树仅解决static/index.html冲突，并更新本任务tests/ui/product-requisition-action-reliability.test.cjs交集回归；正式新tests/ui/stock_draft_speed.test.cjs只有源码提取签名正则如必要可适配，原行为断言全部保留。其他文件禁止写；不commit、不stage、不改版本或其他树。根独占版本/卡/证据/合并提交。保留新正式go可选load参数和当前明细优先、后台原页面加载；本任务productAction正常handoff仍有效，默认go继续loadPage，完整actor/auth/page/form/轮次/超时保护不可删除；pending计数绑定原form，不得污染新form或放行未加载保存。旧全局错误保护必须保留。
+
+验证旧74 UI及本次提速针对用例、真实go交接/关闭重开/换账号/延迟bootstrap/空明细pending清理，不扩浏览器服务或正式点击。独立审者只读核合并index交集并3条高价值用例；API源码不变，不重复宽跑。后端28+新正式合并2HTTP证据继续按源码核对。最终发布等待并行正式资料操作结束及CAS所有门禁；没有本任务正式数据写入授权。
+
+交集验证补边：speed测试的实际go调用新增window依赖，允许仅在setup以VM加载真实product-workbench模块并传入window，保留原13条行为断言，不空stub或删断言。已实际复现openLowStockReplenishment等待go权限时换账号，旧动作仍重置新form；允许在go返回后、开窗前复核actor/authGeneration/activePage，属于原身份隔离根因，并新增真实行为回归。

@@ -1,6 +1,6 @@
 # DELIVERY-ATOMIC-DISPATCH-20261010
 
-状态：API、UI 与助手实现已整合，定向验证通过，候选 v0.22.619 正在最终独审；尚未正式发布。本卡不把设计或负面观察当修复。用户持续升级/修复发布授权继续有效，不另索重复发布批准；具体数据及发布门禁保留。
+状态：v0.22.619 技术发布完成，待管理员人工验收。签名源码 ae89b827e5ed7f2f5f80093132afedf070075741，包 b450abd407cb553aa83ac036cbd5efcc83f9cc7e1997bfbaaa4e263ec1019b67；实际助手更新、新冷备完整恢复演练、原业务与附件保持、健康/资源/匿名权限及 NAS 更新源读回均通过。发布校验脚本的路径类型错误已核验后向前恢复启动，详情见同名报告；没有回写旧库或修改产品源码。本卡不把设计或负面观察当修复；持续 Goal active，草稿保存及取消自身的原结果恢复另列后续闭环。
 
 目标：员工确认的整次送货要么完整提交一次，要么全部未提交；断网后能只读核对原结果，取消后的迟到原请求不能重新扣库，其他人改过数量的旧页面不能直接发后来新数量。正常明确重新发货、物理片/客户数量、BOM、共享库存、拿货、修订、打印及后续回单/对账阻断保持。
 
@@ -31,7 +31,7 @@
 
 全部错误保留原请求虽能避免重复扣库，但版本已变化的原请求无法继续；不得只让员工联系管理员而没有操作出口。新增显式“结束本次确认，重新核对”close写动作，携带完整原command及原actor/key，与execute同Order→Delivery锁序，锁后重新读ledger。若已completed返回原完成结果；若已closed返回原结束凭据；仅原key不存在时写同action的closed原凭据及审计，一次提交，原业务数量/状态不变。不得重新要求原version等当前、pending或库存资格，仍核actor、完整请求身份、原及当前客户权限和受管激活门禁。全局key唯一竞争须回滚后精确重读，不能覆盖终态。
 
-closed证明须绑定原actor/key/hash/resource/完整原request和closed_at，不伪装dispatch_receipt。execute锁前/锁后遇有效closed只返回原closed，迟到请求不再扣库；resolver支持只读closed，not_recorded不构成结束证据。UI在发close前持久化closing意图，超时/刷新只查原结果或重发原close，不能再执行原dispatch；严格核验并持久closed凭据后才解除同单pending，新发仍读新快照并由员工确认。迟到错误不能覆盖completed/closed终态。当前候选尚未发布，delivery_dispatch_v1同时包含completed/closed，旧中间候选不作为可回退兼容版本。
+closed证明须绑定原actor/key/hash/resource/完整原request和closed_at，不伪装dispatch_receipt。execute锁前/锁后遇有效closed只返回原closed，迟到请求不再扣库；resolver支持只读closed，not_recorded不构成结束证据。UI在发close前持久化closing意图，超时/刷新只查原结果或重发原close，不能再执行原dispatch；严格核验并持久closed凭据后才解除同单pending，新发仍读新快照并由员工确认。迟到错误不能覆盖completed/closed终态。正式 v619 的 delivery_dispatch_v1 同时包含 completed/closed，旧中间候选不作为可回退兼容版本。
 
 最短新增真实交错：execute先赢再close仍completed；close先赢再迟到execute无库存变化；close提交后丢回包可只读恢复closed，重新核对后新key正常发货。close提交失败/权限失败保原待核对，不按任意4xx清键。不新增取消送货或草稿恢复范围。
 
@@ -48,7 +48,7 @@ closed证明须绑定原actor/key/hash/resource/完整原request和closed_at，�
 
 真实合成HTTP覆盖原请求重放、异body/actor/customer scope、旧版本、取消后原key不扣/旧版本新key拒绝/明确新版本正常发；前置apply/prepare/dispatch各故障全回滚，原结果commit后丢回包可只读恢复；普通/无订单双数量及受控revision。UI用真实API包跑实际方法，覆盖坏ack、unknown持久化、同来源待核对、迟到跨账号/窗口、打印/列表辅助失败。helper真实签名包、激活前后、损坏/伪能力、零record窗口、真实加密backup→空目录restore及失败不promote。
 
-不跑全仓或无关长测试。禁止IAB、正式自动点击、新Chrome/额外服务、旧PID终止、正式业务补数及Git push。root差异检查/源绑定/唯一head后独审；正式安装助手和应用须同候选通过验证，实时CAS、新冷备实际Manager.restore、原业务字段和原附件保持、完整性/外键、健康/资源/权限核对，回退门禁不能省略。无DDL时不运行无关迁移；如确需DDL先另卡完整读取三份迁移文档并执行全部门禁。
+不跑全仓或无关长测试。禁止IAB、正式自动点击、新Chrome/额外服务、旧PID终止及正式业务补数。原本本卡不执行 Git push；收尾时已核对老板在清理任务的直接指令“未推送的全部推送发布”及“允许，协调所有正在进行的 ERP 任务”，本次仅允许把已验证并正式运行的 v619 及文档快进同步到候选分支与 factory-current-baseline，不 force-push，不夹带新功能；先核远端和运行包，再同步并读回，结果写独立回执及 disk-cleanup-20261010-closeout/dispatch-status.json。root差异检查/源绑定/唯一head后独审；正式安装助手和应用须同候选通过验证，实时CAS、新冷备实际Manager.restore、原业务字段和原附件保持、完整性/外键、健康/资源/权限核对，回退门禁不能省略。无DDL时不运行无关迁移；如确需DDL先另卡完整读取三份迁移文档并执行全部门禁。
 
 每阶段NAS独立回执，管理员1～3步现场验收待反馈；持续Goal active。局域网一次瞬时失联已独立复查自行恢复，未执行修复、不计本卡成果。
 

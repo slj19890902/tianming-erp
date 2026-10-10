@@ -215,9 +215,13 @@
   </style>
 <link rel="stylesheet" href="/static/ui/order-reference.css?v=423" /><script src="/static/ui/order-reference.js?v=423"></script><link rel="stylesheet" href="/static/ui/production-task-paper.css?v=581"><script src="/static/ui/production-task-paper.js?v=581"></script></head>
 <body>
+  <script src="/static/ui/material-strip-print.js?v=20261010"></script>
+  <link rel="stylesheet" href="/static/ui/material-strip-print.css?v=20261010">
+  <style id="stripPageStyle"></style>
   <div class="toolbar">
     <button id="retryButton" type="button">重新加载</button>
     <button id="printButton" class="primary" type="button" disabled>打印</button>
+    <button id="stripButton" type="button">切换简易报料条单（12列）</button>
     <button id="modeButton" type="button">切换客户随货版</button>
     <button id="labelButton" type="button" disabled>生产包装标签</button>
     <button id="labelRefreshButton" type="button" hidden disabled>按常用箱刷新标签计划</button>
@@ -805,6 +809,7 @@
       }
 
       function renderPages(packageData) {
+        if (document.body.classList.contains('material-strip')) return MaterialStripPrint.render(pagesHost, packageData.cards || [], customerSafe);
         const layouts = ProductionTaskPaper.render(pagesHost, packageData.cards || []);
         pagesHost.insertAdjacentHTML('beforeend', (packageData.cards || []).flatMap(card =>
           (card.managed_drawings || []).map(drawing => drawingAppendixHtml(card, drawing))).join(''));
@@ -828,8 +833,8 @@
         await waitForProductQrImages();
         await waitForDrawingImages();
         assertDrawingAppendicesFit();
-        if (overflowingCards().length) throw new Error('任务单排版超出纸面，请刷新后重试');
-        toolbarNote.textContent = `A4 · 大字双联 · 共 ${layouts.length} 页`;
+        if (overflowingCards().length || Array.from(pagesHost.querySelectorAll('.material-strip-page')).some(page=>page.scrollHeight>page.clientHeight+1 || page.scrollWidth>page.clientWidth+1)) throw new Error('任务单排版超出纸面，请切换完整任务单或核对过长内容');
+        toolbarNote.textContent = `A4 · ${document.body.classList.contains('material-strip') ? '横向简易条单，每行可裁切' : '大字双联'} · 共 ${layouts.length} 页`;
         message.hidden = true;
         printButton.disabled = !layouts.length || packageData.printable === false;
       }
@@ -914,6 +919,13 @@
 
       retryButton.addEventListener("click", loadPackage);
       printButton.addEventListener("click", verifyAndPrint);
+      document.getElementById('stripButton').addEventListener('click', async () => {
+        const enabled = document.body.classList.toggle('material-strip');
+        document.getElementById('stripPageStyle').textContent = enabled ? '@page{size:A4 landscape;margin:0}' : '';
+        document.getElementById('stripButton').textContent = enabled ? '切换完整生产任务单' : '切换简易报料条单（12列）';
+        printVerified=false;
+        try {if(loadedPackage) await render(loadedPackage);} catch(error) {printButton.disabled=true;message.hidden=false;message.textContent=error.message;}
+      });
       window.addEventListener('beforeprint', () => {
         const ready = printVerified && loadedPackage && !printButton.disabled && checkDrawingPrintReadiness();
         document.body.classList.toggle('print-blocked', !ready);

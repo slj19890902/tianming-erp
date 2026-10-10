@@ -5,47 +5,59 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>生产包装标签</title>
   <style>
-    :root { color-scheme:light; font-family:"Microsoft YaHei","SimSun",sans-serif; color:#0f172a; }
+    :root {
+      color-scheme:light;
+      font-family:"Microsoft YaHei","SimHei","SimSun",sans-serif;
+      color:#000;
+      --label-width:65mm;
+      --label-height:45mm;
+    }
     * { box-sizing:border-box; }
-    body { margin:0; background:#e2e8f0; }
+    html,body { margin:0; min-height:100%; }
+    body { background:#f3f4f6; }
     .toolbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:10px; padding:10px 16px; background:#fff; border-bottom:1px solid #cbd5e1; }
-    button { border:1px solid #94a3b8; border-radius:6px; background:#fff; padding:8px 15px; cursor:pointer; font-size:14px; }
-    button.primary { color:#fff; background:#0f766e; border-color:#0f766e; }
+    button { border:1px solid #64748b; border-radius:5px; background:#fff; color:#111827; padding:8px 15px; cursor:pointer; font-size:14px; }
+    button.primary { border-width:2px; border-color:#111827; font-weight:700; }
     button:disabled { opacity:.45; cursor:not-allowed; }
-    .toolbar-note { margin-left:auto; color:#64748b; font-size:12px; }
-    .message { max-width:760px; margin:18px auto; padding:14px 16px; border:1px solid #93c5fd; border-radius:8px; color:#1e3a8a; background:#eff6ff; text-align:center; }
-    .message.error { color:#991b1b; border-color:#fca5a5; background:#fff1f2; }
-    .label-list { display:grid; gap:14px; justify-items:center; padding:14px; }
-    .label-card { width:min(100%,760px); min-height:360px; padding:24px; border:3px solid #0f766e; border-radius:12px; background:#fff; box-shadow:0 2px 12px #0f172a22; break-inside:avoid; page-break-inside:avoid; }
-    .label-head { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; padding-bottom:14px; border-bottom:3px solid #0f172a; }
-    .label-title { margin:0; font-size:28px; letter-spacing:3px; }
-    .identity { flex:0 0 auto; padding:6px 12px; border:2px solid #c2410c; border-radius:99px; color:#9a3412; background:#fff7ed; font-size:16px; font-weight:900; }
-    .customer { margin-top:18px; font-size:22px; font-weight:900; }
-    .product { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:20px; align-items:center; margin-top:12px; }
-    .product-code { font-size:32px; font-weight:900; line-height:1.15; overflow-wrap:anywhere; }
-    .product-name { margin-top:6px; font-size:21px; font-weight:700; }
-    .specification { margin-top:5px; color:#475569; font-size:17px; }
-    .quantity { min-width:170px; padding:14px; border:3px solid #0f766e; border-radius:10px; text-align:center; }
-    .quantity span { display:block; color:#475569; font-size:16px; font-weight:700; }
-    .quantity strong { display:block; margin:4px 0; color:#b91c1c; font-size:58px; line-height:1; }
-    .quantity b { font-size:18px; }
-    .meta { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 18px; margin-top:18px; padding-top:14px; border-top:1px solid #94a3b8; font-size:14px; }
-    .meta strong { display:inline-block; min-width:84px; }
-    .notice { grid-column:1 / -1; margin-top:5px; padding:8px 10px; color:#9a3412; background:#fff7ed; border-radius:6px; font-size:13px; font-weight:700; text-align:center; }
+    .toolbar-note { margin-left:auto; color:#475569; font-size:12px; }
+    .message { max-width:680px; margin:18px auto; padding:12px 16px; border:1px solid #94a3b8; border-radius:6px; color:#334155; background:#fff; text-align:center; }
+    .message.error { color:#7f1d1d; border-color:#991b1b; }
+    .label-list { display:grid; gap:14px; justify-items:center; padding:18px; }
+    .label-card {
+      width:var(--label-width);
+      height:var(--label-height);
+      display:grid;
+      grid-template-rows:6.4mm 9.8mm 6.3mm 6.3mm 1fr;
+      overflow:hidden;
+      border:.35mm solid #000;
+      border-radius:1.4mm;
+      background:#fff;
+      box-shadow:0 2px 10px rgb(15 23 42 / 14%);
+      break-inside:avoid;
+      page-break-inside:avoid;
+    }
+    .customer-row { display:grid; grid-template-columns:11mm 1fr; align-items:center; padding:0 1.5mm; border-bottom:.35mm solid #000; }
+    .field-name { color:#374151; font-size:2.45mm; font-weight:700; line-height:1; white-space:nowrap; }
+    .customer-name { min-width:0; overflow:hidden; font-size:4.35mm; font-weight:900; line-height:1.05; text-align:center; white-space:nowrap; text-overflow:ellipsis; }
+    .code-row { display:flex; flex-direction:column; justify-content:center; padding:.7mm 1.5mm .55mm; border-bottom:.25mm solid #000; text-align:center; }
+    .code-row .field-name { align-self:flex-start; margin-bottom:.4mm; }
+    .product-code { min-width:0; overflow:hidden; font-family:"Arial","Microsoft YaHei",sans-serif; font-size:5.2mm; font-weight:900; letter-spacing:.08mm; line-height:1; white-space:nowrap; text-overflow:ellipsis; }
+    .detail-row { display:grid; grid-template-columns:11mm 1fr; align-items:center; padding:0 1.5mm; border-bottom:.2mm solid #9ca3af; }
+    .detail-value { min-width:0; overflow:hidden; font-size:3.3mm; font-weight:700; line-height:1.1; text-align:right; white-space:nowrap; text-overflow:ellipsis; }
+    .quantity-row { display:flex; align-items:baseline; justify-content:center; gap:1.2mm; padding:.75mm 1.5mm .55mm; }
+    .quantity-row .field-name { color:#000; font-size:3mm; }
+    .quantity-number { font-family:"Arial","Microsoft YaHei",sans-serif; font-size:7.2mm; font-weight:900; line-height:1; }
+    .quantity-unit { font-size:3.6mm; font-weight:900; }
     [hidden] { display:none !important; }
-    @page { margin:4mm; }
-    @media (max-width:620px) {
-      .product { grid-template-columns:1fr; }
-      .quantity { min-width:0; }
-      .meta { grid-template-columns:1fr; }
-      .notice { grid-column:auto; }
+    @page { size:65mm 45mm; margin:0; }
+    @media (max-width:520px) {
       .toolbar-note { display:none; }
     }
     @media print {
-      body { background:#fff; }
+      html,body { width:var(--label-width); min-height:var(--label-height); background:#fff; }
       .toolbar,.message { display:none !important; }
       .label-list { display:block; padding:0; }
-      .label-card { width:100%; min-height:0; margin:0; border-radius:0; box-shadow:none; break-after:page; page-break-after:always; }
+      .label-card { width:var(--label-width); height:var(--label-height); margin:0; box-shadow:none; break-after:page; page-break-after:always; }
       .label-card:last-child { break-after:auto; page-break-after:auto; }
     }
   </style>
@@ -55,7 +67,7 @@
     <button id="retryButton" type="button">重新加载</button>
     <button id="printButton" class="primary" type="button" disabled>打印包装标签</button>
     <button id="closeButton" type="button">关闭</button>
-    <span class="toolbar-note">实际纸型、方向和间隙由标签打印机设置</span>
+    <span class="toolbar-note">65 × 45 mm｜100% 实际大小｜黑白打印</span>
   </nav>
   <div id="message" class="message">正在读取冻结的生产包装标签计划……</div>
   <main id="labelList" class="label-list" aria-live="polite"></main>
@@ -79,9 +91,6 @@
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
-      const textList = (value) => Array.isArray(value) && value.length
-        ? value.map((item) => String(item)).join(" / ")
-        : "-";
       const positiveInteger = (value) => Number.isInteger(Number(value)) && Number(value) > 0;
 
       function errorMessage(status, payload) {
@@ -122,19 +131,23 @@
         });
       }
 
-      function labelHtml(label, packageData) {
-        const fingerprint = String(packageData.plan_fingerprint || "").slice(0, 12) || "-";
-        return `<article class="label-card">
-          <header class="label-head"><h1 class="label-title">生产包装标签</h1><span class="identity">非库存标签</span></header>
-          <div class="customer">${escapeHtml(label.customer_name || "客户待确认")}</div>
-          <section class="product"><div><div class="product-code">${escapeHtml(label.product_code || "存货编码待确认")}</div><div class="product-name">${escapeHtml(label.product_name || "产品名称待确认")}</div><div class="specification">${escapeHtml(label.specification || "规格待确认")}</div></div><div class="quantity"><span>本标签</span><strong>${escapeHtml(label.quantity)}</strong><b>只</b></div></section>
-          <footer class="meta"><div><strong>计划总数：</strong>${escapeHtml(label.total_quantity)} 只</div><div><strong>标签序号：</strong>第 ${escapeHtml(label.label_number)} / ${escapeHtml(label.label_count)} 张</div><div><strong>每张数量：</strong>${escapeHtml(label.units_per_label)} 只</div><div><strong>生产任务：</strong>#${escapeHtml(label.production_task_id)} / v${escapeHtml(label.production_task_version)}</div><div><strong>报料单号：</strong>${escapeHtml(packageData.supplier_order_number)}</div><div><strong>系统订单：</strong>${escapeHtml(textList(label.order_numbers))}</div><div><strong>客户单号：</strong>${escapeHtml(textList(label.customer_pos))}</div><div><strong>计划指纹：</strong>${escapeHtml(fingerprint)}</div><div class="notice">本标签仅供生产分装，不代表收货、完工或入库。</div></footer>
+      function labelHtml(label) {
+        const customer = label.customer_code || label.customer_name || "客户待确认";
+        const productCode = label.product_code || "存货编码待确认";
+        const productName = label.product_name || "产品名称待确认";
+        const specification = label.specification || "规格待确认";
+        return `<article class="label-card" aria-label="生产包装标签">
+          <div class="customer-row"><span class="field-name">客户名称</span><strong class="customer-name" title="${escapeHtml(customer)}">${escapeHtml(customer)}</strong></div>
+          <div class="code-row"><span class="field-name">存货编码</span><strong class="product-code" title="${escapeHtml(productCode)}">${escapeHtml(productCode)}</strong></div>
+          <div class="detail-row"><span class="field-name">产品名称</span><strong class="detail-value" title="${escapeHtml(productName)}">${escapeHtml(productName)}</strong></div>
+          <div class="detail-row"><span class="field-name">规格</span><strong class="detail-value" title="${escapeHtml(specification)}">${escapeHtml(specification)}</strong></div>
+          <div class="quantity-row"><span class="field-name">每捆数量</span><strong class="quantity-number">${escapeHtml(label.quantity)}</strong><span class="quantity-unit">只</span></div>
         </article>`;
       }
 
       function render(packageData) {
         validatePackage(packageData);
-        labelList.innerHTML = packageData.labels.map((label) => labelHtml(label, packageData)).join("");
+        labelList.innerHTML = packageData.labels.map((label) => labelHtml(label)).join("");
         loadedPackage = packageData;
         message.hidden = true;
         printButton.disabled = false;

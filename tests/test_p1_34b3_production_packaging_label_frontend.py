@@ -73,17 +73,21 @@ def test_waiting_material_task_page_opens_separate_packaging_label_page() -> Non
     assert "window.opener" not in TASK_PRINT
 
 
-def test_packaging_label_page_is_get_only_and_has_no_finished_inventory_identity() -> None:
+def test_packaging_label_page_is_real_size_minimal_and_get_only() -> None:
     for marker in (
         "生产包装标签",
-        "非库存标签",
-        "本标签",
-        "计划总数：",
-        "标签序号：",
-        "生产任务：",
-        "报料单号：",
-        "计划指纹：",
-        "本标签仅供生产分装，不代表收货、完工或入库",
+        "客户名称",
+        "存货编码",
+        "产品名称",
+        "规格",
+        "每捆数量",
+        "65 × 45 mm",
+        "@page { size:65mm 45mm; margin:0; }",
+        "--label-width:65mm",
+        "--label-height:45mm",
+        "width:var(--label-width)",
+        "height:var(--label-height)",
+        "label.customer_code || label.customer_name",
         "/production-packaging-label-package",
         'method:"GET"',
         'credentials:"include"',
@@ -94,6 +98,16 @@ def test_packaging_label_page_is_get_only_and_has_no_finished_inventory_identity
         assert marker in LABEL_PRINT
 
     for forbidden in (
+        "计划总数：",
+        "标签序号：",
+        "生产任务：",
+        "报料单号：",
+        "系统订单：",
+        "客户单号：",
+        "计划指纹：",
+        "background:#000",
+        "background:black",
+        "color:#fff",
         "库存批次",
         "库位",
         "可用库存",

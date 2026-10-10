@@ -582,6 +582,7 @@ def test_production_packaging_labels_deduplicate_split_rows_and_keep_remainder(
     assert first["production_task_count"] == 1
     assert first["label_count"] == 5
     assert [row["quantity"] for row in first["labels"]] == [5, 5, 5, 5, 3]
+    assert {row["customer_code"] for row in first["labels"]} == {"P132A2-A"}
     assert {row["production_task_id"] for row in first["labels"]} == {task.id}
     assert first["plan_fingerprint"] == second["plan_fingerprint"]
     assert before == after == 4

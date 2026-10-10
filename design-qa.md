@@ -64,3 +64,60 @@ Fixes made:
 - P3: after formal rack-level inventory binding is approved, shelf tags can be introduced only inside the rack elevation view, keeping the global 2.5D view uncluttered.
 
 final result: passed
+
+# P1-34B3 65×45 mm 生产包装标签实尺寸极简版视觉验收
+
+## Comparison target
+
+- source visual truth path: `D:\.codex\visualizations\2026\08\11\019fee7c-7117-7761-871b-98acfc9f9c8d\production-label-real-size\source-65x45-1.png`
+- implementation URL: `http://127.0.0.1:18112/production-packaging-label.html?id=1`
+- implementation full-view screenshot: `D:\.codex\visualizations\2026\08\11\019fee7c-7117-7761-871b-98acfc9f9c8d\production-label-real-size\implementation-65x45-screen.png`
+- implementation focused screenshot: `D:\.codex\visualizations\2026\08\11\019fee7c-7117-7761-871b-98acfc9f9c8d\production-label-real-size\implementation-65x45-first-label.png`
+- normalized comparison board: `D:\.codex\visualizations\2026\08\11\019fee7c-7117-7761-871b-98acfc9f9c8d\production-label-real-size\comparison-65x45-source-vs-implementation.png`
+- browser viewport: default in-app browser viewport, screenshot output 1280 × 720 px.
+- source pixels: 563 × 390 px; implementation focused crop: 248 × 172 px. Both have the 65:45 physical aspect ratio and were normalized to the same 258 px comparison height.
+- measured implementation label box: 245.656 × 170.078 CSS px, matching 65 × 45 mm at 96 CSS px/in within sub-pixel rounding.
+- state: three realistic product labels loaded from the read-only production packaging label package; third label is the remainder bundle.
+
+## Full-view comparison evidence
+
+The browser full view shows all three labels at one consistent physical size. The source hierarchy is retained: customer first, product code as the strongest identifier, product name and specification in the middle, and bundle quantity as the bottom focus. The large black customer and quantity bands from the source are intentionally removed under the owner's latest requirement; the ERP version uses white paper, black text and thin rules only.
+
+## Focused region comparison evidence
+
+The side-by-side board compares one full 65 × 45 mm source label with one full ERP label at the same normalized physical ratio. After the first pass, the left-side field names were widened from 9 mm to 11 mm and forced to one line. The second browser measurement reports no horizontal overflow for any of the five field groups.
+
+## Required fidelity surfaces
+
+- Fonts and typography: Microsoft YaHei/SimHei with a clear black-and-white hierarchy; the inventory code and bundle count remain the fastest scanning targets.
+- Spacing and layout rhythm: five compact rows fit inside the exact 65 × 45 mm border without overall scroll or clipping.
+- Colors and visual tokens: label content uses white or transparent backgrounds only. Browser computed styles found no filled label region; no large black background is present.
+- Image quality and assets: this label contains no decorative image or generated asset, which matches the requirement for a simple label-printer output.
+- Copy and content: the printed label contains only 客户名称、存货编码、产品名称、规格、每捆数量. It omits barcode, production task number, order number, stock, location, cost and internal process facts.
+
+## Comparison history
+
+### Pass 1 — fixed
+
+- P2: 客户名称 and 产品名称 could wrap into two lines in the 9 mm label-name column, weakening scanability.
+
+Fix made:
+
+- Increased the left label-name column to 11 mm and added `white-space: nowrap`.
+
+### Pass 2 — passed
+
+- Label box remains exactly 65 × 45 mm.
+- All five labels stay on one line in the tested realistic sample set.
+- Browser computed audit found zero horizontally overflowing label descendants, zero warning/error console messages, and no non-transparent background inside the label.
+- No actionable P0, P1 or P2 visual issue remains.
+
+## Primary interactions tested
+
+- `重新加载` refetched the same GET-only preview and restored three labels without changing the URL.
+- `打印包装标签` and `关闭` were enabled after successful loading.
+- The print action was not invoked because it opens the operating-system printer dialog; CSSOM inspection confirmed `@page { size: 65mm 45mm; margin: 0; }`.
+- Raw browser PDF printing is unavailable on this surface, so physical printer direction, gap/black-mark detection and 100% scale remain external human acceptance items.
+- Browser console warning/error count: 0.
+
+final result: passed

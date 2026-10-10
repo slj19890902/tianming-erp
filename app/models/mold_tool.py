@@ -31,6 +31,7 @@ class MoldTool(Base):
     __tablename__ = "mold_tools"
     __table_args__ = (
         UniqueConstraint("mold_code", name="uq_mold_tools_code"),
+        Index("uq_mold_tools_delete_key", "delete_idempotency_key", unique=True),
         Index("ix_mold_tools_active_location", "is_active", "rack_location"),
         Index("ix_mold_tools_archive_status", "archive_status", "rack_location"),
         CheckConstraint(
@@ -105,6 +106,11 @@ class MoldTool(Base):
     )
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deleted_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    delete_idempotency_key: Mapped[str | None] = mapped_column(String(120), nullable=True)
     archive_status: Mapped[str] = mapped_column(
         String(20), default="active", server_default="active", nullable=False
     )

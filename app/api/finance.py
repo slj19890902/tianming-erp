@@ -58,7 +58,7 @@ from app.models.invoice_task import (
 from app.models.supplier import Supplier
 from app.models.fulfillment_reminder import FulfillmentReminder
 from app.models.order import Order, OrderItem
-from app.models.mold_tool import MoldToolCustomer
+from app.models.mold_tool import MoldTool, MoldToolCustomer
 from app.models.printing_plate import PrintingPlate
 from app.models.product import Product
 from app.models.user import User
@@ -1049,7 +1049,8 @@ def _validate_customer_charge_links(
     if payload.mold_tool_id is not None:
         linked = db.scalar(
             select(MoldToolCustomer.id)
-            .where(
+            .join(MoldTool, MoldTool.id == MoldToolCustomer.mold_tool_id)
+            .where(MoldTool.deleted_at.is_(None),
                 MoldToolCustomer.mold_tool_id == payload.mold_tool_id,
                 MoldToolCustomer.customer_id == payload.customer_id,
             )

@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.620"
+APP_VERSION = "v0.22.621"
 APP_VERSION_NAME = "生产任务单右侧图纸缩略图"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -6024,6 +6024,19 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.619：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
+APP_CHANGES = [
+    "模具与位置查询统一按存货编码、模具和产品名称搜索，任一字段符合关键词即可显示。",
+    "管理员可在编辑窗口删除误建且从未使用过的模具档案；当前或历史绑定、打印、位置确认及其他使用记录均阻止删除。",
+    "删除保留原编号与审计，重复提交不重复执行；已删除档案不能恢复、改写或再次引用。",
+    "新增删除保护字段和兼容门禁，不自动删除任何正式模具，不改写既有订单、库存、费用或生产历史。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新模具与位置查询，在同一搜索框分别输入存货编码片段、模具或产品名称，核对匹配结果及客户、位置筛选。",
+    "管理员编辑确认误建且未使用的档案，核对删除提示；取消应保留，确认后从查询移除。",
+    "核对已使用、曾绑定后解绑或已打印的模具仍被保护，不能删除；正式操作由管理员人工验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.620：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
 
 APP_CHANGES = [
     "完整生产任务单在工艺右侧显示对应存货编码的图纸缩略图，保持大字号、半页A4双联及多图续页。",
@@ -6036,4 +6049,4 @@ APP_VERIFICATION_STEPS = [
     "抽查补库、合并报料或多图任务，核对续页图纸归属；A4按100%打印一张检查实物效果。",
     "确认简易报料条单仍可切换；任务图与参考图标识正确，客户随货版不带内部图纸。",
 ]
-APP_CHANGELOG = [*(f"v0.22.620：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.621：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

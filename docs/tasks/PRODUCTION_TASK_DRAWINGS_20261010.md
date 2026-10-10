@@ -12,4 +12,4 @@
 
 实施范围记录：审查发现补库图纸字段为空、PDF需权限预览后，子任务固定独占app/services/production_paper_drawings.py、app/services/requisition_production_print.py、app/api/requisition.py与tests/test_production_paper_drawings.py；发现旧实收fallback后追加app/api/incoming.py。根独占打印HTML、paper JS/CSS、Chrome测试及版本/交付记录。所有变更只投影和展示，不写正式业务。
 
-基线协调：开发起点v617/1f719611，期间正式已发布v618/65004e46和v619/ae89b827。已合入两个正式源，保留周需求、库存查询、十二列简易报料条单、发货原子提交及对应助手读能力门禁。图纸候选暂记v620，待发布协调排队后再以最新正式基线确定版本，不抢先发布。无迁移，唯一head eo1010pi。
+基线协调：已保留v618简易条单、v619发货原子提交与兼容门禁，并合入已推送的v620模具删除/统一搜索候选36ec1136。图纸候选顺延v621，等待协调方确认v620正式成功后才可部署。继承ep1010md及unused_mold_deletion_v1、delivery_dispatch_v1读取门禁；图纸功能本身没有新迁移，发布须以正式已升级ep1010md为前提，不重复执行迁移或补正数据。

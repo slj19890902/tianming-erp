@@ -2404,7 +2404,7 @@ def _mobile_mold_search_group(
         )
     )
     statement = (
-        select(MoldTool)
+        select(MoldTool).where(MoldTool.deleted_at.is_(None))
         .options(
             selectinload(MoldTool.products).selectinload(Product.customer),
             selectinload(MoldTool.customer_links).selectinload(

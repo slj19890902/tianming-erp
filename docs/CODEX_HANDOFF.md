@@ -1,5 +1,9 @@
 # Codex 项目交接
 
+## 2026-09-17 SEMI-OPT-IN v0.22.450
+
+- 运行767aaa67，包fcee6dea，head sc0916无DDL；通用片料仅推荐默认不采用、本行/当前PDF整单拒绝及刷新保留、独立操作列。12项定向、签名自检、NAS备份、健康/资源及只读序列化通过；首次临时配置冲突触发保护回退，隔离并修正诊断环境后已成功部署，无历史业务写入。见docs/release_reports/SEMI_OPT_IN_20260917.md及NAS同任务v450回执，待人工验收。
+
 ## 2026-09-16 SHEET-MEASUREMENT-MATCH v0.22.449
 
 - 运行f539d8d0，包07b26d08，唯一head sc0916无DDL；净片后加工、10mm测量待核、W/Y白纸、压线A1可裁及切换批次旧筛选修复。33项定向、签名自检、NAS完整备份、健康/两端资源/正式只读样本通过；无历史业务改写，保留v448。5批模切缺具体用途需现场确认，北K21301853宽差1mm仅待核。见docs/release_reports/SHEET_MEASUREMENT_MATCH_20260916.md及NAS同任务v449回执，待管理员人工验收。
@@ -5775,7 +5779,3 @@ v371/f112ddc4/mq0912技术发布，无新增迁移；完整安装器已发NAS re
 ## 2026-09-20 v0.22.463 合并报料布局与逐批抵扣
 
 技术发布完成，待管理员人工验收；dc0920 无新增迁移。代码 3e18e180，默认客户绑定、主动其他查询、逐批采用与事务幂等保护。独立回执：`docs/release_reports/REQUISITION_DEDUCTION_UI_RELEASE_20260920.md`。
-
-## 2026-09-20 v0.22.465 订单与报料分阶段抵扣
-
-技术发布完成，待管理员人工验收；代码 d01b1de1，签名包 3d08c0b0，dt0920 无迁移。订单/PDF 仅直接抵扣无需分切的库存，需分切片料移至合并报料确认方案后预占。详见 docs/release_reports/ORDER_REQUISITION_STAGED_DEDUCTION_RELEASE_20260920.md。

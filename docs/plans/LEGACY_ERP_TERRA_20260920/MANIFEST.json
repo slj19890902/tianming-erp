@@ -1,0 +1,207 @@
+{
+  "created_at": "2026-09-20T05:56:20.1432401Z",
+  "kind": "continuous_goal_prompt_and_execution_plan_not_implementation",
+  "local_head": "e365c9aaf1e44d614b8f97e648d40ebd22351603",
+  "remote_head_reverified": true,
+  "audit_integrity": {
+    "files": 66,
+    "evidence": 26,
+    "result": "PASS",
+    "scope": "package_integrity_only"
+  },
+  "task_count": 21,
+  "scenario_count": 32,
+  "files": [
+    {
+      "path": "00_交给Terra的启动提示词.md",
+      "bytes": 8413,
+      "sha256": "810a51be7be2819e529dca56cb51d6446e474d25b48a72c2b24fdb40074dafd4"
+    },
+    {
+      "path": "01_实施总方案.md",
+      "bytes": 8987,
+      "sha256": "3f8f3b1601d58242d022003371e98f1da6c8311468dd0abec8fb000e284d882f"
+    },
+    {
+      "path": "02_执行与发布规程.md",
+      "bytes": 8831,
+      "sha256": "84cf233e3eb0bfdbe54f2c21e37da17033dffca9d6adc34d2d5a115706497b9d"
+    },
+    {
+      "path": "03_进度与决策.md",
+      "bytes": 34054,
+      "sha256": "7e808909b01042ef6fbf20d091fcfaafd5a89e85136d5ab83c9407508fb7ca81"
+    },
+    {
+      "path": "04_场景覆盖与验收.md",
+      "bytes": 11341,
+      "sha256": "3fdc95157652bfe607ef8624362cc2c2220727808827b8da61dce5466b304558"
+    },
+    {
+      "path": "05_已确认合同速查.md",
+      "bytes": 11326,
+      "sha256": "128da7bbadfa6992b7ea1d24a701b818350fc59cd151974bf6e3259c86800f9b"
+    },
+    {
+      "path": "06_Astra最终验收交接.md",
+      "bytes": 2227,
+      "sha256": "5446567d5ed94b6e8060cdd4b99277586686992af71b37cb100fdc752fb54f35"
+    },
+    {
+      "path": "20260920-T02-独立工作区与隔离数据库预检.md",
+      "bytes": 2090,
+      "sha256": "29c79e8181c335e883aa3608766a82d8da2639da4c96336cb402b1416442e384"
+    },
+    {
+      "path": "README.md",
+      "bytes": 3383,
+      "sha256": "829d97f7f1251584c2c92482783d7555b6a362457ce71ad3043df03d3797a445"
+    },
+    {
+      "path": "tasks/T00.md",
+      "bytes": 5640,
+      "sha256": "4e0c11f6ffaee709374bd6e4e9925fc5e8b4f2329415fe8fe748c57e7f130d10"
+    },
+    {
+      "path": "tasks/T01.md",
+      "bytes": 5899,
+      "sha256": "a1e144d7af247ec816a71d6b9e179663568b850132ec0cafe09304e434a3b0a1"
+    },
+    {
+      "path": "tasks/T02.md",
+      "bytes": 10478,
+      "sha256": "d163be869ec52180bb83637d04fe1ce28117df917edab1ecc115588300c1e593"
+    },
+    {
+      "path": "tasks/T03.md",
+      "bytes": 5979,
+      "sha256": "f40bee2a0d228082af4f323822495848d2f68ccd04c2946eb3f8182c24fa4cd3"
+    },
+    {
+      "path": "tasks/T04.md",
+      "bytes": 3314,
+      "sha256": "1af5449bda25b4734f20c0bf50d61c58491bdc280a29a9e73e7e0298baae593b"
+    },
+    {
+      "path": "tasks/T05.md",
+      "bytes": 6445,
+      "sha256": "302af25ca482c088da81e7f642d67c42da494f033b641f28589cbbe83bd248b4"
+    },
+    {
+      "path": "tasks/T06.md",
+      "bytes": 6565,
+      "sha256": "3a2bef1f92b4e28902ed5cb281d6dadc03c317d5c4b62d289c322d2103f365ee"
+    },
+    {
+      "path": "tasks/T07.md",
+      "bytes": 3549,
+      "sha256": "505a26da45bb3bef5280ba23b4bdd68ae26500beecea2ca7cb1770156fed7ba3"
+    },
+    {
+      "path": "tasks/T08.md",
+      "bytes": 3126,
+      "sha256": "fdd40c1b0ce8fc46c30cd4f01f6e57db2d10d11ecf12d7d9d39ba81dcc139942"
+    },
+    {
+      "path": "tasks/T09.md",
+      "bytes": 3221,
+      "sha256": "b6564930b8a615afcedaed7c38387e406695a4722f600bed0514113200768948"
+    },
+    {
+      "path": "tasks/T10.md",
+      "bytes": 3399,
+      "sha256": "728cbe21282e01bee406a6c4f8f6c5ffd523ef3dd655306e6df22d0152ab64b5"
+    },
+    {
+      "path": "tasks/T11.md",
+      "bytes": 3573,
+      "sha256": "33ed0fe3d9391ecac7233587f19566cfe24fb3eec5707447e05e71145f5fbb03"
+    },
+    {
+      "path": "tasks/T12.md",
+      "bytes": 3246,
+      "sha256": "723d36c177b75469a0739bf7a8cfd897177c374d91fd42ef8f40fad1a4da7280"
+    },
+    {
+      "path": "tasks/T13.md",
+      "bytes": 3291,
+      "sha256": "7a320c2eaf4b43c9c0899bae96f25b4400354b51628e090076589bb5bf97dd14"
+    },
+    {
+      "path": "tasks/T14.md",
+      "bytes": 5358,
+      "sha256": "29aa874be75e1d30e0e18d58c68897976902a557960851f963f18927560ba8e4"
+    },
+    {
+      "path": "tasks/T15.md",
+      "bytes": 6428,
+      "sha256": "2893c0a2e8f4742594869f13aae7f0e701e815a65c1dc89141d440d1b612df01"
+    },
+    {
+      "path": "tasks/T16.md",
+      "bytes": 6043,
+      "sha256": "7d25811d457a9860c993b5cb9488fef594f4002c1529974af8e9d69e38fb3ad8"
+    },
+    {
+      "path": "tasks/T17.md",
+      "bytes": 4466,
+      "sha256": "8769f18491d8d4289bb97e17830135b99195073d7961436920974735cbc778aa"
+    },
+    {
+      "path": "tasks/T18.md",
+      "bytes": 5933,
+      "sha256": "a8b59f016b9a3a7660fa7d5db1b299567c5341b8e76d7dc7ffc4ac1198313ae3"
+    },
+    {
+      "path": "tasks/T19.md",
+      "bytes": 4764,
+      "sha256": "50eed8878a495498138d0517b4122db44a49a44ab352441a9c90a697376bd137"
+    },
+    {
+      "path": "tasks/T20.md",
+      "bytes": 3349,
+      "sha256": "87df7d4f14da8972f157cc98853dcf5caffe3774ba0cace0b85585cfba958057"
+    }
+  ],
+  "source_fingerprints": [
+    {
+      "path": "docs/CODEX_START.md",
+      "sha256": "56c6cb6584e492df7cc3d07834094bce5094bb08f5d2881b86431d6c65f33a6e"
+    },
+    {
+      "path": "docs/CODEX_EXECUTION_CHARTER.md",
+      "sha256": "155ceabd9ef271049a68e9c545a207b840694d4bb958062543ab92921be91a50"
+    },
+    {
+      "path": "docs/TIANMING_ERP_MASTER_REQUIREMENTS.md",
+      "sha256": "7c2ce91cf1734583f18c9fbeb5d8f713f14f18b1a6f891f4ca162fbca2ccc5d4"
+    },
+    {
+      "path": "docs/release_reports/A0004_R2_ORDER_EXECUTION_STATUS_RELEASE_20260920.md",
+      "sha256": "8d52185ab569a0c1ffae787e9832cb6f54d4bcb4995ca0113241b11a42863a82"
+    },
+    {
+      "path": "docs/release_reports/A0008_R2_DELIVERY_TEMPLATE_DESIGNER_RELEASE_20260920.md",
+      "sha256": "78f6d2bf804efcfbf4914709e434ebe9456daf072224d8c710342a9793169447"
+    },
+    {
+      "path": "app/core/database.py",
+      "sha256": "06cbafea5ace493c72fd567508f6d36f77ac17062f416a7cc1dd8cf59e768c6a"
+    },
+    {
+      "path": "app/api/orders.py",
+      "sha256": "5a5f8d84932c1469824bda67a1e102ddc6207147d43bd4eebb593223adc9f4d2"
+    },
+    {
+      "path": "app/version.py",
+      "sha256": "79c5ac65cd502050804e049e1b11ad11e79f0b5110deae097469c1f5e4594c74"
+    }
+  ],
+  "validation_errors": [],
+  "environment_recovery": {
+    "checked_at": "2026-09-20T15:25:06.4752275+08:00",
+    "remote_head": "e365c9aaf1e44d614b8f97e648d40ebd22351603",
+    "result": "host ls-remote twice and fetch passed; sandbox context mismatch",
+    "scope": "environment_only_not_T02_implementation"
+  }
+}

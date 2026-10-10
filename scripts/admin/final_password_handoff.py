@@ -5,6 +5,7 @@ import getpass
 import hashlib
 import json
 import os
+import secrets
 import sqlite3
 import urllib.error
 import urllib.parse
@@ -285,26 +286,44 @@ def role_matrix(base_url: str, username: str, password: str) -> dict[str, int]:
     }
 
 
+def prompt_previous_password(username: str) -> str:
+    password = getpass.getpass(
+        f"{username} previous password to verify as rejected: "
+    )
+    if not password:
+        raise RuntimeError(f"[{username}] previous password cannot be empty")
+    return password
+
+
 def verify_old_passwords(base_url: str) -> dict[str, int]:
-    attempts = {
-        "admin_old_admin": ("admin", "admin"),
-        "workshop_old_123456": ("workshop", "123456"),
-        "finance_old_123456": ("finance", "123456"),
-        "sales_old_123456": ("sales", "123456"),
-        "generic_wrong_password": ("admin", "WrongPass!2026"),
-    }
+    attempts = [
+        ("admin_previous_password", "admin"),
+        ("workshop_previous_password", "workshop"),
+        ("finance_previous_password", "finance"),
+        ("sales_previous_password", "sales"),
+    ]
     result: dict[str, int] = {}
-    for key, (username, password) in attempts.items():
+    for key, username in attempts:
+        password = prompt_previous_password(username)
         opener = open_api(base_url)
         status, _ = request_json(
             opener,
             f"{base_url}/api/auth/login",
             method="POST",
-            payload={"username": username, "password": password, "remember_me": False},
+            payload={"username": username, "password": password, "remember": False},
         )
         result[key] = status
-    return result
 
+    control_password = secrets.token_urlsafe(32)
+    opener = open_api(base_url)
+    status, _ = request_json(
+        opener,
+        f"{base_url}/api/auth/login",
+        method="POST",
+        payload={"username": "admin", "password": control_password, "remember": False},
+    )
+    result["generated_wrong_password_control"] = status
+    return result
 
 def ensure_user_set(db_path: Path) -> None:
     usernames = {row["username"] for row in fetch_users(db_path)}
@@ -390,6 +409,9 @@ def main() -> int:
     counts_before = {
         "sales_orders": db_scalar(db_path, "SELECT COUNT(*) FROM sales_orders"),
         "sales_order_items": db_scalar(db_path, "SELECT COUNT(*) FROM sales_order_items"),
+        "legacy_ruida_orders": db_scalar(db_path, "SELECT COUNT(*) FROM legacy_ruida_orders"),
+        "legacy_ruida_order_items": db_scalar(db_path, "SELECT COUNT(*) FROM legacy_ruida_order_items"),
+        "ruida_prefixed_orders": db_scalar(db_path, "SELECT COUNT(*) FROM sales_orders WHERE order_number LIKE 'RUIDA-%'"),
         "operation_logs": db_scalar(db_path, "SELECT COUNT(*) FROM operation_logs"),
     }
 
@@ -407,6 +429,9 @@ def main() -> int:
     counts_after = {
         "sales_orders": db_scalar(db_path, "SELECT COUNT(*) FROM sales_orders"),
         "sales_order_items": db_scalar(db_path, "SELECT COUNT(*) FROM sales_order_items"),
+        "legacy_ruida_orders": db_scalar(db_path, "SELECT COUNT(*) FROM legacy_ruida_orders"),
+        "legacy_ruida_order_items": db_scalar(db_path, "SELECT COUNT(*) FROM legacy_ruida_order_items"),
+        "ruida_prefixed_orders": db_scalar(db_path, "SELECT COUNT(*) FROM sales_orders WHERE order_number LIKE 'RUIDA-%'"),
         "operation_logs": db_scalar(db_path, "SELECT COUNT(*) FROM operation_logs"),
     }
     source_integrity_after = db_integrity(db_path)
@@ -468,7 +493,10 @@ def main() -> int:
         "incoming_html_status": incoming_html_status,
         "role_checks": role_checks,
         "history_counts_unchanged": counts_before["sales_orders"] == counts_after["sales_orders"]
-        and counts_before["sales_order_items"] == counts_after["sales_order_items"],
+        and counts_before["sales_order_items"] == counts_after["sales_order_items"]
+        and counts_before["legacy_ruida_orders"] == counts_after["legacy_ruida_orders"]
+        and counts_before["legacy_ruida_order_items"] == counts_after["legacy_ruida_order_items"]
+        and counts_before["ruida_prefixed_orders"] == counts_after["ruida_prefixed_orders"],
         "operation_logs_delta": counts_after["operation_logs"] - counts_before["operation_logs"],
     }
     output_json.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

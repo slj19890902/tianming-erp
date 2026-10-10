@@ -1,0 +1,18 @@
+{
+  "created": "2026-09-21",
+  "scope": "plan_only_not_execution",
+  "files": [
+    {
+      "path": "00_复制给Terra的提示词.md",
+      "sha256": "7da26082101c0cd15d6dda7e02801c93b1e72d0c4ecd7abe84152d4af2860f2c"
+    },
+    {
+      "path": "01_整改实施方案.md",
+      "sha256": "37689e7b5f723f90f2ef9eb4ef5e518c2f6866830a2530c96c0eb4345fab542e"
+    },
+    {
+      "path": "02_整改进度.md",
+      "sha256": "f5de4f7f15f448125b1f848936c1270ca8121fbbcf93b8ae826005ba5417bdbc"
+    }
+  ]
+}

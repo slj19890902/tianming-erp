@@ -214,6 +214,9 @@ def product_replenishment_defaults(product: Product) -> dict:
         str(product.crease_type or "").strip(),
         str(product.crease_type or "").strip(),
     ) or None
+    # Match the draft payload's normalization. Old net/raw sheet masters can
+    # retain crease segments; those are not part of their purchasing contract.
+    has_crease_segments = crease_type not in {"净料", "毛片", "其他"}
     values = {
         "material_id": product.material_id,
         "material_code": material_code,
@@ -223,9 +226,9 @@ def product_replenishment_defaults(product: Product) -> dict:
         "report_length_mm": product.report_length_mm,
         "report_width_mm": product.report_width_mm,
         "crease_type": crease_type,
-        "crease_left_mm": product.crease_left_mm,
-        "crease_middle_mm": product.crease_middle_mm,
-        "crease_right_mm": product.crease_right_mm,
+        "crease_left_mm": product.crease_left_mm if has_crease_segments else None,
+        "crease_middle_mm": product.crease_middle_mm if has_crease_segments else None,
+        "crease_right_mm": product.crease_right_mm if has_crease_segments else None,
         "cutting_mode": cutting_mode,
         "output_per_sheet": cutting_factor(cutting_mode),
         "pieces_per_box": int(product.pieces_per_box or 1),

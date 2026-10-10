@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.608"
+APP_VERSION = "v0.22.609"
 APP_VERSION_NAME = "报料入口与补库校验"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5859,6 +5859,21 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.607：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
+
+APP_CHANGES = [
+    "库存预警报料草稿统一净料、毛片等非压线类型的有效参数，旧档残留压线数值不再造成保存误报。",
+    "保留真实压线、材质、尺寸、客户和开料换算的一致性校验；不修改产品主档、历史报料或库存。",
+    "首页库存预警客户卡片整块可点击，名称、数量、状态和空白处均可选中；支持键盘Enter和空格。",
+    "本版无数据库迁移，保留权限、幂等、事务、审核和历史业务事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新首页，点击库存预警客户卡片的空白处或数量，确认右侧显示对应客户款号。",
+    "在确有报料需求时，重新生成光洋80012273的报料草稿，核对后保存；不应再出现无效压线参数导致的主数据不一致提示。",
+    "核对保存成功后的原草稿，不重复报料；原产品及历史库存数量保持。",
+]
+APP_CHANGELOG = [*(f"v0.22.608：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
 APP_CHANGES = [
     "从产品资料打开订单或报料时，切换账号、页面或重新打开草稿后，旧读取不会继续打开旧窗口或覆盖新表单。",
     "打开资料和报料时遇到长时间无响应，会结束等待并提示重新打开；旧账号的迟到错误不会退出当前账号。",
@@ -5871,4 +5886,4 @@ APP_VERIFICATION_STEPS = [
     "连续切换产品、页面或关闭后重新打开草稿，核对当前资料不被旧读取覆盖；弱网超时后按提示重新打开。",
     "从报料的外购包材采购历史查看已有采购单，核对原单号与数量；无需重复报料或改动真实库存。",
 ]
-APP_CHANGELOG = [*(f"v0.22.608：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.609：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

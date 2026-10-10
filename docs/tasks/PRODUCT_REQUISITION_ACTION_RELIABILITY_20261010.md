@@ -32,3 +32,9 @@ API实施补边：原外购新建无明确创建审计，本轮允许真实INSER
 UI测试白名单补充：仅允许 `tests/ui/mobile_product_workbench_reliability.test.cjs` 的actual-entry源码提取正则适配onOrder新增可选当前身份参数。原29行为断言不变，不删用例或放宽业务预期；其余旧测试不改。
 
 API兼容补边：真实回归显示外购新增request_hash后，`app/services/incoming_receipts.py` 的 `_stock_target` 纸板采购校验抢先覆盖外购专用收料路由错误码。API负责人增加此文件局部白名单，只调整原外购关联/路由识别的门禁次序，通用收料仍禁止外购，数量/状态/权限/锁与收料执行不放宽。冻结候选前精确审核全部StockReplenishmentOrder.request_hash旧用途，证明专用外购查询、收料、取消、采购池及打印读取保持正确；其他文件不得自动扩改。
+
+## 2026-10-10 09:30 正式并行基线整合
+
+正式已由其他任务发布v608，源f751729378a667c15b5d2a3293299e53458f7981、包2cbebbbbfab45175d3e38703a5b4acd9c446b884bf37c7b4fcf460ea1df3ac74、en1009hp。已读取该独立NAS回执；根保留其净料报料参数归一化、首页整卡点击与两资源引用，原v608候选模板停用。本任务改为v609，合并实际正式提交，只解决版本记录冲突；index自动合并只有两项home资源引用与本任务改动共存。相对新正式运行文件仍限定本卡原allowlist；原saveStockReplenishmentDraft及home/source算法保持新正式。重跑合并受影响的根UI、后端定向及v608参数合同回归，独立审者核查合并交集。无Git push、迁移或正式历史写入；发布时重新CAS实际正式/NAS。
+
+API兼容最终判据：旧NULL请求，或确有外购采购batch且整来源没有任何非NULL quantity_contract明细。不得将已有实物预警合同订单放宽进普通报料/打印。最终候选8c79504e；UI90b0d4c保留loadPage。已确认旧77四测试/旧外购一静态测试在原正式607实际失败，保留失败证据，不冒称全仓测试通过。

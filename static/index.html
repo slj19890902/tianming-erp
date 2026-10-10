@@ -422,6 +422,43 @@
       .delivery-list-detail .delivery-detail-name { width: 38%; }
       .delivery-list-detail .delivery-detail-spec { width: 25%; }
       .delivery-list-detail .delivery-detail-quantity { width: 15%; text-align: right; }
+      @media (max-width: 1400px) {
+        .delivery-list-panel .table-wrap {
+          width: 100%; max-width: 100%; min-width: 0; overflow-x: hidden;
+        }
+        .delivery-list-table {
+          width: 100%; min-width: 0 !important; table-layout: fixed; white-space: normal;
+        }
+        .delivery-list-table th,
+        .delivery-list-table td {
+          min-width: 0; padding-left: 6px; padding-right: 6px;
+          vertical-align: middle; white-space: normal; overflow-wrap: anywhere; word-break: break-word;
+        }
+        .delivery-list-table .delivery-col-number { width: 13%; }
+        .delivery-list-table .delivery-col-customer { width: 12%; }
+        .delivery-list-table .delivery-col-date { width: 10%; }
+        .delivery-list-table .delivery-col-vehicle { width: 7%; }
+        .delivery-list-table .delivery-col-quantity { width: 6%; }
+        .delivery-list-table .delivery-col-status { width: 12%; }
+        .delivery-list-table .delivery-col-receipt { width: 9%; }
+        .delivery-list-table .delivery-col-detail { width: 10%; }
+        .delivery-list-table .delivery-col-actions { width: 21%; }
+        .delivery-list-table .delivery-list-detail-toggle,
+        .delivery-list-table .delivery-list-actions .btn,
+        .delivery-list-table .delivery-list-actions .select {
+          max-width: 100%; min-width: 0; white-space: normal; overflow-wrap: anywhere;
+        }
+        .delivery-list-table .delivery-list-actions {
+          min-width: 0 !important; gap: 4px; align-items: flex-start;
+        }
+        .delivery-list-table .delivery-list-actions .select { width: min(130px, 100%); }
+        .ui-large .delivery-list-table th,
+        .ui-large .delivery-list-table td { padding-left: 5px; padding-right: 5px; }
+        .ui-large .delivery-list-table .delivery-list-detail-toggle,
+        .ui-large .delivery-list-table .delivery-list-actions .btn.small {
+          padding-left: 8px; padding-right: 8px; line-height: 1.3;
+        }
+      }
       .finance-current-table { table-layout: fixed; white-space: normal; }
       .finance-current-table th,
       .finance-current-table td { padding: 8px 6px; line-height: 1.35; vertical-align: middle; overflow-wrap: anywhere; }
@@ -1399,9 +1436,46 @@
       .incoming-table .input, .incoming-table .select { min-width: 0 !important; padding-left: 7px; padding-right: 7px; }
       .incoming-table .status { max-width: 100%; white-space: normal; }
       .incoming-table .toolbar-group { min-width: 0; gap: 4px; }
+      .incoming-table .incoming-board-cell { word-break: normal; overflow-wrap: normal; }
+      .incoming-table .btn {
+        max-width: 100%; min-width: 0; padding-left: 6px; padding-right: 6px;
+        line-height: 1.3; white-space: normal; overflow-wrap: anywhere;
+      }
+      .incoming-table td:last-child .btn { display: block; width: 100%; margin: 0 0 4px; }
+      .incoming-table td:last-child .btn:last-child { margin-bottom: 0; }
       .incoming-customer-cell { line-height: 1.35; }
-      .incoming-decision-cell { width: 14%; }
+      .incoming-decision-cell { width: 13%; }
+      .incoming-action-cell { width: 9%; }
       .incoming-location-picker { display: grid; gap: 4px; margin-top: 5px; }
+      @media (max-width: 1400px) {
+        .table-wrap:has(> .customer-list-table) {
+          width: 100%; max-width: 100%; min-width: 0; overflow-x: hidden;
+        }
+        .customer-list-table {
+          width: 100%; min-width: 0; table-layout: fixed; white-space: normal;
+        }
+        .customer-list-table th,
+        .customer-list-table td {
+          min-width: 0; padding-left: 6px; padding-right: 6px;
+          vertical-align: middle; white-space: normal; overflow-wrap: anywhere; word-break: break-word;
+        }
+        .customer-list-table .customer-col-number { width: 8%; }
+        .customer-list-table .customer-col-code { width: 8%; }
+        .customer-list-table .customer-col-name { width: 17%; }
+        .customer-list-table .customer-col-contact { width: 10%; }
+        .customer-list-table .customer-col-phone { width: 13%; }
+        .customer-list-table .customer-col-term { width: 8%; }
+        .customer-list-table .customer-col-delivery { width: 10%; }
+        .customer-list-table .customer-col-status { width: 8%; }
+        .customer-list-table .customer-col-actions { width: 18%; }
+        .customer-list-actions { min-width: 0; gap: 4px; align-items: flex-start; }
+        .customer-list-actions .btn {
+          max-width: 100%; min-width: 0; padding-left: 7px; padding-right: 7px;
+          line-height: 1.3; white-space: normal; overflow-wrap: anywhere;
+        }
+        .ui-large .customer-list-table th,
+        .ui-large .customer-list-table td { padding-left: 5px; padding-right: 5px; }
+      }
       .external-incoming-panel {
         margin: 10px 0; padding: 12px; border: 1px solid #bfdbfe;
         border-radius: 12px; background: #f8fbff;
@@ -2128,11 +2202,11 @@
                 <div class="toolbar-group"><label><input type="checkbox" v-model="filters.showInactive" @change="pages.customers=1;loadCustomers()" /> 显示已停用客户</label><input class="input" v-model="filters.customerKeyword" @input="queuePageSearch('customers')" @keyup.enter="pages.customers=1; loadCustomers()" /><button class="btn" @click="pages.customers=1; loadCustomers()">查询</button></div>
               </div>
               <data-panel :empty="!customers.length">
-                <table><thead><tr><th>客户编号</th><th>客户缩写</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th>状态</th><th>操作</th></tr></thead>
+                <table class="customer-list-table"><colgroup><col class="customer-col-number" /><col class="customer-col-code" /><col class="customer-col-name" /><col class="customer-col-contact" /><col class="customer-col-phone" /><col class="customer-col-term" /><col class="customer-col-delivery" /><col class="customer-col-status" /><col class="customer-col-actions" /></colgroup><thead><tr><th>客户编号</th><th>客户缩写</th><th>客户名称</th><th>联系人</th><th>电话</th><th>账期</th><th>送货方式</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody><tr v-for="row in customers" :key="row.id">
                   <td>{{ row.customer_number }}</td><td>{{ row.customer_code }}</td><td>{{ row.name }}</td><td>{{ row.contact_person || "-" }}</td><td>{{ row.phone || "-" }}</td>
                   <td>{{ row.payment_term_days }} 天</td><td>{{ row.delivery_method }}</td><td><status-tag :value="row.is_active ? 'active' : 'inactive'"></status-tag></td>
-                  <td class="toolbar-group"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button v-if="canViewContracts" class="btn small primary" @click="openCustomerContracts(row)">合同</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="customerLifecycleBusy()" @click="toggleCustomerStatus(row)">{{ customerLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button></td>
+                  <td class="toolbar-group customer-list-actions"><button v-if="canViewQuotations" class="btn small primary" @click="openCustomerQuotations(row)">报价</button><button v-if="canViewContracts" class="btn small primary" @click="openCustomerContracts(row)">合同</button><button class="btn small" @click="openCustomer(row)">{{ canEditCustomers ? "查看/编辑" : "查看" }}</button><button class="btn small" @click="openMasterVersionHistory('customer',row)">版本 {{ row.version || "-" }}</button><button v-if="canDeactivateCustomers" :class="['btn','small',row.is_active ? 'danger' : 'success']" :disabled="customerLifecycleBusy()" @click="toggleCustomerStatus(row)">{{ customerLifecyclePending('status',row.id) ? '处理中…' : (row.is_active ? "停用" : "启用") }}</button></td>
                 </tr></tbody></table>
               </data-panel>
               <pager :page="pages.customers" :total="customersTotal" :page-size="pageSize" @change="pages.customers=$event; loadCustomers()"></pager>
@@ -3138,10 +3212,10 @@
               </section>
               <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
                 <table class="incoming-table">
-                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th>报料尺寸</th><th>客户</th><th>存货编码</th><th>产品</th><th>材质</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th class="incoming-decision-cell">收料结果 / 入库位</th><th>报料日期</th><th>图纸</th><th>生产卡</th><th v-if="hasPermission('incoming.execute')">操作</th></tr></thead>
+                  <thead><tr><th v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" :checked="allIncomingSelected" @change="toggleAllIncoming($event.target.checked)" /> 全选</th><th class="incoming-board-cell">报料尺寸</th><th>客户</th><th>存货编码</th><th>产品</th><th>材质</th><th>计划 / 已收 / 待收</th><th>本次收料</th><th class="incoming-decision-cell">收料结果 / 入库位</th><th>报料日期</th><th>图纸</th><th>生产卡</th><th v-if="hasPermission('incoming.execute')" class="incoming-action-cell">操作</th></tr></thead>
                   <tbody><tr v-for="row in (incomingTab==='pending' ? incomingPending : incomingReceived)" :key="row.history_key || row.item_id">
                     <td v-if="incomingTab==='pending' && hasPermission('incoming.execute')"><input type="checkbox" v-model="incomingSelected[row.item_id]" :disabled="!canReceiveIncoming(row)" /></td>
-                    <td><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
+                    <td class="incoming-board-cell"><strong>{{ formatBoardSpec(row.cardboard_len,row.cardboard_width) }}</strong></td>
                     <td class="incoming-customer-cell">{{ row.customer_name }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.product_name }}</td><td>{{ row.material_display || "-" }}</td>
                     <td><div>计划 {{ row.planned_quantity ?? row.requisition_qty ?? row.quantity }}</div><div>已收 {{ row.cumulative_received_quantity || 0 }}</div><strong>待收 {{ row.remaining_quantity ?? row.requisition_qty ?? row.quantity }}</strong></td>
                     <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.incoming_quantity }}</strong></td>
@@ -3149,7 +3223,7 @@
                     <td>{{ row.requisition_date || "-" }}</td>
                     <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
                     <td><button v-if="incomingTab==='received' && row.receipt_item_id && row.receipt_status==='posted' && row.order_item_id" class="btn small primary" @click="openIncomingProductionCard(row)">打印生产卡</button><span v-else class="muted">-</span></td>
-                    <td v-if="hasPermission('incoming.execute')"><template v-if="incomingTab==='pending'"><button class="btn small success" @click="receiveIncoming(row)">确认实收</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
+                    <td v-if="hasPermission('incoming.execute')" class="incoming-action-cell"><template v-if="incomingTab==='pending'"><button class="btn small success" @click="receiveIncoming(row)">确认实收</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
                   </tr></tbody>
                 </table>
               </data-panel>
@@ -3273,7 +3347,7 @@
                 <div v-if="deliveryListState.refreshing" class="muted" style="margin-bottom:8px">正在刷新送货单</div>
                 <div v-if="deliveryListState.error" class="notice warning" style="margin-bottom:8px">送货单加载失败：{{ deliveryListState.error }}；已保留上次列表结果。</div>
                 <div v-if="deliveryListState.loaded && !deliveries.length" class="empty">当前没有符合条件的送货单</div>
-                <div v-else class="table-wrap"><table class="delivery-list-table"><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
+                <div v-else class="table-wrap"><table class="delivery-list-table"><colgroup><col class="delivery-col-number" /><col class="delivery-col-customer" /><col class="delivery-col-date" /><col class="delivery-col-vehicle" /><col class="delivery-col-quantity" /><col class="delivery-col-status" /><col class="delivery-col-receipt" /><col class="delivery-col-detail" /><col class="delivery-col-actions" /></colgroup><thead><tr><th>送货单号</th><th>客户</th><th>日期</th><th>车号</th><th>数量</th><th>状态</th><th>回单</th><th>明细</th><th>操作</th></tr></thead>
                 <tbody>
                   <template v-for="row in deliveries" :key="row.id">
                   <tr>
@@ -3284,7 +3358,7 @@
                     <td>{{ deliveryActualGoodsQuantity(row) }}</td>
                     <td><status-tag :value="row.status"></status-tag> <span v-if="row.pick_task && deliveryPickStatusLabel(row) !== statusText(row.status)" :class="['status', deliveryPickStatusClass(row)]">{{ deliveryPickStatusLabel(row) }}</span> <span v-if="row.is_printed" class="status green">已打印</span></td>
                     <td><status-tag :value="row.return_receipt_status === 'cancelled' ? 'receipt_cancelled' : (row.return_receipt_status || 'waiting_receipt')"></status-tag></td>
-                    <td><button class="btn small" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${(row.items || []).length}）` }}</button></td>
+                    <td><button class="btn small delivery-list-detail-toggle" @click="toggleDeliveryListDetail(row)">{{ expandedDeliveryRows[row.id] ? '收起明细' : `查看明细（${(row.items || []).length}）` }}</button></td>
                     <td class="toolbar-group delivery-list-actions">
                       <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" @click="createDeliveryPickTask(row)">{{ deliveryOperationState.action==='pick' && Number(deliveryOperationState.deliveryId)===Number(row.id) ? '推送中…' : '拿货' }}</button>
                       <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">

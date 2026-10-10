@@ -984,7 +984,9 @@ export function EditorCanvas({
       startY: number;
       moved: boolean;
     } | null = null;
-    const setPointer = (event: PointerEvent | DragEvent) => {
+    let pendingPointerMove: { clientX: number; clientY: number } | null = null;
+    let pointerMoveFrame: number | null = null;
+    const setPointer = (event: Pick<PointerEvent, "clientX" | "clientY">) => {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -1051,7 +1053,7 @@ export function EditorCanvas({
         renderer.domElement.setPointerCapture(event.pointerId);
       }
     };
-    const onPointerMove = (event: PointerEvent) => {
+    const processPointerMove = (event: { clientX: number; clientY: number }) => {
       if (pendingCanvasAction && Math.hypot(event.clientX - pendingCanvasAction.startX, event.clientY - pendingCanvasAction.startY) > 4) {
         pendingCanvasAction.moved = true;
       }
@@ -1092,7 +1094,24 @@ export function EditorCanvas({
         }
       }
     };
+    const onPointerMove = (event: PointerEvent) => {
+      pendingPointerMove = { clientX: event.clientX, clientY: event.clientY };
+      if (pointerMoveFrame !== null) return;
+      pointerMoveFrame = requestAnimationFrame(() => {
+        pointerMoveFrame = null;
+        const latest = pendingPointerMove;
+        pendingPointerMove = null;
+        if (latest) processPointerMove(latest);
+      });
+    };
+    const flushPointerMove = (event: PointerEvent) => {
+      if (pointerMoveFrame !== null) cancelAnimationFrame(pointerMoveFrame);
+      pointerMoveFrame = null;
+      pendingPointerMove = null;
+      processPointerMove({ clientX: event.clientX, clientY: event.clientY });
+    };
     const onPointerUp = (event: PointerEvent) => {
+      flushPointerMove(event);
       if (pendingCanvasAction && pendingCanvasAction.pointerId === event.pointerId) {
         const currentAction = pendingCanvasAction;
         pendingCanvasAction = null;
@@ -1142,6 +1161,9 @@ export function EditorCanvas({
       else handlersRef.current.onMovePallet(current.id, xMm, yMm);
     };
     const onPointerCancel = (event: PointerEvent) => {
+      if (pointerMoveFrame !== null) cancelAnimationFrame(pointerMoveFrame);
+      pointerMoveFrame = null;
+      pendingPointerMove = null;
       pendingCanvasAction = null;
       pendingSelection = null;
       if (!dragging) return;
@@ -1233,6 +1255,7 @@ export function EditorCanvas({
     resizeObserver.observe(container);
     return () => {
       cancelAnimationFrame(frame);
+      if (pointerMoveFrame !== null) cancelAnimationFrame(pointerMoveFrame);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointermove", onPointerMove);

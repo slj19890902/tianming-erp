@@ -11,6 +11,8 @@ import hashlib
 import json
 import logging
 import re
+import sys
+from app.services import delivery_dispatch_commands as dispatch_commands
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
@@ -6812,11 +6814,12 @@ def submit_delivery_pick_task(
     return _pick_task_response(db, task)
 
 
-@pick_router.post("/{task_id}/apply")
-def apply_delivery_pick_task(
+def _apply_delivery_pick_task(
     task_id: int,
-    db: Session = Depends(get_db),
-    user: User = Depends(can_operate),
+    *,
+    db: Session,
+    user: User,
+    commit: bool = True,
 ) -> dict:
     task = _pick_task_for_user(db, task_id, user)
     if task.status not in {"driver_confirmed", "exception"}:
@@ -6938,7 +6941,7 @@ def apply_delivery_pick_task(
             },
             description="应用送货拿货结果到本次送货明细",
         )
-        db.commit()
+        db.commit() if commit else db.flush()
         return _delivery_response(db, delivery.id)
     except HTTPException:
         db.rollback()
@@ -6946,6 +6949,15 @@ def apply_delivery_pick_task(
     except Exception:
         db.rollback()
         raise
+
+@pick_router.post("/{task_id}/apply")
+def apply_delivery_pick_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    return _apply_delivery_pick_task(task_id, db=db, user=user)
+
 
 
 def _refresh_order_status(db: Session, order_id: int) -> None:
@@ -9217,6 +9229,7 @@ def _dispatch_delivery(
     user: User,
     commit: bool = True,
     write_audit: bool = True,
+    advance_version: bool = False,
 ) -> dict:
     delivery = _delivery_for_user(db, delivery_id, user)
     dispatched_at = _utc_now()
@@ -9264,6 +9277,7 @@ def _dispatch_delivery(
             )
             .values(
                 status="dispatched",
+                version=Delivery.version + 1 if advance_version else Delivery.version,
                 dispatched_by=user.id,
                 dispatched_at=dispatched_at,
                 ever_dispatched_at=func.coalesce(
@@ -9660,13 +9674,45 @@ def _dispatch_delivery(
         raise
 
 
-@router.put("/{delivery_id}/dispatch")
 def dispatch_delivery(
     delivery_id: int,
+    payload: dispatch_commands.DispatchCommand | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
-    return _dispatch_delivery(delivery_id, db=db, user=user)
+    if payload is None:
+        raise HTTPException(409, "请刷新页面，先核对送货快照后再确认发货。", headers=dispatch_commands.headers())
+    return dispatch_commands.execute(db, delivery_id, payload, user, sys.modules[__name__])
+
+
+def delivery_dispatch_snapshot(
+    delivery_id: int,
+    pick_action: Literal["none", "apply"] = "none",
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    dispatch_commands.require_activation(db)
+    with db.no_autoflush:
+        dispatch_commands.consistent_read(db)
+        return dispatch_commands.snapshot(db, delivery_id, user, sys.modules[__name__], pick_action=pick_action)
+
+
+def resolve_delivery_dispatch(
+    delivery_id: int,
+    key: str,
+    payload: dispatch_commands.ResolveCommand,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    return dispatch_commands.resolve(db, delivery_id, key, payload, user, sys.modules[__name__])
+
+
+for _path, _endpoint, _methods in (
+    ("/{delivery_id}/dispatch", dispatch_delivery, ["PUT"]),
+    ("/{delivery_id}/dispatch-snapshot", delivery_dispatch_snapshot, ["GET"]),
+    ("/{delivery_id}/dispatch-results/{key}/resolve", resolve_delivery_dispatch, ["POST"]),
+):
+    router.add_api_route(_path, _endpoint, methods=_methods, route_class_override=dispatch_commands.DispatchRoute)
 
 
 def _update_delivery(
@@ -10862,6 +10908,7 @@ def _cancel_delivery(
             )
             .values(
                 status="pending",
+                version=Delivery.version if revision_mode else Delivery.version + 1,
                 dispatched_by=None,
                 dispatched_at=None,
                 printed_by=None,

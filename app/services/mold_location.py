@@ -376,7 +376,7 @@ def plan_mold_rack_layout_relocations(
     first_floor_location = _first_floor_rack_location(rack_by_code)
     relocations: list[MoldRackLayoutRelocation] = []
     rows = db.scalars(
-        select(MoldTool)
+        select(MoldTool).where(MoldTool.deleted_at.is_(None))
         .order_by(MoldTool.mold_code, MoldTool.id)
     ).all()
     for mold in rows:
@@ -473,7 +473,7 @@ def mold_rack_layout_usage_blockers(
     old_cells = {cell["location_code"]:(rack,cell) for rack in published.get("racks") or [] for cell in projected_cells(rack)}
     new_cells = {cell["location_code"]:(rack,cell) for rack in floor_layout.get("racks") or [] for cell in projected_cells(rack)}
     blockers=[]
-    for mold in db.scalars(select(MoldTool)).all():
+    for mold in db.scalars(select(MoldTool).where(MoldTool.deleted_at.is_(None))).all():
         location = str(mold.rack_location or "").strip().upper()
         if location not in old_cells:
             continue
@@ -487,7 +487,7 @@ def mold_rack_layout_usage_blockers(
         # The old relocation planner had no destination when every rack was removed.
         new_racks={str(r.get("mold_rack_code") or "").upper() for r in floor_layout.get("racks") or []}
         old_racks={str(r.get("mold_rack_code") or "").upper() for r in published.get("racks") or []}
-        for mold in db.scalars(select(MoldTool)).all():
+        for mold in db.scalars(select(MoldTool).where(MoldTool.deleted_at.is_(None))).all():
             guide=describe_mold_location(mold.rack_location)
             if guide.get("floor")==floor_code and isinstance(guide.get("rack"),int):
                 code=f"R{guide['rack']:02d}"

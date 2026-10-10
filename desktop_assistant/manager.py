@@ -86,6 +86,10 @@ class Manager:
                 ).fetchone()
                 purchase_identity_contract = any(row[1] == 'production_snapshot_json' for row in
                     db.execute('PRAGMA table_info(stock_replenishment_order_items)'))
+                mold_deletion_contract = any(row[1] == 'deleted_at' for row in
+                    db.execute('PRAGMA table_info(mold_tools)'))
+            if mold_deletion_contract and not self._shared_finished_reader(release, "unused_mold_deletion_v1"):
+                return False
             if quotation_contract and not self._quotation_writer(release):
                 return False
             if shared_stock_contract and not self._shared_finished_reader(release):

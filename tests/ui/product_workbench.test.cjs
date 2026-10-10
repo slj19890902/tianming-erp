@@ -77,3 +77,11 @@ test('drawing failure offers a local retry without losing the selected product',
  const h=harness(async()=>details);await h.instance.show(17);const img=h.root.querySelector('img');img.dispatchEvent(new h.window.Event('error'));
  assert.match(h.root.textContent,/图纸加载失败 · 重试/);click(h,'.pw-engineering button');assert.ok(h.root.querySelector('img'));assert.equal(h.instance.snapshot().productId,17);h.instance.destroy();
 });
+
+test('lifecycle distinguishes 2500 materials from 10000 theoretical outputs and pages delivery history',async()=>{
+ const paths=[];const activity={page:1,has_more:true,items:[{source:'补库收料',status:'待生产',document:'TEST-PURCHASE',quantity:2500,unit:'张',physical_quantity:2500,theoretical_output:10000,output_unit:'只',factor:4,pieces_per_box:1,location:'原料堆放区003',frozen_spec:'795×457 mm'}],deliveries:[{document:'TEST-DELIVERY',status:'已送货',date:'2026-01-01',quantity:40,unit:'只',code:'80011965',specification:'原规格'}],related_products:[{product_id:18,code:'BOM18',name:'组合产品',relation:'组合产品'}]};
+ const h=harness(async path=>{paths.push(path);return {...details,activity:{...activity,page:path.includes('activity_page=2')?2:1}};});await h.instance.show(17);
+ assert.equal(h.instance.snapshot().tab,'activity');assert.match(h.root.textContent,/理论待产 10,000 只/);assert.match(h.root.textContent,/2,500 张/);assert.match(h.root.textContent,/原料堆放区003/);assert.match(h.root.textContent,/TEST-DELIVERY/);assert.match(h.root.textContent,/组合产品/);
+ click(h,'[data-activity-page="2"]');await tick();assert.match(paths.at(-1),/activity_page=2/);assert.equal(h.instance.snapshot().tab,'activity');
+ click(h,'[data-tab="inventory"]');assert.doesNotMatch(h.root.textContent,/理论待产 10,000/);h.instance.destroy();
+});

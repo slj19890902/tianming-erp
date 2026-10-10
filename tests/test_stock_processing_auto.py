@@ -141,7 +141,7 @@ def test_independent_components_actual_assembly_and_replay(stock_replenishment_a
             assert pending_response.status_code==200,pending_response.text
             pending=next(r for r in pending_response.json()['items'] if r.get('parent_product_id')==pid)
             assert pending['can_assemble_stock'] and pending['available_sets']==7
-            assert pending['unit']==pending['verified_output_unit']==parent_unit
+            assert pending['unit']==pending['verified_output_unit']=='套'
         # A malformed unrelated old task must not enter the new assembly path.
         with factory() as db:
             original=db.scalar(select(Job))
@@ -158,7 +158,7 @@ def test_independent_components_actual_assembly_and_replay(stock_replenishment_a
             return
         assert plan.status_code==200,plan.text
         plan=plan.json();assert plan['available_sets']==7 and not plan['shortages']
-        assert plan['output_unit']==parent_unit
+        assert plan['output_unit']=='套'
         body=dict(action='assemble_stock',parent_id=pid,sets=5,basis_hash=plan['basis_hash'],jobs=plan['sources'],
             location_id=7,layout_version=1,operation_key='independent-stock-assembly')
         response=client.post('/api/production/stock-preparation/group-actions',json=body)
@@ -170,7 +170,8 @@ def test_independent_components_actual_assembly_and_replay(stock_replenishment_a
             output=db.get(InventoryLot,response.json()['output_lot_id'])
             assert output.quantity_available==5 and output.finished_detail.product_id==pid
             from app.services.warehouse_display_units import lot_display_unit
-            assert lot_display_unit(output)==parent_unit
+            # The purchase froze 套 before the later parent-unit edit.
+            assert lot_display_unit(output)=='套'
             from app.services.inventory_valuation import frozen_cost
             unit,evidence=frozen_cost(output,db)
             assert unit is not None and evidence['total_cost']
@@ -193,7 +194,7 @@ def test_frozen_yield_batch_units_and_continuing_after_product_change(stock_repl
         assert pending['expected_output']==72 and pending['product']['name']!='后来改名'
 
 
-def test_product_change_before_receipt_stays_raw_and_read_only(stock_replenishment_app):
+def test_product_change_before_receipt_uses_purchase_identity(stock_replenishment_app):
     app,factory=stock_replenishment_app;app.include_router(router,prefix='/api/production')
     def change(item):
         from app.models.product import Product
@@ -202,12 +203,12 @@ def test_product_change_before_receipt_stays_raw_and_read_only(stock_replenishme
             product=db.get(Product,1);product.production_process='新的模切身份';product.updated_at=utc_now_naive();product.version+=1;db.commit()
     with TestClient(app) as client:
         receive(client,before_receive=change)
-        r=row(client);assert r['available']==20 and not r['jobs']
+        r=row(client);assert r['available']==0 and r['reserved']==20 and len(r['jobs'])==1
         rows=client.get('/api/production/stock-preparation',params={'workspace':True,'state':'pending'}).json()['items']
-        assert rows[0]['processing_block'] and rows[0]['processing_yield_per_sheet']==1
-        body=dict(action='process',operation_key='changed-product-process',lot_version=r['lot_version'],actual_input_quantity=6,
-            actual_output=6,location_id=7,layout_version=1,output_kind='semi')
-        assert client.post(f"/api/production/stock-preparation/{r['receipt_item_id']}/actions",json=body).status_code==409
+        assert rows and r['jobs'][0]['product']['factor']==1
+        assert '新的模切身份' not in r['jobs'][0]['product']['physical_basis']
+        body=completion(r,6,'changed-product-process')
+        assert client.post(f"/api/production/stock-preparation/{r['receipt_item_id']}/actions",json=body).status_code==200
 
 
 def test_overreceipt_is_visible_raw_and_auto_plan_stays_within_purchase(stock_replenishment_app):

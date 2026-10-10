@@ -84,6 +84,8 @@ class Manager:
                 shared_bom_contract = db.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='shared_bom_members'"
                 ).fetchone()
+                purchase_identity_contract = any(row[1] == 'production_snapshot_json' for row in
+                    db.execute('PRAGMA table_info(stock_replenishment_order_items)'))
             if quotation_contract and not self._quotation_writer(release):
                 return False
             if shared_stock_contract and not self._shared_finished_reader(release):
@@ -95,6 +97,8 @@ class Manager:
             if company_profile_contract and not self._shared_finished_reader(release, "company_profiles_v1"):
                 return False
             if shared_bom_contract and not self._shared_finished_reader(release, "shared_bom_v1"):
+                return False
+            if purchase_identity_contract and not self._shared_finished_reader(release, "stock_purchase_identity_v1"):
                 return False
         # Additive JSON business facts can change semantics without an Alembic
         # revision change. Check the signed reader contract before that shortcut.

@@ -32,14 +32,12 @@ def processing_block(db, item, lot):
         product = prep.plan_product(db, item, lot)
         from app.services.stock_replenishment_plan import frozen_bom_plan
         contract = frozen_bom_plan(item)
-        if contract:
+        if contract and not item.production_snapshot_json:
             child = next((c for c in contract['components'] if c['product_id'] == product.id), None)
             parent = db.get(Product, contract['parent_product_id'])
             if (not child or child['product_version'] != product.version or not parent
                     or parent.version != contract['parent_product_version']):
                 return '采购后产品或BOM版本已变化，请核对冻结加工身份'
-        elif (product.updated_at and item.created_at and product.updated_at > item.created_at):
-            return '采购后产品资料已变化，请核对原加工身份'
         if item.sheet_cutting_snapshot:
             from app.services.sheet_cutting_contract import SheetCuttingContract
             cutting = SheetCuttingContract.from_snapshot(item.sheet_cutting_snapshot)
@@ -60,12 +58,14 @@ def freeze_snapshot(db, item, lot):
     from app.services.finished_stock_identity import product_basis
     from app.services.stock_replenishment_plan import frozen_bom_plan
     contract = frozen_bom_plan(item)
+    from app.services.stock_purchase_identity import resolve
+    identity = resolve(db, item, product)
     return dict(product_id=product.id, code=item.product_code_snapshot or product.product_code,
         name=item.product_name_snapshot or product.product_name, factor=item.stock_yield_per_sheet,
-        pieces_per_box=item.pieces_per_box, physical_basis=product_basis(product),
-        product_version=product.version, planned_location=None, preparation_group=None,
+        pieces_per_box=item.pieces_per_box, physical_basis=identity['physical_basis'],
+        purchase_identity=identity, product_version=identity['product_version'], planned_location=None, preparation_group=None,
         frozen_bom_plan=contract, sheet_cutting_snapshot=item.sheet_cutting_snapshot,
-        bom_parent_basis=product_basis(db.get(Product,contract['parent_product_id'])) if contract else None,
+        bom_parent_basis=(identity.get('bom_parent_basis') or product_basis(db.get(Product,contract['parent_product_id']))) if contract else None,
         auto_planned=True)
 
 

@@ -16417,9 +16417,17 @@ def create_stock_replenishment_order(
                     frozen['purchase_quantities'] = {str(row.reference_product_id): row.quantity for row in actual_rows}
                     validated_bom_plans[policy_id] = frozen
         for item in items:
+            from app.services.stock_purchase_identity import capture
+            target_product = db.get(Product, item.reference_product_id or item.product_id) if (item.reference_product_id or item.product_id) else None
+            identity = capture(target_product, item) if target_product else None
             if item.stock_policy_id in validated_bom_plans:
-                item.quantity_contract_json = json.dumps(validated_bom_plans[item.stock_policy_id], ensure_ascii=False,
-                    sort_keys=True, separators=(',', ':'))
+                frozen_contract = validated_bom_plans[item.stock_policy_id]
+                from app.services.finished_stock_identity import product_basis
+                if identity:
+                    identity['bom_parent_basis'] = product_basis(db.get(Product, frozen_contract['parent_product_id']))
+                item.quantity_contract_json = json.dumps(frozen_contract, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            if identity:
+                item.production_snapshot_json = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         material_suppliers = {
             material.supplier_name.strip()
             for item in items

@@ -232,6 +232,7 @@ def reverse_products(response: Response,
 @router.get("/products/{product_id}")
 def product_details(product_id: int, response: Response,
                     include_history: bool = Query(default=False),
+                    activity_page: int = Query(default=1, ge=1, le=100000),
                     db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
     _headers(response)
     _require_view(user)
@@ -246,9 +247,15 @@ def product_details(product_id: int, response: Response,
     drawing = product_drawing_metadata(db, [product.id], user=user, visible_customer_ids=scope)[product.id]
     inventory = inventory_details(db, product) if warehouse_allowed else {"visibility": "hidden_by_permission", "items": []}
     orders = order_card(db, product, include_history=include_history) if orders_allowed else {"visibility": "hidden_by_permission", "items": []}
+    from app.services.product_activity import activity
+    lifecycle = activity(db, product, scope=scope, page=activity_page, permissions=dict(
+        warehouse=warehouse_allowed, orders=orders_allowed,
+        requisition=has_permission(user, 'requisition.view'), incoming=has_permission(user, 'incoming.view'),
+        production=any(has_permission(user, p) for p in ('production.printing.view', 'production.die_cut.view')),
+        deliveries=has_permission(user, 'deliveries.view')))
     return {"product": product_card(product, summary, drawing),
             "production": production_card(db, product, scope, can_see_mold_location=warehouse_allowed),
-            "inventory": inventory, "orders": orders,
+            "inventory": inventory, "orders": orders, "activity": lifecycle,
             "actions": action_card(db, product,
                                    can_edit_requisition=has_permission(user, "requisition.execute"),
                                    can_request=has_permission(user, "business_requests.submit")),

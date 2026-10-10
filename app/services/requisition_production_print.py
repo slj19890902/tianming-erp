@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections import OrderedDict
 from pathlib import PurePath
@@ -12,16 +13,20 @@ from sqlalchemy.orm import Session
 from app.core.time_contract import utc_naive_to_api
 from app.models.customer import Customer
 from app.models.incoming_receipt import IncomingReceiptItem
+from app.models.mold_tool import MoldTool
 from app.models.order import Order, OrderItem
+from app.models.product import Product
 from app.models.product_bom import (
     RequisitionItemBomSource,
     SalesOrderItemBomComponent,
 )
+from app.models.product_drawing import ProductDrawing
 from app.models.production import ProductionTask
 from app.models.supplier_requisition_order import (
     SupplierRequisitionOrder,
     SupplierRequisitionOrderItem,
 )
+from app.services.box_type_rules import box_type_code, canonical_box_style
 from app.services.history_orders import build_display_registry, display_order_number
 
 
@@ -50,6 +55,68 @@ def _file_name(value: str | None) -> str | None:
     return PurePath(text).name or None
 
 
+def _drawing_suffix(value: str | None) -> str:
+    suffix = PurePath(str(value or "").replace("\\", "/")).suffix.lower()
+    return (
+        suffix
+        if suffix in {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
+        else ".bin"
+    )
+
+
+def _drawing_kind(value: str | None) -> str | None:
+    suffix = _drawing_suffix(value)
+    if suffix == ".pdf":
+        return "pdf"
+    if suffix in {".jpg", ".jpeg", ".png", ".webp"}:
+        return "image"
+    return None
+
+
+def _order_drawing_url(order_item: OrderItem | None) -> str | None:
+    if order_item is None or not order_item.drawing_file:
+        return None
+    return (
+        f"/api/orders/items/{order_item.id}/drawing/content/"
+        f"file{_drawing_suffix(order_item.drawing_file)}"
+    )
+
+
+def _product_drawing_url(drawing: ProductDrawing | None) -> str | None:
+    if drawing is None:
+        return None
+    reference = drawing.thumbnail_path or drawing.image_path
+    return (
+        f"/api/master/products/drawings/{drawing.id}/content/"
+        f"thumbnail{_drawing_suffix(reference)}"
+    )
+
+
+def _layout_kind(box_style: str | None, box_category: str | None) -> str:
+    """Map explicit common-box metadata to the three approved task-sheet layouts."""
+
+    code = box_type_code(box_style)
+    if code == "liner":
+        return "liner"
+    if code in {"die_cut_inner_box", "die_cut_partition"} or str(
+        box_category or ""
+    ).strip().casefold() == "die_cut":
+        return "die_cut"
+    return "carton"
+
+
+def _explicit_joining_method(values: list[object]) -> str | None:
+    """Extract only explicitly frozen joining instructions; never infer from names."""
+
+    text = " / ".join(str(value or "") for value in values)
+    methods: list[str] = []
+    if any(token in text for token in ("打钉", "钉箱", "钉合")):
+        methods.append("打钉")
+    if any(token in text for token in ("粘贴", "粘箱", "粘合", "糊盒")):
+        methods.append("粘贴")
+    return " / ".join(methods) or None
+
+
 def _json_list(value: str | None) -> list[object]:
     try:
         parsed = json.loads(value or "[]")
@@ -64,6 +131,8 @@ def _printing_snapshot(task: ProductionTask | None) -> dict:
             "print_content": None,
             "printing_plate_mode": None,
             "printing_plate_codes": [],
+            "printing_plates": [],
+            "printing_colors": [],
             "printing_instruction": None,
             "plate_alignment_value_mm": None,
             "plate_mount_value_mm": None,
@@ -76,6 +145,15 @@ def _printing_snapshot(task: ProductionTask | None) -> dict:
         for value in _json_list(task.printing_plate_codes_snapshot)
         if str(value).strip()
     ]
+    details = [
+        {
+            "plate_code": str(value.get("plate_code") or "").strip(),
+            "color_name": str(value.get("color_name") or "").strip(),
+        }
+        for value in _json_list(task.printing_plate_details_snapshot)
+        if isinstance(value, dict)
+        and str(value.get("plate_code") or "").strip()
+    ]
     content = str(task.print_content_snapshot or "").strip() or None
     if not content or content in {"无印刷", "无", "否", "不印刷"}:
         instruction = "无需印刷"
@@ -87,6 +165,10 @@ def _printing_snapshot(task: ProductionTask | None) -> dict:
         "print_content": content,
         "printing_plate_mode": task.printing_plate_mode_snapshot or "no_plate",
         "printing_plate_codes": codes,
+        "printing_plates": details,
+        "printing_colors": _unique_text(
+            [value.get("color_name") for value in details]
+        ),
         "printing_instruction": instruction,
         "plate_alignment_value_mm": task.plate_alignment_value_mm_snapshot,
         "plate_mount_value_mm": task.plate_mount_value_mm_snapshot,
@@ -251,6 +333,53 @@ def build_supplier_requisition_production_package(
         else {}
     )
 
+    product_ids = {
+        int(item.product_id) for item in items if item.product_id is not None
+    }
+    products = (
+        {
+            int(row.id): row
+            for row in db.scalars(
+                select(Product).where(Product.id.in_(product_ids))
+            ).all()
+        }
+        if product_ids
+        else {}
+    )
+    latest_drawings: dict[int, ProductDrawing] = {}
+    if product_ids:
+        for drawing in db.scalars(
+            select(ProductDrawing)
+            .where(ProductDrawing.product_id.in_(product_ids))
+            .order_by(
+                ProductDrawing.product_id,
+                ProductDrawing.uploaded_at.desc(),
+                ProductDrawing.id.desc(),
+            )
+        ).all():
+            latest_drawings.setdefault(int(drawing.product_id), drawing)
+
+    mold_ids = {
+        int(product.mold_tool_id)
+        for product in products.values()
+        if product.mold_tool_id is not None
+    }
+    mold_ids.update(
+        int(snapshot.snapshot_mold_tool_id)
+        for snapshot in bom_snapshots.values()
+        if snapshot.snapshot_mold_tool_id is not None
+    )
+    molds = (
+        {
+            int(row.id): row
+            for row in db.scalars(
+                select(MoldTool).where(MoldTool.id.in_(mold_ids))
+            ).all()
+        }
+        if mold_ids
+        else {}
+    )
+
     tasks = (
         db.scalars(
             select(ProductionTask).where(
@@ -328,6 +457,54 @@ def build_supplier_requisition_production_package(
             if component_snapshot is not None
             else ordinary_tasks.get(int(item.order_item_id or 0))
         )
+        product = products.get(int(item.product_id or 0))
+        product_drawing = latest_drawings.get(int(item.product_id or 0))
+        box_style = (
+            component_snapshot.snapshot_component_box_style
+            if component_snapshot is not None
+            else product.box_style
+            if product is not None
+            else None
+        )
+        box_category = (
+            component_snapshot.snapshot_component_box_category
+            if component_snapshot is not None
+            else product.box_category
+            if product is not None
+            else None
+        )
+        layout_kind = _layout_kind(box_style, box_category)
+        mold_id = (
+            component_snapshot.snapshot_mold_tool_id
+            if component_snapshot is not None
+            else product.mold_tool_id
+            if product is not None
+            else None
+        )
+        current_mold = molds.get(int(mold_id or 0))
+        drawing_reference = (
+            component_snapshot.snapshot_die_cut_path
+            if component_snapshot is not None
+            else order_item.drawing_file
+            if order_item is not None
+            else product_drawing.image_path
+            if product_drawing is not None
+            else None
+        )
+        drawing_url = _order_drawing_url(order_item)
+        drawing_source = "订单图纸" if drawing_url else None
+        drawing_kind = (
+            _drawing_kind(order_item.drawing_file)
+            if drawing_url and order_item is not None
+            else None
+        )
+        if drawing_url is None and product_drawing is not None:
+            drawing_url = _product_drawing_url(product_drawing)
+            drawing_source = "常用箱图纸"
+            drawing_kind = _drawing_kind(
+                product_drawing.thumbnail_path or product_drawing.image_path
+            )
+        printing_snapshot = _printing_snapshot(task)
         product_code = str(item.product_code or "").strip()
         customer_key: object = customer.id if customer is not None else item.customer_name
         group_key = (
@@ -353,10 +530,27 @@ def build_supplier_requisition_production_package(
                 "delivery_dates": [],
                 "planned_finished_quantity": 0,
                 "requisition_quantity": 0,
+                "layout_kind": layout_kind,
+                "box_style": canonical_box_style(box_style),
+                "box_type_code": box_type_code(box_style),
+                "finished_length_mm": (
+                    product.length_mm if product is not None else None
+                ),
+                "finished_width_mm": (
+                    product.width_mm if product is not None else None
+                ),
+                "finished_height_mm": (
+                    product.height_mm if product is not None else None
+                ),
+                "printing_colors": [],
+                "joining_methods": [],
+                "production_label_units_per_bundle": None,
                 "review_required": False,
                 "review_messages": [],
                 "components": [],
                 "_planned_quantity_keys": set(),
+                "_layout_kinds": set(),
+                "_box_styles": set(),
             }
             grouped[group_key] = card
 
@@ -386,6 +580,10 @@ def build_supplier_requisition_production_package(
                 ),
             ]
         )
+        joining_method = _explicit_joining_method(production_notes)
+        component_printing_colors = printing_snapshot[
+            "printing_colors"
+        ] or _unique_text([product.printing_colors if product is not None else None])
         component = {
             "supplier_order_item_id": item.id,
             "source_identity": source_identity,
@@ -409,28 +607,59 @@ def build_supplier_requisition_production_package(
             "crease_type": crease_values[0],
             "crease_display": _crease_display(crease_values),
             "production_notes": production_notes,
-            "drawing_reference": _file_name(
-                component_snapshot.snapshot_die_cut_path
-                if component_snapshot is not None
-                else order_item.drawing_file
-                if order_item is not None
-                else None
-            ),
+            "box_style": canonical_box_style(box_style),
+            "box_type_code": box_type_code(box_style),
+            "layout_kind": layout_kind,
+            "drawing_reference": _file_name(drawing_reference),
+            "drawing_url": drawing_url,
+            "drawing_kind": drawing_kind,
+            "drawing_source": drawing_source,
             "mold_code": (
                 component_snapshot.snapshot_mold_tool_code
                 if component_snapshot is not None
+                else current_mold.mold_code
+                if current_mold is not None
                 else None
             ),
             "mold_name": (
                 component_snapshot.snapshot_mold_tool_name
                 if component_snapshot is not None
+                else current_mold.mold_name
+                if current_mold is not None
                 else None
             ),
+            "mold_location": (
+                current_mold.rack_location if current_mold is not None else None
+            ),
+            "joining_method": joining_method,
             "production_task_id": task.id if task is not None else None,
             "production_task_version": task.version if task is not None else None,
-            **_printing_snapshot(task),
+            "production_label_units_per_bundle": (
+                int(task.production_label_units_per_label_snapshot)
+                if task is not None
+                and task.production_label_units_per_label_snapshot is not None
+                else None
+            ),
+            **printing_snapshot,
         }
         card["components"].append(component)
+        card["_layout_kinds"].add(layout_kind)
+        if card["box_style"]:
+            card["_box_styles"].add(card["box_style"])
+        if component["box_style"]:
+            card["_box_styles"].add(component["box_style"])
+        card["printing_colors"] = _unique_text(
+            [*card["printing_colors"], *component_printing_colors]
+        )
+        card["joining_methods"] = _unique_text(
+            [*card["joining_methods"], joining_method]
+        )
+        bundle_quantity = component["production_label_units_per_bundle"]
+        if (
+            bundle_quantity
+            and card["production_label_units_per_bundle"] is None
+        ):
+            card["production_label_units_per_bundle"] = bundle_quantity
         planned_quantity_key = (
             f"bom:{component_snapshot.id}"
             if component_snapshot is not None
@@ -506,6 +735,46 @@ def build_supplier_requisition_production_package(
     cards = list(grouped.values())
     for card in cards:
         card.pop("_planned_quantity_keys", None)
+        layout_kinds = card.pop("_layout_kinds", set())
+        card.pop("_box_styles", None)
+        card["box_styles"] = _unique_text(
+            [component.get("box_style") for component in card["components"]]
+        )
+        card["box_type_codes"] = _unique_text(
+            [component.get("box_type_code") for component in card["components"]]
+        )
+        if len(layout_kinds) > 1:
+            card["review_required"] = True
+            card["review_messages"] = _unique_text(
+                [*card["review_messages"], "同码组件箱型版式不一致，请人工核对"]
+            )
+        card["joining_method"] = " / ".join(card["joining_methods"]) or None
+        card["production_steps"] = _unique_text(
+            [
+                note
+                for component in card["components"]
+                for note in component.get("production_notes", [])
+            ]
+        )
+        card["structure_reference"] = next(
+            (
+                {
+                    "name": component.get("drawing_reference"),
+                    "url": component.get("drawing_url"),
+                    "kind": component.get("drawing_kind"),
+                    "source": component.get("drawing_source"),
+                }
+                for component in card["components"]
+                if component.get("drawing_url") or component.get("drawing_reference")
+            ),
+            None,
+        )
+        per_bundle = card.get("production_label_units_per_bundle")
+        card["estimated_bundle_count"] = (
+            math.ceil(card["planned_finished_quantity"] / per_bundle)
+            if per_bundle
+            else None
+        )
         if len(card["components"]) > 6:
             card["review_required"] = True
             card["review_messages"] = _unique_text(

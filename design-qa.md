@@ -64,3 +64,28 @@ Fixes made:
 - P3: after formal rack-level inventory binding is approved, shelf tags can be introduced only inside the rack elevation view, keeping the global 2.5D view uncluttered.
 
 final result: passed
+
+---
+
+# Production task sheet design QA
+
+- Source: `D:\纸箱厂erp软件搭建\output\pdf\生产任务单_内部生产版_三方案_A5.pdf`
+- Source render used for A1 comparison: `D:\纸箱厂erp软件搭建\tmp\pdfs\render_internal\page-1.png`
+- Combined source and implementation screenshot: `D:\tm-worktrees\erp-production-task-form-20260811\docs\qa\production-task-a1-comparison.png`
+- Batch first-page screenshot: `D:\tm-worktrees\erp-production-task-form-20260811\docs\qa\production-task-batch-a4.png`
+- Batch odd-last-page screenshot: `D:\tm-worktrees\erp-production-task-form-20260811\docs\qa\production-task-batch-last-page.png`
+- Browser viewport: 1200 × 800. The comparison harness renders the ERP page in a 1200 × 1400 iframe scaled to 50% so the complete A4 state and the source render are visible together.
+
+## Comparison
+
+- Preserved the source hierarchy: title and status, three headline metrics, product and size row, ordered process route, technical details, and structure-reference column.
+- Removed the source colors intentionally because the approved ERP output is black-and-white. Borders, type weights, and grayscale structure images retain the visual hierarchy without relying on color.
+- The single-task state uses one full A4 page with enlarged type and a detail panel that fills the available height.
+- The batch state places two fixed half-page cards on each A4 page. Three cards produce two pages and the final lower half remains blank.
+- A1, die-cut inner box, and liner states were checked with realistic data. No text clipping, overlapping, broken borders, or layout-overflow marker was present.
+- A real provided source image was loaded through the structure-reference image slot; the formal implementation uses the existing authenticated product/order drawing routes.
+- The customer-safe state hides elements marked as internal and shows its safe-mode footer. The mode switch was exercised in the browser and restored successfully.
+
+## Final result
+
+passed

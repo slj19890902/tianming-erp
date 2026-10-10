@@ -287,6 +287,7 @@ def production_print_app(tmp_path: Path):
         "supplier_item_id": first_supplier_item_id,
         "sales_order_id": order_id,
         "order_item_id": order_item_id,
+        "product_id": product.id,
     }
     engine.dispose()
 
@@ -334,6 +335,7 @@ def test_package_keeps_split_components_and_two_half_page_layout(
     assert three_card_package["pages"][-1]["top"] is not None
     assert three_card_package["pages"][-1]["bottom"] is None
     split = first["cards"][0]
+    assert split["layout_kind"] == "carton"
     assert split["product_name"] == "天地盖测试箱"
     assert split["planned_finished_quantity"] == 200
     assert split["requisition_quantity"] == 200
@@ -528,20 +530,100 @@ def test_print_page_and_erp_entry_keep_purchase_and_receipt_prints_separate():
     assert "_conditional_file_endpoint(requisition_production_print_path)" in main_source
     assert "@page { size:A4 portrait;" in print_html
     assert "grid-template-rows:140.5mm 140.5mm" in print_html
-    assert 'class="half-card blank"' in print_html
-    assert "计划成品" in print_html and "采购纸板" in print_html
-    assert 'line.product_name || "-"' in print_html
-    assert "计划已变化/请核对并重打" in print_html
+    assert 'class="task-card half-card blank"' in print_html
+    assert "packageData.card_count === 1" in print_html
+    assert 'class="page single-page"' in print_html
+    assert 'class="page batch-page"' in print_html
+    assert "单张任务单独占一张 A4" in print_html
+    assert "批量每张 A4 上下两款" in print_html
+    assert "A1 型纸箱生产任务单" in print_html
+    assert "模切内盒生产任务单" in print_html
+    assert "衬板生产任务单" in print_html
+    assert "filter:grayscale(1)" in print_html
+    assert "structure_reference" in print_html
+    assert "计划已变化 / 请核对并重打" in print_html
     assert "card.scrollHeight > card.clientHeight + 1" in print_html
-    assert "任务内容超过半页容量，已停止打印" in print_html
-    assert "credentials: \"include\"" in print_html
-    assert "cache: \"no-store\"" in print_html
+    assert "任务内容超过页面容量，已停止打印" in print_html
+    assert 'credentials:"include"' in print_html
+    assert 'cache:"no-store"' in print_html
+    assert "customer-safe" in print_html
+    assert "internal-only" in print_html
     assert "window.opener" not in print_html
     assert "method: \"POST\"" not in print_html
     assert "method: \"PUT\"" not in print_html
     assert "method: \"DELETE\"" not in print_html
     for forbidden in ("单价", "成本", "库存批次", "可用库存"):
         assert forbidden not in print_html
+
+
+def test_package_projects_explicit_box_layout_current_mold_and_secure_drawing(
+    production_print_app,
+):
+    from app.models.mold_tool import MoldTool
+    from app.models.product import Product
+    from app.models.production import ProductionTask
+    from app.models.supplier_requisition_order import SupplierRequisitionOrder
+    from app.services.requisition_production_print import (
+        build_supplier_requisition_production_package,
+    )
+
+    with production_print_app["session_factory"]() as db:
+        product = db.get(Product, production_print_app["product_id"])
+        task = db.scalar(
+            select(ProductionTask).where(
+                ProductionTask.order_item_id == production_print_app["order_item_id"]
+            )
+        )
+        mold = MoldTool(
+            mold_code="MD-P132A2",
+            mold_name="内盒模具",
+            rack_location="1F-M-R02-L2-P08",
+            is_active=True,
+        )
+        db.add(mold)
+        db.flush()
+        product.box_style = "模切内盒"
+        product.box_category = "die_cut"
+        product.mold_tool_id = mold.id
+        product.printing_colors = "黑色"
+        task.printing_plate_details_snapshot = json.dumps(
+            [{"plate_code": "PLATE-01", "color_name": "黑色"}],
+            ensure_ascii=False,
+        )
+        db.commit()
+
+        order = db.get(
+            SupplierRequisitionOrder,
+            production_print_app["supplier_order_id"],
+        )
+        die_cut = build_supplier_requisition_production_package(db, order)
+        card = die_cut["cards"][0]
+        component = card["components"][0]
+
+        assert card["layout_kind"] == "die_cut"
+        assert card["box_style"] == "模切内盒"
+        assert card["printing_colors"] == ["黑色"]
+        assert component["mold_code"] == "MD-P132A2"
+        assert component["mold_location"] == "1F-M-R02-L2-P08"
+        assert component["drawing_kind"] == "pdf"
+        assert component["drawing_url"] == (
+            f"/api/orders/items/{production_print_app['order_item_id']}"
+            "/drawing/content/file.pdf"
+        )
+
+        product.box_style = "衬板"
+        product.box_category = "normal"
+        task.production_label_enabled_snapshot = True
+        task.production_label_units_per_label_snapshot = 50
+        task.production_label_total_quantity_snapshot = 200
+        task.production_label_count_snapshot = 4
+        db.commit()
+        liner = build_supplier_requisition_production_package(db, order)
+        liner_card = liner["cards"][0]
+
+        assert liner_card["layout_kind"] == "liner"
+        assert liner_card["production_label_units_per_bundle"] == 50
+        assert liner_card["estimated_bundle_count"] == 4
 
 
 def test_production_packaging_labels_deduplicate_split_rows_and_keep_remainder(
@@ -567,6 +649,9 @@ def test_production_packaging_labels_deduplicate_split_rows_and_keep_remainder(
         task.production_label_units_per_label_snapshot = 5
         task.production_label_total_quantity_snapshot = 23
         task.production_label_count_snapshot = 5
+        # Keep the print-plan version stable. SQLite's second-level on-update
+        # timestamp otherwise makes this test depend on crossing a clock tick.
+        task.updated_at = datetime(2026, 8, 10, 9, 0, 0)
         db.commit()
         order = db.get(
             SupplierRequisitionOrder,
@@ -621,6 +706,7 @@ def test_production_packaging_label_api_is_read_only_and_customer_scoped(
         task.production_label_units_per_label_snapshot = 5
         task.production_label_total_quantity_snapshot = 23
         task.production_label_count_snapshot = 5
+        task.updated_at = datetime(2026, 8, 10, 9, 0, 0)
         db.commit()
 
     with TestClient(production_print_app["app"]) as client:

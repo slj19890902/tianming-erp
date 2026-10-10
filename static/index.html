@@ -36450,7 +36450,7 @@
             const status=names[current?.status]||current?.status||"状态待核对";
             const quantity=Number.isSafeInteger(current?.stocked_quantity)?"，已收料 "+current.stocked_quantity:"";
             const external=current?.external_purchase_status;
-            const cancelled=external?.status==='cancelled'||external?.status==='voided';
+            const cancelled=external?.status==='cancelled'||external?.status==='voided'||external?.purchase_orders?.some(order=>['cancelled','voided'].includes(order.status));
             return "原保存已确认；当前原单："+status+quantity+(cancelled?"，采购已取消":"");
           },
           refreshStockReplenishmentRecovery() {

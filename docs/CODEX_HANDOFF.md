@@ -1,5 +1,20 @@
 # Codex 项目交接
 
+## 2026-07-20 N043 | 邮箱自动收单草稿 P1 安全收口（未提交）
+
+- 独立 worktree：`D:\tm-worktrees\erp-email-order-intake-n043`；分支：`feature/email-order-intake-n043`。保留全部既有未提交 N043 改动；未 commit、未 push、未连接真实邮箱，未连接或写入正式数据库。
+- 多附件邮件按草稿客户逐项过滤：受限账号只能看到自己客户的草稿及对应附件；无可靠客户归属的兄弟附件在混合消息中 fail-closed 隐藏。消息状态按可见草稿重算，主记录错误不再带出隐藏兄弟草稿；跨客户 `duplicate_of_attachment_id` 对受限和非受限账号均不返回。
+- 发件人映射更新同时校验原客户和目标客户。`retry/rematch` 在执行前校验预期客户，服务层使用 `commit=False` 延迟事务提交，结果客户再次通过范围门禁后才写审计并提交；异常越界结果会随请求事务回滚。
+- 无 `cost.view` 的草稿 JSON 先复用 PDF 成本脱敏，再使用字段白名单输出。任意未知嵌套对象、warnings、`integrity_errors`、自由文本证据及单价/金额/成本/毛利/供应商字段均 fail-closed 丢弃；附件名、主题、错误和映射备注等元数据也执行敏感文本过滤。具备 `cost.view` 的账号仍获得完整独立副本，持久化草稿不被改写。
+- `/status` 只统计当前稳定 `mailbox_key`；受限账号按客户可见草稿计算状态，不暴露邮箱级轮询次数、时间或其他客户汇总。默认 `mailbox_key` 由 `host + username + folder` 的 SHA-256 非敏感摘要稳定派生，显式配置仍保持兼容。
+- IMAP 构造和底层 socket 均设置单操作超时，整轮轮询另有总时限；下载正文后再次以 `len(raw_message)` 校验真实大小。轮询会在总时限内遍历所有未处理 UID，坏 UID 不再以旧 `5 * max` 窗口饿死后续有效邮件；超大邮件仍以 `mailbox_key + UIDVALIDITY + UID` 持久化拒收并去重。
+- 普通邮件 UID 并发唯一约束冲突会回滚损坏事务并安全取得赢家记录。文件锁加入随机 owner token 和独占回收锁，旧 owner 不会删除替代锁；轮询总时限显著小于陈旧锁回收阈值。XLSX 在创建完整 `ZipFile` 成员列表前先从 EOCD 检查声明成员数，之后仍逐项执行数量、加密、解压大小和压缩比门禁。
+- Windows 脚本使用 UTF-8 BOM 并通过 Windows PowerShell 5.1 解析；计划任务安装时验证 `app.main.__file__` 属于当前 worktree，保存具体 `python.exe` 绝对路径，运行时不依赖任意 `py`。配置与真实邮箱 UAT 说明已更新至 `docs/N043_EMAIL_ORDER_INTAKE_SETUP.md`。
+- Excel 附件继续明确保持 `waiting_excel_parser`，不伪装为已解析；正式订单仍只能经人工预览确认创建。
+- 现有未提交迁移保持 `revision=cf62v8x9z51`、`down_revision=ce61v8x9z50`，本轮未修改 revision、parent 或 schema；迁移测试只使用 pytest 临时数据库。
+- 自动验证：reviewer 定向安全用例 `13 passed`；N043 全套 `76 passed`；N043 + N028 权限底座 + 既有 PDF 成本脱敏联合回归 `100 passed`；完整 N028 权限回归 `73 passed`。相关 `py_compile`、Windows PowerShell 5.1 语法解析和 `git diff --check` 均通过。
+- 剩余仅为真实环境 UAT 风险：不同邮箱服务商的授权密码/TLS/UIDVALIDITY 行为、真实大邮箱吞吐、计划任务服务账号环境变量与 ACL、断网重连，以及真实 PDF/Excel 附件组合。必须在专用测试邮箱和数据库副本验证，不能直接连接正式邮箱或正式库。
+
 ## 2026-07-19 N039/N040 | 复合产品生产闭环与客户材质候选追溯
 
 - N039 已经人工验收并合并到主功能分支，合并提交 `ba34b7e`；正式数据库已在在线备份后由 `cc59v8x9z48` 线性升级到 `cd60v8x9z49`，迁移后 `integrity_check=ok`、外键异常 0。升级前备份为 `data/backups/carton_erp_before_n039_cd60_20260719_160006.sqlite3`，SHA-256 为 `6FC7024D828858BA056F16F7ABC0F36A3102AD03C429FD5D9A31DA9FB1A10B0F`。

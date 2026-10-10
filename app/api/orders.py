@@ -28,11 +28,13 @@ from app.core.time_contract import (
     beijing_naive_to_api,
     beijing_now_naive,
     beijing_today,
+    utc_now_naive,
     utc_naive_to_api,
 )
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
+from app.models.email_order_intake import EmailOrderIntakeDraft
 from app.models.finance import (
     Invoice,
     ReturnReceipt,
@@ -348,6 +350,9 @@ class OrderCreate(BaseModel):
     import_integrity_errors: list[str] | None = None
     import_draft: bool = False
     pdf_import_confirmation: PdfImportConfirmation | None = None
+    # Set only by the email-intake preview flow.  The endpoint validates that
+    # this identifier, the signed preview and the source PDF still agree.
+    email_intake_draft_id: int | None = Field(default=None, gt=0)
 
     # legacy single-line compatibility payload
     product_archive_id: int | None = None
@@ -427,6 +432,9 @@ def _encode_pdf_preview_safety_token(
         "iat": now,
         "exp": now + timedelta(minutes=PDF_PREVIEW_SAFETY_TOKEN_TTL_MINUTES),
     }
+    email_draft_id = draft.get("email_intake_draft_id")
+    if email_draft_id is not None:
+        claims["email_intake_draft_id"] = int(email_draft_id)
     return jwt.encode(claims, load_settings().secret_key, algorithm="HS256")
 
 
@@ -565,6 +573,105 @@ def _validate_pdf_import_safety(
     if claims["customer_route_status"] != "locked":
         reasons.append(f"customer_route={claims['customer_route_status']}")
     return reasons, claims
+
+
+def _email_draft_conversion_conflict(
+    draft_id: int,
+    converted_order_id: int | None = None,
+) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "EMAIL_INTAKE_DRAFT_CONVERTED",
+            "message": "该邮箱订单草稿已经转换为正式订单，不能再次打开或保存。",
+            "email_intake_draft_id": draft_id,
+            "converted_order_id": converted_order_id,
+        },
+    )
+
+
+def _lock_email_draft_for_conversion(
+    db: Session,
+    *,
+    payload: OrderCreate,
+    user: User,
+    pdf_safety_claims: dict,
+) -> EmailOrderIntakeDraft | None:
+    """Validate and lock the email-only provenance before writing an order."""
+    if payload.email_intake_draft_id is None:
+        return None
+    if payload.pdf_import_confirmation is None:
+        raise HTTPException(
+            status_code=400,
+            detail="邮箱订单草稿必须使用邮箱预览返回的 PDF 安全确认后才能保存。",
+        )
+
+    draft = db.scalar(
+        select(EmailOrderIntakeDraft)
+        .where(EmailOrderIntakeDraft.id == payload.email_intake_draft_id)
+        .with_for_update()
+    )
+    if draft is None:
+        raise HTTPException(status_code=404, detail="邮箱订单草稿不存在。")
+    if not has_unrestricted_customer_access(user, db) and (
+        draft.customer_id is None or draft.customer_id not in customer_scope_ids(user, db)
+    ):
+        raise HTTPException(status_code=403, detail="无客户访问权限。")
+    if draft.customer_id != payload.customer_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "EMAIL_INTAKE_DRAFT_CUSTOMER_STALE",
+                "message": "邮箱订单草稿客户与待保存订单客户不一致，请重新打开预览。",
+            },
+        )
+    if draft.parser_type != "pdf":
+        raise HTTPException(status_code=409, detail="只有 PDF 邮箱订单草稿可以转换为正式订单。")
+    if draft.status == "converted" or draft.converted_order_id is not None:
+        raise _email_draft_conversion_conflict(draft.id, draft.converted_order_id)
+    if draft.status not in {"review_ready", "needs_confirmation"}:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "EMAIL_INTAKE_DRAFT_NOT_READY",
+                "message": "该邮箱订单草稿尚未准备好，请先在收件草稿中重试或确认客户。",
+            },
+        )
+    existing_order_id = db.scalar(
+        select(Order.id).where(Order.email_intake_draft_id == draft.id)
+    )
+    if existing_order_id is not None:
+        raise _email_draft_conversion_conflict(draft.id, existing_order_id)
+    if (
+        pdf_safety_claims.get("source_hash") != draft.file_sha256
+        or pdf_safety_claims.get("source_name") != draft.source_name
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "EMAIL_INTAKE_DRAFT_SOURCE_STALE",
+                "message": "邮箱订单草稿的 PDF 或安全确认已变化，请重新打开预览。",
+            },
+        )
+    try:
+        token_draft_id = int(pdf_safety_claims.get("email_intake_draft_id"))
+    except (TypeError, ValueError) as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "EMAIL_INTAKE_DRAFT_TOKEN_STALE",
+                "message": "邮箱订单草稿与预览确认不匹配，请重新打开该草稿预览。",
+            },
+        ) from error
+    if token_draft_id != draft.id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "EMAIL_INTAKE_DRAFT_TOKEN_STALE",
+                "message": "邮箱订单草稿与预览确认不匹配，请重新打开该草稿预览。",
+            },
+        )
+    return draft
 
 
 def _validated_order_layer_flute(
@@ -3061,6 +3168,11 @@ def create_order(
     if payload.customer_id is not None:
         require_customer_access(payload.customer_id, current_user=user, db=db)
     if payload.items is None:
+        if payload.email_intake_draft_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Email intake drafts require the multi-item PDF save flow.",
+            )
         return _legacy_create(payload, user)
     if not payload.items:
         raise HTTPException(status_code=400, detail="订单至少需要一条明细")
@@ -3106,6 +3218,12 @@ def create_order(
         customer = db.get(Customer, payload.customer_id)
         if customer is None:
             raise HTTPException(status_code=400, detail="客户不存在")
+        email_draft = _lock_email_draft_for_conversion(
+            db,
+            payload=payload,
+            user=user,
+            pdf_safety_claims=pdf_safety_claims,
+        )
         if payload.pdf_import_confirmation is not None and (
             not customer.is_active or customer.status != "active"
         ):
@@ -3309,6 +3427,7 @@ def create_order(
             payment_status=payload.payment_status,
             total_amount=Decimal("0"),
             remark=(payload.remark or "").strip() or None,
+            email_intake_draft_id=(email_draft.id if email_draft is not None else None),
             created_by=user.id,
         )
         db.add(order)
@@ -3530,6 +3649,11 @@ def create_order(
             if not is_composite_product(resolved_products[index]):
                 refresh_production_task(db, created_item.id)
         refresh_order_production_status(db, order.id)
+        if email_draft is not None:
+            email_draft.status = "converted"
+            email_draft.converted_order_id = order.id
+            email_draft.reviewed_by = user.id
+            email_draft.reviewed_at = utc_now_naive()
         db.commit()
         db.refresh(order)
         response = _order_response(
@@ -3563,6 +3687,11 @@ def create_order(
         ) from error
     except IntegrityError as error:
         db.rollback()
+        if payload.email_intake_draft_id is not None and (
+            "email_intake_draft_id" in str(error).lower()
+            or "uq_sales_orders_email_intake_draft_id" in str(error).lower()
+        ):
+            raise _email_draft_conversion_conflict(payload.email_intake_draft_id) from error
         raise HTTPException(status_code=409, detail="订单号或订单数据冲突") from error
     except Exception:
         db.rollback()

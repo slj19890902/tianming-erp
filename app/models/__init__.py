@@ -132,3 +132,10 @@ from app.models.incoming_receipt import (  # noqa: E402,F401
     IncomingReceipt,
     IncomingReceiptItem,
 )
+from app.models.email_order_intake import (  # noqa: E402,F401
+    EmailOrderIntakeAttachment,
+    EmailOrderIntakeDraft,
+    EmailOrderIntakeMessage,
+    EmailOrderIntakePollState,
+    EmailOrderSenderMapping,
+)

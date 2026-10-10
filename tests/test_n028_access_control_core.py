@@ -121,6 +121,7 @@ def test_sales_defaults_are_business_limited_and_boss_excludes_backup(
                 "orders.create",
                 "orders.edit",
                 "dashboard.view",
+                "email_intake.view",
             }
         )
         assert has_permission(sales, "customers.edit")
@@ -129,6 +130,7 @@ def test_sales_defaults_are_business_limited_and_boss_excludes_backup(
         assert has_permission(sales, "quotations.edit")
         assert has_permission(sales, "orders.create")
         assert has_permission(sales, "orders.edit")
+        assert has_permission(sales, "email_intake.view")
         for permission in (
             "customers.deactivate",
             "customers.delete",
@@ -150,11 +152,13 @@ def test_sales_defaults_are_business_limited_and_boss_excludes_backup(
             "cost.view",
             "system.backup",
             "users.manage",
+            "email_intake.manage",
         ):
             assert not has_permission(sales, permission)
         assert has_permission(boss, "orders.rollback")
         assert not has_permission(boss, "users.manage")
         assert not has_permission(boss, "system.backup")
+        assert not has_permission(boss, "email_intake.manage")
 
     with TestClient(app) as client:
         boss_payload = _login(client, "boss", "BossPass123!")

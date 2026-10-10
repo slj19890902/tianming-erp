@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 from ipaddress import ip_address
@@ -13,6 +14,7 @@ ENV_FILE = PROJECT_ROOT / ".env"
 DEFAULT_DATABASE_PATH = PROJECT_ROOT / "data" / "carton_erp.sqlite3"
 DEFAULT_BACKUP_DIR = Path(r"Z:\sata1-18015598002\BoxERP\backups")
 DEFAULT_SECRET_FILE = PROJECT_ROOT / "data" / "session_secret.key"
+DEFAULT_EMAIL_INTAKE_STORAGE_DIR = PROJECT_ROOT / "data" / "email_order_intake"
 DEFAULT_ALLOWED_ORIGINS = (
     "http://127.0.0.1:8000",
     "http://localhost:8000",
@@ -66,6 +68,27 @@ class Settings:
     session_cookie_name: str = "erp_session"
     session_expire_minutes: int = 480
     session_cookie_secure: bool = False
+    email_intake_enabled: bool = False
+    email_intake_mailbox_key: str = "default"
+    email_imap_host: str = ""
+    email_imap_port: int = 993
+    email_imap_username: str = ""
+    email_imap_password_file: Path | None = None
+    email_imap_folder: str = "INBOX"
+    email_imap_use_ssl: bool = True
+    email_imap_starttls: bool = False
+    email_imap_timeout_seconds: int = 30
+    email_intake_poll_timeout_seconds: int = 300
+    email_intake_max_messages: int = 50
+    email_intake_max_raw_message_bytes: int = 50 * 1024 * 1024
+    email_intake_max_attachments: int = 20
+    email_intake_max_attachment_bytes: int = 20 * 1024 * 1024
+    email_intake_max_total_attachment_bytes: int = 40 * 1024 * 1024
+    email_intake_xlsx_max_zip_members: int = 2_000
+    email_intake_xlsx_max_uncompressed_bytes: int = 100 * 1024 * 1024
+    email_intake_xlsx_max_compression_ratio: int = 100
+    email_intake_max_pdf_pages: int = 100
+    email_intake_storage_dir: Path = DEFAULT_EMAIL_INTAKE_STORAGE_DIR
 
     @property
     def database_url(self) -> str:
@@ -85,11 +108,42 @@ def normalize_path(value: str | Path) -> Path:
         return Path(os.path.abspath(path))
 
 
+def derive_email_intake_mailbox_key(host: str, username: str, folder: str) -> str:
+    """Return a stable, non-sensitive identity for one physical mailbox."""
+
+    canonical = "\0".join(
+        (
+            (host or "").strip().casefold(),
+            (username or "").strip().casefold(),
+            (folder or "INBOX").strip().casefold() or "inbox",
+        )
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
+    return f"imap-{digest}"
+
+
 def _resolved_path(env_name: str, default: Path) -> Path:
     configured = Path(os.getenv(env_name, str(default))).expanduser()
     if not configured.is_absolute():
         configured = PROJECT_ROOT / configured
     return normalize_path(configured)
+
+
+def _optional_resolved_path(env_name: str) -> Path | None:
+    value = os.getenv(env_name, "").strip()
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return normalize_path(path)
+
+
+def _bool_env(env_name: str, default: bool) -> bool:
+    raw = os.getenv(env_name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _load_or_create_secret(secret_file: Path, *, allow_create: bool = True) -> str:
@@ -258,6 +312,94 @@ def load_settings() -> Settings:
         raise ValueError(
             "ERP_WORKERS must be 1 because login throttling uses process-local keyed locks"
         )
+    email_enabled = _bool_env("ERP_EMAIL_INTAKE_ENABLED", False)
+    email_password_file = _optional_resolved_path("ERP_EMAIL_IMAP_PASSWORD_FILE")
+    email_use_ssl = _bool_env("ERP_EMAIL_IMAP_USE_SSL", True)
+    email_starttls = _bool_env("ERP_EMAIL_IMAP_STARTTLS", False)
+    email_imap_host = os.getenv("ERP_EMAIL_IMAP_HOST", "").strip()
+    email_imap_username = os.getenv("ERP_EMAIL_IMAP_USERNAME", "").strip()
+    email_imap_folder = os.getenv("ERP_EMAIL_IMAP_FOLDER", "INBOX").strip() or "INBOX"
+    explicit_mailbox_key = os.getenv("ERP_EMAIL_INTAKE_MAILBOX_KEY", "").strip()
+    email_mailbox_key = explicit_mailbox_key or derive_email_intake_mailbox_key(
+        email_imap_host,
+        email_imap_username,
+        email_imap_folder,
+    )
+    email_imap_timeout_seconds = int(
+        os.getenv("ERP_EMAIL_IMAP_TIMEOUT_SECONDS", "30")
+    )
+    email_poll_timeout_seconds = int(
+        os.getenv("ERP_EMAIL_INTAKE_POLL_TIMEOUT_SECONDS", "300")
+    )
+    email_max_messages = int(os.getenv("ERP_EMAIL_INTAKE_MAX_MESSAGES", "50"))
+    email_max_raw_message_bytes = int(
+        os.getenv("ERP_EMAIL_INTAKE_MAX_RAW_MESSAGE_BYTES", str(50 * 1024 * 1024))
+    )
+    email_max_attachments = int(os.getenv("ERP_EMAIL_INTAKE_MAX_ATTACHMENTS", "20"))
+    email_max_attachment_bytes = int(
+        os.getenv("ERP_EMAIL_INTAKE_MAX_ATTACHMENT_BYTES", str(20 * 1024 * 1024))
+    )
+    email_max_total_attachment_bytes = int(
+        os.getenv(
+            "ERP_EMAIL_INTAKE_MAX_TOTAL_ATTACHMENT_BYTES", str(40 * 1024 * 1024)
+        )
+    )
+    email_xlsx_max_zip_members = int(
+        os.getenv("ERP_EMAIL_INTAKE_XLSX_MAX_ZIP_MEMBERS", "2000")
+    )
+    email_xlsx_max_uncompressed_bytes = int(
+        os.getenv(
+            "ERP_EMAIL_INTAKE_XLSX_MAX_UNCOMPRESSED_BYTES",
+            str(100 * 1024 * 1024),
+        )
+    )
+    email_xlsx_max_compression_ratio = int(
+        os.getenv("ERP_EMAIL_INTAKE_XLSX_MAX_COMPRESSION_RATIO", "100")
+    )
+    email_max_pdf_pages = int(os.getenv("ERP_EMAIL_INTAKE_MAX_PDF_PAGES", "100"))
+    if not email_mailbox_key or len(email_mailbox_key) > 100 or not all(
+        char.isalnum() or char in {"-", "_", "."} for char in email_mailbox_key
+    ):
+        raise ValueError("ERP_EMAIL_INTAKE_MAILBOX_KEY 只能包含字母、数字、点、横线和下划线")
+    if not 1 <= email_max_messages <= 500:
+        raise ValueError("ERP_EMAIL_INTAKE_MAX_MESSAGES 必须在 1 到 500 之间")
+    if not 1 <= email_imap_timeout_seconds <= 300:
+        raise ValueError("ERP_EMAIL_IMAP_TIMEOUT_SECONDS 必须在 1 到 300 之间")
+    if not 5 <= email_poll_timeout_seconds <= 900:
+        raise ValueError("ERP_EMAIL_INTAKE_POLL_TIMEOUT_SECONDS 必须在 5 到 900 之间")
+    if not 1 * 1024 * 1024 <= email_max_raw_message_bytes <= 100 * 1024 * 1024:
+        raise ValueError(
+            "ERP_EMAIL_INTAKE_MAX_RAW_MESSAGE_BYTES 必须在 1048576 到 104857600 之间"
+        )
+    if not 1 <= email_max_attachments <= 100:
+        raise ValueError("ERP_EMAIL_INTAKE_MAX_ATTACHMENTS 必须在 1 到 100 之间")
+    if not 1 <= email_max_attachment_bytes <= 100 * 1024 * 1024:
+        raise ValueError("ERP_EMAIL_INTAKE_MAX_ATTACHMENT_BYTES 必须在 1 到 104857600 之间")
+    if not 1 * 1024 * 1024 <= email_max_total_attachment_bytes <= 100 * 1024 * 1024:
+        raise ValueError(
+            "ERP_EMAIL_INTAKE_MAX_TOTAL_ATTACHMENT_BYTES 必须在 1048576 到 104857600 之间"
+        )
+    if not 1 <= email_xlsx_max_zip_members <= 10_000:
+        raise ValueError("ERP_EMAIL_INTAKE_XLSX_MAX_ZIP_MEMBERS 必须在 1 到 10000 之间")
+    if not 1 * 1024 * 1024 <= email_xlsx_max_uncompressed_bytes <= 250 * 1024 * 1024:
+        raise ValueError(
+            "ERP_EMAIL_INTAKE_XLSX_MAX_UNCOMPRESSED_BYTES 必须在 1048576 到 262144000 之间"
+        )
+    if not 1 <= email_xlsx_max_compression_ratio <= 1_000:
+        raise ValueError(
+            "ERP_EMAIL_INTAKE_XLSX_MAX_COMPRESSION_RATIO 必须在 1 到 1000 之间"
+        )
+    if not 1 <= email_max_pdf_pages <= 1_000:
+        raise ValueError("ERP_EMAIL_INTAKE_MAX_PDF_PAGES 必须在 1 到 1000 之间")
+    if email_enabled:
+        if not email_imap_host:
+            raise ValueError("启用邮箱自动收单时必须配置 ERP_EMAIL_IMAP_HOST")
+        if not email_imap_username:
+            raise ValueError("启用邮箱自动收单时必须配置 ERP_EMAIL_IMAP_USERNAME")
+        if email_password_file is None:
+            raise ValueError("启用邮箱自动收单时必须配置 ERP_EMAIL_IMAP_PASSWORD_FILE")
+        if not (email_use_ssl or email_starttls):
+            raise ValueError("邮箱自动收单必须启用 SSL 或 STARTTLS")
     return Settings(
         database_path=database_path,
         backup_dir=backup_dir,
@@ -297,6 +439,29 @@ def load_settings() -> Settings:
             "false",
         ).strip().lower()
         in {"1", "true", "yes", "on"},
+        email_intake_enabled=email_enabled,
+        email_intake_mailbox_key=email_mailbox_key,
+        email_imap_host=email_imap_host,
+        email_imap_port=int(os.getenv("ERP_EMAIL_IMAP_PORT", "993")),
+        email_imap_username=email_imap_username,
+        email_imap_password_file=email_password_file,
+        email_imap_folder=email_imap_folder,
+        email_imap_use_ssl=email_use_ssl,
+        email_imap_starttls=email_starttls,
+        email_imap_timeout_seconds=email_imap_timeout_seconds,
+        email_intake_poll_timeout_seconds=email_poll_timeout_seconds,
+        email_intake_max_messages=email_max_messages,
+        email_intake_max_raw_message_bytes=email_max_raw_message_bytes,
+        email_intake_max_attachments=email_max_attachments,
+        email_intake_max_attachment_bytes=email_max_attachment_bytes,
+        email_intake_max_total_attachment_bytes=email_max_total_attachment_bytes,
+        email_intake_xlsx_max_zip_members=email_xlsx_max_zip_members,
+        email_intake_xlsx_max_uncompressed_bytes=email_xlsx_max_uncompressed_bytes,
+        email_intake_xlsx_max_compression_ratio=email_xlsx_max_compression_ratio,
+        email_intake_max_pdf_pages=email_max_pdf_pages,
+        email_intake_storage_dir=_resolved_path(
+            "ERP_EMAIL_INTAKE_STORAGE_DIR", DEFAULT_EMAIL_INTAKE_STORAGE_DIR
+        ),
     )
 
 

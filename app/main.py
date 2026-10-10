@@ -24,6 +24,7 @@ from app.api.deliveries import (
     pick_router,
     router as deliveries_router,
 )
+from app.api.email_intake import router as email_intake_router
 from app.api.dashboard import router as dashboard_router
 from app.api.finance import router as finance_router
 from app.api.incoming import router as incoming_router
@@ -470,6 +471,12 @@ def create_app() -> FastAPI:
             pdf_training_router,
             prefix="/api/pdf-training",
             tags=["pdf-training"],
+        )
+    if not any(route.path == "/api/email-order-intake/status" for route in application.routes):
+        application.include_router(
+            email_intake_router,
+            prefix="/api/email-order-intake",
+            tags=["email-order-intake"],
         )
     if not any(route.path == "/api/warehouse/locations" for route in application.routes):
         application.include_router(

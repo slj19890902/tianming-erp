@@ -54,6 +54,8 @@ PERMISSION_CATALOG = frozenset(
         "cost.view",
         "pdf_training.view",
         "pdf_training.manage",
+        "email_intake.view",
+        "email_intake.manage",
         "system.backup",
         "users.manage",
     }
@@ -71,6 +73,7 @@ SALES_DEFAULT_PERMISSIONS = frozenset(
         "orders.create",
         "orders.edit",
         "dashboard.view",
+        "email_intake.view",
     }
 )
 ALL_PERMISSIONS = PERMISSION_CATALOG
@@ -80,6 +83,7 @@ ADMIN_ONLY_PERMISSIONS = frozenset(
         "users.manage",
         "pdf_training.manage",
         "warehouse.stocktake.review",
+        "email_intake.manage",
     }
 )
 BOSS_DEFAULT_PERMISSIONS = frozenset(

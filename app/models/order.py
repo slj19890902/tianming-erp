@@ -82,6 +82,14 @@ class Order(Base):
         nullable=False,
     )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Nullable for ordinary and uploaded-PDF orders.  The unique index makes
+    # one email draft map to at most one formal order at the database layer.
+    email_intake_draft_id: Mapped[int | None] = mapped_column(
+        ForeignKey("email_order_intake_drafts.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     created_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,

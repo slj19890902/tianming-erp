@@ -487,6 +487,16 @@
       .modal-head { border-radius: 16px 16px 0 0; }
       .modal-foot { justify-content: flex-end; border-top: 1px solid var(--line); border-bottom: 0; gap: 8px; border-radius: 0 0 16px 16px; }
       .modal-body { padding: 18px; }
+      .email-intake-summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; margin-bottom:12px; }
+      .email-intake-summary > div { padding:12px; border:1px solid var(--line); border-radius:10px; background:#f8fafc; }
+      .email-intake-summary strong { display:block; margin-top:4px; overflow-wrap:anywhere; }
+      .email-intake-table-wrap { overflow-x:auto; margin-top:10px; }
+      .email-intake-table { min-width:980px; }
+      .email-intake-message { max-width:260px; white-space:normal; line-height:1.45; }
+      @media (max-width: 760px) {
+        .desktop-only { display:none !important; }
+        .email-intake-summary { grid-template-columns:1fr; }
+      }
       /* v0.19.2-B：调价/价格历史/比价/楞型规则弹窗统一居中遮罩，不再渲染到页面底部 */
       .modal-backdrop {
         position: fixed; inset: 0; z-index: 60; display: flex;
@@ -1490,6 +1500,7 @@
                     <div class="toolbar-group">
                       <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
                       <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
+                      <button v-if="canViewEmailIntake" class="btn desktop-only" @click="openEmailOrderIntake">邮箱订单草稿</button>
                       <button class="btn" @click="loadOrders()">刷新</button>
                     </div>
                   </div>
@@ -2711,14 +2722,145 @@
               <div class="field"><label>来源</label><input class="input" v-model="materialCandidateForm.source" readonly /></div>
               <div class="field wide"><label>备注</label><textarea class="textarea" v-model.trim="materialCandidateForm.notes" rows="3" placeholder="可选：维护说明或适用范围"></textarea></div>
             </div>
+            <div v-else-if="modal.type === 'emailOrderIntake'">
+              <div class="notice" style="margin-bottom:12px;white-space:normal">
+                <strong>邮件只进入草稿，人工确认后才会保存正式订单。</strong>
+                邮箱服务器、账号和密码由系统管理员在服务器配置，本页面不会显示或修改敏感配置。
+              </div>
+
+              <div class="email-intake-summary">
+                <div>
+                  <span class="muted">邮箱配置</span>
+                  <strong :class="['status', emailIntake.status.configured ? 'green' : 'red']">{{ emailIntake.status.configured ? '已配置' : '未配置' }}</strong>
+                </div>
+                <div>
+                  <span class="muted">邮箱标识</span>
+                  <strong>{{ emailIntake.status.masked_email || '需由系统管理员在服务器配置' }}</strong>
+                </div>
+                <div>
+                  <span class="muted">最近轮询时间</span>
+                  <strong>{{ emailIntakeLastPollTimeText() }}</strong>
+                </div>
+                <div>
+                  <span class="muted">最近轮询结果</span>
+                  <strong :class="['status', emailIntakePollStatusClass()]">{{ emailIntakePollStatusText() }}</strong>
+                </div>
+                <div>
+                  <span class="muted">轮询摘要</span>
+                  <strong>{{ emailIntakePollSummary() }}</strong>
+                </div>
+              </div>
+
+              <div class="toolbar-group" style="justify-content:flex-start;margin-bottom:12px">
+                <button v-if="canManageEmailIntake" class="btn primary" :disabled="emailIntake.polling" @click="pollEmailIntakeOnce">{{ emailIntake.polling ? '正在收取…' : '立即收取' }}</button>
+                <button class="btn" :disabled="emailIntake.loading" @click="loadEmailOrderIntake">刷新列表</button>
+                <span v-if="emailIntake.error" class="danger-text">{{ emailIntake.error }}</span>
+              </div>
+
+              <section v-if="canManageEmailIntake" class="section-card" style="margin-bottom:14px">
+                <div class="section-head">
+                  <strong>发件人 → 客户映射</strong>
+                  <span class="muted">仅支持完整发件人邮箱，不支持域名模糊映射。</span>
+                </div>
+                <div class="section-body">
+                  <div class="form-grid" style="margin-bottom:10px">
+                    <div class="field"><label>完整发件人邮箱 *</label><input class="input" type="email" autocomplete="off" v-model.trim="emailSenderMappingForm.sender_email" placeholder="例如 orders@example.com" /></div>
+                    <div class="field"><label>客户 *</label><search-select v-model="emailSenderMappingForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="搜索并选择客户"></search-select></div>
+                    <div class="field"><label>状态</label><select class="select" v-model="emailSenderMappingForm.is_active"><option :value="true">启用</option><option :value="false">停用</option></select></div>
+                    <div class="field wide"><label>备注</label><input class="input" v-model.trim="emailSenderMappingForm.notes" placeholder="可选：订单邮箱或维护说明" /></div>
+                    <div class="field wide"><div class="toolbar-group" style="justify-content:flex-start"><button class="btn primary" :disabled="emailIntake.savingMapping" @click="saveEmailSenderMapping">{{ emailSenderMappingForm.id ? '保存修改' : '新增映射' }}</button><button v-if="emailSenderMappingForm.id" class="btn" @click="resetEmailSenderMappingForm">取消编辑</button></div></div>
+                  </div>
+                  <div class="email-intake-table-wrap">
+                    <table class="data-table email-intake-table">
+                      <thead><tr><th>完整发件人邮箱</th><th>客户</th><th>状态</th><th>备注</th><th>操作</th></tr></thead>
+                      <tbody>
+                        <tr v-for="row in emailIntake.mappings" :key="row.id || row.sender_email">
+                          <td>{{ row.sender_email || row.sender || '-' }}</td>
+                          <td>{{ emailMappingCustomerName(row) }}</td>
+                          <td><span :class="['status', emailMappingIsActive(row) ? 'green' : 'gray']">{{ emailMappingIsActive(row) ? '启用' : '停用' }}</span></td>
+                          <td>{{ row.notes || row.remark || '-' }}</td>
+                          <td><button class="btn small" @click="editEmailSenderMapping(row)">编辑</button><button class="btn small" @click="toggleEmailSenderMapping(row)">{{ emailMappingIsActive(row) ? '停用' : '启用' }}</button></td>
+                        </tr>
+                        <tr v-if="!emailIntake.mappings.length"><td colspan="5" class="muted" style="text-align:center">暂无发件人映射</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </section>
+
+              <section class="section-card">
+                <div class="section-head">
+                  <div class="toolbar-group" style="justify-content:flex-start">
+                    <button :class="['btn','small',emailIntake.tab==='drafts' ? 'primary' : '']" @click="emailIntake.tab='drafts'">识别草稿</button>
+                    <button :class="['btn','small',emailIntake.tab==='messages' ? 'primary' : '']" @click="emailIntake.tab='messages'">收件记录</button>
+                  </div>
+                  <span class="muted">所有邮件都有记录；发件地址仅用于推荐客户，系统不能替你验证发件人身份，保存前请人工核对客户和附件。</span>
+                </div>
+                <div class="section-body">
+                  <div v-if="emailIntake.tab==='drafts'" class="email-intake-table-wrap">
+                    <table class="data-table email-intake-table">
+                      <thead><tr><th>邮件时间</th><th>发件人</th><th>主题</th><th>附件名</th><th>客户</th><th>状态</th><th>错误 / 提示</th><th>操作</th></tr></thead>
+                      <tbody>
+                        <tr v-for="draft in emailIntake.drafts" :key="emailDraftId(draft)">
+                          <td>{{ formatDateTime(emailDraftReceivedAt(draft)) }}</td>
+                          <td>{{ emailDraftSender(draft) }}</td>
+                          <td>{{ draft.subject || draft.email_subject || draft.message?.subject || '-' }}</td>
+                          <td>{{ emailDraftAttachmentName(draft) }}</td>
+                          <td>{{ emailDraftCustomerName(draft) }}</td>
+                          <td><span :class="['status', emailIntakeStatusClass(draft)]">{{ emailIntakeStatusLabel(draft) }}</span></td>
+                          <td class="email-intake-message">{{ emailDraftMessage(draft) }}</td>
+                          <td>
+                            <button v-if="!emailDraftIsExcel(draft)" class="btn small primary" :disabled="!canCreateOrders || emailDraftIsConverted(draft) || emailIntake.openingDraftId===emailDraftId(draft)" :title="emailDraftIsConverted(draft) ? '该草稿已经生成正式订单' : (canCreateOrders ? '进入现有PDF识别草稿' : '需要订单新增权限')" @click="openEmailIntakePreview(draft)">{{ emailDraftIsConverted(draft) ? '已生成订单' : '打开识别草稿' }}</button>
+                            <button v-else class="btn small" disabled title="等待新振Excel模块优化完成">等待新振Excel模块优化完成</button>
+                            <button v-if="canManageEmailIntake && emailDraftCanRetry(draft)" class="btn small" :disabled="emailIntake.retryingDraftId===emailDraftId(draft)" @click="retryEmailIntakeDraft(draft)">重试</button>
+                          </td>
+                        </tr>
+                        <tr v-if="!emailIntake.drafts.length"><td colspan="8" class="muted" style="text-align:center">暂无邮箱订单草稿</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div v-else class="email-intake-table-wrap">
+                    <table class="data-table email-intake-table">
+                      <thead><tr><th>收件时间</th><th>发件人</th><th>主题</th><th>客户</th><th>邮件状态</th><th>尝试次数</th><th>错误 / 提示</th><th>操作</th></tr></thead>
+                      <tbody>
+                        <template v-for="message in emailIntake.messages" :key="message.id">
+                          <tr>
+                            <td>{{ formatDateTime(message.received_at || message.created_at) }}</td>
+                            <td>{{ message.sender_email || '-' }}</td>
+                            <td>{{ message.subject || '-' }}</td>
+                            <td>{{ emailMessageCustomerName(message) }}</td>
+                            <td><span :class="['status',emailMessageStatusClass(message)]">{{ emailMessageStatusLabel(message) }}</span></td>
+                            <td>{{ message.attempt_count || 0 }}</td>
+                            <td class="email-intake-message">{{ message.last_error || '-' }}</td>
+                            <td><button class="btn small" :disabled="emailIntake.loadingMessageId===message.id" @click="toggleEmailMessageDetail(message)">{{ emailIntake.expandedMessageId===message.id ? '收起' : '查看附件' }}</button></td>
+                          </tr>
+                          <tr v-if="emailIntake.expandedMessageId===message.id">
+                            <td colspan="8" style="padding:8px 14px;background:#f8fafc">
+                              <div v-if="emailIntake.loadingMessageId===message.id" class="muted">正在读取附件明细…</div>
+                              <div v-else-if="!(emailIntake.messageDetails[message.id]?.attachments || []).length" class="muted">该邮件没有可登记附件。</div>
+                              <table v-else class="data-table" style="margin:0">
+                                <thead><tr><th>附件名</th><th>类型</th><th>大小</th><th>状态</th><th>是否重复</th><th>错误原因</th></tr></thead>
+                                <tbody><tr v-for="attachment in emailIntake.messageDetails[message.id].attachments" :key="attachment.id"><td>{{ attachment.filename || '-' }}</td><td>{{ attachment.file_type || '-' }}</td><td>{{ fileSize(attachment.byte_size || 0) }}</td><td>{{ emailAttachmentStatusLabel(attachment) }}</td><td>{{ attachment.is_duplicate_content ? '是' : '否' }}</td><td>{{ attachment.error_message || '-' }}</td></tr></tbody>
+                              </table>
+                            </td>
+                          </tr>
+                        </template>
+                        <tr v-if="!emailIntake.messages.length"><td colspan="8" class="muted" style="text-align:center">暂无邮箱收件记录</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </section>
+            </div>
             <div v-else-if="modal.type === 'orderPdfImport'">
-              <div class="form-grid" style="margin-bottom:12px">
+              <div v-if="orderImportSource === 'email'" class="notice" style="margin-bottom:12px;white-space:normal">当前草稿来自邮箱收件箱。请人工核对客户、产品、数量和单价；确认后才可保存正式订单。</div>
+              <div v-if="orderImportSource !== 'email'" class="form-grid" style="margin-bottom:12px">
                 <div class="field wide">
                   <label>上传客户采购订单 PDF（可多选）</label>
                   <input class="input" type="file" multiple accept="application/pdf,.pdf" @change="onOrderPdfFileChange" />
                 </div>
               </div>
-              <div class="toolbar-group" style="margin-bottom:12px">
+              <div v-if="orderImportSource !== 'email'" class="toolbar-group" style="margin-bottom:12px">
                 <button class="btn primary" :disabled="!orderImportBatch.files.length || loading" @click="previewOrderPdfImport">识别预览草稿</button>
                 <span class="muted" v-if="orderImportBatch.files.length">已选择 {{ orderImportBatch.files.length }} 个文件</span>
               </div>
@@ -4505,6 +4647,14 @@
             orderNumberPreview: "",
             orderImportBatch: { files: [], status: "idle" },
             orderImportDrafts: [],
+            orderImportSource: "upload",
+            orderImportEmailDraftId: null,
+            emailIntake: {
+              status: { configured:false, masked_email:"", last_poll_at:"", last_poll_status:"", last_poll_message:"" },
+              tab:"drafts", drafts: [], messages: [], messageDetails:{}, mappings: [], loading:false, polling:false, savingMapping:false,
+              openingDraftId:null, retryingDraftId:null, expandedMessageId:null, loadingMessageId:null, error:"",
+            },
+            emailSenderMappingForm: { id:null, sender_email:"", customer_id:null, is_active:true, notes:"" },
             incomingSelected: {},
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
@@ -4672,6 +4822,8 @@
           isWorkshop() { return this.user?.role === "workshop"; },
           canAdmin() { return this.user?.role === "admin"; },
           canSubmitPdfCorrection() { return this.hasPermission("pdf_training.manage"); },
+          canViewEmailIntake() { return this.hasPermission("email_intake.view"); },
+          canManageEmailIntake() { return this.hasPermission("email_intake.manage"); },
           canManagePermissions() { return this.user?.role === "admin"; },
           canViewCosts() { return this.hasPermission("cost.view"); },
           canCreateCustomers() { return this.hasPermission("customers.create"); },
@@ -7686,6 +7838,7 @@
               ["customers", "客户查看", "customers.view"], ["customers", "客户新增", "customers.create"], ["customers", "客户编辑", "customers.edit"], ["customers", "客户停用", "customers.deactivate"], ["customers", "客户删除", "customers.delete"],
               ["products", "产品查看", "products.view"], ["products", "产品新增", "products.create"], ["products", "产品编辑", "products.edit"], ["products", "产品停用", "products.deactivate"], ["products", "产品删除", "products.delete"],
               ["quotations", "报价查看", "quotations.view"], ["quotations", "报价编辑", "quotations.edit"], ["orders", "订单查看", "orders.view"], ["orders", "订单新增", "orders.create"], ["orders", "订单编辑", "orders.edit"], ["orders", "订单状态操作", "orders.status"], ["orders", "订单删除", "orders.delete"], ["orders", "订单回滚", "orders.rollback"],
+              ["email_intake", "邮箱订单草稿查看", "email_intake.view"], ["email_intake", "邮箱收取与映射维护", "email_intake.manage"],
               ["requisition", "报料查看", "requisition.view"], ["requisition", "报料执行", "requisition.execute"], ["sensitive", "成本/毛利查看", "cost.view"], ["system", "系统备份", "system.backup"], ["system", "用户权限管理", "users.manage"],
               ["dashboard", "首页仪表盘查看", "dashboard.view"], ["incoming", "来料入库查看", "incoming.view"], ["incoming", "来料入库操作", "incoming.execute"],
               ["warehouse", "仓库库存查看", "warehouse.view"], ["warehouse", "仓库库存操作", "warehouse.execute"], ["warehouse", "订单库存预占", "warehouse.reserve"], ["warehouse", "库存盘点查看", "warehouse.stocktake.view"], ["warehouse", "库存盘点提交", "warehouse.stocktake.submit"], ["warehouse", "库存盘点审核", "warehouse.stocktake.review"],
@@ -7698,7 +7851,7 @@
             const role = roleOverride || this.permissionProfile?.role || this.permissionUsers.find(row => row.id === this.selectedPermissionUserId)?.role;
             if (role === "admin") return true;
             const defaults = {
-              boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage","warehouse.stocktake.review"].includes(code)),
+              boss: this.permissionCatalogSeed().map(row => row.code).filter(code => !["system.backup","users.manage","warehouse.stocktake.review","email_intake.manage"].includes(code)),
               sales: ["customers.view","customers.edit","products.view","products.edit","quotations.view","quotations.edit","orders.view","orders.create","orders.edit","dashboard.view"],
               finance: ["customers.view","quotations.view","orders.view","dashboard.view","deliveries.view","finance.view","finance.execute","cost.view"],
               workshop: ["customers.view","products.view","orders.view","dashboard.view","incoming.view","incoming.execute","warehouse.view","warehouse.execute","warehouse.stocktake.view","warehouse.stocktake.submit","deliveries.view"],
@@ -9666,6 +9819,296 @@
             try { const result=await this.sendVersionedMasterMutation({method:"delete",url:`/api/master/materials/${row.id}`,row,reasonLabel:`停用材质“${row.code}”`,defaultReason:"停用材质"}); if(!result)return; await this.loadMaterials(); this.showToast("材质已停用"); }
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
+          emailIntakeStatusValue(draft) {
+            return String(draft?.status || draft?.draft_status || draft?.processing_status || "").trim().toLowerCase();
+          },
+          emailIntakeStatusLabel(draft) {
+            const value = this.emailIntakeStatusValue(draft);
+            const labels = {
+              pending_customer_match:"待客户匹配", needs_customer:"待客户匹配", needs_customer_match:"待客户匹配", needs_mapping:"待客户匹配",
+              pending_manual_review:"待人工确认", needs_confirmation:"待人工确认", needs_manual_review:"待人工确认",
+              ready_for_preview:"可打开识别草稿", preview_ready:"可打开识别草稿", ready:"可打开识别草稿", review_ready:"可打开识别草稿",
+              excel_pending_n042:"Excel待N042模块", excel_waiting:"Excel待N042模块", unsupported_excel:"Excel待N042模块", waiting_excel_parser:"Excel待N042模块",
+              duplicate:"重复附件", duplicate_attachment:"重复附件", duplicate_skipped:"重复附件",
+              converted:"已生成正式订单",
+              failed:"解析失败", parse_failed:"解析失败", parsing_failed:"解析失败",
+              ignored:"已忽略",
+            };
+            if (this.emailDraftIsExcel(draft) && !labels[value]) return "Excel待N042模块";
+            return labels[value] || draft?.status_label || draft?.status_text || "待人工确认";
+          },
+          emailIntakeStatusClass(draft) {
+            const label = this.emailIntakeStatusLabel(draft);
+            if (["可打开识别草稿","已生成正式订单"].includes(label)) return "green";
+            if (["解析失败"].includes(label)) return "red";
+            if (["重复附件","已忽略"].includes(label)) return "gray";
+            return "orange";
+          },
+          emailDraftId(draft) { return draft?.id ?? draft?.draft_id ?? draft?.message_attachment_id ?? draft?.attachment_id; },
+          emailDraftReceivedAt(draft) { return draft?.received_at || draft?.email_received_at || draft?.message_received_at || draft?.message?.received_at || draft?.created_at || ""; },
+          emailDraftSender(draft) { return draft?.sender_email || draft?.sender || draft?.from_email || draft?.from_address || draft?.message?.sender_email || "-"; },
+          emailDraftAttachmentName(draft) {
+            return draft?.attachment_name || draft?.filename || draft?.original_filename || draft?.source_name || draft?.attachment?.filename || draft?.attachments?.[0]?.filename || "-";
+          },
+          emailDraftIsExcel(draft) {
+            const name = this.emailDraftAttachmentName(draft).toLowerCase();
+            const kind = String(draft?.attachment_type || draft?.parser_type || draft?.file_type || draft?.mime_type || "").toLowerCase();
+            return /\.(xls|xlsx)$/.test(name) || kind.includes("excel") || kind.includes("spreadsheet");
+          },
+          emailDraftCustomerName(draft) {
+            if (draft?.customer_name || draft?.matched_customer_name) return draft.customer_name || draft.matched_customer_name;
+            const customerId = draft?.customer_id ?? draft?.matched_customer_id;
+            return customerId ? this.customerName(customerId) : "待匹配";
+          },
+          emailDraftIsDuplicate(draft) {
+            return Boolean(
+              draft?.is_duplicate_content
+              || draft?.duplicate_of_attachment_id
+              || ["duplicate","duplicate_attachment","duplicate_skipped"].includes(this.emailIntakeStatusValue(draft))
+            );
+          },
+          emailDraftIsConverted(draft) {
+            return this.emailIntakeStatusValue(draft) === "converted" || Number(draft?.converted_order_id || 0) > 0;
+          },
+          emailDraftMessage(draft) {
+            if (this.emailDraftIsExcel(draft)) return "等待新振Excel模块优化完成";
+            const messages = [];
+            if (this.emailDraftIsConverted(draft)) messages.push(`已生成正式订单${draft.converted_order_id ? ` #${draft.converted_order_id}` : ''}，不可重复保存。`);
+            if (this.emailDraftIsDuplicate(draft)) messages.push("重复附件：系统已保留草稿，不影响打开核对。");
+            const detail = draft?.error_message || draft?.last_error || draft?.error || draft?.message || draft?.warning || draft?.hint;
+            if (detail) messages.push(String(detail));
+            if (!messages.length && ["pending_customer_match","needs_customer","needs_customer_match","needs_mapping"].includes(this.emailIntakeStatusValue(draft))) {
+              messages.push("尚未匹配客户，请先补充发件人映射，再点击重试。");
+            }
+            return messages.join(" ") || "-";
+          },
+          emailDraftCanRetry(draft) {
+            return ["failed","parse_failed","parsing_failed","pending_customer_match","needs_customer","needs_customer_match","needs_mapping"].includes(this.emailIntakeStatusValue(draft));
+          },
+          emailMappingIsActive(row) { return row?.is_active ?? row?.enabled ?? true; },
+          emailMappingCustomerName(row) {
+            if (row?.customer_name || row?.matched_customer_name) return row.customer_name || row.matched_customer_name;
+            const customerId = row?.customer_id ?? row?.matched_customer_id;
+            return customerId ? this.customerName(customerId) : "-";
+          },
+          emailMessageCustomerName(message) {
+            const customerId = message?.mapped_customer_id ?? message?.customer_id;
+            return customerId ? this.customerName(customerId) : "待匹配";
+          },
+          emailMessageStatusLabel(message) {
+            const value = String(message?.status || "").trim().toLowerCase();
+            return {
+              received:"已收取", review_ready:"可人工核对", needs_mapping:"待匹配客户",
+              needs_confirmation:"待人工确认", waiting_excel_parser:"Excel待处理",
+              failed:"收件失败", ignored:"已忽略",
+            }[value] || value || "未知";
+          },
+          emailMessageStatusClass(message) {
+            const value = String(message?.status || "").trim().toLowerCase();
+            if (["review_ready"].includes(value)) return "green";
+            if (["failed"].includes(value)) return "red";
+            if (["ignored"].includes(value)) return "gray";
+            return "orange";
+          },
+          emailAttachmentStatusLabel(attachment) {
+            const value = String(attachment?.status || "").trim().toLowerCase();
+            return {stored:"已保存",parsed:"已解析",waiting_excel_parser:"Excel待处理",unsupported:"不支持",failed:"失败"}[value] || value || "未知";
+          },
+          async toggleEmailMessageDetail(message) {
+            const id = Number(message?.id || 0);
+            if (!id) return;
+            if (this.emailIntake.expandedMessageId === id) {
+              this.emailIntake.expandedMessageId = null;
+              return;
+            }
+            this.emailIntake.expandedMessageId = id;
+            if (this.emailIntake.messageDetails[id]) return;
+            this.emailIntake.loadingMessageId = id;
+            try {
+              const { data } = await axios.get(`/api/email-order-intake/messages/${encodeURIComponent(id)}`);
+              this.emailIntake.messageDetails[id] = data?.data || data || {};
+            } catch (error) {
+              this.showToast(`收件附件加载失败：${this.errorMessage(error)}`, true);
+            } finally {
+              this.emailIntake.loadingMessageId = null;
+            }
+          },
+          emailIntakeLastPollTimeText() {
+            const state = this.emailIntake.status || {};
+            const time = state.last_poll_at || state.last_collected_at || state.last_checked_at;
+            return time ? this.formatDateTime(time) : "尚未轮询";
+          },
+          emailIntakePollStatusText() {
+            const value = String(this.emailIntake.status?.last_poll_status || "never").trim().toLowerCase();
+            return { never:"尚未轮询", running:"正在轮询", success:"成功", failed:"失败" }[value] || value || "尚未轮询";
+          },
+          emailIntakePollStatusClass() {
+            const value = String(this.emailIntake.status?.last_poll_status || "never").trim().toLowerCase();
+            if (value === "success") return "green";
+            if (value === "failed") return "red";
+            return value === "running" ? "orange" : "gray";
+          },
+          emailIntakePollSummary() {
+            const state = this.emailIntake.status || {};
+            const message = state.last_poll_message || state.last_result_message || state.last_message;
+            if (message) return message;
+            const counts = state.last_poll_counts || {};
+            if ([counts.examined, counts.created, counts.duplicates, counts.failed].some(value => Number(value || 0) > 0)) {
+              return `检查 ${Number(counts.examined || 0)} 封，新建 ${Number(counts.created || 0)}，重复 ${Number(counts.duplicates || 0)}，失败 ${Number(counts.failed || 0)}`;
+            }
+            return "暂无轮询摘要";
+          },
+          resetEmailSenderMappingForm() {
+            this.emailSenderMappingForm = { id:null, sender_email:"", customer_id:null, is_active:true, notes:"" };
+          },
+          editEmailSenderMapping(row) {
+            if (!this.canManageEmailIntake) return;
+            this.emailSenderMappingForm = {
+              id:row?.id ?? null,
+              sender_email:String(row?.sender_email || row?.sender || "").trim(),
+              customer_id:row?.customer_id ?? row?.matched_customer_id ?? null,
+              is_active:this.emailMappingIsActive(row),
+              notes:String(row?.notes || row?.remark || "").trim(),
+            };
+          },
+          async openEmailOrderIntake() {
+            if (!this.canViewEmailIntake) return this.showToast("当前账号没有邮箱订单草稿查看权限", true);
+            this.modal = { type:"emailOrderIntake", title:"邮箱订单草稿" };
+            this.resetEmailSenderMappingForm();
+            if (this.canManageEmailIntake && !this.customerOptions.length) {
+              try { await this.loadCustomerOptions(); } catch (_) { /* loadEmailOrderIntake 会展示其余接口状态 */ }
+            }
+            await this.loadEmailOrderIntake();
+          },
+          async loadEmailOrderIntake() {
+            if (!this.canViewEmailIntake || this.emailIntake.loading) return;
+            this.emailIntake.loading = true;
+            this.emailIntake.error = "";
+            const requests = [
+              ["status", axios.get("/api/email-order-intake/status")],
+              ["drafts", axios.get("/api/email-order-intake/drafts")],
+              ["messages", axios.get("/api/email-order-intake/messages")],
+            ];
+            if (this.canManageEmailIntake) requests.push(["mappings", axios.get("/api/email-order-intake/sender-mappings")]);
+            const results = await Promise.allSettled(requests.map(row => row[1]));
+            const errors = [];
+            results.forEach((result, index) => {
+              const key = requests[index][0];
+               if (result.status === "rejected") { errors.push(`${key === 'status' ? '配置状态' : key === 'drafts' ? '草稿列表' : key === 'messages' ? '收件记录' : '发件人映射'}加载失败：${this.errorMessage(result.reason)}`); return; }
+              const data = result.value?.data?.data || result.value?.data || {};
+              if (key === "status") {
+                const status = data?.status && typeof data.status === "object" ? data.status : data;
+                this.emailIntake.status = {
+                  configured:Boolean(status.configured ?? status.is_configured ?? status.mailbox_configured ?? status.imap_configured),
+                  masked_email:status.masked_email || status.mailbox_hint || status.email_hint || "",
+                  last_poll_at:status.last_poll_at || status.last_collected_at || status.last_checked_at || "",
+                  last_poll_status:status.last_poll_status || status.poll_status || "",
+                  last_poll_message:status.last_poll_message || status.last_result_message || status.last_message || "",
+                  last_poll_counts:status.last_poll_counts && typeof status.last_poll_counts === "object" ? status.last_poll_counts : {},
+                };
+              } else if (key === "drafts") {
+                this.emailIntake.drafts = Array.isArray(data) ? data : (data.items || data.drafts || data.results || []);
+              } else if (key === "messages") {
+                this.emailIntake.messages = Array.isArray(data) ? data : (data.items || data.messages || data.results || []);
+              } else {
+                this.emailIntake.mappings = Array.isArray(data) ? data : (data.items || data.mappings || data.results || []);
+              }
+            });
+            this.emailIntake.error = errors.join("；");
+            this.emailIntake.loading = false;
+          },
+          async pollEmailIntakeOnce() {
+            if (!this.canManageEmailIntake || this.emailIntake.polling) return;
+            this.emailIntake.polling = true;
+            try {
+              const { data } = await axios.post("/api/email-order-intake/poll-once");
+              const result = data?.data || data || {};
+              const received = result.received_count ?? result.collected_count ?? result.new_count;
+              this.showToast(result.message || (received === undefined ? "邮箱收取完成" : `邮箱收取完成，新增 ${received} 份草稿`));
+              await this.loadEmailOrderIntake();
+            } catch (error) { this.showToast(`邮箱收取失败：${this.errorMessage(error)}`, true); }
+            finally { this.emailIntake.polling = false; }
+          },
+          async saveEmailSenderMapping() {
+            if (!this.canManageEmailIntake || this.emailIntake.savingMapping) return;
+            const form = this.emailSenderMappingForm;
+            const sender = String(form.sender_email || "").trim().toLowerCase();
+            if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(sender)) return this.showToast("请输入完整、有效的发件人邮箱", true);
+            if (!form.customer_id) return this.showToast("请选择发件人对应的客户", true);
+            const payload = { sender_email:sender, customer_id:Number(form.customer_id), is_active:form.is_active !== false, notes:String(form.notes || "").trim() };
+            this.emailIntake.savingMapping = true;
+            try {
+              if (form.id) await axios.put(`/api/email-order-intake/sender-mappings/${encodeURIComponent(form.id)}`, payload);
+              else await axios.post("/api/email-order-intake/sender-mappings", payload);
+              this.showToast(form.id ? "发件人映射已修改" : "发件人映射已新增");
+              this.resetEmailSenderMappingForm();
+              await this.loadEmailOrderIntake();
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.emailIntake.savingMapping = false; }
+          },
+          async toggleEmailSenderMapping(row) {
+            if (!this.canManageEmailIntake || !row?.id) return;
+            const payload = {
+              sender_email:String(row.sender_email || row.sender || "").trim().toLowerCase(),
+              customer_id:Number(row.customer_id ?? row.matched_customer_id),
+              is_active:!this.emailMappingIsActive(row),
+              notes:String(row.notes || row.remark || "").trim(),
+            };
+            try {
+              await axios.put(`/api/email-order-intake/sender-mappings/${encodeURIComponent(row.id)}`, payload);
+              this.showToast(payload.is_active ? "发件人映射已启用" : "发件人映射已停用");
+              await this.loadEmailOrderIntake();
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+          },
+          async retryEmailIntakeDraft(draft) {
+            if (!this.canManageEmailIntake) return;
+            const id = this.emailDraftId(draft);
+            if (id === null || id === undefined) return this.showToast("当前草稿缺少编号，无法重试", true);
+            this.emailIntake.retryingDraftId = id;
+            try {
+              await axios.post(`/api/email-order-intake/drafts/${encodeURIComponent(id)}/retry`);
+              this.showToast("草稿已重新进入解析队列");
+              await this.loadEmailOrderIntake();
+            } catch (error) { this.showToast(this.errorMessage(error), true); }
+            finally { this.emailIntake.retryingDraftId = null; }
+          },
+          normalizeEmailPreviewDraft(data, sourceDraft) {
+            let draft = data?.draft || data?.preview_draft || data?.preview || data?.data?.draft || data?.data || data;
+            if (Array.isArray(draft?.drafts)) draft = draft.drafts[0];
+            if (Array.isArray(draft)) draft = draft[0];
+            if (!draft || typeof draft !== "object") throw new Error("后端没有返回可编辑的识别草稿");
+            return {
+              ...draft,
+              source_name:draft.source_name || this.emailDraftAttachmentName(sourceDraft),
+              matched_customer_id:draft.matched_customer_id ?? draft.customer_id ?? draft.matched_customer?.id ?? null,
+              confirmed:false,
+              _correction_open:false,
+              _correction_submitting:false,
+              _correction_error:"",
+              _correction_success:null,
+              _correction_form:null,
+              items:(draft.items || draft.order_items || []).map(item => ({...item, client_line_id:createIdempotencyKey(), _inventory:this.newOrderInventoryState()})),
+            };
+          },
+          async openEmailIntakePreview(sourceDraft) {
+            if (!this.canCreateOrders) return this.showToast("打开订单草稿需要订单新增权限", true);
+            if (this.emailDraftIsExcel(sourceDraft)) return;
+            const id = this.emailDraftId(sourceDraft);
+            if (id === null || id === undefined) return this.showToast("当前草稿缺少编号，无法打开", true);
+            this.emailIntake.openingDraftId = id;
+            try {
+              const { data } = await axios.post(`/api/email-order-intake/drafts/${encodeURIComponent(id)}/open-preview`);
+              const draft = this.normalizeEmailPreviewDraft(data, sourceDraft);
+              this.orderImportSource = "email";
+              this.orderImportEmailDraftId = id;
+              this.orderImportBatch = { files:[], status:"recognized" };
+              this.orderImportDrafts = [draft];
+              this.modal = { type:"orderPdfImport", title:"邮箱订单识别草稿" };
+              const jobs = draft.items.filter(item => item.matched_product_id).map(item => this.loadOrderLineInventory(item,draft.matched_customer_id));
+              await Promise.allSettled(jobs);
+            } catch (error) { this.showToast(`打开识别草稿失败：${this.errorMessage(error)}`, true); }
+            finally { this.emailIntake.openingDraftId = null; }
+          },
           openOrder() {
             this.orderForm = { customer_id:null, customer_po:"", order_date:today(), delivery_date:plusDays(7), remark:"", items:[] };
             this.orderNumberPreview = "";
@@ -9677,6 +10120,8 @@
           openOrderPdfImport() {
             this.orderImportBatch = { files:[], status:"idle" };
             this.orderImportDrafts = [];
+            this.orderImportSource = "upload";
+            this.orderImportEmailDraftId = null;
             this.modal = { type:"orderPdfImport", title:"识别采购订单 PDF" };
           },
           pdfCorrectionItemFromDraft(item, index) {
@@ -10047,6 +10492,7 @@
               order_date: draft.order_date || today(),
               delivery_date: draft.delivery_date || plusDays(7),
               remark: `PDF识别草稿：${draft.source_name || "客户采购订单"}`,
+              email_intake_draft_id: this.orderImportSource === "email" ? (draft.email_intake_draft_id || this.orderImportEmailDraftId) : null,
               import_draft: true,
               import_integrity_status: draft.integrity_check?.integrity_status || null,
               import_integrity_errors: draft.integrity_check?.integrity_errors || [],
@@ -10119,6 +10565,7 @@
                     customer_id:draft.matched_customer_id, customer_po:draft.customer_po,
                     order_date:draft.order_date || today(), delivery_date:draft.delivery_date || null,
                     remark:`PDF识别草稿：${draft.source_name}`,
+                    email_intake_draft_id:this.orderImportSource === "email" ? (draft.email_intake_draft_id || this.orderImportEmailDraftId) : null,
                     import_draft:true,
                     import_integrity_status:draft.integrity_check?.integrity_status || null,
                     import_integrity_errors:draft.integrity_check?.integrity_errors || [],

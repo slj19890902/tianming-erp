@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.606"
-APP_VERSION_NAME = "子件组套保存结果恢复"
+APP_VERSION = "v0.22.607"
+APP_VERSION_NAME = "产品查询与手机图纸可靠性"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5844,3 +5844,17 @@ APP_VERIFICATION_STEPS = [
     "无需为验收额外组套或调整真实库存；浏览器显示和现场操作交管理员核对。",
 ]
 APP_CHANGELOG = [*(f"v0.22.606：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "手机产品搜索与资料卡的图纸默认收起，展开后才加载图片或PDF首页；收起、切换及退出时释放原预览。",
+    "切换产品后旧查询不会改动当前页签；查询返回或图纸重试时保留正在输入的搜索条件。",
+    "产品查询超时、空白或异常返回显示明确的重试入口，不再一直加载或误报没有匹配产品。",
+    "已加工子件的位置明细及实际批次反查统一按片显示；异常查询编号和页号在入口明确拒绝。",
+    "本版无数据库迁移，不调整库存数量、报料配比、客户权限、匹配算法或历史业务事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机查询已有图纸的产品，确认图纸默认收起；展开后核对图片或PDF首页，收起后可重新展开。",
+    "连续切换产品、页签和地图后返回，核对当前编码、页签和未提交的搜索词保持正确。",
+    "核对一款已有加工子件的实际数量、片单位和货位；读取失败时只点重试，无需新增真实库存业务。",
+]
+APP_CHANGELOG = [*(f"v0.22.607：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

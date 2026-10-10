@@ -1,0 +1,5 @@
+{
+  "batch_id": "FULL_REFERENCE_CATALOG_20260810",
+  "ok": false,
+  "error": "隔离演练注入故障：验证整批事务与图片回滚"
+}

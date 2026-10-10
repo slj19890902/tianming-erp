@@ -4776,6 +4776,8 @@
                     <label class="process-option"><input type="checkbox" value="粘贴" v-model="productForm._production_processes" @change="onProductProcessesChanged" />粘贴</label>
                     <label class="process-option"><input type="checkbox" value="打钉" v-model="productForm._production_processes" @change="onProductProcessesChanged" />打钉</label>
                     <label class="process-option"><input type="checkbox" value="模切" v-model="productForm._production_processes" @change="onProductProcessesChanged" />模切</label>
+                    <label class="process-option"><input type="checkbox" value="开槽" v-model="productForm._production_processes" @change="onProductProcessesChanged" />开槽</label>
+                    <label class="process-option"><input type="checkbox" value="二次粘合" v-model="productForm._production_processes" @change="onProductProcessesChanged" />二次粘合</label>
                     <label class="process-option"><input type="checkbox" value="其他" v-model="productForm._production_processes" @change="onProductProcessesChanged" />其他</label>
                   </div>
                 </div>
@@ -18771,8 +18773,8 @@
             return form;
           },
           parseProductionProcesses(value) {
-            const allowed = ["粘贴", "打钉", "模切", "其他"];
-            const aliases = { "粘箱":"粘贴", "糊箱":"粘贴", "钉箱":"打钉", "打钉箱":"打钉" };
+            const allowed = ["粘贴", "打钉", "模切", "开槽", "二次粘合", "其他"];
+            const aliases = { "粘合":"粘贴", "粘箱":"粘贴", "糊箱":"粘贴", "钉箱":"打钉", "打钉箱":"打钉" };
             const values = String(value || "").split(/[，、,]/).map(item => item.trim()).filter(Boolean);
             const normalized = values.map(item => aliases[item] || item).filter(item => allowed.includes(item));
             if (values.length && !normalized.length) normalized.push("其他");

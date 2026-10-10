@@ -1,0 +1,3292 @@
+{
+  "batch_id": "MIXED_SAMPLE_CATALOG_20260810",
+  "mode": "dry_run",
+  "database": "D:\\纸箱厂erp软件搭建\\data\\carton_erp.sqlite3",
+  "formal_database": true,
+  "input": {
+    "reference": {
+      "path": "C:\\Users\\Administrator\\Desktop\\天明合作纸箱\\YL YKE KEW基本资料 - 副本.xlsx",
+      "sha256": "C4F60DB29EB9A9B48B1BEED40522D024D0F0B3AEE39F75DCEB0AE695D3F43303"
+    },
+    "volumes": [
+      {
+        "path": "D:\\纸箱厂erp软件搭建\\tmp\\codex_sample_sync_20260810\\第001卷_共享读取副本.xlsx",
+        "sha256": "30E5952EE7DF4EB457E4F69F40F0187A3973B3106D6649FD52BD8B342E76D5A3"
+      },
+      {
+        "path": "C:\\Users\\Administrator\\Desktop\\ERPtupian\\天明ERP_P1-22_v2_22款样品直导模板_结构预览_20260807_154227_第002卷_共005卷.xlsx",
+        "sha256": "A475998C5E6ACE3FF5908A9597E7A12FF39CEB3FE0DD7304F7BDAAC580105CD6"
+      },
+      {
+        "path": "C:\\Users\\Administrator\\Desktop\\ERPtupian\\天明ERP_P1-22_v2_22款样品直导模板_结构预览_20260807_154227_第003卷_共005卷.xlsx",
+        "sha256": "421753ED7572703FF9A57B26FC5B3F6E2D9F6B65A4D6E23B41CB67122E848D57"
+      },
+      {
+        "path": "C:\\Users\\Administrator\\Desktop\\ERPtupian\\天明ERP_P1-22_v2_22款样品直导模板_结构预览_20260807_154227_第004卷_共005卷.xlsx",
+        "sha256": "4D19622397BA540A0A5712B8777448346B4376CA68F47FD10DBBA04F97EC994A"
+      },
+      {
+        "path": "C:\\Users\\Administrator\\Desktop\\ERPtupian\\天明ERP_P1-22_v2_22款样品直导模板_结构预览_20260807_154227_第005卷_共005卷.xlsx",
+        "sha256": "8F425E6A5DA699B0C3222C13720E9876B150CC1F75B4D650D07B165B482EFECC"
+      }
+    ],
+    "counts": {
+      "registrations": 210,
+      "unique_product_codes": 207,
+      "embedded_drawings": 268
+    }
+  },
+  "database_before": {
+    "sha256": "F8CEEE9F7CF0AF7B4A2570C5268A608753FD4D2DC86D63F127D9C1C9C2ED6607",
+    "integrity_check": "ok",
+    "foreign_key_violations": 0,
+    "alembic_revision": "dw05v8x9z94",
+    "counts": {
+      "customers": 135,
+      "products": 3500,
+      "product_drawings": 141,
+      "product_bom_components": 1,
+      "materials": 623,
+      "master_data_object_versions": 821,
+      "operation_logs": 4349,
+      "sales_orders": 88,
+      "sales_order_items": 331,
+      "supplier_requisition_orders": 80,
+      "supplier_requisition_order_items": 235,
+      "inventory_lots": 217
+    }
+  },
+  "plan": {
+    "summary": {
+      "target_products": 221,
+      "create": 86,
+      "existing": 135,
+      "excluded_samples": 22,
+      "printed_products": 62,
+      "red_print_products": 13,
+      "black_print_products": 49,
+      "source_drawings_assigned": 286,
+      "by_customer": {
+        "KEW": 88,
+        "YKE": 126,
+        "YL": 7
+      }
+    },
+    "products": [
+      {
+        "customer_code": "KEW",
+        "product_code": "80010319",
+        "sample_ids": [
+          "YP190"
+        ],
+        "reference_key": "KEW:KEW:2",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010554",
+        "sample_ids": [
+          "YP082"
+        ],
+        "reference_key": "KEW:KEW:3",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010557",
+        "sample_ids": [
+          "YP080"
+        ],
+        "reference_key": "KEW:KEW:4",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010564",
+        "sample_ids": [
+          "YP078"
+        ],
+        "reference_key": "KEW:KEW:5",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010577",
+        "sample_ids": [
+          "YP115"
+        ],
+        "reference_key": "KEW:KEW:6",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010578",
+        "sample_ids": [
+          "YP099"
+        ],
+        "reference_key": "KEW:KEW:7",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010626",
+        "sample_ids": [
+          "YP193"
+        ],
+        "reference_key": "KEW:KEW:10",
+        "material_id": 616,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010627",
+        "sample_ids": [
+          "YP103"
+        ],
+        "reference_key": "KEW:KEW:11",
+        "material_id": 616,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010628",
+        "sample_ids": [
+          "YP182"
+        ],
+        "reference_key": "KEW:KEW:12",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010631",
+        "sample_ids": [
+          "YP050"
+        ],
+        "reference_key": "KEW:KEW:14",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010633",
+        "sample_ids": [
+          "YP061"
+        ],
+        "reference_key": "KEW:KEW:15",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010634",
+        "sample_ids": [
+          "YP065"
+        ],
+        "reference_key": "KEW:KEW:16",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010636",
+        "sample_ids": [
+          "YP068"
+        ],
+        "reference_key": "KEW:KEW:17",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010637",
+        "sample_ids": [
+          "YP069"
+        ],
+        "reference_key": "KEW:KEW:18",
+        "material_id": 539,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010640",
+        "sample_ids": [
+          "YP114"
+        ],
+        "reference_key": "KEW:KEW:19",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010641",
+        "sample_ids": [
+          "YP081"
+        ],
+        "reference_key": "KEW:KEW:20",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010642",
+        "sample_ids": [
+          "YP085"
+        ],
+        "reference_key": "KEW:KEW:21",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010644",
+        "sample_ids": [
+          "YP064"
+        ],
+        "reference_key": "KEW:KEW:22",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80010651",
+        "sample_ids": [
+          "YP049"
+        ],
+        "reference_key": "KEW:KEW:23",
+        "material_id": 616,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80011965",
+        "sample_ids": [
+          "YP174"
+        ],
+        "reference_key": "KEW:KEW:30",
+        "material_id": 616,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80011966",
+        "sample_ids": [
+          "YP057"
+        ],
+        "reference_key": "KEW:KEW:31",
+        "material_id": 609,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80011991",
+        "sample_ids": [
+          "YP042"
+        ],
+        "reference_key": "KEW:KEW:34",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012043",
+        "sample_ids": [
+          "YP092"
+        ],
+        "reference_key": "KEW:KEW:149",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012044",
+        "sample_ids": [
+          "YP094"
+        ],
+        "reference_key": "KEW:KEW:150",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012060",
+        "sample_ids": [
+          "YP039"
+        ],
+        "reference_key": "KEW:KEW:35",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012064",
+        "sample_ids": [
+          "YP044"
+        ],
+        "reference_key": "KEW:KEW:36",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012079",
+        "sample_ids": [
+          "YP197"
+        ],
+        "reference_key": "KEW:KEW:39",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012080",
+        "sample_ids": [
+          "YP180"
+        ],
+        "reference_key": "KEW:KEW:40",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012081",
+        "sample_ids": [
+          "YP143"
+        ],
+        "reference_key": "KEW:KEW:41",
+        "material_id": 609,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012130",
+        "sample_ids": [
+          "YP133"
+        ],
+        "reference_key": "KEW:KEW:44",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012135",
+        "sample_ids": [
+          "YP137"
+        ],
+        "reference_key": "KEW:KEW:47",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012142",
+        "sample_ids": [
+          "YP053"
+        ],
+        "reference_key": "KEW:KEW:48",
+        "material_id": 619,
+        "production_process": "开槽",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012251",
+        "sample_ids": [
+          "YP101"
+        ],
+        "reference_key": "KEW:KEW:52",
+        "material_id": 616,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012260",
+        "sample_ids": [
+          "YP160"
+        ],
+        "reference_key": "KEW:KEW:53",
+        "material_id": 619,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012261",
+        "sample_ids": [
+          "YP159"
+        ],
+        "reference_key": "KEW:KEW:54",
+        "material_id": 619,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012267",
+        "sample_ids": [
+          "YP124"
+        ],
+        "reference_key": "KEW:KEW:55",
+        "material_id": 619,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012273",
+        "sample_ids": [
+          "YP051"
+        ],
+        "reference_key": "KEW:KEW:56",
+        "material_id": 619,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012274",
+        "sample_ids": [
+          "YP156"
+        ],
+        "reference_key": "KEW:KEW:57",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012288",
+        "sample_ids": [
+          "YP046"
+        ],
+        "reference_key": "KEW:KEW:61",
+        "material_id": 609,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012289",
+        "sample_ids": [
+          "YP161"
+        ],
+        "reference_key": "KEW:KEW:62",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012290",
+        "sample_ids": [
+          "YP166"
+        ],
+        "reference_key": "KEW:KEW:63",
+        "material_id": 610,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "80012672",
+        "sample_ids": [
+          "YP158"
+        ],
+        "reference_key": "KEW:KEW:70",
+        "material_id": 629,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021086",
+        "sample_ids": [
+          "YP048"
+        ],
+        "reference_key": "KEW:KEW:73",
+        "material_id": 614,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021111",
+        "sample_ids": [
+          "YP153"
+        ],
+        "reference_key": "KEW:KEW:74",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021121",
+        "sample_ids": [
+          "YP152"
+        ],
+        "reference_key": "KEW:KEW:76",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021122",
+        "sample_ids": [
+          "YP125"
+        ],
+        "reference_key": "KEW:KEW:77",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021145",
+        "sample_ids": [
+          "YP209"
+        ],
+        "reference_key": "KEW:KEW:79",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021152",
+        "sample_ids": [
+          "YP192"
+        ],
+        "reference_key": "KEW:KEW:80",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021153",
+        "sample_ids": [
+          "YP194"
+        ],
+        "reference_key": "KEW:KEW:81",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021154",
+        "sample_ids": [
+          "YP187"
+        ],
+        "reference_key": "KEW:KEW:82",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021156",
+        "sample_ids": [
+          "YP105"
+        ],
+        "reference_key": "KEW:KEW:84",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021157",
+        "sample_ids": [
+          "YP106"
+        ],
+        "reference_key": "KEW:KEW:85",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021159",
+        "sample_ids": [
+          "YP191"
+        ],
+        "reference_key": "KEW:KEW:87",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021161",
+        "sample_ids": [
+          "YP183"
+        ],
+        "reference_key": "KEW:KEW:88",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021171",
+        "sample_ids": [
+          "YP204"
+        ],
+        "reference_key": "KEW:KEW:91",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021172",
+        "sample_ids": [
+          "YP200"
+        ],
+        "reference_key": "KEW:KEW:92",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021191",
+        "sample_ids": [
+          "YP028"
+        ],
+        "reference_key": "KEW:KEW:93",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021198",
+        "sample_ids": [
+          "YP154"
+        ],
+        "reference_key": "KEW:KEW:94",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021200",
+        "sample_ids": [
+          "YP142"
+        ],
+        "reference_key": "KEW:KEW:96",
+        "material_id": 610,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021210",
+        "sample_ids": [
+          "YP210"
+        ],
+        "reference_key": "KEW:KEW:98",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021215",
+        "sample_ids": [
+          "YP155"
+        ],
+        "reference_key": "KEW:KEW:102",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "82021315",
+        "sample_ids": [
+          "YP185"
+        ],
+        "reference_key": "KEW:KEW:103",
+        "material_id": 610,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010003",
+        "sample_ids": [
+          "YP163"
+        ],
+        "reference_key": "KEW:KEW:104",
+        "material_id": 629,
+        "production_process": "开槽、打钉",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010077",
+        "sample_ids": [
+          "YP171"
+        ],
+        "reference_key": "KEW:KEW:105",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010079",
+        "sample_ids": [
+          "YP198"
+        ],
+        "reference_key": "KEW:KEW:107",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010080",
+        "sample_ids": [
+          "YP199"
+        ],
+        "reference_key": "KEW:KEW:108",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010095",
+        "sample_ids": [
+          "YP173"
+        ],
+        "reference_key": "KEW:KEW:110",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010096",
+        "sample_ids": [
+          "YP186"
+        ],
+        "reference_key": "KEW:KEW:111",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010099",
+        "sample_ids": [
+          "YP162"
+        ],
+        "reference_key": "KEW:KEW:113",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010100",
+        "sample_ids": [
+          "YP157"
+        ],
+        "reference_key": "KEW:KEW:114",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010102",
+        "sample_ids": [
+          "YP178"
+        ],
+        "reference_key": "KEW:KEW:116",
+        "material_id": 619,
+        "production_process": "开槽、粘贴",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010105",
+        "sample_ids": [
+          "YP176"
+        ],
+        "reference_key": "KEW:KEW:117",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010119",
+        "sample_ids": [
+          "YP205"
+        ],
+        "reference_key": "KEW:KEW:121",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010120",
+        "sample_ids": [
+          "YP196"
+        ],
+        "reference_key": "KEW:KEW:122",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010123",
+        "sample_ids": [
+          "YP177"
+        ],
+        "reference_key": "KEW:KEW:123",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010132",
+        "sample_ids": [
+          "YP167"
+        ],
+        "reference_key": "KEW:KEW:126",
+        "material_id": 610,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010133",
+        "sample_ids": [
+          "YP195"
+        ],
+        "reference_key": "KEW:KEW:127",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010134",
+        "sample_ids": [
+          "YP189"
+        ],
+        "reference_key": "KEW:KEW:128",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010135",
+        "sample_ids": [
+          "YP188"
+        ],
+        "reference_key": "KEW:KEW:129",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80010136",
+        "sample_ids": [
+          "YP031",
+          "YP170"
+        ],
+        "reference_key": "KEW:KEW:130",
+        "material_id": 614,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 3,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80020008",
+        "sample_ids": [
+          "YP207"
+        ],
+        "reference_key": "KEW:KEW:133",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C80020013",
+        "sample_ids": [
+          "YP202"
+        ],
+        "reference_key": "KEW:KEW:135",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C82020013",
+        "sample_ids": [
+          "YP206"
+        ],
+        "reference_key": "KEW:KEW:140",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C82020015",
+        "sample_ids": [
+          "YP164"
+        ],
+        "reference_key": "KEW:KEW:142",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C82020017",
+        "sample_ids": [
+          "YP175"
+        ],
+        "reference_key": "KEW:KEW:143",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C82020018",
+        "sample_ids": [
+          "YP181"
+        ],
+        "reference_key": "KEW:KEW:144",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C82020019",
+        "sample_ids": [
+          "YP168"
+        ],
+        "reference_key": "KEW:KEW:145",
+        "material_id": 610,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "KEW",
+        "product_code": "C82020020",
+        "sample_ids": [
+          "YP184"
+        ],
+        "reference_key": "KEW:KEW:146",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010335",
+        "sample_ids": [
+          "YP112"
+        ],
+        "reference_key": "YKE:YKE :3",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010336",
+        "sample_ids": [
+          "YP104"
+        ],
+        "reference_key": "YKE:YKE :4",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010341",
+        "sample_ids": [
+          "YP110",
+          "YP111"
+        ],
+        "reference_key": "YKE:YKE :6",
+        "material_id": 609,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 3,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010464",
+        "sample_ids": [
+          "YP059"
+        ],
+        "reference_key": "YKE:YKE :7",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010554",
+        "sample_ids": [
+          "YP082"
+        ],
+        "reference_key": "YKE:YKE :8",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010555",
+        "sample_ids": [
+          "YP083"
+        ],
+        "reference_key": "YKE:YKE :9",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010557",
+        "sample_ids": [
+          "YP080"
+        ],
+        "reference_key": "YKE:YKE :10",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010564",
+        "sample_ids": [
+          "YP078"
+        ],
+        "reference_key": "YKE:YKE :11",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010565",
+        "sample_ids": [
+          "YP079"
+        ],
+        "reference_key": "YKE:YKE :12",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010577",
+        "sample_ids": [
+          "YP115"
+        ],
+        "reference_key": "YKE:YKE :13",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010578",
+        "sample_ids": [
+          "YP099"
+        ],
+        "reference_key": "YKE:YKE :14",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010607",
+        "sample_ids": [
+          "YP062"
+        ],
+        "reference_key": "YKE:YKE :17",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010620",
+        "sample_ids": [
+          "YP067"
+        ],
+        "reference_key": "YKE:YKE :21",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010626",
+        "sample_ids": [
+          "YP193"
+        ],
+        "reference_key": "YKE:YKE :22",
+        "material_id": 616,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010627",
+        "sample_ids": [
+          "YP103"
+        ],
+        "reference_key": "YKE:YKE :23",
+        "material_id": 616,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010628",
+        "sample_ids": [
+          "YP182"
+        ],
+        "reference_key": "YKE:YKE :24",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010631",
+        "sample_ids": [
+          "YP050"
+        ],
+        "reference_key": "YKE:YKE :25",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010633",
+        "sample_ids": [
+          "YP061"
+        ],
+        "reference_key": "YKE:YKE :26",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010634",
+        "sample_ids": [
+          "YP065"
+        ],
+        "reference_key": "YKE:YKE :27",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010636",
+        "sample_ids": [
+          "YP068"
+        ],
+        "reference_key": "YKE:YKE :28",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010637",
+        "sample_ids": [
+          "YP069"
+        ],
+        "reference_key": "YKE:YKE :29",
+        "material_id": 621,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010640",
+        "sample_ids": [
+          "YP114"
+        ],
+        "reference_key": "YKE:YKE :30",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010641",
+        "sample_ids": [
+          "YP081"
+        ],
+        "reference_key": "YKE:YKE :31",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010642",
+        "sample_ids": [
+          "YP085"
+        ],
+        "reference_key": "YKE:YKE :32",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010643",
+        "sample_ids": [
+          "YP063"
+        ],
+        "reference_key": "YKE:YKE :33",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010644",
+        "sample_ids": [
+          "YP064"
+        ],
+        "reference_key": "YKE:YKE :34",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010651",
+        "sample_ids": [
+          "YP049"
+        ],
+        "reference_key": "YKE:YKE :35",
+        "material_id": 616,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80010677",
+        "sample_ids": [
+          "YP087"
+        ],
+        "reference_key": "YKE:YKE :36",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80011639",
+        "sample_ids": [
+          "YP089"
+        ],
+        "reference_key": "YKE:YKE :37",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80011640",
+        "sample_ids": [
+          "YP090"
+        ],
+        "reference_key": "YKE:YKE :38",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80011641",
+        "sample_ids": [
+          "YP088"
+        ],
+        "reference_key": "YKE:YKE :39",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80011926",
+        "sample_ids": [
+          "YP102"
+        ],
+        "reference_key": "YKE:YKE :40",
+        "material_id": 616,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80011927",
+        "sample_ids": [
+          "YP136"
+        ],
+        "reference_key": "YKE:YKE :41",
+        "material_id": 609,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80011950",
+        "sample_ids": [
+          "YP033"
+        ],
+        "reference_key": "YKE:YKE :43",
+        "material_id": 609,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80011965",
+        "sample_ids": [
+          "YP174"
+        ],
+        "reference_key": "YKE:YKE :46",
+        "material_id": 616,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80011966",
+        "sample_ids": [
+          "YP057"
+        ],
+        "reference_key": "YKE:YKE :47",
+        "material_id": 609,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80011991",
+        "sample_ids": [
+          "YP042"
+        ],
+        "reference_key": "YKE:YKE :49",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012043",
+        "sample_ids": [
+          "YP092"
+        ],
+        "reference_key": "YKE:YKE :51",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012044",
+        "sample_ids": [
+          "YP094"
+        ],
+        "reference_key": "YKE:YKE :52",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012046",
+        "sample_ids": [
+          "YP091"
+        ],
+        "reference_key": "YKE:YKE :54",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012047",
+        "sample_ids": [
+          "YP117"
+        ],
+        "reference_key": "YKE:YKE :55",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012049",
+        "sample_ids": [
+          "YP097"
+        ],
+        "reference_key": "YKE:YKE :57",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012050",
+        "sample_ids": [
+          "YP093"
+        ],
+        "reference_key": "YKE:YKE :58",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012051",
+        "sample_ids": [
+          "YP096"
+        ],
+        "reference_key": "YKE:YKE :59",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012053",
+        "sample_ids": [
+          "YP098"
+        ],
+        "reference_key": "YKE:YKE :61",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012054",
+        "sample_ids": [
+          "YP095"
+        ],
+        "reference_key": "YKE:YKE :62",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012058",
+        "sample_ids": [
+          "YP086"
+        ],
+        "reference_key": "YKE:YKE :225",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012060",
+        "sample_ids": [
+          "YP039"
+        ],
+        "reference_key": "YKE:YKE :64",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012064",
+        "sample_ids": [
+          "YP044"
+        ],
+        "reference_key": "YKE:YKE :65",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012066",
+        "sample_ids": [
+          "YP043"
+        ],
+        "reference_key": "YKE:YKE :66",
+        "material_id": 616,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012081",
+        "sample_ids": [
+          "YP143"
+        ],
+        "reference_key": "YKE:YKE :68",
+        "material_id": 609,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012130",
+        "sample_ids": [
+          "YP133"
+        ],
+        "reference_key": "YKE:YKE :75",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012134",
+        "sample_ids": [
+          "YP134"
+        ],
+        "reference_key": "YKE:YKE :78",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012135",
+        "sample_ids": [
+          "YP137"
+        ],
+        "reference_key": "YKE:YKE :79",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012138",
+        "sample_ids": [
+          "YP006"
+        ],
+        "reference_key": "YKE:YKE :80",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012139",
+        "sample_ids": [
+          "YP138"
+        ],
+        "reference_key": "YKE:YKE :81",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012140",
+        "sample_ids": [
+          "YP139"
+        ],
+        "reference_key": "YKE:YKE :82",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012141",
+        "sample_ids": [
+          "YP075"
+        ],
+        "reference_key": "YKE:YKE :83",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012142",
+        "sample_ids": [
+          "YP053"
+        ],
+        "reference_key": "YKE:YKE :84",
+        "material_id": 619,
+        "production_process": "开槽",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012145",
+        "sample_ids": [
+          "YP036"
+        ],
+        "reference_key": "YKE:YKE :85",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012146",
+        "sample_ids": [
+          "YP025"
+        ],
+        "reference_key": "YKE:YKE :86",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012147",
+        "sample_ids": [
+          "YP077"
+        ],
+        "reference_key": "YKE:YKE :87",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012148",
+        "sample_ids": [
+          "YP003"
+        ],
+        "reference_key": "YKE:YKE :88",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012158",
+        "sample_ids": [
+          "YP013"
+        ],
+        "reference_key": "YKE:YKE :95",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012159",
+        "sample_ids": [
+          "YP129"
+        ],
+        "reference_key": "YKE:YKE :96",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012160",
+        "sample_ids": [
+          "YP128"
+        ],
+        "reference_key": "YKE:YKE :97",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012161",
+        "sample_ids": [
+          "YP131"
+        ],
+        "reference_key": "YKE:YKE :98",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012166",
+        "sample_ids": [
+          "YP012"
+        ],
+        "reference_key": "YKE:YKE :101",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012167",
+        "sample_ids": [
+          "YP074"
+        ],
+        "reference_key": "YKE:YKE :102",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012168",
+        "sample_ids": [
+          "YP072"
+        ],
+        "reference_key": "YKE:YKE :103",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012169",
+        "sample_ids": [
+          "YP076"
+        ],
+        "reference_key": "YKE:YKE :104",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012173",
+        "sample_ids": [
+          "YP024"
+        ],
+        "reference_key": "YKE:YKE :106",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012174",
+        "sample_ids": [
+          "YP073"
+        ],
+        "reference_key": "YKE:YKE :107",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012175",
+        "sample_ids": [
+          "YP014"
+        ],
+        "reference_key": "YKE:YKE :108",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012177",
+        "sample_ids": [
+          "YP016"
+        ],
+        "reference_key": "YKE:YKE :110",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012178",
+        "sample_ids": [
+          "YP001"
+        ],
+        "reference_key": "YKE:YKE :111",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012181",
+        "sample_ids": [
+          "YP127"
+        ],
+        "reference_key": "YKE:YKE :112",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012182",
+        "sample_ids": [
+          "YP126"
+        ],
+        "reference_key": "YKE:YKE :113",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012251",
+        "sample_ids": [
+          "YP101"
+        ],
+        "reference_key": "YKE:YKE :120",
+        "material_id": 616,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012288",
+        "sample_ids": [
+          "YP046"
+        ],
+        "reference_key": "YKE:YKE :123",
+        "material_id": 609,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012289",
+        "sample_ids": [
+          "YP161"
+        ],
+        "reference_key": "YKE:YKE :124",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012333",
+        "sample_ids": [
+          "YP002"
+        ],
+        "reference_key": "YKE:YKE :126",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012338",
+        "sample_ids": [
+          "YP058"
+        ],
+        "reference_key": "YKE:YKE :228",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012386",
+        "sample_ids": [
+          "YP023"
+        ],
+        "reference_key": "YKE:YKE :129",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012387",
+        "sample_ids": [
+          "YP021"
+        ],
+        "reference_key": "YKE:YKE :130",
+        "material_id": 610,
+        "production_process": "开槽",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012388",
+        "sample_ids": [
+          "YP032"
+        ],
+        "reference_key": "YKE:YKE :131",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012410",
+        "sample_ids": [
+          "YP005"
+        ],
+        "reference_key": "YKE:YKE :134",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012411",
+        "sample_ids": [
+          "YP004"
+        ],
+        "reference_key": "YKE:YKE :135",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012415",
+        "sample_ids": [
+          "YP047"
+        ],
+        "reference_key": "YKE:YKE :136",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012498",
+        "sample_ids": [
+          "YP052"
+        ],
+        "reference_key": "YKE:YKE :141",
+        "material_id": 619,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "红色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012499",
+        "sample_ids": [
+          "YP045"
+        ],
+        "reference_key": "YKE:YKE :142",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012619",
+        "sample_ids": [
+          "YP169"
+        ],
+        "reference_key": "YKE:YKE :146",
+        "material_id": 610,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012620",
+        "sample_ids": [
+          "YP165"
+        ],
+        "reference_key": "YKE:YKE :147",
+        "material_id": 610,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012632",
+        "sample_ids": [
+          "YP019"
+        ],
+        "reference_key": "YKE:YKE :148",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012633",
+        "sample_ids": [
+          "YP011"
+        ],
+        "reference_key": "YKE:YKE :149",
+        "material_id": 615,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012636",
+        "sample_ids": [
+          "YP018"
+        ],
+        "reference_key": "YKE:YKE :151",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012642",
+        "sample_ids": [
+          "YP119"
+        ],
+        "reference_key": "YKE:YKE :152",
+        "material_id": 616,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012643",
+        "sample_ids": [
+          "YP035"
+        ],
+        "reference_key": "YKE:YKE :153",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012644",
+        "sample_ids": [
+          "YP130"
+        ],
+        "reference_key": "YKE:YKE :154",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012645",
+        "sample_ids": [
+          "YP132"
+        ],
+        "reference_key": "YKE:YKE :155",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012647",
+        "sample_ids": [
+          "YP022"
+        ],
+        "reference_key": "YKE:YKE :157",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012648",
+        "sample_ids": [
+          "YP055"
+        ],
+        "reference_key": "YKE:YKE :158",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012657",
+        "sample_ids": [
+          "YP040"
+        ],
+        "reference_key": "YKE:YKE :160",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012752",
+        "sample_ids": [
+          "YP203"
+        ],
+        "reference_key": "YKE:YKE :162",
+        "material_id": 610,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012753",
+        "sample_ids": [
+          "YP179"
+        ],
+        "reference_key": "YKE:YKE :163",
+        "material_id": 610,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80019980",
+        "sample_ids": [
+          "YP020"
+        ],
+        "reference_key": "YKE:YKE :168",
+        "material_id": 610,
+        "production_process": "模切、粘贴、二次粘合",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80019986",
+        "sample_ids": [
+          "YP015"
+        ],
+        "reference_key": "YKE:YKE :173",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80019988",
+        "sample_ids": [
+          "YP120"
+        ],
+        "reference_key": "YKE:YKE :175",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80040988",
+        "sample_ids": [
+          "YP008"
+        ],
+        "reference_key": "YKE:YKE :185",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80049947",
+        "sample_ids": [
+          "YP041"
+        ],
+        "reference_key": "YKE:YKE :222",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80049958",
+        "sample_ids": [
+          "YP009"
+        ],
+        "reference_key": "YKE:YKE :195",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80049959",
+        "sample_ids": [
+          "YP070"
+        ],
+        "reference_key": "YKE:YKE :196",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80049960",
+        "sample_ids": [
+          "YP054"
+        ],
+        "reference_key": "YKE:YKE :197",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80049992",
+        "sample_ids": [
+          "YP010"
+        ],
+        "reference_key": "YKE:YKE :205",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80049994",
+        "sample_ids": [
+          "YP007"
+        ],
+        "reference_key": "YKE:YKE :207",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "82020083",
+        "sample_ids": [
+          "YP027"
+        ],
+        "reference_key": "YKE:YKE :209",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "82021086",
+        "sample_ids": [
+          "YP048"
+        ],
+        "reference_key": "YKE:YKE :210",
+        "material_id": 614,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "82021089",
+        "sample_ids": [
+          "YP060"
+        ],
+        "reference_key": "YKE:YKE :211",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "82021154",
+        "sample_ids": [
+          "YP187"
+        ],
+        "reference_key": "YKE:YKE :212",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "82021156",
+        "sample_ids": [
+          "YP105"
+        ],
+        "reference_key": "YKE:YKE :214",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "82021171",
+        "sample_ids": [
+          "YP204"
+        ],
+        "reference_key": "YKE:YKE :215",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "82021191",
+        "sample_ids": [
+          "YP028"
+        ],
+        "reference_key": "YKE:YKE :218",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "82021233",
+        "sample_ids": [
+          "YP029"
+        ],
+        "reference_key": "YKE:YKE :219",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "82021317",
+        "sample_ids": [
+          "YP116"
+        ],
+        "reference_key": "YKE:YKE :220",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "82021318",
+        "sample_ids": [
+          "YP135"
+        ],
+        "reference_key": "YKE:YKE :221",
+        "material_id": 622,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000012",
+        "sample_ids": [
+          "YP145"
+        ],
+        "reference_key": "YL:Y L:8",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "create"
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000096",
+        "sample_ids": [
+          "YP147",
+          "YP148"
+        ],
+        "reference_key": "YL:Y L:19",
+        "material_id": 609,
+        "production_process": "模切、粘贴",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 2,
+        "action": "create"
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000120",
+        "sample_ids": [
+          "YP151"
+        ],
+        "reference_key": "YL:Y L:122",
+        "material_id": 610,
+        "production_process": "模切、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000130",
+        "sample_ids": [
+          "YP140"
+        ],
+        "reference_key": "YL:Y L:54",
+        "material_id": 415,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000132",
+        "sample_ids": [
+          "YP150"
+        ],
+        "reference_key": "YL:Y L:56",
+        "material_id": 609,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000135",
+        "sample_ids": [
+          "YP141"
+        ],
+        "reference_key": "YL:Y L:58",
+        "material_id": 610,
+        "production_process": "开槽、打钉",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000165",
+        "sample_ids": [
+          "YP146"
+        ],
+        "reference_key": "YL:Y L:95",
+        "material_id": 520,
+        "production_process": "模切",
+        "print_content": "单色印刷",
+        "printing_colors": "黑色",
+        "drawings": 1,
+        "action": "update_or_drawing"
+      },
+      {
+        "customer_code": "YKE",
+        "product_code": "80012500",
+        "sample_ids": [
+          "YP026",
+          "YP030"
+        ],
+        "reference_key": "YKE:rows143+144:BOM",
+        "material_id": 619,
+        "production_process": "模切",
+        "print_content": "无印刷",
+        "printing_colors": null,
+        "drawings": 2,
+        "action": "create_bom"
+      }
+    ],
+    "excluded": [
+      {
+        "sample_id": "YP017",
+        "product_code": "80040974",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP034",
+        "product_code": "82021190",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP037",
+        "product_code": "80010417",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP038",
+        "product_code": "80012615",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP056",
+        "product_code": "80012277",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP066",
+        "product_code": "80010613",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP071",
+        "product_code": "80060204",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP084",
+        "product_code": "80010567",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP100",
+        "product_code": "82021082",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP107",
+        "product_code": "80012336",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP108",
+        "product_code": "80010260",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP109",
+        "product_code": "80010022",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP113",
+        "product_code": "80010581",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP118",
+        "product_code": "80011979",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP121",
+        "product_code": "CH00001",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP122",
+        "product_code": "80012082/2-1",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP123",
+        "product_code": "80012082/2-2",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP144",
+        "product_code": "80012082/衬板",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP149",
+        "product_code": "Z.001.000148",
+        "reason": "Z+B 材质主档未建立"
+      },
+      {
+        "sample_id": "YP172",
+        "product_code": "C80010127",
+        "reason": "三客户基础资料无精确型号"
+      },
+      {
+        "sample_id": "YP201",
+        "product_code": "80020548",
+        "reason": "450克灰底白板材质主档未建立"
+      },
+      {
+        "sample_id": "YP208",
+        "product_code": "C80010093",
+        "reason": "三客户基础资料无精确型号"
+      }
+    ]
+  },
+  "backup": null,
+  "apply": null,
+  "readback": null,
+  "database_after": null
+}

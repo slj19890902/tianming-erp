@@ -190,7 +190,7 @@ def test_legacy_common_box_mismatch_only_blocks_report_or_crease_edits() -> None
 def test_common_box_processes_remove_double_and_drawings_are_independent_of_print() -> None:
     source = _source()
 
-    for process in ("粘贴", "打钉", "模切", "其他"):
+    for process in ("粘贴", "打钉", "模切", "开槽", "二次粘合", "其他"):
         assert f'value="{process}"' in source
     assert 'value="双拼"' not in source
     assert 'v-model="productForm._production_processes"' in source
@@ -202,6 +202,7 @@ def test_common_box_processes_remove_double_and_drawings_are_independent_of_prin
     assert "无印刷产品也可上传实物图、模切形状或模具核对图" in source
     assert '@click="previewProductDrawing(row)"' in source
     assert "serializeProductionProcesses" in source
+    assert '"粘合":"粘贴"' in source
 
 
 def test_common_box_second_row_contains_splice_flap_report_and_crease() -> None:

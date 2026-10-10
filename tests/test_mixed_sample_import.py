@@ -96,18 +96,59 @@ def _reference_workbook() -> bytes:
     for code, name in (("YKE", "研光共享箱"), ("KEW", "光洋共享箱")):
         sheet = workbook.create_sheet(code)
         row = [None] * 19
+        row[0] = "☆"
         row[1] = name
         row[2] = f"DRAW-{code}"
         row[3] = "SHARED001"
+        row[4] = "A"
+        row[5] = 120
+        row[6] = 3
+        row[7] = "B4"
         row[8] = "300*200*100"
         row[9] = "120*100*120=340"
         row[10] = 340
         row[12] = 1000
+        row[13] = 0.25
+        row[14] = 0.5
         row[15] = "VSNIV/AB"
         row[17] = 6.8
         row[18] = "红钉"
         sheet.append(row)
     return _xlsx(workbook)
+
+
+def test_reference_reader_preserves_original_business_columns() -> None:
+    from app.services.mixed_sample_import import read_mixed_reference_workbook
+
+    rows, errors = read_mixed_reference_workbook(_reference_workbook())
+
+    assert errors == []
+    yke = next(row for row in rows if row["customer_code"] == "YKE")
+    assert yke["legacy_source_marker"] == "☆"
+    assert yke["source_box_type"] == "A"
+    assert yke["production_quantity"] == 120
+    assert yke["reserved_loss_quantity"] == 3
+    assert yke["storage_location"] == "B4"
+    assert yke["paper_calculation_coefficient"] == 0.25
+    assert yke["paper_sheet_quantity"] == 0.5
+    assert yke["source_values"]["B"] == "研光共享箱"
+    assert yke["source_values"]["C"] == "DRAW-YKE"
+    assert yke["source_values"]["D"] == "SHARED001"
+    assert yke["source_values"]["J"] == "120*100*120=340"
+    assert yke["source_values"]["K"] == 340
+    assert yke["source_values"]["M"] == 1000
+    assert yke["source_values"]["N"] == 0.25
+    assert yke["source_values"]["O"] == 0.5
+    assert yke["source_values"]["P"] == "VSNIV/AB"
+
+
+def test_reference_reader_keeps_finished_dimensions_before_source_suffix() -> None:
+    from app.services.mixed_sample_import import _parse_dimensions
+
+    assert _parse_dimensions("450*340*285=1615*631") == (450, 340, 285)
+    assert _parse_dimensions("330*200*220-YL") == (330, 200, 220)
+    assert _parse_dimensions("388*475=2") == (None, None, None)
+    assert _parse_dimensions("310*275*196(空白）") == (310, 275, 196)
 
 
 def _reference_workbook_with_two_yke_choices() -> bytes:

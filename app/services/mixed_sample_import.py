@@ -251,7 +251,11 @@ def normalize_sample_code(value: object) -> str:
 
 def _parse_dimensions(value: object) -> tuple[int | None, int | None, int | None]:
     text = _text(value).replace("×", "*").replace("X", "*").replace("x", "*")
-    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*\*\s*(\d+(?:\.\d+)?)\s*\*\s*(\d+(?:\.\d+)?)\s*", text)
+    match = re.match(
+        r"^\s*(\d+(?:\.\d+)?)\s*\*\s*(\d+(?:\.\d+)?)\s*\*\s*"
+        r"(\d+(?:\.\d+)?)(?=\s*(?:$|[-=(（]))",
+        text,
+    )
     if match is None:
         return None, None, None
     values = tuple(int(Decimal(part)) for part in match.groups())
@@ -307,6 +311,14 @@ def _reference_record(
     material_text: object,
     sale_unit_price: object,
     base_process: object,
+    source_values: dict[str, object] | None = None,
+    legacy_source_marker: object = None,
+    source_box_type: object = None,
+    production_quantity: object = None,
+    reserved_loss_quantity: object = None,
+    storage_location: object = None,
+    paper_calculation_coefficient: object = None,
+    paper_sheet_quantity: object = None,
 ) -> dict[str, Any] | None:
     code = normalize_sample_code(product_code)
     original_name = _text(product_name)
@@ -347,6 +359,14 @@ def _reference_record(
         "base_process": _text(base_process),
         "dimensions_raw": _text(dimensions_raw),
         "report_raw": _text(report_raw),
+        "source_values": dict(source_values or {}),
+        "legacy_source_marker": _text(legacy_source_marker) or None,
+        "source_box_type": _text(source_box_type) or None,
+        "production_quantity": _decimal(production_quantity),
+        "reserved_loss_quantity": _decimal(reserved_loss_quantity),
+        "storage_location": _text(storage_location) or None,
+        "paper_calculation_coefficient": _decimal(paper_calculation_coefficient),
+        "paper_sheet_quantity": _decimal(paper_sheet_quantity),
     }
 
 
@@ -378,7 +398,7 @@ def read_mixed_reference_workbook(content: bytes) -> tuple[list[dict[str, Any]],
         for customer_code in SUPPORTED_CUSTOMERS:
             worksheet = workbook[sheets[customer_code]]
             for row_number, values in enumerate(
-                worksheet.iter_rows(max_col=19, values_only=True), start=1
+                worksheet.iter_rows(max_col=20, values_only=True), start=1
             ):
                 if customer_code == "YL":
                     if row_number == 1:
@@ -397,6 +417,13 @@ def read_mixed_reference_workbook(content: bytes) -> tuple[list[dict[str, Any]],
                         material_text=values[10],
                         sale_unit_price=values[15],
                         base_process=values[16] if len(values) > 16 else None,
+                        source_values={
+                            chr(65 + index): value
+                            for index, value in enumerate(values[:18])
+                        },
+                        production_quantity=values[2],
+                        paper_calculation_coefficient=values[8],
+                        paper_sheet_quantity=values[9],
                     )
                 else:
                     record = _reference_record(
@@ -413,6 +440,17 @@ def read_mixed_reference_workbook(content: bytes) -> tuple[list[dict[str, Any]],
                         material_text=values[15],
                         sale_unit_price=values[17],
                         base_process=values[18],
+                        source_values={
+                            chr(65 + index): value
+                            for index, value in enumerate(values[:20])
+                        },
+                        legacy_source_marker=values[0],
+                        source_box_type=values[4],
+                        production_quantity=values[5],
+                        reserved_loss_quantity=values[6],
+                        storage_location=values[7],
+                        paper_calculation_coefficient=values[13],
+                        paper_sheet_quantity=values[14],
                     )
                 if record is not None:
                     records.append(record)

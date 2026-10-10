@@ -20,6 +20,17 @@
 .paper-operation { display:flex; gap:3mm; padding:1.2mm 0; border-bottom:1px solid #aaa; overflow-wrap:anywhere; }
 .paper-operation b { flex:0 0 auto; max-width:47%; }
 .paper-operation span { min-width:0; }
+.paper-work { display:block; }
+.paper-work.with-drawings { display:grid; grid-template-columns:minmax(0,1fr) 68mm; gap:4mm; align-items:start; }
+.paper-instructions,.paper-drawings { min-width:0; }
+.paper-drawing { margin:0 0 2mm; padding:1.5mm; border:1px solid #555; break-inside:avoid; }
+.paper-drawing figcaption { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:1mm 2mm; font-size:11pt; overflow-wrap:anywhere; }
+.paper-drawing figcaption b { font-size:13pt; }
+.paper-drawing img { display:block; width:100%; height:40mm; object-fit:contain; margin:1mm 0; }
+.paper-drawing-name { font-size:10pt; line-height:1.2; overflow-wrap:anywhere; }
+.paper-drawing-unavailable { height:40mm; display:flex; align-items:center; font-size:12pt; }
+.paper-many-drawings .paper-drawing img,.paper-many-drawings .paper-drawing-unavailable { height:28mm; }
+body.customer-safe .paper-work.with-drawings { display:block; }
 .paper-qrs { display:grid; grid-template-columns:repeat(5,1fr); gap:2mm; padding-top:2mm; }
 .paper-qrs>div { display:flex; flex-direction:column; align-items:center; gap:1mm; font-size:10pt; overflow-wrap:anywhere; }
 .paper-qrs img { width:16mm; height:16mm; }

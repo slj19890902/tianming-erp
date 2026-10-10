@@ -207,6 +207,7 @@ def test_replenishment_sheet_source_code_is_searchable_without_use_binding(ledge
     row = result['items'][0]
     assert row['source_product_code'] == '80012273'
     assert row['source_product_name'] == '来源产品'
+    assert row['source_products'] == [dict(code='80012273', name='来源产品', kind='stock_replenishment')]
     assert row['inventory_code'] is None  # A source is not a confirmed use binding.
     assert (row['before_physical'], row['after_physical'], row['unit']) == (0, 500, 'sheets')
     assert get(ledger, keyword='80012273', customer_id=ledger[2]['a'])['total'] == 1
@@ -257,6 +258,19 @@ def test_replenishment_sheet_source_code_is_searchable_without_use_binding(ledge
         'SEMI-SOURCE-1', 'SEMI-SOURCE-2',
     }
     assert get(ledger, lot_number='SEMI-SOURCE-3')['items'][0]['source_product_code'] is None
+
+
+def test_multiple_source_facts_have_stable_lossless_projection():
+    from app.services.warehouse_movement_read import _stable_source_products
+
+    facts = [('B', '乙', 'order_purchase_reserve'),
+             ('A', '甲', 'stock_replenishment'),
+             ('B', '乙', 'order_purchase_reserve'),
+             (None, '无编码', 'stock_replenishment')]
+    assert _stable_source_products(facts) == [
+        dict(code='A', name='甲', kind='stock_replenishment'),
+        dict(code='B', name='乙', kind='order_purchase_reserve'),
+    ]
 
 
 def test_merged_purchase_reserve_uses_each_frozen_order_line_code(ledger):

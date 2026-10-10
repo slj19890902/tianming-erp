@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 import hashlib
 import json
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.customer import Customer
@@ -18,6 +18,10 @@ from app.models.external_packaging_purchase import (
     ExternalPackagingReceiptItem,
 )
 from app.models.order import Order, OrderItem
+from app.models.stock_replenishment import (
+    StockReplenishmentOrder,
+    StockReplenishmentOrderItem,
+)
 from app.models.user import User
 from app.services.external_packaging_purchase import (
     ExternalPurchaseContractError,
@@ -28,6 +32,10 @@ from app.services.order_status_policy import (
     ORDER_ITEM_ACTIVE_ORDER_STATUSES,
     order_item_forward_block_message,
     order_item_forward_block_reason,
+)
+from app.services.stock_replenishment import (
+    StockReplenishmentError,
+    receive_replenishment_item,
 )
 
 
@@ -173,7 +181,8 @@ def purchase_receipt_progress(
 def _purchase_payload(
     purchase: ExternalPackagingPurchaseOrder,
     *,
-    sales_order: Order,
+    sales_order: Order | None,
+    replenishment_order: StockReplenishmentOrder | None,
     customer: Customer | None,
     totals: dict[int, Decimal],
     eligible_sales_order_item_ids: set[int] | None = None,
@@ -182,6 +191,7 @@ def _purchase_payload(
         item
         for item in purchase.items
         if eligible_sales_order_item_ids is None
+        or item.sales_order_item_id is None
         or int(item.sales_order_item_id) in eligible_sales_order_item_ids
     ]
     item_rows = []
@@ -189,6 +199,25 @@ def _purchase_payload(
         ordered = Decimal(item.purchase_quantity)
         received = totals.get(item.id, Decimal("0"))
         remaining = max(ordered - received, Decimal("0"))
+        converted_finished_quantity: int | None = None
+        loose_remainder_quantity: Decimal | None = None
+        if (
+            item.stock_replenishment_item_id is not None
+            and item.order_quantity_basis_snapshot is not None
+            and item.purchase_quantity_basis_snapshot is not None
+        ):
+            order_basis = Decimal(item.order_quantity_basis_snapshot)
+            purchase_basis = Decimal(item.purchase_quantity_basis_snapshot)
+            converted_finished_quantity = int(
+                (
+                    received * order_basis / purchase_basis
+                ).to_integral_value(rounding=ROUND_FLOOR)
+            )
+            loose_remainder_quantity = received - (
+                Decimal(converted_finished_quantity)
+                * purchase_basis
+                / order_basis
+            )
         item_rows.append(
             {
                 "purchase_item_id": item.id,
@@ -200,6 +229,22 @@ def _purchase_payload(
                 "received_quantity": _text(received),
                 "remaining_quantity": _text(remaining),
                 "purchase_unit": item.purchase_unit,
+                "converted_finished_quantity": converted_finished_quantity,
+                "loose_remainder_quantity": (
+                    _text(loose_remainder_quantity)
+                    if loose_remainder_quantity is not None
+                    else None
+                ),
+                "order_quantity_basis": (
+                    _text(Decimal(item.order_quantity_basis_snapshot))
+                    if item.order_quantity_basis_snapshot is not None
+                    else None
+                ),
+                "purchase_quantity_basis": (
+                    _text(Decimal(item.purchase_quantity_basis_snapshot))
+                    if item.purchase_quantity_basis_snapshot is not None
+                    else None
+                ),
             }
         )
     return {
@@ -207,9 +252,27 @@ def _purchase_payload(
         "purchase_number": purchase.purchase_number,
         "supplier_id": purchase.supplier_id,
         "supplier_name": purchase.supplier_name_snapshot,
-        "sales_order_id": sales_order.id,
-        "order_number": sales_order.order_number,
-        "customer_id": sales_order.customer_id,
+        "source_type": (
+            "sales_order" if sales_order is not None else "stock_replenishment"
+        ),
+        "sales_order_id": sales_order.id if sales_order is not None else None,
+        "stock_replenishment_order_id": (
+            replenishment_order.id if replenishment_order is not None else None
+        ),
+        "order_number": (
+            sales_order.order_number
+            if sales_order is not None
+            else replenishment_order.order_number
+            if replenishment_order is not None
+            else None
+        ),
+        "customer_id": (
+            sales_order.customer_id
+            if sales_order is not None
+            else replenishment_order.customer_id
+            if replenishment_order is not None
+            else None
+        ),
         "customer_name": customer.name if customer is not None else "客户待确认",
         "status": _purchase_status(visible_items, totals),
         "items": item_rows,
@@ -236,6 +299,17 @@ def build_external_receiving_overview(
         )
         .exists()
     )
+    has_stock_replenishment_item = (
+        select(ExternalPackagingPurchaseItem.id)
+        .where(
+            ExternalPackagingPurchaseItem.purchase_order_id
+            == ExternalPackagingPurchaseOrder.id,
+            ExternalPackagingPurchaseItem.stock_replenishment_item_id.is_not(
+                None
+            ),
+        )
+        .exists()
+    )
     query = (
         select(ExternalPackagingPurchaseOrder)
         .join(
@@ -243,7 +317,12 @@ def build_external_receiving_overview(
             ExternalPackagingPurchaseBatch.id
             == ExternalPackagingPurchaseOrder.batch_id,
         )
-        .join(Order, Order.id == ExternalPackagingPurchaseBatch.sales_order_id)
+        .outerjoin(Order, Order.id == ExternalPackagingPurchaseBatch.sales_order_id)
+        .outerjoin(
+            StockReplenishmentOrder,
+            StockReplenishmentOrder.id
+            == ExternalPackagingPurchaseBatch.stock_replenishment_order_id,
+        )
         .outerjoin(
             ExternalPackagingPurchaseCancellation,
             ExternalPackagingPurchaseCancellation.purchase_order_id
@@ -260,12 +339,31 @@ def build_external_receiving_overview(
         .where(
             ExternalPackagingPurchaseOrder.status == "confirmed",
             ExternalPackagingPurchaseCancellation.id.is_(None),
-            Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES),
-            has_forward_eligible_item,
+            or_(
+                (
+                    ExternalPackagingPurchaseBatch.sales_order_id.is_not(None)
+                    & Order.status.in_(ORDER_ITEM_ACTIVE_ORDER_STATUSES)
+                    & has_forward_eligible_item
+                ),
+                (
+                    ExternalPackagingPurchaseBatch.stock_replenishment_order_id.is_not(
+                        None
+                    )
+                    & StockReplenishmentOrder.status.in_(
+                        ("confirmed", "partially_stocked", "stocked")
+                    )
+                    & has_stock_replenishment_item
+                ),
+            ),
         )
     )
     if visible_customer_ids is not None:
-        query = query.where(Order.customer_id.in_(visible_customer_ids))
+        query = query.where(
+            or_(
+                Order.customer_id.in_(visible_customer_ids),
+                StockReplenishmentOrder.customer_id.in_(visible_customer_ids),
+            )
+        )
     if not include_completed:
         received_by_item = _received_quantity_aggregate().subquery()
         has_any_item = (
@@ -295,12 +393,33 @@ def build_external_receiving_overview(
         )
         query = query.where(or_(~has_any_item, has_pending_item))
     purchases = list(db.scalars(query).unique().all())
-    order_ids = {purchase.batch.sales_order_id for purchase in purchases}
+    order_ids = {
+        int(purchase.batch.sales_order_id)
+        for purchase in purchases
+        if purchase.batch.sales_order_id is not None
+    }
     sales_orders = {
         row.id: row
         for row in db.scalars(select(Order).where(Order.id.in_(order_ids))).all()
     }
-    customer_ids = {row.customer_id for row in sales_orders.values()}
+    replenishment_ids = {
+        int(purchase.batch.stock_replenishment_order_id)
+        for purchase in purchases
+        if purchase.batch.stock_replenishment_order_id is not None
+    }
+    replenishment_orders = {
+        int(row.id): row
+        for row in db.scalars(
+            select(StockReplenishmentOrder).where(
+                StockReplenishmentOrder.id.in_(replenishment_ids)
+            )
+        ).all()
+    }
+    customer_ids = {row.customer_id for row in sales_orders.values()} | {
+        int(row.customer_id)
+        for row in replenishment_orders.values()
+        if row.customer_id is not None
+    }
     customers = {
         row.id: row
         for row in db.scalars(select(Customer).where(Customer.id.in_(customer_ids))).all()
@@ -313,6 +432,7 @@ def build_external_receiving_overview(
             int(item.sales_order_item_id)
             for purchase in purchases
             for item in purchase.items
+            if item.sales_order_item_id is not None
         }
         order_items = list(
             db.scalars(
@@ -335,13 +455,30 @@ def build_external_receiving_overview(
         }
     rows = []
     for purchase in purchases:
-        sales_order = sales_orders.get(purchase.batch.sales_order_id)
-        if sales_order is None:
+        sales_order = (
+            sales_orders.get(int(purchase.batch.sales_order_id))
+            if purchase.batch.sales_order_id is not None
+            else None
+        )
+        replenishment_order = (
+            replenishment_orders.get(
+                int(purchase.batch.stock_replenishment_order_id)
+            )
+            if purchase.batch.stock_replenishment_order_id is not None
+            else None
+        )
+        if sales_order is None and replenishment_order is None:
             continue
+        customer_id = (
+            int(sales_order.customer_id)
+            if sales_order is not None
+            else int(replenishment_order.customer_id)
+        )
         payload = _purchase_payload(
             purchase,
             sales_order=sales_order,
-            customer=customers.get(sales_order.customer_id),
+            replenishment_order=replenishment_order,
+            customer=customers.get(customer_id),
             totals=totals,
             eligible_sales_order_item_ids=eligible_sales_order_item_ids,
         )
@@ -389,6 +526,12 @@ def serialize_external_receipt(receipt: ExternalPackagingReceipt) -> dict[str, A
                 "purchase_item_id": row.purchase_item_id,
                 "received_quantity": _text(Decimal(row.received_quantity)),
                 "purchase_unit": row.purchase_unit_snapshot,
+                "converted_finished_quantity": int(
+                    row.converted_finished_quantity or 0
+                ),
+                "loose_remainder_quantity_after": _text(
+                    Decimal(row.loose_remainder_quantity_after or 0)
+                ),
             }
             for row in receipt.items
         ],
@@ -420,8 +563,8 @@ def record_external_purchase_receipt(
             )
         return _load_receipt(db, existing.id), False
 
-    sales_order_id = db.scalar(
-        select(ExternalPackagingPurchaseBatch.sales_order_id)
+    source_batch = db.scalar(
+        select(ExternalPackagingPurchaseBatch)
         .join(
             ExternalPackagingPurchaseOrder,
             ExternalPackagingPurchaseOrder.batch_id
@@ -429,13 +572,42 @@ def record_external_purchase_receipt(
         )
         .where(ExternalPackagingPurchaseOrder.id == purchase_order_id)
     )
-    if sales_order_id is None:
+    if source_batch is None:
         raise ExternalPurchaseContractError("外购包装采购单不存在", status_code=404)
-    sales_order = claim_external_purchase_order(db, int(sales_order_id))
-    if sales_order is None:
-        raise ExternalPurchaseContractError("采购单关联订单不存在")
-    if sales_order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
-        raise ExternalPurchaseContractError("关联订单已终止，不能继续收料")
+    sales_order: Order | None = None
+    replenishment_order: StockReplenishmentOrder | None = None
+    if source_batch.sales_order_id is not None:
+        sales_order = claim_external_purchase_order(
+            db, int(source_batch.sales_order_id)
+        )
+        if sales_order is None:
+            raise ExternalPurchaseContractError("采购单关联订单不存在")
+        if sales_order.status not in ORDER_ITEM_ACTIVE_ORDER_STATUSES:
+            raise ExternalPurchaseContractError("关联订单已终止，不能继续收料")
+        source_customer_id = int(sales_order.customer_id)
+    elif source_batch.stock_replenishment_order_id is not None:
+        replenishment_order_id = int(source_batch.stock_replenishment_order_id)
+        claimed = db.execute(
+            update(StockReplenishmentOrder)
+            .where(StockReplenishmentOrder.id == replenishment_order_id)
+            .values(status=StockReplenishmentOrder.status)
+            .execution_options(synchronize_session=False)
+        )
+        if claimed.rowcount != 1:
+            raise ExternalPurchaseContractError("采购单关联补库来源不存在")
+        db.flush()
+        replenishment_order = db.get(
+            StockReplenishmentOrder, replenishment_order_id
+        )
+        if replenishment_order is None:
+            raise ExternalPurchaseContractError("采购单关联补库来源不存在")
+        if replenishment_order.status == "voided":
+            raise ExternalPurchaseContractError("关联补库来源已作废，不能继续收料")
+        if replenishment_order.customer_id is None:
+            raise ExternalPurchaseContractError("关联补库来源缺少客户")
+        source_customer_id = int(replenishment_order.customer_id)
+    else:
+        raise ExternalPurchaseContractError("采购单缺少有效业务来源")
 
     purchase = db.scalar(
         select(ExternalPackagingPurchaseOrder)
@@ -457,7 +629,7 @@ def record_external_purchase_receipt(
         raise ExternalPurchaseContractError("外购包装采购单已作废，不能继续收料")
     if (
         visible_customer_ids is not None
-        and sales_order.customer_id not in visible_customer_ids
+        and source_customer_id not in visible_customer_ids
     ):
         raise ExternalPurchaseContractError("无权操作该客户的外购包装收料", status_code=403)
     if not lines:
@@ -469,40 +641,62 @@ def record_external_purchase_receipt(
         raise ExternalPurchaseContractError("同一采购明细不能重复提交", status_code=422)
     if any(item_id not in purchase_items for item_id in submitted_ids):
         raise ExternalPurchaseContractError("收料明细不属于当前采购单", status_code=422)
-    target_order_item_ids = {
-        int(purchase_items[item_id].sales_order_item_id)
-        for item_id in submitted_ids
-    }
-    target_order_items = {
-        int(row.id): row
-        for row in db.scalars(
-            select(OrderItem).where(
-                OrderItem.id.in_(target_order_item_ids),
-                OrderItem.order_id == sales_order.id,
-            )
-        ).all()
-    }
-    if set(target_order_items) != target_order_item_ids:
-        raise ExternalPurchaseContractError("外购包装收料来源不完整")
+    target_order_items: dict[int, OrderItem] = {}
+    stock_items: dict[int, StockReplenishmentOrderItem] = {}
+    if sales_order is not None:
+        target_order_item_ids = {
+            int(purchase_items[item_id].sales_order_item_id)
+            for item_id in submitted_ids
+        }
+        target_order_items = {
+            int(row.id): row
+            for row in db.scalars(
+                select(OrderItem).where(
+                    OrderItem.id.in_(target_order_item_ids),
+                    OrderItem.order_id == sales_order.id,
+                )
+            ).all()
+        }
+        if set(target_order_items) != target_order_item_ids:
+            raise ExternalPurchaseContractError("外购包装收料来源不完整")
+    else:
+        stock_item_ids = {
+            int(purchase_items[item_id].stock_replenishment_item_id)
+            for item_id in submitted_ids
+            if purchase_items[item_id].stock_replenishment_item_id is not None
+        }
+        stock_items = {
+            int(row.id): row
+            for row in db.scalars(
+                select(StockReplenishmentOrderItem).where(
+                    StockReplenishmentOrderItem.id.in_(stock_item_ids),
+                    StockReplenishmentOrderItem.replenishment_order_id
+                    == replenishment_order.id,
+                )
+            ).all()
+        }
+        if len(stock_item_ids) != len(submitted_ids) or set(stock_items) != stock_item_ids:
+            raise ExternalPurchaseContractError("外购备库收料来源不完整")
     totals = _received_totals(db, set(purchase_items))
     normalized: list[tuple[ExternalPackagingPurchaseItem, Decimal]] = []
     for line in lines:
         item = purchase_items[int(line["purchase_item_id"])]
-        order_item = target_order_items[int(item.sales_order_item_id)]
-        block = order_item_forward_block_reason(
-            order_status=sales_order.status,
-            ordered_quantity=order_item.quantity,
-            delivered_quantity=order_item.delivered_quantity,
-            is_force_closed=order_item.is_force_closed,
-        )
-        if block is not None:
-            raise ExternalPurchaseContractError(
-                order_item_forward_block_message(
-                    block,
-                    action="收取外购包材",
-                    order_status=sales_order.status,
-                )
+        if sales_order is not None:
+            order_item = target_order_items[int(item.sales_order_item_id)]
+            block = order_item_forward_block_reason(
+                order_status=sales_order.status,
+                ordered_quantity=order_item.quantity,
+                delivered_quantity=order_item.delivered_quantity,
+                is_force_closed=order_item.is_force_closed,
             )
+            if block is not None:
+                raise ExternalPurchaseContractError(
+                    order_item_forward_block_message(
+                        block,
+                        action="收取外购包材",
+                        order_status=sales_order.status,
+                    )
+                )
         quantity = _decimal(line["received_quantity"])
         if item.purchase_unit in DISCRETE_PURCHASE_UNITS and quantity != quantity.to_integral_value():
             raise ExternalPurchaseContractError(
@@ -538,13 +732,58 @@ def record_external_purchase_receipt(
     db.add(receipt)
     db.flush()
     for item, quantity in normalized:
-        db.add(
-            ExternalPackagingReceiptItem(
-                receipt_id=receipt.id,
-                purchase_item_id=item.id,
-                received_quantity=quantity,
-                purchase_unit_snapshot=item.purchase_unit,
-            )
+        receipt_item = ExternalPackagingReceiptItem(
+            receipt_id=receipt.id,
+            purchase_item_id=item.id,
+            received_quantity=quantity,
+            purchase_unit_snapshot=item.purchase_unit,
+            converted_finished_quantity=0,
+            loose_remainder_quantity_after=Decimal("0"),
         )
+        db.add(receipt_item)
+        db.flush()
+        if replenishment_order is not None:
+            stock_item = stock_items[int(item.stock_replenishment_item_id)]
+            order_basis = _decimal(item.order_quantity_basis_snapshot)
+            purchase_basis = _decimal(item.purchase_quantity_basis_snapshot)
+            cumulative_received = totals.get(item.id, Decimal("0")) + quantity
+            completed_after = int(
+                (
+                    cumulative_received * order_basis / purchase_basis
+                ).to_integral_value(rounding=ROUND_FLOOR)
+            )
+            converted_quantity = completed_after - int(
+                stock_item.stocked_quantity or 0
+            )
+            if converted_quantity < 0:
+                raise ExternalPurchaseContractError(
+                    "外购备库累计换算数量小于已入库数量，已停止收料"
+                )
+            remainder = cumulative_received - (
+                Decimal(completed_after) * purchase_basis / order_basis
+            )
+            if remainder < 0:
+                raise ExternalPurchaseContractError(
+                    "外购备库散件余量计算异常，已停止收料"
+                )
+            receipt_item.converted_finished_quantity = converted_quantity
+            receipt_item.loose_remainder_quantity_after = remainder.quantize(
+                SIX_PLACES
+            )
+            if converted_quantity > 0:
+                try:
+                    receive_replenishment_item(
+                        db,
+                        order=replenishment_order,
+                        item=stock_item,
+                        quantity=converted_quantity,
+                        operator_id=user.id,
+                        receipt_item_id=receipt_item.id,
+                        source_ref_type="external_packaging_receipt_item",
+                    )
+                except StockReplenishmentError as error:
+                    raise ExternalPurchaseContractError(
+                        str(error), status_code=error.status_code
+                    ) from error
     db.flush()
     return _load_receipt(db, receipt.id), True

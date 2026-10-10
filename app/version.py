@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.611"
-APP_VERSION_NAME = "报料入口与补库校验"
+APP_VERSION = "v0.22.612"
+APP_VERSION_NAME = "手机常用箱全部上传图纸"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5914,3 +5914,15 @@ APP_VERIFICATION_STEPS = [
     "从报料的外购包材采购历史查看已有采购单，核对原单号与数量；无需重复报料或改动真实库存。",
 ]
 APP_CHANGELOG = [*(f"v0.22.611：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "手机查看常用箱工程图纸显示全部保留的上传附件，按上传时间排列，显示张数并支持逐张查看原图或完整PDF。",
+    "手机搜索、库存关联产品和产品二维码当前资料页统一展示；单张加载失败可单独重试，其余图纸继续显示。",
+    "保留客户范围、逐图权限、历史上传记录和生产任务冻结图纸；本版无数据库迁移，不修改正式业务数据。",
+]
+APP_VERIFICATION_STEPS = [
+    "手机刷新后搜索一款多次上传图纸的常用箱，展开工程图纸，核对张数与全部缩略图。",
+    "分别点开较早上传图片和PDF，核对原图；扫描产品二维码也应看到全部工程图纸。",
+]
+APP_CHANGELOG = [*(f"v0.22.612：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

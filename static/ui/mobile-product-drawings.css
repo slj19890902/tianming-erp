@@ -4,15 +4,18 @@
 .product-candidate > .product-drawings { margin: 0 11px 10px; }
 .product-candidate > .product-drawing-state { margin: 0 11px 10px; }
 .product-drawings { margin-top: 10px; border-top: 1px solid var(--line); scroll-margin-top: 76px; }
+.product-drawings [hidden] { display: none !important; }
 .product-drawings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 9px 2px; color: var(--blue); font-weight: 800; cursor: pointer; overflow-wrap: anywhere; list-style: none; }
 .product-drawings-toggle::-webkit-details-marker { display: none; }
 .product-drawings-action { flex: 0 0 auto; font-size: 13px; }
 .product-drawings-toggle:focus-visible, .product-drawing-original:focus-visible { outline: 3px solid #7ab8e5; outline-offset: 2px; }
 .product-drawings-panel { padding-bottom: 4px; }
-.product-drawing-item { margin-bottom: 8px; }
+.product-drawing-item { margin: 0 0 10px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
 .product-drawing-preview { display: block; width: 100%; max-height: 260px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; background: #f8faf9; }
 .product-drawing-state, .product-drawing-name { margin: 6px 0; color: var(--muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
-.product-drawing-original { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 10px; border: 1px solid var(--blue); border-radius: 8px; color: var(--blue); background: var(--blue-soft); font-weight: 800; text-decoration: none; scroll-margin-bottom: calc(86px + env(safe-area-inset-bottom)); }
+.product-drawing-name { color: var(--text); font-weight: 700; }
+.product-drawing-time { display: block; margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+.product-drawing-original { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 10px; border: 1px solid var(--blue); border-radius: 8px; color: var(--blue); background: var(--blue-soft, #eaf4ff); font-weight: 800; text-decoration: none; scroll-margin-bottom: calc(86px + env(safe-area-inset-bottom)); }
 .product-drawing-retry { margin: 6px 0; }
 .result-head { flex-wrap: wrap; }
 .result-head > div:first-child { flex: 1 1 180px; overflow-wrap: anywhere; }

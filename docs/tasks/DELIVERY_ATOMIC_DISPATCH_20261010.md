@@ -1,0 +1,41 @@
+# DELIVERY-ATOMIC-DISPATCH-20261010
+
+状态：独审已确认最低正确合同，授权运行源码实施；尚未修复发布。本卡不把设计或负面观察当修复。用户持续升级/修复发布授权继续有效，不另索重复发布批准；具体数据及发布门禁保留。
+
+目标：员工确认的整次送货要么完整提交一次，要么全部未提交；断网后能只读核对原结果，取消后的迟到原请求不能重新扣库，其他人改过数量的旧页面不能直接发后来新数量。正常明确重新发货、物理片/客户数量、BOM、共享库存、拿货、修订、打印及后续回单/对账阻断保持。
+
+基线：审查575e与原正式v614相关源等价。实际正式v615/5b726452cac0709259e74b520b95e3364f7ddf05已合入fabb7c45，根审查与方案7f9c3561，工作分支codex/delivery-atomic-dispatch-20261010。正式包c9b4c3a524779beb1a92a9c7a2e6e84854f15b306c6f73ec6b38b1f5d83a84c2，revision eo1010pi，远端已到5b726452；实施前/发布前重新核对。保留v615现场查询及图纸全部附件，不覆盖主工作区或旧候选。
+
+启动：CODEX_START→NAS AI_START→本卡→ORDER_FLOW→总需求4/6/7/10/11/12/16/17及章程3～9。证据为docs/reports/DELIVERY_SAVE_RECOVERY_AUDIT_20261010.md和artifact delivery-save-recovery-audit的真实HTTP/实际方法；不得扩为全仓重构。
+
+## 实现边界
+
+1. 原子发货命令：强制expected_actor_id、idempotency_key、expected_version及员工已确认的完整单据/拿货行快照。只读预览提供冻结客户和物理数量，发现版本/数量变化须员工重新核对；不静默换成后台最新值。
+2. 同写事务内先判原key精确重放，再沿Order→Delivery→OrderItem既有锁序核版本和原快照。必要的拿货apply抽私有commit=False，随货prepare与最终dispatch同父事务。保存完整原结果后才commit；故障全回滚。原结果与当前状态分开，原key在取消后仅返回旧完成事实，不重新扣库。
+3. 原记录使用FinanceIdempotencyRecord的真实delivery dispatch新action，原actor/key/hash/resource/response自洽；损坏或缺证据只给追溯，不能补造成功。只读resolver无DML，当前权限及原/当前客户范围都核对。首次明确未执行与先前unknown分开，不能把任意4xx/500当全局未执行。
+4. 外部旧无body写请求明确拒绝并提示刷新。普通发货/取消变化使旧version失效；私有已发货revision整体原事务及版本语义保留。不得给旧测试全局自动添body来掩盖旧端点行为。
+5. UI发出前持久保存完整原命令，独立账号/请求记录，紧凑显示“查原结果”“按原内容继续”“查看原单”。unknown跨刷新重开保留；空/部分/坏2xx不成功；有限等待及账号/窗口代际防晚回包。主完成与打印登记/列表失败分开，恢复成功不自动重打。
+6. 独立读取/执行兼容能力delivery_dispatch_v1必须在新写协议开放前激活。助手update/start/rollback/fallback/backup/restore全部核签名能力，不因same revision越过，也不让迁移分支绕过；实际安装助手须先含新门禁并退出旧GUI。无新记录但在途请求也须受保护。采用shared/data/delivery-dispatch-contract.json持久哨兵、state索引、加密备份metadata中的原内容/哈希。停服冷备验证后、新程序启动前原子激活；restore在promote前核metadata/哨兵/数据库action/签名能力并恢复索引。受管API从固定共享路径核哨兵，缺环境变量不能让真实受管库放行；非受管合成库独立。数据库action仅作遗失标记兜底。无DDL，不声称阻止管理员人为直接运行旧二进制，不能以别的capability冒支持。
+
+快照边界经独审确认：仅绑定已确认Delivery全行/版本/冻结双数量与BOM、已显式unordered allocation及拿货任务完整实际来源；普通order未预选批次明确allocation_mode=on_dispatch，保留原同锁自动多货位扣减，不复制未来分配算法、不发明lot_version或因无关库存变化挡送货。receipt记录本次真正消费流水。随货prepare同样绑定已确认需求和冻结身份，库位选择沿原算法、同事务提交或回滚。
+
+草稿create/update恢复本身另列下一最小闭环；当前不得宣称保存弹窗全部已修。现有保存后发货入口须使用已核对持久单ID和版本，不能把草稿坏回包当已确认发货依据。原historical/revision/customer-po的保存算法不在本卡重写。
+
+## 并行与唯一文件所有权
+
+本卡明确授权两个执行代理和一个独审并行。执行者从本卡最终提交建立自己的新codex分支，保留旧候选；各自既有独立worktree可在确认clean且无运行引用后复用。
+
+- /root/mobile_drawings_api：app/api/deliveries.py、新app/services/delivery_dispatch_commands.py、新tests/test_delivery_dispatch_commands.py和tests/test_delivery_dispatch_revision_compat.py；必要的定向既有送货测试更新先报根列文件，不能全局改conftest或通用自动补body。只写artifact/delivery-atomic-dispatch/api。
+- /root/mobile_drawings_ui：static/index.html、新static/ui/delivery-dispatch-recovery.js、新tests/ui/delivery_dispatch_recovery.test.cjs及实际方法/DOM定向测试。只写artifact/delivery-atomic-dispatch/ui。保留v615 index原资源hash及其他模块。
+- 根：desktop_assistant/manager.py、build.py、server_entry.py，新desktop_assistant/delivery_dispatch_contract.py，tests/desktop_assistant/test_delivery_dispatch_reader.py，任务/报告/版本及发布资产。API调用新模块require_managed_dispatch_activation(database_path, control=None)，传真实db.get_bind().url.database，模块自动核TM_ERP_CONTROL/真实共享路径；失败ValueError转503禁止写，彼此不互改。
+- /root/order_recovery_review：只写artifact/delivery-atomic-dispatch/review，独立检查真实反例→修复、数量/权限/回滚及helper恢复，发现缺陷交owner；不改候选源码。
+
+## 最短验收与发布
+
+真实合成HTTP覆盖原请求重放、异body/actor/customer scope、旧版本、取消后原key不扣/旧版本新key拒绝/明确新版本正常发；前置apply/prepare/dispatch各故障全回滚，原结果commit后丢回包可只读恢复；普通/无订单双数量及受控revision。UI用真实API包跑实际方法，覆盖坏ack、unknown持久化、同来源待核对、迟到跨账号/窗口、打印/列表辅助失败。helper真实签名包、激活前后、损坏/伪能力、零record窗口、真实加密backup→空目录restore及失败不promote。
+
+不跑全仓或无关长测试。禁止IAB、正式自动点击、新Chrome/额外服务、旧PID终止、正式业务补数及Git push。root差异检查/源绑定/唯一head后独审；正式安装助手和应用须同候选通过验证，实时CAS、新冷备实际Manager.restore、原业务字段和原附件保持、完整性/外键、健康/资源/权限核对，回退门禁不能省略。无DDL时不运行无关迁移；如确需DDL先另卡完整读取三份迁移文档并执行全部门禁。
+
+每阶段NAS独立回执，管理员1～3步现场验收待反馈；持续Goal active。局域网一次瞬时失联已独立复查自行恢复，未执行修复、不计本卡成果。
+
+本卡artifact根：D:/.codex/visualizations/2026/10/10/delivery-atomic-dispatch。API在自己的artifact先定版API_CONTRACT.md并向UI/根通知；字段修正须同步，UI不自行发明成功proof。独审只读建议与根方案以当前本卡为实施范围。

@@ -9,3 +9,7 @@
 发布沿用NAS普通代码修复长期授权，保持实时基线、唯一迁移头、定向验证、签名包范围、冷备真实恢复、原事实/附件保护、只读健康及资源核对、NAS独立回执和Git同步。预计不涉及迁移或正式业务写入。
 
 负责人先固定范围并读取主模块与适用章程。按现行NAS模型规范，允许一个独立只读子任务审查图纸来源/权限/打印门禁；根负责人唯一负责模板和集成，若需后台写入另固定互不重叠文件负责人；不安排无关任务。
+
+实施范围记录：审查发现补库图纸字段为空、PDF需权限预览后，子任务固定独占app/services/production_paper_drawings.py、app/services/requisition_production_print.py、app/api/requisition.py与tests/test_production_paper_drawings.py；发现旧实收fallback后追加app/api/incoming.py。根独占打印HTML、paper JS/CSS、Chrome测试及版本/交付记录。所有变更只投影和展示，不写正式业务。
+
+基线协调：开发起点v617/1f719611，期间正式已发布v618/65004e46、文档47c129e5。已合并最新正式分支，保留周需求、库存查询与十二列简易报料条单；本轮候选v619只增加完整任务单图纸闭环。无迁移，唯一head eo1010pi。

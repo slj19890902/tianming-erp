@@ -278,8 +278,15 @@ def calculate_requisitions(
     effective_demands: Mapping[str, Any],
     *,
     actual_yields_by_signature: Mapping[Any, Any] | None = None,
+    joint_cut_groups: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Calculate requisition rows; no percentage-loss estimate is introduced."""
+
+    if joint_cut_groups is not None:
+        from app.services.joint_cutting_contract import calculate_joint_requisitions
+        return calculate_joint_requisitions(
+            effective_demands, joint_cut_groups, actual_yields_by_signature
+        )
 
     actual_yields_by_signature = actual_yields_by_signature or {}
     rows: list[dict[str, Any]] = []

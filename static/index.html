@@ -23,6 +23,7 @@
     <script src="/static/ui/stock-preparation-completion-recovery.js?v=20261010-completion1"></script>
     <script src="/static/ui/stock-preparation-group-recovery.js?v=72b124d276b5"></script>
     <script src="/static/ui/stock-replenishment-save-recovery.js?v=f7c4b6c25c37"></script>
+    <script src="/static/ui/delivery-dispatch-recovery.js?v=cabbe6fcb1a5"></script>
     <script src="/static/ui/stock-preparation-assembly-recovery.js?v=a11f3ee39242"></script>
     <script src="/static/ui/production-workspace.js?v=fe58b8dee03a"></script>
     <script src="/static/ui/production-desk.js?v=round-experience-d2"></script>
@@ -5073,6 +5074,15 @@
 
             <template v-else-if="activePage === 'deliveries'">
               <div class="page-head delivery-page-head"><div><h2>送货与回单</h2></div><div class="toolbar-group"><button v-if="canDelivery" class="btn primary" @click="openDelivery">新增送货单</button><button v-if="canDelivery" class="btn" @click="openTianhuaPreimport">导入预送货</button><button class="btn" @click="openDeliveryBacklogs">持续待补送</button><button class="btn" @click="openDeliveryRoutePlan">送货路线辅助</button><button class="btn" @click="loadDeliveries">刷新</button></div></div>
+              <div v-if="deliveryDispatchStorageError" class="panel status orange">{{ deliveryDispatchStorageError }}</div>
+              <div v-if="deliveryDispatchNotice && deliveryDispatchNotice.record.actor === Number(user?.id)" class="panel" data-delivery-dispatch-success><strong>{{ deliveryDispatchNotice.message }} · {{ deliveryDispatchNotice.record.display.delivery_number }}</strong><div>{{ deliveryDispatchCurrentText(deliveryDispatchNotice.record.current,deliveryDispatchNotice.record.state) }}</div><div v-if="deliveryDispatchNotice.record.state==='closed'">本次确认已结束，没有执行这次发货；新发货仍需重新核对数量。</div><div v-if="deliveryDispatchNotice.auxiliary">{{ deliveryDispatchNotice.auxiliary }}</div><button class="btn" :disabled="deliveryDispatchIsBusy()" @click="viewDeliveryDispatchOriginal(deliveryDispatchNotice.record)">查看原单</button><button v-if="deliveryDispatchNotice.record.state==='closed'" class="btn primary" :disabled="deliveryDispatchIsBusy()" @click="dispatchDelivery({id:deliveryDispatchNotice.record.deliveryId})">重新核对发货</button><button v-else-if="deliveryDispatchNotice.record.state==='confirmed'" class="btn" :disabled="deliveryDispatchIsBusy()" @click="printDelivery({id:deliveryDispatchNotice.record.deliveryId,delivery_number:deliveryDispatchNotice.record.display.delivery_number})">打印原单</button></div>
+              <div v-for="record in deliveryDispatchRecords.filter(row => row.actor === Number(user?.id))" :key="record.key" class="panel" data-delivery-dispatch-recovery>
+                <strong>原发货结果待核对 · {{ record.display.delivery_number }} · {{ record.display.customer_name }}</strong>
+                <div v-for="line in deliveryDispatchLines(record)" :key="line.id">{{ line.code }} {{ line.name }}：{{ line.quantity }} {{ line.unit }} · {{ line.location }}</div>
+                <div>如果已发货，会显示原结果；如果本次未发货，则结束这次确认，再核对数量。</div>
+                <div v-if="record.state==='closing'">正在核对结束结果，不再按原请求发货；可查原结果或再次结束本次确认。</div>
+                <div class="toolbar-group"><button class="btn primary" :disabled="deliveryDispatchIsBusy()" @click="queryDeliveryDispatchResult(record)">查原结果</button><button v-if="deliveryDispatchNotRecorded[record.key] && record.state!=='closing'" class="btn" :disabled="deliveryDispatchIsBusy()" @click="sendDeliveryDispatchRecord(record,true)">按原内容继续</button><button class="btn" :disabled="deliveryDispatchIsBusy()" @click="closeDeliveryDispatchRequest(record)">结束本次确认，重新核对</button><button class="btn" :disabled="deliveryDispatchIsBusy()" @click="viewDeliveryDispatchOriginal(record)">查看原单</button></div>
+              </div>
               <div v-if="deliveryDashboardMode==='pending_customers'" class="panel" style="margin-bottom:10px">
                 <div class="toolbar"><div><strong>下一步：选客户开送货单</strong><span class="muted" style="margin-left:8px">点客户后直接进入送货明细</span></div><button class="btn small" @click="deliveryDashboardMode=''">查看全部送货单</button></div>
                 <div v-if="deliveryPendingState.loading" class="empty">正在加载待送货客户…</div>
@@ -9410,6 +9420,16 @@
                 </tbody></table>
               </div>
             </div>
+            <div v-else-if="modal.type === 'deliveryDispatch'" data-delivery-dispatch-preview>
+              <div v-if="deliveryDispatchPreview && deliveryDispatchPreview.packet.current_actor_id === Number(user?.id)">
+                <strong>{{ deliveryDispatchPreview.display.delivery_number }} · {{ deliveryDispatchPreview.display.customer_name }}</strong>
+                <table><thead><tr><th>产品</th><th>原待发</th><th>本次发货</th><th>实物与位置</th></tr></thead><tbody>
+                  <tr v-for="line in deliveryDispatchLines(deliveryDispatchPreview)" :key="line.id"><td>{{ line.code }} {{ line.name }}</td><td>{{ line.original }} {{ line.unit }}</td><td><strong>{{ line.quantity }} {{ line.unit }}</strong></td><td>{{ line.physical }} {{ line.physicalUnit }} · {{ line.location }}</td></tr>
+                </tbody></table>
+                <p v-if="deliveryDispatchPreview.packet.snapshot.pick_action==='apply'" class="status orange">按已提交的实际拿货数量发货；请核对上面的数量变化。</p>
+                <button class="btn primary" :disabled="deliveryDispatchIsBusy()" data-delivery-dispatch-send @click="sendDeliveryDispatchPreview">{{ deliveryDispatchIsBusy() ? '发货中…' : (deliveryDispatchPreview.packet.snapshot.pick_action==='apply' ? '确认拿货变化并发货' : '发货并打印') }}</button>
+              </div>
+            </div>
             <div v-else-if="modal.type === 'delivery'">
               <fieldset :disabled="deliverySaveState.saving" style="border:0;padding:0;margin:0;min-width:0;width:100%">
               <div class="delivery-flow-guide" aria-label="送货单操作顺序" aria-live="polite">
@@ -10066,7 +10086,7 @@
             <button type="button" class="btn primary product-inline-save" :disabled="(!!productForm.id && !canEditProducts) || loading || masterSavePending || !!productCreaseMismatch || !!productMoldError || !!productPrintingPlateError || !!productPrintingColorError || !!productProductionLabelError" @click="saveModal()">{{ masterSavePending ? '保存中…' : (productEditReturnContext && productEditReturnContext.source!=='bom' ? (productEditReturnContext.source==='requisition' ? '保存并返回报料' : '保存并返回订单') : '保存') }}</button>
           </div>
           <div v-if="!['product','orderPdfImport'].includes(modal?.type)" class="modal-foot">
-            <button v-if="!isForcedPassword && modal?.type!=='statementDetail'" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving)" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
+            <button v-if="!isForcedPassword && modal?.type!=='statementDetail'" class="btn" :disabled="masterSavePending || (modal?.type==='stockReplenishment' && stockReplenishmentSaveState.saving) || (modal?.type==='quotationConvert' && quotationConversionState.saving) || (modal?.type==='order' && orderCreateSaveState.saving) || (modal?.type==='orderEdit' && orderGroupSaveState.saving) || (modal?.type==='orderItem' && orderItemSaveState.saving) || (modal?.type==='orderItem' && finishedReservationActionBlocked()) || (['supplierRequisitionDraft','requisition'].includes(modal?.type) && requisitionInventoryActionBlocked()) || (modal?.type==='delivery' && deliverySaveState.saving) || (modal?.type==='deliveryDispatch' && deliveryDispatchIsBusy())" @click="closeModal">{{ canSaveModal ? "取消" : "关闭" }}</button>
             <button v-if="modal?.type==='statementDetail' && !['confirmed','cancelled'].includes(statementDetail?.confirmation_status)" class="btn primary" :disabled="!!financeStatementOperationState.action" @click="exportStatement(statementDetail,'xlsx')">导出对账单</button>
             <button v-if="modal?.type==='statementDetail' && !['confirmed','cancelled'].includes(statementDetail?.confirmation_status) && canConfirmStatement && canGenerateInvoiceTask" class="btn" :disabled="!!financeStatementOperationState.action" @click="confirmAndDownloadStatement(statementDetail)">{{ financeStatementOperationState.action==='confirm_download' ? '确认并下载中…' : '确认并下载开票文件' }}</button>
             <button v-else-if="modal?.type==='statementDetail' && statementDetail?.confirmation_status!=='cancelled'" class="btn primary" @click="exportStatement(statementDetail,'xlsx')">重新导出 Excel</button>
@@ -10796,7 +10816,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "", fluteRuleAction:{action:"",ruleId:null},
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryCustomerSources:{orders:true,inventory:false}, deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryInlineEdit:null, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryDetailedSearchVisible:false, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliveryLabelOpenState:{busy:false,deliveryId:null}, deliveryLabelRecoveryUrl:"", deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, deliveryReminderState:{loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryCustomerSources:{orders:true,inventory:false}, deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryInlineEdit:null, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryDetailedSearchVisible:false, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliveryDispatchRecords:[], deliveryDispatchStorageError:"", deliveryDispatchNotice:null, deliveryDispatchBusy:false, deliveryDispatchBusyActor:null, deliveryDispatchBusyAuth:null, deliveryDispatchEpoch:0, deliveryDispatchNotRecorded:{}, deliveryDispatchPreview:null, deliveryLabelOpenState:{busy:false,deliveryId:null}, deliveryLabelRecoveryUrl:"", deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, deliveryReminderState:{loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
             invoiceTasks: [], invoiceHistoryRecords: [], invoiceSearchVisible:false, invoiceTaskFilters:{customer_id:"",statement_month:"",customer_keyword:"",month_from:"",month_to:"",date_basis:"statement",status:""}, invoiceTaskState:{loading:false,error:""},
             partnerInvoiceMerge:{statementId:null,requestToken:0,loading:false,saving:false,preview:null,key:null},
             invoiceVoidForm:{}, invoiceVoidState:{loading:false,saving:false,error:"",token:0}, statementInvalidateForm:{},
@@ -11945,7 +11965,7 @@
             return this.isAccessibleReadOnlyOrderDialog || ["order", "costGaps"].includes(this.modal?.type) || modalA11ySessionActive;
           },
           canSaveModal() {
-            if (!this.modal) return false;
+            if (!this.modal || this.modal.type === "deliveryDispatch") return false;
             if (this.modal.type === "customer") return this.customerForm.id ? this.canEditCustomers : this.canCreateCustomers;
             if (this.modal.type === "supplier") return this.canAdmin;
             if (this.modal.type === "product") return this.productForm.id ? this.canEditProducts : this.canCreateProducts;
@@ -23432,6 +23452,7 @@
             this.invalidateDeliveryListDetail(row);
           },
           async loadDeliveries() {
+            this.refreshDeliveryDispatchRecovery();
             if (this.deliveryInlineEdit) { this.showToast("请先保存或取消当前明细编辑，再刷新列表。", true); return false; }
             const requestToken = Number(this.deliveryListState.request_token || 0) + 1;
             this.deliveryListState.request_token = requestToken;
@@ -38566,7 +38587,7 @@
             }
             const row = this.currentDeliveryDraftRow();
             row.pick_task = this.deliveryForm.pick_task || row.pick_task || null;
-            const dispatched = await this.dispatchDelivery(row, {confirmAction:false});
+            const dispatched = await this.dispatchDelivery(row, {confirmAction:false,expectedForm:this.deliveryForm});
             if (dispatched) this.modal = null;
             return dispatched;
           },
@@ -39561,7 +39582,7 @@
                 this.showToast(message, true);
                 return;
               }
-            if (this.modal?.type === "delivery" && this.deliverySaveState?.saving) {
+            if ((this.modal?.type === "delivery" && this.deliverySaveState?.saving) || (this.modal?.type === "deliveryDispatch" && this.deliveryDispatchIsBusy())) {
                 this.showToast("送货草稿正在保存，请稍候", true);
                 return;
               }
@@ -40649,10 +40670,12 @@
               row._externalBuying = false;
             }
           },
-          async showDeliveryStockWarnings(deliveryId) {
+          async showDeliveryStockWarnings(deliveryId, context = null) {
+            if (context && !context.current()) return;
             if (!this.hasPermission('warehouse.view')) return;
             try {
-              const {data} = await axios.get(`/api/deliveries/${deliveryId}/stock-warnings`);
+              const {data} = context ? await this.deliveryDispatchRequest("get",`/api/deliveries/${deliveryId}/stock-warnings`,undefined,context) : await axios.get(`/api/deliveries/${deliveryId}/stock-warnings`);
+              if (context && !context.current()) return;
               const rows = data.items || [];
               if (!rows.length) return;
               const lines = rows.map(row => `${row.product_code || ''} ${row.product_name || ''}：库存 ${row.available_quantity}，预警 ${row.warning_quantity}`);
@@ -40671,75 +40694,250 @@
                 : row.proposed_items.map(item => `${item.product_code || item.product_name || row.product_name}：报料 ${item.quantity}${item.target_inventory_type === 'semi_finished' ? '张' : ''}`).join('\n'));
               const message = `以下产品达到库存预警：\n${lines.join('\n')}\n\n本次待报料：\n${demandLines.join('\n')}${blocked.length ? '\n\n以下产品需先补全资料：\n' + blocked.join('\n') : ''}\n\n确认生成以上待报料草稿？`;
               if (!confirm(message)) return;
+              if (context && !context.current()) return;
               const items = ready.map(row => Number(row.suggested_physical_quantity || 0) > 0
                 ? {policy_id:row.id,physical_quantity:Number(row.suggested_physical_quantity)}
                 : {policy_id:row.id,plan_hash:row.plan_hash});
-              const result = await axios.post(`/api/deliveries/${deliveryId}/stock-warnings/confirm`, {items});
+              const result = context ? await this.deliveryDispatchRequest("post",`/api/deliveries/${deliveryId}/stock-warnings/confirm`,{items},context) : await axios.post(`/api/deliveries/${deliveryId}/stock-warnings/confirm`, {items});
+              if (context && !context.current()) return;
               this.showToast(`待报料已保存：${(result.data.orders || []).map(order => order.order_number).join('、')}`);
             } catch (error) {
-              this.showToast(`发货已完成；补库提醒处理失败，请从库存预警核对：${this.errorMessage(error)}`, true);
+              if (!context || context.current()) this.showToast(`发货已完成；补库提醒处理失败，请从库存预警核对：${this.errorMessage(error)}`, true);
             }
+          },
+          deliveryDispatchIsBusy() { return this.deliveryDispatchBusy && this.deliveryDispatchBusyActor === Number(this.user?.id) && this.deliveryDispatchBusyAuth === this.authGeneration; },
+          deliveryDispatchController() {
+            if (!window.TmDeliveryDispatchRecovery) throw new Error("发货核对组件未加载，请刷新页面；没有新发货");
+            return window.TmDeliveryDispatchRecovery.create(Number(this.user?.id), window.localStorage);
+          },
+          refreshDeliveryDispatchRecovery() {
+            try { this.deliveryDispatchRecords = this.deliveryDispatchController().list().filter(record => !["confirmed","closed"].includes(record.state)); this.deliveryDispatchStorageError = ""; }
+            catch (error) { this.deliveryDispatchStorageError = this.errorMessage(error); this.deliveryDispatchRecords = []; }
+          },
+          deliveryDispatchContext(modal = this.modal) {
+            const actor = Number(this.user?.id), auth = this.authGeneration, page = this.activePage;
+            const epoch = this.deliveryDispatchEpoch = Number(this.deliveryDispatchEpoch || 0) + 1;
+            return {actor, auth, page, epoch, current:() => Number(this.user?.id) === actor && this.authGeneration === auth && this.activePage === page && this.deliveryDispatchEpoch === epoch && this.modal === modal};
+          },
+          async deliveryDispatchRequest(method, url, body, context) {
+            // Local client inherits fresh authentication defaults without global late-error effects.
+            const client = axios.create({timeout:60000});
+            let timer;
+            try {
+              const request = client.request({method, url, data:body, timeout:60000});
+              return await Promise.race([request, new Promise((_,reject) => { timer = setTimeout(() => reject(new Error("等待发货回执超时，原内容已保留，请查原结果")),60000); })]);
+            } catch (error) {
+              if (context.current() && error?.response?.status === 401) window.erpAuthRequired?.();
+              throw error;
+            } finally { clearTimeout(timer); }
+          },
+          deliveryDispatchLines(record) {
+            const snapshot = record?.body?.snapshot || record?.packet?.snapshot;
+            const display = record?.display || record?.packet?.display || {};
+            return (snapshot?.items || []).map(item => {
+              const text = (display.items || []).find(line => line.delivery_item_id === item.delivery_item_id) || {};
+              const final = snapshot.expected_final_items.find(line => line.delivery_item_id === item.delivery_item_id);
+              return {id:item.delivery_item_id, code:text.product_code || "", name:text.product_name || "品名待核对", location:(snapshot.pick_task?.items.find(line => line.delivery_item_id === item.delivery_item_id)?.location_lines || []).map(line => line.location_name).filter(Boolean).join("、") || (item.allocation_mode === "on_dispatch" ? "发货时按当前库存位置分配" : "按已选库存批次"), original:item.customer_quantity, quantity:final.customer_quantity, unit:final.customer_unit || "单位待核对", physical:final.physical_quantity, physicalUnit:final.physical_unit || "单位待核对"};
+            });
+          },
+          deliveryDispatchCurrentText(current, state = "confirmed") {
+            if (!current) return "";
+            if (current.status === "pending") return state === "closed" ? "当前原单待发货" : "当前已撤销发货，原完成记录保留";
+            if (current.status === "voided") return "当前送货单已删除留痕";
+            return current.status === "dispatched" ? "当前仍为已发货" : "请查看原单当前状态";
           },
           async dispatchDelivery(row, options = {}) {
-            if (this.deliveryInlineEdit) { this.showToast("请先保存或取消明细编辑，再打印。", true); return false; }
-            if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;
-            const deliveryId = Number(row?.id || 0);
-            const deliveryNumber = String(row?.delivery_number || `#${deliveryId}`);
-            if (!deliveryId) {
-              this.showToast("送货单不存在，无法发货", true);
-              return false;
-            }
-            const task = this.normalizeDeliveryPickTask(row);
-            const frozenTask = task ? {...task} : null;
-            if (task?.id && (task.has_exception || task.status === "exception")) {
-              const details = this.deliveryPickExceptionText(row);
-              if (!confirm(`司机拿货结果存在异常，请确认以下变化后再发货：\n${details || "存在没货或数量变化"}\n\n确认后系统会先应用司机结果，再继续发货打印。`)) return false;
-            }
-            const customerName = String(row?.customer_name || "客户未登记");
-            if (options?.confirmAction !== false && !confirm(`确认发货并打印吗？\n客户：${customerName}\n送货单：${deliveryNumber}`)) return false;
-            this.deliveryOperationState = {action:"dispatch",deliveryId,deliveryNumber};
-            const frozenRow = {...row,id:deliveryId,delivery_number:deliveryNumber,pick_task:frozenTask};
-            let printSession = null;
-            let dispatchSucceeded = false;
+            if (this.deliveryInlineEdit || this.deliveryOperationState.action || this.receiptOperationState?.action || this.deliveryDispatchIsBusy()) return false;
+            const id = Number(row?.id), actor = Number(this.user?.id);
+            if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(actor) || actor <= 0) { this.showToast("请刷新并核对已保存的原送货单",true); return false; }
+            const context = this.deliveryDispatchContext();
+            this.deliveryDispatchBusyActor = context.actor; this.deliveryDispatchBusyAuth = context.auth; this.deliveryDispatchBusy = true;
             try {
-              if (frozenTask?.id && (frozenTask.has_exception || frozenTask.status === "exception")) {
-                await this.applyDeliveryPickTask(frozenRow);
-                row.pick_task = {...frozenTask,status:"applied",has_exception:false};
+              const controller = this.deliveryDispatchController();
+              const pending = controller.list().find(record => record.deliveryId === id && !["confirmed","closed"].includes(record.state));
+              if (pending) { this.refreshDeliveryDispatchRecovery(); this.showToast("原发货结果待核对，请查原结果；没有新发货",true); return false; }
+              const task = this.normalizeDeliveryPickTask(row);
+              const pickAction = task && task.status !== "applied" && (task.has_exception || task.status === "exception") ? "apply" : "none";
+              const {data} = await this.deliveryDispatchRequest("get", `/api/deliveries/${id}/dispatch-snapshot?pick_action=${pickAction}`, undefined, context);
+              if (!context.current()) return false;
+              const packet = window.TmDeliveryDispatchRecovery.validateSnapshot(data, actor, id, Number(row.version));
+              const form = options.expectedForm;
+              if (form) {
+                const lines = form.lines || [], ids = new Set(lines.map(line => Number(line.delivery_item_id)));
+                if (this.deliveryForm !== form || Number(form.customer_id) !== packet.snapshot.delivery.customer_id || Number(form.version) !== packet.snapshot.delivery.version || lines.length !== packet.snapshot.items.length || ids.size !== lines.length || lines.some(line => !Number.isSafeInteger(Number(line.delivery_item_id)) || !packet.snapshot.items.some(item => item.delivery_item_id === Number(line.delivery_item_id) && item.customer_quantity === Number(line.delivered_quantity)))) {
+                  throw new Error("原草稿保存尚未完整核对，请刷新并打开原送货单后再发货");
+                }
               }
-              await axios.post(`/api/deliveries/${deliveryId}/prepare-accompany`);
-              printSession = await this.openDeliveryPrintTab(deliveryId, true);
-              if (!printSession) return false;
-              await axios.put(`/api/deliveries/${deliveryId}/dispatch`);
-              dispatchSucceeded = true;
-              this.invalidateDeliveryListDetail(deliveryId);
-              printSession.activate();
-              try {
-                await axios.put(`/api/deliveries/${deliveryId}/printed`);
-              } catch (error) {
-                this.showToast(`发货已经完成；打印登记失败，可重新打开打印页，不要再次发货：${this.errorMessage(error)}`, true);
-                return true;
-              }
-              try {
-                await Promise.all([this.loadDeliveries(),this.loadOrders(),this.loadKpi()]);
-              } catch (error) {
-                this.showToast(`发货已经完成；列表刷新失败，只需刷新页面，不要再次发货：${this.errorMessage(error)}`, true);
-                return true;
-              }
-              this.showToast("发货成功，打印页已打开");
-              return true;
-            }
-            catch (error) {
-              const message = this.errorMessage(error);
-              if (printSession && !dispatchSucceeded) printSession.abort(message);
-              this.showToast(message, true);
+              this.deliveryDispatchPreview = {packet, display:packet.display, body:null};
+              this.modal = {type:"deliveryDispatch",title:"核对发货"};
               return false;
-            } finally {
-              if (dispatchSucceeded) await this.showDeliveryStockWarnings(deliveryId);
-              if (this.deliveryOperationState.action === "dispatch" && Number(this.deliveryOperationState.deliveryId) === deliveryId) {
-                this.deliveryOperationState = {action:"",deliveryId:null,deliveryNumber:""};
-              }
-            }
+            } catch (error) { if (context.current()) this.showToast(this.errorMessage(error),true); return false; }
+            finally { if (Number(this.user?.id) === context.actor && this.authGeneration === context.auth && this.deliveryDispatchEpoch === context.epoch) this.deliveryDispatchBusy = false; }
           },
+          async sendDeliveryDispatchPreview() {
+            if (this.deliveryDispatchIsBusy() || this.modal?.type !== "deliveryDispatch" || !this.deliveryDispatchPreview) return false;
+            const preview = this.deliveryDispatchPreview, actor = Number(this.user?.id);
+            let record;
+            try {
+              const packet = window.TmDeliveryDispatchRecovery.validateSnapshot(preview.packet, actor, preview.packet.snapshot.delivery.id);
+              const body = {expected_actor_id:actor, idempotency_key:createIdempotencyKey(), expected_version:packet.snapshot.delivery.version, snapshot_hash:packet.snapshot_hash, snapshot:packet.snapshot, confirm_pick_exception:packet.snapshot.pick_action === "apply"};
+              record = this.deliveryDispatchController().prepare(body,packet.display);
+            } catch (error) { this.showToast(this.errorMessage(error),true); return false; }
+            return this.sendDeliveryDispatchRecord(record, false);
+          },
+          async refreshDeliveryDispatchAfterSuccess(context) {
+            const requestToken = Number(this.deliveryListState.request_token || 0) + 1;
+            this.deliveryListState.request_token = requestToken;
+            const params = new URLSearchParams({page:String(Number(this.pages.deliveries || 1)),page_size:String(this.deliveryListPageSize()),view:"summary"});
+            for (const [key,value] of Object.entries({...this.deliveryListFilters,...this.deliveryDetailedFilters})) if (value !== "" && value !== null && value !== undefined) params.set(key,String(value));
+            const {data} = await this.deliveryDispatchRequest("get",`/api/deliveries?${params}`,undefined,context);
+            if (!context.current() || this.deliveryListState.request_token !== requestToken) return false;
+            if (!data || !Array.isArray(data.items) || !Number.isSafeInteger(data.total) || data.total < 0) throw new Error("送货列表回执不完整，请重读");
+            this.deliveries = data.items; this.deliveriesTotal = data.total;
+            this.expandedDeliveryRows = {}; this.deliveryDetailState = {};
+            this.deliveryListState.loaded = true; this.deliveryListState.error = "";
+            return true;
+          },
+          async sendDeliveryDispatchRecord(record, recovering = true) {
+            if (this.deliveryDispatchIsBusy()) return false;
+            const context = this.deliveryDispatchContext();
+            if (record.actor !== context.actor) return false;
+            let controller, live;
+            try { controller = this.deliveryDispatchController(); live = controller.get(record.key); }
+            catch (error) { this.deliveryDispatchStorageError = this.errorMessage(error); this.showToast(this.deliveryDispatchStorageError,true); return false; }
+            if (!live || ["confirmed","closed","closing"].includes(live.state)) { this.showToast("原请求已确认或正在结束，请查原结果",true); return false; }
+            if (recovering && !this.deliveryDispatchNotRecorded?.[record.key]) { this.showToast("请先查原结果，再按原内容继续",true); return false; }
+            this.deliveryDispatchBusyActor = context.actor; this.deliveryDispatchBusyAuth = context.auth; this.deliveryDispatchBusy = true;
+            let printSession = null;
+            try {
+              if (recovering) controller.unknown(record.key);
+              controller.sending(record.key);
+              window.TmDeliveryDispatchRecovery.validateCommand(live.body,context.actor);
+              if (!recovering) printSession = await this.openDeliveryPrintTab(record.deliveryId,true);
+              if (!context.current()) return false;
+              const beforeSend = controller.get(record.key);
+              if (!beforeSend || ["confirmed","closed","closing"].includes(beforeSend.state)) {
+                printSession?.abort("原确认已有结果或正在结束，请查原结果");
+                this.refreshDeliveryDispatchRecovery();
+                this.showToast("原确认已有结果或正在结束，请查原结果；没有继续发货",true);
+                return false;
+              }
+              if (window.TmDeliveryDispatchRecovery.stable(beforeSend.body) !== window.TmDeliveryDispatchRecovery.stable(live.body)) throw new Error("原发货内容发生变化，请保留记录并查原结果");
+              live = beforeSend;
+              const {data} = await this.deliveryDispatchRequest("put", `/api/deliveries/${record.deliveryId}/dispatch`, live.body, context);
+              if (!context.current()) return false;
+              if (data?.result === "closed") {
+                const proof = window.TmDeliveryDispatchRecovery.validateClosed(data,live,context.actor);
+                let closed, cacheFailed = false;
+                try { closed = controller.close(record.key,proof,data.current); }
+                catch (_) { closed = controller.get(record.key); cacheFailed = true; }
+                printSession?.abort("本次确认已结束，请重新核对发货");
+                this.deliveryDispatchNotice = {record:closed,message:"本次确认已结束",auxiliary:cacheFailed ? "本机未能保留结束凭据，请再次查原结果；不要重发原请求" : ""};
+                this.refreshDeliveryDispatchRecovery();
+                if (closed.state === "closed" && this.modal?.type === "deliveryDispatch") this.modal = null;
+                return true;
+              }
+              const receipt = window.TmDeliveryDispatchRecovery.validateCompleted(data,live,context.actor);
+              let confirmed, cacheFailed = false;
+              try { confirmed = controller.confirm(record.key,receipt,data.current); }
+              catch (error) { confirmed = controller.get(record.key); cacheFailed = true; }
+              this.deliveryDispatchNotice = {record:confirmed, message:"原发货已完成", auxiliary:cacheFailed ? "原发货已完成，但浏览器未能保留确认回执；请再次只读核对，不能重新发货" : (!recovering && !printSession ? "原发货已完成，打印页未打开；请查看或打印原单" : "")};
+              this.deliveryDispatchNotRecorded = {...this.deliveryDispatchNotRecorded,[record.key]:false};
+              this.refreshDeliveryDispatchRecovery();
+              this.invalidateDeliveryListDetail(record.deliveryId);
+              printSession?.activate();
+              if (this.modal?.type === "deliveryDispatch") this.modal = null;
+              const completedModal = this.modal;
+              const stillCurrent = () => Number(this.user?.id) === context.actor && this.authGeneration === context.auth && this.activePage === context.page && this.deliveryDispatchEpoch === context.epoch && this.modal === completedModal;
+              try {
+                if (printSession) await this.deliveryDispatchRequest("put",`/api/deliveries/${record.deliveryId}/printed`,undefined,{current:stillCurrent});
+                if (stillCurrent()) await this.refreshDeliveryDispatchAfterSuccess({current:stillCurrent});
+              } catch (error) { if (stillCurrent()) this.deliveryDispatchNotice.auxiliary = "发货已完成，打印登记或列表刷新失败；请查看原单，不要重新发货"; }
+              if (!recovering && stillCurrent()) await this.showDeliveryStockWarnings(record.deliveryId,{current:stillCurrent});
+              return true;
+            } catch (error) {
+              if (context.current()) {
+                try { controller.unknown(record.key); } catch (storageError) { this.deliveryDispatchStorageError = this.errorMessage(storageError); }
+                printSession?.abort("发货结果待核对，请在原页面查原结果");
+                this.refreshDeliveryDispatchRecovery();
+                this.showToast(`原发货结果待核对：${this.errorMessage(error)}。请查原结果，不要新建发货`,true);
+              }
+              return false;
+            } finally { if (Number(this.user?.id) === context.actor && this.authGeneration === context.auth && this.deliveryDispatchEpoch === context.epoch) this.deliveryDispatchBusy = false; }
+          },
+          async queryDeliveryDispatchResult(record) {
+            if (this.deliveryDispatchIsBusy()) return false;
+            const context = this.deliveryDispatchContext();
+            if (record.actor !== context.actor) return false;
+            let controller;
+            try { controller = this.deliveryDispatchController(); }
+            catch (error) { this.deliveryDispatchStorageError = this.errorMessage(error); this.showToast(this.deliveryDispatchStorageError,true); return false; }
+            this.deliveryDispatchBusyActor = context.actor; this.deliveryDispatchBusyAuth = context.auth; this.deliveryDispatchBusy = true;
+            try {
+              const live = controller.unknown(record.key);
+              const {data} = await this.deliveryDispatchRequest("post",`/api/deliveries/${record.deliveryId}/dispatch-results/${encodeURIComponent(record.key)}/resolve`,{expected_actor_id:context.actor,original_request:live.body},context);
+              if (!context.current()) return false;
+              window.TmDeliveryDispatchRecovery.validateResolve(data,live,context.actor);
+              if (data.status === "completed") {
+                let confirmed, cacheFailed = false;
+                try { confirmed = controller.confirm(record.key,data.dispatch_receipt,data.current); }
+                catch (_) { confirmed = controller.get(record.key); cacheFailed = true; }
+                this.deliveryDispatchNotice = {record:confirmed,message:"原发货已完成",auxiliary:cacheFailed ? "原发货已完成，但本机未能保存确认回执；可再次只读核对，不要重新发货" : ""};
+                this.deliveryDispatchNotRecorded = {...this.deliveryDispatchNotRecorded,[record.key]:false};
+              } else if (data.status === "closed") {
+                let closed, cacheFailed = false;
+                try { closed = controller.close(record.key,data.closure_receipt,data.current); }
+                catch (_) { closed = controller.get(record.key); cacheFailed = true; }
+                this.deliveryDispatchNotice = {record:closed,message:"本次确认已结束",auxiliary:cacheFailed ? "本机未能保留结束凭据，请再次查原结果；不要重发原请求" : ""};
+                this.deliveryDispatchNotRecorded = {...this.deliveryDispatchNotRecorded,[record.key]:false};
+              } else if (data.status === "not_recorded") {
+                this.deliveryDispatchNotRecorded = {...this.deliveryDispatchNotRecorded,[record.key]:true};
+                this.showToast(live.state === "closing" ? "尚未查到结束确认的结果；原内容已保留，请再次查原结果或结束本次确认，不可继续原发货" : "当前未查到原发货记录，原内容已保留；可按原内容继续。若原单已变更，请查看原单并联系管理员核对",true);
+              } else { this.showToast("原发货证据不足，已保留原内容；请查看原单并联系管理员核对",true); }
+              this.refreshDeliveryDispatchRecovery();
+              if (["completed","closed"].includes(data.status) && this.modal?.type === "deliveryDispatch") this.modal = null;
+              return true;
+            } catch (error) { if (context.current()) this.showToast(`核对失败，原发货内容已保留：${this.errorMessage(error)}。请查看原单并联系管理员核对`,true); return false; }
+            finally { if (Number(this.user?.id) === context.actor && this.authGeneration === context.auth && this.deliveryDispatchEpoch === context.epoch) this.deliveryDispatchBusy = false; }
+          },
+          async closeDeliveryDispatchRequest(record) {
+            if (this.deliveryDispatchIsBusy()) return false;
+            const context = this.deliveryDispatchContext();
+            if (record.actor !== context.actor) return false;
+            this.deliveryDispatchBusyActor = context.actor; this.deliveryDispatchBusyAuth = context.auth; this.deliveryDispatchBusy = true;
+            try {
+              const controller = this.deliveryDispatchController(), live = controller.closing(record.key);
+              if (["confirmed","closed"].includes(live.state)) { this.refreshDeliveryDispatchRecovery(); return false; }
+              const {data} = await this.deliveryDispatchRequest("post",`/api/deliveries/${record.deliveryId}/dispatch-results/${encodeURIComponent(record.key)}/close`,{expected_actor_id:context.actor,original_request:live.body},context);
+              if (!context.current()) return false;
+              const completed = data?.result === "completed";
+              const proof = completed ? window.TmDeliveryDispatchRecovery.validateCompleted(data,live,context.actor) : window.TmDeliveryDispatchRecovery.validateClosed(data,live,context.actor);
+              let terminal, cacheFailed = false;
+              try { terminal = completed ? controller.confirm(record.key,proof,data.current) : controller.close(record.key,proof,data.current); }
+              catch (_) { terminal = controller.get(record.key); cacheFailed = true; }
+              this.deliveryDispatchNotice = {record:terminal,message:completed ? "已查到原发货完成记录" : "本次确认已结束",auxiliary:cacheFailed ? "本机未能保留核对凭据，请再次查原结果；不要重发原请求" : ""};
+              this.deliveryDispatchNotRecorded = {...this.deliveryDispatchNotRecorded,[record.key]:false};
+              this.refreshDeliveryDispatchRecovery();
+              if (["confirmed","closed"].includes(terminal.state) && this.modal?.type === "deliveryDispatch") this.modal = null;
+              return true;
+            } catch (error) { if (context.current()) { this.refreshDeliveryDispatchRecovery(); this.showToast(`结束结果仍待核对：${this.errorMessage(error)}；请查原结果或再次结束本次确认，不要重发原发货`,true); } return false; }
+            finally { if (Number(this.user?.id) === context.actor && this.authGeneration === context.auth && this.deliveryDispatchEpoch === context.epoch) this.deliveryDispatchBusy = false; }
+          },
+          async viewDeliveryDispatchOriginal(record) {
+            const context = this.deliveryDispatchContext();
+            if (record.actor !== context.actor) return false;
+            try {
+              const {data} = await this.deliveryDispatchRequest("get",`/api/deliveries/${record.deliveryId}`,undefined,context);
+              if (!context.current()) return false;
+              if (!data || Number(data.id) !== record.deliveryId || !Array.isArray(data.items)) throw new Error("原单详情不完整，请重读");
+              const row = {...data,detail_loaded:true};
+              this.deliveries = [row,...this.deliveries.filter(item => Number(item.id) !== record.deliveryId)];
+              this.expandedDeliveryRows = {...this.expandedDeliveryRows,[record.deliveryId]:true};
+              if (this.modal?.type === "deliveryDispatch") this.modal = null;
+              return true;
+            } catch (error) { if (context.current()) this.showToast(`原发货状态保留，查看原单失败：${this.errorMessage(error)}`,true); return false; }
+          },
+
           async printDelivery(row) {
             if (this.deliveryInlineEdit) { this.showToast("请先保存或取消明细编辑，再打印。", true); return false; }
             if (this.deliveryOperationState.action || this.receiptOperationState?.action) return false;

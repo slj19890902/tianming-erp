@@ -1,0 +1,2057 @@
+{
+  "sourceCandidate": "5111aa0ff93760e235c5b05d83a4e5709f349839",
+  "sourceHashes": {
+    "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+    "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+    "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+    "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+  },
+  "fixtureNode": "tests.test_delivery_dispatch_revision_compat::test_composite_direct_only_completion_conservation",
+  "originalBody": {
+    "expected_actor_id": 1,
+    "idempotency_key": "component-direct-command",
+    "expected_version": 1,
+    "snapshot_hash": "83130a2121bb24bf18942f8b67c5625ede0b23045dbe4ab3615c601e75ae94e4",
+    "snapshot": {
+      "schema_version": 1,
+      "delivery": {
+        "id": 1,
+        "customer_id": 1,
+        "status": "pending",
+        "version": 1,
+        "source_mode": "order",
+        "delivery_date": "2026-10-10",
+        "vehicle_number": null
+      },
+      "items": [
+        {
+          "delivery_item_id": 1,
+          "revision_number": 1,
+          "source_type": "order",
+          "order_item_id": 1,
+          "product_id": null,
+          "source_product_id": 1,
+          "customer_id": 1,
+          "customer_quantity": 10,
+          "physical_quantity": 10,
+          "customer_unit": "套",
+          "physical_unit": "套",
+          "quantity_contract": null,
+          "goods": [
+            {
+              "component_snapshot_id": 1,
+              "source_product_id": 2,
+              "customer_id": 1,
+              "physical_quantity": 20,
+              "physical_unit": "PCS",
+              "quantity_per_set": 2,
+              "bom_delivery_mode": null
+            },
+            {
+              "component_snapshot_id": 2,
+              "source_product_id": 3,
+              "customer_id": 1,
+              "physical_quantity": 30,
+              "physical_unit": "PCS",
+              "quantity_per_set": 3,
+              "bom_delivery_mode": null
+            }
+          ],
+          "semi_requirements": [],
+          "direct_completion_sources": [],
+          "order_delivered_quantity": 0,
+          "allocation_mode": "on_dispatch",
+          "allocations": []
+        }
+      ],
+      "pick_task": null,
+      "pick_action": "none",
+      "expected_final_items": [
+        {
+          "delivery_item_id": 1,
+          "customer_quantity": 10,
+          "physical_quantity": 10,
+          "customer_unit": "套",
+          "physical_unit": "套",
+          "goods": [
+            {
+              "component_snapshot_id": 1,
+              "source_product_id": 2,
+              "customer_id": 1,
+              "physical_quantity": 20,
+              "physical_unit": "PCS",
+              "quantity_per_set": 2,
+              "bom_delivery_mode": null
+            },
+            {
+              "component_snapshot_id": 2,
+              "source_product_id": 3,
+              "customer_id": 1,
+              "physical_quantity": 30,
+              "physical_unit": "PCS",
+              "quantity_per_set": 3,
+              "bom_delivery_mode": null
+            }
+          ]
+        }
+      ]
+    },
+    "confirm_pick_exception": false
+  },
+  "actorId": 1,
+  "snapshot": {
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store"
+    },
+    "body": {
+      "schema_version": 1,
+      "current_actor_id": 1,
+      "snapshot": {
+        "schema_version": 1,
+        "delivery": {
+          "id": 1,
+          "customer_id": 1,
+          "status": "pending",
+          "version": 1,
+          "source_mode": "order",
+          "delivery_date": "2026-10-10",
+          "vehicle_number": null
+        },
+        "items": [
+          {
+            "delivery_item_id": 1,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 1,
+            "product_id": null,
+            "source_product_id": 1,
+            "customer_id": 1,
+            "customer_quantity": 10,
+            "physical_quantity": 10,
+            "customer_unit": "套",
+            "physical_unit": "套",
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": 1,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 20,
+                "physical_unit": "PCS",
+                "quantity_per_set": 2,
+                "bom_delivery_mode": null
+              },
+              {
+                "component_snapshot_id": 2,
+                "source_product_id": 3,
+                "customer_id": 1,
+                "physical_quantity": 30,
+                "physical_unit": "PCS",
+                "quantity_per_set": 3,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 0,
+            "allocation_mode": "on_dispatch",
+            "allocations": []
+          }
+        ],
+        "pick_task": null,
+        "pick_action": "none",
+        "expected_final_items": [
+          {
+            "delivery_item_id": 1,
+            "customer_quantity": 10,
+            "physical_quantity": 10,
+            "customer_unit": "套",
+            "physical_unit": "套",
+            "goods": [
+              {
+                "component_snapshot_id": 1,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 20,
+                "physical_unit": "PCS",
+                "quantity_per_set": 2,
+                "bom_delivery_mode": null
+              },
+              {
+                "component_snapshot_id": 2,
+                "source_product_id": 3,
+                "customer_id": 1,
+                "physical_quantity": 30,
+                "physical_unit": "PCS",
+                "quantity_per_set": 3,
+                "bom_delivery_mode": null
+              }
+            ]
+          }
+        ]
+      },
+      "snapshot_hash": "83130a2121bb24bf18942f8b67c5625ede0b23045dbe4ab3615c601e75ae94e4",
+      "display": {
+        "delivery_number": "N039-20261010-001",
+        "customer_name": "N039 测试客户",
+        "requires_pick_apply": false,
+        "pick_status": null,
+        "items": [
+          {
+            "delivery_item_id": 1,
+            "product_code": "KIT-001",
+            "product_name": "组合成品",
+            "original_customer_quantity": 10,
+            "original_physical_quantity": 10,
+            "final_customer_quantity": 10,
+            "final_physical_quantity": 10,
+            "customer_unit": "套",
+            "physical_unit": "套",
+            "allocation_mode": "on_dispatch"
+          }
+        ]
+      }
+    }
+  },
+  "write": {
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store"
+    },
+    "body": {
+      "schema_version": 1,
+      "result": "completed",
+      "current_actor_id": 1,
+      "dispatch_receipt": {
+        "schema_version": 1,
+        "idempotency_key": "component-direct-command",
+        "actor_id": 1,
+        "request_hash": "7f38e0fdcab21f7b434ed4773d891b0277464581ad1623ca28e64240af0d5502",
+        "request": {
+          "expected_version": 1,
+          "snapshot_hash": "83130a2121bb24bf18942f8b67c5625ede0b23045dbe4ab3615c601e75ae94e4",
+          "snapshot": {
+            "schema_version": 1,
+            "delivery": {
+              "id": 1,
+              "customer_id": 1,
+              "status": "pending",
+              "version": 1,
+              "source_mode": "order",
+              "delivery_date": "2026-10-10",
+              "vehicle_number": null
+            },
+            "items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              }
+            ],
+            "pick_task": null,
+            "pick_action": "none",
+            "expected_final_items": [
+              {
+                "delivery_item_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ]
+              }
+            ]
+          },
+          "confirm_pick_exception": false
+        },
+        "delivery_id": 1,
+        "customer_id": 1,
+        "delivery_number": "N039-20261010-001",
+        "original_version": 1,
+        "completed_version": 2,
+        "dispatched_at": "2026-10-10T05:37:29.936205Z",
+        "stages": {
+          "pick_applied": false,
+          "pick_task_id": null,
+          "prepared": true,
+          "dispatched": true
+        },
+        "original_items": [
+          {
+            "delivery_item_id": 1,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 1,
+            "product_id": null,
+            "source_product_id": 1,
+            "customer_id": 1,
+            "customer_quantity": 10,
+            "physical_quantity": 10,
+            "customer_unit": "套",
+            "physical_unit": "套",
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": 1,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 20,
+                "physical_unit": "PCS",
+                "quantity_per_set": 2,
+                "bom_delivery_mode": null
+              },
+              {
+                "component_snapshot_id": 2,
+                "source_product_id": 3,
+                "customer_id": 1,
+                "physical_quantity": 30,
+                "physical_unit": "PCS",
+                "quantity_per_set": 3,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 0,
+            "allocation_mode": "on_dispatch",
+            "allocations": []
+          }
+        ],
+        "final_items": [
+          {
+            "delivery_item_id": 1,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 1,
+            "product_id": null,
+            "source_product_id": 1,
+            "customer_id": 1,
+            "customer_quantity": 10,
+            "physical_quantity": 10,
+            "customer_unit": "套",
+            "physical_unit": "套",
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": 1,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 20,
+                "physical_unit": "PCS",
+                "quantity_per_set": 2,
+                "bom_delivery_mode": null
+              },
+              {
+                "component_snapshot_id": 2,
+                "source_product_id": 3,
+                "customer_id": 1,
+                "physical_quantity": 30,
+                "physical_unit": "PCS",
+                "quantity_per_set": 3,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 10,
+            "allocation_mode": "on_dispatch",
+            "allocations": [],
+            "allocation_ids": []
+          }
+        ],
+        "removed_delivery_item_ids": [],
+        "movements": [],
+        "direct_component_allocations": [
+          {
+            "allocation_id": 1,
+            "delivery_item_id": 1,
+            "production_completion_id": 1,
+            "component_snapshot_id": 1,
+            "physical_quantity": 20
+          },
+          {
+            "allocation_id": 2,
+            "delivery_item_id": 1,
+            "production_completion_id": 2,
+            "component_snapshot_id": 2,
+            "physical_quantity": 30
+          }
+        ],
+        "direct_completion_coverage": []
+      },
+      "current": null
+    }
+  },
+  "replay": null,
+  "resolve": {
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store"
+    },
+    "body": {
+      "status": "completed",
+      "current_actor_id": 1,
+      "idempotency_key": "component-direct-command",
+      "dispatch_receipt": {
+        "actor_id": 1,
+        "completed_version": 2,
+        "customer_id": 1,
+        "delivery_id": 1,
+        "delivery_number": "N039-20261010-001",
+        "direct_completion_coverage": [],
+        "direct_component_allocations": [
+          {
+            "allocation_id": 1,
+            "component_snapshot_id": 1,
+            "delivery_item_id": 1,
+            "physical_quantity": 20,
+            "production_completion_id": 1
+          },
+          {
+            "allocation_id": 2,
+            "component_snapshot_id": 2,
+            "delivery_item_id": 1,
+            "physical_quantity": 30,
+            "production_completion_id": 2
+          }
+        ],
+        "dispatched_at": "2026-10-10T05:37:29.936205Z",
+        "final_items": [
+          {
+            "allocation_ids": [],
+            "allocation_mode": "on_dispatch",
+            "allocations": [],
+            "customer_id": 1,
+            "customer_quantity": 10,
+            "customer_unit": "套",
+            "delivery_item_id": 1,
+            "direct_completion_sources": [],
+            "goods": [
+              {
+                "bom_delivery_mode": null,
+                "component_snapshot_id": 1,
+                "customer_id": 1,
+                "physical_quantity": 20,
+                "physical_unit": "PCS",
+                "quantity_per_set": 2,
+                "source_product_id": 2
+              },
+              {
+                "bom_delivery_mode": null,
+                "component_snapshot_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 30,
+                "physical_unit": "PCS",
+                "quantity_per_set": 3,
+                "source_product_id": 3
+              }
+            ],
+            "order_delivered_quantity": 10,
+            "order_item_id": 1,
+            "physical_quantity": 10,
+            "physical_unit": "套",
+            "product_id": null,
+            "quantity_contract": null,
+            "revision_number": 1,
+            "semi_requirements": [],
+            "source_product_id": 1,
+            "source_type": "order"
+          }
+        ],
+        "idempotency_key": "component-direct-command",
+        "movements": [],
+        "original_items": [
+          {
+            "allocation_mode": "on_dispatch",
+            "allocations": [],
+            "customer_id": 1,
+            "customer_quantity": 10,
+            "customer_unit": "套",
+            "delivery_item_id": 1,
+            "direct_completion_sources": [],
+            "goods": [
+              {
+                "bom_delivery_mode": null,
+                "component_snapshot_id": 1,
+                "customer_id": 1,
+                "physical_quantity": 20,
+                "physical_unit": "PCS",
+                "quantity_per_set": 2,
+                "source_product_id": 2
+              },
+              {
+                "bom_delivery_mode": null,
+                "component_snapshot_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 30,
+                "physical_unit": "PCS",
+                "quantity_per_set": 3,
+                "source_product_id": 3
+              }
+            ],
+            "order_delivered_quantity": 0,
+            "order_item_id": 1,
+            "physical_quantity": 10,
+            "physical_unit": "套",
+            "product_id": null,
+            "quantity_contract": null,
+            "revision_number": 1,
+            "semi_requirements": [],
+            "source_product_id": 1,
+            "source_type": "order"
+          }
+        ],
+        "original_version": 1,
+        "removed_delivery_item_ids": [],
+        "request": {
+          "confirm_pick_exception": false,
+          "expected_version": 1,
+          "snapshot": {
+            "delivery": {
+              "customer_id": 1,
+              "delivery_date": "2026-10-10",
+              "id": 1,
+              "source_mode": "order",
+              "status": "pending",
+              "vehicle_number": null,
+              "version": 1
+            },
+            "expected_final_items": [
+              {
+                "customer_quantity": 10,
+                "customer_unit": "套",
+                "delivery_item_id": 1,
+                "goods": [
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "source_product_id": 2
+                  },
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "source_product_id": 3
+                  }
+                ],
+                "physical_quantity": 10,
+                "physical_unit": "套"
+              }
+            ],
+            "items": [
+              {
+                "allocation_mode": "on_dispatch",
+                "allocations": [],
+                "customer_id": 1,
+                "customer_quantity": 10,
+                "customer_unit": "套",
+                "delivery_item_id": 1,
+                "direct_completion_sources": [],
+                "goods": [
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "source_product_id": 2
+                  },
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "source_product_id": 3
+                  }
+                ],
+                "order_delivered_quantity": 0,
+                "order_item_id": 1,
+                "physical_quantity": 10,
+                "physical_unit": "套",
+                "product_id": null,
+                "quantity_contract": null,
+                "revision_number": 1,
+                "semi_requirements": [],
+                "source_product_id": 1,
+                "source_type": "order"
+              }
+            ],
+            "pick_action": "none",
+            "pick_task": null,
+            "schema_version": 1
+          },
+          "snapshot_hash": "83130a2121bb24bf18942f8b67c5625ede0b23045dbe4ab3615c601e75ae94e4"
+        },
+        "request_hash": "7f38e0fdcab21f7b434ed4773d891b0277464581ad1623ca28e64240af0d5502",
+        "schema_version": 1,
+        "stages": {
+          "dispatched": true,
+          "pick_applied": false,
+          "pick_task_id": null,
+          "prepared": true
+        }
+      },
+      "closure_receipt": null,
+      "current": {
+        "delivery_id": 1,
+        "customer_id": 1,
+        "delivery_number": "N039-20261010-001",
+        "status": "dispatched",
+        "version": 2,
+        "total_quantity": 10,
+        "dispatched_at": "2026-10-10T05:37:29.936205Z"
+      },
+      "trace": null
+    }
+  },
+  "successfulWrite": {
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store"
+    },
+    "body": {
+      "schema_version": 1,
+      "result": "completed",
+      "current_actor_id": 1,
+      "dispatch_receipt": {
+        "schema_version": 1,
+        "idempotency_key": "component-direct-command",
+        "actor_id": 1,
+        "request_hash": "7f38e0fdcab21f7b434ed4773d891b0277464581ad1623ca28e64240af0d5502",
+        "request": {
+          "expected_version": 1,
+          "snapshot_hash": "83130a2121bb24bf18942f8b67c5625ede0b23045dbe4ab3615c601e75ae94e4",
+          "snapshot": {
+            "schema_version": 1,
+            "delivery": {
+              "id": 1,
+              "customer_id": 1,
+              "status": "pending",
+              "version": 1,
+              "source_mode": "order",
+              "delivery_date": "2026-10-10",
+              "vehicle_number": null
+            },
+            "items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              }
+            ],
+            "pick_task": null,
+            "pick_action": "none",
+            "expected_final_items": [
+              {
+                "delivery_item_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ]
+              }
+            ]
+          },
+          "confirm_pick_exception": false
+        },
+        "delivery_id": 1,
+        "customer_id": 1,
+        "delivery_number": "N039-20261010-001",
+        "original_version": 1,
+        "completed_version": 2,
+        "dispatched_at": "2026-10-10T05:37:29.936205Z",
+        "stages": {
+          "pick_applied": false,
+          "pick_task_id": null,
+          "prepared": true,
+          "dispatched": true
+        },
+        "original_items": [
+          {
+            "delivery_item_id": 1,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 1,
+            "product_id": null,
+            "source_product_id": 1,
+            "customer_id": 1,
+            "customer_quantity": 10,
+            "physical_quantity": 10,
+            "customer_unit": "套",
+            "physical_unit": "套",
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": 1,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 20,
+                "physical_unit": "PCS",
+                "quantity_per_set": 2,
+                "bom_delivery_mode": null
+              },
+              {
+                "component_snapshot_id": 2,
+                "source_product_id": 3,
+                "customer_id": 1,
+                "physical_quantity": 30,
+                "physical_unit": "PCS",
+                "quantity_per_set": 3,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 0,
+            "allocation_mode": "on_dispatch",
+            "allocations": []
+          }
+        ],
+        "final_items": [
+          {
+            "delivery_item_id": 1,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 1,
+            "product_id": null,
+            "source_product_id": 1,
+            "customer_id": 1,
+            "customer_quantity": 10,
+            "physical_quantity": 10,
+            "customer_unit": "套",
+            "physical_unit": "套",
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": 1,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 20,
+                "physical_unit": "PCS",
+                "quantity_per_set": 2,
+                "bom_delivery_mode": null
+              },
+              {
+                "component_snapshot_id": 2,
+                "source_product_id": 3,
+                "customer_id": 1,
+                "physical_quantity": 30,
+                "physical_unit": "PCS",
+                "quantity_per_set": 3,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 10,
+            "allocation_mode": "on_dispatch",
+            "allocations": [],
+            "allocation_ids": []
+          }
+        ],
+        "removed_delivery_item_ids": [],
+        "movements": [],
+        "direct_component_allocations": [
+          {
+            "allocation_id": 1,
+            "delivery_item_id": 1,
+            "production_completion_id": 1,
+            "component_snapshot_id": 1,
+            "physical_quantity": 20
+          },
+          {
+            "allocation_id": 2,
+            "delivery_item_id": 1,
+            "production_completion_id": 2,
+            "component_snapshot_id": 2,
+            "physical_quantity": 30
+          }
+        ],
+        "direct_completion_coverage": []
+      },
+      "current": null
+    }
+  },
+  "closes": [],
+  "events": [
+    {
+      "method": "POST",
+      "url": "/api/deliveries",
+      "request": {
+        "customer_id": 1,
+        "delivery_date": "2026-10-10",
+        "items": [
+          {
+            "order_item_id": 1,
+            "delivered_quantity": 10
+          }
+        ]
+      },
+      "response": {
+        "status": 201,
+        "headers": {},
+        "body": {
+          "id": 1,
+          "delivery_number": "N039-20261010-001",
+          "pre_delivery_batch": null,
+          "customer_id": 1,
+          "customer_name": "N039 测试客户",
+          "delivery_date": "2026-10-10",
+          "created_at": "2026-10-10T05:37:29Z",
+          "is_historical_backfill": false,
+          "backfilled_by": null,
+          "backfilled_at": null,
+          "version": 1,
+          "suggested_reconciliation_month": "2026-10",
+          "vehicle_number": null,
+          "source_mode": "order",
+          "status": "pending",
+          "total_quantity": 10,
+          "total_actual_goods_quantity": 50,
+          "original_delivered_quantity": 10,
+          "display_quantity": 10,
+          "quantity_difference": 0,
+          "quantity_source": "delivered",
+          "dispatched_at": null,
+          "ever_dispatched_at": null,
+          "voided_at": null,
+          "voided_by": null,
+          "is_printed": false,
+          "printed_at": null,
+          "printed_by": null,
+          "return_receipt_id": null,
+          "return_receipt_status": null,
+          "pick_task": null,
+          "items": [
+            {
+              "id": 1,
+              "delivery_id": 1,
+              "source_type": "order",
+              "order_item_id": 1,
+              "product_id": null,
+              "delivered_quantity": 10,
+              "unit_price": null,
+              "price_source": null,
+              "ordered_quantity_snapshot": 10,
+              "order_remaining_snapshot": 10,
+              "over_delivery_quantity": 0,
+              "over_delivery_confirmed_by": null,
+              "over_delivery_reason": null,
+              "remarks": null,
+              "order_id": 1,
+              "order_number": "N039-PO-001",
+              "customer_po": null,
+              "product_code": "KIT-001",
+              "product_name": "组合成品",
+              "unit_snapshot": "套",
+              "quantity_contract_json": null,
+              "production_notes": null,
+              "specification": "组合成品",
+              "item_sequence": null,
+              "pre_delivery_position": null,
+              "actual_delivery_quantity": 10,
+              "original_delivered_quantity": 10,
+              "display_quantity": 10,
+              "quantity_difference": 0,
+              "quantity_source": "delivered",
+              "display_order_number": "N039-PO-001",
+              "is_composite_bom": true,
+              "composite_fulfillment_mode": "component_delivery",
+              "kit_availability": {
+                "applicable": true,
+                "effective_sets": 10,
+                "delivered_sets": 0,
+                "available_sets": 10,
+                "components": [
+                  {
+                    "snapshot_id": 1,
+                    "component_code": "COMP-A",
+                    "component_name": "组件 A",
+                    "quantity_per_set": 2,
+                    "is_required": true,
+                    "stock_quantity": 0,
+                    "direct_quantity": 20,
+                    "available_quantity": 20,
+                    "required_piece_quantity": 20,
+                    "target_quantity": 20,
+                    "delivered_quantity": 0,
+                    "remaining_quantity": 20,
+                    "delivered_piece_quantity": 0,
+                    "remaining_required_piece_quantity": 20
+                  },
+                  {
+                    "snapshot_id": 2,
+                    "component_code": "COMP-B",
+                    "component_name": "组件 B",
+                    "quantity_per_set": 3,
+                    "is_required": true,
+                    "stock_quantity": 0,
+                    "direct_quantity": 30,
+                    "available_quantity": 30,
+                    "required_piece_quantity": 30,
+                    "target_quantity": 30,
+                    "delivered_quantity": 0,
+                    "remaining_quantity": 30,
+                    "delivered_piece_quantity": 0,
+                    "remaining_required_piece_quantity": 30
+                  }
+                ],
+                "missing_components": []
+              },
+              "available_sets": 10,
+              "missing_components": [],
+              "component_lines": [
+                {
+                  "line_type": "component",
+                  "component_snapshot_id": 1,
+                  "component_product_id": 2,
+                  "product_code": "COMP-A",
+                  "product_name": "组件 A",
+                  "specification": "1000×700",
+                  "unit": "PCS",
+                  "quantity_per_set": 2,
+                  "target_quantity": 20,
+                  "delivered_quantity": 0,
+                  "remaining_quantity": 20,
+                  "planned_delivery_quantity": 20,
+                  "pricing_included": false,
+                  "show_on_delivery": true,
+                  "pricing_note": "套内组件，不单独计价",
+                  "independent_return_receipt": false,
+                  "independent_statement": false
+                },
+                {
+                  "line_type": "component",
+                  "component_snapshot_id": 2,
+                  "component_product_id": 3,
+                  "product_code": "COMP-B",
+                  "product_name": "组件 B",
+                  "specification": "1100×700",
+                  "unit": "PCS",
+                  "quantity_per_set": 3,
+                  "target_quantity": 30,
+                  "delivered_quantity": 0,
+                  "remaining_quantity": 30,
+                  "planned_delivery_quantity": 30,
+                  "pricing_included": false,
+                  "show_on_delivery": true,
+                  "pricing_note": "套内组件，不单独计价",
+                  "independent_return_receipt": false,
+                  "independent_statement": false
+                }
+              ],
+              "actual_goods_lines": [
+                {
+                  "line_type": "component",
+                  "order_item_id": 1,
+                  "component_snapshot_id": 1,
+                  "product_code": "COMP-A",
+                  "product_name": "组件 A",
+                  "specification": "1000×700",
+                  "unit": "PCS",
+                  "quantity": 20,
+                  "pricing_included": false,
+                  "independent_return_receipt": false,
+                  "independent_statement": false
+                },
+                {
+                  "line_type": "component",
+                  "order_item_id": 1,
+                  "component_snapshot_id": 2,
+                  "product_code": "COMP-B",
+                  "product_name": "组件 B",
+                  "specification": "1100×700",
+                  "unit": "PCS",
+                  "quantity": 30,
+                  "pricing_included": false,
+                  "independent_return_receipt": false,
+                  "independent_statement": false
+                }
+              ],
+              "quantity_contract": null,
+              "actual_goods_quantity": 50,
+              "requires_return_location": false,
+              "allocations": [],
+              "inventory_sources": [
+                {
+                  "source_type": "component_direct",
+                  "reservation_id": null,
+                  "lot_id": null,
+                  "lot_number": null,
+                  "location_id": null,
+                  "location_code": null,
+                  "location_name": null,
+                  "warehouse_floor": null,
+                  "area_code": null,
+                  "position_status": "unlocated",
+                  "map_issue": null,
+                  "location_operational": false,
+                  "component_type": "bom_component",
+                  "component_snapshot_id": 1,
+                  "component_code": "COMP-A",
+                  "component_name": "组件 A",
+                  "quantity_per_set": 2,
+                  "unit": "PCS",
+                  "is_graph_root": false,
+                  "quantity_to_pick_stock": 0,
+                  "quantity_to_pick_requirement": 20
+                },
+                {
+                  "source_type": "component_direct",
+                  "reservation_id": null,
+                  "lot_id": null,
+                  "lot_number": null,
+                  "location_id": null,
+                  "location_code": null,
+                  "location_name": null,
+                  "warehouse_floor": null,
+                  "area_code": null,
+                  "position_status": "unlocated",
+                  "map_issue": null,
+                  "location_operational": false,
+                  "component_type": "bom_component",
+                  "component_snapshot_id": 2,
+                  "component_code": "COMP-B",
+                  "component_name": "组件 B",
+                  "quantity_per_set": 3,
+                  "unit": "PCS",
+                  "is_graph_root": false,
+                  "quantity_to_pick_stock": 0,
+                  "quantity_to_pick_requirement": 30
+                }
+              ],
+              "pick_result": null
+            }
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "url": "/api/deliveries/1/dispatch-snapshot",
+      "request": null,
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "no-store"
+        },
+        "body": {
+          "schema_version": 1,
+          "current_actor_id": 1,
+          "snapshot": {
+            "schema_version": 1,
+            "delivery": {
+              "id": 1,
+              "customer_id": 1,
+              "status": "pending",
+              "version": 1,
+              "source_mode": "order",
+              "delivery_date": "2026-10-10",
+              "vehicle_number": null
+            },
+            "items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              }
+            ],
+            "pick_task": null,
+            "pick_action": "none",
+            "expected_final_items": [
+              {
+                "delivery_item_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ]
+              }
+            ]
+          },
+          "snapshot_hash": "83130a2121bb24bf18942f8b67c5625ede0b23045dbe4ab3615c601e75ae94e4",
+          "display": {
+            "delivery_number": "N039-20261010-001",
+            "customer_name": "N039 测试客户",
+            "requires_pick_apply": false,
+            "pick_status": null,
+            "items": [
+              {
+                "delivery_item_id": 1,
+                "product_code": "KIT-001",
+                "product_name": "组合成品",
+                "original_customer_quantity": 10,
+                "original_physical_quantity": 10,
+                "final_customer_quantity": 10,
+                "final_physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "allocation_mode": "on_dispatch"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "url": "/api/deliveries/1/dispatch",
+      "request": {
+        "expected_actor_id": 1,
+        "idempotency_key": "component-direct-command",
+        "expected_version": 1,
+        "snapshot_hash": "83130a2121bb24bf18942f8b67c5625ede0b23045dbe4ab3615c601e75ae94e4",
+        "snapshot": {
+          "schema_version": 1,
+          "delivery": {
+            "id": 1,
+            "customer_id": 1,
+            "status": "pending",
+            "version": 1,
+            "source_mode": "order",
+            "delivery_date": "2026-10-10",
+            "vehicle_number": null
+          },
+          "items": [
+            {
+              "delivery_item_id": 1,
+              "revision_number": 1,
+              "source_type": "order",
+              "order_item_id": 1,
+              "product_id": null,
+              "source_product_id": 1,
+              "customer_id": 1,
+              "customer_quantity": 10,
+              "physical_quantity": 10,
+              "customer_unit": "套",
+              "physical_unit": "套",
+              "quantity_contract": null,
+              "goods": [
+                {
+                  "component_snapshot_id": 1,
+                  "source_product_id": 2,
+                  "customer_id": 1,
+                  "physical_quantity": 20,
+                  "physical_unit": "PCS",
+                  "quantity_per_set": 2,
+                  "bom_delivery_mode": null
+                },
+                {
+                  "component_snapshot_id": 2,
+                  "source_product_id": 3,
+                  "customer_id": 1,
+                  "physical_quantity": 30,
+                  "physical_unit": "PCS",
+                  "quantity_per_set": 3,
+                  "bom_delivery_mode": null
+                }
+              ],
+              "semi_requirements": [],
+              "direct_completion_sources": [],
+              "order_delivered_quantity": 0,
+              "allocation_mode": "on_dispatch",
+              "allocations": []
+            }
+          ],
+          "pick_task": null,
+          "pick_action": "none",
+          "expected_final_items": [
+            {
+              "delivery_item_id": 1,
+              "customer_quantity": 10,
+              "physical_quantity": 10,
+              "customer_unit": "套",
+              "physical_unit": "套",
+              "goods": [
+                {
+                  "component_snapshot_id": 1,
+                  "source_product_id": 2,
+                  "customer_id": 1,
+                  "physical_quantity": 20,
+                  "physical_unit": "PCS",
+                  "quantity_per_set": 2,
+                  "bom_delivery_mode": null
+                },
+                {
+                  "component_snapshot_id": 2,
+                  "source_product_id": 3,
+                  "customer_id": 1,
+                  "physical_quantity": 30,
+                  "physical_unit": "PCS",
+                  "quantity_per_set": 3,
+                  "bom_delivery_mode": null
+                }
+              ]
+            }
+          ]
+        },
+        "confirm_pick_exception": false
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "no-store"
+        },
+        "body": {
+          "schema_version": 1,
+          "result": "completed",
+          "current_actor_id": 1,
+          "dispatch_receipt": {
+            "schema_version": 1,
+            "idempotency_key": "component-direct-command",
+            "actor_id": 1,
+            "request_hash": "7f38e0fdcab21f7b434ed4773d891b0277464581ad1623ca28e64240af0d5502",
+            "request": {
+              "expected_version": 1,
+              "snapshot_hash": "83130a2121bb24bf18942f8b67c5625ede0b23045dbe4ab3615c601e75ae94e4",
+              "snapshot": {
+                "schema_version": 1,
+                "delivery": {
+                  "id": 1,
+                  "customer_id": 1,
+                  "status": "pending",
+                  "version": 1,
+                  "source_mode": "order",
+                  "delivery_date": "2026-10-10",
+                  "vehicle_number": null
+                },
+                "items": [
+                  {
+                    "delivery_item_id": 1,
+                    "revision_number": 1,
+                    "source_type": "order",
+                    "order_item_id": 1,
+                    "product_id": null,
+                    "source_product_id": 1,
+                    "customer_id": 1,
+                    "customer_quantity": 10,
+                    "physical_quantity": 10,
+                    "customer_unit": "套",
+                    "physical_unit": "套",
+                    "quantity_contract": null,
+                    "goods": [
+                      {
+                        "component_snapshot_id": 1,
+                        "source_product_id": 2,
+                        "customer_id": 1,
+                        "physical_quantity": 20,
+                        "physical_unit": "PCS",
+                        "quantity_per_set": 2,
+                        "bom_delivery_mode": null
+                      },
+                      {
+                        "component_snapshot_id": 2,
+                        "source_product_id": 3,
+                        "customer_id": 1,
+                        "physical_quantity": 30,
+                        "physical_unit": "PCS",
+                        "quantity_per_set": 3,
+                        "bom_delivery_mode": null
+                      }
+                    ],
+                    "semi_requirements": [],
+                    "direct_completion_sources": [],
+                    "order_delivered_quantity": 0,
+                    "allocation_mode": "on_dispatch",
+                    "allocations": []
+                  }
+                ],
+                "pick_task": null,
+                "pick_action": "none",
+                "expected_final_items": [
+                  {
+                    "delivery_item_id": 1,
+                    "customer_quantity": 10,
+                    "physical_quantity": 10,
+                    "customer_unit": "套",
+                    "physical_unit": "套",
+                    "goods": [
+                      {
+                        "component_snapshot_id": 1,
+                        "source_product_id": 2,
+                        "customer_id": 1,
+                        "physical_quantity": 20,
+                        "physical_unit": "PCS",
+                        "quantity_per_set": 2,
+                        "bom_delivery_mode": null
+                      },
+                      {
+                        "component_snapshot_id": 2,
+                        "source_product_id": 3,
+                        "customer_id": 1,
+                        "physical_quantity": 30,
+                        "physical_unit": "PCS",
+                        "quantity_per_set": 3,
+                        "bom_delivery_mode": null
+                      }
+                    ]
+                  }
+                ]
+              },
+              "confirm_pick_exception": false
+            },
+            "delivery_id": 1,
+            "customer_id": 1,
+            "delivery_number": "N039-20261010-001",
+            "original_version": 1,
+            "completed_version": 2,
+            "dispatched_at": "2026-10-10T05:37:29.936205Z",
+            "stages": {
+              "pick_applied": false,
+              "pick_task_id": null,
+              "prepared": true,
+              "dispatched": true
+            },
+            "original_items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              }
+            ],
+            "final_items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 10,
+                "allocation_mode": "on_dispatch",
+                "allocations": [],
+                "allocation_ids": []
+              }
+            ],
+            "removed_delivery_item_ids": [],
+            "movements": [],
+            "direct_component_allocations": [
+              {
+                "allocation_id": 1,
+                "delivery_item_id": 1,
+                "production_completion_id": 1,
+                "component_snapshot_id": 1,
+                "physical_quantity": 20
+              },
+              {
+                "allocation_id": 2,
+                "delivery_item_id": 1,
+                "production_completion_id": 2,
+                "component_snapshot_id": 2,
+                "physical_quantity": 30
+              }
+            ],
+            "direct_completion_coverage": []
+          },
+          "current": null
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "url": "/api/deliveries/1/dispatch-results/component-direct-command/resolve",
+      "request": {
+        "expected_actor_id": 1,
+        "original_request": {
+          "expected_actor_id": 1,
+          "idempotency_key": "component-direct-command",
+          "expected_version": 1,
+          "snapshot_hash": "83130a2121bb24bf18942f8b67c5625ede0b23045dbe4ab3615c601e75ae94e4",
+          "snapshot": {
+            "schema_version": 1,
+            "delivery": {
+              "id": 1,
+              "customer_id": 1,
+              "status": "pending",
+              "version": 1,
+              "source_mode": "order",
+              "delivery_date": "2026-10-10",
+              "vehicle_number": null
+            },
+            "items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              }
+            ],
+            "pick_task": null,
+            "pick_action": "none",
+            "expected_final_items": [
+              {
+                "delivery_item_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ]
+              }
+            ]
+          },
+          "confirm_pick_exception": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "no-store"
+        },
+        "body": {
+          "status": "completed",
+          "current_actor_id": 1,
+          "idempotency_key": "component-direct-command",
+          "dispatch_receipt": {
+            "actor_id": 1,
+            "completed_version": 2,
+            "customer_id": 1,
+            "delivery_id": 1,
+            "delivery_number": "N039-20261010-001",
+            "direct_completion_coverage": [],
+            "direct_component_allocations": [
+              {
+                "allocation_id": 1,
+                "component_snapshot_id": 1,
+                "delivery_item_id": 1,
+                "physical_quantity": 20,
+                "production_completion_id": 1
+              },
+              {
+                "allocation_id": 2,
+                "component_snapshot_id": 2,
+                "delivery_item_id": 1,
+                "physical_quantity": 30,
+                "production_completion_id": 2
+              }
+            ],
+            "dispatched_at": "2026-10-10T05:37:29.936205Z",
+            "final_items": [
+              {
+                "allocation_ids": [],
+                "allocation_mode": "on_dispatch",
+                "allocations": [],
+                "customer_id": 1,
+                "customer_quantity": 10,
+                "customer_unit": "套",
+                "delivery_item_id": 1,
+                "direct_completion_sources": [],
+                "goods": [
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "source_product_id": 2
+                  },
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "source_product_id": 3
+                  }
+                ],
+                "order_delivered_quantity": 10,
+                "order_item_id": 1,
+                "physical_quantity": 10,
+                "physical_unit": "套",
+                "product_id": null,
+                "quantity_contract": null,
+                "revision_number": 1,
+                "semi_requirements": [],
+                "source_product_id": 1,
+                "source_type": "order"
+              }
+            ],
+            "idempotency_key": "component-direct-command",
+            "movements": [],
+            "original_items": [
+              {
+                "allocation_mode": "on_dispatch",
+                "allocations": [],
+                "customer_id": 1,
+                "customer_quantity": 10,
+                "customer_unit": "套",
+                "delivery_item_id": 1,
+                "direct_completion_sources": [],
+                "goods": [
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "source_product_id": 2
+                  },
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "source_product_id": 3
+                  }
+                ],
+                "order_delivered_quantity": 0,
+                "order_item_id": 1,
+                "physical_quantity": 10,
+                "physical_unit": "套",
+                "product_id": null,
+                "quantity_contract": null,
+                "revision_number": 1,
+                "semi_requirements": [],
+                "source_product_id": 1,
+                "source_type": "order"
+              }
+            ],
+            "original_version": 1,
+            "removed_delivery_item_ids": [],
+            "request": {
+              "confirm_pick_exception": false,
+              "expected_version": 1,
+              "snapshot": {
+                "delivery": {
+                  "customer_id": 1,
+                  "delivery_date": "2026-10-10",
+                  "id": 1,
+                  "source_mode": "order",
+                  "status": "pending",
+                  "vehicle_number": null,
+                  "version": 1
+                },
+                "expected_final_items": [
+                  {
+                    "customer_quantity": 10,
+                    "customer_unit": "套",
+                    "delivery_item_id": 1,
+                    "goods": [
+                      {
+                        "bom_delivery_mode": null,
+                        "component_snapshot_id": 1,
+                        "customer_id": 1,
+                        "physical_quantity": 20,
+                        "physical_unit": "PCS",
+                        "quantity_per_set": 2,
+                        "source_product_id": 2
+                      },
+                      {
+                        "bom_delivery_mode": null,
+                        "component_snapshot_id": 2,
+                        "customer_id": 1,
+                        "physical_quantity": 30,
+                        "physical_unit": "PCS",
+                        "quantity_per_set": 3,
+                        "source_product_id": 3
+                      }
+                    ],
+                    "physical_quantity": 10,
+                    "physical_unit": "套"
+                  }
+                ],
+                "items": [
+                  {
+                    "allocation_mode": "on_dispatch",
+                    "allocations": [],
+                    "customer_id": 1,
+                    "customer_quantity": 10,
+                    "customer_unit": "套",
+                    "delivery_item_id": 1,
+                    "direct_completion_sources": [],
+                    "goods": [
+                      {
+                        "bom_delivery_mode": null,
+                        "component_snapshot_id": 1,
+                        "customer_id": 1,
+                        "physical_quantity": 20,
+                        "physical_unit": "PCS",
+                        "quantity_per_set": 2,
+                        "source_product_id": 2
+                      },
+                      {
+                        "bom_delivery_mode": null,
+                        "component_snapshot_id": 2,
+                        "customer_id": 1,
+                        "physical_quantity": 30,
+                        "physical_unit": "PCS",
+                        "quantity_per_set": 3,
+                        "source_product_id": 3
+                      }
+                    ],
+                    "order_delivered_quantity": 0,
+                    "order_item_id": 1,
+                    "physical_quantity": 10,
+                    "physical_unit": "套",
+                    "product_id": null,
+                    "quantity_contract": null,
+                    "revision_number": 1,
+                    "semi_requirements": [],
+                    "source_product_id": 1,
+                    "source_type": "order"
+                  }
+                ],
+                "pick_action": "none",
+                "pick_task": null,
+                "schema_version": 1
+              },
+              "snapshot_hash": "83130a2121bb24bf18942f8b67c5625ede0b23045dbe4ab3615c601e75ae94e4"
+            },
+            "request_hash": "7f38e0fdcab21f7b434ed4773d891b0277464581ad1623ca28e64240af0d5502",
+            "schema_version": 1,
+            "stages": {
+              "dispatched": true,
+              "pick_applied": false,
+              "pick_task_id": null,
+              "prepared": true
+            }
+          },
+          "closure_receipt": null,
+          "current": {
+            "delivery_id": 1,
+            "customer_id": 1,
+            "delivery_number": "N039-20261010-001",
+            "status": "dispatched",
+            "version": 2,
+            "total_quantity": 10,
+            "dispatched_at": "2026-10-10T05:37:29.936205Z"
+          },
+          "trace": null
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "url": "/api/deliveries/1/dispatch-results/component-direct-command/resolve",
+      "request": {
+        "expected_actor_id": 1,
+        "original_request": {
+          "expected_actor_id": 1,
+          "idempotency_key": "component-direct-command",
+          "expected_version": 1,
+          "snapshot_hash": "83130a2121bb24bf18942f8b67c5625ede0b23045dbe4ab3615c601e75ae94e4",
+          "snapshot": {
+            "schema_version": 1,
+            "delivery": {
+              "id": 1,
+              "customer_id": 1,
+              "status": "pending",
+              "version": 1,
+              "source_mode": "order",
+              "delivery_date": "2026-10-10",
+              "vehicle_number": null
+            },
+            "items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              }
+            ],
+            "pick_task": null,
+            "pick_action": "none",
+            "expected_final_items": [
+              {
+                "delivery_item_id": 1,
+                "customer_quantity": 10,
+                "physical_quantity": 10,
+                "customer_unit": "套",
+                "physical_unit": "套",
+                "goods": [
+                  {
+                    "component_snapshot_id": 1,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 20,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 2,
+                    "bom_delivery_mode": null
+                  },
+                  {
+                    "component_snapshot_id": 2,
+                    "source_product_id": 3,
+                    "customer_id": 1,
+                    "physical_quantity": 30,
+                    "physical_unit": "PCS",
+                    "quantity_per_set": 3,
+                    "bom_delivery_mode": null
+                  }
+                ]
+              }
+            ]
+          },
+          "confirm_pick_exception": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "no-store"
+        },
+        "body": {
+          "status": "trace",
+          "current_actor_id": 1,
+          "idempotency_key": "component-direct-command",
+          "dispatch_receipt": null,
+          "closure_receipt": null,
+          "current": {
+            "delivery_id": 1,
+            "customer_id": 1,
+            "delivery_number": "N039-20261010-001",
+            "status": "dispatched",
+            "version": 2,
+            "total_quantity": 10,
+            "dispatched_at": "2026-10-10T05:37:29.936205Z"
+          },
+          "trace": {
+            "delivery_id": 1,
+            "delivery_number": "N039-20261010-001",
+            "url": "/api/deliveries/1"
+          }
+        }
+      }
+    }
+  ],
+  "finalFacts": {
+    "deliveries": [
+      [
+        1,
+        "dispatched",
+        2,
+        10
+      ]
+    ],
+    "lots": [],
+    "movements": 0,
+    "records": 1,
+    "order_items": [
+      [
+        1,
+        10
+      ]
+    ],
+    "tasks": []
+  }
+}

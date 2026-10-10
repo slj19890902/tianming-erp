@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import pytest
 
 from fastapi.testclient import TestClient
 from sqlalchemy import event, select, func
@@ -274,3 +275,38 @@ def test_normalized_net_dimensions_and_nested_float_hash(stock_replenishment_app
         proof=rejected.json()['detail']['save_result']
         assert proof['request_hash']==hashlib.sha256(canonical.encode('utf-8')).hexdigest()
         assert proof['status']=='not_saved'
+
+
+@pytest.mark.parametrize('mapping', ['material_layer', 'external_precision'])
+def test_authoritative_material_mapping_and_existing_precision_gate(mapping, stock_replenishment_app, external_stock_app):
+    if mapping == 'material_layer':
+        app, _ = stock_replenishment_app
+        original=body('save-layer-hint');original['items'][0]['layer_count']=3
+        actor=1
+    else:
+        app=external_stock_app;policy,_=_seed_external_warning(app)
+        from app.models.user import User
+        with app.state.factory() as db:actor=db.scalar(select(User.id).where(User.username=='p1-40a-admin'))
+        original=None
+    with TestClient(app) as client:
+        if mapping == 'material_layer':login(client)
+        else:
+            external_login(client);draft=client.get(f'/api/requisition/stock-policies/{policy}/replenishment-draft').json()
+            original=dict(source_type='stock_warning',idempotency_key='save-precision-override',customer_id=draft['customer_id'],supplier_name=draft['supplier_name'],stock_now=False,items=[draft['items'][0]],expected_actor_id=actor)
+            original['items'][0]['external_purchase_quantity']='11.0000001'
+        factory=stock_replenishment_app[1] if mapping=='material_layer' else app.state.factory
+        before=counts(factory)
+        saved=client.post(PATH,json=original)
+        if mapping=='external_precision':
+            # The old _positive_decimal rejects nonzero digits beyond scale 6
+            # before quantization. This is a normal gate, not a proof defect.
+            assert saved.status_code==409,saved.text
+            assert counts(factory)==before
+            assert saved.headers.get('x-stock-replenishment-rejected')=='1'
+            return
+        assert saved.status_code==201,saved.text
+        receipt=saved.json()['save_receipt'];assert receipt is not None
+        assert resolve(client,original,actor=actor).json()['status']=='completed'
+        if mapping=='material_layer':
+            assert receipt['request']['items'][0]['layer_count']==3
+            assert receipt['lines'][0]['layer_count']==5

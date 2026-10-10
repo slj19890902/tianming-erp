@@ -179,8 +179,17 @@ def build_receipt(db, order, payload, actor_id):
         if batch is None:
             if row.quantity != original.quantity or row.procurement_route_snapshot not in (None, "paperboard"):
                 return None
+            if row.target_inventory_type == "semi_finished" and (
+                not row.material_code_snapshot or row.layer_count not in (1, 3, 5, 7)
+                or not row.flute_type or row.report_length_mm is None or row.report_width_mm is None
+            ):
+                return None
             for field in ("material_id", "layer_count", "flute_type", "report_length_mm", "report_width_mm", "crease_type", "crease_left_mm", "crease_middle_mm", "crease_right_mm"):
                 value = getattr(original, field)
+                if field == "layer_count" and original.material_id is not None:
+                    # The existing builder takes material.layer_count rather
+                    # than this request hint; preserve the actual source value.
+                    continue
                 if value is not None and getattr(row, field) != value:
                     return None
             if any(getattr(row, field) != getattr(original, field) for field in ("sheet_type", "component_type", "pieces_per_box", "stock_yield_per_sheet")):

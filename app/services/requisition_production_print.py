@@ -45,6 +45,7 @@ from app.services.box_type_rules import box_type_code, canonical_box_style
 from app.services.drawing_binding import bound_task_release
 from app.services.drawing_snapshots import release_paper_snapshot
 from app.services.product_drawings import engineering_drawing_condition
+from app.services.production_paper_drawings import order_paper_drawings, stock_sources
 from app.services.order_number_display import build_display_registry, display_order_number
 from app.services.fulfillment_reminders import (
     matching_production_reminders,
@@ -818,6 +819,11 @@ def build_supplier_requisition_production_package(
             "drawing_kind": drawing_kind,
             "drawing_source": drawing_source,
             "managed_drawing": managed_drawing,
+            "paper_drawings": (
+                [{**drawing, "product_code": item.product_code}
+                 for drawing in order_paper_drawings(db, order_item, component_snapshot, managed_drawing)]
+                if order_item is not None else []
+            ),
             "mold_tool_id": int(mold_id) if mold_id is not None else None,
             "mold_code": (
                 managed_mold.get("code") if managed_release else
@@ -1521,6 +1527,9 @@ def build_stock_replenishment_production_package(
             "drawing_url": None,
             "drawing_kind": None,
             "drawing_source": None,
+            "paper_drawings": [{**drawing.public("stock-item", item.id),
+                                "product_code": item.product_code_snapshot}
+                               for drawing in stock_sources(db, item)],
             **mold_projection,
             "joining_method": joining_method,
             "joining_method_source": (

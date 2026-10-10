@@ -24,6 +24,7 @@ def test_backup_does_not_stop_when_nas_preflight_fails(monkeypatch):
     monkeypatch.setattr('desktop_assistant.nas_probe.check_before_stop', Mock(side_effect=ValueError('NAS unavailable')))
     manager = Mock()
     manager.lock.return_value = nullcontext()
+    manager._backup_locked.side_effect = lambda password, nas: Manager._backup_locked(manager, password, nas)
     with pytest.raises(ValueError):
         Manager.backup(manager, 'unused', 'Z:/backup')
     manager.stop.assert_not_called()

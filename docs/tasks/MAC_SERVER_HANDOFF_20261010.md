@@ -139,3 +139,9 @@ Mac计划每小时整点检查北京时间23点的备份是否已完成，错过
 仅受管Mac家庭服务及原生迁移使用/usr/bin/sandbox-exec固定出站拒绝策略，不提供自定义策略覆盖，不改防火墙、NAS挂载或Windows生产启动；系统工具缺失/非root所有/链接替换时启动前拒绝，执行策略失败时原启动/迁移失败门禁继续保留。原Python审计仍负责禁止外部域名与非回环监听。此系统策略未限制文件/IPC，也不声称能隔离恶意代码借助其他系统服务间接联网；直接手工Python启动不自动获得该系统保护。
 
 Apple DTS明确说明自定义sandbox语言不作为第三方支持接口，sandbox-exec已弃用（https://developer.apple.com/forums/thread/661939）。本方案只是当前macOS27.0.1实测的家庭进程额外门禁，升级系统后须重验，不能推广为长期受支持或完整安全边界；正式服务仍需单独明确启用设计与验收。没有在真实数据上启动服务、解密备份或接管工厂。
+
+第十七个闭环：助手334项全量Mac回归发现21项失败，逐项核对后修正测试夹具，不放宽运行门禁。链接测试在Mac创建真实POSIX目录链接，在Windows保留真实junction；模拟Windows命令的测试显式提供SystemRoot/creationflags/FUSE API，仅真正Windows PowerShell及DPAPI/ACL实机检查加平台跳过。NAS维护锁路径Mock绑定真实_backup_locked；恢复结果核验新增完整凭据状态；启动状态夹具补齐发货保护契约，避免把不可撤销Python审计钩子安装到pytest主进程。腐坏凭据配置应拒绝完整备份和升级，单独验证原库/配置/当前版本保留，保留有效偏好下发布源选择回归。生产应用代码本闭环不变。
+
+助手全量Mac回归修复后335项：326通过、9跳过、无失败，27.65秒。新增一项损坏凭据配置拒绝升级检查。9项跳过包含Windows PowerShell3项、发布身份Windows ACL/DPAPI3项、运营凭据Windows DPAPI1项、Windows8.3路径API1项、需ERP_TEST_LAUNCHD显式启用的实机launchd1项；此前合成launchd实证仍保留，不替代原Windows用户验收。3条告警来自依赖弃用及测试短合成JWT密钥，未涉及正式凭据。证据assistant-suite-mac-final.log。
+
+全部修改仅在测试和任务卡，没有改变应用/Manager生产安全逻辑；原生候选b仍绑定3de3be32，源文件字节不变，不因测试修复重复打包或替换其签名请求。真实正式325表/2983文件、原账号权限、真实凭据和业务链仍待完整真实备份恢复后核验，不能以335项合成测试替代。

@@ -42,6 +42,7 @@ def test_identity_rejection_still_prevents_lock_and_stop(tmp_path):
     assert trace.read_text().splitlines() == ['init']
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Windows PowerShell integration')
 def test_readonly_check_does_not_enter_stop_phase(tmp_path):
     from desktop_assistant.onboarding import check_original_runtime
     source, release = tmp_path / 'source', tmp_path / 'signed'
@@ -54,6 +55,8 @@ def test_child_uses_only_windows_modules_without_changing_parent(tmp_path, monke
     from desktop_assistant.windows import run_maintenance_powershell
     from unittest.mock import patch
     monkeypatch.setenv('PSModulePath', 'foreign-powershell-7-modules')
+    monkeypatch.setenv('SystemRoot', str(tmp_path/'synthetic-windows'))
+    monkeypatch.setattr('subprocess.CREATE_NO_WINDOW', 0x08000000, raising=False)
     with patch('desktop_assistant.windows.subprocess.run') as run:
         run_maintenance_powershell('Write-Output fixture', tmp_path)
     args, options = run.call_args

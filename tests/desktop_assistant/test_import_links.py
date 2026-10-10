@@ -12,6 +12,10 @@ from tests.desktop_assistant.test_self_service import example, offline, PASSWORD
 
 def junction(link, target):
     link.parent.mkdir(parents=True, exist_ok=True)
+    if os.name != 'nt':
+        link.symlink_to(target, target_is_directory=True)
+        assert link.is_symlink()
+        return
     quote = lambda p: "'" + str(p).replace("'", "''") + "'"
     executable = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     subprocess.run([str(executable), '-NoProfile', '-NonInteractive', '-Command',
@@ -36,7 +40,7 @@ def test_development_dependency_link_is_ignored_and_business_files_restore(examp
             patch('desktop_assistant.import_existing.psutil.process_iter', return_value=[]), \
             patch('desktop_assistant.import_existing.socket.socket', return_value=offline()):
         assert '首次接入完成' in onboard(target, source, case.package, PASSWORD, case.nas)
-    assert link.is_junction() and (dependency / 'tool.js').is_file()
+    assert (link.is_junction() or link.is_symlink()) and (dependency / 'tool.js').is_file()
     assert sha(source / 'data/carton_erp.sqlite3') == original
     assert not (target.root / 'shared/data/work/report/node_modules').exists()
     assert not (target.root / 'shared/data/release_rehearsals').exists()

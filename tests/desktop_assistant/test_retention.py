@@ -103,13 +103,16 @@ def test_unknown_junction_does_not_delete_shared(installed):
     identity, release, package = old_release(installed)
     target = installed.manager.root/'shared'
     link = release/'unexpected'
-    subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',
-                    f"New-Item -ItemType Junction -Path '{link}' -Target '{target}' | Out-Null"],check=True)
+    if os.name == 'nt':
+        subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',
+                        f"New-Item -ItemType Junction -Path '{link}' -Target '{target}' | Out-Null"],check=True)
+    else:
+        link.symlink_to(target, target_is_directory=True)
     try:
         result=retention.cleanup_releases(installed.manager,installed.nas/'releases')
         assert identity in result['retained'] and (target/'data/carton_erp.sqlite3').exists()
     finally:
-        link.rmdir()
+        link.unlink() if link.is_symlink() else link.rmdir()
 
 
 def test_managed_junction_is_unlinked_without_following(installed):
@@ -146,14 +149,30 @@ def test_failed_start_does_not_call_retention(installed, monkeypatch):
     run.assert_not_called()
 
 
-def test_direct_update_uses_configured_feed_and_ignores_bad_preferences(installed,monkeypatch):
+def test_direct_update_uses_configured_feed_without_preference_feed(installed,monkeypatch):
     from unittest.mock import Mock
     feed=installed.nas/'desktop-assistant/releases'
     write_json(installed.manager.root/'control/setup-defaults.json',{'release_feed':str(feed)})
-    (installed.manager.root/'preferences.json').write_text('invalid settings')
+    write_json(installed.manager.root/'preferences.json', {})
     run=Mock();monkeypatch.setattr(retention,'after_update',run)
     assert installed.manager.update(installed.release('two'),PASSWORD,installed.nas)=='two'
     run.assert_called_once_with(installed.manager,feed)
+
+
+def test_corrupt_credential_preferences_block_complete_backup_and_update(installed, monkeypatch):
+    from unittest.mock import Mock
+    preferences = installed.manager.root/'preferences.json'
+    preferences.write_text('invalid settings')
+    before = installed.manager.state['current']
+    database = installed.manager.root/'shared/data/carton_erp.sqlite3'
+    fingerprint = sha(database)
+    run = Mock(); monkeypatch.setattr(retention, 'after_update', run)
+    with pytest.raises(ValueError, match='凭据配置格式错误'):
+        installed.manager.update(installed.release('two'), PASSWORD, installed.nas)
+    assert installed.manager.state['current'] == before
+    assert sha(database) == fingerprint
+    assert preferences.read_text() == 'invalid settings'
+    run.assert_not_called()
 
 
 def test_idle_guard_detects_database_in_child_environment(monkeypatch,tmp_path):
@@ -188,12 +207,14 @@ def test_windows_short_names_still_use_canonical_boundary(tmp_path,monkeypatch):
 
 def test_fuse_upload_queue_never_counts_as_synced(monkeypatch):
     import io
+    from pathlib import PureWindowsPath
     class Kernel:
         def GetVolumeInformationW(self,*args):args[6].value='FUSE-rclone';return 1
         def GetDriveTypeW(self,*args):return 3
-    monkeypatch.setattr(retention.ctypes,'windll',SimpleNamespace(kernel32=Kernel()))
+    monkeypatch.setattr(retention.ctypes,'windll',SimpleNamespace(kernel32=Kernel()), raising=False)
+    monkeypatch.setattr(retention, 'os', SimpleNamespace(name='nt'))
     result={'fs':'uzmount:','diskCache':{'uploadsQueued':1,'uploadsInProgress':0,'erroredFiles':0}}
     monkeypatch.setattr(retention,'build_opener',lambda *_:SimpleNamespace(open=lambda *a,**k:io.BytesIO(json.dumps(result).encode())))
-    assert not retention.archive_synced(Path('Z:/folder/file.zip'))
+    assert not retention.archive_synced(PureWindowsPath('Z:/folder/file.zip'))
     result['diskCache']['uploadsQueued']=0
-    assert retention.archive_synced(Path('Z:/folder/file.zip'))
+    assert retention.archive_synced(PureWindowsPath('Z:/folder/file.zip'))

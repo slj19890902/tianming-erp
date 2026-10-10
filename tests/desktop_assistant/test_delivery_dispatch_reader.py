@@ -165,6 +165,10 @@ def test_start_rejects_incompatible_reader_even_when_process_is_running(installa
     state['current'] = fixture.ids['dispatch-old']
     write_json(fixture.manager.root/'state.json', state)
     monkeypatch.setattr(fixture.manager, '_process', lambda: (object(), {'exe':'old.exe'}))
+    # Authenticate this synthetic Windows runtime without trying to run it on
+    # Mac; this test targets the independent reader gate before process reuse.
+    runtime = fixture.manager._runtime_python
+    monkeypatch.setattr(fixture.manager, '_runtime_python', lambda identity: runtime(identity, runnable=False))
     with pytest.raises(ValueError, match='发货保护'):
         Manager.start(fixture.manager)
 

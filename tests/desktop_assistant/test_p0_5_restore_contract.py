@@ -363,6 +363,7 @@ def test_managed_restore_keeps_service_stopped_until_explicit_start(
         "version": "one",
         "data_time": target.state["source_time"],
         "started": False,
+        "credentials": {"status": "restored", "restored": [], "mailbox_version_preserved": True},
     }
     assert sha(target.root / "shared/data/carton_erp.sqlite3") == source_hash
     assert (target.root / "shared/data/drawing.pdf").read_bytes() == b"synthetic attachment"

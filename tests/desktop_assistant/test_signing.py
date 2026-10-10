@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -6,6 +7,7 @@ from desktop_assistant.signing import initialize, load_key, public_bytes, export
 
 
 class SigningTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'nt', 'Real Windows ACL and current-user DPAPI')
     def test_encrypted_identity_is_stable_and_can_sign(self):
         with tempfile.TemporaryDirectory() as root:
             directory=Path(root)/'publisher'
@@ -28,6 +30,7 @@ class SigningTests(unittest.TestCase):
                 initialize(directory)
             self.assertFalse((directory/'publisher.json').exists())
 
+    @unittest.skipUnless(os.name == 'nt', 'Real Windows ACL and current-user DPAPI')
     def test_portable_backup_restores_same_identity_without_overwrite(self):
         with tempfile.TemporaryDirectory() as root:
             root=Path(root); original=root/'original'; restored=root/'restored'
@@ -42,6 +45,7 @@ class SigningTests(unittest.TestCase):
             self.assertEqual((restored/'publisher.json').read_bytes(),before)
             with self.assertRaises(FileExistsError):export_identity(original/'publisher.json',backup,password)
 
+    @unittest.skipUnless(os.name == 'nt', 'Real Windows ACL and current-user DPAPI')
     def test_wrong_password_and_tampering_do_not_create_identity(self):
         with tempfile.TemporaryDirectory() as root:
             root=Path(root); original=root/'original'; initialize(original)

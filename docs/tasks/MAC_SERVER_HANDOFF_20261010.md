@@ -111,3 +111,11 @@ Mac 默认使用系统 STHeiti Medium.ttc 的 Heiti SC（face 1），合同和�
 第十三个闭环：desktop_assistant/restore_cli.py 和对应测试，为实际家庭恢复提供本机隐藏口令输入入口。必须核对完整备份 SHA256 与既有公钥指纹，目标为当前用户本地磁盘下全新目录，不接受已有目录、路径链接或 NAS 目标；凭据包绑定匹配后才创建目标。可在内存中从已认证移交包读取备份密码，口令不通过参数/环境/文件/管道输入。恢复调用原 Manager 验签/验库/附件/凭据流程，强制家庭联网保护且不启动服务；只输出不含秘密的回执。
 
 交互恢复入口6项通过，包括真实macOS伪终端隐藏口令输入、完整合成备份解密/发布验签/恢复后DB SHA一致、无服务进程、口令不出现在终端记录和回执；错误公钥/备份指纹在口令提示之前拒绝，外部口令错误不创建目标，已有/链接/目录外目标拒绝，stdin管道拒绝。另对已授权NAS路径进行只读落点检查，本机home与NAS设备号不同，NAS目标被拒绝且未创建目录。证据 restore-cli-tests.log、restore-cli-nas-preflight.json。没有使用真实恢复密码或正式数据；完整移交后的当前服务用户钥匙串及后台服务运行仍待实证。
+
+第十四个闭环：desktop_assistant/service_supervisor.py、mac_service.py 及测试，实现签名原生包的用户 launchd 监护。只在Mac当前用户登录会话使用、固定家庭预演，不创建root daemon或正式接管；共用原维护锁，尊重人工停止/迁移失败，异常退出后可由launchd重启，服务停用只通过现有身份/nonce优雅停止，不能强杀数据库进程。登记前核验归档、公钥、原生Python和全部发布文件，plists只含非秘密参数。测试仅注册任务自有短期合成launchd任务，不注册正式ERP。服务尚要求登录，不能称未登录冷启动或现场断电恢复通过。
+
+用户服务监护18项通过：尊重人工停止、首次接入待办与迁移/reader失败；维护锁忙时不启动或强停，独立监护锁防重复，进程退出后重启，已校验运行身份不每两秒重读大型发布包。登记校验原签名/原生运行器/全部发布文件，错误公钥、篡改代码和Windows包拒绝；同名任务不接管，外来标签即使两份plist内容相同也不得停用。明确停用设置manual_stop，经原nonce优雅停止；只移除已核对的本安装LaunchAgent，原plist按SHA归档保留，不删除其他任务。证据 mac-service-tests.log。
+
+实机launchd检查使用本任务临时目录中的合成Python任务（非ERP）：首次exit 7后产生第二个不同PID，bootout触发SIGTERM并写优雅退出标记，最后launchctl确认标签不存在；未向用户Library/LaunchAgents写入正式ERP任务。正式定义30秒重启节流、90秒退出等待、umask077，程序参数无密钥；Interactive用于HTTP用户请求而非后台限速。AbandonProcessGroup保留监护异常退出时的ERP子进程，再由监护恢复核验，避免launchd直接强杀数据库；明确停用仍通过维护锁/Manager.stop验证。
+
+来源为本机launchd.plist手册及Apple官方 Creating Launch Daemons and Agents（https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html）。这是当前用户登录会话能力；不冒充专用非管理员账户、注销后运行、FileVault解锁前冷启动或工厂断电恢复已通过。服务入口固定到已签名包，更新入口需先核验停用、归档配置再登记，不覆盖运行定义；完整ERP原生服务/真实库/自动备份调度仍待验证。

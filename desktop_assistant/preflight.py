@@ -3,10 +3,11 @@ from pathlib import Path
 from contextlib import closing
 import argparse, json, sqlite3
 from desktop_assistant.storage import sha
+from desktop_assistant.source_paths import relative_source_path
 
 
 def inspect(database: Path, source: Path, *, managed=False, recorded_root=None, excluded_path=None):
-    source=source.resolve();reference_root=Path(recorded_root or source).resolve();checks=[]
+    source=source.resolve();reference_root=recorded_root or source;checks=[]
     with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True)) as db:
         tables={row[0] for row in db.execute("select name from sqlite_master where type='table'")}
         for table,columns in [('product_drawings',('image_path','thumbnail_path')),('pdf_order_training_samples',('file_path',))]:
@@ -18,11 +19,11 @@ def inspect(database: Path, source: Path, *, managed=False, recorded_root=None, 
                     elif reference.startswith('/static/uploads/'):
                         root=source/('legacy_uploads' if managed else 'static/uploads');path=root/reference.removeprefix('/static/uploads/')
                     else:
-                        root=source;path=Path(reference)
-                        if path.is_absolute():
-                            try:path=source/path.resolve().relative_to(reference_root)
-                            except ValueError:pass
-                        else:path=root/path
+                        root=source
+                        try:path=root/relative_source_path(reference, reference_root)
+                        except ValueError:
+                            checks.append(dict(table=table,id=identity,field=column,status='external',sha256=None))
+                            continue
                     excluded=bool(excluded_path and excluded_path(path))
                     path=path.resolve()
                     state='missing' if excluded else 'external' if not path.is_relative_to(root.resolve()) else 'missing' if not path.is_file() else 'ok'

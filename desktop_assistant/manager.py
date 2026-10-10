@@ -797,7 +797,7 @@ class Manager:
                     raise ValueError('恢复程序不支持已保存的供应商修边尺寸，尚未启用恢复数据')
             dispatch_activation = dispatch_contract.validate_recovery(payload / 'shared', manifest, release_manifest)
             validate_database_schema(database, contract)
-            rebind_pdf_sources(database, Path(manifest['source_shared']),
+            rebind_pdf_sources(database, manifest['source_shared'],
                                payload / 'shared', self.root / 'shared')
             from desktop_assistant.preflight import inspect
             checks = inspect(database, payload / 'shared',

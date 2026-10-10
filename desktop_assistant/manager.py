@@ -16,6 +16,7 @@ import psutil
 from desktop_assistant.storage import (archive_path, database_info, decrypt_file, encrypt_file,
                                       extract_verified, pack_tree, pack_recovery, read_json, sha, write_json, signed_release_manifest)
 from desktop_assistant.attachments import rebind_pdf_sources
+from desktop_assistant.operation_lock import operation_lock
 from desktop_assistant import delivery_dispatch_contract as dispatch_contract
 from desktop_assistant.schema_contract import (
     schema_contract_from_signed_release,
@@ -55,21 +56,8 @@ class Manager:
 
     @contextmanager
     def lock(self):
-        import msvcrt
-        with (self.root / 'control' / 'operation.lock').open('a+b') as stream:
-            if os.fstat(stream.fileno()).st_size == 0:
-                stream.write(b'0')
-                stream.flush()
-            stream.seek(0)
-            try:
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError:
-                raise ValueError('另一个更新、恢复或备份正在进行') from None
-            try:
-                yield
-            finally:
-                stream.seek(0)
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        with operation_lock(self.root / 'control' / 'operation.lock'):
+            yield
 
     def manifest(self, release=None):
         return read_json(self.root / 'releases' / (release or self.state['current']) / 'manifest.json')

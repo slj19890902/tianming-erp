@@ -1,7 +1,7 @@
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const port=Number(process.argv[2]);assert.ok(port>1024&&port<65536);
-const base=`http://127.0.0.1:${port}`,out=process.env.ERP_MANUAL_REPLENISHMENT_BROWSER;
+const base=`http://127.0.0.1:${port}`,out=process.env.ERP_MANUAL_REPLENISHMENT_BROWSER,extraIds=JSON.parse(process.argv[3]||'[]');
 const getVm=()=>document.querySelector('#app')._vnode.component.proxy;
 (async()=>{
  const browser=await chromium.launch({channel:'chrome',headless:true});
@@ -53,8 +53,33 @@ const getVm=()=>document.querySelector('#app')._vnode.component.proxy;
   await page.locator('[data-manual-replenishment-picker]:visible').getByRole('button',{name:'选择全部',exact:true}).click();
   assert.ok(await page.locator('[data-manual-replenishment-picker]:visible a').getAttribute('href'));
   await page.screenshot({path:path.join(out,'import-multi-select.png')});
+  // The exact old recovery records remain persisted and recoverable, but do not fill the upload view.
+  await page.evaluate(()=>{
+   const v=document.querySelector('#app')._vnode.component.proxy;
+   for(let i=0;i<24;i++)localStorage.setItem(`erp.pdf-save.v1:${v.user.id}:fiction-old-${i}`,`fiction-key-${i}`);
+   v.openOrderPdfImport();v.reloadPdfSaveRecovery();
+  });
+  const history=page.locator('[data-pdf-recovery-history]');
+  assert.equal(await history.count(),1);assert.equal(await history.getAttribute('open'),null);
+  assert.equal(await history.getByRole('button',{name:'查询原结果',exact:true}).first().isVisible(),false);
+  await page.screenshot({path:path.join(out,'import-history-collapsed.png')});
+  await history.locator(':scope > summary').click();
+  assert.equal(await history.getByRole('button',{name:'查询原结果',exact:true}).count(),24);
+  assert.equal(await page.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith('erp.pdf-save.v1:')).length),24);
+  await page.evaluate(async(ids)=>{
+   const v=document.querySelector('#app')._vnode.component.proxy;await v.openOrder();v.orderForm.customer_id=1;await v.openOrderCommonBoxPicker();
+   const products=v.orderCommonBoxPicker.items.filter(p=>ids.includes(p.id));if(products.length!==25)throw Error('Fictional picker rows missing');
+   for(const p of products){v.toggleOrderCommonBoxSelection(p,true);v.setOrderCommonBoxQuantity(p,10);}
+  },extraIds);
+  const importButton=page.locator('.order-common-box-backdrop').getByRole('button',{name:'导入订单',exact:true});
+  await importButton.click();
+  await page.waitForFunction(()=>{const v=document.querySelector('#app')._vnode.component.proxy;return !v.orderCommonBoxPicker.importing&&!v.orderCommonBoxPicker.visible;});
+  assert.equal(await page.evaluate(()=>document.querySelector('#app')._vnode.component.proxy.orderForm.items.length),28);
+  assert.equal(await page.evaluate(ids=>document.querySelector('#app')._vnode.component.proxy.orderForm.items.filter(i=>ids.includes(i.product_id)).length,extraIds),25);
+  assert.ok(await page.evaluate(()=>document.querySelector('#app')._vnode.component.proxy.orderNumberPreview));
+  await page.screenshot({path:path.join(out,'common-box-25-rows.png')});
   assert.deepEqual(errors,[]);
-  fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({passed:true,browser:'installed Chrome',full_erp_html:true,real_api:true,fictional_database:true,multi_select:2,unwarned:true,blank_quantities:true,order_preserved:true,saved_readback:[12,25],import_entry:true},null,2));
+  fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({passed:true,browser:'installed Chrome',full_erp_html:true,real_api:true,fictional_database:true,multi_select:2,unwarned:true,blank_quantities:true,order_preserved:true,saved_readback:[12,25],import_entry:true,common_box_rows:25,recovery_history_collapsed:24},null,2));
   console.log('Chrome full-page multi-select, new window, manual save/readback and original order preserved: passed');
  } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

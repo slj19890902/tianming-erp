@@ -52,6 +52,7 @@ const ctx={productForm:{id:existing?9:null},drawingFile:null,productEditReturnCo
 
 def test_bom_unit_control_preserves_existing_nonstandard_units():
     html = (Path(__file__).resolve().parents[1] / "static/index.html").read_text(encoding="utf-8")
-    assert 'aria-label="产品库存单位" v-model="productForm.unit"' in html
-    assert "!['只','套','片'].includes(productForm.unit)" in html
-    assert ':value="productForm.unit">{{ productForm.unit }}</option>' in html
+    assert 'aria-label="产品库存单位" :value="productUnitLabel(productForm, true)" readonly' in html
+    assert 'unit: f.unit' in html  # Explicit BOM preset repair must be detected as a dirty product.
+    assert '父件单位原值为' in html
+    assert '@click="repairProductBomSet"' in html

@@ -221,3 +221,10 @@ el1009cp→em1009bs仅新增不可变shared_bom_members空表，不改原业务�
 ## 2026-10-09 首页提醒 en1009hp
 
 承接正式 em1009bs，新增 home_task_preferences 和 home_task_mutations 两张空表，不回写业务表。提醒按事项身份、来源摘要、客户范围和个人/团队保存，CAS版本、幂等请求、不可变历史及OperationLog同事务。新表为空可降回 em1009bs；任一表有记录则拒绝有损降级。程序回退只经签名兼容授权使用v593，保留新表与提醒历史，不能恢复旧库覆盖新事实。用户本轮明确批准升级发布。
+
+
+## 2026-10-10 报料冻结加工身份 eo1010pi / v613
+
+en1009hp→eo1010pi只在stock_replenishment_order_items新增可空production_snapshot_json及不可变触发器；不回填旧单、库存、数量、成本或工艺。新报料保存时冻结加工身份，旧报料仅以原单和校验过的当时主档版本取证。隔离正式副本完成升降升，323张原业务表既有字段事实保持，完整性ok/FK0；非空新列在任何降级DDL前拒绝。
+
+正式先更新签名stock_purchase_identity_v1读取门禁助手，保留现有全部reader门禁，再由Manager持锁核对实时v612基线、冷备恢复验证、签名包隔离演练、迁移及启动前旧事实/附件比较。旧包保留但不能直接接新schema；有新业务后保留现库向前修复，不删冻结身份、不stamp、不恢复旧备份覆盖新事实。只新增结构，不代用户生产入库或送货。最新发布和人工验收状态见docs/reports/PRODUCT_LIFECYCLE_FREEZE_20261010.md。

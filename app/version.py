@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.612"
-APP_VERSION_NAME = "手机常用箱全部上传图纸"
+APP_VERSION = "v0.22.613"
+APP_VERSION_NAME = "报料冻结规格与产品全程状态"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5926,3 +5926,17 @@ APP_VERIFICATION_STEPS = [
     "分别点开较早上传图片和PDF，核对原图；扫描产品二维码也应看到全部工程图纸。",
 ]
 APP_CHANGELOG = [*(f"v0.22.612：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
+    "首页产品查询新增全程状态，展示补库与订单报料、收料、待生产、完工位置、关联组合产品和历史送货。",
+    "从原收料单关联材料库存，区分实存材料、理论待产与实际成品；2500张四模材料显示理论10000，不自动增加成品库存。",
+    "补库加工沿用本批正式报料与产品冻结身份，常用箱后续修改不再阻断旧批生产；完工和送货继续保留本批规格。",
+    "新增可空的报料加工快照列及不可变保护，不回填历史业务数据；保留实收异常、数量、客户权限和生产入库校验。",
+]
+APP_VERIFICATION_STEPS = [
+    "强制刷新首页搜索80011965，打开研光产品的全程状态，核对2500张材料、理论10000只、本批795×457及原料堆放区003号位；库存页原3200只保持。",
+    "有实际生产完工时，按原收料批次进入加工入库，核对本批原规格与实际完工数量；未生产不能直接把理论产量当成品。",
+    "查询有真实送货或BOM关系的产品，核对历史送货与关联产品；正式页面等待管理员人工验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.613：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

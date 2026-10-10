@@ -889,3 +889,10 @@ el1009cp→em1009bs仅新增不可变shared_bom_members空表，不改原业务�
 ## 2026-10-09 HOME-CUSTOMER-ACTIONS 发布步骤
 
 从实时v593/em1009bs核对源码与唯一head。管理测试副本完成 en1009hp upgrade→em1009bs downgrade→en1009hp upgrade，逐表旧字段指纹不变、FK=0、完整性ok，非空提醒表降级拒绝。正式通过Manager签名跨版本包，声明 from_revision=em1009bs、rollback_package_sha256=23ca1b031e1be656d1bc9eac31f6e078752096bba50a753d38a96a9a640c2be4；时点冷备独立恢复验证后正式迁移，新两表必须为空，旧321表及附件/reader门禁保持。三入口健康、静态资源及匿名权限只读核验；NAS发布并写独立回执。正式页面仅管理员人工验收。
+
+
+## 2026-10-10 报料冻结加工身份 eo1010pi / v613
+
+en1009hp→eo1010pi只在stock_replenishment_order_items新增可空production_snapshot_json及不可变触发器；不回填旧单、库存、数量、成本或工艺。新报料保存时冻结加工身份，旧报料仅以原单和校验过的当时主档版本取证。隔离正式副本完成升降升，323张原业务表既有字段事实保持，完整性ok/FK0；非空新列在任何降级DDL前拒绝。
+
+正式先更新签名stock_purchase_identity_v1读取门禁助手，保留现有全部reader门禁，再由Manager持锁核对实时v612基线、冷备恢复验证、签名包隔离演练、迁移及启动前旧事实/附件比较。旧包保留但不能直接接新schema；有新业务后保留现库向前修复，不删冻结身份、不stamp、不恢复旧备份覆盖新事实。只新增结构，不代用户生产入库或送货。最新发布和人工验收状态见docs/reports/PRODUCT_LIFECYCLE_FREEZE_20261010.md。

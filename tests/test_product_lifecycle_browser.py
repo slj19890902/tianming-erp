@@ -22,7 +22,7 @@ def test_product_lifecycle_in_real_chrome(stock_replenishment_app):
     def browser_page():
         return '''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/ui/product-workbench.css"><body><h1>隔离验收 · 虚构资料</h1><main id="workbench"></main><script src="/static/ui/product-workbench.js"></script><script>ERPProductWorkbench.mount({container:document.getElementById('workbench'),request:async path=>{const r=await fetch(path);const data=await r.json();if(!r.ok)throw Error(data.detail||'读取失败');return data;}});</script></body></html>'''
     with factory() as db:
-        p=db.get(Product,1);p.product_code='80011965';p.product_name='虚构四模产品';db.commit()
+        p=db.get(Product,1);p.product_code='80011965';p.customer_material_code='80011965';p.product_name='虚构四模产品';db.commit()
     with TestClient(app) as client:
         payload=_customer_replenishment_payload(2500);payload['items'][0]['stock_yield_per_sheet']=4
         receive(client,payload,quantity=2500)

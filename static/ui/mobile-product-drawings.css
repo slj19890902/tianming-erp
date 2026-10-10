@@ -4,6 +4,7 @@
 .product-candidate > .product-drawings { margin: 0 11px 10px; }
 .product-candidate > .product-drawing-state { margin: 0 11px 10px; }
 .product-drawings { margin-top: 10px; border-top: 1px solid var(--line); scroll-margin-top: 76px; }
+.product-drawings [hidden] { display: none !important; }
 .product-drawings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 9px 2px; color: var(--blue); font-weight: 800; cursor: pointer; overflow-wrap: anywhere; list-style: none; }
 .product-drawings-toggle::-webkit-details-marker { display: none; }
 .product-drawings-action { flex: 0 0 auto; font-size: 13px; }

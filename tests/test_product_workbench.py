@@ -18,7 +18,10 @@ from app.models.material import Material
 from app.models.warehouse_goods import WarehouseGoodsProfile
 from app.models.order import Order, OrderItem
 from app.models.user import User
-from app.models.warehouse_inventory import InventoryLot, SemiFinishedLotAllowedProduct
+from app.models.warehouse_inventory import (
+    InventoryLot, InventoryLotTransfer, SemiFinishedInventoryDetail,
+    SemiFinishedLotAllowedProduct,
+)
 from test_p1_21b_mobile_admin_product_search import _login, mobile_erp_app
 from test_bidirectional_sheet_cut import eligibility_db, prepare as prepare_cut
 from tests.test_finished_goods_inventory_reservation import reservation_db
@@ -237,6 +240,70 @@ def test_source_lot_without_allowed_binding_can_rank_product(mobile_erp_app):
             dimension_basis="finished", length=None, width=None, height=None,
             page=1, page_size=20, allow_order_search=False, allow_inventory_rank=True)
         assert total == 2 and [row.id for row in rows] == [target.id, zero.id]
+
+
+def test_moved_source_lot_ranks_only_its_product_before_pagination(mobile_erp_app):
+    from app.models.stock_replenishment import StockReplenishmentOrder, StockReplenishmentOrderItem
+    app, ids, factory = _app(mobile_erp_app)
+    now = datetime(2026, 10, 10)
+    with factory() as db:
+        customer_id = db.get(Product, ids["product"]).customer_id
+        other_customer_id = db.get(Product, ids["other_product"]).customer_id
+        products = []
+        for name, owner in (("ZERO", customer_id), ("SOURCE", customer_id),
+                            ("OTHER-ZERO", other_customer_id), ("OTHER-SOURCE", other_customer_id)):
+            products.append(Product(customer_id=owner, product_code=f"MOVE-NEAR-{name}",
+                customer_material_code=f"MOVENEAR{name}", product_name=f"近尺寸{name}",
+                length_mm=420, width_mm=310, height_mm=260, sale_unit_price=Decimal("1")))
+        db.add_all(products)
+        db.flush()
+        zero, source_product, other_zero, other_source = products
+        location = db.scalar(select(WarehouseLocation).where(WarehouseLocation.location_code == "SF-TEMP"))
+        def sheet(number, owner, available, status):
+            lot = InventoryLot(lot_number=number, inventory_type="semi_finished",
+                warehouse_location_id=location.id, quantity_available=available,
+                unit="sheets", status=status, source_type="transfer",
+                source_ref_type="stock_replenishment_receipt", source_ref_id=888001,
+                stock_date=date(2026, 10, 10), last_movement_at=now)
+            lot.semi_finished_detail = SemiFinishedInventoryDetail(
+                owner_customer_id=owner, material_code_snapshot="K=A",
+                normalized_material_code="K=A", layer_count=3, flute_type="B",
+                board_length_mm=800, board_width_mm=600, component_type="whole",
+                sheet_type="raw_board")
+            db.add(lot)
+            db.flush()
+            return lot
+        root = sheet("MOVE-NEAR-ROOT", customer_id, 0, "closed")
+        successor = sheet("MOVE-NEAR-SUCCESSOR", customer_id, 5, "active")
+        sheet("MOVE-NEAR-SAME-REF-NO-TRANSFER", other_customer_id, 5, "active")
+        db.add(InventoryLotTransfer(source_lot_id=root.id, target_lot_id=successor.id,
+            source_location_id=location.id, target_location_id=location.id,
+            quantity=5, available_quantity=5, reserved_quantity=0,
+            source_version_before=1, source_version_after=2,
+            idempotency_key="move-near-transfer", request_hash="a" * 64,
+            transferred_at=now))
+        order = StockReplenishmentOrder(order_number="MOVE-NEAR-ORDER",
+            source_type="manual_history", status="stocked", customer_id=customer_id)
+        db.add(order)
+        db.flush()
+        db.add(StockReplenishmentOrderItem(replenishment_order_id=order.id,
+            target_inventory_type="semi_finished", product_id=source_product.id,
+            reference_product_id=source_product.id, customer_id=customer_id,
+            product_name_snapshot=source_product.product_name,
+            quantity=5, stocked_quantity=5, inventory_lot_id=root.id))
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        params = {"q": "MOVE-NEAR", "length": 421, "width": 311, "height": 260,
+                  "tolerance_mm": 10, "page_size": 1}
+        first = client.get("/api/product-workbench/search", params=params)
+        assert first.status_code == 200, first.text
+        assert first.json()["items"][0]["id"] == source_product.id
+        assert first.json()["total"] >= 4
+        other = client.get("/api/product-workbench/search", params={
+            **params, "customer_id": other_customer_id})
+        assert other.status_code == 200, other.text
+        assert other.json()["items"][0]["id"] == other_zero.id
 
 
 def test_scope_hides_search_detail_and_reverse(mobile_erp_app):

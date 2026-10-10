@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="/static/ui/home-workbench.css?v=20261010-home2" />
     <script src="/static/ui/home-workbench.js?v=20261010-home2"></script>
     <link rel="stylesheet" href="/static/ui/product-workbench.css?v=1bbc57da356b" />
-    <script src="/static/ui/product-workbench.js?v=4f07fc902f70"></script>
+    <script src="/static/ui/product-workbench.js?v=c880d8dc7f20"></script>
     <script src="/static/ui/order-context.js?v=round-experience-d1b"></script>
     <script src="/static/ui/workspace.js?v=71e4c13edadc"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
@@ -10294,15 +10294,23 @@
       // END IDEMPOTENCY_KEY_HELPER
 
       axios.defaults.withCredentials = true;
+      const erpRequestIdentity = () => window.erpRequestIdentity?.() || {actor:null, generation:null};
+      axios.interceptors.request.use(config => {
+        config._erpRequestIdentity = {...erpRequestIdentity()};
+        return config;
+      }, undefined, {synchronous:true});
       axios.interceptors.response.use(
         (response) => response,
         (error) => {
           const status = error?.response?.status;
-          window.TMEntryProduct?.offerRepair(error?.response?.data?.detail);
-          if (status === 401 && window.erpAuthRequired) {
+          const sent = error?.config?._erpRequestIdentity;
+          const now = erpRequestIdentity();
+          const sameSession = !!sent && sent.actor === now.actor && sent.generation === now.generation;
+          if (sameSession) window.TMEntryProduct?.offerRepair(error?.response?.data?.detail);
+          if (sameSession && status === 401 && window.erpAuthRequired) {
             if (!window.erpCheckingSession) window.erpAuthRequired();
           }
-          if (status === 403 && window.erpForbidden) window.erpForbidden(error?.response?.data?.detail);
+          if (sameSession && status === 403 && window.erpForbidden) window.erpForbidden(error?.response?.data?.detail);
           return Promise.reject(error);
         }
       );
@@ -12371,6 +12379,7 @@
           }
         },
         async mounted() {
+          window.erpRequestIdentity = () => ({actor:this.user?.id ?? null, generation:this.authGeneration});
           window.erpAuthRequired = () => {
             this.finishOriginalBusinessConfirmation(false);
             window.TmDesktopDeliveryMargin?.destroy?.();
@@ -16543,8 +16552,11 @@
               await this.runExplicitPageListLoad(page, {resetPage:true});
             }, 300));
           },
-          async go(page) {
+          async go(page, {productAction=null}={}) {
+            window.ERPProductWorkbench?.navigationIntent(this, productAction);
+            if (productAction && !productAction.current()) return;
             if (this.activePage === "warehouse" && page !== "warehouse" && !await this.checkWarehouseNavigation()) return;
+            if (productAction && !productAction.current()) return;
             const leavingWarehouse = this.activePage === "warehouse" && page !== "warehouse";
             if (!this.pageAllowed(page)) {
               this.showToast("当前账号没有访问该功能的权限", true);
@@ -16585,6 +16597,7 @@
                 this.cancelQueuedPageSearch(previousSearchPage);
               }
             }
+            if (productAction && !productAction.arrive(page)) return;
             this.activePage = page;
             if (leavingWarehouse) this.leaveWarehouseWorkspaceUrl(page);
             await this.loadPage(page);
@@ -17157,7 +17170,8 @@
               if (requestGeneration === this.authGeneration && requestUserId === (this.user?.id ?? null)) this.customerPhoneGovernanceExporting = false;
             }
           },
-          async loadCustomerOptions(force=false) {
+          async loadCustomerOptions(force=false, {productAction=null}={}) {
+            if (productAction && !productAction.current()) return false;
             if (!this.hasPermission("customers.view")) {
               this.customerOptions = [];
               this.customerOptionsIdentity = "";
@@ -17173,12 +17187,12 @@
             const controller = this.beginLatestRequest(requestKey);
             const isCurrent = () => latestRequestControllers.get(requestKey) === controller
               && identity === `${this.user?.id ?? "anonymous"}:${this.authGeneration}`
-              && this.hasPermission("customers.view");
+              && this.hasPermission("customers.view") && (!productAction || productAction.current());
             try {
               const options = new Map();
               let pageCount = 1;
               for (let page = 1; page <= pageCount; page += 1) {
-                const { data } = await axios.get("/api/master/customers", {
+                const { data } = await (productAction || axios).get("/api/master/customers", {
                   params:{ page, page_size:200, include_inactive:true },
                   signal:controller.signal,
                 });
@@ -17389,13 +17403,13 @@
           },
           // 分页拉取材质：后端限制 page_size<=200，因此用 page 翻页拉全部，
           // 单次 limit 永不超过 200，避免一次性全量导致 422（Input should be <= 200）。
-          async fetchAllMaterials(baseParams, signal) {
+          async fetchAllMaterials(baseParams, signal, productAction=null) {
             const PAGE_SIZE = 200;  // 后端硬上限，禁止超过
             let page = 1;
             const all = [];
             while (true) {
               const params = { ...baseParams, page, page_size: PAGE_SIZE };
-              const data = (await axios.get("/api/master/materials", { params, signal })).data;
+              const data = (await (productAction || axios).get("/api/master/materials", { params, signal })).data;
               const items = data.items || [];
               all.push(...items);
               const total = data.total != null ? data.total : all.length;
@@ -17867,7 +17881,8 @@
             await Promise.all([this.loadMaterials(),this.loadPaperCodes()]);
             this.resetPaperCodeForm();
           },
-          async loadMaterials() {
+          async loadMaterials({productAction=null}={}) {
+            if (productAction && !productAction.current()) return false;
             const requestKey = "materials:list";
             const controller = this.beginLatestRequest(requestKey);
             const actorId = this.user?.id, generation = this.authGeneration;
@@ -17877,15 +17892,15 @@
             const shouldHydrateAll = true; // Every successful refresh also refreshes selector facts.
             const isUnfilteredCommonView = !params.layer_count && !params.supplier_name && params.sort === "common";
             try {
-              const materials = await this.fetchAllMaterials(params, controller.signal);
+              const materials = await this.fetchAllMaterials(params, controller.signal, productAction);
               let allMaterials = null;
               if (shouldHydrateAll) {
                 allMaterials = isUnfilteredCommonView
                   ? materials.slice()
-                  : await this.fetchAllMaterials({ sort: "common" }, controller.signal);
+                  : await this.fetchAllMaterials({ sort: "common" }, controller.signal, productAction);
               }
               if (latestRequestControllers.get(requestKey) !== controller) return false;
-              if (actorId !== this.user?.id || generation !== this.authGeneration) return false;
+              if (actorId !== this.user?.id || generation !== this.authGeneration || (productAction && !productAction.current())) return false;
               this.materials = materials;
               // 维护全量材质供选择器复用；新业务供应商选项只来自启用供应商主数据。
               this.materialSuppliers = this.activeSupplierNames;
@@ -20192,6 +20207,8 @@
           },
           async openStockReplenishment(options={}) {
             if (!this.canRequisition) return;
+            const productAction = options.productAction;
+            if (productAction && !productAction.current()) return;
             const warningOnly = !!options.warningOnly;
             const controller = this.beginLatestRequest("requisition:stock-replenishment-bootstrap");
             this.stockReplenishmentSaveState = {saving:false, committed:false, uncertain:false, result:null};
@@ -20199,17 +20216,23 @@
             this.stockReplenishmentProducts = [];
             this.stockReplenishmentCompanions = [];
             this.modal = { type:"stockReplenishment", title:warningOnly ? "按库存预警生成报料草稿" : "手动库存补库报料" };
+            const form = this.stockReplenishmentForm, modal = this.modal;
+            productAction?.bind(form, modal);
+            const current = () => !controller.signal.aborted && this.stockReplenishmentForm === form && this.modal === modal && (!productAction || productAction.current());
+            const http = productAction || axios;
             try {
               const tasks = [
-                axios.get("/api/requisition/stock-policies", {params:{warning_only:true}, signal:controller.signal}),
+                http.get("/api/requisition/stock-policies", {params:{warning_only:true}, signal:controller.signal}),
               ];
-              if (!this.customerOptions.length) tasks.push(this.loadCustomerOptions());
+              if (!this.customerOptions.length) tasks.push(this.loadCustomerOptions(false, {productAction}));
               // 补库详细参数中的材质 search-select 需要完整材质集合；只在实际打开弹窗时补齐。
-              if (!this.allMaterials.length) tasks.push(this.loadMaterials());
+              if (!this.allMaterials.length) tasks.push(this.loadMaterials({productAction}));
               const [policies] = await Promise.all(tasks);
+              if (!current()) return;
               this.stockPolicyWarnings = policies.data.items || [];
             } catch (error) {
-              if (!this.isCancelledRequest(error)) this.showToast("补库基础数据加载失败：" + this.errorMessage(error), true);
+              if (productAction) throw error;
+              if (current() && !this.isCancelledRequest(error)) this.showToast("补库基础数据加载失败：" + this.errorMessage(error), true);
             } finally {
               this.finishLatestRequest("requisition:stock-replenishment-bootstrap", controller);
             }
@@ -20235,7 +20258,8 @@
           explainStockPolicyDraftQuantity(policy) {
             this.showToast(`建议 ${policy.suggested_new_requisition_finished_quantity || 0} 套；填写本次计划补库套数，系统按BOM、库存及在途重算子件张数，不修改预警目标，也不重复扣成品库存。`);
           },
-          async addStockPolicyDraft(policy) {
+          async addStockPolicyDraft(policy, {productAction=null}={}) {
+            if (productAction && !productAction.current()) return;
             const requestKey = `requisition:stock-policy-draft:${policy.id}`;
             const controller = this.beginLatestRequest(requestKey);
             const form = this.stockReplenishmentForm;
@@ -20248,8 +20272,8 @@
                 if (!Number.isSafeInteger(quantity) || quantity < 1) throw new Error("本次补库套数须为正整数");
                 params.finished_quantity = quantity;
               }
-              const { data } = await axios.get(`/api/requisition/stock-policies/${policy.id}/replenishment-draft`, {params,signal:controller.signal});
-              if (controller.signal.aborted || this.stockReplenishmentForm !== form || this.modal?.type !== "stockReplenishment") return;
+              const { data } = await (productAction || axios).get(`/api/requisition/stock-policies/${policy.id}/replenishment-draft`, {params,signal:controller.signal});
+              if (controller.signal.aborted || this.stockReplenishmentForm !== form || this.modal?.type !== "stockReplenishment" || (productAction && !productAction.current())) return;
               const lines = (data.items || []).filter(line => Number(line.quantity || 0) > 0);
               if (!lines.length) {
                 if (!data.draft_ready) this.showToast(`报料资料还缺：${(data.missing_fields || []).join("、")}`, true);
@@ -20272,11 +20296,13 @@
               }
               this.stockReplenishmentCompanions = data.compatible_products || [];
               const customerIds = [...new Set(lines.map(line => line.customer_id).filter(Boolean))];
-              await Promise.all(customerIds.map(customerId => this.loadStockProducts(customerId)));
+              await Promise.all(customerIds.map(customerId => this.loadStockProducts(customerId, "", {productAction})));
+              if (productAction && !productAction.current()) return;
               this.syncStockReplenishmentSupplier();
               if (!data.draft_ready) this.showToast(`报料资料还缺：${(data.missing_fields || []).join("、")}`, true);
               else if (data.is_virtual_composite_parent) this.showToast(`已按BOM生成 ${lines.length} 条组件报料明细`);
-            } catch(error) { if (!this.isCancelledRequest(error)) this.showToast(this.errorMessage(error), true); }
+            } catch(error) { if (productAction) throw error;
+              if (!this.isCancelledRequest(error)) this.showToast(this.errorMessage(error), true); }
             finally { this.finishLatestRequest(requestKey,controller); }
           },
           async addCompatibleStockDraft(companion) {
@@ -20319,15 +20345,17 @@
             const usedPurchaseQuantity=finishedQuantity*purchaseBasis/orderBasis;
             line.external_purchase_remainder=Math.max(purchaseQuantity-usedPurchaseQuantity,0).toFixed(6).replace(/0+$/,"").replace(/\.$/,"") || "0";
           },
-          async loadStockProducts(customerId, query="") {
+          async loadStockProducts(customerId, query="", {productAction=null}={}) {
+            if (productAction && !productAction.current()) return;
             if (!customerId) return;
             try {
               const keyword=String(query||"").trim();
-              const {data} = await axios.get("/api/requisition/stock-replenishment/products", {params:{customer_id:customerId,q:keyword||undefined,limit:keyword?100:2000}});
+              const {data} = await (productAction || axios).get("/api/requisition/stock-replenishment/products", {params:{customer_id:customerId,q:keyword||undefined,limit:keyword?100:2000}});
+              if (productAction && !productAction.current()) return;
               const existing = new Map((this.stockReplenishmentProducts || []).map(row=>[row.id,row]));
               (data.items || []).forEach(row=>existing.set(row.id,row));
               this.stockReplenishmentProducts = [...existing.values()];
-            } catch(error) { this.showToast(this.errorMessage(error), true); }
+            } catch(error) { if (productAction) throw error; this.showToast(this.errorMessage(error), true); }
           },
           searchStockProducts(customerId, query) {
             if (!customerId || !String(query||"").trim()) return;
@@ -34923,15 +34951,18 @@
           customerChargeTypeText(value) {
             return {mold:"模具费",printing_plate:"制版费",sample:"打样费",setup:"开机费",freight:"运费",other:"其他"}[value] || value || "其他";
           },
-          async loadOrderCustomerCharges(orderId = null) {
+          async loadOrderCustomerCharges(orderId = null, {productAction=null}={}) {
+            if (productAction && !productAction.current()) return;
             const selectedOrderId = Number(orderId || this.orderDetail?.id || 0);
             if (!selectedOrderId || !this.hasPermission("finance.view")) { this.orderCustomerCharges = []; return; }
             try {
-              const {data} = await axios.get("/api/finance/customer-charges", {params:{order_id:selectedOrderId}});
+              const {data} = await (productAction || axios).get("/api/finance/customer-charges", {params:{order_id:selectedOrderId}});
+              if (productAction && !productAction.current()) return;
               this.orderCustomerCharges = data.items || [];
             } catch(error) {
+              if (productAction && !productAction.current()) return;
               this.orderCustomerCharges = [];
-              this.showToast(`附加收费读取失败：${this.errorMessage(error)}`, true);
+              if (!error._productActionNotified) this.showToast(`附加收费读取失败：${this.errorMessage(error)}`, true);
             }
           },
           openCustomerChargeForm(charge = null) {
@@ -35109,7 +35140,8 @@
               state.error=error.response && error.response.status<500 ? this.errorMessage(error) : "结果暂不确定，请重试同一操作；不要另建转换。";
             } finally {state.loading=false;}
           },
-          async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null}={}) {
+          async openOrderDetail(row, {keepModalA11ySession=false, returnFocusFallback=null, productAction=null}={}) {
+            if (productAction && !productAction.current()) return false;
             this.costPanelReturnContext = null; this.costReviewFocusItemId = 0;
             const requestKey = "orders:read-detail-modal";
             const orderId = Number(row?.id || 0);
@@ -35123,17 +35155,18 @@
             this.cancelOrderTraceChildRequests();
             const controller = this.beginLatestRequest(requestKey);
             try {
-              const { data } = await axios.get(`/api/orders/${orderId}`, {signal:controller.signal});
-              if (latestRequestControllers.get(requestKey) !== controller) return false;
+              const { data } = await (productAction || axios).get(`/api/orders/${orderId}`, {signal:controller.signal});
+              if (latestRequestControllers.get(requestKey) !== controller || (productAction && !productAction.current())) return false;
               if (keepCurrentModalSession && (!modalA11ySessionActive || modalA11ySessionGeneration !== expectedModalSessionGeneration)) return false;
               this.orderDetail = data;
-              await this.loadOrderCustomerCharges(orderId);
+              await this.loadOrderCustomerCharges(orderId, {productAction});
+              if (productAction && !productAction.current()) return false;
               this.modal = { type:"orderDetail", title:`只读订单详情 ${this.displayOrderNumber(data)}` };
               this.focusAccessibleModal(modalOpener, returnFocusFallback);
               return true;
             } catch (error) {
-              if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller) return false;
-              this.showToast(`订单详情读取失败：${this.errorMessage(error)}`, true);
+              if (this.isCancelledRequest(error) || latestRequestControllers.get(requestKey) !== controller || (productAction && !productAction.current())) return false;
+              if (!error._productActionNotified) this.showToast(`订单详情读取失败：${this.errorMessage(error)}${productAction ? "，请返回产品后重新打开" : ""}`, true);
               if (keepCurrentModalSession && modalA11ySessionActive && modalA11ySessionGeneration === expectedModalSessionGeneration) this.focusAccessibleModal(modalOpener);
               return false;
             } finally {

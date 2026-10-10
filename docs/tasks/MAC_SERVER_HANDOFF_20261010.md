@@ -81,3 +81,9 @@ Mac 默认使用系统 STHeiti Medium.ttc 的 Heiti SC（face 1），合同和�
 定向验证：中文 PDF/文字/工程图 22 项通过；40×30 和 40×80 标签的 1/2/100 页及像素边界 7 项通过；送货打印布局契约 8 项通过。Mac 字体会将“片”提取为兼容部首，测试只对提取文本做 NFKC 比较，不改 PDF 或业务文字。测试使用任务目录中的官方 Chrome for Testing headless shell 155.0.8059.39，静态合成 HTML、独立临时配置、关闭背景联网及外部 DNS；其代码签名为 ad hoc，不声称 Google Developer ID 验签。
 
 三份合成样张（合同 2 页、工程图 3 页、40×80 标签 2 页）已由 Poppler 渲染并逐页目视检查：中文可读、无方框和截断、工程图尺寸标注完整、标签旋转及二维码位置正确。证据 mac-chinese-pdf-tests.log、mac-label-pdf-tests.log、mac-delivery-print-contract-tests.log、native-print-samples.json、native-print-visual-review.json。没有使用真实订单或访问正式数据库；实体针式/标签打印机的驱动、走纸、二维码扫描及现场签字尚未验收。原 46477f6a 未签名构建仅证明原生运行时，必须在后续变更完成后重建，不能作为最终候选签署。
+
+第九个闭环范围：新增 app/core/mac_keychain.py 和 tests/test_mac_keychain.py，先实现并验证本机钥匙串后端。通过系统 Security/CoreFoundation API 在当前用户钥匙串保存凭据，普通配置只持带用途的随机引用；旧 DPAPI 值明确拒绝，不能假装跨机解密。禁止将秘密放入子进程参数或日志，不修改默认钥匙串/搜索列表/访问控制。实机验证仅在本任务新建的独立临时钥匙串中保存合成值并验证锁定拒绝，不读取个人钥匙串条目；邮箱/AI/备份接入及异机加密移交另作后续闭环。
+
+钥匙串后端定向 8 项通过，包含独立临时钥匙串实机中文/NUL 字节往返、同引用重复拒绝、锁定拒绝及解锁恢复；测试只删除自身刚创建的临时钥匙串，搜索列表前后相同，交互设置恢复原值。生产 API 每次请求设置禁止交互；实机测试另禁用交互防止无人值守弹窗，因此不把该测试扩大为所有运行上下文的无弹窗保证。用途不符、旧 DPAPI、空值/过大值/无效编码均先拒绝；私钥用途不支持。未读取个人钥匙串已有条目、未存正式秘密、未接入业务入口。证据 mac-keychain-tests.log。
+
+实现采用 Security.framework SecItem API 的当前用户文件型钥匙串，并限制到该用户 Library/Keychains 和当前 UID；不设置 iCloud 同步、默认钥匙串、搜索列表或 ACL。Apple TN3137 说明后台 daemon 无法使用 data-protection keychain，且新版 macOS 钥匙串文件可能依赖受保护熵文件，故不将复制钥匙串当作异机备份；后续仍须应用级加密凭据导出与异机恢复演练。来源：https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains 。当前后端是开发验证结果，服务身份及重启后解锁尚待验证，不代表凭据迁移完成。

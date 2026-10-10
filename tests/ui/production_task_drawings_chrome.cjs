@@ -6,7 +6,7 @@ const svg='<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" view
 function drawing(code,n=1) {return {key:`drawing-${code}-${n}`,product_code:code,name:`内衬展开图 ${n}`,source_label:'参考图',kind:'image',preview_url:`/api/requisition/production-paper-drawings/order-item/${code}/drawing-${n}/preview`};}
 function card(code,options={}) {
   const component={product_code:code,product_name:'模切内衬',report_length_mm:954,report_width_mm:540,
-    material_code:'VIK',flute_type:'B',finished_unit:'片',customer_order_quantity:100,finished_deduction_quantity:0,planned_finished_quantity:100,
+    material_code:'VIK',flute_type:'B',finished_unit:'片',customer_order_quantity:100,finished_deduction_quantity:0,planned_finished_quantity:100,requisition_quantity:50,strip_finished_quantity:100,
     joining_method:'打钉',printing_colors:['黑色'],print_content:'客户标志',mold_code:code+'长模',mold_location_display:'A11',
     sheet_cutting_snapshot:{cutting_factor:3,length_parts:3,width_parts:1,theoretical_length_mm:318,theoretical_width_mm:540,is_die_cut:true,mold_count:2},
     paper_drawings:[drawing(code)]};
@@ -62,7 +62,7 @@ function card(code,options={}) {
     await page.emulateMedia({media:'screen'});await pdf('two-tasks-with-drawings.pdf');
     cards=Array.from({length:4},(_,i)=>card(String(80011940+i),{group:'combined'}));
     cards[0].components[0].paper_drawings.push(drawing('80011940',2));
-    await page.reload();await ready();result=await inspect();assert(!result.clipped);assert(!result.footerOverlap);assert.equal(result.figures.length,5);assert(result.pages>1);assert(result.text.includes('续页'));
+    await page.reload();await ready();result=await inspect();assert(!result.clipped);assert(!result.footerOverlap);assert.equal(result.figures.length,5);assert.equal(result.pages,2);assert(result.text.includes('续页'));
     for(const f of result.figures)assert(f.src.includes(f.code));snapshots.push({scenario:'merged-multiple-drawings-continuation',...result});
     await page.screenshot({path:path.join(output,'merged-drawings.png'),fullPage:true});
     await pdf('merged-drawings.pdf');
@@ -80,6 +80,8 @@ function card(code,options={}) {
     await page.click('#printButton');await page.waitForTimeout(200);assert.equal(prints,3);
     failed=true;await page.reload();await page.waitForFunction(()=>document.getElementById('message').textContent.includes('图纸加载失败'));
     assert(await page.locator('#printButton').isDisabled());failed=false;await page.click('#retryButton');await ready();
+    await page.click('#stripButton');await ready();assert.equal(await page.locator('.paper-drawing').count(),0);assert.equal(await page.locator('.material-strip-page').count(),1);
+    await page.click('#stripButton');await ready();assert.equal(await page.locator('.paper-drawing').count(),1);
     cards[0].components[0].paper_drawings[0].preview_url='https://untrusted.test/drawing.png';
     await page.reload();await page.waitForFunction(()=>document.getElementById('message').textContent.includes('图纸预览不可用'));
     assert(await page.locator('#printButton').isDisabled());assert.equal(unexpected.length,0);assert.equal(errors.length,0,errors.join('\n'));

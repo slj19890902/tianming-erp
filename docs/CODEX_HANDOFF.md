@@ -1,3 +1,7 @@
+## 2026-10-10 Mac正式服务器迁移准备（尚未切换）
+
+老板要求新Mac接替工厂Windows服务器，仅ERP完整真实数据/附件/配置，不含微信办公资料。已核验v625发布并保全遗漏代码和本机Git历史；Mac尚未接入，Windows助手/DPAPI邮箱及凭据/附件路径/打印仍须跨平台适配。旧机不得清空，最终须停写同步和单写端接管。入口：docs/tasks/MAC_SERVER_HANDOFF_20261010.md、docs/plans/MAC_SERVER_MIGRATION_20261010.md及NAS独立交接回执；12752/12753最新配片口径在任务卡，不以旧候选3A口径写库。
+
 ## 2026-10-10 供应商修边尺寸常用箱默认值 v0.22.625
 
 签名源码45a48679、包f5fcddbd，完整保留v623导入/补库，ep1010md无迁移。理论375×226/长2宽3可保存实际750×700毛片；盖底独立，采购面积计成本、产出仍6×M，历史冻结保持。新助手supplier_sheet_trim_v1保护v3事实，禁止不兼容旧程序回退。冷备真实恢复、原事实/附件、健康及14项资源核对、NAS feed通过；无正式业务代改，待人工验收。详见docs/reports/SUPPLIER_SHEET_DEFAULT_20261010.md及NAS 20261010-SUPPLIER-SHEET-DEFAULT-v625正式发布.md。

@@ -13,3 +13,18 @@
 - 根：确认本卡及实际新正式基线，跨接口核验、独立审查、定义后续实施allowlist。正式已有功能不得因修复丢失，保留数量/状态/权限/幂等/版本/事务/审计和历史冻结。
 
 审查不改库存、材料匹配核心、BOM、报料审批、价格或历史资料；需要业务规则变化先独立列出，不夹带。发现问题分类真实缺陷/既有正常门禁/待现场核验。每轮写NAS独立回执，不能只重复状态。持续Goal active。
+
+## 已复现后实施阶段（2026-10-10 08:15）
+
+已有实际合成HTTP和真实linkedom/VM审查：API确认已加工子件位置/实际批次反查单位误标、超大int/offset产生500两类；UI确认手机图纸未展开即src、旧show回调污染新产品页签、render丢未提交条件、无限等待四类，空坏2xx另由审查确认后收口。正常地图返回/普通历史切换/销毁后旧结果不渲染不算Bug。修复仅针对实际复现，不扩原数量或匹配规则。
+
+最小方案：API局部按库存实物形态投影原单位，ID与页号/offset边界前置可读4xx；UI把已提交查询和正在编辑条件分离，请求及后续页签恢复均核对同一轮身份，有限等待并拒绝迟到结果，错误/空回执有明确重试，手机复用现有TmProductDrawings实现收起/展开/图片及PDF/失败分类/释放。桌面图纸原呈现保留，手机详情和结果都默认收起。
+
+本阶段明确允许API/UI/独立审者并行，各有写入边界。根核验两旧group-save树干净且无存活python/node/chrome引用后复用，从正式4b66fc4c建立新分支，原分支保留；禁止触碰旧production-save和chain服务引用树。
+
+- API负责人 /root/mobile_drawings_api：D:/.codex/worktrees/group-save-recovery-api-20261010/纸箱厂erp软件搭建，新分支codex/mobile-product-workbench-api-20261010。允许 app/api/product_workbench.py、app/services/product_workbench.py、tests/test_product_workbench.py；artifact/api。先提交失败证据和最小合同，后实现验证，并交最终真实详情/搜索/反查HTTP给UI。禁止改共享数量helper/模型/迁移。
+- UI负责人 /root/mobile_drawings_ui：D:/.codex/worktrees/group-save-recovery-ui-20261010/纸箱厂erp软件搭建，新分支codex/mobile-product-workbench-ui-20261010。允许 static/ui/product-workbench.js、static/ui/product-workbench.css、static/index.html、static/mobile_erp.html、tests/ui/product_workbench.test.cjs，可新增 tests/ui/mobile_product_workbench_reliability.test.cjs；artifact/ui。不得改旧TmProductDrawings实现，必要时先报告。只改入口资源版本所需行，不扩大主单体页面业务。复用固定linkedom依赖，不改依赖锁。
+- 独立审者 /root/order_recovery_review：只读候选和根，自有artifact/review探针，核当前7类边界、真实API→实际UI及权限/单位守恒、图纸生命周期。未能用真实浏览器时仅声明技术非DOM验证。
+- 根独占版本、任务卡、报告、整合与受控发布。目标暂定v607，发布前重新核验正式基线；无迁移/正式历史修正/no push。
+
+必须证据：失败复现→针对性修复回归；实际手机入口展开前0预览请求、展开后按权限加载、收起/切换/销毁取消与释放；旧产品/账号晚回不改当前页签/图纸，未提交输入不被刷新/重试清除；超时退忙可重试且晚响应不能覆盖；坏2xx不报空库存/成功、不崩页；原正常搜索、实际批次反查、地图返回、桌面报料用途与首页相邻不退化。库存数量/版本/客户范围保持，不用快照或窄测试证明全ERP无Bug。发布沿已验证标准Manager签名、冷备恢复、原表/文件保持、唯一head、健康与静态资源门禁，现场验收仍pending。

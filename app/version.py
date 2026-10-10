@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.624"
-APP_VERSION_NAME = "供应商修边尺寸默认值"
+APP_VERSION = "v0.22.625"
+APP_VERSION_NAME = "供应商修边尺寸与盖底默认值"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6090,3 +6090,15 @@ APP_VERIFICATION_STEPS = [
     "核对历史已报料单据仍保留原尺寸；本版不会批量修改任何正式产品或库存。",
 ]
 APP_CHANGELOG = [*(f"v0.22.624：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "常用箱保存供应商实际报料长宽和毛片要求，后续新报料沿用；理论尺寸、开料份数、模数及产出保持独立。",
+    "盖片与底片的纸板要求分别联动，底片改毛片时正确清空底压线，保留盖片设置。",
+    "采购、来料和成本使用冻结的实际尺寸，修边余量不增加产出；历史数据不批量修改，旧程序读取保护保持。",
+]
+APP_VERIFICATION_STEPS = [
+    "常用箱调整供应商实际长宽并选择毛片，保存后重新打开，核对默认值保持。",
+    "天地盖分别核对盖、底；底片改毛片后底压线清空，盖片资料应保持。",
+    "核对下一笔新报料的实际尺寸、采购张数和生产修边说明；历史已报料尺寸保持。",
+]
+APP_CHANGELOG = [*(f"v0.22.625：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

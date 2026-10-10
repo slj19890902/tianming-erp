@@ -7019,7 +7019,7 @@
                   <div class="sheet-cutting-inputs" :data-supplier-sheet-default="part.key">
                     <label>供应商报料长 <input class="input" type="number" min="1" step="0.01" :value="productSupplierDimension(part.key,'length')" @input="setProductSupplierDimension(part.key,'length',$event.target.value)" /></label>
                     <label>供应商报料宽 <input class="input" type="number" min="1" step="0.01" :value="productSupplierDimension(part.key,'width')" @input="setProductSupplierDimension(part.key,'width',$event.target.value)" /></label>
-                    <label>供应商纸板要求 <select class="select" aria-label="供应商纸板要求" v-model="productForm[part.key==='base'?'base_crease_type':'crease_type']" @change="markProductCreaseTypeManual"><option :value="null">未设置</option><option v-for="creaseType in productSupportedCreaseTypes(productForm.box_style)" :key="creaseType" :value="creaseType">{{ creaseType }}</option></select></label>
+                    <label>供应商纸板要求 <select class="select" aria-label="供应商纸板要求" v-model="productForm[part.key==='base'?'base_crease_type':'crease_type']" @change="part.key==='base' ? markProductBaseCreaseTypeManual() : markProductCreaseTypeManual()"><option :value="null">未设置</option><option v-for="creaseType in productSupportedCreaseTypes(productForm.box_style)" :key="creaseType" :value="creaseType">{{ creaseType }}</option></select></label>
                     <button v-if="part.value.actual_supplier_length_mm!=null" class="btn small" type="button" @click="resetProductSupplierDimensions(part.key)">恢复按开料计算</button>
                   </div>
                   <small class="muted">随常用箱保存，作为以后新报料的默认值。含修边余量请选择毛片；理论尺寸与每张产出不变。</small>

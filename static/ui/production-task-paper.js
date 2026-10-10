@@ -6,6 +6,12 @@
   const num = value => Number(value || 0).toLocaleString('zh-CN');
   const size = (length, width) => length && width ? `${length}×${width} mm` : '尺寸待核对';
   const noPrint = value => !value || /^(无|否|无印刷|无需印刷|不印刷|不印)$/.test(String(value).trim());
+  // Only server-projected, authorized previews. Never embed a path or a PDF as an image.
+  const previewSource = value => typeof value === 'string' && (
+    /^\/api\/requisition\/[a-zA-Z0-9_/?=&.%+-]+$/.test(value) ||
+    /^\/api\/drawing-releases\/\d+\/render\.svg\?view=structure$/.test(value) ||
+    /^data:image\/svg\+xml;base64,[A-Za-z0-9+/=]+$/.test(value)
+  ) ? value : '';
 
   function groups(cards) {
     const result = [], lookup = new Map();
@@ -62,7 +68,7 @@
   }
 
   function atoms(group) {
-    const rows = [], blocks = [], reservations = new Set();
+    const rows = [], blocks = [], reservations = new Set(), drawings = new Set();
     const multiple = group.cards.reduce((n,c) => n + (c.components || []).length, 0) > 1;
     for (const [cardIndex, card] of group.cards.entries()) {
       for (const c of card.components || [card]) {
@@ -83,6 +89,15 @@
           previousRow.cells = [code,name,...previousRow.quantities.map(v=>`${num(v)}${unit}`)];
         } else rows.push({kind:'row',rowKey,quantities,orderKeys:new Set([orderKey]),taskKeys:new Set([taskKey]),cells:[code,name,...quantities.map(v=>`${num(v)}${unit}`)]});
         if (c.quantity_per_set) blocks.push({kind:'block', label:code, text:`每套 ${c.quantity_per_set}片 · ${num(c.order_set_quantity)}套`, internal:false});
+        const componentDrawings = [];
+        for (const drawing of c.paper_drawings || []) {
+          const key = JSON.stringify([code, c.bom_component_id, drawing.key]);
+          if (drawings.has(key)) continue;
+          drawings.add(key);
+          componentDrawings.push({kind:'drawing', code, label:code+label, name:drawing.name || name,
+            source:drawing.source_label || '参考图', src:previewSource(drawing.preview_url), internal:true});
+        }
+        if (componentDrawings.length) blocks.push(componentDrawings[0]);
         const prefix = multiple ? `${code}${label} ` : '';
         for (const op of operations(c, card)) blocks.push({kind:'block', ...op, label:prefix+op.label});
         let finishedLocations = false;
@@ -96,6 +111,7 @@
         }
         if (!finishedLocations && Number(c.finished_deduction_quantity ?? card.stock_deduction_quantity) > 0)
           blocks.push({kind:'block', label:code+' 成品位置', text:'待核对当前抵扣批次', internal:true});
+        blocks.push(...componentDrawings.slice(1));
       }
       if (card.paper_phase === 'actual_receipt') blocks.push({kind:'block', label:'本批实收', text:`${num(card.received_sheet_quantity)}张 · 最多生产 ${num(card.production_capacity_quantity)}${card.output_unit || '只'} · ${card.employee_location_name || card.current_address_name || card.warehouse_location || '位置待核对'} · ${card.inventory_lot_number || card.receipt_number || ''}`, internal:true});
       for (const r of card.fulfillment_reminders || []) blocks.push({kind:'block', label:'交付要求', text:r.content, internal:true});
@@ -131,18 +147,25 @@
     return `<header class="paper-head"><div><div class="paper-title">${title} <span data-part></span></div><h1>${esc(first.customer_name || '客户待核对')}</h1><div class="paper-orders">订单 ${esc(orders.join('、') || '待核对')}</div></div>${qr}</header><div class="paper-board"><strong>纸板 ${esc(sizes.join(' / '))}</strong><b>${num(qty)}张</b><span>${esc(materials.join('、'))}</span></div>`;
   }
   function body(atoms) {
-    let html = '', inTable = false;
+    let html = '', inTable = false, instructions = '', drawings = '', qrs = '';
     for (const a of atoms) {
       if (a.kind === 'row') {
         if (!inTable) { html += '<table class="paper-products"><colgroup><col style="width:23%"><col style="width:32%"><col style="width:15%"><col style="width:15%"><col style="width:15%"></colgroup><thead><tr><th>存货编码</th><th>产品名称</th><th>订单数</th><th>成品抵扣</th><th>需生产数</th></tr></thead><tbody>'; inTable = true; }
         html += `<tr>${a.cells.map(v => `<td>${esc(v)}</td>`).join('')}</tr>`;
       } else {
         if (inTable) { html += '</tbody></table>'; inTable = false; }
-        html += a.kind === 'qrs' ? `<div class="paper-qrs">${a.values.map(v=>`<div><img src="${esc(v.src)}" alt="扫码查看当前产品资料"><span>${esc(v.code)}</span></div>`).join('')}</div>`
-          : `<div class="paper-operation${a.internal ? ' internal-only' : ''}"><b>${esc(a.label)}</b><span>${esc(a.text)}</span></div>`;
+        if (a.kind === 'drawing') {
+          drawings += `<figure class="paper-drawing internal-only"><figcaption><b>${esc(a.label)}</b><span>${esc(a.source)}</span></figcaption>${a.src
+            ? `<img src="${esc(a.src)}" alt="${esc(a.label)} 图纸" decoding="async">`
+            : '<div class="paper-drawing-unavailable" data-drawing-unavailable>图纸预览不可用，请重新加载</div>'}<div class="paper-drawing-name">${esc(a.name)}</div></figure>`;
+        } else if (a.kind === 'qrs') {
+          qrs += `<div class="paper-qrs">${a.values.map(v=>`<div><img src="${esc(v.src)}" alt="扫码查看当前产品资料"><span>${esc(v.code)}</span></div>`).join('')}</div>`;
+        } else instructions += `<div class="paper-operation${a.internal ? ' internal-only' : ''}"><b>${esc(a.label)}</b><span>${esc(a.text)}</span></div>`;
       }
     }
-    return html + (inTable ? '</tbody></table>' : '');
+    html += inTable ? '</tbody></table>' : '';
+    if (instructions || drawings) html += `<div class="paper-work${drawings ? ' with-drawings' : ''}"><div class="paper-instructions">${instructions}</div>${drawings ? `<aside class="paper-drawings internal-only">${drawings}</aside>` : ''}</div>`;
+    return html + qrs;
   }
   function render(host, cards) {
     host.innerHTML = '';
@@ -151,20 +174,28 @@
     measurePage.append(measure); host.append(measurePage);
     const pages = []; let pending = null;
     for (const group of groups(cards)) {
+      const drawingCount = group.cards.reduce((sum,card) => sum+(card.components || []).reduce((n,c)=>n+(c.paper_drawings || []).length,0),0);
+      const compactDrawings = drawingCount > 1 ? ' paper-many-drawings' : '';
+      measure.className = 'task-card paper-half'+compactDrawings;
       const head = header(group), sections = []; let content = [];
       const footer = `<footer class="paper-foot"><span>${esc(uniq(group.cards.map(c => c.supplier_order_number)).join('、'))}</span><span class="paper-page-index"></span></footer>`;
       const set = values => { measure.innerHTML = head + body(values) + footer; };
+      const exceeds = () => {
+        const foot = measure.querySelector('.paper-foot').getBoundingClientRect();
+        return measure.scrollHeight > measure.clientHeight + 1 || measure.scrollWidth > measure.clientWidth + 1 ||
+          [...measure.children].some(e => !e.matches('.paper-foot') && e.getBoundingClientRect().bottom > foot.top - 4);
+      };
       for (const atom of atoms(group)) {
         set([...content, atom]);
-        if (measure.scrollHeight > measure.clientHeight + 1 || measure.scrollWidth > measure.clientWidth + 1) {
+        if (exceeds()) {
           if (content.length) { sections.push(content); content = []; set([atom]); }
-          if (measure.scrollHeight > measure.clientHeight + 1 || measure.scrollWidth > measure.clientWidth + 1)
+          if (exceeds())
             throw new Error(`任务内容过长：${atom.label || atom.cells?.[0] || '客户 / 订单'}，请精简该项后打印`);
         }
         content.push(atom);
       }
       if (content.length) sections.push(content);
-      const htmls = sections.map((values, i) => `<section class="task-card paper-half">${head.replace('data-part>', `data-part>${sections.length>1 ? `${i+1}/${sections.length}${i ? ' 续页' : ''}` : ''}`)}${body(values)}${footer.replace('class="paper-page-index">', `class="paper-page-index">${i+1}/${sections.length}`)}</section>`);
+      const htmls = sections.map((values, i) => `<section class="task-card paper-half${compactDrawings}">${head.replace('data-part>', `data-part>${sections.length>1 ? `${i+1}/${sections.length}${i ? ' 续页' : ''}` : ''}`)}${body(values)}${footer.replace('class="paper-page-index">', `class="paper-page-index">${i+1}/${sections.length}`)}</section>`);
       if (htmls.length > 1) {
         if (pending) { pages.push([pending]); pending = null; }
         for (let i=0;i<htmls.length;i+=2) pages.push(htmls.slice(i,i+2));

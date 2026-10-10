@@ -251,19 +251,59 @@ def test_mold_combined_dimensions_are_intersected_and_customer_scoped(
         assert _list_ids(client, **params) == []
 
 
-def test_mold_location_frontend_uses_compact_intersection_filters_and_two_lines() -> None:
+def test_unified_mold_keyword_matches_code_product_or_mold_name_with_scope(mold_app) -> None:
+    from app.models.access_control import UserCustomerScope
+    from app.models.mold_tool import MoldTool
+    from app.models.product import Product
+    from app.models.user import User
+
+    app, factory = mold_app
+    seeded = _seed_filter_matrix(factory)
+    with factory() as db:
+        printed = db.query(Product).filter(Product.mold_tool_id == seeded["printed"]).one()
+        printed.product_code = "SEARCH-77221"
+        printed.customer_material_code = "CLIENT-55881"
+        printed.product_name = "风机包装内盒"
+        unprinted = db.get(MoldTool, seeded["unprinted"])
+        unprinted.mold_name = "风机专用刀模"
+        sales = db.query(User).filter(User.username == "sales").one()
+        sales.customer_access_mode = "selected"
+        db.add(UserCustomerScope(user_id=sales.id, customer_id=seeded["customer_1"]))
+        db.commit()
+
+    with TestClient(app) as client:
+        _login(client, "admin")
+        for word in ("7722", "5588", "包装内盒"):
+            assert _list_ids(client, q=word) == [seeded["printed"]]
+        # One word matches a product name on one mold and the mold name on another.
+        assert set(_list_ids(client, q="风机")) == {seeded["printed"], seeded["unprinted"]}
+        assert _list_ids(client, q="风机", rack_location="G02") == [seeded["unprinted"]]
+        assert _list_ids(client, q="风机", customer_keyword="模联") == []
+        assert _list_ids(client, q="没有该名称") == []
+        response = client.get("/api/warehouse/molds", params={"q": "风机", "page": 1, "page_size": 1})
+        assert response.status_code == 200
+        assert response.json()["total"] == 2
+        assert len(response.json()["items"]) == 1
+
+    with TestClient(app) as client:
+        _login(client, "sales")
+        assert _list_ids(client, q="风机") == []
+        assert _list_ids(client, q="7722") == []
+
+
+def test_mold_location_frontend_uses_unified_keyword_and_independent_filters() -> None:
     source = (Path(__file__).resolve().parents[1] / "static" / "warehouse.html").read_text(
         encoding="utf-8"
     )
     for marker in (
         'id="moldCustomerFilter"',
-        'id="moldProductCodeFilter"',
+        'id="moldKeyword"',
+        'placeholder="存货编码 / 模具 / 产品名称"',
         'id="moldRackFilter"',
         'id="moldIncludeUnprinted"',
         'id="moldIncludeInactive"',
         'id="moldIncludeRepair"',
         "customer_keyword=",
-        "product_code=",
         "rack_location=",
         "include_unprinted=",
         "include_repair=",

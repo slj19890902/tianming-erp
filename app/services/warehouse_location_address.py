@@ -917,7 +917,7 @@ def _location_impacts(db: Session, entries: list[dict]) -> dict:
         ),
         "molds_with_text_reference": int(
             db.scalar(
-                select(func.count(MoldTool.id)).where(MoldTool.rack_location.in_(codes))
+                select(func.count(MoldTool.id)).where(MoldTool.rack_location.in_(codes), MoldTool.deleted_at.is_(None))
             )
             or 0
         ),

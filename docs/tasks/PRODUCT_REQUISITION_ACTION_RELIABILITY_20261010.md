@@ -13,3 +13,14 @@
 - 根：固定新任务卡，核最新正式及源、主规则，整合实际复现/正常门禁/未知项目，给后续最小allowlist。独立审者仅在明确需要时接入，不扩大盲测。
 
 保留订单与备库用途分流、审批、客户范围、数量/单位、权限、版本、幂等、事务、审计和历史事实。不能通过去掉确认/权限/幂等来简化报料，不修改数量或制造申请/订单。只有实际复现才计Bug，既有正常去重和被拒请求是正常保护。当前阶段输出源码/请求证据、最小修复建议、NAS独立回执；Goal继续active。
+
+## 2026-10-10 09:01 实施阶段：入口身份与保存门禁
+
+只读探针已经完成，依据老板持续修复并发布授权推进以下最小闭环，初始只读限制仅对本节allowlist解除。方案见 `docs/reports/PRODUCT_REQUISITION_ACTION_RELIABILITY_PLAN_20261010.md`。不要求凑Bug数量，不将保存未知恢复半实现计入本轮完成。
+
+- API负责人 /root/mobile_drawings_api：只写 `app/api/requisition.py`、`app/services/external_packaging_stock_replenishment.py` 和本轮新增 `tests/test_product_requisition_action_reliability.py`；原测试若确需契约变更先向根说明。在已保留的group-save-recovery-api树确认clean、无运行引用后，从本实施卡根提交创建 `codex/product-requisition-action-api-20261010`，不得在37361旧候选上继续。负责外购原key当前权限、完整actor+normalized payload哈希、新单INSERT原子保存、旧null不造证明、完整异常重放路径，以及普通新单引用停用/删除产品资格。既有成功重放继续按原冻结事实，不以当前主档资格拒绝；不修改迁移。
+- UI负责人 /root/mobile_drawings_ui：只写 `static/ui/product-workbench.js`、`static/index.html` 的本卡相关方法、`static/mobile_erp.html` 仅资源引用，以及新增 `tests/ui/product-requisition-action-reliability.test.cjs`。在已保留的group-save-recovery-ui树确认clean、无运行引用后，从同一根提交创建 `codex/product-requisition-action-ui-20261010`。负责动作轮次/账号/页面/原form身份、有限等待和迟到回调失效。合法go造成组件卸载不得阻断正常跳转；取消/切页不能继续开旧窗或写新草稿。普通开窗和保存不增加确认。
+- 独立审核 /root/order_recovery_review：只写本artifact/review，审核两候选最终SHA及3～5个高价值反例。批准申请、跨日/主档变更重放、权限/数量/原采购数和原字段不变、UI真实handoff都需有当前证据。不能以作者测试全绿代替独立结论。
+- 根：独占文档、任务卡、版本、合并及正式发布；只在定向回归、独立审核、差异/唯一head通过后按标准Manager冷备/恢复/事实核对/健康/静态门禁发布。无Git push、无正式业务修正、无新服务/浏览器或PID终止。当前正式仍v607；版本和正式CAS发布前重查。
+
+下一独立闭环保留：补库保存坏ack与unknown的完整原请求持久化、同账号只读结果查询、原key精确重放；员工审批页恢复另核实际脚本。现有UI发现明确记为未修，不把上述入口修复冒充保存恢复完成。

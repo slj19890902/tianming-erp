@@ -52,7 +52,7 @@ test("complete map saves rack movement before validating the new revision and pr
       layout: { source_sha256: "d1", racks: [{ id: "rack", version: 2, x_mm: 100 }] },
       rackDrafts: { rack: { id: "rack", version: 2, x_mm: 900 } }, rackDraft: r => r, rackMutationPayload: r => r,
       floorCode: "3F", layoutDraftControl: { has_draft: true, published_revision: "p1" },
-      setSpatialEditBusy: noop, setLocationEditMessage: noop, operationKey: () => "complete-key",
+      setSpatialEditBusy: noop, setLocationEditMessage: noop, setLayoutApplyError: noop, operationKey: () => "complete-key",
       setLayout: noop, rememberServerDraft: noop, setLayoutDraftControl: noop,
       mutateJson: async (url, method, payload) => {
         calls.push({ url, method, payload });
@@ -75,6 +75,42 @@ test("complete map saves rack movement before validating the new revision and pr
     assert.deepEqual(modes, rejected ? [] : ["lookup"]);
     if (!rejected) assert.equal(calls[2].payload.expected_draft_revision, "d2");
   }
+});
+
+test("complete and apply shows the publish rejection beside the action and clears it on retry", async () => {
+  const errors = [], messages = [];
+  let rejectPublish = true;
+  const noop = () => {};
+  const context = {
+    layout: {source_sha256: "d1", racks: []}, rackDrafts: {}, floorCode: "3F",
+    layoutDraftControl: {has_draft: true, published_revision: "p1"}, publishedFloorRevision: "p1",
+    setLayoutApplyError: value => errors.push(value), setLocationEditMessage: value => messages.push(value),
+    setSpatialEditBusy: noop, setLayoutDraftControl: noop, operationKey: () => "same-key",
+    mutateJson: async path => {
+      if (path.endsWith("validate")) return {draft_revision: "d1", blockers: [], warnings: []};
+      if (rejectPublish) throw new Error("C 架层格与现有货位冲突");
+      return {backup_name: "before.json"};
+    },
+    prepareLegacyRackBindingConfirmation: async () => ({request: {}}),
+    refreshPublishedTwinFloor: noop, refreshDashboard: noop,
+    setMapMode: noop, setSearchPanelOpen: noop, setLocationEditMode: noop,
+    setAreaPolicyEditMode: noop, setAdvancedAreaMaintenanceOpen: noop,
+    setLocationPointEditAreaCode: noop, setLayoutMapToolsOpen: noop,
+    setRackDrafts: noop, setZonePolicyDrafts: noop, replaceZoneGeometryDrafts: noop,
+    setLegacyRackBindingPreview: noop, setLegacyRackBindingSelections: noop,
+  };
+  await componentValue("previewAndPublishLayout", context)();
+  assert.deepEqual(errors, ["", "地图未应用：C 架层格与现有货位冲突。修改仍保留，可继续调整后再次完成。"]);
+  assert.equal(messages.at(-1), errors.at(-1));
+  context.layoutApplyError = errors.at(-1);
+  componentValue("rememberServerDraft", context)("d2");
+  assert.equal(errors.at(-1), "");
+  assert.equal(messages.at(-1), "");
+  rejectPublish = false;
+  await componentValue("previewAndPublishLayout", context)();
+  assert.equal(errors.at(-1), "");
+  assert.match(source, /<div role="alert" aria-live="assertive"[^>]*>\{layoutApplyError\}<\/div>/);
+  assert.ok(source.indexOf('>{layoutApplyError}</div>') < source.indexOf('className={`twin-workspace'));
 });
 
 test("empty rack cells have no movable floor dots while stock and discrepancies stay visible", () => {
@@ -355,7 +391,7 @@ test("both map publish entrances reload warehouse records before claiming the ne
         mutateJson: async url => url.endsWith("/validate") ? { status: "validated", draft_revision: "new-map", blockers: [], warnings: [] } : { backup_name: "previous-map.json" },
         refreshPublishedTwinFloor: async () => { steps.push("layout"); },
         refreshDashboard: async () => { steps.push("warehouse"); if (readFails) throw Error("warehouse readback unavailable"); },
-        setSpatialEditBusy: () => {}, setLayoutDraftControl: () => {}, setLocationEditMessage: v => { messages.push(v); },
+        setSpatialEditBusy: () => {}, setLayoutDraftControl: () => {}, setLayoutApplyError: () => {}, setLocationEditMessage: v => { messages.push(v); },
         setMapMode: () => {}, setSearchPanelOpen: () => {}, setLocationEditMode: () => {}, setAreaPolicyEditMode: () => {},
         setAdvancedAreaMaintenanceOpen: () => {}, setLocationPointEditAreaCode: () => {}, setLayoutMapToolsOpen: () => {},
         setRackDrafts: () => {}, setZonePolicyDrafts: () => {}, replaceZoneGeometryDrafts: () => {},
@@ -748,7 +784,7 @@ test("all map commit-and-readback actions keep acknowledged success distinct fro
       selectedAreaFeature: { id: "zone-test", version: 1 }, simpleAreaCapacity: "1", formalAreaCodeDraft: "TEST", formalAreaNameDraft: "测试区",
       spatialEditBusy: false, simpleAreaRotation: 0, setAreaSettingsMessage: noop, areaSettingsDraftsRef: { current: {} },
       formalAreaOptions: [], selectedExistingAreaId: "", simpleAreaUsage: "semi_finished", simpleAreaLayout: "pallet_ground", planningPublishedRevision: "p1",
-      setSpatialEditBusy: noop, setLocationEditMessage: message => messages.push(message), setLayoutDraftControl: noop,
+      setSpatialEditBusy: noop, setLocationEditMessage: message => messages.push(message), setLayoutDraftControl: noop, setLayoutApplyError: noop,
       setPlanningPublishedRevision: noop, operationKey: () => "test-once", window: { confirm: () => true },
       prepareLegacyRackBindingConfirmation: async () => ({ summary: "", request: {} }),
       mutateJson: async path => path.endsWith("validate")

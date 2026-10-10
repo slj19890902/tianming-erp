@@ -1541,6 +1541,7 @@ export function WarehouseTwinApp() {
   const [planningPublishedLayout, setPlanningPublishedLayout] = useState<Layout | null>(null);
   const [layoutStandardPallet, setLayoutStandardPallet] = useState<StandardPalletContract | null>(null);
   const [layoutDraftControl, setLayoutDraftControl] = useState<LayoutDraftControl | null>(null);
+  const [layoutApplyError, setLayoutApplyError] = useState("");
   const geometryApplyRequestRef = useRef<{ signature: string; operationKey: string } | null>(null);
   const rackApplyRequestRef = useRef<{ signature: string; operationKey: string } | null>(null);
   const rackDeleteRequestsRef = useRef<Record<string, {
@@ -1899,6 +1900,7 @@ export function WarehouseTwinApp() {
     setZonePolicyDrafts({});
     replaceZoneGeometryDrafts({});
     setLayoutDraftControl(null);
+    setLayoutApplyError("");
     setPublishedFloorRevision("");
     setPlanningPublishedLayout(null);
     setMapMode((current) => traceReadOnly
@@ -4947,6 +4949,8 @@ export function WarehouseTwinApp() {
   }, [pendingRackEdit, locationEditMode, selectedRack?.id, traceReadOnly]);
 
   const rememberServerDraft = (revision: string) => {
+    if (layoutApplyError) setLocationEditMessage("");
+    setLayoutApplyError("");
     setLegacyRackBindingPreview(null);
     setLegacyRackBindingSelections({});
     setLayoutDraftControl((current) => ({
@@ -5009,17 +5013,23 @@ export function WarehouseTwinApp() {
     setLegacyRackBindingSelections(selections);
     if (!preview.groups.length) return { request: {}, summary: "" };
     if (preview.unresolved_count > 0) {
-      setLocationEditMessage(`有 ${preview.unresolved_count} 组旧货位超出当前货架层格或目标已占用；请先修正货架层数、格数或冲突。`);
+      const message = `有 ${preview.unresolved_count} 组旧货位超出当前货架层格或目标已占用；请先修正货架层数、格数或冲突。`;
+      setLayoutApplyError(message);
+      setLocationEditMessage(message);
       return null;
     }
     const missing = preview.groups.filter((group) => !selections[group.binding_key]);
     if (missing.length) {
-      setLocationEditMessage(`请在当前区域下方核对 ${missing.length} 组旧货位对应的实际货架，核对后再次点击“完成并应用”。`);
+      const message = `请在当前区域下方核对 ${missing.length} 组旧货位对应的实际货架，核对后再次点击“完成并应用”。`;
+      setLayoutApplyError(message);
+      setLocationEditMessage(message);
       return null;
     }
     const targets = Object.values(selections);
     if (new Set(targets).size !== targets.length) {
-      setLocationEditMessage("同一地图货架不能绑定两组旧货位，请重新选择。");
+      const message = "同一地图货架不能绑定两组旧货位，请重新选择。";
+      setLayoutApplyError(message);
+      setLocationEditMessage(message);
       return null;
     }
     const occupiedCount = preview.groups.reduce((total, group) => total + group.occupied_location_count, 0);
@@ -5115,6 +5125,7 @@ export function WarehouseTwinApp() {
 
   const previewAndPublishLayout = async () => {
     if (!layout) return;
+    setLayoutApplyError("");
     const pendingRacks = Object.entries(rackDrafts).filter(([id, draft]) => {
       const original = layout.racks.find((rack) => rack.id === id);
       return original && JSON.stringify(rackMutationPayload(draft)) !== JSON.stringify(rackMutationPayload(rackDraft(original)));
@@ -5133,7 +5144,9 @@ export function WarehouseTwinApp() {
         setLayoutMapToolsOpen(false);
         setLocationEditMessage("地图调整已完成；当前没有未应用修改，查货正在使用最新地图。");
       } catch (reason) {
-        setLocationEditMessage(`地图没有待应用修改，但正式地图回读失败：${(reason as Error).message}。请刷新页面核对。`);
+        const message = `地图没有待应用修改，但正式地图回读失败：${(reason as Error).message}。请刷新页面核对。`;
+        setLayoutApplyError(message);
+        setLocationEditMessage(message);
       } finally {
         setSpatialEditBusy(false);
       }
@@ -5171,7 +5184,9 @@ export function WarehouseTwinApp() {
         warnings: validation.warnings
       } : current);
       if (validation.blockers.length) {
-        setLocationEditMessage(`地图未应用：${validation.blockers.slice(0, 3).join("；")}。修改仍保留，可继续调整后再次完成。`);
+        const message = `地图未应用：${validation.blockers.slice(0, 3).join("；")}。修改仍保留，可继续调整后再次完成。`;
+        setLayoutApplyError(message);
+        setLocationEditMessage(message);
         return;
       }
       const bindingConfirmation = await prepareLegacyRackBindingConfirmation(validation.draft_revision);
@@ -5206,9 +5221,13 @@ export function WarehouseTwinApp() {
     } catch (reason) {
       if (publicationAcknowledged) {
         setLayoutDraftControl(null);
-        setLocationEditMessage(`布局已发布，但地图或仓库记录回读失败：${(reason as Error).message}。当前画面尚未核验，请刷新页面核对；不要重复发布。`);
+        const message = `布局已发布，但地图或仓库记录回读失败：${(reason as Error).message}。当前画面尚未核验，请刷新页面核对；不要重复发布。`;
+        setLayoutApplyError(message);
+        setLocationEditMessage(message);
       } else {
-        setLocationEditMessage(`地图未应用：${(reason as Error).message}。修改仍保留，可继续调整后再次完成。`);
+        const message = `地图未应用：${(reason as Error).message}。修改仍保留，可继续调整后再次完成。`;
+        setLayoutApplyError(message);
+        setLocationEditMessage(message);
       }
     } finally {
       setSpatialEditBusy(false);
@@ -6577,6 +6596,8 @@ export function WarehouseTwinApp() {
       <div className="twin-toolbar-spacer" />
     </section>
 
+    {mapMode === "planning" && locationEditMode && layoutApplyError && <div role="alert" aria-live="assertive" style={{padding: "7px 12px", color: "#991b1b", background: "#fff1f2", borderBottom: "1px solid #fecdd3", fontSize: "12px", fontWeight: 700, overflowWrap: "anywhere"}}>{layoutApplyError}</div>}
+
     <section className={`twin-workspace ${layerPanelOpen ? "layers-open" : "layers-collapsed"} ${searchPanelOpen ? "context-open" : "context-collapsed"} ${locationEditMode ? "location-editing" : ""} ${mapMode === "move" && moveAction === "merge" ? "merge-active" : ""} ${focusedRack ? "rack-focused" : ""}`}>
       {layerPanelOpen && <aside className="twin-layer-rail">
         <div className="twin-rail-title"><b>图层</b></div>
@@ -7254,7 +7275,7 @@ export function WarehouseTwinApp() {
                 <span>只按同一区域、层号和格号列出可选货架；选择后再次点“完成并应用”，保留原货位 ID、编号和库存。</span>
                 {legacyRackBindingPreview.groups.map((group) => <label key={group.binding_key}>
                   <span>{group.area_code} · {group.legacy_rack_code}架 · {group.location_count} 格{group.occupied_location_count ? `（${group.occupied_location_count} 格有货）` : ""}</span>
-                  <select value={legacyRackBindingSelections[group.binding_key] || ""} onChange={(event) => setLegacyRackBindingSelections((current) => ({ ...current, [group.binding_key]: event.target.value }))}>
+                  <select value={legacyRackBindingSelections[group.binding_key] || ""} onChange={(event) => { setLegacyRackBindingSelections((current) => ({ ...current, [group.binding_key]: event.target.value })); setLayoutApplyError(""); setLocationEditMessage(""); }}>
                     <option value="">选择现场对应货架</option>
                     {group.candidates.map((candidate) => <option key={candidate.map_rack_id} value={candidate.map_rack_id}>{candidate.rack_name}{candidate.map_rack_id === group.suggested_map_rack_id ? "（建议）" : ""}</option>)}
                   </select>

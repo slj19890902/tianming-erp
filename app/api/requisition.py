@@ -15074,6 +15074,7 @@ def search_stock_replenishment_products(
     customer_id: int | None = None,
     q: str | None = None,
     limit: int = Query(default=30, ge=1, le=2000),
+    product_ids: list[int] | None = Query(default=None, max_length=100),
     db: Session = Depends(get_db),
     _user: User = Depends(can_read),
 ) -> dict:
@@ -15091,6 +15092,11 @@ def search_stock_replenishment_products(
     if customer_id:
         require_customer_access(customer_id, _user, db)
         query = query.where(Product.customer_id == customer_id)
+    if product_ids is not None:
+        if not product_ids or any(product_id <= 0 for product_id in product_ids):
+            raise HTTPException(status_code=422, detail="请选择有效的常用箱产品")
+        query = query.where(Product.id.in_(set(product_ids)))
+        limit = max(limit, len(set(product_ids)))
     if q and q.strip():
         pattern = f"%{q.strip()}%"
         query = query.where(

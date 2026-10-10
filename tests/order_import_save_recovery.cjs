@@ -2,7 +2,7 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
 const repo=path.resolve(__dirname,'..'),html=fs.readFileSync(path.join(repo,'static/index.html'),'utf8');
 const source=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map(x=>x[1]).find(x=>x.trim());
 const store=new Map();const storage={get length(){return store.size},key:i=>[...store.keys()][i]??null,getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,String(v)),removeItem:k=>store.delete(k)};
-const box={axios:{defaults:{},interceptors:{response:{use(){}}}},Vue:{createApp(d){box.methods=d.methods;return{component(){return this},mixin(d){Object.assign(box.methods,d.methods);return this},mount(){return this}}}},localStorage:storage,window:{},TMOrderReference:{component:{}},console,URLSearchParams,setTimeout,clearTimeout};
+const box={axios:{defaults:{},interceptors:{request:{use(){}},response:{use(){}}}},Vue:{createApp(d){box.methods=d.methods;return{component(){return this},mixin(d){Object.assign(box.methods,d.methods);return this},mount(){return this}}}},localStorage:storage,window:{},TMOrderReference:{component:{}},TMDemandStock:{mixin:{},component:{}},TMManualReplenishment:{picker:{}},console,URLSearchParams,setTimeout,clearTimeout};
 box.axios.create=config=>{box.lastHttpConfig=config;return box.axios};
 vm.createContext(box);vm.runInContext(source,box);
 vm.runInContext(fs.readFileSync(path.join(repo,'static/ui/pdf-workspace.js'),'utf8'),box);box.window.ERPPdfWorkspace.install({mixin(d){Object.assign(box.methods,d.methods)}});

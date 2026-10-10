@@ -32,6 +32,7 @@
     <script src="/static/ui/desktop-delivery-margin.js?v=20260926-dashboard-cost"></script>
     <script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script>
     <script src="/static/ui/demand-stock.js?v=20261010"></script>
+    <script src="/static/ui/manual-replenishment-entry.js?v=fb1a07910498"></script>
     <link rel="stylesheet" href="/static/ui/demand-stock.css?v=20261010">
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <link rel="stylesheet" href="/static/drawing-workbench.css?v=20260930-543" />
@@ -7569,6 +7570,9 @@
                 <div class="toolbar-group"><button class="btn small" :disabled="pdfDraftPosition()<=1" @click="pdfMoveDraft(-1)">上一份</button><strong>第 {{pdfDraftPosition()}} / {{pdfQueueDrafts().length}} 份</strong><button class="btn small" :disabled="pdfDraftPosition()>=pdfQueueDrafts().length" @click="pdfMoveDraft(1)">下一份</button></div>
               </div>
               <div v-if="orderImportRecoveryError" class="notice error">恢复存储不可用：{{orderImportRecoveryError}}。首次保存未发出，请保留此浏览器并检查存储设置。</div>
+              <details v-if="pdfRecoveryDetachedRows().length" data-pdf-recovery-history style="margin-bottom:12px;padding:10px 12px;border:1px solid #e6d8ad;border-radius:8px;background:#fffcf3">
+                <summary style="cursor:pointer;font-weight:600">历史保存待核对（{{pdfRecoveryDetachedRows().length}} 条）<span class="muted" style="font-weight:400"> · 展开查询原结果</span></summary>
+                <div style="max-height:320px;overflow:auto;margin-top:10px">
               <div v-for="r in pdfRecoveryDetachedRows()" :key="r.storageKey" class="notice warning" style="margin-bottom:12px">
                 <strong>{{r.phase==="confirmed"?"已确认原保存":"原保存内容 / 待核对"}}：{{pdfRecoveryLabel(r)}}</strong>
                 <div>{{r.message || (r.legacy?'旧记录缺少原请求内容，请识别原文件后查询来源；不能重新生成旧请求。':'原保存请求已保留，库存版本是当时内容，不代表当前库存。')}}</div>
@@ -7578,8 +7582,11 @@
                 <a v-if="r.traceOrderId" class="btn small" :href="`/?page=orders&email_order=${r.traceOrderId}`" target="_blank" rel="noopener">查看已找到原订单 {{r.traceOrderNumber}}</a>
                 <details><summary>管理员核对依据</summary>原账号 {{r.actorId}}；请求键 {{r.key}}；文件 {{r.summary?.fileName||'请识别原文件核对'}}；客户单号 {{r.summary?.customerPO||'旧记录未保存'}}。请在订单页核对对应文件来源与订单，不要换键绕过。</details>
               </div>
+                </div>
+              </details>
               <div v-for="(draft,draftIndex) in orderImportDrafts" :key="draft.file_hash || draft.source_name" v-show="(!emailQueueMode || !pdfQueueVisible) && pdfCurrentDraft(draft)" class="order-group-detail-card" style="margin-bottom:12px">
                 <demand-stock-summary v-if="hasPermission('warehouse.view')" :customer-id="draft.matched_customer_id" :lines="draft.items"></demand-stock-summary>
+                <manual-replenishment-picker v-if="canRequisition" :customer-id="draft.matched_customer_id" :lines="draft.items"></manual-replenishment-picker>
                 <details v-if="draft.source_format==='weekly_demand'"><summary>原需求表与原单库存参考（不写入仓库）</summary><div v-for="row in draft.items" :key="row.line_no">{{row.raw_product_code}} · 原位置 {{row.source_location||'未填写'}} · 原文 {{(row.raw_lines||[]).join(' ')}}<span v-if="row.source_stock_reference"> · 原单现存 {{row.source_stock_reference.on_hand}} / 原单剩余 {{row.source_stock_reference.remaining}}</span></div></details>
                 <div v-if="emailQueueMode && draft.email_attachment_id && draft._show_advanced_details" class="toolbar-group" style="margin-bottom:8px">
                   <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'processed')">已人工处理</button>
@@ -8087,6 +8094,7 @@
                 <span class="muted">每款只占一行；可一次选择多款。</span>
               </div>
               <demand-stock-summary v-if="hasPermission('warehouse.view')" :customer-id="orderForm.customer_id" :lines="orderForm.items"></demand-stock-summary>
+              <manual-replenishment-picker v-if="canRequisition" :customer-id="orderForm.customer_id" :lines="orderForm.items"></manual-replenishment-picker>
               <!-- P1-02：固定一行一款，普通明细不依赖横向滚动。 -->
               <div class="order-entry-table-wrap">
               <table class="line-items order-entry-table"><thead><tr>
@@ -10214,6 +10222,8 @@
                 <span>第 {{ orderCommonBoxPicker.page }} / {{ Math.max(orderCommonBoxPicker.pages,1) }} 页</span>
                 <button class="btn small" type="button" :disabled="orderCommonBoxPicker.page >= orderCommonBoxPicker.pages || orderCommonBoxPicker.loading" @click="loadOrderCommonBoxes(orderCommonBoxPicker.page+1)">下一页</button>
                 <button class="btn success" type="button" :disabled="!orderCommonBoxSelectedCount() || orderCommonBoxPicker.importing" @click="importSelectedOrderCommonBoxes">{{ orderCommonBoxPicker.importing ? "导入中…" : "导入订单" }}</button>
+                <a v-if="canRequisition && selectedOrderReplenishmentLink()" class="btn" :href="selectedOrderReplenishmentLink()" target="_blank" rel="noopener" title="在新窗口填写补库数量，原选款与订单保留">已选产品补库</a>
+                <span v-if="canRequisition && orderCommonBoxSelectedCount()>100" class="muted">补库每次最多100款，请分批选择。</span>
               </div>
             </div>
           </div>
@@ -11121,7 +11131,7 @@
             orderRequisitionPreview: { loading:false, error:"", checked:false, items:[] },
             orderEditForm: { order_ids: [], customer_name: "", customer_po: "", order_number: "", order_date: "", delivery_date: "", remark: "" },
             orderEditGroup: null,
-            orderNumberPreview: "",
+            orderNumberPreview: "", orderNumberPreviewSequence:0,
             orderImportBatch: { files: [], status: "idle", retryDraft: null },
             orderImportDrafts: [],
             orderImportRecoveryRows: [], orderImportRecoveryError:"",
@@ -16896,6 +16906,9 @@
               supplierPromise,
             });
             await Promise.all([supplierPromise, pagePromise]);
+            if (requestAuthGeneration === this.authGeneration && requestUserId === (this.user?.id ?? null)) {
+              await window.TMManualReplenishment.openFromLocation(this);
+            }
             return (
               requestAuthGeneration === this.authGeneration
               && requestUserId === (this.user?.id ?? null)
@@ -20271,6 +20284,10 @@
             this.ensureWarehouseFrame(`/warehouse.html?embedded=1&tab=finished&keyword=${keyword}`);
             this.warehouseFrameRevision += 1;
             await this.go("warehouse");
+          },
+          selectedOrderReplenishmentLink() {
+            const ids=Object.values(this.orderCommonBoxPicker.selected || {}).map(value=>value.product.id);
+            return window.TMManualReplenishment.link(this.orderForm.customer_id,ids);
           },
           async openStockReplenishment(options={}) {
             if (!this.canRequisition) return;
@@ -34167,18 +34184,28 @@
           async refreshOrderNumberPreview() {
             const form = this.orderForm, customerId = form.customer_id;
             const generation = this.authGeneration, actorId = this.user?.id;
+            const sequence = this.orderNumberPreviewSequence = (Number(this.orderNumberPreviewSequence) || 0) + 1;
+            const orderDate = form.order_date || today();
+            const isCurrent = () => form === this.orderForm && customerId === form.customer_id && generation === this.authGeneration && actorId === this.user?.id && sequence === this.orderNumberPreviewSequence && orderDate === (form.order_date || today());
             if (!this.orderForm.customer_id) {
               this.orderNumberPreview = "";
               return;
             }
+            try {
             const { data } = await axios.get("/api/orders/number-preview", {
               params: {
-                item_count: Math.max(this.orderForm.items.length || 1, 1),
-                order_date: this.orderForm.order_date || today(),
+                // Only the main number is consumed; row suffixes are derived locally.
+                item_count: 1,
+                order_date: orderDate,
               }
             });
-            if (form !== this.orderForm || customerId !== form.customer_id || generation !== this.authGeneration || actorId !== this.user?.id) return;
+            if (!isCurrent()) return;
             this.orderNumberPreview = data.order_number || "";
+            } catch (error) {
+              if (!isCurrent()) return;
+              this.orderNumberPreview = "";
+              this.showToast("订单编号暂未预览，已录入产品仍保留；保存时将生成正式编号。", true);
+            }
           },
           itemOrderNumberPreview(index) {
             if (!this.orderNumberPreview) return "-";
@@ -42631,6 +42658,7 @@
       });
       app.mixin(TMDemandStock.mixin);
       app.component("demand-stock-summary", TMDemandStock.summary);
+      app.component("manual-replenishment-picker", TMManualReplenishment.picker);
       app.component("weekly-demand-import", TMDemandStock.importer);
       app.component("order-reference", TMOrderReference.component);
       app.component("page-head", { props:["title","desc"], template:`<div class="page-head"><div><h2>{{title}}</h2><p>{{desc}}</p></div></div>` });

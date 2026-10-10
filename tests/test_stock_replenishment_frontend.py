@@ -38,7 +38,7 @@ def test_replenishment_form_always_saves_a_draft_before_stocking() -> None:
 
 
 def test_replenishment_save_and_print_paths_are_wired() -> None:
-    assert 'axios.post("/api/requisition/stock-replenishment/orders"' in INDEX
+    assert 'this.stockReplenishmentRequest("/api/requisition/stock-replenishment/orders",record.body,current)' in INDEX
     assert "/api/requisition/stock-replenishment/orders/${data.id}/print" in INDEX
     assert "openStockReplenishmentPrint(printable)" in INDEX
     assert "补库单已保存，库存批次已生成" not in INDEX

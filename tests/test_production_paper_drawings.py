@@ -188,6 +188,7 @@ def test_stock_purchase_pointer_does_not_follow_master_and_missing_evidence_is_n
 def test_bad_frozen_source_has_explicit_failure(production_print_app, tmp_path, monkeypatch, reference, content, expected):
     fixture = production_print_app
     root = tmp_path / "files"
+    root.mkdir()
     monkeypatch.setenv("ERP_FILE_STORAGE_DIR", str(root))
     with fixture["session_factory"]() as db:
         item = db.get(OrderItem, fixture["order_item_id"])

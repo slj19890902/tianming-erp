@@ -6222,3 +6222,6 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 - 2026-10-10 REPLENISHMENT-REVERSAL-80012273：v0.22.617 / f261fbd252db344704d87240dad81cb1b4c7a2b6 / eo1010pi技术发布；补库按实际依赖逐笔回退，产品查询补齐加工产出。无迁移或业务补正，原500张和新1560片未改，冷备真实隔离恢复及健康资源核对通过；见docs/release_reports/REPLENISHMENT_REVERSAL_V617_20261010.md及NAS独立回执，待管理员人工验收。
 
 - 2026-10-10 PRODUCTION-TASK-DRAWINGS：v0.22.621 / 08e5c401f11880ea73529ec7bddf0791abd5c9b2 / ep1010md技术发布；完整任务单右侧图纸，冻结/参考分离，普通/补库/旧实收覆盖；保留v618简易条单。无迁移或业务补正，新冷备真实恢复与健康资产核对通过，待管理员实体打印验收；见docs/release_reports/PRODUCTION_TASK_DRAWINGS_V621_20261010.md及NAS独立回执。
+
+## 2026-10-10 v623 手动补库与录单修复
+技术发布完成，签名源码326c1deb9a229a0003542da9ad09aee2eddfd984，包35a1552fe24e6eb76b51125122eb81cdbfdc245ad8ff089336af0cb5f8d2f6d0，head ep1010md，无迁移。包含未预警多选补库、录单编号预览20行误限制修复、历史导入恢复折叠；修边尺寸另卡未实施。冷备恢复/健康/NAS通过，正式人工验收待反馈，详见docs/release_reports/MANUAL_REPLENISHMENT_V623_20261010.md。

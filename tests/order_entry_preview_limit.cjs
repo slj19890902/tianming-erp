@@ -1,0 +1,17 @@
+const fs=require('fs'),path=require('path'),vm=require('vm'),assert=require('assert/strict'),cp=require('child_process');
+const root=process.argv[2]||process.cwd();
+const html=process.argv[3]?cp.execFileSync('git',['show',`${process.argv[3]}:static/index.html`],{cwd:root,encoding:'utf8',maxBuffer:16*1024*1024}):fs.readFileSync(path.join(root,'static/index.html'),'utf8');
+const normalized=html.replace(/\t/g,'');
+function method(name){const match=new RegExp('^          (?:async )?'+name+'\\(','m').exec(normalized);assert.ok(match,name);const next=/^          (?:async )?[A-Za-z_$][\w$]*\(/m.exec(normalized.slice(match.index+12));return normalized.slice(match.index,match.index+12+next.index);}
+const box={axios:{}};
+const methods=Function('axios','today','return ({'+['refreshOrderNumberPreview','itemOrderNumberPreview','orderLineIsBlank','importSelectedOrderCommonBoxes'].map(method).join('\n')+'});')(box.axios,()=> '2026-10-10');
+function context(){return {...methods,user:{id:1},authGeneration:1,orderNumberPreview:'',orderNumberPreviewSequence:0,orderForm:{customer_id:1,order_date:'2026-10-10',items:[{quantity:''}]},orderProductOptions:{},orderCommonBoxPicker:{selected:Object.fromEntries(Array.from({length:35},(_,i)=>[i+1,{product:{id:i+1,product_code:`FICTION-${i+1}`},quantity:i+1,sequence:i+1}])),visible:true,importing:false},toasts:[],showToast(s){this.toasts.push(s)},addOrderItem(){this.orderForm.items.push({})},async selectOrderProduct(i,id){this.orderForm.items[i].product_id=id},onOrderDraftQuantityInput(){},reallocateAllDraftInventory(){},orderSpecificationText(){return ''},spec(){return ''},errorMessage(e){return e.message}};}
+(async()=>{
+ let c=context(),requests=[];box.axios.get=async(url,opts)=>{requests.push(opts.params);if(opts.params.item_count>20)throw Error('Input should be less than or equal to 20');return {data:{order_number:'TM20261010001'}}};
+ await c.importSelectedOrderCommonBoxes();assert.equal(c.orderForm.items.length,35);assert.equal(c.orderNumberPreview,'TM20261010001');assert.equal(c.orderCommonBoxPicker.visible,false);assert.equal(requests.at(-1).item_count,1);assert.equal(c.itemOrderNumberPreview(34),'TM20261010001-035');
+ c=context();box.axios.get=async()=>{throw Error('network unavailable')};await c.importSelectedOrderCommonBoxes();assert.equal(c.orderForm.items.length,35);assert.equal(c.orderForm.items[34].quantity,35);assert.equal(c.orderCommonBoxPicker.visible,false);assert.equal(c.orderNumberPreview,'');assert.ok(c.toasts.some(x=>x.includes('仍保留')));
+ c=context();const pending=[];box.axios.get=()=>new Promise(resolve=>pending.push(resolve));let a=c.refreshOrderNumberPreview();c.orderForm.order_date='2026-10-11';let b=c.refreshOrderNumberPreview();pending[1]({data:{order_number:'NEW'}});await b;pending[0]({data:{order_number:'OLD'}});await a;assert.equal(c.orderNumberPreview,'NEW');
+ c=context();box.axios.get=()=>new Promise(resolve=>pending.push(resolve));a=c.refreshOrderNumberPreview();c.authGeneration++;pending.at(-1)({data:{order_number:'WRONG-ACTOR'}});await a;assert.equal(c.orderNumberPreview,'');
+ assert.match(html,/<details v-if="pdfRecoveryDetachedRows\(\)\.length" data-pdf-recovery-history/);assert.ok(html.includes("runPdfRecovery(r,'resolve')"));assert.ok(html.includes("r.canContinue && r.bodyJson"));
+ console.log('PASS: 35 real import-method rows, bounded preview, network recovery, date race, account race, retained folded recovery controls');
+})().catch(e=>{console.error(e);process.exitCode=1});

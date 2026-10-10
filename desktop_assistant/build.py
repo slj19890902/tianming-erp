@@ -155,7 +155,8 @@ def main():
                                                     'contract_seal_v1': 1,
                                                     'company_profiles_v1': 1, 'shared_bom_v1': 1,
                                                     'stock_purchase_identity_v1': 1,
-                                                    'delivery_dispatch_v1': 1},
+                                                    'delivery_dispatch_v1': 1,
+                                                    'unused_mold_deletion_v1': 1},
                             'offline_ocr_models': models}, key)
     if args.package_only:
         write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,

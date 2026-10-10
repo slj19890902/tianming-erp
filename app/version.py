@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.620"
+APP_VERSION = "v0.22.622"
 APP_VERSION_NAME = "BOM组合保存设置同步与错误定位"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -6025,6 +6025,19 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.619：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 APP_CHANGES = [
+    "模具与位置查询统一按存货编码、模具和产品名称搜索，任一字段符合关键词即可显示。",
+    "管理员可在编辑窗口删除误建且从未使用过的模具档案；当前或历史绑定、打印、位置确认及其他使用记录均阻止删除。",
+    "删除保留原编号与审计，重复提交不重复执行；已删除档案不能恢复、改写或再次引用。",
+    "新增删除保护字段和兼容门禁，不自动删除任何正式模具，不改写既有订单、库存、费用或生产历史。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新模具与位置查询，在同一搜索框分别输入存货编码片段、模具或产品名称，核对匹配结果及客户、位置筛选。",
+    "管理员编辑确认误建且未使用的档案，核对删除提示；取消应保留，确认后从查询移除。",
+    "核对已使用、曾绑定后解绑或已打印的模具仍被保护，不能删除；正式操作由管理员人工验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.620：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
     "BOM组合保存冲突逐项显示形成方式、父件单位、计价和交付问题，保存时定位到组合BOM，提供应用组套设置入口。",
     "加载原配方期间锁定箱型和子件编辑，读取失败可重试，避免晚到的旧配方覆盖当前选择或误保存空配方。",
     "应用组套设置保留已有子件和每套用量；新父件与配方一起原子保存，单位修正纳入变更检测。",
@@ -6035,4 +6048,4 @@ APP_VERIFICATION_STEPS = [
     "核对本体、补强板及每套用量保持原值，保存后重新打开，确认零件组装、套、整套计价和父件交付。",
     "核对无权限账号不可修改；旧收料子套件不能通过应用组套设置绕过受控转换。",
 ]
-APP_CHANGELOG = [*(f"v0.22.620：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.622：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

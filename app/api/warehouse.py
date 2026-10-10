@@ -389,6 +389,7 @@ from app.services.master_data_versioning import (
     apply_versioned_update,
     record_versioned_create,
 )
+from app.services.mold_deletion import delete_unused_mold, mold_deletion_blockers
 from app.services.mold_identity import (
     MoldIdentityError,
     compose_mold_display_name,
@@ -19488,6 +19489,8 @@ def _require_mold_customer_scope(
     *,
     include_historical: bool = False,
 ) -> None:
+    if row.deleted_at is not None:
+        raise HTTPException(404, "模具不存在或已删除")
     visible_products = (
         _historical_visible_mold_products(row, allowed_customer_ids)
         if include_historical
@@ -19765,6 +19768,7 @@ def _mold_tools_query(
         selectinload(MoldTool.products).selectinload(Product.customer),
         selectinload(MoldTool.products).selectinload(Product.material),
     )
+    query = query.where(MoldTool.deleted_at.is_(None))
     if allowed_customer_ids is not None:
         query = query.where(
             or_(
@@ -23603,7 +23607,7 @@ def update_mold_tool(
         )
         .where(MoldTool.id == mold_id)
     )
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(status_code=404, detail="模具不存在")
     if row.archive_status == "archived":
         raise HTTPException(status_code=409, detail="封存模具不能直接编辑，请先按现场搬回后恢复启用")
@@ -24087,6 +24091,57 @@ def unbind_mold_product(
     }
 
 
+class MoldDeletePayload(BaseModel):
+    expected_version: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=120, pattern=r"^[A-Za-z0-9_-]+$")
+    confirmed: Literal[True]
+
+
+def _require_mold_delete_scope(user: User, db: Session) -> None:
+    if _mold_customer_scope(user, db) is not None:
+        raise HTTPException(403, "删除模具仅允许全客户范围的管理员操作")
+
+
+@router.get("/molds/{mold_id}/deletion-check")
+def check_mold_deletion(mold_id: int, db: Session = Depends(get_db),
+                        user: User = Depends(admin_only)) -> dict:
+    _require_mold_delete_scope(user, db)
+    row = db.get(MoldTool, mold_id)
+    if row is None or row.deleted_at is not None:
+        raise HTTPException(404, "模具不存在或已删除")
+    blockers = mold_deletion_blockers(db, row)
+    return {"id": row.id, "version": row.version, "eligible": not blockers, "reasons": blockers}
+
+
+@router.delete("/molds/{mold_id}")
+@_mold_layout_locked
+def delete_mold_tool(mold_id: int, payload: MoldDeletePayload, request: Request,
+                     db: Session = Depends(get_db), user: User = Depends(admin_only)) -> dict:
+    _require_mold_delete_scope(user, db)
+    try:
+        row, replayed = delete_unused_mold(db, mold_id=mold_id,
+            expected_version=payload.expected_version, idempotency_key=payload.idempotency_key,
+            actor_id=user.id)
+        if not replayed:
+            append_audit_event(db, request=request, actor=user, event_category="business",
+                result="success", source="web", module_code="warehouse",
+                action_code="mold.master.delete_unused", legacy_action="DELETE",
+                resource=f"warehouse/molds/{row.id}", entity_type="mold_tool", entity_id=row.id,
+                object_ref=row.mold_code, description="删除误建且未使用的模具档案，保留身份及审计",
+                details={"mold_code": row.mold_code, "mold_name": row.mold_name,
+                         "version": row.version, "idempotency_key": payload.idempotency_key,
+                         "expected_version": payload.expected_version})
+        db.commit()
+        return {"id": row.id, "deleted": True, "version": row.version,
+                "idempotent_replay": replayed, "message": "误建模具档案已删除，操作记录已保留"}
+    except IntegrityError as error:
+        db.rollback()
+        raise HTTPException(409, "模具资料或使用记录已变化，请刷新后核对") from error
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.put("/molds/{mold_id}/enable")
 @_mold_layout_locked
 def enable_mold_tool(
@@ -24096,7 +24151,7 @@ def enable_mold_tool(
     user: User = Depends(admin_only),
 ) -> dict:
     row = db.get(MoldTool, mold_id)
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(status_code=404, detail="模具不存在")
     if row.archive_status == "archived":
         raise HTTPException(status_code=409, detail="封存模具不能普通启用，请先搬回一楼正式模具位并恢复")
@@ -24136,7 +24191,7 @@ def disable_mold_tool(
     user: User = Depends(admin_only),
 ) -> dict:
     row = db.get(MoldTool, mold_id)
-    if row is None:
+    if row is None or row.deleted_at is not None:
         raise HTTPException(status_code=404, detail="模具不存在")
     raise HTTPException(
         status_code=409,

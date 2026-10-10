@@ -28,6 +28,7 @@ from app.models.supplier import (
     SupplierSupplyCategory,
 )
 from app.models.user import User
+from app.services.audit_log import append_audit_event
 from app.services.corner_guard_pricing import (
     CATEGORY_CODE as CORNER_GUARD_CATEGORY_CODE,
     current_corner_guard_meter_price,
@@ -378,6 +379,7 @@ def create_external_stock_replenishment_purchase(
     idempotency_key: str,
     remark: str | None,
     user: User,
+    request_hash: str | None,
 ) -> StockReplenishmentOrder:
     existing_order = replay_external_stock_replenishment_purchase(
         db,
@@ -385,9 +387,15 @@ def create_external_stock_replenishment_purchase(
         finished_quantity=finished_quantity,
         purchase_quantity=purchase_quantity,
         idempotency_key=idempotency_key,
+        user=user,
+        request_hash=request_hash,
     )
     if existing_order is not None:
         return existing_order
+
+    if (not isinstance(request_hash, str) or len(request_hash) != 64
+            or any(char not in "0123456789abcdef" for char in request_hash)):
+        raise ExternalPurchaseContractError("外购备库缺少完整原请求校验证明，不能新增采购。")
 
     product = policy.product or db.get(Product, policy.product_id)
     if product is None or product.deleted_at is not None or not product.is_active:
@@ -425,6 +433,7 @@ def create_external_stock_replenishment_purchase(
         status="confirmed",
         remark=remark,
         created_by=user.id,
+        request_hash=request_hash,
         confirmed_by=user.id,
         confirmed_at=utc_now_naive(),
     )
@@ -449,8 +458,17 @@ def create_external_stock_replenishment_purchase(
     db.add(order)
     db.flush()
 
-    return _post_external_stock_purchase(db, order=order, item=item, prepared=prepared,
+    result = _post_external_stock_purchase(db, order=order, item=item, prepared=prepared,
         idempotency_key=idempotency_key, fingerprint=fingerprint, user=user)
+    batch = external_purchase_batch_for_replenishment(db, order.id)
+    append_audit_event(db, actor=user, event_category="business", result="success", source="web",
+        module_code="requisition", action_code="stock_replenishment.external_create",
+        resource="StockReplenishmentOrder", entity_id=order.id, customer_id=order.customer_id,
+        description="确认外购包材备库采购",
+        details={"order_id": order.id, "batch_id": batch.id if batch else None,
+                 "actor_id": user.id, "request_hash": request_hash,
+                 "key_digest": hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()})
+    return result
 
 
 def _post_external_stock_purchase(db, *, order, item, prepared, idempotency_key, fingerprint, user):
@@ -539,8 +557,15 @@ def replay_external_stock_replenishment_purchase(
     finished_quantity: int,
     purchase_quantity: Any | None,
     idempotency_key: str,
+    user: User,
+    request_hash: str | None,
 ) -> StockReplenishmentOrder | None:
     """Replay from frozen purchase facts without consulting mutable master data."""
+    from app.api.deps import has_permission, require_customer_access
+    if (user.role != "admin" or not has_permission(user, "cost.view")
+            or not has_permission(user, "requisition.execute")):
+        raise ExternalPurchaseContractError(
+            "外购包材备库会生成正式供应商采购单，仅管理员可确认。", status_code=403)
 
     existing_batch = db.scalar(
         select(ExternalPackagingPurchaseBatch).where(
@@ -559,6 +584,19 @@ def replay_external_stock_replenishment_purchase(
     )
     if existing_order is None:
         raise ExternalPurchaseContractError("外购备库来源记录不完整")
+    require_customer_access(existing_order.customer_id, user, db)
+    if existing_order.request_hash is None:
+        purchase_order = db.scalar(select(ExternalPackagingPurchaseOrder).where(
+            ExternalPackagingPurchaseOrder.batch_id == existing_batch.id
+        ).order_by(ExternalPackagingPurchaseOrder.id).limit(1))
+        purchase_number = purchase_order.purchase_number if purchase_order else existing_order.order_number
+        raise ExternalPurchaseContractError(
+            f"原采购单 {purchase_number}（补库来源 {existing_order.order_number}）缺少完整原请求证明；"
+            "请在‘报料→外购包材→采购历史’核对原单，"
+            f"或只读查询 /api/requisition/stock-replenishment/orders/{existing_order.id}。"
+            "本次未新增采购，勿换标识重新创建。")
+    if request_hash is None or existing_order.request_hash != request_hash or existing_order.created_by != user.id:
+        raise ExternalPurchaseContractError("同一提交标识的补库内容或操作人已变化，请核对原单。")
     stock_items = list(
         db.scalars(
             select(StockReplenishmentOrderItem)
@@ -573,6 +611,7 @@ def replay_external_stock_replenishment_purchase(
     if len(stock_items) != 1:
         raise ExternalPurchaseContractError("外购备库来源明细不完整")
     stock_item = stock_items[0]
+    require_customer_access(stock_item.customer_id, user, db)
     purchase_items = list(
         db.scalars(
             select(ExternalPackagingPurchaseItem)

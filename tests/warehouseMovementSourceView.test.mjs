@@ -18,16 +18,49 @@ const base = {
 test('source code is labelled as provenance, separately from confirmed usage', () => {
   const html = globalThis.WarehouseMovementView.row(base, value => value);
   assert.match(html, /80012273/);
-  assert.match(html, /来源存货编码（不代表片料适用绑定）/);
-  assert.match(html, /适用款号未绑定/);
+  assert.match(html, /报料来源：/);
+  assert.doesNotMatch(html, /适用款号/);
   assert.match(html, /0 → 500 张/);
-  assert.doesNotMatch(html, /已确认适用款号：80012273/);
+  assert.doesNotMatch(html, /适用款号：80012273/);
 });
 
 test('confirmed binding remains separate and source text is escaped', () => {
   const html = globalThis.WarehouseMovementView.row({
     ...base, source_product_name: '<来源>', inventory_code: 'OTHER-CODE',
   }, value => value);
-  assert.match(html, /来源产品：&lt;来源&gt;/);
-  assert.match(html, /已确认适用款号：OTHER-CODE/);
+  assert.match(html, /&lt;来源&gt;/);
+  assert.match(html, /适用款号：OTHER-CODE/);
+});
+
+test('multiple source facts stay visible and product names do not repeat', () => {
+  const html = globalThis.WarehouseMovementView.row({
+    ...base, source_product_code: null, source_product_name: null,
+    source_products: [
+      {code: 'A', name: '同名产品', kind: 'order_purchase_reserve'},
+      {code: 'B', name: '<另一产品>', kind: 'order_purchase_reserve'},
+    ], product_name: '同名产品',
+  }, value => value);
+  assert.match(html, /报料来源：/);
+  assert.match(html, /A \/ B/);
+  assert.match(html, /&lt;另一产品&gt;/);
+  assert.equal((html.match(/同名产品/g)||[]).length, 1);
+  assert.doesNotMatch(html, /适用款号/);
+});
+
+test('a sheet without source or binding says the product is unspecified', () => {
+  const html = globalThis.WarehouseMovementView.row({
+    ...base, source_product_code: null, source_product_name: null,
+    source_products: [],
+  }, value => value);
+  assert.match(html, /未指定产品/);
+  assert.doesNotMatch(html, /未绑定编码|适用款号/);
+});
+
+test('a confirmed binding without purchase source is labelled only as usage', () => {
+  const html = globalThis.WarehouseMovementView.row({
+    ...base, source_product_code: null, source_product_name: null,
+    source_products: [], inventory_code: 'BOUND-1',
+  }, value => value);
+  assert.match(html, /适用款号：BOUND-1/);
+  assert.doesNotMatch(html, /报料来源/);
 });

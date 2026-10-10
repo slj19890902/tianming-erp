@@ -108,8 +108,15 @@ def source_identity_condition(keyword, visible_customer_ids=None):
                  for source in sources))
 
 
+def _stable_source_products(rows):
+    facts = {(str(code).strip(), name, kind) for code, name, kind in rows
+             if code and str(code).strip()}
+    return [dict(code=code, name=name, kind=kind)
+            for code, name, kind in sorted(facts, key=lambda row: (row[0].casefold(), row[1] or '', row[2]))]
+
+
 def source_identities(db, lot_ids, visible_customer_ids=None):
-    """Return only unique, identity-checked source labels for this visible page."""
+    """Return stable, distinct source facts for this visible page."""
     if not lot_ids:
         return {}
     evidence = {}
@@ -118,9 +125,9 @@ def source_identities(db, lot_ids, visible_customer_ids=None):
         ('order_purchase_reserve', _order_purpose_source_query(lot_ids=lot_ids, visible_customer_ids=visible_customer_ids)),
     ):
         for lot_id, code, name in db.execute(query):
-            if code and str(code).strip():
-                evidence.setdefault(lot_id, set()).add((str(code).strip(), name, kind))
-    return {lot_id: next(iter(rows)) for lot_id, rows in evidence.items() if len(rows) == 1}
+            evidence.setdefault(lot_id, []).append((code, name, kind))
+    return {lot_id: products for lot_id, rows in evidence.items()
+            if (products := _stable_source_products(rows))}
 
 def keyword_condition(keyword, visible_customer_ids=None):
     def contains(column): return column.contains(keyword.strip(), autoescape=True)
@@ -185,9 +192,11 @@ def enrich_movements(db, rows, serialize, *, visible_customer_ids=None):
             from_location=locations.get(transfer.source_location_id) if transfer else None,
             to_location=locations.get(transfer.target_location_id) if transfer else None,
             transfer_quantity=transfer.quantity if transfer else None)
-        source = sources.get(lot.id)
-        item.update(source_product_code=source[0] if source else None,
-                    source_product_name=source[1] if source else None,
-                    source_kind=source[2] if source else None)
+        source_products = sources.get(lot.id, [])
+        single_source = source_products[0] if len(source_products) == 1 else None
+        item.update(source_products=source_products,
+                    source_product_code=single_source['code'] if single_source else None,
+                    source_product_name=single_source['name'] if single_source else None,
+                    source_kind=single_source['kind'] if single_source else None)
         result.append(item)
     return result

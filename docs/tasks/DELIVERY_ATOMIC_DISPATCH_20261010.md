@@ -1,6 +1,6 @@
 # DELIVERY-ATOMIC-DISPATCH-20261010
 
-状态：独审已确认最低正确合同，授权运行源码实施；尚未修复发布。本卡不把设计或负面观察当修复。用户持续升级/修复发布授权继续有效，不另索重复发布批准；具体数据及发布门禁保留。
+状态：API、UI 与助手实现已整合，定向验证通过，候选 v0.22.617 正在最终独审；尚未正式发布。本卡不把设计或负面观察当修复。用户持续升级/修复发布授权继续有效，不另索重复发布批准；具体数据及发布门禁保留。
 
 目标：员工确认的整次送货要么完整提交一次，要么全部未提交；断网后能只读核对原结果，取消后的迟到原请求不能重新扣库，其他人改过数量的旧页面不能直接发后来新数量。正常明确重新发货、物理片/客户数量、BOM、共享库存、拿货、修订、打印及后续回单/对账阻断保持。
 
@@ -25,7 +25,7 @@
 
 ### 原请求结束出口（独审发现的发布可用性闭环）
 
-全部错误保留原请求虽能避免重复扣库，但版本已变化的原请求无法继续；不得只让员工联系管理员而没有操作出口。新增显式“结束本次请求，重新核对”close写动作，携带完整原command及原actor/key，与execute同Order→Delivery锁序，锁后重新读ledger。若已completed返回原完成结果；若已closed返回原结束凭据；仅原key不存在时写同action的closed原凭据及审计，一次提交，原业务数量/状态不变。不得重新要求原version等当前、pending或库存资格，仍核actor、完整请求身份、原及当前客户权限和受管激活门禁。全局key唯一竞争须回滚后精确重读，不能覆盖终态。
+全部错误保留原请求虽能避免重复扣库，但版本已变化的原请求无法继续；不得只让员工联系管理员而没有操作出口。新增显式“结束本次确认，重新核对”close写动作，携带完整原command及原actor/key，与execute同Order→Delivery锁序，锁后重新读ledger。若已completed返回原完成结果；若已closed返回原结束凭据；仅原key不存在时写同action的closed原凭据及审计，一次提交，原业务数量/状态不变。不得重新要求原version等当前、pending或库存资格，仍核actor、完整请求身份、原及当前客户权限和受管激活门禁。全局key唯一竞争须回滚后精确重读，不能覆盖终态。
 
 closed证明须绑定原actor/key/hash/resource/完整原request和closed_at，不伪装dispatch_receipt。execute锁前/锁后遇有效closed只返回原closed，迟到请求不再扣库；resolver支持只读closed，not_recorded不构成结束证据。UI在发close前持久化closing意图，超时/刷新只查原结果或重发原close，不能再执行原dispatch；严格核验并持久closed凭据后才解除同单pending，新发仍读新快照并由员工确认。迟到错误不能覆盖completed/closed终态。当前候选尚未发布，delivery_dispatch_v1同时包含completed/closed，旧中间候选不作为可回退兼容版本。
 

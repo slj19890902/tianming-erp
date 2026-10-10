@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.616"
-APP_VERSION_NAME = "补库任务模具位置与首页提醒数量修复"
+APP_VERSION = "v0.22.617"
+APP_VERSION_NAME = "发货整次提交与原结果核对"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5982,3 +5982,17 @@ APP_VERIFICATION_STEPS = [
     "切换生产等其他工作区，核对提醒筛选、隐藏及延后仍可恢复；实物打印由管理员验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.616：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "拿货应用、随货准备和发货合为一次完整提交；核对原版本与数量，任一步失败整体回滚。",
+    "发货遇到断网、超时或异常回复后保留原内容，可查询原结果；取消后的迟到旧操作不会再次扣库。",
+    "原内容已过期时可结束本次确认再重新核对；已经发货则显示原完成结果，不误作未执行。",
+    "分别校验客户数量、实际出库数量、BOM与半成品来源；正常订单继续按总数自动跨货位扣减。",
+    "同步更新ERP助手的备份恢复与版本兼容保护；无数据库结构迁移，不修改历史库存、成本或订单事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新送货页面，在实际业务中核对本次数量后确认发货；成功后核对送货单与库存总量。",
+    "遇到连接异常时使用查原结果；需要重新核对数量时使用结束本次确认，确认原结果后再操作。",
+    "核对现有BOM、外购包材和多货位送货仍按正确实物数量处理；真实打印由管理员现场验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.617：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

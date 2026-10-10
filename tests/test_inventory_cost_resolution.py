@@ -117,6 +117,26 @@ def test_same_code_without_supplier_is_ambiguous_but_exact_supplier_resolves(db:
     assert exact.unit_cost == Decimal("3.5000")
 
 
+def test_symbol_material_code_resolves_without_stripping_plus(db: Session) -> None:
+    material = _material(db, code="A+A", supplier="Supplier A", price="2.0000")
+
+    estimate = estimate_semi_finished_cost(
+        db,
+        material_id=None,
+        material_code="A+A",
+        supplier_name="Supplier A",
+        layer_count=3,
+        flute_type=None,
+        board_length_mm=1000,
+        board_width_mm=1000,
+    )
+
+    assert estimate is not None
+    assert estimate.detail["material_id"] == material.id
+    assert estimate.detail["material_code"] == "A+A"
+    assert estimate.square_price == Decimal("2.0000")
+
+
 def test_finished_formula_uses_pieces_and_current_effective_square_price(db: Session) -> None:
     customer = Customer(
         customer_number=9822,

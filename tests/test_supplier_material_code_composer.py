@@ -69,6 +69,13 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
                     quote_price=Decimal("2.3400"),
                     is_active=True,
                 ),
+                Material(
+                    code="7RIR6",
+                    supplier_name="供应商A",
+                    layer_count=5,
+                    quote_price=Decimal("2.9500"),
+                    is_active=False,
+                ),
             ]
         )
         db.commit()
@@ -88,6 +95,18 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
             "/api/auth/login",
             json={"username": "composer-admin", "password": "ComposerPass123!"},
         ).status_code == 200
+
+        active_materials = client.get("/api/master/materials")
+        assert active_materials.status_code == 200
+        assert {row["code"] for row in active_materials.json()["items"]} == {"J616J"}
+        historical_materials = client.get(
+            "/api/master/materials", params={"include_inactive": True}
+        )
+        assert historical_materials.status_code == 200
+        assert {row["code"] for row in historical_materials.json()["items"]} == {
+            "J616J",
+            "7RIR6",
+        }
 
         base_rows = [
             ("J", 190, "国产AA级牛卡"),
@@ -123,6 +142,51 @@ def test_supplier_paper_codes_and_material_composer(tmp_path):
         )
         assert listed.status_code == 200
         assert listed.json()["total"] == 4
+
+        plus_code = client.post(
+            "/api/master/materials/paper-codes",
+            json={
+                "supplier_name": "供应商A",
+                "code_char": "+",
+                "paper_name": "105g芯纸",
+                "gram_weight": 105,
+                "paper_role": "芯纸",
+            },
+        )
+        assert plus_code.status_code == 201
+        assert plus_code.json()["code_char"] == "+"
+
+        plus_preview = client.post(
+            "/api/master/materials/compose/preview",
+            json={
+                "supplier_name": "供应商A",
+                "layer_count": 3,
+                "material_code": "A+A",
+            },
+        )
+        assert plus_preview.status_code == 200
+        assert plus_preview.json()["valid"] is True
+        assert [row["code_char"] for row in plus_preview.json()["layers"]] == [
+            "A",
+            "+",
+            "A",
+        ]
+
+        plus_saved = client.post(
+            "/api/master/materials/compose/save",
+            json={
+                "supplier_name": "供应商A",
+                "layer_count": 3,
+                "material_code": "A+A",
+                "quote_price": 1.56,
+                "parsed_supplier_name": "供应商A",
+                "parsed_layer_count": 3,
+                "parsed_material_code": "A+A",
+                "price_source": "manual",
+            },
+        )
+        assert plus_saved.status_code == 200
+        assert plus_saved.json()["material"]["code"] == "A+A"
 
         five_layer = client.post(
             "/api/master/materials/compose/preview",
@@ -380,6 +444,10 @@ def test_supplier_material_composer_frontend_and_migration_chain():
     assert "/api/master/materials/compose/preview" in html
     assert "/api/master/materials/compose/save" in html
     assert "系统自动解析和推算建议价" in html
+    assert "代码字符（可用 + 等符号）" in html
+    assert "基础代码必须是单个可见字符（支持 + 等符号）" in html
+    assert "基础代码必须是单个字母或数字" not in html
+    assert "!/^[A-Z0-9]$/.test(payload.code_char)" not in html
 
     migration = (
         root

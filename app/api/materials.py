@@ -401,6 +401,7 @@ def list_materials(
     supplier_name: str | None = Query(default=None),
     sort: Literal["common", "weight", "price"] = Query(default="common"),
     keyword: str | None = Query(default=None),
+    include_inactive: bool = Query(default=False),
     db: Session = Depends(get_db),
     user: User = Depends(can_read),
 ) -> dict:
@@ -410,6 +411,8 @@ def list_materials(
     # v0.19.2 下一轮: keyword 关键字搜索（代码/供应商/克重结构/纸种说明/报价），
     #   语义上「先经过 supplier+layer+flute 过滤，再按关键字匹配」。
     filters = []
+    if not include_inactive:
+        filters.append(Material.is_active.is_(True))
     if layer_count is not None:
         filters.append(Material.layer_count == layer_count)
     if flute_type:

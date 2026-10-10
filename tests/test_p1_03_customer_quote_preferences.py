@@ -55,7 +55,24 @@ def _app_with_customer_quote_preferences(tmp_path):
             code="QP-A",
             supplier_name="测试供应商",
             layer_count=3,
+            basis_weight_description="120g/100g/120g",
+            paper_composition=(
+                "面纸:A=120g 国产A级牛卡 | 瓦楞:B=100g 国产高强瓦 | "
+                "里纸:A=120g 国产A级牛卡"
+            ),
             quote_price=Decimal("2.0000"),
+            is_active=True,
+        )
+        comparison_material = Material(
+            code="QP-B",
+            supplier_name="对比供应商",
+            layer_count=3,
+            basis_weight_description="120g/100g/120g",
+            paper_composition=(
+                "面纸:X=120g 国产A级牛卡 | 瓦楞:Y=100g 国产高强瓦 | "
+                "里纸:X=120g 国产A级牛卡"
+            ),
+            quote_price=Decimal("1.9000"),
             is_active=True,
         )
         db.add_all(
@@ -65,6 +82,7 @@ def _app_with_customer_quote_preferences(tmp_path):
                 customer,
                 other,
                 material,
+                comparison_material,
                 SupplierFlutePriceRule(
                     supplier_name="测试供应商",
                     layer_count=3,
@@ -77,7 +95,12 @@ def _app_with_customer_quote_preferences(tmp_path):
         db.flush()
         db.add(UserCustomerScope(user_id=scoped.id, customer_id=customer.id))
         db.commit()
-        ids = {"customer": customer.id, "other": other.id, "material": material.id}
+        ids = {
+            "customer": customer.id,
+            "other": other.id,
+            "material": material.id,
+            "comparison_material": comparison_material.id,
+        }
 
     app = FastAPI()
     app.include_router(auth_router, prefix="/api/auth")
@@ -115,6 +138,32 @@ def test_customer_quote_preference_crud_estimate_and_audit(tmp_path) -> None:
             assert row["tax_included_square_price"] == "3.2500"
             assert row["layer_count"] == 3
             assert row["material_display"] == "QP-A / 测试供应商"
+
+            second = client.post(
+                f"/api/customers/{ids['customer']}/quote-preferences",
+                json={
+                    "box_type": "A1",
+                    "material_id": ids["comparison_material"],
+                    "flute_type": "A",
+                    "tax_included_square_price": "3.2500",
+                },
+            )
+            assert second.status_code == 201, second.text
+            compared = client.get(
+                f"/api/customers/{ids['customer']}/quote-preferences"
+            )
+            assert compared.status_code == 200, compared.text
+            compared_by_material = {
+                item["material_id"]: item for item in compared.json()["items"]
+            }
+            first_comparison = compared_by_material[ids["material"]]
+            second_comparison = compared_by_material[ids["comparison_material"]]
+            assert first_comparison["comparison_status"] == "comparable"
+            assert first_comparison["similar_material_count"] == 2
+            assert first_comparison["material_effective_square_price"] == 2.1
+            assert first_comparison["similar_delta_to_lowest"] == 0.2
+            assert second_comparison["material_effective_square_price"] == 1.9
+            assert second_comparison["is_similar_lowest_cost"] is True
 
             preference_estimate = client.post(
                 f"/api/customers/{ids['customer']}/quote-preferences/estimate",
@@ -204,7 +253,7 @@ def test_customer_quote_preference_crud_estimate_and_audit(tmp_path) -> None:
                     OperationLog.resource == "CustomerQuotePreference"
                 )
             ).all()
-            assert [change.action for change in changes] == ["CREATE", "UPDATE"]
+            assert [change.action for change in changes] == ["CREATE", "CREATE", "UPDATE"]
             assert "修改客户尺寸报价偏好" in changes[-1].details
     finally:
         engine.dispose()

@@ -36,8 +36,8 @@ def test_factory_update_reports_current_release_version() -> None:
         current_release_metadata,
     )
 
-    assert APP_VERSION == "v0.22.43"
-    assert APP_VERSION_NAME == "统一验收功能正式整合"
+    assert APP_VERSION == "v0.22.44"
+    assert APP_VERSION_NAME == "材质停用与多供应商比价修复"
     assert APP_BUILD_DATE == "2026-08-04"
     assert APP_EXTERNAL_ACCEPTANCE_REQUIRED is True
     metadata = current_release_metadata(expected_version=APP_VERSION)
@@ -50,23 +50,27 @@ def test_factory_update_reports_current_release_version() -> None:
         item for item in APP_CHANGELOG if item.startswith(f"{APP_VERSION}：")
     ]
     assert any(
-        "本次更新｜" in item and "首页" in item and "财务" in item
+        "本次更新｜" in item and "停用供应商材质" in item and "历史单据" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "报料" in item and "加号" in item
+        "本次更新｜" in item and "加号" in item and "森林阳光" in item
         for item in current_release
     )
     assert any(
-        "本次更新｜" in item and "两人" in item and "原因输入" in item
+        "本次更新｜" in item and "手工尺寸" in item and "箱型和楞型" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "一张送货单一行" in item and "短收回库" in item
+        "本次更新｜" in item and "多个供应商材质" in item and "自动比价" in item
         for item in current_release
     )
     assert any(
-        "如何验证｜" in item and "手机只读" in item and "一楼中文地图" in item
+        "如何验证｜" in item and "7RIR6" in item and "包含停用" in item
+        for item in current_release
+    )
+    assert any(
+        "如何验证｜" in item and "同一箱型楞型" in item and "每层克重和纸种" in item
         for item in current_release
     )
     assert any(

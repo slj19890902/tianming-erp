@@ -117,7 +117,7 @@ def test_manual_size_requires_explicit_a1_dimensions_material_and_matching_flute
         ({"length_mm": None}, "必须填写正数的长、宽、高"),
         ({"material_id": None}, "必须明确选择材质"),
         ({"layer_count": 3}, "层数必须与所选材质真实层数一致"),
-        ({"flute_type": "BE"}, "楞型必须与所选材质真实楞型一致"),
+        ({"flute_type": "A"}, "五层"),
     ]
     with TestClient(app) as client:
         _login(client)
@@ -135,6 +135,38 @@ def test_manual_size_requires_explicit_a1_dimensions_material_and_matching_flute
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Order)) == 0
         assert session.scalar(select(func.count()).select_from(Product)) == 2
+
+
+def test_manual_size_material_is_layer_compatible_not_flute_bound(order_api_app) -> None:
+    app, session_factory = order_api_app
+    _make_fixture_material_valid_for_manual_a1(session_factory)
+    payload = _manual_payload(client_line_id="manual-five-layer-be")
+    payload["customer_po"] = "P1-03-FIVE-LAYER-BE"
+    payload["items"][0]["flute_type"] = "BE"
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post("/api/orders", json=payload)
+    assert response.status_code == 201, response.text
+    assert response.json()["items"][0]["flute_type"] == "BE"
+
+
+def test_manual_size_rejects_inactive_material(order_api_app) -> None:
+    from app.models.material import Material
+
+    app, session_factory = order_api_app
+    _make_fixture_material_valid_for_manual_a1(session_factory)
+    with session_factory() as session:
+        material = session.get(Material, 1)
+        assert material is not None
+        material.is_active = False
+        session.commit()
+    payload = _manual_payload(client_line_id="manual-inactive-material")
+    payload["customer_po"] = "P1-03-INACTIVE-MATERIAL"
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post("/api/orders", json=payload)
+    assert response.status_code == 400, response.text
+    assert "材质已停用" in response.json()["detail"]
 
 
 def test_manual_size_retry_reuses_common_box_and_duplicate_order_guard(

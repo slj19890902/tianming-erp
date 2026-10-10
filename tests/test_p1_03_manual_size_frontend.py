@@ -49,7 +49,8 @@ def test_p1_03_quote_preview_preserves_manual_unit_price_and_uses_customer_endpo
     assert "markManualSizeUnitPrice(item)" in INDEX
     assert "客户平方价" in INDEX
     assert "manualSizeQuoteText(item)" in INDEX
-    assert "直接选择材质" in INDEX
+    assert "先选楞型" in INDEX
+    assert "再选供应商材质" in INDEX
     assert "selectManualSizeMaterial(item)" in INDEX
     assert 'min="0.0001"' in INDEX
 
@@ -64,6 +65,28 @@ def test_p1_03_customer_quote_preference_compact_maintenance_uses_versioned_api(
     preference_block = INDEX[INDEX.index("customer-pricing-preferences"):INDEX.index("customer-pricing-preferences") + 7000]
     assert "修改原因" not in preference_block
     assert "is_default" not in preference_block
+
+
+def test_material_selection_loads_on_demand_and_never_offers_inactive_rows() -> None:
+    assert "await Promise.all(tasks);" in INDEX
+    assert "ensureMaterialSelectionOptions()" in INDEX
+    assert "if (m.is_active === false) return false;" in INDEX
+    assert "m.is_active !== false" in INDEX
+
+
+def test_quote_preferences_and_manual_size_use_box_flute_then_material() -> None:
+    preference_start = INDEX.index('<section class="customer-pricing-preferences">')
+    preference_block = INDEX[preference_start:preference_start + 9000]
+    assert preference_block.index("customerQuotePreferenceDraft.box_type") < preference_block.index("customerQuotePreferenceDraft.flute_type")
+    assert preference_block.index("customerQuotePreferenceDraft.flute_type") < preference_block.index("customerQuotePreferenceDraft.material_id")
+    assert "quotePreferenceMaterialOptions(customerQuotePreferenceDraft)" in preference_block
+    assert "同一箱型和楞型逐条添加多个供应商材质" in preference_block
+    assert "正式订单仍由操作员明确选择" in preference_block
+    manual_block = _order_template()
+    assert 'v-model="item.flute_type" @change="onManualSizeFluteChange(item)"' in manual_block
+    assert ':options="manualSizeMaterialOptions(item)"' in manual_block
+    assert "manualSizeMaterialHint(item)" in manual_block
+    assert "const preference = this.manualSizePreferenceOptions[0] || null;" not in INDEX
 
 
 def test_p1_03_new_quotation_uses_customer_pricing_preview_without_repricing_history() -> None:

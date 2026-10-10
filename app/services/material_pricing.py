@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from decimal import Decimal
 from typing import Iterable
 
@@ -128,6 +130,36 @@ def _weight_key(material: Material) -> str:
     return (material.basis_weight_description or "").strip()
 
 
+def material_similarity_signature(material: Material) -> str | None:
+    """Return an exact cross-supplier paper/weight signature when provable.
+
+    Supplier code letters are intentionally ignored because the same paper can
+    use different codes at different suppliers.  Every layer's normalized
+    right-hand description (including gram weight and paper type) must match.
+    Missing or unstructured paper descriptions are not silently treated as
+    similar merely because their total weights happen to match.
+    """
+    composition = unicodedata.normalize(
+        "NFKC", str(material.paper_composition or "")
+    ).strip()
+    if not composition:
+        return None
+    layers: list[str] = []
+    for raw_layer in composition.split("|"):
+        if "=" not in raw_layer:
+            return None
+        paper = raw_layer.split("=", 1)[1].strip().casefold()
+        paper = re.sub(r"\s+", "", paper)
+        if not paper or re.search(r"\d+(?:\.\d+)?g", paper) is None:
+            return None
+        layers.append(paper)
+    if not layers or (
+        material.layer_count is not None and len(layers) != material.layer_count
+    ):
+        return None
+    return f"{material.layer_count or ''}|{'|'.join(layers)}"
+
+
 def compare_materials(
     session: Session,
     *,
@@ -141,11 +173,15 @@ def compare_materials(
     绝不因 paper_composition 等字段缺失而抛错。
     """
     groups: dict[str, list[Material]] = {}
+    confirmed_similarity: dict[str, bool] = {}
     for m in candidates:
         if m.quote_price is None:
             continue
-        key = f"{m.layer_count or ''}|{_weight_key(m)}"
+        signature = material_similarity_signature(m)
+        paper_key = signature or "纸种未完整维护"
+        key = f"{m.layer_count or ''}|{_weight_key(m)}|{paper_key}"
         groups.setdefault(key, []).append(m)
+        confirmed_similarity[key] = signature is not None
 
     out: list[dict] = []
     for key, mats in groups.items():
@@ -188,7 +224,9 @@ def compare_materials(
         # 跨类别提示
         classes = {(r["grade"], r["origin"]) for r in rows}
         any_special = any(r["special"] for r in rows)
-        if any_special:
+        if not confirmed_similarity[key]:
+            status = "纸种未完整维护，待人工确认"
+        elif any_special:
             status = "仅供参考"
         elif len(classes) > 1:
             status = "材质类别不同，仅供参考"
@@ -197,14 +235,15 @@ def compare_materials(
         else:
             status = "可比价"
 
-        layer = key.split("|")[0]
-        weight = key.split("|", 1)[1]
+        layer = key.split("|", 1)[0]
+        weight = _weight_key(mats[0])
         out.append(
             {
                 "key": key,
                 "layer_count": int(layer) if layer.isdigit() else None,
                 "weight_structure": weight,
                 "flute_type": _norm_flute(flute_type) or None,
+                "same_weight_and_paper": confirmed_similarity[key],
                 "status": status,
                 "min_effective": min_eff,
                 "max_effective": max(eff_vals),

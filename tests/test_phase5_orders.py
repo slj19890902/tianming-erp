@@ -197,6 +197,31 @@ def test_new_order_rejects_disabled_or_unknown_supplier_from_legacy_material_id(
         assert session.scalar(select(func.count()).select_from(Order)) == 0
 
 
+def test_new_order_rejects_inactive_material_but_preserves_historical_row(
+    order_api_app,
+) -> None:
+    from app.models.material import Material
+    from app.models.order import Order
+
+    app, session_factory = order_api_app
+    with session_factory() as session:
+        material = session.get(Material, 1)
+        assert material is not None
+        material.is_active = False
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        response = client.post("/api/orders", json=_payload())
+
+    assert response.status_code == 400, response.text
+    assert "材质已停用" in response.json()["detail"]
+    with session_factory() as session:
+        assert session.get(Material, 1) is not None
+        assert session.get(Material, 1).is_active is False
+        assert session.scalar(select(func.count()).select_from(Order)) == 0
+
+
 def test_order_item_material_edit_only_gates_actual_material_change(
     order_api_app,
 ) -> None:

@@ -36,6 +36,7 @@ from app.services.customer_quote_pricing import (
     resolve_customer_square_price,
 )
 from app.services.flute_mapping import normalize_flute_type, validate_flute_consistency
+from app.services import material_pricing
 
 
 router = APIRouter()
@@ -209,32 +210,117 @@ def _require_a1_quote_box_type(box_type: str) -> str:
     return normalized
 
 
-def _quote_preference_response(preference: CustomerQuotePreference) -> dict:
-    return {
+def _quote_preference_response(
+    preference: CustomerQuotePreference,
+    db: Session,
+    *,
+    include_cost: bool,
+) -> dict:
+    material = preference.material
+    response = {
         "id": preference.id,
         "customer_id": preference.customer_id,
         "box_type": preference.box_type,
         "material_id": preference.material_id,
-        "material_code": preference.material.code if preference.material else None,
-        "supplier_name": preference.material.supplier_name if preference.material else None,
-        "layer_count": preference.material.layer_count if preference.material else None,
+        "material_code": material.code if material else None,
+        "supplier_name": material.supplier_name if material else None,
+        "layer_count": material.layer_count if material else None,
+        "material_is_active": bool(material and material.is_active),
         "material_display": (
             " / ".join(
                 part
                 for part in (
-                    preference.material.code,
-                    preference.material.supplier_name,
+                    material.code,
+                    material.supplier_name,
                 )
                 if part
             )
-            if preference.material
+            if material
             else None
         ),
         "flute_type": preference.flute_type,
         "tax_included_square_price": preference.tax_included_square_price,
         "is_active": preference.is_active,
         "version": preference.version,
+        "comparison_status": (
+            "material_inactive" if material is not None and not material.is_active
+            else "not_compared"
+        ),
+        "similar_material_count": 0,
+        "similar_material_ids": [],
     }
+    if include_cost and material is not None and material.is_active:
+        effective = material_pricing.get_effective_material_price(
+            db,
+            material=material,
+            flute_type=preference.flute_type,
+        )
+        response.update(
+            material_base_square_price=effective["base_price"],
+            material_flute_delta=effective["flute_delta"],
+            material_effective_square_price=effective["effective_price"],
+            material_quote_date=(
+                material.quote_date.isoformat() if material.quote_date else None
+            ),
+        )
+    return response
+
+
+def _decorate_quote_preference_comparisons(
+    preferences: list[CustomerQuotePreference],
+    responses: list[dict],
+    *,
+    include_cost: bool,
+) -> None:
+    """Mark only provably same-weight, same-paper rows as comparable."""
+    groups: dict[tuple[str, str, str], list[int]] = {}
+    for index, preference in enumerate(preferences):
+        material = preference.material
+        if (
+            not preference.is_active
+            or material is None
+            or not material.is_active
+        ):
+            continue
+        signature = material_pricing.material_similarity_signature(material)
+        if signature is None:
+            responses[index]["comparison_status"] = "paper_type_unconfirmed"
+            continue
+        groups.setdefault(
+            (preference.box_type, preference.flute_type, signature), []
+        ).append(index)
+
+    for indexes in groups.values():
+        material_ids = [responses[index]["material_id"] for index in indexes]
+        for index in indexes:
+            responses[index]["similar_material_count"] = len(indexes)
+            responses[index]["similar_material_ids"] = material_ids
+            responses[index]["comparison_status"] = (
+                "comparable" if len(indexes) > 1 else "no_similar_material"
+            )
+        if not include_cost or len(indexes) < 2:
+            continue
+        priced = [
+            index for index in indexes
+            if responses[index].get("material_effective_square_price") is not None
+        ]
+        if not priced:
+            continue
+        lowest = min(
+            responses[index]["material_effective_square_price"] for index in priced
+        )
+        ordered = sorted(
+            priced,
+            key=lambda index: (
+                responses[index]["material_effective_square_price"],
+                responses[index]["material_id"],
+            ),
+        )
+        for rank, index in enumerate(ordered, start=1):
+            current = responses[index]["material_effective_square_price"]
+            responses[index]["similar_cost_rank"] = rank
+            responses[index]["similar_delta_to_lowest"] = round(current - lowest, 4)
+            responses[index]["is_similar_lowest_cost"] = current == lowest
 
 
 @router.get("")
@@ -306,8 +392,18 @@ def list_customer_quote_preferences(
     )
     if not include_inactive:
         statement = statement.where(CustomerQuotePreference.is_active.is_(True))
-    preferences = db.scalars(statement).all()
-    return {"items": [_quote_preference_response(item) for item in preferences]}
+    preferences = list(db.scalars(statement).all())
+    include_cost = has_permission(user, "cost.view")
+    responses = [
+        _quote_preference_response(item, db, include_cost=include_cost)
+        for item in preferences
+    ]
+    _decorate_quote_preference_comparisons(
+        preferences,
+        responses,
+        include_cost=include_cost,
+    )
+    return {"items": responses}
 
 
 @router.post("/{customer_id}/quote-preferences", status_code=status.HTTP_201_CREATED)
@@ -340,7 +436,11 @@ def create_customer_quote_preference(
             action="CREATE",
             resource="CustomerQuotePreference",
             resource_id=preference.id,
-            details={"after": _quote_preference_response(preference)},
+            details={
+                "after": _quote_preference_response(
+                    preference, db, include_cost=has_permission(user, "cost.view")
+                )
+            },
         )
         db.commit()
     except IntegrityError as error:
@@ -350,7 +450,9 @@ def create_customer_quote_preference(
             detail="该客户、箱型、材质和楞型的报价偏好已存在",
         ) from error
     db.refresh(preference)
-    return _quote_preference_response(preference)
+    return _quote_preference_response(
+        preference, db, include_cost=has_permission(user, "cost.view")
+    )
 
 
 @router.put("/{customer_id}/quote-preferences/{preference_id}")
@@ -371,7 +473,9 @@ def update_customer_quote_preference(
                 f"v{preference.version}，请刷新后再保存"
             ),
         )
-    before = _quote_preference_response(preference)
+    before = _quote_preference_response(
+        preference, db, include_cost=has_permission(user, "cost.view")
+    )
     updates = {
         "tax_included_square_price": payload.tax_included_square_price,
         "is_active": payload.is_active,
@@ -392,13 +496,17 @@ def update_customer_quote_preference(
             resource_id=preference.id,
             details={
                 "before": before,
-                "after": _quote_preference_response(preference),
+                "after": _quote_preference_response(
+                    preference, db, include_cost=has_permission(user, "cost.view")
+                ),
                 "change_reason": "修改客户尺寸报价偏好",
             },
         )
         db.commit()
     db.refresh(preference)
-    return _quote_preference_response(preference)
+    return _quote_preference_response(
+        preference, db, include_cost=has_permission(user, "cost.view")
+    )
 
 
 @router.post("/{customer_id}/quote-preferences/estimate")

@@ -5226,6 +5226,11 @@ def _create_order_impl(
                     status_code=400,
                     detail=f"第{index}条明细材质不存在",
                 )
+            if selected_material is not None and not selected_material.is_active:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"第{index}条明细所选材质已停用，请重新选择",
+                )
             if (
                 selected_material is not None
                 and (selected_material.supplier_name or "").strip()
@@ -5943,6 +5948,8 @@ def update_order_item(
         requested_material = db.get(Material, payload.material_id)
         if requested_material is None:
             raise HTTPException(status_code=400, detail="订单明细材质不存在")
+        if not requested_material.is_active:
+            raise HTTPException(status_code=400, detail="订单明细所选材质已停用，请重新选择")
         if (requested_material.supplier_name or "").strip():
             try:
                 resolve_supplier(

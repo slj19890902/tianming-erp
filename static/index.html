@@ -2066,7 +2066,7 @@
                       <input class="input" style="width:140px" v-model.trim="compareWeight" placeholder="输入克重结构" />
                       <button class="btn small" @click="loadCompare">查询比价</button>
                     </div>
-                    <p style="color:#666;font-size:12px">同克重多供应商比价；楞型不作为主筛选条件，纸种类别或进口来源不同仅供参考。</p>
+                    <p style="color:#666;font-size:12px">只有逐层克重和纸种都相同才自动归为类似材质并比价；楞型只计入当期加价，纸种资料不全或类别不同必须人工核对。</p>
                     <div v-if="compareLoading" class="muted" style="text-align:center;padding:20px">加载中…</div>
                     <div v-else-if="compareError" style="color:#dc2626;text-align:center;padding:20px">{{ compareError }}</div>
                     <div v-for="(group, gi) in compareGroups" :key="gi" style="margin-bottom:20px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
@@ -3568,17 +3568,18 @@
                 <div class="toolbar" style="margin:0 0 7px"><strong>客户报价偏好</strong><span class="muted">按箱型维护常用材质、楞型与含税客户平方价。</span></div>
                 <div v-if="!customerForm.id" class="muted">请先保存客户基本资料，再维护报价偏好。</div>
                 <template v-else>
-                  <div v-if="canEditCustomers" class="form-grid" style="grid-template-columns:120px minmax(220px,1fr) 90px 130px 80px auto;gap:6px;margin:0 0 8px">
-                    <select class="select" v-model="customerQuotePreferenceDraft.box_type"><option v-for="boxType in productBoxStyleOptions" :key="boxType" :value="boxType">{{ boxType }}</option></select>
-                    <search-select v-model="customerQuotePreferenceDraft.material_id" :options="materialSelectOptions('',null,null)" label-key="_label" value-key="id" placeholder="选择材质"></search-select>
-                    <input class="input" v-model.trim="customerQuotePreferenceDraft.flute_type" placeholder="楞型" />
+                  <div v-if="canEditCustomers" class="form-grid" style="grid-template-columns:120px 100px minmax(240px,1fr) 130px 80px auto;gap:6px;margin:0 0 8px">
+                    <select class="select" v-model="customerQuotePreferenceDraft.box_type" @change="onCustomerQuoteBoxTypeChange"><option v-for="boxType in productBoxStyleOptions" :key="boxType" :value="boxType">{{ boxType }}</option></select>
+                    <select class="select" v-model="customerQuotePreferenceDraft.flute_type" @change="onCustomerQuoteFluteChange"><option value="">先选楞型</option><option v-for="flute in quotePreferenceFluteOptions()" :key="flute" :value="flute">{{ flute }}瓦</option></select>
+                    <search-select v-model="customerQuotePreferenceDraft.material_id" :disabled="!customerQuotePreferenceDraft.flute_type" :options="quotePreferenceMaterialOptions(customerQuotePreferenceDraft)" label-key="_label" value-key="id" placeholder="再选该楞型兼容材质"></search-select>
                     <input class="input sensitive-price" type="number" min="0.0001" step="0.0001" v-model="customerQuotePreferenceDraft.tax_included_square_price" placeholder="含税元/㎡" />
                     <label style="white-space:nowrap"><input type="checkbox" v-model="customerQuotePreferenceDraft.is_active" /> 启用</label>
                     <button class="btn small success" type="button" :disabled="customerQuotePreferenceLoading" @click="createCustomerQuotePreference">新增</button>
                   </div>
-                  <div class="table-wrap"><table class="compact-table"><thead><tr><th>箱型</th><th>材质</th><th>楞型</th><th class="sensitive-price">客户平方价</th><th>状态</th><th v-if="canEditCustomers">操作</th></tr></thead><tbody>
-                    <tr v-if="!customerQuotePreferences.length"><td :colspan="canEditCustomers ? 6 : 5" class="muted">暂无已维护偏好；手工尺寸行不会自动猜测材质或报价。</td></tr>
-                    <tr v-for="preference in customerQuotePreferences" :key="preference.id || preference._key"><td>{{ preference.box_type || 'A1' }}</td><td>{{ preference.material_code || '-' }}</td><td>{{ preference.flute_type || '-' }}</td><td class="sensitive-price"><input v-if="canEditCustomers" class="input" type="number" min="0.0001" step="0.0001" v-model="preference.tax_included_square_price" /><span v-else>{{ preference.tax_included_square_price == null ? '-' : money(preference.tax_included_square_price) }}</span></td><td><label v-if="canEditCustomers"><input type="checkbox" v-model="preference.is_active" /> {{ preference.is_active === false ? '停用' : '启用' }}</label><span v-else>{{ preference.is_active === false ? '停用' : '启用' }}</span></td><td v-if="canEditCustomers"><button class="btn small" type="button" :disabled="customerQuotePreferenceLoading" @click="updateCustomerQuotePreference(preference)">保存</button></td></tr>
+                  <div class="notice" style="margin:0 0 8px">可以为同一箱型和楞型逐条添加多个供应商材质。含税价是给客户的平方价；供应商材质只作为当期成本比价候选，正式订单仍由操作员明确选择。</div>
+                  <div class="table-wrap"><table class="compact-table"><thead><tr><th>箱型</th><th>楞型</th><th>供应商 / 材质</th><th v-if="canViewCosts" class="cost-sensitive">供应商当前成本</th><th>自动比价</th><th class="sensitive-price">客户平方价</th><th>状态</th><th v-if="canEditCustomers">操作</th></tr></thead><tbody>
+                    <tr v-if="!customerQuotePreferences.length"><td :colspan="6 + (canViewCosts ? 1 : 0) + (canEditCustomers ? 1 : 0)" class="muted">暂无已维护偏好；手工尺寸行不会自动猜测材质或供应商。</td></tr>
+                    <tr v-for="preference in customerQuotePreferences" :key="preference.id || preference._key"><td>{{ preference.box_type || 'A1' }}</td><td>{{ preference.flute_type || '-' }}</td><td>{{ preference.material_display || preference.material_code || '-' }}<span v-if="preference.material_is_active === false" class="status orange" style="margin-left:5px">材质已停用</span></td><td v-if="canViewCosts" class="cost-sensitive">{{ preference.material_effective_square_price == null ? '-' : '￥'+money(preference.material_effective_square_price)+'/㎡' }}</td><td>{{ customerQuoteComparisonText(preference) }}</td><td class="sensitive-price"><input v-if="canEditCustomers" class="input" type="number" min="0.0001" step="0.0001" v-model="preference.tax_included_square_price" /><span v-else>{{ preference.tax_included_square_price == null ? '-' : money(preference.tax_included_square_price) }}</span></td><td><label v-if="canEditCustomers"><input type="checkbox" v-model="preference.is_active" /> {{ preference.is_active === false ? '停用' : '启用' }}</label><span v-else>{{ preference.is_active === false ? '停用' : '启用' }}</span></td><td v-if="canEditCustomers"><button class="btn small" type="button" :disabled="customerQuotePreferenceLoading" @click="updateCustomerQuotePreference(preference)">保存</button></td></tr>
                   </tbody></table></div>
                 </template>
               </section>
@@ -4476,7 +4477,7 @@
 	                    <td class="order-entry-name">
 	                      <div v-if="item.manual_size_entry" class="manual-size-inline">
 	                        <input class="input" :disabled="!orderForm.customer_id" v-model.trim="item.product_name" placeholder="产品名称" />
-	                        <select class="select" :disabled="!orderForm.customer_id" v-model="item.box_type" @change="refreshManualSizeQuote(item)"><option v-for="boxType in manualSizeBoxTypeOptions" :key="boxType" :value="boxType">{{ boxType }}</option></select>
+	                        <select class="select" :disabled="!orderForm.customer_id" v-model="item.box_type" @change="onManualSizeBoxTypeChange(item)"><option v-for="boxType in manualSizeBoxTypeOptions" :key="boxType" :value="boxType">{{ boxType }}</option></select>
 	                      </div>
 	                      <input v-else class="input" :disabled="!orderForm.customer_id || item._from_product"
 	                        v-model.trim="item.product_name" :title="item.product_name" placeholder="产品名称" />
@@ -4492,11 +4493,9 @@
 	                        </div>
 	                      </div>
 	                      <div v-else-if="item.manual_size_entry" style="display:flex;flex-direction:column;gap:4px">
-	                        <select class="select" :disabled="!orderForm.customer_id" v-model.number="item._quote_preference_id" @change="applyManualSizePreference(item)">
-	                          <option :value="null">直接选择材质</option><option v-for="preference in manualSizePreferenceOptions" :key="preference.id" :value="preference.id">{{ manualSizePreferenceLabel(preference) }}</option>
-	                        </select>
-	                        <div v-if="!item._quote_preference_id" style="display:grid;grid-template-columns:minmax(0,1fr) 72px;gap:4px"><search-select v-model="item.material_id" :options="materialSelectOptions('',null,null)" label-key="_label" value-key="id" placeholder="选择材质" @change="selectManualSizeMaterial(item)"></search-select><select class="select" v-model="item.flute_type" @change="refreshManualSizeQuote(item)"><option :value="null">楞型</option><option v-for="opt in orderItemFluteOptions(item)" :key="opt" :value="opt">{{ opt }}</option></select></div>
-	                        <div v-else class="muted" style="font-size:10px">{{ item.material || '请选择客户报价偏好' }}{{ item.flute_type ? ' / '+item.flute_type : '' }}</div>
+	                        <select class="select" :disabled="!orderForm.customer_id" v-model="item.flute_type" @change="onManualSizeFluteChange(item)"><option :value="null">先选楞型</option><option v-for="opt in quotePreferenceFluteOptions()" :key="opt" :value="opt">{{ opt }}瓦</option></select>
+	                        <search-select v-model="item.material_id" :disabled="!item.flute_type" :options="manualSizeMaterialOptions(item)" label-key="_label" value-key="id" placeholder="再选供应商材质" @change="selectManualSizeMaterial(item)"></search-select>
+	                        <div class="muted" style="font-size:10px">{{ manualSizeMaterialHint(item) }}</div>
 	                      </div>
 	                      <div v-else style="display:flex;flex-direction:column;gap:4px">
 	                        <div style="display:flex;gap:4px">
@@ -6685,7 +6684,9 @@
             }));
           },
           manualSizePreferenceOptions() {
-            return (this.customerQuotePreferences || []).filter(row => row && row.is_active !== false);
+            return (this.customerQuotePreferences || []).filter(row =>
+              row && row.is_active !== false && row.material_is_active !== false
+            );
           },
           manualSizeBoxTypeOptions() {
             return ["A1"];
@@ -9953,6 +9954,12 @@
               this.finishLatestRequest("materials:list", controller);
             }
           },
+          async ensureMaterialSelectionOptions() {
+            const tasks = [];
+            if (!this.suppliers.length) tasks.push(this.loadSuppliers(false));
+            if (!this.allMaterials.length) tasks.push(this.loadMaterials());
+            if (tasks.length) await Promise.all(tasks);
+          },
           async openMaterialCandidateMaintenance() {
             if (!this.canAdmin) return;
             this.productTab = "materialCandidates";
@@ -10091,6 +10098,7 @@
               // 此 helper 被新建订单、常用箱、报料等新业务选择器共同复用。
               // 停用供应商（如佳丰）和未登记供应商的旧材质只保留历史展示，
               // 不再进入任何新业务候选。
+              if (m.is_active === false) return false;
               if (!this.isActiveMaterialSupplier(m.supplier_name)) return false;
               if (supplierName && supplierName !== "全部供应商" && supplierName !== "") {
                 if (supplierName === "其他供应商") {
@@ -10146,7 +10154,11 @@
           // 保存校验：必须选中有效 material_id，不能只输入文字
           validateSelectedMaterial(materialId) {
             const source = this.allMaterials.length ? this.allMaterials : this.materials;
-            return materialId != null && source.some(m => m.id === materialId);
+            return materialId != null && source.some(m =>
+              m.id === materialId
+              && m.is_active !== false
+              && this.isActiveMaterialSupplier(m.supplier_name)
+            );
           },
           // ===== v0.19.2-B 供应商调价 =====
           priceAdjustFormKey() {
@@ -12461,9 +12473,9 @@
           async createCustomerQuotePreference() {
             const draft = this.customerQuotePreferenceDraft;
             if (!this.customerForm?.id) return;
-            if (!draft.material_id) { this.showToast("请选择材质", true); return; }
-            if (!String(draft.flute_type || "").trim()) { this.showToast("请填写楞型", true); return; }
-            if (draft.tax_included_square_price === "" || Number(draft.tax_included_square_price) < 0) { this.showToast("请填写含税客户平方价", true); return; }
+            if (!String(draft.flute_type || "").trim()) { this.showToast("请先选择楞型", true); return; }
+            if (!draft.material_id) { this.showToast("请选择该楞型兼容的材质", true); return; }
+            if (draft.tax_included_square_price === "" || Number(draft.tax_included_square_price) <= 0) { this.showToast("请填写大于0的含税客户平方价", true); return; }
             this.customerQuotePreferenceLoading = true;
             try {
               await axios.post(`/api/master/customers/${this.customerForm.id}/quote-preferences`, {
@@ -12482,6 +12494,41 @@
               this.customerQuotePreferenceLoading = false;
             }
           },
+          quotePreferenceFluteOptions() {
+            return ["A", "B", "E", "AB", "BE", "AAA", "ABC"];
+          },
+          layerCountForFlute(fluteType) {
+            const flute = String(fluteType || "").trim().toUpperCase();
+            if (["A", "B", "E"].includes(flute)) return 3;
+            if (["AB", "BE"].includes(flute)) return 5;
+            if (["AAA", "ABC"].includes(flute)) return 7;
+            return null;
+          },
+          quotePreferenceMaterialOptions(draft=this.customerQuotePreferenceDraft) {
+            const layerCount = this.layerCountForFlute(draft?.flute_type);
+            if (!layerCount) return [];
+            return this.materialSelectOptions("", layerCount, draft.flute_type);
+          },
+          onCustomerQuoteBoxTypeChange() {
+            this.customerQuotePreferenceDraft.material_id = null;
+          },
+          onCustomerQuoteFluteChange() {
+            const draft = this.customerQuotePreferenceDraft;
+            const valid = this.quotePreferenceMaterialOptions(draft).some(row =>
+              Number(row.id) === Number(draft.material_id)
+            );
+            if (!valid) draft.material_id = null;
+          },
+          customerQuoteComparisonText(preference) {
+            if (preference?.material_is_active === false) return "已退出新业务候选";
+            if (preference?.comparison_status === "comparable") {
+              if (preference.is_similar_lowest_cost) return `同克重同纸种最低（${preference.similar_material_count}个）`;
+              if (preference.similar_delta_to_lowest != null) return `同类高 ￥${this.money(preference.similar_delta_to_lowest)}/㎡`;
+              return `同克重同纸种可比（${preference.similar_material_count}个）`;
+            }
+            if (preference?.comparison_status === "paper_type_unconfirmed") return "纸种资料不全，待人工核对";
+            return "暂无同克重同纸种候选";
+          },
           async updateCustomerQuotePreference(preference) {
             if (!this.customerForm?.id || !preference?.id) return;
             this.customerQuotePreferenceLoading = true;
@@ -12499,7 +12546,7 @@
               this.customerQuotePreferenceLoading = false;
             }
           },
-          openCustomer(row=null) {
+          async openCustomer(row=null) {
             const next = row ? JSON.parse(JSON.stringify(row)) : blankCustomer();
             if (!row) next.customer_number = Math.max(0, ...this.customers.map(c => Number(c.customer_number || 0))) + 1;
             if (!Number.isInteger(Number(next.statement_cycle_start_day)) || Number(next.statement_cycle_start_day) < 1 || Number(next.statement_cycle_start_day) > 28) next.statement_cycle_start_day = 20;
@@ -12511,6 +12558,7 @@
             if (next.id && this.canManageInvoiceProfiles) { this.loadInvoiceSellers(); this.loadCustomerInvoiceProfile(next.id); this.loadCustomerInvoiceRule(next.id); }
             this.beginMasterEdit("customer",this.customerForm);
             this.modal = { type:"customer", title: row ? (this.canEditCustomers ? "编辑客户" : "查看客户") : "新增客户" };
+            await this.ensureMaterialSelectionOptions();
           },
           contractStatusText(status) {
             return ({ draft:"草稿", confirmed:"客户已确认", converted:"已转订单" })[status] || status || "草稿";
@@ -13748,7 +13796,7 @@
             try {
               const payload = this.paperCodePayload(this.paperCodeForm);
               if (!payload.supplier_name) throw new Error("请填写供应商");
-              if (!/^[A-Z0-9]$/.test(payload.code_char)) throw new Error("基础代码必须是单个字母或数字");
+              if (Array.from(payload.code_char).length !== 1) throw new Error("基础代码必须是单个可见字符（支持 + 等符号）");
               if (!payload.paper_name) throw new Error("请填写纸种名称");
               if (!(payload.gram_weight > 0)) throw new Error("克重必须大于0");
               if (this.paperCodeForm.id) await axios.put(`/api/master/materials/paper-codes/${this.paperCodeForm.id}`,payload);
@@ -15105,7 +15153,9 @@
             catch(error){this.showToast(this.errorMessage(error),true);}
           },
 	          async openOrder() {
-	            if (!this.customerOptions.length) await this.loadCustomerOptions();
+	            const tasks = [this.ensureMaterialSelectionOptions()];
+	            if (!this.customerOptions.length) tasks.push(this.loadCustomerOptions());
+	            await Promise.all(tasks);
 	            this.orderForm = { customer_id:null, customer_po:"", order_date:today(), delivery_date:plusDays(7), requisition_strategy:"normal", remark:"", items:[] };
 	            this.resetOrderRequisitionPreview();
 	            this.orderNumberPreview = "";
@@ -16006,7 +16056,6 @@
             const index = reuseBlankLine ? 0 : this.orderForm.items.length;
             if (!reuseBlankLine) this.addOrderItem(false, false);
             const item = this.orderForm.items[index];
-            const preference = this.manualSizePreferenceOptions[0] || null;
             if (item._inventory_refresh_timer) clearTimeout(item._inventory_refresh_timer);
             Object.assign(item, {
               manual_size_entry: true,
@@ -16014,12 +16063,18 @@
               is_new_product: false,
               product_code: "",
               product_name: "纸箱",
-              box_type: preference?.box_type || "A1",
+              box_type: "A1",
               length_mm: null,
               width_mm: null,
               height_mm: null,
               specification: "",
-              _quote_preference_id: preference?.id || null,
+              material_id: null,
+              material: "",
+              flute_type: null,
+              layer_count: null,
+              _layer_filter: null,
+              _flute_filter: null,
+              _quote_preference_id: null,
               _manual_unit_price: false,
               _quote_preview: null,
               _quote_preview_loading: false,
@@ -16028,7 +16083,6 @@
               _inventory_product: null,
               _show_inventory_details: false,
             });
-            if (preference) this.applyManualSizePreference(item);
             this.refreshOrderNumberPreview();
           },
           applyManualSizePreference(item) {
@@ -16056,8 +16110,71 @@
             item.material = material?.code || "";
             item.layer_count = material?.layer_count || null;
             item._layer_filter = material?.layer_count || null;
-            item.flute_type = null;
-            item._flute_filter = null;
+            item._flute_filter = item.flute_type || null;
+            const preference = this.manualSizePreferencesFor(item).find(row =>
+              Number(row.material_id) === Number(item.material_id)
+            );
+            item._quote_preference_id = preference?.id || null;
+            await this.refreshManualSizeQuote(item);
+          },
+          manualSizePreferencesFor(item) {
+            const boxType = String(item?.box_type || "A1").trim().toUpperCase();
+            const fluteType = String(item?.flute_type || "").trim().toUpperCase();
+            return this.manualSizePreferenceOptions.filter(row =>
+              String(row.box_type || "A1").trim().toUpperCase() === boxType
+              && String(row.flute_type || "").trim().toUpperCase() === fluteType
+            );
+          },
+          manualSizeMaterialOptions(item) {
+            const layerCount = this.layerCountForFlute(item?.flute_type);
+            if (!layerCount) return [];
+            const preferences = this.manualSizePreferencesFor(item);
+            if (!preferences.length) return this.materialSelectOptions("", layerCount, item.flute_type);
+            const byMaterial = new Map();
+            for (const preference of preferences) {
+              const material = this._findMaterial(preference.material_id);
+              if (!material || material.is_active === false || Number(material.layer_count) !== Number(layerCount)) continue;
+              const compare = preference.comparison_status === "comparable"
+                ? (preference.is_similar_lowest_cost ? "｜同类当前最低" : (preference.similar_delta_to_lowest != null ? `｜同类高￥${this.money(preference.similar_delta_to_lowest)}` : "｜同类可比"))
+                : "";
+              const supplierCost = preference.material_effective_square_price == null
+                ? ""
+                : `｜供应商￥${this.money(preference.material_effective_square_price)}/㎡`;
+              byMaterial.set(Number(material.id), {
+                ...material,
+                _label:`${material.code || "-"}｜${material.supplier_name || "未设供应商"}${supplierCost}｜客户￥${this.money(preference.tax_included_square_price)}/㎡${compare}`,
+                _display:`${material.code || "-"}｜${material.supplier_name || "未设供应商"}`,
+                _quote_preference_id:preference.id,
+              });
+            }
+            return [...byMaterial.values()].sort((left,right) => {
+              const lp = preferences.find(row => Number(row.material_id) === Number(left.id));
+              const rp = preferences.find(row => Number(row.material_id) === Number(right.id));
+              return Number(lp?.similar_cost_rank || 999) - Number(rp?.similar_cost_rank || 999)
+                || this.supplierRank(left.supplier_name) - this.supplierRank(right.supplier_name)
+                || String(left.code || "").localeCompare(String(right.code || ""));
+            });
+          },
+          manualSizeMaterialHint(item) {
+            if (!item?.flute_type) return "先选择楞型，系统再显示兼容层数的材质";
+            const preferences = this.manualSizePreferencesFor(item);
+            if (!preferences.length) return "该客户尚未维护候选；当前显示全部启用兼容材质，需人工选择";
+            const comparable = preferences.filter(row => row.comparison_status === "comparable").length;
+            return `已维护 ${preferences.length} 个供应商材质候选${comparable ? `，其中 ${comparable} 个同克重同纸种自动比价` : ""}；最终由你选择`;
+          },
+          async onManualSizeBoxTypeChange(item) {
+            item.material_id = null;
+            item.material = "";
+            item._quote_preference_id = null;
+            await this.refreshManualSizeQuote(item);
+          },
+          async onManualSizeFluteChange(item) {
+            item.layer_count = this.layerCountForFlute(item.flute_type);
+            item._layer_filter = item.layer_count;
+            item._flute_filter = item.flute_type || null;
+            item.material_id = null;
+            item.material = "";
+            item._quote_preference_id = null;
             await this.refreshManualSizeQuote(item);
           },
           markManualSizeUnitPrice(item) {

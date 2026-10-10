@@ -142,4 +142,41 @@ class TestCompare:
         db.commit()
         groups = mp.compare_materials(db, candidates=[m], layer_count=3, flute_type="B")
         assert len(groups) == 1
-        assert groups[0]["status"] == "仅一家供应商"
+        assert groups[0]["status"] == "纸种未完整维护，待人工确认"
+
+    def test_same_weight_requires_same_paper_type_for_automatic_comparison(self, db):
+        first = _mat(
+            db,
+            "A6A",
+            "供应商甲",
+            "1.80",
+            weight="120g/100g/120g",
+            paper="面纸:A=120g 国产A级牛卡 | 瓦楞:6=100g 国产高强瓦 | 里纸:A=120g 国产A级牛卡",
+        )
+        same = _mat(
+            db,
+            "B7B",
+            "供应商乙",
+            "1.70",
+            weight="120g/100g/120g",
+            paper="面纸:B=120g 国产A级牛卡 | 瓦楞:7=100g 国产高强瓦 | 里纸:B=120g 国产A级牛卡",
+        )
+        different = _mat(
+            db,
+            "C8C",
+            "供应商丙",
+            "1.60",
+            weight="120g/100g/120g",
+            paper="面纸:C=120g 国产A级牛卡 | 瓦楞:8=100g 国产普瓦 | 里纸:C=120g 国产A级牛卡",
+        )
+        db.commit()
+        groups = mp.compare_materials(
+            db,
+            candidates=[first, same, different],
+            layer_count=3,
+            flute_type="B",
+        )
+        assert len(groups) == 2
+        comparable = next(group for group in groups if len(group["rows"]) == 2)
+        assert comparable["same_weight_and_paper"] is True
+        assert {row["material_code"] for row in comparable["rows"]} == {"A6A", "B7B"}

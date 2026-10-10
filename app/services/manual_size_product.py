@@ -58,6 +58,8 @@ def _validate_input(
     material = db.get(Material, data.material_id)
     if material is None:
         raise ManualSizeProductError("手工尺寸订单所选材质不存在")
+    if not material.is_active:
+        raise ManualSizeProductError("手工尺寸订单所选材质已停用，请重新选择")
     if data.layer_count is None or int(data.layer_count) != int(material.layer_count):
         raise ManualSizeProductError("手工尺寸订单层数必须与所选材质真实层数一致")
     flute_type = normalize_flute_type(data.flute_type)
@@ -66,9 +68,6 @@ def _validate_input(
     error = validate_flute_for_write(flute_type, material.layer_count)
     if error:
         raise ManualSizeProductError(error)
-    material_flute = normalize_flute_type(material.flute_type)
-    if material_flute and material_flute != flute_type:
-        raise ManualSizeProductError("手工尺寸订单楞型必须与所选材质真实楞型一致")
     return material, flute_type
 
 

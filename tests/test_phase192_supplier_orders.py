@@ -48,6 +48,7 @@ def test_supplier_material_display_rejects_flute_combinations_as_material_code()
     ("raw_code", "layer_count", "expected"),
     [
         ("A6A-EXTRA", 3, "A6A"),
+        ("A+A", 3, "A+A"),
         ("A416D-EXTRA", 5, "A416D"),
         ("A12345B-EXTRA", 7, "A12345B"),
     ],

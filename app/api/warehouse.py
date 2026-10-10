@@ -3552,6 +3552,7 @@ _INSIGHT_OPERATIONAL_SUMMARY_FIELDS = frozenset(
     {
         "recorded_lots",
         "available_lots",
+        "usable_lots",
         "finished_available",
         "semi_finished_available",
         "total_reserved",
@@ -3561,7 +3562,7 @@ _INSIGHT_OPERATIONAL_SUMMARY_FIELDS = frozenset(
 )
 _INSIGHT_OPERATIONAL_QUALITY_FIELDS = frozenset({"active_location_lots"})
 _INSIGHT_OPERATIONAL_TYPE_FIELDS = frozenset(
-    {"lots", "available", "reserved", "damaged", "scrapped"}
+    {"lots", "available", "frozen", "reserved", "damaged", "scrapped"}
 )
 _INSIGHT_OPERATIONAL_AGE_FIELDS = frozenset(
     {"key", "label", "lots", "finished_available", "semi_finished_available"}
@@ -3584,6 +3585,12 @@ _INSIGHT_OPERATIONAL_ACTION_FIELDS = frozenset(
         "uncovered_demand_quantity",
         "coverage_percent",
         "coverage_basis",
+        "coverage_is_primary",
+        "coverage_primary_lot_number",
+        "active_reserved_demand_quantity",
+        "net_unreserved_demand_quantity",
+        "free_available_quantity",
+        "free_covered_demand_quantity",
     }
 )
 _INSIGHT_OPERATIONAL_DETAIL_FIELDS = frozenset(
@@ -3601,7 +3608,14 @@ _INSIGHT_OPERATIONAL_PRODUCT_FIELDS = frozenset(
     {"product_id", "inventory_code", "name"}
 )
 _INSIGHT_OPERATIONAL_DEMAND_FIELDS = frozenset(
-    {"demand_30", "demand_90", "demand_180", "open_demand"}
+    {
+        "demand_30",
+        "demand_90",
+        "demand_180",
+        "open_demand",
+        "active_reserved_demand",
+        "net_unreserved_demand",
+    }
 )
 _INSIGHT_OPERATIONAL_REASON_CODES = frozenset(
     {

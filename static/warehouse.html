@@ -104,12 +104,13 @@
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h2>库存经营看板</h2><div class="muted">库龄按入库日期，停滞按最后异动；需求覆盖和半成品候选均只读，建议不自动执行。</div></div><button id="refreshInsights" class="btn primary" type="button">刷新看板</button></div>
         <div id="insightScope" class="notice info" style="margin-top:12px"></div>
         <div id="insightRecommendation" class="notice" style="margin-top:8px"></div>
+        <div id="insightAiReadiness" class="notice warn hidden" style="margin-top:8px"></div>
       </div>
       <div id="insightSummary" class="metric-grid" style="margin-bottom:14px"></div>
       <div class="panel">
         <h2>数据可信度</h2>
         <div id="insightQuality" class="summary"></div>
-        <div id="insightCostNotice" class="notice hidden">库龄始终按入库日期计算，最后异动只反映停滞。实际库存金额：成本事实账尚未建立时统一显示“成本待补”，不得按 0 元计算；下列来源覆盖均为估算，绝非实际现金成本覆盖。</div>
+        <div id="insightCostNotice" class="notice hidden">库龄始终按入库日期计算，最后异动只反映停滞。现有入库成本快照、当前报价和产品参考价都只属于估算；真实成本必须另行保存纸板价格凭据、人工、印刷、模切及确认记录。</div>
       </div>
       <div class="panel table-wrap">
         <h2>库龄分布</h2>
@@ -521,6 +522,14 @@
       const showCosts=hasPermission("cost.view");
       $("insightScope").textContent=data.scope_notice;
       $("insightRecommendation").textContent=data.recommendation_notice;
+      const readiness=data.recommendation_readiness;
+      if(readiness){
+        const statusLabels={no_inventory_data:"待录入库存",no_usable_inventory:"当前无可用库存",blocked_actual_cost:"真实成本待建立",collecting_history:"正在积累流水",pilot_only:"仅适合试运行分析",ready:"数据已就绪"};
+        const history=`库存流水 ${readiness.movement_count||0} 条 / ${readiness.movement_history_days||0} 天`;
+        const reasons=(readiness.reasons||[]).map(item=>`<li>${h(item)}</li>`).join("");
+        $("insightAiReadiness").innerHTML=`<b>AI 建议状态：${h(statusLabels[readiness.status]||readiness.status||"未就绪")}</b> · ${h(history)}<br><span class="muted">${h(readiness.safety_notice||"")}</span>${reasons?`<ul style="margin:6px 0 0 18px">${reasons}</ul>`:""}`;
+        $("insightAiReadiness").classList.toggle("hidden",false);
+      }else{$("insightAiReadiness").classList.toggle("hidden",true)}
       const cards=[
         ["已录入批次",summary.recorded_lots,"批"],
         ["成品可用",summary.finished_available,"个"],
@@ -529,8 +538,8 @@
       ];
       if(showCosts){
         cards.push(
-          ["当前材料估算",summary.estimated_inventory_value==null?"成本待补":`¥${summary.estimated_inventory_value}`,""],
-          ["实际现金占用",summary.actual_inventory_value==null?"成本待补":`¥${summary.actual_inventory_value}`,""]
+          ["入库时材料估算",summary.estimated_inventory_value==null?"成本待补":`¥${summary.estimated_inventory_value}`,""],
+          ["已确认完整成本",summary.actual_inventory_value==null?"尚未建立":`¥${summary.actual_inventory_value}`,""]
         );
       }
       $("insightSummary").innerHTML=cards.map(row=>`<div class="metric-card"><span class="muted">${row[0]}</span><strong>${row[1]}</strong><span>${row[2]}</span></div>`).join("");
@@ -538,20 +547,29 @@
       const qualityRows=[`<span>有可用量批次 <strong>${summary.available_lots}</strong></span>`,`<span>有效库位 <strong>${quality.active_location_lots}</strong></span>`];
       if(showCosts){
         const costCoverage=percentage(quality.cost_coverage_percent);
-        qualityRows.push(`<span>可估算合计 <strong>${quality.cost_ready_lots}</strong></span>`,`<span>成本待补 <strong>${quality.missing_cost_lots}</strong></span>`,`<span>估算覆盖 <strong>${costCoverage}</strong></span>`,`<span>入库快照估算 <strong>${percentage(quality.snapshot_estimate_coverage)}</strong></span>`,`<span>当前材料报价估算 <strong>${percentage(quality.current_quote_coverage)}</strong></span>`,`<span>产品参考估算 <strong>${percentage(quality.product_reference_coverage)}</strong></span>`);
+        qualityRows.push(`<span>可测算合计 <strong>${quality.cost_ready_lots}</strong></span>`,`<span>成本待补 <strong>${quality.missing_cost_lots}</strong></span>`,`<span>估算覆盖 <strong>${costCoverage}</strong></span>`,`<span>入库时报价估算 <strong>${percentage(quality.snapshot_estimate_coverage)}</strong></span>`,`<span>当前材料报价估算 <strong>${percentage(quality.current_quote_coverage)}</strong></span>`,`<span>产品参考估算 <strong>${percentage(quality.product_reference_coverage)}</strong></span>`);
       }
       $("insightQuality").innerHTML=qualityRows.join("");
       $("insightCostNotice").classList.toggle("hidden",!showCosts);
       $("insightAgeBody").innerHTML=(data.age_buckets||[]).map(row=>`<tr><td><b>${h(row.label)}</b></td><td>${row.lots}</td><td>${row.finished_available} 个</td><td>${row.semi_finished_available} 张/片</td></tr>`).join("");
       const priorityLabels=["立即处理","优先核对","重点关注","持续跟进","数据补全"];
-      $("insightActionHead").innerHTML=["优先级 / 批次","库存对象","库位","可用 / 库龄 / 停滞","需求覆盖",...(showCosts?["估算来源"]:[]),"依据与建议"].map(label=>`<th>${label}</th>`).join("");
+      $("insightActionHead").innerHTML=["优先级 / 批次","库存对象","库位","可用 / 库龄 / 停滞","需求覆盖",...(showCosts?["材料成本来源"]:[]),"依据与建议"].map(label=>`<th>${label}</th>`).join("");
       $("insightActionBody").innerHTML=(data.action_items||[]).map(row=>{
         const d=row.detail||{};
-        const costLabels={estimated_snapshot:"入库快照估算",estimated_current_material_quote:"当前材料报价估算",estimated_product_cost:"产品参考估算"};
+        const costLabels={estimated_snapshot:"入库时报价估算",estimated_current_material_quote:"当前材料报价估算",estimated_product_cost:"产品参考估算"};
         const cost=showCosts?(row.cost_status==="pending"?'<span class="tag warn">成本待补</span>':`<span class="tag blue">${costLabels[row.cost_status]||"估算"}</span><br>估算 ¥${h(row.estimated_value)}`):"";
         const age=`${row.age_days} 天（入库）`;
         const stagnation=row.movement_stagnant_days==null?"最后异动时间缺失":`停滞 ${row.movement_stagnant_days} 天`;
-        const coverage=row.coverage_basis==="finished_available_vs_open_order_demand"?`未完成需求 ${row.demand?.open_demand||0}<br>覆盖 ${row.covered_demand_quantity||0} / 未覆盖 ${row.uncovered_demand_quantity||0}${row.coverage_percent==null?"（无未完成需求）":`（${row.coverage_percent}%）`}`:`候选关联需求 ${row.demand?.open_demand||0}<br><span class="muted">只读展示，不自动抵扣</span>`;
+        let coverage;
+        if(row.coverage_basis==="finished_free_stock_plus_active_reservations"){
+          coverage=`未完成需求 ${row.demand?.open_demand||0}<br>已有预占 ${row.active_reserved_demand_quantity||0} / 尚未预占 ${row.net_unreserved_demand_quantity||0}<br>可用库存再覆盖 ${row.free_covered_demand_quantity||0}<br>总覆盖 ${row.covered_demand_quantity||0} / 未覆盖 ${row.uncovered_demand_quantity||0}${row.coverage_percent==null?"（无未完成需求）":`（${row.coverage_percent}%）`}`;
+        }else if(row.coverage_basis==="finished_product_coverage_secondary_lot"){
+          coverage=`同款产品覆盖已在批次 ${h(row.coverage_primary_lot_number||"-")} 汇总<br><span class="muted">本行不重复计算</span>`;
+        }else if(row.coverage_basis==="finished_available_vs_open_order_demand"){
+          coverage=`未完成需求 ${row.demand?.open_demand||0}<br>覆盖 ${row.covered_demand_quantity||0} / 未覆盖 ${row.uncovered_demand_quantity||0}${row.coverage_percent==null?"（无未完成需求）":`（${row.coverage_percent}%）`}`;
+        }else{
+          coverage=`候选关联需求 ${row.demand?.open_demand||0}<br><span class="muted">只读展示，不自动抵扣</span>`;
+        }
         const reasons=(row.reasons||[]).map(reason=>`<div>${h(reason.text)}</div>`).join("");
         return `<tr><td><span class="tag ${row.priority<=1?'red':row.priority<=2?'warn':''}">${priorityLabels[row.priority]||"数据补全"}</span><br><b>${h(row.lot_number)}</b></td><td>${h(d.customer_name||"未指定客户")}<br><b>${h(d.inventory_code||"-")}</b> · ${h(d.name||"-")}</td><td>${h(row.location_code||"未登记")}</td><td><b>${row.quantity_available}</b> ${labels[row.unit]||row.unit}<br>${age}<br><span class="muted">${stagnation}</span></td><td>${coverage}</td>${showCosts?`<td>${cost}</td>`:""}<td class="reason-list">${reasons}</td></tr>`
       }).join("")||`<tr><td colspan="${showCosts?7:6}" class="empty">当前没有需要处理的已录入可用库存</td></tr>`;

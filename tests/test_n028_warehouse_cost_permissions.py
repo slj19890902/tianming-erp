@@ -38,6 +38,7 @@ def _insights_fixture() -> dict:
             "total_scrapped": 0,
             "estimated_inventory_value": "234.56",
             "actual_inventory_value": "999.99",
+            "confirmed_material_inventory_value": "888.88",
             "future_cost_total": "444.44 supplier-secret",
         },
         "data_quality": {
@@ -49,8 +50,16 @@ def _insights_fixture() -> dict:
             "current_quote_coverage": 0.0,
             "product_reference_coverage": 0.0,
             "actual_cost_supported": False,
+            "confirmed_material_cost_lots": 1,
+            "actual_material_cost_coverage_percent": 50.0,
+            "material_snapshot_coverage": 50.0,
             "actual_cost_message": "成本来源：快照估算",
             "supplier_cost_source": "supplier-secret estimated_snapshot 444.44",
+        },
+        "recommendation_readiness": {
+            "status": "blocked_actual_cost",
+            "actual_cost_coverage_percent": 50.0,
+            "reasons": ["supplier-secret estimated_snapshot 444.44"],
         },
         "by_type": {
             "finished": {
@@ -98,7 +107,13 @@ def _insights_fixture() -> dict:
                 "covered_demand_quantity": 10,
                 "uncovered_demand_quantity": 2,
                 "coverage_percent": 83.3,
-                "coverage_basis": "finished_available_vs_open_order_demand",
+                "coverage_basis": "finished_free_stock_plus_active_reservations",
+                "coverage_is_primary": True,
+                "coverage_primary_lot_number": "OPERATIONAL-LOT",
+                "active_reserved_demand_quantity": 4,
+                "net_unreserved_demand_quantity": 8,
+                "free_available_quantity": 12,
+                "free_covered_demand_quantity": 8,
                 "estimated_unit_cost": "10.00",
                 "estimated_value": "120.00",
                 "cost_status": "estimated_snapshot",
@@ -124,6 +139,8 @@ def _insights_fixture() -> dict:
                     "demand_90": 4,
                     "demand_180": 6,
                     "open_demand": 12,
+                    "active_reserved_demand": 4,
+                    "net_unreserved_demand": 8,
                     "estimated_value": "222.22",
                 },
                 "reasons": [
@@ -286,6 +303,8 @@ def test_insights_api_removes_cost_fields_and_cost_only_actions_without_cost_vie
         "demand_90",
         "demand_180",
         "open_demand",
+        "active_reserved_demand",
+        "net_unreserved_demand",
     }
     assert payload["action_item_count"] == 1
     assert payload["high_priority_action_item_count"] == 1
@@ -294,6 +313,7 @@ def test_insights_api_removes_cost_fields_and_cost_only_actions_without_cost_vie
         "234.56",
         "444.44",
         "999.99",
+        "888.88",
         "23.45",
         "supplier-secret",
         "成本来源",
@@ -317,6 +337,7 @@ def test_insights_api_keeps_full_response_for_cost_view_users(
     payload = response.json()
     assert payload["summary"]["estimated_inventory_value"] == "234.56"
     assert payload["summary"]["actual_inventory_value"] == "999.99"
+    assert payload["summary"]["confirmed_material_inventory_value"] == "888.88"
     assert payload["data_quality"]["actual_cost_message"] == "成本来源：快照估算"
     assert payload["action_items"][0]["estimated_unit_cost"] == "23.45"
     assert payload["action_items"][0]["cost_status"] == "pending"
@@ -329,7 +350,7 @@ def test_warehouse_insight_frontend_uses_permission_gate_before_cost_rendering()
     assert 'const showCosts=hasPermission("cost.view");' in WAREHOUSE_HTML
     assert 'if(showCosts){\n        cards.push(' in WAREHOUSE_HTML
     assert '$("insightCostNotice").classList.toggle("hidden",!showCosts);' in WAREHOUSE_HTML
-    assert '...(showCosts?["估算来源"]:[])' in WAREHOUSE_HTML
+    assert '...(showCosts?["材料成本来源"]:[])' in WAREHOUSE_HTML
     assert '${showCosts?`<td>${cost}</td>`:""}' in WAREHOUSE_HTML
 
 
@@ -398,8 +419,9 @@ console.log(JSON.stringify({{authFailure,withoutCost,withCost}}));
     without_cost_text = json.dumps(rendered["withoutCost"], ensure_ascii=False)
     for secret in ("234.56", "999.99", "estimated_snapshot", "supplier-secret"):
         assert secret not in without_cost_text
-    assert "估算来源" not in rendered["withoutCost"]["head"]
+    assert "材料成本来源" not in rendered["withoutCost"]["head"]
+    assert "已有预占 4 / 尚未预占 8" in rendered["withoutCost"]["actions"]
     assert rendered["withCost"]["noticeHidden"] is False
     assert "234.56" in rendered["withCost"]["summary"]
-    assert "估算来源" in rendered["withCost"]["head"]
+    assert "材料成本来源" in rendered["withCost"]["head"]
     assert "120.00" in rendered["withCost"]["actions"]

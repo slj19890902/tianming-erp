@@ -22345,6 +22345,68 @@ def get_supplier_order_production_print_package(
     return package
 
 
+@router.get("/production-paper-drawings/{owner_type}/{owner_id}/{drawing_key}/{mode}")
+def read_production_paper_drawing(
+    owner_type: str, owner_id: int, drawing_key: str, mode: str, request: Request,
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+):
+    """Authorize the real source before reading a bounded image/PDF preview."""
+    from fastapi.responses import Response
+    from app.services.production_paper_drawings import (
+        order_sources, stock_sources, order_has_managed_drawing,
+        has_printable_order_source, has_posted_paper_receipt,
+    )
+    from app.services.mobile_product_drawings import HEADERS, drawing_file, drawing_original, drawing_preview, failure
+
+    requisition_reader = has_permission(user, "requisition.view")
+    incoming_reader = has_permission(user, "incoming.view")
+    if not requisition_reader and not incoming_reader:
+        can_read(request=request, current_user=user, db=db)  # Preserve the existing denial audit.
+    if not 0 < owner_id <= 2_147_483_647 or len(drawing_key) > 64 or mode not in {"preview", "original"}:
+        raise failure(404, "生产图纸不存在")
+    if owner_type == "stock-item":
+        source = db.get(StockReplenishmentOrderItem, owner_id)
+        if source is None:
+            raise failure(404, "补库图纸来源不存在")
+        _require_stock_replenishment_order_access(db, source.order, user)
+        customer_id = _stock_replenishment_item_customer_id(db, source)
+        if customer_id is None or source.order.status not in {"confirmed", "partially_stocked", "stocked"}:
+            raise failure(404, "补库图纸来源不完整或已失效")
+        require_customer_access(customer_id, user, db)
+        if not requisition_reader and not has_posted_paper_receipt(db, stock_item=source):
+            raise failure(403, "当前账号只能查看已实收来源的图纸")
+        drawings = stock_sources(db, source)
+    elif owner_type in {"order-item", "bom-component"}:
+        component = None
+        if owner_type == "bom-component":
+            component = db.get(SalesOrderItemBomComponent, owner_id)
+            item = db.get(OrderItem, component.sales_order_item_id) if component else None
+        else:
+            item = db.get(OrderItem, owner_id)
+        if item is None or item.order is None:
+            raise failure(404, "订单图纸来源不存在")
+        require_customer_access(item.order.customer_id, user, db)
+        printable_source = requisition_reader and has_printable_order_source(db, item, component)
+        posted_source = incoming_reader and has_posted_paper_receipt(db, item=item, component=component)
+        if not printable_source and not posted_source:
+            if requisition_reader:
+                raise failure(404, "当前来源没有有效报料或实收任务图纸")
+            raise failure(403, "当前账号只能查看已实收来源的图纸")
+        drawings = order_sources(db, item, component,
+                                 managed=order_has_managed_drawing(db, item, component))
+    else:
+        raise failure(404, "生产图纸来源不存在")
+    drawing = next((row for row in drawings if row.key == drawing_key), None)
+    if drawing is None:
+        raise failure(404, "当前任务图纸不存在或版本已变化，请重新加载")
+    source = drawing.source()
+    path = drawing_file(source)
+    if mode == "preview":
+        return Response(drawing_preview(source, path), media_type="image/webp", headers=HEADERS)
+    content, media_type = drawing_original(path)
+    return Response(content, media_type=media_type, headers=HEADERS)
+
+
 def _apply_production_packaging_label_layout_write(
     db: Session,
     *,

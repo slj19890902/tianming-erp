@@ -4171,6 +4171,14 @@ def incoming_production_card(
                     'mold_location_version': mold.location_version if mold else None,
                     'mold_is_active': mold.is_active if mold else None,
                     'mold_binding_basis': 'drawing_release'})
+        from app.services.production_paper_drawings import order_paper_drawings
+        for card in package['cards']:
+            for component in card['components']:
+                component['paper_drawings'] = [
+                    {**drawing, 'product_code': component.get('product_code')}
+                    for drawing in order_paper_drawings(
+                        db, order_item, component_snapshot, component.get('managed_drawing'))
+                ]
     return {**legacy_card, **package}
 
 

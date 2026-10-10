@@ -1,3 +1,7 @@
+## 2026-10-10 BOM组合保存提示与设置入口 v0.22.622
+
+签名源码3899d26e、包cf8370cc，完整保留v621/08e5c401与v620，ep1010md无迁移。字段冲突定位、应用组套设置、配方加载保护及原子保存已发布；53项定向、冷备真实恢复、325表/2983文件保持、健康及10项静态核对通过，NAS已同步。未代改12500或任何正式业务事实，待管理员人工验收。详见docs/release_reports/BOM_SAVE_GUIDANCE_V622_20261010.md及NAS同名v622回执。
+
 ## 2026-10-10 误建模具删除与统一搜索 v0.22.620
 
 正式签名36ec1136、包34e76529，ep1010md继承eo1010pi；保留v619发货保护，新增unused_mold_deletion_v1。真实冷备恢复、隔离迁移、原事实/附件、完整性及LAN健康与静态文件通过；不自动删除正式模具，待管理员人工验收。旧版不兼容ep结构，禁止旧数据库覆盖回退。详见docs/release_reports/MOLD_DELETE_SEARCH_V620_20261010.md和NAS同名回执。
@@ -6212,3 +6216,5 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 - 2026-10-10 TASK-MOLD-FINANCE-COUNT：v0.22.616 / b11162d3665206d3bea0dd28d55afb3def96c1cd / eo1010pi已技术发布，包508038e684c4；补库任务保留原模具身份并读取当前位置，首页提醒按当前客户/业务范围计组。无迁移或业务补正，冷备真实隔离恢复、原事实/附件及健康资源核对通过；见docs/release_reports/TASK_MOLD_FINANCE_COUNT_V616_20261010.md及NAS独立回执，待管理员人工验收。
 
 - 2026-10-10 REPLENISHMENT-REVERSAL-80012273：v0.22.617 / f261fbd252db344704d87240dad81cb1b4c7a2b6 / eo1010pi技术发布；补库按实际依赖逐笔回退，产品查询补齐加工产出。无迁移或业务补正，原500张和新1560片未改，冷备真实隔离恢复及健康资源核对通过；见docs/release_reports/REPLENISHMENT_REVERSAL_V617_20261010.md及NAS独立回执，待管理员人工验收。
+
+- 2026-10-10 PRODUCTION-TASK-DRAWINGS：v0.22.621 / 08e5c401f11880ea73529ec7bddf0791abd5c9b2 / ep1010md技术发布；完整任务单右侧图纸，冻结/参考分离，普通/补库/旧实收覆盖；保留v618简易条单。无迁移或业务补正，新冷备真实恢复与健康资产核对通过，待管理员实体打印验收；见docs/release_reports/PRODUCTION_TASK_DRAWINGS_V621_20261010.md及NAS独立回执。

@@ -27,7 +27,7 @@ def run_js(body):
     if node is None:
         pytest.skip("Node.js unavailable")
     names = ["bomComponentUnit", "bomComponentOption", "normalizeBomComponent", "applyBomResponse", "mergeBomComponentOptions",
-        "onBomInventoryModeChange", "_productBomSaveFields", "_productBomDirty", "validateProductBom",
+        "onBomInventoryModeChange", "_productBomSaveFields", "_productBomDirty", "validateProductBom", "productBomSetIssues",
         "bomPayload", "openBomChildEditor", "returnFromCommonBoxEditor", "bindBomYieldToCurrentProduct", "selectBomComponent"]
     constants = HTML[HTML.index("      let bomComponentKeyCounter"):HTML.index("      const blankMaterial =")]
     script = "const assert=require('node:assert/strict');\n" + constants

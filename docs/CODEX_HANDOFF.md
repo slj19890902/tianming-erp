@@ -6196,3 +6196,5 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 - 2026-10-10 MOBILE-FIELD-SEARCH：v0.22.615 / 5b726452cac0709259e74b520b95e3364f7ddf05 / eo1010pi已技术发布，包c9b4c3a52477；承接v614，来源编码、手机现场查询与移库追溯，无迁移或业务回填。NAS冷备真实隔离恢复、原事实/附件、健康与资源核对通过；见docs/release_reports/MOBILE_FIELD_SEARCH_V615_20261010.md及NAS独立回执，待管理员人工验收。
 
 - 2026-10-10 TASK-MOLD-FINANCE-COUNT：v0.22.616 / b11162d3665206d3bea0dd28d55afb3def96c1cd / eo1010pi已技术发布，包508038e684c4；补库任务保留原模具身份并读取当前位置，首页提醒按当前客户/业务范围计组。无迁移或业务补正，冷备真实隔离恢复、原事实/附件及健康资源核对通过；见docs/release_reports/TASK_MOLD_FINANCE_COUNT_V616_20261010.md及NAS独立回执，待管理员人工验收。
+
+- 2026-10-10 REPLENISHMENT-REVERSAL-80012273：v0.22.617 / f261fbd252db344704d87240dad81cb1b4c7a2b6 / eo1010pi技术发布；补库按实际依赖逐笔回退，产品查询补齐加工产出。无迁移或业务补正，原500张和新1560片未改，冷备真实隔离恢复及健康资源核对通过；见docs/release_reports/REPLENISHMENT_REVERSAL_V617_20261010.md及NAS独立回执，待管理员人工验收。

@@ -6192,3 +6192,5 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 - 2026-10-09 COMPANY-SEAL：v0.22.590 / 853dcfe27f482d74a420d051b18bdee353ca5a81 / el1009cp已技术发布，章归属开单公司；三张新增表、原317表事实与原章保持，company_profiles_v1阻止旧程序越界回退。NAS冷备/事实/健康/静态核对通过，待管理员验收；未push，旧远端不能覆盖正式。见docs/reports/COMPANY_SEAL_20261009.md及NAS回执20261009-公司抬头与电子章-v590.md。
 
 - 2026-10-10 HOME-PRODUCT-WORKBENCH：v0.22.605 / f816611cecc2c2152ace1633695abc472d512e57 / en1009hp 已技术发布，包 0e77d74013666d964e68237940e319de6ea17e843fe09d8e7b60ded0d9e53f49。首页客户队列及电脑/手机产品双向检索；无DDL和业务补正，已完成新NAS冷备真实隔离恢复、原事实、健康及静态核对。见 docs/release_reports/HOME_PRODUCT_WORKBENCH_V605_20261010.md 和NAS同名独立回执；待管理员页面验收。
+
+- 2026-10-10 MOBILE-FIELD-SEARCH：v0.22.615 / 5b726452cac0709259e74b520b95e3364f7ddf05 / eo1010pi已技术发布，包c9b4c3a52477；承接v614，来源编码、手机现场查询与移库追溯，无迁移或业务回填。NAS冷备真实隔离恢复、原事实/附件、健康与资源核对通过；见docs/release_reports/MOBILE_FIELD_SEARCH_V615_20261010.md及NAS独立回执，待管理员人工验收。

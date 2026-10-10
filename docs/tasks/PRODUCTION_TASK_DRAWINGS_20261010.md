@@ -13,3 +13,5 @@
 实施范围记录：审查发现补库图纸字段为空、PDF需权限预览后，子任务固定独占app/services/production_paper_drawings.py、app/services/requisition_production_print.py、app/api/requisition.py与tests/test_production_paper_drawings.py；发现旧实收fallback后追加app/api/incoming.py。根独占打印HTML、paper JS/CSS、Chrome测试及版本/交付记录。所有变更只投影和展示，不写正式业务。
 
 基线协调：已保留v618简易条单、v619发货原子提交与兼容门禁，并合入已推送的v620模具删除/统一搜索候选36ec1136。图纸候选顺延v621，等待协调方确认v620正式成功后才可部署。继承ep1010md及unused_mold_deletion_v1、delivery_dispatch_v1读取门禁；图纸功能本身没有新迁移，发布须以正式已升级ep1010md为前提，不重复执行迁移或补正数据。
+
+2026-10-10发布轮次：协调方已确认v620正式完成并放行本任务；实时核对正式源码36ec1136、基线6659aa5d、包34e76529及ep1010md一致。合入最终回执后仅8个图纸运行文件变化；不执行新迁移。沿用现安装助手，Manager正常锁内更新、冷备真实恢复和事实保护全部执行，可选历史包归档留给独立清理任务。

@@ -48,10 +48,14 @@ def stock_replenishment_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 "zones_by_id": {
                     "stock-replenishment-zone-raw-001": "RAW-001",
                     "stock-replenishment-zone-fg-004": "FG-004",
+                    "stock-replenishment-zone-f34": "F34",
+                    "stock-replenishment-zone-f12": "F12",
                 },
                 "zone_ids_by_area": {
                     "RAW-001": ("stock-replenishment-zone-raw-001",),
                     "FG-004": ("stock-replenishment-zone-fg-004",),
+                    "F34": ("stock-replenishment-zone-f34",),
+                    "F12": ("stock-replenishment-zone-f12",),
                 },
             }
         return {
@@ -186,7 +190,35 @@ def stock_replenishment_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             area_name="三楼左区成品区",
             construction_status="enabled",
         )
-        session.add_all([area_a1, area_a2, area_raw_001, area_fg_004])
+        area_f34 = WarehouseArea(
+            floor_id=floor3.id,
+            area_code="F34",
+            area_name="F3/F4之间临时周转区",
+            planned_location_count=3,
+            planned_pallet_capacity=3,
+            construction_status="enabled",
+            capacity_review_status="confirmed",
+            capacity_eligible=True,
+            confirmed_pallet_capacity=3,
+            capacity_reviewed_by="test-owner",
+            capacity_reviewed_at=datetime.now(),
+        )
+        area_f12 = WarehouseArea(
+            floor_id=floor3.id,
+            area_code="F12",
+            area_name="F1/F2之间临时周转区",
+            planned_location_count=8,
+            planned_pallet_capacity=8,
+            construction_status="enabled",
+            capacity_review_status="confirmed",
+            capacity_eligible=True,
+            confirmed_pallet_capacity=8,
+            capacity_reviewed_by="test-owner",
+            capacity_reviewed_at=datetime.now(),
+        )
+        session.add_all(
+            [area_a1, area_a2, area_raw_001, area_fg_004, area_f34, area_f12]
+        )
         session.flush()
         session.add(
             WarehouseAreaStoragePolicy(
@@ -219,8 +251,64 @@ def stock_replenishment_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                     published_map_revision="stock-replenishment-map-floor3-v1",
                     version=1,
                 ),
+                WarehouseAreaStoragePolicy(
+                    area_id=area_f34.id,
+                    map_feature_id="stock-replenishment-zone-f34",
+                    allowed_inventory_types_json='["finished"]',
+                    storage_layout="pallet_ground",
+                    status="published",
+                    published_map_revision="stock-replenishment-map-floor3-v1",
+                    version=1,
+                ),
+                WarehouseAreaStoragePolicy(
+                    area_id=area_f12.id,
+                    map_feature_id="stock-replenishment-zone-f12",
+                    allowed_inventory_types_json='["finished"]',
+                    storage_layout="pallet_ground",
+                    status="published",
+                    published_map_revision="stock-replenishment-map-floor3-v1",
+                    version=1,
+                ),
             ]
         )
+        turnover_locations = [
+            *[
+                WarehouseLocation(
+                    location_code=f"F34-P{index:02d}",
+                    location_name=f"F34-P{index:02d}",
+                    warehouse_type="finished",
+                    warehouse_floor=3,
+                    area_code="F34",
+                    storage_type="temporary_aisle",
+                    placement_status="placed",
+                    source_version="CURRENT_MAP",
+                    is_temporary=True,
+                    is_active=True,
+                    address_kind="functional",
+                    address_area_id=area_f34.id,
+                    sort_order=300 + index,
+                )
+                for index in range(1, 4)
+            ],
+            *[
+                WarehouseLocation(
+                    location_code=f"F12-P{index:02d}",
+                    location_name=f"F12-P{index:02d}",
+                    warehouse_type="finished",
+                    warehouse_floor=3,
+                    area_code="F12",
+                    storage_type="temporary_aisle",
+                    placement_status="placed",
+                    source_version="CURRENT_MAP",
+                    is_temporary=True,
+                    is_active=True,
+                    address_kind="functional",
+                    address_area_id=area_f12.id,
+                    sort_order=400 + index,
+                )
+                for index in range(1, 9)
+            ],
+        ]
         locations = [
             WarehouseLocation(
                 location_code="FG-A01",
@@ -291,7 +379,7 @@ def stock_replenishment_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 is_active=True,
             ),
         ]
-        session.add_all([product, liner_product, *locations])
+        session.add_all([product, liner_product, *locations, *turnover_locations])
         session.flush()
         staging = locations[4]
         session.add(
@@ -324,6 +412,25 @@ def stock_replenishment_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                     height_pct=Decimal("8"),
                     source_type="seeded",
                 ),
+                *[
+                    Floor3LocationLayout(
+                        location_id=location.id,
+                        left_pct=Decimal("0"),
+                        top_pct=(
+                            Decimal(index - 1) * Decimal("100") / Decimal(count)
+                        ),
+                        width_pct=Decimal("100"),
+                        height_pct=Decimal("100") / Decimal(count),
+                        source_type="manual",
+                        layout_kind="logical_anchor",
+                    )
+                    for locations_in_area in (
+                        turnover_locations[:3],
+                        turnover_locations[3:],
+                    )
+                    for count in (len(locations_in_area),)
+                    for index, location in enumerate(locations_in_area, start=1)
+                ],
             ]
         )
         ground_plan = WarehouseGroundLayoutPlan(
@@ -521,6 +628,8 @@ def test_formal_replenishment_rejects_v11_locations_and_policies(
         assert locations.status_code == 200, locations.text
         assert {row["location_code"] for row in locations.json()["items"]} == {
             "1FA",
+            *{f"F34-P{index:02d}" for index in range(1, 4)},
+            *{f"F12-P{index:02d}" for index in range(1, 9)},
             "F3-FG-004-R01-L01-G01",
             "F3-RAW-001-R01-L01-G01",
             "FG-A01",
@@ -900,7 +1009,7 @@ def test_non_liner_replenishment_cannot_create_finished_inventory_directly(
     assert "只有正式识别为衬板" in response.text
 
 
-def test_liner_replenishment_receives_directly_into_floor3_left_finished_area(
+def test_liner_replenishment_batch_receives_into_floor3_right_turnover_area(
     stock_replenishment_app,
 ) -> None:
     app, session_factory = stock_replenishment_app
@@ -936,17 +1045,28 @@ def test_liner_replenishment_receives_directly_into_floor3_left_finished_area(
         assert item["reference_product_id"] == liner["id"]
 
         received = client.put(
-            f"/api/incoming/receive/sr{item['id']}",
+            "/api/incoming/batch-receive",
             json={
-                "received_quantity": 32,
-                "idempotency_key": "liner-direct-finished-receipt",
+                "items": [
+                    {
+                        "item_id": f"sr{item['id']}",
+                        "received_quantity": 32,
+                        "idempotency_key": "liner-batch-finished-receipt-line",
+                    }
+                ],
+                "idempotency_key": "liner-batch-finished-receipt",
             },
         )
         assert received.status_code == 200, received.text
+        assert received.json()["succeeded"] == 1
+        assert received.json()["failed"] == 0
 
     from app.models.warehouse_inventory import (
         FinishedGoodsInventoryDetail,
         InventoryLot,
+        InventoryPallet,
+        InventoryPalletItem,
+        WarehouseGroundOccupancy,
         WarehouseLocation,
     )
 
@@ -961,7 +1081,22 @@ def test_liner_replenishment_receives_directly_into_floor3_left_finished_area(
         assert lot.quantity_available == 32
         assert detail.inventory_code_snapshot == "LINER-001"
         assert location.warehouse_floor == 3
-        assert location.area_code == "FG-004"
+        assert location.area_code == "F34"
+        assert location.location_code == "F34-P01"
+        pallet = session.scalar(
+            select(InventoryPallet)
+            .join(InventoryPalletItem)
+            .where(InventoryPalletItem.inventory_lot_id == lot.id)
+        )
+        assert pallet is not None
+        assert pallet.location_id == location.id
+        assert pallet.needs_relocation is True
+        assert session.scalar(
+            select(func.count(WarehouseGroundOccupancy.id)).where(
+                WarehouseGroundOccupancy.pallet_id == pallet.id,
+                WarehouseGroundOccupancy.status == "active",
+            )
+        ) == 0
 
 
 def test_liner_stock_warning_can_create_draft_and_receive_as_finished(
@@ -1024,7 +1159,168 @@ def test_liner_stock_warning_can_create_draft_and_receive_as_finished(
         assert lot.quantity_available == 9
         assert detail.inventory_code_snapshot == "LINER-001"
         assert location.warehouse_floor == 3
-        assert location.area_code == "FG-004"
+        assert location.area_code == "F34"
+        assert location.location_code == "F34-P01"
+
+
+def test_liner_replenishment_falls_back_from_full_f34_to_f12(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    from app.models.warehouse_inventory import InventoryPallet, WarehouseLocation
+
+    with session_factory() as session:
+        f34_rows = list(
+            session.scalars(
+                select(WarehouseLocation)
+                .where(WarehouseLocation.area_code == "F34")
+                .order_by(WarehouseLocation.location_code)
+            ).all()
+        )
+        assert [row.location_code for row in f34_rows] == [
+            "F34-P01",
+            "F34-P02",
+            "F34-P03",
+        ]
+        session.add_all(
+            [
+                InventoryPallet(
+                    pallet_code=f"TEST-F34-OCCUPIED-{index}",
+                    location_id=row.id,
+                    status="active",
+                    is_current=True,
+                    needs_relocation=True,
+                    created_by=1,
+                )
+                for index, row in enumerate(f34_rows, start=1)
+            ]
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        liner = client.get(
+            "/api/requisition/stock-replenishment/products",
+            params={"customer_id": 1, "q": "LINER-001"},
+        ).json()["items"][0]
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "customer_request",
+                "supplier_name": "佳丰",
+                "stock_now": False,
+                "items": [
+                    {
+                        "target_inventory_type": "finished",
+                        "customer_id": 1,
+                        "reference_product_id": liner["id"],
+                        "quantity": 12,
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        item = created.json()["items"][0]
+        received = client.put(
+            f"/api/incoming/receive/sr{item['id']}",
+            json={
+                "received_quantity": 12,
+                "idempotency_key": "liner-f34-full-f12-fallback",
+            },
+        )
+        assert received.status_code == 200, received.text
+
+    from app.models.warehouse_inventory import InventoryLot
+
+    with session_factory() as session:
+        lot = session.scalar(
+            select(InventoryLot)
+            .where(InventoryLot.source_type == "replenishment")
+            .order_by(InventoryLot.id.desc())
+        )
+        assert lot is not None
+        location = session.get(WarehouseLocation, lot.warehouse_location_id)
+        assert location is not None
+        assert location.location_code == "F12-P01"
+
+
+def test_liner_replenishment_fails_atomically_when_f34_and_f12_are_full(
+    stock_replenishment_app,
+) -> None:
+    app, session_factory = stock_replenishment_app
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.models.stock_replenishment import StockReplenishmentOrderItem
+    from app.models.warehouse_inventory import (
+        InventoryLot,
+        InventoryPallet,
+        WarehouseLocation,
+    )
+
+    with session_factory() as session:
+        turnover_rows = list(
+            session.scalars(
+                select(WarehouseLocation)
+                .where(WarehouseLocation.area_code.in_(("F34", "F12")))
+                .order_by(WarehouseLocation.area_code, WarehouseLocation.location_code)
+            ).all()
+        )
+        assert len(turnover_rows) == 11
+        session.add_all(
+            [
+                InventoryPallet(
+                    pallet_code=f"TEST-TURNOVER-FULL-{index:02d}",
+                    location_id=row.id,
+                    status="active",
+                    is_current=True,
+                    needs_relocation=True,
+                    created_by=1,
+                )
+                for index, row in enumerate(turnover_rows, start=1)
+            ]
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        _login(client)
+        liner = client.get(
+            "/api/requisition/stock-replenishment/products",
+            params={"customer_id": 1, "q": "LINER-001"},
+        ).json()["items"][0]
+        created = client.post(
+            "/api/requisition/stock-replenishment/orders",
+            json={
+                "source_type": "customer_request",
+                "supplier_name": "佳丰",
+                "stock_now": False,
+                "items": [
+                    {
+                        "target_inventory_type": "finished",
+                        "customer_id": 1,
+                        "reference_product_id": liner["id"],
+                        "quantity": 18,
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+        item_id = created.json()["items"][0]["id"]
+        received = client.put(
+            f"/api/incoming/receive/sr{item_id}",
+            json={
+                "received_quantity": 18,
+                "idempotency_key": "liner-turnover-all-full",
+            },
+        )
+        assert received.status_code == 409, received.text
+        assert "F34" in received.text and "F12" in received.text
+        assert "归位" in received.text
+
+    with session_factory() as session:
+        item = session.get(StockReplenishmentOrderItem, item_id)
+        assert item is not None
+        assert item.stocked_quantity == 0
+        assert session.scalar(select(func.count(InventoryLot.id))) == 0
+        assert session.scalar(select(func.count(IncomingReceiptItem.id))) == 0
 
 
 def test_replenishment_rejects_incomplete_or_mismatched_crease(

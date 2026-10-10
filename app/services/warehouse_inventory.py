@@ -474,6 +474,48 @@ def _ensure_finished_projection_postcondition(
         # policy/ground-plan lifecycle; adding a second occupancy projection
         # would recreate the dual-source bug this gate removes.
         return current_pallet
+    published_liner_turnover_compat = bool(
+        not isinstance(ground_layout, dict)
+        and _is_current_floor3_liner_turnover_location(location, context)
+    )
+    if published_liner_turnover_compat:
+        # F34/F12 are owner-designated temporary turnover positions.  Their
+        # saved logical anchors identify where the pallet is waiting, but they
+        # are deliberately not fabricated into measured 1200x1000 ground
+        # slots.  The current pallet is therefore the sole space occupancy
+        # fact and must remain marked for later relocation.
+        if (
+            ground_secondary_location_id is not None
+            or ground_capacity_quantity is not None
+        ):
+            raise WarehouseInventoryError(
+                "临时周转位置不能登记地堆双位或虚拟地堆容量",
+                409,
+            )
+        active_ground_occupancy = db.scalar(
+            select(WarehouseGroundOccupancy.id)
+            .where(
+                WarehouseGroundOccupancy.pallet_id == int(current_pallet.id),
+                WarehouseGroundOccupancy.status == "active",
+            )
+            .limit(1)
+        )
+        if active_ground_occupancy is not None:
+            raise WarehouseInventoryError(
+                "临时周转栈板同时存在地堆排位占用，请先核对空间事实",
+                409,
+            )
+        if not current_pallet.needs_relocation:
+            if not create_missing:
+                raise WarehouseInventoryError(
+                    "临时周转栈板缺少待归位标记，请先核对历史空间事实",
+                    409,
+                )
+            current_pallet.needs_relocation = True
+            current_pallet.version = int(current_pallet.version or 0) + 1
+            current_pallet.updated_by = operator_id
+            db.flush()
+        return current_pallet
     if not isinstance(ground_layout, dict):
         raise WarehouseInventoryError(
             "地堆成品位置缺少当前发布排位，不能形成真实空间占用",
@@ -867,6 +909,7 @@ CURRENT_MAP_LEFT_RAW_SEMI_AREA_CODES = frozenset(
 CURRENT_MAP_LEFT_FINISHED_AREA_CODES = frozenset(
     {"FG-004", "FG-005", "FG-006", "FG-007", "FG-008", "FG-009"}
 )
+CURRENT_MAP_LINER_FINISHED_TURNOVER_AREA_PRIORITY = ("F34", "F12")
 RAW_MATERIAL_STAGING_STORAGE_TYPES = frozenset(
     {"ground", "temporary_aisle", "rack"}
 )
@@ -1375,6 +1418,114 @@ def automatic_floor3_left_finished_location(db: Session) -> WarehouseLocation:
         raise WarehouseInventoryError(
             "当前正式地图没有可用的三楼左区成品货位；"
             "系统不会回退到一楼、待送区或旧版未发布位置。",
+            409,
+        )
+    return candidates[0]
+
+
+def _is_current_floor3_liner_turnover_location(
+    location: WarehouseLocation,
+    projection_context: dict[str, object | None],
+) -> bool:
+    """Recognize only the two published logical linerboard turnover areas."""
+
+    area_code = str(location.area_code or "").strip().upper()
+    policy = projection_context.get("policy")
+    layout = projection_context.get("layout")
+    published_identity = projection_context.get("published_floor_identity")
+    if (
+        area_code not in CURRENT_MAP_LINER_FINISHED_TURNOVER_AREA_PRIORITY
+        or int(location.warehouse_floor or 0) != 3
+        or str(location.source_version or "").strip().upper() != "CURRENT_MAP"
+        or str(location.storage_type or "").strip().lower() != "temporary_aisle"
+        or str(location.address_kind or "").strip().lower() != "functional"
+        or not location.is_temporary
+        or not isinstance(policy, WarehouseAreaStoragePolicy)
+        or policy.status != "published"
+        or policy.storage_layout not in {"pallet_ground", "mixed"}
+        or not isinstance(layout, Floor3LocationLayout)
+        or layout.layout_kind != "logical_anchor"
+        or not isinstance(published_identity, dict)
+    ):
+        return False
+    try:
+        parsed_allowed_types = json.loads(policy.allowed_inventory_types_json)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if not isinstance(parsed_allowed_types, list):
+        return False
+    allowed_types = {
+        str(value).strip()
+        for value in parsed_allowed_types
+        if isinstance(value, str)
+    }
+    current_revision = str(published_identity.get("revision") or "").strip()
+    zone_ids = tuple(
+        (published_identity.get("zone_ids_by_area") or {}).get(area_code, ())
+    )
+    return bool(
+        "finished" in allowed_types
+        and current_revision
+        and str(policy.published_map_revision or "").strip() == current_revision
+        and len(zone_ids) == 1
+        and str(policy.map_feature_id or "").strip() == str(zone_ids[0]).strip()
+    )
+
+
+def automatic_floor3_liner_finished_turnover_location(
+    db: Session,
+) -> WarehouseLocation:
+    """Choose an empty published linerboard turnover position, F34 then F12."""
+
+    rows = list(
+        db.scalars(
+            select(WarehouseLocation).where(
+                WarehouseLocation.is_active.is_(True),
+                WarehouseLocation.warehouse_type.in_(("finished", "shared")),
+                WarehouseLocation.warehouse_floor == 3,
+                WarehouseLocation.area_code.in_(
+                    CURRENT_MAP_LINER_FINISHED_TURNOVER_AREA_PRIORITY
+                ),
+                WarehouseLocation.storage_type == "temporary_aisle",
+                WarehouseLocation.is_temporary.is_(True),
+            )
+        ).all()
+    )
+    contexts = load_warehouse_location_projection_contexts(db, rows)
+    candidates: list[WarehouseLocation] = []
+    for row in rows:
+        context = contexts.get(int(row.id), {})
+        if not _is_current_floor3_liner_turnover_location(row, context):
+            continue
+        if operational_location_issue(
+            db,
+            row,
+            warehouse_types={"finished", "shared"},
+            require_published=True,
+            require_map_geometry=True,
+            required_inventory_type="finished",
+            require_empty=True,
+            projection_context=context,
+        ) is None:
+            candidates.append(row)
+    priority = {
+        area_code: index
+        for index, area_code in enumerate(
+            CURRENT_MAP_LINER_FINISHED_TURNOVER_AREA_PRIORITY
+        )
+    }
+    candidates.sort(
+        key=lambda row: (
+            priority.get(str(row.area_code or "").strip().upper(), 99),
+            int(row.sort_order or 0),
+            str(row.location_code or ""),
+            int(row.id),
+        )
+    )
+    if not candidates:
+        raise WarehouseInventoryError(
+            "三楼右区 F34、F12 临时周转位置均已占用或尚未启用；"
+            "请先把现有临时栈板归位，或联系仓库管理员核对正式地图位置。",
             409,
         )
     return candidates[0]

@@ -14797,7 +14797,7 @@ def _build_replenishment_item(
         )
     if is_liner_reference and payload.target_inventory_type != "finished":
         raise StockReplenishmentError(
-            "衬板属于直接成品，补库到料必须进入三楼左区成品货位。",
+            "衬板属于直接成品，补库到料必须进入三楼右区 F34/F12 临时周转位置。",
             409,
         )
     material = db.get(Material, payload.material_id) if payload.material_id else None

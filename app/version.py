@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.609"
+APP_VERSION = "v0.22.610"
 APP_VERSION_NAME = "首页库存预警报料明细优先加载"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5874,6 +5874,19 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.608：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 APP_CHANGES = [
+    "修复应用新增模具货架时，被同楼层未改动旧区域的历史货位完工状态阻断的问题；本次新增或修改区域仍须完整校验。",
+    "布局应用失败原因显示在完成按钮附近，不再需要滚动右侧面板查找；草稿仍保留，可核对后重试。",
+    "本版无数据库迁移，保留客户权限、库存数量、既有模具位置、地图版本和发布审计。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，核对已应用的C模具架及C1至C9格号；再次进入区域规划应能正确区分已应用与尚未应用的调整。",
+    "进入C架C1查看本次补建模具，核对同编码父件、内衬及长短片分开显示；按实物调整暂存位置。",
+    "确认原A/B架模具、库存和客户范围保持原值；无需为验收额外新增库存或重复应用布局。",
+]
+APP_CHANGELOG = [*(f"v0.22.609：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
+APP_CHANGES = [
     "首页库存预警生成报料草稿时优先读取本款明细，不再等待整页报料数据及不显示的全部预警计算。",
     "客户和材质选项随后补齐；保留手动补库、BOM套数、数量编辑和保存校验，增加读取提示及过期响应保护。",
     "本版无数据库迁移，不修改正式订单、库存、常用箱或历史报料事实。",
@@ -5881,6 +5894,6 @@ APP_CHANGES = [
 APP_VERIFICATION_STEPS = [
     "强制刷新首页，点一个库存预警款的生成报料草稿，核对明细和数量优先显示。",
     "核对客户、材质和报料张数；有真实业务需要时再保存，核对生成单号及回读数量。",
-    "进入系统版本确认 v0.22.609；正式页面等待管理员人工验收。",
+    "进入系统版本确认 v0.22.610；正式页面等待管理员人工验收。",
 ]
-APP_CHANGELOG = [*(f"v0.22.609：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.610：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

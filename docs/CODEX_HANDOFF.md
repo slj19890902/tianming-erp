@@ -1526,3 +1526,10 @@ legacy_ruida_* 原始层
 - 独立 worktree 为 `D:\tm-worktrees\erp-pdf-flute-correction-fix-20260722`，分支为 `codex/pdf-flute-correction-fix-20260722`，基线为正式提交 `ff9b4ebdc12be0e6d9d8995e74b3ac47fcaf56a3`。最小修复让常用箱层数/楞型优先，材质和 PDF 仅作为缺省回退，并新增 `BC14C/A -> 常用箱 5/AB` 回归断言。
 - 验证结果：`tests/test_phase192_hotfix3.py` 为 `23 passed, 18 skipped`；PDF 导入与楞型相关组合为 `152 passed, 8 skipped, 2 failed`。2 个失败是基线已存在的旧材质更新用例未携带 P4 后新增的 `expected_version/change_reason`，在未修改的正式基线同样失败。Python 编译和 `git diff --check` 通过。
 - 本轮没有迁移、没有手工修改或写入正式数据库，也没有改动正式运行目录。修复尚未发布；发布前须单独报告提交 SHA、测试结果和是否需要重启，并等待用户授权。
+
+## 75. 2026-07-22 GitHub Issue #33 第一阶段历史材质只读 Dry-run
+
+- 隔离 worktree：`D:\tm-worktrees\erp-issue-33-history-dryrun-20260722`，分支 `codex/issue-33-history-dryrun-20260722`，基线 `c5cffa2123973b3f30b74be7f6dc198d1f070210`。正式数据库只以 SQLite `mode=ro` 和 `PRAGMA query_only=ON` 读取；工具没有 Apply 参数。
+- 报告：`docs/migration_reports/issue_33/ISSUE_33_HISTORICAL_MATERIAL_DRY_RUN_20260722_172452.md`；REVIEW CSV：`docs/migration_reports/issue_33/ISSUE_33_HISTORICAL_MATERIAL_REVIEW_20260722_172452.csv`。数据库前后 SHA-256 均为 `7863f9d926aa10fae8274cdff8d2e983a20b310aea8f67468afcb212ae366dbb`，大小均为 `219447296` 字节，mtime UTC 均为 `2026-07-22T07:42:50.091878+00:00`，`integrity_check=ok`、外键错误 0。
+- `historical_requisition_maps` 为 2313 条未关联产品的原始档案，其中 721 条（663 条可解析楞型后缀、58 条组合/不可解析代码）进入全 `pending` REVIEW CSV；`material_requisition_items` 为 175 条，按关联订单快照验证异常 0。当前原始档案精确 `BC14C/A` 与 `K618A/B` 均为 0；业务快照样例为 `BC14C/5/AB` 与 `K618A/5/AB`。
+- GitHub 连接器授权恢复后已读取并成功评论 `slj19890902/tianming-erp#33`。评论包含两表摘要、REVIEW CSV 路径与 SHA、数据库前后指纹、`BC14C`/`K618A` 样本证据和“未授权 Apply 前不得写入”的门禁；未向其他 Issue、PR 或仓库写入内容。

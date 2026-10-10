@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.609"
+APP_VERSION = "v0.22.610"
 APP_VERSION_NAME = "报料入口与补库校验"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5873,6 +5873,19 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.608：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
+APP_CHANGES = [
+    "修复应用新增模具货架时，被同楼层未改动旧区域的历史货位完工状态阻断的问题；本次新增或修改区域仍须完整校验。",
+    "布局应用失败原因显示在完成按钮附近，不再需要滚动右侧面板查找；草稿仍保留，可核对后重试。",
+    "本版无数据库迁移，保留客户权限、库存数量、既有模具位置、地图版本和发布审计。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新仓库地图，核对已应用的C模具架及C1至C9格号；再次进入区域规划应能正确区分已应用与尚未应用的调整。",
+    "进入C架C1查看本次补建模具，核对同编码父件、内衬及长短片分开显示；按实物调整暂存位置。",
+    "确认原A/B架模具、库存和客户范围保持原值；无需为验收额外新增库存或重复应用布局。",
+]
+APP_CHANGELOG = [*(f"v0.22.609：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+
 
 APP_CHANGES = [
     "从产品资料打开订单或报料时，切换账号、页面或重新打开草稿后，旧读取不会继续打开旧窗口或覆盖新表单。",
@@ -5886,4 +5899,4 @@ APP_VERIFICATION_STEPS = [
     "连续切换产品、页面或关闭后重新打开草稿，核对当前资料不被旧读取覆盖；弱网超时后按提示重新打开。",
     "从报料的外购包材采购历史查看已有采购单，核对原单号与数量；无需重复报料或改动真实库存。",
 ]
-APP_CHANGELOG = [*(f"v0.22.609：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.610：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

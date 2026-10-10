@@ -306,23 +306,40 @@ def release_stock_sources(db, purchase, user):
     for link in links:
         if link.material_requisition_item_id:
             continue
-        item = db.get(StockReplenishmentOrderItem, link.stock_replenishment_item_id)
-        order = db.get(StockReplenishmentOrder, item.replenishment_order_id)
-        claim = db.execute(update(StockReplenishmentOrder).where(
-            StockReplenishmentOrder.id == order.id,
-            StockReplenishmentOrder.status.in_(("confirmed", "partially_stocked")))
-            .values(status=StockReplenishmentOrder.status))
-        if claim.rowcount != 1:
-            raise HTTPException(409, "补库来源状态已变化，请刷新")
-        db.refresh(item)
-        receipt = db.scalar(select(IncomingReceiptItem.id).where(
-            IncomingReceiptItem.stock_replenishment_item_id == item.id,
-            IncomingReceiptItem.status == "posted").limit(1))
-        if receipt or item.stocked_quantity or item.inventory_lot_id:
-            raise HTTPException(409, "补库来源已有实际收货或库存事实，请先撤销对应来料")
-        from app.services.raw_purchase_plans import void_unreceived_plan
-        void_unreceived_plan(db,item.id,user)
-        link.status = "voided"
+        release_stock_source_link(db, link=link, user=user)
+    db.flush()
+
+
+def release_stock_source_link(db, *, link, user):
+    """Release exactly one typed stock source; the caller retains the purchase."""
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from app.api.requisition import _require_stock_replenishment_order_access
+    if link.status != 'active' or link.stock_replenishment_item_id is None or link.material_requisition_item_id is not None:
+        raise HTTPException(409, '选中采购行来源已变化或不是独立补库来源，请刷新核对范围')
+    item = db.get(StockReplenishmentOrderItem, link.stock_replenishment_item_id)
+    if item is None:
+        raise HTTPException(409, '选中采购行的补库来源不存在')
+    order = db.get(StockReplenishmentOrder, item.replenishment_order_id)
+    _require_stock_replenishment_order_access(db, order, user)
+    claim = db.execute(update(StockReplenishmentOrder).where(
+        StockReplenishmentOrder.id == order.id,
+        StockReplenishmentOrder.status.in_(("confirmed", "partially_stocked", "stocked")))
+        .values(status=StockReplenishmentOrder.status))
+    if claim.rowcount != 1:
+        raise HTTPException(409, "补库来源状态已变化，请刷新")
+    db.refresh(item)
+    receipt = db.scalar(select(IncomingReceiptItem.id).where(
+        IncomingReceiptItem.stock_replenishment_item_id == item.id,
+        IncomingReceiptItem.status == "posted").limit(1))
+    if receipt or item.stocked_quantity or item.inventory_lot_id:
+        raise HTTPException(409, "这笔补库来源已有实际来料或库存，请先撤销对应来料实收")
+    from app.services.raw_purchase_plans import void_unreceived_plan
+    void_unreceived_plan(db, item.id, user)
+    changed = db.execute(update(ProcurementSourceLink).where(
+        ProcurementSourceLink.id == link.id, ProcurementSourceLink.status == 'active'
+    ).values(status='voided'))
+    if changed.rowcount != 1:
+        raise HTTPException(409, '采购行来源已被其他操作撤销，请刷新核对')
     db.flush()
 
 

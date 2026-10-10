@@ -35,7 +35,7 @@
     let live=true,serial=0,operation=null,actionBusy=false;
     let mode=initialState.mode==='reverse'?'reverse':'search',params=initialState.params||{},page=initialState.page||1;
     let draft={...(initialState.draft||params)},resetDraft=false;
-    let result=null,detail=null,tab=initialState.tab||'production',busy=false,error='',mapRow=null,includeHistory=false,lastProductId=null,purpose=false;
+    let result=null,detail=null,tab=initialState.tab||'production',busy=false,error='',mapRow=null,includeHistory=false,lastProductId=null,purpose=false,retryForm=false;
     function captureDraft(){const form=container.querySelector('form');if(form)form.querySelectorAll('[name]').forEach(e=>{draft[e.name||e.getAttribute('name')]=e.value;});}
     const store=()=>onState({mode,params:{...params},draft:{...draft},page,tab,productId:detail?pid(detail.product):null});
     const stop=()=>{serial++;operation?.cancel();operation=null;busy=false;};
@@ -44,11 +44,15 @@
     const savedId=initialState.productId;
     function validateBody(body,id){
       const object=v=>!!v&&typeof v==='object'&&!Array.isArray(v);
+      const inventoryComplete=v=>object(v.summary)&&object(v.groups)&&['finished','semi_finished','processed_component'].every(k=>{
+        const summary=v.summary[k],group=v.groups[k];
+        return object(summary)&&['actual','available','reserved'].every(n=>typeof summary[n]==='number'&&Number.isFinite(summary[n])&&summary[n]>=0)&&typeof summary.unit==='string'&&object(group)&&Array.isArray(group.positions);
+      });
       if(!object(body))throw Error('产品资料回执不完整，请重试');
-      if(id){if(!object(body.product)||pid(body.product)!==id||!object(body.production)||!object(body.actions)||!object(body.inventory)||!object(body.orders)||!Array.isArray(body.inventory.items)||!Array.isArray(body.orders.items)||!['molds','bom','process_steps'].every(k=>Array.isArray(body.production[k]))||(body.inventory.visibility!=='hidden_by_permission'&&(!object(body.inventory.summary)||!object(body.inventory.groups))))throw Error('产品资料回执不完整，请重试');}
+      if(id){if(!object(body.product)||pid(body.product)!==id||!object(body.production)||!object(body.actions)||!object(body.inventory)||!object(body.orders)||!Array.isArray(body.inventory.items)||!Array.isArray(body.orders.items)||!['molds','bom','process_steps'].every(k=>Array.isArray(body.production[k]))||(body.inventory.visibility!=='hidden_by_permission'&&!inventoryComplete(body.inventory)))throw Error('产品资料回执不完整，请重试');}
       else if(!Array.isArray(body.items)||!Number.isSafeInteger(body.total)||body.total<0||!Number.isInteger(body.page)||body.page<=0||!Number.isInteger(body.page_size)||body.page_size<=0||typeof body.has_more!=='boolean'||body.items.some(p=>!object(p)||!validId(pid(p))))throw Error('查询回执不完整，请重试');
     }
-    const get=async(path,id=null)=>{stop();busy=true;error='';const token=serial,controller=new AbortController();let timer,rejectWait,failed=false;
+    const get=async(path,id=null)=>{stop();busy=true;error='';retryForm=false;const token=serial,controller=new AbortController();let timer,rejectWait,failed=false;
       const wait=new Promise((_,reject)=>{rejectWait=reject;timer=setTimeout(()=>{const e=Error('网络较慢，读取超时，请重试');e.name='TimeoutError';reject(e);},15000);});
       const op={cancel(){clearTimeout(timer);controller.abort();const e=Error('读取已取消');e.name='AbortError';rejectWait(e);}};operation=op;render();
       try{const body=await Promise.race([request(path,{signal:controller.signal}),wait]);if(!live||token!==serial)return null;validateBody(body,id);return {body,token};}
@@ -123,10 +127,11 @@
       container.querySelector('form').addEventListener('input',()=>{captureDraft();store();});
       container.querySelector('form').addEventListener('change',()=>{captureDraft();store();});
       const all=(s,f)=>container.querySelectorAll(s).forEach(e=>e.addEventListener('click',()=>f(e)));
-      container.querySelector('form').addEventListener('submit',e=>{e.preventDefault();try{captureDraft();params=criteria(e.target,mode);search(1);}catch(ex){error=ex.message;render();}});
-      all('[data-mode]',e=>{stop();mode=e.dataset.mode;params={};draft={};resetDraft=true;result=detail=null;error='';onOpen(false);store();render();});
-      all('[data-close]',()=>{stop();result=detail=null;error='';mapRow=null;params={};draft={};resetDraft=true;onOpen(false);store();render();});
-      all('[data-retry]',()=>lastProductId?show(lastProductId):search(page));
+      const submit=form=>{stop();lastProductId=null;try{captureDraft();params=criteria(form,mode);search(1);}catch(ex){retryForm=true;error=ex.message;render();}};
+      container.querySelector('form').addEventListener('submit',e=>{e.preventDefault();submit(e.target);});
+      all('[data-mode]',e=>{stop();mode=e.dataset.mode;params={};draft={};resetDraft=true;result=detail=null;lastProductId=null;retryForm=false;mapRow=null;error='';onOpen(false);store();render();});
+      all('[data-close]',()=>{stop();result=detail=null;lastProductId=null;retryForm=false;error='';mapRow=null;params={};draft={};resetDraft=true;onOpen(false);store();render();});
+      all('[data-retry]',()=>retryForm?submit(container.querySelector('form')):lastProductId?show(lastProductId):search(page));
       all('[data-product]',e=>show(e.dataset.product));all('[data-page]',e=>search(Number(e.dataset.page)));
       all('[data-back]',()=>{stop();detail=null;lastProductId=null;mapRow=null;store();if(result)render();else if(Object.keys(params).length)search(page);else{onOpen(false);render();}});
       all('[data-tab]',e=>{tab=e.dataset.tab;store();render();});

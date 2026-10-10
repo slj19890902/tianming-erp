@@ -199,6 +199,23 @@ def _validate_content(
     )
 
 
+def validate_upload_bytes(
+    *,
+    content: bytes,
+    filename: str,
+    content_type: str,
+    policy: UploadPolicy,
+) -> ValidatedUpload:
+    """Validate trusted-process bytes with the same gate as multipart uploads."""
+
+    return _validate_content(
+        content=content,
+        filename=filename,
+        content_type=content_type,
+        policy=policy,
+    )
+
+
 async def read_validated_upload(
     upload: UploadFile,
     policy: UploadPolicy,
@@ -405,6 +422,20 @@ def temporary_token_file(token: str, *, owner_id: int) -> StoredUpload:
         size=int(metadata["size"]),
         sha256=str(metadata["sha256"]),
     )
+
+
+def discard_temporary_token(token: str, *, owner_id: int) -> None:
+    """Delete an unused temporary upload owned by the current user.
+
+    Import previews may stage several drawing files and later become invalid,
+    expire, or be replaced by a new preview.  Deleting both the metadata and
+    payload keeps those abandoned files from lingering until the periodic TTL
+    cleanup while preserving the same owner and token checks as consumption.
+    """
+
+    metadata_path, source, _metadata = _load_token(token, owner_id=owner_id)
+    source.unlink(missing_ok=True)
+    metadata_path.unlink(missing_ok=True)
 
 
 def consume_temporary_token(

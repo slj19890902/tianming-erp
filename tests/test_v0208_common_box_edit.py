@@ -190,8 +190,9 @@ def test_legacy_common_box_mismatch_only_blocks_report_or_crease_edits() -> None
 def test_common_box_processes_remove_double_and_print_type_controls_drawings() -> None:
     source = _source()
 
-    for process in ("粘贴", "打钉", "模切", "其他"):
+    for process in ("印刷", "开槽", "模切", "打钉", "粘合", "二次粘合", "其他"):
         assert f'value="{process}"' in source
+    assert 'value="粘贴"' not in source
     assert 'value="双拼"' not in source
     assert 'v-model="productForm._production_processes"' in source
 

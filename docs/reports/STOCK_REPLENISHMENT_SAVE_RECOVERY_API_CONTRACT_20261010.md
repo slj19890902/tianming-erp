@@ -70,3 +70,15 @@ Pydantic 422发生handler前，可说明本次输入尚未进入handler，但不
 ## 6. 下一实施最短验证
 
 v611旧hash跨版精确重放；普通多行/同产品重复行索引映射；direct外购override冻结floor；已保存后收料/void/inactive且scope用户可核对；CBR/CBW与SW/RAW/physical隔离；旧null/缺行/SET NULL不猜；actor/pathkey/body冲突；fresh安全rollback独占Rejected对照commit丢ackPreserve；只读成功/业务冲突无DML；审批applied重放零执行。当前5项仅现状观察，不称上述新合同验收已通过。
+
+## v1 澄清（2026-10-10，保持原业务算法）
+
+hash规范投影中的 `_canonical_value` 对非整数float先转Decimal再变十进制文本，整数float变int；因此规范echo中尺寸139.5可为JSON number，但hash里的该值为string "139.5"。嵌套replenishment_plan/plans内float同规则递归。Decimal已被model_dump(json)变成字符串的字段不再二次规范化。
+
+direct外购请求 external_purchase_unit、external_order_quantity_basis、external_purchase_quantity_basis 等只是旧模型接受并参与完整hash的请求提示，既有create并未以它们为权威采购值。Receipt.request忠实回显；实际采购单位/比例/实存floor仅读取持久purchase快照，不要求这些非权威请求提示等于实际值，不因此新增拒绝或降级合法complete。
+
+首次安全拒绝沿 FastAPI 标准 detail 包络，唯一实际形状为 `{detail:{message:可读错误,save_result:{status:"not_saved",current_actor_id,idempotency_key,request_hash}}}`（不是顶层save_result）。current.receipt_progress为真实received/remaining/short_closed/shortage/over字段；external_purchase_status为null或 `{batch_id,purchase_orders:[{id,status:"confirmed"|"cancelled"}]}`。policy.customer_id合法NULL时，由存在的policy.product客户与持久来源行客户共同核验，不新增active资格。
+
+实际 HTTP 已确认：material_id存在时，旧_build采用材质权威层数，request.layer_count只是hint。该hint仍原样echo+hash；来源lines.layer_count为实际持久值，不强等hint，也不查当前材质重建原值。material-layer-hint.json演示request3/actual5。external >6位非零尾数并非合法舍入请求，旧_positive_decimal先409拒绝，再quantize；不更改该门禁，11.0000000与11 Decimal数值本来等价。
+
+最终门禁澄清：真正fresh保存要求commit前完整save_receipt，不可证明时500+Preserve且rollback；已有历史NULL/缺行仍trace，不强行回填。普通BOM主POST为CBR/CBW完整证明可恢复，不归physical二段；bom-two-components.json展示真实两子件4/8来源量。原业务响应items.quantity_contract可为null，而items.replenishment_plan.kind与持久quantity_contract_json为bom_stock_plan，UI不得把此合法形状当坏回包。

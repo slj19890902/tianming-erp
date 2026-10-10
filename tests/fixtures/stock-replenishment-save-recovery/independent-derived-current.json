@@ -1,0 +1,351 @@
+{
+  "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+  "sourceSHA256": {
+    "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+    "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+  },
+  "actorId": 1,
+  "originalBody": {
+    "idempotency_key": "independent-material-supplier",
+    "source_type": "customer_request",
+    "supplier_name": " 佳丰 ",
+    "customer_id": 1,
+    "stock_now": false,
+    "items": [
+      {
+        "target_inventory_type": "semi_finished",
+        "customer_id": 1,
+        "product_id": null,
+        "material_id": 1,
+        "material_code": "A416D",
+        "layer_count": 3,
+        "flute_type": "AB",
+        "report_length_mm": 1865,
+        "report_width_mm": 830,
+        "crease_type": "压线",
+        "crease_left_mm": 335,
+        "crease_middle_mm": 160,
+        "crease_right_mm": 335,
+        "sheet_type": "creased_sheet",
+        "quantity": 30,
+        "location_id": null,
+        "reference_product_id": 1
+      }
+    ],
+    "expected_actor_id": 1
+  },
+  "write": {
+    "status": 201,
+    "headers": {
+      "content-length": "3452",
+      "content-type": "application/json",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "id": 1,
+      "order_number": "CBR-20261010-1088AAA17D222BC65F52",
+      "request_hash": "e4624ac2454c9394c58945b7f77cc3e10285adbb1b4768ac0a6046ddd73c8ed7",
+      "supplier_name": "苏州佳丰",
+      "customer_id": 1,
+      "customer_name": "天华测试客户",
+      "source_type": "customer_request",
+      "status": "draft",
+      "remark": null,
+      "created_at": "2026-10-10T03:11:28Z",
+      "confirmed_at": null,
+      "stocked_at": null,
+      "total_quantity": 30,
+      "stocked_quantity": 0,
+      "items": [
+        {
+          "id": 1,
+          "stock_policy_id": null,
+          "quantity_contract": null,
+          "replenishment_plan": null,
+          "sheet_cutting_snapshot": null,
+          "target_inventory_type": "semi_finished",
+          "product_id": null,
+          "reference_product_id": 1,
+          "customer_id": 1,
+          "product_code": "21301010",
+          "product_name": "天华测试外箱",
+          "internal_name": null,
+          "material_id": 1,
+          "material_code": "A416D",
+          "layer_count": 5,
+          "flute_type": "AB",
+          "report_length_mm": 1865,
+          "report_width_mm": 830,
+          "crease_type": "压线",
+          "crease_left_mm": 335,
+          "crease_middle_mm": 160,
+          "crease_right_mm": 335,
+          "sheet_type": "creased_sheet",
+          "component_type": "whole",
+          "pieces_per_box": 1,
+          "stock_yield_per_sheet": 1,
+          "quantity": 30,
+          "stocked_quantity": 0,
+          "receipt_progress": {
+            "received_quantity": 0,
+            "remaining_quantity": 30,
+            "short_closed": false,
+            "shortage_quantity": 30,
+            "over_quantity": 0
+          },
+          "location": null,
+          "inventory_lot": null,
+          "historical_source": null,
+          "remark": null,
+          "stocked_at": null
+        }
+      ],
+      "current_actor_id": 1,
+      "save_receipt": {
+        "schema_version": 1,
+        "idempotency_key": "independent-material-supplier",
+        "actor_id": 1,
+        "request_hash": "e4624ac2454c9394c58945b7f77cc3e10285adbb1b4768ac0a6046ddd73c8ed7",
+        "request": {
+          "replenishment_plan": null,
+          "replenishment_plans": [],
+          "source_type": "customer_request",
+          "idempotency_key": "independent-material-supplier",
+          "supplier_name": " 佳丰 ",
+          "customer_id": 1,
+          "remark": null,
+          "stock_now": false,
+          "items": [
+            {
+              "stock_policy_id": null,
+              "procurement_mode": null,
+              "target_inventory_type": "semi_finished",
+              "product_id": null,
+              "reference_product_id": 1,
+              "customer_id": 1,
+              "material_id": 1,
+              "product_code": null,
+              "product_name": null,
+              "internal_name": null,
+              "material_code": "A416D",
+              "layer_count": 3,
+              "flute_type": "AB",
+              "report_length_mm": 1865,
+              "report_width_mm": 830,
+              "crease_type": "压线",
+              "crease_left_mm": 335,
+              "crease_middle_mm": 160,
+              "crease_right_mm": 335,
+              "sheet_type": "creased_sheet",
+              "component_type": "whole",
+              "pieces_per_box": 1,
+              "stock_yield_per_sheet": 1,
+              "quantity": 30,
+              "location_id": null,
+              "historical_workbook": null,
+              "historical_sheet": null,
+              "historical_row": null,
+              "historical_search_text": null,
+              "remark": null,
+              "external_purchase_quantity": null,
+              "external_purchase_unit": null,
+              "external_order_quantity_basis": null,
+              "external_purchase_quantity_basis": null
+            }
+          ]
+        },
+        "request_match": true,
+        "outcome": "draft_saved",
+        "source": {
+          "id": 1,
+          "order_number": "CBR-20261010-1088AAA17D222BC65F52",
+          "source_type": "customer_request",
+          "created_by": 1,
+          "created_at": "2026-10-10T03:11:28",
+          "customer_id": 1,
+          "supplier_name": "苏州佳丰",
+          "remark": null
+        },
+        "lines": [
+          {
+            "stock_policy_id": null,
+            "product_id": null,
+            "reference_product_id": 1,
+            "customer_id": 1,
+            "material_id": 1,
+            "target_inventory_type": "semi_finished",
+            "internal_name": null,
+            "layer_count": 5,
+            "flute_type": "AB",
+            "report_length_mm": 1865,
+            "report_width_mm": 830,
+            "crease_type": "压线",
+            "crease_left_mm": 335,
+            "crease_middle_mm": 160,
+            "crease_right_mm": 335,
+            "sheet_type": "creased_sheet",
+            "component_type": "whole",
+            "pieces_per_box": 1,
+            "stock_yield_per_sheet": 1,
+            "remark": null,
+            "request_index": 0,
+            "source_item_id": 1,
+            "requested_quantity": 30,
+            "saved_quantity": 30,
+            "procurement_route": "paperboard",
+            "product_code": "21301010",
+            "product_name": "天华测试外箱",
+            "material_code": "A416D"
+          }
+        ],
+        "external_purchase": null
+      }
+    }
+  },
+  "resolve": {
+    "status": 200,
+    "headers": {
+      "content-length": "2561",
+      "content-type": "application/json",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "status": "completed",
+      "current_actor_id": 1,
+      "idempotency_key": "independent-material-supplier",
+      "request_match": true,
+      "save_receipt": {
+        "schema_version": 1,
+        "idempotency_key": "independent-material-supplier",
+        "actor_id": 1,
+        "request_hash": "e4624ac2454c9394c58945b7f77cc3e10285adbb1b4768ac0a6046ddd73c8ed7",
+        "request": {
+          "replenishment_plan": null,
+          "replenishment_plans": [],
+          "source_type": "customer_request",
+          "idempotency_key": "independent-material-supplier",
+          "supplier_name": " 佳丰 ",
+          "customer_id": 1,
+          "remark": null,
+          "stock_now": false,
+          "items": [
+            {
+              "stock_policy_id": null,
+              "procurement_mode": null,
+              "target_inventory_type": "semi_finished",
+              "product_id": null,
+              "reference_product_id": 1,
+              "customer_id": 1,
+              "material_id": 1,
+              "product_code": null,
+              "product_name": null,
+              "internal_name": null,
+              "material_code": "A416D",
+              "layer_count": 3,
+              "flute_type": "AB",
+              "report_length_mm": 1865,
+              "report_width_mm": 830,
+              "crease_type": "压线",
+              "crease_left_mm": 335,
+              "crease_middle_mm": 160,
+              "crease_right_mm": 335,
+              "sheet_type": "creased_sheet",
+              "component_type": "whole",
+              "pieces_per_box": 1,
+              "stock_yield_per_sheet": 1,
+              "quantity": 30,
+              "location_id": null,
+              "historical_workbook": null,
+              "historical_sheet": null,
+              "historical_row": null,
+              "historical_search_text": null,
+              "remark": null,
+              "external_purchase_quantity": null,
+              "external_purchase_unit": null,
+              "external_order_quantity_basis": null,
+              "external_purchase_quantity_basis": null
+            }
+          ]
+        },
+        "request_match": true,
+        "outcome": "draft_saved",
+        "source": {
+          "id": 1,
+          "order_number": "CBR-20261010-1088AAA17D222BC65F52",
+          "source_type": "customer_request",
+          "created_by": 1,
+          "created_at": "2026-10-10T03:11:28",
+          "customer_id": 1,
+          "supplier_name": "苏州佳丰",
+          "remark": null
+        },
+        "lines": [
+          {
+            "stock_policy_id": null,
+            "product_id": null,
+            "reference_product_id": 1,
+            "customer_id": 1,
+            "material_id": 1,
+            "target_inventory_type": "semi_finished",
+            "internal_name": null,
+            "layer_count": 5,
+            "flute_type": "AB",
+            "report_length_mm": 1865,
+            "report_width_mm": 830,
+            "crease_type": "压线",
+            "crease_left_mm": 335,
+            "crease_middle_mm": 160,
+            "crease_right_mm": 335,
+            "sheet_type": "creased_sheet",
+            "component_type": "whole",
+            "pieces_per_box": 1,
+            "stock_yield_per_sheet": 1,
+            "remark": null,
+            "request_index": 0,
+            "source_item_id": 1,
+            "requested_quantity": 30,
+            "saved_quantity": 30,
+            "procurement_route": "paperboard",
+            "product_code": "21301010",
+            "product_name": "天华测试外箱",
+            "material_code": "A416D"
+          }
+        ],
+        "external_purchase": null
+      },
+      "current": {
+        "source_id": 1,
+        "status": "voided",
+        "stocked_quantity": 0,
+        "items": [
+          {
+            "source_item_id": 1,
+            "stocked_quantity": 0,
+            "receipt_progress": {
+              "received_quantity": 0,
+              "remaining_quantity": 30,
+              "short_closed": false,
+              "shortage_quantity": 30,
+              "over_quantity": 0
+            }
+          }
+        ],
+        "external_purchase_status": null
+      },
+      "trace": null
+    }
+  },
+  "conflict": {
+    "status": 409,
+    "headers": {
+      "cache-control": "no-store",
+      "x-stock-replenishment-preserve": "1",
+      "content-length": "67",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "原提交内容不匹配，请保留原请求核对。"
+    }
+  },
+  "dml": []
+}

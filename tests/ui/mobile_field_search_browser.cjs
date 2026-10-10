@@ -33,6 +33,18 @@ const {chromium}=require(process.env.PLAYWRIGHT_NODE_MODULE||'C:/Users/Administr
   await page.locator('#productWorkbench .pw-loading').waitFor({state:'hidden'});
   assert.equal(await page.locator('#productWorkbench .pw-error').count(),0);
   await page.screenshot({path:path.join(output,'mobile-board-query.png'),fullPage:true});
+  await page.locator('#fieldMaterial').fill('VIK');
+  await page.locator('#fieldTolerance').selectOption('10');
+  await page.locator('#fieldFlute').selectOption('B');
+  await page.locator('#fieldBoardState').selectOption('net_raw');
+  await Promise.all([page.waitForResponse(r=>r.url().includes('/api/product-workbench/reverse?')&&r.url().includes('net_raw')&&r.url().includes('VIK')&&r.status()===200),page.locator('#lookupButton').click()]);
+  await page.locator('#productWorkbench .pw-loading').waitFor({state:'hidden'});
+  await page.reload();await page.locator('#lookupInput').waitFor({state:'visible'});
+  assert.equal(await page.locator('#fieldMaterial').inputValue(),'VIK');
+  assert.equal(await page.locator('#fieldTolerance').inputValue(),'10');
+  assert.equal(await page.locator('#fieldFlute').inputValue(),'B');
+  assert.equal(await page.locator('#fieldBoardState').inputValue(),'net_raw');
+  assert.equal(await page.locator('#lookupInput').inputValue(),'800×600');
   await page.locator('[data-field-intent="location"]').click();
   await page.locator('#lookupInput').fill('C1');await page.locator('#lookupButton').click();
   await page.locator('#fieldLocationResults').waitFor({state:'visible'});
@@ -45,6 +57,6 @@ const {chromium}=require(process.env.PLAYWRIGHT_NODE_MODULE||'C:/Users/Administr
   assert.equal(await page.locator('#lookupInput').inputValue(),'C1');
   assert.equal(await page.locator('[data-field-intent="location"]').getAttribute('aria-pressed'),'true');
   assert.deepEqual(errors,[]);assert.deepEqual(writes,[]);
-  fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({passed:true,isolated:true,realMobilePage:true,realApi:true,browser:'installed Chrome',typography,widths:[320,390],writes,errors},null,2));
+  fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({passed:true,isolated:true,realMobilePage:true,realApi:true,browser:'installed Chrome',typography,widths:[320,390],warehouseReturn:true,filtersSurviveReload:true,writes,errors},null,2));
  }finally{await browser.close();}
 })().catch(e=>{console.error(e.stack);process.exitCode=1;});

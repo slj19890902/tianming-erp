@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.616"
-APP_VERSION_NAME = "补库任务模具位置与首页提醒数量修复"
+APP_VERSION = "v0.22.617"
+APP_VERSION_NAME = "周需求库存预览、真实货位与简易报料条单"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5982,3 +5982,17 @@ APP_VERIFICATION_STEPS = [
     "切换生产等其他工作区，核对提醒筛选、隐藏及延后仍可恢复；实物打印由管理员验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.616：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "导入订单增加周需求单入口，支持图片、PDF、Excel及粘贴；左侧需求匹配客户常用箱，右侧原单库存只作参考，不覆盖库存。",
+    "订单导入、新建订单及常用箱选择统一显示现存、占用、可用、本批预计结余、缺货提示与具体货位数量；同批重复编码累计试算。",
+    "仓库查货右侧直接列出产品所在区域、货架层格与各位置数量，不再只显示位置个数。",
+    "生产任务单新增横向十二列简易报料条单，一组件/材料来源一行；保留父成品数量，区分订纸与库存材料做，沿用打印前版本核对。",
+    "本版无数据库迁移，不更改正式订单、库存、模具或BOM事实；80012753多模具换算资料仍须核实后维护。",
+]
+APP_VERIFICATION_STEPS = [
+    "导入订单→周需求单，选择客户并上传或粘贴左侧需求，核对原单及ERP现存/本批结余；导入常用箱修改数量，核对库存提示同步变化。",
+    "仓库查货搜索有库存的存货编码，确认右侧直接显示区域、货架层格及数量；多处库存应逐处列出。",
+    "已报料生产任务单→切换简易报料条单，核对12列、同款多组件分行、订纸或领料位置，再用A4横向实物打印裁切验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.617：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

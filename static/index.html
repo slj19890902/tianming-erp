@@ -30,6 +30,8 @@
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
     <script src="/static/ui/desktop-delivery-margin.js?v=20260926-dashboard-cost"></script>
     <script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script>
+    <script src="/static/ui/demand-stock.js?v=20261010"></script>
+    <link rel="stylesheet" href="/static/ui/demand-stock.css?v=20261010">
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <link rel="stylesheet" href="/static/drawing-workbench.css?v=20260930-543" />
     <script src="/static/drawing-workbench.js?v=20260930-543"></script>
@@ -7524,6 +7526,7 @@
               </details>
               <div v-if="!emailQueueMode" class="form-grid pdf-upload-controls" style="margin-bottom:4px">
                 <div class="field wide">
+                  <weekly-demand-import :customers="activeCustomerOptions" @parsed="acceptWeeklyDemand"></weekly-demand-import>
                   <label v-if="!orderImportDrafts.length">上传客户订单 PDF / Excel（可多选）</label>
                   <input class="input" type="file" multiple accept="application/pdf,.pdf,.xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" @change="onOrderPdfFileChange" />
                 </div>
@@ -7558,6 +7561,8 @@
                 <details><summary>管理员核对依据</summary>原账号 {{r.actorId}}；请求键 {{r.key}}；文件 {{r.summary?.fileName||'请识别原文件核对'}}；客户单号 {{r.summary?.customerPO||'旧记录未保存'}}。请在订单页核对对应文件来源与订单，不要换键绕过。</details>
               </div>
               <div v-for="(draft,draftIndex) in orderImportDrafts" :key="draft.file_hash || draft.source_name" v-show="(!emailQueueMode || !pdfQueueVisible) && pdfCurrentDraft(draft)" class="order-group-detail-card" style="margin-bottom:12px">
+                <demand-stock-summary v-if="hasPermission('warehouse.view')" :customer-id="draft.matched_customer_id" :lines="draft.items"></demand-stock-summary>
+                <details v-if="draft.source_format==='weekly_demand'"><summary>原需求表与原单库存参考（不写入仓库）</summary><div v-for="row in draft.items" :key="row.line_no">{{row.raw_product_code}} · 原位置 {{row.source_location||'未填写'}} · 原文 {{(row.raw_lines||[]).join(' ')}}<span v-if="row.source_stock_reference"> · 原单现存 {{row.source_stock_reference.on_hand}} / 原单剩余 {{row.source_stock_reference.remaining}}</span></div></details>
                 <div v-if="emailQueueMode && draft.email_attachment_id && draft._show_advanced_details" class="toolbar-group" style="margin-bottom:8px">
                   <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'processed')">已人工处理</button>
                   <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'duplicate')">重复，不再提醒</button>
@@ -8063,6 +8068,7 @@
                 <button class="btn manual-size-entry" type="button" :disabled="!orderForm.customer_id" @click="addManualSizeOrderItem">手工尺寸</button>
                 <span class="muted">每款只占一行；可一次选择多款。</span>
               </div>
+              <demand-stock-summary v-if="hasPermission('warehouse.view')" :customer-id="orderForm.customer_id" :lines="orderForm.items"></demand-stock-summary>
               <!-- P1-02：固定一行一款，普通明细不依赖横向滚动。 -->
               <div class="order-entry-table-wrap">
               <table class="line-items order-entry-table"><thead><tr>
@@ -10139,6 +10145,7 @@
             </div>
             <div v-if="orderCommonBoxPicker.error" class="notice danger" style="margin-bottom:10px">{{ orderCommonBoxPicker.error }}</div>
             <div v-if="orderCommonBoxPicker.source_order_id" class="notice" style="margin-bottom:10px">按历史订单 {{ orderCommonBoxPicker.source_order_number }} 选款：原单 {{ orderCommonBoxPicker.source_product_total }} 款，当前筛选 {{ orderCommonBoxPicker.total }} 款。停用、删除或不再适合独立下单的款不列出；旧数量、成交价、交期和PO不沿用。<button type="button" class="btn small" @click="showAllOrderCommonBoxes">查看客户全部常用箱</button></div>
+            <div class="demand-stock-layout">
             <div class="order-common-box-table-wrap">
               <table class="order-common-box-table">
                 <thead><tr>
@@ -10166,6 +10173,8 @@
                   <tr v-if="orderCommonBoxPicker.loading"><td colspan="8" class="empty">正在读取常用箱…</td></tr>
                 </tbody>
               </table>
+            </div>
+            <demand-stock-summary v-if="hasPermission('warehouse.view')" :customer-id="orderForm.customer_id" :lines="commonBoxDemandLines()"></demand-stock-summary>
             </div>
             <div class="order-common-box-summary">
               <div class="toolbar-group">
@@ -42369,6 +42378,9 @@
           },
         }
       });
+      app.mixin(TMDemandStock.mixin);
+      app.component("demand-stock-summary", TMDemandStock.summary);
+      app.component("weekly-demand-import", TMDemandStock.importer);
       app.component("order-reference", TMOrderReference.component);
       app.component("page-head", { props:["title","desc"], template:`<div class="page-head"><div><h2>{{title}}</h2><p>{{desc}}</p></div></div>` });
       app.component("data-panel", { props:["empty"], template:`<div class="panel"><div v-if="empty" class="empty">当前没有符合条件的数据</div><div v-else class="table-wrap"><slot></slot></div></div>` });

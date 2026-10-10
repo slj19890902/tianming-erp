@@ -57,6 +57,12 @@ from app.services.production_workflow import (
 )
 from app.services.product_qr import product_qr_payload
 from app.services.product_specification import resolved_product_specification
+from app.services.customer_document_fields import decode_snapshot, document_snapshot
+
+
+def _strip_customer_category(product, order_item=None):
+    frozen = decode_snapshot(getattr(order_item, 'customer_document_snapshot_json', None))
+    return (frozen if frozen is not None else document_snapshot(product) if product else {}).get('customer_category')
 
 
 _REQUISITION_ITEM_SOURCE = re.compile(r"^requisition_item:(\d+)$")
@@ -669,6 +675,7 @@ def build_supplier_requisition_production_package(
                 "source_identity": source_identity,
                 "component_label": component_label,
                 "customer_id": customer.id if customer is not None else None,
+                "customer_category": _strip_customer_category(product, order_item),
                 "customer_name": (
                     customer.chinese_short_name
                     if customer is not None and customer.chinese_short_name
@@ -776,6 +783,8 @@ def build_supplier_requisition_production_package(
                 else int(item.quantity or 0) + int(item.stock_deduction_qty or 0)),
             "finished_deduction_quantity": int(item.stock_deduction_qty or 0),
             "quantity_per_set": int(component_snapshot.quantity_per_set) if component_snapshot is not None else None,
+            "strip_finished_quantity": (int(component_snapshot.order_set_quantity) if component_snapshot is not None else int(order_item.quantity) if order_item is not None else None),
+            "customer_category": _strip_customer_category(product, order_item),
             "order_set_quantity": int(component_snapshot.order_set_quantity) if component_snapshot is not None else None,
             "task_status": task.status if task is not None else None,
             "needs_die_cut": bool((item.sheet_cutting_snapshot or {}).get('is_die_cut'))
@@ -1475,6 +1484,9 @@ def build_stock_replenishment_production_package(
         mold_projection, mold_review = _stock_print_mold(db, item, product, customer, requires_mold=requires_mold)
         component = {
             "stock_replenishment_item_id": int(item.id),
+            "strip_finished_quantity": int(frozen['finished_quantity']) if frozen else planned_output if not is_semi_finished else None,
+            "order_set_quantity": int(frozen['finished_quantity']) if frozen else None,
+            "customer_category": _strip_customer_category(product),
             "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
             "production_route": route,
             "cutting_work_instruction": route['cutting_instruction'],

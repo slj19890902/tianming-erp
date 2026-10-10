@@ -21,6 +21,14 @@
 
 草稿create/update恢复本身另列下一最小闭环；当前不得宣称保存弹窗全部已修。现有保存后发货入口须使用已核对持久单ID和版本，不能把草稿坏回包当已确认发货依据。原historical/revision/customer-po的保存算法不在本卡重写。
 
+### 原请求结束出口（独审发现的发布可用性闭环）
+
+全部错误保留原请求虽能避免重复扣库，但版本已变化的原请求无法继续；不得只让员工联系管理员而没有操作出口。新增显式“结束本次请求，重新核对”close写动作，携带完整原command及原actor/key，与execute同Order→Delivery锁序，锁后重新读ledger。若已completed返回原完成结果；若已closed返回原结束凭据；仅原key不存在时写同action的closed原凭据及审计，一次提交，原业务数量/状态不变。不得重新要求原version等当前、pending或库存资格，仍核actor、完整请求身份、原及当前客户权限和受管激活门禁。全局key唯一竞争须回滚后精确重读，不能覆盖终态。
+
+closed证明须绑定原actor/key/hash/resource/完整原request和closed_at，不伪装dispatch_receipt。execute锁前/锁后遇有效closed只返回原closed，迟到请求不再扣库；resolver支持只读closed，not_recorded不构成结束证据。UI在发close前持久化closing意图，超时/刷新只查原结果或重发原close，不能再执行原dispatch；严格核验并持久closed凭据后才解除同单pending，新发仍读新快照并由员工确认。迟到错误不能覆盖completed/closed终态。当前候选尚未发布，delivery_dispatch_v1同时包含completed/closed，旧中间候选不作为可回退兼容版本。
+
+最短新增真实交错：execute先赢再close仍completed；close先赢再迟到execute无库存变化；close提交后丢回包可只读恢复closed，重新核对后新key正常发货。close提交失败/权限失败保原待核对，不按任意4xx清键。不新增取消送货或草稿恢复范围。
+
 ## 并行与唯一文件所有权
 
 本卡明确授权两个执行代理和一个独审并行。执行者从本卡最终提交建立自己的新codex分支，保留旧候选；各自既有独立worktree可在确认clean且无运行引用后复用。

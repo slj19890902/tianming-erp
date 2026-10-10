@@ -24063,13 +24063,19 @@ def void_supplier_requisition_item(
                 raise HTTPException(status_code=409, detail="供应商报料单不存在")
             _require_supplier_order_customer_access(order, user, db)
 
+            from app.models.procurement_source import ProcurementSourceLink
+            source_links = list(db.scalars(select(ProcurementSourceLink).where(
+                ProcurementSourceLink.supplier_item_id == item.id)))
+            stock_links = [row for row in source_links if row.stock_replenishment_item_id is not None]
+            if stock_links and user.role != 'admin':
+                raise HTTPException(403, '仅管理员可撤销补库统一采购行')
+
             existing_key_item = db.scalar(
                 select(SupplierRequisitionOrderItem).where(
                     SupplierRequisitionOrderItem.void_idempotency_key
                     == payload.idempotency_key
                 )
             )
-            from app.models.procurement_source import ProcurementSourceLink
             if existing_key_item is not None:
                 if (
                     existing_key_item.id != item.id
@@ -24085,7 +24091,9 @@ def void_supplier_requisition_item(
             link = db.scalar(select(ProcurementSourceLink).where(
                 ProcurementSourceLink.supplier_item_id == item.id,
                 ProcurementSourceLink.status == 'active'))
-            if link is not None:
+            if stock_links and link is None and item.status == 'active':
+                raise HTTPException(409, '选中补库采购行的来源绑定已变化，请刷新核对，不能按普通行撤销')
+            if link is not None and link.material_requisition_item_id is not None:
                 source = db.get(RequisitionItem, link.material_requisition_item_id) if link.material_requisition_item_id else None
                 sales_item = db.get(OrderItem, source.order_item_id) if source else None
                 sales_order = db.get(Order, sales_item.order_id) if sales_item else None
@@ -24097,6 +24105,18 @@ def void_supplier_requisition_item(
                         customer_po=sales_order.customer_po, orders=[dict(id=sales_order.id)]) if sales_order else None,
                     'supplier_order_id': order.id,
                 })
+            if link is not None:
+                if (len(source_links) != 1 or item.source_key != f'stock_replenishment:{link.stock_replenishment_item_id}'
+                        or item.order_item_id is not None or link.source_quantity != item.requisition_qty):
+                    raise HTTPException(409, {'code': 'PROCUREMENT_SOURCE_SCOPE_REQUIRED',
+                        'message': '选中采购行不是单一完整补库来源，请先核对关联范围；不会自动撤销其他来源',
+                        'supplier_order_id': order.id,
+                        'stock_replenishment_item_ids': [row.stock_replenishment_item_id for row in stock_links]})
+                claimed_order = db.execute(update(SupplierRequisitionOrder).where(
+                    SupplierRequisitionOrder.id == order.id, SupplierRequisitionOrder.status == 'confirmed'
+                ).values(status=SupplierRequisitionOrder.status))
+                if claimed_order.rowcount != 1:
+                    raise HTTPException(409, '采购单状态已变化，请刷新后重试')
             if item.status != "active":
                 raise HTTPException(status_code=409, detail="该报料明细已经撤销")
             if item.version != payload.expected_version:
@@ -24155,6 +24175,10 @@ def void_supplier_requisition_item(
                     status_code=409,
                     detail=f"该明细关联生产完工 #{completion_id}，不能撤销",
                 )
+
+            if link is not None:
+                from app.services.unified_procurement import release_stock_source_link
+                release_stock_source_link(db, link=link, user=user)
 
             before = {
                 "status": item.status,
@@ -24243,6 +24267,8 @@ def void_supplier_requisition_item(
                         "active_item_ids": [row.id for row in active_items],
                     },
                     "source_key": item.source_key,
+                    "procurement_source_link_id": link.id if link is not None else None,
+                    "stock_replenishment_item_id": link.stock_replenishment_item_id if link is not None else None,
                     "order_item_id": item.order_item_id,
                     "requisition_qty": int(item.requisition_qty or 0),
                     "customer_ids": customer_ids,

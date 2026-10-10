@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.617"
+APP_VERSION = "v0.22.618"
 APP_VERSION_NAME = "周需求库存预览、真实货位与简易报料条单"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5984,6 +5984,19 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.616：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 APP_CHANGES = [
+    "管理员可按实际依赖先取消补库生产安排或撤销加工，再撤回对应实收，最后撤销选中的独立补库采购行，保留同单其他明细。",
+    "补库收料撤销按真实来源核对数量、下游使用和当前位置；重复提交不重复扣减，已混用、拆批或供应商已确认对账的记录仍受保护。",
+    "产品查询补齐已完成补库加工的实际产出与移库后位置，区分未加工片料、已加工片料和成品，避免重复计数。",
+    "单笔生产入库选项明确区分片料/半成品入库和完整成品入库；本版不自动更改现存库存类别、数量、成本或位置。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新查询80012273，应同时看到旧500张片料与新1560片已加工片料及各自位置；按现场实物确认数量和入库类别。",
+    "需撤旧500片时，先在待生产取消其安排，再在来料实收记录撤回，最后在已报料明细撤销该行；核对新批次保持不变。",
+    "实际已送货、被订单预占、拆批混用或已确认供应商对账的记录，按提示先处理真实下游，不得越级撤销。",
+]
+APP_CHANGELOG = [*(f"v0.22.617：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
     "导入订单增加周需求单入口，支持图片、PDF、Excel及粘贴；左侧需求匹配客户常用箱，右侧原单库存只作参考，不覆盖库存。",
     "订单导入、新建订单及常用箱选择统一显示现存、占用、可用、本批预计结余、缺货提示与具体货位数量；同批重复编码累计试算。",
     "仓库查货右侧直接列出产品所在区域、货架层格与各位置数量，不再只显示位置个数。",
@@ -5995,4 +6008,4 @@ APP_VERIFICATION_STEPS = [
     "仓库查货搜索有库存的存货编码，确认右侧直接显示区域、货架层格及数量；多处库存应逐处列出。",
     "已报料生产任务单→切换简易报料条单，核对12列、同款多组件分行、订纸或领料位置，再用A4横向实物打印裁切验收。",
 ]
-APP_CHANGELOG = [*(f"v0.22.617：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.618：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

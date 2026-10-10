@@ -45,7 +45,7 @@ def _source_stock_priority_ids(db: Session, candidate_products) -> list[int]:
     once per source-linked candidate, with a concrete owner and root ID set;
     it never implicitly correlates to the outer Product search row.
     """
-    from app.services.product_activity import source_lot_descendant_ids
+    from app.services.product_activity import source_lot_descendant_ids, completed_stock_output_roots
 
     candidate_ids = select(candidate_products.c.id)
     roots: dict[tuple[int, int | None], set[int]] = defaultdict(set)
@@ -80,6 +80,8 @@ def _source_stock_priority_ids(db: Session, candidate_products) -> list[int]:
             OrderItem.product_id.in_(candidate_ids), Receipt.status == "posted")):
         if lot_id is not None:
             roots[(int(product_id), customer_id)].add(int(lot_id))
+    for product_id, customer_id, lot_id in completed_stock_output_roots(db, candidate_ids):
+        roots[(int(product_id), customer_id)].add(int(lot_id))
     if not roots:
         return []
     owners = {product_id: customer_id for product_id, customer_id in db.execute(

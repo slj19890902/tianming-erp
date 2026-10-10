@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="/static/ui/home-workbench.css?v=20261010-stock-alert3" />
     <script src="/static/ui/home-workbench.js?v=5e31af5338b09535"></script>
     <link rel="stylesheet" href="/static/ui/product-workbench.css?v=dbd8b4a62a34" />
-    <script src="/static/ui/product-workbench.js?v=d955b9c2cc11"></script>
+    <script src="/static/ui/product-workbench.js?v=6907ff23797a"></script>
     <script src="/static/ui/order-context.js?v=round-experience-d1b"></script>
     <script src="/static/ui/workspace.js?v=71e4c13edadc"></script>
     <script src="/static/ui/workflow-continuity.js?v=7ef70dee3ee7"></script>
@@ -4912,7 +4912,7 @@
                     </template>
                     <template v-else>
                       <template v-if="['group_job','single_job','group_stock'].includes(stockPrepDialog.row.entry_type)">
-                        <label>入库方式 <select class="select" v-model="stockPrepDialog.disposition" :disabled="stockPrepDialog.loading||(stockPrepDialog.row.entry_type==='single_job'&&stockCompletionLocked(stockPrepDialog.row))||groupStockLocked(stockPrepDialog.row)"><option value="semi" :disabled="stockPrepDialog.row.entry_type==='group_stock' && stockPrepDialog.jobs.some(j=>j.output_kind!=='semi')">按子件存放</option><option value="finished">{{stockPrepDialog.row.entry_type==='single_job'?'完整成品入库':'已组好整套入库'}}</option></select></label>
+                        <label>入库方式 <select class="select" v-model="stockPrepDialog.disposition" :disabled="stockPrepDialog.loading||(stockPrepDialog.row.entry_type==='single_job'&&stockCompletionLocked(stockPrepDialog.row))||groupStockLocked(stockPrepDialog.row)"><option value="semi" :disabled="stockPrepDialog.row.entry_type==='group_stock' && stockPrepDialog.jobs.some(j=>j.output_kind!=='semi')">{{stockPrepDialog.row.entry_type==='single_job'?'片料 / 半成品入库':'按子件存放'}}</option><option value="finished">{{stockPrepDialog.row.entry_type==='single_job'?'完整成品入库':'已组好整套入库'}}</option></select></label>
                         <label v-if="stockPrepDialog.row.entry_type!=='single_job' && stockPrepDialog.disposition==='finished'">实际成套数量 <input class="input compact-input" type="number" min="1" v-model.number="stockPrepDialog.sets" :disabled="stockPrepDialog.loading||groupStockLocked(stockPrepDialog.row)" /> 套</label>
                         <div v-if="stockPrepDialog.job" class="toolbar-group"><label>本次加工 <input class="input compact-input" type="number" min="1" :max="stockPrepDialog.job.input_quantity" :disabled="stockPrepDialog.row.entry_type==='single_job'&&(stockPrepDialog.loading||stockCompletionLocked(stockPrepDialog.row))" v-model.number="stockPrepDialog.inputQuantity" @input="updateStockProcessingQuantity" /> 张</label><span>从 {{stockPrepDialog.job.source_location||stockPrepDialog.row.location}} 取料</span><label>实际产出 <input class="input compact-input" type="number" min="1" :disabled="stockPrepDialog.row.entry_type==='single_job'&&(stockPrepDialog.loading||stockCompletionLocked(stockPrepDialog.row))" v-model.number="stockPrepDialog.job._actual" /> {{stockPrepDialog.job.output_unit || "单位待完善"}}</label><info-note>填本次实际加工投入和产出，未加工材料继续留在待加工中；不要把损耗当成未加工材料。</info-note></div>
                         <info-note v-if="stockPrepDialog.disposition==='finished' && stockPrepDialog.jobs">每套按冻结用量扣减子件，多余子件保留半成品；保存表示已实际组装完成。</info-note>

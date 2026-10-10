@@ -2933,9 +2933,10 @@
               <span :class="{warning:warehouseTwinMetrics.column_conflicts>0}"><b>{{ warehouseTwinMetrics.column_conflicts }}</b>柱子冲突</span>
             </div>
             <button v-if="pageAllowed('warehouse')" type="button" :class="['btn','primary','topbar-warehouse-entry',{active:activePage==='warehouse'}]" :aria-current="activePage==='warehouse' ? 'page' : null" title="进入仓库页面" @click="goMenu('warehouse')"><span aria-hidden="true" v-html="navIcon('warehouse')"></span><span>仓库</span></button>
-            <div v-if="activePage==='warehouse'" class="warehouse-top-shortcuts" role="group" aria-label="仓库楼层与台账">
+            <div v-if="activePage==='warehouse'" class="warehouse-top-shortcuts" role="group" aria-label="仓库楼层、打印与台账">
               <button type="button" :class="{active:warehouseTwinFloor==='1F'}" @click="selectWarehouseFloor('1F')">1F 生产车间</button>
               <button type="button" :class="{active:warehouseTwinFloor==='3F'}" @click="selectWarehouseFloor('3F')">3F 成品仓库</button>
+              <a href="/warehouse-ledger.html?tab=locations&amp;location_view=ledger&amp;label_print=1">打印货位编号</a>
               <a href="/warehouse-ledger.html?tab=finished">库存台账</a>
             </div>
             <span class="top-user-name">{{ user.real_name || user.username }}</span>

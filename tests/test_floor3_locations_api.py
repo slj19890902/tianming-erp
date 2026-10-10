@@ -4319,7 +4319,7 @@ def test_p1_34b1_location_label_frontend_is_batchable_and_read_only() -> None:
     page = (root / "static" / "location-label.html").read_text(encoding="utf-8")
     warehouse = (root / "static" / "warehouse.html").read_text(encoding="utf-8")
 
-    assert "90 × 60 mm" in page
+    assert "80 × 40 mm" in page
     assert "/api/warehouse/locations/labels?location_ids=" in page
     assert "/api/warehouse/locations/${id}/label" in page
     assert "扫码后仍须登录" in page
@@ -4329,3 +4329,4 @@ def test_p1_34b1_location_label_frontend_is_batchable_and_read_only() -> None:
     assert 'id="locationBatchPrint"' in warehouse
     assert "locationLabelEligible" in warehouse
     assert "/location-label.html?location_id=" in warehouse
+    assert 'params.get("label_print")==="1"' in warehouse

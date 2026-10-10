@@ -970,6 +970,13 @@
         if(capacityAreaId>0&&capacityFloorId>0&&capacityAreaCode&&capacityMapFeatureId){await openCapacityReviewLedger({areaId:capacityAreaId,floorId:capacityFloorId,areaCode:capacityAreaCode,mapFeatureId:capacityMapFeatureId});return}
         toast("容量复核链接缺少完整地图区域身份，请返回实测地图重新进入",true);return
       }
+      if(requestedTab==="locations"&&requestedLocationView==="ledger"&&params.get("label_print")==="1"){
+        activateWarehouseLocationHub();
+        await switchLocationView("ledger");
+        requestAnimationFrame(()=>{$("locationBatchPrint").scrollIntoView({behavior:"smooth",block:"center"});$("locationLabelSelectAll").focus()});
+        toast("请选择一个或多个正式货位，再打印 80×40 毫米货位编号标签");
+        return
+      }
       if(requestedTab==="locations"){openMeasuredWarehouseMap(params);return}
       const fromPdfOrder=params.get("source")==="pdf-order";
       if(fromPdfOrder&&!lotId){toast("库存定位链接缺少批次信息，请返回 PDF 订单后重新打开",true);return}

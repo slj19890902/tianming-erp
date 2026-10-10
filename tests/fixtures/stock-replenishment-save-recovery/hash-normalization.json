@@ -1,0 +1,119 @@
+{
+  "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+  "sourceSHA256": {
+    "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+    "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+  },
+  "originalBody": {
+    "idempotency_key": "http-nested-hash",
+    "source_type": "customer_request",
+    "supplier_name": "苏州佳丰",
+    "customer_id": 1,
+    "stock_now": false,
+    "items": [
+      {
+        "target_inventory_type": "semi_finished",
+        "customer_id": 1,
+        "product_id": 1,
+        "material_id": 1,
+        "material_code": "A416D",
+        "layer_count": 5,
+        "flute_type": "AB",
+        "report_length_mm": 139.5,
+        "report_width_mm": 830,
+        "crease_type": "净",
+        "crease_left_mm": 335,
+        "crease_middle_mm": 160,
+        "crease_right_mm": 335,
+        "sheet_type": "creased_sheet",
+        "quantity": 30,
+        "location_id": 2
+      }
+    ],
+    "expected_actor_id": 1,
+    "replenishment_plan": {
+      "policy_id": 1,
+      "finished_quantity": 1,
+      "width": 139.5,
+      "fraction": 1.25,
+      "label": "合成中文"
+    }
+  },
+  "actorId": 1,
+  "write": {
+    "status": 409,
+    "headers": {
+      "cache-control": "no-store",
+      "x-stock-replenishment-rejected": "1",
+      "content-length": "265",
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": {
+        "message": "本次补库套数必须为正整数，请重新生成草稿。",
+        "save_result": {
+          "status": "not_saved",
+          "current_actor_id": 1,
+          "idempotency_key": "http-nested-hash",
+          "request_hash": "10d6ed2c9ec2ae6a99739703956808a38b26a0bdeb09cd17c3408a6c421439be"
+        }
+      }
+    }
+  },
+  "normalizedRequest": {
+    "replenishment_plan": {
+      "policy_id": 1,
+      "finished_quantity": 1,
+      "width": 139.5,
+      "fraction": 1.25,
+      "label": "合成中文"
+    },
+    "replenishment_plans": [],
+    "source_type": "customer_request",
+    "idempotency_key": "http-nested-hash",
+    "supplier_name": "苏州佳丰",
+    "customer_id": 1,
+    "remark": null,
+    "stock_now": false,
+    "items": [
+      {
+        "stock_policy_id": null,
+        "procurement_mode": null,
+        "target_inventory_type": "semi_finished",
+        "product_id": 1,
+        "reference_product_id": null,
+        "customer_id": 1,
+        "material_id": 1,
+        "product_code": null,
+        "product_name": null,
+        "internal_name": null,
+        "material_code": "A416D",
+        "layer_count": 5,
+        "flute_type": "AB",
+        "report_length_mm": 139.5,
+        "report_width_mm": 830,
+        "crease_type": "净料",
+        "crease_left_mm": null,
+        "crease_middle_mm": null,
+        "crease_right_mm": null,
+        "sheet_type": "net_sheet",
+        "component_type": "whole",
+        "pieces_per_box": 1,
+        "stock_yield_per_sheet": 1,
+        "quantity": 30,
+        "location_id": 2,
+        "historical_workbook": null,
+        "historical_sheet": null,
+        "historical_row": null,
+        "historical_search_text": null,
+        "remark": null,
+        "external_purchase_quantity": null,
+        "external_purchase_unit": null,
+        "external_order_quantity_basis": null,
+        "external_purchase_quantity_basis": null
+      }
+    ]
+  },
+  "canonicalHashInput": "{\"actor_id\":1,\"payload\":{\"customer_id\":1,\"idempotency_key\":\"http-nested-hash\",\"items\":[{\"component_type\":\"whole\",\"crease_left_mm\":null,\"crease_middle_mm\":null,\"crease_right_mm\":null,\"crease_type\":\"净料\",\"customer_id\":1,\"external_order_quantity_basis\":null,\"external_purchase_quantity\":null,\"external_purchase_quantity_basis\":null,\"external_purchase_unit\":null,\"flute_type\":\"AB\",\"historical_row\":null,\"historical_search_text\":null,\"historical_sheet\":null,\"historical_workbook\":null,\"internal_name\":null,\"layer_count\":5,\"location_id\":2,\"material_code\":\"A416D\",\"material_id\":1,\"pieces_per_box\":1,\"procurement_mode\":null,\"product_code\":null,\"product_id\":1,\"product_name\":null,\"quantity\":30,\"reference_product_id\":null,\"remark\":null,\"report_length_mm\":\"139.5\",\"report_width_mm\":830,\"sheet_type\":\"net_sheet\",\"stock_policy_id\":null,\"stock_yield_per_sheet\":1,\"target_inventory_type\":\"semi_finished\"}],\"remark\":null,\"replenishment_plan\":{\"finished_quantity\":1,\"fraction\":\"1.25\",\"label\":\"合成中文\",\"policy_id\":1,\"width\":\"139.5\"},\"replenishment_plans\":[],\"source_type\":\"customer_request\",\"stock_now\":false,\"supplier_name\":\"苏州佳丰\"}}",
+  "hash": "10d6ed2c9ec2ae6a99739703956808a38b26a0bdeb09cd17c3408a6c421439be"
+}

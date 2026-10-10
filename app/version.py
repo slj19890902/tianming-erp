@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.614"
+APP_VERSION = "v0.22.615"
 APP_VERSION_NAME = "手机现场查询与库存来源追溯"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5941,6 +5941,20 @@ APP_VERIFICATION_STEPS = [
 ]
 APP_CHANGELOG = [*(f"v0.22.613：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
+APP_CHANGES = [
+    "补库保存先核对完整单号、操作人、明细和数量，空回包或不完整回执不再误报成功。",
+    "断网、超时或刷新后保留原保存内容，可查原结果、查看原单或按原内容继续；结果未确认前避免同一来源重复报料。",
+    "切换账号或重新打开窗口后，旧请求不会覆盖当前表单；已保存后的打印、列表刷新失败仍保留原单号。",
+    "原保存结果与当前收料、作废和采购取消状态分开展示；查询原结果不会再次创建采购。",
+    "保留手机全部图纸和报料冻结加工资料；本版无数据库迁移，不调整已有库存、成本或历史业务记录。",
+]
+APP_VERIFICATION_STEPS = [
+    "强制刷新后，在真实补库业务保存时核对成功单号、存货编码和数量；成功后的打印或列表异常应提供原单入口。",
+    "如保存时断网或超时，重新打开后使用查原结果，核对原单；尚未确认时不要另建重复报料。",
+    "切换账号或关闭后重开表单，确认旧请求不会覆盖当前内容；核对手机图纸与原报料加工规格仍正常。",
+]
+APP_CHANGELOG = [*(f"v0.22.614：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
 
 APP_CHANGES = [
     "库存流水显示可追溯的报料来源编码，并与片料适用款号分开；拆分移库后仍能找到原产品和实际位置。",
@@ -5954,4 +5968,4 @@ APP_VERIFICATION_STEPS = [
     "手机现场查询按存货编码或长×宽×高找产品，核对放大的模具格号、实存位置和生产资料，展开查看全部图纸。",
     "手机切换查货位，查看默认规划和实存；从原盘点或移货页面返回后，应回到原查询。实际操作由管理员验收。",
 ]
-APP_CHANGELOG = [*(f"v0.22.614：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.615：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

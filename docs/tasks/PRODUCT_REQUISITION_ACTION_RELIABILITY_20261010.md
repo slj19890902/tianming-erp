@@ -56,3 +56,5 @@ API兼容最终判据：旧NULL请求，或确有外购采购batch且整来源�
 验证旧74 UI及本次提速针对用例、真实go交接/关闭重开/换账号/延迟bootstrap/空明细pending清理，不扩浏览器服务或正式点击。独立审者只读核合并index交集并3条高价值用例；API源码不变，不重复宽跑。后端28+新正式合并2HTTP证据继续按源码核对。最终发布等待并行正式资料操作结束及CAS所有门禁；没有本任务正式数据写入授权。
 
 交集验证补边：speed测试的实际go调用新增window依赖，允许仅在setup以VM加载真实product-workbench模块并传入window，保留原13条行为断言，不空stub或删断言。已实际复现openLowStockReplenishment等待go权限时换账号，旧动作仍重置新form；允许在go返回后、开窗前复核actor/authGeneration/activePage，属于原身份隔离根因，并新增真实行为回归。
+
+2026-10-10 v611技术发布完成，待管理员人工验收。源aa70b997095a1fc2604a74a4103a7596efedc5a3，包c523c18d8094e473ff44859340c71dabcc49bf4730991d25dc55c99489227227；完整保留正式608/609/610，en1009hp无迁移。UI93/图纸/独立交集3通过，后端已核证据保持；本次冷备实际恢复验证、323表及附件保持、健康/资源核对通过。补库保存坏回执与未知持久恢复仍未完成。详见FACTORY_RELIABILITY_RELEASE_V611_20261010.md。

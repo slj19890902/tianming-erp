@@ -1,0 +1,683 @@
+{
+  "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+  "sourceSHA256": {
+    "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+    "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+  },
+  "originalBody": {
+    "source_type": "stock_warning",
+    "idempotency_key": "http-external-override",
+    "customer_id": 1,
+    "supplier_name": "蜂窝板供应商",
+    "stock_now": false,
+    "items": [
+      {
+        "stock_policy_id": 1,
+        "procurement_mode": "external_purchase",
+        "target_inventory_type": "finished",
+        "product_id": 1,
+        "reference_product_id": 1,
+        "customer_id": 1,
+        "product_code": "EXT-HC-CUSTOMER",
+        "product_name": "客户定制蜂窝纸板",
+        "material_id": null,
+        "material_code": null,
+        "layer_count": null,
+        "flute_type": null,
+        "report_length_mm": null,
+        "report_width_mm": null,
+        "sheet_type": "raw_board",
+        "component_type": "whole",
+        "pieces_per_box": 1,
+        "stock_yield_per_sheet": 1,
+        "quantity": 4000,
+        "suggested_finished_quantity": 4000,
+        "external_category_code": "honeycomb_board",
+        "external_specification_summary": "材质170*110*170，孔径15mm，800×180×60mm",
+        "external_purchase_quantity": "11",
+        "external_purchase_unit": "ignored-unit",
+        "external_order_quantity_basis": "123.00",
+        "external_purchase_quantity_basis": "456.000000",
+        "external_supplier_product_code": "HC-GENERAL",
+        "external_supplier_product_name": "蜂窝纸板",
+        "draft_ready": true,
+        "missing_fields": []
+      }
+    ],
+    "expected_actor_id": 1
+  },
+  "actorId": 1,
+  "write": {
+    "status": 201,
+    "headers": {
+      "content-length": "4903",
+      "content-type": "application/json",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "id": 2,
+      "order_number": "CBW-20261010-61B39EDDD9C6F888EB45",
+      "request_hash": "455ea2e1c64f7af14ba0f6f79810aceeb8b04080aed9bbb2a77f43e6df3cf8c8",
+      "supplier_name": "蜂窝板供应商",
+      "customer_id": 1,
+      "customer_name": "匿名客户甲",
+      "source_type": "stock_warning",
+      "status": "confirmed",
+      "remark": null,
+      "created_at": "2026-10-10T03:07:50Z",
+      "confirmed_at": "2026-10-10T03:07:50.229933Z",
+      "stocked_at": null,
+      "total_quantity": 5,
+      "stocked_quantity": 0,
+      "items": [
+        {
+          "id": 2,
+          "stock_policy_id": 1,
+          "quantity_contract": null,
+          "replenishment_plan": null,
+          "sheet_cutting_snapshot": null,
+          "target_inventory_type": "finished",
+          "product_id": 1,
+          "reference_product_id": 1,
+          "customer_id": 1,
+          "product_code": "EXT-HC-CUSTOMER",
+          "product_name": "客户定制蜂窝纸板",
+          "internal_name": null,
+          "material_id": null,
+          "material_code": null,
+          "layer_count": null,
+          "flute_type": null,
+          "report_length_mm": null,
+          "report_width_mm": null,
+          "crease_type": null,
+          "crease_left_mm": null,
+          "crease_middle_mm": null,
+          "crease_right_mm": null,
+          "sheet_type": "raw_board",
+          "component_type": "whole",
+          "pieces_per_box": 1,
+          "stock_yield_per_sheet": 1,
+          "quantity": 5,
+          "stocked_quantity": 0,
+          "receipt_progress": {
+            "received_quantity": 0,
+            "remaining_quantity": 5,
+            "short_closed": false,
+            "shortage_quantity": 5,
+            "over_quantity": 0
+          },
+          "location": null,
+          "inventory_lot": null,
+          "historical_source": null,
+          "remark": null,
+          "stocked_at": null
+        }
+      ],
+      "procurement_mode": "external_purchase",
+      "external_purchase_batch_id": 2,
+      "external_purchase_orders": [
+        {
+          "id": 2,
+          "purchase_number": "EP-20261010-002",
+          "supplier_id": 5,
+          "supplier_name": "蜂窝板供应商",
+          "currency": "CNY",
+          "status": "confirmed",
+          "goods_amount": "93.5",
+          "tax_amount": "10.76",
+          "total_amount": "93.5",
+          "items": [
+            {
+              "id": 2,
+              "order_component_id": null,
+              "purpose": "库存预警备库｜EXT-HC-CUSTOMER",
+              "specification_summary": "材质170*110*170，孔径15mm，800×180×60mm",
+              "specification": {
+                "aperture_mm": 15.0,
+                "length_mm": 800.0,
+                "material": "170*110*170",
+                "thickness_mm": 60.0,
+                "width_mm": 180.0
+              },
+              "supplier_product_code": "HC-GENERAL",
+              "product_name": "蜂窝纸板",
+              "purchase_quantity": "11",
+              "purchase_unit": "片",
+              "unit_price": "8.5",
+              "currency": "CNY",
+              "tax_mode": "tax_inclusive",
+              "tax_rate": "0.13",
+              "line_amount": "93.5",
+              "tax_amount": "10.76",
+              "total_amount": "93.5",
+              "price_version_id": 1,
+              "price_version_number": 1,
+              "shipping_fee_mode": "not_provided",
+              "shipping_fee": null,
+              "sample_fee": null,
+              "plate_fee": null,
+              "die_fee": null
+            }
+          ]
+        }
+      ],
+      "current_actor_id": 1,
+      "save_receipt": {
+        "schema_version": 1,
+        "idempotency_key": "http-external-override",
+        "actor_id": 1,
+        "request_hash": "455ea2e1c64f7af14ba0f6f79810aceeb8b04080aed9bbb2a77f43e6df3cf8c8",
+        "request": {
+          "replenishment_plan": null,
+          "replenishment_plans": [],
+          "source_type": "stock_warning",
+          "idempotency_key": "http-external-override",
+          "supplier_name": "蜂窝板供应商",
+          "customer_id": 1,
+          "remark": null,
+          "stock_now": false,
+          "items": [
+            {
+              "stock_policy_id": 1,
+              "procurement_mode": "external_purchase",
+              "target_inventory_type": "finished",
+              "product_id": 1,
+              "reference_product_id": 1,
+              "customer_id": 1,
+              "material_id": null,
+              "product_code": "EXT-HC-CUSTOMER",
+              "product_name": "客户定制蜂窝纸板",
+              "internal_name": null,
+              "material_code": null,
+              "layer_count": null,
+              "flute_type": null,
+              "report_length_mm": null,
+              "report_width_mm": null,
+              "crease_type": null,
+              "crease_left_mm": null,
+              "crease_middle_mm": null,
+              "crease_right_mm": null,
+              "sheet_type": "raw_board",
+              "component_type": "whole",
+              "pieces_per_box": 1,
+              "stock_yield_per_sheet": 1,
+              "quantity": 4000,
+              "location_id": null,
+              "historical_workbook": null,
+              "historical_sheet": null,
+              "historical_row": null,
+              "historical_search_text": null,
+              "remark": null,
+              "external_purchase_quantity": "11",
+              "external_purchase_unit": "ignored-unit",
+              "external_order_quantity_basis": "123.00",
+              "external_purchase_quantity_basis": "456.000000"
+            }
+          ]
+        },
+        "request_match": true,
+        "outcome": "direct_external_purchase_confirmed",
+        "source": {
+          "id": 2,
+          "order_number": "CBW-20261010-61B39EDDD9C6F888EB45",
+          "source_type": "stock_warning",
+          "created_by": 1,
+          "created_at": "2026-10-10T03:07:50",
+          "customer_id": 1,
+          "supplier_name": "蜂窝板供应商",
+          "remark": null
+        },
+        "lines": [
+          {
+            "stock_policy_id": 1,
+            "product_id": 1,
+            "reference_product_id": 1,
+            "customer_id": 1,
+            "material_id": null,
+            "target_inventory_type": "finished",
+            "internal_name": null,
+            "layer_count": null,
+            "flute_type": null,
+            "report_length_mm": null,
+            "report_width_mm": null,
+            "crease_type": null,
+            "crease_left_mm": null,
+            "crease_middle_mm": null,
+            "crease_right_mm": null,
+            "sheet_type": "raw_board",
+            "component_type": "whole",
+            "pieces_per_box": 1,
+            "stock_yield_per_sheet": 1,
+            "remark": null,
+            "request_index": 0,
+            "source_item_id": 2,
+            "requested_quantity": 4000,
+            "saved_quantity": 5,
+            "procurement_route": "external_packaging",
+            "product_code": "EXT-HC-CUSTOMER",
+            "product_name": "客户定制蜂窝纸板",
+            "material_code": null
+          }
+        ],
+        "external_purchase": {
+          "batch_id": 2,
+          "idempotency_key": "http-external-override",
+          "source_order_id": 2,
+          "purchase_order_ids": [
+            2
+          ],
+          "lines": [
+            {
+              "source_item_id": 2,
+              "purchase_order_id": 2,
+              "purchase_item_id": 2,
+              "external_product_id_snapshot": 5,
+              "purchase_quantity": "11",
+              "purchase_unit": "片",
+              "order_quantity_basis": "1",
+              "purchase_quantity_basis": "2",
+              "converted_source_quantity": 5
+            }
+          ]
+        }
+      }
+    }
+  },
+  "replay": {
+    "status": 201,
+    "headers": {
+      "content-length": "4903",
+      "content-type": "application/json",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "id": 2,
+      "order_number": "CBW-20261010-61B39EDDD9C6F888EB45",
+      "request_hash": "455ea2e1c64f7af14ba0f6f79810aceeb8b04080aed9bbb2a77f43e6df3cf8c8",
+      "supplier_name": "蜂窝板供应商",
+      "customer_id": 1,
+      "customer_name": "匿名客户甲",
+      "source_type": "stock_warning",
+      "status": "confirmed",
+      "remark": null,
+      "created_at": "2026-10-10T03:07:50Z",
+      "confirmed_at": "2026-10-10T03:07:50.229933Z",
+      "stocked_at": null,
+      "total_quantity": 5,
+      "stocked_quantity": 0,
+      "items": [
+        {
+          "id": 2,
+          "stock_policy_id": 1,
+          "quantity_contract": null,
+          "replenishment_plan": null,
+          "sheet_cutting_snapshot": null,
+          "target_inventory_type": "finished",
+          "product_id": 1,
+          "reference_product_id": 1,
+          "customer_id": 1,
+          "product_code": "EXT-HC-CUSTOMER",
+          "product_name": "客户定制蜂窝纸板",
+          "internal_name": null,
+          "material_id": null,
+          "material_code": null,
+          "layer_count": null,
+          "flute_type": null,
+          "report_length_mm": null,
+          "report_width_mm": null,
+          "crease_type": null,
+          "crease_left_mm": null,
+          "crease_middle_mm": null,
+          "crease_right_mm": null,
+          "sheet_type": "raw_board",
+          "component_type": "whole",
+          "pieces_per_box": 1,
+          "stock_yield_per_sheet": 1,
+          "quantity": 5,
+          "stocked_quantity": 0,
+          "receipt_progress": {
+            "received_quantity": 0,
+            "remaining_quantity": 5,
+            "short_closed": false,
+            "shortage_quantity": 5,
+            "over_quantity": 0
+          },
+          "location": null,
+          "inventory_lot": null,
+          "historical_source": null,
+          "remark": null,
+          "stocked_at": null
+        }
+      ],
+      "procurement_mode": "external_purchase",
+      "external_purchase_batch_id": 2,
+      "external_purchase_orders": [
+        {
+          "id": 2,
+          "purchase_number": "EP-20261010-002",
+          "supplier_id": 5,
+          "supplier_name": "蜂窝板供应商",
+          "currency": "CNY",
+          "status": "confirmed",
+          "goods_amount": "93.5",
+          "tax_amount": "10.76",
+          "total_amount": "93.5",
+          "items": [
+            {
+              "id": 2,
+              "order_component_id": null,
+              "purpose": "库存预警备库｜EXT-HC-CUSTOMER",
+              "specification_summary": "材质170*110*170，孔径15mm，800×180×60mm",
+              "specification": {
+                "aperture_mm": 15.0,
+                "length_mm": 800.0,
+                "material": "170*110*170",
+                "thickness_mm": 60.0,
+                "width_mm": 180.0
+              },
+              "supplier_product_code": "HC-GENERAL",
+              "product_name": "蜂窝纸板",
+              "purchase_quantity": "11",
+              "purchase_unit": "片",
+              "unit_price": "8.5",
+              "currency": "CNY",
+              "tax_mode": "tax_inclusive",
+              "tax_rate": "0.13",
+              "line_amount": "93.5",
+              "tax_amount": "10.76",
+              "total_amount": "93.5",
+              "price_version_id": 1,
+              "price_version_number": 1,
+              "shipping_fee_mode": "not_provided",
+              "shipping_fee": null,
+              "sample_fee": null,
+              "plate_fee": null,
+              "die_fee": null
+            }
+          ]
+        }
+      ],
+      "current_actor_id": 1,
+      "save_receipt": {
+        "schema_version": 1,
+        "idempotency_key": "http-external-override",
+        "actor_id": 1,
+        "request_hash": "455ea2e1c64f7af14ba0f6f79810aceeb8b04080aed9bbb2a77f43e6df3cf8c8",
+        "request": {
+          "replenishment_plan": null,
+          "replenishment_plans": [],
+          "source_type": "stock_warning",
+          "idempotency_key": "http-external-override",
+          "supplier_name": "蜂窝板供应商",
+          "customer_id": 1,
+          "remark": null,
+          "stock_now": false,
+          "items": [
+            {
+              "stock_policy_id": 1,
+              "procurement_mode": "external_purchase",
+              "target_inventory_type": "finished",
+              "product_id": 1,
+              "reference_product_id": 1,
+              "customer_id": 1,
+              "material_id": null,
+              "product_code": "EXT-HC-CUSTOMER",
+              "product_name": "客户定制蜂窝纸板",
+              "internal_name": null,
+              "material_code": null,
+              "layer_count": null,
+              "flute_type": null,
+              "report_length_mm": null,
+              "report_width_mm": null,
+              "crease_type": null,
+              "crease_left_mm": null,
+              "crease_middle_mm": null,
+              "crease_right_mm": null,
+              "sheet_type": "raw_board",
+              "component_type": "whole",
+              "pieces_per_box": 1,
+              "stock_yield_per_sheet": 1,
+              "quantity": 4000,
+              "location_id": null,
+              "historical_workbook": null,
+              "historical_sheet": null,
+              "historical_row": null,
+              "historical_search_text": null,
+              "remark": null,
+              "external_purchase_quantity": "11",
+              "external_purchase_unit": "ignored-unit",
+              "external_order_quantity_basis": "123.00",
+              "external_purchase_quantity_basis": "456.000000"
+            }
+          ]
+        },
+        "request_match": true,
+        "outcome": "direct_external_purchase_confirmed",
+        "source": {
+          "id": 2,
+          "order_number": "CBW-20261010-61B39EDDD9C6F888EB45",
+          "source_type": "stock_warning",
+          "created_by": 1,
+          "created_at": "2026-10-10T03:07:50",
+          "customer_id": 1,
+          "supplier_name": "蜂窝板供应商",
+          "remark": null
+        },
+        "lines": [
+          {
+            "stock_policy_id": 1,
+            "product_id": 1,
+            "reference_product_id": 1,
+            "customer_id": 1,
+            "material_id": null,
+            "target_inventory_type": "finished",
+            "internal_name": null,
+            "layer_count": null,
+            "flute_type": null,
+            "report_length_mm": null,
+            "report_width_mm": null,
+            "crease_type": null,
+            "crease_left_mm": null,
+            "crease_middle_mm": null,
+            "crease_right_mm": null,
+            "sheet_type": "raw_board",
+            "component_type": "whole",
+            "pieces_per_box": 1,
+            "stock_yield_per_sheet": 1,
+            "remark": null,
+            "request_index": 0,
+            "source_item_id": 2,
+            "requested_quantity": 4000,
+            "saved_quantity": 5,
+            "procurement_route": "external_packaging",
+            "product_code": "EXT-HC-CUSTOMER",
+            "product_name": "客户定制蜂窝纸板",
+            "material_code": null
+          }
+        ],
+        "external_purchase": {
+          "batch_id": 2,
+          "idempotency_key": "http-external-override",
+          "source_order_id": 2,
+          "purchase_order_ids": [
+            2
+          ],
+          "lines": [
+            {
+              "source_item_id": 2,
+              "purchase_order_id": 2,
+              "purchase_item_id": 2,
+              "external_product_id_snapshot": 5,
+              "purchase_quantity": "11",
+              "purchase_unit": "片",
+              "order_quantity_basis": "1",
+              "purchase_quantity_basis": "2",
+              "converted_source_quantity": 5
+            }
+          ]
+        }
+      }
+    }
+  },
+  "resolve": {
+    "status": 200,
+    "headers": {
+      "content-length": "3045",
+      "content-type": "application/json",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "status": "completed",
+      "current_actor_id": 1,
+      "idempotency_key": "http-external-override",
+      "request_match": true,
+      "save_receipt": {
+        "schema_version": 1,
+        "idempotency_key": "http-external-override",
+        "actor_id": 1,
+        "request_hash": "455ea2e1c64f7af14ba0f6f79810aceeb8b04080aed9bbb2a77f43e6df3cf8c8",
+        "request": {
+          "replenishment_plan": null,
+          "replenishment_plans": [],
+          "source_type": "stock_warning",
+          "idempotency_key": "http-external-override",
+          "supplier_name": "蜂窝板供应商",
+          "customer_id": 1,
+          "remark": null,
+          "stock_now": false,
+          "items": [
+            {
+              "stock_policy_id": 1,
+              "procurement_mode": "external_purchase",
+              "target_inventory_type": "finished",
+              "product_id": 1,
+              "reference_product_id": 1,
+              "customer_id": 1,
+              "material_id": null,
+              "product_code": "EXT-HC-CUSTOMER",
+              "product_name": "客户定制蜂窝纸板",
+              "internal_name": null,
+              "material_code": null,
+              "layer_count": null,
+              "flute_type": null,
+              "report_length_mm": null,
+              "report_width_mm": null,
+              "crease_type": null,
+              "crease_left_mm": null,
+              "crease_middle_mm": null,
+              "crease_right_mm": null,
+              "sheet_type": "raw_board",
+              "component_type": "whole",
+              "pieces_per_box": 1,
+              "stock_yield_per_sheet": 1,
+              "quantity": 4000,
+              "location_id": null,
+              "historical_workbook": null,
+              "historical_sheet": null,
+              "historical_row": null,
+              "historical_search_text": null,
+              "remark": null,
+              "external_purchase_quantity": "11",
+              "external_purchase_unit": "ignored-unit",
+              "external_order_quantity_basis": "123.00",
+              "external_purchase_quantity_basis": "456.000000"
+            }
+          ]
+        },
+        "request_match": true,
+        "outcome": "direct_external_purchase_confirmed",
+        "source": {
+          "id": 2,
+          "order_number": "CBW-20261010-61B39EDDD9C6F888EB45",
+          "source_type": "stock_warning",
+          "created_by": 1,
+          "created_at": "2026-10-10T03:07:50",
+          "customer_id": 1,
+          "supplier_name": "蜂窝板供应商",
+          "remark": null
+        },
+        "lines": [
+          {
+            "stock_policy_id": 1,
+            "product_id": 1,
+            "reference_product_id": 1,
+            "customer_id": 1,
+            "material_id": null,
+            "target_inventory_type": "finished",
+            "internal_name": null,
+            "layer_count": null,
+            "flute_type": null,
+            "report_length_mm": null,
+            "report_width_mm": null,
+            "crease_type": null,
+            "crease_left_mm": null,
+            "crease_middle_mm": null,
+            "crease_right_mm": null,
+            "sheet_type": "raw_board",
+            "component_type": "whole",
+            "pieces_per_box": 1,
+            "stock_yield_per_sheet": 1,
+            "remark": null,
+            "request_index": 0,
+            "source_item_id": 2,
+            "requested_quantity": 4000,
+            "saved_quantity": 5,
+            "procurement_route": "external_packaging",
+            "product_code": "EXT-HC-CUSTOMER",
+            "product_name": "客户定制蜂窝纸板",
+            "material_code": null
+          }
+        ],
+        "external_purchase": {
+          "batch_id": 2,
+          "idempotency_key": "http-external-override",
+          "source_order_id": 2,
+          "purchase_order_ids": [
+            2
+          ],
+          "lines": [
+            {
+              "source_item_id": 2,
+              "purchase_order_id": 2,
+              "purchase_item_id": 2,
+              "external_product_id_snapshot": 5,
+              "purchase_quantity": "11",
+              "purchase_unit": "片",
+              "order_quantity_basis": "1",
+              "purchase_quantity_basis": "2",
+              "converted_source_quantity": 5
+            }
+          ]
+        }
+      },
+      "current": {
+        "source_id": 2,
+        "status": "confirmed",
+        "stocked_quantity": 0,
+        "items": [
+          {
+            "source_item_id": 2,
+            "stocked_quantity": 0,
+            "receipt_progress": {
+              "received_quantity": 0,
+              "remaining_quantity": 5,
+              "short_closed": false,
+              "shortage_quantity": 5,
+              "over_quantity": 0
+            }
+          }
+        ],
+        "external_purchase_status": {
+          "batch_id": 2,
+          "purchase_orders": [
+            {
+              "id": 2,
+              "status": "confirmed"
+            }
+          ]
+        }
+      },
+      "trace": null
+    }
+  }
+}

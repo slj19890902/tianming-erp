@@ -22,6 +22,7 @@
     <script src="/static/ui/warehouse-workspace.js?v=20260928"></script>
     <script src="/static/ui/stock-preparation-completion-recovery.js?v=20261010-completion1"></script>
     <script src="/static/ui/stock-preparation-group-recovery.js?v=72b124d276b5"></script>
+    <script src="/static/ui/stock-replenishment-save-recovery.js?v=f7c4b6c25c37"></script>
     <script src="/static/ui/stock-preparation-assembly-recovery.js?v=a11f3ee39242"></script>
     <script src="/static/ui/production-workspace.js?v=fe58b8dee03a"></script>
     <script src="/static/ui/production-desk.js?v=round-experience-d2"></script>
@@ -3292,10 +3293,25 @@
               </div>
             </section>
 
+            <section v-if="stockReplenishmentRecoveryRecords.length || stockReplenishmentRecoveryError" class="order-next-step-guide" aria-live="polite">
+              <div class="order-next-step-copy"><strong>原报料待核对</strong><span v-if="stockReplenishmentRecoveryError">{{ stockReplenishmentRecoveryError }}。请保留本机记录，交管理员在报料历史按原客户、产品和数量核对。</span></div>
+              <div v-for="record in stockReplenishmentRecoveryRecords" :key="record.key" class="order-next-step-copy">
+                <strong>{{ record.summary?.customer || '原客户' }} · {{ record.summary?.products || '原报料产品' }}</strong>
+                <span v-if="record.result?._current">{{ stockReplenishmentCurrentText(record.result._current) }}</span>
+                <span>{{ record.state==='confirmed' ? (record.receipt?.outcome==='direct_external_purchase_confirmed' ? '外购采购已生成' : '补库草稿已保存') : '保存结果待核对；原内容已保留' }}{{ record.message ? '：'+record.message : '' }}</span>
+                <div class="order-next-step-actions">
+                  <button class="btn" type="button" :disabled="!!stockReplenishmentRecoveryBusy" @click="queryStockReplenishmentResult(record)">查原结果</button>
+                  <button v-if="record.notRecorded && record.state!=='confirmed'" class="btn primary" type="button" :disabled="!!stockReplenishmentRecoveryBusy" @click="continueStockReplenishmentResult(record)">按原内容继续</button>
+                  <button v-if="record.result || record.trace" class="btn" type="button" :disabled="!!stockReplenishmentRecoveryBusy" @click="viewStockReplenishmentRecovery(record)">查看原单</button>
+                  <button v-if="record.state==='confirmed'" class="btn" type="button" :disabled="!!stockReplenishmentRecoveryBusy" @click="printStockReplenishmentRecovery(record)">打印原单</button>
+                </div>
+              </div>
+            </section>
             <section v-if="stockReplenishmentSavedNotice.visible" class="order-next-step-guide" aria-live="polite">
-              <div class="order-next-step-copy"><strong>已保存 {{ stockReplenishmentSavedNotice.result?.document_number || stockReplenishmentSavedNotice.result?.order_number || ('补库单 #' + stockReplenishmentSavedNotice.result?.id) }}</strong><span v-if="stockReplenishmentSavedNotice.readError">列表读取失败：{{ stockReplenishmentSavedNotice.readError }}</span></div>
+              <div class="order-next-step-copy"><strong>{{ stockReplenishmentSavedNotice.result?.procurement_mode==='external_purchase' ? '外购采购已生成' : '补库草稿已保存' }} {{ stockReplenishmentSavedNotice.result?.document_number || stockReplenishmentSavedNotice.result?.order_number || ('补库单 #' + stockReplenishmentSavedNotice.result?.id) }}</strong><span v-if="stockReplenishmentSavedNotice.result?._current">{{ stockReplenishmentCurrentText(stockReplenishmentSavedNotice.result._current) }}</span><span v-if="stockReplenishmentSavedNotice.readError">列表读取失败：{{ stockReplenishmentSavedNotice.readError }}</span></div>
               <div class="order-next-step-actions">
-                <button class="btn primary" type="button" @click="viewSavedStockReplenishment()">{{ stockReplenishmentSavedNotice.result?.status==='draft' ? '查看待报料' : stockReplenishmentSavedNotice.result?.procurement_mode==='external_purchase' ? '查看包材采购历史' : '查看已报料' }}</button>
+                <button class="btn primary" type="button" @click="viewSavedStockReplenishment()">{{ stockReplenishmentSavedNotice.result?._save_recovery ? '查看原单' : stockReplenishmentSavedNotice.result?.status==='draft' ? '查看待报料' : stockReplenishmentSavedNotice.result?.procurement_mode==='external_purchase' ? '查看包材采购历史' : '查看已报料' }}</button>
+                <button v-if="stockReplenishmentSavedNotice.result?._save_recovery" class="btn" type="button" @click="printStockReplenishmentRecovery({state:'confirmed',result:stockReplenishmentSavedNotice.result})">打印原单</button>
                 <button v-if="stockReplenishmentSavedNotice.result?.status!=='draft' && hasPermission('incoming.execute') && pageAllowed('incoming')" class="btn" type="button" @click="viewSavedStockReplenishment('incoming')">查看来料待入库</button>
                 <button v-if="stockReplenishmentSavedNotice.readError" class="btn" type="button" @click="viewSavedStockReplenishment()">重试读取</button>
                 <button class="btn" type="button" @click="stockReplenishmentSavedNotice.visible=false">关闭</button>
@@ -10851,6 +10867,10 @@
             supplierRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null},
             compositeRequisitionSaveState:{saving:false, committed:false, uncertain:false, result:null, requestKey:"", draftSignature:""},
             stockPolicyDraftQuantities:{},
+            stockReplenishmentRecoveryRecords:[],
+            stockReplenishmentRecoveryError:"",
+            stockReplenishmentRecoveryBusy:"",
+            stockReplenishmentRecoveryEpoch:0,
             stockReplenishmentSavedNotice:{visible:false,result:null,readError:""},
             stockReplenishmentSaveState:{saving:false, committed:false, uncertain:false, result:null},
             stockReplenishmentVoidState:{orderId:null, documentNumber:"", uncertainIds:{}},
@@ -16335,6 +16355,10 @@
             this.stockReplenishmentSaveState = {saving:false,committed:false,uncertain:false,result:null};
             this.stockReplenishmentVoidState = {orderId:null,documentNumber:"",uncertainIds:{}};
             this.stockPolicyDraftQuantities = {};
+            this.stockReplenishmentRecoveryEpoch = (this.stockReplenishmentRecoveryEpoch || 0) + 1;
+            this.stockReplenishmentRecoveryRecords = [];
+            this.stockReplenishmentRecoveryError = "";
+            this.stockReplenishmentRecoveryBusy = "";
             this.stockReplenishmentSavedNotice = {visible:false,result:null,readError:""};
             this.stockPolicyWarnings = [];
             this.stockReplenishmentProducts = [];
@@ -19206,6 +19230,7 @@
             });
           },
           async loadRequisition({skipAutoRelease=false}={}) {
+            if (window.TmStockReplenishmentRecovery) this.refreshStockReplenishmentRecovery();
             const controller = this.beginLatestRequest("requisition:pending");
             const authGeneration = this.authGeneration;
             const userId = this.user?.id ?? null;
@@ -20212,6 +20237,14 @@
           },
           async openStockReplenishment(options={}) {
             if (!this.canRequisition) return;
+            if (window.TmStockReplenishmentRecovery) {
+              this.refreshStockReplenishmentRecovery();
+              if (this.stockReplenishmentRecoveryError) {
+                this.showToast("本机原报料记录无法读取，请在报料页核对；暂不能新发报料",true);
+                if (options.productAction) throw new Error("请先查原报料结果，再开始新报料");
+                return false;
+              }
+            }
             const productAction = options.productAction;
             if (productAction && !productAction.current()) return;
             const warningOnly = !!options.warningOnly;
@@ -36364,6 +36397,9 @@
             const notice = this.stockReplenishmentSavedNotice;
             const saved = notice.result;
             if (!saved) return false;
+            if (saved._save_recovery && target!=="incoming") return this.viewStockReplenishmentRecovery({result:saved});
+            const actor=this.user?.id,generation=this.authGeneration;
+            const current=()=>this.user?.id===actor&&this.authGeneration===generation&&this.stockReplenishmentSavedNotice===notice;
             notice.readError = "";
             try {
               if (target === "incoming") {
@@ -36372,7 +36408,7 @@
                 this.incomingTab = "pending";
                 this.invalidatePageCache("incoming");
                 await this.go("incoming");
-                return true;
+                return current();
               }
               if (!this.pageAllowed("requisition")) return false;
               this.requisitionWorkspace = saved.procurement_mode === "external_purchase" ? "packaging" : "board";
@@ -36382,6 +36418,7 @@
               this.reportedSort = {by:"reported_at",direction:"desc"};
               this.invalidatePageCache("requisition");
               await this.go("requisition");
+              if(!current())return false;
               if (this.requisitionWorkspace === "board") {
                 if (saved.status === "draft") await this.loadRequisition({skipAutoRelease:true});
                 else {
@@ -36389,7 +36426,9 @@
                   if (this.reportedItemError) throw new Error(this.reportedItemError);
                 }
               }
+              if(!current())return false;
               await this.$nextTick();
+              if(!current())return false;
               const rows = this.requisitionTab === "pending" ? this.filteredRequisitionPending : this.requisitionItems;
               const row = (rows || []).find(row => Number(row.stock_replenishment_order_id || row.source_document_id) === Number(saved.id) || [row.order_number,row.document_number,row.source_document_number].includes(saved.order_number || saved.document_number));
               if (!row && this.requisitionWorkspace === "board") this.showToast("单据已保存；当前筛选或客户范围内未显示，请核对筛选。客户范围保持原设置。");
@@ -36401,22 +36440,46 @@
               }
               return true;
             } catch (error) {
-              if (this.isCancelledRequest(error)) return false;
+              if (!current() || this.isCancelledRequest(error)) return false;
               notice.readError = this.errorMessage(error);
               return false;
             }
           },
-          async saveStockReplenishmentDraft() {
-            const state = this.stockReplenishmentSaveState;
-            if (state.saving || state.committed) {
-              this.showToast(
-                state.committed ? "补库草稿已经保存，请勿重复提交" : "正在保存补库草稿，请勿重复点击",
-                true,
-              );
-              return state.committed ? state.result : {_in_flight:true};
+          stockReplenishmentCurrentText(current) {
+            const names={draft:"待报料",confirmed:"已报料",stocked:"已收料",voided:"已作废",cancelled:"已取消",partial:"部分收料"};
+            const status=names[current?.status]||current?.status||"状态待核对";
+            const quantity=Number.isSafeInteger(current?.stocked_quantity)?"，已收料 "+current.stocked_quantity:"";
+            const external=current?.external_purchase_status;
+            const cancelled=external?.status==='cancelled'||external?.status==='voided'||external?.purchase_orders?.some(order=>['cancelled','voided'].includes(order.status));
+            return "原保存已确认；当前原单："+status+quantity+(cancelled?"，采购已取消":"");
+          },
+          refreshStockReplenishmentRecovery() {
+            try {
+              if (!Number.isSafeInteger(this.user?.id) || this.user.id<=0) return;
+              const store=window.TmStockReplenishmentRecovery.createStore(window.localStorage,this.user.id);
+              this.stockReplenishmentRecoveryRecords=store.list();
+              this.stockReplenishmentRecoveryError="";
+            } catch(error) {
+              this.stockReplenishmentRecoveryError="无法可靠读取本机原报料记录，暂不能发送新报料："+this.errorMessage(error);
             }
-            const validation = this.validateStockReplenishmentForm();
-            if (validation) throw new Error(validation);
+          },
+          async stockReplenishmentRequest(url,body,current) {
+            // A fresh local client copies current authentication defaults; it has no global late-error interceptors.
+            const client=axios.create({timeout:60000});
+            let timer;
+            try {
+              const request=client.post(url,body,{timeout:60000});
+              return await Promise.race([request,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error("等待回执超时，原报料内容已保留；请查原结果")),60000);})]);
+            } catch(error) {
+              if(current() && error?.response?.status===401) window.erpAuthRequired?.();
+              throw error;
+            } finally { clearTimeout(timer); }
+          },
+          async saveStockReplenishmentDraft() {
+            const state=this.stockReplenishmentSaveState;
+            if(state.saving || state.committed) return state.committed?{...state.result,_in_flight:true}:{_in_flight:true};
+            const validation=this.validateStockReplenishmentForm();
+            if(validation) throw new Error(validation);
             const payload = {
               source_type:this.stockReplenishmentForm.source_type,
               idempotency_key:this.stockReplenishmentForm.idempotency_key || null,
@@ -36449,62 +36512,103 @@
                 return item;
               }),
             };
-            const frozenPayload = JSON.parse(JSON.stringify(payload));
-            state.saving = true;
-            state.uncertain = false;
+            payload.expected_actor_id=this.user?.id;
+            const api=window.TmStockReplenishmentRecovery;
+            if(!api) throw new Error("原报料保护组件未加载，请刷新页面后再保存");
+            let store,record;
+            try {
+              store=api.createStore(window.localStorage,this.user.id);
+              const customer=(this.customerOptions||[]).find(c=>Number(c.id)===Number(payload.customer_id));
+              record=store.prepare(payload,{customer:customer?.name||customer?.customer_name||"原客户",products:payload.items.map(i=>(i.product_code||i.product_name||i.material_code||"原产品")+" × "+i.quantity).join("、")});
+              if(record.state!=='prepared'||record.hadUnknown) throw new Error("原报料结果待核对，请先查原结果，不要更改原内容");
+            } catch(error) {this.refreshStockReplenishmentRecovery();throw new Error("原内容未可靠保存，未发送："+this.errorMessage(error));}
+            return this.sendStockReplenishmentRecord(record,{fresh:true,state,form:this.stockReplenishmentForm,modal:this.modal,store});
+          },
+          async sendStockReplenishmentRecord(record,options={}) {
+            const api=window.TmStockReplenishmentRecovery,actor=this.user?.id,generation=this.authGeneration,epoch=this.stockReplenishmentRecoveryEpoch||0;
+            const state=options.state||this.stockReplenishmentSaveState,form=options.form||this.stockReplenishmentForm,modal=Object.prototype.hasOwnProperty.call(options,"modal")?options.modal:this.modal,page=this.activePage;
+            let closedOwnModal=false;
+            const current=()=>this.user?.id===actor&&this.authGeneration===generation&&(this.stockReplenishmentRecoveryEpoch||0)===epoch&&this.activePage===page&&(!form||this.stockReplenishmentForm===form)&&(this.modal===modal||(closedOwnModal&&this.modal===null));
+            const store=options.store||api.createStore(window.localStorage,actor);
+            const live=store.get(record.key);
+            if(!live||live.state==='confirmed'||live.hash!==record.hash) throw new Error("原单已确认或本机内容已变化，请查原结果");
+            if(!options.fresh&&!record.notRecorded) throw new Error("请先查原结果，再按原内容继续");
+            state.saving=true;this.stockReplenishmentRecoveryBusy=record.key;
             try {
               let data;
               try {
-                ({data} = await axios.post("/api/requisition/stock-replenishment/orders", frozenPayload));
-              } catch (error) {
-                const status = Number(error?.response?.status || 0);
-                if (!error?.response || status >= 500) {
-                  state.uncertain = true;
-                  if (this.modal?.type === "stockReplenishment") this.modal = null;
-                  error._stockReplenishmentOutcomeUncertain = true;
+                ({data}=await this.stockReplenishmentRequest("/api/requisition/stock-replenishment/orders",record.body,current));
+                if(!current()) return {_stale:true};
+                const proof=api.validateComplete(data,record);
+                // Persist a separate confirmation before attempting pending cleanup; late unknown cannot overwrite it.
+                state.committed=true;state.uncertain=false;state.result=data;
+                try {record=store.confirm(record,data,proof);store.remove(record);}catch(error){this.stockReplenishmentRecoveryError="原报料已确认，本机记录未清理："+this.errorMessage(error);}
+              } catch(error) {
+                if(!current()) return {_stale:true};
+                if(options.fresh&&api.notSaved(error,record)){
+                  try {store.reject(record);} catch(storageError){state.uncertain=true;this.refreshStockReplenishmentRecovery();throw storageError;}
+                  state.uncertain=false;this.refreshStockReplenishmentRecovery();throw error;
                 }
-                throw error;
+                try {store.unknown(record);}catch(storageError){this.stockReplenishmentRecoveryError="原请求已发送，本机记录读取失败，请保留现场："+this.errorMessage(storageError);}
+                state.uncertain=true;this.refreshStockReplenishmentRecovery();
+                if(this.modal===modal && modal) this.modal=null;
+                error._stockReplenishmentOutcomeUncertain=true;throw error;
               }
-              // 补库报料草稿已经写入；打印和列表刷新失败不能把已完成业务显示成保存失败。
-              state.committed = true;
-              state.result = data;
-              if (this.modal?.type === "stockReplenishment") this.modal = null;
-              let printFailed = false;
-              try {
-                if (data.procurement_mode === "external_purchase") {
-                  const purchaseId = Number(data.external_purchase_orders?.[0]?.id || 0);
-                  if (!purchaseId || !window.open(`/external-purchase-print.html?id=${purchaseId}`, "_blank")) printFailed = true;
-                } else if (data.status !== "draft") {
-                  const printable = (await axios.get(`/api/requisition/stock-replenishment/orders/${data.id}/print`)).data;
-                  this.openStockReplenishmentPrint(printable);
-                }
-                } catch (error) {
-                  printFailed = true;
+              if(!current()) return {_stale:true};
+              if(modal&&this.modal===modal){closedOwnModal=true;this.modal=null;}
+              const notice={visible:true,result:data,readError:""};this.stockReplenishmentSavedNotice=notice;
+              this.refreshStockReplenishmentRecovery();
+              this.pages.requisitionPending=1;this.pages.requisitionReported=1;this.reportedSort={by:"reported_at",direction:"desc"};this.invalidatePageCache("requisition");
+              let printFailed=false,refreshFailed=false;
+              // Only ordinary initial success retains its existing print behavior. Recovery never opens another print window automatically.
+              if(options.fresh && current()) {
+                try {if(data.procurement_mode==='external_purchase'){const id=Number(data.external_purchase_orders?.[0]?.id||0);if(!id||!window.open(`/external-purchase-print.html?id=${id}`,"_blank"))printFailed=true;}else if(data.status!=='draft'){const printable=(await axios.create({timeout:15000}).get(`/api/requisition/stock-replenishment/orders/${data.id}/print`)).data;if(current())this.openStockReplenishmentPrint(printable);}}
+                catch(error){if(current())printFailed=true;}
               }
-              this.pages.requisitionPending = 1;
-              this.pages.requisitionReported = 1;
-              this.reportedSort = {by:"reported_at",direction:"desc"};
-              this.invalidatePageCache("requisition");
-              this.stockReplenishmentSavedNotice = {visible:true,result:data,readError:""};
-              let refreshFailed = false;
-              if (this.activePage === "requisition" && (this.requisitionWorkspace || "board") === "board") {
-                try {
-                  if (data.status === "draft") await this.loadRequisition({skipAutoRelease:true});
-                  else if (this.requisitionTab === "submitted") {
-                    await this.loadReportedDocuments();
-                    if (this.reportedItemError) throw new Error(this.reportedItemError);
-                  }
-                } catch (error) {
-                  if (!this.isCancelledRequest(error)) {
-                    refreshFailed = true;
-                    this.stockReplenishmentSavedNotice.readError = this.errorMessage(error);
-                  }
-                }
+              if(current() && this.activePage==='requisition' && (this.requisitionWorkspace||'board')==='board'){
+                try {if(data.status==='draft')await this.loadRequisition({skipAutoRelease:true});else if(this.requisitionTab==='submitted'){await this.loadReportedDocuments();if(this.reportedItemError)throw Error(this.reportedItemError);}}
+                catch(error){if(current()&&this.stockReplenishmentSavedNotice===notice){refreshFailed=true;notice.readError=this.errorMessage(error);}}
               }
-              return {...data, _refresh_failed:refreshFailed, _print_failed:printFailed};
-            } finally {
-              state.saving = false;
-            }
+              return current()?{...data,_refresh_failed:refreshFailed,_print_failed:printFailed}:{_stale:true};
+            } finally {state.saving=false;if(this.user?.id===actor&&this.authGeneration===generation&&(this.stockReplenishmentRecoveryEpoch||0)===epoch&&this.stockReplenishmentRecoveryBusy===record.key)this.stockReplenishmentRecoveryBusy="";}
+          },
+          async queryStockReplenishmentResult(record) {
+            if(this.stockReplenishmentRecoveryBusy)return;
+            const api=window.TmStockReplenishmentRecovery,actor=this.user?.id,generation=this.authGeneration,epoch=this.stockReplenishmentRecoveryEpoch||0;
+            const page=this.activePage,form=this.stockReplenishmentForm,modal=this.modal;
+            const current=()=>this.activePage===page&&this.stockReplenishmentForm===form&&this.modal===modal&&this.user?.id===actor&&this.authGeneration===generation&&(this.stockReplenishmentRecoveryEpoch||0)===epoch;
+            this.stockReplenishmentRecoveryBusy=record.key;
+            try {
+              const store=api.createStore(window.localStorage,actor),live=store.get(record.key);
+              if(!live)throw Error("原记录已变化，请重新读取");
+              const {data}=await this.stockReplenishmentRequest('/api/requisition/stock-replenishment/save-results/'+encodeURIComponent(record.key)+'/resolve',{expected_actor_id:actor,original_request:live.body},current);
+              if(!current())return;
+              const proof=api.validateResolve(data,live);
+              if(proof){const result=api.resultOf(proof,data.current);let confirmed=store.confirm(live,result,proof);try{store.remove(confirmed);}catch(error){confirmed.message=this.errorMessage(error);}this.stockReplenishmentSavedNotice={visible:true,result,readError:""};this.refreshStockReplenishmentRecovery();this.showToast(proof.outcome==='draft_saved'?"补库草稿已保存，可查看原单":"外购采购已生成，可查看原单");}
+              else {const updated=store.unknown(live);this.refreshStockReplenishmentRecovery();const row=this.stockReplenishmentRecoveryRecords.find(r=>r.key===record.key);if(row){row.notRecorded=data.status==='not_recorded';row.trace=data.trace;row.message=data.status==='not_recorded'?"当前未查到；可按原内容继续，不能换内容重新保存":"原单已找到，但证明不完整；请查看原单并交管理员核对原客户、产品和数量";}}
+            }catch(error){if(current()){const row=this.stockReplenishmentRecoveryRecords.find(r=>r.key===record.key);if(row){row.notRecorded=false;row.message=this.errorMessage(error)+"；请在报料历史按原客户、编码和数量交管理员核对";}else this.stockReplenishmentRecoveryError=this.errorMessage(error);}}
+            finally {if(this.user?.id===actor&&this.authGeneration===generation&&(this.stockReplenishmentRecoveryEpoch||0)===epoch&&this.stockReplenishmentRecoveryBusy===record.key)this.stockReplenishmentRecoveryBusy="";}
+          },
+          async continueStockReplenishmentResult(record) {
+            if(this.stockReplenishmentRecoveryBusy||!record.notRecorded)return;
+            try {const data=await this.sendStockReplenishmentRecord(record);if(!data?._stale)this.showToast("原报料已确认，可查看原单；未自动打印");}
+            catch(error){this.refreshStockReplenishmentRecovery();this.showToast("原报料内容已保留，请查原结果："+this.errorMessage(error),true);}
+          },
+          async viewStockReplenishmentRecovery(record) {
+            const saved=record.result||{id:record.trace?.source_id,order_number:record.trace?.order_number};
+            if(!Number.isSafeInteger(saved.id)||saved.id<=0)return;
+            const actor=this.user?.id,generation=this.authGeneration,modal=this.modal;
+            try {
+              const {data}=await axios.create({timeout:15000}).get(`/api/requisition/stock-replenishment/orders/${saved.id}/print`);
+              if(this.user?.id===actor&&this.authGeneration===generation&&this.modal===modal)this.openStockReplenishmentPrint(data);
+            }catch(error){if(this.user?.id===actor&&this.authGeneration===generation){this.showToast("原单 "+saved.order_number+" 已定位，读取暂未完成；请在报料历史核对，原内容已保留："+this.errorMessage(error),true);}}
+          },
+          async printStockReplenishmentRecovery(record) {
+            if(record.state!=='confirmed'||!record.result)return;
+            const actor=this.user?.id,generation=this.authGeneration,modal=this.modal,page=this.activePage;
+            if(!window.confirm("请确认原单是否已打印；再次打印可能产生重复纸单。继续打印？"))return;
+            try {const data=record.result;if(data.procurement_mode==='external_purchase'){const id=data.external_purchase_orders?.[0]?.id;if(id)window.open(`/external-purchase-print.html?id=${id}`,"_blank");}else{const printable=(await axios.create({timeout:15000}).get(`/api/requisition/stock-replenishment/orders/${data.id}/print`)).data;if(this.user?.id===actor&&this.authGeneration===generation&&this.modal===modal&&this.activePage===page)this.openStockReplenishmentPrint(printable);}}
+            catch(error){if(this.user?.id===actor&&this.authGeneration===generation&&this.modal===modal&&this.activePage===page)this.showToast("原单已保存，打印暂未打开，请从原单重试",true);}
           },
           beginSupplierSheetCuttingEdit(line) {
             line._sheet_cutting_edit={length_parts:line.sheet_cutting_snapshot.length_parts,width_parts:line.sheet_cutting_snapshot.width_parts};
@@ -40302,7 +40406,7 @@
               }
               if (this.modal.type === "stockReplenishment") {
                 const data = await this.saveStockReplenishmentDraft();
-                if (data?._in_flight) return false;
+                if (data?._in_flight || data?._stale) return false;
                 const number = data?.document_number || data?.order_number || `#${data.id}`;
                 const destination = data.status === "draft" ? "待报料" : data.procurement_mode === "external_purchase" ? "包材采购历史" : "已报料";
                 this.showToast(`已保存 ${number}；${data?._refresh_failed ? destination + "读取失败，可单独重试读取" : "点击“查看" + destination + "”继续"}${data?._print_failed ? "；打印页未打开，可从原单重开" : ""}。`);
@@ -40475,7 +40579,7 @@
                 return false;
               }
               if (error?._stockReplenishmentOutcomeUncertain) {
-                this.showToast("补库草稿提交连接中断，结果暂不确定。原草稿已关闭，请刷新“已报料”和“来料待入库”核对，不要重复点击原草稿。", true);
+                this.showToast("保存结果待核对，原客户、产品和数量已保留；请在报料页点击‘查原结果’，未查到时可按原内容继续。", true);
                 return false;
               }
               if (masterEntity && masterForm?.id && this.handleMaster409(error,masterEntity,{

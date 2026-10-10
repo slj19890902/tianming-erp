@@ -1,0 +1,117 @@
+{
+  "kind": "anonymous isolated real HTTP archives; no production data",
+  "files": {
+    "cardboard-dimension.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "a450d4b2dd18cfe09a88427514315c0e5ed9ab24bd461621b29241412dd1cb48",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "committed-ack-loss.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "3c3c27f312f751847cc987461ece5f449e4b5f3b6d38a8252213abc5fdda4703",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "direct-external.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "92129cb891fa07455df81d1be812bd9d9ac4469ff5501383ad343ebf585f1842",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "external-override.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "c5eec41efff3c2182d78b67bc3eedeff50494520a157bdcdabbabe09e65ba827",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "fresh-rejected.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "0e128a12adaf73908a0d80eeb1d7dccf6ab5f08c901a2e888bd1765769f69c47",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "hash-normalization.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "dfcf23ff42448bbc47c1280f25bf90e6ce6b861f0eb9c769f74d53133caefb59",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "independent-derived-current.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "d56fd1b43915977d97c39bdf78acf91a24f9312f8cf260a2f96e01679f4497b4",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "independent-external-hints.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "b88d83ed852fed1916ff5f67ed5242b3de943ad2ec8a86014462ed4aa50fa56c",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "legacy-null.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "cbfb39bea3899508419d0f9e9d5e07f09aab8178f83bb46a9078f81c1813727e",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "material-layer-hint.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "e4336392d936d084e1c2694d3af0c1692a6782fdf55071554574211d76647f2c",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "not-recorded.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "52691d2b84f0292d8bf693300e3cbc7dcbc985b9ae7dc1d66a14d7247cbad40f",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "plain-current-shape.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "a5ea5fac67a340e9830af42a220582f01effbd523ecea72fb68ab1c9aa25f78e",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "plain.json": {
+      "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+      "sha256": "c5d837304299f106dcd45c6f67dfd22e07351a64d39c2aa444626fa07a19b134",
+      "sourceSHA256": {
+        "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    },
+    "bom-two-components.json": {
+      "sourceCandidate": "f5ad9f23a96fe0967de15cd2a2cbbc8ddf0dc8d6",
+      "sha256": "fbfe086f554ffd5eef2b30ea6ed0f03cb03a1b07ca39b809533889f73031f827",
+      "sourceSHA256": {
+        "app/api/requisition.py": "8dc16636a5d864d89059deca3a1e7b0bbf675ea13eee126233712831ef2818e2",
+        "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+      }
+    }
+  }
+}

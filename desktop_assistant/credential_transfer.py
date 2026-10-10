@@ -57,7 +57,7 @@ def _entry(value, purpose):
     return {'value': secret, 'source_protected_sha256': _hash(value.encode('utf-8'))}
 
 
-def collect(root: Path) -> dict:
+def collect(root: Path, *, bound_backup_sha256=None) -> dict:
     """Read only known operational locations; never enumerate system secrets."""
     root = Path(root).absolute()
     if not root.is_dir():
@@ -100,15 +100,20 @@ def collect(root: Path) -> dict:
         current = _read(path, 65536) if path.exists() else None
         if current != original:
             raise ValueError('凭据配置在导出期间变化，请重新导出')
-    result = {'type': TYPE, 'source_platform': sys.platform, 'files': files, 'entries': entries}
+    result = {'type': TYPE, 'source_platform': sys.platform, 'files': files, 'entries': entries,
+              'bound_backup_sha256': bound_backup_sha256}
     _validate(result)
     return result
 
 
 def _validate(record):
-    if (not isinstance(record, dict) or set(record) != {'type', 'source_platform', 'files', 'entries'}
+    if (not isinstance(record, dict) or set(record) != {'type', 'source_platform', 'files', 'entries', 'bound_backup_sha256'}
             or record['type'] != TYPE or record['source_platform'] not in {'win32', 'darwin'}):
         raise ValueError('凭据移交内容格式错误')
+    binding = record['bound_backup_sha256']
+    if binding is not None and (not isinstance(binding, str) or len(binding) != 64
+                               or any(c not in '0123456789abcdef' for c in binding)):
+        raise ValueError('凭据包绑定的完整备份指纹无效')
     if not isinstance(record['files'], dict) or not set(record['files']) <= {v[0] for v in CONFIGS.values()}:
         raise ValueError('凭据移交包含未知配置路径')
     if not isinstance(record['entries'], dict) or not set(record['entries']) <= {*CONFIGS, 'mailbox'}:
@@ -174,11 +179,12 @@ def unseal(raw, password):
         raise ValueError('移交口令错误、内容不兼容或加密凭据包已损坏') from None
 
 
-def export(root, destination, password):
+def export(root, destination, password, *, backup=None):
     destination = Path(destination)
     if destination.exists() or destination.is_symlink():
         raise ValueError('移交输出已存在，拒绝覆盖')
-    record = collect(root)
+    from desktop_assistant.storage import sha
+    record = collect(root, bound_backup_sha256=sha(Path(backup)) if backup is not None else None)
     encrypted = seal(record, password)
     if unseal(encrypted, password) != record:
         raise ValueError('移交加密回读不一致')
@@ -196,6 +202,7 @@ def main():
     parser = argparse.ArgumentParser(description='原服务用户导出加密运营凭据，不导出发布私钥')
     parser.add_argument('--root', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--backup', type=Path, help='绑定需要恢复的完整加密备份；旧备份跨机恢复必须指定')
     args = parser.parse_args()
     if not sys.stdin.isatty():
         raise SystemExit('请在原服务用户的交互终端运行，口令不能通过参数、管道或日志传入')
@@ -203,7 +210,7 @@ def main():
     if getpass.getpass('再次输入移交口令：') != password:
         raise SystemExit('两次口令不一致，未导出')
     try:
-        print(json.dumps(export(args.root, args.output, password), ensure_ascii=False))
+        print(json.dumps(export(args.root, args.output, password, backup=args.backup), ensure_ascii=False))
     except Exception:
         raise SystemExit('移交未完成：请核对原服务用户、来源目录、输出目录及口令；未输出秘密详情') from None
 

@@ -48,7 +48,7 @@ class Manager:
     def __init__(self, root: Path, public_key: bytes):
         self.root = root.resolve()
         self.public_key = public_key
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         for name in ('releases', 'shared', 'control', 'backups', 'packages', 'staging'):
             (self.root / name).mkdir(exist_ok=True)
 
@@ -462,10 +462,15 @@ class Manager:
         else:
             authority = None
         stamp = datetime.now(CN).strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:8]
+        from desktop_assistant.credential_transfer import export as export_credentials
+        credential_package = job / 'credentials.tmencrypted'
+        export_credentials(self.root, credential_package, password)
+        packages['credentials.tmencrypted'] = credential_package
         raw = job / 'recovery.zip'
         pack_recovery(self.root / 'shared', packages, raw, {'type': 'tianming.recovery.v1', 'created': datetime.now(CN).isoformat(),
                             'release': current, 'version': self.manifest()['version'], 'database': before,
                             'source_shared': str(self.root / 'shared'), 'schema_authority': authority,
+                            'credential_transfer': 'credentials.tmencrypted',
                             **({dispatch_contract.STATE_KEY: dispatch_activation} if dispatch_activation else {})})
         if database_info(self.root / 'shared/data/carton_erp.sqlite3') != before:
             raise ValueError('备份期间数据复核不一致')
@@ -756,7 +761,8 @@ class Manager:
                 raise ValueError('升级数据完整，但新程序启动失败；已恢复兼容旧程序，数据未回退') from None
             return '已核对完整升级结果并恢复运行，业务数据未回退'
 
-    def restore(self, backup: Path, password: str):
+    def restore(self, backup: Path, password: str, *, credentials: Path | None = None,
+                credential_password: str | None = None):
         """Restore into an EMPTY managed installation. Never replaces running data."""
         with self.lock():
             if self.state['current'] or any((self.root / 'shared').iterdir()):
@@ -821,16 +827,42 @@ class Manager:
             if database_info(database) != info:
                 raise ValueError('恢复库最终完整性、表计数或版本复核失败')
             validate_database_schema(database, contract)
+            from desktop_assistant.credential_restore import load_for_recovery, prepare
+            from desktop_assistant.credential_transfer import CONFIGS, _path
+            credential_record = load_for_recovery(manifest, payload, backup, password,
+                                                   credentials, credential_password)
+            credential_report = {'status': 'not-included'}
+            credential_paths = {}
+            if credential_record is not None:
+                for name, _field in CONFIGS.values():
+                    destination = _path(self.root, name)
+                    if destination.exists():
+                        raise ValueError('目标已有凭据配置，恢复不能覆盖')
+                credential_paths, credential_report = prepare(credential_record, payload)
+                credential_report['status'] = 'restored'
+                if database_info(database) != info:
+                    raise ValueError('凭据恢复后的完整性、表计数或版本不一致')
+                validate_database_schema(database, contract)
             # Promote program caches only after all payload checks pass.
             if authority:
                 self.stage_release(compatible_package, verify_existing=True)
             self.stage_release(payload / 'release.zip', verify_existing=True)
+            for name, source in credential_paths.items():
+                destination = _path(self.root, name)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with source.open('rb') as src, os.fdopen(descriptor, 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
+                    dst.flush()
+                    os.fsync(dst.fileno())
             (self.root / 'shared').rmdir()  # proven empty above
             (payload / 'shared').rename(self.root / 'shared')
             write_json(self.root / 'state.json', {'current': release['id'], 'previous': None,
                        'restored_at': datetime.now(CN).isoformat(), 'source_time': manifest['created'],
                        'schema_authority': authority,
+                       'credential_restore': credential_report,
                        **({dispatch_contract.STATE_KEY: dispatch_contract.state_index(dispatch_activation)}
                           if dispatch_activation else {})})
             # A new PC's LAN URLs, firewall and printer need explicit local configuration.
-            return {'version': release['version'], 'data_time': manifest['created'], 'started': False}
+            return {'version': release['version'], 'data_time': manifest['created'], 'started': False,
+                    'credentials': credential_report}

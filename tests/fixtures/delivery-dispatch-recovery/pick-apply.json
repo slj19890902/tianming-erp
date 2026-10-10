@@ -1,0 +1,3530 @@
+{
+  "sourceCandidate": "5111aa0ff93760e235c5b05d83a4e5709f349839",
+  "sourceHashes": {
+    "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+    "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+    "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+    "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+  },
+  "fixtureNode": "tests.test_delivery_dispatch_commands::test_atomic_pick_apply_failure_restores_original_task",
+  "originalBody": {
+    "expected_actor_id": 1,
+    "idempotency_key": "dispatch-command-first",
+    "expected_version": 1,
+    "snapshot_hash": "1137a77555d9302ec2ad324f94f06897b72ea514e918cf8aeb21ce5605b4c619",
+    "snapshot": {
+      "schema_version": 1,
+      "delivery": {
+        "id": 1,
+        "customer_id": 1,
+        "status": "pending",
+        "version": 1,
+        "source_mode": "order",
+        "delivery_date": "2026-07-18",
+        "vehicle_number": null
+      },
+      "items": [
+        {
+          "delivery_item_id": 1,
+          "revision_number": 1,
+          "source_type": "order",
+          "order_item_id": 1,
+          "product_id": null,
+          "source_product_id": 1,
+          "customer_id": 1,
+          "customer_quantity": 100,
+          "physical_quantity": 100,
+          "customer_unit": null,
+          "physical_unit": null,
+          "quantity_contract": null,
+          "goods": [
+            {
+              "component_snapshot_id": null,
+              "source_product_id": 1,
+              "customer_id": 1,
+              "physical_quantity": 100,
+              "physical_unit": null,
+              "quantity_per_set": null,
+              "bom_delivery_mode": null
+            }
+          ],
+          "semi_requirements": [],
+          "direct_completion_sources": [],
+          "order_delivered_quantity": 0,
+          "allocation_mode": "on_dispatch",
+          "allocations": []
+        },
+        {
+          "delivery_item_id": 2,
+          "revision_number": 1,
+          "source_type": "order",
+          "order_item_id": 2,
+          "product_id": null,
+          "source_product_id": 2,
+          "customer_id": 1,
+          "customer_quantity": 50,
+          "physical_quantity": 50,
+          "customer_unit": null,
+          "physical_unit": null,
+          "quantity_contract": null,
+          "goods": [
+            {
+              "component_snapshot_id": null,
+              "source_product_id": 2,
+              "customer_id": 1,
+              "physical_quantity": 50,
+              "physical_unit": null,
+              "quantity_per_set": null,
+              "bom_delivery_mode": null
+            }
+          ],
+          "semi_requirements": [],
+          "direct_completion_sources": [],
+          "order_delivered_quantity": 0,
+          "allocation_mode": "on_dispatch",
+          "allocations": []
+        }
+      ],
+      "pick_task": {
+        "id": 1,
+        "delivery_id": 1,
+        "snapshot_version": 1,
+        "route_snapshot_version": "dcac9852dbabc14b",
+        "print_version": "1-44877cf821",
+        "status": "exception",
+        "items": [
+          {
+            "task_item_id": 1,
+            "delivery_item_id": 1,
+            "order_item_id": 1,
+            "original_physical_quantity": 100,
+            "picked_physical_quantity": 80,
+            "pick_status": "partial",
+            "location_plan_complete": true,
+            "location_lines": [
+              {
+                "pick_item_id": 1,
+                "order_item_id": 1,
+                "source_type": "finished_inventory",
+                "reservation_id": 1,
+                "lot_id": 1,
+                "lot_number": "PHASE7-FG-1",
+                "component_snapshot_id": null,
+                "product_code": "PICK-001",
+                "product_name": "拿货测试外箱",
+                "specification": "500×300×200mm",
+                "pick_quantity": 100,
+                "requirement_quantity": 100,
+                "requirement_numerator": 100,
+                "requirement_denominator": 1,
+                "unit": "个",
+                "location_id": 1,
+                "location_code": "PHASE7-FG",
+                "location_name": "Phase 7 成品测试库位",
+                "warehouse_floor": null,
+                "area_code": null,
+                "location_sort_order": 0,
+                "placement_status": null,
+                "position_status": "unplaced",
+                "map_feature_id": null,
+                "published_map_revision": null,
+                "map_point": null,
+                "pallet_id": null,
+                "pallet_code": null,
+                "location_operational": true,
+                "needs_relocation": false,
+                "requires_attention": false,
+                "specification_display": "500×300×200mm",
+                "customer_inventory_code": "PICK-001",
+                "units_per_bundle": null,
+                "bundle_count": null,
+                "loose_quantity": null,
+                "bundle_text": "每捆数量待核"
+              }
+            ]
+          },
+          {
+            "task_item_id": 2,
+            "delivery_item_id": 2,
+            "order_item_id": 2,
+            "original_physical_quantity": 50,
+            "picked_physical_quantity": 50,
+            "pick_status": "picked",
+            "location_plan_complete": true,
+            "location_lines": [
+              {
+                "pick_item_id": 2,
+                "order_item_id": 2,
+                "source_type": "finished_inventory",
+                "reservation_id": 2,
+                "lot_id": 2,
+                "lot_number": "PHASE7-FG-2",
+                "component_snapshot_id": null,
+                "product_code": "PICK-002",
+                "product_name": "拿货测试内箱",
+                "specification": "300×200×150mm",
+                "pick_quantity": 50,
+                "requirement_quantity": 50,
+                "requirement_numerator": 50,
+                "requirement_denominator": 1,
+                "unit": "个",
+                "location_id": 1,
+                "location_code": "PHASE7-FG",
+                "location_name": "Phase 7 成品测试库位",
+                "warehouse_floor": null,
+                "area_code": null,
+                "location_sort_order": 0,
+                "placement_status": null,
+                "position_status": "unplaced",
+                "map_feature_id": null,
+                "published_map_revision": null,
+                "map_point": null,
+                "pallet_id": null,
+                "pallet_code": null,
+                "location_operational": true,
+                "needs_relocation": false,
+                "requires_attention": false,
+                "specification_display": "300×200×150mm",
+                "customer_inventory_code": "PICK-002",
+                "units_per_bundle": null,
+                "bundle_count": null,
+                "loose_quantity": null,
+                "bundle_text": "每捆数量待核"
+              }
+            ]
+          }
+        ]
+      },
+      "pick_action": "apply",
+      "expected_final_items": [
+        {
+          "delivery_item_id": 1,
+          "customer_quantity": 80,
+          "physical_quantity": 80,
+          "customer_unit": null,
+          "physical_unit": null,
+          "goods": [
+            {
+              "component_snapshot_id": null,
+              "source_product_id": 1,
+              "customer_id": 1,
+              "physical_quantity": 80,
+              "physical_unit": null,
+              "quantity_per_set": null,
+              "bom_delivery_mode": null
+            }
+          ]
+        },
+        {
+          "delivery_item_id": 2,
+          "customer_quantity": 50,
+          "physical_quantity": 50,
+          "customer_unit": null,
+          "physical_unit": null,
+          "goods": [
+            {
+              "component_snapshot_id": null,
+              "source_product_id": 2,
+              "customer_id": 1,
+              "physical_quantity": 50,
+              "physical_unit": null,
+              "quantity_per_set": null,
+              "bom_delivery_mode": null
+            }
+          ]
+        }
+      ]
+    },
+    "confirm_pick_exception": true
+  },
+  "actorId": 1,
+  "snapshot": {
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store"
+    },
+    "body": {
+      "schema_version": 1,
+      "current_actor_id": 1,
+      "snapshot": {
+        "schema_version": 1,
+        "delivery": {
+          "id": 1,
+          "customer_id": 1,
+          "status": "pending",
+          "version": 1,
+          "source_mode": "order",
+          "delivery_date": "2026-07-18",
+          "vehicle_number": null
+        },
+        "items": [
+          {
+            "delivery_item_id": 1,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 1,
+            "product_id": null,
+            "source_product_id": 1,
+            "customer_id": 1,
+            "customer_quantity": 100,
+            "physical_quantity": 100,
+            "customer_unit": null,
+            "physical_unit": null,
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "physical_quantity": 100,
+                "physical_unit": null,
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 0,
+            "allocation_mode": "on_dispatch",
+            "allocations": []
+          },
+          {
+            "delivery_item_id": 2,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 2,
+            "product_id": null,
+            "source_product_id": 2,
+            "customer_id": 1,
+            "customer_quantity": 50,
+            "physical_quantity": 50,
+            "customer_unit": null,
+            "physical_unit": null,
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 50,
+                "physical_unit": null,
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 0,
+            "allocation_mode": "on_dispatch",
+            "allocations": []
+          }
+        ],
+        "pick_task": {
+          "id": 1,
+          "delivery_id": 1,
+          "snapshot_version": 1,
+          "route_snapshot_version": "dcac9852dbabc14b",
+          "print_version": "1-44877cf821",
+          "status": "exception",
+          "items": [
+            {
+              "task_item_id": 1,
+              "delivery_item_id": 1,
+              "order_item_id": 1,
+              "original_physical_quantity": 100,
+              "picked_physical_quantity": 80,
+              "pick_status": "partial",
+              "location_plan_complete": true,
+              "location_lines": [
+                {
+                  "pick_item_id": 1,
+                  "order_item_id": 1,
+                  "source_type": "finished_inventory",
+                  "reservation_id": 1,
+                  "lot_id": 1,
+                  "lot_number": "PHASE7-FG-1",
+                  "component_snapshot_id": null,
+                  "product_code": "PICK-001",
+                  "product_name": "拿货测试外箱",
+                  "specification": "500×300×200mm",
+                  "pick_quantity": 100,
+                  "requirement_quantity": 100,
+                  "requirement_numerator": 100,
+                  "requirement_denominator": 1,
+                  "unit": "个",
+                  "location_id": 1,
+                  "location_code": "PHASE7-FG",
+                  "location_name": "Phase 7 成品测试库位",
+                  "warehouse_floor": null,
+                  "area_code": null,
+                  "location_sort_order": 0,
+                  "placement_status": null,
+                  "position_status": "unplaced",
+                  "map_feature_id": null,
+                  "published_map_revision": null,
+                  "map_point": null,
+                  "pallet_id": null,
+                  "pallet_code": null,
+                  "location_operational": true,
+                  "needs_relocation": false,
+                  "requires_attention": false,
+                  "specification_display": "500×300×200mm",
+                  "customer_inventory_code": "PICK-001",
+                  "units_per_bundle": null,
+                  "bundle_count": null,
+                  "loose_quantity": null,
+                  "bundle_text": "每捆数量待核"
+                }
+              ]
+            },
+            {
+              "task_item_id": 2,
+              "delivery_item_id": 2,
+              "order_item_id": 2,
+              "original_physical_quantity": 50,
+              "picked_physical_quantity": 50,
+              "pick_status": "picked",
+              "location_plan_complete": true,
+              "location_lines": [
+                {
+                  "pick_item_id": 2,
+                  "order_item_id": 2,
+                  "source_type": "finished_inventory",
+                  "reservation_id": 2,
+                  "lot_id": 2,
+                  "lot_number": "PHASE7-FG-2",
+                  "component_snapshot_id": null,
+                  "product_code": "PICK-002",
+                  "product_name": "拿货测试内箱",
+                  "specification": "300×200×150mm",
+                  "pick_quantity": 50,
+                  "requirement_quantity": 50,
+                  "requirement_numerator": 50,
+                  "requirement_denominator": 1,
+                  "unit": "个",
+                  "location_id": 1,
+                  "location_code": "PHASE7-FG",
+                  "location_name": "Phase 7 成品测试库位",
+                  "warehouse_floor": null,
+                  "area_code": null,
+                  "location_sort_order": 0,
+                  "placement_status": null,
+                  "position_status": "unplaced",
+                  "map_feature_id": null,
+                  "published_map_revision": null,
+                  "map_point": null,
+                  "pallet_id": null,
+                  "pallet_code": null,
+                  "location_operational": true,
+                  "needs_relocation": false,
+                  "requires_attention": false,
+                  "specification_display": "300×200×150mm",
+                  "customer_inventory_code": "PICK-002",
+                  "units_per_bundle": null,
+                  "bundle_count": null,
+                  "loose_quantity": null,
+                  "bundle_text": "每捆数量待核"
+                }
+              ]
+            }
+          ]
+        },
+        "pick_action": "apply",
+        "expected_final_items": [
+          {
+            "delivery_item_id": 1,
+            "customer_quantity": 80,
+            "physical_quantity": 80,
+            "customer_unit": null,
+            "physical_unit": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "physical_quantity": 80,
+                "physical_unit": null,
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ]
+          },
+          {
+            "delivery_item_id": 2,
+            "customer_quantity": 50,
+            "physical_quantity": 50,
+            "customer_unit": null,
+            "physical_unit": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 50,
+                "physical_unit": null,
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ]
+          }
+        ]
+      },
+      "snapshot_hash": "1137a77555d9302ec2ad324f94f06897b72ea514e918cf8aeb21ce5605b4c619",
+      "display": {
+        "delivery_number": "TM-20260718-001",
+        "customer_name": null,
+        "requires_pick_apply": true,
+        "pick_status": "exception",
+        "items": [
+          {
+            "delivery_item_id": 1,
+            "product_code": null,
+            "product_name": null,
+            "original_customer_quantity": 100,
+            "original_physical_quantity": 100,
+            "final_customer_quantity": 80,
+            "final_physical_quantity": 80,
+            "customer_unit": null,
+            "physical_unit": null,
+            "allocation_mode": "on_dispatch"
+          },
+          {
+            "delivery_item_id": 2,
+            "product_code": null,
+            "product_name": null,
+            "original_customer_quantity": 50,
+            "original_physical_quantity": 50,
+            "final_customer_quantity": 50,
+            "final_physical_quantity": 50,
+            "customer_unit": null,
+            "physical_unit": null,
+            "allocation_mode": "on_dispatch"
+          }
+        ]
+      }
+    }
+  },
+  "write": {
+    "status": 500,
+    "headers": {
+      "cache-control": "no-store",
+      "x-delivery-dispatch-preserve": "1"
+    },
+    "body": {
+      "detail": "发货结果暂无法确认，请保留原请求并核对原结果。"
+    }
+  },
+  "replay": {
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store"
+    },
+    "body": {
+      "schema_version": 1,
+      "result": "completed",
+      "current_actor_id": 1,
+      "dispatch_receipt": {
+        "schema_version": 1,
+        "idempotency_key": "dispatch-command-first",
+        "actor_id": 1,
+        "request_hash": "91417ecc199e641dcb7d5f0db5160d5eaf616939ac6ceead924929a9107aa18c",
+        "request": {
+          "expected_version": 1,
+          "snapshot_hash": "1137a77555d9302ec2ad324f94f06897b72ea514e918cf8aeb21ce5605b4c619",
+          "snapshot": {
+            "schema_version": 1,
+            "delivery": {
+              "id": 1,
+              "customer_id": 1,
+              "status": "pending",
+              "version": 1,
+              "source_mode": "order",
+              "delivery_date": "2026-07-18",
+              "vehicle_number": null
+            },
+            "items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 100,
+                "physical_quantity": 100,
+                "customer_unit": null,
+                "physical_unit": null,
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 100,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              },
+              {
+                "delivery_item_id": 2,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 2,
+                "product_id": null,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "customer_quantity": 50,
+                "physical_quantity": 50,
+                "customer_unit": null,
+                "physical_unit": null,
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 50,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              }
+            ],
+            "pick_task": {
+              "id": 1,
+              "delivery_id": 1,
+              "snapshot_version": 1,
+              "route_snapshot_version": "dcac9852dbabc14b",
+              "print_version": "1-44877cf821",
+              "status": "exception",
+              "items": [
+                {
+                  "task_item_id": 1,
+                  "delivery_item_id": 1,
+                  "order_item_id": 1,
+                  "original_physical_quantity": 100,
+                  "picked_physical_quantity": 80,
+                  "pick_status": "partial",
+                  "location_plan_complete": true,
+                  "location_lines": [
+                    {
+                      "pick_item_id": 1,
+                      "order_item_id": 1,
+                      "source_type": "finished_inventory",
+                      "reservation_id": 1,
+                      "lot_id": 1,
+                      "lot_number": "PHASE7-FG-1",
+                      "component_snapshot_id": null,
+                      "product_code": "PICK-001",
+                      "product_name": "拿货测试外箱",
+                      "specification": "500×300×200mm",
+                      "pick_quantity": 100,
+                      "requirement_quantity": 100,
+                      "requirement_numerator": 100,
+                      "requirement_denominator": 1,
+                      "unit": "个",
+                      "location_id": 1,
+                      "location_code": "PHASE7-FG",
+                      "location_name": "Phase 7 成品测试库位",
+                      "warehouse_floor": null,
+                      "area_code": null,
+                      "location_sort_order": 0,
+                      "placement_status": null,
+                      "position_status": "unplaced",
+                      "map_feature_id": null,
+                      "published_map_revision": null,
+                      "map_point": null,
+                      "pallet_id": null,
+                      "pallet_code": null,
+                      "location_operational": true,
+                      "needs_relocation": false,
+                      "requires_attention": false,
+                      "specification_display": "500×300×200mm",
+                      "customer_inventory_code": "PICK-001",
+                      "units_per_bundle": null,
+                      "bundle_count": null,
+                      "loose_quantity": null,
+                      "bundle_text": "每捆数量待核"
+                    }
+                  ]
+                },
+                {
+                  "task_item_id": 2,
+                  "delivery_item_id": 2,
+                  "order_item_id": 2,
+                  "original_physical_quantity": 50,
+                  "picked_physical_quantity": 50,
+                  "pick_status": "picked",
+                  "location_plan_complete": true,
+                  "location_lines": [
+                    {
+                      "pick_item_id": 2,
+                      "order_item_id": 2,
+                      "source_type": "finished_inventory",
+                      "reservation_id": 2,
+                      "lot_id": 2,
+                      "lot_number": "PHASE7-FG-2",
+                      "component_snapshot_id": null,
+                      "product_code": "PICK-002",
+                      "product_name": "拿货测试内箱",
+                      "specification": "300×200×150mm",
+                      "pick_quantity": 50,
+                      "requirement_quantity": 50,
+                      "requirement_numerator": 50,
+                      "requirement_denominator": 1,
+                      "unit": "个",
+                      "location_id": 1,
+                      "location_code": "PHASE7-FG",
+                      "location_name": "Phase 7 成品测试库位",
+                      "warehouse_floor": null,
+                      "area_code": null,
+                      "location_sort_order": 0,
+                      "placement_status": null,
+                      "position_status": "unplaced",
+                      "map_feature_id": null,
+                      "published_map_revision": null,
+                      "map_point": null,
+                      "pallet_id": null,
+                      "pallet_code": null,
+                      "location_operational": true,
+                      "needs_relocation": false,
+                      "requires_attention": false,
+                      "specification_display": "300×200×150mm",
+                      "customer_inventory_code": "PICK-002",
+                      "units_per_bundle": null,
+                      "bundle_count": null,
+                      "loose_quantity": null,
+                      "bundle_text": "每捆数量待核"
+                    }
+                  ]
+                }
+              ]
+            },
+            "pick_action": "apply",
+            "expected_final_items": [
+              {
+                "delivery_item_id": 1,
+                "customer_quantity": 80,
+                "physical_quantity": 80,
+                "customer_unit": null,
+                "physical_unit": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 80,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ]
+              },
+              {
+                "delivery_item_id": 2,
+                "customer_quantity": 50,
+                "physical_quantity": 50,
+                "customer_unit": null,
+                "physical_unit": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 50,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ]
+              }
+            ]
+          },
+          "confirm_pick_exception": true
+        },
+        "delivery_id": 1,
+        "customer_id": 1,
+        "delivery_number": "TM-20260718-001",
+        "original_version": 1,
+        "completed_version": 3,
+        "dispatched_at": "2026-10-10T05:37:01.868911Z",
+        "stages": {
+          "pick_applied": true,
+          "pick_task_id": 1,
+          "prepared": true,
+          "dispatched": true
+        },
+        "original_items": [
+          {
+            "delivery_item_id": 1,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 1,
+            "product_id": null,
+            "source_product_id": 1,
+            "customer_id": 1,
+            "customer_quantity": 100,
+            "physical_quantity": 100,
+            "customer_unit": null,
+            "physical_unit": null,
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "physical_quantity": 100,
+                "physical_unit": null,
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 0,
+            "allocation_mode": "on_dispatch",
+            "allocations": []
+          },
+          {
+            "delivery_item_id": 2,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 2,
+            "product_id": null,
+            "source_product_id": 2,
+            "customer_id": 1,
+            "customer_quantity": 50,
+            "physical_quantity": 50,
+            "customer_unit": null,
+            "physical_unit": null,
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 50,
+                "physical_unit": null,
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 0,
+            "allocation_mode": "on_dispatch",
+            "allocations": []
+          }
+        ],
+        "final_items": [
+          {
+            "delivery_item_id": 1,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 1,
+            "product_id": null,
+            "source_product_id": 1,
+            "customer_id": 1,
+            "customer_quantity": 80,
+            "physical_quantity": 80,
+            "customer_unit": "只",
+            "physical_unit": "只",
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "physical_quantity": 80,
+                "physical_unit": "只",
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 80,
+            "allocation_mode": "on_dispatch",
+            "allocations": [],
+            "allocation_ids": [
+              1
+            ]
+          },
+          {
+            "delivery_item_id": 2,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 2,
+            "product_id": null,
+            "source_product_id": 2,
+            "customer_id": 1,
+            "customer_quantity": 50,
+            "physical_quantity": 50,
+            "customer_unit": "只",
+            "physical_unit": "只",
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 50,
+                "physical_unit": "只",
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 50,
+            "allocation_mode": "on_dispatch",
+            "allocations": [],
+            "allocation_ids": [
+              2
+            ]
+          }
+        ],
+        "removed_delivery_item_ids": [],
+        "movements": [
+          {
+            "movement_id": 1,
+            "inventory_lot_id": 1,
+            "source_product_id": 1,
+            "owner_customer_id": 1,
+            "delivery_item_id": 1,
+            "component_snapshot_id": null,
+            "requirement_product_id": 1,
+            "requirement_quantity": 80,
+            "requirement_denominator": 1,
+            "semi_requirement_id": null,
+            "source_kind": "inventory",
+            "physical_quantity": 80,
+            "unit": "boxes",
+            "location_id": 1,
+            "operator_id": 1,
+            "occurred_at": "2026-10-10T05:37:01Z"
+          },
+          {
+            "movement_id": 2,
+            "inventory_lot_id": 2,
+            "source_product_id": 2,
+            "owner_customer_id": 1,
+            "delivery_item_id": 2,
+            "component_snapshot_id": null,
+            "requirement_product_id": 2,
+            "requirement_quantity": 50,
+            "requirement_denominator": 1,
+            "semi_requirement_id": null,
+            "source_kind": "inventory",
+            "physical_quantity": 50,
+            "unit": "boxes",
+            "location_id": 1,
+            "operator_id": 1,
+            "occurred_at": "2026-10-10T05:37:01Z"
+          }
+        ],
+        "direct_component_allocations": [],
+        "direct_completion_coverage": []
+      },
+      "current": null
+    }
+  },
+  "resolve": null,
+  "successfulWrite": {
+    "status": 200,
+    "headers": {
+      "cache-control": "no-store"
+    },
+    "body": {
+      "schema_version": 1,
+      "result": "completed",
+      "current_actor_id": 1,
+      "dispatch_receipt": {
+        "schema_version": 1,
+        "idempotency_key": "dispatch-command-first",
+        "actor_id": 1,
+        "request_hash": "91417ecc199e641dcb7d5f0db5160d5eaf616939ac6ceead924929a9107aa18c",
+        "request": {
+          "expected_version": 1,
+          "snapshot_hash": "1137a77555d9302ec2ad324f94f06897b72ea514e918cf8aeb21ce5605b4c619",
+          "snapshot": {
+            "schema_version": 1,
+            "delivery": {
+              "id": 1,
+              "customer_id": 1,
+              "status": "pending",
+              "version": 1,
+              "source_mode": "order",
+              "delivery_date": "2026-07-18",
+              "vehicle_number": null
+            },
+            "items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 100,
+                "physical_quantity": 100,
+                "customer_unit": null,
+                "physical_unit": null,
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 100,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              },
+              {
+                "delivery_item_id": 2,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 2,
+                "product_id": null,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "customer_quantity": 50,
+                "physical_quantity": 50,
+                "customer_unit": null,
+                "physical_unit": null,
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 50,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              }
+            ],
+            "pick_task": {
+              "id": 1,
+              "delivery_id": 1,
+              "snapshot_version": 1,
+              "route_snapshot_version": "dcac9852dbabc14b",
+              "print_version": "1-44877cf821",
+              "status": "exception",
+              "items": [
+                {
+                  "task_item_id": 1,
+                  "delivery_item_id": 1,
+                  "order_item_id": 1,
+                  "original_physical_quantity": 100,
+                  "picked_physical_quantity": 80,
+                  "pick_status": "partial",
+                  "location_plan_complete": true,
+                  "location_lines": [
+                    {
+                      "pick_item_id": 1,
+                      "order_item_id": 1,
+                      "source_type": "finished_inventory",
+                      "reservation_id": 1,
+                      "lot_id": 1,
+                      "lot_number": "PHASE7-FG-1",
+                      "component_snapshot_id": null,
+                      "product_code": "PICK-001",
+                      "product_name": "拿货测试外箱",
+                      "specification": "500×300×200mm",
+                      "pick_quantity": 100,
+                      "requirement_quantity": 100,
+                      "requirement_numerator": 100,
+                      "requirement_denominator": 1,
+                      "unit": "个",
+                      "location_id": 1,
+                      "location_code": "PHASE7-FG",
+                      "location_name": "Phase 7 成品测试库位",
+                      "warehouse_floor": null,
+                      "area_code": null,
+                      "location_sort_order": 0,
+                      "placement_status": null,
+                      "position_status": "unplaced",
+                      "map_feature_id": null,
+                      "published_map_revision": null,
+                      "map_point": null,
+                      "pallet_id": null,
+                      "pallet_code": null,
+                      "location_operational": true,
+                      "needs_relocation": false,
+                      "requires_attention": false,
+                      "specification_display": "500×300×200mm",
+                      "customer_inventory_code": "PICK-001",
+                      "units_per_bundle": null,
+                      "bundle_count": null,
+                      "loose_quantity": null,
+                      "bundle_text": "每捆数量待核"
+                    }
+                  ]
+                },
+                {
+                  "task_item_id": 2,
+                  "delivery_item_id": 2,
+                  "order_item_id": 2,
+                  "original_physical_quantity": 50,
+                  "picked_physical_quantity": 50,
+                  "pick_status": "picked",
+                  "location_plan_complete": true,
+                  "location_lines": [
+                    {
+                      "pick_item_id": 2,
+                      "order_item_id": 2,
+                      "source_type": "finished_inventory",
+                      "reservation_id": 2,
+                      "lot_id": 2,
+                      "lot_number": "PHASE7-FG-2",
+                      "component_snapshot_id": null,
+                      "product_code": "PICK-002",
+                      "product_name": "拿货测试内箱",
+                      "specification": "300×200×150mm",
+                      "pick_quantity": 50,
+                      "requirement_quantity": 50,
+                      "requirement_numerator": 50,
+                      "requirement_denominator": 1,
+                      "unit": "个",
+                      "location_id": 1,
+                      "location_code": "PHASE7-FG",
+                      "location_name": "Phase 7 成品测试库位",
+                      "warehouse_floor": null,
+                      "area_code": null,
+                      "location_sort_order": 0,
+                      "placement_status": null,
+                      "position_status": "unplaced",
+                      "map_feature_id": null,
+                      "published_map_revision": null,
+                      "map_point": null,
+                      "pallet_id": null,
+                      "pallet_code": null,
+                      "location_operational": true,
+                      "needs_relocation": false,
+                      "requires_attention": false,
+                      "specification_display": "300×200×150mm",
+                      "customer_inventory_code": "PICK-002",
+                      "units_per_bundle": null,
+                      "bundle_count": null,
+                      "loose_quantity": null,
+                      "bundle_text": "每捆数量待核"
+                    }
+                  ]
+                }
+              ]
+            },
+            "pick_action": "apply",
+            "expected_final_items": [
+              {
+                "delivery_item_id": 1,
+                "customer_quantity": 80,
+                "physical_quantity": 80,
+                "customer_unit": null,
+                "physical_unit": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 80,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ]
+              },
+              {
+                "delivery_item_id": 2,
+                "customer_quantity": 50,
+                "physical_quantity": 50,
+                "customer_unit": null,
+                "physical_unit": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 50,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ]
+              }
+            ]
+          },
+          "confirm_pick_exception": true
+        },
+        "delivery_id": 1,
+        "customer_id": 1,
+        "delivery_number": "TM-20260718-001",
+        "original_version": 1,
+        "completed_version": 3,
+        "dispatched_at": "2026-10-10T05:37:01.868911Z",
+        "stages": {
+          "pick_applied": true,
+          "pick_task_id": 1,
+          "prepared": true,
+          "dispatched": true
+        },
+        "original_items": [
+          {
+            "delivery_item_id": 1,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 1,
+            "product_id": null,
+            "source_product_id": 1,
+            "customer_id": 1,
+            "customer_quantity": 100,
+            "physical_quantity": 100,
+            "customer_unit": null,
+            "physical_unit": null,
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "physical_quantity": 100,
+                "physical_unit": null,
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 0,
+            "allocation_mode": "on_dispatch",
+            "allocations": []
+          },
+          {
+            "delivery_item_id": 2,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 2,
+            "product_id": null,
+            "source_product_id": 2,
+            "customer_id": 1,
+            "customer_quantity": 50,
+            "physical_quantity": 50,
+            "customer_unit": null,
+            "physical_unit": null,
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 50,
+                "physical_unit": null,
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 0,
+            "allocation_mode": "on_dispatch",
+            "allocations": []
+          }
+        ],
+        "final_items": [
+          {
+            "delivery_item_id": 1,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 1,
+            "product_id": null,
+            "source_product_id": 1,
+            "customer_id": 1,
+            "customer_quantity": 80,
+            "physical_quantity": 80,
+            "customer_unit": "只",
+            "physical_unit": "只",
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "physical_quantity": 80,
+                "physical_unit": "只",
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 80,
+            "allocation_mode": "on_dispatch",
+            "allocations": [],
+            "allocation_ids": [
+              1
+            ]
+          },
+          {
+            "delivery_item_id": 2,
+            "revision_number": 1,
+            "source_type": "order",
+            "order_item_id": 2,
+            "product_id": null,
+            "source_product_id": 2,
+            "customer_id": 1,
+            "customer_quantity": 50,
+            "physical_quantity": 50,
+            "customer_unit": "只",
+            "physical_unit": "只",
+            "quantity_contract": null,
+            "goods": [
+              {
+                "component_snapshot_id": null,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "physical_quantity": 50,
+                "physical_unit": "只",
+                "quantity_per_set": null,
+                "bom_delivery_mode": null
+              }
+            ],
+            "semi_requirements": [],
+            "direct_completion_sources": [],
+            "order_delivered_quantity": 50,
+            "allocation_mode": "on_dispatch",
+            "allocations": [],
+            "allocation_ids": [
+              2
+            ]
+          }
+        ],
+        "removed_delivery_item_ids": [],
+        "movements": [
+          {
+            "movement_id": 1,
+            "inventory_lot_id": 1,
+            "source_product_id": 1,
+            "owner_customer_id": 1,
+            "delivery_item_id": 1,
+            "component_snapshot_id": null,
+            "requirement_product_id": 1,
+            "requirement_quantity": 80,
+            "requirement_denominator": 1,
+            "semi_requirement_id": null,
+            "source_kind": "inventory",
+            "physical_quantity": 80,
+            "unit": "boxes",
+            "location_id": 1,
+            "operator_id": 1,
+            "occurred_at": "2026-10-10T05:37:01Z"
+          },
+          {
+            "movement_id": 2,
+            "inventory_lot_id": 2,
+            "source_product_id": 2,
+            "owner_customer_id": 1,
+            "delivery_item_id": 2,
+            "component_snapshot_id": null,
+            "requirement_product_id": 2,
+            "requirement_quantity": 50,
+            "requirement_denominator": 1,
+            "semi_requirement_id": null,
+            "source_kind": "inventory",
+            "physical_quantity": 50,
+            "unit": "boxes",
+            "location_id": 1,
+            "operator_id": 1,
+            "occurred_at": "2026-10-10T05:37:01Z"
+          }
+        ],
+        "direct_component_allocations": [],
+        "direct_completion_coverage": []
+      },
+      "current": null
+    }
+  },
+  "closes": [],
+  "events": [
+    {
+      "method": "POST",
+      "url": "/api/deliveries/1/pick-task",
+      "request": null,
+      "response": {
+        "status": 201,
+        "headers": {},
+        "body": {
+          "id": 1,
+          "delivery_id": 1,
+          "customer_id": 1,
+          "customer_name": "N036测试客户",
+          "delivery_number": "TM-20260718-001",
+          "planned_delivery_date": "2026-07-18",
+          "status": "pushed",
+          "has_exception": false,
+          "exceptions": [],
+          "snapshot_version": 1,
+          "route_snapshot_version": "dcac9852dbabc14b",
+          "print_version": "1-a5f220ebbb",
+          "assigned_to": 2,
+          "assigned_to_name": "delivery_picker",
+          "assignment_required": false,
+          "created_at": "2026-10-10T05:37:01Z",
+          "submitted_at": null,
+          "applied_at": null,
+          "dispatched_at": null,
+          "items": [
+            {
+              "id": 1,
+              "delivery_item_id": 1,
+              "order_item_id": 1,
+              "original_quantity": 100,
+              "planned_quantity": 100,
+              "picked_quantity": 0,
+              "status": "pending",
+              "pick_status": "pending",
+              "product_code": "PICK-001",
+              "product_name": "拿货测试外箱",
+              "specification": "500×300×200mm",
+              "is_composite_bom": false,
+              "component_lines": [],
+              "location_lines": [
+                {
+                  "pick_item_id": 1,
+                  "order_item_id": 1,
+                  "source_type": "finished_inventory",
+                  "reservation_id": 1,
+                  "lot_id": 1,
+                  "lot_number": "PHASE7-FG-1",
+                  "component_snapshot_id": null,
+                  "product_code": "PICK-001",
+                  "product_name": "拿货测试外箱",
+                  "specification": "500×300×200mm",
+                  "pick_quantity": 100,
+                  "requirement_quantity": 100,
+                  "requirement_numerator": 100,
+                  "requirement_denominator": 1,
+                  "unit": "个",
+                  "location_id": 1,
+                  "location_code": "PHASE7-FG",
+                  "location_name": "Phase 7 成品测试库位",
+                  "warehouse_floor": null,
+                  "area_code": null,
+                  "location_sort_order": 0,
+                  "placement_status": null,
+                  "position_status": "unplaced",
+                  "map_feature_id": null,
+                  "published_map_revision": null,
+                  "map_point": null,
+                  "pallet_id": null,
+                  "pallet_code": null,
+                  "location_operational": true,
+                  "needs_relocation": false,
+                  "requires_attention": false,
+                  "specification_display": "500×300×200mm",
+                  "customer_inventory_code": "PICK-001",
+                  "units_per_bundle": null,
+                  "bundle_count": null,
+                  "loose_quantity": null,
+                  "bundle_text": "每捆数量待核"
+                }
+              ],
+              "location_plan_complete": true,
+              "updated_at": null,
+              "specification_display": "500×300×200mm",
+              "customer_inventory_code": "PICK-001"
+            },
+            {
+              "id": 2,
+              "delivery_item_id": 2,
+              "order_item_id": 2,
+              "original_quantity": 50,
+              "planned_quantity": 50,
+              "picked_quantity": 0,
+              "status": "pending",
+              "pick_status": "pending",
+              "product_code": "PICK-002",
+              "product_name": "拿货测试内箱",
+              "specification": "300×200×150mm",
+              "is_composite_bom": false,
+              "component_lines": [],
+              "location_lines": [
+                {
+                  "pick_item_id": 2,
+                  "order_item_id": 2,
+                  "source_type": "finished_inventory",
+                  "reservation_id": 2,
+                  "lot_id": 2,
+                  "lot_number": "PHASE7-FG-2",
+                  "component_snapshot_id": null,
+                  "product_code": "PICK-002",
+                  "product_name": "拿货测试内箱",
+                  "specification": "300×200×150mm",
+                  "pick_quantity": 50,
+                  "requirement_quantity": 50,
+                  "requirement_numerator": 50,
+                  "requirement_denominator": 1,
+                  "unit": "个",
+                  "location_id": 1,
+                  "location_code": "PHASE7-FG",
+                  "location_name": "Phase 7 成品测试库位",
+                  "warehouse_floor": null,
+                  "area_code": null,
+                  "location_sort_order": 0,
+                  "placement_status": null,
+                  "position_status": "unplaced",
+                  "map_feature_id": null,
+                  "published_map_revision": null,
+                  "map_point": null,
+                  "pallet_id": null,
+                  "pallet_code": null,
+                  "location_operational": true,
+                  "needs_relocation": false,
+                  "requires_attention": false,
+                  "specification_display": "300×200×150mm",
+                  "customer_inventory_code": "PICK-002",
+                  "units_per_bundle": null,
+                  "bundle_count": null,
+                  "loose_quantity": null,
+                  "bundle_text": "每捆数量待核"
+                }
+              ],
+              "location_plan_complete": true,
+              "updated_at": null,
+              "specification_display": "300×200×150mm",
+              "customer_inventory_code": "PICK-002"
+            }
+          ],
+          "location_groups": [
+            {
+              "key": "finished_inventory|1|None|False",
+              "priority": 0,
+              "label": "Phase 7 成品测试库位",
+              "source_type": "finished_inventory",
+              "warehouse_floor": null,
+              "area_code": null,
+              "location_id": 1,
+              "location_code": "PHASE7-FG",
+              "location_name": "Phase 7 成品测试库位",
+              "location_sort_order": 0,
+              "pallet_id": null,
+              "pallet_code": null,
+              "needs_relocation": false,
+              "requires_attention": false,
+              "total_pick_quantity": 150,
+              "lines": [
+                {
+                  "pick_item_id": 1,
+                  "order_item_id": 1,
+                  "source_type": "finished_inventory",
+                  "reservation_id": 1,
+                  "lot_id": 1,
+                  "lot_number": "PHASE7-FG-1",
+                  "component_snapshot_id": null,
+                  "product_code": "PICK-001",
+                  "product_name": "拿货测试外箱",
+                  "specification": "500×300×200mm",
+                  "pick_quantity": 100,
+                  "requirement_quantity": 100,
+                  "requirement_numerator": 100,
+                  "requirement_denominator": 1,
+                  "unit": "个",
+                  "location_id": 1,
+                  "location_code": "PHASE7-FG",
+                  "location_name": "Phase 7 成品测试库位",
+                  "warehouse_floor": null,
+                  "area_code": null,
+                  "location_sort_order": 0,
+                  "placement_status": null,
+                  "position_status": "unplaced",
+                  "map_feature_id": null,
+                  "published_map_revision": null,
+                  "map_point": null,
+                  "pallet_id": null,
+                  "pallet_code": null,
+                  "location_operational": true,
+                  "needs_relocation": false,
+                  "requires_attention": false,
+                  "specification_display": "500×300×200mm",
+                  "customer_inventory_code": "PICK-001",
+                  "units_per_bundle": null,
+                  "bundle_count": null,
+                  "loose_quantity": null,
+                  "bundle_text": "每捆数量待核"
+                },
+                {
+                  "pick_item_id": 2,
+                  "order_item_id": 2,
+                  "source_type": "finished_inventory",
+                  "reservation_id": 2,
+                  "lot_id": 2,
+                  "lot_number": "PHASE7-FG-2",
+                  "component_snapshot_id": null,
+                  "product_code": "PICK-002",
+                  "product_name": "拿货测试内箱",
+                  "specification": "300×200×150mm",
+                  "pick_quantity": 50,
+                  "requirement_quantity": 50,
+                  "requirement_numerator": 50,
+                  "requirement_denominator": 1,
+                  "unit": "个",
+                  "location_id": 1,
+                  "location_code": "PHASE7-FG",
+                  "location_name": "Phase 7 成品测试库位",
+                  "warehouse_floor": null,
+                  "area_code": null,
+                  "location_sort_order": 0,
+                  "placement_status": null,
+                  "position_status": "unplaced",
+                  "map_feature_id": null,
+                  "published_map_revision": null,
+                  "map_point": null,
+                  "pallet_id": null,
+                  "pallet_code": null,
+                  "location_operational": true,
+                  "needs_relocation": false,
+                  "requires_attention": false,
+                  "specification_display": "300×200×150mm",
+                  "customer_inventory_code": "PICK-002",
+                  "units_per_bundle": null,
+                  "bundle_count": null,
+                  "loose_quantity": null,
+                  "bundle_text": "每捆数量待核"
+                }
+              ],
+              "address_kind": "legacy",
+              "rack_display_name": null,
+              "level_no": null,
+              "slot_no": null,
+              "position_status": "unplaced",
+              "map_feature_id": null,
+              "published_map_revision": null,
+              "map_status": "unmapped",
+              "map_point": null,
+              "recommended_sequence": 1,
+              "route_basis": "text_fallback",
+              "route_snapshot_status": "frozen"
+            }
+          ],
+          "location_plan_complete": true,
+          "as_of": "2026-10-10T05:37:01.085133Z"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "url": "/api/deliveries/1/dispatch-snapshot",
+      "request": null,
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "no-store"
+        },
+        "body": {
+          "schema_version": 1,
+          "current_actor_id": 1,
+          "snapshot": {
+            "schema_version": 1,
+            "delivery": {
+              "id": 1,
+              "customer_id": 1,
+              "status": "pending",
+              "version": 1,
+              "source_mode": "order",
+              "delivery_date": "2026-07-18",
+              "vehicle_number": null
+            },
+            "items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 100,
+                "physical_quantity": 100,
+                "customer_unit": null,
+                "physical_unit": null,
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 100,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              },
+              {
+                "delivery_item_id": 2,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 2,
+                "product_id": null,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "customer_quantity": 50,
+                "physical_quantity": 50,
+                "customer_unit": null,
+                "physical_unit": null,
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 50,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              }
+            ],
+            "pick_task": {
+              "id": 1,
+              "delivery_id": 1,
+              "snapshot_version": 1,
+              "route_snapshot_version": "dcac9852dbabc14b",
+              "print_version": "1-44877cf821",
+              "status": "exception",
+              "items": [
+                {
+                  "task_item_id": 1,
+                  "delivery_item_id": 1,
+                  "order_item_id": 1,
+                  "original_physical_quantity": 100,
+                  "picked_physical_quantity": 80,
+                  "pick_status": "partial",
+                  "location_plan_complete": true,
+                  "location_lines": [
+                    {
+                      "pick_item_id": 1,
+                      "order_item_id": 1,
+                      "source_type": "finished_inventory",
+                      "reservation_id": 1,
+                      "lot_id": 1,
+                      "lot_number": "PHASE7-FG-1",
+                      "component_snapshot_id": null,
+                      "product_code": "PICK-001",
+                      "product_name": "拿货测试外箱",
+                      "specification": "500×300×200mm",
+                      "pick_quantity": 100,
+                      "requirement_quantity": 100,
+                      "requirement_numerator": 100,
+                      "requirement_denominator": 1,
+                      "unit": "个",
+                      "location_id": 1,
+                      "location_code": "PHASE7-FG",
+                      "location_name": "Phase 7 成品测试库位",
+                      "warehouse_floor": null,
+                      "area_code": null,
+                      "location_sort_order": 0,
+                      "placement_status": null,
+                      "position_status": "unplaced",
+                      "map_feature_id": null,
+                      "published_map_revision": null,
+                      "map_point": null,
+                      "pallet_id": null,
+                      "pallet_code": null,
+                      "location_operational": true,
+                      "needs_relocation": false,
+                      "requires_attention": false,
+                      "specification_display": "500×300×200mm",
+                      "customer_inventory_code": "PICK-001",
+                      "units_per_bundle": null,
+                      "bundle_count": null,
+                      "loose_quantity": null,
+                      "bundle_text": "每捆数量待核"
+                    }
+                  ]
+                },
+                {
+                  "task_item_id": 2,
+                  "delivery_item_id": 2,
+                  "order_item_id": 2,
+                  "original_physical_quantity": 50,
+                  "picked_physical_quantity": 50,
+                  "pick_status": "picked",
+                  "location_plan_complete": true,
+                  "location_lines": [
+                    {
+                      "pick_item_id": 2,
+                      "order_item_id": 2,
+                      "source_type": "finished_inventory",
+                      "reservation_id": 2,
+                      "lot_id": 2,
+                      "lot_number": "PHASE7-FG-2",
+                      "component_snapshot_id": null,
+                      "product_code": "PICK-002",
+                      "product_name": "拿货测试内箱",
+                      "specification": "300×200×150mm",
+                      "pick_quantity": 50,
+                      "requirement_quantity": 50,
+                      "requirement_numerator": 50,
+                      "requirement_denominator": 1,
+                      "unit": "个",
+                      "location_id": 1,
+                      "location_code": "PHASE7-FG",
+                      "location_name": "Phase 7 成品测试库位",
+                      "warehouse_floor": null,
+                      "area_code": null,
+                      "location_sort_order": 0,
+                      "placement_status": null,
+                      "position_status": "unplaced",
+                      "map_feature_id": null,
+                      "published_map_revision": null,
+                      "map_point": null,
+                      "pallet_id": null,
+                      "pallet_code": null,
+                      "location_operational": true,
+                      "needs_relocation": false,
+                      "requires_attention": false,
+                      "specification_display": "300×200×150mm",
+                      "customer_inventory_code": "PICK-002",
+                      "units_per_bundle": null,
+                      "bundle_count": null,
+                      "loose_quantity": null,
+                      "bundle_text": "每捆数量待核"
+                    }
+                  ]
+                }
+              ]
+            },
+            "pick_action": "apply",
+            "expected_final_items": [
+              {
+                "delivery_item_id": 1,
+                "customer_quantity": 80,
+                "physical_quantity": 80,
+                "customer_unit": null,
+                "physical_unit": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 80,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ]
+              },
+              {
+                "delivery_item_id": 2,
+                "customer_quantity": 50,
+                "physical_quantity": 50,
+                "customer_unit": null,
+                "physical_unit": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 50,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ]
+              }
+            ]
+          },
+          "snapshot_hash": "1137a77555d9302ec2ad324f94f06897b72ea514e918cf8aeb21ce5605b4c619",
+          "display": {
+            "delivery_number": "TM-20260718-001",
+            "customer_name": null,
+            "requires_pick_apply": true,
+            "pick_status": "exception",
+            "items": [
+              {
+                "delivery_item_id": 1,
+                "product_code": null,
+                "product_name": null,
+                "original_customer_quantity": 100,
+                "original_physical_quantity": 100,
+                "final_customer_quantity": 80,
+                "final_physical_quantity": 80,
+                "customer_unit": null,
+                "physical_unit": null,
+                "allocation_mode": "on_dispatch"
+              },
+              {
+                "delivery_item_id": 2,
+                "product_code": null,
+                "product_name": null,
+                "original_customer_quantity": 50,
+                "original_physical_quantity": 50,
+                "final_customer_quantity": 50,
+                "final_physical_quantity": 50,
+                "customer_unit": null,
+                "physical_unit": null,
+                "allocation_mode": "on_dispatch"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "url": "/api/deliveries/1/dispatch",
+      "request": {
+        "expected_actor_id": 1,
+        "idempotency_key": "dispatch-command-first",
+        "expected_version": 1,
+        "snapshot_hash": "1137a77555d9302ec2ad324f94f06897b72ea514e918cf8aeb21ce5605b4c619",
+        "snapshot": {
+          "schema_version": 1,
+          "delivery": {
+            "id": 1,
+            "customer_id": 1,
+            "status": "pending",
+            "version": 1,
+            "source_mode": "order",
+            "delivery_date": "2026-07-18",
+            "vehicle_number": null
+          },
+          "items": [
+            {
+              "delivery_item_id": 1,
+              "revision_number": 1,
+              "source_type": "order",
+              "order_item_id": 1,
+              "product_id": null,
+              "source_product_id": 1,
+              "customer_id": 1,
+              "customer_quantity": 100,
+              "physical_quantity": 100,
+              "customer_unit": null,
+              "physical_unit": null,
+              "quantity_contract": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 1,
+                  "customer_id": 1,
+                  "physical_quantity": 100,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ],
+              "semi_requirements": [],
+              "direct_completion_sources": [],
+              "order_delivered_quantity": 0,
+              "allocation_mode": "on_dispatch",
+              "allocations": []
+            },
+            {
+              "delivery_item_id": 2,
+              "revision_number": 1,
+              "source_type": "order",
+              "order_item_id": 2,
+              "product_id": null,
+              "source_product_id": 2,
+              "customer_id": 1,
+              "customer_quantity": 50,
+              "physical_quantity": 50,
+              "customer_unit": null,
+              "physical_unit": null,
+              "quantity_contract": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 2,
+                  "customer_id": 1,
+                  "physical_quantity": 50,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ],
+              "semi_requirements": [],
+              "direct_completion_sources": [],
+              "order_delivered_quantity": 0,
+              "allocation_mode": "on_dispatch",
+              "allocations": []
+            }
+          ],
+          "pick_task": {
+            "id": 1,
+            "delivery_id": 1,
+            "snapshot_version": 1,
+            "route_snapshot_version": "dcac9852dbabc14b",
+            "print_version": "1-44877cf821",
+            "status": "exception",
+            "items": [
+              {
+                "task_item_id": 1,
+                "delivery_item_id": 1,
+                "order_item_id": 1,
+                "original_physical_quantity": 100,
+                "picked_physical_quantity": 80,
+                "pick_status": "partial",
+                "location_plan_complete": true,
+                "location_lines": [
+                  {
+                    "pick_item_id": 1,
+                    "order_item_id": 1,
+                    "source_type": "finished_inventory",
+                    "reservation_id": 1,
+                    "lot_id": 1,
+                    "lot_number": "PHASE7-FG-1",
+                    "component_snapshot_id": null,
+                    "product_code": "PICK-001",
+                    "product_name": "拿货测试外箱",
+                    "specification": "500×300×200mm",
+                    "pick_quantity": 100,
+                    "requirement_quantity": 100,
+                    "requirement_numerator": 100,
+                    "requirement_denominator": 1,
+                    "unit": "个",
+                    "location_id": 1,
+                    "location_code": "PHASE7-FG",
+                    "location_name": "Phase 7 成品测试库位",
+                    "warehouse_floor": null,
+                    "area_code": null,
+                    "location_sort_order": 0,
+                    "placement_status": null,
+                    "position_status": "unplaced",
+                    "map_feature_id": null,
+                    "published_map_revision": null,
+                    "map_point": null,
+                    "pallet_id": null,
+                    "pallet_code": null,
+                    "location_operational": true,
+                    "needs_relocation": false,
+                    "requires_attention": false,
+                    "specification_display": "500×300×200mm",
+                    "customer_inventory_code": "PICK-001",
+                    "units_per_bundle": null,
+                    "bundle_count": null,
+                    "loose_quantity": null,
+                    "bundle_text": "每捆数量待核"
+                  }
+                ]
+              },
+              {
+                "task_item_id": 2,
+                "delivery_item_id": 2,
+                "order_item_id": 2,
+                "original_physical_quantity": 50,
+                "picked_physical_quantity": 50,
+                "pick_status": "picked",
+                "location_plan_complete": true,
+                "location_lines": [
+                  {
+                    "pick_item_id": 2,
+                    "order_item_id": 2,
+                    "source_type": "finished_inventory",
+                    "reservation_id": 2,
+                    "lot_id": 2,
+                    "lot_number": "PHASE7-FG-2",
+                    "component_snapshot_id": null,
+                    "product_code": "PICK-002",
+                    "product_name": "拿货测试内箱",
+                    "specification": "300×200×150mm",
+                    "pick_quantity": 50,
+                    "requirement_quantity": 50,
+                    "requirement_numerator": 50,
+                    "requirement_denominator": 1,
+                    "unit": "个",
+                    "location_id": 1,
+                    "location_code": "PHASE7-FG",
+                    "location_name": "Phase 7 成品测试库位",
+                    "warehouse_floor": null,
+                    "area_code": null,
+                    "location_sort_order": 0,
+                    "placement_status": null,
+                    "position_status": "unplaced",
+                    "map_feature_id": null,
+                    "published_map_revision": null,
+                    "map_point": null,
+                    "pallet_id": null,
+                    "pallet_code": null,
+                    "location_operational": true,
+                    "needs_relocation": false,
+                    "requires_attention": false,
+                    "specification_display": "300×200×150mm",
+                    "customer_inventory_code": "PICK-002",
+                    "units_per_bundle": null,
+                    "bundle_count": null,
+                    "loose_quantity": null,
+                    "bundle_text": "每捆数量待核"
+                  }
+                ]
+              }
+            ]
+          },
+          "pick_action": "apply",
+          "expected_final_items": [
+            {
+              "delivery_item_id": 1,
+              "customer_quantity": 80,
+              "physical_quantity": 80,
+              "customer_unit": null,
+              "physical_unit": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 1,
+                  "customer_id": 1,
+                  "physical_quantity": 80,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ]
+            },
+            {
+              "delivery_item_id": 2,
+              "customer_quantity": 50,
+              "physical_quantity": 50,
+              "customer_unit": null,
+              "physical_unit": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 2,
+                  "customer_id": 1,
+                  "physical_quantity": 50,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ]
+            }
+          ]
+        },
+        "confirm_pick_exception": true
+      },
+      "response": {
+        "status": 500,
+        "headers": {
+          "cache-control": "no-store",
+          "x-delivery-dispatch-preserve": "1"
+        },
+        "body": {
+          "detail": "发货结果暂无法确认，请保留原请求并核对原结果。"
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "url": "/api/deliveries/1/dispatch",
+      "request": {
+        "expected_actor_id": 1,
+        "idempotency_key": "dispatch-command-first",
+        "expected_version": 1,
+        "snapshot_hash": "1137a77555d9302ec2ad324f94f06897b72ea514e918cf8aeb21ce5605b4c619",
+        "snapshot": {
+          "schema_version": 1,
+          "delivery": {
+            "id": 1,
+            "customer_id": 1,
+            "status": "pending",
+            "version": 1,
+            "source_mode": "order",
+            "delivery_date": "2026-07-18",
+            "vehicle_number": null
+          },
+          "items": [
+            {
+              "delivery_item_id": 1,
+              "revision_number": 1,
+              "source_type": "order",
+              "order_item_id": 1,
+              "product_id": null,
+              "source_product_id": 1,
+              "customer_id": 1,
+              "customer_quantity": 100,
+              "physical_quantity": 100,
+              "customer_unit": null,
+              "physical_unit": null,
+              "quantity_contract": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 1,
+                  "customer_id": 1,
+                  "physical_quantity": 100,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ],
+              "semi_requirements": [],
+              "direct_completion_sources": [],
+              "order_delivered_quantity": 0,
+              "allocation_mode": "on_dispatch",
+              "allocations": []
+            },
+            {
+              "delivery_item_id": 2,
+              "revision_number": 1,
+              "source_type": "order",
+              "order_item_id": 2,
+              "product_id": null,
+              "source_product_id": 2,
+              "customer_id": 1,
+              "customer_quantity": 50,
+              "physical_quantity": 50,
+              "customer_unit": null,
+              "physical_unit": null,
+              "quantity_contract": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 2,
+                  "customer_id": 1,
+                  "physical_quantity": 50,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ],
+              "semi_requirements": [],
+              "direct_completion_sources": [],
+              "order_delivered_quantity": 0,
+              "allocation_mode": "on_dispatch",
+              "allocations": []
+            }
+          ],
+          "pick_task": {
+            "id": 1,
+            "delivery_id": 1,
+            "snapshot_version": 1,
+            "route_snapshot_version": "dcac9852dbabc14b",
+            "print_version": "1-44877cf821",
+            "status": "exception",
+            "items": [
+              {
+                "task_item_id": 1,
+                "delivery_item_id": 1,
+                "order_item_id": 1,
+                "original_physical_quantity": 100,
+                "picked_physical_quantity": 80,
+                "pick_status": "partial",
+                "location_plan_complete": true,
+                "location_lines": [
+                  {
+                    "pick_item_id": 1,
+                    "order_item_id": 1,
+                    "source_type": "finished_inventory",
+                    "reservation_id": 1,
+                    "lot_id": 1,
+                    "lot_number": "PHASE7-FG-1",
+                    "component_snapshot_id": null,
+                    "product_code": "PICK-001",
+                    "product_name": "拿货测试外箱",
+                    "specification": "500×300×200mm",
+                    "pick_quantity": 100,
+                    "requirement_quantity": 100,
+                    "requirement_numerator": 100,
+                    "requirement_denominator": 1,
+                    "unit": "个",
+                    "location_id": 1,
+                    "location_code": "PHASE7-FG",
+                    "location_name": "Phase 7 成品测试库位",
+                    "warehouse_floor": null,
+                    "area_code": null,
+                    "location_sort_order": 0,
+                    "placement_status": null,
+                    "position_status": "unplaced",
+                    "map_feature_id": null,
+                    "published_map_revision": null,
+                    "map_point": null,
+                    "pallet_id": null,
+                    "pallet_code": null,
+                    "location_operational": true,
+                    "needs_relocation": false,
+                    "requires_attention": false,
+                    "specification_display": "500×300×200mm",
+                    "customer_inventory_code": "PICK-001",
+                    "units_per_bundle": null,
+                    "bundle_count": null,
+                    "loose_quantity": null,
+                    "bundle_text": "每捆数量待核"
+                  }
+                ]
+              },
+              {
+                "task_item_id": 2,
+                "delivery_item_id": 2,
+                "order_item_id": 2,
+                "original_physical_quantity": 50,
+                "picked_physical_quantity": 50,
+                "pick_status": "picked",
+                "location_plan_complete": true,
+                "location_lines": [
+                  {
+                    "pick_item_id": 2,
+                    "order_item_id": 2,
+                    "source_type": "finished_inventory",
+                    "reservation_id": 2,
+                    "lot_id": 2,
+                    "lot_number": "PHASE7-FG-2",
+                    "component_snapshot_id": null,
+                    "product_code": "PICK-002",
+                    "product_name": "拿货测试内箱",
+                    "specification": "300×200×150mm",
+                    "pick_quantity": 50,
+                    "requirement_quantity": 50,
+                    "requirement_numerator": 50,
+                    "requirement_denominator": 1,
+                    "unit": "个",
+                    "location_id": 1,
+                    "location_code": "PHASE7-FG",
+                    "location_name": "Phase 7 成品测试库位",
+                    "warehouse_floor": null,
+                    "area_code": null,
+                    "location_sort_order": 0,
+                    "placement_status": null,
+                    "position_status": "unplaced",
+                    "map_feature_id": null,
+                    "published_map_revision": null,
+                    "map_point": null,
+                    "pallet_id": null,
+                    "pallet_code": null,
+                    "location_operational": true,
+                    "needs_relocation": false,
+                    "requires_attention": false,
+                    "specification_display": "300×200×150mm",
+                    "customer_inventory_code": "PICK-002",
+                    "units_per_bundle": null,
+                    "bundle_count": null,
+                    "loose_quantity": null,
+                    "bundle_text": "每捆数量待核"
+                  }
+                ]
+              }
+            ]
+          },
+          "pick_action": "apply",
+          "expected_final_items": [
+            {
+              "delivery_item_id": 1,
+              "customer_quantity": 80,
+              "physical_quantity": 80,
+              "customer_unit": null,
+              "physical_unit": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 1,
+                  "customer_id": 1,
+                  "physical_quantity": 80,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ]
+            },
+            {
+              "delivery_item_id": 2,
+              "customer_quantity": 50,
+              "physical_quantity": 50,
+              "customer_unit": null,
+              "physical_unit": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 2,
+                  "customer_id": 1,
+                  "physical_quantity": 50,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ]
+            }
+          ]
+        },
+        "confirm_pick_exception": true
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "no-store"
+        },
+        "body": {
+          "schema_version": 1,
+          "result": "completed",
+          "current_actor_id": 1,
+          "dispatch_receipt": {
+            "schema_version": 1,
+            "idempotency_key": "dispatch-command-first",
+            "actor_id": 1,
+            "request_hash": "91417ecc199e641dcb7d5f0db5160d5eaf616939ac6ceead924929a9107aa18c",
+            "request": {
+              "expected_version": 1,
+              "snapshot_hash": "1137a77555d9302ec2ad324f94f06897b72ea514e918cf8aeb21ce5605b4c619",
+              "snapshot": {
+                "schema_version": 1,
+                "delivery": {
+                  "id": 1,
+                  "customer_id": 1,
+                  "status": "pending",
+                  "version": 1,
+                  "source_mode": "order",
+                  "delivery_date": "2026-07-18",
+                  "vehicle_number": null
+                },
+                "items": [
+                  {
+                    "delivery_item_id": 1,
+                    "revision_number": 1,
+                    "source_type": "order",
+                    "order_item_id": 1,
+                    "product_id": null,
+                    "source_product_id": 1,
+                    "customer_id": 1,
+                    "customer_quantity": 100,
+                    "physical_quantity": 100,
+                    "customer_unit": null,
+                    "physical_unit": null,
+                    "quantity_contract": null,
+                    "goods": [
+                      {
+                        "component_snapshot_id": null,
+                        "source_product_id": 1,
+                        "customer_id": 1,
+                        "physical_quantity": 100,
+                        "physical_unit": null,
+                        "quantity_per_set": null,
+                        "bom_delivery_mode": null
+                      }
+                    ],
+                    "semi_requirements": [],
+                    "direct_completion_sources": [],
+                    "order_delivered_quantity": 0,
+                    "allocation_mode": "on_dispatch",
+                    "allocations": []
+                  },
+                  {
+                    "delivery_item_id": 2,
+                    "revision_number": 1,
+                    "source_type": "order",
+                    "order_item_id": 2,
+                    "product_id": null,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "customer_quantity": 50,
+                    "physical_quantity": 50,
+                    "customer_unit": null,
+                    "physical_unit": null,
+                    "quantity_contract": null,
+                    "goods": [
+                      {
+                        "component_snapshot_id": null,
+                        "source_product_id": 2,
+                        "customer_id": 1,
+                        "physical_quantity": 50,
+                        "physical_unit": null,
+                        "quantity_per_set": null,
+                        "bom_delivery_mode": null
+                      }
+                    ],
+                    "semi_requirements": [],
+                    "direct_completion_sources": [],
+                    "order_delivered_quantity": 0,
+                    "allocation_mode": "on_dispatch",
+                    "allocations": []
+                  }
+                ],
+                "pick_task": {
+                  "id": 1,
+                  "delivery_id": 1,
+                  "snapshot_version": 1,
+                  "route_snapshot_version": "dcac9852dbabc14b",
+                  "print_version": "1-44877cf821",
+                  "status": "exception",
+                  "items": [
+                    {
+                      "task_item_id": 1,
+                      "delivery_item_id": 1,
+                      "order_item_id": 1,
+                      "original_physical_quantity": 100,
+                      "picked_physical_quantity": 80,
+                      "pick_status": "partial",
+                      "location_plan_complete": true,
+                      "location_lines": [
+                        {
+                          "pick_item_id": 1,
+                          "order_item_id": 1,
+                          "source_type": "finished_inventory",
+                          "reservation_id": 1,
+                          "lot_id": 1,
+                          "lot_number": "PHASE7-FG-1",
+                          "component_snapshot_id": null,
+                          "product_code": "PICK-001",
+                          "product_name": "拿货测试外箱",
+                          "specification": "500×300×200mm",
+                          "pick_quantity": 100,
+                          "requirement_quantity": 100,
+                          "requirement_numerator": 100,
+                          "requirement_denominator": 1,
+                          "unit": "个",
+                          "location_id": 1,
+                          "location_code": "PHASE7-FG",
+                          "location_name": "Phase 7 成品测试库位",
+                          "warehouse_floor": null,
+                          "area_code": null,
+                          "location_sort_order": 0,
+                          "placement_status": null,
+                          "position_status": "unplaced",
+                          "map_feature_id": null,
+                          "published_map_revision": null,
+                          "map_point": null,
+                          "pallet_id": null,
+                          "pallet_code": null,
+                          "location_operational": true,
+                          "needs_relocation": false,
+                          "requires_attention": false,
+                          "specification_display": "500×300×200mm",
+                          "customer_inventory_code": "PICK-001",
+                          "units_per_bundle": null,
+                          "bundle_count": null,
+                          "loose_quantity": null,
+                          "bundle_text": "每捆数量待核"
+                        }
+                      ]
+                    },
+                    {
+                      "task_item_id": 2,
+                      "delivery_item_id": 2,
+                      "order_item_id": 2,
+                      "original_physical_quantity": 50,
+                      "picked_physical_quantity": 50,
+                      "pick_status": "picked",
+                      "location_plan_complete": true,
+                      "location_lines": [
+                        {
+                          "pick_item_id": 2,
+                          "order_item_id": 2,
+                          "source_type": "finished_inventory",
+                          "reservation_id": 2,
+                          "lot_id": 2,
+                          "lot_number": "PHASE7-FG-2",
+                          "component_snapshot_id": null,
+                          "product_code": "PICK-002",
+                          "product_name": "拿货测试内箱",
+                          "specification": "300×200×150mm",
+                          "pick_quantity": 50,
+                          "requirement_quantity": 50,
+                          "requirement_numerator": 50,
+                          "requirement_denominator": 1,
+                          "unit": "个",
+                          "location_id": 1,
+                          "location_code": "PHASE7-FG",
+                          "location_name": "Phase 7 成品测试库位",
+                          "warehouse_floor": null,
+                          "area_code": null,
+                          "location_sort_order": 0,
+                          "placement_status": null,
+                          "position_status": "unplaced",
+                          "map_feature_id": null,
+                          "published_map_revision": null,
+                          "map_point": null,
+                          "pallet_id": null,
+                          "pallet_code": null,
+                          "location_operational": true,
+                          "needs_relocation": false,
+                          "requires_attention": false,
+                          "specification_display": "300×200×150mm",
+                          "customer_inventory_code": "PICK-002",
+                          "units_per_bundle": null,
+                          "bundle_count": null,
+                          "loose_quantity": null,
+                          "bundle_text": "每捆数量待核"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "pick_action": "apply",
+                "expected_final_items": [
+                  {
+                    "delivery_item_id": 1,
+                    "customer_quantity": 80,
+                    "physical_quantity": 80,
+                    "customer_unit": null,
+                    "physical_unit": null,
+                    "goods": [
+                      {
+                        "component_snapshot_id": null,
+                        "source_product_id": 1,
+                        "customer_id": 1,
+                        "physical_quantity": 80,
+                        "physical_unit": null,
+                        "quantity_per_set": null,
+                        "bom_delivery_mode": null
+                      }
+                    ]
+                  },
+                  {
+                    "delivery_item_id": 2,
+                    "customer_quantity": 50,
+                    "physical_quantity": 50,
+                    "customer_unit": null,
+                    "physical_unit": null,
+                    "goods": [
+                      {
+                        "component_snapshot_id": null,
+                        "source_product_id": 2,
+                        "customer_id": 1,
+                        "physical_quantity": 50,
+                        "physical_unit": null,
+                        "quantity_per_set": null,
+                        "bom_delivery_mode": null
+                      }
+                    ]
+                  }
+                ]
+              },
+              "confirm_pick_exception": true
+            },
+            "delivery_id": 1,
+            "customer_id": 1,
+            "delivery_number": "TM-20260718-001",
+            "original_version": 1,
+            "completed_version": 3,
+            "dispatched_at": "2026-10-10T05:37:01.868911Z",
+            "stages": {
+              "pick_applied": true,
+              "pick_task_id": 1,
+              "prepared": true,
+              "dispatched": true
+            },
+            "original_items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 100,
+                "physical_quantity": 100,
+                "customer_unit": null,
+                "physical_unit": null,
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 100,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              },
+              {
+                "delivery_item_id": 2,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 2,
+                "product_id": null,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "customer_quantity": 50,
+                "physical_quantity": 50,
+                "customer_unit": null,
+                "physical_unit": null,
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 50,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 0,
+                "allocation_mode": "on_dispatch",
+                "allocations": []
+              }
+            ],
+            "final_items": [
+              {
+                "delivery_item_id": 1,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 1,
+                "product_id": null,
+                "source_product_id": 1,
+                "customer_id": 1,
+                "customer_quantity": 80,
+                "physical_quantity": 80,
+                "customer_unit": "只",
+                "physical_unit": "只",
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 1,
+                    "customer_id": 1,
+                    "physical_quantity": 80,
+                    "physical_unit": "只",
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 80,
+                "allocation_mode": "on_dispatch",
+                "allocations": [],
+                "allocation_ids": [
+                  1
+                ]
+              },
+              {
+                "delivery_item_id": 2,
+                "revision_number": 1,
+                "source_type": "order",
+                "order_item_id": 2,
+                "product_id": null,
+                "source_product_id": 2,
+                "customer_id": 1,
+                "customer_quantity": 50,
+                "physical_quantity": 50,
+                "customer_unit": "只",
+                "physical_unit": "只",
+                "quantity_contract": null,
+                "goods": [
+                  {
+                    "component_snapshot_id": null,
+                    "source_product_id": 2,
+                    "customer_id": 1,
+                    "physical_quantity": 50,
+                    "physical_unit": "只",
+                    "quantity_per_set": null,
+                    "bom_delivery_mode": null
+                  }
+                ],
+                "semi_requirements": [],
+                "direct_completion_sources": [],
+                "order_delivered_quantity": 50,
+                "allocation_mode": "on_dispatch",
+                "allocations": [],
+                "allocation_ids": [
+                  2
+                ]
+              }
+            ],
+            "removed_delivery_item_ids": [],
+            "movements": [
+              {
+                "movement_id": 1,
+                "inventory_lot_id": 1,
+                "source_product_id": 1,
+                "owner_customer_id": 1,
+                "delivery_item_id": 1,
+                "component_snapshot_id": null,
+                "requirement_product_id": 1,
+                "requirement_quantity": 80,
+                "requirement_denominator": 1,
+                "semi_requirement_id": null,
+                "source_kind": "inventory",
+                "physical_quantity": 80,
+                "unit": "boxes",
+                "location_id": 1,
+                "operator_id": 1,
+                "occurred_at": "2026-10-10T05:37:01Z"
+              },
+              {
+                "movement_id": 2,
+                "inventory_lot_id": 2,
+                "source_product_id": 2,
+                "owner_customer_id": 1,
+                "delivery_item_id": 2,
+                "component_snapshot_id": null,
+                "requirement_product_id": 2,
+                "requirement_quantity": 50,
+                "requirement_denominator": 1,
+                "semi_requirement_id": null,
+                "source_kind": "inventory",
+                "physical_quantity": 50,
+                "unit": "boxes",
+                "location_id": 1,
+                "operator_id": 1,
+                "occurred_at": "2026-10-10T05:37:01Z"
+              }
+            ],
+            "direct_component_allocations": [],
+            "direct_completion_coverage": []
+          },
+          "current": null
+        }
+      }
+    },
+    {
+      "method": "PUT",
+      "url": "/api/deliveries/1/dispatch",
+      "request": {
+        "expected_actor_id": 1,
+        "idempotency_key": "dispatch-command-first",
+        "expected_version": 1,
+        "snapshot_hash": "1137a77555d9302ec2ad324f94f06897b72ea514e918cf8aeb21ce5605b4c619",
+        "snapshot": {
+          "schema_version": 1,
+          "delivery": {
+            "id": 1,
+            "customer_id": 1,
+            "status": "pending",
+            "version": 1,
+            "source_mode": "order",
+            "delivery_date": "2026-07-18",
+            "vehicle_number": null
+          },
+          "items": [
+            {
+              "delivery_item_id": 1,
+              "revision_number": 1,
+              "source_type": "order",
+              "order_item_id": 1,
+              "product_id": null,
+              "source_product_id": 1,
+              "customer_id": 1,
+              "customer_quantity": 100,
+              "physical_quantity": 100,
+              "customer_unit": null,
+              "physical_unit": null,
+              "quantity_contract": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 1,
+                  "customer_id": 1,
+                  "physical_quantity": 100,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ],
+              "semi_requirements": [],
+              "direct_completion_sources": [],
+              "order_delivered_quantity": 0,
+              "allocation_mode": "on_dispatch",
+              "allocations": []
+            },
+            {
+              "delivery_item_id": 2,
+              "revision_number": 1,
+              "source_type": "order",
+              "order_item_id": 2,
+              "product_id": null,
+              "source_product_id": 2,
+              "customer_id": 1,
+              "customer_quantity": 50,
+              "physical_quantity": 50,
+              "customer_unit": null,
+              "physical_unit": null,
+              "quantity_contract": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 2,
+                  "customer_id": 1,
+                  "physical_quantity": 50,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ],
+              "semi_requirements": [],
+              "direct_completion_sources": [],
+              "order_delivered_quantity": 0,
+              "allocation_mode": "on_dispatch",
+              "allocations": []
+            }
+          ],
+          "pick_task": {
+            "id": 1,
+            "delivery_id": 1,
+            "snapshot_version": 1,
+            "route_snapshot_version": "dcac9852dbabc14b",
+            "print_version": "1-44877cf821",
+            "status": "exception",
+            "items": [
+              {
+                "task_item_id": 1,
+                "delivery_item_id": 1,
+                "order_item_id": 1,
+                "original_physical_quantity": 100,
+                "picked_physical_quantity": 80,
+                "pick_status": "partial",
+                "location_plan_complete": true,
+                "location_lines": [
+                  {
+                    "pick_item_id": 1,
+                    "order_item_id": 1,
+                    "source_type": "finished_inventory",
+                    "reservation_id": 1,
+                    "lot_id": 1,
+                    "lot_number": "PHASE7-FG-1",
+                    "component_snapshot_id": null,
+                    "product_code": "PICK-001",
+                    "product_name": "拿货测试外箱",
+                    "specification": "500×300×200mm",
+                    "pick_quantity": 100,
+                    "requirement_quantity": 100,
+                    "requirement_numerator": 100,
+                    "requirement_denominator": 1,
+                    "unit": "个",
+                    "location_id": 1,
+                    "location_code": "PHASE7-FG",
+                    "location_name": "Phase 7 成品测试库位",
+                    "warehouse_floor": null,
+                    "area_code": null,
+                    "location_sort_order": 0,
+                    "placement_status": null,
+                    "position_status": "unplaced",
+                    "map_feature_id": null,
+                    "published_map_revision": null,
+                    "map_point": null,
+                    "pallet_id": null,
+                    "pallet_code": null,
+                    "location_operational": true,
+                    "needs_relocation": false,
+                    "requires_attention": false,
+                    "specification_display": "500×300×200mm",
+                    "customer_inventory_code": "PICK-001",
+                    "units_per_bundle": null,
+                    "bundle_count": null,
+                    "loose_quantity": null,
+                    "bundle_text": "每捆数量待核"
+                  }
+                ]
+              },
+              {
+                "task_item_id": 2,
+                "delivery_item_id": 2,
+                "order_item_id": 2,
+                "original_physical_quantity": 50,
+                "picked_physical_quantity": 50,
+                "pick_status": "picked",
+                "location_plan_complete": true,
+                "location_lines": [
+                  {
+                    "pick_item_id": 2,
+                    "order_item_id": 2,
+                    "source_type": "finished_inventory",
+                    "reservation_id": 2,
+                    "lot_id": 2,
+                    "lot_number": "PHASE7-FG-2",
+                    "component_snapshot_id": null,
+                    "product_code": "PICK-002",
+                    "product_name": "拿货测试内箱",
+                    "specification": "300×200×150mm",
+                    "pick_quantity": 50,
+                    "requirement_quantity": 50,
+                    "requirement_numerator": 50,
+                    "requirement_denominator": 1,
+                    "unit": "个",
+                    "location_id": 1,
+                    "location_code": "PHASE7-FG",
+                    "location_name": "Phase 7 成品测试库位",
+                    "warehouse_floor": null,
+                    "area_code": null,
+                    "location_sort_order": 0,
+                    "placement_status": null,
+                    "position_status": "unplaced",
+                    "map_feature_id": null,
+                    "published_map_revision": null,
+                    "map_point": null,
+                    "pallet_id": null,
+                    "pallet_code": null,
+                    "location_operational": true,
+                    "needs_relocation": false,
+                    "requires_attention": false,
+                    "specification_display": "300×200×150mm",
+                    "customer_inventory_code": "PICK-002",
+                    "units_per_bundle": null,
+                    "bundle_count": null,
+                    "loose_quantity": null,
+                    "bundle_text": "每捆数量待核"
+                  }
+                ]
+              }
+            ]
+          },
+          "pick_action": "apply",
+          "expected_final_items": [
+            {
+              "delivery_item_id": 1,
+              "customer_quantity": 80,
+              "physical_quantity": 80,
+              "customer_unit": null,
+              "physical_unit": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 1,
+                  "customer_id": 1,
+                  "physical_quantity": 80,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ]
+            },
+            {
+              "delivery_item_id": 2,
+              "customer_quantity": 50,
+              "physical_quantity": 50,
+              "customer_unit": null,
+              "physical_unit": null,
+              "goods": [
+                {
+                  "component_snapshot_id": null,
+                  "source_product_id": 2,
+                  "customer_id": 1,
+                  "physical_quantity": 50,
+                  "physical_unit": null,
+                  "quantity_per_set": null,
+                  "bom_delivery_mode": null
+                }
+              ]
+            }
+          ]
+        },
+        "confirm_pick_exception": true
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "no-store"
+        },
+        "body": {
+          "current": null,
+          "current_actor_id": 1,
+          "dispatch_receipt": {
+            "actor_id": 1,
+            "completed_version": 3,
+            "customer_id": 1,
+            "delivery_id": 1,
+            "delivery_number": "TM-20260718-001",
+            "direct_completion_coverage": [],
+            "direct_component_allocations": [],
+            "dispatched_at": "2026-10-10T05:37:01.868911Z",
+            "final_items": [
+              {
+                "allocation_ids": [
+                  1
+                ],
+                "allocation_mode": "on_dispatch",
+                "allocations": [],
+                "customer_id": 1,
+                "customer_quantity": 80,
+                "customer_unit": "只",
+                "delivery_item_id": 1,
+                "direct_completion_sources": [],
+                "goods": [
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": null,
+                    "customer_id": 1,
+                    "physical_quantity": 80,
+                    "physical_unit": "只",
+                    "quantity_per_set": null,
+                    "source_product_id": 1
+                  }
+                ],
+                "order_delivered_quantity": 80,
+                "order_item_id": 1,
+                "physical_quantity": 80,
+                "physical_unit": "只",
+                "product_id": null,
+                "quantity_contract": null,
+                "revision_number": 1,
+                "semi_requirements": [],
+                "source_product_id": 1,
+                "source_type": "order"
+              },
+              {
+                "allocation_ids": [
+                  2
+                ],
+                "allocation_mode": "on_dispatch",
+                "allocations": [],
+                "customer_id": 1,
+                "customer_quantity": 50,
+                "customer_unit": "只",
+                "delivery_item_id": 2,
+                "direct_completion_sources": [],
+                "goods": [
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": null,
+                    "customer_id": 1,
+                    "physical_quantity": 50,
+                    "physical_unit": "只",
+                    "quantity_per_set": null,
+                    "source_product_id": 2
+                  }
+                ],
+                "order_delivered_quantity": 50,
+                "order_item_id": 2,
+                "physical_quantity": 50,
+                "physical_unit": "只",
+                "product_id": null,
+                "quantity_contract": null,
+                "revision_number": 1,
+                "semi_requirements": [],
+                "source_product_id": 2,
+                "source_type": "order"
+              }
+            ],
+            "idempotency_key": "dispatch-command-first",
+            "movements": [
+              {
+                "component_snapshot_id": null,
+                "delivery_item_id": 1,
+                "inventory_lot_id": 1,
+                "location_id": 1,
+                "movement_id": 1,
+                "occurred_at": "2026-10-10T05:37:01Z",
+                "operator_id": 1,
+                "owner_customer_id": 1,
+                "physical_quantity": 80,
+                "requirement_denominator": 1,
+                "requirement_product_id": 1,
+                "requirement_quantity": 80,
+                "semi_requirement_id": null,
+                "source_kind": "inventory",
+                "source_product_id": 1,
+                "unit": "boxes"
+              },
+              {
+                "component_snapshot_id": null,
+                "delivery_item_id": 2,
+                "inventory_lot_id": 2,
+                "location_id": 1,
+                "movement_id": 2,
+                "occurred_at": "2026-10-10T05:37:01Z",
+                "operator_id": 1,
+                "owner_customer_id": 1,
+                "physical_quantity": 50,
+                "requirement_denominator": 1,
+                "requirement_product_id": 2,
+                "requirement_quantity": 50,
+                "semi_requirement_id": null,
+                "source_kind": "inventory",
+                "source_product_id": 2,
+                "unit": "boxes"
+              }
+            ],
+            "original_items": [
+              {
+                "allocation_mode": "on_dispatch",
+                "allocations": [],
+                "customer_id": 1,
+                "customer_quantity": 100,
+                "customer_unit": null,
+                "delivery_item_id": 1,
+                "direct_completion_sources": [],
+                "goods": [
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": null,
+                    "customer_id": 1,
+                    "physical_quantity": 100,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "source_product_id": 1
+                  }
+                ],
+                "order_delivered_quantity": 0,
+                "order_item_id": 1,
+                "physical_quantity": 100,
+                "physical_unit": null,
+                "product_id": null,
+                "quantity_contract": null,
+                "revision_number": 1,
+                "semi_requirements": [],
+                "source_product_id": 1,
+                "source_type": "order"
+              },
+              {
+                "allocation_mode": "on_dispatch",
+                "allocations": [],
+                "customer_id": 1,
+                "customer_quantity": 50,
+                "customer_unit": null,
+                "delivery_item_id": 2,
+                "direct_completion_sources": [],
+                "goods": [
+                  {
+                    "bom_delivery_mode": null,
+                    "component_snapshot_id": null,
+                    "customer_id": 1,
+                    "physical_quantity": 50,
+                    "physical_unit": null,
+                    "quantity_per_set": null,
+                    "source_product_id": 2
+                  }
+                ],
+                "order_delivered_quantity": 0,
+                "order_item_id": 2,
+                "physical_quantity": 50,
+                "physical_unit": null,
+                "product_id": null,
+                "quantity_contract": null,
+                "revision_number": 1,
+                "semi_requirements": [],
+                "source_product_id": 2,
+                "source_type": "order"
+              }
+            ],
+            "original_version": 1,
+            "removed_delivery_item_ids": [],
+            "request": {
+              "confirm_pick_exception": true,
+              "expected_version": 1,
+              "snapshot": {
+                "delivery": {
+                  "customer_id": 1,
+                  "delivery_date": "2026-07-18",
+                  "id": 1,
+                  "source_mode": "order",
+                  "status": "pending",
+                  "vehicle_number": null,
+                  "version": 1
+                },
+                "expected_final_items": [
+                  {
+                    "customer_quantity": 80,
+                    "customer_unit": null,
+                    "delivery_item_id": 1,
+                    "goods": [
+                      {
+                        "bom_delivery_mode": null,
+                        "component_snapshot_id": null,
+                        "customer_id": 1,
+                        "physical_quantity": 80,
+                        "physical_unit": null,
+                        "quantity_per_set": null,
+                        "source_product_id": 1
+                      }
+                    ],
+                    "physical_quantity": 80,
+                    "physical_unit": null
+                  },
+                  {
+                    "customer_quantity": 50,
+                    "customer_unit": null,
+                    "delivery_item_id": 2,
+                    "goods": [
+                      {
+                        "bom_delivery_mode": null,
+                        "component_snapshot_id": null,
+                        "customer_id": 1,
+                        "physical_quantity": 50,
+                        "physical_unit": null,
+                        "quantity_per_set": null,
+                        "source_product_id": 2
+                      }
+                    ],
+                    "physical_quantity": 50,
+                    "physical_unit": null
+                  }
+                ],
+                "items": [
+                  {
+                    "allocation_mode": "on_dispatch",
+                    "allocations": [],
+                    "customer_id": 1,
+                    "customer_quantity": 100,
+                    "customer_unit": null,
+                    "delivery_item_id": 1,
+                    "direct_completion_sources": [],
+                    "goods": [
+                      {
+                        "bom_delivery_mode": null,
+                        "component_snapshot_id": null,
+                        "customer_id": 1,
+                        "physical_quantity": 100,
+                        "physical_unit": null,
+                        "quantity_per_set": null,
+                        "source_product_id": 1
+                      }
+                    ],
+                    "order_delivered_quantity": 0,
+                    "order_item_id": 1,
+                    "physical_quantity": 100,
+                    "physical_unit": null,
+                    "product_id": null,
+                    "quantity_contract": null,
+                    "revision_number": 1,
+                    "semi_requirements": [],
+                    "source_product_id": 1,
+                    "source_type": "order"
+                  },
+                  {
+                    "allocation_mode": "on_dispatch",
+                    "allocations": [],
+                    "customer_id": 1,
+                    "customer_quantity": 50,
+                    "customer_unit": null,
+                    "delivery_item_id": 2,
+                    "direct_completion_sources": [],
+                    "goods": [
+                      {
+                        "bom_delivery_mode": null,
+                        "component_snapshot_id": null,
+                        "customer_id": 1,
+                        "physical_quantity": 50,
+                        "physical_unit": null,
+                        "quantity_per_set": null,
+                        "source_product_id": 2
+                      }
+                    ],
+                    "order_delivered_quantity": 0,
+                    "order_item_id": 2,
+                    "physical_quantity": 50,
+                    "physical_unit": null,
+                    "product_id": null,
+                    "quantity_contract": null,
+                    "revision_number": 1,
+                    "semi_requirements": [],
+                    "source_product_id": 2,
+                    "source_type": "order"
+                  }
+                ],
+                "pick_action": "apply",
+                "pick_task": {
+                  "delivery_id": 1,
+                  "id": 1,
+                  "items": [
+                    {
+                      "delivery_item_id": 1,
+                      "location_lines": [
+                        {
+                          "area_code": null,
+                          "bundle_count": null,
+                          "bundle_text": "每捆数量待核",
+                          "component_snapshot_id": null,
+                          "customer_inventory_code": "PICK-001",
+                          "location_code": "PHASE7-FG",
+                          "location_id": 1,
+                          "location_name": "Phase 7 成品测试库位",
+                          "location_operational": true,
+                          "location_sort_order": 0,
+                          "loose_quantity": null,
+                          "lot_id": 1,
+                          "lot_number": "PHASE7-FG-1",
+                          "map_feature_id": null,
+                          "map_point": null,
+                          "needs_relocation": false,
+                          "order_item_id": 1,
+                          "pallet_code": null,
+                          "pallet_id": null,
+                          "pick_item_id": 1,
+                          "pick_quantity": 100,
+                          "placement_status": null,
+                          "position_status": "unplaced",
+                          "product_code": "PICK-001",
+                          "product_name": "拿货测试外箱",
+                          "published_map_revision": null,
+                          "requirement_denominator": 1,
+                          "requirement_numerator": 100,
+                          "requirement_quantity": 100,
+                          "requires_attention": false,
+                          "reservation_id": 1,
+                          "source_type": "finished_inventory",
+                          "specification": "500×300×200mm",
+                          "specification_display": "500×300×200mm",
+                          "unit": "个",
+                          "units_per_bundle": null,
+                          "warehouse_floor": null
+                        }
+                      ],
+                      "location_plan_complete": true,
+                      "order_item_id": 1,
+                      "original_physical_quantity": 100,
+                      "pick_status": "partial",
+                      "picked_physical_quantity": 80,
+                      "task_item_id": 1
+                    },
+                    {
+                      "delivery_item_id": 2,
+                      "location_lines": [
+                        {
+                          "area_code": null,
+                          "bundle_count": null,
+                          "bundle_text": "每捆数量待核",
+                          "component_snapshot_id": null,
+                          "customer_inventory_code": "PICK-002",
+                          "location_code": "PHASE7-FG",
+                          "location_id": 1,
+                          "location_name": "Phase 7 成品测试库位",
+                          "location_operational": true,
+                          "location_sort_order": 0,
+                          "loose_quantity": null,
+                          "lot_id": 2,
+                          "lot_number": "PHASE7-FG-2",
+                          "map_feature_id": null,
+                          "map_point": null,
+                          "needs_relocation": false,
+                          "order_item_id": 2,
+                          "pallet_code": null,
+                          "pallet_id": null,
+                          "pick_item_id": 2,
+                          "pick_quantity": 50,
+                          "placement_status": null,
+                          "position_status": "unplaced",
+                          "product_code": "PICK-002",
+                          "product_name": "拿货测试内箱",
+                          "published_map_revision": null,
+                          "requirement_denominator": 1,
+                          "requirement_numerator": 50,
+                          "requirement_quantity": 50,
+                          "requires_attention": false,
+                          "reservation_id": 2,
+                          "source_type": "finished_inventory",
+                          "specification": "300×200×150mm",
+                          "specification_display": "300×200×150mm",
+                          "unit": "个",
+                          "units_per_bundle": null,
+                          "warehouse_floor": null
+                        }
+                      ],
+                      "location_plan_complete": true,
+                      "order_item_id": 2,
+                      "original_physical_quantity": 50,
+                      "pick_status": "picked",
+                      "picked_physical_quantity": 50,
+                      "task_item_id": 2
+                    }
+                  ],
+                  "print_version": "1-44877cf821",
+                  "route_snapshot_version": "dcac9852dbabc14b",
+                  "snapshot_version": 1,
+                  "status": "exception"
+                },
+                "schema_version": 1
+              },
+              "snapshot_hash": "1137a77555d9302ec2ad324f94f06897b72ea514e918cf8aeb21ce5605b4c619"
+            },
+            "request_hash": "91417ecc199e641dcb7d5f0db5160d5eaf616939ac6ceead924929a9107aa18c",
+            "schema_version": 1,
+            "stages": {
+              "dispatched": true,
+              "pick_applied": true,
+              "pick_task_id": 1,
+              "prepared": true
+            }
+          },
+          "result": "completed",
+          "schema_version": 1
+        }
+      }
+    }
+  ],
+  "finalFacts": {
+    "deliveries": [
+      [
+        1,
+        "dispatched",
+        3,
+        130
+      ]
+    ],
+    "lots": [
+      [
+        1,
+        0,
+        20,
+        80,
+        2
+      ],
+      [
+        2,
+        0,
+        0,
+        50,
+        2
+      ]
+    ],
+    "movements": 2,
+    "records": 1,
+    "order_items": [
+      [
+        1,
+        80
+      ],
+      [
+        2,
+        50
+      ]
+    ],
+    "tasks": [
+      [
+        1,
+        "dispatched",
+        1
+      ]
+    ]
+  }
+}

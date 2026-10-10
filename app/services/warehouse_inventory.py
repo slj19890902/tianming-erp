@@ -34,6 +34,8 @@ from app.models.warehouse_inventory import (
     OrderItemSemiRequirement,
     SemiFinishedInventoryDetail,
     SemiFinishedLotAllowedProduct,
+    WarehouseArea,
+    WarehouseFloor,
     WarehouseLocation,
 )
 from app.services.flute_mapping import seven_layer_code_error
@@ -59,6 +61,12 @@ SEMI_FINISHED_FLUTES_BY_LAYER: dict[int, frozenset[str]] = {
     5: frozenset({"AB", "BE"}),
     7: frozenset({"AAA", "ABC"}),
 }
+
+
+RAW_MATERIAL_STAGING_FLOORS = frozenset({1, 3})
+RAW_MATERIAL_STAGING_WAREHOUSE_TYPES = frozenset({"semi_finished", "shared"})
+RAW_MATERIAL_STAGING_STORAGE_TYPES = frozenset({"ground", "temporary_aisle"})
+FLOOR1_RAW_MATERIAL_STAGING_CODE = "1FA"
 
 
 @dataclass(frozen=True)
@@ -149,7 +157,104 @@ def _number(prefix: str) -> str:
     return f"{prefix}-{beijing_now_naive():%Y%m%d}-{uuid4().hex[:10].upper()}"
 
 
-def _location(db: Session, location_id: int, inventory_type: str) -> WarehouseLocation:
+def _is_raw_material_staging_location(
+    db: Session,
+    location: WarehouseLocation,
+) -> bool:
+    """Validate an area-level staging point reserved for incoming board sheets.
+
+    This intentionally does not treat every unplaced location as usable.  The
+    exception is limited to the existing floor-1 raw-material staging marker
+    and future floor-1/floor-3 locations explicitly named as raw-material
+    staging areas in the warehouse ledger.
+    """
+
+    if (
+        not location.is_active
+        or location.warehouse_type not in RAW_MATERIAL_STAGING_WAREHOUSE_TYPES
+        or location.warehouse_floor not in RAW_MATERIAL_STAGING_FLOORS
+        or location.storage_type not in RAW_MATERIAL_STAGING_STORAGE_TYPES
+        or not (location.area_code or "").strip()
+        or location.placement_status != "unplaced"
+        or location.source_version == "V11"
+        or location.location_code == "F1-DISPATCH-01"
+    ):
+        return False
+    labels = " ".join(
+        filter(
+            None,
+            [location.location_code, location.location_name, location.remarks],
+        )
+    )
+    is_existing_floor1_staging = (
+        location.location_code == FLOOR1_RAW_MATERIAL_STAGING_CODE
+    )
+    if (
+        not is_existing_floor1_staging
+        and "原料" not in labels
+        and "片料" not in labels
+        and "半成品" not in labels
+    ):
+        return False
+    floor = db.scalar(
+        select(WarehouseFloor).where(
+            WarehouseFloor.floor_number == location.warehouse_floor
+        )
+    )
+    if floor is None or floor.construction_status == "not_started":
+        return False
+    area = db.scalar(
+        select(WarehouseArea).where(
+            WarehouseArea.floor_id == floor.id,
+            WarehouseArea.area_code == location.area_code,
+        )
+    )
+    if area is None or area.construction_status == "not_started":
+        return False
+    if is_existing_floor1_staging:
+        return True
+    return (
+        floor.construction_status == "enabled"
+        and area.construction_status == "enabled"
+    )
+
+
+def automatic_raw_material_staging_location(db: Session) -> WarehouseLocation:
+    """Return the configured floor-1/floor-3 staging area for incoming sheets."""
+
+    rows = db.scalars(
+        select(WarehouseLocation).where(
+            WarehouseLocation.is_active.is_(True),
+            WarehouseLocation.warehouse_type.in_(
+                RAW_MATERIAL_STAGING_WAREHOUSE_TYPES
+            ),
+            WarehouseLocation.warehouse_floor.in_(RAW_MATERIAL_STAGING_FLOORS),
+        )
+    ).all()
+    candidates = [row for row in rows if _is_raw_material_staging_location(db, row)]
+    candidates.sort(
+        key=lambda row: (
+            0 if row.location_code == FLOOR1_RAW_MATERIAL_STAGING_CODE else 1,
+            row.warehouse_floor or 99,
+            row.sort_order,
+            row.id,
+        )
+    )
+    if not candidates:
+        raise WarehouseInventoryError(
+            "未配置可用的一楼或三楼原料暂存区，请先维护原料区域主数据",
+            409,
+        )
+    return candidates[0]
+
+
+def _location(
+    db: Session,
+    location_id: int,
+    inventory_type: str,
+    *,
+    allow_raw_material_staging: bool = False,
+) -> WarehouseLocation:
     location = db.get(WarehouseLocation, location_id)
     allowed = {
         "finished": {"finished", "shared"},
@@ -157,6 +262,12 @@ def _location(db: Session, location_id: int, inventory_type: str) -> WarehouseLo
     }[inventory_type]
     if location is None:
         raise WarehouseInventoryError("库位不存在", 404)
+    if (
+        inventory_type == "semi_finished"
+        and allow_raw_material_staging
+        and _is_raw_material_staging_location(db, location)
+    ):
+        return location
     if getattr(location, "source_version", None) == "V11":
         if inventory_type != "finished":
             raise WarehouseInventoryError(
@@ -2009,6 +2120,7 @@ def manual_semi_finished_in(
     movement_reason: str = "手工半成品入库",
     stock_date_accuracy: str = "exact",
     stock_date_original_text: str | None = None,
+    allow_raw_material_staging: bool = False,
 ) -> InventoryLot:
     existing = _idempotent_lot(db, idempotency_key)
     if existing:
@@ -2040,7 +2152,12 @@ def manual_semi_finished_in(
         )
     if sheet_type not in {"raw_board", "net_sheet", "creased_sheet"}:
         raise WarehouseInventoryError("片料类型无效")
-    _location(db, location_id, "semi_finished")
+    _location(
+        db,
+        location_id,
+        "semi_finished",
+        allow_raw_material_staging=allow_raw_material_staging,
+    )
     customer = db.get(Customer, customer_id) if customer_id else None
     if customer_id and customer is None:
         raise WarehouseInventoryError("客户不存在", 404)

@@ -2593,8 +2593,7 @@
               </div>
               <div v-if="incomingTab==='received' && incomingReceivedLoading" class="status blue" style="display:block;margin:8px 0">正在读取今日实收，已显示的记录不会被清空。</div>
               <div v-if="incomingTab==='received' && incomingReceivedError" class="status orange" style="display:block;margin:8px 0">{{ incomingReceivedError }} <button class="btn small" @click="loadIncomingReceived({force:true})">重试</button></div>
-              <div v-if="incomingTab==='pending' && incomingReceiptLocationsLoading" class="status blue" style="display:block;margin:8px 0">正在读取补库到厂后的可用库位…</div>
-              <div v-if="incomingTab==='pending' && incomingReceiptLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingReceiptLocationsError }} <button class="btn small" @click="ensureIncomingReceiptLocations()">重试</button></div>
+              <div v-if="incomingTab==='pending' && incomingPending.some(row=>row.source_type==='stock_replenishment')" class="status blue" style="display:block;margin:8px 0">补库片料到厂后由系统自动进入原料暂存区，无需选择具体库位。</div>
               <div v-if="incomingTab==='pending' && incomingLocationsLoading" class="status blue" style="display:block;margin:8px 0">正在读取余量转半成品所需库位…</div>
               <div v-if="incomingTab==='pending' && incomingLocationsError" class="status orange" style="display:block;margin:8px 0">{{ incomingLocationsError }} <button class="btn small" @click="ensureIncomingLocations()">重试</button></div>
               <data-panel v-if="incomingTab !== 'history'" :empty="!(incomingTab==='pending' ? incomingPending : incomingReceived).length && !(incomingTab==='received' && (incomingReceivedLoading || incomingReceivedError))">
@@ -2606,7 +2605,7 @@
                     <td class="incoming-customer-cell">{{ row.customer_name }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.product_name }}</td><td>{{ row.material_display || "-" }}</td>
                     <td><div>计划 {{ row.planned_quantity ?? row.requisition_qty ?? row.quantity }}</div><div>已收 {{ row.cumulative_received_quantity || 0 }}</div><strong>待收 {{ row.remaining_quantity ?? row.requisition_qty ?? row.quantity }}</strong></td>
                     <td><input v-if="incomingTab==='pending' && hasPermission('incoming.execute')" class="input compact-input" type="number" min="1" v-model.number="row.incoming_quantity" /><strong v-else>{{ row.incoming_quantity }}</strong></td>
-                    <td class="incoming-decision-cell"><template v-if="incomingTab==='pending'"><div v-if="Number(row.cumulative_received_quantity||0)>0 && Number(row.remaining_quantity||0)>0" class="status orange">已收 {{ row.cumulative_received_quantity }}，待补 {{ row.remaining_quantity }}</div><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><span v-else class="status green">数量刚好</span><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id" :disabled="!hasPermission('incoming.execute')"><option :value="null">余量放哪个库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.location_name }}</option></select><div v-if="row.source_type==='stock_replenishment'" class="incoming-location-picker"><span class="muted">到厂后入库位</span><select class="select" v-model.number="row.receipt_location_id" :disabled="!hasPermission('incoming.execute') || incomingReceiptLocationsLoading"><option :value="null">请选择本次入库库位</option><option v-for="location in incomingReceiptLocationsFor(row)" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.location_name }}</option></select></div></template><template v-else><span :class="['status',row.variance_type==='matched'?'green':'orange']">{{ incomingVarianceLabel(row) }}</span><div v-if="row.resolution_reason" class="muted">{{ row.resolution_reason }}</div></template></td>
+                    <td class="incoming-decision-cell"><template v-if="incomingTab==='pending'"><div v-if="Number(row.cumulative_received_quantity||0)>0 && Number(row.remaining_quantity||0)>0" class="status orange">已收 {{ row.cumulative_received_quantity }}，待补 {{ row.remaining_quantity }}</div><select v-if="incomingProjectedVariance(row)<0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">少收怎么处理</option><option value="await_supplier">继续等补货</option><option v-if="row.source_type!=='stock_replenishment'" value="accept_short">按已收数结单</option></select><select v-else-if="incomingProjectedVariance(row)>0" class="select" v-model="row.resolution_action" :disabled="!hasPermission('incoming.execute')"><option value="">多收怎么处理</option><option value="all_to_production">全部用于本单</option><option value="transfer_to_semi_inventory">余量存半成品仓</option></select><span v-else class="status green">数量刚好</span><select v-if="row.resolution_action==='transfer_to_semi_inventory'" class="select" v-model.number="row.surplus_location_id" :disabled="!hasPermission('incoming.execute')"><option :value="null">余量放哪个库位</option><option v-for="location in incomingSemiLocations()" :key="location.id" :value="location.id">{{ location.location_code }}｜{{ location.location_name }}</option></select><div v-if="row.source_type==='stock_replenishment'" class="incoming-location-picker"><span class="status blue">自动进入原料暂存区</span></div></template><template v-else><span :class="['status',row.variance_type==='matched'?'green':'orange']">{{ incomingVarianceLabel(row) }}</span><div v-if="row.resolution_reason" class="muted">{{ row.resolution_reason }}</div></template></td>
                     <td>{{ row.requisition_date || "-" }}</td>
                     <td><a v-if="row.drawing_is_pdf" class="btn small" :href="row.drawing_path" target="_blank">打开PDF</a><span v-else>-</span></td>
                     <td v-if="hasPermission('incoming.execute')"><template v-if="incomingTab==='pending'"><button class="btn small success" @click="receiveIncoming(row)">确认实收</button><button v-if="row.pending_receipt_item_id" class="btn small" @click="acceptShortIncoming(row)">不再补货，短收结单</button></template><button v-else-if="canAdmin" class="btn small danger" @click="revertIncoming(row)">撤销收料，回到已报料</button></td>
@@ -5214,7 +5213,7 @@
                     <div class="field stock-span-2"><label>压线类型</label><select class="select" v-model="line.crease_type" @change="onStockCreaseTypeChanged(line)"><option :value="null">未指定</option><option value="压线">压线</option><option value="净料">净</option><option value="毛片">毛</option></select></div>
                     <div class="field stock-span-6"><label>压线尺寸</label><div v-if="line.crease_type==='压线'" class="stock-crease-inputs"><label>上摇盖<input class="input" type="number" min="0" v-model.number="line.crease_left_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>高<input class="input" type="number" min="1" v-model.number="line.crease_middle_mm" @input="syncStockReportWidthFromCrease(line)" /></label><span>+</span><label>下摇盖<input class="input" type="number" min="0" v-model.number="line.crease_right_mm" @input="syncStockReportWidthFromCrease(line)" /></label></div><div v-else class="muted">{{ line.crease_type || '无需压线分段' }}</div></div>
                     <div v-if="stockCreaseMismatch(line)" class="status orange stock-span-full" style="white-space:normal">{{ stockCreaseMismatch(line) }}</div>
-                    <div class="field stock-span-4"><label>目标库位</label><select class="select" v-model.number="line.location_id"><option :value="null">请选择库位</option><option v-for="loc in stockLocationsForType(line.target_inventory_type)" :key="loc.id" :value="loc.id">{{ loc.location_code }}｜{{ loc.location_name }}</option></select></div>
+                    <div class="field stock-span-4"><label>片料到厂去向</label><div class="status blue">系统自动进入一楼或已正式启用的三楼原料/半成品暂存区，无需在报料时选择库位。</div></div>
                     <div class="field stock-span-4"><label>库存预警</label><button class="btn" type="button" @click="saveStockPolicyFromLine(line)">保存为预警模板</button></div>
                     </div>
                   </details>
@@ -6326,12 +6325,12 @@
             mergeSuggestions: [], mergeSuggestionsLoading: false, mergeSuggestionsError: "", mergeSuggestionsExpanded: {}, mergeSuggestionsDeduction: {}, requisitionMergeExpanded: {}, requisitionComponentExpanded: {},
             supplierOrders: [],
             supplierRequisitionDraft: { supplier_groups: [] }, supplierRequisitionSelections: [],
-            stockPolicyWarnings: [], stockReplenishmentLocations: [], stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
+            stockPolicyWarnings: [], stockReplenishmentProducts: [], stockReplenishmentCompanions: [],
             stockReplenishmentForm: { source_type:"customer_request", idempotency_key:null, supplier_name:"", customer_id:null, remark:"", stock_now:false, items:[] },
             lowStockExpandedCustomers: {},
             requisitionReportedTotal: 0,
             reportedFilters: { customer_id:"", document_number:"", order_number:"", product_code:"", supplier_name:"", status:"", date_from:"", date_to:"" },
-            incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "", incomingReceiptLocations: [], incomingReceiptLocationsLoading: false, incomingReceiptLocationsError: "",
+            incomingTab: "pending", incomingPending: [], incomingReceived: [], incomingReceivedLoaded: false, incomingReceivedLoading: false, incomingReceivedError: "", incomingHistory: [], incomingHistoryTotal: 0, incomingLocations: [], incomingLocationsLoading: false, incomingLocationsError: "",
             incomingHistoryFilters: { customer_id:"", document_keyword:"", product_code:"", product_name:"", supplier_name:"", date_from:"", date_to:"", receipt_status:"" },
             productionTab: "pending", productionPending: [], productionHistory: [], productionHistoryTotal: 0, productionLocations: [], productionLocationsLoading: false, productionLocationsError: "", productionSelected: {}, productionBusy: false,
             productionHistoryFilters: { customer_id:"", order_keyword:"", product_code:"", product_name:"", completed_date_from:"", completed_date_to:"", status:"" },
@@ -11175,23 +11174,18 @@
             this.modal = { type:"stockReplenishment", title:warningOnly ? "按库存预警生成报料草稿" : "手动库存补库报料" };
             try {
               const tasks = [
-                axios.get("/api/requisition/stock-replenishment/locations", {signal:controller.signal}),
                 axios.get("/api/requisition/stock-policies", {params:{warning_only:true}, signal:controller.signal}),
               ];
               if (!this.customerOptions.length) tasks.push(this.loadCustomerOptions());
               // 补库详细参数中的材质 search-select 需要完整材质集合；只在实际打开弹窗时补齐。
               if (!this.allMaterials.length) tasks.push(this.loadMaterials());
-              const [locations, policies] = await Promise.all(tasks);
-              this.stockReplenishmentLocations = locations.data.items || [];
+              const [policies] = await Promise.all(tasks);
               this.stockPolicyWarnings = policies.data.items || [];
             } catch (error) {
               if (!this.isCancelledRequest(error)) this.showToast("补库基础数据加载失败：" + this.errorMessage(error), true);
             } finally {
               this.finishLatestRequest("requisition:stock-replenishment-bootstrap", controller);
             }
-          },
-          defaultStockLocation(type) {
-            return this.stockLocationsForType(type)[0]?.id || null;
           },
           addBlankStockReplenishmentLine() {
             this.stockReplenishmentForm.items.push({
@@ -11200,7 +11194,7 @@
               layer_count:5, flute_type:"AB", report_length_mm:null, report_width_mm:null,
               crease_type:null, crease_text:"", crease_left_mm:null, crease_middle_mm:null, crease_right_mm:null,
               sheet_type:"raw_board", component_type:"whole", pieces_per_box:1, stock_yield_per_sheet:1,
-              quantity:null, location_id:this.defaultStockLocation("semi_finished"), remark:"",
+              quantity:null, location_id:null, remark:"",
             });
           },
           async addStockPolicyDraft(policy) {
@@ -11246,10 +11240,6 @@
           },
           stockWarningExtraSheets(line) {
             return Math.max(Number(line.quantity || 0) - this.stockWarningTheoreticalSheets(line), 0);
-          },
-          stockLocationsForType(type) {
-            const allowed = type === "finished" ? ["finished","shared"] : ["semi_finished","shared"];
-            return (this.stockReplenishmentLocations || []).filter(row=>allowed.includes(row.warehouse_type));
           },
           async loadStockProducts(customerId, query="") {
             if (!customerId) return;
@@ -11353,7 +11343,7 @@
             }
           },
           onStockTargetTypeChanged(line) {
-            line.location_id = this.defaultStockLocation(line.target_inventory_type);
+            line.location_id = null;
             if (line.target_inventory_type === "finished" && !line.customer_id) {
               line.product_id = null;
             }
@@ -11428,7 +11418,7 @@
                 material_code:line.material_code||null,layer_count:line.layer_count||null,flute_type:line.flute_type||null,
                 report_length_mm:line.report_length_mm||null,report_width_mm:line.report_width_mm||null,
                 sheet_type:line.sheet_type||"raw_board",component_type:line.component_type||"whole",pieces_per_box:Number(line.pieces_per_box||1),stock_yield_per_sheet:Number(line.stock_yield_per_sheet||1),
-                warning_quantity:warningQuantity,target_quantity:targetQuantity,default_location_id:line.location_id||null,supplier_name:this.stockReplenishmentForm.supplier_name||null,remark:line.remark||null,active:true,
+                warning_quantity:warningQuantity,target_quantity:targetQuantity,default_location_id:null,supplier_name:this.stockReplenishmentForm.supplier_name||null,remark:line.remark||null,active:true,
               });
               const {data}=await axios.get("/api/requisition/stock-policies",{params:{warning_only:true}}); this.stockPolicyWarnings=data.items||[];
               this.showToast("库存预警模板已保存");
@@ -11959,8 +11949,7 @@
             const controller = this.beginLatestRequest("incoming:pending");
             try {
               const pending = await axios.get("/api/incoming/pending", {signal:controller.signal});
-              this.incomingPending=(pending.data.items || []).map(row=>({...row,incoming_quantity:Number(row.remaining_quantity ?? row.incoming_quantity ?? row.requisition_qty ?? row.quantity ?? 0),resolution_action:"",resolution_reason:"",receipt_location_id:Number(row.default_location_id)||null,surplus_location_id:null}));
-              if (this.incomingPending.some(row => row.source_type === "stock_replenishment")) this.ensureIncomingReceiptLocations();
+              this.incomingPending=(pending.data.items || []).map(row=>({...row,incoming_quantity:Number(row.remaining_quantity ?? row.incoming_quantity ?? row.requisition_qty ?? row.quantity ?? 0),resolution_action:"",resolution_reason:"",surplus_location_id:null}));
               const pendingIds = new Set(this.incomingPending.map(row => row.item_id));
               Object.keys(this.incomingSelected).forEach(itemId => {
                 if (!pendingIds.has(Number(itemId))) delete this.incomingSelected[itemId];
@@ -12002,21 +11991,6 @@
               this.finishLatestRequest("incoming:surplus-locations", controller);
             }
           },
-          async ensureIncomingReceiptLocations() {
-            if (!this.hasPermission("incoming.execute") || this.incomingReceiptLocations.length || this.incomingReceiptLocationsLoading) return;
-            const controller = this.beginLatestRequest("incoming:replenishment-locations");
-            this.incomingReceiptLocationsLoading = true;
-            this.incomingReceiptLocationsError = "";
-            try {
-              const locations = await axios.get("/api/incoming/replenishment-locations", {signal:controller.signal});
-              this.incomingReceiptLocations=locations.data.items || [];
-            } catch (error) {
-              if (!this.isCancelledRequest(error)) this.incomingReceiptLocationsError = "补库入库位读取失败，请重试";
-            } finally {
-              if (latestRequestControllers.get("incoming:replenishment-locations") === controller) this.incomingReceiptLocationsLoading = false;
-              this.finishLatestRequest("incoming:replenishment-locations", controller);
-            }
-          },
           onIncomingResolutionAction(row) {
             if (row?.resolution_action === "transfer_to_semi_inventory") this.ensureIncomingLocations();
             else row.surplus_location_id = null;
@@ -12047,12 +12021,6 @@
           incomingSemiLocations() {
             return (this.incomingLocations || []).filter(row => ["semi_finished", "shared"].includes(row.warehouse_type));
           },
-          incomingReceiptLocationsFor(row) {
-            const allowed = row?.target_inventory_type === "finished"
-              ? ["finished", "shared"]
-              : ["semi_finished", "shared"];
-            return (this.incomingReceiptLocations || []).filter(location => allowed.includes(location.warehouse_type));
-          },
           incomingVarianceLabel(row) {
             const type=row?.variance_type;
             const action=row?.resolution_action;
@@ -12071,10 +12039,7 @@
             if (action==="transfer_to_semi_inventory" && this.incomingLocationsLoading) throw new Error("正在读取半成品库位，请稍候再确认");
             if (action==="transfer_to_semi_inventory" && this.incomingLocationsError) throw new Error(this.incomingLocationsError);
             if (action==="transfer_to_semi_inventory" && !Number(row.surplus_location_id)) throw new Error("余量转半成品库存时必须选择库位");
-            if (row.source_type==="stock_replenishment" && this.incomingReceiptLocationsLoading) throw new Error("正在读取入库库位，请稍候");
-            if (row.source_type==="stock_replenishment" && this.incomingReceiptLocationsError) throw new Error(this.incomingReceiptLocationsError);
-            if (row.source_type==="stock_replenishment" && !Number(row.receipt_location_id)) throw new Error("请先选择本次入库库位");
-            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,receipt_location_id:Number(row.receipt_location_id)||null,surplus_location_id:Number(row.surplus_location_id)||null,idempotency_key:createIdempotencyKey()};
+            return {item_id:row.item_id,received_quantity:Number(row.incoming_quantity),resolution_action:action,resolution_reason:row.resolution_reason?.trim()||null,surplus_location_id:Number(row.surplus_location_id)||null,idempotency_key:createIdempotencyKey()};
           },
           canReceiveIncoming(row) {
             return row?.material_status === "pending" && ["已报料", "供应商已排单"].includes(row?.requisition_status);
@@ -19753,7 +19718,7 @@
                   remark:this.stockReplenishmentForm.remark || null,
                   stock_now:false,
                   items:this.stockReplenishmentForm.items.map(line => {
-                    const item={...line}; delete item._key; delete item.crease_text; delete item.material_supplier_name; delete item.suggested_finished_quantity; delete item.theoretical_requisition_quantity; delete item.compatible_product_ids; delete item.compatible_product_codes; delete item.draft_ready; delete item.missing_fields; delete item.cutting_mode; delete item.output_per_sheet;
+                    const item={...line}; delete item._key; delete item.crease_text; delete item.material_supplier_name; delete item.suggested_finished_quantity; delete item.theoretical_requisition_quantity; delete item.compatible_product_ids; delete item.compatible_product_codes; delete item.draft_ready; delete item.missing_fields; delete item.cutting_mode; delete item.output_per_sheet; item.location_id=null;
                     return item;
                   }),
                 };

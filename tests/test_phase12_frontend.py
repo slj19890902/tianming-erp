@@ -378,13 +378,14 @@ def test_desktop_and_mobile_incoming_layout_support_editable_quantity() -> None:
     assert "pending_receipt_item_id" in INCOMING
     assert "item.requisition_date" in INCOMING
     assert '/api/incoming/surplus-locations' in INCOMING
-    assert '/api/incoming/replenishment-locations' in INCOMING
-    assert 'data-receipt-location="${key}"' in INCOMING
+    assert '/api/incoming/replenishment-locations' not in INCOMING
+    assert 'data-receipt-location="${key}"' not in INCOMING
+    assert "片料到厂后由系统自动进入原料暂存区" in INCOMING
     assert 'api("/api/warehouse/locations")' not in INCOMING
     assert 'this.hasPermission("incoming.execute")' in INDEX
     assert '"/api/incoming/surplus-locations"' in INDEX
-    assert '"/api/incoming/replenishment-locations"' in INDEX
-    assert "receipt_location_id" in INDEX
+    assert '"/api/incoming/replenishment-locations"' not in INDEX
+    assert "自动进入原料暂存区" in INDEX
     assert "incoming-table" in INDEX
     assert "本次后累计等于计划" not in INDEX
     assert "本次后累计等于计划" not in INCOMING

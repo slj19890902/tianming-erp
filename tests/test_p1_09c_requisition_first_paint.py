@@ -30,7 +30,10 @@ def test_requisition_cold_entry_requests_only_pending_business_data() -> None:
 def test_requisition_secondary_tabs_and_tools_load_on_demand() -> None:
     tab_switch = _method_block("async selectRequisitionTab(tab)", "async refreshRequisitionTab()")
     merge_open = _method_block("async openMergeSuggestions()", "async ensureRequisitionMaterials()")
-    replenishment_open = _method_block("async openStockReplenishment(options={})", "defaultStockLocation(type)")
+    replenishment_open = _method_block(
+        "async openStockReplenishment(options={})",
+        "addBlankStockReplenishmentLine()",
+    )
 
     assert "if (tab === \"submitted\")" in tab_switch
     assert "this.loadReportedDocuments()" in tab_switch
@@ -41,7 +44,7 @@ def test_requisition_secondary_tabs_and_tools_load_on_demand() -> None:
     assert "mergeSuggestionsError" in merge_open
     assert 'beginLatestRequest("requisition:stock-replenishment-bootstrap")' in replenishment_open
     assert 'axios.get("/api/requisition/stock-policies", {params:{warning_only:true}, signal:controller.signal})' in replenishment_open
-    assert 'axios.get("/api/requisition/stock-replenishment/locations", {signal:controller.signal})' in replenishment_open
+    assert 'axios.get("/api/requisition/stock-replenishment/locations", {signal:controller.signal})' not in replenishment_open
     assert "if (!this.allMaterials.length) tasks.push(this.loadMaterials());" in replenishment_open
 
 

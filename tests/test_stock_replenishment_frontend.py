@@ -29,8 +29,10 @@ def test_replenishment_form_always_saves_a_draft_before_stocking() -> None:
     assert "stock_now:false," in INDEX
     assert "stockReplenishmentForm.stock_now = false" in INDEX
     assert "stockReplenishmentForm.idempotency_key || createIdempotencyKey()" in INDEX
-    assert "stockLocationsForType(line.target_inventory_type)" in INDEX
-    assert "location_id:this.defaultStockLocation" in INDEX
+    assert "stockLocationsForType(line.target_inventory_type)" not in INDEX
+    assert "location_id:this.defaultStockLocation" not in INDEX
+    assert "片料到厂去向" in INDEX
+    assert "无需在报料时选择库位" in INDEX
     assert 'v-model="line.target_inventory_type" disabled' in INDEX
     assert '<option value="finished">成品</option>' not in INDEX
 
@@ -41,6 +43,7 @@ def test_replenishment_save_and_print_paths_are_wired() -> None:
     assert "openStockReplenishmentPrint(printable)" in INDEX
     assert "补库单已保存，库存批次已生成" not in INDEX
     assert "补库报料草稿已保存；到料确认后进入客户专用纸板备料" in INDEX
+    assert "item.location_id=null" in INDEX
 
 
 def test_stock_policy_can_be_saved_from_a_replenishment_line() -> None:

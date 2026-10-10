@@ -77,22 +77,24 @@
       homeStockRows() { return this.homeVisibleWarnings.filter(r => this.homeStockTab==='all' || (this.homeStockTab==='action' ? actionable(r) : this.homeStockTab==='approval' ? stockState(r)==='approval' : !actionable(r)&&stockState(r)!=='approval')); },
       homePageSize() { return listSize(this.homeAvailableHeight,this.homeRowHeight); },
       homeCustomerSize() { return listSize(this.homeAvailableHeight,this.isLargeUi?70:55); },
-      homeQueueGroups() {if(this.homeWorkspace==='stock')return this.homeStockGroups;const keys=this.homeWorkspace==='approval'?['approval']:workKeys[this.homeWorkspace]||[];const rows=this.homeFilteredTasks.filter(r=>keys.includes(r.key));const groups=new Map();for(const row of rows){const id=Number(row.customer_id||row.customer_ids?.[0]);if(!groups.has(id))groups.set(id,{id,label:row.customer_label,rows:[]});groups.get(id).rows.push(row);}return [...groups.values()].sort((a,b)=>b.rows.length-a.rows.length||a.id-b.id);},
+      homeQueueGroups() {if(this.homeWorkspace==='stock')return this.homeStockGroups;const groups=new Map();for(const row of this.homeWorkspaceTasks){const id=Number(row.customer_id||row.customer_ids?.[0]);if(!groups.has(id))groups.set(id,{id,label:row.customer_label,rows:[]});groups.get(id).rows.push(row);}return [...groups.values()].sort((a,b)=>b.rows.length-a.rows.length||a.id-b.id);},
       homeSelectedCustomer() {const chosen=Number(this.homeCustomer|| (this.homeWorkspace==='stock'?this.homeStockCustomer:this.homeWorkCustomer));return this.homeQueueGroups.some(g=>g.id===chosen)?chosen:this.homeQueueGroups[0]?.id||null;},
       homeQueuePage() {return pageRows(this.homeQueueGroups,this.homeCustomerPage,this.homeCustomerSize);},
       homeStockGroupPage() {return pageRows(this.homeStockGroups,this.homeCustomerPage,this.homeCustomerSize);},
       homeStockDetailCustomer() {return this.homeSelectedCustomer;},
       homeStocksPage() { return pageRows(this.homeStockRows.filter(r=>Number(r.customer_id)===this.homeSelectedCustomer),this.homeStockPage,this.homePageSize); },
       homeTodayOrderIds() { return new Set(this.homeFilteredTasks.filter(r => r.order_id && r.due_date===this.homeData.today).map(r=>r.order_id)); },
-      homeTaskRows() { const rows=this.homeFilteredTasks.filter(r => (this.homeAttentionTab==='all'||attentionCategory(r)===this.homeAttentionTab)&&(this.homeTaskMode==='all'
+      homeWorkspaceTasks() {const keys=this.homeWorkspace==='approval'?['approval']:workKeys[this.homeWorkspace]||[];return this.homeFilteredTasks.filter(r => keys.includes(r.key)&&(this.homeTaskMode==='all'
         || (this.homeTaskMode==='today' && r.order_id && this.homeTodayOrderIds.has(r.order_id))
         || (this.homeTaskMode==='approval' && r.key==='approval')
         || (this.homeTaskMode==='receipt' && r.key==='pending_receipt')
-        || r.key===this.homeTaskMode)).filter(r=>(this.homeWorkspace==='approval'?['approval']:workKeys[this.homeWorkspace]||[]).includes(r.key)&&Number(r.customer_id||r.customer_ids?.[0])===this.homeSelectedCustomer);return rows; },
+        || r.key===this.homeTaskMode));},
+      homeTaskScopeRows() {return this.homeWorkspaceTasks.filter(r=>Number(r.customer_id||r.customer_ids?.[0])===this.homeSelectedCustomer);},
+      homeTaskRows() {return this.homeTaskScopeRows.filter(r=>this.homeAttentionTab==='all'||attentionCategory(r)===this.homeAttentionTab);},
       homeGroupedTasks() {return taskGroups(this.homeTaskRows);},
       homePriority() {const rows=this.homeFilteredTasks.filter(r=>attentionCategory(r)==='active'&&(r.key==='approval'||r.urgency==='today'&&r.due_date===this.homeData.today));return this.homeShowPriorityAll?taskGroups(rows):priorityTasks(rows,this.homeData.today);},
       homePriorityTotal() {return taskGroups(this.homeFilteredTasks.filter(r=>attentionCategory(r)==='active'&&(r.key==='approval'||r.urgency==='today'&&r.due_date===this.homeData.today))).length;},
-      homeAttentionCounts() {const counts={active:0,customer:0,deferred:0,review:0,hidden:0,all:this.homeFilteredTasks.length};for(const r of this.homeFilteredTasks)counts[attentionCategory(r)]++;return counts;},
+      homeAttentionCounts() {const rows=this.homeTaskScopeRows;const counts={active:0,customer:0,deferred:0,review:0,hidden:0,all:taskGroups(rows).length};for(const key of ['active','customer','deferred','review','hidden'])counts[key]=taskGroups(rows.filter(r=>attentionCategory(r)===key)).length;return counts;},
       homeTasksPage() { return pageRows(this.homeGroupedTasks,this.homeTaskPage,this.homePageSize); },
       homeFinanceCard() {return this.homeStages.find(c=>c.key==='pending_payment')||null;},
       homeDeliveryCustomers() {return new Set(this.homeFilteredTasks.filter(r=>r.key==='pending_delivery').map(r=>r.customer_id)).size;},
@@ -336,7 +338,7 @@
           <aside class="home-queue" aria-label="客户队列"><div class="home-panel-heading"><h2>客户队列</h2><span>{{vm.homeQueueGroups.length}}家</span></div><button v-for="g in vm.homeQueuePage.rows" :key="g.id" class="home-queue-item" :class="{active:vm.homeSelectedCustomer===g.id}" @click="vm.homeChooseCustomer(g.id)"><strong>{{g.label}}</strong><span>{{g.rows.length}}项 · {{g.rows[0]?.type}}</span></button><div v-if="!vm.homeQueueGroups.length" class="home-empty">当前范围暂无客户</div><footer v-if="vm.homeQueuePage.pages>1" class="home-pagination"><span>{{vm.homeQueuePage.page}} / {{vm.homeQueuePage.pages}}</span><div><button :disabled="vm.homeQueuePage.page<=1" @click="vm.homeCustomerPage--">上一页</button><button :disabled="vm.homeQueuePage.page>=vm.homeQueuePage.pages" @click="vm.homeCustomerPage++">下一页</button></div></footer></aside>
           <div class="home-detail">
           <div class="home-panel-heading"><h2 id="home-tasks-title">{{vm.homeTaskLabel}}</h2><button class="home-link" @click="vm.homeTaskMode='all';vm.homeAttentionTab='active';vm.homeTaskPage=1">优先处理</button></div>
-          <nav class="home-attention-tabs" aria-label="提醒分类"><button v-for="(label,key) in {active:'现在处理',customer:'待客户',deferred:'已延后',review:'待处置',hidden:'已隐藏',all:'全部'}" :key="key" :class="{active:vm.homeAttentionTab===key}" @click="vm.homeAttentionTab=key">{{label}} <span>{{vm.homeAttentionCounts[key]}}</span></button></nav>
+          <nav class="home-attention-tabs" aria-label="当前客户事项分组"><button v-for="(label,key) in {active:'现在处理',customer:'待客户',deferred:'已延后',review:'待处置',hidden:'已隐藏',all:'全部'}" :key="key" :class="{active:vm.homeAttentionTab===key}" @click="vm.homeAttentionTab=key">{{label}} <span>{{vm.homeAttentionCounts[key]}}组</span></button></nav>
           <div v-if="vm.homePreferenceError" class="home-error" role="alert">{{vm.homePreferenceError}}</div>
           <div v-if="!vm.homeTasksPage.total" class="home-empty">{{vm.homeQuery || vm.homeCustomer?'当前筛选下暂无待办':'当前没有此类待办'}}</div>
           <article v-for="g in vm.homeTasksPage.rows" :key="g.key" class="home-task-group"><div class="home-task-group-head"><strong>{{g.order_label || g.rows[0].product_code || g.rows[0].type}}</strong><span>{{g.rows[0].type}} · {{g.rows.length}}项</span><button class="home-link" @click="vm.homeExpandedTaskGroup=vm.homeExpandedTaskGroup===g.key?null:g.key">{{vm.homeExpandedTaskGroup===g.key?'收起成员':'查看成员'}}</button></div><template v-for="r in g.rows" :key="r.id"><div v-if="vm.homeExpandedTaskGroup===g.key || g.rows.length===1" class="home-task">

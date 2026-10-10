@@ -1348,6 +1348,45 @@ def build_supplier_requisition_production_package(
     }
 
 
+def _stock_print_mold(db: Session, item, product, customer, *, requires_mold: bool) -> tuple[dict, str | None]:
+    """Keep the purchase's mold identity, but locate that physical mold today.
+
+    A replenishment source is not a sales ProductionTask. Its own frozen
+    purchase identity (or verified historical master) is the authority; a new
+    product binding must never silently replace the mold of an old purchase.
+    """
+    result = dict(mold_tool_id=None, mold_code=None, mold_name=None,
+                  mold_location=None, mold_location_display=None,
+                  mold_location_version=None, mold_is_active=None, mold_binding_basis=None)
+    if product is None or customer is None or product.customer_id != customer.id:
+        return result, None
+    from app.services.stock_purchase_identity import resolve
+    from app.services.warehouse_inventory import WarehouseInventoryError
+    try:
+        identity = resolve(db, item, product)
+        mold_id = identity['fields'].get('mold_tool_id')
+        if mold_id is None:
+            return result, None
+        mold_id = int(mold_id)
+    except AttributeError:
+        return result, '模具待核对：报料时的产品资料格式异常，请核对原单' if requires_mold else None
+    except (WarehouseInventoryError, ValueError, TypeError, KeyError) as error:
+        # Missing/invalid historical evidence is still visibly unresolved;
+        # do not substitute today's mold or mutate the source to make it pass.
+        return result, f'模具待核对：{error}' if requires_mold else None
+    mold = db.get(MoldTool, mold_id)
+    if mold is None:
+        return result, '报料关联模具档案缺失，请核对' if requires_mold else None
+    location = describe_mold_location(mold.rack_location) if mold.rack_location else {}
+    label = (location.get('short_label') if location.get('kind') != 'retired_cell' else None) or location.get('prompt')
+    result.update(mold_tool_id=mold.id, mold_code=mold.mold_code, mold_name=mold.mold_name,
+                  mold_location=mold.rack_location or None, mold_location_display=label,
+                  mold_location_version=int(mold.location_version), mold_is_active=bool(mold.is_active),
+                  mold_binding_basis=identity['source'] if item.production_snapshot_json or identity['source'] == 'master_history'
+                  else 'current_product_binding')
+    return result, None
+
+
 def build_stock_replenishment_production_package(
     db: Session,
     order: StockReplenishmentOrder,
@@ -1431,6 +1470,9 @@ def build_stock_replenishment_production_package(
             joining=_explicit_joining_method(route_process))
         route['source'] = 'frozen_bom_stock_plan' if frozen_component else 'current_common_box_fallback'
         joining_method = _explicit_joining_method(production_steps) or "无需结合"
+        requires_mold = (bool(item.sheet_cutting_snapshot.get('is_die_cut')) if item.sheet_cutting_snapshot
+                         else layout_kind == 'die_cut' or any(step['code'] == 'die_cutting' for step in route['steps']))
+        mold_projection, mold_review = _stock_print_mold(db, item, product, customer, requires_mold=requires_mold)
         component = {
             "stock_replenishment_item_id": int(item.id),
             "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
@@ -1479,11 +1521,7 @@ def build_stock_replenishment_production_package(
             "drawing_url": None,
             "drawing_kind": None,
             "drawing_source": None,
-            "mold_tool_id": None,
-            "mold_code": None,
-            "mold_name": None,
-            "mold_location": None,
-            "mold_location_display": None,
+            **mold_projection,
             "joining_method": joining_method,
             "joining_method_source": (
                 "current_common_box_fallback"
@@ -1507,7 +1545,7 @@ def build_stock_replenishment_production_package(
             "printing_content": product.print_content if product is not None else None,
             "printing_plates": [],
         }
-        review_messages = []
+        review_messages = [mold_review] if mold_review else []
         selection_block_reasons = []
         if customer is None:
             selection_block_reasons.append("补库明细缺少权威客户归属，请核对补库单")

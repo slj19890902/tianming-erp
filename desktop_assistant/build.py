@@ -81,13 +81,21 @@ def main():
     parser.add_argument('--site-packages', type=Path, required=True)
     parser.add_argument('--ocr-models', type=Path, required=True, help='已下载的 EasyOCR model 目录')
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--signing-key', type=Path, required=True)
+    signing = parser.add_mutually_exclusive_group(required=True)
+    signing.add_argument('--signing-key', type=Path)
+    signing.add_argument('--signing-request-only', action='store_true')
+    parser.add_argument('--trusted-public-key', type=Path)
+    parser.add_argument('--runtime-platform', choices=('windows', 'macos-arm64'), default='windows')
     parser.add_argument('--revision', required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--package-only', action='store_true', help='仅构建签名更新包，不重复生成安装器')
     parser.add_argument('--upgrade-from-revision')
     parser.add_argument('--rollback-package-sha256')
     args = parser.parse_args()
+    if args.runtime_platform == 'macos-arm64' and not (args.package_only or args.signing_request_only):
+        parser.error('Mac原生包使用--package-only，Windows安装器不能跨平台使用')
+    if args.signing_request_only and not args.trusted_public_key:
+        parser.error('签名请求必须指定已有可信公钥')
     migration = None
     if args.upgrade_from_revision or args.rollback_package_sha256:
         if (not args.upgrade_from_revision or not args.rollback_package_sha256
@@ -114,12 +122,19 @@ def main():
     if root == output or root in output.parents:
         raise ValueError('构建输出必须在仓库之外')
     output.mkdir(parents=True)
-    if not args.signing_key.is_file():
-        raise ValueError('发布私钥必须预先生成并安全保存，构建不得自动更换发布身份')
-    from desktop_assistant.signing import load_key
-    key = load_key(args.signing_key)
     public = output / 'release-public.pem'
-    public.write_bytes(key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+    key = None
+    if args.signing_request_only:
+        from desktop_assistant.release_request import public_identity
+        raw_public = args.trusted_public_key.read_bytes()
+        public_identity(raw_public)
+        public.write_bytes(raw_public)
+    else:
+        if not args.signing_key.is_file():
+            raise ValueError('发布私钥必须预先生成并安全保存，构建不得自动更换发布身份')
+        from desktop_assistant.signing import load_key
+        key = load_key(args.signing_key)
+        public.write_bytes(key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
     tree = output / 'payload'
     tree.mkdir()
     allowed = {'app', 'alembic', 'static', 'templates', 'desktop_assistant'}
@@ -139,14 +154,24 @@ def main():
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
     runtime = tree / 'runtime'
-    shutil.copytree(args.runtime_base, runtime, ignore=runtime_copy_ignore)
-    shutil.copytree(args.site_packages, runtime / 'Lib/site-packages',
-                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    runtime_metadata = {}
+    if args.runtime_platform == 'macos-arm64':
+        from desktop_assistant.native_runtime import assemble, executable_files, verify_relocation
+        assemble(args.runtime_base, args.site_packages, runtime, runtime_copy_ignore)
+        runtime_metadata['runtime_platform'] = 'macos-arm64'
+        write_json(output / 'native-runtime-verification.json', verify_relocation(tree))
+    else:
+        shutil.copytree(args.runtime_base, runtime, ignore=runtime_copy_ignore)
+        shutil.copytree(args.site_packages, runtime / 'Lib/site-packages',
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     from desktop_assistant.ocr_models import copy_models
     models = copy_models(args.ocr_models, args.site_packages, runtime / 'ocr/model')
     # Force a relocatable Python search path, independent of machine registry and PYTHONHOME.
-    (runtime / 'python312._pth').write_text('python312.zip\n.\nLib\nDLLs\nLib/site-packages\n..\nimport site\n', encoding='ascii')
-    package = output / 'release.zip'
+    if args.runtime_platform == 'windows':
+        (runtime / 'python312._pth').write_text('python312.zip\n.\nLib\nDLLs\nLib/site-packages\n..\nimport site\n', encoding='ascii')
+    if args.runtime_platform == 'macos-arm64':
+        runtime_metadata['executable_files'] = executable_files(tree)
+    package = output / ('release.unsigned.zip' if args.signing_request_only else 'release.zip')
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration,
                             'schema_contract': schema_contract,
@@ -159,7 +184,13 @@ def main():
                                                     'delivery_dispatch_v1': 1,
                                                     'unused_mold_deletion_v1': 1,
                                                     'supplier_sheet_trim_v1': 1},
-                            'offline_ocr_models': models}, key)
+                            'offline_ocr_models': models, **runtime_metadata}, key)
+    if args.signing_request_only:
+        from desktop_assistant.release_request import prepare_request
+        record = prepare_request(package, public.read_bytes(), output / 'signing-request.json')
+        write_json(output / 'build-result.json', {**record, 'installer_built': False})
+        remove_transient_build_trees(output)
+        return
     if args.package_only:
         write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,
                    'release_sha256': sha(package), 'installer_built': False})

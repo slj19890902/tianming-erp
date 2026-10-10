@@ -130,6 +130,11 @@ def extract_verified(archive: Path, target: Path, public_key: bytes | None = Non
         expected = set(files) | {'manifest.json'} | ({'manifest.sig'} if public_key is not None else set())
         if set(names) != expected:
             raise ValueError('归档文件清单不一致')
+        executable_files = manifest.get('executable_files', [])
+        if (not isinstance(executable_files, list)
+                or any(not isinstance(name, str) or name not in files for name in executable_files)
+                or (executable_files and public_key is None)):
+            raise ValueError('执行权限清单必须来自已签名发布文件')
         target.mkdir(parents=True)
         for name, expected_hash in files.items():
             safe_name(name)
@@ -140,6 +145,8 @@ def extract_verified(archive: Path, target: Path, public_key: bytes | None = Non
                     dest.write(block)
             if sha(destination) != expected_hash:
                 raise ValueError('文件校验失败：' + name)
+            if name in executable_files and os.name != 'nt':
+                destination.chmod(0o755)
         write_json(target / 'manifest.json', manifest)
         return manifest
 

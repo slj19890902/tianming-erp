@@ -279,3 +279,32 @@ def test_missing_consumption_evidence_is_not_completion(delivery_api_app):
         before=state(factory);found=resolve(c,did,body)
         assert found.status_code==200 and found.json()['status']=='trace' and found.json()['dispatch_receipt'] is None
         assert state(factory)==before
+
+
+def test_replay_checks_frozen_item_customer_after_current_scope_changes(delivery_api_app):
+    from app.models.order import Order
+    from app.models.product import Product
+    from app.models.warehouse_inventory import FinishedGoodsInventoryDetail
+    from app.models.user import User
+    from app.models.access_control import UserPermissionOverride,UserCustomerScope
+    app,factory=delivery_api_app
+    with TestClient(app) as c:
+        _login(c,'admin');created=seed(c,factory);did=created['id']
+        with factory() as db:
+            db.get(Order,1).customer_id=2;db.get(Product,1).customer_id=2
+            for detail in db.scalars(select(FinishedGoodsInventoryDetail).where(FinishedGoodsInventoryDetail.product_id==1)):
+                detail.owner_customer_id=2
+            db.commit()
+        body=command(c,did,'frozen-item-scope-command')
+        assert {r['customer_id'] for r in body['snapshot']['items']}=={1,2}
+        saved=c.put(f'/api/deliveries/{did}/dispatch',json=body);assert saved.status_code==200,saved.text
+        with factory() as db:
+            db.get(Order,1).customer_id=1
+            db.get(Product,1).customer_id=1
+            actor=db.get(User,body['expected_actor_id']);actor.role='sales';actor.customer_access_mode='selected'
+            db.add(UserPermissionOverride(user_id=actor.id,permission_code='deliveries.execute',is_allowed=True))
+            db.add(UserCustomerScope(user_id=actor.id,customer_id=1));db.commit()
+        _login(c,'admin');before=state(factory)
+        for response in (resolve(c,did,body),c.put(f'/api/deliveries/{did}/dispatch',json=body),close_request(c,did,body)):
+            assert response.status_code==403 and response.headers['x-delivery-dispatch-preserve']=='1'
+        assert state(factory)==before

@@ -103,6 +103,14 @@ def test_ordinary_historical_direct_completion_coverage(delivery_api_app):
         after=state(factory);assert c.put(f'/api/deliveries/{did}/dispatch',json=body).json()==sent.json() and state(factory)==after
         from tests.test_delivery_dispatch_commands import resolve
         assert resolve(c,did,body).json()['status']=='completed'
+        import json
+        from app.models.finance import FinanceIdempotencyRecord
+        with factory() as db:
+            record=db.scalar(select(FinanceIdempotencyRecord).where(FinanceIdempotencyRecord.idempotency_key==body['idempotency_key']))
+            damaged=json.loads(record.response_json);half=copy.deepcopy(damaged['dispatch_receipt']['direct_completion_coverage'][0]);half['credited_quantity']=15
+            damaged['dispatch_receipt']['direct_completion_coverage']=[half,copy.deepcopy(half)]
+            record.response_json=json.dumps(damaged);db.commit()
+        before=state(factory);assert resolve(c,did,body).json()['status']=='trace' and state(factory)==before
 
 
 def test_composite_direct_only_completion_conservation(composite_requisition_app):
@@ -130,8 +138,17 @@ def test_composite_direct_only_completion_conservation(composite_requisition_app
         receipt=sent.json()['dispatch_receipt'];assert not receipt['movements'] and receipt['direct_component_allocations']
         from tests.test_delivery_dispatch_commands import resolve
         assert resolve(c,did,body).json()['status']=='completed'
+        import json
+        from app.models.finance import FinanceIdempotencyRecord
+        with factory() as db:
+            record=db.scalar(select(FinanceIdempotencyRecord).where(FinanceIdempotencyRecord.idempotency_key==body['idempotency_key']))
+            damaged=json.loads(record.response_json);rows=damaged['dispatch_receipt']['direct_component_allocations'];half=copy.deepcopy(rows[0]);half['physical_quantity']//=2
+            damaged['dispatch_receipt']['direct_component_allocations']=[half,copy.deepcopy(half),*rows[1:]]
+            record.response_json=json.dumps(damaged);db.commit()
+        before=state(factory);assert resolve(c,did,body).json()['status']=='trace' and state(factory)==before
 
 from tests.test_semi_finished_order_reservation import b1_app
+from tests.test_p1_40b_external_packaging_routing import routing_app
 
 
 def test_legacy_liner_semi_consumption_conservation(b1_app):
@@ -158,3 +175,27 @@ def test_legacy_liner_semi_consumption_conservation(b1_app):
         assert sum(r['physical_quantity'] for r in receipt['movements'])==5
         assert resolve(c,did,body).json()['status']=='completed'
         after=state(factory);assert c.put(f'/api/deliveries/{did}/dispatch',json=body).json()==sent.json() and state(factory)==after
+
+
+def test_order_finished_reservation_dual_quantity_credit(routing_app):
+    from app.api.deliveries import router
+    from app.core.time_contract import beijing_today
+    from app.models.order import OrderItem
+    from tests.test_direct_external_finished import prepare,receive
+    from tests.test_delivery_dispatch_commands import resolve
+    routing_app.include_router(router,prefix='/api/deliveries')
+    with TestClient(routing_app) as c:
+        oid,pid,line=prepare(routing_app,c,ratio='2')
+        assert receive(c,pid,line,200).status_code==200
+        with routing_app.state.factory() as db:item_id=db.scalar(select(OrderItem.id).where(OrderItem.order_id==oid))
+        created=c.post('/api/deliveries',json=dict(customer_id=routing_app.state.fixture['customer_a'],delivery_date=beijing_today().isoformat(),items=[dict(order_item_id=item_id,delivered_quantity=100)]))
+        assert created.status_code==201,created.text
+        did=created.json()['id'];body=command(c,did,'order-dual-credit-command');sent=c.put(f'/api/deliveries/{did}/dispatch',json=body)
+        assert sent.status_code==200,sent.text
+        receipt=sent.json()['dispatch_receipt'];row=receipt['final_items'][0]
+        assert row['customer_quantity']==100 and row['physical_quantity']==200
+        assert sum(r['physical_quantity'] for r in receipt['movements'])==200
+        from fractions import Fraction
+        assert sum(Fraction(r['requirement_quantity'],r['requirement_denominator']) for r in receipt['movements'])==100
+        assert resolve(c,did,body).json()['status']=='completed'
+        after=state(routing_app.state.factory);assert c.put(f'/api/deliveries/{did}/dispatch',json=body).json()==sent.json() and state(routing_app.state.factory)==after

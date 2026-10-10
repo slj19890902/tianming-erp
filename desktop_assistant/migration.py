@@ -15,6 +15,7 @@ import subprocess
 import uuid
 
 from desktop_assistant.storage import database_info, extract_verified, sha, write_json
+from desktop_assistant.runtime_platform import prepare_runtime, runtime_python, process_options
 
 
 def quote(name):
@@ -111,21 +112,47 @@ def files(root):
     return result
 
 
-def run_migration(release, shared, revision, log, environment=None):
-    # No inherited ERP paths, credentials, .env or Python configuration.
-    keep={'SYSTEMROOT','WINDIR','PATH','PATHEXT','COMSPEC','TEMP','TMP'}
-    env={key:value for key,value in os.environ.items() if key.upper() in keep}
+def run_migration(release, shared, revision, log, environment=None, *, release_manifest):
+    # Callers pass the manifest authenticated by extraction or package signature.
+    if revision != release_manifest.get('revision'):
+        raise ValueError('迁移目标与签名发布包不一致')
+    prepare_runtime(release, release_manifest)
+    python = runtime_python(release, release_manifest, runnable=True)
+    database = shared / 'data/carton_erp.sqlite3'
+    if not database.is_file():
+        raise ValueError('迁移数据库不存在，拒绝创建空库')
+    if not database.is_absolute() or database.resolve() != database.absolute() or database.is_symlink():
+        raise ValueError('迁移数据库不能通过链接访问')
+    keep = {'SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'COMSPEC', 'TEMP', 'TMP'}
+    env = {key: value for key, value in os.environ.items() if key.upper() in keep}
     env.update(ERP_ENVIRONMENT='test', ERP_SECRET_KEY='isolated-desktop-migration-rehearsal-only',
-        ERP_DATABASE_PATH=str(shared/'data/carton_erp.sqlite3'),
-        ERP_BACKUP_DIR=str(shared/'rehearsal-backups'), PYTHONPATH=str(release), PYTHONUTF8='1')
+               ERP_BACKUP_DIR=str(shared / 'rehearsal-backups'))
     if environment is not None:
         env.update(environment)
-        env['ERP_DATABASE_PATH'] = str(shared/'data/carton_erp.sqlite3')
+    # Neither restored settings nor the parent's environment can redirect code
+    # or the database. The original entry point stays supported for old Windows
+    # releases; new native Mac releases require the guarded migration entry.
+    for name in list(env):
+        if name.startswith('PYTHON') or name in {'OPENAI_API_KEY', 'DEEPSEEK_API_KEY'} or name.lower() in (
+                'http_proxy', 'https_proxy', 'all_proxy', 'ftp_proxy'):
+            env.pop(name, None)
+    env.update(ERP_DATABASE_PATH=str(database), PYTHONPATH=str(release), PYTHONUTF8='1',
+               PYTHONNOUSERSITE='1')
+    native = release_manifest.get('runtime_platform') == 'macos-arm64'
+    if native or environment is None:
+        env['ERP_HOME_REHEARSAL'] = '1'
+    module = 'alembic'
+    if native:
+        entry = release / 'desktop_assistant/migration_entry.py'
+        expected = release_manifest.get('files', {}).get('desktop_assistant/migration_entry.py')
+        if not expected or not entry.is_file() or entry.is_symlink() or sha(entry) != expected:
+            raise ValueError('Mac迁移安全入口缺失或校验失败')
+        module = 'desktop_assistant.migration_entry'
     with log.open('wb') as output:
-        result=subprocess.run([str(release/'runtime/python.exe'),'-X','utf8','-m','alembic','upgrade',revision],
-            cwd=release,env=env,stdout=output,stderr=output,timeout=600,creationflags=subprocess.CREATE_NO_WINDOW)
+        result = subprocess.run([str(python), '-X', 'utf8', '-m', module, 'upgrade', revision],
+            cwd=release, env=env, stdout=output, stderr=output, timeout=600, **process_options())
     if result.returncode:
-        raise ValueError('隔离升级失败，未修改托管数据库；请查看演练日志')
+        raise ValueError('升级子进程失败，保留现场；不得启动未核验数据库，请查看迁移日志')
 
 
 def rehearse(manager, package):
@@ -153,7 +180,7 @@ def rehearse(manager, package):
             with closing(sqlite3.connect(copy)) as dst:src.backup(dst)
         if facts(copy)!=before or files(shared)!=before_files:
             raise ValueError('复制期间数据变化或附件不一致，请重新演练')
-        run_migration(release,shared,manifest['revision'],job/'migration.log')
+        run_migration(release,shared,manifest['revision'],job/'migration.log', release_manifest=manifest)
         after_info=database_info(copy);after=facts(copy,before['columns'])
         if after_info['revision']!=manifest['revision']:
             raise ValueError('隔离升级未达到发布包目标版本')

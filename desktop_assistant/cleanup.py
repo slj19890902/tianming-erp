@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -28,6 +29,14 @@ def local_path(path: Path) -> Path:
     return path.resolve()
 
 
+def is_application_process(name: str) -> bool:
+    name = name.casefold()
+    # "enterprise" in a VPN/system process is not an ERP executable. Keep
+    # Python/Tianming names and ERP-prefixed words (ERP.exe, erp-worker, etc.).
+    return ('python' in name or 'tianming' in name or '天明' in name
+            or re.search(r'(^|[^a-z0-9])erp', name) is not None)
+
+
 def assert_idle(root: Path) -> None:
     """An inaccessible application process cannot be treated as idle."""
     prefix = str(root).casefold()
@@ -37,7 +46,7 @@ def assert_idle(root: Path) -> None:
         try:
             values = [proc.exe(), proc.cwd(), *proc.cmdline()]
             name = (proc.info.get('name') or '').casefold()
-            if any(word in name for word in ('python', 'tianming', 'erp')):
+            if is_application_process(name):
                 values.extend(value for key, value in proc.environ().items()
                               if key.startswith(('ERP_', 'TM_ERP_'))
                               and key.endswith(('_PATH', '_DIR', '_ROOT', '_CONTROL')))
@@ -47,7 +56,7 @@ def assert_idle(root: Path) -> None:
             continue
         except psutil.AccessDenied:
             name = (proc.info.get('name') or '').casefold()
-            if any(word in name for word in ('python', 'tianming', 'erp')):
+            if is_application_process(name):
                 raise ValueError('无法确认 ERP/测试进程已退出') from None
 
 

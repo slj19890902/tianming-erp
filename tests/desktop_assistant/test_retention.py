@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
@@ -172,6 +173,7 @@ def test_owned_tree_rejects_escape_git_and_links(tmp_path,monkeypatch):
     assert child.exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows 8.3 API requires Windows")
 def test_windows_short_names_still_use_canonical_boundary(tmp_path,monkeypatch):
     import ctypes
     buffer=ctypes.create_unicode_buffer(32768)

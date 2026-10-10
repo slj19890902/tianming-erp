@@ -32,7 +32,7 @@ class UpdateChainTests(unittest.TestCase):
         latest=self.package('latest','r3',second,'r2')
         return bridge,second,latest
 
-    def migrate(self,release,shared,revision,log,environment=None):
+    def migrate(self,release,shared,revision,log,environment=None, **_runtime):
         with closing(sqlite3.connect(shared/'data/carton_erp.sqlite3')) as db:
             db.execute('CREATE TABLE feature_'+revision+'(id INTEGER PRIMARY KEY,value TEXT)')
             db.execute('UPDATE alembic_version SET version_num=?',(revision,));db.commit()
@@ -71,7 +71,7 @@ class UpdateChainTests(unittest.TestCase):
 
     def test_second_step_failure_stops_chain_without_reverting_prior_upgrade(self):
         bridge,second,latest=self.chain()
-        def fail(release,shared,revision,log,environment=None):
+        def fail(release,shared,revision,log,environment=None, **_runtime):
             if revision=='r3':raise RuntimeError('isolated rehearsal failure')
             return self.migrate(release,shared,revision,log,environment)
         with patch('desktop_assistant.migration.run_migration',side_effect=fail):

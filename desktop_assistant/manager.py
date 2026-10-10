@@ -640,7 +640,9 @@ class Manager:
             try:
                 run_migration(release, shared, candidate['revision'],
                     self.root / 'control' / ('migration-' + uuid.uuid4().hex + '.log'),
-                    environment=self._environment(release))
+                    environment=self._environment(release),
+                    release_manifest=signed_release_manifest(
+                        self.root / "packages" / (candidate["id"] + ".zip"), self.public_key))
                 actual = database_info(dbpath)
                 if (actual['revision'] != candidate['revision']
                         or schema(dbpath) != report['result_schema']

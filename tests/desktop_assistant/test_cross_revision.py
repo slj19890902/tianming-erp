@@ -12,6 +12,10 @@ class CrossRevisionTests(unittest.TestCase):
     def setUp(self):
         self.fixture=recovery.RecoveryTests();self.fixture.setUp()
         self.manager=self.fixture.manager
+        # Existing Windows packages are synthetic; TestManager never starts a
+        # process. Keep executable hash checks while omitting only host matching.
+        runtime = self.manager._runtime_python
+        self.manager._runtime_python = lambda identity, **_: runtime(identity, runnable=False)
         self.database=self.manager.root/'shared/data/carton_erp.sqlite3'
 
     def tearDown(self):self.fixture.tearDown()
@@ -23,7 +27,7 @@ class CrossRevisionTests(unittest.TestCase):
             'from_revision':'r1','rollback_package_sha256':old or self.manager.state['current']}},self.fixture.key)
         return package
 
-    def migrate(self,release,shared,revision,log,environment=None):
+    def migrate(self,release,shared,revision,log,environment=None, **_runtime):
         with closing(sqlite3.connect(shared/'data/carton_erp.sqlite3')) as db:
             db.execute('CREATE TABLE new_feature(id INTEGER PRIMARY KEY, note TEXT)')
             db.execute('UPDATE alembic_version SET version_num=?',(revision,));db.commit()
@@ -109,7 +113,7 @@ class CrossRevisionTests(unittest.TestCase):
 
     def test_partial_actual_migration_never_starts_unproven_database(self):
         count=0
-        def fail(release,shared,revision,log,environment=None):
+        def fail(release,shared,revision,log,environment=None, **_runtime):
             nonlocal count
             count+=1
             self.migrate(release,shared,revision,log,environment)
@@ -127,7 +131,7 @@ class CrossRevisionTests(unittest.TestCase):
 
     def interrupted(self):
         count=0
-        def stop_after(release,shared,revision,log,environment=None):
+        def stop_after(release,shared,revision,log,environment=None, **_runtime):
             nonlocal count
             count+=1
             self.migrate(release,shared,revision,log,environment)
@@ -180,7 +184,7 @@ class CrossRevisionTests(unittest.TestCase):
             self.manager.recover_interrupted_update()
 
     def test_different_constraint_order_does_not_block_valid_upgrade(self):
-        def migrate(release,shared,revision,log,environment=None):
+        def migrate(release,shared,revision,log,environment=None, **_runtime):
             constraints=['CHECK(n > 0)','UNIQUE(n)']
             if environment is not None:constraints.reverse()
             with closing(sqlite3.connect(shared/'data/carton_erp.sqlite3')) as db:

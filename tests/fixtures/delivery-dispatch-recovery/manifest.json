@@ -144,6 +144,17 @@
         "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
         "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
       }
+    },
+    {
+      "file": "zero-component.json",
+      "sha256": "d7c46fd7399f7813ca2bf66df8667dac819a3059536425494b9dcf448068150e",
+      "fixtureExplanation": "原10套/A每套2/B每套3；持久需求调整A20→2、B30不变；真实首发1套消耗A2/B3；第二1套A需求已满为0/B3，父件始终1。",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
     }
   ]
 }

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -40,6 +41,16 @@ from app.models.order import Order, OrderItem
 from app.models.product import Product
 from app.models.user import User
 from app.services.history_orders import build_display_registry, display_order_number
+from app.services.customer_statement_reconciliation import (
+    MAX_XLSX_SIZE_BYTES,
+    CustomerStatementReconciliationError,
+    ReconciliationMetadata,
+    ReconciliationReport,
+    StatementGroup,
+    StatementRow,
+    generate_reconciliation_xlsx,
+    reconcile_customer_statement_xlsx,
+)
 
 
 router = APIRouter()
@@ -498,6 +509,321 @@ def _statement_detail_response(
             "settlements": [dict(row._mapping) for row in settlements],
         },
         user,
+    )
+
+
+def _customer_statement_erp_rows(
+    db: Session,
+    *,
+    statement_id: int,
+) -> list[dict]:
+    rows = db.execute(
+        select(
+            StatementItem.id.label("statement_item_id"),
+            Delivery.delivery_date,
+            Delivery.delivery_number,
+            Order.customer_po,
+            OrderItem.snapshot_product_code.label("product_code"),
+            OrderItem.snapshot_product_name.label("product_name"),
+            OrderItem.snapshot_spec.label("specification"),
+            Product.unit,
+            StatementItem.actual_received_quantity,
+            StatementItem.unit_price_snapshot,
+            StatementItem.receivable_amount,
+        )
+        .select_from(StatementItem)
+        .join(
+            ReturnReceiptItem,
+            ReturnReceiptItem.id == StatementItem.return_receipt_item_id,
+        )
+        .join(DeliveryItem, DeliveryItem.id == ReturnReceiptItem.delivery_item_id)
+        .join(Delivery, Delivery.id == DeliveryItem.delivery_id)
+        .join(OrderItem, OrderItem.id == DeliveryItem.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(StatementItem.statement_id == statement_id)
+        .order_by(StatementItem.id)
+    ).all()
+    return [
+        {
+            "source_row": index,
+            **dict(row._mapping),
+        }
+        for index, row in enumerate(rows, 1)
+    ]
+
+
+def _statement_group_value(group: StatementGroup | None, field_name: str):
+    return getattr(group, field_name, None) if group is not None else None
+
+
+def _statement_row_response(row: StatementRow) -> dict:
+    return {
+        "source_row": row.source_row,
+        "reference_id": row.reference_id,
+        "receipt_date": row.receipt_date,
+        "delivery_date": row.delivery_date,
+        "receipt_number": row.receipt_number,
+        "delivery_number": row.delivery_number,
+        "customer_po": row.customer_po,
+        "product_code": row.product_code,
+        "product_name": row.product_name,
+        "specification": row.specification,
+        "unit": row.unit,
+        "quantity": row.quantity,
+        "unit_price": row.unit_price,
+        "net_amount": row.net_amount,
+        "amount": row.amount,
+        "warnings": list(row.warnings),
+    }
+
+
+def _customer_reconciliation_response(
+    report: ReconciliationReport,
+    *,
+    statement: Statement,
+    customer: Customer,
+) -> dict:
+    customer_rows = report.customer_statement.rows
+    erp_rows = report.erp_rows
+    customer_quantity = sum(
+        (row.quantity or Decimal("0") for row in customer_rows), Decimal("0")
+    )
+    erp_quantity = sum(
+        (row.quantity or Decimal("0") for row in erp_rows), Decimal("0")
+    )
+    customer_amount = sum(
+        (row.amount or Decimal("0") for row in customer_rows), Decimal("0")
+    )
+    erp_amount = sum(
+        (row.amount or Decimal("0") for row in erp_rows), Decimal("0")
+    )
+    differences = []
+    for result in report.results:
+        if result.is_match:
+            continue
+        customer_group = result.customer_group
+        erp_group = result.erp_group
+        differences.append(
+            {
+                "difference_type": result.difference_type,
+                "difference_types": list(result.difference_types),
+                "match_status": result.match_status,
+                "match_level": result.match_level,
+                "customer_row_number": ",".join(
+                    str(value) for value in customer_group.source_rows
+                )
+                if customer_group
+                else None,
+                "erp_row_number": ",".join(erp_group.references)
+                if erp_group
+                else None,
+                "customer_order_no": _statement_group_value(
+                    customer_group, "customer_po"
+                )
+                or _statement_group_value(erp_group, "customer_po"),
+                "product_code": _statement_group_value(
+                    customer_group, "product_code"
+                )
+                or _statement_group_value(erp_group, "product_code"),
+                "customer_product_name": _statement_group_value(
+                    customer_group, "product_name"
+                ),
+                "erp_product_name": _statement_group_value(
+                    erp_group, "product_name"
+                ),
+                "customer_specification": _statement_group_value(
+                    customer_group, "specification"
+                ),
+                "erp_specification": _statement_group_value(
+                    erp_group, "specification"
+                ),
+                "customer_quantity": _statement_group_value(
+                    customer_group, "quantity"
+                ),
+                "erp_quantity": _statement_group_value(erp_group, "quantity"),
+                "quantity_difference": result.quantity_difference,
+                "customer_unit_price": _statement_group_value(
+                    customer_group, "unit_price"
+                ),
+                "erp_unit_price": _statement_group_value(erp_group, "unit_price"),
+                "unit_price_difference": result.unit_price_difference,
+                "customer_amount": _statement_group_value(customer_group, "amount"),
+                "erp_amount": _statement_group_value(erp_group, "amount"),
+                "amount_difference": result.amount_difference,
+                "suggestion": result.handling_suggestion,
+                "notes": list(result.notes),
+                "requires_manual_review": result.requires_manual_review,
+            }
+        )
+    return {
+        "statement": {
+            "id": statement.id,
+            "statement_number": statement.statement_number,
+            "statement_month": statement.statement_month,
+            "customer_id": customer.id,
+            "customer_name": customer.name,
+        },
+        "customer_parse": {
+            "sheet_name": report.customer_statement.sheet_name,
+            "header_row": report.customer_statement.header_row,
+            "field_mapping": dict(report.customer_statement.field_mapping),
+            "warnings": list(report.customer_statement.warnings),
+        },
+        "summary": {
+            "customer_file_total_rows": len(customer_rows),
+            "erp_total_rows": len(erp_rows),
+            "customer_total_quantity": customer_quantity,
+            "erp_total_quantity": erp_quantity,
+            "customer_total_amount": customer_amount,
+            "erp_total_amount": erp_amount,
+            "matched_rows": len(report.matched_results),
+            "difference_rows": len(report.difference_results),
+            "manual_review_rows": len(report.manual_review_results),
+        },
+        "differences": differences,
+        "customer_rows": [
+            _statement_row_response(row) for row in customer_rows[:500]
+        ],
+        "erp_rows": [_statement_row_response(row) for row in erp_rows[:500]],
+        "preview_truncated": len(customer_rows) > 500 or len(erp_rows) > 500,
+    }
+
+
+async def _customer_reconciliation_report(
+    *,
+    statement_id: int,
+    file: UploadFile,
+    db: Session,
+    user: User,
+) -> tuple[ReconciliationReport, Statement, Customer, bytes, str]:
+    filename = (file.filename or "").strip()
+    if not filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=422, detail="客户对账文件必须是 xlsx 格式")
+    payload = await file.read(MAX_XLSX_SIZE_BYTES + 1)
+    if not payload:
+        raise HTTPException(status_code=422, detail="客户对账文件为空")
+    if len(payload) > MAX_XLSX_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="客户对账文件超过 20MB 限制")
+    row = db.execute(
+        select(Statement, Customer)
+        .join(Customer, Customer.id == Statement.customer_id)
+        .where(Statement.id == statement_id)
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="对账单不存在")
+    statement, customer = row
+    require_customer_access(statement.customer_id, user, db)
+    erp_rows = _customer_statement_erp_rows(db, statement_id=statement.id)
+    if not erp_rows:
+        raise HTTPException(status_code=409, detail="ERP 对账单没有可核对明细")
+    try:
+        report = reconcile_customer_statement_xlsx(
+            payload,
+            erp_rows,
+            metadata=ReconciliationMetadata(
+                customer_name=customer.name,
+                statement_month=statement.statement_month,
+                customer_file_name=filename,
+                erp_statement_range=statement.statement_number,
+                operator=user.username,
+            ),
+        )
+    except CustomerStatementReconciliationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return report, statement, customer, payload, filename
+
+
+@router.post("/statements/{statement_id}/customer-reconciliation/preview")
+async def preview_customer_statement_reconciliation(
+    statement_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    report, statement, customer, payload, filename = (
+        await _customer_reconciliation_report(
+            statement_id=statement_id,
+            file=file,
+            db=db,
+            user=user,
+        )
+    )
+    _audit(
+        db,
+        user=user,
+        action="RECONCILE_CUSTOMER_XLSX",
+        resource="CustomerStatementReconciliation",
+        entity_id=statement.id,
+        details={
+            "statement_number": statement.statement_number,
+            "customer_id": customer.id,
+            "file_name": filename,
+            "file_sha256": hashlib.sha256(payload).hexdigest(),
+            "customer_rows": len(report.customer_statement.rows),
+            "erp_rows": len(report.erp_rows),
+            "matched_rows": len(report.matched_results),
+            "difference_rows": len(report.difference_results),
+            "manual_review_rows": len(report.manual_review_results),
+        },
+        description="导入客户 xlsx 并核对 ERP 月结对账单",
+    )
+    db.commit()
+    return _customer_reconciliation_response(
+        report, statement=statement, customer=customer
+    )
+
+
+@router.post("/statements/{statement_id}/customer-reconciliation/export")
+async def export_customer_statement_reconciliation(
+    statement_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> StreamingResponse:
+    report, statement, customer, payload, filename = (
+        await _customer_reconciliation_report(
+            statement_id=statement_id,
+            file=file,
+            db=db,
+            user=user,
+        )
+    )
+    output = generate_reconciliation_xlsx(report)
+    _audit(
+        db,
+        user=user,
+        action="EXPORT_CUSTOMER_RECON",
+        resource="CustomerStatementReconciliation",
+        entity_id=statement.id,
+        details={
+            "statement_number": statement.statement_number,
+            "customer_id": customer.id,
+            "file_name": filename,
+            "file_sha256": hashlib.sha256(payload).hexdigest(),
+            "report_sha256": hashlib.sha256(output).hexdigest(),
+            "difference_rows": len(report.difference_results),
+            "manual_review_rows": len(report.manual_review_results),
+        },
+        description="导出客户与 ERP 月结对账差异报告",
+    )
+    db.commit()
+    raw_name = (
+        f"{_customer_abbr(customer.name)}{statement.statement_month}"
+        f"{statement.statement_number}客户对账差异.xlsx"
+    )
+    encoded = quote(raw_name)
+    return StreamingResponse(
+        BytesIO(output),
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="customer-reconciliation.xlsx"; '
+                f"filename*=UTF-8''{encoded}"
+            )
+        },
     )
 
 

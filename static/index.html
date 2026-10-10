@@ -1834,7 +1834,7 @@
               <div class="panel">
                 <div class="section-title">对账单</div>
                 <div class="table-wrap"><table><thead><tr><th>对账单号</th><th>客户</th><th>月份</th><th class="sensitive-price">应收金额</th><th class="sensitive-price">已开票</th><th class="sensitive-price">已收款</th><th>状态</th><th>操作</th></tr></thead>
-                <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button v-if="canFinance" class="btn small" @click="openStatementEdit(row)">编辑</button><button v-if="canFinance" class="btn small danger" @click="cancelStatement(row)">取消</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button v-if="canFinance" class="btn small" @click="registerInvoice(row)">登记开票</button><button v-if="canFinance" class="btn small success" :disabled="row.status==='settled'" @click="settle(row)">收款核销</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
+                <tbody><tr v-for="row in statements" :key="row.id"><td><a href="#" @click.prevent="openStatementDetail(row)">{{ row.statement_number }}</a></td><td>{{ row.customer_name }}</td><td>{{ row.statement_month }}</td><td class="sensitive-price">¥ {{ money(row.total_receivable) }}</td><td class="sensitive-price">¥ {{ money(row.invoiced_amount) }}</td><td class="sensitive-price">¥ {{ money(row.settled_amount) }}</td><td><status-tag :value="row.status"></status-tag></td><td class="toolbar-group"><button class="btn small" @click="openStatementDetail(row)">查看</button><button v-if="canFinance" class="btn small" @click="openStatementEdit(row)">编辑</button><button v-if="canFinance" class="btn small danger" @click="cancelStatement(row)">取消</button><button class="btn small" @click="exportStatement(row)">导出 Excel</button><button v-if="canFinance" class="btn small" @click="openCustomerStatementReconciliation(row)">导入客户对账</button><button v-if="canFinance" class="btn small" @click="registerInvoice(row)">登记开票</button><button v-if="canFinance" class="btn small success" :disabled="row.status==='settled'" @click="settle(row)">收款核销</button></td></tr></tbody></table><div v-if="!statements.length" class="empty">暂无对账单</div></div>
                 <pager :page="pages.statements" :total="statementsTotal" :page-size="pageSize" @change="pages.statements=$event; loadFinance()"></pager>
               </div>
               <div class="panel" style="margin-top:10px">
@@ -3785,6 +3785,39 @@
               </div>
               <div class="muted">如果该对账单已开票或已收款，系统会拒绝保存。已结清时请先撤销收款再编辑。</div>
             </div>
+            <div v-else-if="modal.type === 'customerStatementReconciliation'">
+              <div class="form-grid">
+                <div class="field"><label>ERP 对账单</label><div><strong>{{ customerStatementReconciliation.statement?.statement_number || "-" }}</strong></div></div>
+                <div class="field"><label>客户</label><div>{{ customerStatementReconciliation.statement?.customer_name || "-" }}</div></div>
+                <div class="field"><label>对账月份</label><div>{{ customerStatementReconciliation.statement?.statement_month || "-" }}</div></div>
+                <div class="field wide"><label>客户 xlsx 对账文件</label><input class="input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" @change="customerStatementReconciliation.file=$event.target.files[0]||null;customerStatementReconciliation.result=null" /></div>
+              </div>
+              <div class="toolbar-group" style="margin:10px 0">
+                <button class="btn primary" :disabled="customerStatementReconciliation.loading || !customerStatementReconciliation.file" @click="reconcileCustomerStatement">{{ customerStatementReconciliation.loading ? "正在核对..." : "开始核对" }}</button>
+                <button v-if="customerStatementReconciliation.result" class="btn" :disabled="customerStatementReconciliation.loading" @click="exportCustomerStatementReconciliation">导出 xlsx 差异报告</button>
+              </div>
+              <div v-if="customerStatementReconciliation.result" class="status blue" style="margin-bottom:10px">
+                工作表：{{ customerStatementReconciliation.result.customer_parse?.sheet_name || "-" }}；
+                客户文件 {{ customerStatementReconciliation.result.summary?.customer_file_total_rows || 0 }} 行，
+                ERP {{ customerStatementReconciliation.result.summary?.erp_total_rows || 0 }} 行；
+                完全匹配 {{ customerStatementReconciliation.result.summary?.matched_rows || 0 }} 行，
+                差异 {{ customerStatementReconciliation.result.summary?.difference_rows || 0 }} 行，
+                待人工确认 {{ customerStatementReconciliation.result.summary?.manual_review_rows || 0 }} 行。
+              </div>
+              <div v-if="customerStatementReconciliation.result?.customer_parse?.warnings?.length" class="status orange" style="margin-bottom:10px">
+                <div v-for="warning in customerStatementReconciliation.result.customer_parse.warnings" :key="warning">{{ warning }}</div>
+              </div>
+              <div v-if="customerStatementReconciliation.result" class="table-wrap" style="max-height:430px">
+                <table><thead><tr><th>差异类型</th><th>客户行</th><th>ERP行</th><th>客户单号</th><th>存货编码</th><th>客户数量 / ERP数量</th><th>客户单价 / ERP单价</th><th>客户金额 / ERP金额</th><th>处理建议</th></tr></thead>
+                <tbody>
+                  <tr v-for="(row,index) in (customerStatementReconciliation.result.differences || []).slice(0,300)" :key="index">
+                    <td>{{ row.difference_type || row.match_status || "-" }}</td><td>{{ row.customer_row_number || "-" }}</td><td>{{ row.erp_row_number || "-" }}</td><td>{{ row.customer_order_no || "-" }}</td><td>{{ row.product_code || "-" }}</td><td>{{ row.customer_quantity ?? "-" }} / {{ row.erp_quantity ?? "-" }}</td><td>{{ row.customer_unit_price ?? "-" }} / {{ row.erp_unit_price ?? "-" }}</td><td>{{ row.customer_amount ?? "-" }} / {{ row.erp_amount ?? "-" }}</td><td>{{ row.suggestion || row.processing_suggestion || "-" }}</td>
+                  </tr>
+                  <tr v-if="!(customerStatementReconciliation.result.differences || []).length"><td colspan="9" class="empty">全部匹配，未发现差异。</td></tr>
+                </tbody></table>
+                <div v-if="(customerStatementReconciliation.result.differences || []).length > 300" class="muted" style="padding:8px">页面只显示前 300 条差异；导出的 xlsx 包含全部结果。</div>
+              </div>
+            </div>
             <div v-else-if="modal.type === 'password'" class="form-grid">
               <div v-if="modal.force" class="field wide danger-text">当前为临时密码，修改完成后才能继续使用系统。</div>
               <div class="field wide"><label>当前密码</label><input class="input" type="password" autocomplete="current-password" v-model="passwordForm.current_password" /></div>
@@ -4397,7 +4430,7 @@
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "苏州嘉林亿", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
             deliveries: [], pendingDeliveryItems: [], deliveryPickTasks: [], statements: [], invoices: [], moldTools: [],
-            pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
+            pendingStatements: [], statementCustomers: [], statementDetail: null, statementEditForm: { id: null, statement_month: "" }, customerStatementReconciliation: { statement:null, file:null, result:null, loading:false }, backups: [], backupStats: {}, backupCleanupPreview: null, showCleanupPreview: false,
             systemUsers: [], expandedOrders: {},
             permissionUsers: [], permissionProfile: null, permissionDraft: { permissions: {}, customer_access_mode: "all", customer_ids: [] },
             permissionCatalog: [], permissionLoading: false, selectedPermissionUserId: null,
@@ -11537,6 +11570,39 @@
             await this.loadFinance();
             this.statementDetail = null;
           },
+          openCustomerStatementReconciliation(row) {
+            this.customerStatementReconciliation = { statement:{...row}, file:null, result:null, loading:false };
+            this.modal = { type:"customerStatementReconciliation", title:"客户对账单导入核对" };
+          },
+          async reconcileCustomerStatement() {
+            const state=this.customerStatementReconciliation;
+            if(!state.statement?.id || !state.file) return this.showToast("请选择客户 xlsx 对账文件",true);
+            const form=new FormData();form.append("file",state.file);
+            state.loading=true;
+            try{
+              const {data}=await axios.post(`/api/finance/statements/${state.statement.id}/customer-reconciliation/preview`,form,{headers:{"Content-Type":"multipart/form-data"}});
+              state.result=data;
+              this.showToast(data.summary?.difference_rows ? `核对完成，发现 ${data.summary.difference_rows} 条差异` : "核对完成，未发现差异");
+            }catch(error){this.showToast(this.errorMessage(error),true)}
+            finally{state.loading=false}
+          },
+          async exportCustomerStatementReconciliation() {
+            const state=this.customerStatementReconciliation;
+            if(!state.statement?.id || !state.file) return;
+            const form=new FormData();form.append("file",state.file);
+            state.loading=true;
+            try{
+              const response=await axios.post(`/api/finance/statements/${state.statement.id}/customer-reconciliation/export`,form,{headers:{"Content-Type":"multipart/form-data"},responseType:"blob"});
+              const url=URL.createObjectURL(response.data);
+              const link=document.createElement("a");link.href=url;
+              const disposition=response.headers?.["content-disposition"]||"";
+              const encoded=(disposition.match(/filename\*=UTF-8''([^;]+)/)||[])[1];
+              link.download=encoded?decodeURIComponent(encoded):`${state.statement.statement_number}_客户对账差异.xlsx`;
+              document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);
+              this.showToast("客户对账差异报告已导出");
+            }catch(error){this.showToast(this.errorMessage(error),true)}
+            finally{state.loading=false}
+          },
           async cancelStatement(row) {
             if (!confirm(`确定取消该对账单吗？取消后相关送货明细可重新生成对账单。`)) return;
             try {
@@ -11557,6 +11623,7 @@
             this.modal = null;
             this.statementDetail = null;
             this.statementEditForm = { id: null, statement_month: "" };
+            this.customerStatementReconciliation = { statement:null, file:null, result:null, loading:false };
             this.productFormSnapshot = null;
             this.productBomSnapshot = null;
             this.bomEditor = blankBomEditor();

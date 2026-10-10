@@ -6,6 +6,8 @@
 
 基线：审查575e与原正式v614相关源等价。实际正式v615/5b726452cac0709259e74b520b95e3364f7ddf05已合入fabb7c45，根审查与方案7f9c3561，工作分支codex/delivery-atomic-dispatch-20261010。正式包c9b4c3a524779beb1a92a9c7a2e6e84854f15b306c6f73ec6b38b1f5d83a84c2，revision eo1010pi，远端已到5b726452；实施前/发布前重新核对。保留v615现场查询及图纸全部附件，不覆盖主工作区或旧候选。
 
+实施期间正式再次更新至v616/b11162d3665206d3bea0dd28d55afb3def96c1cd，包508038e684c4ec979492cec28f76fc950bf98baf635095a2913a8570b931afbf；远端e10da8d5479c77d580d9fca6010e5f62fe7f393d为其发布回执。根d0139e31已完整合入。送货API/models/helper与v615等价；保留新增补库模具打印、首页提醒组数和index中home-workbench.js的5e31af5338b09535引用。发布版本按最终正式基线顺延，不覆盖其他任务成果。
+
 启动：CODEX_START→NAS AI_START→本卡→ORDER_FLOW→总需求4/6/7/10/11/12/16/17及章程3～9。证据为docs/reports/DELIVERY_SAVE_RECOVERY_AUDIT_20261010.md和artifact delivery-save-recovery-audit的真实HTTP/实际方法；不得扩为全仓重构。
 
 ## 实现边界

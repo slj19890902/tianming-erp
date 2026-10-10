@@ -1,3 +1,7 @@
+## 2026-10-10 报料冻结规格与全程状态 v0.22.613
+
+正式bcd3510f，包eaebeada，承接v612；迁移en1009hp→eo1010pi仅加可空冻结身份及不可变保护，旧业务323表/附件保持。签名stock_purchase_identity_v1助手门禁已安装；旧包不能接新库，有新业务后向前修复。80011965旧报料795×457继续收料生产，首页区分2500材料/理论10000/原3200成品；不代做入库送货。48后端+78前端+隔离Chrome、冷备恢复及健康资源通过。未push，待管理员人工验收。详见docs/reports/PRODUCT_LIFECYCLE_FREEZE_20261010.md及NAS PRODUCT-LIFECYCLE-FREEZE-20261010-v613.md。
+
 ## 2026-10-10 产品查询与手机图纸 v0.22.607
 
 正式ef952a8d，包e576e9d0，承接v606/en1009hp无迁移。9类实际查询/图纸/单位/边界问题修复，库存与业务事实保持。根API14、独立API2、根UI56及原图纸/实际HTTP交叉复核通过；新冷备恢复、原业务/附件、健康/资源通过。无push，待管理员人工验收。详见docs/reports/FACTORY_RELIABILITY_RELEASE_V607_20261010.md及NAS“20261010-v607-产品查询与手机图纸可靠性发布回执.md”。Goal active。

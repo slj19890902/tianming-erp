@@ -37,5 +37,19 @@ def test_supplier_cutting_does_not_discount_per_piece_material_cost(monkeypatch)
     estimate = estimate_finished_product_cost(None, product=product)
     assert estimate.area_m2 == Decimal('0.044')
     assert estimate.unit_cost == Decimal('0.088')
+    product.sheet_cutting_settings['schema_version'] = 3
+    product.sheet_cutting_settings['cover'] = SheetCuttingSettings(2, 3, 2, True, 680, 630).to_dict()
+    # 680*630/12 plus 300*100/3; trim is bought but never extra output.
+    assert estimate_finished_product_cost(None, product=product).unit_cost == Decimal('0.0914')
     product.sheet_cutting_settings = None
     assert estimate_finished_product_cost(None, product=product).unit_cost == Decimal('0.196')
+
+    # Existing decimal-size v2 facts retain their original per-theoretical-sheet rounding.
+    product.box_style = 'A1/0201 普通开槽箱'
+    product.base_report_length_mm = product.base_report_width_mm = None
+    product.report_length_mm, product.report_width_mm = Decimal('340.01'), Decimal('200.02')
+    product.pieces_per_box = 1
+    product.sheet_cutting_settings = {'schema_version': 2, 'whole': SheetCuttingSettings(2, 3, 2, True).to_dict()}
+    estimate = estimate_finished_product_cost(None, product=product)
+    assert estimate.area_m2 == Decimal('0.034005')
+    assert estimate.detail['area_basis'] == 'theoretical_sheet_area_per_mold_output'

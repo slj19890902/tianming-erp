@@ -104,6 +104,7 @@ def main():
                       'app/services/shared_finished_stock.py', 'app/models/shared_finished_stock.py',
                       'app/services/shared_finished_management.py', 'app/services/shared_finished_receipts.py',
                       'app/services/delivery_dispatch_commands.py',
+                      'app/services/sheet_cutting_contract.py', 'app/services/sheet_cutting_settings.py',
                       'desktop_assistant/delivery_dispatch_contract.py'}
     if not reader_sources <= sources.keys():
         raise ValueError('库存业务读取契约的实现不完整，禁止签名发布')
@@ -156,7 +157,8 @@ def main():
                                                     'company_profiles_v1': 1, 'shared_bom_v1': 1,
                                                     'stock_purchase_identity_v1': 1,
                                                     'delivery_dispatch_v1': 1,
-                                                    'unused_mold_deletion_v1': 1},
+                                                    'unused_mold_deletion_v1': 1,
+                                                    'supplier_sheet_trim_v1': 1},
                             'offline_ocr_models': models}, key)
     if args.package_only:
         write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,

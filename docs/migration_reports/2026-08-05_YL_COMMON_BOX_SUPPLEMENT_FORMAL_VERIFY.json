@@ -1,0 +1,219 @@
+{
+  "changed": false,
+  "status": "dry_run",
+  "database": "D:\\纸箱厂erp软件搭建\\data\\carton_erp.sqlite3",
+  "manifest_sha256": "c75c4b7fe3c3edfa4b9a15c132f51701e27d0b572ed2905716f282192ebb1184",
+  "checks": {
+    "sha256": "5cc9a6e634ba577c33a6e67349f043eb4a8fe6499b5cf52c5e3172c851a8b84d",
+    "integrity_check": "ok",
+    "foreign_key_violations": 0,
+    "alembic_revision": "dk93v8x9z82",
+    "counts": {
+      "customers": 134,
+      "products": 3495,
+      "materials": 616,
+      "master_data_object_versions": 594,
+      "operation_logs": 3788,
+      "sales_orders": 73,
+      "sales_order_items": 288,
+      "supplier_requisition_orders": 74,
+      "supplier_requisition_order_items": 196,
+      "inventory_lots": 213
+    }
+  },
+  "plan": {
+    "status": "already_applied",
+    "customer_total": 1,
+    "customer_create_count": 0,
+    "product_total": 28,
+    "product_create_count": 0,
+    "active_product_count": 28,
+    "inactive_product_count": 0,
+    "box_category_counts": {
+      "normal": 27,
+      "die_cut": 1
+    },
+    "customer_counts": {
+      "YL": 28
+    },
+    "customer_items": [
+      {
+        "customer_code": "YL",
+        "name": "苏州工业园区驿力机车科技有限公司",
+        "customer_number": 131,
+        "status": "already_applied",
+        "id": 136
+      }
+    ],
+    "product_items": [
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000004",
+        "status": "already_applied",
+        "id": 3469
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000009",
+        "status": "already_applied",
+        "id": 3470
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000036",
+        "status": "already_applied",
+        "id": 3471
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000082",
+        "status": "already_applied",
+        "id": 3472
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000105",
+        "status": "already_applied",
+        "id": 3473
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000107",
+        "status": "already_applied",
+        "id": 3474
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000108",
+        "status": "already_applied",
+        "id": 3475
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000109",
+        "status": "already_applied",
+        "id": 3476
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000115",
+        "status": "already_applied",
+        "id": 3477
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000129",
+        "status": "already_applied",
+        "id": 3478
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000130",
+        "status": "already_applied",
+        "id": 3479
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000132",
+        "status": "already_applied",
+        "id": 3480
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000135",
+        "status": "already_applied",
+        "id": 3481
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000142",
+        "status": "already_applied",
+        "id": 3482
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000144",
+        "status": "already_applied",
+        "id": 3483
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000138",
+        "status": "already_applied",
+        "id": 3484
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000139",
+        "status": "already_applied",
+        "id": 3485
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000145",
+        "status": "already_applied",
+        "id": 3486
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000151",
+        "status": "already_applied",
+        "id": 3487
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000227",
+        "status": "already_applied",
+        "id": 3488
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000150",
+        "status": "already_applied",
+        "id": 3489
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000156",
+        "status": "already_applied",
+        "id": 3490
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000165",
+        "status": "already_applied",
+        "id": 3491
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000166",
+        "status": "already_applied",
+        "id": 3492
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000167",
+        "status": "already_applied",
+        "id": 3493
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000204",
+        "status": "already_applied",
+        "id": 3494
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000226",
+        "status": "already_applied",
+        "id": 3495
+      },
+      {
+        "customer_code": "YL",
+        "product_code": "Z.001.000120",
+        "status": "already_applied",
+        "id": 3496
+      }
+    ]
+  }
+}

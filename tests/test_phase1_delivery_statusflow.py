@@ -883,7 +883,12 @@ def test_pending_delivery_search_scopes_customer_and_empty_keyword(
         )
 
     assert empty.status_code == 200
-    assert empty.json()["items"] == []
+    empty_payload = empty.json()
+    empty_items = empty_payload["items"]
+    assert empty_items
+    assert empty_payload["total"] == len(empty_items)
+    assert all(item["customer_id"] == 1 for item in empty_items)
+    assert all(item["remaining_quantity"] > 0 for item in empty_items)
     assert matched_inventory_code.status_code == 200
     inventory_items = matched_inventory_code.json()["items"]
     assert inventory_items
@@ -918,6 +923,10 @@ def test_pending_delivery_search_scopes_customer_and_empty_keyword(
     assert listed.status_code == 200
     listed_items = listed.json()["items"]
     assert listed_items
+    assert empty_payload["total"] == listed.json()["total"]
+    assert [item["order_item_id"] for item in empty_items] == [
+        item["order_item_id"] for item in listed_items
+    ]
     assert all(item["customer_id"] == 1 for item in listed_items)
     assert all(item["remaining_quantity"] > 0 for item in listed_items)
     assert {item["order_item_id"] for item in listed_items} == {1, 2, 3}

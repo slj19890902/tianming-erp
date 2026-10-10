@@ -6145,15 +6145,6 @@ def search_pending_delivery_items(
                 product_name_keyword = product_name_keyword or general_keyword
             general_keyword = ""
 
-    if not list_all and not any(
-        [
-            inventory_keyword,
-            general_keyword,
-            customer_po_keyword,
-            product_name_keyword,
-        ]
-    ):
-        return {"items": [], "total": 0, "page": page, "page_size": page_size or 20, "total_pages": 1}
     if db.get(Customer, customer_id) is None:
         raise HTTPException(status_code=400, detail="客户不存在")
     load_all = list_all and page_size is None and limit is None
@@ -6166,38 +6157,47 @@ def search_pending_delivery_items(
         product_name_keyword=product_name_keyword,
         general_keyword=general_keyword,
     )
-    total = db.scalar(select(func.count()).select_from(base_query.subquery())) or 0
+    rows = list(db.execute(base_query))
+    context = _PendingDeliveryReadContext(db, rows)
+    eligible_rows = []
+    for row in rows:
+        order_item = context.order_item(row._mapping["order_item_id"])
+        if (
+            order_item is not None
+            and context.remaining_quantity(db, order_item) > 0
+        ):
+            eligible_rows.append(row)
+    total = len(eligible_rows)
     if load_all:
-        rows = list(db.execute(base_query))
-        effective_limit = max(int(total), 1)
+        selected_rows = eligible_rows
+        effective_limit = max(total, 1)
         page = 1
     else:
-        query_limit = min(effective_limit * 3, 200)
         offset = 0 if list_all and page_size is None else (page - 1) * effective_limit
-        rows = list(db.execute(base_query.offset(offset).limit(query_limit)))
-    context = _PendingDeliveryReadContext(db, rows)
-    items = []
-    for row in rows:
-        payload = _pending_delivery_item_payload(
-            db,
-            row=row,
-            registry=registry,
-            context=context,
-            include_material_display=True,
+        selected_rows = eligible_rows[offset : offset + effective_limit]
+    items = [
+        payload
+        for row in selected_rows
+        if (
+            payload := _pending_delivery_item_payload(
+                db,
+                row=row,
+                registry=registry,
+                context=context,
+                include_material_display=True,
+            )
         )
-        if payload is not None:
-            items.append(payload)
-        if len(items) >= effective_limit:
-            break
+        is not None
+    ]
     return {
         "items": items,
-        "total": int(total),
+        "total": total,
         "page": page,
         "page_size": effective_limit,
         "total_pages": (
             1
             if load_all
-            else max((int(total) + effective_limit - 1) // effective_limit, 1)
+            else max((total + effective_limit - 1) // effective_limit, 1)
         ),
     }
 

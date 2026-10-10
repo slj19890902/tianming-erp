@@ -18,6 +18,8 @@ from desktop_assistant.storage import (archive_path, database_info, decrypt_file
                                       extract_verified, pack_tree, pack_recovery, read_json, sha, write_json, signed_release_manifest)
 from desktop_assistant.attachments import rebind_pdf_sources
 from desktop_assistant.operation_lock import operation_lock
+from desktop_assistant.runtime_platform import (runtime_relative, runtime_python, prepare_runtime,
+                                                process_options, link_managed_directory)
 from desktop_assistant import delivery_dispatch_contract as dispatch_contract
 from desktop_assistant.schema_contract import (
     schema_contract_from_signed_release,
@@ -226,15 +228,17 @@ class Manager:
             manifest = extract_verified(package, stage, self.public_key)
             if manifest.get('type') != 'tianming.release.v1':
                 raise ValueError('发布包类型不匹配')
-            required = ('runtime/python.exe', 'main.py', 'app/main.py', 'desktop_assistant/server_entry.py')
+            required = (runtime_relative(manifest), 'main.py', 'app/main.py', 'desktop_assistant/server_entry.py')
             if not all((stage / p).is_file() for p in required):
                 raise ValueError('发布包缺少程序或运行环境')
+            prepare_runtime(stage, manifest)
             if any((stage / p).exists() for p in ('data', '.env', 'static/uploads', 'factory_twin/data')):
                 raise ValueError('程序发布包不得携带业务数据或配置')
             if destination.exists():
                 # Restore must authenticate the code that will actually run,
                 # not merely the archive or its mutable manifest cache.
                 self._verify_cached_release(destination, manifest)
+                prepare_runtime(destination, manifest)
                 if stage.resolve().parent != (self.root / 'staging').resolve():
                     raise ValueError('恢复校验暂存路径异常')
                 shutil.rmtree(stage)
@@ -360,28 +364,24 @@ class Manager:
     def _link_data(self, release: Path):
         for relative, folder in (('data', 'data'), ('static/uploads', 'legacy_uploads'),
                                  ('factory_twin/data', 'factory_twin_data'), ('logs', 'logs')):
-            link, target = release / relative, self.root / 'shared' / folder
-            target.mkdir(parents=True, exist_ok=True)
-            link.parent.mkdir(parents=True, exist_ok=True)
-            if link.exists():
-                if link.resolve() != target.resolve():
-                    raise ValueError('程序目录存在非托管数据，拒绝覆盖')
-                continue
-            # Native junction creation; never pass data paths through cmd strings.
-            quoted_link = str(link).replace("'", "''")
-            quoted_target = str(target).replace("'", "''")
-            subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
-                            f"New-Item -ItemType Junction -Path '{quoted_link}' -Target '{quoted_target}' | Out-Null"],
-                           check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            link_managed_directory(release / relative, self.root / 'shared' / folder)
+
+    def _runtime_python(self, identity, *, runnable=True):
+        package = self.root / 'packages' / (identity + '.zip')
+        if sha(package) != identity:
+            raise ValueError('缓存发布包校验失败')
+        manifest = signed_release_manifest(package, self.public_key)
+        return runtime_python(self.root / 'releases' / identity, manifest, runnable=runnable)
 
     def start(self):
         state = self.state
         if not state.get('current'):
             raise ValueError('尚未接入或恢复ERP数据')
+        python = self._runtime_python(state['current'])
         self._check_dispatch_reader(state['current'], require_active=self._dispatch_reader(state['current']))
         running = self._process()
         if running:
-            expected = self.root / 'releases' / state['current'] / 'runtime/python.exe'
+            expected = python
             if Path(running[1]['exe']).resolve() != expected.resolve():
                 raise ValueError('运行程序与已核对版本不一致，未接管或停止其他进程')
             return
@@ -401,11 +401,10 @@ class Manager:
                 raise ValueError('端口已有服务，拒绝接管或停止其他ERP')
         nonce = uuid.uuid4().hex
         env.update(TM_ERP_CONTROL=str(self.root / 'control'), TM_ERP_NONCE=nonce)
-        python = release / 'runtime/python.exe'
         with (self.root / 'control/server.log').open('ab') as log:
             proc = subprocess.Popen([str(python), '-m', 'desktop_assistant.server_entry'],
                                     cwd=release, env=env, stdout=log, stderr=log,
-                                    creationflags=subprocess.CREATE_NO_WINDOW)
+                                    **process_options())
         owner = psutil.Process(proc.pid)
         write_json(self.root / 'control/process.json', {'pid': proc.pid, 'created': owner.create_time(),
                    'exe': str(python), 'nonce': nonce})
@@ -709,7 +708,7 @@ class Manager:
             if (contract.get('policy') != 'preserve_existing_facts_v1'
                     or contract.get('rollback_package_sha256') != state['current']):
                 raise ValueError('升级兼容证明不匹配，保留现场')
-            python = (self.root / 'releases' / target / 'runtime/python.exe').resolve()
+            python = self._runtime_python(target).resolve()
             for proc in psutil.process_iter(['exe']):
                 try:
                     executable = proc.info['exe']

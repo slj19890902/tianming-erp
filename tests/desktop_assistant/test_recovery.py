@@ -1,5 +1,6 @@
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -51,7 +52,7 @@ class RecoveryTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.key = Ed25519PrivateKey.generate()
         self.public = self.key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         self.manager = TestManager(self.root / 'installation', self.public)
@@ -293,6 +294,7 @@ class RecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '另一个'):
                 self.manager.backup(PASSWORD, self.nas)
 
+    @unittest.skipUnless(os.name == "nt", "DPAPI round trip requires a Windows user session")
     def test_windows_secret_storage_round_trip(self):
         token = protect(PASSWORD)
         self.assertNotIn(PASSWORD, token)

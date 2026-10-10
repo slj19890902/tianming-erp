@@ -511,7 +511,7 @@
   <script src="/static/ui/mobile-field-return.js?v=20261010"></script>
   <script src="/static/ui/mobile-product-drawings.js?v=20261009-1"></script>
   <link rel="stylesheet" href="/static/ui/product-workbench.css?v=1bbc57da356b">
-  <script src="/static/ui/product-workbench.js?v=4f07fc902f70"></script>
+  <script src="/static/ui/product-workbench.js?v=c880d8dc7f20"></script>
   <script src="/static/ui/mobile-dimension-stock.js?v=20261010-recovery1"></script>
   <script src="/static/ui/mobile-delivery-margin.js?v=20260915-costcontract428"></script>
   <script>
@@ -870,12 +870,12 @@
         const isLookup = page === "lookup";
         if (isLookup && state.shell?.user?.id) {
           const user = state.shell.user;
-          window.ERPProductWorkbench?.mountMobile({container:byId('productWorkbench'),userId:user.id,onOrder:async row=>{
+          window.ERPProductWorkbench?.mountMobile({container:byId('productWorkbench'),userId:user.id,onOrder:async (row,isCurrent)=>{
             byId('lookupInput').value=row.order_number||row.customer_po||'';
             byId('lookupCategory').value='orders';
             byId('lookupUnfulfilled').checked=false;
             await runUnifiedSearch(1);
-            byId('lookupResults').scrollIntoView({block:'start'});
+            if (isCurrent() && state.activePage === 'lookup' && state.shell?.user?.id === user.id) byId('lookupResults').scrollIntoView({block:'start'});
           }});
           window.TmDimensionStock?.mount({apiGet, apiPost, userId:user.id, displayName:user.display_name || user.real_name || user.username || "当前账号"});
         } else window.TmDimensionStock?.destroy();

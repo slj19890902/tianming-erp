@@ -264,6 +264,14 @@ def _stock_target(
             raise IncomingReceiptError(
                 "该补库明细当前不可收货，可能已入库或已作废", 409
             )
+        if order.request_hash:
+            # A purchase-line withdrawal may commit while receipt waits on the
+            # stock source row. Its earlier purchase-link read is then stale.
+            from app.services.unified_procurement import active_stock_purchase_clause
+            if db.scalar(select(StockReplenishmentOrderItem.id)
+                    .join(StockReplenishmentOrder, StockReplenishmentOrder.id == StockReplenishmentOrderItem.replenishment_order_id)
+                    .where(StockReplenishmentOrderItem.id == item.id, active_stock_purchase_clause())) is None:
+                raise IncomingReceiptError('该补库需求尚未生成有效采购单，不能收货', 409)
         if int(item.stocked_quantity or 0) >= int(item.quantity or 0):
             raise IncomingReceiptError("该补库明细已经全部入库", 409)
     from app.services.replenishment_receipt_progress import receipt_progress
@@ -2341,10 +2349,10 @@ def revert_receipt_item(
     if receipt_item is None:
         raise IncomingReceiptError("来料实收记录不存在", 404)
     if receipt_item.stock_replenishment_item_id is not None:
-        raise IncomingReceiptError(
-            "补库来料已经形成客户专用纸板备料，不能用普通撤销；"
-            "请走后续受控库存调整流程。",
-            409,
+        from app.services.replenishment_receipt_reversal import reverse_stock_receipt
+        return reverse_stock_receipt(
+            db, receipt_item=receipt_item, user=user, reason=clean_reason,
+            idempotency_key=stable_idempotency_key, audit_context=audit_context,
         )
     try:
         locked_orders = lock_order_rows_for_production_transition(

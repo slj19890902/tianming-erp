@@ -6194,3 +6194,5 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 - 2026-10-10 HOME-PRODUCT-WORKBENCH：v0.22.605 / f816611cecc2c2152ace1633695abc472d512e57 / en1009hp 已技术发布，包 0e77d74013666d964e68237940e319de6ea17e843fe09d8e7b60ded0d9e53f49。首页客户队列及电脑/手机产品双向检索；无DDL和业务补正，已完成新NAS冷备真实隔离恢复、原事实、健康及静态核对。见 docs/release_reports/HOME_PRODUCT_WORKBENCH_V605_20261010.md 和NAS同名独立回执；待管理员页面验收。
 
 - 2026-10-10 MOBILE-FIELD-SEARCH：v0.22.615 / 5b726452cac0709259e74b520b95e3364f7ddf05 / eo1010pi已技术发布，包c9b4c3a52477；承接v614，来源编码、手机现场查询与移库追溯，无迁移或业务回填。NAS冷备真实隔离恢复、原事实/附件、健康与资源核对通过；见docs/release_reports/MOBILE_FIELD_SEARCH_V615_20261010.md及NAS独立回执，待管理员人工验收。
+
+- 2026-10-10 TASK-MOLD-FINANCE-COUNT：v0.22.616 / b11162d3665206d3bea0dd28d55afb3def96c1cd / eo1010pi已技术发布，包508038e684c4；补库任务保留原模具身份并读取当前位置，首页提醒按当前客户/业务范围计组。无迁移或业务补正，冷备真实隔离恢复、原事实/附件及健康资源核对通过；见docs/release_reports/TASK_MOLD_FINANCE_COUNT_V616_20261010.md及NAS独立回执，待管理员人工验收。

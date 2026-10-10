@@ -1,5 +1,28 @@
 # Codex 项目交接
 
+## 2026-07-20 N041 最终自动收口与隔离 UAT（自动验证通过，待人工签字）
+
+- worktree 仍为 `D:\tm-worktrees\erp-customer-contract-n041-v2`，分支 `feature/customer-contract-n041-v2`，HEAD `9cce9fa`；本轮未 commit、未 push、未合并。
+- N041 专项、前端、真实迁移、权限和更新脚本最终实跑 `66 passed`；订单、成品预占、N029 生产和 N039 复合 BOM 相邻回归 `97 passed`。相关 `py_compile`、内联 JavaScript 语法及 `git diff --check` 通过。
+- 提交前并发门禁已升级为 10 个独立 `TestClient` 和登录会话、`Barrier(10)`、`max_workers=10`，三轮均证明 10 个响应只指向一个来源合同和一张订单，且只有一个新建结果、一个订单流水和一条转换审计；未出现 SQLite busy 或阻塞。新增快照回归证明合同确认后再修改客户/产品描述主数据，合同打印、转单订单头及订单明细仍使用确认时合同快照。A4 实际分页和裁切仍须人工验收。
+- pytest 数据库分别固定为 `D:\tm-uat\n041_closeout_test_guard\pytest_guard.sqlite3` 和 `regression_guard.sqlite3`，未连接正式库或最终 UAT 副本。
+- 正式库仅通过 SQLite `mode=ro + query_only` 核对：`ce61v8x9z50`、`sales_orders/sales_order_items=33/175`、legacy `39,922/40,449`、`integrity_check=ok`、外键异常 0。数据库同时保留旧兼容表 `orders/order_items=1/0`；该旧表口径不能用于判断当前 ERP 订单基线。
+- 隔离目录为 `D:\tm-uat\n041_closeout_20260720_231956`。源快照和 `before_df62` 备份 SHA-256 均为 `54ABA86C11BED5FCE188BC9838C294DE84AC598EDE9CD6D88B922E10D7413628`；已完成 `ce61 -> df62 -> ce61 -> df62`，每阶段完整性、外键和 `33/175` 业务计数正常。
+- 最终 UAT 数据库为 `D:\tm-uat\n041_closeout_20260720_231956\carton_erp_n041_uat_final.sqlite3`，从已验证 df62 备份新建，未覆盖任何旧文件。账号调整后备份为 `backups\carton_erp_n041_uat_final_after_account_adjustment_df62.sqlite3`，SHA-256 `AFFBEAD2322396656EF94AB3CFEF71146E134FDFA43AF10D57E91C4F3F401324`。
+- UAT 目录、所有子文件和 `session_secret.key` ACL 仅保留本机 Administrator 与 SYSTEM FullControl。最终服务为 `http://127.0.0.1:18082/`、PID `9544`，显式连接 final 副本；health、登录、`auth/me`、首页及带 `customer_id` 的合同列表只读 smoke 均为 200，未创建合同或订单。
+- smoke 后 final 副本只读 SHA-256 为 `425D763D6CBDA107683666F97B8AFE04CB8DF08B508E188185858778161ED9F0`，head=`df62v8x9z51`、订单/明细 `33/175`、legacy `39,922/40,449`、完整性正常、外键异常 0。正式数据库未迁移或写入。
+- 证据与人工清单：`D:\tm-uat\n041_closeout_20260720_231956\N041_CLOSEOUT_EVIDENCE_20260720.md`、`N041_MANUAL_UAT_CHECKLIST_20260720.md`。用户明确回复“N041 人工验收通过”前，禁止提交、合并或正式迁移。
+
+## 2026-07-20 N041 v2 | 客户合同并发安全与转单一致性（本地完成，待安全集成/UAT）
+
+- 独立 worktree：`D:\tm-worktrees\erp-customer-contract-n041-v2`；分支：`feature/customer-contract-n041-v2`；当前提交 `9cce9fa`，相对 `feature/v0208-common-box-edit` 为线性领先 1 个提交，另有本轮未提交修补。本轮未 commit、未 push，主线 worktree 及其既有脏文档未被写入。
+- 合同草稿修改和确认已把 `expected_version` 校验收口为数据库条件 `UPDATE` CAS；即使两个请求都先读到同一版本，也只有一个能取得版本，失败方回滚并返回 409，不会覆盖赢家内容或追加失败方审计。
+- 合同转订单仍在一个事务内创建订单、更新合同和写审计，并由 `sales_orders.source_contract_id` 唯一约束兜底。并发失败方完整回滚后重新读取已提交赢家，可靠返回同一个订单；订单流水、订单、合同和转换审计均只保留赢家事实。合同转换响应和订单响应均明确返回 `source_contract_id`。
+- 确认合同是不可变业务快照。来源订单可继续走正常订单编辑与生产业务，但订单编辑不反向改写合同；专项测试逐字段验证合同抬头、日期、备注、金额、版本、状态及明细保持确认/转换时快照。
+- 客户范围负向测试覆盖列表、创建、按 ID 读取、浏览器打印、修改、删除、确认和转订单；跨客户请求 fail-closed，且不产生订单、合同版本变化或审计写入。合同继续使用用户已验收的浏览器 A4 打印，本轮未增加服务端 PDF 归档。
+- N041 迁移 `df62v8x9z51` 仍线性接在 `ce61v8x9z50` 后。自动测试仅使用真实临时 SQLite，迁移前逐次复制备份并核对大小、SHA-256 和 `integrity_check`，完成 `ce61 -> df62 -> ce61 -> df62`；合同事实存在时 downgrade 明确 fail-closed，失败后事实、schema、revision、完整性和外键检查保持正常。未连接、迁移或写入正式数据库。
+- 版本更新为 `v0.22.17 客户合同并发安全与转单一致性`。自动验证：N041/前端/真实迁移/权限/版本脚本组合 `57 passed`；订单创建、原子回滚、客户范围、生产任务、复合 BOM 和库存预占定向回归 `13 passed`；最终并发专项复核 `15 passed`。
+
 ## 2026-07-19 N039/N040 | 复合产品生产闭环与客户材质候选追溯
 
 - N039 已经人工验收并合并到主功能分支，合并提交 `ba34b7e`；正式数据库已在在线备份后由 `cc59v8x9z48` 线性升级到 `cd60v8x9z49`，迁移后 `integrity_check=ok`、外键异常 0。升级前备份为 `data/backups/carton_erp_before_n039_cd60_20260719_160006.sqlite3`，SHA-256 为 `6FC7024D828858BA056F16F7ABC0F36A3102AD03C429FD5D9A31DA9FB1A10B0F`。

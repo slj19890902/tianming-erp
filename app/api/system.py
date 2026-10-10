@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 import jwt
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -33,6 +33,17 @@ from app.models.user import User
 from app.services.delivery_print_settings import (
     get_delivery_print_settings,
     save_delivery_print_settings,
+)
+from app.services.print_template_settings import (
+    PrintTemplateCommitStateUnknownError,
+    PrintTemplateMutation,
+    PrintTemplateRevisionConflictError,
+    PrintTemplateStorageError,
+    PrintTemplateValidationError,
+    get_print_template_settings,
+    recover_interrupted_print_template_transaction,
+    staged_restore_print_template_settings,
+    staged_save_print_template_settings,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,6 +88,19 @@ class CompanyConfigUpdate(BaseModel):
 class DeliveryPrintSettingsUpdate(BaseModel):
     paper_width_mm: float
     paper_height_mm: float
+
+
+class PrintTemplateSettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0, strict=True)
+    fields: dict[str, Any]
+
+
+class PrintTemplateSettingsRestore(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0, strict=True)
 
 
 def _safe_backup_path(backup_dir: Path, filename: str) -> Path:
@@ -1433,3 +1457,252 @@ def update_delivery_print_paper_settings(
     )
     db.commit()
     return settings
+
+
+# ---------------------------------------------------------------------------
+# Editable print-template wording (N041 acceptance follow-up)
+# ---------------------------------------------------------------------------
+
+
+def _print_template_response(
+    settings: Mapping[str, Any], *, can_manage: bool
+) -> dict[str, Any]:
+    return {
+        "template_key": settings["template_key"],
+        "revision": settings["revision"],
+        "fields": settings["fields"],
+        "can_manage": can_manage,
+    }
+
+
+def _raise_print_template_http_error(error: Exception) -> None:
+    if isinstance(error, PrintTemplateRevisionConflictError):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(error),
+                "expected_revision": error.expected_revision,
+                "current_revision": error.current_revision,
+            },
+        ) from error
+    if isinstance(error, PrintTemplateValidationError):
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if isinstance(error, PrintTemplateStorageError):
+        logger.exception("访问打印模板设置失败")
+        raise HTTPException(status_code=503, detail="打印模板设置暂时不可用") from error
+    raise error
+
+
+def _add_print_template_audit(
+    *,
+    db: Session,
+    request: Request,
+    user: User,
+    mutation: PrintTemplateMutation,
+    action: str,
+) -> None:
+    """Record revisions and hashes only; never duplicate editable text in logs."""
+    operation = "恢复系统原版" if action == "PRINT_TEMPLATE_RESTORE" else "更新"
+    db.add(
+        OperationLog(
+            user_id=user.id,
+            action=action,
+            resource="System",
+            details=json.dumps(
+                {
+                    "template_key": mutation.template_key,
+                    "previous_revision": mutation.previous_revision,
+                    "revision": mutation.revision,
+                    "changed_fields": list(mutation.changed_fields),
+                    "fields_sha256": mutation.fields_sha256,
+                    "operation_id": mutation.operation_id,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            ip_address=request.client.host if request.client else None,
+            username=user.username,
+            role=user.role,
+            entity_type="print_template_settings",
+            description=(
+                f"管理员{operation}打印模板 {mutation.template_key}，"
+                f"revision {mutation.revision}"
+            ),
+            user_agent=request.headers.get("user-agent"),
+        )
+    )
+
+
+def _print_template_audit_committed(db: Session, operation_id: str) -> bool:
+    candidates = db.scalars(
+        select(OperationLog.details).where(
+            OperationLog.entity_type == "print_template_settings",
+            OperationLog.details.contains(operation_id),
+        )
+    ).all()
+    for details in candidates:
+        try:
+            parsed = json.loads(details or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if parsed.get("operation_id") == operation_id:
+            return True
+    return False
+
+
+def _recover_print_template_transaction(db: Session) -> None:
+    recover_interrupted_print_template_transaction(
+        lambda operation_id: _print_template_audit_committed(db, operation_id)
+    )
+
+
+def _print_template_audit_committed_independently(
+    db: Session,
+    operation_id: str,
+) -> bool:
+    """Verify on a fresh connection, never the possibly failed request Session."""
+    bind = db.get_bind()
+    verification_engine = getattr(bind, "engine", bind)
+    with verification_engine.connect() as connection:
+        with Session(bind=connection, expire_on_commit=False) as verification_db:
+            return _print_template_audit_committed(
+                verification_db,
+                operation_id,
+            )
+
+
+def _rollback_uncertain_print_template_audit(db: Session) -> None:
+    try:
+        db.rollback()
+    except Exception as error:
+        raise PrintTemplateCommitStateUnknownError(
+            "打印模板审计提交结果未知，等待后续恢复"
+        ) from error
+
+
+def _commit_print_template_audit(db: Session, operation_id: str) -> None:
+    if not operation_id:
+        raise PrintTemplateStorageError("打印模板审计事务编号缺失")
+    try:
+        db.commit()
+        return
+    except Exception as commit_error:
+        try:
+            if _print_template_audit_committed_independently(db, operation_id):
+                logger.warning(
+                    "打印模板审计 commit 抛错但已独立确认提交：%s",
+                    operation_id,
+                )
+                return
+        except Exception as verification_error:
+            raise PrintTemplateCommitStateUnknownError(
+                "打印模板审计提交结果未知，等待后续恢复"
+            ) from verification_error
+
+        # The first fresh connection did not see the audit.  Only a successful
+        # rollback followed by a second fresh read makes "not committed"
+        # conclusive; rollback or verification failure must retain the journal.
+        _rollback_uncertain_print_template_audit(db)
+        try:
+            committed_after_rollback = (
+                _print_template_audit_committed_independently(db, operation_id)
+            )
+        except Exception as verification_error:
+            raise PrintTemplateCommitStateUnknownError(
+                "打印模板审计提交结果未知，等待后续恢复"
+            ) from verification_error
+        if committed_after_rollback:
+            logger.warning(
+                "打印模板审计在回滚确认阶段被独立确认提交：%s",
+                operation_id,
+            )
+            return
+        raise PrintTemplateStorageError(
+            "打印模板审计提交失败，设置已回滚"
+        ) from commit_error
+
+
+@router.get("/print-template-settings/{template_key}")
+def read_print_template_settings(
+    template_key: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return defaults or saved text; first read never creates the sidecar."""
+    try:
+        _recover_print_template_transaction(db)
+        settings = get_print_template_settings(template_key)
+    except (
+        PrintTemplateValidationError,
+        PrintTemplateStorageError,
+    ) as error:
+        _raise_print_template_http_error(error)
+        raise AssertionError("unreachable")
+    return _print_template_response(settings, can_manage=user.role == "admin")
+
+
+@router.put("/print-template-settings/{template_key}")
+def update_print_template_settings(
+    template_key: str,
+    body: PrintTemplateSettingsUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict[str, Any]:
+    try:
+        _recover_print_template_transaction(db)
+        with staged_save_print_template_settings(
+            template_key,
+            expected_revision=body.expected_revision,
+            fields=body.fields,
+        ) as mutation:
+            if mutation.revision == mutation.previous_revision:
+                return _print_template_response(mutation.public_dict(), can_manage=True)
+            _add_print_template_audit(
+                db=db,
+                request=request,
+                user=user,
+                mutation=mutation,
+                action="PRINT_TEMPLATE_UPDATE",
+            )
+            _commit_print_template_audit(db, mutation.operation_id or "")
+    except (
+        PrintTemplateRevisionConflictError,
+        PrintTemplateValidationError,
+        PrintTemplateStorageError,
+    ) as error:
+        _raise_print_template_http_error(error)
+        raise AssertionError("unreachable")
+    return _print_template_response(mutation.public_dict(), can_manage=True)
+
+
+@router.post("/print-template-settings/{template_key}/restore")
+def restore_print_template_settings_to_default(
+    template_key: str,
+    body: PrintTemplateSettingsRestore,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_only),
+) -> dict[str, Any]:
+    try:
+        _recover_print_template_transaction(db)
+        with staged_restore_print_template_settings(
+            template_key,
+            expected_revision=body.expected_revision,
+        ) as mutation:
+            _add_print_template_audit(
+                db=db,
+                request=request,
+                user=user,
+                mutation=mutation,
+                action="PRINT_TEMPLATE_RESTORE",
+            )
+            _commit_print_template_audit(db, mutation.operation_id or "")
+    except (
+        PrintTemplateRevisionConflictError,
+        PrintTemplateValidationError,
+        PrintTemplateStorageError,
+    ) as error:
+        _raise_print_template_http_error(error)
+        raise AssertionError("unreachable")
+    return _print_template_response(mutation.public_dict(), can_manage=True)

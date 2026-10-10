@@ -9,27 +9,43 @@
   </style>
 </head>
 <body>
-  <div class="toolbar"><button type="button" onclick="window.print()">打印标签</button></div>
+  <div class="toolbar" id="printToolbar"><button id="printButton" type="button" data-print-action="print">打印标签</button></div>
   <div id="message"></div>
   <article id="label" class="label" style="display:none">
     <div>
       <div class="title" id="moldName"></div>
-      <div class="mold-code" id="moldCode"></div>
+      <div class="mold-code"><span data-print-edit-key="mold_number_label" data-print-edit-label="模具编号标签">模具编号：</span><span id="moldCode"></span></div>
       <div class="location"><div class="location-code" id="rackLocation"></div><div class="prompt" id="positionPrompt"></div></div>
       <div class="products" id="products"></div>
+      <div id="additionalProducts" style="display:none"><span data-print-edit-key="additional_products_prefix" data-print-edit-label="其余产品前缀">另有 </span><span id="additionalProductsCount"></span><span data-print-edit-key="additional_products_suffix" data-print-edit-label="其余产品后缀"> 款，请扫码查看。</span></div>
     </div>
-    <div class="qr"><img id="qr" alt="模具查询二维码"><div>扫码查询模具</div><small id="lookupUrl"></small></div>
+    <div class="qr"><img id="qr" alt="模具查询二维码"><div data-print-edit-key="qr_prompt" data-print-edit-label="二维码提示">扫码查询模具</div><small id="lookupUrl"></small></div>
   </article>
+  <script type="text/javascript" src="/static/assets/print-template-editor.js"></script>
   <script>
     const $=id=>document.getElementById(id);const h=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[char]);
     async function api(url){const response=await fetch(url,{credentials:"same-origin"});let body={};try{body=await response.json()}catch{}if(!response.ok){const error=new Error(typeof body.detail==="string"?body.detail:`请求失败（HTTP ${response.status}）`);error.status=response.status;throw error}return body}
     function loginNext(){location.href=`/?next=${encodeURIComponent(location.pathname+location.search)}`}
+    const templateEditor=PrintTemplateEditor.create({templateKey:"mold_label",root:document,toolbar:$("printToolbar"),printButton:$("printButton"),onPrint:()=>window.print()});
+    function renderProducts(data){
+      const container=$("products");container.textContent="";
+      const shown=(data.products||[]).slice(0,8);
+      shown.forEach(row=>{
+        const product=document.createElement("div");product.className="product";
+        const name=document.createElement("b");name.textContent=`${row.customer_name||"-"}｜${row.product_name||""}`;product.appendChild(name);product.appendChild(document.createElement("br"));
+        const codeLabel=document.createElement("span");codeLabel.dataset.printEditKey="product_code_label";codeLabel.dataset.printEditLabel="存货编码标签";codeLabel.textContent="存货编码";product.appendChild(codeLabel);product.appendChild(document.createTextNode(" "));
+        const code=document.createElement("span");code.textContent=row.product_code||"";product.appendChild(code);product.appendChild(document.createTextNode("｜"));
+        const specificationLabel=document.createElement("span");specificationLabel.dataset.printEditKey="specification_label";specificationLabel.dataset.printEditLabel="规格标签";specificationLabel.textContent="规格";product.appendChild(specificationLabel);product.appendChild(document.createTextNode(" "));
+        const specification=document.createElement("span");specification.textContent=row.specification||"未登记";product.appendChild(specification);container.appendChild(product);
+      });
+      const extra=Math.max(Number(data.product_count||0)-shown.length,0);$("additionalProducts").style.display=extra?"block":"none";$("additionalProductsCount").textContent=extra?String(extra):"";
+      templateEditor.applyTo(container);templateEditor.applyTo($("additionalProducts"));
+    }
     async function init(){
       const id=Number.parseInt(new URLSearchParams(location.search).get("mold_id"),10);if(!Number.isInteger(id)||id<=0){$("message").innerHTML='<div class="error">模具ID无效，请从模具列表重新打开。</div>';return}
       try{
         await api("/api/auth/me");const data=await api(`/api/warehouse/molds/${id}/label`);
-        $("moldName").textContent=data.mold_name;$("moldCode").textContent=`模具编号：${data.mold_code}`;$("rackLocation").textContent=data.rack_location;$("positionPrompt").textContent=data.location_guide.prompt;$("qr").src=data.qr_data_url;$("lookupUrl").textContent=data.lookup_url;
-        const shown=(data.products||[]).slice(0,8);$("products").innerHTML=shown.map(row=>`<div class="product"><b>${h(row.customer_name||"-")}｜${h(row.product_name)}</b><br>存货编码 ${h(row.product_code)}｜规格 ${h(row.specification||"未登记")}</div>`).join("")+(data.product_count>shown.length?`<div>另有 ${data.product_count-shown.length} 款，请扫码查看。</div>`:"");$("label").style.display="grid";
+        $("moldName").textContent=data.mold_name;$("moldCode").textContent=data.mold_code;$("rackLocation").textContent=data.rack_location;$("positionPrompt").textContent=data.location_guide.prompt;$("qr").src=data.qr_data_url;$("lookupUrl").textContent=data.lookup_url;renderProducts(data);$("label").style.display="grid";await templateEditor.ready;
       }catch(error){if(error.status===401){loginNext();return}$("message").innerHTML=`<div class="error">${h(error.message)}</div>`}
     }init();
   </script>

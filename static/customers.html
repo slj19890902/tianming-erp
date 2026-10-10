@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script src="/static/assets/time-utils.js"></script>
+    <script src="/static/assets/print-template-editor.js"></script>
     <title>客户管理 - 三级纸箱厂 ERP</title>
     <style>
       :root {
@@ -625,6 +626,10 @@
         }
       }
 
+      .print-document-title {
+        display: none;
+      }
+
       @media print {
         .topbar,
         .sidebar,
@@ -650,6 +655,12 @@
         .panel {
           border: 0;
         }
+
+        .print-document-title {
+          display: block;
+          margin: 0 0 14px;
+          text-align: center;
+        }
       }
     </style>
   </head>
@@ -661,10 +672,10 @@
           <strong>三级纸箱厂 ERP</strong>
           <span class="muted">客户管理</span>
         </div>
-        <div class="top-actions">
+        <div class="top-actions" id="printToolbar">
           <button class="btn" id="topRefresh">刷新</button>
           <button class="btn" id="topExport">导出 CSV</button>
-          <button class="btn" id="topPrint">打印</button>
+          <button class="btn" id="topPrint" type="button" data-print-action="print">打印</button>
           <a class="btn" href="/" style="text-decoration:none">返回系统</a>
         </div>
       </header>
@@ -704,6 +715,7 @@
           </section>
 
           <section class="panel">
+            <h1 class="print-document-title" data-print-edit-key="document_title" data-print-edit-label="打印标题">客户列表</h1>
             <div class="filters">
               <div class="field">
                 <label for="keyword">关键词</label>
@@ -732,7 +744,7 @@
               </div>
               <div class="toolbar-group">
                 <button class="btn" id="exportBtn">导出当前结果</button>
-                <button class="btn" id="printBtn">打印列表</button>
+                <button class="btn" id="printBtn" type="button" data-print-action="print">打印列表</button>
                 <button class="btn" id="refreshBtn">刷新</button>
               </div>
             </div>
@@ -754,17 +766,17 @@
                 </colgroup>
                 <thead>
                   <tr>
-                    <th>ID</th>
-                    <th>客户编号</th>
-                    <th>客户名称</th>
-                    <th>联系人</th>
-                    <th>联系电话</th>
-                    <th>送货地址</th>
-                    <th>账期</th>
-                    <th>产品数</th>
-                    <th>历史订单</th>
-                    <th>文件数</th>
-                    <th>状态</th>
+                    <th data-print-edit-key="column_id">ID</th>
+                    <th data-print-edit-key="column_customer_code">客户编号</th>
+                    <th data-print-edit-key="column_customer_name">客户名称</th>
+                    <th data-print-edit-key="column_contact">联系人</th>
+                    <th data-print-edit-key="column_phone">联系电话</th>
+                    <th data-print-edit-key="column_address">送货地址</th>
+                    <th data-print-edit-key="column_credit_terms">账期</th>
+                    <th data-print-edit-key="column_product_count">产品数</th>
+                    <th data-print-edit-key="column_history_order_count">历史订单</th>
+                    <th data-print-edit-key="column_file_count">文件数</th>
+                    <th data-print-edit-key="column_status">状态</th>
                   </tr>
                 </thead>
                 <tbody id="customerRows"></tbody>
@@ -1589,7 +1601,6 @@
         $("drawerNewOrder").addEventListener("click", () => openOrderForm());
         ["refreshBtn", "topRefresh"].forEach((id) => $(id).addEventListener("click", () => loadCustomers()));
         ["exportBtn", "topExport"].forEach((id) => $(id).addEventListener("click", exportCsv));
-        ["printBtn", "topPrint"].forEach((id) => $(id).addEventListener("click", () => window.print()));
         $("searchBtn").addEventListener("click", () => {
           state.keyword = $("keyword").value.trim();
           state.status = $("statusFilter").value;
@@ -1656,6 +1667,13 @@
       }
 
       bindEvents();
+      const printTemplateEditor = PrintTemplateEditor.create({
+        templateKey: "customer_list",
+        root: document,
+        toolbar: $("printToolbar"),
+        printButton: [$("topPrint"), $("printBtn")],
+        onPrint: () => window.print(),
+      });
       loadCustomers();
     </script>
   </body>

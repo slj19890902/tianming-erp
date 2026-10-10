@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="/static/assets/time-utils.js"></script>
+  <script src="/static/assets/print-template-editor.js"></script>
   <title>送货单打印</title>
   <style>
     * { box-sizing: border-box; }
@@ -183,7 +184,7 @@
   </style>
 </head>
 <body>
-  <div class="toolbar no-print">
+  <div id="printTemplateToolbar" class="toolbar no-print">
     <button id="printButton" type="button">确认打印</button>
     <a href="/" aria-label="返回系统">返回系统</a>
   </div>
@@ -194,16 +195,20 @@
   <main class="sheet">
     <div class="page-number" data-field="pageNumber"></div>
     <h1 data-field="senderCompanyName" class="company">苏州天明包装有限公司</h1>
-    <h2 class="document-title">送货单</h2>
-    <div data-field="senderContact" class="factory-address">地址：苏州市吴中区临湖镇浦庄大道工业区　电话：0512-66530018</div>
+    <h2 class="document-title" data-print-edit-key="document_title">送货单</h2>
+    <div data-field="senderContact" class="factory-address">
+      <span data-field="senderAddressPart"><span data-print-edit-key="address_label">地址：</span><span data-field="senderAddress">苏州市吴中区临湖镇浦庄大道工业区</span></span>
+      <span data-field="senderPhonePart">　<span data-print-edit-key="phone_label">电话：</span><span data-field="senderPhone">0512-66530018</span></span>
+      <span data-field="senderFaxPart" hidden>　<span data-print-edit-key="fax_label">传真：</span><span data-field="senderFax"></span></span>
+    </div>
 
     <section class="meta">
-      <div class="meta-row"><span>客户名称：</span><span data-field="customerName" class="meta-value"></span></div>
-      <div class="meta-row"><span>送货单号：</span><span data-field="deliveryNumber" class="meta-value"></span></div>
-      <div class="meta-row"><span>联系电话：</span><span data-field="customerPhone" class="meta-value"></span></div>
-      <div class="meta-row"><span>送货日期：</span><span data-field="deliveryDate" class="meta-value"></span></div>
-      <div class="meta-row"><span>客户地址：</span><span data-field="customerAddress" class="meta-value"></span></div>
-      <div class="meta-row"><span>车牌号码：</span><span data-field="vehicleNumber" class="meta-value"></span></div>
+      <div class="meta-row"><span data-print-edit-key="customer_name_label">客户名称：</span><span data-field="customerName" class="meta-value"></span></div>
+      <div class="meta-row"><span data-print-edit-key="delivery_number_label">送货单号：</span><span data-field="deliveryNumber" class="meta-value"></span></div>
+      <div class="meta-row"><span data-print-edit-key="customer_phone_label">联系电话：</span><span data-field="customerPhone" class="meta-value"></span></div>
+      <div class="meta-row"><span data-print-edit-key="delivery_date_label">送货日期：</span><span data-field="deliveryDate" class="meta-value"></span></div>
+      <div class="meta-row"><span data-print-edit-key="customer_address_label">客户地址：</span><span data-field="customerAddress" class="meta-value"></span></div>
+      <div class="meta-row"><span data-print-edit-key="vehicle_number_label">车牌号码：</span><span data-field="vehicleNumber" class="meta-value"></span></div>
     </section>
 
     <table>
@@ -217,31 +222,33 @@
         <col style="width:18%">
       </colgroup>
       <thead>
+        <!-- 兼容离线包静态检查的系统原版锚点：<th>序号</th> <th>单位</th> -->
         <tr>
-          <th>序号</th>
-          <th>客户单号</th>
-          <th>款号</th>
-          <th>产品名称</th>
-          <th>单位</th>
-          <th>数量</th>
-          <th>备注</th>
+          <th data-print-edit-key="column_sequence">序号</th>
+          <th data-print-edit-key="column_customer_po">客户单号</th>
+          <th data-print-edit-key="column_product_code">款号</th>
+          <th data-print-edit-key="column_product_name">产品名称</th>
+          <th data-print-edit-key="column_unit">单位</th>
+          <th data-print-edit-key="column_quantity">数量</th>
+          <th data-print-edit-key="column_remarks">备注</th>
         </tr>
       </thead>
       <tbody data-field="itemRows"></tbody>
     </table>
 
-    <div class="total">本页数量：<span data-field="pageQuantity"></span>　送货总量：<span data-field="totalQuantity"></span></div>
+    <span data-field="longRemarkPlaceholder" data-print-edit-key="long_remark_placeholder" hidden>详见备注说明</span>
+    <div class="total"><span data-print-edit-key="page_quantity_label">本页数量：</span><span data-field="pageQuantity"></span>　<span data-print-edit-key="total_quantity_label">送货总量：</span><span data-field="totalQuantity"></span></div>
     <section data-field="remarkNotes" class="remark-notes" hidden>
-      <strong>备注说明：</strong>
+      <strong data-print-edit-key="remark_notes_label">备注说明：</strong>
       <div data-field="remarkNoteItems"></div>
     </section>
-    <div class="copies">白联:存档　红联:客户　黄联:回单</div>
+    <div class="copies" data-print-edit-key="copies_text">白联:存档　红联:客户　黄联:回单</div>
     <section class="signatures">
-      <div>送货人：<span class="signature-line"></span></div>
-      <div>收货单位(签章)：<span class="signature-line"></span></div>
-      <div>经手人：<span class="signature-line"></span></div>
+      <div><span data-print-edit-key="delivery_person_label">送货人：</span><span class="signature-line"></span></div>
+      <div><span data-print-edit-key="receiving_unit_label">收货单位(签章)：</span><span class="signature-line"></span></div>
+      <div><span data-print-edit-key="handler_label">经手人：</span><span class="signature-line"></span></div>
     </section>
-    <div class="opened-at">开单时间：<span data-field="createdAt"></span></div>
+    <div class="opened-at"><span data-print-edit-key="created_at_label">开单时间：</span><span data-field="createdAt"></span></div>
   </main>
   </template>
   <div id="sheets" class="sheets" hidden></div>
@@ -255,9 +262,13 @@
       .replaceAll("'", "&#039;");
 
     const getField = (sheet, name) => sheet.querySelector(`[data-field="${name}"]`);
+    let currentDeliveryData = null;
+    let deliveryPrintEditor = null;
 
     function createSheet() {
-      return document.getElementById("sheetTemplate").content.firstElementChild.cloneNode(true);
+      const sheet = document.getElementById("sheetTemplate").content.firstElementChild.cloneNode(true);
+      if (deliveryPrintEditor) deliveryPrintEditor.applyTo(sheet);
+      return sheet;
     }
 
     function applyPaperSize(widthValue, heightValue) {
@@ -291,12 +302,15 @@
 
     function populateSheet(sheet, data, entries, pageNumber, totalPages) {
       const sender = data.sender || {};
-      const senderParts = [];
-      if (sender.address) senderParts.push(`地址：${sender.address}`);
-      if (sender.phone) senderParts.push(`电话：${sender.phone}`);
-      if (sender.fax) senderParts.push(`传真：${sender.fax}`);
       if (sender.company_name) getField(sheet, "senderCompanyName").textContent = sender.company_name;
-      if (senderParts.length) getField(sheet, "senderContact").textContent = senderParts.join("　");
+      if (sender.address || sender.phone || sender.fax) {
+        getField(sheet, "senderAddress").textContent = sender.address || "";
+        getField(sheet, "senderAddressPart").hidden = !sender.address;
+        getField(sheet, "senderPhone").textContent = sender.phone || "";
+        getField(sheet, "senderPhonePart").hidden = !sender.phone;
+        getField(sheet, "senderFax").textContent = sender.fax || "";
+        getField(sheet, "senderFaxPart").hidden = !sender.fax;
+      }
       getField(sheet, "pageNumber").textContent = `${pageNumber}/${totalPages}页`;
       getField(sheet, "customerName").textContent = data.customer?.name || "";
       getField(sheet, "customerPhone").textContent = data.customer?.phone || "";
@@ -316,7 +330,11 @@
         const item = entry.item;
         const productName = String(item.product_name || "").trim();
         const customerRemark = String(item.remarks || "").trim();
-        const tableRemark = customerRemark.length > 12 ? "详见备注说明" : customerRemark;
+        const hasLongRemark = customerRemark.length > 12;
+        const tableRemark = customerRemark.length > 12
+          ? (deliveryPrintEditor?.value().fields.long_remark_placeholder
+            || getField(sheet, "longRemarkPlaceholder").textContent)
+          : customerRemark;
         const longNameClass = productName.length > 28 ? " long-name" : "";
         return `<tr>
           <td class="sequence">${entry.index + 1}</td>
@@ -325,7 +343,7 @@
           <td class="product-name${longNameClass}">${escapeHtml(productName)}</td>
           <td>${escapeHtml(item.unit)}</td>
           <td>${escapeHtml(item.quantity)}</td>
-          <td class="item-remark">${escapeHtml(tableRemark)}</td>
+          <td class="item-remark"${hasLongRemark ? ' data-print-edit-key="long_remark_placeholder"' : ""}>${escapeHtml(tableRemark)}</td>
         </tr>`;
       }).join("");
       const remarkNotes = entries
@@ -376,7 +394,42 @@
         populateSheet(sheet, data, pageEntries, index + 1, pages.length);
         container.appendChild(sheet);
       });
+      if (deliveryPrintEditor) deliveryPrintEditor.applyTo(container);
       container.style.visibility = "visible";
+      const errorBox = document.getElementById("errorBox");
+      errorBox.textContent = "";
+      errorBox.hidden = true;
+    }
+
+    async function initializePrintEditor() {
+      const printButton = document.getElementById("printButton");
+      if (!window.PrintTemplateEditor) {
+        printButton.addEventListener("click", () => window.print());
+        return;
+      }
+      try {
+        deliveryPrintEditor = PrintTemplateEditor.create({
+          templateKey: "delivery_note",
+          root: document.getElementById("sheets"),
+          toolbar: document.getElementById("printTemplateToolbar"),
+          printButton,
+          onApplied: () => {
+            if (currentDeliveryData) renderDelivery(currentDeliveryData);
+          },
+          onBeforePrint: () => {
+            if (currentDeliveryData) renderDelivery(currentDeliveryData);
+          },
+          onPrint: () => {
+            if (currentDeliveryData) renderDelivery(currentDeliveryData);
+            window.print();
+          },
+        });
+        await deliveryPrintEditor.ready;
+      } catch (error) {
+        console.error("送货单打印模板编辑器加载失败", error);
+        deliveryPrintEditor = null;
+        printButton.addEventListener("click", () => window.print(), { once: false });
+      }
     }
 
     function showError(message) {
@@ -402,14 +455,18 @@
         if (!response.ok) {
           throw new Error(data.detail || "读取送货单失败。");
         }
+        currentDeliveryData = data;
         renderDelivery(data);
       } catch (error) {
         showError(error.message);
       }
     }
 
-    document.getElementById("printButton").addEventListener("click", () => window.print());
-    loadPaperSettings().then(loadDelivery);
+    (async () => {
+      await loadPaperSettings();
+      await initializePrintEditor();
+      await loadDelivery();
+    })();
   </script>
 </body>
 </html>

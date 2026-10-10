@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import event
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -240,6 +240,137 @@ def _select_count(statements: list[str]) -> int:
     return sum(statement.startswith(("select ", "pragma ")) for statement in statements)
 
 
+def _seed_formal_like_delivery_inventory_sources(engine) -> list[int]:
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.warehouse_inventory import (
+        DeliveryInventoryAllocation,
+        InventoryLot,
+        InventoryMovement,
+        InventoryReservation,
+        WarehouseArea,
+        WarehouseFloor,
+        WarehouseLocation,
+    )
+
+    with Session(engine) as db:
+        floor = WarehouseFloor(
+            floor_code="F1",
+            floor_name="一楼",
+            floor_number=1,
+            construction_status="enabled",
+            planning_reference_pallet_capacity=100,
+        )
+        db.add(floor)
+        db.flush()
+        db.add(
+            WarehouseArea(
+                floor_id=floor.id,
+                area_code="RAW",
+                area_name="待送区",
+                construction_status="enabled",
+            )
+        )
+        delivery_items = list(
+            db.scalars(select(DeliveryItem).order_by(DeliveryItem.id)).all()
+        )
+        delivery_ids: list[int] = []
+        for index, delivery_item in enumerate(delivery_items, start=1):
+            delivery = db.get(Delivery, delivery_item.delivery_id)
+            assert delivery is not None
+            delivery_ids.append(int(delivery.id))
+            location = WarehouseLocation(
+                location_code=f"P109-LOC-{index:03d}",
+                location_name=f"性能库位 {index}",
+                warehouse_type="finished",
+                is_active=True,
+                warehouse_floor=1,
+                area_code="RAW",
+                storage_type="ground",
+                placement_status="placed",
+                sort_order=index,
+            )
+            db.add(location)
+            db.flush()
+            dispatched = delivery.status == "dispatched"
+            lot = InventoryLot(
+                lot_number=f"P109-LOT-{index:03d}",
+                inventory_type="finished",
+                warehouse_location_id=location.id,
+                quantity_available=0 if dispatched else 5,
+                quantity_reserved=0 if dispatched else 5,
+                quantity_consumed=5 if dispatched else 0,
+                quantity_damaged=0,
+                quantity_scrapped=0,
+                unit="boxes",
+                status="active",
+                source_type="manual",
+                stock_date=date(2026, 7, 1),
+                stock_date_accuracy="exact",
+                last_movement_at=datetime(2026, 7, 29, 8, 0, 0),
+                version=1,
+            )
+            db.add(lot)
+            db.flush()
+            reservation = InventoryReservation(
+                reservation_number=f"P109-RES-{index:03d}",
+                inventory_lot_id=lot.id,
+                reservation_type="finished_order",
+                order_id=delivery_item.order_item.order_id,
+                order_item_id=delivery_item.order_item_id,
+                reserved_stock_quantity=5,
+                credited_requirement_quantity=5,
+                yield_factor=1,
+                consumed_stock_quantity=5 if dispatched else 0,
+                released_stock_quantity=0,
+                consumed_requirement_quantity=5 if dispatched else 0,
+                released_requirement_quantity=0,
+                status="consumed" if dispatched else "active",
+                idempotency_key=f"p109-res-{index:03d}",
+            )
+            db.add(reservation)
+            db.flush()
+            if dispatched:
+                movement = InventoryMovement(
+                    movement_number=f"P109-MOV-{index:03d}",
+                    inventory_lot_id=lot.id,
+                    movement_type="consume",
+                    quantity=5,
+                    unit="boxes",
+                    before_available=0,
+                    after_available=0,
+                    before_reserved=5,
+                    after_reserved=0,
+                    before_consumed=0,
+                    after_consumed=5,
+                    before_damaged=0,
+                    after_damaged=0,
+                    before_scrapped=0,
+                    after_scrapped=0,
+                    reservation_id=reservation.id,
+                    related_order_id=delivery_item.order_item.order_id,
+                    related_order_item_id=delivery_item.order_item_id,
+                    related_delivery_id=delivery.id,
+                    reason="送货列表批量查询回归",
+                    idempotency_key=f"p109-mov-{index:03d}",
+                )
+                db.add(movement)
+                db.flush()
+                db.add(
+                    DeliveryInventoryAllocation(
+                        delivery_item_id=delivery_item.id,
+                        reservation_id=reservation.id,
+                        consume_movement_id=movement.id,
+                        consumed_stock_quantity=5,
+                        credited_requirement_quantity=5,
+                        reversed_stock_quantity=0,
+                        reversed_requirement_quantity=0,
+                        status="active",
+                    )
+                )
+        db.commit()
+    return delivery_ids
+
+
 def test_delivery_list_page_scales_without_per_row_sql_and_keeps_summary_contract(delivery_scaling_app) -> None:
     app, engine, ids = delivery_scaling_app
     with TestClient(app) as client:
@@ -273,6 +404,91 @@ def test_delivery_list_page_scales_without_per_row_sql_and_keeps_summary_contrac
         forbidden = client.get("/api/deliveries", params={"customer_id": ids["outside_customer_id"]})
     assert scoped.json()["total"] == 24
     assert forbidden.status_code == 403
+
+
+def test_delivery_list_batches_formal_like_inventory_sources_with_fixed_query_ceiling(
+    delivery_scaling_app,
+) -> None:
+    app, engine, _ids = delivery_scaling_app
+    _seed_formal_like_delivery_inventory_sources(engine)
+
+    with TestClient(app) as client:
+        _login(client, "p109b-admin")
+        first_page, first_sql = _read_with_sql_count(
+            client,
+            engine,
+            "/api/deliveries",
+            params={"page": 1, "page_size": 5},
+        )
+        full_page, full_sql = _read_with_sql_count(
+            client,
+            engine,
+            "/api/deliveries",
+            params={"page": 1, "page_size": 24},
+        )
+        second_page, _ = _read_with_sql_count(
+            client,
+            engine,
+            "/api/deliveries",
+            params={"page": 2, "page_size": 5},
+        )
+
+    assert first_page.json()["total"] == full_page.json()["total"] == 24
+    assert [row["id"] for row in first_page.json()["items"]] == [
+        row["id"] for row in full_page.json()["items"][:5]
+    ]
+    assert set(row["id"] for row in first_page.json()["items"]).isdisjoint(
+        row["id"] for row in second_page.json()["items"]
+    )
+    assert any(
+        item["inventory_sources"]
+        for delivery in full_page.json()["items"]
+        for item in delivery["items"]
+    )
+
+    full_selects = [
+        statement
+        for statement in full_sql
+        if statement.startswith(("select ", "pragma "))
+    ]
+    assert len(full_selects) <= 24
+    assert len(full_selects) <= _select_count(first_sql) + 2
+    assert sum(" from inventory_reservations " in row for row in full_selects) == 1
+    assert sum(" from inventory_lots " in row for row in full_selects) == 1
+    assert sum(" from warehouse_locations " in row for row in full_selects) == 1
+    assert sum(" from warehouse_floors" in row for row in full_selects) == 1
+    assert sum(" from warehouse_areas " in row for row in full_selects) == 1
+
+
+def test_delivery_list_batch_response_matches_single_delivery_serializer(
+    delivery_scaling_app,
+) -> None:
+    from app.api.deliveries import _delivery_list_page_context, _delivery_response
+    from app.models.delivery import Delivery
+
+    _app, engine, _ids = delivery_scaling_app
+    _seed_formal_like_delivery_inventory_sources(engine)
+    with Session(engine) as db:
+        delivery_ids = list(
+            db.scalars(
+                select(Delivery.id).order_by(
+                    Delivery.created_at.desc(),
+                    Delivery.id.desc(),
+                )
+            ).all()
+        )
+        expected = [
+            _delivery_response(db, delivery_id)
+            for delivery_id in delivery_ids
+        ]
+    with Session(engine) as db:
+        context = _delivery_list_page_context(db, delivery_ids)
+        actual = [
+            _delivery_response(db, delivery_id, list_context=context)
+            for delivery_id in delivery_ids
+        ]
+
+    assert actual == expected
 
 
 def test_pending_delivery_search_scales_by_limit_without_writes_or_scope_leak(delivery_scaling_app) -> None:

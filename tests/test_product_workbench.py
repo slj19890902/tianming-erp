@@ -113,6 +113,7 @@ def test_actual_lot_reverse_reuses_matcher_without_reserving(mobile_erp_app):
         assert all(item["deductible"] is False for item in payload["items"])
         assert all(item["match_class"] in {"confirmed", "cut_candidate", "review"} for item in payload["items"])
         assert all(item["lot_available_quantity"] == 8 for item in payload["items"])
+        assert all(item["lot_unit"] == "张" for item in payload["items"])
         assert all(item["customer_id"] == payload["registered_owner_customer_id"] for item in payload["items"])
     with factory() as db:
         lot = db.get(InventoryLot, lot_id)
@@ -328,6 +329,10 @@ def test_processed_output_is_counted_as_pieces_not_sheets(mobile_erp_app):
     with factory() as db:
         lot = db.scalar(select(InventoryLot).where(InventoryLot.lot_number == "SF-MOBILE-001"))
         db.add(WarehouseGoodsProfile(lot_id=lot.id, data_json='{"output_piece":true,"processing":"cut"}'))
+        product = db.get(Product, ids["product"])
+        product.report_length_mm, product.report_width_mm = 800, 600
+        product.default_material_code, product.flute_type, product.layer_count = "K=A", "B", 3
+        before = lot.quantity_available, lot.quantity_reserved, lot.version
         db.commit()
     with TestClient(app) as client:
         _login(client, "mobile-admin")
@@ -338,7 +343,15 @@ def test_processed_output_is_counted_as_pieces_not_sheets(mobile_erp_app):
             "actual": 10, "available": 8, "reserved": 2, "unit": "片"}
         assert stock["summary"]["semi_finished"]["actual"] == 0
         row = next(x for x in stock["items"] if x["inventory_type"] == "processed_component")
+        assert row["unit"] == "片"
+        assert all(x["unit"] == "片" for x in stock["groups"]["processed_component"]["positions"])
         assert row["reverse_source"]["processed_state"] == "output_piece"
+        reverse = client.get("/api/product-workbench/reverse", params=row["reverse_source"])
+        assert reverse.status_code == 200, reverse.text
+        assert reverse.json()["items"] and all(x["lot_unit"] == "片" for x in reverse.json()["items"])
+    with factory() as db:
+        lot = db.scalar(select(InventoryLot).where(InventoryLot.lot_number == "SF-MOBILE-001"))
+        assert before == (lot.quantity_available, lot.quantity_reserved, lot.version)
 
 
 def test_report_placeholder_blocks_draft_without_falsely_claiming_stock_only(mobile_erp_app):
@@ -357,3 +370,34 @@ def test_report_placeholder_blocks_draft_without_falsely_claiming_stock_only(mob
         assert actions["can_requisition"] is False
         assert actions["stock_only"] is False
         assert "占位" in actions["action_reason"]
+
+
+def test_database_ids_and_entire_pagination_offset_are_bounded(mobile_erp_app):
+    app, ids, factory = _app(mobile_erp_app)
+    maximum = (1 << 63) - 1
+    with factory() as db:
+        before = list(db.execute(select(InventoryLot.id, InventoryLot.quantity_available,
+                                        InventoryLot.quantity_reserved, InventoryLot.version)))
+    with TestClient(app, raise_server_exceptions=False) as client:
+        _login(client, "mobile-admin")
+        for url, params in (
+            (f"/api/product-workbench/products/{maximum + 1}", {}),
+            ("/api/product-workbench/search", {"q": "MOBILE", "customer_id": maximum + 1}),
+            ("/api/product-workbench/search", {"q": "MOBILE", "page": maximum}),
+            ("/api/product-workbench/search", {"q": "MOBILE", "page_size": 50, "page": maximum // 50 + 2}),
+            ("/api/product-workbench/reverse", {"length": 800, "width": 600, "lot_id": maximum + 1}),
+            ("/api/product-workbench/reverse", {"length": 800, "width": 600, "known_customer_id": maximum + 1}),
+            ("/api/product-workbench/reverse", {"length": 800, "width": 600, "page": maximum}),
+        ):
+            response = client.get(url, params=params)
+            assert response.status_code == 422, (url, params, response.text)
+            assert isinstance(response.json()["detail"], str)
+        assert client.get(f"/api/product-workbench/products/{maximum}").status_code == 404
+        assert client.get("/api/product-workbench/reverse", params={"length": 800, "width": 600, "lot_id": maximum}).status_code == 404
+        # Largest valid OFFSET and absent optional fields are still legal reads.
+        assert client.get("/api/product-workbench/search", params={"q": "MOBILE", "page_size": 1, "page": maximum}).status_code == 200
+        normal = client.get(f"/api/product-workbench/products/{ids['product_two']}")
+        assert normal.status_code == 200 and normal.json()["production"]["cutting"] is None
+    with factory() as db:
+        assert before == list(db.execute(select(InventoryLot.id, InventoryLot.quantity_available,
+                                               InventoryLot.quantity_reserved, InventoryLot.version)))

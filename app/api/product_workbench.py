@@ -24,6 +24,7 @@ from app.services.product_workbench import (
 )
 
 router = APIRouter()
+MAX_DATABASE_INTEGER = (1 << 63) - 1
 
 
 def _headers(response: Response) -> None:
@@ -42,6 +43,16 @@ def _require_view(user: User) -> None:
         raise HTTPException(403, "当前账号没有产品查看权限")
 
 
+def _database_id(value: int | None) -> None:
+    if value is not None and not 0 < value <= MAX_DATABASE_INTEGER:
+        raise HTTPException(422, "编号超出有效范围，请重新核对")
+
+
+def _pagination_offset(page: int, page_size: int) -> None:
+    if page > MAX_DATABASE_INTEGER or (page - 1) * page_size > MAX_DATABASE_INTEGER:
+        raise HTTPException(422, "分页范围过大，请重新查询")
+
+
 @router.get("/search")
 def search_products(response: Response,
                     q: str = Query(default="", max_length=100),
@@ -55,6 +66,8 @@ def search_products(response: Response,
                     db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
     _headers(response)
     _require_view(user)
+    _database_id(customer_id)
+    _pagination_offset(page, page_size)
     if not q.strip() and all(value is None for value in (length, width, height)):
         raise HTTPException(422, "请输入关键词或至少一项尺寸")
     if customer_id is not None:
@@ -88,12 +101,15 @@ def reverse_products(response: Response,
                      db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
     _headers(response)
     _require_view(user)
+    _database_id(known_customer_id)
+    _pagination_offset(page, page_size)
     if known_customer_id is not None:
         require_customer_access(known_customer_id, user, db)
     scope = _visible_customer_ids(user, db)
     if lot_id is not None:
         if not has_permission(user, "warehouse.view"):
             raise HTTPException(403, "当前账号无权查看实际库存批次")
+        _database_id(lot_id)
         lot = db.get(InventoryLot, lot_id)
         if lot is None or lot.inventory_type != "semi_finished":
             raise HTTPException(404, "片料批次不存在或无权查看")
@@ -154,7 +170,7 @@ def reverse_products(response: Response,
                          "check_items": row.get("warnings", []), "actual_lot_id": lot.id,
                          "cut_plan": row.get("cut_plan"),
                          "lot_available_quantity": int(lot.quantity_available or 0),
-                         "lot_unit": "张",
+                         "lot_unit": "片" if (profile or {}).get("output_piece") is True else "张",
                          "deductible": False, "selection_requires_existing_validation": True})
             items.append(item)
         return {"items": items, "total": total, "page": page, "page_size": page_size,
@@ -219,6 +235,7 @@ def product_details(product_id: int, response: Response,
                     db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
     _headers(response)
     _require_view(user)
+    _database_id(product_id)
     scope = _visible_customer_ids(user, db)
     product = db.scalar(visible_products(db, scope).where(Product.id == product_id))
     if product is None:

@@ -579,6 +579,72 @@ def _bind_formal_area(
     return area, policy
 
 
+def test_full_floor_publish_carries_only_strictly_unchanged_area_readiness(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    published, draft_path = _isolate_layout_paths(tmp_path, monkeypatch)
+    source = json.loads(published.read_text(encoding='utf-8'))
+    source_floor = source['floors']['3F']
+    source_feature = source_floor['features'][0]
+    source_feature.update({
+        'allowed_inventory_types': ['finished'],
+        'storage_layout': 'pallet_ground',
+        'formal_area_name': '三楼 F1 区',
+    })
+    source_floor['revision'] = _floor_revision(source_floor)
+    published.write_text(json.dumps(source, ensure_ascii=False), encoding='utf-8')
+
+    draft = editor._new_draft_document(published)
+    draft_floor = draft['floors']['3F']
+    draft_floor['features'].append({
+        'id': 'new-aisle',
+        'feature_kind': 'aisle',
+        'name': '新通道',
+        'points': [[100, 100], [200, 100], [200, 200], [100, 200]],
+    })
+    draft_floor['revision'] = _floor_revision(draft_floor)
+    editor._mark_draft_changed(draft, '3F')
+    editor._write_document(draft_path, draft)
+
+    engine, factory = _database(tmp_path)
+    try:
+        with factory() as db:
+            admin = db.scalar(select(User).where(User.username == 'p1-47b-admin'))
+            assert admin is not None
+            area, policy = _bind_formal_area(db, admin=admin)
+            area.planned_location_count = 10
+            area.construction_status = 'enabled'
+            policy.status = 'published'
+            policy.published_map_revision = source_floor['revision']
+            db.flush()
+
+            count_error = '计划 10 个库位，当前有效 0 个'
+            assert any(count_error in item for item in
+                       warehouse_api._formal_area_publish_blockers(db, '3F'))
+            assert warehouse_api._unchanged_published_area_feature_ids(
+                db, '3F', draft_layout=editor.load_warehouse_twin_layout_draft('3F'),
+            ) == {'zone-f1'}
+            assert not any(count_error in item for item in
+                           warehouse_api._formal_area_publish_blockers(
+                               db, '3F', skip_unchanged_readiness=True,
+                           ))
+
+            draft_floor['features'][0]['name'] = '已修改的正式区域'
+            draft_floor['revision'] = _floor_revision(draft_floor)
+            editor._mark_draft_changed(draft, '3F')
+            editor._write_document(draft_path, draft)
+            assert warehouse_api._unchanged_published_area_feature_ids(
+                db, '3F', draft_layout=editor.load_warehouse_twin_layout_draft('3F'),
+            ) == set()
+            assert any(count_error in item for item in
+                       warehouse_api._formal_area_publish_blockers(
+                           db, '3F', skip_unchanged_readiness=True,
+                       ))
+    finally:
+        engine.dispose()
+
+
 def _seed_precise_rack_area_with_legacy_anchors(
     db,
     *,

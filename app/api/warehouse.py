@@ -11127,18 +11127,46 @@ def _formal_location_zone_geometry_blockers(
     return blockers
 
 
+def _unchanged_published_area_feature_ids(
+    db: Session,
+    floor_code: str,
+    *,
+    draft_layout: dict,
+    published_layout: dict | None = None,
+) -> set[str]:
+    """Find previously published areas whose zone and mapped assets did not change."""
+    from app.services.warehouse_map_publication import (
+        published_floor_areas, unchanged_area,
+    )
+
+    if published_layout is None:
+        published_layout = load_published_warehouse_twin_floor_for_edit(floor_code)
+    return {
+        area.storage_policy.map_feature_id
+        for area in published_floor_areas(db, floor_code)
+        if unchanged_area(area, published_layout, draft_layout)
+    }
+
+
 def _formal_area_publish_blockers(
     db: Session,
     floor_code: str,
     *,
     defer_location_readiness_for_feature_id: str | None = None,
     readiness_feature_id: str | None = None,
+    skip_unchanged_readiness: bool = False,
 ) -> list[str]:
     normalized = floor_code.strip().upper()
     floor = warehouse_floor_for_code(db, normalized)
     if floor is None:
         return []
     draft = load_warehouse_twin_layout_draft(normalized)
+    unchanged_feature_ids = (
+        _unchanged_published_area_feature_ids(
+            db, normalized, draft_layout=draft,
+        )
+        if skip_unchanged_readiness else set()
+    )
     features = {
         str(item.get("id") or ""): item
         for item in draft.get("features") or []
@@ -11367,6 +11395,7 @@ def _formal_area_publish_blockers(
             area.planned_location_count
             and (readiness_feature_id is None or policy.map_feature_id == readiness_feature_id)
             and policy.map_feature_id != defer_location_readiness_for_feature_id
+            and policy.map_feature_id not in unchanged_feature_ids
             # A rack publish reconciles its formal cells later in the same
             # transaction.  Pre-publish rows may therefore contain both the
             # precise cells and empty planning anchors that the rack sync will
@@ -12030,6 +12059,7 @@ def _publish_twin_layout_draft_locked(
         defer_location_readiness_for_feature_id=(
             defer_location_readiness_for_feature_id
         ),
+        skip_unchanged_readiness=(isolated_area_feature_id is None),
     )
     if blockers:
         raise HTTPException(
@@ -12038,6 +12068,13 @@ def _publish_twin_layout_draft_locked(
         )
     published_floor_before = load_published_warehouse_twin_floor_for_edit(floor_code)
     coordinate_draft = load_warehouse_twin_layout_draft(floor_code)
+    unchanged_feature_ids = (
+        _unchanged_published_area_feature_ids(
+            db, floor_code, draft_layout=coordinate_draft,
+            published_layout=published_floor_before,
+        )
+        if isolated_area_feature_id is None else set()
+    )
     publish_snapshot = snapshot_warehouse_twin_publish_state()
     result = None
     try:
@@ -12062,7 +12099,8 @@ def _publish_twin_layout_draft_locked(
                 operator_id=user.id,
                 published_features=list(
                     feature for feature in load_warehouse_twin_floor(floor_code).get("features") or []
-                    if isolated_area_feature_id is None or feature.get("id") == isolated_area_feature_id
+                    if (isolated_area_feature_id is None or feature.get("id") == isolated_area_feature_id)
+                    and feature.get("id") not in unchanged_feature_ids
                 ),
                 defer_location_readiness_for_feature_id=(
                     defer_location_readiness_for_feature_id
@@ -12098,6 +12136,18 @@ def _publish_twin_layout_draft_locked(
                 rack_cell_sync.bound_legacy_location_ids,
             )
         )
+        from app.services.warehouse_map_publication import (
+            carry_unchanged_area_policies, assert_current_floor_bindings,
+        )
+        # The unchanged policies still need the new floor revision before
+        # spatial validation reads the newly published map.  Their location
+        # counts, readiness and area status remain as they were.
+        area_map_application_count = carry_unchanged_area_policies(
+            db, previous_floor_layout=published_floor_before,
+            floor_layout=load_warehouse_twin_floor(floor_code), actor=user,
+            operation_key=payload.operation_key, request=request,
+            excluded_feature_id=isolated_area_feature_id,
+        )
         from app.services.warehouse_ground_map_application import previously_verified_area_features
         preserved_area_features = previously_verified_area_features(
             db, floor_layout=load_warehouse_twin_floor(floor_code),
@@ -12128,15 +12178,6 @@ def _publish_twin_layout_draft_locked(
                 operation_key=payload.operation_key, request=request,
                 excluded_feature_id=isolated_area_feature_id,
             )
-        from app.services.warehouse_map_publication import (
-            carry_unchanged_area_policies, assert_current_floor_bindings,
-        )
-        area_map_application_count = carry_unchanged_area_policies(
-            db, previous_floor_layout=published_floor_before,
-            floor_layout=load_warehouse_twin_floor(floor_code), actor=user,
-            operation_key=payload.operation_key, request=request,
-            excluded_feature_id=isolated_area_feature_id,
-        )
         assert_current_floor_bindings(db, load_warehouse_twin_floor(floor_code))
         legacy_name_update_count = int(
             getattr(published_policies, "legacy_name_update_count", 0)

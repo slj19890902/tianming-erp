@@ -15,7 +15,7 @@
 
 根：整合、版本/文档、静态引用、发布和只读正式核验；每阶段先定向验证再进入下一依赖阶段。
 阶段1执行负责人workbench_backend：独立候选树，warehouse_movement_read、必要来源投影服务、流水schema/API接线、warehouse-movement-view及其专属测试。不得修改product_workbench/mobile_erp。
-后续阶段文件owner由根随阶段下发；允许互不重叠的前后端并行，独立树、白名单和定向测试。审查者只读。
+阶段2-4 API负责人search_review：app/api/product_workbench.py、app/services/product_workbench.py、app/api/mobile_erp.py的只读位置/查询投影、必要新读取服务与专属tests。UI负责人home_frontend：static/mobile_erp.html、static/ui/product-workbench.js/css、新手机查询/上下文模块、static/mobile_stocktake.html仅返回接线及UItests。独立树从a543e785启动；按1→2→3→4依赖顺序在根串行验收、整合。root负责独立复核和最终验收，static/index.html资源引用由root更新。不得重复写同一文件。
 
 ## 验证与交付
 

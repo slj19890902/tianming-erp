@@ -348,6 +348,10 @@ def inventory_details(db: Session, product: Product):
     semi_lots = {lot.id: lot for lot in [*semi, *processed]}
     for kind, group in groups.items():
         for row in group["positions"]:
+            if kind == "processed_component":
+                # Only this workbench's physical-piece projection; the shared
+                # mobile ledger still serves raw semi-finished sheets as 张.
+                row["unit"] = "片"
             if row["lot_id"] in (shared_ids if kind == "finished" else cross_semi_ids):
                 # The approved use may belong to another customer's original
                 # lot. Show physical availability without exposing its code.

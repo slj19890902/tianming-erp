@@ -101,3 +101,13 @@ Mac mini 在家完成准备后搬到工厂，接替当前 Windows 电脑成为�
 - 本机Git对象、元数据及168条stash历史另行加密保全：同目录 `git-history-private-20261010.tmencrypted`，1275571086字节，SHA256 `45c253efc063138cef01cbce974e4f4fc2f31229d9008d1d06493b74dc648de7`；3642个文件，解密回读一致。两个本任务生成的明文校验ZIP已删除，原Git未删。原仓库是partial clone，此归档保全本地对象，不宣称已验证完整离线克隆；Mac端仍须校验远端对象完整性并安全取得解密凭据。
 - 本任务没有改正式业务数据、没有迁移Mac或清空任何旧机资料。剩余混排BOM/12752编辑问题与旧密码草稿未作为“全部功能完成”冒充发布；其未完成状态见第2节及任务卡。
 - 工厂任务证据 `D:/.codex/workspace_artifacts/mac-server-handoff-20261010`；NAS独立回执 `04_开发记录/任务回执/20261010-ERP源码保全与Mac正式服务器迁移交接.md`。本方案与任务卡进入正式Git只属文档同步，运行仍是v625。
+
+## Mac 家庭恢复候选入口（2026-10-11）
+
+以下均在已核验源码候选工作区，用已核验的 Python 运行。参数中的路径和 SHA 由执行端从本次回执核对后填入，不复制未替换的占位内容；没有任何密码参数。
+
+1. 工厂原 Windows 服务用户执行 `python -m desktop_assistant.credential_transfer --root <原安装目录> --output <NAS全新凭据包路径> --backup <本次完整tmbackup路径>`。本地终端隐藏输入移交口令两次，保存输出的包 SHA/用途清单；不运行收单、不读取发布私钥、不改变源配置。
+2. Mac 执行 `python -m desktop_assistant.restore_cli --root <本机SSD用户目录下尚不存在的恢复目录> --backup <完整tmbackup路径> --backup-sha256 <已核验备份SHA> --public-key <既有正式公钥PEM> --publisher-sha256 <已核验正式公钥指纹> --credentials <已核验移交包路径> --backup-password-from-transfer`。仅在Mac本地终端隐藏输入移交口令；从包内读取的备份密码只保留内存。若该备份使用了不同的手工口令，省略最后一个开关并在本地另外输入备份口令；错误口令失败不覆盖重试。
+3. 成功回执为目标 `control/home-restore-receipt.json`，明确 `started=false`、`factory_cutover=false`。恢复后核对完整真实数据和附件、未知绝对路径、业务事实及服务运行，不以该回执替代全部验收。入口强制家庭网络保护，禁止NAS数据库落点，不启动ERP。失败保留现场，先核查再使用新的空目标；旧机始终不清理。
+
+新格式完整备份已内置认证加密凭据包时，不提供外部 `--credentials`；仍须输入完整备份口令。原历史正式备份没有被修改，真实凭据及真实恢复均待工厂原用户交接。

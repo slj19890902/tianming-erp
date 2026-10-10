@@ -84,6 +84,7 @@ def _fixture(tmp_path: Path, *, ordinary_count: int):
                 subtotal=Decimal("0"),
                 material_status="pending",
                 requisition_status="已报料",
+                supplier_order_number=f"P1-09C-SRO-{index:03d}",
                 snapshot_product_name="Pending incoming box",
                 snapshot_product_code="P1-09C-IN",
                 snapshot_material="A=B",
@@ -148,6 +149,27 @@ def _select_count(statements: list[str]) -> int:
     return sum(statement.startswith("select") for statement in statements)
 
 
+def _dashboard_and_count(factory, user_id: int):
+    from app.api.dashboard import dashboard_overview
+    from app.models.user import User
+
+    engine = factory.kw["bind"]
+    statements: list[str] = []
+
+    def record_sql(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement.lstrip().lower())
+
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        with factory() as db:
+            user = db.get(User, user_id)
+            assert user is not None
+            response = dashboard_overview(db, user)
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)
+    return response, statements
+
+
 def test_pending_incoming_ordinary_rows_scale_without_writes(tmp_path: Path) -> None:
     _engine, small_factory, small_user_id, _ids = _fixture(
         tmp_path / "small", ordinary_count=1
@@ -165,8 +187,8 @@ def test_pending_incoming_ordinary_rows_scale_without_writes(tmp_path: Path) -> 
         not statement.startswith(("insert", "update", "delete"))
         for statement in [*small_sql, *large_sql]
     )
-    # Q0-01 adds two constant stock-replenishment source lookups.  The total
-    # must remain independent of the number of ordinary incoming rows.
+    # Receipt facts and stock-replenishment sources are fetched in constant
+    # batches; the total must remain independent of the number of rows.
     assert _select_count(small_sql) == 13
     assert _select_count(large_sql) == _select_count(small_sql)
     row = large["items"][0]
@@ -182,7 +204,34 @@ def test_pending_incoming_ordinary_rows_scale_without_writes(tmp_path: Path) -> 
     }.items() <= row.items()
 
 
-def test_pending_incoming_receipt_and_component_rows_fall_back_to_existing_helper(
+def test_dashboard_incoming_collection_does_not_restore_per_row_queries(
+    tmp_path: Path,
+) -> None:
+    _engine, small_factory, small_user_id, _ids = _fixture(
+        tmp_path / "small-dashboard", ordinary_count=1
+    )
+    _engine, large_factory, large_user_id, _ids = _fixture(
+        tmp_path / "large-dashboard", ordinary_count=20
+    )
+    small, small_sql = _dashboard_and_count(small_factory, small_user_id)
+    large, large_sql = _dashboard_and_count(large_factory, large_user_id)
+
+    small_card = next(
+        card for card in small["cards"] if card["key"] == "pending_incoming"
+    )
+    large_card = next(
+        card for card in large["cards"] if card["key"] == "pending_incoming"
+    )
+    assert small_card["count"] == 1
+    assert large_card["count"] == 20
+    assert _select_count(large_sql) <= _select_count(small_sql) + 5
+    assert all(
+        not statement.startswith(("insert", "update", "delete"))
+        for statement in [*small_sql, *large_sql]
+    )
+
+
+def test_pending_incoming_receipt_and_component_rows_use_batch_summary(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -280,14 +329,40 @@ def test_pending_incoming_receipt_and_component_rows_fall_back_to_existing_helpe
     response, statements = _read_and_count(factory, user_id)
     rows = {str(row["item_id"]): row for row in response["items"]}
 
-    assert {items_id for items_id in map(str, item_ids[:3])} <= set(map(str, called_keys))
-    assert f"r{component.id}" in set(map(str, called_keys))
-    assert str(item_ids[4]) not in set(map(str, called_keys))
+    assert called_keys == []
     assert rows[str(item_ids[0])]["cumulative_received_quantity"] == 40
     assert rows[str(item_ids[0])]["remaining_quantity"] == 60
     assert rows[str(item_ids[0])]["resolution_action"] == "await_supplier"
     assert rows[str(item_ids[1])]["variance_type"] == "over"
     assert rows[str(item_ids[2])]["latest_receipt_item_id"] is None
+    with factory() as db:
+        expected = {
+            str(item_key): original(db, item_key)
+            for item_key in (*item_ids[:3], f"r{component.id}")
+        }
+    summary_keys = {
+        "planned_quantity",
+        "cumulative_received_quantity",
+        "remaining_quantity",
+        "variance_quantity",
+        "variance_type",
+        "resolution_status",
+        "resolution_action",
+        "pending_receipt_item_id",
+        "latest_receipt_item_id",
+        "latest_receipt_id",
+        "surplus_inventory_lot_id",
+    }
+    for item_key, expected_summary in expected.items():
+        if expected_summary is None:
+            assert rows[item_key]["latest_receipt_item_id"] is None
+            continue
+        assert {
+            key: rows[item_key].get(key) for key in summary_keys
+        } == {
+            key: expected_summary.get(key) for key in summary_keys
+        }
+    assert _select_count(statements) <= 15
     assert all(
         not statement.startswith(("insert", "update", "delete"))
         for statement in statements

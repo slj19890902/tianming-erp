@@ -100,40 +100,183 @@ def _product_drawing_url(drawing: ProductDrawing | None) -> str | None:
 
 
 class _PendingIncomingReadContext:
-    """Request-local negative receipt facts for ordinary pending rows.
+    """Batch posted-receipt summaries for rows already selected by this page.
 
-    A normal order-item row with neither a requisition route nor any receipt
-    fact has the same source-summary result as the old helper: ``None``.  The
-    context proves that negative fact in one query, so the list need not call
-    the authoritative helper once per row.  Every row with a receipt fact or a
-    special route deliberately keeps the old helper path.
+    ``_rows`` has already resolved whether a line uses the ordinary order-item,
+    requisition-item or stock-replenishment route.  Re-reading that route plus
+    the same receipt facts once per row created five repeated queries for each
+    formal pending line.  This request-local context keeps the route decision
+    intact and only batches the posted receipt aggregation/latest-row lookup.
     """
 
     def __init__(self, db: Session, rows: list[dict]) -> None:
-        ordinary_item_ids = {
-            int(row["item_id"])
-            for row in rows
-            if isinstance(row.get("item_id"), int)
-            and not row.get("requisition_item_id")
-            and not row.get("supplier_order_number")
-        }
-        self._receipt_free_item_ids = set(ordinary_item_ids)
-        if not ordinary_item_ids:
-            return
-        receipt_item_ids = set(
-            db.scalars(
-                select(IncomingReceiptItem.order_item_id).where(
-                    IncomingReceiptItem.order_item_id.in_(ordinary_item_ids)
+        self._handled_keys: set[tuple[str, int]] = set()
+        self._summaries: dict[tuple[str, int], dict | None] = {}
+        planned_by_key: dict[tuple[str, int], int] = {}
+        for row in rows:
+            key = self._row_source_key(row)
+            if key is None:
+                continue
+            self._handled_keys.add(key)
+            kind, _source_id = key
+            if kind == "stock":
+                planned = int(row.get("quantity") or 0)
+            elif kind == "requisition":
+                planned = int(row.get("requisition_qty") or 0)
+            else:
+                planned = int(
+                    row.get("requisition_qty") or row.get("quantity") or 0
                 )
-            ).all()
-        )
-        self._receipt_free_item_ids -= {
-            int(item_id) for item_id in receipt_item_ids if item_id is not None
-        }
+            planned_by_key[key] = planned
 
-    def has_proven_empty_summary(self, row: dict) -> bool:
+        if not self._handled_keys:
+            return
+
+        order_item_ids = {
+            source_id
+            for kind, source_id in self._handled_keys
+            if kind == "order"
+        }
+        requisition_item_ids = {
+            source_id
+            for kind, source_id in self._handled_keys
+            if kind == "requisition"
+        }
+        stock_item_ids = {
+            source_id
+            for kind, source_id in self._handled_keys
+            if kind == "stock"
+        }
+        source_filters = []
+        if order_item_ids:
+            source_filters.append(
+                (
+                    IncomingReceiptItem.order_item_id.in_(order_item_ids)
+                    & IncomingReceiptItem.requisition_item_id.is_(None)
+                )
+            )
+        if requisition_item_ids:
+            source_filters.append(
+                IncomingReceiptItem.requisition_item_id.in_(requisition_item_ids)
+            )
+        if stock_item_ids:
+            source_filters.append(
+                IncomingReceiptItem.stock_replenishment_item_id.in_(stock_item_ids)
+            )
+
+        facts_by_key: dict[tuple[str, int], list[IncomingReceiptItem]] = {}
+        receipt_items = db.scalars(
+            select(IncomingReceiptItem)
+            .where(
+                IncomingReceiptItem.status == "posted",
+                or_(*source_filters),
+            )
+            .order_by(IncomingReceiptItem.id)
+        ).all()
+        for receipt_item in receipt_items:
+            key: tuple[str, int] | None = None
+            if (
+                receipt_item.stock_replenishment_item_id is not None
+                and ("stock", int(receipt_item.stock_replenishment_item_id))
+                in self._handled_keys
+            ):
+                key = ("stock", int(receipt_item.stock_replenishment_item_id))
+            elif (
+                receipt_item.requisition_item_id is not None
+                and ("requisition", int(receipt_item.requisition_item_id))
+                in self._handled_keys
+            ):
+                key = ("requisition", int(receipt_item.requisition_item_id))
+            elif (
+                receipt_item.order_item_id is not None
+                and receipt_item.requisition_item_id is None
+                and ("order", int(receipt_item.order_item_id))
+                in self._handled_keys
+            ):
+                key = ("order", int(receipt_item.order_item_id))
+            if key is not None:
+                facts_by_key.setdefault(key, []).append(receipt_item)
+
+        for key in self._handled_keys:
+            kind, _source_id = key
+            facts = facts_by_key.get(key, [])
+            # The ordinary/requisition helper intentionally returned ``None``
+            # until at least one posted fact existed.  Stock summaries always
+            # expose the remaining quantity, even before the first receipt.
+            if not facts and kind != "stock":
+                self._summaries[key] = None
+                continue
+            latest = facts[-1] if facts else None
+            planned = planned_by_key[key]
+            received = sum(int(row.received_quantity or 0) for row in facts)
+            variance = received - planned
+            summary = {
+                "planned_quantity": planned,
+                "cumulative_received_quantity": received,
+                "remaining_quantity": max(planned - received, 0),
+                "variance_quantity": variance,
+                "variance_type": (
+                    "matched"
+                    if variance == 0
+                    else "short"
+                    if variance < 0
+                    else "over"
+                ),
+                "resolution_status": (
+                    latest.resolution_status if latest else "not_required"
+                ),
+                "resolution_action": latest.resolution_action if latest else None,
+                "pending_receipt_item_id": (
+                    latest.id
+                    if latest
+                    and latest.resolution_status == "pending"
+                    and latest.resolution_action == "await_supplier"
+                    else None
+                ),
+                "latest_receipt_item_id": latest.id if latest else None,
+                "latest_receipt_id": latest.receipt_id if latest else None,
+            }
+            if kind == "stock":
+                summary.update(
+                    {
+                        "received_inventory_lot_id": (
+                            latest.received_inventory_lot_id if latest else None
+                        ),
+                        "surplus_inventory_lot_id": None,
+                    }
+                )
+            else:
+                summary["surplus_inventory_lot_id"] = (
+                    latest.surplus_inventory_lot_id if latest else None
+                )
+            self._summaries[key] = summary
+
+    @staticmethod
+    def _row_source_key(row: dict) -> tuple[str, int] | None:
         item_id = row.get("item_id")
-        return isinstance(item_id, int) and item_id in self._receipt_free_item_ids
+        if isinstance(item_id, str) and item_id.startswith("sr"):
+            source_id = row.get("stock_replenishment_item_id")
+            return (
+                ("stock", int(source_id))
+                if source_id is not None and item_id == f"sr{int(source_id)}"
+                else None
+            )
+        if isinstance(item_id, str) and item_id.startswith("r"):
+            source_id = row.get("requisition_item_id")
+            return (
+                ("requisition", int(source_id))
+                if source_id is not None and item_id == f"r{int(source_id)}"
+                else None
+            )
+        if isinstance(item_id, int) and not row.get("requisition_item_id"):
+            return ("order", int(item_id))
+        return None
+
+    def summary_for(self, row: dict) -> tuple[bool, dict | None]:
+        key = self._row_source_key(row)
+        if key is None or key not in self._handled_keys:
+            return False, None
+        return True, self._summaries.get(key)
 
 
 def _utc_now() -> datetime:
@@ -394,7 +537,6 @@ def _stock_replenishment_pending_rows(
         )
     rows: list[dict] = []
     for item, order in db.execute(query):
-        summary = stock_source_summary(db, f"sr{item.id}")
         customer_name = item.customer.name if item.customer else ""
         rows.append(
             {
@@ -432,7 +574,7 @@ def _stock_replenishment_pending_rows(
                 "material_status": "pending",
                 "requisition_status": "已报料",
                 "requisition_qty": item.quantity,
-                "incoming_quantity": summary["remaining_quantity"],
+                "incoming_quantity": item.quantity,
                 "requisition_date": order.confirmed_at or order.created_at,
                 "requisition_spec": None,
                 "cardboard_len": item.report_length_mm,
@@ -459,7 +601,6 @@ def _stock_replenishment_pending_rows(
                 "drawing_path": None,
                 "drawing_is_pdf": False,
                 "can_revert_receipt": False,
-                **summary,
             }
         )
     return rows
@@ -997,7 +1138,15 @@ def _rows(
         ).all()
         for drawing in drawings:
             latest_drawings.setdefault(drawing.product_id, drawing)
-    read_context = _PendingIncomingReadContext(db, rows)
+    stock_replenishment_rows = (
+        _stock_replenishment_pending_rows(db, user=user)
+        if received_since is None
+        else []
+    )
+    read_context = _PendingIncomingReadContext(
+        db,
+        [*rows, *stock_replenishment_rows],
+    )
     for row in rows:
         # v0.23.0 P0-3：订单/明细上传的图纸优先于常用箱图纸——车间来料页面
         # 需要能看到"这一单"实际上传的图纸，而不仅仅是常用箱历史图纸。
@@ -1014,11 +1163,9 @@ def _rows(
         row["drawing_is_pdf"] = bool(
             final_reference and final_reference.lower().endswith(".pdf")
         )
-        summary = (
-            None
-            if read_context.has_proven_empty_summary(row)
-            else source_summary_for_item(db, row["item_id"])
-        )
+        handled, summary = read_context.summary_for(row)
+        if not handled:
+            summary = source_summary_for_item(db, row["item_id"])
         if summary is not None:
             row.update(summary)
             if received_since is None:
@@ -1040,8 +1187,15 @@ def _rows(
                     "surplus_inventory_lot_id": None,
                 }
             )
-    if received_since is None:
-        rows.extend(_stock_replenishment_pending_rows(db, user=user))
+    for row in stock_replenishment_rows:
+        handled, summary = read_context.summary_for(row)
+        if not handled or summary is None:
+            # Defensive fallback for an unexpected route shape; ordinary page
+            # rows always use the batched branch above.
+            summary = stock_source_summary(db, row["item_id"])
+        row.update(summary)
+        row["incoming_quantity"] = summary["remaining_quantity"]
+    rows.extend(stock_replenishment_rows)
     return rows
 
 

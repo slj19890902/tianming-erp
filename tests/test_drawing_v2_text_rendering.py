@@ -9,7 +9,7 @@ from xml.etree import ElementTree
 
 import pytest
 from fastapi import HTTPException
-from PIL import Image
+from PIL import Image, ImageFont
 from pypdf import PdfReader
 from pypdf.generic import ContentStream
 from sqlalchemy.orm import Session
@@ -29,9 +29,11 @@ from test_drawing_v2_isolated import isolated_drawing_db
 
 @pytest.fixture(autouse=True)
 def known_font(monkeypatch):
-    font = Path('C:/Windows/Fonts/simsun.ttc')
+    from app.services.cjk_fonts import mac_font_candidates
+    candidates = (*mac_font_candidates(), Path('C:/Windows/Fonts/simsun.ttc'))
+    font = next((path for path in candidates if path.is_file()), candidates[-1])
     if not font.is_file():
-        pytest.skip('Existing SimSun is unavailable; no installation permitted')
+        pytest.skip('Known local Chinese font unavailable; no automatic font installation')
     monkeypatch.setenv('ERP_DRAWING_TEXT_FONT_PATH', str(font))
 
 
@@ -54,7 +56,12 @@ def test_visible_alpha_bounds_mixed_text_descenders_and_explicit_lines():
         assert max(gaps) > 2  # Two separately rendered lines, not collapsed whitespace.
     assert metadata['sha256'] == hashlib.sha256(multiline).hexdigest()
     assert len(metadata['font_sha256']) == 64
-    assert metadata['font_name'][0] == 'SimSun'
+    from app.services.cjk_fonts import font_face_index
+    import os
+    font_path = os.environ['ERP_DRAWING_TEXT_FONT_PATH']
+    expected = ImageFont.truetype(font_path, 16, index=font_face_index(font_path)).getname()
+    assert metadata['font_name'] == list(expected)
+    assert metadata['font_index'] == font_face_index(font_path)
     assert text_service.render_text_artwork(text_object('天明ERP\r\nAgj'))[0] == multiline
     capital, _ = text_service.render_text_artwork(text_object('ABC'))
     descender, _ = text_service.render_text_artwork(text_object('Agj'))

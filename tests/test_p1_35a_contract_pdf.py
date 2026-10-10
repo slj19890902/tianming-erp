@@ -14,10 +14,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 
+from app.services.cjk_fonts import mac_font_candidates
+
 TRUSTED_TEST_FONT = next(
     (
         path
         for path in (
+            *mac_font_candidates(),
             Path(r"C:\Windows\Fonts\simhei.ttf"),
             Path(r"C:\Windows\Fonts\Deng.ttf"),
             Path(r"C:\Windows\Fonts\simsunb.ttf"),
@@ -43,7 +46,7 @@ def contract_pdf_app(tmp_path, monkeypatch):
     from app.models.customer_contract import CustomerContract, CustomerContractItem
     from app.models.user import User
 
-    assert TRUSTED_TEST_FONT is not None, "Windows 合同 PDF 中文字体不存在"
+    assert TRUSTED_TEST_FONT is not None, "本机合同 PDF 中文字体不存在"
     monkeypatch.setenv("ERP_CONTRACT_PDF_FONT_PATH", str(TRUSTED_TEST_FONT))
 
     engine = create_sqlite_engine(tmp_path / "p1-35a-contract-pdf.sqlite3")

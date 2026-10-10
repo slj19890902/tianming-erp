@@ -34,6 +34,7 @@ from reportlab.platypus import (
 )
 
 from app.core.config import PROJECT_ROOT
+from app.services.cjk_fonts import mac_font_candidates, font_face_index
 from app.models.company_config import CompanyConfig
 from app.models.customer_contract import CustomerContract, CustomerContractItem
 from app.services.product_specification import dimension_specification
@@ -47,7 +48,7 @@ _TRUSTED_WINDOWS_FONTS = (
     Path(r"C:\Windows\Fonts\simsunb.ttf"),
 )
 _FONT_LOCK = Lock()
-_REGISTERED_FONTS: dict[tuple[str, int, int], tuple[str, str]] = {}
+_REGISTERED_FONTS: dict[tuple[str, int, int, int], tuple[str, str]] = {}
 
 _TERMS = (
     (
@@ -116,7 +117,7 @@ def _configured_font_path() -> Path:
                 f"{_FONT_ENV_NAME} 指定的中文字体不存在"
             )
         return path
-    for path in _TRUSTED_WINDOWS_FONTS:
+    for path in (*mac_font_candidates(), *_TRUSTED_WINDOWS_FONTS):
         if path.is_file():
             return path
     raise ContractPdfFontError(
@@ -127,15 +128,16 @@ def _configured_font_path() -> Path:
 def _registered_font() -> tuple[str, str]:
     path = _configured_font_path()
     stat = path.stat()
-    key = (str(path).casefold(), stat.st_size, stat.st_mtime_ns)
+    face_index = font_face_index(path)
+    key = (str(path).casefold(), stat.st_size, stat.st_mtime_ns, face_index)
     with _FONT_LOCK:
         existing = _REGISTERED_FONTS.get(key)
         if existing is not None:
             return existing
         try:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            font_name = f"ContractCJK_{digest[:16]}"
-            pdfmetrics.registerFont(TTFont(font_name, str(path)))
+            font_name = f"ContractCJK_{digest[:16]}" + (f"_face{face_index}" if face_index else "")
+            pdfmetrics.registerFont(TTFont(font_name, str(path), subfontIndex=face_index))
         except Exception as error:  # ReportLab emits several font-specific errors.
             raise ContractPdfFontError(
                 "合同 PDF 中文字体无法加载或禁止嵌入"

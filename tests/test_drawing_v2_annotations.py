@@ -6,7 +6,7 @@ from xml.etree import ElementTree
 from pypdf import PdfReader
 from reportlab.pdfbase import pdfmetrics
 
-from app.services.drawing_exports import _wrapped_lines, engineering_pdf
+from app.services.drawing_exports import _wrapped_lines, engineering_pdf, _annotation_font
 from app.services.drawing_geometry import build_geometry, svg
 
 
@@ -68,7 +68,7 @@ def test_svg_and_pdf_share_index_text_and_wrap_long_identifiers():
     for size in (9, 13):
         lines = _wrapped_lines(title, 400, size)
         assert len(lines) > 1 and ''.join(lines) == title
-        assert all(pdfmetrics.stringWidth(line, 'STSong-Light', size) <= 400 for line in lines)
+        assert all(pdfmetrics.stringWidth(line, _annotation_font(), size) <= 400 for line in lines)
     assert title.replace(' ', '') in ''.join(pages[0].extract_text().split())
 
 

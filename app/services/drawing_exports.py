@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import sys
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A3, A4, landscape
@@ -91,14 +92,23 @@ def _assembly_placements(metadata: dict | None) -> list[dict]:
     return [entry for entry in placements if isinstance(entry, dict)] if isinstance(placements, list) else []
 
 
-def _wrapped_lines(text: str, width: float, font_size: float) -> list[str]:
+def _annotation_font():
+    if sys.platform == 'darwin':
+        from app.services.contract_pdf import _registered_font
+        return _registered_font()[0]
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    return "STSong-Light"
+
+
+def _wrapped_lines(text: str, width: float, font_size: float, font_name: str | None = None) -> list[str]:
     """Wrap CJK and unbroken customer drawing IDs at measured glyph widths."""
+    font_name = font_name or _annotation_font()
     rows, current = [], ''
     for character in str(text):
         if character == '\n':
             rows.append(current)
             current = ''
-        elif current and pdfmetrics.stringWidth(current + character, 'STSong-Light', font_size) > width:
+        elif current and pdfmetrics.stringWidth(current + character, font_name, font_size) > width:
             rows.append(current)
             current = character
         else:
@@ -107,8 +117,9 @@ def _wrapped_lines(text: str, width: float, font_size: float) -> list[str]:
 
 
 def _draw_geometry(c, geometry: dict, viewport: tuple[float, float, float, float],
-                   print_objects: list[dict], image_assets: dict | None) -> None:
+                   print_objects: list[dict], image_assets: dict | None, font_name: str | None = None) -> None:
     """Fit a display view while preserving the one world-mm placement model."""
+    font_name = font_name or _annotation_font()
     left, bottom, available_w, available_h = viewport
     dw, dh = float(geometry['width_mm']), float(geometry['height_mm'])
     margin = float(geometry.get('annotation_margin_mm', 0))
@@ -133,7 +144,7 @@ def _draw_geometry(c, geometry: dict, viewport: tuple[float, float, float, float
     c.setFillColor(colors.HexColor('#444444'))
     c.setStrokeColor(colors.HexColor('#666666'))
     annotation_font = max(8, float(geometry.get("annotation_font_mm", 8)) * scale)
-    c.setFont("STSong-Light", annotation_font)
+    c.setFont(font_name, annotation_font)
     for mark in geometry.get("annotations", []):
         c.line(offset_x + float(mark['x1']) * scale, offset_y + (dh-float(mark['y1'])) * scale,
                offset_x + float(mark['x2']) * scale, offset_y + (dh-float(mark['y2'])) * scale)
@@ -158,7 +169,7 @@ def _draw_geometry(c, geometry: dict, viewport: tuple[float, float, float, float
         c.drawString(offset_x+float(entry['x'])*scale, offset_y+(dh-float(entry['y']))*scale, entry['text'])
     c.setStrokeColor(colors.black)
     c.setFillColor(colors.black)
-    c.setFont("STSong-Light", 8)
+    c.setFont(font_name, 8)
     panels = {panel["id"]: panel for panel in geometry["panels"]}
     for index, obj in enumerate(print_objects):
         panel = panels[obj["panel_id"]]
@@ -193,7 +204,7 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
                     print_objects: list[dict], image_assets: dict[int, tuple[bytes, str]] | None = None,
                     drawing_metadata: dict | None = None) -> bytes:
     """Annotated reference pages, never a 1:1 machine cutting file."""
-    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    font_name = _annotation_font()
     page = landscape(A3 if max(float(geometry["width_mm"]), float(geometry["height_mm"])) > 900 else A4)
     output = BytesIO()
     c = canvas.Canvas(output, pagesize=page, pageCompression=1)
@@ -204,7 +215,7 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
     for line in (f"客户：{customer}    产品：{product}",
                  f"图号：{number}    版次：{revision}    单位：mm",
                  (f"纸厚：{thickness}" if geometry.get('type') == 'assembly' else f"纸厚：{thickness}    总展开：{geometry['width_mm']} × {geometry['height_mm']} mm")):
-        header_lines.extend(_wrapped_lines(line, pw-margin*2, 9))
+        header_lines.extend(_wrapped_lines(line, pw-margin*2, 9, font_name))
     title_h = max(88, 30 + 14*len(header_lines))
     available_w = pw-margin*2
     available_h = ph-margin*2-title_h-footer_h
@@ -214,15 +225,15 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
         c.setFillColor(colors.black)
         c.setLineWidth(.8)
         c.rect(margin/2, margin/2, pw-margin, ph-margin)
-        c.setFont('STSong-Light', 13)
+        c.setFont(font_name, 13)
         c.drawString(margin, ph-margin, title)
-        c.setFont('STSong-Light', 9)
+        c.setFont(font_name, 9)
         for index, line in enumerate(header_lines):
             c.drawString(margin, ph-margin-18-index*14, line)
 
     def finish_page():
         c.setFillColor(colors.black)
-        c.setFont('STSong-Light', 8)
+        c.setFont(font_name, 8)
         c.drawRightString(pw-margin, margin-8, f"第 {c.getPageNumber()} 页")
         c.showPage()
 
@@ -231,18 +242,18 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
         thumbnail_w = min(210, available_w*.25)
         main_w = available_w-thumbnail_w-24
         focus = print_focus_geometry(geometry, print_objects)
-        _draw_geometry(c, focus, (margin, margin+footer_h, main_w, available_h), print_objects, image_assets)
+        _draw_geometry(c, focus, (margin, margin+footer_h, main_w, available_h), print_objects, image_assets, font_name)
         thumbnail = {**geometry, 'view_kind': 'structure_thumbnail', 'annotations': [], 'annotation_legends': [],
                      'view_bounds': {'x': '0', 'y': '0', 'width': geometry['width_mm'], 'height': geometry['height_mm']}}
         tx = margin+main_w+24
         thumbnail_h = min(available_h-36, thumbnail_w*1.35)
         c.setFillColor(colors.black)
-        c.setFont('STSong-Light', 9)
+        c.setFont(font_name, 9)
         c.drawString(tx, margin+footer_h+available_h-8, '结构缩略（定位参考）')
         _draw_geometry(c, thumbnail, (tx, margin+footer_h+available_h-24-thumbnail_h,
-                                     thumbnail_w, thumbnail_h), print_objects, image_assets)
+                                     thumbnail_w, thumbnail_h), print_objects, image_assets, font_name)
         c.setFillColor(colors.black)
-        c.setFont('STSong-Light', 8)
+        c.setFont(font_name, 8)
         c.drawString(margin, margin+78, '主图：印刷内容聚焦；右侧：整图位置；完整结构及尺寸见下一页。')
         c.drawString(margin, margin+62, '实际宽高、方向和距边以标注为准；主图与缩略图使用不同显示比例，禁止量纸面推尺寸。')
         for index, obj in enumerate(print_objects[:3]):
@@ -253,18 +264,18 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
 
     if geometry.get('type') != 'assembly':
         header('天明 ERP 完整结构图（按标注尺寸核对）')
-        _draw_geometry(c, geometry, (margin, margin+footer_h, available_w, available_h), [], image_assets)
+        _draw_geometry(c, geometry, (margin, margin+footer_h, available_w, available_h), [], image_assets, font_name)
         c.setFillColor(colors.black)
-        c.setFont('STSong-Light', 8)
+        c.setFont(font_name, 8)
         c.drawString(margin, margin+78, '黑实线：切断    蓝虚线：压折；颜色仅辅助区分，以线型为准。')
         c.drawString(margin, margin+62, '此图为尺寸与工艺核对图；不得按纸面缩放量尺寸或直接作为机台程序。')
         finish_page()
-        c.setFont('STSong-Light', 13)
+        c.setFont(font_name, 13)
         y = ph-margin
-        for line in _wrapped_lines(f'尺寸明细｜{number} {revision}', pw-margin*2, 13):
+        for line in _wrapped_lines(f'尺寸明细｜{number} {revision}', pw-margin*2, 13, font_name):
             c.drawString(margin, y, line)
             y -= 18
-        c.setFont('STSong-Light', 10)
+        c.setFont(font_name, 10)
         c.drawString(margin, y-4, '所有尺寸单位：mm；以明确标注和已确认原件为准，不按 PDF 纸面比例量取。')
         y -= 36
         for label, value in geometry.get('dimensions', {}).items():
@@ -276,12 +287,12 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
             y -= 20
             for obj in print_objects:
                 description = f"{obj.get('text') or '图片'}｜{obj['width_mm']}×{obj['height_mm']}｜{obj['panel_id']}｜X:{obj['x_mm']} Y:{obj['y_mm']}｜角度:{obj.get('rotation_deg', 0)}"
-                for line in _wrapped_lines(description, pw-margin*2, 10):
+                for line in _wrapped_lines(description, pw-margin*2, 10, font_name):
                     if y < margin+20:
                         finish_page()
-                        c.setFont('STSong-Light', 10)
+                        c.setFont(font_name, 10)
                         y = ph-margin
-                        for heading in _wrapped_lines(f'印刷明细（续页）｜{number} {revision}', pw-margin*2, 10):
+                        for heading in _wrapped_lines(f'印刷明细（续页）｜{number} {revision}', pw-margin*2, 10, font_name):
                             c.drawString(margin, y, heading)
                             y -= 14
                         y -= 12
@@ -291,7 +302,7 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
     placements = _assembly_placements(drawing_metadata)
     if geometry.get('type') == 'assembly' or placements:
         header('天明 ERP 组合部件清单')
-        c.setFont('STSong-Light', 9)
+        c.setFont(font_name, 9)
         c.drawString(margin, ph-margin-title_h, '子件图纸与摆放位置（mm）')
         y = ph-margin-title_h-24
         for index, placement in enumerate(placements, 1):
@@ -300,9 +311,9 @@ def engineering_pdf(geometry: dict, *, customer: str, product: str,
             release = str(placement.get('child_number',placement.get('child_release_id',''))) + ' / ' + str(placement.get('child_revision',''))
             position = placement.get('position_mm', '')
             line = f"{index}. 路径:{path}  产品:{product_id}  发布图:{release}  位置(mm):{position}  旋转(度):{placement.get('rotation_deg',[])}"
-            for row in _wrapped_lines(line, pw-margin*2, 9):
+            for row in _wrapped_lines(line, pw-margin*2, 9, font_name):
                 if y < margin+20:
-                    finish_page(); c.setFont('STSong-Light', 9); y = ph-margin
+                    finish_page(); c.setFont(font_name, 9); y = ph-margin
                 c.drawString(margin, y, row); y -= 14
         finish_page()
     c.save()

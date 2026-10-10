@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import unicodedata
 
 import pytest
 
@@ -22,6 +23,12 @@ POINTS_TO_MM = 25.4 / 72.0
 
 
 def _find_headless_browser() -> Path | None:
+    configured = os.environ.get("ERP_TEST_CHROME_BINARY")
+    if configured:
+        path = Path(configured).resolve()
+        if not path.is_file():
+            raise ValueError("Configured test Chrome does not exist")
+        return path
     command_names = (
         "msedge",
         "microsoft-edge",
@@ -37,7 +44,7 @@ def _find_headless_browser() -> Path | None:
         if resolved:
             return Path(resolved)
 
-    candidates: list[Path] = []
+    candidates: list[Path] = [Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")]
     for environment_name in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"):
         root = os.environ.get(environment_name)
         if not root:
@@ -157,6 +164,11 @@ def _print_to_pdf(browser: Path, fixture: Path, output: Path, work_dir: Path) ->
             headless_flag,
             "--disable-gpu",
             "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--disable-sync",
+            "--no-proxy-server",
+            "--host-resolver-rules=MAP * ~NOTFOUND",
             "--no-first-run",
             "--no-default-browser-check",
             "--no-pdf-header-footer",
@@ -217,7 +229,9 @@ def test_mold_label_print_pdf_has_one_40x30mm_page_per_label(
             f"第 {page_number} 页高度应约为 30 mm，实际为 {height_mm:.3f} mm"
         )
 
-        page_text = page.extract_text() or ""
+        # macOS CJK fonts can map a shared glyph to a Unicode compatibility
+        # radical (e.g. U+2F5A for 片). Compare equivalent text; do not alter PDF.
+        page_text = unicodedata.normalize("NFKC", page.extract_text() or "")
         expected_number = (
             "61452621",
             "61452621R1F",

@@ -21,6 +21,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     Request,
@@ -523,6 +524,39 @@ class InventoryDraftPreviewPayload(BaseModel):
 
     customer_id: int = Field(gt=0, strict=True)
     items: list[InventoryDraftPreviewItem] = Field(min_length=1, max_length=200)
+
+
+class DemandStockItem(BaseModel):
+    client_line_id: str = Field(min_length=1, max_length=100)
+    product_id: int = Field(gt=0, strict=True)
+    quantity: int = Field(ge=0, le=2147483647, strict=True)
+
+
+class DemandStockPayload(BaseModel):
+    customer_id: int = Field(gt=0, strict=True)
+    items: list[DemandStockItem] = Field(min_length=1, max_length=200)
+
+
+@router.post('/demand-stock-preview')
+def preview_demand_stock(payload: DemandStockPayload, db: Session = Depends(get_db),
+                         user: User = Depends(can_create)):
+    if not has_permission(user, 'warehouse.view'):
+        raise HTTPException(403, '当前账号没有仓库库存查看权限')
+    require_customer_access(payload.customer_id, user, db)
+    products = []
+    seen = set()
+    for item in payload.items:
+        if item.client_line_id in seen:
+            raise HTTPException(409, '需求行标识重复')
+        seen.add(item.client_line_id)
+        product = db.get(Product, item.product_id)
+        if not product or product.deleted_at is not None or not product.is_active:
+            raise HTTPException(404, '产品不存在或已停用')
+        if product.customer_id != payload.customer_id:
+            raise HTTPException(409, '产品不属于所选客户')
+        products.append(product)
+    from app.services.weekly_demand import demand_stock_preview
+    return demand_stock_preview(db, payload.customer_id, payload.items, products)
 
 
 class NewOrderBomComponentDemand(BaseModel):
@@ -4861,6 +4895,44 @@ async def preview_order_import_batch(
                 )
             )
     return {"batch_count": len(files), "drafts": drafts}
+
+
+@router.post('/weekly-demand-preview')
+async def preview_weekly_demand(customer_id: int = Query(..., gt=0),
+                               file: UploadFile | None = File(None), text: str = Form('', max_length=100000),
+                               db: Session = Depends(get_db), user: User = Depends(can_create)):
+    require_customer_access(customer_id, user, db)
+    customer = db.get(Customer, customer_id)
+    if not customer or not customer.is_active or customer.status != 'active':
+        raise HTTPException(409, '请选择启用客户')
+    from app.services.secure_uploads import IMAGE_POLICY
+    from app.services.weekly_demand_import import source_lines, parse_weekly_lines
+    try:
+        if file and text.strip():
+            raise ValueError('请只选择文件或粘贴文本其中一种来源')
+        if file:
+            extension = Path(file.filename or '').suffix.lower()
+            policy = EXCEL_POLICY if extension in ('.xls', '.xlsx') else PDF_POLICY if extension == '.pdf' else IMAGE_POLICY
+            upload = await read_validated_upload(file, policy)
+            content, extension, filename, digest = upload.content, upload.extension, upload.original_filename, upload.sha256
+        else:
+            content, extension, filename = text.strip().encode('utf-8'), '.txt', '周需求粘贴文本'
+            digest = hashlib.sha256(content).hexdigest()
+        from starlette.concurrency import run_in_threadpool
+        lines = await run_in_threadpool(source_lines, content, extension)
+        rows, warnings = parse_weekly_lines(lines)
+    except (ValueError, UnicodeError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    draft = dict(source_name=filename, source_format='weekly_demand',
+                 file_hash=digest, parser_version='weekly-demand-v1',
+                 parse_status='recognized', recognition_status='needs_confirmation',
+                 customer_name_raw=customer.name, customer_po=None, delivery_date=None,
+                 customer_route=dict(status='locked', template_customer_id=customer.id, customer_name=customer.name),
+                 integrity_check=dict(integrity_status='passed', source_row_count=len(rows), parsed_row_count=len(rows)),
+                 items=rows, warnings=warnings + [
+                     '周需求单：逐行核对编码和左侧需求数量；右侧库存仅为原单参考，不更新仓库。',
+                     '请明确填写客户订单号和实际交期；照片中的“16号或19号”不能自动选择。'])
+    return _finalize_pdf_preview_for_user(_match_pdf_preview_for_user(db, draft, user), user)
 
 
 @router.post("/draft-rematch")

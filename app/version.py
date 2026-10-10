@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.618"
+APP_VERSION = "v0.22.619"
 APP_VERSION_NAME = "发货整次提交与原结果核对"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5997,6 +5997,20 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.617：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 APP_CHANGES = [
+    "导入订单增加周需求单入口，支持图片、PDF、Excel及粘贴；左侧需求匹配客户常用箱，右侧原单库存只作参考，不覆盖库存。",
+    "订单导入、新建订单及常用箱选择统一显示现存、占用、可用、本批预计结余、缺货提示与具体货位数量；同批重复编码累计试算。",
+    "仓库查货右侧直接列出产品所在区域、货架层格与各位置数量，不再只显示位置个数。",
+    "生产任务单新增横向十二列简易报料条单，一组件/材料来源一行；保留父成品数量，区分订纸与库存材料做，沿用打印前版本核对。",
+    "本版无数据库迁移，不更改正式订单、库存、模具或BOM事实；80012753多模具换算资料仍须核实后维护。",
+]
+APP_VERIFICATION_STEPS = [
+    "导入订单→周需求单，选择客户并上传或粘贴左侧需求，核对原单及ERP现存/本批结余；导入常用箱修改数量，核对库存提示同步变化。",
+    "仓库查货搜索有库存的存货编码，确认右侧直接显示区域、货架层格及数量；多处库存应逐处列出。",
+    "已报料生产任务单→切换简易报料条单，核对12列、同款多组件分行、订纸或领料位置，再用A4横向实物打印裁切验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.618：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
     "拿货应用、随货准备和发货合为一次完整提交；核对原版本与数量，任一步失败整体回滚。",
     "发货遇到断网、超时或异常回复后保留原内容，可查询原结果；取消后的迟到旧操作不会再次扣库。",
     "原内容已过期时可结束本次确认再重新核对；已经发货则显示原完成结果，不误作未执行。",
@@ -6008,4 +6022,4 @@ APP_VERIFICATION_STEPS = [
     "遇到连接异常时使用查原结果；需要重新核对数量时使用结束本次确认，确认原结果后再操作。",
     "核对现有BOM、外购包材和多货位送货仍按正确实物数量处理；真实打印由管理员现场验收。",
 ]
-APP_CHANGELOG = [*(f"v0.22.618：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.619：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

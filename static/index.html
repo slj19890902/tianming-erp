@@ -23,7 +23,7 @@
     <script src="/static/ui/stock-preparation-completion-recovery.js?v=20261010-completion1"></script>
     <script src="/static/ui/stock-preparation-group-recovery.js?v=72b124d276b5"></script>
     <script src="/static/ui/stock-replenishment-save-recovery.js?v=f7c4b6c25c37"></script>
-    <script src="/static/ui/delivery-dispatch-recovery.js?v=a486fab5c4f1"></script>
+    <script src="/static/ui/delivery-dispatch-recovery.js?v=cabbe6fcb1a5"></script>
     <script src="/static/ui/stock-preparation-assembly-recovery.js?v=a11f3ee39242"></script>
     <script src="/static/ui/production-workspace.js?v=fe58b8dee03a"></script>
     <script src="/static/ui/production-desk.js?v=round-experience-d2"></script>
@@ -40794,6 +40794,15 @@
               window.TmDeliveryDispatchRecovery.validateCommand(live.body,context.actor);
               if (!recovering) printSession = await this.openDeliveryPrintTab(record.deliveryId,true);
               if (!context.current()) return false;
+              const beforeSend = controller.get(record.key);
+              if (!beforeSend || ["confirmed","closed","closing"].includes(beforeSend.state)) {
+                printSession?.abort("原确认已有结果或正在结束，请查原结果");
+                this.refreshDeliveryDispatchRecovery();
+                this.showToast("原确认已有结果或正在结束，请查原结果；没有继续发货",true);
+                return false;
+              }
+              if (window.TmDeliveryDispatchRecovery.stable(beforeSend.body) !== window.TmDeliveryDispatchRecovery.stable(live.body)) throw new Error("原发货内容发生变化，请保留记录并查原结果");
+              live = beforeSend;
               const {data} = await this.deliveryDispatchRequest("put", `/api/deliveries/${record.deliveryId}/dispatch`, live.body, context);
               if (!context.current()) return false;
               if (data?.result === "closed") {

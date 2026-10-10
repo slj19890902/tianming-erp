@@ -5030,6 +5030,17 @@ def revert_new_receipt_item(
     if replay is not None:
         return replay
     try:
+        current_fact = db.get(IncomingReceiptItem, receipt_item_id)
+        if current_fact is not None and current_fact.stock_replenishment_item_id is not None:
+            from app.services.replenishment_receipt_reversal import lock_stock_receipt_source
+            lock_stock_receipt_source(db, receipt_id=receipt_item_id, user=user)
+            # A concurrent retry may have committed while this request waited
+            # for its typed source lock. Recheck and replay that original result.
+            idempotency_key, request_hash, replay = _reversal_idempotency_contract(
+                db, user=user, target_kind='receipt_item', target_id=receipt_item_id, payload=payload,
+            )
+            if replay is not None:
+                return replay
         fact = revert_receipt_item(
             db,
             user=user,

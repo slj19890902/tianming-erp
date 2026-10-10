@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.617"
+APP_VERSION = "v0.22.618"
 APP_VERSION_NAME = "发货整次提交与原结果核对"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -5984,6 +5984,19 @@ APP_VERIFICATION_STEPS = [
 APP_CHANGELOG = [*(f"v0.22.616：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
 
 APP_CHANGES = [
+    "管理员可按实际依赖先取消补库生产安排或撤销加工，再撤回对应实收，最后撤销选中的独立补库采购行，保留同单其他明细。",
+    "补库收料撤销按真实来源核对数量、下游使用和当前位置；重复提交不重复扣减，已混用、拆批或供应商已确认对账的记录仍受保护。",
+    "产品查询补齐已完成补库加工的实际产出与移库后位置，区分未加工片料、已加工片料和成品，避免重复计数。",
+    "单笔生产入库选项明确区分片料/半成品入库和完整成品入库；本版不自动更改现存库存类别、数量、成本或位置。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新查询80012273，应同时看到旧500张片料与新1560片已加工片料及各自位置；按现场实物确认数量和入库类别。",
+    "需撤旧500片时，先在待生产取消其安排，再在来料实收记录撤回，最后在已报料明细撤销该行；核对新批次保持不变。",
+    "实际已送货、被订单预占、拆批混用或已确认供应商对账的记录，按提示先处理真实下游，不得越级撤销。",
+]
+APP_CHANGELOG = [*(f"v0.22.617：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
     "拿货应用、随货准备和发货合为一次完整提交；核对原版本与数量，任一步失败整体回滚。",
     "发货遇到断网、超时或异常回复后保留原内容，可查询原结果；取消后的迟到旧操作不会再次扣库。",
     "原内容已过期时可结束本次确认再重新核对；已经发货则显示原完成结果，不误作未执行。",
@@ -5995,4 +6008,4 @@ APP_VERIFICATION_STEPS = [
     "遇到连接异常时使用查原结果；需要重新核对数量时使用结束本次确认，确认原结果后再操作。",
     "核对现有BOM、外购包材和多货位送货仍按正确实物数量处理；真实打印由管理员现场验收。",
 ]
-APP_CHANGELOG = [*(f"v0.22.617：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+APP_CHANGELOG = [*(f"v0.22.618：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

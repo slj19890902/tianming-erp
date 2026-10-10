@@ -2994,7 +2994,10 @@ def test_unified_stock_purchase_reported_receipt_progress_and_reversal_gate(
         for receipt_id in reversed(receipt_ids):
             reverted = client.put(f'/api/incoming/receipt-items/{receipt_id}/revert', json={})
             assert reverted.status_code == 409, reverted.text
-            assert '受控库存调整' in reverted.json()['detail']
+            # The real automatic production reservation still blocks receipt
+            # reversal until its explicit cancellation, rather than all stock
+            # receipts being rejected just because they are replenishment.
+            assert any(text in reverted.json()['detail'] for text in ('生产安排', '最新一笔'))
         assert reported_status() == '已入库'
 
 

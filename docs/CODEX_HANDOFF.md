@@ -6192,3 +6192,5 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 - 2026-10-09 COMPANY-SEAL：v0.22.590 / 853dcfe27f482d74a420d051b18bdee353ca5a81 / el1009cp已技术发布，章归属开单公司；三张新增表、原317表事实与原章保持，company_profiles_v1阻止旧程序越界回退。NAS冷备/事实/健康/静态核对通过，待管理员验收；未push，旧远端不能覆盖正式。见docs/reports/COMPANY_SEAL_20261009.md及NAS回执20261009-公司抬头与电子章-v590.md。
 
 - 2026-10-10 HOME-PRODUCT-WORKBENCH：v0.22.605 / f816611cecc2c2152ace1633695abc472d512e57 / en1009hp 已技术发布，包 0e77d74013666d964e68237940e319de6ea17e843fe09d8e7b60ded0d9e53f49。首页客户队列及电脑/手机产品双向检索；无DDL和业务补正，已完成新NAS冷备真实隔离恢复、原事实、健康及静态核对。见 docs/release_reports/HOME_PRODUCT_WORKBENCH_V605_20261010.md 和NAS同名独立回执；待管理员页面验收。
+
+- 2026-10-10 STOCK-REPLENISHMENT-SAVE-RECOVERY：v0.22.614 / 5be5273f93522a90df2a5f5e23b3a42dacf6d368 / eo1010pi技术发布，保留v613快照reader，无新迁移和业务补数。真实NAS冷备恢复及原事实/资源通过；未push，远端13e93766不能覆盖当前正式。见docs/reports/STOCK_REPLENISHMENT_SAVE_RECOVERY_RELEASE_20261010.md，现场验收pending。

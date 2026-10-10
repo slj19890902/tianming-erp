@@ -260,6 +260,16 @@ def consumption_proven(receipt, payload):
     try:
         expected={r['delivery_item_id']:r for r in payload.snapshot['expected_final_items'] if r['physical_quantity']>0}
         originals={r['delivery_item_id']:r for r in payload.snapshot['items']}
+        final_rows={r['delivery_item_id']:r for r in receipt['final_items']}
+        def physical_factor(key):
+            row=final_rows[key[0]]
+            # Ordinary order reservation credit is in customer units. Use
+            # only the two quantities confirmed by the original snapshot;
+            # components, subkits and unordered stock already use their own
+            # frozen demand units and must not inherit this parent ratio.
+            if row['source_type']=='order' and key[1] is None and key[2]==row['source_product_id']:
+                return Fraction(row['physical_quantity'],row['customer_quantity'])
+            return Fraction(1)
         required={};actual={};semi={}
         for row in receipt['final_items']:
             confirmed=expected[row['delivery_item_id']]['goods']
@@ -279,7 +289,7 @@ def consumption_proven(receipt, payload):
                 semi_key=(key,movement['semi_requirement_id'])
                 semi[semi_key]=semi.get(semi_key,Fraction(0))+credit
             elif movement['source_kind'] in {'inventory','subkit'}:
-                actual[key]=actual.get(key,Fraction(0))+credit
+                actual[key]=actual.get(key,Fraction(0))+credit*physical_factor(key)
             else:return False
         for key in {row[0] for row in semi}:
             definitions=originals[key[0]]['semi_requirements']
@@ -287,12 +297,20 @@ def consumption_proven(receipt, payload):
             # Each material component contributes the same parent coverage;
             # summing lid/body pieces would count one parent twice.
             coverage=min(semi.get((key,d['requirement_id']),Fraction(0))/d['pieces_per_box'] for d in definitions)
-            actual[key]=actual.get(key,Fraction(0))+coverage
+            actual[key]=actual.get(key,Fraction(0))+coverage*physical_factor(key)
+        allocation_ids=set()
         for allocation in receipt['direct_component_allocations']:
+            if allocation['allocation_id'] in allocation_ids:return False
+            allocation_ids.add(allocation['allocation_id'])
             matches=[key for key in required if key[0]==allocation['delivery_item_id'] and key[1]==allocation['component_snapshot_id']]
             if len(matches)!=1:return False
             key=matches[0];actual[key]=actual.get(key,Fraction(0))+allocation['physical_quantity']
+        covered_items=set()
         for direct in receipt['direct_completion_coverage']:
+            if direct['delivery_item_id'] in covered_items:return False
+            covered_items.add(direct['delivery_item_id'])
+            sources=direct['completion_sources']
+            if len({r['completion_id'] for r in sources})!=len(sources):return False
             original=originals[direct['delivery_item_id']]
             if (direct['completion_sources']!=original['direct_completion_sources'] or direct['delivered_before']!=original['order_delivered_quantity']
                     or direct['order_item_id']!=original['order_item_id'] or direct['source_product_id']!=original['source_product_id']
@@ -301,7 +319,7 @@ def consumption_proven(receipt, payload):
                     or direct['credited_quantity']>direct['available_before']):return False
             key=(direct['delivery_item_id'],None,direct['source_product_id'])
             if key not in required:return False
-            actual[key]=actual.get(key,Fraction(0))+direct['credited_quantity']
+            actual[key]=actual.get(key,Fraction(0))+direct['credited_quantity']*physical_factor(key)
         return all(actual.get(key,Fraction(0))==amount for key,amount in required.items()) and not set(actual)-set(required)
     except (KeyError,TypeError,ValueError,ZeroDivisionError):
         return False
@@ -320,6 +338,8 @@ def _matched_record(db, delivery_id, payload, user, api):
         owner = db.get(Order, item.order_id) if item else None
         require_customer_access(owner.customer_id if owner else delivery.customer_id, user, db)
     require_customer_access(payload.snapshot.get('delivery',{}).get('customer_id'),user,db)
+    for original in payload.snapshot.get('items',[]):
+        require_customer_access(original.get('customer_id'),user,db)
     try:
         value=json.loads(record.response_json)
         if value.get('result') == 'closed':
@@ -472,7 +492,7 @@ def build_receipt(db,delivery_id,payload,user,api,first_movement_id):
         if before['direct_completion_sources'] and any(g['component_snapshot_id'] is None and g['source_product_id']==row['source_product_id'] for g in row['goods']):
             parent_credit=sum((Fraction(r['requirement_quantity'],r['requirement_denominator']) for r in facts
                 if r['delivery_item_id']==row['delivery_item_id'] and r['source_kind']=='inventory' and r['component_snapshot_id'] is None and r['requirement_product_id']==row['source_product_id']),Fraction(0))
-            missing=Fraction(row['physical_quantity'])-parent_credit
+            missing=Fraction(row['customer_quantity'])-parent_credit
             available=max(sum(r['direct_quantity'] for r in before['direct_completion_sources'])-before['order_delivered_quantity'],0)
             if missing>0 and missing.denominator==1 and missing<=available:
                 coverage.append(dict(delivery_item_id=row['delivery_item_id'],order_item_id=row['order_item_id'],source_product_id=row['source_product_id'],

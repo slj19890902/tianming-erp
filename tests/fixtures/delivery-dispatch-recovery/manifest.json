@@ -1,0 +1,160 @@
+{
+  "sourceCandidate": "5111aa0ff93760e235c5b05d83a4e5709f349839",
+  "origin": "isolated synthetic TestClient HTTP; no production data, auth cookies or tokens",
+  "files": [
+    {
+      "file": "normal.json",
+      "sha256": "b387fa8415d3668a5e7cdb16826e5d412c72bb504831bf03f31c28b9afab74ee",
+      "fixtureNode": "tests.test_delivery_dispatch_commands::test_complete_replay_cancel_and_old_version_are_distinct",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "order-dual.json",
+      "sha256": "0a7f85c0ce56aa7c31f5bc625671eafe6160a168770d22bbc73cd7cf5882d8e0",
+      "fixtureNode": "tests.test_delivery_dispatch_revision_compat::test_order_finished_reservation_dual_quantity_credit",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "pick-apply.json",
+      "sha256": "9b7bbe25fd9f01be1ab1d9bb22a51d14479438f1ebac22d89d82ec253908ace5",
+      "fixtureNode": "tests.test_delivery_dispatch_commands::test_atomic_pick_apply_failure_restores_original_task",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "accompany.json",
+      "sha256": "5c789a7aa642176624be63cbbbfbf62b969b4366a3a0fb2c6f479b2d1d9625ac",
+      "fixtureNode": "tests.test_delivery_dispatch_revision_compat::test_frozen_accompany_source_conservation",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "unordered-dual.json",
+      "sha256": "cec480bb0c039a4d146dd20061f2763f7b91c6d007f653c79958d6e29c4e25ec",
+      "fixtureNode": "tests.test_delivery_dispatch_revision_compat::test_external_receipt_unordered_dual_quantity_command",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "subkit.json",
+      "sha256": "2dbb1d8f1eeb8f55595121509542c65b8a595bc20353bbffb20d6f4408f4da6a",
+      "fixtureNode": "tests.test_delivery_dispatch_revision_compat::test_frozen_subkit_source_conservation",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "legacy-semi.json",
+      "sha256": "3c945bd7bd9be8f310636388902204dd4e9c30837612b17694f8aef5250ebff9",
+      "fixtureNode": "tests.test_delivery_dispatch_revision_compat::test_legacy_liner_semi_consumption_conservation",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "ordinary-direct.json",
+      "sha256": "60096fb865fb9acd84aa1714f8baedbc57e364fcb80b704f968332c9e5f93ce2",
+      "fixtureNode": "tests.test_delivery_dispatch_revision_compat::test_ordinary_historical_direct_completion_coverage",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "component-direct.json",
+      "sha256": "226dc1cdeb35d832395a2aa29edc8feb4dcabc0d1d7862bc0c99ddd8b9db808b",
+      "fixtureNode": "tests.test_delivery_dispatch_revision_compat::test_composite_direct_only_completion_conservation",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "close-wins.json",
+      "sha256": "176249c41473aa8ec4b2899c4a9ee89b3d7a15b2ac528d071e647f1104b43121",
+      "fixtureNode": "tests.test_delivery_dispatch_commands::test_close_wins_then_late_execute_never_consumes",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "execute-wins-close.json",
+      "sha256": "bed26fced0e44c385b0c64ee94ff17d414ca7e28d540b5fb1d0ad6109a25526b",
+      "fixtureNode": "tests.test_delivery_dispatch_commands::test_execute_wins_then_close_keeps_original_completion",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "close-committed-ack-loss.json",
+      "sha256": "4008e7250391e4b786857031f402969fb73e5aa8694980b43ae052fc9ef330a9",
+      "fixtureNode": "tests.test_delivery_dispatch_commands::test_close_failure_and_committed_ack_loss_then_new_confirmation",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "committed-ack-loss.json",
+      "sha256": "191f86f5c31ff26ac72fe9daa352f86d625f6abc097a8c73a7b0a20caac37753",
+      "fixtureNode": "tests.test_delivery_dispatch_commands::test_committed_ack_loss_and_readonly_result",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    },
+    {
+      "file": "zero-component.json",
+      "sha256": "d7c46fd7399f7813ca2bf66df8667dac819a3059536425494b9dcf448068150e",
+      "fixtureExplanation": "原10套/A每套2/B每套3；持久需求调整A20→2、B30不变；真实首发1套消耗A2/B3；第二1套A需求已满为0/B3，父件始终1。",
+      "sourceHashes": {
+        "app/api/deliveries.py": "eef98bbe1c328ca5f54257d0b8d3d11cff27f4230928a51c42bfc98816983fcf",
+        "app/services/delivery_dispatch_commands.py": "e9e947f36d68b39ffe8b432f701f9dadd30ae8c2f9e68b29e6c26ca0af0a0f17",
+        "tests/test_delivery_dispatch_commands.py": "cdf4f8e921cdb1198e36d31cc4edc25935b40f57dd6eace9d745461085fd03e1",
+        "tests/test_delivery_dispatch_revision_compat.py": "60e00ee2e67dfb1ac3725a551bfc940b9e4b8cc3ef4bfa7b6462b1527dfcc28c"
+      }
+    }
+  ]
+}

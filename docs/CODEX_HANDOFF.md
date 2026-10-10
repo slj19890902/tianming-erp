@@ -1,3 +1,7 @@
+## 2026-10-10 发货整次提交与原结果核对 v0.22.619
+
+签名源码 ae89b827、包 b450abd4，保留正式 v618，eo1010pi 无迁移。整次拿货/配套/发货同事务、冻结原结果、只读恢复及原请求安全结束已发布；API 24 个不同节点、UI 49 项、助手/独审通过，新冷备实际恢复及 325 表/2,982 原文件保持、健康资源和 NAS feed 通过。delivery_dispatch_v1 已激活，旧不兼容程序禁止回退，previous=null；激活两写中断只允许核验后向前修复。发布包装脚本路径类型错误已修正并正常启动，无旧库回写。按老板统一收尾授权同步 Git 正式基线，最终 SHA 见 NAS 与 dispatch-status.json；待人工验收，草稿/取消自身恢复后续。详见 docs/reports/DELIVERY_ATOMIC_DISPATCH_20261010.md 与 NAS 同名 v619 回执。
+
 ## 2026-10-10 周需求库存与简易报料条单 v0.22.618
 
 正式65004e46、包4d62da10，承接v617；eo1010pi无迁移，无业务补正。周需求导入、统一库存结余/具体货位、十二列裁切条单已发布，NAS/Git同步；冷备真实恢复与健康资源通过，待管理员人工验收。80012753多模具事实未猜测补写。详见docs/release_reports/WEEKLY_DEMAND_V618_20261010.md及NAS同名v618回执。
@@ -6196,6 +6200,8 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 - 2026-10-09 COMPANY-SEAL：v0.22.590 / 853dcfe27f482d74a420d051b18bdee353ca5a81 / el1009cp已技术发布，章归属开单公司；三张新增表、原317表事实与原章保持，company_profiles_v1阻止旧程序越界回退。NAS冷备/事实/健康/静态核对通过，待管理员验收；未push，旧远端不能覆盖正式。见docs/reports/COMPANY_SEAL_20261009.md及NAS回执20261009-公司抬头与电子章-v590.md。
 
 - 2026-10-10 HOME-PRODUCT-WORKBENCH：v0.22.605 / f816611cecc2c2152ace1633695abc472d512e57 / en1009hp 已技术发布，包 0e77d74013666d964e68237940e319de6ea17e843fe09d8e7b60ded0d9e53f49。首页客户队列及电脑/手机产品双向检索；无DDL和业务补正，已完成新NAS冷备真实隔离恢复、原事实、健康及静态核对。见 docs/release_reports/HOME_PRODUCT_WORKBENCH_V605_20261010.md 和NAS同名独立回执；待管理员页面验收。
+
+- 2026-10-10 STOCK-REPLENISHMENT-SAVE-RECOVERY：v0.22.614 / 5be5273f93522a90df2a5f5e23b3a42dacf6d368 / eo1010pi技术发布，保留v613快照reader，无新迁移和业务补数。真实NAS冷备恢复及原事实/资源通过；未push，远端13e93766不能覆盖当前正式。见docs/reports/STOCK_REPLENISHMENT_SAVE_RECOVERY_RELEASE_20261010.md，现场验收pending。
 
 - 2026-10-10 MOBILE-FIELD-SEARCH：v0.22.615 / 5b726452cac0709259e74b520b95e3364f7ddf05 / eo1010pi已技术发布，包c9b4c3a52477；承接v614，来源编码、手机现场查询与移库追溯，无迁移或业务回填。NAS冷备真实隔离恢复、原事实/附件、健康与资源核对通过；见docs/release_reports/MOBILE_FIELD_SEARCH_V615_20261010.md及NAS独立回执，待管理员人工验收。
 

@@ -102,7 +102,9 @@ def main():
                       'app/services/stock_preparation_assembly.py',
                       'app/services/quotation_mutations.py', 'app/api/quotations.py',
                       'app/services/shared_finished_stock.py', 'app/models/shared_finished_stock.py',
-                      'app/services/shared_finished_management.py', 'app/services/shared_finished_receipts.py'}
+                      'app/services/shared_finished_management.py', 'app/services/shared_finished_receipts.py',
+                      'app/services/delivery_dispatch_commands.py',
+                      'desktop_assistant/delivery_dispatch_contract.py'}
     if not reader_sources <= sources.keys():
         raise ValueError('库存业务读取契约的实现不完整，禁止签名发布')
     schema_contract = schema_contract_from_sources(sources, args.revision)
@@ -152,7 +154,9 @@ def main():
                                                     'shared_finished_management_v1': 1,
                                                     'contract_seal_v1': 1,
                                                     'company_profiles_v1': 1, 'shared_bom_v1': 1,
-                                                    'stock_purchase_identity_v1': 1, 'unused_mold_deletion_v1': 1},
+                                                    'stock_purchase_identity_v1': 1,
+                                                    'delivery_dispatch_v1': 1,
+                                                    'unused_mold_deletion_v1': 1},
                             'offline_ocr_models': models}, key)
     if args.package_only:
         write_json(output / 'build-result.json', {'git_sha': code_sha, 'version': args.version,

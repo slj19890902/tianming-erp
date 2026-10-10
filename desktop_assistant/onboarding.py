@@ -145,6 +145,7 @@ def onboard(manager, source, package, password, nas):
         except (ValueError, OSError) as error:
             raise ValueError(str(error) + '；尚未停服') from None
         release = manager.stage_release(package)
+        _check_dispatch_onboarding(manager, release['id'])
         check_source_version(source, release)
         release_root = manager.root / 'releases' / release['id']
         database = source / 'data/carton_erp.sqlite3'
@@ -170,7 +171,13 @@ def onboard(manager, source, package, password, nas):
         return _finish_locked(manager, password, nas)
 
 
+def _check_dispatch_onboarding(manager, release):
+    if manager._dispatch_reader(release):
+        raise ValueError('此发货保护更新包不能用于旧系统首次接入，未启动接管；已接入请使用“更新”，新机器请使用已验证的完整备份“恢复”。旧系统首次接入需使用兼容接入方案后再升级')
+
+
 def _finish_locked(manager, password, nas):
+    _check_dispatch_onboarding(manager, manager.state['current'])
     _check_nas(password, nas)
     source = Path(manager.state['imported_source'])
     # Never resume a stale copied ledger after the original has been used again.

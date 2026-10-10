@@ -1,0 +1,75 @@
+{
+  "sourceCandidate": "650dabf49a212d55f1cec0292d392c560dca3468",
+  "sourceSHA256": {
+    "app/api/requisition.py": "7217f8a457a5ef8d2f9be06ceb1e423cdbf64c4b7f5f87f2066ead2f68bea5d3",
+    "app/services/stock_replenishment_save_recovery.py": "93d28242e2bde1bf824dada09d6ddbc11fc1a52774ec52efc474f27a8b11be54"
+  },
+  "originalBody": {
+    "idempotency_key": "http-plain",
+    "source_type": "customer_request",
+    "supplier_name": "苏州佳丰",
+    "customer_id": 1,
+    "stock_now": false,
+    "items": [
+      {
+        "target_inventory_type": "semi_finished",
+        "customer_id": 1,
+        "product_id": 1,
+        "material_id": 1,
+        "material_code": "A416D",
+        "layer_count": 5,
+        "flute_type": "AB",
+        "report_length_mm": 1865,
+        "report_width_mm": 830,
+        "crease_type": "压线",
+        "crease_left_mm": 335,
+        "crease_middle_mm": 160,
+        "crease_right_mm": 335,
+        "sheet_type": "creased_sheet",
+        "quantity": 30,
+        "location_id": 2
+      }
+    ],
+    "expected_actor_id": 1
+  },
+  "actorId": 1,
+  "resolve": {
+    "status": 200,
+    "headers": {
+      "content-length": "518",
+      "content-type": "application/json",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "status": "trace",
+      "current_actor_id": 1,
+      "idempotency_key": "http-plain",
+      "request_match": false,
+      "save_receipt": null,
+      "current": {
+        "source_id": 1,
+        "status": "draft",
+        "stocked_quantity": 0,
+        "items": [
+          {
+            "source_item_id": 1,
+            "stocked_quantity": 0,
+            "receipt_progress": {
+              "received_quantity": 0,
+              "remaining_quantity": 30,
+              "short_closed": false,
+              "shortage_quantity": 30,
+              "over_quantity": 0
+            }
+          }
+        ],
+        "external_purchase_status": null
+      },
+      "trace": {
+        "source_id": 1,
+        "order_number": "CBR-20261010-A1D74C4EAF35C98BA4CA",
+        "url": "/api/requisition/stock-replenishment/orders/1"
+      }
+    }
+  }
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from datetime import datetime
 import json
 
 import fitz
@@ -337,3 +338,53 @@ def test_published_sources_match_current_product_customer_version_and_metadata_q
         _login(client, "mobile-admin")
         response = client.get(f'/api/mobile/erp/products/{ids["product_two"]}/drawings/{release_key}/preview')
         assert response.status_code == 404  # Frozen tasks retain their separate release URL.
+
+
+def test_all_uploaded_engineering_drawings_are_listed_and_individually_readable(drawing_app, monkeypatch):
+    app, ids, factory, root = drawing_app
+    with factory() as db:
+        original = db.get(ProductDrawing, ids["attachment"])
+        original.uploaded_at = datetime(2026, 10, 1, 9)
+        # Two uploads at the same time still have a stable order; a missing
+        # newest file must not hide the earlier, valid engineering drawings.
+        pdf = ProductDrawing(product_id=ids["product"], image_path="private:engineering.pdf",
+                             thumbnail_path="private:engineering.pdf", uploaded_at=datetime(2026, 10, 2, 9))
+        missing = ProductDrawing(product_id=ids["product"], image_path="private:missing.png",
+                                 thumbnail_path="private:missing.png", uploaded_at=datetime(2026, 10, 2, 9))
+        db.add_all([pdf, missing])
+        db.commit()
+        expected = [f"attachment-{missing.id}", f"attachment-{pdf.id}", f"attachment-{original.id}"]
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        with monkeypatch.context() as patch:
+            patch.setattr(drawings, "resolve_stored_reference", lambda *_: pytest.fail("Metadata opened a file"))
+            product = client.get(f'/api/mobile/erp/products/{ids["product"]}/inventory').json()["product"]
+            items = product["drawings"]["items"]
+            assert [item["id"] for item in items] == expected
+            assert [item["uploaded_at"] for item in items] == ["2026-10-02T09:00:00Z", "2026-10-02T09:00:00Z", "2026-10-01T09:00:00Z"]
+            assert "private:" not in json.dumps(product)
+        assert client.get(items[0]["preview_url"]).status_code == 404
+        for item in items[1:]:
+            assert client.get(item["preview_url"]).status_code == 200
+            assert client.get(item["original_url"]).status_code == 200
+        # All upload records survive a missing file and preview failures.
+        assert len(client.get(f'/api/mobile/erp/products/{ids["product"]}/inventory').json()["product"]["drawings"]["items"]) == 3
+        overview = client.get(f'/api/mobile/erp/products/{ids["product"]}/production-overview')
+        assert overview.status_code == 200, overview.text
+        assert [item["id"] for item in overview.json()["product"]["drawings"]["items"]] == expected
+    with factory() as db:
+        user = db.scalar(select(User).where(User.username == "mobile-admin"))
+        denied = drawings.product_drawing_metadata(db, [ids["product"]], user=user, visible_customer_ids=[])
+        assert denied[ids["product"]] == {"status": "none", "items": []}
+        assert db.get(Product, ids["product"]).version == 1
+
+
+def test_uploaded_history_does_not_duplicate_legacy_pointer_or_include_print_artwork(drawing_app):
+    app, ids, factory, _ = drawing_app
+    with factory() as db:
+        db.get(Product, ids["product"]).die_cut_path = "private:engineering.png"
+        db.commit()
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        product = client.get(f'/api/mobile/erp/products/{ids["product"]}/inventory').json()["product"]
+        assert [item["id"] for item in product["drawings"]["items"]] == [f'attachment-{ids["attachment"]}']

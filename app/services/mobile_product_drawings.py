@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 import math
 from pathlib import Path
@@ -13,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import has_permission
+from app.core.time_contract import utc_naive_to_api
 from app.models.customer import Customer
 from app.models.drawing_design import DrawingRelease
 from app.models.product import Product
@@ -45,12 +47,16 @@ class DrawingSource:
     reference: str
     name: str = "产品工程图纸"
     thumbnail: str | None = None
+    uploaded_at: datetime | None = None
 
     def public(self, product_id: int) -> dict:
         base = f"/api/mobile/erp/products/{product_id}/drawings/{self.key}"
-        return {"id": self.key, "name": self.name,
+        item = {"id": self.key, "name": self.name,
                 "kind": "pdf" if Path(self.reference).suffix.lower() == ".pdf" else "image",
                 "preview_url": base + "/preview", "original_url": base + "/original"}
+        if self.uploaded_at is not None:
+            item["uploaded_at"] = utc_naive_to_api(self.uploaded_at)
+        return item
 
 
 def _engineering_reference(reference: str | None) -> bool:
@@ -72,14 +78,18 @@ def product_drawing_metadata(db: Session, product_ids, *, user, visible_customer
     products = {p.id: p for p in db.scalars(statement)}
     if not products:
         return result
-    # Rank in SQL so one page never loads a product's whole attachment history.
-    ranked = select(ProductDrawing.id.label("id"), func.row_number().over(
-        partition_by=ProductDrawing.product_id,
-        order_by=(ProductDrawing.uploaded_at.desc(), ProductDrawing.id.desc())).label("rank")
-    ).where(ProductDrawing.product_id.in_(products), engineering_drawing_condition()).subquery()
-    sources = {d.product_id: DrawingSource(f"attachment-{d.id}", d.image_path, thumbnail=d.thumbnail_path)
-               for d in db.scalars(select(ProductDrawing).join(ranked, ranked.c.id == ProductDrawing.id)
-                                   .where(ranked.c.rank == 1)) if _engineering_reference(d.image_path)}
+    # Uploads are separate engineering attachments, not replacements. Return
+    # every retained upload, in stable newest-first order, without opening files.
+    # Product/customer filtering happens before attachment metadata is read.
+    sources: dict[int, list[DrawingSource]] = {}
+    attachments = select(ProductDrawing).where(ProductDrawing.product_id.in_(products),
+        engineering_drawing_condition()).order_by(ProductDrawing.product_id,
+        ProductDrawing.uploaded_at.desc(), ProductDrawing.id.desc())
+    for drawing in db.scalars(attachments):
+        if _engineering_reference(drawing.image_path):
+            sources.setdefault(drawing.product_id, []).append(DrawingSource(
+                f"attachment-{drawing.id}", drawing.image_path,
+                thumbnail=drawing.thumbnail_path, uploaded_at=drawing.uploaded_at))
     released = select(DrawingRelease.id.label("id"), func.row_number().over(
         partition_by=DrawingRelease.product_id, order_by=DrawingRelease.id.desc()).label("rank")
     ).join(Product, Product.id == DrawingRelease.product_id).where(
@@ -88,14 +98,14 @@ def product_drawing_metadata(db: Session, product_ids, *, user, visible_customer
     for release in db.scalars(select(DrawingRelease).join(released, released.c.id == DrawingRelease.id)
                               .where(released.c.rank == 1)):
         if _engineering_reference(release.pdf_reference):
-            sources.setdefault(release.product_id, DrawingSource(f"release-{release.id}", release.pdf_reference,
-                               f"已发布产品图纸 {release.revision}"))
+            sources.setdefault(release.product_id, [DrawingSource(f"release-{release.id}", release.pdf_reference,
+                               f"已发布产品图纸 {release.revision}")])
     for product in products.values():
-        source = sources.get(product.id)
-        if source is None and _engineering_reference(product.die_cut_path):
-            source = DrawingSource("legacy", product.die_cut_path)
-        if source:
-            result[product.id] = {"status": "available", "items": [source.public(product.id)]}
+        product_sources = sources.get(product.id)
+        if product_sources is None and _engineering_reference(product.die_cut_path):
+            product_sources = [DrawingSource("legacy", product.die_cut_path)]
+        if product_sources:
+            result[product.id] = {"status": "available", "items": [source.public(product.id) for source in product_sources]}
     return result
 
 

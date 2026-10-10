@@ -76,6 +76,13 @@ def test_receipt_generation_failure_rolls_back_then_fresh_rejection(stock_replen
         assert failed.status_code == 500
         assert counts(factory) == before
         assert resolve(client, original).json()['status'] == 'not_recorded'
+        with monkeypatch.context() as patch:
+            patch.setattr(requisition.save_recovery, 'build_receipt', lambda *args: None)
+            missing = client.post(PATH, json=body('save-proof-missing'))
+        assert missing.status_code == 500
+        assert missing.headers.get('x-stock-replenishment-preserve') == '1'
+        assert 'x-stock-replenishment-rejected' not in missing.headers
+        assert counts(factory) == before
         invalid = body('save-safe-rejected'); invalid['items'][0]['material_id'] = 99999
         rejected = client.post(PATH, json=invalid)
         assert rejected.status_code in (400, 404, 409)
@@ -310,3 +317,40 @@ def test_authoritative_material_mapping_and_existing_precision_gate(mapping, sto
         if mapping=='material_layer':
             assert receipt['request']['items'][0]['layer_count']==3
             assert receipt['lines'][0]['layer_count']==5
+
+
+def seed_two_component_plan(factory):
+    from app.models.stock_replenishment import InventoryStockPolicy
+    from app.models.product_bom import ProductBomComponent
+    with factory() as db:
+        original=db.get(Product,1)
+        second=Product(customer_id=1,product_code='RECOVERY-BOM-CHILD',customer_material_code='RECOVERY-BOM-CHILD',product_name='合成BOM第二子件',box_category='normal')
+        for field in ('material_id','legacy_material_text','length_mm','width_mm','height_mm','flute_type','layer_count','report_length_mm','report_width_mm','crease_type','crease_left_mm','crease_middle_mm','crease_right_mm'):
+            setattr(second,field,getattr(original,field))
+        parent=Product(customer_id=1,product_code='RECOVERY-BOM-PARENT',customer_material_code='RECOVERY-BOM-PARENT',product_name='合成两子件套件',box_category='normal',is_composite=True,is_virtual_composite_parent=True,unit='套')
+        db.add_all([second,parent]);db.flush()
+        db.add_all([ProductBomComponent(parent_product_id=parent.id,component_product_id=original.id,quantity_per_set=1,display_order=1,internal_component_code='RECOVERY-ONE'),ProductBomComponent(parent_product_id=parent.id,component_product_id=second.id,quantity_per_set=2,display_order=2,internal_component_code='RECOVERY-TWO')])
+        policy=InventoryStockPolicy(policy_name='合成两子件预警',target_inventory_type='finished',product_id=parent.id,customer_id=1,warning_quantity=10,target_quantity=50)
+        db.add(policy);db.flush();policy_id=policy.id;db.commit()
+        return policy_id
+
+
+def test_bom_plan_source_contract_is_not_physical_namespace(stock_replenishment_app):
+    app,factory=stock_replenishment_app;policy=seed_two_component_plan(factory)
+    with TestClient(app) as client:
+        login(client)
+        preview=client.get(f'/api/requisition/stock-policies/{policy}/replenishment-draft',params={'finished_quantity':4})
+        assert preview.status_code==200 and preview.json()['draft_ready'],preview.text
+        original={**preview.json(),'idempotency_key':'save-bom-plan','expected_actor_id':1}
+        original['items']=[dict(row,reference_product_id=row['product_id'],product_id=None,location_id=None) for row in original['items']]
+        saved=client.post(PATH,json=original);assert saved.status_code==201,saved.text
+        receipt=saved.json()['save_receipt'];assert receipt is not None
+        assert len(receipt['lines'])==2 and [line['saved_quantity'] for line in receipt['lines']]==[4,8]
+        assert all(item['replenishment_plan']['kind']=='bom_stock_plan' and item['quantity_contract'] is None for item in saved.json()['items'])
+        with factory() as db:
+            import json
+            row=db.get(StockReplenishmentOrder,saved.json()['id'])
+            assert all(json.loads(item.quantity_contract_json)['kind']=='bom_stock_plan' for item in row.items)
+        before=counts(factory);found=resolve(client,original)
+        assert found.status_code==200 and found.json()['save_receipt']==receipt
+        assert counts(factory)==before

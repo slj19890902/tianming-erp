@@ -16017,7 +16017,7 @@ def create_stock_replenishment_order(
         db.info.pop("stock_save_recovery_guard", None)
 
 
-def _stock_save_response(db, order, payload, user):
+def _stock_save_response(db, order, payload, user, *, require_complete=False):
     save_recovery.require_source_scope(db, order, _allowed_customer_ids(user, db))
     batch = save_recovery.external_batch(db, order)
     if batch is not None:
@@ -16025,6 +16025,8 @@ def _stock_save_response(db, order, payload, user):
     response = _replenishment_order_response(db, order) if batch else replenishment_order_dict(order, db=db)
     response["current_actor_id"] = user.id
     response["save_receipt"] = save_recovery.build_receipt(db, order, payload, user.id)
+    if require_complete and response["save_receipt"] is None:
+        raise RuntimeError("Fresh replenishment receipt could not be proved")
     return response
 
 
@@ -16260,7 +16262,7 @@ def _create_stock_replenishment_order_impl(payload, db, user):
             )
             _require_stock_replenishment_order_access(db, order, user)
             db.flush()
-            response = _stock_save_response(db, order, payload, user)
+            response = _stock_save_response(db, order, payload, user, require_complete=True)
             _commit_stock_save(db)
             return response
         validated_bom_plans = {}
@@ -16527,7 +16529,7 @@ def _create_stock_replenishment_order_impl(payload, db, user):
         db.flush()
         if payload.stock_now:
             stock_replenishment_order(db, order=order, operator_id=user.id)
-        response = _stock_save_response(db, order, payload, user)
+        response = _stock_save_response(db, order, payload, user, require_complete=True)
         _commit_stock_save(db)
         return response
     except IntegrityError:

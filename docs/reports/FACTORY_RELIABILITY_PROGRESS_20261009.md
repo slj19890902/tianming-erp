@@ -58,3 +58,5 @@
 2026-10-10 v604技术发布完成，待管理员人工验收。整组dispose原请求持久保存、父首次INSERT冻结证明和只读恢复；同组group_stock后续入口保护，多job/少套余片及原单位规则保留。源75129569ed5ff0bf454d075471c9b4fd902b070f，包077c2cde0a2d54932987baa2a960aa5934f66dfb17194b273bd21051e9fa6081，en1009hp无迁移。根整组UI57、原single49、真实HTTP及独立复核通过；冷备恢复、323表/附件保持、健康/资源通过。此前Chrome/旧PID审批拒绝未绕过，现场pending；历史入口限制、手机永久结束reader/回退门禁仍保留。Goal active。
 
 2026-10-10 v604后下一GROUP_ASSEMBLY_SAVE_RECOVERY_AUDIT_20261010已启动，只读审实际group_stock/assemble保存、数量/幂等/回滚及未知恢复。API固定4d、UI固定e578并先核与正式751受影响源等价，仅artifact探针，无源码/正式写；完整报告后由根先定最小方案再实施。原dispose闭环已发布，不混称其余组套动作已修复。持续Goal active。
+
+2026-10-10 v606技术发布完成，待管理员人工验收。独立子件组套原请求持久保存、完整不可变证明和只读恢复；耗尽成员、连续组套余额及原单位保留。源4b66fc4c104cf49bc48b065c20b5aeed17f9403a，包f863ced8beebe2968263f409af2c8beb6a7fe58c6d4bf8c56ff3e4a8b83c912d，en1009hp无迁移。API24+相邻5、独立API2、根UI组套54/整组57/单项49及独立最终复核通过；冷备恢复、323表/附件保持、健康/资源通过。此前Chrome/旧PID审批拒绝未绕过，现场pending；历史入口限制、手机永久结束reader/回退门禁仍保留。Goal active。

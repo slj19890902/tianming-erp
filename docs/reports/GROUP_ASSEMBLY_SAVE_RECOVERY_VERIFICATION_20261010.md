@@ -28,3 +28,5 @@ index交集逐行审查，仅新增组套恢复script/卡片/重试通道/instal
 管理员只需在实际业务中打开已有待核对组套，点“查原组套结果”，核对原套数、成套位置及本次余片。无需额外创建真实组套进行验收。
 
 证据：D:/.codex/visualizations/2026/10/10/group-assembly-save-recovery-fix；根合并/发布证据：D:/.codex/visualizations/2026/10/10/group-assembly-recovery-release-v606。
+
+v606技术发布完成，待管理员人工验收。源4b66fc4c104cf49bc48b065c20b5aeed17f9403a，包f863ced8beebe2968263f409af2c8beb6a7fe58c6d4bf8c56ff3e4a8b83c912d；正式/NAS一致，备份恢复、业务和附件保持、健康/资源通过，详见FACTORY_RELIABILITY_RELEASE_V606_20261010.md。

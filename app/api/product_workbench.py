@@ -155,10 +155,16 @@ def reverse_products(response: Response,
             raise HTTPException(422, "层数与所选批次登记事实不一致")
         from app.services.warehouse_goods import goods_profile
         profile = goods_profile(db, lot)
-        actual_state = "output_piece" if (profile or {}).get("output_piece") is True else (profile or {}).get("processing") or {
-            "raw_board": "raw", "creased_sheet": "creased"}.get(detail.sheet_type)
-        if actual_state == "cut":
+        processing = (profile or {}).get("processing")
+        if (profile or {}).get("output_piece") is True:
+            actual_state = "output_piece"
+        elif processing in {"cut", None, "raw"} and detail.sheet_type == "net_sheet":
             actual_state = "net_raw"
+        elif processing == "cut":
+            actual_state = "net_raw"
+        else:
+            actual_state = processing or {
+                "raw_board": "raw", "creased_sheet": "creased"}.get(detail.sheet_type)
         net_identity_unverified = actual_state == "raw" and processed_state == "net_raw"
         if actual_state and actual_state != processed_state and not (
                 actual_state == "net_raw" and processed_state == "raw") and not net_identity_unverified:

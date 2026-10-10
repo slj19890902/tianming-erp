@@ -295,9 +295,9 @@
           <nav class="home-tabs" aria-label="库存预警范围"><button v-for="(label,key) in {all:'全部',action:'需处理',arranged:'已安排',approval:'待审批'}" :key="key" :class="{active:vm.homeStockTab===key}" :aria-pressed="vm.homeStockTab===key" @click="vm.homeStockTab=key">{{label}} {{vm.homeStockCounts[key]}}</button></nav>
           <div class="home-queue">
             <div class="home-customer-head"><span>客户</span><span>需处理</span><span>已安排</span><span>待审批</span><span></span></div>
-            <article v-for="g in vm.homeStockGroupPage.rows" :key="g.id" class="home-customer-row" :class="{active:vm.homeSelectedCustomer===g.id}">
-              <div><strong>{{g.label}}</strong><small>{{g.rows.length}} 款预警</small></div><span class="amber">未安排{{g.action}}</span><span>已安排{{g.arranged}}</span><span>待审批{{g.approval}}</span><button class="home-button" @click="vm.homeChooseStockCustomer(g.id)">查看产品 ›</button>
-            </article>
+            <button v-for="g in vm.homeStockGroupPage.rows" :key="g.id" type="button" class="home-customer-row" :class="{active:vm.homeSelectedCustomer===g.id}" :aria-pressed="vm.homeSelectedCustomer===g.id" @click="vm.homeChooseStockCustomer(g.id)">
+              <span class="home-customer-name"><strong>{{g.label}}</strong><small>{{g.rows.length}} 款预警</small></span><span class="amber">未安排{{g.action}}</span><span>已安排{{g.arranged}}</span><span>待审批{{g.approval}}</span><span class="home-button">查看产品 ›</span>
+            </button>
             <div v-if="!vm.homeStockGroupPage.total" class="home-empty">当前范围暂无库存预警</div>
             <footer v-if="vm.homeStockGroupPage.pages>1" class="home-pagination"><span>共 {{vm.homeStockGroupPage.total}} 家客户 · {{vm.homeStockGroupPage.page}} / {{vm.homeStockGroupPage.pages}}</span><div><button :disabled="vm.homeStockGroupPage.page<=1" @click="vm.homeCustomerPage--">上一页</button><button :disabled="vm.homeStockGroupPage.page>=vm.homeStockGroupPage.pages" @click="vm.homeCustomerPage++">下一页</button></div></footer>
           </div>

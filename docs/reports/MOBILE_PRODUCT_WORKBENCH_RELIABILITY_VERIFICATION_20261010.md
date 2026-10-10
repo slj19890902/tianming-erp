@@ -17,3 +17,5 @@
 发布门禁：精确正式/远端CAS、签名、Manager新冷备独立恢复、重启前全部原表/共享文件保持、唯一head、完整性/FK、本机及LAN健康、4个相关静态资源与2个匿名只读拒绝。NAS发布源单独CAS核验。没有Git push和正式历史修正。
 
 证据目录D:/.codex/visualizations/2026/10/10/product-workbench-reliability-release-v607：root-api.xml、root-ui.json/tap、root-drawings.txt、candidate.json、validation.json及后续发布/备份/静态检查。原红绿和独立证据在相邻mobile-product-workbench-reliability下；报告已存NAS独立任务回执。
+
+v607技术发布完成，待管理员人工验收。源ef952a8d60d60683b167d2890c471d37a686aa42，包e576e9d0eb176ef619938e3ec603871b35476e0785eb6faa4d12cee18ddfb5c5；正式/NAS一致。备份恢复、原业务/附件保持、健康/资源通过。详见FACTORY_RELIABILITY_RELEASE_V607_20261010.md。

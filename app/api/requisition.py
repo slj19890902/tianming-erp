@@ -15738,6 +15738,24 @@ def _coalesce(value, fallback):
     return fallback if value in (None, "") else value
 
 
+def _legacy_or_external_replenishment_clause():
+    # Preserve physical-warning contracts; only direct external purchases gain proof.
+    from app.models.external_packaging_purchase import ExternalPackagingPurchaseBatch
+    external = select(ExternalPackagingPurchaseBatch.id).where(
+        ExternalPackagingPurchaseBatch.stock_replenishment_order_id == StockReplenishmentOrder.id
+    ).exists()
+    physical_contract = select(StockReplenishmentOrderItem.id).where(
+        StockReplenishmentOrderItem.replenishment_order_id == StockReplenishmentOrder.id,
+        StockReplenishmentOrderItem.quantity_contract_json.is_not(None),
+    ).exists()
+    return or_(StockReplenishmentOrder.request_hash.is_(None), and_(external, ~physical_contract))
+
+
+def _require_external_stock_replenishment_permission(user: User) -> None:
+    if user.role != "admin" or not has_permission(user, "cost.view"):
+        raise HTTPException(403, "外购包材备库会生成正式供应商采购单，仅管理员可确认。")
+
+
 def _build_replenishment_item(
     db: Session,
     payload: StockReplenishmentItemPayload,
@@ -15764,6 +15782,8 @@ def _build_replenishment_item(
     product = db.get(Product, reference_product_id) if reference_product_id else None
     if reference_product_id and (product is None or product.deleted_at is not None):
         raise StockReplenishmentError("补库明细产品不存在。", 404)
+    if product is not None and not product.is_active:
+        raise StockReplenishmentError("参考常用箱已停用，不能新增补库需求；请重新选择启用产品。", 409)
     policy_product = (
         db.get(Product, policy.product_id)
         if policy is not None and policy.product_id is not None
@@ -16072,6 +16092,8 @@ def create_stock_replenishment_order(
                 existing_external_purchase = (
                     external_stock_purchase_payload(db, existing_order) is not None
                 )
+                if existing_external_purchase:
+                    _require_external_stock_replenishment_permission(user)
                 if existing_external_purchase != requested_external_purchase:
                     raise StockReplenishmentError(
                         "同一防重复标识对应的补库类型已变化，请关闭后重新操作。",
@@ -16102,6 +16124,8 @@ def create_stock_replenishment_order(
                     finished_quantity=int(replay_item.quantity),
                     purchase_quantity=replay_item.external_purchase_quantity,
                     idempotency_key=payload.idempotency_key,
+                    user=user,
+                    request_hash=request_hash,
                 )
                 if replayed_order is None:
                     raise StockReplenishmentError(
@@ -16131,11 +16155,7 @@ def create_stock_replenishment_order(
             ):
                 external_lines.append((raw_item, referenced_product))
         if external_lines:
-            if user.role != "admin" or not has_permission(user, "cost.view"):
-                raise HTTPException(
-                    status_code=403,
-                    detail="外购包材备库会生成正式供应商采购单，仅管理员可确认。",
-                )
+            _require_external_stock_replenishment_permission(user)
             if payload.source_type != "stock_warning":
                 raise StockReplenishmentError(
                     "无订单外购包材备库只能从已启用的库存预警发起。", 409
@@ -16185,6 +16205,7 @@ def create_stock_replenishment_order(
                 idempotency_key=payload.idempotency_key,
                 remark=payload.remark or external_item.remark,
                 user=user,
+                request_hash=request_hash,
             )
             _require_stock_replenishment_order_access(db, order, user)
             commit_business_change(db)
@@ -16492,6 +16513,8 @@ def create_stock_replenishment_order(
                 existing_external_purchase = (
                     external_stock_purchase_payload(db, existing_order) is not None
                 )
+                if existing_external_purchase:
+                    _require_external_stock_replenishment_permission(user)
                 if existing_external_purchase != requested_external_purchase:
                     raise HTTPException(
                         status_code=409,
@@ -16530,6 +16553,8 @@ def create_stock_replenishment_order(
                                     external_item.external_purchase_quantity
                                 ),
                                 idempotency_key=payload.idempotency_key or "",
+                                user=user,
+                                request_hash=request_hash,
                             )
                         )
                     except ExternalPurchaseContractError as error:
@@ -16629,7 +16654,9 @@ def print_stock_replenishment_order(
     _require_stock_replenishment_order_access(
         db, order, _user, relationships_loaded=True
     )
-    if order.request_hash:
+    if order.request_hash and db.scalar(select(StockReplenishmentOrder.id).where(
+        StockReplenishmentOrder.id == order.id, _legacy_or_external_replenishment_clause()
+    )) is None:
         raise HTTPException(409, "这是补库来源需求，请在统一采购单中打印正式采购内容")
     payload = replenishment_order_dict(order, db=db)
     payload["sender"] = _company_sender(db)
@@ -19980,7 +20007,7 @@ def _build_reported_document_candidates(db: Session, user: User) -> list[dict]:
             stock_order_customer,
             stock_order_customer.id == StockReplenishmentOrder.customer_id,
         )
-        .where(StockReplenishmentOrder.request_hash.is_(None))
+        .where(_legacy_or_external_replenishment_clause())
         .order_by(
             StockReplenishmentOrder.created_at.desc(),
             StockReplenishmentOrder.id.desc(),
@@ -21008,7 +21035,7 @@ def _build_reported_documents(
         )
 
     stock_ids = selected_ids("stock_replenishment")
-    stock_query = _replenishment_order_query().where(StockReplenishmentOrder.request_hash.is_(None)).order_by(
+    stock_query = _replenishment_order_query().where(_legacy_or_external_replenishment_clause()).order_by(
         StockReplenishmentOrder.created_at.desc(),
         StockReplenishmentOrder.id.desc(),
     )

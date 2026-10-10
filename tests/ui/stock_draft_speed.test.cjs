@@ -2,6 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
+const nodeVm=require('node:vm');
 const names=['go','openLowStockReplenishment','openStockReplenishment','addStockPolicyDraft','loadStockProducts','stockPolicyDraftQuantity','syncStockReplenishmentSupplier','stockReplenishmentMaterialSuppliers','validateStockReplenishmentForm'];
 function methodSource(html=fs.readFileSync(path.join(__dirname,'../../static/index.html'),'utf8')) {
   return names.map(name=>{
@@ -15,7 +16,9 @@ function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function setup(get=async()=>({data:{items:[]}})) {
   const controllers=new Map();let serial=0;
-  const methods=new Function('axios','createIdempotencyKey','latestRequestControllers','return ({'+methodSource()+'});')({get},()=>`test-${++serial}`,controllers);
+  const window={};
+  nodeVm.runInNewContext(fs.readFileSync(path.join(__dirname,'../../static/ui/product-workbench.js'),'utf8'),{window});
+  const methods=new Function('axios','createIdempotencyKey','latestRequestControllers','window','return ({'+methodSource()+'});')({get},()=>`test-${++serial}`,controllers,window);
   const vm={...methods,user:{id:1},authGeneration:1,activePage:'dashboard',canRequisition:true,canSubmitBusinessRequest:false,
     stockPolicyDraftQuantities:{},customerOptions:[],allMaterials:[],stockPolicyWarnings:[],stockReplenishmentForm:{items:[]},stockReplenishmentProducts:[],modal:null,
     pages:[],toasts:[],loadPage:async p=>{vm.pages.push(p);},loadCustomerOptions:async()=>{},loadMaterials:async()=>{},pageAllowed:()=>true,

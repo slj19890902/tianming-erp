@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.615"
-APP_VERSION_NAME = "手机现场查询与库存来源追溯"
+APP_VERSION = "v0.22.616"
+APP_VERSION_NAME = "补库任务模具位置与首页提醒数量修复"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5969,3 +5969,16 @@ APP_VERIFICATION_STEPS = [
     "手机切换查货位，查看默认规划和实存；从原盘点或移货页面返回后，应回到原查询。实际操作由管理员验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.615：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "修复库存备库生产任务单未读取已有模具的问题；按报料冻结身份或已校验历史关联读取模具，并显示当前真实格位。",
+    "模具移位会更新任务单位置并触发旧预览核对；后来更换常用箱模具不会静默替换旧报料所用模具。",
+    "首页现在处理、延后及隐藏数量跟随当前工作区、业务类型和客户筛选，按列表同一分组口径计数。",
+    "本版无迁移，不改订单、库存数量、位置、金额、收款状态、客户权限或历史打印记录。",
+]
+APP_VERIFICATION_STEPS = [
+    "重新打开80012273的补库生产任务单，核对模具与位置B7；旧预览刷新后再打印。",
+    "首页进入财务核对，切换客户和提醒状态，核对顶部组数与当前列表一致，组内事项数保持可见。",
+    "切换生产等其他工作区，核对提醒筛选、隐藏及延后仍可恢复；实物打印由管理员验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.616：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

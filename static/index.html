@@ -5224,7 +5224,7 @@
             </div>
             <div v-else-if="modal.type === 'delivery'">
               <div class="form-grid">
-                <div class="field"><label>客户</label><select class="select" v-model.number="deliveryForm.customer_id" :disabled="!!deliveryForm.editingId" @change="onDeliveryCustomerChange"><option :value="null">请选择客户</option><option v-for="c in activeCustomerOptions" :key="c.id" :value="c.id">{{ c.name }}</option></select></div>
+                <div class="field"><label>客户</label><select class="select" v-model.number="deliveryForm.customer_id" :disabled="!!deliveryForm.editingId" @change="onDeliveryCustomerChange"><option :value="null">请选择客户</option><option v-for="c in deliveryCustomerOptions" :key="c.id" :value="c.id">{{ c.name }}</option></select><div v-if="!deliveryForm.editingId && !deliveryCandidateLoading && !deliveryCustomerOptions.length" class="muted">当前没有待送货客户</div></div>
                 <div class="field"><label>送货日期</label><input class="input" type="date" v-model="deliveryForm.delivery_date" /></div>
                 <div class="field"><label>车号</label><input class="input" v-model.trim="deliveryForm.vehicle_number" /></div>
               </div>
@@ -6180,7 +6180,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "",
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, statements: [], invoices: [], moldTools: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false }, deliveryCandidateLoading:false, statements: [], invoices: [], moldTools: [],
             invoiceTasks: [], invoiceTaskFilters:{customer_id:"",statement_month:"",status:""}, invoiceTaskState:{loading:false,error:""},
             invoiceTaskDetail:null, invoiceTaskResult:{task_id:null,status:"issued",invoice_number:"",invoice_date:"",failure_reason:"",expected_version:null},
             invoiceSellers: [], invoiceSellerForm:{id:null,seller_name:"",tax_no:"",address_phone:"",bank_account:"",is_active:true,version:null},
@@ -6888,6 +6888,14 @@
           deliveryCustomers() {
             const ids = [...new Set(this.pendingDeliveryItems.map(row => row.customer_id))];
             return this.customerOptions.filter(row => ids.includes(row.id));
+          },
+          deliveryCustomerOptions() {
+            const ids = new Set((this.deliveryCustomerCandidates || []).map(row => Number(row.customer_id)));
+            const editingCustomerId = this.deliveryForm.editingId ? Number(this.deliveryForm.customer_id) : null;
+            return this.customerOptions.filter(row => (
+              (row.is_active && ids.has(Number(row.id)))
+              || (editingCustomerId && Number(row.id) === editingCustomerId)
+            ));
           },
           pendingDeliveryCustomerGroups() {
             const groups = new Map();
@@ -11886,6 +11894,7 @@
             try {
               const { data } = await axios.get("/api/deliveries/pending_items");
               this.pendingDeliveryItems = data.items || [];
+              this.deliveryCustomerCandidates = data.customer_candidates || [];
             } finally {
               this.deliveryCandidateLoading = false;
             }
@@ -17846,9 +17855,9 @@
           async openDelivery(preferredCustomerId = null) {
             if (!Number.isInteger(Number(preferredCustomerId))) preferredCustomerId = null;
             await this.loadDeliveryPendingItems();
-            const availableCustomers = this.activeCustomerOptions || [];
+            const availableCustomers = this.deliveryCustomerOptions || [];
             const availableCustomerIds = new Set(availableCustomers.map(row => Number(row.id)));
-            const selectedCustomerId = availableCustomerIds.has(Number(preferredCustomerId)) ? Number(preferredCustomerId) : (this.deliveryCustomers[0]?.id || availableCustomers[0]?.id || null);
+            const selectedCustomerId = availableCustomerIds.has(Number(preferredCustomerId)) ? Number(preferredCustomerId) : (availableCustomers[0]?.id || null);
             this.deliveryForm = { editingId:null, delivery_number:"", source_mode:"order", source_tab:"order", customer_id:selectedCustomerId, delivery_date:today(), vehicle_number:"", lines:[], saved_signature:"" };
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };
             this.unorderedFinishedPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:12, total:0, total_pages:1, request_token:0, message:"", error:false };

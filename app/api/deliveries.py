@@ -3413,6 +3413,151 @@ def _product_specification(product: Product) -> str | None:
     )
 
 
+def _unordered_finished_customer_summaries(
+    db: Session,
+    *,
+    user: User,
+) -> list[dict]:
+    """Return customers that own at least one currently selectable free lot.
+
+    Keep this qualification aligned with ``unordered_finished_candidates`` so
+    the delivery customer selector never advertises a customer whose inventory
+    picker would immediately be empty.
+    """
+
+    active_reservation = exists(
+        select(1).where(
+            InventoryReservation.inventory_lot_id == InventoryLot.id,
+            InventoryReservation.status != "cancelled",
+            InventoryReservation.reserved_stock_quantity
+            > (
+                InventoryReservation.consumed_stock_quantity
+                + InventoryReservation.released_stock_quantity
+            ),
+        )
+    )
+    query = (
+        select(
+            Customer.id.label("customer_id"),
+            Customer.name.label("customer_name"),
+            func.count(InventoryLot.id).label("lot_count"),
+            func.coalesce(func.sum(InventoryLot.quantity_available), 0).label(
+                "available_quantity"
+            ),
+        )
+        .select_from(InventoryLot)
+        .join(
+            FinishedGoodsInventoryDetail,
+            FinishedGoodsInventoryDetail.inventory_lot_id == InventoryLot.id,
+        )
+        .join(Product, Product.id == FinishedGoodsInventoryDetail.product_id)
+        .join(
+            WarehouseLocation,
+            WarehouseLocation.id == InventoryLot.warehouse_location_id,
+        )
+        .join(Customer, Customer.id == FinishedGoodsInventoryDetail.owner_customer_id)
+        .where(
+            Customer.is_active.is_(True),
+            InventoryLot.inventory_type == "finished",
+            InventoryLot.status == "active",
+            InventoryLot.quantity_available > 0,
+            InventoryLot.quantity_reserved == 0,
+            FinishedGoodsInventoryDetail.is_general.is_(False),
+            Product.customer_id == Customer.id,
+            Product.is_active.is_(True),
+            Product.deleted_at.is_(None),
+            ~active_reservation,
+        )
+        .group_by(Customer.id, Customer.name)
+        .order_by(Customer.name, Customer.id)
+    )
+    visible_customer_ids = _visible_customer_ids(user, db)
+    if visible_customer_ids is not None:
+        query = query.where(Customer.id.in_(visible_customer_ids))
+    return [
+        {
+            "customer_id": int(row.customer_id),
+            "customer_name": row.customer_name,
+            "lot_count": int(row.lot_count or 0),
+            "available_quantity": int(row.available_quantity or 0),
+        }
+        for row in db.execute(query).all()
+    ]
+
+
+def _delivery_customer_candidates_from_pending_items(
+    db: Session,
+    *,
+    user: User,
+    pending_items: list[dict],
+) -> list[dict]:
+    """Merge order and free-stock sources without repeating the pending query."""
+
+    grouped: dict[int, dict] = {}
+    for item in pending_items:
+        customer_id = int(item["customer_id"])
+        candidate = grouped.setdefault(
+            customer_id,
+            {
+                "customer_id": customer_id,
+                "customer_name": item["customer_name"],
+                "has_pending_orders": True,
+                "pending_item_count": 0,
+                "pending_quantity": 0,
+                "has_unordered_finished": False,
+                "unordered_lot_count": 0,
+                "unordered_available_quantity": 0,
+            },
+        )
+        candidate["pending_item_count"] += 1
+        candidate["pending_quantity"] += int(
+            item.get("deliverable_quantity")
+            or item.get("remaining_quantity")
+            or 0
+        )
+
+    for summary in _unordered_finished_customer_summaries(db, user=user):
+        customer_id = int(summary["customer_id"])
+        candidate = grouped.setdefault(
+            customer_id,
+            {
+                "customer_id": customer_id,
+                "customer_name": summary["customer_name"],
+                "has_pending_orders": False,
+                "pending_item_count": 0,
+                "pending_quantity": 0,
+                "has_unordered_finished": False,
+                "unordered_lot_count": 0,
+                "unordered_available_quantity": 0,
+            },
+        )
+        candidate["has_unordered_finished"] = True
+        candidate["unordered_lot_count"] = int(summary["lot_count"])
+        candidate["unordered_available_quantity"] = int(
+            summary["available_quantity"]
+        )
+
+    if grouped:
+        active_customer_ids = set(
+            db.scalars(
+                select(Customer.id).where(
+                    Customer.id.in_(grouped),
+                    Customer.is_active.is_(True),
+                )
+            ).all()
+        )
+        grouped = {
+            customer_id: candidate
+            for customer_id, candidate in grouped.items()
+            if customer_id in active_customer_ids
+        }
+
+    return sorted(
+        grouped.values(),
+        key=lambda row: (row["customer_name"], row["customer_id"]),
+    )
+
+
 @router.get("/unordered-finished-candidates")
 def unordered_finished_candidates(
     customer_id: int = Query(gt=0),
@@ -4029,7 +4174,14 @@ def pending_delivery_items(
         )
         if payload is not None:
             items.append(payload)
-    return {"items": items}
+    return {
+        "items": items,
+        "customer_candidates": _delivery_customer_candidates_from_pending_items(
+            db,
+            user=user,
+            pending_items=items,
+        ),
+    }
 
 
 def pending_delivery_customer_summaries(

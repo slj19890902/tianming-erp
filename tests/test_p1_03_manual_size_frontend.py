@@ -24,7 +24,10 @@ def test_p1_03_manual_size_entry_is_a_clear_compact_order_action() -> None:
     assert "manual-size-line" in INDEX
     assert "manual-size-dimensions" in INDEX
     assert "manual-size-inline" in INDEX
+    assert "manual-size-board" in INDEX
     assert 'v-model="item.box_type"' in block
+    assert 'v-model.trim="item.customer_model"' in block
+    assert 'v-model="item.crease_type"' in block
     for field in ("item.length_mm", "item.width_mm", "item.height_mm", "item.quantity"):
         assert field in block
     assert "reuseBlankLine" in INDEX
@@ -37,6 +40,10 @@ def test_p1_03_manual_size_payload_is_explicit_and_does_not_fake_common_box() ->
     assert "length_mm: item.manual_size_entry" in INDEX
     assert "width_mm: item.manual_size_entry" in INDEX
     assert "height_mm: item.manual_size_entry" in INDEX
+    assert "crease_type: item.manual_size_entry" in INDEX
+    assert "crease_left_mm: item.manual_size_entry" in INDEX
+    assert 'v-if="!item.manual_size_entry" class="order-entry-code"' in INDEX
+    assert ':colspan="item.manual_size_entry ? 2 : 1"' in INDEX
     assert "手工尺寸报价不得自动生成或猜测" not in INDEX  # policy is enforced by payload, not a stale hint
     assert 'product_code: ""' in INDEX
     assert "manual_size_entry: true" in INDEX
@@ -49,7 +56,7 @@ def test_p1_03_quote_preview_preserves_manual_unit_price_and_uses_customer_endpo
     assert "markManualSizeUnitPrice(item)" in INDEX
     assert "客户平方价" in INDEX
     assert "manualSizeQuoteText(item)" in INDEX
-    assert "输入材质代码筛选已保存偏好" in INDEX
+    assert 'placeholder="输入材质代码筛选"' in INDEX
     assert "直接选择材质" not in _order_template()
     assert "selectManualSizeMaterial(item)" not in INDEX
     assert 'min="0.0001"' in INDEX
@@ -72,6 +79,7 @@ def test_quote_preference_uses_required_cascade_and_searchable_saved_material() 
     preference_block = INDEX[start:start + 12000]
     fields = [
         "customerQuotePreferenceDraft.box_type",
+        "customerQuotePreferenceDraft.crease_type",
         "customerQuotePreferenceDraft.layer_count",
         "customerQuotePreferenceDraft.flute_type",
         "customerQuotePreferenceDraft.supplier_name",
@@ -84,19 +92,31 @@ def test_quote_preference_uses_required_cascade_and_searchable_saved_material() 
     assert 'v-model.trim="customerQuotePreferenceDraft.flute_type"' not in preference_block
     assert "quotePreferenceSupplierOptions(customerQuotePreferenceDraft)" in preference_block
     assert "quotePreferenceMaterialOptions(customerQuotePreferenceDraft)" in preference_block
-    assert "同一箱型可以新增多个供应商、多个材质代码作对比" in preference_block
+    assert "同一箱型和压线类型可以新增多个供应商、多个材质代码作对比" in preference_block
     assert "除含税平方价外均从已建档数据下拉选择" in preference_block
 
 
 def test_manual_size_only_uses_active_saved_customer_quote_preferences() -> None:
     block = _order_template()
-    assert "manualSizeLayerOptions(item)" in block
-    assert "manualSizeFluteOptions(item)" in block
-    assert "manualSizeSupplierOptions(item)" in block
+    assert "manualSizeCreaseTypeOptions(item)" in block
     assert "manualSizePreferenceSelectOptions(item)" in block
+    assert "manualSizeLayerOptions(item)" not in block
+    assert "manualSizeSupplierOptions(item)" not in block
     assert "该客户没有已保存并启用的 A1 报价偏好" in INDEX
     assert "必须从该客户已保存并启用的报价偏好中选择" in INDEX
     assert ':options="materialSelectOptions(\'\',null,null)"' not in block
+
+
+def test_manual_size_reuses_box_rule_and_keeps_crease_width_in_sync() -> None:
+    block = _order_template()
+    assert 'scheduleManualSizeRefresh(item)' in block
+    assert 'syncManualSizeCrease(item,\'left\')' in block
+    assert 'syncManualSizeCrease(item,\'right\')' in block
+    assert '纸板 {{ manualSizeBoardText(item) }}' in block
+    assert 'flap_mm: 30' in INDEX
+    assert '"/api/products/box-type-recommendation"' in INDEX
+    assert 'item.crease_right_mm = this.normalizeMmInteger(item.crease_left_mm)' in INDEX
+    assert 'item.report_width_mm = segments.every(value => value !== null)' in INDEX
 
 
 def test_customer_editor_loads_material_options_on_demand_and_filters_inactive() -> None:

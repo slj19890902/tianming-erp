@@ -761,13 +761,21 @@
       .order-entry-total-value { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
       .manual-size-line { background:#faf5ff; }
       .manual-size-code { color:#6d28d9; font-weight:700; white-space:nowrap; }
-      .manual-size-inline { display:grid; grid-template-columns:minmax(0,1fr); gap:4px; }
+      .manual-size-inline { display:grid; gap:4px; }
+      .manual-size-name-box { display:grid; grid-template-columns:minmax(0,1fr) minmax(150px,.75fr); gap:4px; }
+      .manual-size-detail-row { display:grid; grid-template-columns:minmax(110px,.8fr) minmax(0,1.4fr); gap:4px; }
       .manual-size-dimensions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:3px; }
       .manual-size-dimensions .input {
         min-width:0; padding-left:4px; padding-right:4px; text-align:center;
         font-variant-numeric:tabular-nums;
       }
       .manual-size-quote { margin-top:3px; color:#5b21b6; font-size:11px; line-height:1.25; overflow-wrap:anywhere; }
+      .manual-size-board { display:grid; gap:4px; font-size:11px; }
+      .manual-size-board-size { color:#4c1d95; font-weight:700; font-variant-numeric:tabular-nums; }
+      .manual-size-crease-row { display:flex; align-items:center; gap:3px; min-width:0; }
+      .manual-size-crease-row .select { flex:0 0 76px; width:76px; }
+      .manual-size-crease-segments { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:3px; min-width:0; }
+      .manual-size-crease-segments .input { min-width:0; padding-left:3px; padding-right:3px; text-align:center; }
       .customer-pricing-preferences { margin-top:14px; border-top:1px solid var(--line); padding-top:12px; }
       .customer-pricing-preferences .compact-table { width:100%; table-layout:fixed; }
       .customer-pricing-preferences th,.customer-pricing-preferences td { padding:4px; vertical-align:middle; }
@@ -3662,12 +3670,13 @@
               </fieldset>
               <section v-if="customerForm.id && canManageInvoiceProfiles" class="panel" style="margin:10px 0 0;padding:10px"><div class="toolbar"><strong>开票 / 税务资料</strong><span v-if="customerInvoiceState.profileLoading" class="status blue">税务资料读取中</span><span v-else :class="['status',customerInvoiceProfile.confirmation_status==='confirmed'?'green':'orange']">{{ customerInvoiceProfile.confirmation_status==='confirmed'?'已确认':'待确认' }}</span><button class="btn small" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving" @click="loadCustomerInvoiceProfile(customerForm.id)">{{ customerInvoiceState.profileLoading ? '读取中…' : '刷新' }}</button></div><div v-if="customerInvoiceProfile.error" class="notice danger">{{ customerInvoiceProfile.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceProfile(customerForm.id)">重新读取税务资料</button></div><fieldset class="form-grid" style="margin-top:8px" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)"><div class="field"><label>开票抬头</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_title" /></div><div class="field"><label>税号</label><input class="input" v-model.trim="customerInvoiceProfile.tax_no" /></div><div class="field"><label>开票地址电话</label><input class="input" v-model.trim="customerInvoiceProfile.invoice_address_phone" /></div><div class="field"><label>开户行及账号</label><input class="input" v-model.trim="customerInvoiceProfile.bank_account" /></div><div class="field"><label>默认销方</label><select class="select" v-model.number="customerInvoiceProfile.default_seller_id"><option :value="null">请选择已维护销方</option><option v-for="seller in invoiceSellers.filter(row=>row.is_active!==false)" :key="seller.id" :value="seller.id">{{ seller.seller_name || seller.name }}</option></select></div></fieldset><div class="toolbar-group" style="margin-top:8px"><button class="btn small primary" :disabled="customerInvoiceState.profileLoading || customerInvoiceState.profileSaving || !!customerInvoiceProfile.error || Number(customerInvoiceState.profileLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceProfile">{{ customerInvoiceState.profileSaving ? '税务资料保存中…' : '保存税务资料' }}</button></div><div class="panel" style="margin-top:10px;padding:8px"><div class="toolbar"><strong>客户默认开票项目规则</strong><span v-if="customerInvoiceState.ruleLoading" class="status blue">默认规则读取中</span><button class="btn small" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving" @click="loadCustomerInvoiceRule(customerForm.id)">{{ customerInvoiceState.ruleLoading ? '读取中…' : '刷新' }}</button></div><div v-if="customerInvoiceRule.error" class="notice danger">{{ customerInvoiceRule.error }} <button class="btn small" type="button" @click="loadCustomerInvoiceRule(customerForm.id)">重新读取默认规则</button></div><fieldset class="form-grid" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)"><div class="field"><label>项目名称</label><input class="input" v-model.trim="customerInvoiceRule.project_name" /></div><div class="field"><label>税收分类编码</label><input class="input" v-model.trim="customerInvoiceRule.tax_category_code" /></div><div class="field"><label>单位</label><input class="input" v-model.trim="customerInvoiceRule.unit" /></div><div class="field"><label>税率</label><input class="input" type="number" min="0" step="0.01" v-model="customerInvoiceRule.tax_rate" /></div><div class="field"><label>确认状态</label><select class="select" v-model="customerInvoiceRule.confirmation_status"><option value="draft">待确认</option><option value="confirmed">已确认</option></select></div></fieldset><button class="btn small primary" style="margin-top:7px" :disabled="customerInvoiceState.ruleLoading || customerInvoiceState.ruleSaving || !!customerInvoiceRule.error || Number(customerInvoiceState.ruleLoadedCustomerId)!==Number(customerForm.id)" @click="saveCustomerInvoiceRule">{{ customerInvoiceState.ruleSaving ? '默认规则保存中…' : '保存默认规则' }}</button></div><div class="muted" style="margin-top:5px">普通联系人地址、电话不会自动带入开票资料；必须由财务确认。</div></section>
               <section class="customer-pricing-preferences">
-                <div class="toolbar" style="margin:0 0 7px"><strong>客户报价偏好</strong><span class="muted">按箱型、层数、楞型和供应商维护已确认材质及含税客户平方价。</span></div>
+                <div class="toolbar" style="margin:0 0 7px"><strong>客户报价偏好</strong><span class="muted">按箱型、压线类型、层数、楞型和供应商维护已确认材质及含税客户平方价。</span></div>
                 <div v-if="!customerForm.id" class="muted">请先保存客户基本资料，再维护报价偏好。</div>
                 <template v-else>
-                  <div v-if="canEditCustomers" class="form-grid" style="grid-template-columns:minmax(150px,1.2fr) 88px 92px minmax(150px,1fr) minmax(220px,1.5fr) 130px 74px auto;gap:6px;margin:0 0 8px">
+                  <div v-if="canEditCustomers" class="form-grid" style="grid-template-columns:minmax(145px,1.15fr) 92px 76px 82px minmax(135px,1fr) minmax(180px,1.35fr) 120px 70px auto;gap:6px;margin:0 0 8px">
                     <select class="select" v-model="customerQuotePreferenceDraft.box_type" :disabled="customerQuotePreferenceOptionsLoading" @change="onCustomerQuoteBoxTypeChange"><option value="">先选箱型</option><option v-for="boxType in productBoxStyleOptions" :key="boxType" :value="boxType">{{ boxType }}</option></select>
-                    <select class="select" v-model.number="customerQuotePreferenceDraft.layer_count" :disabled="!customerQuotePreferenceDraft.box_type || customerQuotePreferenceOptionsLoading" @change="onCustomerQuoteLayerChange"><option :value="null">再选层数</option><option v-for="layer in quotePreferenceLayerOptions" :key="layer" :value="layer">{{ layer }}层</option></select>
+                    <select class="select" v-model="customerQuotePreferenceDraft.crease_type" :disabled="!customerQuotePreferenceDraft.box_type || customerQuotePreferenceOptionsLoading" @change="onCustomerQuoteCreaseTypeChange"><option value="">压线类型</option><option v-for="creaseType in productSupportedCreaseTypes(customerQuotePreferenceDraft.box_type)" :key="creaseType" :value="creaseType">{{ creaseTypeLabel(creaseType) }}</option></select>
+                    <select class="select" v-model.number="customerQuotePreferenceDraft.layer_count" :disabled="!customerQuotePreferenceDraft.crease_type || customerQuotePreferenceOptionsLoading" @change="onCustomerQuoteLayerChange"><option :value="null">再选层数</option><option v-for="layer in quotePreferenceLayerOptions" :key="layer" :value="layer">{{ layer }}层</option></select>
                     <select class="select" v-model="customerQuotePreferenceDraft.flute_type" :disabled="!customerQuotePreferenceDraft.layer_count" @change="onCustomerQuoteFluteChange"><option value="">再选楞型</option><option v-for="flute in quotePreferenceFluteOptions(customerQuotePreferenceDraft.layer_count)" :key="flute" :value="flute">{{ flute }}瓦</option></select>
                     <select class="select" v-model="customerQuotePreferenceDraft.supplier_name" :disabled="!customerQuotePreferenceDraft.flute_type" @change="onCustomerQuoteSupplierChange"><option value="">再选供应商</option><option v-for="supplier in quotePreferenceSupplierOptions(customerQuotePreferenceDraft)" :key="supplier" :value="supplier">{{ supplierDisplayName(supplier) }}</option></select>
                     <search-select v-model="customerQuotePreferenceDraft.material_id" :disabled="!customerQuotePreferenceDraft.supplier_name" :options="quotePreferenceMaterialOptions(customerQuotePreferenceDraft)" label-key="_label" value-key="id" placeholder="输入材质代码筛选已有码"></search-select>
@@ -3677,10 +3686,10 @@
                   </div>
                   <div v-if="customerQuotePreferenceOptionsLoading" class="muted" style="margin:0 0 7px">正在读取供应商材质代码…</div>
                   <div v-else-if="customerQuotePreferenceOptionsError" class="danger-text" style="margin:0 0 7px">{{ customerQuotePreferenceOptionsError }}</div>
-                  <div class="notice" style="margin:0 0 8px">同一箱型可以新增多个供应商、多个材质代码作对比。除含税平方价外均从已建档数据下拉选择；手工尺寸只显示这里已保存且启用的组合。</div>
-                  <div class="table-wrap"><table class="compact-table"><thead><tr><th>箱型</th><th>层数</th><th>楞型</th><th>供应商</th><th>材质代码</th><th class="sensitive-price">客户含税平方价</th><th>状态</th><th v-if="canEditCustomers">操作</th></tr></thead><tbody>
-                    <tr v-if="!customerQuotePreferences.length"><td :colspan="canEditCustomers ? 8 : 7" class="muted">暂无已保存报价偏好；手工尺寸不会显示任何材质候选。</td></tr>
-                    <tr v-for="preference in customerQuotePreferences" :key="preference.id || preference._key"><td>{{ preference.box_type || 'A1' }}</td><td>{{ preference.layer_count ? preference.layer_count+'层' : '-' }}</td><td>{{ preference.flute_type || '-' }}</td><td>{{ supplierDisplayName(preference.supplier_name) || '-' }}</td><td>{{ preference.material_code || '-' }}<span v-if="preference.material_is_active === false" class="status orange" style="margin-left:5px">材质已停用</span></td><td class="sensitive-price"><input v-if="canEditCustomers" class="input" type="number" min="0.0001" step="0.0001" v-model="preference.tax_included_square_price" /><span v-else>{{ preference.tax_included_square_price == null ? '-' : money(preference.tax_included_square_price) }}</span></td><td><label v-if="canEditCustomers"><input type="checkbox" v-model="preference.is_active" /> {{ preference.is_active === false ? '停用' : '启用' }}</label><span v-else>{{ preference.is_active === false ? '停用' : '启用' }}</span></td><td v-if="canEditCustomers"><button class="btn small" type="button" :disabled="customerQuotePreferenceLoading" @click="updateCustomerQuotePreference(preference)">保存</button></td></tr>
+                  <div class="notice" style="margin:0 0 8px">同一箱型和压线类型可以新增多个供应商、多个材质代码作对比。除含税平方价外均从已建档数据下拉选择；手工尺寸只显示这里已保存且启用的材质代码。</div>
+                  <div class="table-wrap"><table class="compact-table"><thead><tr><th>箱型</th><th>压线类型</th><th>层数</th><th>楞型</th><th>供应商</th><th>材质代码</th><th class="sensitive-price">客户含税平方价</th><th>状态</th><th v-if="canEditCustomers">操作</th></tr></thead><tbody>
+                    <tr v-if="!customerQuotePreferences.length"><td :colspan="canEditCustomers ? 9 : 8" class="muted">暂无已保存报价偏好；手工尺寸不会显示任何材质候选。</td></tr>
+                    <tr v-for="preference in customerQuotePreferences" :key="preference.id || preference._key"><td>{{ normalizeBoxTypeDisplay(preference.box_type || 'A1') }}</td><td>{{ creaseTypeLabel(preference.crease_type || '压线') }}</td><td>{{ preference.layer_count ? preference.layer_count+'层' : '-' }}</td><td>{{ preference.flute_type || '-' }}</td><td>{{ supplierDisplayName(preference.supplier_name) || '-' }}</td><td>{{ preference.material_code || '-' }}<span v-if="preference.material_is_active === false" class="status orange" style="margin-left:5px">材质已停用</span></td><td class="sensitive-price"><input v-if="canEditCustomers" class="input" type="number" min="0.0001" step="0.0001" v-model="preference.tax_included_square_price" /><span v-else>{{ preference.tax_included_square_price == null ? '-' : money(preference.tax_included_square_price) }}</span></td><td><label v-if="canEditCustomers"><input type="checkbox" v-model="preference.is_active" /> {{ preference.is_active === false ? '停用' : '启用' }}</label><span v-else>{{ preference.is_active === false ? '停用' : '启用' }}</span></td><td v-if="canEditCustomers"><button class="btn small" type="button" :disabled="customerQuotePreferenceLoading" @click="updateCustomerQuotePreference(preference)">保存</button></td></tr>
                   </tbody></table></div>
                 </template>
               </section>
@@ -4572,23 +4581,36 @@
 	                    </td>
 	                  </tr>
 	                  <tr :class="{'order-entry-row-error': !!item._validation_error, 'manual-size-line': !!item.manual_size_entry}">
-	                    <td class="order-entry-code">
-	                      <span v-if="item.manual_size_entry" class="manual-size-code">手工尺寸</span>
-	                      <search-select v-else v-model="item.product_id" :disabled="!orderForm.customer_id"
+	                    <td v-if="!item.manual_size_entry" class="order-entry-code">
+	                      <search-select v-model="item.product_id" :disabled="!orderForm.customer_id"
 	                        :options="orderProductOptions[index] || []" label-key="_compact_label" value-key="id"
 	                        placeholder="搜索编码" @search="searchOrderProducts(index,$event)"
 	                        @change="selectOrderProduct(index,$event)">
 	                      </search-select>
 	                    </td>
-	                    <td class="order-entry-name">
+	                    <td class="order-entry-name" :colspan="item.manual_size_entry ? 2 : 1">
 	                      <div v-if="item.manual_size_entry" class="manual-size-inline">
-	                        <input class="input" :disabled="!orderForm.customer_id" v-model.trim="item.product_name" placeholder="产品名称" />
-	                        <select class="select" :disabled="!orderForm.customer_id || !manualSizeBoxTypeOptions.length" v-model="item.box_type" @change="onManualSizeBoxTypeChange(item)"><option value="">已保存箱型</option><option v-for="boxType in manualSizeBoxTypeOptions" :key="boxType" :value="boxType">{{ boxType }}</option></select>
+	                        <div class="manual-size-name-box">
+	                          <input class="input" :disabled="!orderForm.customer_id" v-model.trim="item.product_name" placeholder="产品名称" />
+	                          <select class="select" :disabled="!orderForm.customer_id || !manualSizeBoxTypeOptions.length" v-model="item.box_type" @change="onManualSizeBoxTypeChange(item)"><option value="">已保存箱型</option><option v-for="boxType in manualSizeBoxTypeOptions" :key="boxType" :value="boxType">{{ normalizeBoxTypeDisplay(boxType) }}</option></select>
+	                        </div>
+	                        <div class="manual-size-detail-row">
+	                          <input class="input" v-model.trim="item.customer_model" placeholder="产品规格" />
+	                          <div class="manual-size-dimensions"><input class="input" type="number" min="1" placeholder="长" v-model.number="item.length_mm" @input="scheduleManualSizeRefresh(item)" /><input class="input" type="number" min="1" placeholder="宽" v-model.number="item.width_mm" @input="scheduleManualSizeRefresh(item)" /><input class="input" type="number" min="1" placeholder="高" v-model.number="item.height_mm" @input="scheduleManualSizeRefresh(item)" /></div>
+	                        </div>
 	                      </div>
 	                      <input v-else class="input" :disabled="!orderForm.customer_id || item._from_product"
 	                        v-model.trim="item.product_name" :title="item.product_name" placeholder="产品名称" />
 	                    </td>
-	                    <td class="order-entry-spec"><div v-if="item.manual_size_entry" class="manual-size-dimensions"><input class="input" type="number" min="1" placeholder="长" v-model.number="item.length_mm" @change="refreshManualSizeQuote(item)" /><input class="input" type="number" min="1" placeholder="宽" v-model.number="item.width_mm" @change="refreshManualSizeQuote(item)" /><input class="input" type="number" min="1" placeholder="高" v-model.number="item.height_mm" @change="refreshManualSizeQuote(item)" /></div><input v-else class="input spec-input" :disabled="!orderForm.customer_id || item._from_product" v-model.trim="item.specification" /></td>
+	                    <td v-if="!item.manual_size_entry" class="order-entry-spec"><input class="input spec-input" :disabled="!orderForm.customer_id || item._from_product" v-model.trim="item.specification" /></td>
+	                    <td v-else class="order-entry-spec">
+	                      <div class="manual-size-board">
+	                        <div class="manual-size-crease-row"><select class="select" v-model="item.crease_type" :disabled="!item.box_type" @change="onManualSizeCreaseTypeChange(item)"><option value="">压线类型</option><option v-for="creaseType in manualSizeCreaseTypeOptions(item)" :key="creaseType" :value="creaseType">{{ creaseTypeLabel(creaseType) }}</option></select><span class="manual-size-board-size">纸板 {{ manualSizeBoardText(item) }}</span></div>
+	                        <div v-if="item.crease_type==='压线'" class="manual-size-crease-segments"><input class="input" type="number" min="0" step="1" v-model.number="item.crease_left_mm" @input="syncManualSizeCrease(item,'left')" aria-label="左压线" placeholder="左" /><input class="input" type="number" min="1" step="1" v-model.number="item.crease_middle_mm" @input="syncManualSizeCrease(item,'middle')" aria-label="中压线" placeholder="中" /><input class="input" type="number" min="0" step="1" v-model.number="item.crease_right_mm" @input="syncManualSizeCrease(item,'right')" aria-label="右压线" placeholder="右" /></div>
+	                        <span v-else class="muted">{{ item._structure_message || '输入长宽高后自动生成纸板长宽' }}</span>
+	                        <span v-if="item.crease_type==='压线'" class="muted">左 / 中 / 右（左右联动相等）｜舌头 30mm</span>
+	                      </div>
+	                    </td>
 	                    <td class="order-entry-material">
 	                      <div v-if="item._from_product" class="order-entry-material-stack">
 	                        <span class="order-entry-material-text" :title="orderItemCompressedMaterial(item)">{{ orderItemCompressedMaterial(item) }}</span>
@@ -4599,12 +4621,7 @@
 	                        </div>
 	                      </div>
 	                      <div v-else-if="item.manual_size_entry" style="display:flex;flex-direction:column;gap:4px">
-	                        <div style="display:grid;grid-template-columns:70px 70px minmax(100px,1fr);gap:4px">
-	                          <select class="select" v-model.number="item.layer_count" @change="onManualSizeLayerChange(item)"><option :value="null">层数</option><option v-for="layer in manualSizeLayerOptions(item)" :key="layer" :value="layer">{{ layer }}层</option></select>
-	                          <select class="select" v-model="item.flute_type" :disabled="!item.layer_count" @change="onManualSizeFluteChange(item)"><option :value="null">楞型</option><option v-for="flute in manualSizeFluteOptions(item)" :key="flute" :value="flute">{{ flute }}</option></select>
-	                          <select class="select" v-model="item._quote_supplier_name" :disabled="!item.flute_type" @change="onManualSizeSupplierChange(item)"><option value="">供应商</option><option v-for="supplier in manualSizeSupplierOptions(item)" :key="supplier" :value="supplier">{{ supplierDisplayName(supplier) }}</option></select>
-	                        </div>
-	                        <search-select v-model="item._quote_preference_id" :disabled="!item._quote_supplier_name" :options="manualSizePreferenceSelectOptions(item)" label-key="_label" value-key="id" placeholder="输入材质代码筛选已保存偏好" @change="applyManualSizePreference(item)"></search-select>
+	                        <search-select v-model="item._quote_preference_id" :disabled="!item.crease_type" :options="manualSizePreferenceSelectOptions(item)" label-key="_label" value-key="id" placeholder="输入材质代码筛选" @change="applyManualSizePreference(item)"></search-select>
 	                        <div class="muted" style="font-size:10px">{{ manualSizeMaterialHint(item) }}</div>
 	                      </div>
 	                      <div v-else style="display:flex;flex-direction:column;gap:4px">
@@ -6516,7 +6533,7 @@
             productRecommendationSequence: 0,
             customerForm: blankCustomer(), customerQuotePreferences: [], customerQuotePreferenceLoading: false,
             customerQuotePreferenceOptionsLoading: false, customerQuotePreferenceOptionsError: "",
-            customerQuotePreferenceDraft: { box_type:"", layer_count:null, flute_type:"", supplier_name:"", material_id:null, tax_included_square_price:"", is_active:true }, productForm: blankProduct(),
+            customerQuotePreferenceDraft: { box_type:"", crease_type:"", layer_count:null, flute_type:"", supplier_name:"", material_id:null, tax_included_square_price:"", is_active:true }, productForm: blankProduct(),
             quickStockPolicyForm: { id:null, product_id:null, customer_name:"", product_code:"", product_name:"", available_quantity:0, warning_quantity:0, target_quantity:1 },
             materialForm: blankMaterial(),
             orderForm: { customer_id: null, customer_po: "", order_date: today(), delivery_date: plusDays(7), requisition_strategy:"normal", remark: "", items: [] },
@@ -8970,9 +8987,17 @@
                 if (!String(item.product_name || "").trim()) return `第${index + 1}条手工尺寸行缺少产品名称。`;
                 if (!item.box_type) return `第${index + 1}条手工尺寸行缺少箱型。`;
                 if (![item.length_mm, item.width_mm, item.height_mm].every(value => Number(value) > 0)) return `第${index + 1}条手工尺寸行请填写长、宽、高。`;
-                if (!item._quote_preference_id || !item.material_id || !item.flute_type) return `第${index + 1}条手工尺寸行必须从该客户已保存并启用的报价偏好中选择箱型、层数、楞型、供应商和材质代码。`;
+                if (!item.crease_type) return `第${index + 1}条手工尺寸行请选择压线类型。`;
+                if (!(Number(item.report_length_mm) > 0) || !(Number(item.report_width_mm) > 0)) return `第${index + 1}条手工尺寸行尚未生成有效纸板长宽。`;
+                if (item.crease_type === "压线") {
+                  const segments = [item.crease_left_mm, item.crease_middle_mm, item.crease_right_mm].map(value => Number(value));
+                  if (!segments.every((value, segmentIndex) => Number.isFinite(value) && value >= (segmentIndex === 1 ? 1 : 0))) return `第${index + 1}条手工尺寸行请完整填写左、中、右压线。`;
+                  if (segments[0] !== segments[2]) return `第${index + 1}条手工尺寸行的左右压线必须相等。`;
+                  if (segments.reduce((sum,value) => sum + value, 0) !== Number(item.report_width_mm)) return `第${index + 1}条手工尺寸行的压线合计必须等于纸板宽。`;
+                }
+                if (!item._quote_preference_id || !item.material_id || !item.flute_type) return `第${index + 1}条手工尺寸行必须从该客户已保存并启用的报价偏好中选择材质代码。`;
                 const savedPreference = this.manualSizePreferenceOptions.find(row => Number(row.id) === Number(item._quote_preference_id));
-                if (!savedPreference || Number(savedPreference.material_id) !== Number(item.material_id)) return `第${index + 1}条手工尺寸行的报价偏好已变化，请重新选择。`;
+                if (!savedPreference || Number(savedPreference.material_id) !== Number(item.material_id) || String(savedPreference.crease_type || "压线") !== String(item.crease_type)) return `第${index + 1}条手工尺寸行的报价偏好已变化，请重新选择。`;
 	              } else if (item.is_new_product) {
                 if (!String(item.product_code || "").trim()) {
                   return `第${index + 1}条新产品缺少存货编码。`;
@@ -10630,6 +10655,9 @@
               }));
           },
           onCustomerQuoteBoxTypeChange() {
+            Object.assign(this.customerQuotePreferenceDraft, { crease_type:"", layer_count:null, flute_type:"", supplier_name:"", material_id:null });
+          },
+          onCustomerQuoteCreaseTypeChange() {
             Object.assign(this.customerQuotePreferenceDraft, { layer_count:null, flute_type:"", supplier_name:"", material_id:null });
           },
           onCustomerQuoteLayerChange() {
@@ -14189,7 +14217,7 @@
             this.modal = { type:"resetPassword", title:"重置账号密码" };
           },
           blankCustomerQuotePreferenceDraft() {
-            return { box_type:"", layer_count:null, flute_type:"", supplier_name:"", material_id:null, tax_included_square_price:"", is_active:true };
+            return { box_type:"", crease_type:"", layer_count:null, flute_type:"", supplier_name:"", material_id:null, tax_included_square_price:"", is_active:true };
           },
           async ensureCustomerQuotePreferenceOptions() {
             if (this.customerQuotePreferenceOptionsLoading) return;
@@ -14249,6 +14277,7 @@
             const draft = this.customerQuotePreferenceDraft;
             if (!this.customerForm?.id) return;
             if (!String(draft.box_type || "").trim()) { this.showToast("请先选择箱型", true); return; }
+            if (!String(draft.crease_type || "").trim()) { this.showToast("请选择压线类型", true); return; }
             if (![3,5,7].includes(Number(draft.layer_count))) { this.showToast("请选择层数", true); return; }
             if (!String(draft.flute_type || "").trim()) { this.showToast("请选择楞型", true); return; }
             if (!String(draft.supplier_name || "").trim()) { this.showToast("请选择供应商", true); return; }
@@ -14259,6 +14288,7 @@
             try {
               await axios.post(`/api/master/customers/${this.customerForm.id}/quote-preferences`, {
                 box_type: draft.box_type || "A1",
+                crease_type: String(draft.crease_type).trim(),
                 material_id: Number(draft.material_id),
                 flute_type: String(draft.flute_type).trim(),
                 tax_included_square_price: Number(draft.tax_included_square_price),
@@ -18443,6 +18473,12 @@
               if (item.manual_size_entry) {
                 Object.assign(item, {
                   box_type:this.manualSizeBoxTypeOptions[0] || "",
+                  crease_type:"",
+                  crease_left_mm:null,
+                  crease_middle_mm:null,
+                  crease_right_mm:null,
+                  report_length_mm:null,
+                  report_width_mm:null,
                   layer_count:null,
                   flute_type:null,
                   _layer_filter:null,
@@ -18454,6 +18490,8 @@
                   unit_price:"",
                   _manual_unit_price:false,
                   _quote_preview:null,
+                  _manual_crease:false,
+                  _structure_message:"输入长宽高后自动生成纸板长宽",
                 });
                 continue;
               }
@@ -18510,57 +18548,32 @@
 	            if (refreshPreview && this.modal?.type === "order") this.refreshOrderNumberPreview();
 	          },
           manualSizePreferenceLabel(preference) {
-            const material = preference?.material_code || preference?.material?.code || "未命名材质";
-            const flute = preference?.flute_type || "未设楞型";
-            const supplier = this.supplierDisplayName(preference?.supplier_name) || "未设供应商";
-            const price = preference?.tax_included_square_price;
-            return `${material}｜${supplier}｜${preference?.layer_count || "-"}层/${flute}${price == null ? "" : `｜￥${this.money(price)}/㎡`}`;
+            return preference?.material_code || preference?.material?.code || "未命名材质";
           },
           manualSizePreferencesFor(item) {
             const boxType = String(item?.box_type || "").trim().toUpperCase();
+            const creaseType = String(item?.crease_type || "").trim();
             return this.manualSizePreferenceOptions.filter(row =>
               String(row.box_type || "").trim().toUpperCase() === boxType
+              && (!creaseType || String(row.crease_type || "压线").trim() === creaseType)
             );
           },
-          manualSizeLayerOptions(item) {
-            return [...new Set(this.manualSizePreferencesFor(item)
-              .map(row => Number(row.layer_count || 0))
-              .filter(layer => [3,5,7].includes(layer)))].sort((a,b) => a-b);
-          },
-          manualSizeFluteOptions(item) {
-            const layerCount = Number(item?.layer_count || 0);
-            return [...new Set(this.manualSizePreferencesFor(item)
-              .filter(row => Number(row.layer_count) === layerCount)
-              .map(row => String(row.flute_type || "").trim().toUpperCase())
-              .filter(Boolean))];
-          },
-          manualSizeSupplierOptions(item) {
-            const layerCount = Number(item?.layer_count || 0);
-            const fluteType = String(item?.flute_type || "").trim().toUpperCase();
-            return [...new Set(this.manualSizePreferencesFor(item)
-              .filter(row => Number(row.layer_count) === layerCount && String(row.flute_type || "").trim().toUpperCase() === fluteType)
-              .map(row => String(row.supplier_name || "").trim())
+          manualSizeCreaseTypeOptions(item) {
+            const boxType = String(item?.box_type || "").trim().toUpperCase();
+            return [...new Set(this.manualSizePreferenceOptions
+              .filter(row => String(row.box_type || "").trim().toUpperCase() === boxType)
+              .map(row => String(row.crease_type || "压线").trim())
               .filter(Boolean))];
           },
           manualSizePreferenceSelectOptions(item) {
-            const layerCount = Number(item?.layer_count || 0);
-            const fluteType = String(item?.flute_type || "").trim().toUpperCase();
-            const supplierName = String(item?._quote_supplier_name || "").trim();
             return this.manualSizePreferencesFor(item)
-              .filter(row =>
-                Number(row.layer_count) === layerCount
-                && String(row.flute_type || "").trim().toUpperCase() === fluteType
-                && String(row.supplier_name || "").trim() === supplierName
-              )
               .map(row => ({ ...row, _label:this.manualSizePreferenceLabel(row) }));
           },
           manualSizeMaterialHint(item) {
             if (!this.manualSizeBoxTypeOptions.length) return "该客户没有已保存并启用的 A1 报价偏好，请先到客户管理维护";
-            if (!item?.layer_count) return "先选择报价偏好中已保存的层数";
-            if (!item?.flute_type) return "再选择报价偏好中已保存的楞型";
-            if (!item?._quote_supplier_name) return "再选择报价偏好中已保存的供应商";
-            if (!item?._quote_preference_id) return "输入材质代码筛选，并从已保存偏好中明确选择";
-            return `${item.material || "已选材质"}｜${this.supplierDisplayName(item._quote_supplier_name)}｜仅使用已保存报价偏好`;
+            if (!item?.crease_type) return "先选择该箱型已保存的压线类型";
+            if (!item?._quote_preference_id) return "输入材质代码，只显示客户资料中已保存且启用的代码";
+            return item.material || "已选材质";
           },
           addManualSizeOrderItem() {
             if (!this.manualSizeBoxTypeOptions.length) {
@@ -18578,11 +18591,18 @@
               is_new_product: false,
               product_code: "",
               product_name: "纸箱",
+              customer_model: "",
               box_type: this.manualSizeBoxTypeOptions[0],
               length_mm: null,
               width_mm: null,
               height_mm: null,
               specification: "",
+              report_length_mm: null,
+              report_width_mm: null,
+              crease_type: "",
+              crease_left_mm: null,
+              crease_middle_mm: null,
+              crease_right_mm: null,
               material_id: null,
               material: "",
               layer_count: null,
@@ -18594,6 +18614,10 @@
               _manual_unit_price: false,
               _quote_preview: null,
               _quote_preview_loading: false,
+              _structure_sequence: 0,
+              _structure_message: "输入长宽高后自动生成纸板长宽",
+              _manual_crease: false,
+              _manual_size_refresh_timer: null,
               _inventory_refresh_timer: null,
               _inventory: null,
               _inventory_product: null,
@@ -18605,9 +18629,7 @@
             const preference = this.manualSizePreferenceOptions.find(row => Number(row.id) === Number(item._quote_preference_id));
             const matchesCurrentCascade = preference
               && String(preference.box_type || "").trim().toUpperCase() === String(item.box_type || "").trim().toUpperCase()
-              && Number(preference.layer_count) === Number(item.layer_count)
-              && String(preference.flute_type || "").trim().toUpperCase() === String(item.flute_type || "").trim().toUpperCase()
-              && String(preference.supplier_name || "").trim() === String(item._quote_supplier_name || "").trim();
+              && String(preference.crease_type || "压线").trim() === String(item.crease_type || "").trim();
             if (!matchesCurrentCascade) {
               item._quote_preference_id = null;
               item.material_id = null;
@@ -18629,20 +18651,86 @@
             this.refreshManualSizeQuote(item);
           },
           onManualSizeBoxTypeChange(item) {
-            Object.assign(item, { layer_count:null, flute_type:null, _layer_filter:null, _flute_filter:null, _quote_supplier_name:"", _quote_preference_id:null, material_id:null, material:"", unit_price:"", _manual_unit_price:false });
-            this.refreshManualSizeQuote(item);
+            Object.assign(item, { crease_type:"", crease_left_mm:null, crease_middle_mm:null, crease_right_mm:null, report_length_mm:null, report_width_mm:null, layer_count:null, flute_type:null, _layer_filter:null, _flute_filter:null, _quote_supplier_name:"", _quote_preference_id:null, material_id:null, material:"", unit_price:"", _manual_unit_price:false, _manual_crease:false });
+            this.refreshManualSizeEntry(item);
           },
-          onManualSizeLayerChange(item) {
-            Object.assign(item, { flute_type:null, _layer_filter:item.layer_count || null, _flute_filter:null, _quote_supplier_name:"", _quote_preference_id:null, material_id:null, material:"", unit_price:"", _manual_unit_price:false });
-            this.refreshManualSizeQuote(item);
+          onManualSizeCreaseTypeChange(item) {
+            Object.assign(item, { crease_left_mm:null, crease_middle_mm:null, crease_right_mm:null, report_length_mm:null, report_width_mm:null, layer_count:null, flute_type:null, _layer_filter:null, _flute_filter:null, _quote_supplier_name:"", _quote_preference_id:null, material_id:null, material:"", unit_price:"", _manual_unit_price:false, _manual_crease:false });
+            this.refreshManualSizeEntry(item);
           },
-          onManualSizeFluteChange(item) {
-            Object.assign(item, { _flute_filter:item.flute_type || null, _quote_supplier_name:"", _quote_preference_id:null, material_id:null, material:"", unit_price:"", _manual_unit_price:false });
-            this.refreshManualSizeQuote(item);
+          manualSizeBoardText(item) {
+            const length = this.normalizeMmInteger(item?.report_length_mm);
+            const width = this.normalizeMmInteger(item?.report_width_mm);
+            return length && width ? `${length} × ${width}mm` : "待生成";
           },
-          onManualSizeSupplierChange(item) {
-            Object.assign(item, { _quote_preference_id:null, material_id:null, material:"", unit_price:"", _manual_unit_price:false });
-            this.refreshManualSizeQuote(item);
+          scheduleManualSizeRefresh(item) {
+            if (!item?.manual_size_entry) return;
+            item._manual_crease = false;
+            if (item._manual_size_refresh_timer) clearTimeout(item._manual_size_refresh_timer);
+            item._manual_size_refresh_timer = setTimeout(() => {
+              item._manual_size_refresh_timer = null;
+              this.refreshManualSizeEntry(item);
+            }, 180);
+          },
+          async refreshManualSizeEntry(item) {
+            await this.refreshManualSizeStructure(item);
+            await this.refreshManualSizeQuote(item);
+          },
+          async refreshManualSizeStructure(item) {
+            if (!item?.manual_size_entry) return;
+            item.specification = this.manualSizeSpecification(item);
+            const dimensions = [item.length_mm, item.width_mm, item.height_mm]
+              .map(value => this.normalizeMmInteger(value));
+            if (!item.box_type || !item.crease_type || !dimensions.every(value => value && value > 0)) {
+              Object.assign(item, { report_length_mm:null, report_width_mm:null, crease_left_mm:null, crease_middle_mm:null, crease_right_mm:null });
+              item._structure_message = "输入长宽高后自动生成纸板长宽";
+              return;
+            }
+            const sequence = Number(item._structure_sequence || 0) + 1;
+            item._structure_sequence = sequence;
+            try {
+              const { data } = await axios.post("/api/products/box-type-recommendation", {
+                box_style: this.normalizeBoxTypeDisplay(item.box_type),
+                length_mm: dimensions[0],
+                width_mm: dimensions[1],
+                height_mm: dimensions[2],
+                splice_mode: "single",
+                flap_mm: 30,
+                crease_type: item.crease_type,
+              });
+              if (Number(item._structure_sequence) !== sequence) return;
+              item.report_length_mm = data?.report_length_mm ?? null;
+              item.report_width_mm = data?.report_width_mm ?? null;
+              item._structure_message = data?.message || "已按常用箱规则生成";
+              if (item.crease_type === "压线") {
+                if (!item._manual_crease) {
+                  item.crease_left_mm = data?.crease_left_mm ?? null;
+                  item.crease_middle_mm = data?.crease_middle_mm ?? null;
+                  item.crease_right_mm = data?.crease_right_mm ?? null;
+                }
+                this.syncManualSizeCrease(item, "recommendation");
+                item._manual_crease = false;
+              } else {
+                item.crease_left_mm = null;
+                item.crease_middle_mm = null;
+                item.crease_right_mm = null;
+              }
+            } catch (error) {
+              if (Number(item._structure_sequence) !== sequence) return;
+              Object.assign(item, { report_length_mm:null, report_width_mm:null, crease_left_mm:null, crease_middle_mm:null, crease_right_mm:null });
+              item._structure_message = `纸板尺寸生成失败：${this.errorMessage(error)}`;
+            }
+          },
+          syncManualSizeCrease(item, source) {
+            if (!item || item.crease_type !== "压线") return;
+            if (source === "left") item.crease_right_mm = this.normalizeMmInteger(item.crease_left_mm);
+            if (source === "right") item.crease_left_mm = this.normalizeMmInteger(item.crease_right_mm);
+            const segments = [item.crease_left_mm, item.crease_middle_mm, item.crease_right_mm]
+              .map(value => this.normalizeMmInteger(value));
+            item.report_width_mm = segments.every(value => value !== null)
+              ? segments.reduce((sum, value) => sum + value, 0)
+              : null;
+            if (source !== "recommendation") item._manual_crease = true;
           },
           markManualSizeUnitPrice(item) {
             item._manual_unit_price = true;
@@ -18655,7 +18743,7 @@
           manualSizeQuoteText(item) {
             if (item?._quote_preview_loading) return "正在计算客户报价…";
             const preview = item?._quote_preview;
-            if (!preview) return "选择材质、楞型并填写尺寸后自动试算";
+            if (!preview) return "选择已保存材质代码并填写尺寸后自动试算";
             const rawSource = preview.final_price_source || preview.price_source || "客户报价偏好";
             const source = rawSource === "estimated" ? "系统估价" : rawSource;
             const price = preview.customer_square_price;
@@ -18674,6 +18762,7 @@
             try {
               const { data } = await axios.post(`/api/master/customers/${this.orderForm.customer_id}/quote-preferences/estimate`, {
                 box_type: item.box_type || "A1",
+                crease_type: item.crease_type || "压线",
                 material_id: Number(item.material_id),
                 flute_type: item.flute_type,
                 length_mm: dimensions[0], width_mm: dimensions[1], height_mm: dimensions[2],
@@ -18787,6 +18876,7 @@
               material: item.material,
               original_material_code: item.original_material_code || null,
               specification: item.specification,
+              customer_model: item.customer_model || null,
               production_notes: item.production_notes || null,
               quantity: item.quantity,
               unit_price: item.unit_price,
@@ -18798,6 +18888,10 @@
               length_mm: item.manual_size_entry ? Number(item.length_mm) : null,
               width_mm: item.manual_size_entry ? Number(item.width_mm) : null,
               height_mm: item.manual_size_entry ? Number(item.height_mm) : null,
+              crease_type: item.manual_size_entry ? (item.crease_type || null) : null,
+              crease_left_mm: item.manual_size_entry && item.crease_type === "压线" ? Number(item.crease_left_mm) : null,
+              crease_middle_mm: item.manual_size_entry && item.crease_type === "压线" ? Number(item.crease_middle_mm) : null,
+              crease_right_mm: item.manual_size_entry && item.crease_type === "压线" ? Number(item.crease_right_mm) : null,
               temp_drawing_token: item.temp_drawing_token || null,
               drawing_save_option: item.temp_drawing_token ? (item.drawing_save_option || "order_only") : null,
               bom_component_demands: (item.bom_component_demands || [])

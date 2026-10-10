@@ -128,10 +128,21 @@ def test_customer_quote_preference_crud_estimate_and_audit(tmp_path) -> None:
     try:
         with TestClient(app) as client:
             _login(client, "quote-admin", "QuotePass123!")
+            missing_crease = client.post(
+                f"/api/customers/{ids['customer']}/quote-preferences",
+                json={
+                    "box_type": "A1",
+                    "material_id": ids["material"],
+                    "flute_type": "A",
+                    "tax_included_square_price": "3.2500",
+                },
+            )
+            assert missing_crease.status_code == 422, missing_crease.text
             created = client.post(
                 f"/api/customers/{ids['customer']}/quote-preferences",
                 json={
                     "box_type": "a1/0201",
+                    "crease_type": "压线",
                     "material_id": ids["material"],
                     "flute_type": "a",
                     "tax_included_square_price": "3.2500",
@@ -140,6 +151,7 @@ def test_customer_quote_preference_crud_estimate_and_audit(tmp_path) -> None:
             assert created.status_code == 201, created.text
             row = created.json()
             assert row["box_type"] == "A1"
+            assert row["crease_type"] == "压线"
             assert row["flute_type"] == "A"
             assert row["tax_included_square_price"] == "3.2500"
             assert row["layer_count"] == 3
@@ -150,28 +162,47 @@ def test_customer_quote_preference_crud_estimate_and_audit(tmp_path) -> None:
                 f"/api/customers/{ids['customer']}/quote-preferences",
                 json={
                     "box_type": "A1",
+                    "crease_type": "压线",
                     "material_id": ids["comparison_material"],
                     "flute_type": "A",
                     "tax_included_square_price": "3.3000",
                 },
             )
             assert comparison.status_code == 201, comparison.text
+            net_sheet = client.post(
+                f"/api/customers/{ids['customer']}/quote-preferences",
+                json={
+                    "box_type": "A1",
+                    "crease_type": "净料",
+                    "material_id": ids["material"],
+                    "flute_type": "A",
+                    "tax_included_square_price": "3.2800",
+                },
+            )
+            assert net_sheet.status_code == 201, net_sheet.text
             listed = client.get(
                 f"/api/customers/{ids['customer']}/quote-preferences"
             )
             assert listed.status_code == 200, listed.text
             assert {
-                (item["box_type"], item["supplier_name"], item["material_code"])
+                (
+                    item["box_type"],
+                    item["crease_type"],
+                    item["supplier_name"],
+                    item["material_code"],
+                )
                 for item in listed.json()["items"]
             } == {
-                ("A1", "测试供应商", "QP-A"),
-                ("A1", "对比供应商", "QP-B"),
+                ("A1", "压线", "测试供应商", "QP-A"),
+                ("A1", "净料", "测试供应商", "QP-A"),
+                ("A1", "压线", "对比供应商", "QP-B"),
             }
 
             preference_estimate = client.post(
                 f"/api/customers/{ids['customer']}/quote-preferences/estimate",
                 json={
                     "box_type": "a1/0201",
+                    "crease_type": "压线",
                     "material_id": ids["material"],
                     "flute_type": "a",
                     "length_mm": 100,
@@ -190,6 +221,7 @@ def test_customer_quote_preference_crud_estimate_and_audit(tmp_path) -> None:
                 json={
                     "customer_id": ids["customer"],
                     "box_type": "A1/0201",
+                    "crease_type": "压线",
                     "material_id": ids["material"],
                     "flute_type": "A",
                     "length_mm": 100,
@@ -237,6 +269,7 @@ def test_customer_quote_preference_crud_estimate_and_audit(tmp_path) -> None:
                 f"/api/customers/{ids['customer']}/quote-preferences/estimate",
                 json={
                     "box_type": "A1/0201",
+                    "crease_type": "压线",
                     "material_id": ids["material"],
                     "flute_type": "A",
                     "length_mm": 100,
@@ -256,7 +289,9 @@ def test_customer_quote_preference_crud_estimate_and_audit(tmp_path) -> None:
                     OperationLog.resource == "CustomerQuotePreference"
                 )
             ).all()
-            assert [change.action for change in changes] == ["CREATE", "CREATE", "UPDATE"]
+            assert [change.action for change in changes] == [
+                "CREATE", "CREATE", "CREATE", "UPDATE"
+            ]
             assert "修改客户尺寸报价偏好" in changes[-1].details
     finally:
         engine.dispose()
@@ -271,6 +306,7 @@ def test_default_uses_effective_material_price_and_scope_is_enforced(tmp_path) -
                 f"/api/customers/{ids['customer']}/quote-preferences/estimate",
                 json={
                     "box_type": "A1",
+                    "crease_type": "压线",
                     "material_id": ids["material"],
                     "flute_type": "A",
                     "length_mm": 100,
@@ -294,6 +330,7 @@ def test_default_uses_effective_material_price_and_scope_is_enforced(tmp_path) -
                 f"/api/customers/{ids['customer']}/quote-preferences/estimate",
                 json={
                     "box_type": "A3",
+                    "crease_type": "压线",
                     "material_id": ids["material"],
                     "flute_type": "A",
                     "length_mm": 100,
@@ -324,6 +361,7 @@ def test_quote_preference_rejects_material_from_inactive_supplier(tmp_path) -> N
                 f"/api/customers/{ids['customer']}/quote-preferences",
                 json={
                     "box_type": "A1",
+                    "crease_type": "压线",
                     "material_id": ids["comparison_material"],
                     "flute_type": "A",
                     "tax_included_square_price": "3.3000",

@@ -68,6 +68,7 @@ STATUS_LABELS = {
 class QuotationPreviewPayload(BaseModel):
     customer_id: int | None = Field(default=None, gt=0)
     box_type: str
+    crease_type: str = Field(default="压线", min_length=1, max_length=20)
     length_mm: Decimal | None = Field(default=None, gt=0)
     width_mm: Decimal | None = Field(default=None, gt=0)
     height_mm: Decimal | None = Field(default=None, gt=0)
@@ -305,6 +306,7 @@ def _preview(db: Session, payload: QuotationPreviewPayload) -> dict:
                 CustomerQuotePreference.customer_id == payload.customer_id,
                 CustomerQuotePreference.box_type
                 == canonical_quote_box_type(payload.box_type),
+                CustomerQuotePreference.crease_type == payload.crease_type.strip(),
                 CustomerQuotePreference.material_id == material.id,
                 CustomerQuotePreference.flute_type == flute_type,
                 CustomerQuotePreference.is_active.is_(True),

@@ -35,6 +35,7 @@ from app.services.customer_quote_pricing import (
     estimate_a1_unit_price,
     resolve_customer_square_price,
 )
+from app.services.box_type_rules import BoxTypeRuleError, normalize_box_configuration
 from app.services.flute_mapping import normalize_flute_type, validate_flute_consistency
 from app.services.supplier_master import SupplierLookupError, resolve_supplier
 
@@ -112,6 +113,7 @@ class CustomerStatusPayload(CustomerMutationPayload):
 
 class CustomerQuotePreferenceCreatePayload(BaseModel):
     box_type: str = Field(min_length=1, max_length=150)
+    crease_type: str = Field(min_length=1, max_length=20)
     material_id: int = Field(gt=0)
     flute_type: str = Field(min_length=1, max_length=20)
     tax_included_square_price: Decimal = Field(gt=0)
@@ -125,6 +127,14 @@ class CustomerQuotePreferenceCreatePayload(BaseModel):
             raise ValueError("不能为空")
         return cleaned.upper()
 
+    @field_validator("crease_type")
+    @classmethod
+    def strip_crease_type(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("不能为空")
+        return cleaned
+
 
 class CustomerQuotePreferenceUpdatePayload(BaseModel):
     tax_included_square_price: Decimal = Field(gt=0)
@@ -134,6 +144,7 @@ class CustomerQuotePreferenceUpdatePayload(BaseModel):
 
 class CustomerQuoteEstimatePayload(BaseModel):
     box_type: str = Field(min_length=1, max_length=150)
+    crease_type: str = Field(min_length=1, max_length=20)
     material_id: int = Field(gt=0)
     flute_type: str = Field(min_length=1, max_length=20)
     length_mm: Decimal = Field(gt=0)
@@ -148,6 +159,14 @@ class CustomerQuoteEstimatePayload(BaseModel):
         if not cleaned:
             raise ValueError("不能为空")
         return cleaned.upper()
+
+    @field_validator("crease_type")
+    @classmethod
+    def strip_estimate_crease_type(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("不能为空")
+        return cleaned
 
 
 def _customer_write_data(payload: CustomerPayload) -> dict:
@@ -217,11 +236,32 @@ def _require_a1_quote_box_type(box_type: str) -> str:
     return normalized
 
 
+def _validated_preference_crease(box_type: str, crease_type: str) -> str:
+    try:
+        configuration = normalize_box_configuration(
+            box_style=box_type,
+            splice_mode="single",
+            pieces_per_box=1,
+            flap_mm=30,
+            default_cutting_mode="一开一",
+            crease_type=crease_type,
+        )
+    except BoxTypeRuleError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if not configuration["recognized"]:
+        raise HTTPException(status_code=400, detail="所选箱型不存在或已停用")
+    normalized = str(configuration["crease_type"] or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="请选择压线类型")
+    return normalized
+
+
 def _quote_preference_response(preference: CustomerQuotePreference) -> dict:
     return {
         "id": preference.id,
         "customer_id": preference.customer_id,
         "box_type": preference.box_type,
+        "crease_type": preference.crease_type,
         "material_id": preference.material_id,
         "material_code": preference.material.code if preference.material else None,
         "supplier_name": preference.material.supplier_name if preference.material else None,
@@ -308,6 +348,7 @@ def list_customer_quote_preferences(
         .where(CustomerQuotePreference.customer_id == customer_id)
         .order_by(
             CustomerQuotePreference.box_type,
+            CustomerQuotePreference.crease_type,
             CustomerQuotePreference.material_id,
             CustomerQuotePreference.flute_type,
             CustomerQuotePreference.id,
@@ -333,9 +374,12 @@ def create_customer_quote_preference(
         raise HTTPException(status_code=400, detail="所选材质不存在或已停用")
     _require_active_material_supplier(db, material)
     flute = _validated_preference_flute(material, payload.flute_type)
+    box_type = _normalized_quote_box_type(payload.box_type)
+    crease_type = _validated_preference_crease(box_type, payload.crease_type)
     preference = CustomerQuotePreference(
         customer_id=customer_id,
-        box_type=_normalized_quote_box_type(payload.box_type),
+        box_type=box_type,
+        crease_type=crease_type,
         material_id=material.id,
         flute_type=flute,
         tax_included_square_price=payload.tax_included_square_price,
@@ -357,7 +401,7 @@ def create_customer_quote_preference(
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="该客户、箱型、材质和楞型的报价偏好已存在",
+            detail="该客户、箱型、压线类型、材质和楞型的报价偏好已存在",
         ) from error
     db.refresh(preference)
     return _quote_preference_response(preference)
@@ -426,11 +470,13 @@ def estimate_customer_quote_preference(
     _require_active_material_supplier(db, material)
     flute = _validated_preference_flute(material, payload.flute_type)
     box_type = _require_a1_quote_box_type(payload.box_type)
+    crease_type = _validated_preference_crease(box_type, payload.crease_type)
     preference = db.scalar(
         select(CustomerQuotePreference)
         .where(
             CustomerQuotePreference.customer_id == customer_id,
             CustomerQuotePreference.box_type == box_type,
+            CustomerQuotePreference.crease_type == crease_type,
             CustomerQuotePreference.material_id == material.id,
             CustomerQuotePreference.flute_type == flute,
             CustomerQuotePreference.is_active.is_(True),
@@ -458,6 +504,7 @@ def estimate_customer_quote_preference(
     response = {
         "customer_id": customer_id,
         "box_type": box_type,
+        "crease_type": crease_type,
         "material_id": material.id,
         "flute_type": flute,
         "preference_id": preference.id if preference is not None else None,

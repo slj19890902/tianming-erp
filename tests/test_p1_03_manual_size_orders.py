@@ -35,9 +35,14 @@ def _manual_payload(*, client_line_id: str = "manual-size-line-001") -> dict:
                 "manual_size_entry": True,
                 "box_type": "A1",
                 "product_name": "纸箱",
+                "customer_model": "手工规格-B07",
                 "length_mm": 520,
                 "width_mm": 350,
                 "height_mm": 300,
+                "crease_type": "压线",
+                "crease_left_mm": 175,
+                "crease_middle_mm": 300,
+                "crease_right_mm": 175,
                 "material_id": 1,
                 "layer_count": 5,
                 "flute_type": "AB",
@@ -73,6 +78,7 @@ def _make_fixture_material_valid_for_manual_a1(session_factory) -> None:
             CustomerQuotePreference(
                 customer_id=1,
                 box_type="A1",
+                crease_type="压线",
                 material_id=material.id,
                 flute_type="AB",
                 tax_included_square_price=Decimal("3.2500"),
@@ -101,6 +107,15 @@ def test_manual_size_order_creates_versioned_a1_common_box_and_freezes_order(
     item = response.json()["items"][0]
     assert item["snapshot_product_name"] == "纸箱"
     assert item["snapshot_spec"].replace("×", "x") == "520x350x300mm"
+    assert item["snapshot_customer_model"] == "手工规格-B07"
+    assert item["snapshot_report_length_mm"] == 1770
+    assert item["snapshot_report_width_mm"] == 650
+    assert item["snapshot_crease_type"] == "压线"
+    assert [
+        item["snapshot_crease_left_mm"],
+        item["snapshot_crease_middle_mm"],
+        item["snapshot_crease_right_mm"],
+    ] == [175, 300, 175]
     assert Decimal(str(item["unit_price"])) == Decimal("3.68")
 
     with session_factory() as session:
@@ -115,6 +130,15 @@ def test_manual_size_order_creates_versioned_a1_common_box_and_freezes_order(
         assert product.material_id == 1
         assert product.layer_count == 5
         assert product.flute_type == "AB"
+        assert product.report_length_mm == 1770
+        assert product.report_width_mm == 650
+        assert product.crease_type == "压线"
+        assert (
+            product.crease_left_mm,
+            product.crease_middle_mm,
+            product.crease_right_mm,
+        ) == (175, 300, 175)
+        assert product.flap_mm == 30
         assert (product.length_mm, product.width_mm, product.height_mm) == (
             Decimal("520"), Decimal("350"), Decimal("300"),
         )
@@ -141,6 +165,16 @@ def test_manual_size_requires_explicit_a1_dimensions_material_and_matching_flute
         ({"material_id": None}, "必须明确选择材质"),
         ({"layer_count": 3}, "层数必须与所选材质真实层数一致"),
         ({"flute_type": "BE"}, "已保存并启用"),
+        (
+            {
+                "crease_type": "净料",
+                "crease_left_mm": None,
+                "crease_middle_mm": None,
+                "crease_right_mm": None,
+            },
+            "已保存并启用",
+        ),
+        ({"crease_right_mm": 176}, "左右数值必须相等"),
     ]
     with TestClient(app) as client:
         _login(client)

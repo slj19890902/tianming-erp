@@ -456,6 +456,10 @@ class OrderItemCreate(BaseModel):
     material_id: int | None = None
     layer_count: int | None = None   # v0.19.2-B: 常用箱层数（自动带出）
     flute_type: str | None = None    # v0.19.2-B: 常用箱实际楞型（自动带出）
+    crease_type: str | None = Field(default=None, max_length=20)
+    crease_left_mm: int | None = Field(default=None, ge=0)
+    crease_middle_mm: int | None = Field(default=None, gt=0)
+    crease_right_mm: int | None = Field(default=None, ge=0)
     temp_drawing_token: str | None = Field(default=None, min_length=32, max_length=32)
     drawing_save_option: Literal[
         "order_only", "save_to_product", "overwrite_product"
@@ -5195,6 +5199,10 @@ def _create_order_impl(
                             material_id=item_payload.material_id,
                             layer_count=item_payload.layer_count,
                             flute_type=item_payload.flute_type,
+                            crease_type=item_payload.crease_type,
+                            crease_left_mm=item_payload.crease_left_mm,
+                            crease_middle_mm=item_payload.crease_middle_mm,
+                            crease_right_mm=item_payload.crease_right_mm,
                             sale_unit_price=Decimal(str(item_payload.unit_price)),
                         ),
                         user=user,

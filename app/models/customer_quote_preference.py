@@ -31,6 +31,7 @@ class CustomerQuotePreference(Base):
         UniqueConstraint(
             "customer_id",
             "box_type",
+            "crease_type",
             "material_id",
             "flute_type",
             name="uq_customer_quote_preferences_identity",
@@ -44,6 +45,9 @@ class CustomerQuotePreference(Base):
         ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True
     )
     box_type: Mapped[str] = mapped_column(String(150), nullable=False)
+    crease_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="压线", server_default="压线"
+    )
     material_id: Mapped[int] = mapped_column(
         ForeignKey("materials.id", ondelete="RESTRICT"), nullable=False, index=True
     )

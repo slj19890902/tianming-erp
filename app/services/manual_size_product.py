@@ -13,6 +13,7 @@ from app.models.customer_quote_preference import CustomerQuotePreference
 from app.models.material import Material
 from app.models.product import Product
 from app.models.user import User
+from app.services.box_type_rules import BoxTypeRuleError, recommend_box_type
 from app.services.flute_mapping import normalize_flute_type, validate_flute_for_write
 from app.services.master_data_versioning import record_versioned_create
 from app.services.supplier_master import SupplierLookupError, resolve_supplier
@@ -36,6 +37,10 @@ class ManualSizeProductInput:
     material_id: int | None
     layer_count: int | None
     flute_type: str | None
+    crease_type: str | None
+    crease_left_mm: int | None
+    crease_middle_mm: int | None
+    crease_right_mm: int | None
     sale_unit_price: Decimal
 
 
@@ -47,7 +52,7 @@ def _validate_input(
     db: Session,
     customer: Customer,
     data: ManualSizeProductInput,
-) -> tuple[Material, str]:
+) -> tuple[Material, str, dict[str, object]]:
     if not data.client_line_id.strip():
         raise ManualSizeProductError("手工尺寸订单必须提供明细幂等标识")
     if (data.box_type or "").strip().upper() != "A1":
@@ -75,11 +80,61 @@ def _validate_input(
     error = validate_flute_for_write(flute_type, material.layer_count)
     if error:
         raise ManualSizeProductError(error)
+    crease_type = str(data.crease_type or "压线").strip()
+    try:
+        recommendation = recommend_box_type(
+            box_style="A1",
+            length_mm=data.length_mm,
+            width_mm=data.width_mm,
+            height_mm=data.height_mm,
+            splice_mode="single",
+            flap_mm=30,
+            crease_type=crease_type,
+        )
+    except BoxTypeRuleError as error:
+        raise ManualSizeProductError(str(error)) from error
+    if not recommendation.get("auto_calculated"):
+        raise ManualSizeProductError("当前箱型无法生成已确认的报料尺寸")
+    if crease_type == "压线":
+        supplied_segments = (
+            data.crease_left_mm,
+            data.crease_middle_mm,
+            data.crease_right_mm,
+        )
+        if all(value is None for value in supplied_segments):
+            left = int(recommendation["crease_left_mm"] or 0)
+            middle = int(recommendation["crease_middle_mm"] or 0)
+            right = int(recommendation["crease_right_mm"] or 0)
+        elif any(value is None for value in supplied_segments):
+            raise ManualSizeProductError("压线尺寸必须完整填写左、中、右三段")
+        else:
+            left, middle, right = (int(value or 0) for value in supplied_segments)
+        if left < 0 or middle <= 0 or right < 0:
+            raise ManualSizeProductError("压线左右段不得小于0，中间段必须大于0")
+        if left != right:
+            raise ManualSizeProductError("A1压线左右数值必须相等")
+        recommendation.update(
+            crease_type="压线",
+            crease_left_mm=left,
+            crease_middle_mm=middle,
+            crease_right_mm=right,
+            report_width_mm=left + middle + right,
+        )
+    elif any(
+        value is not None
+        for value in (
+            data.crease_left_mm,
+            data.crease_middle_mm,
+            data.crease_right_mm,
+        )
+    ):
+        raise ManualSizeProductError("非压线类型不能填写三段压线尺寸")
     saved_preference = db.scalar(
         select(CustomerQuotePreference.id)
         .where(
             CustomerQuotePreference.customer_id == customer.id,
             CustomerQuotePreference.box_type == "A1",
+            CustomerQuotePreference.crease_type == crease_type,
             CustomerQuotePreference.material_id == material.id,
             CustomerQuotePreference.flute_type == flute_type,
             CustomerQuotePreference.is_active.is_(True),
@@ -88,9 +143,9 @@ def _validate_input(
     )
     if saved_preference is None:
         raise ManualSizeProductError(
-            "手工尺寸订单只能选择该客户报价偏好中已保存并启用的箱型、层数、楞型、供应商和材质代码"
+            "手工尺寸订单只能选择该客户报价偏好中已保存并启用的箱型、压线类型和材质代码"
         )
-    return material, flute_type
+    return material, flute_type, recommendation
 
 
 def _same_manual_size_product(
@@ -98,6 +153,7 @@ def _same_manual_size_product(
     data: ManualSizeProductInput,
     *,
     flute_type: str,
+    recommendation: dict[str, object],
 ) -> bool:
     return (
         product.box_style == "A1"
@@ -107,6 +163,13 @@ def _same_manual_size_product(
         and product.length_mm == Decimal(str(data.length_mm))
         and product.width_mm == Decimal(str(data.width_mm))
         and product.height_mm == Decimal(str(data.height_mm))
+        and product.report_length_mm == recommendation["report_length_mm"]
+        and product.report_width_mm == recommendation["report_width_mm"]
+        and product.crease_type == recommendation["crease_type"]
+        and product.crease_left_mm == recommendation["crease_left_mm"]
+        and product.crease_middle_mm == recommendation["crease_middle_mm"]
+        and product.crease_right_mm == recommendation["crease_right_mm"]
+        and product.flap_mm == 30
         and product.sale_unit_price == data.sale_unit_price
     )
 
@@ -129,7 +192,7 @@ def resolve_or_create_manual_size_product(
     silently generating a second code.  The surrounding order transaction owns
     commit/rollback, so a failed order cannot leave this product behind.
     """
-    material, flute_type = _validate_input(db, customer, data)
+    material, flute_type, recommendation = _validate_input(db, customer, data)
     marker = _marker(data.client_line_id.strip())
     existing = db.scalar(
         select(Product)
@@ -138,9 +201,14 @@ def resolve_or_create_manual_size_product(
         .limit(1)
     )
     if existing is not None:
-        if not _same_manual_size_product(existing, data, flute_type=flute_type):
+        if not _same_manual_size_product(
+            existing,
+            data,
+            flute_type=flute_type,
+            recommendation=recommendation,
+        ):
             raise ManualSizeProductError(
-                "同一手工明细幂等标识的尺寸、材质、楞型或单价已不同，不能重复保存"
+                "同一手工明细幂等标识的尺寸、材质、压线或单价已不同，不能重复保存"
             )
         return existing
 
@@ -170,6 +238,16 @@ def resolve_or_create_manual_size_product(
             flute_type=flute_type,
             box_category="normal",
             box_style="A1",
+            report_length_mm=int(recommendation["report_length_mm"] or 0),
+            report_width_mm=int(recommendation["report_width_mm"] or 0),
+            crease_type=str(recommendation["crease_type"] or "") or None,
+            crease_left_mm=recommendation["crease_left_mm"],
+            crease_middle_mm=recommendation["crease_middle_mm"],
+            crease_right_mm=recommendation["crease_right_mm"],
+            splice_mode="single",
+            pieces_per_box=1,
+            default_cutting_mode="一开一",
+            flap_mm=30,
             sale_unit_price=data.sale_unit_price,
             remark=marker,
             is_active=True,

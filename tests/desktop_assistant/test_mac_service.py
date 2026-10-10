@@ -50,9 +50,22 @@ def test_prepare_checks_signed_code_and_never_selects_cached_manifest(signed_cas
     spec = plistlib.loads(path.read_bytes())
     assert spec['Label'] == service.label_for(manager.root)
     assert spec['ProgramArguments'][0].endswith('/runtime/bin/python3.12')
-    script = Path(spec['ProgramArguments'][2])
+    script = Path(spec['ProgramArguments'][3])
     script.write_text('tampered fixture')
     with pytest.raises(ValueError,match='校验失败'):
+        service.prepare(manager)
+
+
+def test_unlisted_import_shadow_and_wrong_data_link_are_rejected(signed_case):
+    manager = signed_case.manager
+    release = manager.root/'releases'/manager.state['current']
+    shadow = release/'json.py'
+    shadow.write_text('# unexpected executable module')
+    with pytest.raises(ValueError,match='未签名'):
+        service.prepare(manager)
+    shadow.unlink()
+    (release/'data').symlink_to(signed_case.root,target_is_directory=True)
+    with pytest.raises(ValueError,match='非托管链接'):
         service.prepare(manager)
 
 
@@ -123,6 +136,7 @@ def test_foreign_label_cannot_be_stopped_even_with_matching_copies(signed_case, 
 def test_definition_uses_isolated_foreground_user_runtime_without_secrets(tmp_path):
     spec = service.definition(tmp_path, tmp_path/'python', tmp_path/'supervisor.py', tmp_path/'public.pem', 'a'*64)
     assert spec['ProgramArguments'][1] == '-I'
+    assert spec['ProgramArguments'][2] == '-B'
     assert spec['KeepAlive'] == {'SuccessfulExit':False}
     assert spec['EnvironmentVariables'] == {'ERP_HOME_REHEARSAL':'1'}
     assert spec['ExitTimeOut'] == 90 and spec['ThrottleInterval'] == 30

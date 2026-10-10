@@ -338,6 +338,7 @@ class Manager:
         rehearsal = sys.platform == 'darwin' or env.get('ERP_HOME_REHEARSAL') == '1'
         if rehearsal:
             env['ERP_HOME_REHEARSAL'] = '1'
+            env['PYTHONDONTWRITEBYTECODE'] = '1'
             env['ERP_BIND_HOST'] = '127.0.0.1'
             env['ERP_AI_INVENTORY_PROVIDER'] = 'disabled'
             for name in list(env):

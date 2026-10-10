@@ -9,7 +9,7 @@ import sys
 
 from desktop_assistant.release_request import public_identity
 from desktop_assistant.runtime_platform import runtime_python
-from desktop_assistant.storage import sha, signed_release_manifest, safe_name, write_json
+from desktop_assistant.storage import sha, signed_release_manifest, safe_name, write_json, read_json
 
 LAUNCHCTL = '/bin/launchctl'
 
@@ -36,7 +36,7 @@ def label_for(root):
 def definition(root, python, script, public, fingerprint):
     """Pure definition builder. Only prepare() authenticates its input code."""
     return {
-        'Label':label_for(root), 'ProgramArguments':[str(python), '-I', str(script),
+        'Label':label_for(root), 'ProgramArguments':[str(python), '-I', '-B', str(script),
             '--root',str(root),'--public-key',str(public),'--publisher-sha256',fingerprint],
         'WorkingDirectory':str(root), 'RunAtLoad':True,
         'KeepAlive':{'SuccessfulExit':False}, 'ThrottleInterval':30,
@@ -76,6 +76,8 @@ def prepare(manager):
         if manifest.get('runtime_platform') != 'macos-arm64':
             raise ValueError('Windows包不能注册为Mac后台服务')
         release = root / 'releases' / identity
+        if release.is_symlink() or release.is_junction():
+            raise ValueError('后台服务发布目录不能是链接')
         python = runtime_python(release, manifest, runnable=True)
         # Check all shipped code/runtime files even after managed data links were
         # added. No mutable cached manifest chooses the supervisor or interpreter.
@@ -84,6 +86,21 @@ def prepare(manager):
             path = release / name
             if path.resolve() != release.resolve() / name or not path.is_file() or sha(path) != expected:
                 raise ValueError('后台服务发布文件校验失败')
+        if read_json(release/'manifest.json') != manifest:
+            raise ValueError('后台服务缓存清单与签名原件不一致')
+        managed = {'data':'data','static/uploads':'legacy_uploads',
+                   'factory_twin/data':'factory_twin_data','logs':'logs'}
+        pending = [release]
+        while pending:
+            for path in pending.pop().iterdir():
+                name = path.relative_to(release).as_posix()
+                if path.is_symlink() or path.is_junction():
+                    if name not in managed or path.resolve() != (root/'shared'/managed[name]).resolve():
+                        raise ValueError('发布目录含非托管链接')
+                elif path.is_dir():
+                    pending.append(path)
+                elif name not in manifest['files'] and name != 'manifest.json':
+                    raise ValueError('发布目录含未签名文件，拒绝后台运行')
         script = release / 'desktop_assistant/service_supervisor.py'
         if 'desktop_assistant/service_supervisor.py' not in manifest['files']:
             raise ValueError('已签名包缺少服务监护入口')

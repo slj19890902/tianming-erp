@@ -143,6 +143,7 @@ def run_migration(release, shared, revision, log, environment=None, *, release_m
         env['ERP_HOME_REHEARSAL'] = '1'
     module = 'alembic'
     if native:
+        env['PYTHONDONTWRITEBYTECODE'] = '1'
         entry = release / 'desktop_assistant/migration_entry.py'
         expected = release_manifest.get('files', {}).get('desktop_assistant/migration_entry.py')
         if not expected or not entry.is_file() or entry.is_symlink() or sha(entry) != expected:

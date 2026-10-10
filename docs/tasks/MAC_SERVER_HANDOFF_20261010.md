@@ -119,3 +119,5 @@ Mac 默认使用系统 STHeiti Medium.ttc 的 Heiti SC（face 1），合同和�
 实机launchd检查使用本任务临时目录中的合成Python任务（非ERP）：首次exit 7后产生第二个不同PID，bootout触发SIGTERM并写优雅退出标记，最后launchctl确认标签不存在；未向用户Library/LaunchAgents写入正式ERP任务。正式定义30秒重启节流、90秒退出等待、umask077，程序参数无密钥；Interactive用于HTTP用户请求而非后台限速。AbandonProcessGroup保留监护异常退出时的ERP子进程，再由监护恢复核验，避免launchd直接强杀数据库；明确停用仍通过维护锁/Manager.stop验证。
 
 来源为本机launchd.plist手册及Apple官方 Creating Launch Daemons and Agents（https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html）。这是当前用户登录会话能力；不冒充专用非管理员账户、注销后运行、FileVault解锁前冷启动或工厂断电恢复已通过。服务入口固定到已签名包，更新入口需先核验停用、归档配置再登记，不覆盖运行定义；完整ERP原生服务/真实库/自动备份调度仍待验证。
+
+服务完整性复核扩展：mac_service准备时另拒绝整个发布目录链接、被改写的缓存manifest、未签名额外文件及非本安装数据链接，防止额外json.py等导入遮蔽；仅允许四种已绑定shared目标的数据链接。范围补入manager.py和migration.py：受管家庭服务及Mac迁移不生成未签名字节码，监护解释器使用-I -B；Windows正式分支不改变。服务/家庭隔离/原生迁移进程联合30项通过，含额外模块和错误链接拒绝，证据mac-service-integrity-tests.log。未删除任何未知文件来通过门禁，未接管正式服务。

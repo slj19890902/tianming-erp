@@ -209,3 +209,73 @@ def test_snapshot_pick_read_is_zero_dml(pick_app):
         finally:event.remove(factory.kw['bind'],'before_cursor_execute',sql)
         assert found.status_code==200 and found.json()['status']=='not_recorded'
         assert not {'INSERT','UPDATE','DELETE'} & set(statements) and state(factory)==before
+
+
+
+def close_request(client,did,body):
+    return client.post(f"/api/deliveries/{did}/dispatch-results/{body['idempotency_key']}/close",json=dict(expected_actor_id=body['expected_actor_id'],original_request=body))
+
+
+def test_execute_wins_then_close_keeps_original_completion(delivery_api_app):
+    app,factory=delivery_api_app
+    with TestClient(app) as c:
+        _login(c,'admin');created=seed(c,factory);did=created['id'];body=command(c,did)
+        write=c.put(f'/api/deliveries/{did}/dispatch',json=body);assert write.status_code==200
+        before=state(factory);closed=close_request(c,did,body)
+        assert closed.status_code==200 and closed.json()==write.json() and state(factory)==before
+        assert resolve(c,did,body).json()['status']=='completed'
+
+
+def test_close_wins_then_late_execute_never_consumes(delivery_api_app):
+    app,factory=delivery_api_app
+    with TestClient(app) as c:
+        _login(c,'admin');created=seed(c,factory);did=created['id'];body=command(c,did)
+        edit=_create_payload();edit.pop('customer_id');edit.update(expected_version=1,idempotency_key='close-after-stale-edit');edit['items'][0]['delivered_quantity']=25
+        assert c.put(f'/api/deliveries/{did}',json=edit).status_code==200
+        before=state(factory);closed=close_request(c,did,body)
+        assert closed.status_code==200 and closed.json()['result']=='closed'
+        closure=closed.json()['closure_receipt'];assert closure['request']['expected_version']==1 and closure['closed_at']
+        after=state(factory);assert after['lots']==before['lots'] and after['deliveries']==before['deliveries'] and after['records']==before['records']+1
+        assert c.put(f'/api/deliveries/{did}/dispatch',json=body).json()==closed.json()
+        assert close_request(c,did,body).json()==closed.json() and state(factory)==after
+        found=resolve(c,did,body);assert found.json()['status']=='closed' and found.json()['closure_receipt']==closure and found.json()['dispatch_receipt'] is None
+        changed=copy.deepcopy(body);changed['confirm_pick_exception']=True
+        assert close_request(c,did,changed).status_code==409 and state(factory)==after
+
+
+def test_close_failure_and_committed_ack_loss_then_new_confirmation(delivery_api_app,monkeypatch):
+    from app.services import delivery_dispatch_commands as service
+    app,factory=delivery_api_app
+    with TestClient(app,raise_server_exceptions=False) as c:
+        _login(c,'admin');created=seed(c,factory);did=created['id'];body=command(c,did);before=state(factory)
+        real_audit=deliveries._write_audit
+        def fail_audit(*a,**kw):
+            if kw.get('action')=='CLOSE_DISPATCH_REQUEST':raise RuntimeError('synthetic close audit failure')
+            return real_audit(*a,**kw)
+        with monkeypatch.context() as patch:patch.setattr(deliveries,'_write_audit',fail_audit);failed=close_request(c,did,body)
+        assert failed.status_code==500 and state(factory)==before and resolve(c,did,body).json()['status']=='not_recorded'
+        _login(c,'finance');denied=close_request(c,did,body);assert denied.status_code==403 and state(factory)==before
+        _login(c,'admin');real=service.commit_command
+        def ack_loss(db):real(db);raise RuntimeError('synthetic close committed ack loss')
+        with monkeypatch.context() as patch:patch.setattr(service,'commit_command',ack_loss);failed=close_request(c,did,body)
+        assert failed.status_code==500
+        after=state(factory);assert after['lots']==before['lots'] and after['deliveries']==before['deliveries']
+        found=resolve(c,did,body);assert found.json()['status']=='closed'
+        assert close_request(c,did,body).json()['closure_receipt']==found.json()['closure_receipt'] and state(factory)==after
+        fresh=command(c,did,'command-after-closed');saved=c.put(f'/api/deliveries/{did}/dispatch',json=fresh)
+        assert saved.status_code==200 and saved.json()['result']=='completed'
+
+
+
+def test_missing_consumption_evidence_is_not_completion(delivery_api_app):
+    app,factory=delivery_api_app
+    with TestClient(app) as c:
+        _login(c,'admin');created=seed(c,factory);did=created['id'];body=command(c,did)
+        saved=c.put(f'/api/deliveries/{did}/dispatch',json=body);assert saved.status_code==200
+        with factory() as db:
+            record=db.scalar(select(FinanceIdempotencyRecord).where(FinanceIdempotencyRecord.idempotency_key==body['idempotency_key']))
+            damaged=json.loads(record.response_json);damaged['dispatch_receipt']['movements']=[];damaged['dispatch_receipt']['direct_component_allocations']=[]
+            record.response_json=json.dumps(damaged);db.commit()
+        before=state(factory);found=resolve(c,did,body)
+        assert found.status_code==200 and found.json()['status']=='trace' and found.json()['dispatch_receipt'] is None
+        assert state(factory)==before

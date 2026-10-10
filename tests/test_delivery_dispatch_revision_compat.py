@@ -2,7 +2,7 @@
 import copy
 from fastapi.testclient import TestClient
 from sqlalchemy import select,func
-from tests.test_delivery_dispatch_commands import delivery_api_app,command,seed,state,_login
+from tests.test_delivery_dispatch_commands import delivery_api_app,command,seed,state,_login,_create_payload
 from tests.test_p1_137b_dispatched_delivery_revision import _revision_payload
 from tests.test_p1_140_external_stock_replenishment import external_stock_app,p1_40a_app,_seed_external_warning,_login as external_login
 
@@ -45,3 +45,116 @@ def test_external_receipt_unordered_dual_quantity_command(external_stock_app):
         with factory() as db:
             lot=db.get(InventoryLot,lot_id);assert lot.quantity_available==0 and lot.quantity_consumed==200
             assert db.scalar(select(func.count()).select_from(Order))==0
+
+
+
+from tests.test_n039_composite_bom_requisition import composite_requisition_app
+from tests.test_p1_81_receipt_purpose_flow import _p181_published_map_identity
+
+
+def _run_existing_receipt_source_flow(module, function, fixture, monkeypatch, *args):
+    """Reuse the old real seed/receipt assertions, with explicit new HTTP entry.
+
+    This adapter belongs only to these named new compatibility tests. Original
+    tests, conftest, application routes and all old no-body checks are untouched.
+    """
+    attempts={}
+    class CommandClient(TestClient):
+        def put(self,url,**kwargs):
+            if str(url).endswith('/dispatch'):
+                did=int(str(url).split('/')[-2])
+                body=attempts.setdefault(did,command(self,did,f'compat-source-{did}')) if did not in attempts else attempts[did]
+                kwargs['json']=body
+            return super().put(url,**kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(module,'TestClient',CommandClient)
+        getattr(module,function)(fixture,*args)
+
+
+def test_frozen_accompany_source_conservation(composite_requisition_app,_p181_published_map_identity,monkeypatch):
+    from tests import test_bom_accompany418 as old
+    _run_existing_receipt_source_flow(old,'test_separate_receipts_accompany_four_dispatch_and_reverse',composite_requisition_app,monkeypatch,_p181_published_map_identity)
+
+
+def test_frozen_subkit_source_conservation(composite_requisition_app,_p181_published_map_identity,monkeypatch):
+    from tests import test_bom_subkit_receipt_flow as old
+    _run_existing_receipt_source_flow(old,'test_parent_and_liner_receipt_dispatch_cancel_are_separate',composite_requisition_app,monkeypatch,_p181_published_map_identity,False,False)
+
+
+def test_ordinary_historical_direct_completion_coverage(delivery_api_app):
+    from datetime import datetime
+    from app.models.production import ProductionTask,ProductionCompletionBatch,ProductionCompletion
+    app,factory=delivery_api_app
+    with factory() as db:
+        task=ProductionTask(order_item_id=1,status='completed',planned_quantity=80,finished_coverage_snapshot=0,
+            ordered_quantity_snapshot=100,material_received_quantity=80,material_input_quantity=80,output_factor=1,version=1)
+        batch=ProductionCompletionBatch(idempotency_key='command-old-direct-fact',request_hash='a'*64,item_count=1,completed_at=datetime.now())
+        db.add_all([task,batch]);db.flush()
+        db.add(ProductionCompletion(batch_id=batch.id,task_id=task.id,order_item_id=1,expected_version=1,quantity=80,
+            completion_type='primary',material_input_quantity=80,planned_output_quantity=80,actual_output_quantity=80,defective_quantity=0,
+            order_reserved_quantity=80,direct_delivery_quantity=80,stock_quantity=0,surplus_finished_quantity=0,initial_disposition='direct',status='posted',completed_at=datetime.now()))
+        db.commit()
+    with TestClient(app) as c:
+        _login(c,'admin');payload=_create_payload();payload['items']=payload['items'][:1]
+        created=c.post('/api/deliveries',json=payload);assert created.status_code==201,created.text
+        did=created.json()['id'];body=command(c,did,'old-direct-command');sent=c.put(f'/api/deliveries/{did}/dispatch',json=body);assert sent.status_code==200,sent.text
+        receipt=sent.json()['dispatch_receipt'];assert receipt['movements']==[] and receipt['direct_component_allocations']==[]
+        coverage=receipt['direct_completion_coverage'];assert len(coverage)==1 and coverage[0]['credited_quantity']==30 and coverage[0]['available_before']==60
+        after=state(factory);assert c.put(f'/api/deliveries/{did}/dispatch',json=body).json()==sent.json() and state(factory)==after
+        from tests.test_delivery_dispatch_commands import resolve
+        assert resolve(c,did,body).json()['status']=='completed'
+
+
+def test_composite_direct_only_completion_conservation(composite_requisition_app):
+    from datetime import datetime
+    from app.api.deliveries import router
+    from app.models.product_bom import SalesOrderItemBomComponent
+    from app.models.production import ProductionTask,ProductionCompletionBatch,ProductionCompletion
+    from tests.test_n039_composite_bom_requisition import _login as login
+    from app.core.time_contract import beijing_today
+    app,factory=composite_requisition_app;app.include_router(router,prefix='/api/deliveries')
+    with factory() as db:
+        for component in db.scalars(select(SalesOrderItemBomComponent).where(SalesOrderItemBomComponent.sales_order_item_id==1)):
+            qty=int(component.required_piece_quantity)
+            task=ProductionTask(order_item_id=1,sales_order_item_bom_component_id=component.id,task_role='component_internal',status='completed',planned_quantity=qty,
+                finished_coverage_snapshot=0,ordered_quantity_snapshot=qty,material_received_quantity=qty,material_input_quantity=qty,output_factor=1,version=1)
+            batch=ProductionCompletionBatch(idempotency_key=f'component-direct-{component.id}',request_hash='b'*64,item_count=1,completed_at=datetime.now())
+            db.add_all([task,batch]);db.flush()
+            db.add(ProductionCompletion(batch_id=batch.id,task_id=task.id,order_item_id=1,expected_version=1,quantity=qty,completion_type='primary',material_input_quantity=qty,
+                planned_output_quantity=qty,actual_output_quantity=qty,defective_quantity=0,order_reserved_quantity=qty,direct_delivery_quantity=qty,stock_quantity=0,
+                surplus_finished_quantity=0,initial_disposition='direct',status='posted',completed_at=datetime.now()))
+        db.commit()
+    with TestClient(app) as c:
+        login(c);created=c.post('/api/deliveries',json=dict(customer_id=1,delivery_date=beijing_today().isoformat(),items=[dict(order_item_id=1,delivered_quantity=10)]));assert created.status_code==201,created.text
+        did=created.json()['id'];body=command(c,did,'component-direct-command');sent=c.put(f'/api/deliveries/{did}/dispatch',json=body);assert sent.status_code==200,sent.text
+        receipt=sent.json()['dispatch_receipt'];assert not receipt['movements'] and receipt['direct_component_allocations']
+        from tests.test_delivery_dispatch_commands import resolve
+        assert resolve(c,did,body).json()['status']=='completed'
+
+from tests.test_semi_finished_order_reservation import b1_app
+
+
+def test_legacy_liner_semi_consumption_conservation(b1_app):
+    from app.api.deliveries import router
+    from app.core.time_contract import beijing_today
+    from app.models.product import Product
+    from app.models.warehouse_inventory import InventoryLot
+    from tests.test_semi_finished_order_reservation import add_semi_lot,login,post_order,order_item,semi_plan
+    from tests.test_delivery_dispatch_commands import resolve
+    app,factory=b1_app;app.include_router(router,prefix='/api/deliveries')
+    lot_id,version=add_semi_lot(factory,quantity=12,key='command-liner-semi')
+    with factory() as db:
+        product=db.get(Product,1);product.box_style='衬板';product.crease_type='净料'
+        db.get(InventoryLot,lot_id).semi_finished_detail.crease_type='净料';db.commit()
+    with TestClient(app) as c:
+        login(c,'admin');order=post_order(c,[order_item(1,5,{'semi':[semi_plan(lot_id,version,5)]})],'COMMAND-LINER')
+        assert order.status_code==201,order.text
+        oid=order.json()['items'][0]['id']
+        created=c.post('/api/deliveries',json=dict(customer_id=1,delivery_date=beijing_today().isoformat(),items=[dict(order_item_id=oid,delivered_quantity=5)]))
+        assert created.status_code==201,created.text
+        did=created.json()['id'];body=command(c,did,'legacy-liner-command');sent=c.put(f'/api/deliveries/{did}/dispatch',json=body)
+        assert sent.status_code==200,sent.text
+        receipt=sent.json()['dispatch_receipt'];assert receipt['movements'] and all(r['source_kind']=='semi' for r in receipt['movements'])
+        assert sum(r['physical_quantity'] for r in receipt['movements'])==5
+        assert resolve(c,did,body).json()['status']=='completed'
+        after=state(factory);assert c.put(f'/api/deliveries/{did}/dispatch',json=body).json()==sent.json() and state(factory)==after

@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 from types import SimpleNamespace
+from fractions import Fraction
 
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -16,9 +17,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import require_customer_access
-from app.core.time_contract import utc_naive_to_api
+from app.core.time_contract import utc_naive_to_api, utc_now_naive
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.finance import FinanceIdempotencyRecord
 from app.models.order import Order, OrderItem
@@ -27,7 +29,9 @@ from app.models.warehouse_inventory import (
     DeliveryInventoryAllocation, FinishedGoodsInventoryDetail, InventoryLot,
     InventoryMovement, InventoryReservation, UnorderedFinishedDeliveryAllocation,
 )
-from app.models.bom_subkit import SubkitDeliveryAllocation
+from app.models.bom_subkit import SubkitDeliveryAllocation, OrderSubkit
+from app.models.production import ProductionCompletion, ProductionTask
+from app.models.warehouse_inventory import OrderItemSemiRequirement
 from app.services.delivery_quantities import for_item, item_physical_quantity, customer_for
 
 ACTION = 'delivery_dispatch_command'
@@ -147,14 +151,29 @@ def _line(db, row, api, *, customer_quantity=None, dispatched=False):
     physical_unit = contract.get('physical_unit') if contract else row.unit_snapshot
     goods = []
     if order_item:
+        from app.services.legacy_accompany import contract as accompany_contract
         components = api._delivery_component_lines(db, order_item=order_item, planned_delivery_quantity=quantity,
             delivery_item_id=row.id, dispatched=dispatched)
+        if not api._uses_composite_inventory(db,order_item.id) and accompany_contract(db,order_item.id) is None:
+            components=[]
         goods = [dict(component_snapshot_id=c['component_snapshot_id'], source_product_id=c['component_product_id'],
             customer_id=customer_id, physical_quantity=int(c['planned_delivery_quantity']), physical_unit=c.get('unit'),
             quantity_per_set=c['quantity_per_set'], bom_delivery_mode=c.get('bom_delivery_mode')) for c in components]
-    if not goods:
-        goods = [dict(component_snapshot_id=None, source_product_id=source_product, customer_id=customer_id,
-            physical_quantity=physical, physical_unit=physical_unit, quantity_per_set=None, bom_delivery_mode=None)]
+    if not goods or (order_item and not api._uses_composite_inventory(db,order_item.id)):
+        goods.insert(0,dict(component_snapshot_id=None, source_product_id=source_product, customer_id=customer_id,
+            physical_quantity=physical, physical_unit=physical_unit, quantity_per_set=None, bom_delivery_mode=None))
+    semi_requirements=[]
+    direct_sources=[]
+    if order_item:
+        kit=db.get(OrderSubkit,order_item.id)
+        if kit:
+            goods.append(dict(component_snapshot_id=None,source_product_id=kit.kit_product_id,customer_id=customer_id,
+                physical_quantity=quantity*kit.kits_per_parent,physical_unit=None,quantity_per_set=kit.kits_per_parent,bom_delivery_mode=None))
+        semi_requirements=[dict(requirement_id=r.id,pieces_per_box=int(r.pieces_per_box or 1)) for r in db.scalars(select(OrderItemSemiRequirement)
+            .where(OrderItemSemiRequirement.order_item_id==order_item.id).order_by(OrderItemSemiRequirement.id))]
+        direct_sources=[dict(completion_id=r.id,direct_quantity=int(r.direct_delivery_quantity)) for r in db.scalars(select(ProductionCompletion)
+            .join(ProductionTask,ProductionTask.id==ProductionCompletion.task_id).where(ProductionTask.sales_order_item_bom_component_id.is_(None),ProductionCompletion.order_item_id==order_item.id,ProductionCompletion.status=='posted',
+                ProductionCompletion.inventory_lot_id.is_(None),ProductionCompletion.initial_disposition=='direct').order_by(ProductionCompletion.id))]
     allocations = []
     if row.source_type == 'unordered_finished':
         allocations = [dict(allocation_id=a.id, inventory_lot_id=a.inventory_lot_id,
@@ -163,7 +182,8 @@ def _line(db, row, api, *, customer_quantity=None, dispatched=False):
     return dict(delivery_item_id=row.id, revision_number=int(row.revision_number or 1), source_type=row.source_type,
         order_item_id=row.order_item_id, product_id=row.product_id, source_product_id=source_product, customer_id=customer_id,
         customer_quantity=quantity, physical_quantity=physical, customer_unit=unit, physical_unit=physical_unit,
-        quantity_contract=contract, goods=jsonable_encoder(goods), allocation_mode='explicit_unordered' if row.source_type=='unordered_finished' else 'on_dispatch', allocations=allocations)
+        quantity_contract=contract, goods=jsonable_encoder(goods), semi_requirements=semi_requirements,direct_completion_sources=direct_sources,
+        order_delivered_quantity=int(order_item.delivered_quantity or 0) if order_item else None, allocation_mode='explicit_unordered' if row.source_type=='unordered_finished' else 'on_dispatch', allocations=allocations)
 
 
 def snapshot(db, delivery_id, user, api, *, pick_action='none', refresh=False):
@@ -209,7 +229,7 @@ def snapshot(db, delivery_id, user, api, *, pick_action='none', refresh=False):
         physical = picked.get(row.id, item['physical_quantity'])
         quantity = customer_for(item['quantity_contract'], physical) if item['quantity_contract'] else physical
         final.append(dict(delivery_item_id=row.id, customer_quantity=int(quantity), physical_quantity=int(physical),
-            customer_unit=item['customer_unit'], physical_unit=item['physical_unit']))
+            customer_unit=item['customer_unit'], physical_unit=item['physical_unit'],goods=_line(db,row,api,customer_quantity=int(quantity))['goods']))
     frozen = dict(schema_version=1, delivery=dict(id=delivery.id, customer_id=delivery.customer_id, status=delivery.status,
         version=int(delivery.version or 1), source_mode=delivery.source_mode, delivery_date=delivery.delivery_date.isoformat(), vehicle_number=delivery.vehicle_number),
         items=items, pick_task=jsonable_encoder(pick), pick_action=pick_action, expected_final_items=final)
@@ -231,6 +251,62 @@ def _record(db, key):
     return db.scalar(select(FinanceIdempotencyRecord).where(FinanceIdempotencyRecord.idempotency_key==key))
 
 
+def consumption_proven(receipt, payload):
+    """Compare original confirmed needs with frozen transaction evidence.
+
+    Physical stock quantities and integer requirement numerators are separate;
+    no FIFO selection, stock writes, or current-master reconstruction occurs.
+    """
+    try:
+        expected={r['delivery_item_id']:r for r in payload.snapshot['expected_final_items'] if r['physical_quantity']>0}
+        originals={r['delivery_item_id']:r for r in payload.snapshot['items']}
+        required={};actual={};semi={}
+        for row in receipt['final_items']:
+            confirmed=expected[row['delivery_item_id']]['goods']
+            if len(row['goods'])!=len(confirmed):return False
+            for got,wanted in zip(row['goods'],confirmed):
+                if any(got[name]!=wanted[name] for name in ('component_snapshot_id','source_product_id','customer_id','physical_quantity','quantity_per_set','bom_delivery_mode')):return False
+                if wanted['physical_unit'] is not None and got['physical_unit']!=wanted['physical_unit']:return False
+                key=(row['delivery_item_id'],got['component_snapshot_id'],got['source_product_id'])
+                if key in required or type(got['physical_quantity']) is not int or got['physical_quantity']<0:return False
+                required[key]=Fraction(got['physical_quantity'])
+        for movement in receipt['movements']:
+            if any(type(movement[name]) is not int or movement[name]<=0 for name in ('requirement_quantity','requirement_denominator','physical_quantity')):return False
+            key=(movement['delivery_item_id'],movement['component_snapshot_id'],movement['requirement_product_id'])
+            if key not in required:return False
+            credit=Fraction(movement['requirement_quantity'],movement['requirement_denominator'])
+            if movement['source_kind']=='semi':
+                semi_key=(key,movement['semi_requirement_id'])
+                semi[semi_key]=semi.get(semi_key,Fraction(0))+credit
+            elif movement['source_kind'] in {'inventory','subkit'}:
+                actual[key]=actual.get(key,Fraction(0))+credit
+            else:return False
+        for key in {row[0] for row in semi}:
+            definitions=originals[key[0]]['semi_requirements']
+            if not definitions:return False
+            # Each material component contributes the same parent coverage;
+            # summing lid/body pieces would count one parent twice.
+            coverage=min(semi.get((key,d['requirement_id']),Fraction(0))/d['pieces_per_box'] for d in definitions)
+            actual[key]=actual.get(key,Fraction(0))+coverage
+        for allocation in receipt['direct_component_allocations']:
+            matches=[key for key in required if key[0]==allocation['delivery_item_id'] and key[1]==allocation['component_snapshot_id']]
+            if len(matches)!=1:return False
+            key=matches[0];actual[key]=actual.get(key,Fraction(0))+allocation['physical_quantity']
+        for direct in receipt['direct_completion_coverage']:
+            original=originals[direct['delivery_item_id']]
+            if (direct['completion_sources']!=original['direct_completion_sources'] or direct['delivered_before']!=original['order_delivered_quantity']
+                    or direct['order_item_id']!=original['order_item_id'] or direct['source_product_id']!=original['source_product_id']
+                    or type(direct['credited_quantity']) is not int or direct['credited_quantity']<=0
+                    or direct['available_before']!=max(sum(r['direct_quantity'] for r in direct['completion_sources'])-direct['delivered_before'],0)
+                    or direct['credited_quantity']>direct['available_before']):return False
+            key=(direct['delivery_item_id'],None,direct['source_product_id'])
+            if key not in required:return False
+            actual[key]=actual.get(key,Fraction(0))+direct['credited_quantity']
+        return all(actual.get(key,Fraction(0))==amount for key,amount in required.items()) and not set(actual)-set(required)
+    except (KeyError,TypeError,ValueError,ZeroDivisionError):
+        return False
+
+
 def _matched_record(db, delivery_id, payload, user, api):
     record = _record(db,payload.idempotency_key)
     if not record:
@@ -246,6 +322,18 @@ def _matched_record(db, delivery_id, payload, user, api):
     require_customer_access(payload.snapshot.get('delivery',{}).get('customer_id'),user,db)
     try:
         value=json.loads(record.response_json)
+        if value.get('result') == 'closed':
+            closure = value['closure_receipt']
+            if (value['schema_version'] != 1 or value['current_actor_id'] != user.id
+                    or value['dispatch_receipt'] is not None or value['current'] is not None
+                    or closure['schema_version'] != 1 or closure['actor_id'] != user.id
+                    or closure['delivery_id'] != delivery_id or closure['idempotency_key'] != payload.idempotency_key
+                    or closure['request_hash'] != record.request_hash or not closure['closed_at']
+                    or closure['customer_id'] != payload.snapshot['delivery']['customer_id']
+                    or canonical(closure['request']) != canonical(request_value(payload))):
+                return None, record
+            require_customer_access(closure['customer_id'], user, db)
+            return value, record
         receipt=value['dispatch_receipt']
         if (value['schema_version']!=1 or value['result']!='completed' or receipt['schema_version']!=1
                 or receipt['actor_id']!=user.id or receipt['delivery_id']!=delivery_id
@@ -286,6 +374,8 @@ def _matched_record(db, delivery_id, payload, user, api):
                     or not movement['occurred_at']):
                 return None, record
             ids.add(movement['movement_id'])
+        if not consumption_proven(receipt, payload):
+            return None, record
         for allocation in receipt['direct_component_allocations']:
             if allocation['delivery_item_id'] not in expected_ids or any(type(allocation[name]) is not int or allocation[name] <= 0 for name in ('allocation_id','production_completion_id','component_snapshot_id','physical_quantity')):
                 return None, record
@@ -316,8 +406,9 @@ def resolve(db,delivery_id,key,payload,user,api):
         consistent_read(db)
         row=api._delivery_for_user(db,delivery_id,user)
         value,record=_matched_record(db,delivery_id,original,user,api)
-        return dict(status='completed' if value else 'trace' if record else 'not_recorded',current_actor_id=user.id,
+        return dict(status=value['result'] if value else 'trace' if record else 'not_recorded',current_actor_id=user.id,
             idempotency_key=key,dispatch_receipt=value['dispatch_receipt'] if value else None,
+            closure_receipt=value.get('closure_receipt') if value else None,
             current=current(db,delivery_id,api,user),trace=_trace(row) if record and not value else None)
 
 
@@ -342,7 +433,7 @@ def build_receipt(db,delivery_id,payload,user,api,first_movement_id):
     bindings={}
     for model in (DeliveryInventoryAllocation,UnorderedFinishedDeliveryAllocation,SubkitDeliveryAllocation):
         for allocation in db.scalars(select(model).where(model.consume_movement_id.in_(movement_ids))):
-            bindings[allocation.consume_movement_id]=allocation.delivery_item_id
+            bindings[allocation.consume_movement_id]=allocation
     facts=[]
     for movement in movements:
         lot=db.get(InventoryLot,movement.inventory_lot_id)
@@ -350,20 +441,51 @@ def build_receipt(db,delivery_id,payload,user,api,first_movement_id):
         reservation=db.get(InventoryReservation,movement.reservation_id) if movement.reservation_id else None
         if movement.operator_id!=user.id or movement.quantity<=0 or movement.id not in bindings:
             raise RuntimeError('Dispatch movement identity missing')
+        allocation=bindings[movement.id]
+        line=next(r for r in final if r['delivery_item_id']==allocation.delivery_item_id)
+        component=getattr(reservation,'sales_order_item_bom_component_id',None)
+        semi_id=getattr(reservation,'semi_requirement_id',None)
+        if isinstance(allocation,SubkitDeliveryAllocation):
+            kit=db.get(OrderSubkit,line['order_item_id']);requirement_product=kit.kit_product_id;kind='subkit'
+        else:
+            matching=[g for g in line['goods'] if g['component_snapshot_id']==component]
+            if component is None:
+                root=[g for g in line['goods'] if g['source_product_id']==line['source_product_id']]
+                matching=root or matching
+                if len(matching)==1:component=matching[0]['component_snapshot_id']
+            if len(matching)!=1:raise RuntimeError('Dispatch requirement identity missing')
+            requirement_product=matching[0]['source_product_id'];kind='semi' if semi_id else 'inventory'
+        credit=getattr(allocation,'credited_requirement_quantity',movement.quantity)
+        denominator=int(reservation.requirement_quantity_denominator or 1) if reservation else 1
         facts.append(dict(movement_id=movement.id,inventory_lot_id=lot.id,source_product_id=detail.product_id if detail else None,
-            owner_customer_id=detail.owner_customer_id if detail else None,delivery_item_id=bindings[movement.id],
-            component_snapshot_id=getattr(reservation,'sales_order_item_bom_component_id',None),physical_quantity=movement.quantity,
+            owner_customer_id=detail.owner_customer_id if detail else None,delivery_item_id=allocation.delivery_item_id,
+            component_snapshot_id=component,requirement_product_id=requirement_product,requirement_quantity=credit,requirement_denominator=denominator,
+            semi_requirement_id=semi_id,source_kind=kind,physical_quantity=movement.quantity,
             unit=movement.unit,location_id=lot.warehouse_location_id,operator_id=movement.operator_id,occurred_at=utc_naive_to_api(movement.created_at)))
     direct=[dict(allocation_id=a.id,delivery_item_id=a.delivery_item_id,production_completion_id=a.production_completion_id,
         component_snapshot_id=a.sales_order_item_bom_component_id,physical_quantity=a.consumed_quantity) for a in db.scalars(select(BomComponentDirectDeliveryAllocation)
         .where(BomComponentDirectDeliveryAllocation.delivery_item_id.in_([r['delivery_item_id'] for r in final]),BomComponentDirectDeliveryAllocation.status=='active'))]
+    coverage=[]
+    originals={r['delivery_item_id']:r for r in payload.snapshot['items']}
     for row in final:
+        before=originals[row['delivery_item_id']]
+        if before['direct_completion_sources'] and any(g['component_snapshot_id'] is None and g['source_product_id']==row['source_product_id'] for g in row['goods']):
+            parent_credit=sum((Fraction(r['requirement_quantity'],r['requirement_denominator']) for r in facts
+                if r['delivery_item_id']==row['delivery_item_id'] and r['source_kind']=='inventory' and r['component_snapshot_id'] is None and r['requirement_product_id']==row['source_product_id']),Fraction(0))
+            missing=Fraction(row['physical_quantity'])-parent_credit
+            available=max(sum(r['direct_quantity'] for r in before['direct_completion_sources'])-before['order_delivered_quantity'],0)
+            if missing>0 and missing.denominator==1 and missing<=available:
+                coverage.append(dict(delivery_item_id=row['delivery_item_id'],order_item_id=row['order_item_id'],source_product_id=row['source_product_id'],
+                    completion_sources=before['direct_completion_sources'],delivered_before=before['order_delivered_quantity'],available_before=available,credited_quantity=int(missing)))
         row['allocation_ids']=[a.id for a in db.scalars(select(DeliveryInventoryAllocation).where(DeliveryInventoryAllocation.delivery_item_id==row['delivery_item_id'],DeliveryInventoryAllocation.consume_movement_id.in_(movement_ids))) ]
-    return dict(schema_version=1,idempotency_key=payload.idempotency_key,actor_id=user.id,request_hash=request_hash(delivery_id,payload),
+    receipt=dict(schema_version=1,idempotency_key=payload.idempotency_key,actor_id=user.id,request_hash=request_hash(delivery_id,payload),
         request=request_value(payload),delivery_id=delivery_id,customer_id=delivery.customer_id,delivery_number=delivery.delivery_number,
         original_version=payload.expected_version,completed_version=int(delivery.version),dispatched_at=utc_naive_to_api(delivery.dispatched_at),
         stages=dict(pick_applied=payload.snapshot['pick_action']=='apply',pick_task_id=payload.snapshot['pick_task']['id'] if payload.snapshot['pick_task'] else None,prepared=True,dispatched=True),
-        original_items=payload.snapshot['items'],final_items=final,removed_delivery_item_ids=[key for key,row in expected.items() if row['physical_quantity']==0],movements=facts,direct_component_allocations=direct)
+        original_items=payload.snapshot['items'],final_items=final,removed_delivery_item_ids=[key for key,row in expected.items() if row['physical_quantity']==0],movements=facts,direct_component_allocations=direct,direct_completion_coverage=coverage)
+    if not consumption_proven(receipt,payload):
+        raise RuntimeError('Dispatch consumption proof does not conserve confirmed requirements')
+    return receipt
 
 
 def execute(db,delivery_id,payload,user,api):
@@ -403,8 +525,86 @@ def execute(db,delivery_id,payload,user,api):
             action=ACTION,actor=user,delivery_id=delivery_id,response=value)
         db.flush();commit_command(db)
         return value
+    except IntegrityError:
+        # Another resource can race for the global key despite our delivery
+        # lock. Re-read only after rollback, then apply the same exact metadata,
+        # actor, scope and proof checks; never overwrite a terminal record.
+        db.rollback()
+        value, record = _matched_record(db, delivery_id, payload, user, api)
+        if value:
+            return value
+        if record:
+            raise HTTPException(409, '原请求记录不可完整核对，请保留原内容并查看原单。')
+        raise
     except Exception as error:
         db.rollback()
         if isinstance(error,HTTPException):
             error.headers=headers(**(error.headers or {}))
+        raise
+
+
+def close(db, delivery_id, key, payload, user, api):
+    """Explicitly end this exact request; neither cancel nor alter a delivery."""
+    actor_guard(user, payload.expected_actor_id)
+    original = payload.original_request
+    actor_guard(user, original.expected_actor_id)
+    require_activation(db)
+    if (key != original.idempotency_key or original.snapshot.get('delivery', {}).get('id') != delivery_id
+            or original.snapshot.get('delivery', {}).get('version') != original.expected_version
+            or digest(original.snapshot) != original.snapshot_hash):
+        raise HTTPException(409, '原请求标识、版本或快照不一致，请保留原内容核对。')
+    value, record = _matched_record(db, delivery_id, original, user, api)
+    if record:
+        if value:
+            return value
+        raise HTTPException(409, '原请求已有记录但完整证明不可读，请保留并查看原单。')
+    try:
+        # Same Order -> Delivery claim as execute. An in-flight command wins
+        # wholly before or after this claim; close does not test old version,
+        # pending status, or stock qualifications.
+        order_ids = list(db.scalars(select(OrderItem.order_id).join(DeliveryItem, DeliveryItem.order_item_id == OrderItem.id)
+            .where(DeliveryItem.delivery_id == delivery_id, DeliveryItem.is_current.is_(True)).distinct().order_by(OrderItem.order_id)))
+        api.lock_order_rows_for_production_transition(db, order_ids)
+        claimed = db.execute(update(Delivery).where(Delivery.id == delivery_id).values(version=Delivery.version).execution_options(synchronize_session=False))
+        value, record = _matched_record(db, delivery_id, original, user, api)
+        if record:
+            if value:
+                db.rollback()
+                return value
+            raise HTTPException(409, '原请求已有记录但完整证明不可读，请保留并查看原单。')
+        if claimed.rowcount != 1:
+            raise HTTPException(404, '送货单不存在。')
+        row = api._delivery_for_user(db, delivery_id, user)
+        db.refresh(row)
+        for current_row in _rows(db, delivery_id, refresh=True):
+            item = db.get(OrderItem, current_row.order_item_id) if current_row.order_item_id else None
+            owner = db.get(Order, item.order_id) if item else None
+            require_customer_access(owner.customer_id if owner else row.customer_id, user, db)
+        original_customer = original.snapshot['delivery']['customer_id']
+        require_customer_access(original_customer, user, db)
+        for original_row in original.snapshot['items']:
+            require_customer_access(original_row['customer_id'], user, db)
+        closure = dict(schema_version=1, idempotency_key=key, actor_id=user.id,
+            request_hash=request_hash(delivery_id, original), request=request_value(original), delivery_id=delivery_id,
+            customer_id=original_customer, delivery_number=row.delivery_number, closed_at=utc_naive_to_api(utc_now_naive()))
+        value = dict(schema_version=1, result='closed', current_actor_id=user.id, dispatch_receipt=None,
+            closure_receipt=closure, current=None)
+        api._record_delivery_idempotency(db, idempotency_key=key, request_hash=closure['request_hash'],
+            action=ACTION, actor=user, delivery_id=delivery_id, response=value)
+        api._write_audit(db, user=user, action='CLOSE_DISPATCH_REQUEST', resource='Delivery', entity_id=delivery_id,
+            details={'request_hash':closure['request_hash'],'idempotency_key_sha256':digest(key)},
+            description='明确结束原发货请求；送货数量和库存不变')
+        db.flush()
+        commit_command(db)
+        return value
+    except IntegrityError:
+        db.rollback()
+        value, record = _matched_record(db, delivery_id, original, user, api)
+        if value:
+            return value
+        if record:
+            raise HTTPException(409, '原请求记录不可完整核对，请保留并查看原单。')
+        raise
+    except Exception:
+        db.rollback()
         raise

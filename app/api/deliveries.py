@@ -9707,10 +9707,21 @@ def resolve_delivery_dispatch(
     return dispatch_commands.resolve(db, delivery_id, key, payload, user, sys.modules[__name__])
 
 
+def close_delivery_dispatch(
+    delivery_id: int,
+    key: str,
+    payload: dispatch_commands.ResolveCommand,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    return dispatch_commands.close(db, delivery_id, key, payload, user, sys.modules[__name__])
+
+
 for _path, _endpoint, _methods in (
     ("/{delivery_id}/dispatch", dispatch_delivery, ["PUT"]),
     ("/{delivery_id}/dispatch-snapshot", delivery_dispatch_snapshot, ["GET"]),
     ("/{delivery_id}/dispatch-results/{key}/resolve", resolve_delivery_dispatch, ["POST"]),
+    ("/{delivery_id}/dispatch-results/{key}/close", close_delivery_dispatch, ["POST"]),
 ):
     router.add_api_route(_path, _endpoint, methods=_methods, route_class_override=dispatch_commands.DispatchRoute)
 

@@ -4,6 +4,7 @@ from app.services.sheet_cutting_settings import theoretical_order_yield, order_y
 from app.core.sheet_dimensions import SheetDimension, sheet_dimension_number, validate_sheet_dimensions
 
 from app.services.business_transaction import commit_business_change
+from app.services import stock_replenishment_save_recovery as save_recovery
 
 from app.services.replenishment_receipt_progress import receipt_progress, receipt_progress_map
 
@@ -1713,6 +1714,7 @@ class StockReplenishmentItemPayload(BaseModel):
 
 
 class StockReplenishmentCreatePayload(BaseModel):
+    expected_actor_id: int | None = Field(default=None, strict=True, gt=0, exclude=True)
     replenishment_plan: dict | None = None
     replenishment_plans: list[dict] = Field(default_factory=list)
     source_type: str = "manual_history"
@@ -1736,6 +1738,11 @@ class StockReplenishmentCreatePayload(BaseModel):
     def normalize_idempotency_key(cls, value: str | None) -> str | None:
         normalized = str(value or "").strip()
         return normalized or None
+
+
+class StockReplenishmentResolvePayload(BaseModel):
+    expected_actor_id: int = Field(strict=True, gt=0)
+    original_request: StockReplenishmentCreatePayload
 
 
 class PendingSupplierOrderDraftItem(BaseModel):
@@ -15969,16 +15976,66 @@ def _build_replenishment_item(
     )
 
 
-@router.post("/stock-replenishment/orders", status_code=status.HTTP_201_CREATED)
 def create_stock_replenishment_order(
     payload: StockReplenishmentCreatePayload,
     db: Session = Depends(get_db),
     user: User = Depends(can_operate),
 ) -> dict:
+    save_recovery.check_actor(payload.expected_actor_id, user.id)
+    guard = {"absent": False, "commit_started": False, "locked": False}
+    db.info["stock_save_recovery_guard"] = guard
+    try:
+        connection = db.connection()
+        if connection.dialect.name == "sqlite":
+            if not connection.connection.driver_connection.in_transaction:
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+                guard["locked"] = True
+        return _create_stock_replenishment_order_impl(payload, db, user)
+    except Exception as error:
+        rolled_back = False
+        try:
+            db.rollback()
+            rolled_back = True
+        except Exception:
+            pass
+        headers = dict(save_recovery.HEADERS)
+        if isinstance(error, HTTPException):
+            headers.update(error.headers or {})
+            detail = error.detail
+            status_code = error.status_code
+        else:
+            detail = "保存结果暂无法确认，请保留原请求并核对结果。"
+            status_code = 500
+        if (guard["locked"] and guard["absent"] and not guard["commit_started"]
+                and rolled_back and isinstance(error, HTTPException) and error.status_code in (400, 404, 409, 422)):
+            headers.pop("X-Stock-Replenishment-Preserve", None)
+            headers["X-Stock-Replenishment-Rejected"] = "1"
+            detail = {"message": detail, "save_result": {"status": "not_saved", "current_actor_id": user.id,
+                "idempotency_key": payload.idempotency_key, "request_hash": save_recovery.request_digest(user.id, payload)}}
+        raise HTTPException(status_code, detail, headers=headers) from error
+    finally:
+        db.info.pop("stock_save_recovery_guard", None)
+
+
+def _stock_save_response(db, order, payload, user):
+    save_recovery.require_source_scope(db, order, _allowed_customer_ids(user, db))
+    batch = save_recovery.external_batch(db, order)
+    if batch is not None:
+        _require_external_stock_replenishment_permission(user)
+    response = _replenishment_order_response(db, order) if batch else replenishment_order_dict(order, db=db)
+    response["current_actor_id"] = user.id
+    response["save_receipt"] = save_recovery.build_receipt(db, order, payload, user.id)
+    return response
+
+
+def _commit_stock_save(db):
+    db.info["stock_save_recovery_guard"]["commit_started"] = True
+    commit_business_change(db)
+
+
+def _create_stock_replenishment_order_impl(payload, db, user):
     idempotent_order_number: str | None = None
-    request_hash = canonical_purchase_purpose_hash(
-        {"actor_id": user.id, "payload": payload.model_dump(mode="json", exclude_none=False)}
-    )
+    request_hash = save_recovery.request_digest(user.id, payload)
     requested_external_purchase = any(
         str(item.procurement_mode or "").strip() == "external_purchase"
         or item.external_purchase_quantity is not None
@@ -16078,12 +16135,7 @@ def create_stock_replenishment_order(
                     )
                 existing_order = batch_order
             if existing_order is not None:
-                _require_stock_replenishment_order_access(
-                    db,
-                    existing_order,
-                    user,
-                    relationships_loaded=True,
-                )
+                save_recovery.require_source_scope(db, existing_order, _allowed_customer_ids(user, db))
                 if existing_order.source_type != payload.source_type:
                     raise StockReplenishmentError(
                         "同一防重复标识对应的补库来源已变化，请关闭后重新操作。",
@@ -16094,15 +16146,13 @@ def create_stock_replenishment_order(
                 )
                 if existing_external_purchase:
                     _require_external_stock_replenishment_permission(user)
-                if existing_external_purchase != requested_external_purchase:
-                    raise StockReplenishmentError(
-                        "同一防重复标识对应的补库类型已变化，请关闭后重新操作。",
-                        409,
-                    )
+                # A completed outcome is authoritative; today's supply_mode
+                # is fresh qualification, not the original request's identity.
+                requested_external_purchase = existing_external_purchase
                 if not existing_external_purchase:
                     if existing_order.request_hash != request_hash:
                         raise StockReplenishmentError("同一提交标识的补库内容或操作人已变化，请重新打开草稿。", 409)
-                    return replenishment_order_dict(existing_order, db=db)
+                    return _stock_save_response(db, existing_order, payload, user)
                 if len(payload.items) != 1:
                     raise StockReplenishmentError(
                         "外购包材备库必须按单款独立重试。", 409
@@ -16131,7 +16181,8 @@ def create_stock_replenishment_order(
                     raise StockReplenishmentError(
                         "外购包材备库重放状态不完整，请刷新后重试。", 409
                     )
-                return _replenishment_order_response(db, replayed_order)
+                return _stock_save_response(db, replayed_order, payload, user)
+            db.info["stock_save_recovery_guard"]["absent"] = True
         external_lines: list[
             tuple[StockReplenishmentItemPayload, Product]
         ] = []
@@ -16208,14 +16259,10 @@ def create_stock_replenishment_order(
                 request_hash=request_hash,
             )
             _require_stock_replenishment_order_access(db, order, user)
-            commit_business_change(db)
-            order = db.scalar(
-                _replenishment_order_query().where(
-                    StockReplenishmentOrder.id == order.id
-                )
-            )
-            assert order is not None
-            return _replenishment_order_response(db, order)
+            db.flush()
+            response = _stock_save_response(db, order, payload, user)
+            _commit_stock_save(db)
+            return response
         validated_bom_plans = {}
         submitted_plans = payload.replenishment_plans or ([payload.replenishment_plan] if payload.replenishment_plan else [])
         plan_component_ids = set()
@@ -16480,12 +16527,9 @@ def create_stock_replenishment_order(
         db.flush()
         if payload.stock_now:
             stock_replenishment_order(db, order=order, operator_id=user.id)
-        commit_business_change(db)
-        order = db.scalar(
-            _replenishment_order_query().where(StockReplenishmentOrder.id == order.id)
-        )
-        assert order is not None
-        return replenishment_order_dict(order, db=db)
+        response = _stock_save_response(db, order, payload, user)
+        _commit_stock_save(db)
+        return response
     except IntegrityError:
         db.rollback()
         if idempotent_order_number is not None:
@@ -16496,25 +16540,14 @@ def create_stock_replenishment_order(
                 )
             )
             if existing_order is not None:
-                _require_stock_replenishment_order_access(
-                    db,
-                    existing_order,
-                    user,
-                    relationships_loaded=True,
-                )
+                db.info["stock_save_recovery_guard"]["absent"] = False
+                save_recovery.require_source_scope(db, existing_order, _allowed_customer_ids(user, db))
                 existing_external_purchase = (
                     external_stock_purchase_payload(db, existing_order) is not None
                 )
                 if existing_external_purchase:
                     _require_external_stock_replenishment_permission(user)
-                if existing_external_purchase != requested_external_purchase:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            "同一防重复标识对应的补库类型已变化，"
-                            "请关闭后重新操作。"
-                        ),
-                    )
+                requested_external_purchase = existing_external_purchase
                 if existing_external_purchase:
                     if len(payload.items) != 1:
                         raise HTTPException(
@@ -16558,10 +16591,10 @@ def create_stock_replenishment_order(
                             status_code=409,
                             detail="外购包材备库并发写入状态不完整，请刷新后重试。",
                         )
-                    return _replenishment_order_response(db, replayed_order)
+                    return _stock_save_response(db, replayed_order, payload, user)
                 if existing_order.request_hash != request_hash:
                     raise HTTPException(status_code=409, detail="同一提交标识的补库内容或操作人已变化，请重新打开草稿。")
-                return replenishment_order_dict(existing_order, db=db)
+                return _stock_save_response(db, existing_order, payload, user)
         raise
     except HTTPException:
         db.rollback()
@@ -16575,6 +16608,58 @@ def create_stock_replenishment_order(
         raise HTTPException(
             status_code=getattr(error, "status_code", 400), detail=str(error)
         ) from error
+
+
+def resolve_stock_replenishment_save(
+    idempotency_key: str,
+    payload: StockReplenishmentResolvePayload,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_operate),
+) -> dict:
+    save_recovery.check_actor(payload.expected_actor_id, user.id)
+    original = payload.original_request
+    save_recovery.check_actor(original.expected_actor_id, user.id)
+    if not idempotency_key or len(idempotency_key) > 80 or original.idempotency_key != idempotency_key:
+        raise HTTPException(409, "原请求标识不匹配，请保留原请求。", headers=save_recovery.HEADERS)
+    if original.source_type not in ("customer_request", "stock_warning") or original.stock_now:
+        raise HTTPException(409, "该来源不属于主补库保存恢复合同。", headers=save_recovery.HEADERS)
+    with db.no_autoflush:
+        order = save_recovery.find_source(db, idempotency_key)
+        result = {"status": "not_recorded", "current_actor_id": user.id,
+            "idempotency_key": idempotency_key, "request_match": False,
+            "save_receipt": None, "current": None, "trace": None}
+        if order is None:
+            # Check current requested customer scope before disclosing absence.
+            customer_ids = {original.customer_id, *(row.customer_id for row in original.items)} - {None}
+            requested_external = False
+            for row in original.items:
+                policy = db.get(InventoryStockPolicy, row.stock_policy_id) if row.stock_policy_id is not None else None
+                if policy is not None and policy.customer_id is not None:
+                    customer_ids.add(policy.customer_id)
+                reference_id = row.reference_product_id or row.product_id or (policy.product_id if policy else None)
+                product = db.get(Product, reference_id) if reference_id is not None else None
+                if product is not None and product.customer_id is not None:
+                    customer_ids.add(product.customer_id)
+                requested_external = requested_external or row.procurement_mode == "external_purchase" or row.external_purchase_quantity is not None or (product is not None and product.supply_mode == "external_purchase")
+            for customer_id in customer_ids:
+                require_customer_access(customer_id, user, db)
+            if requested_external:
+                _require_external_stock_replenishment_permission(user)
+            return result
+        save_recovery.require_source_scope(db, order, _allowed_customer_ids(user, db))
+        if save_recovery.external_batch(db, order) is not None:
+            _require_external_stock_replenishment_permission(user)
+        receipt = save_recovery.build_receipt(db, order, original, user.id)
+        result.update(status="completed" if receipt else "trace", save_receipt=receipt,
+            request_match=order.request_hash == save_recovery.request_digest(user.id, original),
+            current=save_recovery.current_summary(db, order), trace=None if receipt else save_recovery.trace(order))
+        return result
+
+
+router.add_api_route("/stock-replenishment/orders", create_stock_replenishment_order,
+    methods=["POST"], status_code=status.HTTP_201_CREATED, route_class_override=save_recovery.SaveRecoveryRoute)
+router.add_api_route("/stock-replenishment/save-results/{idempotency_key:path}/resolve", resolve_stock_replenishment_save,
+    methods=["POST"], route_class_override=save_recovery.SaveRecoveryRoute)
 
 
 @router.get("/stock-replenishment/orders")

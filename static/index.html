@@ -6826,7 +6826,7 @@
                 <div class="field"><label>客户料号（品目号／物料代号）</label><input class="input" v-model.trim="productForm.customer_material_code" /></div>
                 <div class="field"><label>产品名称</label><input class="input" v-model.trim="productForm.product_name" /></div>
                 <div class="field"><label>箱型</label>
-                  <select class="select" v-model="productForm.box_style" @change="onProductBoxStyleChange">
+                  <select class="select" :disabled="bomEditor.loading || !!bomEditor.error" v-model="productForm.box_style" @change="onProductBoxStyleChange">
                     <option value="">请选择箱型</option>
                     <option value="BOM组合">BOM组合（组套成品）</option>
                     <option v-for="boxType in productBoxStyleOptions" :key="boxType" :value="boxType">{{ boxType }}</option>
@@ -7304,8 +7304,16 @@
                 </fieldset>
                 </div>
               </details>
-              <details class="product-secondary-disclosure" :open="productForm.box_style==='BOM组合'">
+              <details class="product-secondary-disclosure" ref="productBomPanel" tabindex="-1" :open="productForm.box_style==='BOM组合' || bomEditor.loading || !!bomEditor.error">
               <summary>组合 BOM</summary>
+              <div v-if="bomEditor.loading" class="notice" role="status">正在加载原有组合配方，请稍候再修改箱型或子件，避免覆盖已有配方。</div>
+              <div v-else-if="bomEditor.error" class="notice" role="alert">组合配方读取失败：{{ bomEditor.error }} <button type="button" class="btn small" @click="loadProductBom(productForm.id)">重新加载组合配方</button></div>
+              <div v-else-if="productBomSetIssues().length" class="notice" role="alert">
+                <strong>组合 BOM 设置待核对</strong>
+                <div v-for="issue in productBomSetIssues()" :key="issue">{{ issue }}</div>
+                <button type="button" class="btn small primary" :disabled="!!productForm.id && !canEditProducts || !!bomEditor.subkit?.enabled" @click="repairProductBomSet">应用组套设置</button>
+                <div class="muted">设置为：零件组装 · 单位套 · 整套计价 · 父件交付。保留已有子件和每套用量，点击保存后才生效，不修改历史订单和库存。</div>
+              </div>
               <div v-if="bomEditor.enabled && bomEditor.inventory_mode==='assembled' && canManageFinanceCosts" style="margin:8px 0">
                 <button type="button" class="btn small" :disabled="!productForm.id || bomLabor.busy" @click="openBomLabor">组装人工</button>
                 <info-note>默认50套/人·小时；单款可调整，历史批次不改价。</info-note>
@@ -7317,7 +7325,7 @@
                 </div>
               </div>
               <div v-if="productForm.box_style==='BOM组合'" class="notice">每 1 套填写子件片数；父件不报料，两种片料分别维护规格和模具。实际粘合或插合完成后确认，扣子件、入成套库存。</div>
-              <fieldset class="bom-editor-panel" :disabled="!!productForm.id && !canEditProducts">
+              <fieldset class="bom-editor-panel" :disabled="bomEditor.loading || !!bomEditor.error || !!productForm.id && !canEditProducts">
                 <div class="bom-editor-heading">
                   <div class="bom-editor-heading-controls">
                     <label class="remember-line"><input type="checkbox" v-model="bomEditor.enabled" :disabled="productForm.box_style==='BOM组合' || !productForm.id" /> 启用</label>
@@ -7365,7 +7373,7 @@
                   <div v-if="bomEditor.inventory_mode === 'separate' && productForm.combination_mode === 'parent_priced_set'" class="notice">客户按父件规格、数量和单价结算，仓库按子件实物备货。双片示例：客户 800×180×120，实物 800×180×60，每1只用量填2片；交付方式选择“父件交付”，600只对应1200片。没有组装工序；不足两片不折算成一只。更改关系只影响新订单。</div>
                   <details class="bom-mode-help"><summary>怎么选？</summary><div>自己生产：保留实际箱型、材质和报料尺寸，先生产本体。<br>零件组装：父件不报纸板，按子件用量备料，组装后入库。<br>外购本体 / 整件：有组装消耗子件时先收本体，组装后才是完整成品；没有则直接收成品。<br>只列配套清单：不存父件，按子件备货交付。<br>组装消耗：组装时扣子件；随货配套：发货时扣子件。子件也可独立接单。<br>用量只填每1个父件所需数量；开料一开几只换算张数，不放大组合用量。售价和标签不改变扣库规则。</div></details>
                 </div>
-                <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存父产品，再维护内部组件 BOM。</div>
+                <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">父产品与子件配方将一起保存；请先选择客户，再添加子件和每套用量。</div>
                 <div v-else-if="bomEditor.error" class="status orange" style="display:block;white-space:normal">{{ bomEditor.error }}</div>
                 <div v-else-if="bomEditor.notice" class="muted" style="margin-bottom:8px">{{ bomEditor.notice }}</div>
                 <template v-if="bomEditor.enabled && !bomEditor.error">
@@ -28085,12 +28093,19 @@
             };
           },
           _productBomDirty() {
-            if (this.modal?.type !== "product" || !this.productForm?.id || this.productBomSnapshot === null) return false;
+            if (this.modal?.type !== "product") return false;
+            if (!this.productForm?.id) return Boolean(this.bomEditor?.enabled);
+            if (this.productBomSnapshot === null) return false;
             return JSON.stringify(this._productBomSaveFields()) !== this.productBomSnapshot;
           },
           validateProductBom() {
+            if (this.bomEditor.loading) return "组合 BOM：正在加载原有配方，请稍候保存";
+            if (this.bomEditor.error) return "组合 BOM：配方读取失败，请点击“重新加载组合配方”后再保存";
             const mode = this.bomEditor.inventory_mode || "legacy";
-            if (this.productForm.box_style === "BOM组合" && (mode !== "assembled" || !["只", "套"].includes(this.productForm.unit) || this.productForm.combination_mode !== "parent_priced_set" || this.productForm.is_virtual_composite_parent)) return "BOM组合请选择只或套，按父件组装计价，请重新核对BOM组合箱型";
+            if (this.productForm.box_style === "BOM组合") {
+              const issues = this.productBomSetIssues();
+              if (issues.length) return `组合 BOM：${issues.join("；")}。请在下方“组合 BOM”点击“应用组套设置”；旧收料组套须先受控转换`;
+            }
             if (mode === "assembled" && this.productForm.composite_fulfillment_mode !== "parent_delivery") return "组装成套后按父件交货；如需子件实发，请选择子件分存";
             if (mode === "assembled" && (!this.bomEditor.enabled || !this.bomEditor.components.some(row => row.inventory_relation === "assembly"))) return "组套成品至少需要一个组装子件";
             if (!this.bomEditor.enabled) return "";
@@ -28115,6 +28130,34 @@
               if (!Number.isInteger(Number(component.spare_sheet_quantity))) return "备用纸张必须为整数";
             }
             return "";
+          },
+          productBomSetIssues() {
+            if (this.productForm.box_style !== "BOM组合") return [];
+            const form = this.productForm, editor = this.bomEditor, issues = [];
+            if (editor.subkit?.enabled) issues.push("旧收料组套仍启用，须先完成受控转换，不能直接应用组套设置");
+            if (!editor.enabled) issues.push("组合 BOM 尚未启用");
+            if (editor.inventory_mode !== "assembled") issues.push("产品形成方式未设为零件组装");
+            if (!["只", "套"].includes(form.unit)) issues.push(`父件单位原值为“${form.unit || "未设置"}”，BOM组合仅支持只或套，应应用单位“套”`);
+            if (form.combination_mode !== "parent_priced_set") issues.push("计价方式未设为整套计价");
+            if (form.is_virtual_composite_parent) issues.push("父件仍为虚拟父件，不能作为实际组装成品");
+            if (form.composite_fulfillment_mode !== "parent_delivery") issues.push("交付方式未设为父件交付");
+            return issues;
+          },
+          focusProductBomEditor() {
+            this.$nextTick(() => {
+              const panel = this.$refs.productBomPanel;
+              if (!panel) return;
+              panel.open = true;
+              panel.scrollIntoView({block:"center", behavior:"smooth"});
+              panel.focus({preventScroll:true});
+            });
+          },
+          repairProductBomSet() {
+            if (this.productForm.box_style !== "BOM组合" || this.bomEditor.loading || this.bomEditor.error
+                || this.bomEditor.subkit?.enabled || this.productForm.id && !this.canEditProducts) return;
+            this.onProductBoxStyleChange();
+            this.focusProductBomEditor();
+            this.showToast("组套设置已应用，子件和每套用量已保留；请核对后保存");
           },
           bomPayload(expectedVersion=null) {
             const fields = this._productBomSaveFields();
@@ -28973,11 +29016,13 @@
               this.drawingFile = null;
               this.productSaveRecovery = null;
               this.resetBomEditor();
+              this.bomEditor.loading = !!openedId;
               this.resetExternalComponentEditor(openedId);
               // 拍快照用于检测未保存更改
               this.productFormSnapshot = JSON.stringify(this._productFormSaveFields());
               this.beginMasterEdit("product",this.productForm);
               this.modal = { type:"product", title: requestedId ? (this.canEditProducts ? "编辑产品" : "查看产品") : "新增产品" };
+              const bomLoadPromise = openedId ? this.loadProductBom(openedId) : Promise.resolve(true);
               await this.$nextTick();
               if (
                 latestRequestControllers.get(requestKey) !== controller
@@ -28993,7 +29038,7 @@
                 || (Number(this.productForm.id || 0) || null) !== openedId
               ) return false;
               if (openedId) {
-                const loaders = [this.loadProductBom(openedId),this.loadReceiptStorage()];
+                const loaders = [bomLoadPromise,this.loadReceiptStorage()];
                 if (this.canAdmin) loaders.push(this.loadExternalComponents(openedId));
                 if (this.hasPermission("requisition.view")) loaders.push(this.loadProductMaterialContext(openedId));
                 else this.productMaterialContext.error = "当前账号无报料历史查看权限";
@@ -29748,7 +29793,7 @@
             const f = this.productForm;
             const printing = this.productPrintingWriteFields(f);
             return {
-              customer_id: f.customer_id, product_code: f.product_code,
+              customer_id: f.customer_id, product_code: f.product_code, unit: f.unit,
               customer_material_code: f.customer_material_code, product_name: f.product_name,
               customer_drawing_number:f.customer_drawing_number, customer_category:f.customer_category, customer_model:f.customer_model,
               material_id: f.material_id, box_category: f.box_category, box_style: f.box_style,
@@ -40048,6 +40093,14 @@
               return false;
             }
             const masterSaveEntity = ["customer","product","material","supplier"].includes(this.modal?.type) ? this.modal.type : null;
+            if (masterSaveEntity === "product" && (this.bomEditor.loading || this.bomEditor.error || this.productForm.box_style === "BOM组合" || this._productBomDirty())) {
+              const bomError = this.validateProductBom();
+              if (bomError) {
+                this.focusProductBomEditor();
+                this.showToast(bomError, true);
+                return false;
+              }
+            }
             if (masterSaveEntity && this.masterSavePending) {
               const label = masterSaveEntity === "customer" ? "客户" : (masterSaveEntity === "product" ? "常用箱" : (masterSaveEntity === "supplier" ? "供应商" : "材质"));
               this.showToast(`${label}正在保存，请勿重复点击`, true);

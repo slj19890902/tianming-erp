@@ -35,12 +35,12 @@ def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_
         fields["production_notes"] = "本次原子保存备注"
         fields["unit"] = parent_unit
         if create:
-            fields.update(product_code="ATOMIC-NEW", customer_material_code="ATOMIC-NEW")
+            fields.update(product_code="ATOMIC-NEW", customer_material_code="ATOMIC-NEW", box_style="BOM组合")
         else:
             fields["expected_version"] = root.version
         body = jsonable_encoder({"product": fields, "bom": {
             "expected_version": 1 if create else root.version,
-            "inventory_mode": "assembled", "components": [
+            "inventory_mode": "assembled", "material_mode": "expand_children", "delivery_mode": "parent", "components": [
                 {"component_product_id": 2, "quantity_per_set": 5, "inventory_relation": "assembly"},
                 {"component_product_id": 3, "quantity_per_set": 6, "inventory_relation": "assembly"}]}})
     if fail:
@@ -65,13 +65,14 @@ def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_
             return
         saved = response.json()["product"]
         assert saved["production_notes"] == fields["production_notes"]
-        assert saved["unit"] == parent_unit
+        expected_unit = "套" if create else parent_unit
+        assert saved["unit"] == expected_unit
         bom = response.json()["bom"]
         assert bom["version"] == saved["version"]
         assert sorted(Decimal(row["quantity_per_set"]) for row in bom["components"]) == [5, 6]
         with factory() as db:
             assert db.get(Product, saved["id"]).production_notes == fields["production_notes"]
-            assert db.get(Product, saved["id"]).unit == parent_unit
+            assert db.get(Product, saved["id"]).unit == expected_unit
             assert dump_graph(read_compiled_order_bom(db, 1).graph) == before[-1]
 
 

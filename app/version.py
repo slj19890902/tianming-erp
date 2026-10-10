@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.618"
-APP_VERSION_NAME = "周需求库存预览、真实货位与简易报料条单"
+APP_VERSION = "v0.22.620"
+APP_VERSION_NAME = "BOM组合保存设置同步与错误定位"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6009,3 +6009,16 @@ APP_VERIFICATION_STEPS = [
     "已报料生产任务单→切换简易报料条单，核对12列、同款多组件分行、订纸或领料位置，再用A4横向实物打印裁切验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.618：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "BOM组合保存冲突逐项显示形成方式、父件单位、计价和交付问题，保存时定位到组合BOM，提供应用组套设置入口。",
+    "加载原配方期间锁定箱型和子件编辑，读取失败可重试，避免晚到的旧配方覆盖当前选择或误保存空配方。",
+    "应用组套设置保留已有子件和每套用量；新父件与配方一起原子保存，单位修正纳入变更检测。",
+    "无数据库迁移，不直接改写12500或其他正式产品、配方、订单、库存和成本。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新常用箱，编辑12500组合套装；等待配方加载，在组合BOM核对具体冲突，点击应用组套设置。",
+    "核对本体、补强板及每套用量保持原值，保存后重新打开，确认零件组装、套、整套计价和父件交付。",
+    "核对无权限账号不可修改；旧收料子套件不能通过应用组套设置绕过受控转换。",
+]
+APP_CHANGELOG = [*(f"v0.22.620：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

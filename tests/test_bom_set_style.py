@@ -25,7 +25,7 @@ def test_set_style_atomic_create(composite_requisition_app, _p181_published_map_
         production_label_units_per_label=5)
     if parent_unit is not None:
         fields["unit"] = parent_unit
-    expected_unit = parent_unit or "套"
+    expected_unit = "套"  # New BOM sets use the confirmed 2026-10-09 unit naming rule.
     bom = dict(expected_version=1, inventory_mode="assembled", material_mode="expand_children",
         delivery_mode="parent", components=[] if invalid else [
         dict(component_product_id=2, quantity_per_set=3, inventory_relation="assembly"),
@@ -77,7 +77,7 @@ def test_set_style_atomic_create(composite_requisition_app, _p181_published_map_
 def test_set_preset_frontend_defaults_and_child_ratios():
     from tests.test_multilevel_bom_frontend import HTML, method
     constants = HTML[HTML.index("      let bomComponentKeyCounter"):HTML.index("      const blankMaterial =")]
-    names = ["onProductBoxStyleChange", "onBomInventoryModeChange", "addBomComponent", "validateProductBom"]
+    names = ["onProductBoxStyleChange", "onBomInventoryModeChange", "addBomComponent", "validateProductBom", "productBomSetIssues"]
     script = "const assert=require('node:assert/strict');\n" + constants
     script += "\nconst methods={" + "\n".join(method(name) for name in names) + "};\n"
     script += """

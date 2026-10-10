@@ -24,6 +24,8 @@ def main():
     # Keep the path available while consuming the process-control nonce here.
     control = Path(os.environ['TM_ERP_CONTROL'])
     configure_managed_drawing_storage(control)
+    from desktop_assistant.delivery_dispatch_contract import require_managed_dispatch_activation
+    require_managed_dispatch_activation(os.environ.get('ERP_DATABASE_PATH'), control)
     nonce = os.environ.pop('TM_ERP_NONCE')
     server = uvicorn.Server(uvicorn.Config(
         'app.main:app', host=os.environ['ERP_BIND_HOST'], port=int(os.environ['ERP_PORT']),

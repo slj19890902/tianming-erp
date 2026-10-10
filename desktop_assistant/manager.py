@@ -16,6 +16,7 @@ import psutil
 from desktop_assistant.storage import (archive_path, database_info, decrypt_file, encrypt_file,
                                       extract_verified, pack_tree, pack_recovery, read_json, sha, write_json, signed_release_manifest)
 from desktop_assistant.attachments import rebind_pdf_sources
+from desktop_assistant import delivery_dispatch_contract as dispatch_contract
 from desktop_assistant.schema_contract import (
     schema_contract_from_signed_release,
     validate_database_schema,
@@ -60,6 +61,10 @@ class Manager:
         return read_json(self.root / 'releases' / (release or self.state['current']) / 'manifest.json')
 
     def compatible(self, release, revision, authority=None):
+        try:
+            self._check_dispatch_reader(release)
+        except (ValueError, OSError):
+            return False
         # Preserve rollback metadata, but never run a writer which ignores the
         # active quotation version/idempotency contract. This check is read-only.
         import sqlite3
@@ -173,6 +178,34 @@ class Manager:
             return type(capability) is int and capability == 1 and manifest == self.manifest(release)
         except Exception:
             return False
+
+    def _dispatch_reader(self, release):
+        return self._shared_finished_reader(release, dispatch_contract.CAPABILITY)
+
+    def _check_dispatch_reader(self, release, *, require_active=False):
+        value = dispatch_contract.inspect_activation(
+            self.root / 'shared', self.state, require_active=require_active)
+        if value is not None and not self._dispatch_reader(release):
+            raise ValueError('此程序不支持已启用的发货保护规则，未切换程序；请使用兼容的新版本')
+        return value
+
+    def _activate_dispatch_reader(self, candidate, old, new, backup):
+        if not self._dispatch_reader(candidate):
+            return
+        value = dispatch_contract.inspect_activation(self.root / 'shared', self.state)
+        if value is None:
+            marker = self.root / 'shared' / dispatch_contract.MARKER
+            contract = {
+                'reader_capability': dispatch_contract.CAPABILITY, 'version': 1,
+                'activated_package': candidate, 'activated_at': datetime.now(CN).isoformat(),
+                'pre_activation_package': old['current'], 'pre_activation_backup': str(backup),
+            }
+            dispatch_contract.validate_contract(contract)
+            write_json(marker, contract)
+            value = dispatch_contract.activation(self.root / 'shared')
+        new[dispatch_contract.STATE_KEY] = dispatch_contract.state_index(value)
+        if not self._dispatch_reader(old['current']):
+            new['previous'] = None
 
     def stage_release(self, package: Path, *, verify_existing: bool = False) -> dict:
         # Hash names avoid arbitrary version strings becoming paths.
@@ -320,9 +353,16 @@ class Manager:
                            check=True, creationflags=subprocess.CREATE_NO_WINDOW)
 
     def start(self):
-        if self._process():
-            return
         state = self.state
+        if not state.get('current'):
+            raise ValueError('尚未接入或恢复ERP数据')
+        self._check_dispatch_reader(state['current'], require_active=self._dispatch_reader(state['current']))
+        running = self._process()
+        if running:
+            expected = self.root / 'releases' / state['current'] / 'runtime/python.exe'
+            if Path(running[1]['exe']).resolve() != expected.resolve():
+                raise ValueError('运行程序与已核对版本不一致，未接管或停止其他进程')
+            return
         if state.get('onboarding_pending'):
             raise ValueError('首次接入尚未完成完整备份，请点击“完成首次接入”后再启动')
         if state.get('operation') in ('migration_running', 'migration_failed'):
@@ -364,6 +404,7 @@ class Manager:
         current = state['current']
         if not current:
             raise ValueError('尚未导入或恢复ERP数据')
+        dispatch_activation = self._check_dispatch_reader(current, require_active=self._dispatch_reader(current))
         before = database_info(self.root / 'shared/data/carton_erp.sqlite3')
         from desktop_assistant.preflight import inspect
         checks = inspect(self.root / 'shared/data/carton_erp.sqlite3', self.root / 'shared', managed=True)
@@ -403,7 +444,8 @@ class Manager:
         raw = job / 'recovery.zip'
         pack_recovery(self.root / 'shared', packages, raw, {'type': 'tianming.recovery.v1', 'created': datetime.now(CN).isoformat(),
                             'release': current, 'version': self.manifest()['version'], 'database': before,
-                            'source_shared': str(self.root / 'shared'), 'schema_authority': authority})
+                            'source_shared': str(self.root / 'shared'), 'schema_authority': authority,
+                            **({dispatch_contract.STATE_KEY: dispatch_activation} if dispatch_activation else {})})
         if database_info(self.root / 'shared/data/carton_erp.sqlite3') != before:
             raise ValueError('备份期间数据复核不一致')
         encrypted = job / (stamp + '.tmbackup')
@@ -535,6 +577,9 @@ class Manager:
             raise ValueError('请先完成首次接入的完整备份，不能叠加更新')
         if old.get('operation') in ('migration_running', 'migration_failed'):
             raise ValueError('上次迁移尚未完成，禁止叠加更新；请先处理恢复')
+        # A semantic writer incompatibility is never a request to migrate.
+        self._check_dispatch_reader(candidate['id'], require_active=(
+            candidate['id'] == old['current'] and self._dispatch_reader(candidate['id'])))
         if candidate['id'] == old['current']:
             return '已经是该版本'
         revision = database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']
@@ -600,6 +645,7 @@ class Manager:
             }
             if not self._order_inventory_reader(old['current']):
                 new['previous'] = None
+        self._activate_dispatch_reader(candidate['id'], old, new, backup)
         # Commit the reader gate and removal of unsafe one-click rollback before
         # starting the new process; failure here never opens new write requests.
         write_json(self.root / 'state.json', new)
@@ -610,7 +656,7 @@ class Manager:
             if not self.compatible(old['current'], database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']):
                 new.update(operation='update_failed_reader_contract', previous=None)
                 write_json(self.root / 'state.json', new)
-                raise ValueError('新程序未启动且旧程序不能读取新库存业务契约，服务保持停止；保留现场和备份，请向前修复，数据未回退') from None
+                raise ValueError('新程序未启动且旧程序不支持新业务保护规则，服务保持停止；保留现场和备份，请向前修复，数据未回退') from None
             new.update(current=old['current'], previous=old.get('previous'), operation='update_failed')
             write_json(self.root / 'state.json', new)
             self.start()
@@ -667,13 +713,20 @@ class Manager:
                     or files(shared) != state.get('migration_files')):
                 raise ValueError('现场未达到完整升级结果，保持停服；未覆盖数据，请专项恢复')
             previous = state['current']
+            self._check_dispatch_reader(target)
+            old_state = dict(state)
             state.update(current=target, previous=previous, schema_authority=target,
                          operation='migration_recovered', updated_at=datetime.now(CN).isoformat())
+            self._activate_dispatch_reader(target, old_state, state, backup)
             write_json(self.root / 'state.json', state)
             try:
                 self.start()
             except Exception:
                 self.stop()
+                if not self.compatible(previous, actual['revision']):
+                    state.update(operation='update_failed_reader_contract', previous=None)
+                    write_json(self.root / 'state.json', state)
+                    raise ValueError('新程序未启动且旧程序不支持新业务保护规则，服务保持停止；请向前修复，数据未回退') from None
                 state.update(current=previous, previous=target, operation='recovery_start_failed')
                 write_json(self.root / 'state.json', state)
                 self.start()
@@ -728,6 +781,7 @@ class Manager:
             if not contract or contract['revision'] != info['revision']:
                 raise ValueError('缺少与恢复数据库版本匹配的签名必要结构契约')
             database = payload / 'shared/data/carton_erp.sqlite3'
+            dispatch_activation = dispatch_contract.validate_recovery(payload / 'shared', manifest, release_manifest)
             validate_database_schema(database, contract)
             rebind_pdf_sources(database, Path(manifest['source_shared']),
                                payload / 'shared', self.root / 'shared')
@@ -747,6 +801,8 @@ class Manager:
             (payload / 'shared').rename(self.root / 'shared')
             write_json(self.root / 'state.json', {'current': release['id'], 'previous': None,
                        'restored_at': datetime.now(CN).isoformat(), 'source_time': manifest['created'],
-                       'schema_authority': authority})
+                       'schema_authority': authority,
+                       **({dispatch_contract.STATE_KEY: dispatch_contract.state_index(dispatch_activation)}
+                          if dispatch_activation else {})})
             # A new PC's LAN URLs, firewall and printer need explicit local configuration.
             return {'version': release['version'], 'data_time': manifest['created'], 'started': False}

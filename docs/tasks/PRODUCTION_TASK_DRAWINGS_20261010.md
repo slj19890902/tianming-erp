@@ -12,4 +12,4 @@
 
 实施范围记录：审查发现补库图纸字段为空、PDF需权限预览后，子任务固定独占app/services/production_paper_drawings.py、app/services/requisition_production_print.py、app/api/requisition.py与tests/test_production_paper_drawings.py；发现旧实收fallback后追加app/api/incoming.py。根独占打印HTML、paper JS/CSS、Chrome测试及版本/交付记录。所有变更只投影和展示，不写正式业务。
 
-基线协调：开发起点v617/1f719611，期间正式已发布v618/65004e46、文档47c129e5。已合并最新正式分支，保留周需求、库存查询与十二列简易报料条单；本轮候选v619只增加完整任务单图纸闭环。无迁移，唯一head eo1010pi。
+基线协调：开发起点v617/1f719611，期间正式已发布v618/65004e46和v619/ae89b827。已合入两个正式源，保留周需求、库存查询、十二列简易报料条单、发货原子提交及对应助手读能力门禁。图纸候选暂记v620，待发布协调排队后再以最新正式基线确定版本，不抢先发布。无迁移，唯一head eo1010pi。

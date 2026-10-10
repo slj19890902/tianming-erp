@@ -498,6 +498,33 @@
   工厂正式数据库。用户已于 2026-07-25 确认家庭人工 UAT 通过，并授权提交和
   推送当前独立 `codex/` 候选分支；仍不得直接更新工厂正式分支或 `origin/main`。
 
+## 2026-07-25 低库存智能报料与送货备注隔离工厂正式发布
+
+- 老板已明确确认家庭端人工验收通过并授权同步，工厂分支
+  `factory-current-baseline` 已从
+  `1b318efed68c77fa39ff50935e79d09dd0ba8961`
+  严格快进到
+  `12d7e94a1a2d9779816658baa1a9d515fce9403c`，没有产生合并提交。
+- 本候选包含送货客户备注与天华内部说明隔离、首页常用箱低库存按客户分组、
+  建议报料可编辑草稿和客户专用纸板备料边界。没有新增 migration，
+  Alembic head 保持 `cn70v8x9z59`。
+- P0-A Prepare 已停服并通过 SQLite Backup API 创建备份
+  `data/backups/carton_erp_before_release_20260725_130048.sqlite3`；
+  备份和隔离演练副本均为 `cn70v8x9z59`、`integrity_check=ok`、
+  外键异常 0，14 个核心表计数与正式库一致。
+- Apply 后正式库 SHA-256 与发布前一致，revision 仍为
+  `cn70v8x9z59`，完整性和核心表计数复检通过。ERP 已重启，
+  `http://127.0.0.1:8000/api/health` 返回 200。
+- 工厂虚拟环境未安装 pytest；现场完成 `compileall`、健康检查、
+  数据库门禁与未登录接口 401 边界验证。候选端任务回执记录 110 项测试通过。
+- 运行时报告：
+  `docs/migration_reports/release_runtime_20260725_130047.json`；
+  详细记录：
+  `docs/migration_reports/2026-07-25_low_stock_replenishment_factory_release.md`。
+- 正式发布已完成，但仍需工厂现场登录后回归：首页低库存客户分组、
+  建议报料草稿编辑与拦截、客户专用纸板备料，以及送货单客户备注打印隔离。
+  未经现场操作，不把这些步骤写成“工厂现场已复核”。
+
 ## 2026-07-24 送货客户备注与天华内部说明隔离候选（待人工 UAT）
 
 - 本轮从已由工厂验收并更新的候选基线
@@ -536,6 +563,55 @@
   在人工 UAT 通过前不推送、不更新正式基线；通过后仅推送当前 `codex/` 分支，
   再由工厂 Codex 按备份、核对 SHA、快进更新和重启门禁发布。
 
+## 2026-07-24 N081 两人现场盘点简化工厂正式发布完成
+
+- 工厂正式目录已严格快进到
+  `1b318efed68c77fa39ff50935e79d09dd0ba8961`；候选线性继承上一轮已发布的
+  `f7680f1cadb730751d5baa458f9743ed11776ba8`。
+- 用户明确授权完整执行
+  `cp72v8x9z61 → cj66v8x9z55 → ck67v8x9z56 → cm69v8x9z58 → cn70v8x9z59`。
+- P0-A Prepare 已停止旧 ERP PID 8228，并创建验证备份
+  `data/backups/carton_erp_before_release_20260724_201214.sqlite3`；
+  备份 revision=`cp72v8x9z61`、`integrity_check=ok`、外键异常 0。
+- 隔离副本
+  `data/release_rehearsals/carton_erp_release_rehearsal_20260724_201214.sqlite3`
+  已完成 `cp72 → cn70` 演练；最终 `integrity_check=ok`、外键异常 0，
+  15 张核心业务表计数与源库完全一致。
+- 正式 Apply 后 revision=`cn70v8x9z59`、`integrity_check=ok`、
+  外键异常 0；核心业务表计数未改变，其中销售订单/明细 `50/229`、
+  报料主表/明细 `43/175`。正式库 SHA-256 为
+  `D89D0C0B64250FA96F34A8183AF7AA2D86354B1F7977E31ED50D2C97DDDF486F`。
+- ERP 已恢复为正式目录、`0.0.0.0:8000`、单 worker；
+  `GET /api/health` 返回 200 `{"ok":true}`，启动日志未发现错误。
+- N081 发布后只读验证确认：仓库页返回 200；未登录访问盘点模板、现场表和
+  批次接口均返回 401；页面只保留“导出 → 上传并自动检查 → 一次确认盘点入库”，
+  未知位置标记为“位置待确认”，最终确认受权限、检查指纹、错误阻断和幂等保护。
+- 验证过程没有上传文件或执行 submit/post；发布后
+  `inventory_onboarding_batches/lines/postings` 均为 0 条。
+- 工厂 `.venv` 未安装 `pytest`；本机 Python `compileall` 通过，家庭候选已记录
+  `184 passed`。
+- 完整报告：
+  `docs/migration_reports/2026-07-24_n081_field_stocktake_factory_release.md`；
+  运行时 JSON：
+  `docs/migration_reports/release_runtime_20260724_201213.json`。
+- 上一轮组合报料发布记录已恢复到
+  `docs/migration_reports/2026-07-24_composite_business_modes_factory_release.md`；
+  另保留本地安全分支
+  `codex/factory-release-record-f768-20260724@2d971b35b66ae5d49fcdc79e170fe400659089c5`。
+
+## 2026-07-24 组合报料业务模式工厂正式发布完成
+
+- 正式候选为
+  `f7680f1cadb730751d5baa458f9743ed11776ba8`。
+- 已经用户授权完成
+  `ci65v8x9z54 → co71v8x9z60 → cp72v8x9z61`，
+  `integrity_check=ok`、外键异常 0，核心业务表计数未改变。
+- 当次备份：
+  `data/backups/carton_erp_before_release_20260724_194743.sqlite3`；
+  运行时报告：
+  `docs/migration_reports/release_runtime_20260724_194742.json`。
+- 详细记录：
+  `docs/migration_reports/2026-07-24_composite_business_modes_factory_release.md`。
 ## 2026-07-24 N081 两人使用场景现场盘点简化候选（人工 UAT 已通过）
 
 - 本轮恢复紧急修复前暂停的 N081 库存建账闭环，在独立 worktree

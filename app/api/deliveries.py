@@ -7428,6 +7428,14 @@ def _store_unordered_finished_items(
             over_delivery_quantity=0,
             remarks=(line.remarks or "").strip() or None,
         )
+        from app.services.stock_purchase_identity import delivery_fields
+        try:
+            frozen_fields = delivery_fields(entry['allocations'])
+        except WarehouseInventoryError as error:
+            raise HTTPException(error.status_code, str(error)) from error
+        if frozen_fields:
+            for field, value in frozen_fields.items():
+                setattr(delivery_item, field, value)
         db.add(delivery_item)
         db.flush()
         for planned in entry["allocations"]:

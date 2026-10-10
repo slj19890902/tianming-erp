@@ -136,7 +136,9 @@ def stock_snapshot(item, order):
     )
     quantity_contract = ({'quantity_contract_json': item.quantity_contract_json}
                         if item.quantity_contract_json is not None else {})
-    return {**{key: getattr(item, key) for key in fields}, **quantity_contract,
+    production_contract = ({'production_snapshot_json': item.production_snapshot_json}
+                           if item.production_snapshot_json is not None else {})
+    return {**{key: getattr(item, key) for key in fields}, **quantity_contract, **production_contract,
             "source_type": order.source_type, "source_number": order.order_number,
             "source_customer_id": item.customer_id or order.customer_id,
             "supplier_name": order.supplier_name}

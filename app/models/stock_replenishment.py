@@ -171,6 +171,7 @@ class StockReplenishmentOrder(Base):
 
 
 class StockReplenishmentOrderItem(Base):
+    production_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     sheet_cutting_snapshot: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     __tablename__ = "stock_replenishment_order_items"
     __table_args__ = (

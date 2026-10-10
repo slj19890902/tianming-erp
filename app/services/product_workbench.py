@@ -148,6 +148,16 @@ def inventory_summary(db: Session, products: list[Product]):
                 group[field] += direction * quantity
                 if output_piece and owner_is_product:
                     result[product.id]["processed_component"][field] += quantity
+        from app.services.product_activity import source_lots
+        bound_ids = {lot.id for lot in _bound_semi_lots(db, product)}
+        for lot in source_lots(db, product):
+            if lot.id in bound_ids:
+                continue
+            profile = goods_profile(db, lot) or {}
+            group = result[product.id]['processed_component' if profile.get('output_piece') else 'semi_finished']
+            group['actual'] += lot.quantity_available + lot.quantity_reserved
+            group['available'] += lot.quantity_available
+            group['reserved'] += lot.quantity_reserved
     return result
 
 
@@ -327,6 +337,9 @@ def inventory_details(db: Session, product: Product):
     own_semi_ids = {lot.id for lot in semi}
     cross_semi = [lot for lot in _bound_semi_lots(db, product) if lot.id not in own_semi_ids]
     semi.extend(cross_semi)
+    from app.services.product_activity import source_lots
+    known_ids = {lot.id for lot in semi}
+    semi.extend(lot for lot in source_lots(db, product) if lot.id not in known_ids)
     from app.services.warehouse_goods import goods_profile
     profiles = {lot.id: goods_profile(db, lot) or {} for lot in semi}
     processed = [lot for lot in semi if profiles[lot.id].get("output_piece") is True]

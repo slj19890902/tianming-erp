@@ -267,17 +267,10 @@ def plan_product(db, item, lot):
         if lot.allowed_products and product.id not in {binding.product_id for binding in lot.allowed_products}:
             fail("该批材料的已确认适用产品范围不包含目标产品")
         return product
-    detail = lot.semi_finished_detail
-    if (not detail or detail.flute_type != product.flute_type
-            or (product.report_length_mm and product.report_length_mm > detail.board_length_mm)
-            or (product.report_width_mm and product.report_width_mm > detail.board_width_mm)):
-        fail("现有产品规格或楞型与实收材料不匹配，请核对资料")
     if lot.allowed_products and product.id not in {binding.product_id for binding in lot.allowed_products}:
         fail("该批材料的已确认适用产品范围不包含目标产品")
-    from app.services.warehouse_goods import qualification_issues
-    issues = qualification_issues(db,lot,product)
-    if issues:
-        fail("材料不能用于该产品："+"；".join(issues))
+    from app.services.stock_purchase_identity import validate_material
+    validate_material(db, item, lot, product)
     return product
 
 def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='finished', frozen_snapshot=None):
@@ -317,6 +310,11 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='
             fail("生产投入必须大于0且不能超过可用材料")
         product = plan_product(db,item,lot) if frozen_snapshot is None else db.get(Product, frozen_snapshot['product_id'])
         from app.services.finished_stock_identity import product_basis
+        if frozen_snapshot is None and not getattr(item, 'frozen_order_reserve', False):
+            from app.services.stock_purchase_identity import resolve
+            frozen_identity = resolve(db, item, product)
+        else:
+            frozen_identity = None
         expected = quantity * (frozen_snapshot['factor'] if frozen_snapshot else item.stock_yield_per_sheet) // (frozen_snapshot['pieces_per_box'] if frozen_snapshot else item.pieces_per_box)
         if expected <= 0:
             fail("投入材料不足以产出一个成品")
@@ -331,7 +329,9 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='
         db.add(reservation); db.flush()
         job = Job(receipt_item_id=receipt.id, reservation_id=reservation.id, product_id=product.id,
             product_snapshot=json.dumps(frozen_snapshot or dict(product_id=product.id,code=item.product_code_snapshot or product.product_code,name=item.product_name_snapshot or product.product_name,
-                factor=item.stock_yield_per_sheet,pieces_per_box=item.pieces_per_box,physical_basis=product_basis(product),
+                factor=item.stock_yield_per_sheet,pieces_per_box=item.pieces_per_box,
+                physical_basis=frozen_identity['physical_basis'] if frozen_identity else product_basis(product),
+                purchase_identity=frozen_identity,
                 planned_location=planned_location,preparation_group=group_snapshot),ensure_ascii=False),
             input_quantity=quantity, expected_output=expected)
         db.add(job); db.flush()
@@ -379,6 +379,15 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='
             if output.finished_detail:
                 output.finished_detail.inventory_code_snapshot=snapshot["code"]
                 output.finished_detail.product_name_snapshot=snapshot["name"]
+                basis = json.loads(snapshot['physical_basis'])
+                output.finished_detail.material_code_snapshot = basis.get('material')
+                output.finished_detail.flute_type_snapshot = basis.get('flute')
+                output.finished_detail.box_type_snapshot = basis.get('box_style')
+                fields = (snapshot.get('purchase_identity') or {}).get('fields')
+                if fields:
+                    for field in ('length_mm', 'width_mm', 'height_mm'):
+                        value = fields.get(field)
+                        setattr(output.finished_detail, field, round(Decimal(str(value))) if value is not None else None)
             output.estimated_unit_cost_snapshot=None
             if lot.estimated_unit_cost_snapshot is not None:
                 total=Decimal(str(lot.estimated_unit_cost_snapshot))*quantity

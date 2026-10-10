@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import uuid
 
@@ -328,17 +329,29 @@ class Manager:
         env['PYTHONPATH'] = str(release)
         env['ERP_DATABASE_PATH'] = str(shared / 'data/carton_erp.sqlite3')
         env['ERP_WORKERS'] = '1'
-        ai_key = load_openai_api_key(self.root)
-        if ai_key:
-            env['OPENAI_API_KEY'] = ai_key
-            env['ERP_AI_INVENTORY_PROVIDER'] = 'openai'
-            env.setdefault('ERP_AI_INVENTORY_MODEL', 'gpt-5-mini')
-        deepseek_key = load_deepseek_api_key(self.root)
-        if deepseek_key:
-            env.pop('OPENAI_API_KEY', None)
-            env['DEEPSEEK_API_KEY'] = deepseek_key
-            env['ERP_AI_INVENTORY_PROVIDER'] = 'deepseek'
-            env['ERP_AI_INVENTORY_MODEL'] = 'deepseek-flash'
+        # A restored factory configuration cannot promote this Mac to a live
+        # server. Factory activation is a separate, not-yet-implemented gate.
+        rehearsal = sys.platform == 'darwin' or env.get('ERP_HOME_REHEARSAL') == '1'
+        if rehearsal:
+            env['ERP_HOME_REHEARSAL'] = '1'
+            env['ERP_BIND_HOST'] = '127.0.0.1'
+            env['ERP_AI_INVENTORY_PROVIDER'] = 'disabled'
+            for name in list(env):
+                if name in {'OPENAI_API_KEY', 'DEEPSEEK_API_KEY'} or name.lower() in (
+                        'http_proxy', 'https_proxy', 'all_proxy', 'ftp_proxy'):
+                    env.pop(name, None)
+        else:
+            ai_key = load_openai_api_key(self.root)
+            if ai_key:
+                env['OPENAI_API_KEY'] = ai_key
+                env['ERP_AI_INVENTORY_PROVIDER'] = 'openai'
+                env.setdefault('ERP_AI_INVENTORY_MODEL', 'gpt-5-mini')
+            deepseek_key = load_deepseek_api_key(self.root)
+            if deepseek_key:
+                env.pop('OPENAI_API_KEY', None)
+                env['DEEPSEEK_API_KEY'] = deepseek_key
+                env['ERP_AI_INVENTORY_PROVIDER'] = 'deepseek'
+                env['ERP_AI_INVENTORY_MODEL'] = 'deepseek-flash'
         models = release / 'runtime/ocr/model'
         if models.is_dir():
             env['EASYOCR_MODULE_PATH'] = str(models.parent)

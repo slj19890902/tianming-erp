@@ -118,6 +118,12 @@ def _legacy_customers_spa_redirect() -> RedirectResponse:
 @asynccontextmanager
 async def phase2_lifespan(_: FastAPI):
     # Alembic and init_db.py own schema/user initialization from Phase 2 onward.
+    from app.core.home_rehearsal import install_network_guard
+    rehearsal = install_network_guard()
+    if rehearsal:
+        import asyncio
+        if not type(asyncio.get_running_loop()).__module__.startswith("asyncio."):
+            raise ValueError("家庭预演要求标准asyncio事件循环，拒绝未审计原生网络循环")
     current = load_settings()
     print(f"BoxERP database: {current.database_path}")
     # 确保 PDF 训练样本存储目录存在（不进入 Git，.gitkeep 已追踪目录结构）
@@ -142,7 +148,7 @@ async def phase2_lifespan(_: FastAPI):
     from app.services.email_pdf_queue import recognition_loop
     stop = asyncio.Event()
     jobs = []
-    if current.is_production and not os.getenv("ERP_UAT_ROOT"):
+    if current.is_production and not os.getenv("ERP_UAT_ROOT") and not rehearsal:
         jobs.append(asyncio.create_task(settlement_loop(stop, SessionLocal)))
         jobs.append(asyncio.create_task(automatic_sync_loop(stop, SessionLocal)))
         jobs.append(asyncio.create_task(recognition_loop(stop, SessionLocal)))

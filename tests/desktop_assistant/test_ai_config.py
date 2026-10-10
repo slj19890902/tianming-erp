@@ -29,6 +29,7 @@ class AiConfigTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "AI 密钥"):
                 normalize_openai_api_key(value)
 
+    @patch("desktop_assistant.manager.sys.platform", "win32")
     def test_manager_injects_key_only_into_child_process_environment(self) -> None:
         with TemporaryDirectory() as scratch:
             root = Path(scratch) / "erp"
@@ -54,6 +55,7 @@ class AiConfigTests(unittest.TestCase):
                 (shared / "environment.json").read_text(encoding="utf-8"),
             )
 
+    @patch("desktop_assistant.manager.sys.platform", "win32")
     def test_manager_never_inherits_an_unmanaged_parent_api_key(self) -> None:
         with TemporaryDirectory() as scratch:
             root = Path(scratch) / "erp"
@@ -86,7 +88,8 @@ def test_deepseek_local_key_does_not_leak_openai(tmp_path,monkeypatch):
     save_deepseek_api_key(tmp_path,'sk-deepseek-test-1234567890')
     manager=Manager(tmp_path,b'pub')
     (tmp_path/'shared/environment.json').write_text('{}')
-    env=manager._environment(tmp_path/'release')
+    with patch('desktop_assistant.manager.sys.platform', 'win32'):
+        env=manager._environment(tmp_path/'release')
     assert env['ERP_AI_INVENTORY_PROVIDER']=='deepseek'
     assert env['DEEPSEEK_API_KEY']=='sk-deepseek-test-1234567890'
     assert 'OPENAI_API_KEY' not in env

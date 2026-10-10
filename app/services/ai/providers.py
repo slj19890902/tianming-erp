@@ -243,6 +243,11 @@ class OpenAIInventoryInsightProvider:
         return json.loads(_response_output_text(payload))
 
     def _send(self, request_payload):
+        from app.core.home_rehearsal import enabled
+        if enabled():
+            raise ProviderUnavailable(
+                "home_rehearsal", "家庭预演禁止外部AI调用。", request_attempted=False,
+            )
         request = Request(
             self.endpoint,
             data=json.dumps(request_payload, ensure_ascii=False).encode("utf-8"),

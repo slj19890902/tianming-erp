@@ -10,6 +10,7 @@ import threading
 import asyncio
 import logging
 import json
+from app.core.home_rehearsal import require_external_access
 from app.services.email_sender_filter import normalize_senders, sender_matches
 from datetime import datetime
 from email import policy
@@ -129,6 +130,7 @@ def store_message(db, user, validity, uid, raw=None, notice=''):
 
 
 def sync_inbox(db, user, factory=imaplib.IMAP4_SSL):
+    require_external_access()
     if not sync_lock.acquire(blocking=False):
         raise LookupError('正在读取邮箱，请稍后刷新列表')
     client = None
@@ -227,6 +229,7 @@ def _safe_automatic_error(error):
 
 def run_automatic_cycle(session_factory, factory=imaplib.IMAP4_SSL):
     """Run one configured inbox read without creating sales facts."""
+    require_external_access()
     with session_factory() as db:
         settings = db.get(EmailIntakeSettings, 1)
         if settings is None or not settings.automatic_enabled:

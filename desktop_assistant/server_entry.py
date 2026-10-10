@@ -20,6 +20,8 @@ def configure_managed_drawing_storage(control):
 
 
 def main():
+    from app.core.home_rehearsal import install_network_guard
+    rehearsal = install_network_guard()
     # The web app reads the assistant's non-secret backup status from this root.
     # Keep the path available while consuming the process-control nonce here.
     control = Path(os.environ['TM_ERP_CONTROL'])
@@ -30,6 +32,7 @@ def main():
     server = uvicorn.Server(uvicorn.Config(
         'app.main:app', host=os.environ['ERP_BIND_HOST'], port=int(os.environ['ERP_PORT']),
         workers=1, timeout_graceful_shutdown=45,
+        loop="asyncio" if rehearsal else "auto",
     ))
 
     def watch():

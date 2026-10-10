@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -29,6 +29,10 @@ def get_flute_delta(
     supplier_name: str | None,
     layer_count: int | None,
     flute_type: str | None,
+    rules_by_key: Mapping[
+        tuple[str, int, str], tuple[Decimal, int | None]
+    ]
+    | None = None,
 ) -> tuple[Decimal, int | None]:
     """查楞型加价：返回 (price_delta, rule_id)。无匹配规则返回 (0, None)。
 
@@ -37,6 +41,11 @@ def get_flute_delta(
     flute = _norm_flute(flute_type)
     if not supplier_name or layer_count is None or not flute:
         return Decimal("0"), None
+    if rules_by_key is not None:
+        return rules_by_key.get(
+            (supplier_name, layer_count, flute),
+            (Decimal("0"), None),
+        )
     stmt = (
         select(SupplierFlutePriceRule)
         .where(
@@ -65,6 +74,10 @@ def get_effective_material_price(
     supplier_name: str | None = None,
     layer_count: int | None = None,
     flute_type: str | None = None,
+    flute_rules_by_key: Mapping[
+        tuple[str, int, str], tuple[Decimal, int | None]
+    ]
+    | None = None,
 ) -> dict:
     """统一计算最终材料平方价。
 
@@ -85,6 +98,7 @@ def get_effective_material_price(
         supplier_name=supplier_name,
         layer_count=layer_count,
         flute_type=flute_type,
+        rules_by_key=flute_rules_by_key,
     )
 
     base = None if base_price is None else Decimal(base_price)

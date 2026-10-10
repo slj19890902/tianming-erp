@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.material import Material
 from app.models.order import OrderItem
+from app.models.supplier_flute_price_rule import SupplierFlutePriceRule
 from app.services.material_pricing import get_effective_material_price
 from app.services.requisition_quantities import (
     DEFAULT_CUTTING_MODE,
@@ -20,6 +23,16 @@ AREA_QUANTUM = Decimal("0.000001")
 PRICE_QUANTUM = Decimal("0.0001")
 COST_QUANTUM = Decimal("0.0001")
 MONEY_QUANTUM = Decimal("0.01")
+
+
+@dataclass(frozen=True)
+class MaterialCostEstimateContext:
+    """Page-scoped master data used by read-only current-cost estimates."""
+
+    materials_by_id: Mapping[int, Material]
+    flute_rules_by_key: Mapping[
+        tuple[str, int, str], tuple[Decimal, int | None]
+    ]
 
 
 def _decimal(value: object) -> Decimal | None:
@@ -42,6 +55,8 @@ def _positive_int(value: object, default: int = 1) -> int:
 def _material(
     db: Session,
     material_id: object,
+    *,
+    context: MaterialCostEstimateContext | None = None,
 ) -> Material | None:
     try:
         resolved_id = int(material_id) if material_id not in (None, "") else None
@@ -49,7 +64,11 @@ def _material(
         resolved_id = None
     if resolved_id is None:
         return None
-    material = db.get(Material, resolved_id)
+    material = (
+        context.materials_by_id.get(resolved_id)
+        if context is not None
+        else db.get(Material, resolved_id)
+    )
     return material if material is not None and material.is_active else None
 
 
@@ -67,6 +86,7 @@ def _component(
     layer_count: int | None,
     flute_type: str | None,
     spare_sheet_quantity: int = 0,
+    context: MaterialCostEstimateContext | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     missing: list[str] = []
     if int(required_piece_qty or 0) <= 0:
@@ -75,19 +95,23 @@ def _component(
     width = _decimal(width_mm)
     if length is None or width is None:
         missing.append(f"{label}缺少报料长宽")
-    material = _material(db, material_id)
+    material = _material(db, material_id, context=context)
     if material is None:
         missing.append(f"{label}缺少有效供应商材质")
     price_detail: dict[str, Any] | None = None
     square_price: Decimal | None = None
     if material is not None:
-        price_detail = get_effective_material_price(
-            db,
-            material=material,
-            supplier_name=(supplier_name or "").strip() or material.supplier_name,
-            layer_count=layer_count or material.layer_count,
-            flute_type=flute_type,
-        )
+        price_arguments: dict[str, Any] = {
+            "material": material,
+            "supplier_name": (
+                (supplier_name or "").strip() or material.supplier_name
+            ),
+            "layer_count": layer_count or material.layer_count,
+            "flute_type": flute_type,
+        }
+        if context is not None:
+            price_arguments["flute_rules_by_key"] = context.flute_rules_by_key
+        price_detail = get_effective_material_price(db, **price_arguments)
         square_price = _decimal(price_detail.get("effective_price"))
         if square_price is None:
             missing.append(f"{label}缺少有效平方成本")
@@ -227,11 +251,123 @@ def _bom_sources(
     return result
 
 
+def build_material_cost_estimate_context(
+    db: Session,
+    items: Sequence[OrderItem],
+    *,
+    bom_components_by_item_id: Mapping[int, Iterable[Mapping[str, Any]]],
+) -> MaterialCostEstimateContext:
+    """Batch-load the material and flute-rule inputs for a list page.
+
+    The ordinary single-item estimator remains unchanged when no context is
+    supplied.  Missing or inactive material rows and missing flute rules retain
+    the same fallback semantics as the per-component lookup path.
+    """
+
+    sources_by_item_id: dict[int, list[dict[str, Any]]] = {}
+    material_ids: set[int] = set()
+    for item in items:
+        sources = _main_sources(item)
+        sources.extend(
+            _bom_sources(bom_components_by_item_id.get(int(item.id), ()))
+        )
+        sources_by_item_id[int(item.id)] = sources
+        for source in sources:
+            try:
+                material_id = (
+                    int(source.get("material_id"))
+                    if source.get("material_id") not in (None, "")
+                    else None
+                )
+            except (TypeError, ValueError):
+                material_id = None
+            if material_id is not None:
+                material_ids.add(material_id)
+
+    materials_by_id = (
+        {
+            int(material.id): material
+            for material in db.scalars(
+                select(Material).where(
+                    Material.id.in_(material_ids),
+                    Material.is_active.is_(True),
+                )
+            ).all()
+        }
+        if material_ids
+        else {}
+    )
+
+    requested_rule_keys: set[tuple[str, int, str]] = set()
+    for sources in sources_by_item_id.values():
+        for source in sources:
+            try:
+                material_id = (
+                    int(source.get("material_id"))
+                    if source.get("material_id") not in (None, "")
+                    else None
+                )
+            except (TypeError, ValueError):
+                material_id = None
+            material = materials_by_id.get(material_id) if material_id else None
+            if material is None:
+                continue
+            supplier_name = (
+                str(source.get("supplier_name") or "").strip()
+                or material.supplier_name
+            )
+            layer_count = source.get("layer_count") or material.layer_count
+            flute_type = str(source.get("flute_type") or "").strip().upper()
+            if supplier_name and layer_count is not None and flute_type:
+                requested_rule_keys.add(
+                    (supplier_name, int(layer_count), flute_type)
+                )
+
+    rules_by_key: dict[
+        tuple[str, int, str], tuple[Decimal, int | None]
+    ] = {}
+    if requested_rule_keys:
+        supplier_names = {key[0] for key in requested_rule_keys}
+        layer_counts = {key[1] for key in requested_rule_keys}
+        flute_types = {key[2] for key in requested_rule_keys}
+        rules = db.scalars(
+            select(SupplierFlutePriceRule)
+            .where(
+                SupplierFlutePriceRule.supplier_name.in_(supplier_names),
+                SupplierFlutePriceRule.layer_count.in_(layer_counts),
+                SupplierFlutePriceRule.flute_type.in_(flute_types),
+                SupplierFlutePriceRule.is_active.is_(True),
+            )
+            .order_by(
+                SupplierFlutePriceRule.effective_date.is_(None).asc(),
+                SupplierFlutePriceRule.effective_date.desc(),
+                SupplierFlutePriceRule.id.desc(),
+            )
+        ).all()
+        for rule in rules:
+            key = (
+                rule.supplier_name,
+                int(rule.layer_count),
+                str(rule.flute_type or "").strip().upper(),
+            )
+            if key in requested_rule_keys and key not in rules_by_key:
+                rules_by_key[key] = (
+                    Decimal(rule.price_delta or 0),
+                    int(rule.id),
+                )
+
+    return MaterialCostEstimateContext(
+        materials_by_id=materials_by_id,
+        flute_rules_by_key=rules_by_key,
+    )
+
+
 def estimate_order_item_material_cost(
     db: Session,
     item: OrderItem,
     *,
     bom_components: Iterable[Mapping[str, Any]] = (),
+    context: MaterialCostEstimateContext | None = None,
 ) -> dict[str, Any]:
     """Build a read-only current material estimate from frozen physical inputs.
 
@@ -244,7 +380,7 @@ def estimate_order_item_material_cost(
     calculated: list[dict[str, Any]] = []
     missing: list[str] = []
     for source in sources:
-        component, component_missing = _component(db, **source)
+        component, component_missing = _component(db, **source, context=context)
         if component is not None:
             calculated.append(component)
         missing.extend(component_missing)

@@ -313,6 +313,29 @@ def test_actual_lot_reverse_reuses_matcher_without_reserving(mobile_erp_app):
         assert before == (lot.quantity_available, lot.quantity_reserved, lot.version)
 
 
+def test_registered_net_sheet_is_identified_without_cut_profile(mobile_erp_app):
+    app, ids, factory = _app(mobile_erp_app)
+    with factory() as db:
+        product = db.get(Product, ids["product"])
+        product.length_mm, product.width_mm = 800, 600
+        product.report_length_mm, product.report_width_mm = 800, 600
+        product.default_material_code = "K=A"
+        product.flute_type, product.layer_count = "B", 3
+        lot = db.scalar(select(InventoryLot).where(InventoryLot.lot_number == "SF-MOBILE-001"))
+        lot.semi_finished_detail.sheet_type = "net_sheet"
+        db.commit()
+        lot_id = lot.id
+    with TestClient(app) as client:
+        _login(client, "mobile-admin")
+        result = client.get("/api/product-workbench/reverse", params={
+            "length": 800, "width": 600, "processed_state": "net_raw", "lot_id": lot_id})
+        assert result.status_code == 200, result.text
+        assert result.json()["items"]
+        assert all(item["source_processed_state"] == "net_raw"
+                   and item["match_class"] == "review" and item["cut_plan"] is None
+                   for item in result.json()["items"])
+
+
 def test_search_order_mold_and_detail_are_price_free(mobile_erp_app):
     app, ids, factory = _app(mobile_erp_app)
     with factory() as db:

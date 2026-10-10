@@ -13,3 +13,5 @@
 证据目录D:/.codex/workspace_artifacts/supplier-sheet-default-20261010；tests、tests-r2、browser-r4、browser-r5日志和browser-evidence截图/result。早期失败副本保留；成功Chrome副本由run_task报告Git/链接保护而保留，不绕过清理。无全仓测试，无正式业务写入。
 
 发布要求：当前正式Git1f074e8156901e8654d5b7d3d98fe1d3493e4066、v623签名源码326c1deb9a229a0003542da9ad09aee2eddfd984、ep1010md。重建并安装带supplier_sheet_trim_v1签名读取检查的助手，保留现有全部门禁，再用原Manager锁、冷备恢复/事实与附件比较、唯一head、健康和静态资源核对发布。出现任意v3事实后，禁止回退不支持的v623旧程序；保留现库向前修复，不用旧备份覆盖新业务。发布实绩追加下节。
+
+更新器补验：19项首轮通过，9项因隔离运行器缺Git路径及测试连接未关闭影响Windows临时目录释放而失败；补齐运行器路径、关闭测试连接后9项全通过。含真实签名加密恢复包验证：缺失/布尔伪值reader被拒绝且数据未启用，整数1的新reader可完整恢复。已有送货读取门禁与源码/版本/head构建检查保留。成功副本由run_task回收221576353字节。

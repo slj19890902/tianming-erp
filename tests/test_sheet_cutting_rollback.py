@@ -54,3 +54,31 @@ def test_old_program_rollback_is_rejected_after_any_v2_fact(tmp_path, monkeypatc
         assert manager.compatible('new', 'eg1008sc') is True
         with sqlite3.connect(database) as db:
             db.execute(f'DELETE FROM "{table}"')
+
+
+@pytest.mark.parametrize('capability', [None, True, 1])
+def test_actual_signed_recovery_checks_trim_reader_before_promotion(capability):
+    from tests.desktop_assistant.test_p0_5_restore_contract import _package_shared
+    from tests.desktop_assistant import test_recovery as recovery
+    from desktop_assistant.storage import database_info, pack_tree
+    case=recovery.RecoveryTests();case.setUp()
+    try:
+        shared=case.manager.root/'shared'
+        database=shared/'data/carton_erp.sqlite3'
+        with sqlite3.connect(database) as db:
+            db.execute('ALTER TABLE products ADD COLUMN sheet_cutting_settings TEXT')
+            db.execute('UPDATE products SET sheet_cutting_settings=?',(json.dumps({'schema_version':3}),))
+        db.close()
+        release=case.root/'trim-release.zip'
+        pack_tree(case.root/'source-one',release,dict(type='tianming.release.v1',version='one',revision='r1',
+            reader_capabilities={'supplier_sheet_trim_v1':capability}),case.key)
+        package=_package_shared(case,shared,database_metadata=database_info(database),name='trim-recovery',release_package=release)
+        target=recovery.TestManager(case.root/'target',case.public)
+        if type(capability) is int and capability==1:
+            assert target.restore(package,recovery.PASSWORD)['started'] is False
+        else:
+            with pytest.raises(ValueError,match='修边尺寸'):target.restore(package,recovery.PASSWORD)
+            assert target.state['current'] is None
+            assert not any((target.root/'shared').iterdir())
+            assert not any((target.root/'releases').iterdir())
+    finally:case.tearDown()

@@ -1,5 +1,18 @@
 # Codex 项目交接
 
+## 2026-07-20 N042 | 新振 Excel 订单导入安全收口（未提交，禁止直接合并）
+
+- 独立 worktree：`D:\tm-worktrees\erp-xinzhen-excel-n042-v2`；分支：`feature/xinzhen-excel-order-import-n042-v2`。本轮未 commit、未 push、未连接或写入正式数据库。
+- 真实只读样本 `CARTON MARKING PO#35 726340 HS MB0091C1.xls` 为 84,992 字节的 OLE/BIFF `.xls`，SHA-256 为 `688E061097CADB842FF6C272CD6B53DF0DDA411C3904742EA8B7EAE21BC52C4B`。最终解析结果：唯一可见订单表 `1`、客户单号 `35 726340`、款号 `MB0091C1`、颜色 `C1Blush`、尺码 `42"x42"`、纸箱尺寸 `380×260×170mm`、纸箱数量 `25`，款式行 Units、H21 汇总、H23 箱数、总件数、箱号范围和尺寸箱数全部交叉一致。
+- 固定 B10:N30 版式的任何数量冲突都会标记 `needs_review` 并阻断转单；第 31 行以后仍有订单证据会按“疑似截断”拒绝。通用表头重复映射但值冲突时拒绝，不再以后列静默覆盖。所有可见工作表都会枚举；存在多个订单表证据时返回候选，必须明确选择，隐藏工作表不参与自动识别。
+- 新振客户身份采用稳定两级规则：第一优先唯一启用且规范化 `customer_code=XINZHEN` 的客户；仅在不存在该编码时，才兼容唯一启用且名称包含“新振”的客户。编码层或名称回退层出现多个候选都 fail-closed；同名客户不能推翻唯一稳定编码客户。
+- `POST /api/orders/xinzhen-excel-preview` 同时要求 `orders.create` 与 `products.view`，并继续执行 N028 客户范围校验；车间角色候选不返回销售价。候选快速切换使用请求序号、当前选择 ID 和响应产品 ID 三重校验，过期响应不能覆盖新选择。
+- 预览只写不可变 Excel 来源台账，不创建正式订单。数量编辑会立即使原 `quantity_check` 失效，标准订单表单继续携带来源数量；修改数量必须重新勾选确认。后端两级签名 token 绑定操作员、文件 SHA-256、客户 ID/编码、解析版本、规范化源载荷、最终订单载荷和幂等键，确认后再改客户、产品、数量、价格或日期都会拒绝保存。
+- 新增不可变 `excel_order_import_batches`、`excel_order_import_rows`、`excel_order_import_conversions`，数据库唯一约束覆盖重复文件、无 PO 文件、批次转单和请求幂等键；正式订单与转换事实同事务写入，并发双击只生成 1 张订单和 1 条转换事实。新增脱敏真 BIFF fixture `tests/fixtures/n042_xinzhen_carton_marking_sanitized.xls.fixture`，测试不依赖本机绝对路径。
+- **临时迁移绝对禁止直接合并：** `n042tmpv8x9z51` 当前仅为隔离 UAT，父节点为 `ce61v8x9z50`。N041 集成后必须重新分配 revision，并将 `down_revision` 线性接到 `df62v8x9z51`，再重做副本升级、降级、再升级演练。
+- 隔离迁移库位于 worktree 的 `.tmp/n042_migration_20260720_215647/`；迁移前 `ce61` 备份 SHA-256 为 `20A8BEEFAC4E8EFC9EA84819AFE1BCC311741B36A2441118CBA2CE213C91DC9E`，源/备份完整性均为 `ok`、对象数均为 362、revision 均为 `ce61v8x9z50`。已完成 `ce61 -> n042tmp -> ce61 -> n042tmp`，最终 `integrity_check=ok`、外键异常 0，三张台账表和六个 UPDATE/DELETE 禁止触发器齐全。
+- 自动验证：N042 专项 `47 passed`；订单主回归 `62 passed`；N028 客户范围 `19 passed`；内联 JavaScript 语法 `1 passed`；Python 编译和 `git diff --check` 通过。旧 `tests/test_phase10_frontend.py` 为 `11 passed, 1 failed`，唯一失败是基线已存在的旧销售菜单固定字符串断言，`HEAD` 与当前文件都使用 N028 后的菜单，不是 N042 引入，未在本轮修改该无关测试。
+
 ## 2026-07-19 N039/N040 | 复合产品生产闭环与客户材质候选追溯
 
 - N039 已经人工验收并合并到主功能分支，合并提交 `ba34b7e`；正式数据库已在在线备份后由 `cc59v8x9z48` 线性升级到 `cd60v8x9z49`，迁移后 `integrity_check=ok`、外键异常 0。升级前备份为 `data/backups/carton_erp_before_n039_cd60_20260719_160006.sqlite3`，SHA-256 为 `6FC7024D828858BA056F16F7ABC0F36A3102AD03C429FD5D9A31DA9FB1A10B0F`。

@@ -132,3 +132,8 @@ from app.models.incoming_receipt import (  # noqa: E402,F401
     IncomingReceipt,
     IncomingReceiptItem,
 )
+from app.models.excel_order_import import (  # noqa: E402,F401
+    ExcelOrderImportBatch,
+    ExcelOrderImportConversion,
+    ExcelOrderImportRow,
+)

@@ -1490,6 +1490,7 @@
                     <div class="toolbar-group">
                       <button v-if="canCreateOrders" class="btn primary" @click="openOrder">新建订单</button>
                       <button v-if="canCreateOrders" class="btn" @click="openOrderPdfImport">识别PDF订单</button>
+                      <button v-if="canCreateOrders" class="btn" @click="openXinzhenExcelImport">导入新振Excel</button>
                       <button class="btn" @click="loadOrders()">刷新</button>
                     </div>
                   </div>
@@ -3040,12 +3041,90 @@
               </div>
               <div class="muted">识别结果只进入独立草稿层；识别失败或未确认的草稿不会写入正式订单。</div>
             </div>
+            <div v-else-if="modal.type === 'orderXinzhenExcelImport'">
+              <div class="form-grid" style="margin-bottom:12px">
+                <div class="field wide">
+                  <label>上传新振 Excel 订单（单个文件）</label>
+                  <input class="input" type="file" accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" @change="onXinzhenExcelFileChange" />
+                  <div class="muted" style="font-size:12px;margin-top:4px">只生成可编辑草稿。Excel 原文件未提供的价格和日期必须由操作员填写并逐行确认。</div>
+                </div>
+              </div>
+              <div class="toolbar-group" style="margin-bottom:12px">
+                <button class="btn primary" :disabled="!xinzhenExcelImport.file || loading" @click="previewXinzhenExcel">识别预览草稿</button>
+                <span class="muted" v-if="xinzhenExcelImport.file">已选择：{{ xinzhenExcelImport.file.name }}</span>
+              </div>
+              <div v-if="(xinzhenExcelImport.worksheet_options || []).length" class="notice danger" style="margin-bottom:12px">
+                <strong>检测到多张订单工作表，系统不会自动猜测。</strong>
+                <div class="toolbar-group" style="margin-top:8px">
+                  <select class="select" v-model="xinzhenExcelImport.worksheet_name">
+                    <option value="">请选择订单工作表</option>
+                    <option v-for="name in xinzhenExcelImport.worksheet_options" :key="name" :value="name">{{ name }}</option>
+                  </select>
+                  <button class="btn primary" :disabled="!xinzhenExcelImport.worksheet_name || loading" @click="previewXinzhenExcel">按所选工作表重新识别</button>
+                </div>
+              </div>
+              <div v-if="xinzhenExcelPreviewDraft" class="order-group-detail-card">
+                <div class="form-grid" style="margin-bottom:12px">
+                  <div class="field"><label>来源文件</label><div>{{ xinzhenExcelSourceName(xinzhenExcelPreviewDraft) || "-" }}</div></div>
+                  <div class="field"><label>客户单号</label><div>{{ xinzhenExcelField(xinzhenExcelPreviewDraft, ["customer_po", "po", "purchase_order_no"]) || "-" }}</div></div>
+                  <div class="field"><label>Excel 收件方</label><div>{{ xinzhenExcelField(xinzhenExcelPreviewDraft, ["customer_name_raw", "excel_recipient", "recipient", "receiver"]) || "-" }}</div></div>
+                  <div class="field"><label>Excel 发件方</label><div>{{ xinzhenExcelField(xinzhenExcelPreviewDraft, ["vendor_name", "excel_vendor", "vendor", "supplier"]) || "-" }}</div></div>
+                  <div class="field"><label>ERP 客户</label><div :class="{'danger-text':!xinzhenExcelCustomerId(xinzhenExcelPreviewDraft)}">{{ xinzhenExcelCustomerName(xinzhenExcelPreviewDraft) }}</div></div>
+                  <div class="field"><label>识别状态</label><span :class="['status', xinzhenExcelTransferReady(xinzhenExcelPreviewDraft) ? 'green' : 'orange']">{{ xinzhenExcelTransferReady(xinzhenExcelPreviewDraft) ? "可转入新建订单" : "待人工核对" }}</span></div>
+                  <div class="field"><label>纸箱尺寸</label><div>{{ xinzhenExcelDimensions(xinzhenExcelPreviewDraft) || "-" }}</div></div>
+                  <div class="field"><label>总件数</label><div>{{ xinzhenExcelField(xinzhenExcelQuantityCheck(xinzhenExcelPreviewDraft), ["garment_total", "total_units", "total_quantity"]) || "-" }}</div></div>
+                  <div class="field"><label>每箱件数</label><div>{{ xinzhenExcelField(xinzhenExcelQuantityCheck(xinzhenExcelPreviewDraft), ["units_per_carton", "pieces_per_box", "unit_per_carton"]) || "-" }}</div></div>
+                  <div class="field"><label>推导箱数</label><div>{{ xinzhenExcelField(xinzhenExcelQuantityCheck(xinzhenExcelPreviewDraft), ["derived_carton_count", "calculated_carton_count", "carton_count"]) || "-" }}</div></div>
+                  <div class="field"><label>原单箱数</label><div>{{ xinzhenExcelField(xinzhenExcelQuantityCheck(xinzhenExcelPreviewDraft), ["reported_carton_count", "source_carton_count", "carton_count"]) || "-" }}</div></div>
+                  <div class="field wide"><label>数量核对</label><div :class="xinzhenExcelQuantityReconciled(xinzhenExcelPreviewDraft) ? 'status green' : 'status orange'">{{ xinzhenExcelQuantityReconciliationText(xinzhenExcelPreviewDraft) }}</div></div>
+                </div>
+                <div v-if="!xinzhenExcelCustomerId(xinzhenExcelPreviewDraft)" class="notice danger" style="margin-bottom:10px;white-space:normal">未匹配到 ERP 客户，不能转入新建订单。</div>
+                <div v-if="xinzhenExcelWarnings(xinzhenExcelPreviewDraft).length" class="status orange" style="display:block;margin-bottom:10px;line-height:1.7"><strong>识别提示：</strong><div v-for="warning in xinzhenExcelWarnings(xinzhenExcelPreviewDraft)" :key="warning">{{ warning }}</div></div>
+                <div v-if="xinzhenExcelBlockReasons(xinzhenExcelPreviewDraft).length" class="status red" style="display:block;margin-bottom:10px;line-height:1.7"><strong>暂不能转入新建订单：</strong><div v-for="reason in xinzhenExcelBlockReasons(xinzhenExcelPreviewDraft)" :key="reason">{{ reason }}</div></div>
+                <div v-if="xinzhenExcelItems(xinzhenExcelPreviewDraft).length" style="overflow-x:auto">
+                  <table class="line-items" style="min-width:1420px">
+                    <thead><tr><th style="min-width:70px">Excel行</th><th style="min-width:210px">原始款式 / 颜色 / 尺寸</th><th style="min-width:260px">现有常用箱</th><th style="min-width:90px">数量</th><th style="min-width:130px">下单日期</th><th style="min-width:130px">交货日期</th><th class="sensitive-price" style="min-width:150px">客户单价</th><th style="min-width:230px">确认</th></tr></thead>
+                    <tbody>
+                      <tr v-for="item in xinzhenExcelItems(xinzhenExcelPreviewDraft)" :key="item.client_line_id || item.line_no">
+                        <td style="vertical-align:top">{{ item.source_row || item.row_number || item.line_no || "-" }}</td>
+                        <td style="vertical-align:top;font-size:12px;line-height:1.6"><div><strong>{{ item.raw_style || item.raw_vendor_style || item.style_no || "-" }}</strong></div><div>颜色：{{ item.raw_color || item.color || "-" }}</div><div>尺寸：{{ item.raw_size || item.size || item.specification || "-" }}</div></td>
+                        <td style="vertical-align:top">
+                          <search-select v-model="item.matched_product_id" :options="item.product_candidates || []" label-key="_xinzhen_label" value-key="id" placeholder="选择现有常用箱" @change="selectXinzhenExcelProduct(item)"></search-select>
+                          <div v-if="item.matched_product_id" class="muted" style="font-size:11px;margin-top:4px">{{ item.matched_product_code || "-" }} / {{ item.matched_product_name || "-" }} / {{ item.matched_specification || "-" }}</div>
+                          <div v-if="item.common_box_default_price !== null && item.common_box_default_price !== undefined && item.common_box_default_price !== ''" class="status blue" style="display:block;margin-top:4px;white-space:normal">常用箱默认价：¥{{ money(item.common_box_default_price) }}（不是 Excel 原始单价） <button class="btn small" type="button" @click="applyXinzhenExcelDefaultPrice(item)">采用默认价</button></div>
+                        </td>
+                        <td style="vertical-align:top">
+                          <input class="input compact-input" type="number" min="1" step="1" v-model.number="item.quantity" @input="onXinzhenExcelQuantityInput(item)" />
+                          <div class="muted" style="font-size:11px;margin-top:4px">来源数量：{{ item.source_quantity }}</div>
+                          <div v-if="xinzhenExcelQuantityChanged(item)" class="status orange" style="display:block;margin-top:4px;white-space:normal">
+                            原数量核对已失效：{{ item.source_quantity }} → {{ item.quantity }}
+                            <label style="display:flex;align-items:center;gap:4px;margin-top:4px"><input type="checkbox" v-model="item.quantity_change_confirmed" /> 我已核对并确认修改后的数量</label>
+                          </div>
+                        </td>
+                        <td style="vertical-align:top"><input class="input" type="date" v-model="item.order_date" @input="invalidateXinzhenExcelItem(item)" /></td>
+                        <td style="vertical-align:top"><input class="input" type="date" v-model="item.delivery_date" @input="invalidateXinzhenExcelItem(item)" /></td>
+                        <td class="sensitive-price" style="vertical-align:top"><input class="input" type="number" min="0" step="0.0001" placeholder="Excel未提供，请填写" v-model="item.unit_price" @input="invalidateXinzhenExcelItem(item)" /><div class="muted" style="font-size:11px;margin-top:4px">价格来源：人工确认</div></td>
+                        <td style="vertical-align:top;font-size:12px"><span v-if="!item.matched_product_id" class="status red">未选择常用箱</span><span v-else class="status green">已选择现有常用箱</span><label style="display:flex;align-items:center;gap:5px;margin-top:7px;cursor:pointer"><input type="checkbox" v-model="item.manual_fields_confirmed" /> 我已确认本行价格和日期</label></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div v-else class="empty">Excel 没有可用订单明细。</div>
+                <div class="muted" style="margin-top:10px">预览只生成独立草稿，不会创建客户、产品、常用箱或正式订单。</div>
+              </div>
+            </div>
             <div v-else-if="modal.type === 'order'">
               <div class="form-grid">
                 <div class="field"><label>客户</label><search-select v-model="orderForm.customer_id" :options="activeCustomerOptions" label-key="name" value-key="id" placeholder="输入客户名称或拼音首字母" @change="handleOrderCustomerChange"></search-select></div>
-                <div class="field"><label>客户订单号</label><input class="input" v-model.trim="orderForm.customer_po" /></div>
-                <div class="field"><label>下单日期</label><input class="input" type="date" v-model="orderForm.order_date" @change="refreshOrderNumberPreview" /></div>
-                <div class="field"><label>交货日期</label><input class="input" type="date" v-model="orderForm.delivery_date" /></div>
+                <div class="field"><label>客户订单号</label><input class="input" v-model.trim="orderForm.customer_po" @input="invalidateXinzhenStandardOrderConfirmation" /></div>
+                <div class="field"><label>下单日期</label><input class="input" type="date" v-model="orderForm.order_date" @change="refreshOrderNumberPreview();invalidateXinzhenStandardOrderConfirmation()" /></div>
+                <div class="field"><label>交货日期</label><input class="input" type="date" v-model="orderForm.delivery_date" @input="invalidateXinzhenStandardOrderConfirmation" /></div>
+              </div>
+              <div v-if="orderForm._xinzhen_import" :class="['notice', orderForm._xinzhen_import.stale ? 'danger' : 'info']" style="margin:10px 0">
+                <strong>新振 Excel 来源保护：</strong>
+                <span v-if="orderForm._xinzhen_import.stale">订单内容已修改，原确认已失效。</span>
+                <span v-else>文件来源、客户、数量和价格已由后端签名确认。</span>
+                <button v-if="orderForm._xinzhen_import.stale" class="btn small primary" type="button" :disabled="loading" @click="reconfirmXinzhenStandardOrder">重新确认当前内容</button>
               </div>
               <div v-if="!orderForm.customer_id" class="status orange" style="margin:10px 0">请先选择客户，再选择常用箱并填写数量。</div>
               <div v-else class="muted" style="font-size:12px;margin:6px 0 10px;color:#6b7280">
@@ -3106,9 +3185,9 @@
                     <!-- 规格 -->
                     <td><input class="input spec-input" :disabled="!orderForm.customer_id || item._from_product" v-model.trim="item.specification" /></td>
                     <!-- 数量 -->
-                    <td><div class="order-quantity-inventory"><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" @input="scheduleOrderLineInventoryRefresh(item,orderForm.customer_id)" /><button v-if="hasSafeOrderLineInventoryRecommendation(item)" class="btn small success inventory-recommend-button" type="button" @click="confirmSafeOrderLineInventoryRecommendations(item)">确认库存推荐</button></div></td>
+                    <td><div class="order-quantity-inventory"><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="1" v-model.number="item.quantity" @input="onOrderItemQuantityInput(item)" /><button v-if="hasSafeOrderLineInventoryRecommendation(item)" class="btn small success inventory-recommend-button" type="button" @click="confirmSafeOrderLineInventoryRecommendations(item)">确认库存推荐</button></div><div v-if="item.xinzhen_source_row" class="muted" style="font-size:11px;margin-top:3px">Excel来源 {{ item.xinzhen_source_quantity }}</div><label v-if="item.xinzhen_source_row && xinzhenStandardQuantityChanged(item)" class="status orange" style="display:block;margin-top:3px;white-space:normal"><input type="checkbox" v-model="item.xinzhen_quantity_change_confirmed" @change="invalidateXinzhenStandardOrderConfirmation" /> 确认修改数量</label></td>
                     <!-- 单价 -->
-                    <td class="sensitive-price"><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" /></td>
+                    <td class="sensitive-price"><input class="input compact-input" style="width:8ch" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" v-model="item.unit_price" @input="invalidateXinzhenStandardOrderConfirmation" /></td>
                     <!-- 图纸 -->
                     <td style="font-size:12px;padding:4px 6px">
                       <div v-if="item.temp_drawing_file || item.drawing_file" style="margin-bottom:4px">
@@ -4089,6 +4168,9 @@
               <span class="muted">已加入批量保存：{{ confirmedImportDraftCount }} 条</span>
               <button class="btn primary" :disabled="loading || !confirmedImportDraftCount" @click="saveConfirmedImportDrafts">批量保存已确认草稿</button>
             </template>
+            <template v-if="modal?.type === 'orderXinzhenExcelImport' && xinzhenExcelPreviewDraft">
+              <button class="btn primary" :disabled="loading || !xinzhenExcelTransferReady(xinzhenExcelPreviewDraft)" @click="transferXinzhenExcelToOrderForm">确认并转入新建订单</button>
+            </template>
             <template v-if="modal?.type === 'pdfTemplate' && !pdfTemplateFormReadonly">
               <button class="btn primary" :disabled="loading || pdfTemplateLoading" @click="savePdfTemplate">保存 draft</button>
             </template>
@@ -4505,6 +4587,8 @@
             orderNumberPreview: "",
             orderImportBatch: { files: [], status: "idle" },
             orderImportDrafts: [],
+            xinzhenExcelImport: { file: null, status: "idle", worksheet_name:"", worksheet_options:[] },
+            xinzhenExcelPreviewDraft: null,
             incomingSelected: {},
             mobileEntry: { url:"", qr_data_url:"" },
             orderPdfImport: { file: null, draft: null, matchedCustomerLabel: "" },
@@ -6037,8 +6121,24 @@
               if (Number.isNaN(Number(item.unit_price)) || Number(item.unit_price) < 0) {
                 return `第 ${index + 1} 条单价必须是大于等于 0 的数字`;
               }
+              if (
+                item.xinzhen_source_row
+                && this.xinzhenStandardQuantityChanged(item)
+                && !item.xinzhen_quantity_change_confirmed
+              ) {
+                return `第${index + 1}条新振 Excel 数量已修改，请先勾选确认修改数量。`;
+              }
               const inventoryError = this.inventoryDecisionRequired(item);
               if (inventoryError) return `第${index + 1}条${inventoryError}`;
+            }
+            if (
+              this.orderForm._xinzhen_import
+              && (
+                this.orderForm._xinzhen_import.stale
+                || !this.orderForm._xinzhen_import.confirmation_token
+              )
+            ) {
+              return "新振 Excel 转入后的订单内容已变化，请点击“重新确认当前内容”后再保存。";
             }
             return "";
           },
@@ -9674,6 +9774,383 @@
             this.addOrderItem();
             this.refreshOrderNumberPreview();
           },
+          openXinzhenExcelImport() {
+            this.xinzhenExcelImport = { file:null, status:"idle", worksheet_name:"", worksheet_options:[] };
+            this.xinzhenExcelPreviewDraft = null;
+            this.modal = { type:"orderXinzhenExcelImport", title:"导入新振 Excel 订单" };
+          },
+          onXinzhenExcelFileChange(event) {
+            const file = event?.target?.files?.[0] || null;
+            this.xinzhenExcelImport.file = file;
+            this.xinzhenExcelImport.status = file ? "selected" : "idle";
+            this.xinzhenExcelImport.worksheet_name = "";
+            this.xinzhenExcelImport.worksheet_options = [];
+            this.xinzhenExcelPreviewDraft = null;
+          },
+          xinzhenExcelField(draft, keys, fallback="") {
+            const source = draft || {};
+            for (const key of keys || []) {
+              const value = source[key];
+              if (value !== null && value !== undefined && String(value).trim() !== "") return value;
+            }
+            return fallback;
+          },
+          xinzhenExcelSourceName(draft) {
+            return this.xinzhenExcelField(draft, ["source_name", "filename", "file_name"]);
+          },
+          xinzhenExcelItems(draft) {
+            return Array.isArray(draft?.items) ? draft.items : (Array.isArray(draft?.lines) ? draft.lines : []);
+          },
+          xinzhenExcelCustomerId(draft) {
+            const id = Number(this.xinzhenExcelField(draft, ["matched_customer_id", "customer_id", "erp_customer_id"], null));
+            return Number.isInteger(id) && id > 0 ? id : null;
+          },
+          xinzhenExcelCustomerName(draft) {
+            const direct = this.xinzhenExcelField(draft, ["matched_customer_name", "erp_customer_name"]);
+            if (direct) return direct;
+            const customer = this.activeCustomerOptions.find(row => Number(row.id) === this.xinzhenExcelCustomerId(draft));
+            return customer?.name || "未匹配 ERP 客户";
+          },
+          xinzhenExcelDimensions(draft) {
+            const direct = this.xinzhenExcelField(draft, ["carton_dimensions", "carton_size", "dimensions", "size"]);
+            if (direct) return direct;
+            const firstItem = this.xinzhenExcelItems(draft)[0] || {};
+            if (firstItem.raw_carton_dimensions) return firstItem.raw_carton_dimensions;
+            const dimensions = firstItem.carton_dimensions_mm || firstItem.dimensions_mm || {};
+            const values = [dimensions.length_mm, dimensions.width_mm, dimensions.height_mm]
+              .filter(value => value !== null && value !== undefined && String(value).trim() !== "");
+            return values.length === 3 ? `${values.join(" × ")} mm` : "";
+          },
+          xinzhenExcelWarnings(draft) {
+            const warnings = draft?.warnings || draft?.warning_messages || [];
+            const itemWarnings = this.xinzhenExcelItems(draft).flatMap(item => Array.isArray(item?.warnings) ? item.warnings : []);
+            const values = Array.isArray(warnings) ? warnings : [warnings];
+            return [...new Set([...values, ...itemWarnings].filter(Boolean).map(String))];
+          },
+          xinzhenExcelQuantityChecks(draft) {
+            const aggregate = draft?.quantity_check || draft?.quantity_reconciliation || {};
+            const nested = Array.isArray(aggregate?.items) ? aggregate.items.filter(Boolean) : [];
+            if (nested.length) return nested;
+            const itemChecks = this.xinzhenExcelItems(draft).map(item => item?.quantity_check).filter(check => check && typeof check === "object");
+            if (itemChecks.length) return itemChecks;
+            return aggregate && Object.keys(aggregate).length ? [aggregate] : [];
+          },
+          xinzhenExcelQuantityCheck(draft) {
+            return this.xinzhenExcelQuantityChecks(draft)[0] || {};
+          },
+          xinzhenExcelSingleQuantityReconciled(check) {
+            if (check?.status) return check.status === "passed";
+            if (check && typeof check.reconciled === "boolean") return check.reconciled;
+            const derived = Number(this.xinzhenExcelField(check, ["derived_carton_count", "calculated_carton_count"], NaN));
+            const reported = Number(this.xinzhenExcelField(check, ["reported_carton_count", "source_carton_count"], NaN));
+            return Number.isFinite(derived) && Number.isFinite(reported) && derived === reported;
+          },
+          xinzhenExcelQuantityReconciled(draft) {
+            const aggregate = draft?.quantity_check || draft?.quantity_reconciliation || {};
+            if (aggregate?.status && aggregate.status !== "passed") return false;
+            const checks = this.xinzhenExcelQuantityChecks(draft);
+            if (checks.length) return checks.every(check => this.xinzhenExcelSingleQuantityReconciled(check));
+            if (typeof draft?.quantity_reconciled === "boolean") return draft.quantity_reconciled;
+            return false;
+          },
+          xinzhenExcelQuantityReconciliationText(draft) {
+            const checks = this.xinzhenExcelQuantityChecks(draft);
+            if (checks.length > 1) return this.xinzhenExcelQuantityReconciled(draft) ? `已核对：${checks.length} 行箱数全部通过。` : "需核对：存在未通过箱数核对的明细行。";
+            const check = checks[0] || {};
+            if (check.message) return check.message;
+            const derived = this.xinzhenExcelField(check, ["derived_carton_count", "calculated_carton_count"]);
+            const reported = this.xinzhenExcelField(check, ["reported_carton_count", "source_carton_count", "carton_count"]);
+            if (derived === "" || reported === "") return "箱数暂未完成核对，请人工确认。";
+            return this.xinzhenExcelQuantityReconciled(draft) ? `已核对：推导箱数 ${derived} = 原单箱数 ${reported}` : `需核对：推导箱数 ${derived} ≠ 原单箱数 ${reported}`;
+          },
+          xinzhenExcelCandidateLabel(candidate) {
+            const price = candidate?.sale_unit_price === null || candidate?.sale_unit_price === undefined || candidate?.sale_unit_price === "" ? "-" : `¥${this.money(candidate.sale_unit_price)}`;
+            const dimensions = candidate?.dimensions_mm;
+            const specification = candidate?.specification || (dimensions ? `${dimensions.length_mm}×${dimensions.width_mm}×${dimensions.height_mm}` : "-");
+            return `${candidate?.product_code || "-"} / ${candidate?.product_name || "-"} / ${specification} / 默认价 ${price}`;
+          },
+          normalizeXinzhenExcelDraft(rawDraft) {
+            const draft = { ...(rawDraft || {}) };
+            draft.items = this.xinzhenExcelItems(draft).map((rawItem, index) => {
+              const item = { ...(rawItem || {}) };
+              const candidates = Array.isArray(item.product_candidates) ? item.product_candidates : [];
+              const productCandidates = candidates.map(candidate => ({ ...candidate, _xinzhen_label:this.xinzhenExcelCandidateLabel(candidate) }));
+              const selected = productCandidates.find(row => Number(row.id) === Number(item.matched_product_id));
+              const sourceQuantity = item.quantity ?? item.total_units ?? item.units ?? "";
+              return {
+                ...item,
+                line_no:item.line_no || item.source_row || item.row_number || index + 1,
+                raw_style:item.raw_style || item.raw_vendor_style || item.style_no || item.style || "",
+                raw_color:item.raw_color || item.color || "",
+                raw_size:item.raw_size || item.size || item.raw_spec_model || item.specification || "",
+                quantity:sourceQuantity,
+                source_quantity:sourceQuantity,
+                source_quantity_check:{ ...(item.quantity_check || {}) },
+                quantity_check_valid:this.xinzhenExcelSingleQuantityReconciled(item.quantity_check || {}),
+                quantity_change_confirmed:false,
+                order_date:"",
+                delivery_date:"",
+                unit_price:"",
+                matched_product_id:item.matched_product_id || null,
+                product_candidates:productCandidates,
+                matched_product_code:item.matched_product_code || selected?.product_code || "",
+                matched_product_name:item.matched_product_name || selected?.product_name || "",
+                matched_specification:item.matched_specification || selected?.specification || "",
+                matched_material_id:item.matched_material_id || selected?.material_id || null,
+                common_box_default_price:item.common_box_default_price ?? item.product_default_price ?? selected?.sale_unit_price ?? null,
+                manual_fields_confirmed:false,
+                price_from_common_box:false,
+                client_line_id:createIdempotencyKey(),
+                _inventory:this.newOrderInventoryState(),
+              };
+            });
+            return draft;
+          },
+          async previewXinzhenExcel() {
+            const file = this.xinzhenExcelImport.file;
+            if (!file) { this.showToast("请先选择一个新振 Excel 文件", true); return; }
+            if (!/\.(xlsx|xls)$/i.test(file.name || "")) { this.showToast("只支持 .xls 或 .xlsx 文件", true); return; }
+            if (file.size > 5 * 1024 * 1024) { this.showToast("Excel 文件不能超过 5MB", true); return; }
+            this.loading = true;
+            this.xinzhenExcelImport.status = "recognizing";
+            try {
+              const form = new FormData();
+              form.append("file", file, file.name);
+              if (this.xinzhenExcelImport.worksheet_name) form.append("worksheet_name", this.xinzhenExcelImport.worksheet_name);
+              const { data } = await axios.post("/api/orders/xinzhen-excel-preview", form);
+              this.xinzhenExcelPreviewDraft = this.normalizeXinzhenExcelDraft(data?.draft || data);
+              this.xinzhenExcelImport.worksheet_options = [];
+              for (const item of this.xinzhenExcelItems(this.xinzhenExcelPreviewDraft)) if (item.matched_product_id) await this.selectXinzhenExcelProduct(item);
+              this.xinzhenExcelImport.status = "recognized";
+            } catch (error) {
+              this.xinzhenExcelPreviewDraft = null;
+              const detail = error?.response?.data?.detail;
+              if (detail?.code === "XINZHEN_WORKSHEET_SELECTION_REQUIRED") {
+                this.xinzhenExcelImport.worksheet_options = detail.worksheet_options || [];
+                this.xinzhenExcelImport.status = "worksheet_selection_required";
+                this.showToast(detail.message || "请选择订单工作表", true);
+              } else {
+                this.xinzhenExcelImport.status = "failed";
+                this.showToast(this.errorMessage(error), true);
+              }
+            } finally { this.loading = false; }
+          },
+          invalidateXinzhenExcelItem(item) {
+            if (!item) return;
+            item.manual_fields_confirmed = false;
+            item.price_from_common_box = false;
+            if (item._inventory) this.invalidateLineInventory(item);
+          },
+          xinzhenExcelQuantityChanged(item) {
+            return Number(item?.quantity) !== Number(item?.source_quantity);
+          },
+          onXinzhenExcelQuantityInput(item) {
+            this.invalidateXinzhenExcelItem(item);
+            const changed = this.xinzhenExcelQuantityChanged(item);
+            item.quantity_check_valid = !changed && this.xinzhenExcelSingleQuantityReconciled(item.source_quantity_check || {});
+            if (changed) item.quantity_change_confirmed = false;
+          },
+          async selectXinzhenExcelProduct(item) {
+            this.invalidateXinzhenExcelItem(item);
+            const requestSequence = Number(item?._product_request_sequence || 0) + 1;
+            item._product_request_sequence = requestSequence;
+            const selectedProductId = Number(item?.matched_product_id);
+            const candidate = (item?.product_candidates || []).find(row => Number(row.id) === selectedProductId);
+            if (!candidate) {
+              item.matched_product_code = ""; item.matched_product_name = ""; item.matched_specification = ""; item.common_box_default_price = null;
+              return;
+            }
+            item.matched_product_code = candidate.product_code || "";
+            item.matched_product_name = candidate.product_name || "";
+            item.matched_specification = candidate.specification || "";
+            item.matched_material_id = candidate.material_id || null;
+            item.common_box_default_price = candidate.sale_unit_price ?? null;
+            try {
+              const { data } = await axios.get(`/api/master/products/${selectedProductId}`);
+              if (
+                item._product_request_sequence !== requestSequence
+                || Number(item.matched_product_id) !== selectedProductId
+                || Number(data?.id) !== selectedProductId
+              ) return;
+              item.matched_product_code = data.product_code || item.matched_product_code;
+              item.matched_product_name = data.product_name || item.matched_product_name;
+              item.matched_specification = data.length_mm ? `${Math.round(data.length_mm)}×${Math.round(data.width_mm)}×${Math.round(data.height_mm)}` : item.matched_specification;
+              item.matched_material_id = data.material_id || item.matched_material_id || null;
+              item.layer_count = data.layer_count || null;
+              item.flute_type = data.flute_type || null;
+              item._material_code = data.material_code || "";
+              item._material_supplier_name = data.material_supplier_name || "";
+              item._material_weight = data.material_weight || "";
+              item._product_drawings = data.drawings || [];
+              item._inventory_product = data;
+              item.common_box_default_price = data.sale_unit_price ?? item.common_box_default_price;
+            } catch (_) {
+              if (item._product_request_sequence !== requestSequence || Number(item.matched_product_id) !== selectedProductId) return;
+            }
+            if (item._product_request_sequence !== requestSequence || Number(item.matched_product_id) !== selectedProductId) return;
+            this.refreshOrderLineInventory(item, this.xinzhenExcelCustomerId(this.xinzhenExcelPreviewDraft));
+          },
+          applyXinzhenExcelDefaultPrice(item) {
+            if (item?.common_box_default_price === null || item?.common_box_default_price === undefined || item?.common_box_default_price === "") return;
+            item.unit_price = String(item.common_box_default_price);
+            item.price_from_common_box = true;
+            item.manual_fields_confirmed = false;
+          },
+          xinzhenExcelBlockReasons(draft) {
+            const reasons = [];
+            const customerId = this.xinzhenExcelCustomerId(draft);
+            const items = this.xinzhenExcelItems(draft);
+            if (!customerId) reasons.push("未匹配到 ERP 客户。");
+            if (!items.length) reasons.push("没有可用订单明细。");
+            if (!this.xinzhenExcelQuantityReconciled(draft)) reasons.push("箱数交叉核对未通过，请核对 Excel 原单。");
+            const orderDates = new Set();
+            const deliveryDates = new Set();
+            items.forEach((item, index) => {
+              const line = `第${item.line_no || index + 1}行`;
+              if (!item.matched_product_id) reasons.push(`${line}未选择现有常用箱。`);
+              const quantity = Number(item.quantity);
+              if (!Number.isInteger(quantity) || quantity <= 0) reasons.push(`${line}数量必须是大于0的整数。`);
+              if (this.xinzhenExcelQuantityChanged(item) && !item.quantity_change_confirmed) reasons.push(`${line}数量已从来源值 ${item.source_quantity} 改为 ${item.quantity}，请人工重新确认。`);
+              const price = Number(item.unit_price);
+              if (item.unit_price === "" || item.unit_price === null || item.unit_price === undefined || !Number.isFinite(price) || price < 0) reasons.push(`${line}客户单价必须填写为不小于0的数字。`);
+              if (!item.order_date) reasons.push(`${line}下单日期未填写。`); else orderDates.add(item.order_date);
+              if (!item.delivery_date) reasons.push(`${line}交货日期未填写。`); else deliveryDates.add(item.delivery_date);
+              if (!item.manual_fields_confirmed) reasons.push(`${line}尚未确认人工填写的价格和日期。`);
+            });
+            if (orderDates.size > 1 || deliveryDates.size > 1) reasons.push("标准新建订单只支持一组下单日期和交货日期，请统一各明细日期。");
+            return [...new Set(reasons)];
+          },
+          xinzhenExcelTransferReady(draft) {
+            return !!draft?.preview_confirmation_token && this.xinzhenExcelBlockReasons(draft).length === 0;
+          },
+          xinzhenExcelSourceNotes(item) {
+            return [item.raw_style ? `新振款式：${item.raw_style}` : "", item.raw_color ? `颜色：${item.raw_color}` : "", item.raw_size ? `尺寸：${item.raw_size}` : "", item.source_row ? `Excel行：${item.source_row}` : ""].filter(Boolean).join("；");
+          },
+          xinzhenConfirmationOrderFromForm(form) {
+            return {
+              customer_id:Number(form.customer_id),
+              customer_po:form.customer_po || null,
+              order_date:form.order_date || null,
+              delivery_date:form.delivery_date || null,
+              status:form.status || "pending_production",
+              items:(form.items || []).map(item => ({
+                product_id:Number(item.product_id),
+                quantity:Number(item.quantity),
+                unit_price:item.unit_price,
+                xinzhen_source_row:Number(item.xinzhen_source_row),
+                xinzhen_source_quantity:Number(item.xinzhen_source_quantity),
+                xinzhen_quantity_change_confirmed:!!item.xinzhen_quantity_change_confirmed,
+              })),
+            };
+          },
+          async confirmXinzhenOrderForm(form) {
+            const context = form?._xinzhen_import;
+            if (!context?.preview_token || !context?.idempotency_key) throw new Error("新振 Excel 来源确认信息缺失，请重新上传预览。");
+            const { data } = await axios.post("/api/orders/xinzhen-excel-confirm", {
+              preview_token:context.preview_token,
+              idempotency_key:context.idempotency_key,
+              confirmed:true,
+              order:this.xinzhenConfirmationOrderFromForm(form),
+            });
+            context.confirmation_token = data.confirmation_token;
+            context.stale = false;
+            context.quantity_states = data.quantity_states || [];
+          },
+          invalidateXinzhenStandardOrderConfirmation() {
+            const context = this.orderForm?._xinzhen_import;
+            if (!context) return;
+            context.stale = true;
+            context.confirmation_token = "";
+          },
+          xinzhenStandardQuantityChanged(item) {
+            return Number(item?.quantity) !== Number(item?.xinzhen_source_quantity);
+          },
+          onOrderItemQuantityInput(item) {
+            if (item?.xinzhen_source_row) {
+              item.xinzhen_quantity_change_confirmed = false;
+              this.invalidateXinzhenStandardOrderConfirmation();
+            }
+            this.scheduleOrderLineInventoryRefresh(item, this.orderForm.customer_id);
+          },
+          async reconfirmXinzhenStandardOrder() {
+            const error = this.validateOrderFormIgnoringXinzhenToken();
+            if (error) { this.showToast(error, true); return; }
+            this.loading = true;
+            try {
+              await this.confirmXinzhenOrderForm(this.orderForm);
+              this.showToast("当前新振 Excel 订单内容已重新确认");
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+            } finally { this.loading = false; }
+          },
+          validateOrderFormIgnoringXinzhenToken() {
+            const context = this.orderForm?._xinzhen_import;
+            if (!context) return this.validateOrderForm();
+            const stale = context.stale;
+            const token = context.confirmation_token;
+            context.stale = false;
+            context.confirmation_token = token || "temporary-reconfirmation";
+            const error = this.validateOrderForm();
+            context.stale = stale;
+            context.confirmation_token = token;
+            return error;
+          },
+          async transferXinzhenExcelToOrderForm() {
+            const draft = this.xinzhenExcelPreviewDraft;
+            if (!draft || !this.xinzhenExcelTransferReady(draft)) { this.showToast("请先补齐客户、常用箱、数量、日期、单价并逐行确认", true); return; }
+            const customerId = this.xinzhenExcelCustomerId(draft);
+            const sourceName = this.xinzhenExcelSourceName(draft);
+            const items = this.xinzhenExcelItems(draft);
+            const first = items[0];
+            const nextOrderForm = {
+              customer_id:customerId,
+              customer_po:this.xinzhenExcelField(draft, ["customer_po", "po", "purchase_order_no"]),
+              order_date:first.order_date,
+              delivery_date:first.delivery_date,
+              remark:`新振 Excel 导入：${sourceName || "客户订单"}`,
+              _xinzhen_import:{
+                preview_token:draft.preview_confirmation_token,
+                idempotency_key:createIdempotencyKey(),
+                confirmation_token:"",
+                stale:true,
+                file_hash:draft.file_hash,
+                parser_version:draft.parser_version,
+                import_batch_id:draft.import_batch_id,
+              },
+              items:items.map(item => {
+                const candidate = (item.product_candidates || []).find(row => Number(row.id) === Number(item.matched_product_id)) || {};
+                return {
+                  product_id:Number(item.matched_product_id), product_code:item.matched_product_code || candidate.product_code || "", product_name:item.matched_product_name || candidate.product_name || "",
+                  material_id:item.matched_material_id || candidate.material_id || null, material:item._material_code || candidate.material_code || "", specification:item.matched_specification || candidate.specification || "",
+                  production_notes:this.xinzhenExcelSourceNotes(item), quantity:Number(item.quantity), unit_price:item.unit_price, layer_count:item.layer_count || candidate.layer_count || null, flute_type:item.flute_type || candidate.flute_type || null,
+                  _from_product:true, _layer_filter:item.layer_count || candidate.layer_count || null, _flute_filter:item.flute_type || candidate.flute_type || null, _material_code:item._material_code || candidate.material_code || "",
+                  _material_supplier_name:item._material_supplier_name || candidate.material_supplier_name || "", _material_weight:item._material_weight || candidate.material_weight || "", _product_drawings:item._product_drawings || [],
+                  drawing_file:null, temp_drawing_file:null, drawing_save_option:"order_only",
+                  xinzhen_source_row:Number(item.source_row || item.line_no),
+                  xinzhen_source_quantity:Number(item.source_quantity),
+                  xinzhen_quantity_change_confirmed:!!item.quantity_change_confirmed,
+                  _original_product:{ specification:item.matched_specification || candidate.specification || "", sale_unit_price:item.common_box_default_price, layer_count:item.layer_count || candidate.layer_count || null, flute_type:item.flute_type || candidate.flute_type || null, version:item._inventory_product?.version || candidate.version },
+                  client_line_id:item.client_line_id || createIdempotencyKey(), _inventory:item._inventory || this.newOrderInventoryState(), _inventory_product:item._inventory_product || null,
+                };
+              }),
+            };
+            this.loading = true;
+            try {
+              await this.confirmXinzhenOrderForm(nextOrderForm);
+            } catch (error) {
+              this.showToast(this.errorMessage(error), true);
+              this.loading = false;
+              return;
+            }
+            this.loading = false;
+            this.orderForm = nextOrderForm;
+            this.orderNumberPreview = "";
+            this.orderProductOptions = {};
+            this.modal = { type:"order", title:"新建多明细订单（新振 Excel）" };
+            for (const item of this.orderForm.items) if (item.product_id && !this.inventoryStateMatchesLine(item, customerId)) await this.loadOrderLineInventory(item, customerId);
+            this.reallocateAllDraftInventory();
+            await this.refreshOrderNumberPreview();
+          },
           openOrderPdfImport() {
             this.orderImportBatch = { files:[], status:"idle" };
             this.orderImportDrafts = [];
@@ -10262,6 +10739,7 @@
             }
           },
           async handleOrderCustomerChange() {
+            this.invalidateXinzhenStandardOrderConfirmation();
             if (!this.orderForm.items.length) this.addOrderItem();
             this.orderProductOptions = {};
             for (let index=0; index<this.orderForm.items.length; index+=1) {
@@ -10290,6 +10768,7 @@
             return `${this.orderNumberPreview}-${String(index + 1).padStart(3, "0")}`;
           },
           addOrderItem() {
+            this.invalidateXinzhenStandardOrderConfirmation();
             const index = this.orderForm.items.length;
             this.orderForm.items.push({
               product_id:null, is_new_product:false, product_code:"", product_name:"",
@@ -10315,6 +10794,7 @@
           },
           removeOrderItem(index) {
             if (this.orderForm.items.length > 1) {
+              this.invalidateXinzhenStandardOrderConfirmation();
               this.orderForm.items.splice(index,1);
               this.reallocateAllDraftInventory();
               if (this.modal?.type === "order") this.refreshOrderNumberPreview();
@@ -10330,6 +10810,7 @@
           },
           async selectOrderProduct(index, productId) {
             if (!productId) return;
+            this.invalidateXinzhenStandardOrderConfirmation();
             const { data } = await axios.get(`/api/master/products/${productId}`);
             const item = this.orderForm.items[index];
             item.is_new_product = false;
@@ -11712,8 +12193,20 @@
                     is_new_product: item.is_new_product || false,
                     temp_drawing_file: item.temp_drawing_file || null,
                     drawing_save_option: item.temp_drawing_file ? (item.drawing_save_option || "order_only") : null,
+                    xinzhen_source_row:item.xinzhen_source_row || null,
+                    xinzhen_source_quantity:item.xinzhen_source_quantity ?? null,
+                    xinzhen_quantity_change_confirmed:!!item.xinzhen_quantity_change_confirmed,
                   })),
                 };
+                const xinzhenImport = this.orderForm._xinzhen_import;
+                delete orderPayload._xinzhen_import;
+                if (xinzhenImport) {
+                  orderPayload.xinzhen_excel_confirmation = {
+                    confirmation_token:xinzhenImport.confirmation_token,
+                    idempotency_key:xinzhenImport.idempotency_key,
+                    confirmed:true,
+                  };
+                }
                 await axios.post("/api/orders", orderPayload);
                 // 保存后：检测是否有来自常用箱但被手动修改的明细，提示是否同步
                 await this.offerSyncCommonBox(this.orderForm.items);

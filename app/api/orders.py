@@ -6,9 +6,10 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Literal
+from uuid import uuid4
 
 import jwt
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import and_, delete, func, or_, select
@@ -33,6 +34,10 @@ from app.core.time_contract import (
 from app.models.audit import OperationLog
 from app.models.customer import Customer
 from app.models.delivery import Delivery, DeliveryItem
+from app.models.excel_order_import import (
+    ExcelOrderImportBatch,
+    ExcelOrderImportConversion,
+)
 from app.models.finance import (
     Invoice,
     ReturnReceipt,
@@ -87,6 +92,15 @@ from app.services.order_pdf_import import (
     calculate_draft_cost,
     file_sha256,
     match_import_draft,
+)
+from app.services.xinzhen_excel_order_import import (
+    XINZHEN_EXCEL_PARSER_VERSION,
+    XinzhenExcelParseError,
+    XinzhenWorksheetSelectionRequired,
+    find_active_xinzhen_customer,
+    match_xinzhen_excel_draft,
+    parse_xinzhen_excel_order,
+    register_xinzhen_import_batch,
 )
 from app.services.pdf_customer_templates import load_active_pdf_template_rules
 from app.services.pdf_parse_pipeline import parse_pdf_bytes
@@ -263,6 +277,9 @@ class OrderItemCreate(BaseModel):
     drawing_save_option: Literal[
         "order_only", "save_to_product", "overwrite_product"
     ] | None = None
+    xinzhen_source_row: int | None = Field(default=None, ge=1)
+    xinzhen_source_quantity: int | float | None = Field(default=None, gt=0)
+    xinzhen_quantity_change_confirmed: bool = False
 
     @field_validator("product_id", "material_id", mode="before")
     @classmethod
@@ -280,6 +297,14 @@ class PdfImportConfirmation(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     preview_safety_token: str = Field(min_length=1, max_length=4000)
+    confirmed: bool = False
+
+
+class XinzhenExcelImportConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation_token: str = Field(min_length=1, max_length=4000)
+    idempotency_key: str = Field(min_length=8, max_length=120)
     confirmed: bool = False
 
 
@@ -348,6 +373,7 @@ class OrderCreate(BaseModel):
     import_integrity_errors: list[str] | None = None
     import_draft: bool = False
     pdf_import_confirmation: PdfImportConfirmation | None = None
+    xinzhen_excel_confirmation: XinzhenExcelImportConfirmation | None = None
 
     # legacy single-line compatibility payload
     product_archive_id: int | None = None
@@ -367,6 +393,15 @@ class OrderCreate(BaseModel):
     cost_unit_price: float | None = None
     warning_confirmed: bool = False
     created_by: int | None = None
+
+
+class XinzhenExcelConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preview_token: str = Field(min_length=1, max_length=4000)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    confirmed: bool = False
+    order: OrderCreate
 
 
 def _validated_order_quantity(value: int | float, index: int) -> int:
@@ -565,6 +600,347 @@ def _validate_pdf_import_safety(
     if claims["customer_route_status"] != "locked":
         reasons.append(f"customer_route={claims['customer_route_status']}")
     return reasons, claims
+
+
+XINZHEN_PREVIEW_TOKEN_TYPE = "xinzhen_excel_preview"
+XINZHEN_CONFIRM_TOKEN_TYPE = "xinzhen_excel_order_confirmation"
+XINZHEN_TOKEN_TTL_MINUTES = 15
+
+
+def _xinzhen_token_error(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={"code": "XINZHEN_EXCEL_CONFIRMATION_STALE", "message": message},
+    )
+
+
+def _canonical_payload_hash(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _xinzhen_integer_quantity(value: int | float, index: int) -> int:
+    try:
+        decimal_value = Decimal(str(value))
+    except (InvalidOperation, ValueError) as error:
+        raise HTTPException(
+            status_code=400, detail=f"第{index}条新振 Excel 明细数量无效"
+        ) from error
+    if decimal_value <= 0 or decimal_value != decimal_value.to_integral_value():
+        raise HTTPException(
+            status_code=400,
+            detail=f"第{index}条新振 Excel 明细数量必须是大于0的整数",
+        )
+    return int(decimal_value)
+
+
+def _xinzhen_price(value: Decimal, index: int) -> str:
+    try:
+        decimal_value = Decimal(str(value))
+    except (InvalidOperation, ValueError) as error:
+        raise HTTPException(
+            status_code=400, detail=f"第{index}条新振 Excel 明细单价无效"
+        ) from error
+    if decimal_value < 0:
+        raise HTTPException(
+            status_code=400, detail=f"第{index}条新振 Excel 明细单价不能为负数"
+        )
+    return str(decimal_value.quantize(Decimal("0.0001")))
+
+
+def _normalized_xinzhen_order_payload(payload: OrderCreate) -> dict:
+    if payload.customer_id is None or not payload.items:
+        raise HTTPException(
+            status_code=400, detail="新振 Excel 草稿缺少客户或订单明细"
+        )
+    items: list[dict] = []
+    for index, item in enumerate(payload.items, start=1):
+        if item.product_id is None or item.is_new_product:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{index}条新振 Excel 明细必须选择现有常用箱",
+            )
+        if item.xinzhen_source_row is None or item.xinzhen_source_quantity is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"第{index}条新振 Excel 明细缺少来源数量上下文",
+            )
+        source_quantity = _xinzhen_integer_quantity(
+            item.xinzhen_source_quantity, index
+        )
+        edited_quantity = _xinzhen_integer_quantity(item.quantity, index)
+        items.append(
+            {
+                "source_row": item.xinzhen_source_row,
+                "source_quantity": source_quantity,
+                "edited_quantity": edited_quantity,
+                "quantity_changed": edited_quantity != source_quantity,
+                "quantity_change_confirmed": bool(
+                    item.xinzhen_quantity_change_confirmed
+                ),
+                "product_id": item.product_id,
+                "unit_price": _xinzhen_price(item.unit_price, index),
+            }
+        )
+    return {
+        "customer_id": payload.customer_id,
+        "customer_po": (payload.customer_po or "").strip() or None,
+        "order_date": payload.order_date.isoformat() if payload.order_date else None,
+        "delivery_date": (
+            payload.delivery_date.isoformat() if payload.delivery_date else None
+        ),
+        "status": payload.status,
+        "items": items,
+    }
+
+
+def _xinzhen_source_rows(batch: ExcelOrderImportBatch) -> dict[int, dict]:
+    try:
+        payload = json.loads(batch.normalized_source_json)
+        items = payload["items"]
+        return {int(item["source_row"]): item for item in items}
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise _xinzhen_token_error(
+            "新振 Excel 来源台账损坏，已停止保存，请联系管理员。"
+        ) from error
+
+
+def _validate_xinzhen_source_binding(
+    batch: ExcelOrderImportBatch,
+    normalized_order: dict,
+) -> list[dict]:
+    source_rows = _xinzhen_source_rows(batch)
+    order_rows = normalized_order["items"]
+    if len(order_rows) != len(source_rows):
+        raise _xinzhen_token_error(
+            "新振 Excel 明细数量已变化，请返回导入预览重新确认。"
+        )
+    seen_rows: set[int] = set()
+    states: list[dict] = []
+    for item in order_rows:
+        source_row = int(item["source_row"])
+        if source_row in seen_rows or source_row not in source_rows:
+            raise _xinzhen_token_error(
+                "新振 Excel 来源行重复或不存在，请返回导入预览重新确认。"
+            )
+        seen_rows.add(source_row)
+        source = source_rows[source_row]
+        quantity_check = source.get("quantity_check") or {}
+        if quantity_check.get("status") != "passed":
+            raise _xinzhen_token_error(
+                f"Excel第{source_row}行来源数量核对未通过，不能保存。"
+            )
+        expected_source_quantity = _xinzhen_integer_quantity(
+            source.get("source_quantity"), source_row
+        )
+        if int(item["source_quantity"]) != expected_source_quantity:
+            raise _xinzhen_token_error(
+                f"Excel第{source_row}行来源数量被篡改，请重新预览。"
+            )
+        changed = int(item["edited_quantity"]) != expected_source_quantity
+        if changed and not item["quantity_change_confirmed"]:
+            raise _xinzhen_token_error(
+                f"Excel第{source_row}行数量由{expected_source_quantity}改为"
+                f"{item['edited_quantity']}，必须重新人工确认。"
+            )
+        states.append(
+            {
+                "source_row": source_row,
+                "source_quantity": expected_source_quantity,
+                "edited_quantity": int(item["edited_quantity"]),
+                "status": "edited_confirmed" if changed else "source_confirmed",
+            }
+        )
+    return states
+
+
+def _encode_xinzhen_preview_token(
+    batch: ExcelOrderImportBatch,
+    user: User,
+) -> str:
+    now = datetime.now(timezone.utc)
+    claims = {
+        "sub": _pdf_preview_actor(user),
+        "type": XINZHEN_PREVIEW_TOKEN_TYPE,
+        "jti": uuid4().hex,
+        "batch_id": batch.id,
+        "source_sha256": batch.source_sha256,
+        "customer_id": batch.customer_id,
+        "customer_code": batch.customer_code_snapshot or "",
+        "parser_version": batch.parser_version,
+        "normalized_source_hash": batch.normalized_source_hash,
+        "iat": now,
+        "exp": now + timedelta(minutes=XINZHEN_TOKEN_TTL_MINUTES),
+    }
+    return jwt.encode(claims, load_settings().secret_key, algorithm="HS256")
+
+
+def _decode_xinzhen_token(
+    token: str,
+    user: User,
+    *,
+    expected_type: str,
+) -> dict:
+    try:
+        claims = jwt.decode(
+            token,
+            load_settings().secret_key,
+            algorithms=["HS256"],
+            options={
+                "require": [
+                    "sub",
+                    "type",
+                    "jti",
+                    "batch_id",
+                    "source_sha256",
+                    "customer_id",
+                    "customer_code",
+                    "parser_version",
+                    "normalized_source_hash",
+                    "iat",
+                    "exp",
+                ]
+            },
+        )
+    except jwt.ExpiredSignatureError as error:
+        raise _xinzhen_token_error(
+            "新振 Excel 确认已过期，请重新预览。"
+        ) from error
+    except jwt.PyJWTError as error:
+        raise _xinzhen_token_error(
+            "新振 Excel 确认无效，请重新预览。"
+        ) from error
+    if (
+        claims.get("type") != expected_type
+        or claims.get("sub") != _pdf_preview_actor(user)
+    ):
+        raise _xinzhen_token_error(
+            "新振 Excel 确认与当前操作员不匹配。"
+        )
+    try:
+        claims["batch_id"] = int(claims["batch_id"])
+        claims["customer_id"] = int(claims["customer_id"])
+    except (TypeError, ValueError) as error:
+        raise _xinzhen_token_error("新振 Excel 确认载荷无效。") from error
+    return claims
+
+
+def _xinzhen_batch_from_claims(
+    db: Session,
+    claims: dict,
+) -> ExcelOrderImportBatch:
+    batch = db.get(ExcelOrderImportBatch, claims["batch_id"])
+    if batch is None:
+        raise _xinzhen_token_error("新振 Excel 导入批次不存在，请重新预览。")
+    expected = {
+        "source_sha256": batch.source_sha256,
+        "customer_id": batch.customer_id,
+        "customer_code": batch.customer_code_snapshot or "",
+        "parser_version": batch.parser_version,
+        "normalized_source_hash": batch.normalized_source_hash,
+    }
+    if any(claims.get(key) != value for key, value in expected.items()):
+        raise _xinzhen_token_error(
+            "新振 Excel 文件、客户、解析版本或来源载荷已变化，请重新预览。"
+        )
+    return batch
+
+
+def _encode_xinzhen_confirmation_token(
+    *,
+    preview_claims: dict,
+    normalized_order_hash: str,
+    idempotency_key: str,
+    user: User,
+) -> str:
+    now = datetime.now(timezone.utc)
+    claims = {
+        **{
+            key: preview_claims[key]
+            for key in (
+                "batch_id",
+                "source_sha256",
+                "customer_id",
+                "customer_code",
+                "parser_version",
+                "normalized_source_hash",
+            )
+        },
+        "sub": _pdf_preview_actor(user),
+        "type": XINZHEN_CONFIRM_TOKEN_TYPE,
+        "jti": uuid4().hex,
+        "normalized_order_hash": normalized_order_hash,
+        "idempotency_key": idempotency_key,
+        "iat": now,
+        "exp": now + timedelta(minutes=XINZHEN_TOKEN_TTL_MINUTES),
+    }
+    return jwt.encode(claims, load_settings().secret_key, algorithm="HS256")
+
+
+def _existing_xinzhen_conversion(
+    db: Session,
+    *,
+    batch_id: int,
+) -> ExcelOrderImportConversion | None:
+    return db.scalar(
+        select(ExcelOrderImportConversion).where(
+            ExcelOrderImportConversion.batch_id == batch_id
+        )
+    )
+
+
+def _validate_xinzhen_import_confirmation(
+    payload: OrderCreate,
+    user: User,
+    db: Session,
+) -> tuple[dict, ExcelOrderImportConversion | None]:
+    context = payload.xinzhen_excel_confirmation
+    has_source_rows = bool(
+        payload.items
+        and any(item.xinzhen_source_row is not None for item in payload.items)
+    )
+    if context is None:
+        if has_source_rows:
+            raise _xinzhen_token_error(
+                "新振 Excel 订单缺少服务端确认 token，不能保存。"
+            )
+        return {}, None
+    if not context.confirmed:
+        raise _xinzhen_token_error("新振 Excel 订单尚未明确确认。")
+    claims = _decode_xinzhen_token(
+        context.confirmation_token,
+        user,
+        expected_type=XINZHEN_CONFIRM_TOKEN_TYPE,
+    )
+    batch = _xinzhen_batch_from_claims(db, claims)
+    if context.idempotency_key != claims.get("idempotency_key"):
+        raise _xinzhen_token_error("新振 Excel 请求标识与确认 token 不一致。")
+    normalized_order = _normalized_xinzhen_order_payload(payload)
+    _validate_xinzhen_source_binding(batch, normalized_order)
+    normalized_order_hash = _canonical_payload_hash(normalized_order)
+    if normalized_order_hash != claims.get("normalized_order_hash"):
+        raise _xinzhen_token_error(
+            "新振 Excel 订单内容在确认后又被修改，请重新确认。"
+        )
+    if payload.customer_id != claims["customer_id"]:
+        raise _xinzhen_token_error("新振 Excel 客户已变化，请重新预览。")
+    conversion = _existing_xinzhen_conversion(
+        db, batch_id=claims["batch_id"]
+    )
+    if conversion is not None and (
+        conversion.normalized_order_hash != normalized_order_hash
+    ):
+        raise _xinzhen_token_error(
+            "同一 Excel 文件已用不同数量或价格生成过订单，禁止重复导入。"
+        )
+    claims["normalized_order_hash"] = normalized_order_hash
+    return claims, conversion
 
 
 def _validated_order_layer_flute(
@@ -1904,6 +2280,152 @@ async def preview_order_pdf(
         raise HTTPException(status_code=400, detail="文件识别失败，请检查文件内容后重试") from error
 
 
+@router.post("/xinzhen-excel-preview")
+async def preview_xinzhen_excel_order(
+    file: UploadFile = File(...),
+    worksheet_name: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+) -> dict:
+    """Create an editable draft plus an immutable source-audit snapshot."""
+
+    if not has_permission(user, "products.view"):
+        raise HTTPException(status_code=403, detail="缺少产品查看权限，不能匹配常用箱")
+
+    filename = (file.filename or "").strip()
+    if not filename.lower().endswith((".xls", ".xlsx")):
+        raise HTTPException(status_code=400, detail="仅支持 .xls 或 .xlsx 文件")
+    max_upload_bytes = 5 * 1024 * 1024
+    content = await file.read(max_upload_bytes + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="上传的 Excel 文件为空")
+    if len(content) > max_upload_bytes:
+        raise HTTPException(status_code=413, detail="Excel 文件不能超过 5MB")
+    try:
+        customer = find_active_xinzhen_customer(db)
+        require_customer_access(customer.id, current_user=user, db=db)
+        draft = parse_xinzhen_excel_order(
+            content,
+            filename,
+            worksheet_name=(worksheet_name or "").strip() or None,
+        )
+        matched = match_xinzhen_excel_draft(
+            db,
+            draft,
+            customer,
+            include_sale_price=user.role != "workshop",
+        )
+        source_sha256 = hashlib.sha256(content).hexdigest()
+        batch, source_payload_hash = register_xinzhen_import_batch(
+            db,
+            draft=draft,
+            customer=customer,
+            source_filename=filename,
+            source_sha256=source_sha256,
+            operator_id=user.id,
+        )
+        db.commit()
+        matched.update(
+            {
+                "file_hash": source_sha256,
+                "parser_version": XINZHEN_EXCEL_PARSER_VERSION,
+                "import_batch_id": batch.id,
+                "normalized_source_hash": source_payload_hash,
+                "preview_confirmation_token": _encode_xinzhen_preview_token(
+                    batch,
+                    user,
+                ),
+            }
+        )
+        return matched
+    except XinzhenWorksheetSelectionRequired as error:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "XINZHEN_WORKSHEET_SELECTION_REQUIRED",
+                "message": str(error),
+                "worksheet_options": error.sheet_names,
+            },
+        ) from error
+    except XinzhenExcelParseError as error:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post("/xinzhen-excel-confirm")
+def confirm_xinzhen_excel_order(
+    payload: XinzhenExcelConfirmRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(can_create),
+) -> dict:
+    """Bind the reviewed draft to its operator and exact editable payload."""
+
+    if not has_permission(user, "products.view"):
+        raise HTTPException(status_code=403, detail="缺少产品查看权限，不能确认常用箱")
+    if not payload.confirmed:
+        raise _xinzhen_token_error("尚未明确确认新振 Excel 草稿。")
+    preview_claims = _decode_xinzhen_token(
+        payload.preview_token,
+        user,
+        expected_type=XINZHEN_PREVIEW_TOKEN_TYPE,
+    )
+    batch = _xinzhen_batch_from_claims(db, preview_claims)
+    require_customer_access(batch.customer_id, current_user=user, db=db)
+    customer = db.get(Customer, batch.customer_id)
+    if customer is None or not customer.is_active or customer.status != "active":
+        raise _xinzhen_token_error("新振客户已停用或不存在，请重新预览。")
+    current_customer_code = (customer.customer_code or "").strip()
+    if current_customer_code != (batch.customer_code_snapshot or ""):
+        raise _xinzhen_token_error("新振客户编码已变化，请重新预览。")
+
+    normalized_order = _normalized_xinzhen_order_payload(payload.order)
+    if normalized_order["customer_id"] != batch.customer_id:
+        raise _xinzhen_token_error("新振 Excel 客户已变化，请重新预览。")
+    quantity_states = _validate_xinzhen_source_binding(batch, normalized_order)
+    for index, item in enumerate(payload.order.items or [], start=1):
+        product = db.get(Product, item.product_id)
+        if (
+            product is None
+            or product.deleted_at is not None
+            or not product.is_active
+            or product.customer_id != batch.customer_id
+        ):
+            raise _xinzhen_token_error(
+                f"第{index}条所选常用箱已失效或不属于新振客户，请重新选择。"
+            )
+
+    existing = _existing_xinzhen_conversion(db, batch_id=batch.id)
+    normalized_order_hash = _canonical_payload_hash(normalized_order)
+    if existing is not None:
+        if existing.normalized_order_hash != normalized_order_hash:
+            raise _xinzhen_token_error(
+                "同一 Excel 文件已用不同数量或价格生成过订单，禁止重复导入。"
+            )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "XINZHEN_EXCEL_ALREADY_CONVERTED",
+                "message": "这份新振 Excel 已生成过订单，未重复保存。",
+                "order_id": existing.order_id,
+            },
+        )
+
+    token = _encode_xinzhen_confirmation_token(
+        preview_claims=preview_claims,
+        normalized_order_hash=normalized_order_hash,
+        idempotency_key=payload.idempotency_key,
+        user=user,
+    )
+    return {
+        "confirmation_token": token,
+        "idempotency_key": payload.idempotency_key,
+        "confirmed": True,
+        "quantity_states": quantity_states,
+        "import_batch_id": batch.id,
+    }
+
+
 @router.post("/pdf-preview-batch")
 async def preview_order_pdf_batch(
     files: list[UploadFile] = File(...),
@@ -3066,6 +3588,31 @@ def create_order(
         raise HTTPException(status_code=400, detail="订单至少需要一条明细")
     if payload.customer_id is None:
         raise HTTPException(status_code=400, detail="客户不能为空")
+    if (
+        payload.xinzhen_excel_confirmation is not None
+        and not has_permission(user, "products.view")
+    ):
+        raise HTTPException(status_code=403, detail="缺少产品查看权限，不能保存新振 Excel 订单")
+    xinzhen_claims, existing_xinzhen_conversion = (
+        _validate_xinzhen_import_confirmation(payload, user, db)
+    )
+    if existing_xinzhen_conversion is not None:
+        existing_order = db.scalar(
+            select(Order)
+            .options(selectinload(Order.items))
+            .where(Order.id == existing_xinzhen_conversion.order_id)
+        )
+        if existing_order is None:
+            raise _xinzhen_token_error(
+                "新振 Excel 转单台账关联的订单不存在，请联系管理员。"
+            )
+        existing_customer = db.get(Customer, existing_order.customer_id)
+        return _order_response(
+            existing_order,
+            user,
+            db=db,
+            customer_name=(existing_customer.name if existing_customer else None),
+        )
     pdf_safety_override_reasons, pdf_safety_claims = _validate_pdf_import_safety(
         payload,
         user,
@@ -3530,6 +4077,41 @@ def create_order(
             if not is_composite_product(resolved_products[index]):
                 refresh_production_task(db, created_item.id)
         refresh_order_production_status(db, order.id)
+        if xinzhen_claims:
+            db.add(
+                ExcelOrderImportConversion(
+                    batch_id=xinzhen_claims["batch_id"],
+                    idempotency_key=xinzhen_claims["idempotency_key"],
+                    normalized_order_hash=xinzhen_claims["normalized_order_hash"],
+                    order_id=order.id,
+                    operator_id=user.id,
+                    confirmation_token_id=xinzhen_claims["jti"],
+                )
+            )
+            db.add(
+                OperationLog(
+                    user_id=user.id,
+                    action="XINZHEN_EXCEL_CONVERT",
+                    resource="Order",
+                    details=json.dumps(
+                        {
+                            "order_number": order.order_number,
+                            "batch_id": xinzhen_claims["batch_id"],
+                            "source_sha256": xinzhen_claims["source_sha256"],
+                            "parser_version": xinzhen_claims["parser_version"],
+                            "normalized_order_hash": xinzhen_claims[
+                                "normalized_order_hash"
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    username=user.username,
+                    role=user.role,
+                    entity_type="order",
+                    entity_id=order.id,
+                    description="新振 Excel 草稿人工确认后转正式订单",
+                )
+            )
         db.commit()
         db.refresh(order)
         response = _order_response(
@@ -3563,6 +4145,37 @@ def create_order(
         ) from error
     except IntegrityError as error:
         db.rollback()
+        if xinzhen_claims:
+            conversion = db.scalar(
+                select(ExcelOrderImportConversion).where(
+                    or_(
+                        ExcelOrderImportConversion.batch_id
+                        == xinzhen_claims["batch_id"],
+                        ExcelOrderImportConversion.idempotency_key
+                        == xinzhen_claims["idempotency_key"],
+                    )
+                )
+            )
+            if (
+                conversion is not None
+                and conversion.normalized_order_hash
+                == xinzhen_claims["normalized_order_hash"]
+            ):
+                existing_order = db.scalar(
+                    select(Order)
+                    .options(selectinload(Order.items))
+                    .where(Order.id == conversion.order_id)
+                )
+                if existing_order is not None:
+                    existing_customer = db.get(Customer, existing_order.customer_id)
+                    return _order_response(
+                        existing_order,
+                        user,
+                        db=db,
+                        customer_name=(
+                            existing_customer.name if existing_customer else None
+                        ),
+                    )
         raise HTTPException(status_code=409, detail="订单号或订单数据冲突") from error
     except Exception:
         db.rollback()

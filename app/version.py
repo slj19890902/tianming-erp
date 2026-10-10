@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.608"
-APP_VERSION_NAME = "库存预警报料与客户选择修复"
+APP_VERSION = "v0.22.609"
+APP_VERSION_NAME = "首页库存预警报料明细优先加载"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5872,3 +5872,15 @@ APP_VERIFICATION_STEPS = [
     "核对保存成功后的原草稿，不重复报料；原产品及历史库存数量保持。",
 ]
 APP_CHANGELOG = [*(f"v0.22.608：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "首页库存预警生成报料草稿时优先读取本款明细，不再等待整页报料数据及不显示的全部预警计算。",
+    "客户和材质选项随后补齐；保留手动补库、BOM套数、数量编辑和保存校验，增加读取提示及过期响应保护。",
+    "本版无数据库迁移，不修改正式订单、库存、常用箱或历史报料事实。",
+]
+APP_VERIFICATION_STEPS = [
+    "强制刷新首页，点一个库存预警款的生成报料草稿，核对明细和数量优先显示。",
+    "核对客户、材质和报料张数；有真实业务需要时再保存，核对生成单号及回读数量。",
+    "进入系统版本确认 v0.22.609；正式页面等待管理员人工验收。",
+]
+APP_CHANGELOG = [*(f"v0.22.609：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

@@ -130,3 +130,12 @@ Mac 默认使用系统 STHeiti Medium.ttc 的 Heiti SC（face 1），合同和�
 Mac计划每小时整点检查北京时间23点的备份是否已完成，错过时在后续运行补做；当前实现需要该用户保持登录，睡眠/注销不冒充连续后台运行。未运行原生包时可先安全保存NAS及备份凭据，明确显示定时任务尚未安排，以便先备份再安装原生包。运行包升级后旧计划不自动覆盖，须在维护锁内核验停用、归档原配置，再为新签名运行时登记；同一版本改密码可复用经指纹和归属核验的已登记计划。没有登记实际ERP备份任务。
 
 原首次接入测试使用Windows合成发布包，在Mac先被宿主运行器门禁拒绝，已以原提交604e2cf4复现同样行为（self-service-platform-baseline.json）。仅调整该测试的运行器模拟以单独验证首次接入门禁，生产Manager.start及Windows运行器拒绝保持。真实正式备份、真实钥匙串凭据、正式调度及工厂最终停写同步仍未执行。
+
+第十六个闭环范围：desktop_assistant/home_process.py、manager.py、migration.py及定向测试。在当前Mac家庭服务和迁移子进程启动前追加系统进程出站限制，弥补Python审计无法覆盖原生socket和后代进程的缺口。只作为家庭预演额外门禁，保留Python网络/回环限制，不改变Windows正式行为，不修改系统防火墙；系统工具不可用时拒绝降级启动。Apple已弃用自定义sandbox-exec接口，必须记录当前OS实测限制，不冒充长期受支持的完整安全沙箱。
+
+
+家庭进程联网隔离验证：14项通过，包括原生libSystem TCP connect/UDP sendto与后代进程均返回EPERM（不安装Python审计钩子的真实子进程）、未限制的合成对照成功、受限服务仍可接收本机浏览器并回复、exec后PID不变、原生迁移实进程及原Python网络门禁回归。测试只连接本机合成监听器，从未访问外部/工厂端点。Manager/运行器/服务相关26项通过、1项独立launchd实机检查未在本轮启用。证据home-kernel-egress-tests.log、home-kernel-manager-regression.log。
+
+仅受管Mac家庭服务及原生迁移使用/usr/bin/sandbox-exec固定出站拒绝策略，不提供自定义策略覆盖，不改防火墙、NAS挂载或Windows生产启动；系统工具缺失/非root所有/链接替换时启动前拒绝，执行策略失败时原启动/迁移失败门禁继续保留。原Python审计仍负责禁止外部域名与非回环监听。此系统策略未限制文件/IPC，也不声称能隔离恶意代码借助其他系统服务间接联网；直接手工Python启动不自动获得该系统保护。
+
+Apple DTS明确说明自定义sandbox语言不作为第三方支持接口，sandbox-exec已弃用（https://developer.apple.com/forums/thread/661939）。本方案只是当前macOS27.0.1实测的家庭进程额外门禁，升级系统后须重验，不能推广为长期受支持或完整安全边界；正式服务仍需单独明确启用设计与验收。没有在真实数据上启动服务、解密备份或接管工厂。

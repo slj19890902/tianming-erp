@@ -1,7 +1,9 @@
 """Application safeguards for a complete, offline home rehearsal.
 
-This is defence in depth for Python sockets, not an OS network sandbox. Native
-libraries and subprocesses still require separate review before real data runs.
+This hook covers Python sockets only. Managed Mac rehearsal processes also use
+desktop_assistant.home_process for kernel egress restrictions; direct Python
+invocations do not acquire that protection. Neither is a full filesystem/IPC
+sandbox, so native libraries and subprocesses still require review.
 """
 import ipaddress
 import os

@@ -402,8 +402,10 @@ class Manager:
                 raise ValueError('端口已有服务，拒绝接管或停止其他ERP')
         nonce = uuid.uuid4().hex
         env.update(TM_ERP_CONTROL=str(self.root / 'control'), TM_ERP_NONCE=nonce)
+        from desktop_assistant.home_process import command
+        arguments = command([str(python), '-m', 'desktop_assistant.server_entry'], env)
         with (self.root / 'control/server.log').open('ab') as log:
-            proc = subprocess.Popen([str(python), '-m', 'desktop_assistant.server_entry'],
+            proc = subprocess.Popen(arguments,
                                     cwd=release, env=env, stdout=log, stderr=log,
                                     **process_options())
         owner = psutil.Process(proc.pid)

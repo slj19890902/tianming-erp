@@ -149,8 +149,10 @@ def run_migration(release, shared, revision, log, environment=None, *, release_m
         if not expected or not entry.is_file() or entry.is_symlink() or sha(entry) != expected:
             raise ValueError('Mac迁移安全入口缺失或校验失败')
         module = 'desktop_assistant.migration_entry'
+    from desktop_assistant.home_process import command
+    arguments = command([str(python), '-X', 'utf8', '-m', module, 'upgrade', revision], env)
     with log.open('wb') as output:
-        result = subprocess.run([str(python), '-X', 'utf8', '-m', module, 'upgrade', revision],
+        result = subprocess.run(arguments,
             cwd=release, env=env, stdout=output, stderr=output, timeout=600, **process_options())
     if result.returncode:
         raise ValueError('升级子进程失败，保留现场；不得启动未核验数据库，请查看迁移日志')

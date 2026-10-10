@@ -1,15 +1,18 @@
 from io import BytesIO
 import imaplib
+import json
+import hashlib
+from datetime import date
 from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query, UploadFile
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, StrictInt
 from sqlalchemy import select, func, update
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from starlette.datastructures import Headers
 from app.api.deps import get_db, PermissionChecker, has_unrestricted_customer_access
 from app.models.user import User
-from app.models.email_intake import EmailIntakeSettings, EmailIntakeMessage, EmailIntakeAttachment, EmailIntakeOrderLink
+from app.models.email_intake import EmailIntakeSettings, EmailIntakeMessage, EmailIntakeAttachment, EmailIntakeOrderLink, EmailIntakeDraft
 from app.services import email_intake as service
 
 router = APIRouter()
@@ -29,6 +32,16 @@ class SettingsChange(BaseModel):
 class StateChange(BaseModel):
     expected_version: int = Field(ge=1)
     status: str = Field(pattern='^(pending|ignored)$')
+
+
+class ExcelMapping(BaseModel):
+    customer_id: int = Field(gt=0)
+    sheet_name: str = Field(max_length=100)
+    header_row: int = Field(ge=1,le=100)
+    columns: dict[str,StrictInt]
+    customer_po: str = Field(default='',max_length=200)
+    order_date: date | None = None
+    delivery_date: date | None = None
 
 
 @router.get('/settings')
@@ -113,7 +126,11 @@ def detail(message_id: int, response: Response, db: Session = Depends(get_db), u
             .outerjoin(Order, Order.id == EmailIntakeOrderLink.order_id)
             .where(EmailIntakeAttachment.sha256 == attachment.sha256)).all()
         results.append({**{key: getattr(attachment, key) for key in ('id', 'filename', 'sha256', 'duplicate_of')},
-            'orders': [{'id': link.order_id, 'order_number': link.order_number, 'customer_po': link.customer_po} for link in links]})
+            'orders': [{'id': link.order_id, 'order_number': link.order_number, 'customer_po': link.customer_po} for link in links],
+            'drafts': [{'id':draft.id,'created_at':str(draft.created_at),
+                'customer_po':json.loads(draft.draft_json).get('customer_po','')} for draft in db.scalars(
+                    select(EmailIntakeDraft).join(EmailIntakeAttachment,EmailIntakeAttachment.id==EmailIntakeDraft.attachment_id)
+                    .where(EmailIntakeAttachment.sha256==attachment.sha256).order_by(EmailIntakeDraft.id.desc()).limit(30))]})
     return {**{key: getattr(row, key) for key in ('id', 'subject', 'sender', 'received', 'body', 'notice', 'status', 'version')},
             'attachments': results}
 
@@ -150,3 +167,67 @@ async def preview(attachment_id: int, db: Session = Depends(get_db), user: User 
     result = await preview_order_pdf(UploadFile(filename=row.filename, file=BytesIO(row.content),
         headers=Headers({'content-type': 'application/pdf'})), db, user)
     return {**result, 'email_attachment_id': row.id}
+
+
+def excel_attachment(db, attachment_id):
+    attachment=db.get(EmailIntakeAttachment,attachment_id)
+    if not attachment:raise HTTPException(404,'附件不存在')
+    if not attachment.filename.lower().endswith('.xlsx'):
+        raise HTTPException(422,'当前列映射支持xlsx，请将旧xls另存为xlsx后再处理')
+    return attachment
+
+
+@router.get('/attachments/{attachment_id}/workbook')
+def workbook(attachment_id:int,response:Response,sheet_name:str=Query('',max_length=100),header_row:int=Query(1,ge=1,le=100),
+             db:Session=Depends(get_db),user:User=Depends(allowed)):
+    from app.services.email_excel import table
+    response.headers['Cache-Control']='private, no-store'
+    attachment=excel_attachment(db,attachment_id)
+    try:result=table(attachment.content,sheet_name,header_row)
+    except ValueError as error:raise HTTPException(422,str(error)) from None
+    return {key:value for key,value in result.items() if key!='rows'}
+
+
+@router.post('/attachments/{attachment_id}/excel-drafts')
+def build_excel_drafts(attachment_id:int,payload:ExcelMapping,db:Session=Depends(get_db),user:User=Depends(allowed)):
+    from app.models.customer import Customer
+    from app.services.email_excel import table,drafts
+    attachment=excel_attachment(db,attachment_id)
+    customer=db.get(Customer,payload.customer_id)
+    if not customer or not customer.is_active or customer.status!='active':
+        raise HTTPException(422,'请选择有效客户')
+    config=payload.model_dump(mode='json')
+    try:
+        parsed=table(attachment.content,payload.sheet_name,payload.header_row)
+        results=drafts(parsed,payload.columns,customer_po=payload.customer_po,
+                       order_date=config['order_date'],delivery_date=config['delivery_date'])
+    except ValueError as error:raise HTTPException(422,str(error)) from None
+    ids=[]
+    for result in results:
+        key=hashlib.sha256(json.dumps([attachment.sha256,config,result['customer_po']],sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+        existing=db.scalar(select(EmailIntakeDraft).where(EmailIntakeDraft.parse_key==key))
+        if not existing:
+            raw={**result,'source_name':attachment.filename,'source_type':'mail_excel','file_hash':attachment.sha256,
+                 'customer_name':customer.name,'customer_name_raw':customer.name,'customer_type':'email_excel',
+                 'customer_route':{'status':'locked','template_customer_id':customer.id}}
+            existing=EmailIntakeDraft(parse_key=key,attachment_id=attachment.id,customer_id=customer.id,actor_id=user.id,
+                config_json=json.dumps(config,ensure_ascii=False),draft_json=json.dumps(raw,ensure_ascii=False))
+            db.add(existing);db.flush()
+            service.audit(db,user,'draft_parse',{'draft_id':existing.id,'attachment_id':attachment.id,'customer_id':customer.id})
+        ids.append(existing.id)
+    db.commit()
+    return {'draft_ids':ids}
+
+
+@router.get('/drafts/{draft_id}')
+def get_draft(draft_id:int,response:Response,db:Session=Depends(get_db),user:User=Depends(allowed)):
+    from app.services.order_pdf_import import match_import_draft
+    from app.api.orders import _finalize_pdf_preview_for_user
+    from app.models.customer import Customer
+    response.headers['Cache-Control']='private, no-store'
+    snapshot=db.get(EmailIntakeDraft,draft_id)
+    if not snapshot:raise HTTPException(404,'识别草稿不存在')
+    customer=db.get(Customer,snapshot.customer_id)
+    if not customer or not customer.is_active or customer.status!='active':raise HTTPException(409,'原客户已停用，请重新核对附件')
+    matched=match_import_draft(db,json.loads(snapshot.draft_json),customer_id=snapshot.customer_id)
+    return {**_finalize_pdf_preview_for_user(matched,user),'email_attachment_id':snapshot.attachment_id,'email_draft_id':snapshot.id}

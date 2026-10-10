@@ -2903,7 +2903,7 @@ def rematch_draft_items(db: Session, draft: dict, customer_id: int | None) -> di
             item["product_drawing_file"] = selected.drawings[0].image_path
         matched_items.append(item)
     # 合并相同存货编码（同单价/同交期/同常用箱）
-    merged_items = matched_items if draft.get("customer_type") == "simair" else _merge_same_product_code(matched_items)
+    merged_items = matched_items if draft.get("customer_type") == "simair" or draft.get("source_type") == "mail_excel" else _merge_same_product_code(matched_items)
     return {**draft, "matched_customer_id": customer_id, "items": merged_items}
 
 

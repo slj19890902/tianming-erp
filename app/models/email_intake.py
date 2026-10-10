@@ -1,5 +1,6 @@
 """Mail intake staging; no automatic sales facts."""
-from sqlalchemy import Integer, String, Text, LargeBinary, ForeignKey, UniqueConstraint
+from sqlalchemy import Integer, String, Text, LargeBinary, ForeignKey, UniqueConstraint, DateTime, func
+from datetime import datetime
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models import Base
 
@@ -48,3 +49,15 @@ class EmailIntakeOrderLink(Base):
     attachment_id: Mapped[int] = mapped_column(ForeignKey('email_intake_attachments.id'))
     order_id: Mapped[int | None] = mapped_column(ForeignKey('sales_orders.id', ondelete='SET NULL'), nullable=True)
     actor_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+
+
+class EmailIntakeDraft(Base):
+    __tablename__ = 'email_intake_drafts'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    parse_key: Mapped[str] = mapped_column(String(64), unique=True)
+    attachment_id: Mapped[int] = mapped_column(ForeignKey('email_intake_attachments.id'))
+    customer_id: Mapped[int] = mapped_column(ForeignKey('customers.id'))
+    actor_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    config_json: Mapped[str] = mapped_column(Text)
+    draft_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -27,7 +27,7 @@
 
 - /root/mobile_drawings_api：app/api/deliveries.py、新app/services/delivery_dispatch_commands.py、新tests/test_delivery_dispatch_commands.py和tests/test_delivery_dispatch_revision_compat.py；必要的定向既有送货测试更新先报根列文件，不能全局改conftest或通用自动补body。只写artifact/delivery-atomic-dispatch/api。
 - /root/mobile_drawings_ui：static/index.html、新static/ui/delivery-dispatch-recovery.js、新tests/ui/delivery_dispatch_recovery.test.cjs及实际方法/DOM定向测试。只写artifact/delivery-atomic-dispatch/ui。保留v615 index原资源hash及其他模块。
-- 根：desktop_assistant/manager.py、build.py、server_entry.py，新desktop_assistant/delivery_dispatch_contract.py，tests/desktop_assistant/test_delivery_dispatch_reader.py，任务/报告/版本及发布资产。API调用新模块require_managed_dispatch_activation(database_path, control=None)，传真实db.get_bind().url.database，模块自动核TM_ERP_CONTROL/真实共享路径；失败ValueError转503禁止写，彼此不互改。
+- 根：desktop_assistant/manager.py、build.py、server_entry.py、onboarding.py，新desktop_assistant/delivery_dispatch_contract.py，tests/desktop_assistant/test_delivery_dispatch_reader.py，任务/报告/版本及发布资产。API调用新模块require_managed_dispatch_activation(database_path, control=None)，传真实db.get_bind().url.database，模块自动核TM_ERP_CONTROL/真实共享路径；失败ValueError转503禁止写，彼此不互改。
 - /root/order_recovery_review：只写artifact/delivery-atomic-dispatch/review，独立检查真实反例→修复、数量/权限/回滚及helper恢复，发现缺陷交owner；不改候选源码。
 
 ## 最短验收与发布
@@ -39,3 +39,5 @@
 每阶段NAS独立回执，管理员1～3步现场验收待反馈；持续Goal active。局域网一次瞬时失联已独立复查自行恢复，未执行修复、不计本卡成果。
 
 本卡artifact根：D:/.codex/visualizations/2026/10/10/delivery-atomic-dispatch。API在自己的artifact先定版API_CONTRACT.md并向UI/根通知；字段修正须同步，UI不自行发明成功proof。独审只读建议与根方案以当前本卡为实施范围。
+
+独审补充最低边界：本轮发布适用已有受管安装升级及完整备份空目录恢复，不产全新首次接入安装器。新cap包首次接入须在停止原服务前明确拒绝并提示已接入用更新、新机器用验证恢复包；遗留pending同样保持未完成，不自动激活或启动。为此根独占onboarding.py最小门禁和同文件定向测试。取消当前只推进版本，不声称其自身已具原请求恢复或exactly-once；后续单独审。

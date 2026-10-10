@@ -104,7 +104,8 @@ def inspect_activation(shared, state, *, require_active=False):
         if index is not None or require_active or has_records(Path(shared)/'data/carton_erp.sqlite3'):
             raise ValueError(ERROR)
         return None
-    if index != state_index(value):
+    if (not isinstance(index, dict) or type(index.get('version')) is not int
+            or index != state_index(value)):
         raise ValueError(ERROR)
     return value
 
@@ -118,6 +119,9 @@ def validate_recovery(shared, metadata, signed_manifest):
         if recorded is not None or required:
             raise ValueError(ERROR)
         return None
+    if not isinstance(recorded, dict):
+        raise ValueError(ERROR)
+    validate_contract(recorded.get('contract'))
     if recorded != value or not signed_capability(signed_manifest):
         raise ValueError(ERROR)
     return value

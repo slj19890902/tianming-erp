@@ -20,15 +20,19 @@
     if(typeof settings.is_die_cut!=='boolean' || (!settings.is_die_cut && m!==1)) throw new Error('非模切产品的模数必须为一');
     const l=hundredths(length,'理论报料长'),w=hundredths(width,'理论报料宽');
     const c=integer(a*b,'开料份数'),output=integer(c*m,'每张产出');
-    const sl=hundredths(decimal(l*a),'供应商报料长'),sw=hundredths(decimal(w*b),'供应商报料宽');
-    return {schema_version:2,theoretical_length_mm:decimal(l),theoretical_width_mm:decimal(w),
+    const actual=settings.actual_supplier_length_mm!=null || settings.actual_supplier_width_mm!=null;
+    const sl=hundredths(actual?settings.actual_supplier_length_mm:decimal(l*a),'供应商报料长'),sw=hundredths(actual?settings.actual_supplier_width_mm:decimal(w*b),'供应商报料宽');
+    if(sl<l*a || sw<w*b) throw new Error('供应商实际长宽不能小于理论尺寸乘开料份数');
+    return {schema_version:actual?3:2,theoretical_length_mm:decimal(l),theoretical_width_mm:decimal(w),
       length_parts:a,width_parts:b,is_die_cut:settings.is_die_cut,mold_count:m,
+      ...(actual?{actual_supplier_length_mm:decimal(sl),actual_supplier_width_mm:decimal(sw)}:{}),
       supplier_length_mm:decimal(sl),supplier_width_mm:decimal(sw),cutting_factor:c,yield_per_supplier_sheet:output};
   }
   const label=n=>'一开'+({1:'一',2:'二',3:'三',4:'四',5:'五',6:'六'}[n]||n);
   function summary(snapshot) {
     if(!snapshot) return '';
-    return `${label(snapshot.cutting_factor)}（长${snapshot.length_parts}×宽${snapshot.width_parts}）${snapshot.is_die_cut?' · '+snapshot.mold_count+'模':''} · 每张出${snapshot.yield_per_supplier_sheet}片`;
+    const trim=Number(snapshot.supplier_length_mm)>Number(snapshot.theoretical_length_mm)*snapshot.length_parts || Number(snapshot.supplier_width_mm)>Number(snapshot.theoretical_width_mm)*snapshot.width_parts;
+    return `${label(snapshot.cutting_factor)}（长${snapshot.length_parts}×宽${snapshot.width_parts}）${snapshot.is_die_cut?' · '+snapshot.mold_count+'模':''} · 每张出${snapshot.yield_per_supplier_sheet}片${trim?' · 先修边至'+decimal(hundredths(snapshot.theoretical_length_mm,'理论长')*snapshot.length_parts)+'×'+decimal(hundredths(snapshot.theoretical_width_mm,'理论宽')*snapshot.width_parts)+' mm':''}`;
   }
   const api={contract,label,summary};
   if(typeof module!=='undefined' && module.exports) module.exports=api;

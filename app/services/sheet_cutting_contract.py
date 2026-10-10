@@ -28,7 +28,11 @@ def cutting_work_instruction(snapshot):
         split = f"报料纸先按长{contract.length_parts}×宽{contract.width_parts}分切成{contract.cutting_factor}片"
     theory = f"每片{_decimal_text(contract.theoretical_length_mm)}×{_decimal_text(contract.theoretical_width_mm)}mm"
     process = f"再按{contract.mold_count}模加工" if contract.is_die_cut else "每片加工1片产品"
-    return f"{split}；{theory}；{process}；每张报料纸产出{contract.yield_per_supplier_sheet}片产品"
+    trim = ""
+    if contract.has_trim:
+        length, width = contract.required_supplier_size_mm
+        trim = f"先修边至{_decimal_text(length)}×{_decimal_text(width)}mm；"
+    return f"{trim}{split}；{theory}；{process}；每张报料纸产出{contract.yield_per_supplier_sheet}片产品"
 
 
 class SheetCuttingContractError(ValueError):
@@ -76,6 +80,8 @@ class SheetCuttingContract:
     width_parts: int = 1
     is_die_cut: bool = False
     mold_count: int = 1
+    actual_supplier_length_mm: Decimal | None = None
+    actual_supplier_width_mm: Decimal | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "theoretical_length_mm",
@@ -91,6 +97,14 @@ class SheetCuttingContract:
             raise SheetCuttingContractError("非模切产品不能填写多模产出")
         _integer(self.cutting_factor, "开料份数")
         _integer(self.yield_per_supplier_sheet, "每张供应商纸产出")
+        if (self.actual_supplier_length_mm is None) != (self.actual_supplier_width_mm is None):
+            raise SheetCuttingContractError("供应商实际长宽须同时填写")
+        if self.actual_supplier_length_mm is not None:
+            for axis in ("length", "width"):
+                field = f"actual_supplier_{axis}_mm"
+                object.__setattr__(self, field, _dimension(getattr(self, field), "供应商实际尺寸"))
+            if any(actual < required for actual, required in zip(self.supplier_size_mm, self.required_supplier_size_mm)):
+                raise SheetCuttingContractError("供应商实际长宽不能小于理论尺寸乘开料份数")
         length, width = self.supplier_size_mm
         _dimension(length, "供应商报料长度")
         _dimension(width, "供应商报料宽度")
@@ -105,8 +119,18 @@ class SheetCuttingContract:
 
     @property
     def supplier_size_mm(self) -> tuple[Decimal, Decimal]:
+        if self.actual_supplier_length_mm is not None:
+            return self.actual_supplier_length_mm, self.actual_supplier_width_mm
+        return self.required_supplier_size_mm
+
+    @property
+    def required_supplier_size_mm(self) -> tuple[Decimal, Decimal]:
         return (self.theoretical_length_mm * self.length_parts,
                 self.theoretical_width_mm * self.width_parts)
+
+    @property
+    def has_trim(self) -> bool:
+        return self.supplier_size_mm != self.required_supplier_size_mm
 
     @property
     def yield_per_supplier_sheet(self) -> int:
@@ -129,8 +153,8 @@ class SheetCuttingContract:
 
     def to_snapshot(self) -> dict:
         length, width = self.supplier_size_mm
-        return {
-            "schema_version": SCHEMA_VERSION,
+        result = {
+            "schema_version": 3 if self.actual_supplier_length_mm is not None else SCHEMA_VERSION,
             "theoretical_length_mm": _decimal_text(self.theoretical_length_mm),
             "theoretical_width_mm": _decimal_text(self.theoretical_width_mm),
             "length_parts": self.length_parts,
@@ -142,16 +166,21 @@ class SheetCuttingContract:
             "cutting_factor": self.cutting_factor,
             "yield_per_supplier_sheet": self.yield_per_supplier_sheet,
         }
+        if result["schema_version"] == 3:
+            result.update(actual_supplier_length_mm=_decimal_text(length), actual_supplier_width_mm=_decimal_text(width))
+        return result
 
     @classmethod
     def from_snapshot(cls, snapshot: Mapping) -> SheetCuttingContract:
         if not isinstance(snapshot, Mapping):
             raise SheetCuttingContractError("开料快照须为完整对象")
         version = snapshot.get("schema_version")
-        if type(version) is not int or version != SCHEMA_VERSION:
+        if type(version) is not int or version not in (2, 3):
             raise SheetCuttingContractError("开料快照版本不支持；旧单据须沿用原数量合同")
         fields = {"theoretical_length_mm", "theoretical_width_mm", "length_parts",
                   "width_parts", "is_die_cut", "mold_count"}
+        if version == 3:
+            fields |= {"actual_supplier_length_mm", "actual_supplier_width_mm"}
         derived = {"supplier_length_mm", "supplier_width_mm", "cutting_factor",
                    "yield_per_supplier_sheet", "schema_version"}
         if set(snapshot) != fields | derived:

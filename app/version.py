@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.623"
-APP_VERSION_NAME = "录单多选补库与导入恢复提示"
+APP_VERSION = "v0.22.624"
+APP_VERSION_NAME = "供应商修边尺寸默认值"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6077,3 +6077,16 @@ APP_VERIFICATION_STEPS = [
     "导入常用箱窗口勾选多款，点击已选产品补库；管理员核对保存单号和待报料明细。",
 ]
 APP_CHANGELOG = [*(f"v0.22.623：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "常用箱可保存供应商实际报料长宽与毛片要求，后续新订单、补库默认带出；盖底分别设置。",
+    "理论片尺寸、长宽开料份数与模数保持独立；修边余量不增加产出，生产说明显示先修边再分切。",
+    "采购及收料按冻结的实际大纸尺寸计算成本；后续常用箱修改不覆盖已报料单据。",
+    "原数量、权限、客户范围、版本、幂等及审计保护保留；更新器阻止旧程序误读修边合同，无数据库结构迁移。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新常用箱，填写实际供应商报料长宽并选择毛片，保存后重新打开，核对尺寸及开料份数。",
+    "在下一笔新订单或补库报料中核对实际尺寸、每张产出和采购张数；含修边余量时应显示先修边说明。",
+    "核对历史已报料单据仍保留原尺寸；本版不会批量修改任何正式产品或库存。",
+]
+APP_CHANGELOG = [*(f"v0.22.624：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

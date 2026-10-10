@@ -1441,7 +1441,7 @@ def _validated_product_versioned_updates(
 
 
 def _validate_product_sheet_cutting(payload):
-    from app.services.sheet_cutting_settings import normalize_settings, component_settings
+    from app.services.sheet_cutting_settings import normalize_settings, component_settings, validate_supplier_trim
     from app.services.sheet_cutting_contract import SheetCuttingContractError
     try:
         settings = normalize_settings(payload.sheet_cutting_settings)
@@ -1461,8 +1461,15 @@ def _validate_product_sheet_cutting(payload):
                 raise SheetCuttingContractError("几模设置与模切工艺不一致，请核对生产工艺")
             prefix = "base_report_" if component == "base" else "report_"
             length, width = getattr(payload, prefix + "length_mm"), getattr(payload, prefix + "width_mm")
+            if part.actual_supplier_length_mm is not None and not (length and width):
+                raise SheetCuttingContractError("请先填写理论报料长宽，再保存供应商实际长宽")
             if length and width:
-                part.contract(length, width)
+                contract = part.contract(length, width)
+                validate_supplier_trim(contract, payload.base_crease_type if component == "base" else payload.crease_type)
+                try:
+                    validate_sheet_dimensions(*contract.supplier_size_mm, layer_count=payload.layer_count, flute_type=payload.flute_type)
+                except ValueError as error:
+                    raise SheetCuttingContractError(str(error)) from error
         payload.sheet_cutting_settings = settings
         payload.default_cutting_mode = component_settings(settings).cutting_mode
     except SheetCuttingContractError as error:

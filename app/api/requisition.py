@@ -9061,7 +9061,7 @@ def _draft_group_entries_by_purchase_lines(
 def _sync_supplier_cutting_defaults(db, entries, user):
     from copy import deepcopy
     from app.services.master_data_versioning import apply_versioned_update
-    from app.services.sheet_cutting_settings import component_settings
+    from app.services.sheet_cutting_settings import component_settings, apply_contract_to_settings
     plans = {}
     for entry in entries:
         snapshot = entry.get("sheet_cutting_snapshot")
@@ -9073,13 +9073,13 @@ def _sync_supplier_cutting_defaults(db, entries, user):
         component = entry.get("component_type") or "whole"
         key = "cover" if component == "whole" and "cover" in product.sheet_cutting_settings else component
         plan = plans.setdefault(product.id, {"product": product, "settings": deepcopy(product.sheet_cutting_settings), "expected": entry["expected_product_version"], "seen": {}})
-        parts = (snapshot["length_parts"], snapshot["width_parts"])
+        parts = (snapshot["length_parts"], snapshot["width_parts"], snapshot.get("actual_supplier_length_mm"), snapshot.get("actual_supplier_width_mm"))
         if key in plan["seen"] and plan["seen"][key] != parts:
             raise HTTPException(409, "同一常用箱在本次报料中选择了不同开料方式，请拆分核对后生成")
         plan["seen"][key] = parts
         if key not in plan["settings"]:
             raise HTTPException(409, "常用箱组件设置已变化，请刷新报料草稿")
-        plan["settings"][key].update(length_parts=parts[0], width_parts=parts[1])
+        apply_contract_to_settings(plan["settings"], key, snapshot)
     for plan in plans.values():
         product = plan["product"]
         if plan["settings"] == product.sheet_cutting_settings:
@@ -9302,13 +9302,14 @@ def _create_supplier_order_for_pending_entries(
         order_item.special_process = first_entry["cutting_mode"]
         if order_item.sheet_cutting_settings_snapshot is not None:
             from copy import deepcopy
+            from app.services.sheet_cutting_settings import apply_contract_to_settings
             settings = deepcopy(order_item.sheet_cutting_settings_snapshot)
             for entry in item_entries:
                 snapshot = entry.get("sheet_cutting_snapshot")
                 if snapshot is not None:
                     component = entry.get("component_type") or "whole"
                     key = "cover" if component == "whole" and "cover" in settings else component
-                    settings[key].update(length_parts=snapshot["length_parts"], width_parts=snapshot["width_parts"])
+                    apply_contract_to_settings(settings, key, snapshot)
             order_item.sheet_cutting_settings_snapshot = settings
         order_item.cardboard_len = first_entry["cardboard_len"]
         order_item.cardboard_width = first_entry["cardboard_width"]

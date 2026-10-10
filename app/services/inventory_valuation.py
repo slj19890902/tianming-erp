@@ -271,8 +271,8 @@ def _resolve_product_cost(db: Session, product: Product, visited=None, *, main_o
     if view.sheet_cutting_settings is not None:
         from app.services.sheet_cutting_settings import component_settings
         setting = component_settings(view.sheet_cutting_settings)
-        # The v2 estimate already prices theoretical area per mold output.
-        # Supplier splitting changes sheets bought, never area per piece.
+        # The estimate already divides actual supplier area by physical output,
+        # including any explicit trim allowance; do not divide by cutting twice.
         output = 1 if physical_yield is None else physical_yield
         if physical_yield is not None:
             estimate = InventoryCostEstimate(estimate.unit_cost * setting.output_per_sheet,

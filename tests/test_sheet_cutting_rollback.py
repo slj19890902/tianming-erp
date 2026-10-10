@@ -2,6 +2,30 @@ import json
 import sqlite3
 
 from desktop_assistant.manager import Manager
+import pytest
+
+
+@pytest.mark.parametrize('table,column', [
+    ('products','sheet_cutting_settings'), ('sales_order_items','sheet_cutting_settings_snapshot'),
+    ('sales_order_item_bom_components','sheet_cutting_settings_snapshot'),
+    ('material_requisition_items','sheet_cutting_snapshot'), ('supplier_requisition_order_items','sheet_cutting_snapshot'),
+    ('stock_replenishment_order_items','sheet_cutting_snapshot')])
+def test_trim_facts_require_signed_reader_even_same_revision(tmp_path, monkeypatch, table, column):
+    manager=Manager(tmp_path,b'test')
+    (tmp_path/'shared/data').mkdir()
+    database=tmp_path/'shared/data/carton_erp.sqlite3'
+    (tmp_path/'state.json').write_text('{}')
+    monkeypatch.setattr(manager,'_check_dispatch_reader',lambda *a,**k:None)
+    monkeypatch.setattr(manager,'manifest',lambda *a:{'revision':'ep1010md'})
+    monkeypatch.setattr(manager,'_shared_finished_reader',lambda release,name:release=='new' and name=='supplier_sheet_trim_v1')
+    with sqlite3.connect(database) as db:
+        db.execute(f'CREATE TABLE "{table}" ("{column}" TEXT)')
+        db.execute(f'INSERT INTO "{table}" VALUES (?)',(json.dumps({'schema_version':2}),))
+    assert manager.compatible('old','ep1010md')
+    with sqlite3.connect(database) as db:
+        db.execute(f'UPDATE "{table}" SET "{column}"=?',(json.dumps({'schema_version':3}),))
+    assert not manager.compatible('old','ep1010md')
+    assert manager.compatible('new','ep1010md')
 
 
 def test_old_program_rollback_is_rejected_after_any_v2_fact(tmp_path, monkeypatch):

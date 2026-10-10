@@ -174,9 +174,11 @@ def estimate_finished_product_cost(
     sheet_settings = getattr(product, "sheet_cutting_settings", None)
     if sheet_settings is not None:
         cover_setting = component_settings(sheet_settings, "cover" if base_area is not None else "whole")
-        cover_area /= cover_setting.mold_count
+        cover_contract = cover_setting.contract(report_length, report_width)
+        cover_area = _area_m2(*cover_contract.supplier_size_mm) / cover_contract.yield_per_supplier_sheet
         if base_area is not None:
-            base_area /= component_settings(sheet_settings, "base").mold_count
+            base_contract = component_settings(sheet_settings, "base").contract(product.base_report_length_mm, product.base_report_width_mm)
+            base_area = _area_m2(*base_contract.supplier_size_mm) / base_contract.yield_per_supplier_sheet
     components = [
         {
             "component": "cover" if base_area is not None else "whole",
@@ -209,7 +211,7 @@ def estimate_finished_product_cost(
         source="material_quote_area",
         detail={
             "inventory_type": "finished",
-            **({"sheet_cutting_settings": sheet_settings, "area_basis": "theoretical_sheet_area_per_mold_output"} if sheet_settings else {}),
+            **({"sheet_cutting_settings": sheet_settings, "area_basis": "supplier_sheet_area_per_output"} if sheet_settings else {}),
             "formula": "length_mm * width_mm / 1,000,000 * current_effective_material_square_price",
             "estimate_basis": "current_material_quote_not_actual_cash_cost",
             "material_id": material.id,

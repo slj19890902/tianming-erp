@@ -37,5 +37,9 @@ def test_supplier_cutting_does_not_discount_per_piece_material_cost(monkeypatch)
     estimate = estimate_finished_product_cost(None, product=product)
     assert estimate.area_m2 == Decimal('0.044')
     assert estimate.unit_cost == Decimal('0.088')
+    product.sheet_cutting_settings['schema_version'] = 3
+    product.sheet_cutting_settings['cover'] = SheetCuttingSettings(2, 3, 2, True, 680, 630).to_dict()
+    # 680*630/12 plus 300*100/3; trim is bought but never extra output.
+    assert estimate_finished_product_cost(None, product=product).unit_cost == Decimal('0.0914')
     product.sheet_cutting_settings = None
     assert estimate_finished_product_cost(None, product=product).unit_cost == Decimal('0.196')

@@ -37,7 +37,7 @@
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <link rel="stylesheet" href="/static/drawing-workbench.css?v=20260930-543" />
     <script src="/static/drawing-workbench.js?v=20260930-543"></script>
-    <script src="/static/js/sheet-cutting.js?v=20261008-v2"></script>
+    <script src="/static/js/sheet-cutting.js?v=f73ad78201c3"></script>
     <script src="/static/js/product-unit-labels.js?v=6733f6a35088"></script>
     <script src="/static/assets/time-utils.js?v=95c91f9ded41"></script>
     <script src="/static/assets/phone-display.js?v=b9c44d142168"></script>
@@ -7016,9 +7016,16 @@
               <div v-if="productForm.sheet_cutting_settings && productForm.supply_mode!=='external_purchase' && productForm.box_style!=='BOM组合'" class="product-sheet-cutting-row">
                 <div v-for="part in productSheetCuttingParts()" :key="part.key" class="product-sheet-cutting-part">
                   <strong>{{ part.label }}供应商报料：{{ productSupplierSize(part.key) }}</strong>
+                  <div class="sheet-cutting-inputs" :data-supplier-sheet-default="part.key">
+                    <label>供应商报料长 <input class="input" type="number" min="1" step="0.01" :value="productSupplierDimension(part.key,'length')" @input="setProductSupplierDimension(part.key,'length',$event.target.value)" /></label>
+                    <label>供应商报料宽 <input class="input" type="number" min="1" step="0.01" :value="productSupplierDimension(part.key,'width')" @input="setProductSupplierDimension(part.key,'width',$event.target.value)" /></label>
+                    <label>供应商纸板要求 <select class="select" aria-label="供应商纸板要求" v-model="productForm[part.key==='base'?'base_crease_type':'crease_type']" @change="markProductCreaseTypeManual"><option :value="null">未设置</option><option v-for="creaseType in productSupportedCreaseTypes(productForm.box_style)" :key="creaseType" :value="creaseType">{{ creaseType }}</option></select></label>
+                    <button v-if="part.value.actual_supplier_length_mm!=null" class="btn small" type="button" @click="resetProductSupplierDimensions(part.key)">恢复按开料计算</button>
+                  </div>
+                  <small class="muted">随常用箱保存，作为以后新报料的默认值。含修边余量请选择毛片；理论尺寸与每张产出不变。</small>
                   <details class="sheet-cutting-disclosure"><summary>修改开料 · {{ sheetCuttingLabel(part.value.length_parts * part.value.width_parts) }}<span v-if="part.value.length_parts * part.value.width_parts > 1">（长{{ part.value.length_parts }}×宽{{ part.value.width_parts }}）</span></summary>
                     <div class="sheet-cutting-inputs"><label>长向份数 <input class="input" type="number" min="1" step="1" v-model.number="part.value.length_parts" @change="syncProductSheetCuttingSettings" /></label><label>宽向份数 <input class="input" type="number" min="1" step="1" v-model.number="part.value.width_parts" @change="syncProductSheetCuttingSettings" /></label></div>
-                    <small class="muted">按理论长宽倍增；模数单独填写。</small>
+                    <small class="muted">开料所需尺寸按理论长宽倍增；供应商实际尺寸可加修边余量，模数单独填写。</small>
                   </details>
                 </div>
               </div>
@@ -29681,6 +29688,23 @@
               return `${snapshot.supplier_length_mm} × ${snapshot.supplier_width_mm} mm`;
             } catch(error) { return error.message; }
           },
+          productSupplierDimension(key,axis) {
+            const part=this.productForm.sheet_cutting_settings[key];
+            const prefix=key==='base'?'base_report_':'report_';
+            return part['actual_supplier_'+axis+'_mm'] ?? Number(this.productForm[prefix+axis+'_mm']||0)*Number(part[axis+'_parts']||1);
+          },
+          setProductSupplierDimension(key,axis,value) {
+            const part=this.productForm.sheet_cutting_settings[key];
+            const length=this.productSupplierDimension(key,'length'),width=this.productSupplierDimension(key,'width');
+            part.actual_supplier_length_mm=axis==='length'?value:String(length);
+            part.actual_supplier_width_mm=axis==='width'?value:String(width);
+            this.productForm.sheet_cutting_settings.schema_version=3;
+          },
+          resetProductSupplierDimensions(key) {
+            const part=this.productForm.sheet_cutting_settings[key];
+            delete part.actual_supplier_length_mm;delete part.actual_supplier_width_mm;
+            this.syncProductSheetCuttingSettings();
+          },
           syncProductSheetCuttingSettings() {
             const form=this.productForm;
             if(form.supply_mode==='external_purchase' || form.box_style==='BOM组合' || form.is_virtual_composite_parent) { form.sheet_cutting_settings=null; return; }
@@ -29693,6 +29717,7 @@
               const part=old[key] || (key!=='base'?(old.whole || old.cover):null) || {length_parts:1,width_parts:1,mold_count:1};
               next[key]={...part,is_die_cut:die,mold_count:die?part.mold_count:1};
             }
+            if(keys.some(key=>next[key].actual_supplier_length_mm!=null)) next.schema_version=3;
             form.sheet_cutting_settings=next;
             const first=next[keys[0]];
             form.default_cutting_mode=window.ERPSheetCutting.label(first.length_parts*first.width_parts);

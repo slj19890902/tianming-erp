@@ -93,6 +93,20 @@ class Manager:
                     db.execute('PRAGMA table_info(stock_replenishment_order_items)'))
                 mold_deletion_contract = any(row[1] == 'deleted_at' for row in
                     db.execute('PRAGMA table_info(mold_tools)'))
+                supplier_trim_contract = False
+                for table, column in (
+                    ('products', 'sheet_cutting_settings'),
+                    ('sales_order_items', 'sheet_cutting_settings_snapshot'),
+                    ('sales_order_item_bom_components', 'sheet_cutting_settings_snapshot'),
+                    ('material_requisition_items', 'sheet_cutting_snapshot'),
+                    ('supplier_requisition_order_items', 'sheet_cutting_snapshot'),
+                    ('stock_replenishment_order_items', 'sheet_cutting_snapshot')):
+                    if any(row[1] == column for row in db.execute(f'PRAGMA table_info("{table}")')):
+                        supplier_trim_contract = supplier_trim_contract or bool(db.execute(
+                            f'SELECT 1 FROM "{table}" WHERE json_valid("{column}") AND json_extract("{column}", \'$.schema_version\') = 3 LIMIT 1'
+                        ).fetchone())
+            if supplier_trim_contract and not self._shared_finished_reader(release, "supplier_sheet_trim_v1"):
+                return False
             if mold_deletion_contract and not self._shared_finished_reader(release, "unused_mold_deletion_v1"):
                 return False
             if quotation_contract and not self._quotation_writer(release):

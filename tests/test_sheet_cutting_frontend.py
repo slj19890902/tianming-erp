@@ -23,6 +23,28 @@ assert.match(cutting.summary(actual),/4模/);
 """, tmp_path, "sheet-cutting-ui.cjs")
 
 
+def test_supplier_actual_size_browser_matches_backend_and_keeps_defaults(tmp_path):
+    expected=SheetCuttingContract(375,226,2,3,True,4,750,700).to_snapshot()
+    dimension=_method_body("productSupplierDimension(key,axis) {", "setProductSupplierDimension(")
+    change=_method_body("setProductSupplierDimension(key,axis,value) {", "resetProductSupplierDimensions(")
+    sync=_method_body("syncProductSheetCuttingSettings() {", "hydrateProductForm(")
+    _run_node(f"""
+const assert=require('node:assert/strict');
+global.window={{ERPSheetCutting:require({json.dumps(str(ROOT/'static/js/sheet-cutting.js'))})}};
+const part={{length_parts:2,width_parts:3,mold_count:4,is_die_cut:true}};
+const vm={{productForm:{{report_length_mm:375,report_width_mm:226,sheet_cutting_settings:{{schema_version:2,whole:part}}}},productUsesMold:()=>true,isTelescopingLidBoxStyle:()=>false}};
+vm.productSupplierDimension=new Function('key','axis',{json.dumps(dimension)}).bind(vm);
+vm.setProductSupplierDimension=new Function('key','axis','value',{json.dumps(change)}).bind(vm);
+vm.syncProductSheetCuttingSettings=new Function({json.dumps(sync)}).bind(vm);
+vm.setProductSupplierDimension('whole','width','700');vm.syncProductSheetCuttingSettings();
+assert.equal(vm.productForm.sheet_cutting_settings.schema_version,3);
+assert.equal(vm.productForm.report_width_mm,226);
+const snap=window.ERPSheetCutting.contract(375,226,vm.productForm.sheet_cutting_settings.whole);
+assert.deepEqual(snap,{json.dumps(expected)});assert.match(window.ERPSheetCutting.summary(snap),/先修边至750×678/);
+assert.throws(()=>window.ERPSheetCutting.contract(375,226,{{...part,actual_supplier_length_mm:749,actual_supplier_width_mm:700}}));
+""",tmp_path,'supplier-actual-default.cjs')
+
+
 def test_v2_draft_refresh_replaces_geometry_and_quantity_without_losing_remark(tmp_path):
     body = _method_body("restoreSupplierDraftEdits(previousDraft, nextDraft) {", "async refreshSupplierRequisitionDraftAfterInventoryReservation(")
     key = _method_body("supplierDraftEditKey(line) {", "restoreSupplierDraftEdits(")

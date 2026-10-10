@@ -3,13 +3,15 @@ from decimal import Decimal
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+import pytest
 
 from tests.test_p1_13c_bom_a3_physical_sources import a3_surround_app, _login
 from app.services.sheet_cutting_contract import SheetCuttingContract
 from app.services.sheet_cutting_settings import SheetCuttingSettings
 
 
-def test_bom_preview_changes_only_supplier_layout_and_formal_save_writes_defaults(a3_surround_app):
+@pytest.mark.parametrize('trim', [False, True])
+def test_bom_preview_changes_only_supplier_layout_and_formal_save_writes_defaults(a3_surround_app, trim):
     from app.models.product import Product
     from app.models.product_bom import SalesOrderItemBomComponent
     from app.models.requisition import RequisitionItem
@@ -32,11 +34,13 @@ def test_bom_preview_changes_only_supplier_layout_and_formal_save_writes_default
         product.production_process = '模切'
         product.mold_tool_id = mold.id
         product.default_cutting_mode = '一开一'
+        if trim:
+            product.crease_type = snapshot.snapshot_component_crease_type = '毛片'
         db.commit()
         snapshot_id, product_id, version = snapshot.id, product.id, product.version
-    contract = SheetCuttingContract(610, 410, 2, 2, True, 2).to_snapshot()
+    contract = SheetCuttingContract(610, 410, 2, 2, True, 2, 1220 if trim else None, 840 if trim else None).to_snapshot()
     line = {'order_item_id': 1, 'bom_snapshot_id': snapshot_id, 'component_type': 'cover',
-            'cardboard_len': 1220, 'cardboard_width': 820, 'special_process': '一开8',
+            'cardboard_len': 1220, 'cardboard_width': 840 if trim else 820, 'special_process': '一开8',
             'sheet_cutting_snapshot': contract, 'expected_product_version': version}
     with TestClient(app) as client:
         _login(client)
@@ -62,4 +66,7 @@ def test_bom_preview_changes_only_supplier_layout_and_formal_save_writes_default
         assert product.version == version + 1
         assert product.sheet_cutting_settings['cover']['length_parts'] == 2
         assert product.sheet_cutting_settings['base']['length_parts'] == 1
+        if trim:
+            assert product.sheet_cutting_settings['schema_version'] == 3
+            assert product.sheet_cutting_settings['cover']['actual_supplier_width_mm'] == '840'
         assert db.get(SalesOrderItemBomComponent, snapshot_id).sheet_cutting_settings_snapshot == settings

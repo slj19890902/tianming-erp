@@ -588,6 +588,9 @@
 
       function checkDrawingPrintReadiness() {
         try {
+          if (!customerSafe && (pagesHost.querySelector('[data-drawing-unavailable]') ||
+            Array.from(pagesHost.querySelectorAll('.paper-drawing img')).some(image => !image.complete || !image.naturalWidth)))
+            throw new Error('图纸尚未完整加载，已停止打印，请重新加载');
           assertDrawingAppendicesFit();
           return true;
         } catch (error) {
@@ -768,12 +771,17 @@
 
       async function waitForDrawingImages() {
         if (document.fonts?.ready) await document.fonts.ready;
-        await Promise.all(Array.from(pagesHost.querySelectorAll('.drawing-appendix img')).map(image => image.decode
+        if (pagesHost.querySelector('[data-drawing-unavailable]')) throw new Error('图纸预览不可用，请重新加载');
+        const images = Array.from(pagesHost.querySelectorAll('.paper-drawing img,.drawing-appendix img'));
+        try {
+        await Promise.all(images.map(image => image.decode
           ? image.decode()
           : image.complete && image.naturalWidth > 0 ? Promise.resolve() : new Promise((resolve, reject) => {
               image.addEventListener('load', resolve, {once:true});
               image.addEventListener('error', () => reject(new Error('同版附页图示加载失败，请重新加载')), {once:true});
             })));
+        } catch (_) { throw new Error('图纸加载失败，请重新加载后打印'); }
+        if (images.some(image => !image.complete || !image.naturalWidth)) throw new Error('图纸尚未完整加载，请重新加载后打印');
       }
 
       function capacityOverflowSource(card) {

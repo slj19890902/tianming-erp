@@ -39,6 +39,27 @@ def source_lot_descendant_ids(root_lot_ids, owner_customer_id):
     return select(descendants.c.lot_id)
 
 
+def completed_stock_output_roots(db, product_ids):
+    """A completed job and its exact output FK establish product provenance.
+
+    Processed stock keeps its goods profile, not an interchangeable raw-sheet
+    allowed-product row. Validate both directions before traversing real moves.
+    """
+    return db.execute(select(Job.product_id, StockItem.customer_id, InventoryLot.id).select_from(Job).join(
+        Receipt, Receipt.id == Job.receipt_item_id).join(
+        StockItem, StockItem.id == Receipt.stock_replenishment_item_id).join(
+        StockOrder, StockOrder.id == StockItem.replenishment_order_id).join(
+        Product, Product.id == Job.product_id).join(
+        InventoryLot, InventoryLot.id == Job.output_lot_id).join(
+        SemiFinishedInventoryDetail, SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id).where(
+        Job.product_id.in_(product_ids), Job.status == 'completed', Receipt.status == 'posted',
+        StockOrder.status.notin_(('draft', 'voided')),
+        Product.customer_id == StockItem.customer_id,
+        SemiFinishedInventoryDetail.owner_customer_id == StockItem.customer_id,
+        InventoryLot.inventory_type == 'semi_finished',
+        InventoryLot.source_ref_type == 'stock_preparation', InventoryLot.source_ref_id == Job.id))
+
+
 def source_lots(db, product):
     """An original receipt FK establishes provenance, not interchangeable usage."""
     stock = select(Receipt.received_inventory_lot_id).join(StockItem,
@@ -53,6 +74,8 @@ def source_lots(db, product):
         or_(StockItem.reference_product_id == product.id, StockItem.product_id == product.id),
         StockItem.customer_id == product.customer_id, StockOrder.status.notin_(('draft', 'voided')))
     ids = set(db.scalars(stock)) | set(db.scalars(orders)) | set(db.scalars(legacy))
+    ids.update(lot_id for _, owner, lot_id in completed_stock_output_roots(db, [product.id])
+               if owner == product.customer_id)
     if not ids - {None}:
         return []
     from app.api.mobile_erp import _lot_load_options

@@ -90,11 +90,16 @@ def save_settings(payload: SettingsChange, request: Request, db: Session = Depen
     value = payload.authorization_code.get_secret_value().strip()
     if not 8 <= len(value) <= 256 or any(c in value for c in '\r\n\x00'):
         raise HTTPException(422, '请填写有效的126客户端授权码')
+    row = db.get(EmailIntakeSettings, 1)
+    # Keychain storage has a side effect, unlike DPAPI encryption. Reject an
+    # already-stale request before allocating a new credential. The atomic
+    # UPDATE/unique INSERT gates below still handle concurrent changes.
+    if payload.expected_version != (row.version if row else 0):
+        raise HTTPException(409, '邮箱设置已变化，请刷新')
     try:
         encrypted = service.protect(value)
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
-    row = db.get(EmailIntakeSettings, 1)
     if row is None:
         if payload.expected_version != 0:
             raise HTTPException(409, '邮箱设置已变化，请刷新')

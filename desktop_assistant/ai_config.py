@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from desktop_assistant.storage import read_json, write_json
-from desktop_assistant.windows import protect, unprotect
+from desktop_assistant.credential_store import protect, unprotect
 
 
 AI_CONFIG_FILE = "ai-provider.json"
@@ -26,7 +26,7 @@ def save_openai_api_key(root: Path, value: str) -> None:
         root / "control" / AI_CONFIG_FILE,
         {
             "provider": "openai",
-            "protected_api_key": protect(key),
+            "protected_api_key": protect(key, 'openai'),
         },
     )
 
@@ -41,7 +41,7 @@ def load_openai_api_key(root: Path) -> str | None:
     protected = config.get("protected_api_key")
     if not isinstance(protected, str) or not protected:
         raise ValueError("AI 密钥配置不完整")
-    return normalize_openai_api_key(unprotect(protected))
+    return normalize_openai_api_key(unprotect(protected, 'openai'))
 
 
 def openai_api_key_is_configured(root: Path) -> bool:
@@ -52,7 +52,7 @@ def save_deepseek_api_key(root: Path, value: str) -> None:
     key = normalize_openai_api_key(value)
     (root / "control").mkdir(parents=True, exist_ok=True)
     write_json(root / "control" / "deepseek-provider.json",
-               {"provider": "deepseek", "protected_api_key": protect(key)})
+               {"provider": "deepseek", "protected_api_key": protect(key, 'deepseek')})
 
 
 def load_deepseek_api_key(root: Path) -> str | None:
@@ -62,4 +62,4 @@ def load_deepseek_api_key(root: Path) -> str | None:
     config = read_json(path)
     if config.get("provider") != "deepseek":
         raise ValueError("DeepSeek 服务配置类型无效")
-    return normalize_openai_api_key(unprotect(config["protected_api_key"]))
+    return normalize_openai_api_key(unprotect(config["protected_api_key"], 'deepseek'))

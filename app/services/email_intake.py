@@ -6,6 +6,7 @@ import imaplib
 import os
 import re
 import ssl
+import sys
 import threading
 import asyncio
 import logging
@@ -29,7 +30,10 @@ log = logging.getLogger(__name__)
 
 
 def protect(value, decrypt=False):
-    """Windows DPAPI user-bound secret; never store an adjacent plaintext key."""
+    """User-bound host secret; never store an adjacent plaintext key."""
+    if sys.platform == 'darwin':
+        from app.core import mac_keychain
+        return (mac_keychain.unprotect if decrypt else mac_keychain.protect)(value, 'mailbox')
     if os.name != 'nt':
         raise ValueError('邮箱授权码安全保存当前需要Windows服务器')
     from ctypes import wintypes

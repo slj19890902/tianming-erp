@@ -14,7 +14,7 @@ import webbrowser
 
 from desktop_assistant.manager import CN, Manager
 from desktop_assistant.storage import read_json, safe_name, write_json
-from desktop_assistant.windows import unprotect
+from desktop_assistant.credential_store import unprotect_backup as unprotect
 from desktop_assistant.connectivity import browser_url, inspect as inspect_connectivity
 
 

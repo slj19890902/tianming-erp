@@ -87,3 +87,9 @@ Mac 默认使用系统 STHeiti Medium.ttc 的 Heiti SC（face 1），合同和�
 钥匙串后端定向 8 项通过，包含独立临时钥匙串实机中文/NUL 字节往返、同引用重复拒绝、锁定拒绝及解锁恢复；测试只删除自身刚创建的临时钥匙串，搜索列表前后相同，交互设置恢复原值。生产 API 每次请求设置禁止交互；实机测试另禁用交互防止无人值守弹窗，因此不把该测试扩大为所有运行上下文的无弹窗保证。用途不符、旧 DPAPI、空值/过大值/无效编码均先拒绝；私钥用途不支持。未读取个人钥匙串已有条目、未存正式秘密、未接入业务入口。证据 mac-keychain-tests.log。
 
 实现采用 Security.framework SecItem API 的当前用户文件型钥匙串，并限制到该用户 Library/Keychains 和当前 UID；不设置 iCloud 同步、默认钥匙串、搜索列表或 ACL。Apple TN3137 说明后台 daemon 无法使用 data-protection keychain，且新版 macOS 钥匙串文件可能依赖受保护熵文件，故不将复制钥匙串当作异机备份；后续仍须应用级加密凭据导出与异机恢复演练。来源：https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains 。当前后端是开发验证结果，服务身份及重启后解锁尚待验证，不代表凭据迁移完成。
+
+第十个闭环范围：desktop_assistant/credential_store.py、ai_config.py、backup_settings.py、gui.py、app/services/email_intake.py 及定向测试。将邮箱、两种 AI、备份密码读写按宿主路由到带用途的 Mac 钥匙串引用或原 Windows DPAPI，签名身份继续原 Windows 分离签名；保留家庭邮箱/AI调用拒绝，不改业务表、收单游标、权限、调度或正式模式。备份计划的 launchd 注册与可移植凭据包尚未实现，不能把凭据路由当作全备份恢复通过。
+
+凭据路由验证：17 项通过（新增 5 项含原邮箱 API 权限/版本/明文隐藏契约、原 AI 配置 5 项、家庭隔离 7 项），另备份设置定向 9 项通过。均为合成数据；路由/API 测试使用内存钥匙串替身，真实 Security.framework 往返另由第九闭环覆盖。API 回归发现旧实现先加密后检查版本，会在 Mac 钥匙串留下已过期请求的多余条目；范围补入 app/api/email_intake.py，在存储前增加现有版本预检，并保留原 SQL 乐观锁和唯一插入/审计事务门禁。修复后过期配置不会创建新钥匙串条目。
+
+新引用不覆盖旧条目，旧凭据保留便于回滚；并发失败或进程崩溃产生的未引用条目不自动清理。Windows 分支只做模拟路由回归，不冒充工厂原用户 DPAPI 实机读取。未调用邮箱/AI 外部服务；Mac Manager 仍固定家庭预演并跳过 AI 载入。证据 credential-routing-tests.log、credential-backup-settings-tests.log。下一步继续应用级加密凭据移交/完整备份恢复和 launchd/服务用户配置；目前还不能断言无人值守重启及异机恢复完成。

@@ -4,7 +4,8 @@ import os
 import uuid
 
 from desktop_assistant.storage import read_json, write_json
-from desktop_assistant.windows import protect, unprotect, register_nightly
+from desktop_assistant.credential_store import protect_backup as protect, unprotect_backup as unprotect
+from desktop_assistant.windows import register_nightly
 
 
 def load_preferences(root):

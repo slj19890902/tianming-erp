@@ -82,8 +82,8 @@ if __name__ == "__main__":
 def test_deepseek_local_key_does_not_leak_openai(tmp_path,monkeypatch):
     from desktop_assistant.ai_config import save_deepseek_api_key
     from desktop_assistant import ai_config
-    monkeypatch.setattr(ai_config,'protect',lambda key:'cipher')
-    monkeypatch.setattr(ai_config,'unprotect',lambda key:'sk-deepseek-test-1234567890')
+    monkeypatch.setattr(ai_config,'protect',lambda key,purpose:'cipher')
+    monkeypatch.setattr(ai_config,'unprotect',lambda key,purpose:'sk-deepseek-test-1234567890')
     monkeypatch.setattr(ai_config,'load_openai_api_key',lambda root:'sk-openai-test-1234567890')
     save_deepseek_api_key(tmp_path,'sk-deepseek-test-1234567890')
     manager=Manager(tmp_path,b'pub')

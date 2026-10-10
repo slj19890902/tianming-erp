@@ -5,15 +5,21 @@
   const tokenValid = token => typeof token === "string" && /^[a-f0-9]{32}$/.test(token);
   const labelValid = value => typeof value === "string" && value.length <= 40 && !/[\x00-\x1f\x7f]/.test(value);
   function clean(value, owner, now) {
-    if (!value || value.version !== 1 || value.actorId !== owner || !positive(owner) || !["search", "map"].includes(value.kind) ||
+    if (!value || value.version !== 1 || value.actorId !== owner || !positive(owner) || !["search", "map", "field"].includes(value.kind) ||
         !Number.isSafeInteger(value.createdAt) || value.createdAt > now + 60000 || value.createdAt < now - lifetime ||
         typeof value.query !== "string" || value.query.length > 200 || typeof value.includeZero !== "boolean" ||
         (value.selectedProductId !== null && !positive(value.selectedProductId)) ||
         (value.locationId !== null && !positive(value.locationId)) || !labelValid(value.floorCode) || !labelValid(value.areaCode) ||
-        !Number.isFinite(value.scrollY) || value.scrollY < 0 || value.scrollY > 1000000) return null;
+        !Number.isFinite(value.scrollY) || value.scrollY < 0 || value.scrollY > 1000000 ||
+        (value.kind === "field" && (!["product", "board", "location"].includes(value.intent) ||
+          !Number.isSafeInteger(value.page) || value.page < 1 || value.page > 10000 ||
+          !["all", "orders", "materials", "molds", "production", "inventory"].includes(value.category) ||
+          !Number.isSafeInteger(value.lookupPage) || value.lookupPage < 1 || value.lookupPage > 10000 ||
+          (value.nearPage !== undefined && (!Number.isSafeInteger(value.nearPage) || value.nearPage < 1 || value.nearPage > 10000))))) return null;
     // Only navigation/input survives. Inventory responses and quantities are never cached.
     return {version:1,actorId:owner,createdAt:value.createdAt,kind:value.kind,query:value.query,includeZero:value.includeZero,
-      selectedProductId:value.selectedProductId,locationId:value.locationId,floorCode:value.floorCode,areaCode:value.areaCode,scrollY:value.scrollY};
+      selectedProductId:value.selectedProductId,locationId:value.locationId,floorCode:value.floorCode,areaCode:value.areaCode,scrollY:value.scrollY,
+      ...(value.kind === "field" ? {intent:value.intent,page:value.page,category:value.category,lookupPage:value.lookupPage,nearPage:value.nearPage||1} : {})};
   }
   function randomToken() {
     const bytes = new Uint8Array(16);
@@ -62,6 +68,11 @@
       const token=params.get("return_context"),query=new URLSearchParams({return_source:"search"});
       if(tokenValid(token))query.set("return_context",token);
       return {href:"/mobile/?"+query+"#warehouse",label:"返回查货"};
+    }
+    if(params.get("return_source")==="field") {
+      const token=params.get("return_context"),query=new URLSearchParams({return_source:"field"});
+      if(tokenValid(token))query.set("return_context",token);
+      return {href:"/mobile/?"+query+"#lookup",label:"返回现场查询"};
     }
     return null;
   }

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.618"
-APP_VERSION_NAME = "周需求库存预览、真实货位与简易报料条单"
+APP_VERSION = "v0.22.620"
+APP_VERSION_NAME = "录单与订单导入多选手动补库"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6009,3 +6009,16 @@ APP_VERIFICATION_STEPS = [
     "已报料生产任务单→切换简易报料条单，核对12列、同款多组件分行、订纸或领料位置，再用A4横向实物打印裁切验收。",
 ]
 APP_CHANGELOG = [*(f"v0.22.618：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "订单导入和常用箱录单增加选择产品补库入口，支持多选；未触发库存预警也可主动补库。",
+    "常用箱选款窗口可将已选产品直接带入补库；独立窗口填写补库数量，原订单和选款保留。",
+    "按真实产品与客户读取当前报料资料，重复行去重，同编码不同产品保持各自身份；补库数量由员工填写。",
+    "沿用现有补库权限、保存回执和异常恢复保护；本版无数据库迁移，不更改预警阈值或历史库存。",
+]
+APP_VERIFICATION_STEPS = [
+    "刷新订单录入或导入核对页面，展开选择产品补库，勾选两款未预警产品，进入补库录入。",
+    "核对新窗口产品及报料资料、补库数量留空；填写本次真实补库数量后保存，原订单窗口内容应完整保留。",
+    "导入常用箱窗口勾选多款，点击已选产品补库；管理员核对保存单号和待报料明细。",
+]
+APP_CHANGELOG = [*(f"v0.22.620：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

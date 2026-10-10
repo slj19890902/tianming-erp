@@ -31,6 +31,7 @@
     <script src="/static/ui/desktop-delivery-margin.js?v=20260926-dashboard-cost"></script>
     <script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script>
     <script src="/static/ui/demand-stock.js?v=20261010"></script>
+    <script src="/static/ui/manual-replenishment-entry.js?v=fb1a07910498"></script>
     <link rel="stylesheet" href="/static/ui/demand-stock.css?v=20261010">
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <link rel="stylesheet" href="/static/drawing-workbench.css?v=20260930-543" />
@@ -7562,6 +7563,7 @@
               </div>
               <div v-for="(draft,draftIndex) in orderImportDrafts" :key="draft.file_hash || draft.source_name" v-show="(!emailQueueMode || !pdfQueueVisible) && pdfCurrentDraft(draft)" class="order-group-detail-card" style="margin-bottom:12px">
                 <demand-stock-summary v-if="hasPermission('warehouse.view')" :customer-id="draft.matched_customer_id" :lines="draft.items"></demand-stock-summary>
+                <manual-replenishment-picker v-if="canRequisition" :customer-id="draft.matched_customer_id" :lines="draft.items"></manual-replenishment-picker>
                 <details v-if="draft.source_format==='weekly_demand'"><summary>原需求表与原单库存参考（不写入仓库）</summary><div v-for="row in draft.items" :key="row.line_no">{{row.raw_product_code}} · 原位置 {{row.source_location||'未填写'}} · 原文 {{(row.raw_lines||[]).join(' ')}}<span v-if="row.source_stock_reference"> · 原单现存 {{row.source_stock_reference.on_hand}} / 原单剩余 {{row.source_stock_reference.remaining}}</span></div></details>
                 <div v-if="emailQueueMode && draft.email_attachment_id && draft._show_advanced_details" class="toolbar-group" style="margin-bottom:8px">
                   <button class="btn small" :disabled="loading || draft._email_handling" @click="handleEmailPdf(draft,'processed')">已人工处理</button>
@@ -8069,6 +8071,7 @@
                 <span class="muted">每款只占一行；可一次选择多款。</span>
               </div>
               <demand-stock-summary v-if="hasPermission('warehouse.view')" :customer-id="orderForm.customer_id" :lines="orderForm.items"></demand-stock-summary>
+              <manual-replenishment-picker v-if="canRequisition" :customer-id="orderForm.customer_id" :lines="orderForm.items"></manual-replenishment-picker>
               <!-- P1-02：固定一行一款，普通明细不依赖横向滚动。 -->
               <div class="order-entry-table-wrap">
               <table class="line-items order-entry-table"><thead><tr>
@@ -10186,6 +10189,8 @@
                 <span>第 {{ orderCommonBoxPicker.page }} / {{ Math.max(orderCommonBoxPicker.pages,1) }} 页</span>
                 <button class="btn small" type="button" :disabled="orderCommonBoxPicker.page >= orderCommonBoxPicker.pages || orderCommonBoxPicker.loading" @click="loadOrderCommonBoxes(orderCommonBoxPicker.page+1)">下一页</button>
                 <button class="btn success" type="button" :disabled="!orderCommonBoxSelectedCount() || orderCommonBoxPicker.importing" @click="importSelectedOrderCommonBoxes">{{ orderCommonBoxPicker.importing ? "导入中…" : "导入订单" }}</button>
+                <a v-if="canRequisition && selectedOrderReplenishmentLink()" class="btn" :href="selectedOrderReplenishmentLink()" target="_blank" rel="noopener" title="在新窗口填写补库数量，原选款与订单保留">已选产品补库</a>
+                <span v-if="canRequisition && orderCommonBoxSelectedCount()>100" class="muted">补库每次最多100款，请分批选择。</span>
               </div>
             </div>
           </div>
@@ -16868,6 +16873,9 @@
               supplierPromise,
             });
             await Promise.all([supplierPromise, pagePromise]);
+            if (requestAuthGeneration === this.authGeneration && requestUserId === (this.user?.id ?? null)) {
+              await window.TMManualReplenishment.openFromLocation(this);
+            }
             return (
               requestAuthGeneration === this.authGeneration
               && requestUserId === (this.user?.id ?? null)
@@ -20243,6 +20251,10 @@
             this.ensureWarehouseFrame(`/warehouse.html?embedded=1&tab=finished&keyword=${keyword}`);
             this.warehouseFrameRevision += 1;
             await this.go("warehouse");
+          },
+          selectedOrderReplenishmentLink() {
+            const ids=Object.values(this.orderCommonBoxPicker.selected || {}).map(value=>value.product.id);
+            return window.TMManualReplenishment.link(this.orderForm.customer_id,ids);
           },
           async openStockReplenishment(options={}) {
             if (!this.canRequisition) return;
@@ -42380,6 +42392,7 @@
       });
       app.mixin(TMDemandStock.mixin);
       app.component("demand-stock-summary", TMDemandStock.summary);
+      app.component("manual-replenishment-picker", TMManualReplenishment.picker);
       app.component("weekly-demand-import", TMDemandStock.importer);
       app.component("order-reference", TMOrderReference.component);
       app.component("page-head", { props:["title","desc"], template:`<div class="page-head"><div><h2>{{title}}</h2><p>{{desc}}</p></div></div>` });

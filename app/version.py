@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.607"
-APP_VERSION_NAME = "产品查询与手机图纸可靠性"
+APP_VERSION = "v0.22.608"
+APP_VERSION_NAME = "报料入口与补库校验"
 APP_BUILD_DATE = "2026-10-10"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -5858,3 +5858,17 @@ APP_VERIFICATION_STEPS = [
     "核对一款已有加工子件的实际数量、片单位和货位；读取失败时只点重试，无需新增真实库存业务。",
 ]
 APP_CHANGELOG = [*(f"v0.22.607：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "从产品资料打开订单或报料时，切换账号、页面或重新打开草稿后，旧读取不会继续打开旧窗口或覆盖新表单。",
+    "打开资料和报料时遇到长时间无响应，会结束等待并提示重新打开；旧账号的迟到错误不会退出当前账号。",
+    "外购补库重复请求重新核对当前权限、操作人及完整内容；历史请求缺少校验记录时显示原单号和采购历史核对入口。",
+    "已停用或删除的参考常用箱不能再新增补库需求，已成功请求继续按原事实核对；新外购采购与创建审计一起保存。",
+    "本版无数据库迁移，不调整已有库存、数量、成本和历史记录；补库保存结果未知的跨刷新恢复另行完善。",
+]
+APP_VERIFICATION_STEPS = [
+    "搜索一款启用产品，分别打开已有订单和主动备库草稿，核对客户和存货编码；无需提交新单即可关闭。",
+    "连续切换产品、页面或关闭后重新打开草稿，核对当前资料不被旧读取覆盖；弱网超时后按提示重新打开。",
+    "从报料的外购包材采购历史查看已有采购单，核对原单号与数量；无需重复报料或改动真实库存。",
+]
+APP_CHANGELOG = [*(f"v0.22.608：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

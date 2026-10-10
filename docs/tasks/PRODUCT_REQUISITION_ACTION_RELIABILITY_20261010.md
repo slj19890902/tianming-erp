@@ -30,3 +30,5 @@ UI实施补边：正常go仍加载原目标页列表，不跳过loadPage。允�
 API实施补边：原外购新建无明确创建审计，本轮允许真实INSERT分支增加最小外购备库创建事件（稳定order/batch ID、actor、request_hash、key摘要），与采购/哈希同事务，审计失败整单回滚，重放不重复记创建。审计不保存完整敏感body或重复成本，不充作未持久化的原始请求/回执证明。旧null提示须附原单号与实际页面核对路径，不只给裸API地址。
 
 UI测试白名单补充：仅允许 `tests/ui/mobile_product_workbench_reliability.test.cjs` 的actual-entry源码提取正则适配onOrder新增可选当前身份参数。原29行为断言不变，不删用例或放宽业务预期；其余旧测试不改。
+
+API兼容补边：真实回归显示外购新增request_hash后，`app/services/incoming_receipts.py` 的 `_stock_target` 纸板采购校验抢先覆盖外购专用收料路由错误码。API负责人增加此文件局部白名单，只调整原外购关联/路由识别的门禁次序，通用收料仍禁止外购，数量/状态/权限/锁与收料执行不放宽。冻结候选前精确审核全部StockReplenishmentOrder.request_hash旧用途，证明专用外购查询、收料、取消、采购池及打印读取保持正确；其他文件不得自动扩改。

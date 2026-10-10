@@ -168,3 +168,35 @@ def test_structure_api_keeps_customer_scope(context):
     with pytest.raises(HTTPException) as error:
         read_product_bom_structure(1, db=db, user=actor)
     assert error.value.status_code == 403
+
+
+def test_equal_sheet_sizes_keep_two_real_molds_and_independent_yields(context):
+    from app.models.mold_tool import MoldTool, MoldToolCustomer
+    from app.api.products import read_product_bom
+    from app.services.sheet_cutting_settings import theoretical_product_yield
+    db, actor, _, _ = context
+    rows = []
+    for child_id, label, mold_count in [(3, "A模", 2), (4, "B模", 4)]:
+        mold = MoldTool(mold_code=f"UAT-AB-{child_id}", mold_name=label, label_name=label,
+                        identity_status="frozen", rack_location=f"1F-M-R0{child_id}-L2")
+        db.add(mold)
+        db.flush()
+        child = db.get(Product, child_id)
+        db.add(MoldToolCustomer(mold_tool_id=mold.id, customer_id=child.customer_id))
+        child.box_category = "die_cut"
+        child.production_process = "模切"
+        child.report_length_mm, child.report_width_mm = 800, 600
+        child.sheet_cutting_settings = {"schema_version": 2, "whole": {
+            "length_parts": 1, "width_parts": 1, "mold_count": mold_count, "is_die_cut": True}}
+        child.mold_tool_id = mold.id
+        rows.append({"component_product_id": child_id, "quantity_per_set": 1,
+                     "inventory_relation": "assembly", "is_die_cut": True, "mold_tool_id": mold.id})
+    replace_product_bom(db, parent_product_id=1, inventory_mode="assembled", components=rows,
+                        expected_version=1, user=actor)
+    db.commit()
+    result = read_product_bom(1, db=db, user=actor)
+    assert len(result["components"]) == 2
+    assert len({row["mold_tool_id"] for row in result["components"]}) == 2
+    assert [row["component"]["report_length_mm"] for row in result["components"]] == [800, 800]
+    assert [row["component"]["sheet_cutting_settings"]["whole"]["mold_count"] for row in result["components"]] == [2, 4]
+    assert [theoretical_product_yield(db.get(Product, pid)) for pid in (3, 4)] == [2, 4]

@@ -7353,7 +7353,8 @@
                       </select>
                     </label>
                     </div></details>
-                    <button v-show="bomEditor.enabled" type="button" class="btn small" :disabled="!productForm.customer_id || !!bomEditor.error" @click="addBomComponent">添加子件</button>
+                    <button v-show="bomEditor.enabled" type="button" class="btn small" :disabled="!productForm.customer_id || !!bomEditor.error || bomEditor.loading || masterSavePending" @click="addBomComponent">添加已有子件</button>
+                    <button v-show="bomEditor.enabled" type="button" class="btn small" :disabled="!productForm.customer_id || !!bomEditor.error || bomEditor.loading || masterSavePending || !canEditProducts" @click="openBomChildEditor()">新建子件</button>
                   </div>
                 </div>
                 <div v-if="bomEditor.enabled" class="bom-relationship-summary">
@@ -7363,7 +7364,8 @@
                   <div v-if="bomEditor.inventory_mode === 'separate' && productForm.combination_mode === 'parent_priced_set'" class="notice">客户按父件规格、数量和单价结算，仓库按子件实物备货。双片示例：客户 800×180×120，实物 800×180×60，每1只用量填2片；交付方式选择“父件交付”，600只对应1200片。没有组装工序；不足两片不折算成一只。更改关系只影响新订单。</div>
                   <details class="bom-mode-help"><summary>怎么选？</summary><div>自己生产：保留实际箱型、材质和报料尺寸，先生产本体。<br>零件组装：父件不报纸板，按子件用量备料，组装后入库。<br>外购本体 / 整件：有组装消耗子件时先收本体，组装后才是完整成品；没有则直接收成品。<br>只列配套清单：不存父件，按子件备货交付。<br>组装消耗：组装时扣子件；随货配套：发货时扣子件。子件也可独立接单。<br>用量只填每1个父件所需数量；开料一开几只换算张数，不放大组合用量。售价和标签不改变扣库规则。</div></details>
                 </div>
-                <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">请先保存父产品，再维护内部组件 BOM。</div>
+                <div v-if="bomEditor.enabled && bomEditor.inventory_mode==='assembled'" class="muted">A、B 两片粘合：分别添加两个子件，各自设置模具、报料尺寸和每张出数，再填每套用量。尺寸相同也保留两行。子件保存后返回这里，最后保存父件与组合关系。</div>
+                <div v-if="!productForm.id" class="status blue" style="display:block;white-space:normal">父产品与组合关系一起保存；新建子件会先单独保存到常用箱。</div>
                 <div v-else-if="bomEditor.error" class="status orange" style="display:block;white-space:normal">{{ bomEditor.error }}</div>
                 <div v-else-if="bomEditor.notice" class="muted" style="margin-bottom:8px">{{ bomEditor.notice }}</div>
                 <template v-if="bomEditor.enabled && !bomEditor.error">
@@ -7383,6 +7385,10 @@
                           <option value="accompany">随货配套</option>
                         </select>
                         <span class="bom-component-actions"><button type="button" class="btn small" :aria-expanded="!!component._planningOpen" @click="component._planningOpen = !component._planningOpen">备料</button><button type="button" class="btn small" :disabled="!component.component_product_id || bomEditor.loading || masterSavePending || !canEditProducts" @click="openBomChildEditor(component)">子件资料</button><button type="button" class="btn small danger" @click="removeBomComponent(index)">移除</button></span>
+                      </div>
+                      <div v-if="component.component_product_id" class="bom-component-production muted" style="margin:6px 0;white-space:normal">
+                        <div>{{ bomComponentProductionText(component) }}</div>
+                        <div>{{ bomComponentMoldText(component) }} <a v-if="component.mold_tool_id" :href="'/mobile/mold-lookup?mold_id='+encodeURIComponent(component.mold_tool_id)+'&readonly=1'" target="_blank" rel="noopener">查看模具位置</a></div>
                       </div>
                       <div v-show="component._planningOpen" class="bom-component-planning">
                         <label>备用纸张<input class="input" aria-label="子件备用纸张" type="number" min="0" step="1" v-model.number="component.spare_sheet_quantity" />张</label>
@@ -27809,6 +27815,35 @@
             const formatted = this.spec(source);
             return formatted && formatted !== "-" ? formatted : "规格待完善";
           },
+          bomComponentProductionText(component) {
+            const source = component.component || {};
+            const dims = Number(source.report_length_mm)>0 && Number(source.report_width_mm)>0
+              ? `${source.report_length_mm}×${source.report_width_mm}mm` : "待完善";
+            const settings = source.sheet_cutting_settings;
+            const counts = settings?.schema_version === 2 ? ["whole","cover","base"].filter(key=>settings[key]).map(key=>{
+              const part=settings[key], values=[part.length_parts,part.width_parts,part.mold_count].map(Number);
+              const count=values.every(value=>Number.isInteger(value)&&value>0) ? values.reduce((a,b)=>a*b,1) : null;
+              return `${key==='cover'?'盖':key==='base'?'底':''}每张出 ${count || '待完善'} 片`;
+            }).join("；") : "每张出数待完善";
+            return `报料 ${dims}｜${source.production_process || '工艺待完善'}｜${counts}`;
+          },
+          bomComponentMoldText(component) {
+            if (!component.mold_tool_id) return component.is_die_cut ? "模具待绑定，请编辑子件资料" : "未设置模切模具";
+            const mold=(this.moldTools || []).find(row=>Number(row.id)===Number(component.mold_tool_id));
+            const purpose=mold?.label_overrides?.product_name;
+            const name=mold?.display_name || mold?.mold_name;
+            const location=mold?.location_guide?.prompt;
+            return ["模具："+(name || "详情待读取"),purpose ? `用途：${purpose}` : "",location || "位置请点查看"].filter(Boolean).join("｜");
+          },
+          applyBomChildProduct(row, data) {
+            const dieCut = data.box_category === "die_cut" || data.sheet_cutting_settings?.whole?.is_die_cut === true;
+            const moldId = dieCut ? (data.mold_tool_id || null) : null;
+            if (Number(row.mold_tool_id || 0) !== Number(moldId || 0) || !dieCut) row.mold_max_yield_per_sheet = null;
+            row._yieldToken = Symbol(); row._yieldLoading = false; row._yieldError = "";
+            row.is_die_cut = dieCut; row.mold_tool_id = moldId;
+            row.product_code=data.product_code || ""; row.product_name=data.product_name || "";
+            row.component=data; row.unit=data.unit || "";
+          },
           bomRelationshipQuantity(value) {
             const number = Number(value);
             if (!Number.isFinite(number) || number <= 0) return "数量待完善";
@@ -28076,10 +28111,13 @@
             };
           },
           _productBomDirty() {
-            if (this.modal?.type !== "product" || !this.productForm?.id || this.productBomSnapshot === null) return false;
+            if (this.modal?.type !== "product") return false;
+            if (!this.productForm?.id) return this.productForm?.box_style === "BOM组合" || !!this.bomEditor?.enabled;
+            if (this.productBomSnapshot === null) return false;
             return JSON.stringify(this._productBomSaveFields()) !== this.productBomSnapshot;
           },
           validateProductBom() {
+            if (this.bomEditor.loading) return "正在回读组合或子件资料，请稍后保存";
             const mode = this.bomEditor.inventory_mode || "legacy";
             if (this.productForm.box_style === "BOM组合" && (mode !== "assembled" || !["只", "套"].includes(this.productForm.unit) || this.productForm.combination_mode !== "parent_priced_set" || this.productForm.is_virtual_composite_parent)) return "BOM组合请选择只或套，按父件组装计价，请重新核对BOM组合箱型";
             if (mode === "assembled" && this.productForm.composite_fulfillment_mode !== "parent_delivery") return "组装成套后按父件交货；如需子件实发，请选择子件分存";
@@ -28526,25 +28564,28 @@
           async openCommonBoxEditorFromOrder(index) {
             return this.openOrderContextProduct(this.orderForm.items[index], 'order');
           },
-          async openBomChildEditor(component) {
+          async openBomChildEditor(component=null) {
             const childId = Number(component?.component_product_id || 0);
-            if (!childId || !this.canEditProducts || this.masterSavePending || this.bomEditor.loading) return false;
+            const creating = component === null;
+            if ((!creating && !childId) || (creating && !this.productForm.customer_id) || !this.canEditProducts || this.masterSavePending || this.bomEditor.loading) return false;
             const fields = ["productForm", "bomEditor", "externalComponentEditor", "drawingFile",
               "productFormSnapshot", "productBomSnapshot", "productMaterialContext", "productMaterialActiveTab",
               "productMaterialCandidateDetailKeys", "productMaterialCompareKeys", "masterVersionConflict",
-              "masterChangeConfirm", "masterPendingSaveOptions"];
+              "masterChangeConfirm", "masterPendingSaveOptions", "drawingV2", "productSaveRecovery",
+              "receiptStorage", "productDrawingPanelExpanded", "productEditorOptionErrors", "productEditorOptionsError"];
+            const customerId = this.productForm.customer_id;
             this.productEditReturnContext = {
-              source:"bom", productId:childId, returnModal:{...this.modal},
+              source:"bom", productId:childId, creating, returnModal:{...this.modal},
               previous:this.productEditReturnContext, baseline:this.masterEditBaseline.product,
               // Keep File objects and unsaved Vue state intact; opening a child
               // must not silently save or JSON-clone away the parent's draft.
               editorState:Object.fromEntries(fields.map(key => [key,this[key]])),
             };
-            if (!await this.openProduct({id:childId})) {
+            if (!await this.openProduct(creating ? {customer_id:customerId,drawings:[]} : {id:childId})) {
               await this.returnFromCommonBoxEditor(childId, {saved:false});
               return false;
             }
-            this.modal.title = `编辑子件｜${this.productForm.product_name || ""}（关闭返回上级）`;
+            this.modal.title = `${creating ? '新建子件' : '编辑子件'}｜${this.productForm.product_name || ""}（关闭返回上级）`;
             return true;
           },
           resetProductEditorState() {
@@ -28568,19 +28609,30 @@
               this.masterEditBaseline.product = context.baseline;
               this.modal = returnModal;
               if (saved) {
+                const editor = this.bomEditor, form = this.productForm;
+                const current = () => this.bomEditor === editor && this.productForm === form && this.modal.type === "product";
+                editor.loading = true;
                 try {
                   const {data} = await axios.get(`/api/master/products/${productId}`);
-                  this.bomEditor.components.forEach(row => {
-                    if (Number(row.component_product_id) === productId) {
-                      row.product_code=data.product_code; row.product_name=data.product_name;
-                      row.component=data; row.unit=data.unit || "";
-                    }
+                  if (!current()) return true;
+                  if (Number(data.id) !== productId || (form.customer_id && Number(data.customer_id)!==Number(form.customer_id)) || data.is_active === false) throw new Error("子件客户或有效状态已变化，请重新选择");
+                  if (context.creating && !editor.components.some(row=>Number(row.component_product_id)===productId)) {
+                    editor.components.push({...blankBomComponent(),component_product_id:productId,inventory_relation:
+                      editor.inventory_mode === "legacy" ? null : (editor.inventory_mode === "assembled" ? "assembly" : "accompany")});
+                  }
+                  editor.components.forEach(row => {
+                    if (Number(row.component_product_id) === productId) this.applyBomChildProduct(row,data);
                   });
-                  this.bomEditor.componentOptions = this.bomEditor.componentOptions.filter(row => Number(row.id)!==productId);
-                  this.bomEditor.componentOptions.push(this.bomComponentOption(data));
+                  editor.componentOptions = editor.componentOptions.filter(row => Number(row.id)!==productId);
+                  editor.componentOptions.push(this.bomComponentOption(data));
                   this.showToast("子件已保存，上级未保存内容已保留");
                 } catch (error) {
-                  this.showToast(`子件已保存，名称刷新失败：${this.errorMessage(error)}`,true);
+                  if (current()) {
+                    editor.components.filter(row=>Number(row.component_product_id)===productId).forEach(row=>{row._yieldError="子件已保存，资料未成功回读，请重新打开子件资料核对";});
+                    this.showToast(`子件已保存，资料刷新失败，请重新选择已保存的子件，不要重复新建：${this.errorMessage(error)}`,true);
+                  }
+                } finally {
+                  editor.loading = false;
                 }
               }
               if (this.productMaterialContext?.loading && this.productForm.id) this.loadProductMaterialContext(this.productForm.id);

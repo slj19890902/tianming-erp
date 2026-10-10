@@ -25,7 +25,7 @@ def test_set_style_atomic_create(composite_requisition_app, _p181_published_map_
         production_label_units_per_label=5)
     if parent_unit is not None:
         fields["unit"] = parent_unit
-    expected_unit = parent_unit or "套"
+    expected_unit = "套"  # New assembled products follow the confirmed unit rule.
     bom = dict(expected_version=1, inventory_mode="assembled", material_mode="expand_children",
         delivery_mode="parent", components=[] if invalid else [
         dict(component_product_id=2, quantity_per_set=3, inventory_relation="assembly"),

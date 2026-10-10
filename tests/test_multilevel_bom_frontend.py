@@ -28,7 +28,8 @@ def run_js(body):
         pytest.skip("Node.js unavailable")
     names = ["bomComponentUnit", "bomComponentOption", "normalizeBomComponent", "applyBomResponse", "mergeBomComponentOptions",
         "onBomInventoryModeChange", "_productBomSaveFields", "_productBomDirty", "validateProductBom",
-        "bomPayload", "openBomChildEditor", "returnFromCommonBoxEditor", "bindBomYieldToCurrentProduct", "selectBomComponent"]
+        "bomPayload", "openBomChildEditor", "returnFromCommonBoxEditor", "bindBomYieldToCurrentProduct", "selectBomComponent",
+        "applyBomChildProduct", "bomComponentProductionText", "bomComponentMoldText"]
     constants = HTML[HTML.index("      let bomComponentKeyCounter"):HTML.index("      const blankMaterial =")]
     script = "const assert=require('node:assert/strict');\n" + constants
     script += "\nconst methods={" + "\n".join(method(name) for name in names) + "};\n"
@@ -150,6 +151,76 @@ def test_child_save_refreshes_name_not_parent_unsaved_quantity():
     """)
 
 
+def test_child_mold_change_refreshes_parent_and_discards_old_mold_capacity():
+    run_js("""
+      const bom=blankBomEditor();const row={component_product_id:2,quantity_per_set:9,
+        is_die_cut:true,mold_tool_id:40,mold_max_yield_per_sheet:4,spare_sheet_quantity:3};
+      bom.components=[row];
+      const ctx={...methods,productForm:{id:1,customer_id:9},bomEditor:bom,productEditReturnContext:null,
+        modal:{type:'product'},masterEditBaseline:{product:{version:7}},canEditProducts:true,
+        masterSavePending:false,spec:()=>'',showToast:()=>{},errorMessage:e=>e.message,
+        openProduct:async function(){this.productForm={id:2};this.bomEditor=blankBomEditor();return true;}};
+      axios.get=async()=>({data:{id:2,customer_id:9,box_category:'die_cut',mold_tool_id:41,is_active:true}});
+      await ctx.openBomChildEditor(row);await ctx.returnFromCommonBoxEditor(2,{saved:true});
+      assert.equal(row.mold_tool_id,41);assert.equal(row.is_die_cut,true);
+      assert.equal(row.mold_max_yield_per_sheet,null);
+      assert.equal(row.quantity_per_set,9);assert.equal(row.spare_sheet_quantity,3);
+    """)
+
+
+def test_new_child_cancel_and_save_preserve_parent_then_add_real_child_once():
+    run_js("""
+      const form={id:1,customer_id:9,product_name:'父件未保存'};
+      const bom=blankBomEditor();bom.inventory_mode='assembled';
+      const drawing={draft:'未保存图纸'};
+      const ctx={...methods,productForm:form,bomEditor:bom,drawingV2:drawing,
+        productEditReturnContext:null,modal:{type:'product'},masterEditBaseline:{product:{version:7}},
+        canEditProducts:true,masterSavePending:false,spec:()=>'',showToast:()=>{},errorMessage:e=>e.message,
+        openProduct:async function(seed){assert.equal(seed.customer_id,9);assert.equal(seed.id,undefined);
+          this.productForm={customer_id:9};this.bomEditor=blankBomEditor();this.drawingV2={};return true;}};
+      await ctx.openBomChildEditor();await ctx.returnFromCommonBoxEditor(null,{saved:false});
+      assert.equal(ctx.productForm,form);assert.equal(ctx.drawingV2,drawing);assert.equal(bom.components.length,0);
+      axios.get=async()=>({data:{id:3,customer_id:9,box_category:'die_cut',mold_tool_id:42,is_active:true,unit:'片'}});
+      await ctx.openBomChildEditor();await ctx.returnFromCommonBoxEditor(3,{saved:true});
+      assert.equal(ctx.productForm,form);assert.equal(bom.components.length,1);
+      assert.equal(bom.components[0].component_product_id,3);assert.equal(bom.components[0].mold_tool_id,42);
+      assert.equal(bom.components[0].inventory_relation,'assembly');assert.equal(bom.components[0].quantity_per_set,1);
+      assert.equal(await ctx.returnFromCommonBoxEditor(3,{saved:true}),false);
+      ctx.canEditProducts=false;assert.equal(await ctx.openBomChildEditor(),false);
+    """)
+
+
+def test_child_readback_failure_blocks_parent_and_late_result_cannot_touch_other_editor():
+    run_js("""
+      const bom=blankBomEditor();bom.enabled=true;const row={component_product_id:2,quantity_per_set:1};bom.components=[row];
+      const ctx={...methods,productForm:{id:1},bomEditor:bom,productEditReturnContext:null,
+        modal:{type:'product'},masterEditBaseline:{},canEditProducts:true,masterSavePending:false,
+        spec:()=>'',showToast:()=>{},errorMessage:e=>e.message,
+        openProduct:async function(){this.productForm={id:2};this.bomEditor=blankBomEditor();return true;}};
+      await ctx.openBomChildEditor(row);axios.get=async()=>{throw new Error('断网')};
+      await ctx.returnFromCommonBoxEditor(2,{saved:true});assert.match(ctx.validateProductBom(),/未成功回读/);
+      await ctx.openBomChildEditor(row);let resolve;axios.get=()=>new Promise(r=>{resolve=r});
+      const pending=ctx.returnFromCommonBoxEditor(2,{saved:true});assert.match(ctx.validateProductBom(),/正在回读/);
+      const other=blankBomEditor();ctx.bomEditor=other;ctx.productForm={id:99};
+      resolve({data:{id:2,box_category:'die_cut',mold_tool_id:50}});await pending;
+      assert.equal(ctx.bomEditor,other);assert.equal(other.components.length,0);assert.equal(row.mold_tool_id,undefined);
+    """)
+
+
+def test_ab_production_summary_uses_explicit_yields_and_scoped_readable_location():
+    run_js("""
+      const ctx={...methods,moldTools:[{id:41,display_name:'测试客户 A模',mold_code:'INTERNAL-HIDDEN',
+        label_overrides:{product_name:'A模'},location_guide:{prompt:'一楼模具左架第二层'}}]};
+      const row={mold_tool_id:41,component:{report_length_mm:800,report_width_mm:600,production_process:'模切',
+        sheet_cutting_settings:{schema_version:2,whole:{length_parts:2,width_parts:1,mold_count:3,is_die_cut:true}}}};
+      assert.match(ctx.bomComponentProductionText(row),/800×600mm.*模切.*每张出 6 片/);
+      assert.match(ctx.bomComponentMoldText(row),/用途：A模.*一楼模具左架第二层/);
+      assert.doesNotMatch(ctx.bomComponentMoldText(row),/INTERNAL/);
+      row.component.sheet_cutting_settings=null;
+      assert.match(ctx.bomComponentProductionText(row),/出数待完善/);
+    """)
+
+
 def test_new_controls_are_inline_and_no_new_free_text_subkit_button():
     panel = HTML.split('<summary>组合 BOM</summary>', 1)[1].split('</fieldset>', 1)[0]
     assert 'aria-label="BOM库存来源"' in panel
@@ -227,6 +298,18 @@ def test_disable_bom_sends_empty_recipe_without_discarding_local_draft():
       assert.equal(ctx.bomEditor.components.length,1);
       ctx.bomEditor.enabled=true;
       assert.equal(ctx.bomPayload().components.length,1);
+    """)
+
+
+def test_new_parent_cannot_drop_unsaved_bom_on_first_save():
+    run_js("""
+      const ctx={...methods,modal:{type:'product'},productForm:{customer_id:9},
+        productBomSnapshot:null,bomEditor:blankBomEditor()};
+      assert.equal(ctx._productBomDirty(),false);
+      ctx.bomEditor.enabled=true;assert.equal(ctx._productBomDirty(),true);
+      assert.match(ctx.validateProductBom(),/至少添加/);
+      ctx.bomEditor.components=[{...blankBomComponent(),component_product_id:3}];
+      assert.equal(ctx.validateProductBom(),'');assert.equal(ctx.bomPayload(1).components.length,1);
     """)
 
 

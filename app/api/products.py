@@ -2767,7 +2767,12 @@ def _save_product_with_bom(payload, db, user, product_id=None):
                      _update_product(product_id, payload.product, db, user, commit=False))
             product = _product_or_404(db, saved["id"])
             bom_payload = payload.bom.model_copy(update={"expected_version": product.version})
-            bom = _update_product_bom(product.id, bom_payload, db, user, commit=False, preserve_parent_unit=True)
+            # A newly created assembly has no earlier physical-unit history.
+            # Creating the product before its recipe can temporarily classify
+            # it as a sheet; let the assembled BOM establish its final set unit.
+            # Existing parents keep their stored unit and frozen order facts.
+            bom = _update_product_bom(product.id, bom_payload, db, user, commit=False,
+                                      preserve_parent_unit=product_id is not None)
             db.flush()
             db.refresh(product)
             result = {"product": _response(product, user), "bom": bom}

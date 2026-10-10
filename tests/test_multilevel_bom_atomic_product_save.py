@@ -65,13 +65,14 @@ def test_atomic_product_and_bom_save(composite_requisition_app, _p181_published_
             return
         saved = response.json()["product"]
         assert saved["production_notes"] == fields["production_notes"]
-        assert saved["unit"] == parent_unit
+        expected_unit = "套" if create else parent_unit
+        assert saved["unit"] == expected_unit
         bom = response.json()["bom"]
         assert bom["version"] == saved["version"]
         assert sorted(Decimal(row["quantity_per_set"]) for row in bom["components"]) == [5, 6]
         with factory() as db:
             assert db.get(Product, saved["id"]).production_notes == fields["production_notes"]
-            assert db.get(Product, saved["id"]).unit == parent_unit
+            assert db.get(Product, saved["id"]).unit == expected_unit
             assert dump_graph(read_compiled_order_bom(db, 1).graph) == before[-1]
 
 

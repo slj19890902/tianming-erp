@@ -51,7 +51,19 @@ const ctx={productForm:{id:existing?9:null},drawingFile:null,productEditReturnCo
 
 
 def test_bom_unit_control_preserves_existing_nonstandard_units():
-    html = (Path(__file__).resolve().parents[1] / "static/index.html").read_text(encoding="utf-8")
-    assert 'aria-label="产品库存单位" v-model="productForm.unit"' in html
-    assert "!['只','套','片'].includes(productForm.unit)" in html
-    assert ':value="productForm.unit">{{ productForm.unit }}</option>' in html
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "static/index.html").read_text(encoding="utf-8")
+    assert 'aria-label="产品库存单位" :value="productUnitLabel(productForm, true)" readonly' in html
+    # The confirmed unit rule now uses a read-only label. It still must not
+    # convert legacy/custom physical units or erase missing-process review.
+    script = """
+const assert=require('node:assert/strict'),units=require('./static/js/product-unit-labels.js');
+const custom={id:7,unit:'公斤',is_composite:true};
+assert.equal(units.label(custom,true),'公斤');assert.equal(custom.unit,'公斤');
+const pending={id:8,unit:'只',unit_needs_review:true};
+assert.deepEqual(units.info(pending,true),{label:'只',review:true});
+assert.equal(units.label({box_style:'BOM组合',unit:'片'},true),'套');
+"""
+    result = subprocess.run([shutil.which("node")], input=script, cwd=root,
+                            text=True, encoding="utf-8", capture_output=True)
+    assert result.returncode == 0, result.stderr

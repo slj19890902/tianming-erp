@@ -130,8 +130,9 @@ def require_managed_dispatch_activation(database_path, control=None):
     state. The API supplies its actual engine path, never client input.
     """
     control = control if control is not None else os.environ.get('TM_ERP_CONTROL')
+    non_managed_allowed = os.environ.get('ERP_ENVIRONMENT', 'development').strip().lower() in {'development', 'test'}
     if not database_path or str(database_path) == ':memory:':
-        if control:
+        if control or not non_managed_allowed:
             raise ValueError(ERROR)
         return
     database = Path(database_path).resolve()
@@ -148,6 +149,8 @@ def require_managed_dispatch_activation(database_path, control=None):
         shared = database.parent.parent
         root = shared.parent
     else:
+        if not non_managed_allowed:
+            raise ValueError(ERROR)
         return
     state, _ = _read_json(root/'state.json', limit=16*1024*1024)
     inspect_activation(shared, state, require_active=True)

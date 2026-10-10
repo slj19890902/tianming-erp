@@ -1,4 +1,5 @@
 import copy
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -27,8 +28,9 @@ def source(tmp_path, monkeypatch):
     for name, record in configs.items():
         (root / name).write_text(json.dumps(record))
     database = root / 'shared/data/carton_erp.sqlite3'
-    with sqlite3.connect(database) as db:
-        db.executescript("CREATE TABLE email_intake_settings(id INTEGER PRIMARY KEY,encrypted_secret TEXT,version INTEGER,uid TEXT); INSERT INTO email_intake_settings VALUES(1,'windows-mailbox-cipher',7,'unchanged-source');")
+    with closing(sqlite3.connect(database)) as db:
+        with db:
+            db.executescript("CREATE TABLE email_intake_settings(id INTEGER PRIMARY KEY,encrypted_secret TEXT,version INTEGER,uid TEXT); INSERT INTO email_intake_settings VALUES(1,'windows-mailbox-cipher',7,'unchanged-source');")
     monkeypatch.setattr(transfer, 'unprotect', lambda value, purpose: 'synthetic-secret-' + purpose)
     return root
 
@@ -124,8 +126,9 @@ def test_source_links_refused(source, tmp_path):
 def test_absent_credentials_are_explicit_and_unknown_business_data_unchanged(source):
     for name in transfer.CONFIGS.values():
         (source / name[0]).unlink()
-    with sqlite3.connect(source / 'shared/data/carton_erp.sqlite3') as db:
-        db.execute('DELETE FROM email_intake_settings')
+    with closing(sqlite3.connect(source / 'shared/data/carton_erp.sqlite3')) as db:
+        with db:
+            db.execute('DELETE FROM email_intake_settings')
     before = hashes(source)
     record = transfer.collect(source)
     assert record['entries'] == {} and record['files'] == {}

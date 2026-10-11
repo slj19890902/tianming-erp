@@ -1050,7 +1050,6 @@ def create_app() -> FastAPI:
             tags=["system"],
         )
     from app.services.business_visibility import BusinessVisibilityMiddleware
-    application.add_middleware(BusinessVisibilityMiddleware)
     from app.api.business_approvals import router as business_approvals_router
     if not any(route.path == "/api/business-approvals" for route in application.routes):
         application.include_router(business_approvals_router, prefix="/api/business-approvals", tags=["approvals"])
@@ -1126,6 +1125,7 @@ def create_app() -> FastAPI:
         PrivateUploadGuardMiddleware,
         PerformanceObservabilityMiddleware,
         MoldPrivateNoStoreMiddleware,
+        BusinessVisibilityMiddleware,
     }
     application.user_middleware = [
         middleware
@@ -1134,6 +1134,7 @@ def create_app() -> FastAPI:
     ]
     legacy.db_path = lambda: current.database_path
     application.debug = False
+    application.add_middleware(BusinessVisibilityMiddleware)
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(current.allowed_origins),

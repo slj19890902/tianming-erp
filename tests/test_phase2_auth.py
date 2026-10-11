@@ -391,6 +391,12 @@ def test_create_app_can_reinitialize_after_middleware_has_started() -> None:
         if middleware.cls.__name__ == "CORSMiddleware"
     ]
     assert len(cors_layers) == 1
+    visibility_layers = [
+        middleware
+        for middleware in second.user_middleware
+        if middleware.cls.__name__ == "BusinessVisibilityMiddleware"
+    ]
+    assert len(visibility_layers) == 1
 
 
 def test_pytest_subprocess_inherits_isolated_runtime_paths() -> None:

@@ -304,6 +304,9 @@ def local_target(root, installation_id):
         info = parent.stat()
         if info.st_uid not in (0, account.pw_uid) or info.st_mode & 0o022:
             raise ValueError('目标祖先目录可被其他账号改写，不能绑定服务身份')
+    from desktop_assistant.mac_path_security import require_no_acl
+    for path in (root, *root.parents):
+        require_no_acl(path)
     result = subprocess.run(['/usr/sbin/ioreg', '-a', '-r', '-d', '1', '-c', 'IOPlatformExpertDevice'],
                             capture_output=True, check=True, timeout=10)
     if len(result.stdout) > 1024 * 1024:
@@ -349,13 +352,19 @@ def capture_snapshot(shared, *, recorded_root=None):
     checks = inspect(database, shared, managed=True, recorded_root=recorded_root or shared)
     if any(checks['counts'][name] for name in ('missing', 'external', 'hash_mismatch')):
         raise ValueError('完整事实中的附件缺失或不一致')
-    columns, pdf = {}, []
+    columns, pdf, other_mailbox_secrets = {}, [], []
     with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as db:
         db.execute('PRAGMA query_only=ON')
         tables = [row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
         for table in tables:
-            columns[table] = [row[1] for row in db.execute('PRAGMA table_info(' + quote(table) + ')')
+            columns[table] = [row[1] for row in db.execute('PRAGMA table_xinfo(' + quote(table) + ')')
                               if row[1] not in TECHNICAL_FIELDS.get(table, set())]
+        if 'email_intake_settings' in tables:
+            # Only id=1 is authenticated and rewrapped by credential_restore.
+            # Other rows are preserved verbatim, including SQLite value type.
+            other_mailbox_secrets = list(db.execute(
+                'SELECT id,typeof(encrypted_secret),hex(encrypted_secret) '
+                'FROM email_intake_settings WHERE id IS NOT 1 ORDER BY id'))
         if 'pdf_order_training_samples' in tables:
             for identity, raw, expected in db.execute('SELECT id,file_path,file_sha256 FROM pdf_order_training_samples ORDER BY id'):
                 if raw is None or raw == '':
@@ -371,7 +380,9 @@ def capture_snapshot(shared, *, recorded_root=None):
         raise ValueError('正式环境配置格式错误')
     stable_files = {name: value for name, value in before_files.items() if name != 'environment.json'}
     result = {'database_sha256': before, 'revision': info['revision'], 'tables': len(tables),
-              'schema_sha256': schema(database, legacy=True), 'facts_sha256': digest(facts(database, columns)),
+              'schema_sha256': schema(database, legacy=True),
+              'facts_sha256': digest({'facts': facts(database, columns),
+                                      'other_mailbox_secrets': other_mailbox_secrets}),
               'files_sha256': digest(stable_files), 'files': len(before_files),
               'preserved_environment_sha256': digest({k: v for k, v in environment.items() if k not in NETWORK_FIELDS}),
               'pdf_sources_sha256': digest(pdf), 'registered_attachments': checks['counts']['ok']}

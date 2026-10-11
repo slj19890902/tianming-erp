@@ -8,6 +8,7 @@ from pathlib import Path
 import plistlib
 import shutil
 import sqlite3
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -275,10 +276,94 @@ def test_missing_attachment_link_and_concurrent_write_fail_closed(shared, monkey
         cutover.capture_snapshot(shared)
 
 
+def test_unreadable_unregistered_directory_never_becomes_complete_snapshot(shared, monkeypatch):
+    hidden = shared / 'historical'
+    hidden.mkdir()
+    (hidden / 'unregistered.bin').write_bytes(b'must not disappear')
+    original = os.scandir
+    def unreadable(path):
+        if Path(path) == hidden:
+            raise PermissionError('synthetic unreadable historical directory')
+        return original(path)
+    monkeypatch.setattr(os, 'scandir', unreadable)
+    with pytest.raises(PermissionError, match='historical'):
+        cutover.capture_snapshot(shared)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX special-file fixture')
+def test_special_file_is_rejected_without_opening_it(shared):
+    os.mkfifo(shared / 'unregistered.pipe')
+    with pytest.raises(ValueError, match='特殊文件'):
+        cutover.capture_snapshot(shared)
+
+
+def test_generated_columns_are_included_in_complete_facts(shared, monkeypatch):
+    with sqlite3.connect(shared / 'data/carton_erp.sqlite3') as db:
+        db.execute('ALTER TABLE products ADD COLUMN doubled INTEGER GENERATED ALWAYS AS (quantity * 2) VIRTUAL')
+        db.execute('CREATE TABLE generated_fact(base TEXT, stored TEXT GENERATED ALWAYS AS (base || base) STORED)')
+        db.execute("INSERT INTO generated_fact(base) VALUES('kept')")
+    observed = {}
+    original = cutover.facts
+    def observed_facts(database, columns):
+        observed.update(columns)
+        return original(database, columns)
+    monkeypatch.setattr(cutover, 'facts', observed_facts)
+    cutover.capture_snapshot(shared)
+    assert 'doubled' in observed['products']
+    assert 'stored' in observed['generated_fact']
+    assert original(shared / 'data/carton_erp.sqlite3')['columns']['generated_fact'] == ['base', 'stored']
+
+
+def test_only_primary_mailbox_ciphertext_can_be_rewrapped(shared):
+    with sqlite3.connect(shared / 'data/carton_erp.sqlite3') as db:
+        db.execute("INSERT INTO email_intake_settings VALUES(2,'preserve-secondary-secret',1)")
+    source = cutover.capture_snapshot(shared)
+    target = copy_restored(shared)
+    # The existing fixture changes all rows; restore the secondary row first.
+    with sqlite3.connect(target / 'data/carton_erp.sqlite3') as db:
+        db.execute("UPDATE email_intake_settings SET encrypted_secret='preserve-secondary-secret' WHERE id=2")
+    cutover.require_matching_snapshots(source, cutover.capture_snapshot(target))
+    with sqlite3.connect(target / 'data/carton_erp.sqlite3') as db:
+        db.execute("UPDATE email_intake_settings SET encrypted_secret='changed' WHERE id=2")
+    with pytest.raises(ValueError, match='事实'):
+        cutover.require_matching_snapshots(source, cutover.capture_snapshot(target))
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason='macOS extended ACL real API')
+def test_mac_acl_is_checked_without_modifying_permissions(tmp_path):
+    import pwd
+    from desktop_assistant.mac_path_security import require_no_acl
+    root = tmp_path / 'exclusive'
+    root.mkdir(mode=0o700)
+    require_no_acl(root)
+    subprocess.run(['/bin/chmod', '+a', f'user:{pwd.getpwuid(os.getuid()).pw_name} allow read', str(root)], check=True)
+    before = subprocess.check_output(['/bin/ls', '-lde', str(root)])
+    with pytest.raises(ValueError, match='扩展 ACL'):
+        require_no_acl(root)
+    assert subprocess.check_output(['/bin/ls', '-lde', str(root)]) == before
+    with pytest.raises(OSError, match='读取服务目录 ACL'):
+        require_no_acl(root / 'missing')
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason='macOS ACL error handling')
+@pytest.mark.parametrize('error', [0, 5, 12, 13, 45])
+def test_mac_acl_read_errors_do_not_count_as_no_acl(tmp_path, monkeypatch, error):
+    from desktop_assistant import mac_path_security
+    def failed_read(_descriptor, _type):
+        mac_path_security.ctypes.set_errno(error)
+        return None
+    libc = SimpleNamespace(acl_get_fd_np=failed_read, acl_valid=lambda _: 0,
+                          acl_get_entry=lambda *_: -1, acl_free=lambda _: 0)
+    monkeypatch.setattr(mac_path_security.ctypes, 'CDLL', lambda *_args, **_kwargs: libc)
+    with pytest.raises(OSError, match='读取服务目录 ACL'):
+        mac_path_security.require_no_acl(tmp_path)
+
+
 @pytest.mark.skipif(sys.platform != 'darwin', reason='Mac service-account identity')
 def test_local_identity_is_read_only_and_rejects_admin_or_open_permissions(tmp_path, monkeypatch):
     import grp
     import pwd
+    from desktop_assistant import mac_path_security
     root = tmp_path.resolve() / 'service'
     root.mkdir(mode=0o700)
     uid = os.getuid()
@@ -298,11 +383,21 @@ def test_local_identity_is_read_only_and_rejects_admin_or_open_permissions(tmp_p
         assert args == ['/usr/sbin/ioreg', '-a', '-r', '-d', '1', '-c', 'IOPlatformExpertDevice']
         return SimpleNamespace(stdout=plistlib.dumps([{'IOPlatformUUID': '12345678-1234-1234-1234-123456789012'}]))
     monkeypatch.setattr(cutover.subprocess, 'run', ioreg)
+    checked = []
+    monkeypatch.setattr(mac_path_security, 'require_no_acl', checked.append)
     if uid == 0:
         pytest.skip('non-root filesystem identity fixture')
     target = cutover.local_target(root, 'a' * 32)
+    assert checked == [root, *root.parents]
     assert target['service_account'] == '_tianmingerp' and target['service_uid'] == uid
     assert not list(root.iterdir())
+    def forbidden_acl(path):
+        if path == root.parent:
+            raise ValueError('synthetic ancestor ACL')
+    monkeypatch.setattr(mac_path_security, 'require_no_acl', forbidden_acl)
+    with pytest.raises(ValueError, match='ancestor ACL'):
+        cutover.local_target(root, 'a' * 32)
+    monkeypatch.setattr(mac_path_security, 'require_no_acl', checked.append)
     monkeypatch.setattr(cutover.os, 'getgroups', lambda: [80])
     with pytest.raises(ValueError, match='管理员'):
         cutover.local_target(root, 'a' * 32)

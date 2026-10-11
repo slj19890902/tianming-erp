@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 import shutil
 import sqlite3
+import stat
 import subprocess
 import uuid
 
@@ -86,9 +87,9 @@ def facts(database, columns=None):
         db.execute('PRAGMA query_only=ON')
         if columns is None:
             tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'alembic_version'")]
-            columns = {table: [r[1] for r in db.execute('PRAGMA table_info('+quote(table)+')')] for table in tables}
+            columns = {table: [r[1] for r in db.execute('PRAGMA table_xinfo('+quote(table)+')')] for table in tables}
         for table, names in columns.items():
-            actual = {r[1] for r in db.execute('PRAGMA table_info('+quote(table)+')')}
+            actual = {r[1] for r in db.execute('PRAGMA table_xinfo('+quote(table)+')')}
             if not set(names) <= actual:
                 raise ValueError('升级删除既有业务表或字段，必须专项评审：'+table)
             fields = ','.join(map(quote,names))
@@ -102,13 +103,30 @@ def facts(database, columns=None):
 
 
 def files(root):
+    # pathlib glob/walk can suppress scanning errors. A complete inventory must
+    # fail if any directory cannot be read, including unregistered evidence.
+    from desktop_assistant.cleanup import local_path
+    root = local_path(root)
+    if not root.is_dir():
+        raise ValueError('完整文件清单要求已有共享目录')
     result={}
-    for path in root.rglob('*'):
-        if path.is_symlink() or path.is_junction():
-            raise ValueError('托管数据含外部链接，不能自动复制演练')
-        if path.is_file() and path.relative_to(root).as_posix() not in {
-                'data/carton_erp.sqlite3','data/carton_erp.sqlite3-wal','data/carton_erp.sqlite3-shm'}:
-            result[path.relative_to(root).as_posix()]=sha(path)
+    pending = [root]
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                info = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+                    raise ValueError('托管数据含外部链接，不能自动复制演练')
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(path)
+                elif stat.S_ISREG(info.st_mode):
+                    name = path.relative_to(root).as_posix()
+                    if name not in {'data/carton_erp.sqlite3', 'data/carton_erp.sqlite3-wal',
+                                    'data/carton_erp.sqlite3-shm'}:
+                        result[name] = sha(path)
+                else:
+                    raise ValueError('托管数据含特殊文件，不能生成完整文件清单')
     return result
 
 

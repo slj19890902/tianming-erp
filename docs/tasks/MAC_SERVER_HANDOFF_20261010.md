@@ -234,3 +234,16 @@ Manager.backup生成NAS `mac-home-rehearsal-20261011/20261011-074214-0dbc0a3d.tm
 正式部署继续要求系统级LaunchDaemon及专用低权限服务身份，不能把当前用户LaunchAgent验收替代独立于登录的服务。Apple说明用户agent仅在用户登录期间运行，系统daemon由系统launchd加载；系统上下文钥匙串须使用file-based实现。当前原型的个人用户钥匙串/LaunchAgent不因此获得正式部署资格，FileVault保持开启；系统级凭据和重启链尚待实现/实测。来源：https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html 与 https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains 。
 
 下一步依序接入：源端已停写状态及最终备份的认证核验/签发；专用服务身份与系统级后台凭据；目标恢复/本机身份/配置/服务安装的原子接收；最后在工厂明确停写和旧端隔离后启用唯一正式写入端。家庭Manager、出站和队列门禁本轮未改。没有安装或启用系统Daemon、没有改变钥匙串/个人账号、没有连接工厂正式库、没有清空旧机。
+
+
+## 2026-10-11 切换完整性检查收紧与额度检查点
+
+在接入工厂最终停写备份核验之前，对既有切换基础层复审并修复五处漏检：文件枚举改为遇到目录扫描错误立即拒绝，特殊文件不得静默略过；全表列清单和事实读取使用table_xinfo，纳入生成列；仅邮箱id=1可按现有认证恢复入口重封装，其余行密文及类型继续参与事实摘要；Mac目标目录及全部祖先必须同时满足原所有权/mode规则并无扩展ACL。ACL读取使用已打开目录FD及对象身份核对，缺失目录和真正读取错误不能当无ACL，原权限不修改。范围为desktop_assistant/migration.py、factory_cutover.py、新mac_path_security.py及test_factory_cutover.py，另更新本卡、迁移计划和任务回执。独立只读复审不读取正式数据、不写文件，所有代码/数据操作仍由主执行者串行负责。
+
+原HEAD 6ff9e01d下新增5项合成回归均复现失败；修复后切换、迁移、结构约束、完整备份恢复合计80项通过、1项Windows DPAPI实机项跳过。macOS ACL真实API验证仅操作pytest新建目录：无ACL通过、增加合成ACL后拒绝且检查前后ACL原样，目录不存在和5类读取错误拒绝。证据factory-cutover-strict-inventory-before.xml/log、factory-cutover-strict-inventory.xml/log。
+
+三个已停止的Mac完整恢复目录只读重验通过：每份325表、2983非数据库共享文件、888登记附件；结构、业务事实、全部共享文件和保留配置一致，三份DB原SHA及state.json均未变。证据factory-cutover-strict-real-snapshots.json及verify_strict_cutover_snapshots.py。事实摘要新增非主邮箱密文范围，旧摘要保留为历史证据，后续两端必须使用同版核验器，不能跨算法比较。此处仍是10月10日冷备派生的Mac副本，不是工厂最新业务或最终停写验收。
+
+已接收协调任务提出的额度与可恢复检查点要求。每轮先完成风险相称验证、差异检查、独立候选提交和NAS回读核验回执，再启动下一闭环；异常时保存当前阶段、未完成步骤、活动进程和安全续接点，不强杀复制/写入/迁移进程，不假设额度归零后仍有能力收尾。相关额度确认为0或返回明确耗尽错误时不再启动新工作；恢复前通过支持接口核对实际可用额度，再从最新回执核对工作区/活动任务后续接，避免重复运行。普通断线、capacity或接口兼容错误不当额度耗尽。此次支持接口实测Codex周窗口已用87%、剩余13%、ordinaryUsageAllowed=true；没有耗尽证据，没有购买、兑换重置或改变计费，也没有创建定时唤醒。证据factory-cutover-strict-inventory-usage.json。协调消息本身不扩大正式停写或上线授权。
+
+本轮仅完整性修复完成。源端认证最终备份/凭据比较和签发入口尚未实现，本轮未签发真实切换票据。下一项先在维护锁内核验已停止Windows来源、认证解密最终备份、原始DB SHA/全部文件/已签名程序及实际凭据一致；保持旧端停止，不能仅凭布尔声明调用签名codec。随后仍须完成系统级LaunchDaemon、专用账号/后台凭据、Mac接收及工厂现场验收。当前签名家庭运行包仍源码3de3be32，以上新代码未在运行包中，后续重建并由原工厂发布身份另行签名；不得就地改签名包。家庭保护不变，工厂停写/最终同步/旧端隔离/正式接管仍须工厂当次明确授权，不清空旧机。

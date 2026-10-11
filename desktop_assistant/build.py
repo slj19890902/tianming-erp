@@ -122,6 +122,9 @@ def main():
         from desktop_assistant.mac_release_publish import SERVICE_RESTORE_FILES
         if not SERVICE_RESTORE_FILES <= sources.keys():
             raise ValueError('专用恢复入口源码不完整，禁止声明原生恢复能力')
+        from desktop_assistant.mac_restore_completion import ENTRY as completion_entry, MODULE as completion_module
+        if not {completion_entry, completion_module} <= sources.keys():
+            raise ValueError('有限恢复完成入口源码不完整')
         from desktop_assistant.mac_system_service import MANAGE_ENTRY, MANAGE_MODULE
         if not {MANAGE_ENTRY, MANAGE_MODULE, 'desktop_assistant/nightly.py',
                 'desktop_assistant/service_supervisor.py'} <= sources.keys():
@@ -202,7 +205,7 @@ def main():
         # These describe execution/service protocols, not completed system
         # installation or permission to activate a factory writer.
         runtime_metadata['runtime_capabilities'] = {'immutable_execution_v1': 1, 'system_service_v1': 1,
-                                                    'service_restore_v1': 1, 'archive_autofs_v1': 1,
+                                                    'service_restore_v1': 1, 'service_restore_completion_v1': 1, 'archive_autofs_v1': 1,
                                                     'service_manage_v1': 1, 'system_nightly_v1': 1,
                                                     'factory_request_v1': 1, 'factory_audit_v1': 1,
                                                     'factory_activation_v1': 1, 'factory_execution_v1': 1}

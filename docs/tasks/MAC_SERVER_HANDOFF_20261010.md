@@ -335,3 +335,19 @@ CLI仅本机交互隐藏输入最终备份口令，无密码/时钟覆盖参数�
 定向及相邻回归111项，110通过、1项需显式开启的当前用户launchd实机检查跳过，0失败/错误，1.99秒；身份模块46项均通过。覆盖实际身份检查的错误/重复ID、额外组、home/shell、全部早期和晚期失败、摘要/期限/已有对象/竞态拒绝；原生检查仅只读OD、非管理员及用户可写脚本拒绝、pytest自有目录ACL。独立只读复核通过，证据mac-service-identity-regression.xml/log、test-summary、native-readonly和admin-handoff。只读实机仍Apple M6/macOS27.0.1，服务专用身份及固定根目录不存在；没有账号/钥匙串/系统服务安装，没有真实凭据或正式库操作。当前家庭签名运行包仍3de3be32，未重建或改能力位。
 
 下一项后台凭据拟采用两层：System keychain只保管随机引导秘密，按专用UID控制访问；服务专用文件钥匙串保存实际邮箱/AI/备份条目并保留修改/轮换能力。不能把全部运行秘密直接塞进只有管理员可写的System keychain后称功能完整。必须明确系统域查询、非交互、初次创建与日常读取分离、缺失拒绝、服务身份正例/其他UID反例、锁定/进程重启和轮换验证。此设计尚未实现或实机证明，不扩大当前个人用户钥匙串证据；Apple TN3137及System keychain权限讨论为依据：https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains 、https://developer.apple.com/forums/thread/738542 。受保护目标激活、最终工厂签名/同步和现场人工验收继续未完成，旧机不清空。
+
+## 2026-10-11 专用服务后台钥匙串接入范围
+
+本闭环新增app/core/mac_service_keychain.py及专项测试，mac_keychain按真实OS身份路由；不以环境变量选库。System域只保管绑定安装身份的随机引导秘密，实际业务凭据在专用用户文件钥匙串正常新增/轮换；get/put不自动创建、补建或回落个人登录库。显式初始化原语与日常读取分离，完成记录由root保护，真正系统安装器及跨UID/注销/重启实测仍待后继闭合。本轮主写人负责全部文件，独立代理只读查核SDK/Apple OSS和复审；不安装真实账号，不写System keychain，不触及真实秘密或正式数据库。
+
+原生临时钥匙串预检仅用本任务新建随机合成库：创建期间、删除自身测试库后，个人默认库及搜索列表均不变。发现公开Security实现的两个重要边界：显式失效keychain也可能回退defaultKeychainUI；GetStatus的WritePerm并非真实BSD写权限。故服务进程首次使用前一次性选择System偏好域，并回读域/实际默认库/系统文件权限，所有业务操作使用固定私有库且检查实际新增条目落点。System域切换为进程状态，但可能flush此前已脏偏好，因此新服务进程不得预先改默认或列表，不能把每请求切域当无副作用。API使用不得替代实际系统身份正反例验证。
+
+原生合成试验另复现并修正两个文件语义：SecKeychainCreate默认产生644，现仅对该次成功新建的自身文件以FD核对属主/类型/单链接/ACL后收紧600；原服务私有父目录700保持。SecItemAdd会原子替换钥匙串数据库inode，不能把正常写入当路径攻击；现固定并核对私有父目录，钥匙串文件操作前后分别核对权限/归属，新增条目另回读真实目标库与值。当前用户全新合成库已验证UID ACL下同UID不同Python解释器读取旧项及新增新项、旧引用保留、重复拒绝、锁定后错误密码拒绝/正确解锁，用户/System域默认与列表创建期间和删除自身库后均不变。此证据不是专用UID/其他UID拒绝、System引导条目或重启验收；没有读写任何真实System条目。
+
+后台接入源码闭合：新增模块、专项测试及独立原生子进程probe，原mac_keychain只改OS身份分派，不变Windows路由或个人用户行为。每次服务操作验证root保护的非秘密完成记录、实际UID/GID/补充组、固定本机目录、精确System引导引用、解锁及安装绑定HMAC canary；已解锁库即使接受错误解锁口令也会因canary不符拒绝。新增采用单UID进程ACL、无honor-root/应用allow，精确私有库及写后原字节回读；正常改密码仍新增随机引用保留旧项。create_bootstrap/initialize_private只是独立初始化原语，不是完整管理员安装器，不自行发布完成记录。
+
+复核发现旧格式.keychain检测不能用with_suffix移除.keychain-db，已改只去末尾-db并覆盖旧文件/悬空链接。原生缺文件测试增加SecItemAdd哨兵，明确证明在调用写API前拒绝，不能以最终权限报错冒充。最终回归147项：146通过、1项原Windows DPAPI实机跳过、0失败/错误，7.50秒；两个Mac原生钥匙串开关显式启用并实际通过。3条告警为依赖弃用及合成短JWT。独立复核问题已修正，证据mac-service-keychain-reviewed.xml/log；此前42项定向及146项中间回归不相加。原生probe在两个短进程之外另做独立进程偏好指纹前后比较，用户/System默认与列表均未变。测试只新建和删除自身合成库，未读取个人已有条目、未调用真实System条目读写或创建专用账号。
+
+Apple实现依据：SecKeychain.cpp/SecKeychainItem.cpp的失效引用默认库回退、Keychains.cpp的status位并非真实BSD写权限、StorageManager.cpp/DLDBListCFPref.cpp的进程域和脏偏好flush；来源https://github.com/apple-oss-distributions/Security/tree/main/OSX/libsecurity_keychain/lib 。系统库定位采用CopyDomainDefault而非硬编码，依据https://developer.apple.com/forums/thread/738542 。SecAccessCreateWithOwnerAndACL使用CFString授权tag数组；这不等于完整ACL回读或跨UID拒绝已证明。专用服务身份/真实System引导/其他UID/注销/重启仍未验收，后续管理员安装器必须先完成这些核验才能发布root完成记录。
+
+当前工厂正式基线仍只读核对，家庭签名运行包仍3de3be32，未重建、重签或启用factory_cutover_v1。真实四份恢复目录未动，正式库/停启/收单/发信/外部AI/真实签发及旧机清空均未执行。本轮额度接口ordinaryUsageAllowed=true、周已用95%/余5%，没有耗尽证据或兑换/购买；先提交和NAS回读再继续完整系统安装器、LaunchDaemon及目标正式激活。

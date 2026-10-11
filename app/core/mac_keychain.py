@@ -140,6 +140,13 @@ def _purpose(purpose):
         raise KeychainError('不支持的 ERP 凭据用途')
 
 
+def _backend():
+    # Selection follows the OS identity, never an environment override. The
+    # service backend refuses incomplete setup instead of using a login keychain.
+    from app.core.mac_service_keychain import ServiceStore, selected
+    return ServiceStore() if selected() else Keychain()
+
+
 def protect(value: str, purpose: str) -> str:
     _purpose(purpose)
     if not isinstance(value, str):
@@ -151,7 +158,7 @@ def protect(value: str, purpose: str) -> str:
     if not 0 < len(raw) <= MAX_SECRET_BYTES:
         raise KeychainError('凭据为空或长度超限')
     reference = f'{PREFIX}:{purpose}:{uuid.uuid4().hex}'
-    Keychain().put(reference, raw)
+    _backend().put(reference, raw)
     return reference
 
 
@@ -161,6 +168,6 @@ def unprotect(reference: str, purpose: str) -> str:
             re.escape(f'{PREFIX}:{purpose}:') + '[0-9a-f]{32}', reference):
         raise KeychainError('旧 Windows DPAPI 或其他用途凭据不能在此读取；需原用户安全移交')
     try:
-        return Keychain().get(reference).decode('utf-8')
+        return _backend().get(reference).decode('utf-8')
     except UnicodeError:
         raise KeychainError('钥匙串凭据编码无效') from None

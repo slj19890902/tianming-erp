@@ -10,7 +10,8 @@ import zipfile
 
 FILES = ('app/__init__.py', 'app/core/__init__.py', 'app/core/mac_keychain.py',
          'app/core/mac_service_keychain.py', 'desktop_assistant/__init__.py',
-         'desktop_assistant/mac_service_identity.py', 'desktop_assistant/mac_keychain_install.py')
+         'desktop_assistant/mac_service_identity.py', 'desktop_assistant/mac_keychain_install.py',
+         'desktop_assistant/mac_release_publish.py')
 
 
 def build(repo, commit, output):

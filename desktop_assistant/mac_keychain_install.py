@@ -24,7 +24,8 @@ TYPE = 'tianming.keychain-install-plan.v1'
 LIMIT = 65536
 FILES = ('app/__init__.py', 'app/core/__init__.py', 'app/core/mac_keychain.py',
          'app/core/mac_service_keychain.py', 'desktop_assistant/__init__.py',
-         'desktop_assistant/mac_service_identity.py', 'desktop_assistant/mac_keychain_install.py')
+         'desktop_assistant/mac_service_identity.py', 'desktop_assistant/mac_keychain_install.py',
+         'desktop_assistant/mac_release_publish.py')
 
 
 def canonical(value):
@@ -417,15 +418,25 @@ def install(raw, approved_sha):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='专用服务钥匙串初始化；不安装/启动ERP')
-    parser.add_argument('action', choices=('plan', 'install', '_worker'))
+    parser = argparse.ArgumentParser(description='专用服务钥匙串初始化或程序发布；不启动ERP')
+    parser.add_argument('action', choices=('plan', 'install', '_worker', 'publish', '_publish_worker'))
     parser.add_argument('--identity-plan', type=Path)
     parser.add_argument('--observer-uid', type=int)
     parser.add_argument('--file', type=Path)
     parser.add_argument('--approved-sha256')
+    parser.add_argument('--package', type=Path)
     args = parser.parse_args()
     try:
-        if args.action == '_worker':
+        if args.action in {'publish', '_publish_worker'}:
+            verify_code()
+            modules()  # Only now make the protected minimal pack importable.
+            from desktop_assistant import mac_release_publish as publication
+            if args.action == '_publish_worker':
+                result = publication.worker(decode(sys.stdin.buffer.read(LIMIT + 1)))
+            else:
+                raw = protected(args.file)
+                result = publication.publish(raw, args.approved_sha256, args.package)
+        elif args.action == '_worker':
             result = _worker(decode(sys.stdin.buffer.read(LIMIT + 1)))
         elif args.action == 'plan':
             with args.identity_plan.open('rb') as source:
@@ -443,7 +454,7 @@ def main():
                 raw = source.read(LIMIT + 1)
             result = install(raw, args.approved_sha256)
     except (Exception, KeyboardInterrupt):
-        raise SystemExit('钥匙串初始化未确认完成；可能已有条目或完成记录，保留现场，不覆盖重试、不自动删除。') from None
+        raise SystemExit('管理员初始化或发布未确认完成；可能已有文件、条目或完成记录，保留现场，不覆盖重试、不自动删除。') from None
     print(json.dumps(result))
 
 

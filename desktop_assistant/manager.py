@@ -492,6 +492,9 @@ class Manager:
         raise ValueError('ERP启动超时，已停止本次进程')
 
     def _backup_stopped(self, password: str, nas: Path) -> Path:
+        from desktop_assistant import mac_smb_stream_target as stream
+        if stream.selected(nas):
+            return stream.archive_stopped(self, password, nas)
         from desktop_assistant import mac_backup_storage as remote_storage
         with remote_storage.location_guard(nas) as storage_anchor:
             return self._backup_at_location(password, nas, storage_anchor)
@@ -637,10 +640,16 @@ class Manager:
         shutil.rmtree(job)
         return final
 
+    def _backup_preflight(self, nas):
+        from desktop_assistant.nas_probe import check_before_stop
+        from desktop_assistant import mac_smb_stream_target as stream
+        if stream.selected(nas):
+            return check_before_stop(nas, manager=self)
+        return check_before_stop(nas)
+
     def _backup_locked(self, password: str, nas: Path, *, restart_allowed=None):
         """Caller holds the existing maintenance lock for the whole operation."""
-        from desktop_assistant.nas_probe import check_before_stop
-        check_before_stop(nas)
+        self._backup_preflight(nas)
         running = bool(self._process())
         self.stop()
         try:
@@ -712,7 +721,9 @@ class Manager:
         with self.lock():
             if self.state.get('operation') in ('migration_running','migration_failed'):
                 raise ValueError('上次迁移尚未完成，请先处理恢复')
-            chain = self._plan_update_chain(package, nas / 'releases')
+            from desktop_assistant import mac_smb_stream_target as stream
+            releases = package.parent if stream.selected(nas) else nas / 'releases'
+            chain = self._plan_update_chain(package, releases)
             if not chain:
                 from desktop_assistant.retention import after_update
                 after_update(self, package.parent)
@@ -727,7 +738,9 @@ class Manager:
         with self.lock():
             result = self._update_locked(package, password, nas, rollback=rollback)
             from desktop_assistant.retention import after_update
-            archive_dir = nas.parent / 'releases' if nas.name == 'backups' else nas / 'releases'
+            from desktop_assistant import mac_smb_stream_target as stream
+            archive_dir = (package.parent if stream.selected(nas) else
+                           nas.parent / 'releases' if nas.name == 'backups' else nas / 'releases')
             for settings_path in (self.root / 'control/setup-defaults.json', self.root / 'preferences.json'):
                 try:
                     configured = read_json(settings_path).get('release_feed') if settings_path.is_file() else None
@@ -760,8 +773,7 @@ class Manager:
                     or contract.get('from_revision') != revision
                     or contract.get('rollback_package_sha256') != old['current']):
                 raise ValueError('此版本需要专项迁移或缺少上版程序兼容契约，未停止服务')
-        from desktop_assistant.nas_probe import check_before_stop
-        check_before_stop(nas)
+        self._backup_preflight(nas)
         self.stop()
         try:
             backup = self._backup_stopped(password, nas)

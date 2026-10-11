@@ -33,7 +33,10 @@ def _write_probe(path):
         target.unlink(missing_ok=True)
 
 
-def check_before_stop(path):
+def check_before_stop(path, *, manager=None):
+    from desktop_assistant import mac_smb_stream_target as stream
+    if stream.selected(path):
+        return stream.preflight(path, manager=manager)
     from desktop_assistant.mac_backup_storage import prepare_destination, required, BASE
     prepare_destination(path)
     environment = None

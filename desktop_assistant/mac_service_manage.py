@@ -102,6 +102,9 @@ def settings(root, context):
 
 
 def approved_destination(context):
+    from desktop_assistant import mac_smb_stream_target as stream
+    if stream.metadata_present():
+        return stream.approved_destination(context)
     value, _, actual = remote._contract()
     if actual != context: raise ValueError('归档合同与管理身份不同')
     path = Path(value['destination'])
@@ -112,6 +115,9 @@ def approved_destination(context):
 def configured(root, context):
     try:
         _, value = settings(root, context)
+        from desktop_assistant import mac_smb_stream_target as stream
+        if stream.selected(value.get('nas')):
+            return stream.configured(value['nas'], context)
         contract, _, actual = remote._contract()  # Local public metadata, no remote IO.
         return actual == context and value.get('nas') == contract['destination']
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError): return False

@@ -142,6 +142,9 @@ def prepare_destination(path):
     SMB location check can dispatch the separately approved fixed connector.
     NFS keeps its original behavior and never falls back to another transport.
     """
+    from desktop_assistant import mac_smb_stream_target as stream
+    if stream.selected(path):
+        return stream.prepare(path)
     try:
         return before_write(path)
     except ValueError:

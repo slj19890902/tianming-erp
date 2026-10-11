@@ -86,12 +86,16 @@ def main():
     signing.add_argument('--signing-request-only', action='store_true')
     parser.add_argument('--trusted-public-key', type=Path)
     parser.add_argument('--runtime-platform', choices=('windows', 'macos-arm64'), default='windows')
+    parser.add_argument('--smb-stream-wheels', type=Path, nargs=2,
+                        help='显式启用Mac SMB流能力；提供两个固定版本及摘要的本地wheel')
     parser.add_argument('--revision', required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--package-only', action='store_true', help='仅构建签名更新包，不重复生成安装器')
     parser.add_argument('--upgrade-from-revision')
     parser.add_argument('--rollback-package-sha256')
     args = parser.parse_args()
+    if args.smb_stream_wheels and args.runtime_platform != 'macos-arm64':
+        parser.error('SMB流构建只适用于Mac原生包')
     if args.runtime_platform == 'macos-arm64' and not (args.package_only or args.signing_request_only):
         parser.error('Mac原生包使用--package-only，Windows安装器不能跨平台使用')
     if args.signing_request_only and not args.trusted_public_key:
@@ -105,6 +109,10 @@ def main():
                      'rollback_package_sha256': args.rollback_package_sha256}
     root, output = args.repo.resolve(), archive_path(args.output)
     code_sha, sources = source_snapshot(root, args.version, args.revision)
+    stream_wheels = None
+    if args.smb_stream_wheels:
+        from desktop_assistant import mac_smb_stream_build as stream_build
+        stream_wheels = stream_build.inputs(sources, args.smb_stream_wheels)
     reader_sources = {'app/services/processed_component_stock.py',
                       'app/services/stock_preparation_processing.py',
                       'app/services/stock_preparation_assembly.py',
@@ -184,6 +192,11 @@ def main():
     if args.runtime_platform == 'macos-arm64':
         from desktop_assistant.native_runtime import assemble, executable_files, verify_relocation
         assemble(args.runtime_base, args.site_packages, runtime, runtime_copy_ignore)
+        if stream_wheels is not None:
+            stream_build.install(runtime, stream_wheels)
+            proof = stream_build.verify(tree)
+            write_json(output / 'smb-stream-runtime-verification.json', proof)
+            runtime_metadata['smb_stream_dependencies'] = proof
         runtime_metadata['runtime_platform'] = 'macos-arm64'
         write_json(output / 'native-runtime-verification.json', verify_relocation(tree))
     else:
@@ -211,6 +224,8 @@ def main():
                                                     'service_manage_v1': 1, 'system_nightly_v1': 1,
                                                     'factory_request_v1': 1, 'factory_audit_v1': 1,
                                                     'factory_activation_v1': 1, 'factory_execution_v1': 1}
+        if stream_wheels is not None:
+            runtime_metadata['runtime_capabilities'][stream_build.cfg.CAPABILITY] = 1
     package = output / ('release.unsigned.zip' if args.signing_request_only else 'release.zip')
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration,

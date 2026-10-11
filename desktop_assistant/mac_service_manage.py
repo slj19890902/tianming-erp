@@ -105,7 +105,7 @@ def approved_destination(context):
     value, _, actual = remote._contract()
     if actual != context: raise ValueError('归档合同与管理身份不同')
     path = Path(value['destination'])
-    remote.before_write(path)
+    remote.prepare_destination(path)
     return path
 
 

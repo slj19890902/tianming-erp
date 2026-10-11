@@ -135,6 +135,24 @@ def before_write(path):
         raise ValueError(UNCONFIRMED) from None
 
 
+def prepare_destination(path):
+    """Explicit pre-backup connection phase; readback/status never call this.
+
+    Existing verified mounts take no credential-reading worker. Only a failed
+    SMB location check can dispatch the separately approved fixed connector.
+    NFS keeps its original behavior and never falls back to another transport.
+    """
+    try:
+        return before_write(path)
+    except ValueError:
+        if not required(): raise
+        value, _, _ = _contract()
+        if value.get('type') != smb.TYPE or Path(path) != smb.MOUNT/smb.RELATIVE: raise
+        from desktop_assistant.mac_smb_runtime import ensure_destination
+        ensure_destination(path)
+        return before_write(path)
+
+
 @contextmanager
 def _smb_location(value, contract_sha, context):
     with smb_storage.open_location(value, context_sha=value['context_sha256'], uid=context['uid']) as held:
@@ -163,6 +181,7 @@ def _location(path):
 @contextmanager
 def location_guard(path):
     """Keep SMB mount/destination FDs pinned while all existing backup IO runs."""
+    prepare_destination(path)
     with _location(path) as (anchor, _):
         yield anchor
 

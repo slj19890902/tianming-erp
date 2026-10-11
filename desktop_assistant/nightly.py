@@ -36,7 +36,7 @@ def run_once(manager, *, now=None, resume_when_stopped=False, admission=None, re
                     return {'status':'up-to-date'}
                 settings = read_json(manager.root/'preferences.json')
                 destination = Path(settings['nas'])
-                mac_backup_storage.before_write(destination)
+                mac_backup_storage.prepare_destination(destination)
                 password = unprotect_backup(settings['protected_password'])
                 backup = (manager._backup_locked(password, destination, restart_allowed=restart_allowed)
                           if restart_allowed is not None else manager._backup_locked(password, destination))

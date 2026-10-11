@@ -34,8 +34,8 @@ def _write_probe(path):
 
 
 def check_before_stop(path):
-    from desktop_assistant.mac_backup_storage import before_write, required, BASE
-    before_write(path)
+    from desktop_assistant.mac_backup_storage import prepare_destination, required, BASE
+    prepare_destination(path)
     environment = None
     if required():
         command = [sys.executable, '-I', '-B', str(Path(__file__).resolve()), str(path)]

@@ -60,7 +60,8 @@ def case(tmp_path,monkeypatch):
     def guard(path,**kw):
         info=path.lstat()
         if kw.get('link'):
-            assert stat.S_ISLNK(info.st_mode)
+            if not stat.S_ISLNK(info.st_mode) or stat.S_IMODE(info.st_mode)!=0o755:
+                raise ValueError('synthetic managed link mode refusal')
             calls.append((path,kw));return
         if stat.S_ISLNK(info.st_mode) or stat.S_IMODE(info.st_mode)!=kw.get('mode',0o644):
             raise ValueError('synthetic ownership/mode refusal')
@@ -103,6 +104,23 @@ def test_publication_constructs_two_complete_trees_and_only_then_approves(case):
     assert (case.base/'publisher-public.pem').read_bytes()==case.public
     assert result['signature_verified_by_service_uid']
     assert not result['factory_activated'] and not result['system_daemon_installed']
+
+
+def test_restrictive_umask_does_not_make_managed_links_root_only(case):
+    targets={folder:(case.base/'instance/shared'/folder).stat()
+             for folder in m.MANAGED.values()}
+    previous=os.umask(0o077)
+    try:publish(case)
+    finally:os.umask(previous)
+    slot=case.base/'published'/case.plan['package_sha256']
+    for relative,folder in m.MANAGED.items():
+        link=slot/'server'/relative
+        assert stat.S_IMODE(link.lstat().st_mode)==0o755
+        assert os.readlink(link)==str(case.base/'instance/shared'/folder)
+        target=(case.base/'instance/shared'/folder).stat()
+        before=targets[folder]
+        assert (target.st_dev,target.st_ino,target.st_uid,target.st_gid,target.st_mode)==(
+            before.st_dev,before.st_ino,before.st_uid,before.st_gid,before.st_mode)
 
 
 def test_second_approval_preserves_previous_program_and_record(case):
@@ -275,11 +293,45 @@ def test_worker_rechecks_real_signature_and_challenge_without_erp(case,monkeypat
     monkeypatch.setattr(b,'_actual',lambda:b._expected(499,499))
     request={'plan':case.plan,'context':case.context,'challenge':'a'*32}
     result=m.worker(request)
-    assert result['signature_verified'] and result['challenge']=='a'*32
+    assert result['signature_verified'] and result['managed_links_readable'] and result['challenge']=='a'*32
     wrong={**case.plan,'public_key':Ed25519PrivateKey.generate().public_key().public_bytes(
         serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo).decode()}
     from cryptography.exceptions import InvalidSignature
     with pytest.raises(InvalidSignature):m.worker({**request,'plan':wrong})
+
+
+def test_worker_can_read_pristine_links_before_private_targets_exist(case,monkeypatch):
+    publish(case)
+    for folder in m.MANAGED.values():
+        (case.base/'instance/shared'/folder).rmdir()  # Empty synthetic directories.
+    monkeypatch.setattr(m.os,'getuid',lambda:499)
+    monkeypatch.setattr(b,'_actual',lambda:b._expected(499,499))
+    result=m.worker({'plan':case.plan,'context':case.context,'challenge':'c'*32})
+    assert result['managed_links_readable'] is True
+
+
+@pytest.mark.parametrize('fault',['root-only','writable','wrong-target','regular-file','read-denied'])
+def test_worker_rejects_unreadable_or_substituted_managed_links(case,monkeypatch,fault):
+    publish(case)
+    monkeypatch.setattr(m.os,'getuid',lambda:499)
+    monkeypatch.setattr(b,'_actual',lambda:b._expected(499,499))
+    link=case.base/'published'/case.plan['package_sha256']/'server/data'
+    if fault in {'root-only','writable'}:
+        os.chmod(link,0o700 if fault=='root-only' else 0o777,follow_symlinks=False)
+    elif fault in {'wrong-target','regular-file'}:
+        link.unlink()  # Synthetic test link only.
+        if fault=='wrong-target':
+            link.symlink_to(case.base/'instance/shared/logs')
+            os.chmod(link,0o755,follow_symlinks=False)
+        else:link.write_bytes(b'synthetic substitute')
+    else:
+        original=os.readlink
+        def denied(path,*args,**kwargs):
+            if Path(path)==link:raise PermissionError('synthetic service read refusal')
+            return original(path,*args,**kwargs)
+        monkeypatch.setattr(m.os,'readlink',denied)
+    with pytest.raises((ValueError,PermissionError)):
+        m.worker({'plan':case.plan,'context':case.context,'challenge':'b'*32})
 
 
 @pytest.mark.parametrize('interrupt',[False,True])
@@ -297,7 +349,8 @@ def test_child_is_fresh_low_privilege_exec_and_interrupt_is_reaped(case,monkeypa
             if data is not None:
                 request=json.loads(data)
                 process.reply=b.canonical({'challenge':request['challenge'],'identity':b._expected(499,499),
-                    'package_sha256':case.plan['package_sha256'],'signature_verified':True})
+                    'package_sha256':case.plan['package_sha256'],'signature_verified':True,
+                    'managed_links_readable':True})
                 if interrupt:raise KeyboardInterrupt()
             return process.reply,b''
         process.communicate.side_effect=communicate
@@ -313,6 +366,25 @@ def test_child_is_fresh_low_privilege_exec_and_interrupt_is_reaped(case,monkeypa
     assert set(kw['env'])=={'HOME','PATH','LANG'}
     assert process.communicate.call_count==(2 if interrupt else 1)
     process.kill.assert_not_called();process.terminate.assert_not_called()
+
+
+@pytest.mark.parametrize('proof',[None,False])
+def test_child_reply_requires_positive_managed_link_proof(case,monkeypatch,proof):
+    from importlib import reload
+    actual=reload(m).verify_child
+    monkeypatch.setattr(m,'BASE',case.base)
+    monkeypatch.setattr(m,'guard',lambda *a,**kw:None)
+    process=Mock(returncode=0)
+    def communicate(data):
+        request=json.loads(data)
+        result={'challenge':request['challenge'],'identity':b._expected(499,499),
+                'package_sha256':case.plan['package_sha256'],'signature_verified':True}
+        if proof is not None:result['managed_links_readable']=proof
+        return b.canonical(result),b''
+    process.communicate.side_effect=communicate
+    monkeypatch.setattr(m.subprocess,'Popen',lambda *a,**kw:process)
+    with pytest.raises(ValueError,match='回执不匹配'):
+        actual(case.plan,case.context,case.root/'slot')
 
 
 def test_stdlib_publisher_imports_under_real_system_python():

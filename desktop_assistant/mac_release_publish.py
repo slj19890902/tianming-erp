@@ -188,8 +188,9 @@ def validate(raw, approved_sha):
 def guard(path, *, uid=0, directory=False, mode=0o644, link=False):
     if link:
         info = path.lstat()
-        if not stat.S_ISLNK(info.st_mode) or info.st_uid != 0:
-            raise ValueError('托管数据链接不受root保护')
+        if (not stat.S_ISLNK(info.st_mode) or info.st_uid != 0
+                or stat.S_IMODE(info.st_mode) != 0o755):
+            raise ValueError('托管数据链接不受root保护或不能由服务身份读取')
         return  # Its separately checked root directory protects this link.
     _, keychain = bootstrap.modules()
     with keychain._checked_path(path, uid=uid, directory=directory, mode=mode): pass
@@ -394,8 +395,17 @@ def worker(request):
     if not isinstance(key, Ed25519PublicKey): raise ValueError('不是Ed25519发布身份')
     key.verify(signature, raw)
     if bootstrap.digest(raw) != plan['manifest_sha256']: raise ValueError('签名清单不符')
+    for relative, folder in MANAGED.items():
+        link = package.parent/'server'/relative
+        guard(link.parent, directory=True, mode=0o755)
+        guard(link, link=True)
+        # Read the link as the actual service UID, including pristine targets
+        # which do not exist yet. Darwin enforces the link's own read mode.
+        if os.readlink(link) != str(BASE/'instance/shared'/folder):
+            raise ValueError('专用身份读取到非托管数据链接')
     return {'challenge':request['challenge'], 'identity':bootstrap._actual(),
-            'package_sha256':plan['package_sha256'], 'signature_verified':True}
+            'package_sha256':plan['package_sha256'], 'signature_verified':True,
+            'managed_links_readable':True}
 
 
 def verify_child(plan, context, slot):
@@ -418,7 +428,8 @@ def verify_child(plan, context, slot):
         raise ValueError('专用身份验签未完成，已观察进程退出；保留现场')
     result = bootstrap.decode(output)
     if result != {'challenge':request['challenge'], 'identity':bootstrap._expected(context['uid'],context['gid']),
-                  'package_sha256':plan['package_sha256'], 'signature_verified':True}:
+                  'package_sha256':plan['package_sha256'], 'signature_verified':True,
+                  'managed_links_readable':True}:
         raise ValueError('专用身份验签回执不匹配')
 
 
@@ -468,6 +479,9 @@ def publish(raw, approved_sha, package):
             link = slot/'server'/relative
             if not link.parent.exists(): _directory(link.parent)
             link.symlink_to(BASE/'instance/shared'/folder, target_is_directory=True)
+            # umask 077 otherwise creates root-only links on Darwin. Never
+            # follow the link and chmod the private business directory.
+            os.chmod(link, 0o755, follow_symlinks=False)
         for kind in ('server','migration'):
             check_tree(slot/kind,manifest,manifest_raw,server=kind=='server')
             for directory, _, _ in os.walk(slot/kind,topdown=False,followlinks=False):

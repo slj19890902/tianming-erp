@@ -32,6 +32,7 @@ from desktop_assistant.storage import sha, database_info, _decrypt_stream, extra
 ENTRY = 'desktop_assistant/service_restore_completion_entry.py'
 MODULE = 'desktop_assistant/mac_restore_completion.py'
 CAPABILITY = 'service_restore_completion_v1'
+RESUME_CAPABILITY = 'service_restore_resume_v1'
 ERROR = '中断恢复现场或认证来源不一致；保留现场并保持停止'
 
 
@@ -40,6 +41,41 @@ def require_capability(manifest):
     value = (manifest.get('runtime_capabilities') or {}).get(CAPABILITY)
     if type(value) is not int or value != 1 or not {ENTRY, MODULE} <= manifest['files'].keys():
         raise ValueError('已批准签名程序缺少有限恢复完成协议')
+
+
+def _foreground_terminal():
+    # macOS may return EINTR from getpass's tcsetattr after sudo foregrounds a
+    # stopped background command. Refuse before an attempt exists; never fall
+    # back to echoed input or take terminal ownership from the caller.
+    if not restore._terminal(): raise ValueError('有限完成要求三路本机终端及隐藏口令输入')
+    try:
+        foreground = os.tcgetpgrp(0)
+    except OSError:
+        raise ValueError('有限完成要求已有前台控制终端') from None
+    if foreground <= 0 or foreground != os.getpgrp():
+        raise ValueError('有限完成要求已有前台控制终端')
+
+
+def _attempt_record(args, execution_package):
+    return {'type':'tianming.restore-completion-attempt.v1',
+        'input_attempt':args.input_attempt, 'execution_package':execution_package,
+        'restore_package':args.restore_package, 'backup_sha256':args.backup_sha256,
+        'context_sha256':args.context_sha256}
+
+
+def _resume_source(item, expected_sha, args, public):
+    raw = restore._read_complete(item, 4096)
+    if manage.boot.digest(raw) != expected_sha: raise ValueError(ERROR)
+    record = json.loads(raw)
+    if (not isinstance(record, dict) or not restore._hash(record.get('execution_package'))
+            or raw != manage.boot.canonical(_attempt_record(args, record['execution_package']))):
+        raise ValueError(ERROR)
+    # The old approved completion program remains an independently verified
+    # part of the checkpoint, even when this run uses a newer signed program.
+    _, manifest = published.resolve(restore.ROOT, record['execution_package'], public, kind='migration')
+    require_capability(manifest)
+    item.check()
+    return raw
 
 
 def _source(payload, metadata, record, target, public, backup_sha):
@@ -128,11 +164,13 @@ def _phase(name):
 
 
 def run(args, *, script, executable, prompt=getpass.getpass):
-    if not restore._terminal(): raise ValueError('有限完成要求三路本机终端及隐藏口令输入')
+    _foreground_terminal()
+    resume_sha = getattr(args, 'resume_before_decryption_sha256', None)
     if (not isinstance(args.input_attempt, str) or not re.fullmatch('[0-9a-f]{32}', args.input_attempt)
             or any(not restore._hash(getattr(args, name)) for name in ('execution_package', 'restore_package',
                 'backup_sha256', 'publisher_sha256', 'context_sha256', 'staging_identity_sha256'))
-            or (args.credentials_sha256 is not None and not restore._hash(args.credentials_sha256))):
+            or (args.credentials_sha256 is not None and not restore._hash(args.credentials_sha256))
+            or (resume_sha is not None and not restore._hash(resume_sha))):
         raise ValueError('有限完成参数不完整')
     _phase('readonly_signed_identity_preflight')
     context = restore.runtime_identity()
@@ -141,6 +179,9 @@ def run(args, *, script, executable, prompt=getpass.getpass):
     if public_identity(public)[1] != args.publisher_sha256: raise ValueError(ERROR)
     code, code_manifest = published.resolve(restore.ROOT, args.execution_package, public, kind='migration')
     require_capability(code_manifest)
+    if resume_sha is not None:
+        value = (code_manifest.get('runtime_capabilities') or {}).get(RESUME_CAPABILITY)
+        if type(value) is not int or value != 1: raise ValueError('签名程序缺少解密前续接协议')
     if (Path(script).resolve() != code/ENTRY or Path(__file__).resolve() != code/MODULE
             or Path(executable).resolve() != code/'runtime/bin/python3.12'
             or Path(sys.executable).resolve() != code/'runtime/bin/python3.12'):
@@ -175,9 +216,14 @@ def run(args, *, script, executable, prompt=getpass.getpass):
             root = folders['root']
             receipt_name = 'service-restore-'+args.input_attempt+'.json'
             attempt_name = 'restore-completion-'+args.input_attempt+'.json'
-            for path in (home.path/receipt_name, home.path/attempt_name, root.path/'state.json',
-                         root.path/'state.json.pending'):
+            resume_name = 'restore-completion-resume-'+args.input_attempt+'.json'
+            for path in (home.path/receipt_name, home.path/resume_name, root.path/'state.json',
+                         root.path/'state.json.pending', *(() if resume_sha else (home.path/attempt_name,))):
                 if os.path.lexists(path): raise ValueError('已有完成状态或尝试；不能覆盖重试')
+            original_attempt = None
+            if resume_sha is not None:
+                original_attempt = pin(home.path/attempt_name, home)
+                original_attempt_raw = _resume_source(original_attempt, resume_sha, args, public)
             inputs = pin(base.path/'restore-inputs', base, uid=0, mode=0o750, directory=True)
             attempt = pin(inputs.path/args.input_attempt, inputs, uid=0, mode=0o750, directory=True)
             expected_inputs = {'complete.tmbackup'} | ({'credentials.tmencrypted'} if args.credentials_sha256 else set())
@@ -212,6 +258,9 @@ def run(args, *, script, executable, prompt=getpass.getpass):
             def stable():
                 parents_check()
                 for item in held: item.check()
+                if (original_attempt is not None
+                        and restore._read_complete(original_attempt, 4096) != original_attempt_raw):
+                    raise ValueError(ERROR)
                 publication._no_service()
                 if os.path.lexists(base.path/activation.NAME): raise ValueError('已有工厂激活记录，不能续接家庭恢复')
                 if (manager._process() or set(os.listdir(root.fd)) != expected_root | ({'state.json'} if published_state else set())
@@ -226,14 +275,20 @@ def run(args, *, script, executable, prompt=getpass.getpass):
                     if raw_state != manage.boot.canonical(state): raise ValueError(ERROR)
             stable()
             # Exclusive attempt survives authentication, validation or IO failure.
-            _phase('create_exclusive_completion_attempt')
-            restore._receipt(home, attempt_name, manage.boot.canonical({'type':'tianming.restore-completion-attempt.v1',
-                'input_attempt':args.input_attempt, 'execution_package':args.execution_package,
-                'restore_package':args.restore_package,'backup_sha256':args.backup_sha256,
-                'context_sha256':args.context_sha256}), context, stable)
+            _foreground_terminal()
+            attempt_record = _attempt_record(args, args.execution_package)
+            if resume_sha is not None:
+                attempt_record.update(type='tianming.restore-completion-resume.v1',
+                    original_attempt_sha256=resume_sha, credentials_sha256=args.credentials_sha256,
+                    publisher_sha256=args.publisher_sha256, staging_identity_sha256=args.staging_identity_sha256)
+            _phase('create_exclusive_resume_attempt' if resume_sha else 'create_exclusive_completion_attempt')
+            restore._receipt(home, resume_name if resume_sha else attempt_name,
+                             manage.boot.canonical(attempt_record), context, stable)
+            pin(home.path/(resume_name if resume_sha else attempt_name), home)
             from desktop_assistant.mac_system_service import verify_keychain
             verify_keychain(context)
             def hidden(message):
+                _foreground_terminal()
                 with warnings.catch_warnings():
                     warnings.simplefilter('error', getpass.GetPassWarning)
                     return prompt(message)
@@ -326,6 +381,7 @@ def main(*, script, executable):
                  'context-sha256','staging-identity-sha256'):
         parser.add_argument('--'+name, required=True)
     parser.add_argument('--credentials-sha256')
+    parser.add_argument('--resume-before-decryption-sha256')
     args = parser.parse_args()
     try:
         print(json.dumps(run(args, script=script, executable=executable), ensure_ascii=False))

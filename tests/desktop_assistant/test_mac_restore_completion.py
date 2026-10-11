@@ -45,6 +45,7 @@ def partial(case, monkeypatch, request):
     def pack(source,destination,meta,key):
         if meta.get('runtime_platform')=='macos-arm64':
             meta=deepcopy(meta);meta['runtime_capabilities'][completion.CAPABILITY]=1
+            meta['runtime_capabilities'][completion.RESUME_CAPABILITY]=1
         return original_pack(source,destination,meta,key)
     monkeypatch.setattr(fixture_module,'pack_tree',pack)
     restore_files=publication.SERVICE_RESTORE_FILES
@@ -67,6 +68,8 @@ def partial(case, monkeypatch, request):
     job=next((x.root/'staging').iterdir());assert not (job/'payload/shared').exists()
     monkeypatch.setattr(manage,'BASE',x.base);monkeypatch.setattr(manage,'ROOT',x.root)
     monkeypatch.setattr(completion,'__file__',str(x.slot/'migration'/completion.MODULE))
+    # OS foreground identity is adapted here; real private PTYs are tested below.
+    monkeypatch.setattr(completion.os,'tcgetpgrp',lambda fd:os.getpgrp())
     monkeypatch.setattr(credential_transfer,'unprotect',credential_store.unprotect)
     def forbidden(*a,**kw):raise AssertionError('completion cannot restore, rewrap, start, repair or migrate')
     monkeypatch.setattr(Manager,'restore',forbidden)
@@ -199,10 +202,12 @@ def test_completion_capability_cannot_be_inferred_from_ordinary_restore(partial,
     assert not (partial.x.home/('restore-completion-'+partial.args.input_attempt+'.json')).exists()
 
 
-def test_approved_new_execution_package_completes_the_original_restore_target(partial,monkeypatch):
+@pytest.mark.parametrize('resume',[False,True])
+def test_approved_new_execution_package_completes_the_original_restore_target(partial,monkeypatch,resume):
     import shutil
     from desktop_assistant.storage import pack_tree, write_json
     p=partial;x=p.x
+    if resume:old=interrupted_before_password(p)
     source=p.case.fixture.root/'completion-program'
     shutil.copytree(x.slot/'migration',source)
     (source/'manifest.json').unlink()  # Generated synthetic package metadata only.
@@ -225,6 +230,9 @@ def test_approved_new_execution_package_completes_the_original_restore_target(pa
     assert result['result']['version']=='native'
     assert read_json(x.root/'state.json')['current']==x.id
     assert not (x.root/'packages'/(identity+'.zip')).exists()
+    if resume:
+        assert old.read_bytes()==completion.manage.boot.canonical(completion._attempt_record(p.args,x.id))
+        assert read_json(x.home/('restore-completion-resume-'+p.args.input_attempt+'.json'))['execution_package']==identity
 
 
 @pytest.mark.parametrize('change',['business','secret','state','staging'])
@@ -276,4 +284,162 @@ def test_entry_rejects_ordinary_actual_user_before_importing_erp(tmp_path):
     command=[fixture_module.TEST_PYTHON,'-I','-B',str(Path(__file__).resolve().parents[2]/completion.ENTRY)]
     result=subprocess.run(command,capture_output=True,text=True,cwd=tmp_path)
     assert result.returncode!=0 and '有限恢复完成未确认' in result.stderr
+    assert not list(tmp_path.iterdir())
+
+
+def interrupted_before_password(p):
+    import getpass
+    def no_prompt(_):raise getpass.GetPassWarning('synthetic foreground interruption before prompt')
+    with pytest.raises(getpass.GetPassWarning):p.run(no_prompt)
+    path=p.x.home/('restore-completion-'+p.args.input_attempt+'.json')
+    assert path.is_file() and not (p.x.root/'staging'/('completion-'+p.args.input_attempt)).exists()
+    p.args.resume_before_decryption_sha256=sha(path)
+    return path
+
+
+def test_explicit_resume_authenticates_again_and_preserves_original_attempt(partial):
+    p=partial;old=interrupted_before_password(p);raw=old.read_bytes();info=restore._fingerprint(old.stat())
+    before=protected(p);secrets=dict(p.case.secrets);prompts=[]
+    result=p.run(lambda message:prompts.append(message) or PASSWORD)
+    assert len(prompts)==1 and result['manual_stop'] and not result['started']
+    assert old.read_bytes()==raw and restore._fingerprint(old.stat())==info
+    assert protected(p)==before and p.case.secrets==secrets
+    resume=p.x.home/('restore-completion-resume-'+p.args.input_attempt+'.json')
+    assert resume.stat().st_mode & 0o777==0o600
+    record=read_json(resume)
+    assert record['original_attempt_sha256']==sha(old)
+    assert record['credentials_sha256']==p.args.credentials_sha256
+    with pytest.raises(ValueError,match='覆盖重试'):p.run()
+
+
+@pytest.mark.parametrize('fault',[
+    'wrong-hash','invalid-hash','missing','mode','hardlink','symlink','input','target','backup','context',
+    'extra-field','noncanonical','old-execution','old-capability','new-capability','bool-capability',
+    'state','pending','receipt','resume','decrypt-slot',
+])
+def test_resume_requires_exact_protected_pre_decryption_checkpoint(partial,monkeypatch,fault):
+    p=partial;old=interrupted_before_password(p)
+    if fault=='wrong-hash':p.args.resume_before_decryption_sha256='f'*64
+    elif fault=='invalid-hash':p.args.resume_before_decryption_sha256=True
+    elif fault=='missing':old.rename(old.with_suffix('.preserved'))
+    elif fault=='mode':old.chmod(0o644)
+    elif fault=='hardlink':os.link(old,old.with_suffix('.hardlink'))
+    elif fault=='symlink':
+        saved=old.with_suffix('.preserved');old.rename(saved);old.symlink_to(saved)
+    elif fault in {'input','target','backup','context','extra-field','noncanonical','old-execution'}:
+        record=read_json(old)
+        if fault=='extra-field':record['extra']=True
+        elif fault!='noncanonical':
+            key={'input':'input_attempt','target':'restore_package','backup':'backup_sha256',
+                 'context':'context_sha256','old-execution':'execution_package'}[fault]
+            record[key]='f'*(32 if fault=='input' else 64)
+        raw=completion.manage.boot.canonical(record)
+        old.write_bytes(raw+b'\n' if fault=='noncanonical' else raw)
+        p.args.resume_before_decryption_sha256=sha(old)
+    elif fault in {'old-capability','new-capability','bool-capability'}:
+        resolve=completion.published.resolve;calls=0
+        def changed(*a,**kw):
+            nonlocal calls
+            tree,manifest=resolve(*a,**kw);calls+=1;manifest=deepcopy(manifest)
+            if fault=='old-capability' and calls==3:manifest['runtime_capabilities'].pop(completion.CAPABILITY)
+            elif fault=='new-capability':manifest['runtime_capabilities'].pop(completion.RESUME_CAPABILITY)
+            elif fault=='bool-capability':manifest['runtime_capabilities'][completion.RESUME_CAPABILITY]=True
+            return tree,manifest
+        monkeypatch.setattr(completion.published,'resolve',changed)
+    elif fault in {'state','pending'}:(p.x.root/('state.json' if fault=='state' else 'state.json.pending')).write_bytes(b'keep')
+    elif fault in {'receipt','resume'}:
+        prefix='service-restore-' if fault=='receipt' else 'restore-completion-resume-'
+        (p.x.home/(prefix+p.args.input_attempt+'.json')).write_bytes(b'keep')
+    elif fault=='decrypt-slot':(p.x.root/'staging'/('completion-'+p.args.input_attempt)).mkdir()
+    else:raise AssertionError(fault)
+    before=protected(p);secrets=dict(p.case.secrets)
+    def no_input(_):raise AssertionError('invalid checkpoint must be rejected before hidden input')
+    with pytest.raises(Exception) as caught:p.run(no_input)
+    assert not isinstance(caught.value,AssertionError)
+    assert protected(p)==before and p.case.secrets==secrets
+    if fault!='resume':assert not (p.x.home/('restore-completion-resume-'+p.args.input_attempt+'.json')).exists()
+
+
+@pytest.mark.parametrize('change',['original-bytes','original-name','resume-bytes','authentication'])
+def test_resume_rechecks_attempts_and_never_allows_a_second_resume(partial,change):
+    p=partial;old=interrupted_before_password(p);before=protected(p)
+    def prompt(_):
+        if change=='original-bytes':old.write_bytes(old.read_bytes()+b' ')
+        elif change=='original-name':old.rename(old.with_suffix('.preserved'));old.write_bytes(b'changed')
+        elif change=='resume-bytes':
+            path=p.x.home/('restore-completion-resume-'+p.args.input_attempt+'.json');path.write_bytes(b'changed')
+        else:raise ValueError('synthetic authentication interruption')
+        return PASSWORD
+    with pytest.raises(ValueError):p.run(prompt)
+    assert not (p.x.root/'state.json').exists() and protected(p)==before
+    assert (p.x.home/('restore-completion-resume-'+p.args.input_attempt+'.json')).exists()
+    with pytest.raises(ValueError,match='覆盖重试'):p.run()
+
+
+@pytest.mark.parametrize('point',['entry','before-attempt','before-prompt'])
+def test_foreground_failure_does_not_read_password_or_create_new_attempt(partial,monkeypatch,point):
+    p=partial;calls=0
+    def foreground(fd):
+        nonlocal calls
+        calls+=1
+        return os.getpgrp()+(calls=={'entry':1,'before-attempt':2,'before-prompt':3}[point])
+    monkeypatch.setattr(completion.os,'tcgetpgrp',foreground)
+    def no_input(_):raise AssertionError('background input is forbidden')
+    with pytest.raises(ValueError,match='前台控制终端'):p.run(no_input)
+    assert (p.x.home/('restore-completion-'+p.args.input_attempt+'.json')).exists()==(point=='before-prompt')
+    assert len(list((p.x.root/'staging').iterdir()))==1
+    assert not (p.x.root/'state.json').exists()
+
+
+@pytest.mark.parametrize('background',[False,True])
+def test_real_private_pty_foreground_gate_rejects_background_without_signal_stop(tmp_path,background):
+    """A real private controlling terminal; no sudo or service credentials."""
+    import subprocess
+    child = r'''
+import json,os,sys
+sys.path.insert(0,sys.argv[1])
+from desktop_assistant.mac_restore_completion import _foreground_terminal
+try:
+    _foreground_terminal()
+    result={'accepted':True}
+except ValueError:
+    result={'accepted':False}
+result['foreground']=os.getpgrp()==os.tcgetpgrp(0)
+print(json.dumps(result),flush=True)
+'''
+    harness = r'''
+import errno,json,os,pty,select,signal,sys,time
+pid,master=pty.fork()
+if pid==0:
+    child=os.fork()
+    if child==0:
+        if sys.argv[1]=='background':os.setpgid(0,0)
+        os.execv(sys.executable,[sys.executable,'-I','-B','-c',sys.argv[2],sys.argv[3]])
+    _,status=os.waitpid(child,os.WUNTRACED)
+    stopped=os.WIFSTOPPED(status)
+    if stopped:os.kill(child,signal.SIGKILL);os.waitpid(child,0)
+    print(json.dumps({'stopped':stopped,'exit':os.waitstatus_to_exitcode(status) if not stopped else None}),flush=True)
+    os._exit(0)
+data=bytearray();deadline=time.monotonic()+15
+try:
+    while time.monotonic()<deadline:
+        if select.select([master],[],[],0.1)[0]:
+            try:block=os.read(master,65536)
+            except OSError as error:
+                if error.errno==errno.EIO:break
+                raise
+            if not block:break
+            data.extend(block)
+    else:raise TimeoutError('synthetic terminal child did not finish')
+finally:os.close(master)
+_,status=os.waitpid(pid,0)
+assert os.waitstatus_to_exitcode(status)==0
+print(data.decode(),end='')
+'''
+    result=subprocess.run([fixture_module.TEST_PYTHON,'-I','-B','-c',harness,
+        'background' if background else 'foreground',child,str(Path(__file__).resolve().parents[2])],
+        cwd=tmp_path,capture_output=True,text=True,timeout=20)
+    assert result.returncode==0,result.stderr
+    records=[json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
+    assert records==[{'accepted':not background,'foreground':not background},{'stopped':False,'exit':0}]
     assert not list(tmp_path.iterdir())

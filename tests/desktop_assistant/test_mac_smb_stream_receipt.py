@@ -78,6 +78,28 @@ def test_full_backup_receipt_and_retained_copy_restore_original_facts(case,host_
     assert list((case.manager.root/'staging').glob('smb-stream-*'))
 
 
+def test_complete_large_migration_inventory_survives_stream_backup_and_restore(case,host_store):
+    from desktop_assistant.migration import files
+    folder=case.manager.root/'shared/data/synthetic-scale';folder.mkdir(mode=0o700)
+    for index in range(2991):
+        (folder/f'{index:05d}.pdf').write_bytes(b'synthetic scale attachment')
+    inventory=files(case.manager.root/'shared')
+    state=case.manager.state
+    state.update(migration_files=inventory,operation='update',migration_report_sha256='f'*64)
+    write_json(case.manager.root/'state.json',state);(case.manager.root/'state.json').chmod(0o600)
+    assert (case.manager.root/'state.json').stat().st_size>65536
+    backup=run(case)
+    actual=case.manager.state
+    for key,value in state.items():assert actual[key]==value
+    assert 'backup_work_retained' not in actual
+    assert subject.verified_at(case.manager.root,actual)==actual['last_backup_at']
+    target=TestManager(case.root/'large-roundtrip',case.public)
+    result=target.restore(backup,PASSWORD)
+    assert result['credentials']['restored']==['backup','mailbox','openai']
+    assert files(target.root/'shared')==inventory
+    assert database_info(target.root/'shared/data/carton_erp.sqlite3')==database_info(case.manager.root/'shared/data/carton_erp.sqlite3')
+
+
 @pytest.mark.parametrize('kind',['network','copy','receipt','state'])
 def test_failure_does_not_record_success_and_preserves_scene(case,monkeypatch,kind):
     before=(case.manager.root/'state.json').read_bytes()

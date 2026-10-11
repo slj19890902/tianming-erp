@@ -273,10 +273,13 @@ def test_stdlib_administrator_pack_imports_on_system_python_without_runtime_depe
     code="""
 import sys
 sys.path.insert(0,sys.argv[1])
-from desktop_assistant import factory_activation_contract,mac_factory_activation_install
+from desktop_assistant import factory_activation_contract,mac_factory_activation_install,mac_smb_stream_setup
 from desktop_assistant.mac_keychain_install import FILES
 from scripts.uat.build_mac_keychain_installer import FILES as BUILT
-assert FILES==BUILT and len(FILES)==18
+assert FILES==BUILT and len(FILES)==len(set(FILES))==21
+assert {'desktop_assistant/mac_smb_stream_contract.py',
+        'desktop_assistant/mac_smb_stream_runtime_contract.py',
+        'desktop_assistant/mac_smb_stream_setup.py'} <= set(FILES)
 assert not any(name in sys.modules for name in ('cryptography','sqlalchemy','psutil','desktop_assistant.manager'))
 """
     result=subprocess.run(['/usr/bin/python3','-I','-B','-S','-c',code,str(root)],capture_output=True,text=True,timeout=10)

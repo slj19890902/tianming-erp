@@ -5,6 +5,8 @@ restored credential reference and every unrelated preference. No activation,
 migration, restore, arbitrary path, credential rotation or data deletion here.
 """
 from contextlib import contextmanager, ExitStack
+import json
+import math
 import os
 from pathlib import Path
 import re
@@ -21,6 +23,9 @@ from desktop_assistant.mac_service_restore import Lease, _read_complete
 
 BASE = Path('/Library/TianmingERP')
 ROOT = BASE/'instance'
+# Migration state carries the complete attachment hash inventory. Match the
+# existing signed package manifest bound, without widening small control records.
+STATE_LIMIT = 16 * 1024**2
 
 
 def authenticated(request, script, executable):
@@ -87,10 +92,34 @@ def maintenance(lock, *, borrowed=False):
         if not borrowed: fcntl.flock(lock.fd, fcntl.LOCK_UN)
 
 
+def record_limit(name):
+    return STATE_LIMIT if name == 'state.json' else boot.LIMIT
+
+
+def decode_record(raw, name):
+    if name != 'state.json': return boot.decode(raw)
+    if not isinstance(raw, bytes) or not 0 < len(raw) <= STATE_LIMIT:
+        raise ValueError('完整管理状态长度无效')
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value: raise ValueError('完整管理状态字段重复')
+            value[key] = item
+        return value
+    def constant(_): raise ValueError('完整管理状态不能含非有限数字')
+    def number(text):
+        value = float(text)
+        if not math.isfinite(value): constant(text)
+        return value
+    value = json.loads(raw, object_pairs_hook=unique, parse_constant=constant, parse_float=number)
+    if not isinstance(value, dict): raise ValueError('完整管理状态必须为对象')
+    return value
+
+
 def record(root, name, context):
     with Lease(root.path/name, uid=context['uid'], gid=context['gid'], mode=0o600, parent=root) as lease:
-        raw = _read_complete(lease, 65536)
-    return raw, boot.decode(raw)
+        raw = _read_complete(lease, record_limit(name))
+    return raw, decode_record(raw, name)
 
 
 def settings(root, context):
@@ -135,6 +164,7 @@ def save_destination(root, context, recheck):
 def replace_record(root, name, value, previous, context, recheck):
     if name not in {'preferences.json', 'state.json'}: raise ValueError('不支持的管理记录')
     raw = boot.canonical(value)
+    decode_record(raw, name)  # Reject oversized/invalid proposals before any write.
     recheck()
     if record(root, name, context)[0] != previous:
         raise ValueError('专用管理记录并发变化，未覆盖')
@@ -148,7 +178,7 @@ def replace_record(root, name, value, previous, context, recheck):
             if count <= 0: raise ValueError('专用管理记录写入不完整，保留现场')
             remaining = remaining[count:]
         os.fsync(fd)
-        if _read_complete(output, 65536) != raw: raise ValueError('专用管理记录原字节回读不符')
+        if _read_complete(output, record_limit(name)) != raw: raise ValueError('专用管理记录原字节回读不符')
         recheck()
         if record(root, name, context)[0] != previous:
             raise ValueError('专用管理记录并发变化，保留待核文件')

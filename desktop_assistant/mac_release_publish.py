@@ -119,6 +119,22 @@ def inspect(stream):
         return raw, manifest, total
 
 
+SERVICE_RESTORE_FILES = {'desktop_assistant/service_restore_entry.py',
+                         'desktop_assistant/mac_service_restore.py'}
+
+
+def require_service_restore(manifest):
+    """Only pristine publication/explicit native recovery need this protocol."""
+    caps = manifest.get('runtime_capabilities')
+    readers = manifest.get('reader_capabilities')
+    if (not isinstance(caps, dict) or any(type(caps.get(k)) is not int or caps[k] != 1
+            for k in ('immutable_execution_v1', 'system_service_v1', 'service_restore_v1'))
+            or not isinstance(readers, dict) or type(readers.get('restore_provenance_v1')) is not int
+            or readers['restore_provenance_v1'] != 1
+            or not SERVICE_RESTORE_FILES <= manifest.get('files', {}).keys()):
+        raise ValueError('签名程序缺少专用完整恢复协议或来源保留能力')
+
+
 def prepare(package, public, context_raw, code_manifest_raw, *, publisher_sha256, pristine_bootstrap=False):
     """Unprivileged Python 3.12 preparation; no system modifications."""
     from desktop_assistant.release_request import inspect_package, public_identity
@@ -135,13 +151,14 @@ def prepare(package, public, context_raw, code_manifest_raw, *, publisher_sha256
         raise ValueError('需要已初始化的系统服务context')
     raw, _ = inspect_package(package, public)
     with Path(package).open('rb') as stream:
-        checked, _, _ = inspect(stream)
+        checked, manifest, _ = inspect(stream)
         stream.seek(0); package_sha = digest(stream)
     if raw != checked: raise ValueError('计划准备期间程序包变化')
     size = Path(package).stat().st_size
     if not 0 < size <= MAX_PACKAGE: raise ValueError('程序包长度超限')
     now = int(time.time())
     if type(pristine_bootstrap) is not bool: raise ValueError('首次发布选择必须明确为布尔值')
+    if pristine_bootstrap: require_service_restore(manifest)
     return {'type':PRISTINE_TYPE if pristine_bootstrap else TYPE,
             'attempt_id':uuid.uuid4().hex, 'created_at':now, 'expires_at':now+7*86400,
             'code_manifest_sha256':bootstrap.digest(code_manifest_raw),
@@ -425,6 +442,8 @@ def publish(raw, approved_sha, package):
                 raise ValueError('输入不是计划绑定的完整程序文件')
             if digest(source) != plan['package_sha256']: raise ValueError('输入程序包摘要不符')
             manifest_raw, manifest, total = inspect(source)
+            if plan['type'] == PRISTINE_TYPE:
+                require_service_restore(manifest)
             if bootstrap.digest(manifest_raw) != plan['manifest_sha256']:
                 raise ValueError('程序清单不属于批准计划')
             if shutil.disk_usage(BASE).free < total*2+before.st_size+1024**3:

@@ -862,7 +862,8 @@ class Manager:
             return '已核对完整升级结果并恢复运行，业务数据未回退'
 
     def restore(self, backup: Path, password: str, *, credentials: Path | bytes | None = None,
-                credential_password: str | None = None, expected_backup_sha256: str | None = None):
+                credential_password: str | None = None, expected_backup_sha256: str | None = None,
+                native_package: str | None = None):
         """Restore into an EMPTY managed installation. Never replaces running data."""
         if expected_backup_sha256 is not None and (not isinstance(expected_backup_sha256, str)
                 or len(expected_backup_sha256) != 64
@@ -871,6 +872,10 @@ class Manager:
         with self.lock():
             if self.state['current'] or any((self.root / 'shared').iterdir()):
                 raise ValueError('恢复仅允许全新安装目录，现有数据不被覆盖')
+            native = None
+            if native_package is not None:
+                from desktop_assistant import mac_service_restore
+                native = mac_service_restore.native_target(self, native_package)
             job = self.root / 'staging' / uuid.uuid4().hex
             job.mkdir()
             raw = job / 'recovery.zip'
@@ -945,11 +950,18 @@ class Manager:
             if database_info(database) != info:
                 raise ValueError('恢复库最终完整性、表计数或版本复核失败')
             validate_database_schema(database, contract)
+            if native is not None:
+                provenance = mac_service_restore.validate_binding(native, payload, manifest, release_manifest,
+                    info, inventory_activation, dispatch_activation, provenance)
+                self.stage_release(native['package'], verify_existing=True)
+                self._published_release(native['id'], kind='migration')
             from desktop_assistant.credential_restore import load_for_recovery, prepare
             from desktop_assistant.credential_transfer import CONFIGS, _path
             credential_record = load_for_recovery(manifest, payload, backup, password,
                                                    credentials, credential_password,
                                                    authenticated_backup_sha256=authenticated_backup_sha)
+            if native is not None and credential_record is None:
+                raise ValueError('原生完整恢复必须包含已认证的运营凭据记录')
             credential_report = {'status': 'not-included'}
             credential_paths = {}
             if credential_record is not None:
@@ -980,18 +992,29 @@ class Manager:
                     os.fsync(dst.fileno())
             (self.root / 'shared').rmdir()  # proven empty above
             (payload / 'shared').rename(self.root / 'shared')
+            if native is not None:
+                # Both complete approved trees, including now-real data links,
+                # must pass before the native current is written. No runtime starts.
+                for kind in ('server', 'migration'):
+                    self._published_release(native['id'], kind=kind)
             from desktop_assistant.mac_published_runtime import selected as service_identity_selected
-            write_json(self.root / 'state.json', {'current': release['id'], 'previous': None,
+            write_json(self.root / 'state.json', {'current': native['id'] if native else release['id'], 'previous': None,
                        'restored_at': datetime.now(CN).isoformat(), 'source_time': manifest['created'],
                        'restored_backup_sha256': authenticated_backup_sha,
-                       'schema_authority': authority,
+                       'schema_authority': None if native else authority,
                        **provenance,
                        'credential_restore': credential_report,
-                       **({'manual_stop': True} if service_identity_selected() else {}),
+                       **({'manual_stop': True} if native or service_identity_selected() else {}),
+                       **({'operation': 'restore', 'native_restore_binding': {
+                           'type': 'tianming.mac-native-restore.v1', 'package_sha256': native['id'],
+                           'backup_sha256': authenticated_backup_sha, 'context_sha256': native['context_sha256'],
+                           'database_revision': info['revision'], 'schema_migrated': False, 'factory_cutover': False}}
+                          if native else {}),
                        **({inventory_contract.STATE_KEY: inventory_activation}
                           if inventory_activation is not None else {}),
                        **({dispatch_contract.STATE_KEY: dispatch_contract.state_index(dispatch_activation)}
                           if dispatch_activation else {})})
             # A new PC's LAN URLs, firewall and printer need explicit local configuration.
-            return {'version': release['version'], 'data_time': manifest['created'], 'started': False,
+            return {'version': native['manifest']['version'] if native else release['version'],
+                    'data_time': manifest['created'], 'started': False,
                     'credentials': credential_report}

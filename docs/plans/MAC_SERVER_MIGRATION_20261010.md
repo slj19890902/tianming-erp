@@ -352,3 +352,20 @@ GCM抽取唯一流式实现，authenticate_stream对已打开FD完整认证并�
 本轮曾只读既有真实恢复state与缓存manifest（未读真实DB/运营秘密）；其Windows v0.22.624/ep1010md及reader声明只是缓存观察，最终恢复必须重新认证原包。四份真实恢复、原凭据、旧3de3be32家庭签名包和旧机未改；未连接工厂库、发信、收单或外部AI。九源码最小管理员包本轮未变，继续成套保留67c3c2b1包/绑定计划，不重建、不混用旧计划。Downloads同名移交文件仍缺失，既有NAS同名回执不能视为当前正式切换批准，凭据不重复索取。
 
 剩余本任务工作继续保持未完成：签名专用恢复入口及固定root只读加密输入、实际身份/FD/空实例/口令预认证、严格同revision/schema/reader/marker原生绑定；其后系统管理/NAS合同发布、受保护目标激活及新工厂签名。真实管理员安装、后台凭据、注销重启/FileVault、搬入工厂后最终停写同步、完整业务与中文实体打印/扫码验收仍须实测。该检查点不等于ERP已接管，任何阶段不清空旧机。
+
+
+## 2026-10-11 专用账号完整恢复与原生绑定候选
+
+新增service_restore_entry.py薄入口和mac_service_restore.py；仅在已批准的不可变migration树、实际专用UID/GID及内核组、隔离Python -I -B下运行。固定root只读加密输入位于restore-inputs/<attempt>，父链、Data卷、权限、ACL、普通单链接文件和FD/命名身份持续核验；三路TTY隐藏输入，禁止回显降级。实例外同FD flock覆盖全部流程；canary、凭据认证及完整GCM丢弃式预认证通过后才初始化完全空实例。管理员以后只能用OS文件工具准备加密输入，不让root运行ERP或处理明文秘密，不放宽个人home。
+
+Manager.restore新增可选native_package；默认恢复合同保持。源完整备份、源签名/authority、全库/附件及源reader先验证，再验证目标同实际DB revision的模型结构、全部reader和真实dispatch激活记录；源未声明inventory时也不能由目标补造来源证据。native必须有内嵌或外部已认证凭据记录，缺失在任何运营秘密写入前拒绝。原Windows程序和authority按原字节离线保留，跨后续备份/恢复与retention仍保存原身份。shared提升后复验root批准的server和migration树，最后current绑定Mac、schema_authority/previous为空、manual_stop=true；不执行Windows程序、不迁移、不启用缺失reader、不启动服务。
+
+本轮独立复审发现并修复恢复锁替换的晚期检查、回执身份/原字节回读缺失、凭据输入短读完整性和native缺凭据仍完成四项。完成回执提示前拒绝既有对象，写后在同FD检查保护属性及完整原字节；失败保留输入、数据、凭据和部分回执，不能当作回滚后可直接重试。pristine首次发布和显式native恢复要求service_restore_v1/restore_provenance_v1及两入口源码；普通发布和离线历史authority不附加该新门禁。Mac构建声明新能力前核所需源码；新能力不代表已安装或正式激活。
+
+合成集成覆盖Windows current r0+结构authority r1→Mac同r1绑定→完整再备份→第二空实例恢复→保留清理，全业务事实、非DB文件、三类测试凭据、原始两包身份一致。UID/root权限正例有明确测试适配器；真实FD/签名/GCM/SQL、独立进程锁竞争、普通UID拒绝、原生ACL/FIFO及短读行为有实际验证，不能冒充真实服务账号或系统钥匙串验收。旧候选的锁替换、回执四例、缺凭据反例确实失败；最初测试夹具7项错误修正并保留日志，非产品行为放宽。后续定向46项及扩大166项通过，统计不累加；最终整合结果见本节后续补记。
+
+只读刷新M6/16GiB/macOS27.0.1、约389.4GB空闲；_tianmingerp、/Library/TianmingERP和system/cn.tianming.erp仍不存在，唯一Alembic head ep1010md，工厂Git仍b9a077bc115cc649cdc2753cab3dfb3d75269d1c。Downloads同名交接附件不存在，按NAS同名历史回执核对；已完成凭据移交不重复索取，历史步骤不是当前切换许可。四份真实恢复、运营凭据、3de3be32家庭签名运行包与旧机未动，未连接工厂DB、发信/收单/外部AI或正式接管。
+
+发布器源码已变，九源码最小管理员包须按本次固定提交重建、配套新钥匙串计划，旧成套材料保留，不能混用。尚无新的完整工厂签名程序和root context，不伪造真实发布计划或执行恢复。下一闭环仍需专用身份日常管理入口、系统NAS合同/挂载发布、受保护目标激活及新工厂签名；实际管理员安装、专用账号真实完整恢复、后台凭据、注销重启/FileVault、工厂最终停写同步及业务/中文实体打印/扫码仍待实测。现NAS为127.0.0.1:52100个人NFS代理；归档只证明local_mount_view，不证明远端设备持久化或后台可用。本检查点不是迁移整体完成，任何阶段不清空旧机。
+
+最终整合回归1163项：1147通过、16跳过、0失败错误，98.06秒；本轮新增63项（专用恢复55项、pristine能力8项）全部通过。跳过仍15项Windows原生和1项显式个人LaunchAgent，3条原依赖/合成短JWT告警；两个Mac测试钥匙串开关已开启，仅处理测试临时合成条目。普通UID真实-I -B调用薄入口在ERP导入前拒绝。两项独立只读复审未见剩余本范围代码阻断，差异检查通过；不把合成UID/权限适配器当作实际管理员安装。最终证据mac-service-restore-full.xml/log，旧失败及中间记录保留不累加。

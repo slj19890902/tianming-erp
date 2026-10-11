@@ -9,7 +9,7 @@ import pytest
 
 from desktop_assistant import mac_release_publish as m, mac_keychain_install as b
 from desktop_assistant import mac_system_service as service
-from tests.desktop_assistant.test_mac_release_publish import case, publish, REAL_PREFLIGHT
+from tests.desktop_assistant.test_mac_release_publish import case, publish, REAL_PREFLIGHT, make_package
 
 pytestmark = pytest.mark.skipif(sys.platform != 'darwin', reason='Mac publication contract')
 
@@ -23,6 +23,12 @@ def pristine(case, monkeypatch):
     case.context.update(uid=actual.st_uid, gid=actual.st_gid)
     case.context_raw = b.canonical(case.context)
     (case.base/'keychain-context.json').write_bytes(case.context_raw)
+    case.old_package = case.package
+    case.package = case.root/'service-native.zip'
+    case.manifest_raw, case.manifest = make_package(case.package, case.key,
+        metadata={'runtime_capabilities': {'immutable_execution_v1': 1, 'system_service_v1': 1, 'service_restore_v1': 1},
+                  'reader_capabilities': {'restore_provenance_v1': 1}},
+        additions={name: b'# synthetic signed restore protocol' for name in m.SERVICE_RESTORE_FILES})
     case.plan = m.prepare(case.package, case.public, case.context_raw, case.code,
                          publisher_sha256=b.digest(case.public), pristine_bootstrap=True)
     @contextmanager
@@ -39,6 +45,41 @@ def pristine(case, monkeypatch):
     monkeypatch.setattr(service, 'present', lambda: False)
     case.keychain = keychain
     return case
+
+
+def test_old_package_remains_ordinary_only_and_cannot_forge_pristine_plan(pristine):
+    c = pristine
+    ordinary = m.prepare(c.old_package, c.public, c.context_raw, c.code, publisher_sha256=b.digest(c.public))
+    assert ordinary['type'] == m.TYPE
+    with pytest.raises(ValueError, match='专用完整恢复'):
+        m.prepare(c.old_package, c.public, c.context_raw, c.code,
+                  publisher_sha256=b.digest(c.public), pristine_bootstrap=True)
+    with pytest.raises(ValueError, match='专用完整恢复'):
+        publish(c, {**ordinary, 'type': m.PRISTINE_TYPE}, c.old_package)
+    assert not (c.base/'published').exists() and not c.child.called
+
+
+@pytest.mark.parametrize('capability', [None, True, '1', 0, 2])
+def test_pristine_requires_exact_signed_service_restore_version(pristine, capability):
+    c = pristine
+    path = c.root/'bad-restore-version.zip'
+    make_package(path, c.key,
+        metadata={'runtime_capabilities': {'immutable_execution_v1': 1, 'system_service_v1': 1, 'service_restore_v1': capability},
+                  'reader_capabilities': {'restore_provenance_v1': 1}},
+        additions={name: b'# synthetic' for name in m.SERVICE_RESTORE_FILES})
+    with pytest.raises(ValueError, match='专用完整恢复'):
+        m.prepare(path, c.public, c.context_raw, c.code, publisher_sha256=b.digest(c.public), pristine_bootstrap=True)
+
+
+@pytest.mark.parametrize('missing', sorted(m.SERVICE_RESTORE_FILES))
+def test_pristine_requires_both_signed_restore_modules(pristine, missing):
+    c = pristine
+    path = c.root/'missing-restore-entry.zip'
+    make_package(path, c.key, metadata={'runtime_capabilities': c.manifest['runtime_capabilities'],
+                                     'reader_capabilities': c.manifest['reader_capabilities']},
+                 additions={name: b'# synthetic' for name in m.SERVICE_RESTORE_FILES - {missing}})
+    with pytest.raises(ValueError, match='专用完整恢复'):
+        m.prepare(path, c.public, c.context_raw, c.code, publisher_sha256=b.digest(c.public), pristine_bootstrap=True)
 
 
 def test_pristine_mode_is_bound_to_plan_and_does_not_initialize_instance(pristine):

@@ -118,6 +118,10 @@ def main():
                       'desktop_assistant/reader_contract.py'}
     if not reader_sources <= sources.keys():
         raise ValueError('库存业务读取契约的实现不完整，禁止签名发布')
+    if args.runtime_platform == 'macos-arm64':
+        from desktop_assistant.mac_release_publish import SERVICE_RESTORE_FILES
+        if not SERVICE_RESTORE_FILES <= sources.keys():
+            raise ValueError('专用恢复入口源码不完整，禁止声明原生恢复能力')
     schema_contract = schema_contract_from_sources(sources, args.revision)
     if output.exists():
         raise ValueError('构建输出必须是新目录')
@@ -177,7 +181,8 @@ def main():
         runtime_metadata['executable_files'] = executable_files(tree)
         # These describe execution/service protocols, not completed system
         # installation or permission to activate a factory writer.
-        runtime_metadata['runtime_capabilities'] = {'immutable_execution_v1': 1, 'system_service_v1': 1}
+        runtime_metadata['runtime_capabilities'] = {'immutable_execution_v1': 1, 'system_service_v1': 1,
+                                                    'service_restore_v1': 1}
     package = output / ('release.unsigned.zip' if args.signing_request_only else 'release.zip')
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration,

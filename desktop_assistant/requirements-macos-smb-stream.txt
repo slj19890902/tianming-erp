@@ -1,0 +1,3 @@
+# Candidate stream backend only; installing these does not enable a capability.
+smbprotocol==1.17.0
+pyspnego==0.12.4

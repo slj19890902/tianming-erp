@@ -20,6 +20,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from desktop_assistant import mac_mount as mounts
+from desktop_assistant import mac_archive_contract as autofs
 
 BASE = Path('/Library/TianmingERP')
 MOUNT = BASE/'archive'
@@ -49,6 +50,10 @@ def _contract():
     raw = publication.read_record(CONTRACT)
     value = mounts.decode(raw)
     context_sha = digest(publication.read_record(keychain.CONTEXT))
+    if isinstance(value, dict) and value.get('type') == autofs.TYPE:
+        autofs.validate(value, context_sha)
+        autofs.installed(value, _root_configuration)
+        return value, digest(raw), context
     if (not isinstance(value, dict) or set(value) != CONTRACT_FIELDS or value['type'] != CONTRACT_TYPE
             or value['context_sha256'] != context_sha or value['mountpoint'] != str(MOUNT)
             or value['destination'] != str(DESTINATION) or not _sha(context_sha)
@@ -66,6 +71,7 @@ def _contract():
 
 
 def _matches(value, observation):
+    if value.get('type') == autofs.TYPE: return autofs.matches(value, observation)
     if not isinstance(observation, dict) or observation.get('classification') != 'direct_network_unbound':
         return False
     if set(observation) != {'classification', 'kernel', 'remote'}: return False
@@ -89,6 +95,9 @@ def before_write(path):
     if not required(): return None
     try:
         value, contract_sha, context = _contract()
+        if value.get('type') == autofs.TYPE:
+            if Path(path) != autofs.DESTINATION: raise ValueError(UNCONFIRMED)
+            return autofs_location(value, contract_sha, context)
         if Path(path) != DESTINATION or not Path(path).is_absolute(): raise ValueError(UNCONFIRMED)
         observation = mounts.observe(path)
         if not _matches(value, observation) or value['server_address'] in mounts.local_addresses():
@@ -111,9 +120,55 @@ def before_write(path):
         raise ValueError(UNCONFIRMED) from None
 
 
+def _root_configuration(path):
+    return autofs.read_configuration(path)
+
+
+def autofs_location(value, contract_sha, context):
+    """Explicit approved trigger; never treat autofs or a local folder as NAS.
+
+    Used by normal backup after _contract and by the separately approved setup
+    probe before publishing that contract. This may wait on hard NFS.
+    """
+    from app.core import mac_service_keychain as keychain
+    autofs.validate(value, value['context_sha256'])
+    autofs.installed(value, _root_configuration)
+    if not _sha(contract_sha) or value['server_address'] in mounts.local_addresses(): raise ValueError(UNCONFIRMED)
+    def observe():
+        return mounts.observe(autofs.DESTINATION, semantics=True,
+            automount={'mountpoint': str(autofs.MOUNT), 'source': 'map '+str(autofs.MAP)})
+    before = observe()
+    triggering = before.get('classification') == 'automount_trigger_unbound' and autofs.trigger(before.get('kernel'))
+    if not triggering and not _matches(value, before): raise ValueError(UNCONFIRMED)
+    with keychain._checked_path(BASE, uid=0, directory=True, mode=0o755) as base:
+        local = os.fstat(base); physical = autofs.MOUNT.parent.stat(follow_symlinks=False)
+        if (local.st_dev != Path('/System/Volumes/Data').stat().st_dev
+                or (local.st_dev, local.st_ino) != (physical.st_dev, physical.st_ino)):
+            raise ValueError(UNCONFIRMED)
+        # OP_OPEN intentionally triggers this exact root-configured autofs key.
+        fd = os.open('archive', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=base)
+        try:
+            after = observe()
+            if (not _matches(value, after) or (not triggering and after != before)
+                    or (triggering and after.get('autofs') != before['kernel'])
+                    or mounts.fd_identity(fd) != after['kernel']): raise ValueError(UNCONFIRMED)
+            child = os.open('backups', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            try:
+                info = os.fstat(child)
+                if (mounts.fd_identity(child) != after['kernel'] or info.st_uid != context['uid']
+                        or info.st_gid != context['gid'] or stat.S_IMODE(info.st_mode) != 0o700):
+                    raise ValueError(UNCONFIRMED)
+                keychain._no_acl(child)
+            finally: os.close(child)
+            if observe() != after: raise ValueError(UNCONFIRMED)
+            autofs.installed(value, _root_configuration)
+        finally: os.close(fd)
+    return {'contract_sha256': contract_sha, 'context_sha256': value['context_sha256'], 'mount': after}
+
+
 def _final_path(path):
     value = Path(path)
-    if (not value.is_absolute() or value.parent != DESTINATION or value.suffix != '.tmbackup'
+    if (not value.is_absolute() or value.parent not in (DESTINATION, autofs.DESTINATION) or value.suffix != '.tmbackup'
             or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}\.tmbackup', value.name)):
         raise ValueError(UNCONFIRMED)
     return value

@@ -70,8 +70,6 @@ def mounts():
         if actual < 0: raise ValueError('无法读取挂载元数据')
         if actual >= len(values): continue
         result = [_identity(values[n]) for n in range(actual)]
-        if len({v['mountpoint'] for v in result}) != len(result):
-            raise ValueError('重复挂载点')
         return result
     raise ValueError('挂载列表持续变化')
 
@@ -84,13 +82,33 @@ def fd_identity(fd):
     return _identity(value)
 
 
-def _select(path):
+def _choices(path):
     path = Path(path)
     if not path.is_absolute() or os.path.normpath(str(path)) != str(path):
         raise ValueError('存储路径必须为规范绝对路径')
     choices = [m for m in mounts() if Path(m['mountpoint']) == path or Path(m['mountpoint']) in path.parents]
     if not choices: raise ValueError('未找到挂载')
-    return max(choices, key=lambda m: len(Path(m['mountpoint']).parts))
+    depth = max(len(Path(m['mountpoint']).parts) for m in choices)
+    selected = [m for m in choices if len(Path(m['mountpoint']).parts) == depth]
+    return selected
+
+
+def _select(path):
+    selected = _choices(path)
+    if len(selected) != 1: raise ValueError('同一存储路径存在未知或重复挂载拓扑')
+    return selected[0]
+
+
+def _autofs_select(path, expected):
+    selected = _choices(path)
+    triggers = [m for m in selected if m['filesystem'] == 'autofs']
+    remote = [m for m in selected if m['filesystem'] == 'nfs']
+    if (len(triggers) != 1 or len(remote) > 1 or len(selected) != len(triggers)+len(remote)
+            or any(m['mountpoint'] != expected['mountpoint'] for m in selected)
+            or triggers[0]['source'] != expected['source'] or type(triggers[0]['owner']) is not int
+            or triggers[0]['owner'] != 0):
+        raise ValueError('未找到唯一受保护autofs触发层及NFS叠层')
+    return (remote[0] if remote else triggers[0]), triggers[0]
 
 
 def ip(value):
@@ -98,7 +116,7 @@ def ip(value):
     return address.ipv4_mapped if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped else address
 
 
-def parse_nfs(raw, kernel):
+def parse_nfs(raw, kernel, *, semantics=False):
     value = decode(raw)
     if not isinstance(value, dict) or set(value) != {kernel['source']}:
         raise ValueError('NFS记录不唯一或来源变化')
@@ -132,25 +150,35 @@ def parse_nfs(raw, kernel):
     version, port, security = parameter('vers'), parameter('port'), parameter('sec')
     if not port.isascii() or not port.isdecimal() or not 1 <= int(port) <= 65535:
         raise ValueError('NFS端口无效')
-    return {'addresses': addresses, 'export': location['Export'], 'server': location['Server'],
-            'version': version, 'port': int(port), 'security': security, 'tcp': 'tcp' in params}
+    result = {'addresses': addresses, 'export': location['Export'], 'server': location['Server'],
+              'version': version, 'port': int(port), 'security': security, 'tcp': 'tcp' in params}
+    if semantics:
+        result['semantics'] = {'hard': 'hard' in params and 'soft' not in params,
+            'nointr': 'nointr' in params and 'intr' not in params,
+            'resvport': 'resvport' in params and 'noresvport' not in params}
+    return result
 
 
-def observe(path):
+def observe(path, *, semantics=False, automount=None):
     """Classify without touching a remote file; failures cannot approve storage."""
     try:
-        before = _select(path)
+        def snapshot():
+            return _autofs_select(path, automount) if automount is not None else (_select(path), None)
+        before, trigger = snapshot()
         if before['flags'] & 0x1000 or before['filesystem'] == 'apfs':
             return {'classification': 'local_or_unmounted', 'kernel': before}
+        if before['filesystem'] == 'autofs':
+            return {'classification': 'automount_trigger_unbound', 'kernel': before}
         if before['filesystem'] != 'nfs': return {'classification': 'unknown', 'kernel': before}
         result = subprocess.run(['/usr/bin/nfsstat', '-f', 'JSON', '-m', before['mountpoint']],
             capture_output=True, timeout=5, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
         if result.returncode or not 0 < len(result.stdout) <= 65536: raise ValueError('NFS查询失败')
-        remote = parse_nfs(result.stdout, before)
-        if _select(path) != before: raise ValueError('NFS挂载身份变化')
+        remote = parse_nfs(result.stdout, before, semantics=semantics)
+        if snapshot() != (before, trigger): raise ValueError('NFS挂载或触发层身份变化')
         classification = ('loopback_proxy' if any(ip(a).is_loopback for a in remote['addresses'])
                           else 'direct_network_unbound')
-        return {'classification': classification, 'kernel': before, 'remote': remote}
+        return {'classification': classification, 'kernel': before, 'remote': remote,
+                **({'autofs': trigger} if automount is not None else {})}
     except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError):
         return {'classification': 'unknown'}
 

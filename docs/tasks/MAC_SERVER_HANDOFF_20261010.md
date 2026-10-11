@@ -493,3 +493,22 @@ Manager.restore新增可选native_package；默认恢复合同保持。源完整
 发布器源码已变，九源码最小管理员包须按本次固定提交重建、配套新钥匙串计划，旧成套材料保留，不能混用。尚无新的完整工厂签名程序和root context，不伪造真实发布计划或执行恢复。下一闭环仍需专用身份日常管理入口、系统NAS合同/挂载发布、受保护目标激活及新工厂签名；实际管理员安装、专用账号真实完整恢复、后台凭据、注销重启/FileVault、工厂最终停写同步及业务/中文实体打印/扫码仍待实测。现NAS为127.0.0.1:52100个人NFS代理；归档只证明local_mount_view，不证明远端设备持久化或后台可用。本检查点不是迁移整体完成，任何阶段不清空旧机。
 
 最终整合回归1163项：1147通过、16跳过、0失败错误，98.06秒；本轮新增63项（专用恢复55项、pristine能力8项）全部通过。跳过仍15项Windows原生和1项显式个人LaunchAgent，3条原依赖/合成短JWT告警；两个Mac测试钥匙串开关已开启，仅处理测试临时合成条目。普通UID真实-I -B调用薄入口在ERP导入前拒绝。两项独立只读复审未见剩余本范围代码阻断，差异检查通过；不把合成UID/权限适配器当作实际管理员安装。最终证据mac-service-restore-full.xml/log，旧失败及中间记录保留不累加。
+
+
+## 2026-10-11 系统autofs归档安装与明确触发范围
+
+本闭环主代理唯一写入，独立代理只读核验。允许新增mac_archive_contract/mac_archive_install/mac_archive_probe及archive_probe_entry，修改mac_mount、mac_backup_storage的受保护autofs触发分支、管理员最小包/CLI清单、Mac build能力及对应测试、本任务卡和迁移计划。保留现有直连合同兼容；新autofs协议固定Data卷物理mountpoint与绝对root map，计划绑定原master完整SHA/派生配置及本机context/批准probe程序。root只安装标准库配置，不运行ERP或读取运营凭据，不改个人挂载、不猜NAS端点。首次通过真实专用UID随机合成写入/rename/独立F_NOCACHE回读后才发布正式归档合同；系统按需触发不等于启动已就绪，失败保留现场，不自动卸载/清理或回退配置。现无管理员安装和真实NAS导出身份，本轮只能实现合成验收及可审阅材料；最终仍需实际后台/注销重启和远端核验。
+
+本范围完成系统autofs候选协议：固定物理Data卷archive路径、/private/etc绝对map及字面IPv4/export，不推断极空间代理的真实设备身份。管理员计划绑定当前context、批准程序/公钥/registry、代码manifest、原auto_master及派生配置完整SHA、attempt与时窗；只在身份预检通过后保存原master和pending，再独占写map、原子发布保留原字节的master增量，并调用固定automount -v。已有配置、挂载、逻辑/物理别名、失败现场或并发master改动均拒绝覆盖；root只扫描archive名称，不访问待核远端，不导入运行时或读取运营秘密。
+
+归档入口先拒绝root/普通用户，实际专用UID/EUID/GID/EGID/内核组与root context严格相符后，复验当前脚本/解释器、root批准包及完整签名migration树。身份阶段没有NAS IO；probe/readback必须绑定固定root pending原字节。只写新的本次attempt目录与128KiB随机合成文件，专用账号核权限/ACL、实际NFS与FD，fsync后rename，再由新隔离进程F_NOCACHE完整回读；前后重复核文件/目录/配置/挂载身份。失败保留全部现场，不自动卸载、删除、回退或强杀，hard NFS可能持续等待，不虚构有界超时。
+
+正常备份保留旧直连v1合同；新autofs合同先读取root保护配置，核唯一正确触发层后显式open，再要求同一autofs身份上叠加唯一批准NFS并核实际FD。单NFS、错误map、未知叠层、本机代理、本地空目录、只读/async/soft/非预留端口及权限错误均拒绝。原生内核观察包含完整trigger，历史侧车同样严格，成功仍仅证明当次指定服务器回读。root在探针结束后复核完整IPC证据与计划有效期，最后发布正式合同和独立安装回执；不改ERP state、last_backup或Windows六字段回执，不把探针当正式备份。
+
+独立只读复核发现并修复叠层身份丢失、配置父链/短读检查、初次触发身份变化、历史trigger字段、探针跨越批准期、root回执挂载验证不足和vacant可能stat待核路径。两项复审本范围无剩余代码阻断。新增117项全部通过；最终完整助手/凭据/Web状态1280项，1264通过、16跳过、0失败错误，99.88秒，3条原依赖/合成短JWT告警。15项Windows原生、1项显式个人LaunchAgent跳过保持；两个Mac测试钥匙串开关开启。既有191项、新流程早期80/103项和定向371项为中间结果不叠加。root/NFS/专用UID正例用明确适配器，真实私有文件IO、新进程F_NOCACHE、普通身份拒绝以及系统Python3.9 -I -B -S仅stdlib导入实际通过；未声称真实专用UID或autofs上线。
+
+2026-10-11T06:04Z只读刷新仍Apple M6/16GiB/macOS27.0.1、约389.3GB空闲；_tianmingerp、固定系统根、system/cn.tianming.erp未创建；NAS仍UID501的127.0.0.1:52100个人NFS代理。工厂Git只读仍b9a077bc115cc649cdc2753cab3dfb3d75269d1c，唯一migration ep1010md。现有auto_master195字节同FD保护读取通过，但无系统配置变更。Downloads交接附件仍缺失，既有NAS历史回执不能作当前切换批准；已移交凭据不重复索取。四份真实恢复及3de3be32家庭签名运行包未改，本轮未读真实DB/运营秘密。
+
+最小管理员包扩为12源码加manifest共13文件，必须按本提交生成新成套包与钥匙串计划；实际账号/批准新版完整签名程序及明确NAS端点未齐，不能生成真实归档安装计划，更未执行安装或探针。新增archive_autofs_v1仅为构建协议声明。现NAS开发归档继续只证明local_mount_view，远端设备持久化未验证。仍须专用管理入口、配置NAS偏好、受保护目标激活及新工厂签名、实际root安装/完整恢复、后台凭据与注销重启/FileVault、最终工厂停写同步和实体打印/扫码验收；不清空旧机、不连接工厂DB、发信、收单或外部AI。
+
+另只读复核既有路径盘点报告及代码：31,027项company_file_index源路径目前用于文件计数，其他Windows路径主要是历史审计、备份记录、幂等证据；尤其adoption_evidence_reference参与精确字符串幂等判断，不能批量替换。888项注册附件含880图纸/缩略图及8份PDF；86个邮件附件名对应DB BLOB。上述不等于历史外部原文件已搬迁，index_sources_accessibility_verified和complete_historical_external_files_verified仍false；需工厂只读清单将原引用、原件/归档、大小/SHA、Mac可取位置对应，不重建退役抽取层，不改历史事实。

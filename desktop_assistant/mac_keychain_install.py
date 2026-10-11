@@ -25,7 +25,9 @@ LIMIT = 65536
 FILES = ('app/__init__.py', 'app/core/__init__.py', 'app/core/mac_keychain.py',
          'app/core/mac_service_keychain.py', 'desktop_assistant/__init__.py',
          'desktop_assistant/mac_service_identity.py', 'desktop_assistant/mac_keychain_install.py',
-         'desktop_assistant/mac_release_publish.py', 'desktop_assistant/mac_system_service.py')
+         'desktop_assistant/mac_release_publish.py', 'desktop_assistant/mac_system_service.py',
+         'desktop_assistant/mac_archive_contract.py', 'desktop_assistant/mac_archive_install.py',
+         'desktop_assistant/mac_mount.py')
 
 
 def canonical(value):
@@ -420,7 +422,7 @@ def install(raw, approved_sha):
 def main():
     parser = argparse.ArgumentParser(description='专用服务身份、程序和系统监护安装；工厂接管另行授权')
     parser.add_argument('action', choices=('plan', 'install', '_worker', 'publish', '_publish_worker',
-                                         'service-plan', 'service-apply'))
+                                         'service-plan', 'service-apply', 'archive-plan', 'archive-apply'))
     parser.add_argument('--identity-plan', type=Path)
     parser.add_argument('--observer-uid', type=int)
     parser.add_argument('--file', type=Path)
@@ -428,9 +430,25 @@ def main():
     parser.add_argument('--package', type=Path)
     parser.add_argument('--service-action', choices=('install', 'disable', 'enable'))
     parser.add_argument('--package-sha256')
+    parser.add_argument('--nas-address')
+    parser.add_argument('--nas-export')
     args = parser.parse_args()
     try:
-        if args.action in {'service-plan', 'service-apply'}:
+        if args.action in {'archive-plan', 'archive-apply'}:
+            verify_code(trusted=args.action == 'archive-apply')
+            modules()
+            from desktop_assistant import mac_archive_install as archive
+            if args.action == 'archive-plan':
+                raw = canonical(archive.make_plan(args.package_sha256, args.nas_address, args.nas_export))
+                fd = os.open(args.file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, 'wb') as output:
+                    os.fchmod(output.fileno(), 0o600)
+                    output.write(raw); output.flush(); os.fsync(output.fileno())
+                if args.file.read_bytes() != raw: raise ValueError('归档安装计划回读不符')
+                result = {'plan_sha256': digest(raw), 'system_modified': False}
+            else:
+                result = archive.apply(protected(args.file), args.approved_sha256)
+        elif args.action in {'service-plan', 'service-apply'}:
             verify_code(trusted=args.action == 'service-apply')
             modules()
             from desktop_assistant import mac_system_service as service

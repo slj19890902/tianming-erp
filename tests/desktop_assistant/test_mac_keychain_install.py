@@ -317,7 +317,7 @@ def test_minimal_pack_builds_only_committed_allowlist_and_verifies_inventory(tmp
     (repo / builder.FILES[0]).write_text('# uncommitted must not enter pack\n')
     output = tmp_path / 'code.zip'
     report = builder.build(repo, sha, output)
-    assert report['files'] == 10 and report['sha256'] == m.digest(output.read_bytes())
+    assert report['files'] == len(m.FILES)+1 and report['sha256'] == m.digest(output.read_bytes())
     with zipfile.ZipFile(output) as archive:
         assert archive.read(builder.FILES[0]) == b'# synthetic original\n'
         archive.extractall(tmp_path / 'pack')

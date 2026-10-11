@@ -33,7 +33,10 @@ FILES = ('app/__init__.py', 'app/core/__init__.py', 'app/core/mac_keychain.py',
          'desktop_assistant/mac_mount.py', 'desktop_assistant/factory_target_contract.py',
          'desktop_assistant/factory_network.py', 'desktop_assistant/mac_factory_request_install.py',
          'desktop_assistant/factory_activation_contract.py',
-         'desktop_assistant/mac_factory_activation_install.py', 'desktop_assistant/home_process.py')
+         'desktop_assistant/mac_factory_activation_install.py', 'desktop_assistant/home_process.py',
+         'desktop_assistant/mac_smb_stream_contract.py',
+         'desktop_assistant/mac_smb_stream_runtime_contract.py',
+         'desktop_assistant/mac_smb_stream_setup.py')
 
 
 def canonical(value):

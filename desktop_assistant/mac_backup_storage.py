@@ -449,6 +449,10 @@ def publish_receipt(path, receipt, proof):
 def verified_at(root, state, *, now=None):
     """Small local records only. No remote path stat, mount query or full hash."""
     if not required(): return state.get('last_backup_at')
+    stream=state.get('last_backup_stream')
+    if isinstance(stream,dict) and stream.get('path')==state.get('last_backup'):
+        from desktop_assistant.mac_smb_stream_receipt import verified_at as stream_verified_at
+        return stream_verified_at(root,state,now=now)
     try:
         if Path(root).absolute() != BASE/'instance': return None
         value, contract_sha, context = _contract()

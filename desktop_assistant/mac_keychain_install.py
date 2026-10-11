@@ -109,6 +109,39 @@ def protected(path, *, directory=False, readable=False):
         os.close(fd)
 
 
+def verify_python(*, current=False):
+    # /usr/bin/python3 is Apple's shared tool shim, not a small installation
+    # record: its hardlinks and size are legitimate. Keep protected() strict.
+    # The isolated child also checks the Apple interpreter selected by the shim.
+    path = Path(sys.executable).resolve(strict=True) if current else PYTHON
+    for parent in path.parents:
+        protected(parent, directory=True, readable=True)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0
+                or before.st_mode & 0o022 or before.st_mode & 0o005 != 0o005
+                or before.st_nlink < 1 or (path != Path('/usr/bin/python3') and before.st_nlink != 1)):
+            raise ValueError('系统Python的所有者、类型或执行权限不符')
+        no_acl(fd)
+        identifier = 'com.apple.python3' if current else 'com.apple.dt.xcode_select.tool-shim-public'
+        result = subprocess.run(['/usr/bin/codesign', '--verify', '--strict', '-R',
+            '=anchor apple and identifier "' + identifier + '"', str(path)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            cwd='/', env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'en_US.UTF-8'},
+            close_fds=True, shell=False)
+        if result.returncode != 0:
+            raise ValueError('系统Python未通过指定Apple签名核验')
+        def stamp(info):
+            return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+                    info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        if stamp(before) != stamp(os.fstat(fd)) or stamp(before) != stamp(os.stat(path, follow_symlinks=False)):
+            raise ValueError('系统Python在核验期间变化')
+        no_acl(fd)
+    finally:
+        os.close(fd)
+
+
 def verify_code(*, trusted=True):
     root = code_root()
     if trusted:
@@ -259,8 +292,7 @@ def preflight(value):
             raise ValueError('存在既有钥匙串初始化现场，不覆盖重试')
     with keychain._checked_path(BASE / 'home', uid=context['uid'], directory=True, mode=0o700):
         pass
-    for path in (PYTHON, *PYTHON.parents):
-        protected(path, directory=path != PYTHON, readable=True)
+    verify_python()
 
 
 def _proof(secret, phase, context, challenge):
@@ -300,6 +332,7 @@ def _worker(request):
     verify_code()
     if _actual() != request['identity'] or os.getuid() == 0:
         raise ValueError('子进程没有降到指定独立身份')
+    verify_python(current=True)
     phase, context, challenge = request['phase'], request['context'], request['challenge']
     if not isinstance(challenge, str) or uuid.UUID(challenge).hex != challenge:
         raise ValueError('子进程挑战无效')
@@ -385,9 +418,15 @@ def run_child(value, phase, uid, gid, home):
     return result
 
 
-def install(raw, approved_sha):
+def install(raw, approved_sha, *, progress=None):
+    # Only fixed phase names leave the administrator process; never print
+    # native error payloads, subprocess output, proofs or credential values.
+    def report(phase):
+        if progress is not None:
+            progress(phase)
     if os.getuid() != 0 or os.geteuid() != 0:
         raise ValueError('需管理员在本机执行；不请求或绕过密码')
+    report('readonly_preflight')
     value = validate_plan(raw, approved_sha)
     preflight(value)
     identity, keychain = modules()
@@ -397,17 +436,22 @@ def install(raw, approved_sha):
         run_child(value, 'preflight', *args)
     validate_plan(raw, approved_sha)
     preflight(value)
+    report('create_pending_record')
     _write(BASE / 'keychain-init-pending.json', raw)
+    report('create_private_directories')
     for path in (BASE / 'home/Library', BASE / 'home/Library/Keychains'):
         identity._owned_directory(path, context['uid'], context['gid'])
     secret = os.urandom(32).hex().encode()
+    report('create_system_bootstrap')
     keychain.create_bootstrap(context, secret)
     for phase in ('initialize', 'verify'):
+        report('service_' + phase)
         result = run_child(value, phase, *service)
         expected = _proof(secret, phase, context, result['challenge'])
         if not isinstance(result['proof'], str) or not hmac.compare_digest(result['proof'], expected):
             raise ValueError('子进程未证明读取本次原始系统引导秘密')
         validate_plan(raw, approved_sha)
+    report('verify_other_uid_denied')
     run_child(value, 'negative', other['uid'], other['gid'], other['home'])
     validate_plan(raw, approved_sha)
     keychain._identity(context, administrator=True)
@@ -418,6 +462,7 @@ def install(raw, approved_sha):
                'launchd_system_verified': False, 'logout_reboot_verified': False, 'factory_activated': False}
     # Receipt is evidence of completed checks. Context, written last, enables
     # ordinary credentials; its presence must also be verified independently.
+    report('publish_completion')
     _write(BASE / 'keychain-init-verified.json', canonical(receipt))
     _write(keychain.CONTEXT, context_raw, mode=0o644)
     return {**receipt, 'context_published': True}
@@ -514,7 +559,8 @@ def main():
         else:
             with args.file.open('rb') as source:
                 raw = source.read(LIMIT + 1)
-            result = install(raw, args.approved_sha256)
+            result = install(raw, args.approved_sha256, progress=lambda phase:
+                print(json.dumps({'keychain_install_phase': phase}), file=sys.stderr, flush=True))
     except (Exception, KeyboardInterrupt):
         raise SystemExit('管理员初始化或发布未确认完成；可能已有文件、条目或完成记录，保留现场，不覆盖重试、不自动删除。') from None
     print(json.dumps(result))

@@ -1,4 +1,5 @@
 """Synthetic identities and disposable facts only; no real cutover or keys."""
+from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import base64
@@ -34,7 +35,7 @@ def shared(tmp_path):
     (root / 'environment.json').write_text(json.dumps({
         'ERP_ENVIRONMENT': 'production', 'ERP_SECRET_KEY_FILE': '${SHARED}/session.key',
         'ERP_PORT': '8000', 'ERP_ALLOWED_ORIGINS': 'http://192.168.3.80:8000'}))
-    with sqlite3.connect(root / 'data/carton_erp.sqlite3') as db:
+    with closing(sqlite3.connect(root / 'data/carton_erp.sqlite3')) as db, db:
         db.executescript('''
             CREATE TABLE alembic_version(version_num TEXT PRIMARY KEY);
             INSERT INTO alembic_version VALUES('synthetic_head');
@@ -58,7 +59,7 @@ def copy_restored(shared):
     target = shared.parent / 'restored'
     shutil.copytree(shared, target)
     rebind_pdf_sources(target / 'data/carton_erp.sqlite3', shared, target, target)
-    with sqlite3.connect(target / 'data/carton_erp.sqlite3') as db:
+    with closing(sqlite3.connect(target / 'data/carton_erp.sqlite3')) as db, db:
         db.execute("UPDATE email_intake_settings SET encrypted_secret='synthetic-destination-reference'")
     environment = json.loads((target / 'environment.json').read_bytes())
     environment.update(ERP_PORT='18991', ERP_HOME_REHEARSAL='1', ERP_ALLOWED_ORIGINS='http://127.0.0.1:18991')
@@ -214,7 +215,7 @@ def test_installation_expires_without_expiring_a_verified_running_server(case):
 ])
 def test_every_business_fact_and_sequence_is_retained(case, statement):
     target = copy_restored(case.shared)
-    with sqlite3.connect(target / 'data/carton_erp.sqlite3') as db:
+    with closing(sqlite3.connect(target / 'data/carton_erp.sqlite3')) as db, db:
         db.execute(statement)
     with pytest.raises(ValueError, match='事实'):
         cutover.require_matching_snapshots(case.source['snapshot'], cutover.capture_snapshot(target))
@@ -232,7 +233,7 @@ def test_unknown_files_config_schema_and_empty_pdf_semantics_preserved(case, kin
         environment['ERP_SECRET_KEY_FILE'] = '${SHARED}/another.key'
         (target / 'environment.json').write_text(json.dumps(environment))
     else:
-        with sqlite3.connect(target / 'data/carton_erp.sqlite3') as db:
+        with closing(sqlite3.connect(target / 'data/carton_erp.sqlite3')) as db, db:
             db.execute('CREATE INDEX unexpected ON products(quantity)' if kind == 'schema'
                        else 'UPDATE pdf_order_training_samples SET file_path=NULL')
     with pytest.raises(ValueError, match='事实'):
@@ -241,7 +242,7 @@ def test_unknown_files_config_schema_and_empty_pdf_semantics_preserved(case, kin
 
 def test_windows_source_paths_normalize_to_identical_relative_references(shared):
     source = cutover.capture_snapshot(shared)
-    with sqlite3.connect(shared / 'data/carton_erp.sqlite3') as db:
+    with closing(sqlite3.connect(shared / 'data/carton_erp.sqlite3')) as db, db:
         db.execute('UPDATE pdf_order_training_samples SET file_path=?', ('D:\\TianmingERP\\shared\\data\\source.pdf',))
     windows = cutover.capture_snapshot(shared, recorded_root='D:\\TianmingERP\\shared')
     cutover.require_matching_snapshots(source, windows)
@@ -268,7 +269,7 @@ def test_missing_attachment_link_and_concurrent_write_fail_closed(shared, monkey
     original = cutover.facts
     def mutating_reader(database, columns):
         value = original(database, columns)
-        with sqlite3.connect(database) as db:
+        with closing(sqlite3.connect(database)) as db, db:
             db.execute('UPDATE products SET quantity=7')
         return value
     monkeypatch.setattr(cutover, 'facts', mutating_reader)
@@ -298,7 +299,7 @@ def test_special_file_is_rejected_without_opening_it(shared):
 
 
 def test_generated_columns_are_included_in_complete_facts(shared, monkeypatch):
-    with sqlite3.connect(shared / 'data/carton_erp.sqlite3') as db:
+    with closing(sqlite3.connect(shared / 'data/carton_erp.sqlite3')) as db, db:
         db.execute('ALTER TABLE products ADD COLUMN doubled INTEGER GENERATED ALWAYS AS (quantity * 2) VIRTUAL')
         db.execute('CREATE TABLE generated_fact(base TEXT, stored TEXT GENERATED ALWAYS AS (base || base) STORED)')
         db.execute("INSERT INTO generated_fact(base) VALUES('kept')")
@@ -315,15 +316,15 @@ def test_generated_columns_are_included_in_complete_facts(shared, monkeypatch):
 
 
 def test_only_primary_mailbox_ciphertext_can_be_rewrapped(shared):
-    with sqlite3.connect(shared / 'data/carton_erp.sqlite3') as db:
+    with closing(sqlite3.connect(shared / 'data/carton_erp.sqlite3')) as db, db:
         db.execute("INSERT INTO email_intake_settings VALUES(2,'preserve-secondary-secret',1)")
     source = cutover.capture_snapshot(shared)
     target = copy_restored(shared)
     # The existing fixture changes all rows; restore the secondary row first.
-    with sqlite3.connect(target / 'data/carton_erp.sqlite3') as db:
+    with closing(sqlite3.connect(target / 'data/carton_erp.sqlite3')) as db, db:
         db.execute("UPDATE email_intake_settings SET encrypted_secret='preserve-secondary-secret' WHERE id=2")
     cutover.require_matching_snapshots(source, cutover.capture_snapshot(target))
-    with sqlite3.connect(target / 'data/carton_erp.sqlite3') as db:
+    with closing(sqlite3.connect(target / 'data/carton_erp.sqlite3')) as db, db:
         db.execute("UPDATE email_intake_settings SET encrypted_secret='changed' WHERE id=2")
     with pytest.raises(ValueError, match='事实'):
         cutover.require_matching_snapshots(source, cutover.capture_snapshot(target))

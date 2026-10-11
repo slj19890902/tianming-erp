@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -36,7 +37,7 @@ def test_rewrap_changes_only_secret_and_preserves_config_and_mail_state(source, 
     original = sha(source / 'shared/data/carton_erp.sqlite3')
     paths, report = restore.prepare(record, payload)
     assert report['restored'] == ['backup', 'deepseek', 'mailbox', 'openai']
-    with sqlite3.connect(database) as db:
+    with closing(sqlite3.connect(database)) as db, db:
         row = db.execute('SELECT encrypted_secret,version,uid FROM email_intake_settings').fetchone()
     assert row[0].startswith('new-local-mailbox-') and row[1:] == (7, 'unchanged-source')
     preferences = json.loads(paths['preferences.json'].read_text())
@@ -55,7 +56,7 @@ def test_mismatch_refused_before_host_storage(source, tmp_path, host_store, chan
     if change == 'wal':
         Path(str(database)+'-wal').write_bytes(b'synthetic-active-marker')
     else:
-        with sqlite3.connect(database) as db:
+        with closing(sqlite3.connect(database)) as db, db:
             db.execute({'version':'UPDATE email_intake_settings SET version=8',
                         'cipher':"UPDATE email_intake_settings SET encrypted_secret='other'",
                         'absent':'DELETE FROM email_intake_settings'}[change])
@@ -80,11 +81,11 @@ def test_host_readback_failure_preserves_database(source, tmp_path, host_store, 
 def test_trigger_business_side_effect_rolls_back(source, tmp_path, host_store):
     record = credential_transfer.collect(source)
     payload, database = payload_for(source, tmp_path)
-    with sqlite3.connect(database) as db:
+    with closing(sqlite3.connect(database)) as db, db:
         db.executescript("CREATE TABLE business(id INTEGER); CREATE TRIGGER unexpected AFTER UPDATE ON email_intake_settings BEGIN INSERT INTO business VALUES(1); END;")
     with pytest.raises(ValueError, match='已回滚'):
         restore.prepare(record, payload)
-    with sqlite3.connect(database) as db:
+    with closing(sqlite3.connect(database)) as db, db:
         assert db.execute('SELECT count(*) FROM business').fetchone()[0] == 0
         assert db.execute('SELECT encrypted_secret FROM email_intake_settings').fetchone()[0] == 'windows-mailbox-cipher'
 
@@ -111,7 +112,7 @@ def recovery_case(monkeypatch):
         root = case.manager.root
         write_json(root / 'preferences.json', {'protected_password': 'old-backup-cipher', 'nas': 'original-nas'})
         write_json(root / 'control/ai-provider.json', {'provider':'openai','protected_api_key':'old-ai-cipher'})
-        with sqlite3.connect(root / 'shared/data/carton_erp.sqlite3') as db:
+        with closing(sqlite3.connect(root / 'shared/data/carton_erp.sqlite3')) as db, db:
             db.executescript("CREATE TABLE email_intake_settings(id INTEGER PRIMARY KEY, encrypted_secret TEXT, version INTEGER, automatic_enabled INTEGER, uid TEXT); INSERT INTO email_intake_settings VALUES(1,'old-mail-cipher',9,1,'read-position-42');")
         monkeypatch.setattr(credential_transfer, 'unprotect', lambda value, purpose: 'synthetic-secret-' + purpose)
         yield case
@@ -129,7 +130,7 @@ def test_full_encrypted_backup_and_restore_include_host_credentials(recovery_cas
     result = target.restore(backup, PASSWORD)
     assert result['credentials']['status'] == 'restored' and not result['started']
     assert result['credentials']['restored'] == ['backup', 'mailbox', 'openai']
-    with sqlite3.connect(target.root / 'shared/data/carton_erp.sqlite3') as db:
+    with closing(sqlite3.connect(target.root / 'shared/data/carton_erp.sqlite3')) as db, db:
         row = db.execute('SELECT encrypted_secret,version,automatic_enabled,uid FROM email_intake_settings').fetchone()
     assert row[1:] == (9, 1, 'read-position-42')
     assert host_store[row[0]] == 'synthetic-secret-mailbox'

@@ -1,5 +1,5 @@
 """Real synthetic ZIP/GCM/Ed25519/SQLite; Windows adapters are explicitly faked."""
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -19,8 +19,9 @@ from tests.desktop_assistant import test_recovery as recovery_fixtures
 PASSWORD = recovery_fixtures.PASSWORD
 
 
-def hashes(root):
-    return {p.relative_to(root).as_posix(): sha(p) for p in root.rglob('*') if p.is_file()}
+def hashes(root, *, held_lock=False):
+    return {p.relative_to(root).as_posix(): sha(p) for p in root.rglob('*') if p.is_file()
+            and not (held_lock and p == root / 'control/operation.lock')}
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ def case(tmp_path, monkeypatch):
         (root / 'control/operation.lock').write_bytes(b'0')
         write_json(root / 'preferences.json', {'protected_password': 'synthetic-cipher-backup', 'nas': str(fixture.nas)})
         write_json(root / 'control/deepseek-provider.json', {'provider': 'deepseek', 'protected_api_key': 'synthetic-cipher-ai'})
-        with sqlite3.connect(root / 'shared/data/carton_erp.sqlite3') as db:
+        with closing(sqlite3.connect(root / 'shared/data/carton_erp.sqlite3')) as db, db:
             db.executescript("CREATE TABLE email_intake_settings(id INTEGER PRIMARY KEY,encrypted_secret TEXT,version INTEGER); INSERT INTO email_intake_settings VALUES(1,'synthetic-mail-cipher',7);")
         monkeypatch.setattr(credentials, 'unprotect', lambda value,purpose: PASSWORD if purpose=='backup' else 'synthetic-secret-'+purpose)
         real_collect = credentials.collect
@@ -102,6 +103,11 @@ def rewrite_backup(case, mutate):
 
 def test_success_authenticates_real_synthetic_backup_without_source_writes(case):
     before=hashes(case.root)
+    lock=case.root/'control/operation.lock'
+    def lock_metadata():
+        info=lock.stat()
+        return info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_mode
+    lock_before=lock_metadata()
     with run(case) as evidence:
         assert case.events[-2:]==['private-enter','private-final-check']
         assert all(event=='lease-enter' for event in case.events[:-2])
@@ -109,10 +115,14 @@ def test_success_authenticates_real_synthetic_backup_without_source_writes(case)
         assert evidence['credential_purposes']==['backup','deepseek','mailbox']
         assert evidence['snapshot']['database_sha256']==sha(case.root/'shared/data/carton_erp.sqlite3')
         assert 'synthetic-secret' not in json.dumps(evidence)
-        assert hashes(case.root)==before
+        # Windows enforces the byte lock against this second reader too.
+        # Check its identity while held, and its complete bytes after release.
+        assert lock_metadata()==lock_before
+        assert hashes(case.root,held_lock=True)=={k:v for k,v in before.items() if k!='control/operation.lock'}
         with pytest.raises(ValueError,match='另一个'):
             with operation_lock(case.root/'control/operation.lock'): pass
     assert case.events[-1]=='lease-exit'
+    assert lock_metadata()==lock_before
     assert hashes(case.root)==before
 
 
@@ -153,9 +163,9 @@ def test_preconditions_never_create_installation_or_staging(case,monkeypatch,kin
 def test_same_counts_or_normalized_facts_cannot_hide_raw_source_changes(case,kind):
     shared=case.root/'shared'
     if kind=='business-value':
-        with sqlite3.connect(shared/'data/carton_erp.sqlite3') as db: db.execute("UPDATE users SET note='changed'")
+        with closing(sqlite3.connect(shared/'data/carton_erp.sqlite3')) as db, db: db.execute("UPDATE users SET note='changed'")
     elif kind=='mailbox-cipher':
-        with sqlite3.connect(shared/'data/carton_erp.sqlite3') as db: db.execute("UPDATE email_intake_settings SET encrypted_secret='different-cipher'")
+        with closing(sqlite3.connect(shared/'data/carton_erp.sqlite3')) as db, db: db.execute("UPDATE email_intake_settings SET encrypted_secret='different-cipher'")
     elif kind=='network-environment':
         p=shared/'environment.json';v=read_json(p);v['ERP_PORT']='19999';write_json(p,v)
     elif kind=='extra-file': (shared/'unregistered.bin').write_bytes(b'new source evidence')
@@ -230,7 +240,7 @@ def test_missing_inventory_history_is_not_fabricated_and_reader_still_required(c
 @pytest.mark.parametrize('table,reader',list(audit.TABLE_READERS.items()))
 def test_each_existing_business_reader_is_required(case,table,reader):
     database=case.root/'shared/data/carton_erp.sqlite3'
-    with sqlite3.connect(database) as db:db.execute(f'CREATE TABLE {table}(id INTEGER PRIMARY KEY)')
+    with closing(sqlite3.connect(database)) as db, db:db.execute(f'CREATE TABLE {table}(id INTEGER PRIMARY KEY)')
     target={'reader_capabilities':{'factory_cutover_v1':1}}
     with pytest.raises(ValueError,match='reader'): audit._target_readers(database,{},target,None,None)
     target['reader_capabilities'][reader]=1
@@ -246,10 +256,8 @@ def test_target_nonnumeric_reader_cannot_pass_as_one(case):
 def test_clean_wal_source_never_gets_sidecars_created_by_audit(case):
     # Switch the synthetic source and its authenticated backup to WAL format.
     database=case.root/'shared/data/carton_erp.sqlite3'
-    with sqlite3.connect(database) as db:
+    with closing(sqlite3.connect(database)) as db, db:
         assert db.execute('PRAGMA journal_mode=WAL').fetchone()==('wal',)
-    # sqlite3's context manager commits but does not close the connection.
-    db.close()
     assert not any(Path(str(database)+s).exists() for s in ('-wal','-shm','-journal'))
     def changed(meta,payload):
         shutil.copyfile(database,payload/'shared/data/carton_erp.sqlite3')
@@ -312,7 +320,7 @@ def test_signed_schema_authority_is_verified_only_when_revision_differs(case,bad
     identity=sha(authority);shutil.copyfile(authority,root/'packages'/(identity+'.zip'))
     state=read_json(root/'state.json');state['schema_authority']=identity;write_json(root/'state.json',state)
     database=root/'shared/data/carton_erp.sqlite3'
-    with sqlite3.connect(database) as db:db.execute("UPDATE alembic_version SET version_num='r2'")
+    with closing(sqlite3.connect(database)) as db, db:db.execute("UPDATE alembic_version SET version_num='r2'")
     info=database_info(database)
     new_target=case.fixture.root/'target-r2.zip'
     pack_tree(case.fixture.root/'mac-target',new_target,{'type':'tianming.release.v1','version':'synthetic-mac',

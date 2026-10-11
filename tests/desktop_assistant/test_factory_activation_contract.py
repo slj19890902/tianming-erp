@@ -74,7 +74,8 @@ def test_shape_validation_never_claims_to_authenticate_a_signature(record):
     with pytest.raises(InvalidSignature):cutover.verify_authorization(raw,public,value['request'])
 
 
-@pytest.mark.parametrize('raw',[b'[]',b'{"x":1,"x":2}',b'{"x":NaN}',b'{"x":{"a":1,"a":2}}',b'x'*65537])
+@pytest.mark.parametrize('raw',[b'[]',b'{"x":1,"x":2}',b'{"x":NaN}',b'{"x":{"a":1,"a":2}}',b'x'*65537],
+    ids=['array','duplicate','nonfinite','nested-duplicate','oversize-65537'])
 def test_strict_public_json(raw):
     with pytest.raises(ValueError):c.decode(raw)
 

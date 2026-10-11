@@ -57,7 +57,10 @@ def case(monkeypatch, tmp_path):
 
 
 def test_install_verifies_both_identities_before_first_write_and_publishes_context_last(case):
-    result = m.install(case.raw, case.sha)
+    phases = []
+    result = m.install(case.raw, case.sha, progress=phases.append)
+    assert phases == ['readonly_preflight', 'create_pending_record', 'create_private_directories',
+        'create_system_bootstrap', 'service_initialize', 'service_verify', 'verify_other_uid_denied', 'publish_completion']
     assert case.events[:4] == ['preflight', ('preflight', 499), ('preflight', 501), 'preflight']
     assert case.events.index('bootstrap') < case.events.index(('initialize', 499))
     assert case.events.index(('verify', 499)) < case.events.index(('negative', 501))
@@ -176,6 +179,7 @@ def test_spawn_contract_and_response_validation(monkeypatch, fault):
 def test_negative_worker_requires_actual_native_acl_denial(monkeypatch, status):
     expected = m._expected(501, 20)
     monkeypatch.setattr(m, 'verify_code', lambda **kw: 'e' * 64)
+    monkeypatch.setattr(m, 'verify_python', lambda **kw: None)
     monkeypatch.setattr(m, '_actual', lambda: expected)
     monkeypatch.setattr(m.os, 'getuid', lambda: 501)
     monkeypatch.setattr(keychain, '_identity', lambda *a, **k: pytest.fail('Business identity is not ACL evidence'))
@@ -243,6 +247,7 @@ def test_worker_rejects_wrong_real_identity_before_import_or_api(monkeypatch, fi
 @pytest.mark.parametrize('fault', [None, 'origin', 'context', 'receipt', 'od', 'existing', 'dangling'])
 def test_real_preflight_requires_exact_prior_identity_and_no_setup_scene(monkeypatch, tmp_path, fault):
     base = tmp_path.resolve(); monkeypatch.setattr(m, 'BASE', base)
+    monkeypatch.setattr(m, 'verify_python', lambda: None)
     monkeypatch.setattr(keychain, 'CONTEXT', base / 'keychain-context.json')
     monkeypatch.setattr(identity, '_administrator', lambda: None)
     monkeypatch.setattr(keychain, '_identity', lambda *a, **kw: None)
@@ -278,9 +283,10 @@ def test_real_preflight_requires_exact_prior_identity_and_no_setup_scene(monkeyp
     else: m.preflight(value)
 
 
-@pytest.mark.parametrize('fault', [None, 'mode', 'owner', 'hardlink', 'unreadable', 'acl', 'change'])
+@pytest.mark.parametrize('fault', [None, 'mode', 'owner', 'hardlink', 'unreadable', 'acl', 'change', 'oversize'])
 def test_protected_file_checks_metadata_acl_and_stability(tmp_path, monkeypatch, fault):
     path = tmp_path / 'own'; path.write_bytes(b'synthetic')
+    if fault == 'oversize': path.write_bytes(b'x' * (m.LIMIT + 1))
     actual = path.stat()
     info = SimpleNamespace(**{key: getattr(actual, key) for key in
         ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns')}, st_uid=0, st_gid=0, st_nlink=1, st_mode=0o100444)
@@ -341,3 +347,78 @@ def test_native_readonly_groups_acl_and_unprivileged_refusal(tmp_path):
     finally: os.close(fd)
     with pytest.raises(ValueError, match='root保护'): m.protected(path)
     with pytest.raises(ValueError, match='管理员'): m.install(b'{}', '0' * 64)
+
+
+@pytest.mark.parametrize('fault', [None, 'owner', 'writable', 'not_executable', 'acl',
+                                  'signature', 'changed_fd', 'changed_path', 'hardlink'])
+def test_apple_interpreter_checks_protection_signature_and_stability(tmp_path, monkeypatch, fault):
+    path = tmp_path / 'python'; path.write_bytes(b'x' * (m.LIMIT + 1))
+    monkeypatch.setattr(m.sys, 'executable', str(path))
+    monkeypatch.setattr(m, 'protected', lambda *a, **kw: b'')  # root parents adapter
+    actual = path.stat()
+    info = SimpleNamespace(**{key: getattr(actual, key) for key in
+        ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')},
+        st_uid=0, st_gid=0, st_nlink=1, st_mode=0o100755)
+    if fault == 'owner': info.st_uid = 501
+    if fault == 'writable': info.st_mode = 0o100775
+    if fault == 'not_executable': info.st_mode = 0o100744
+    if fault == 'hardlink': info.st_nlink = 2
+    changed = deepcopy(info)
+    changed.st_ino += 1
+    calls = []
+    def fstat(fd):
+        calls.append(fd)
+        return changed if fault == 'changed_fd' and len(calls) > 1 else info
+    monkeypatch.setattr(m.os, 'fstat', fstat)
+    original_stat = m.os.stat
+    def named(p, **kw):
+        if p == path and kw.get('follow_symlinks') is False:
+            return changed if fault == 'changed_path' else info
+        return original_stat(p, **kw)
+    monkeypatch.setattr(m.os, 'stat', named)
+    def acl(fd):
+        if fault == 'acl': raise ValueError('synthetic ACL')
+    monkeypatch.setattr(m, 'no_acl', acl)
+    signed = []
+    def signature(argv, **kw):
+        signed.append(argv)
+        assert argv == ['/usr/bin/codesign', '--verify', '--strict', '-R',
+            '=anchor apple and identifier "com.apple.python3"', str(path)]
+        assert not kw['shell'] and kw['cwd'] == '/' and 'HOME' not in kw['env']
+        return SimpleNamespace(returncode=1 if fault == 'signature' else 0)
+    monkeypatch.setattr(m.subprocess, 'run', signature)
+    if fault:
+        with pytest.raises(ValueError): m.verify_python(current=True)
+    else:
+        m.verify_python(current=True)
+        assert signed and path.stat().st_size > m.LIMIT
+
+
+def test_worker_checks_interpreter_before_keychain_api(monkeypatch):
+    monkeypatch.setattr(m, 'verify_code', lambda: 'e' * 64)
+    monkeypatch.setattr(m, '_actual', lambda: m._expected(499, 499))
+    monkeypatch.setattr(m.os, 'getuid', lambda: 499)
+    def reject(**kw):
+        assert kw == {'current': True}
+        raise ValueError('synthetic interpreter rejected')
+    monkeypatch.setattr(m, 'verify_python', reject)
+    monkeypatch.setattr(m, 'modules', lambda: pytest.fail('no keychain modules before interpreter validation'))
+    with pytest.raises(ValueError, match='interpreter rejected'):
+        m._worker({'phase': 'initialize', 'identity': m._expected(499, 499),
+                   'context': {}, 'challenge': 'a' * 32})
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason='macOS Apple system interpreter')
+def test_native_readonly_apple_shim_and_actual_interpreter():
+    code = '''import sys
+sys.path.insert(0, sys.argv[1])
+from desktop_assistant import mac_keychain_install as m
+m.verify_python()
+m.verify_python(current=True)
+print('Apple shim and actual interpreter verified without Keychain access')
+'''
+    result = subprocess.run(['/usr/bin/python3', '-I', '-B', '-S', '-c', code,
+        str(Path(m.__file__).resolve().parents[1])], capture_output=True, text=True,
+        env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'en_US.UTF-8'}, cwd='/')
+    assert result.returncode == 0, result.stderr
+    assert 'verified without Keychain access' in result.stdout

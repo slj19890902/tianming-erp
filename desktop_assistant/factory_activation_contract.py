@@ -152,5 +152,3 @@ def reply(value, request, context):
     # This is a prior verified backup receipt, not a new network/storage probe.
     _time(value['mac_backup_verified_at'])
     return value
-
-

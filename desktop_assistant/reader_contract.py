@@ -55,4 +55,3 @@ def target_readers(database, source, target, inventory_record, dispatch_record, 
     if dispatch_record is not None: required.add(dispatch.CAPABILITY)
     if not required <= set(available) or (factory and available.get('factory_cutover_v1') != 1):
         raise ValueError('目标程序缺少正式切换或已保存事实的reader能力')
-

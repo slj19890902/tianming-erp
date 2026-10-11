@@ -130,6 +130,8 @@ def main():
                 'desktop_assistant/factory_network.py', 'desktop_assistant/factory_target_contract.py',
                 'desktop_assistant/mac_factory_request_install.py'} <= sources.keys():
             raise ValueError('目标切换申请源码不完整')
+        if 'desktop_assistant/factory_target_audit.py' not in sources:
+            raise ValueError('最终恢复核验源码不完整')
     schema_contract = schema_contract_from_sources(sources, args.revision)
     if output.exists():
         raise ValueError('构建输出必须是新目录')
@@ -195,7 +197,7 @@ def main():
         runtime_metadata['runtime_capabilities'] = {'immutable_execution_v1': 1, 'system_service_v1': 1,
                                                     'service_restore_v1': 1, 'archive_autofs_v1': 1,
                                                     'service_manage_v1': 1, 'system_nightly_v1': 1,
-                                                    'factory_request_v1': 1}
+                                                    'factory_request_v1': 1, 'factory_audit_v1': 1}
     package = output / ('release.unsigned.zip' if args.signing_request_only else 'release.zip')
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration,

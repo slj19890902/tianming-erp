@@ -278,6 +278,7 @@ def test_parent_rejects_failed_or_inconsistent_worker_without_retry(connector, m
 
 @pytest.fixture
 def actual_lock(tmp_path, monkeypatch):
+    if os.name != 'posix': pytest.skip('real POSIX descriptor/flock probe; not a Windows adapter')
     home = tmp_path/'private-home'; home.mkdir(mode=0o700)
     lock = home/'smb-connection.lock'; lock.write_bytes(b'0'); lock.chmod(0o600)
     monkeypatch.setattr(runtime,'LOCK',lock)

@@ -48,6 +48,7 @@ def test_backup_basename_cannot_select_another_remote_object(name):
 
 @contextmanager
 def connected():
+    if os.name != 'posix': pytest.skip('real POSIX socket FD transfer; contract tests remain portable')
     with socket.socket() as listener:
         listener.bind(('127.0.0.1',0));listener.listen(1)
         client=socket.create_connection(listener.getsockname(),timeout=2)
@@ -89,6 +90,7 @@ def test_standard_stream_or_invalid_fd_never_taken_over(fd):
     with pytest.raises(ValueError):wire.Channel(fd,('127.0.0.1',1234))
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='real POSIX socket descriptor validation')
 def test_rejects_non_socket_and_wrong_peer(tmp_path):
     path=tmp_path/'ordinary';path.write_bytes(b'0')
     fd=os.open(path,os.O_RDONLY)
@@ -105,6 +107,7 @@ def test_rejects_non_socket_and_wrong_peer(tmp_path):
         with pytest.raises(OSError):os.fstat(fd)
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='real POSIX socket descriptor validation')
 def test_listening_socket_is_not_an_already_connected_channel():
     listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(1)
     address=listener.getsockname()

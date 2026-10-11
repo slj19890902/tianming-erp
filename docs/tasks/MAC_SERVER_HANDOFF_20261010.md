@@ -785,3 +785,7 @@ NAS后台未就绪时如实保留备份告警，不关闭或伪造门禁。仅�
 最终相关347项全部通过（1.01秒），含67项新增合同/真实loopback socket/传输工厂测试。首轮13失败/42通过，原因是本机不支持SO_ACCEPTCONN；改用AF_INET/SOCK_STREAM/getpeername及SO_TYPE连续复核，新增真实监听socket拒绝用例，没有放宽“必须已连接”要求。失败日志保留。组件候选在实际全出站拒绝子进程中完成一次NAS未认证协商：SMB3.1.1/AES-128-GCM能力/要求签名，新连接EPERM；没有密码、登录、共享读写或实际备份。普通UID501验证不替代UID499/launchd。
 
 当前只完成流合同与传输组件。加密登录、远端目录/文件级上传及第二连接完整回读、现有Manager接入、受保护凭据入口、build能力、原工厂签名、实机备份及注销重启均未完成。原生SMB候选与历史证据继续保留，不将其不支持的能力开启。老板已被异步询问既有NAS管理员登录名和共享名，未索取聊天密码，不把Mac密码当NAS密码。证据evidence/mac-smb-stream-transport-20261012；主代理顺序复查，NAS回读仅local_mount_view，无独立代理审计声明。
+
+跨平台顺序复查追加允许修正test_mac_smb_runtime.py的真实POSIX锁夹具：该前序候选漏标Windows不可执行条件。流传输测试同样只把真实POSIX socket-FD用例标为Windows跳过，合同/协议合成分支仍跨平台运行；不以Mac测试代替Windows原生验收，不改生产门禁。
+
+上述平台夹具修正后的最终相关集合仍347项全部通过（1.00秒，final-v2.log/xml）；Mac真实FD用例均执行，没有新增Mac跳过。此前final.log/xml保留，不把两次重叠集合相加。Windows实际专项仍待原工厂环境，当前不宣称其通过。

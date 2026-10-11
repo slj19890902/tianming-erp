@@ -1,5 +1,14 @@
 # MAC-SERVER-HANDOFF-20261010
 
+## 2026-10-11 系统引导钥匙串未写入现场续接
+
+老板实际执行a90975b8管理员包：只读预检和两个身份进程通过，pending及home/Library/Keychains已创建，停在create_system_bootstrap。随后root只读诊断确认System.keychain状态2（可读、未解锁），身份/路径保护/内存UID ACL通过，本次精确条目查询-25300未找到，私有Keychains目录为空；没有凭据数据读取，不删除pending或目录来重跑。
+
+本闭环范围app/core/mac_service_keychain.py、mac_keychain_install.py及对应测试/任务/计划。Apple公开实现中GetStatus的写权限位仅随未锁状态设置，实际Keychain操作可按系统机制认证；为固定System域的root引导新增保留实际路径/所有者/ACL/文件检查并交原生SecItemAdd执行无UI授权，失败仍拒绝，不手动锁/解锁系统钥匙串，不修改其设置或旧条目，私有钥匙串仍须解锁状态。新增有限resume-empty只接受已批准旧pending、同一创建记录/身份、严格空目录、精确系统条目不存在和一次性独占续接记录；保留所有旧记录，新进程正例、HMAC、其他UID原生ACL拒绝及最终context发布顺序保持。任何部分已写入、未知状态或重复续接均停止。a90975b8只作中间检查点，最终签名候选待本故障闭合后重建，不能先签旧包。
+
+
+本闭环整合1792项：1776通过、16既有平台跳过、0失败错误，XML 253.385秒，1条既有依赖告警。整合期间只将两处Path.stat(follow_symlinks=False)换成Apple Python 3.9支持的等价os.stat；最终源码180项定向回归及Apple 3.9 stdlib真实文件/ACL合成空现场检查复查通过，集合重叠不累加。首次原生探针的测试替身漏接verify_python参数，修正探针后通过，原失败日志保留；未执行系统钥匙串写入。服务HMAC/其他UID拒绝/context发布抽取前后AST一致；相对工厂基线差异检查通过。当前仍无keychain-empty-resume-attempt、verified或context；新最小管理员包待老板实际执行，不能将合成测试当专用499系统钥匙串成功。主代理单独实施复核，未声称独立代理验收。
+
 ## 2026-10-11 实际身份完成后的系统Python预检修复
 
 老板执行f86b5549续接脚本，实际身份完成回执已返回；root0755系统根和499:499的700 home/instance已只读确认。钥匙串初始化在首次写入pending前失败；原安装现场保留，不重跑身份complete。原预检对/usr/bin/python3错误套用小型配置文件的单链接及64KiB限制；本机Apple启动shim为200560字节、78硬链接，原检查已只读复现拒绝。

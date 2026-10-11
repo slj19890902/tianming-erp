@@ -265,3 +265,89 @@ def test_native_uid_acl_other_interpreter_rotation_lock_and_persistent_preferenc
                'missing_private_file_refused'))
     assert not any(report[key] for key in ('system_item_read', 'system_item_write',
                                           'dedicated_service_uid_tested', 'other_uid_rejection_tested'))
+
+
+@pytest.mark.parametrize('status,pointer,absent', [(-25300, None, True), (0, 123, False),
+    (-25308, None, False), (-50, None, False), (0, None, False), (-25300, 123, False)])
+def test_bootstrap_absence_query_never_requests_secret_or_adopts_existing(monkeypatch, status, pointer, absent):
+    import ctypes as C
+    api = module.Security.__new__(module.Security)
+    calls, releases = [], []
+    @contextmanager
+    def query(ref, service, account):
+        assert (ref, service, account) == (99, module.BOOTSTRAP_SERVICE, 'bound-account')
+        yield {'exact-target': ref}
+    @contextmanager
+    def dictionary(entries):
+        calls.append(dict(entries)); yield entries
+    def matching(entries, result):
+        C.cast(result, C.POINTER(C.c_void_p))[0] = pointer
+        return status
+    api.api = SimpleNamespace(constant=lambda name: name, dictionary=dictionary,
+        sec=SimpleNamespace(SecItemCopyMatching=matching), cf=SimpleNamespace(CFRelease=releases.append),
+        check=lambda status: public.Keychain.check(None, status))
+    api.query = query
+    if absent:
+        api.require_absent(99, module.BOOTSTRAP_SERVICE, 'bound-account')
+    else:
+        with pytest.raises(module.KeychainError):
+            api.require_absent(99, module.BOOTSTRAP_SERVICE, 'bound-account')
+    assert calls == [{'exact-target': 99, 'kSecReturnRef': 'kCFBooleanTrue', 'kSecMatchLimit': 'kSecMatchLimitOne'}]
+    assert releases == ([123] if pointer else [])
+
+
+@pytest.mark.parametrize('mode,uid,euid,status,allowed_add', [
+    ('system', 0, 0, 2, True), ('system', 0, 0, 7, True),
+    ('system', 0, 0, 0, False), ('system', 501, 501, 2, False),
+    ('system', 0, 501, 2, False), ('wrong-service', 0, 0, 2, False),
+    ('private', 499, 499, 2, False), ('private', 499, 499, 7, True)])
+def test_only_root_bootstrap_can_reach_native_add_from_locked_readable_system(monkeypatch, mode, uid, euid, status, allowed_add):
+    api = module.Security.__new__(module.Security); api.api = object()
+    api.status = lambda ref: status
+    monkeypatch.setattr(module.os, 'getuid', lambda: uid)
+    monkeypatch.setattr(module.os, 'geteuid', lambda: euid)
+    class ReachedNativeAdd(Exception): pass
+    @contextmanager
+    def access(uid, gid):
+        assert (uid, gid) == (499, 499)
+        raise ReachedNativeAdd
+        yield
+    api.uid_access = access
+    expected = ReachedNativeAdd if allowed_add else module.KeychainError
+    with pytest.raises(expected):
+        api._put(99, module.BOOTSTRAP_SERVICE if mode == 'system' else 'ordinary', 'bound',
+                 b'synthetic-only', 499, 499, Path('/synthetic'), system_write=mode != 'private')
+
+
+@pytest.mark.parametrize('fault', [None, 'different-domain', 'path-protection', 'existing'])
+def test_system_put_pins_protection_domain_and_absence_before_add(monkeypatch, fault):
+    api = module.Security.__new__(module.Security)
+    events = []; expected = Path('/Library/Keychains/System.keychain')
+    api.path = lambda ref: Path('/wrong') if ref == 2 and fault == 'different-domain' else expected
+    monkeypatch.setattr(module.os, 'getuid', lambda: 0)
+    monkeypatch.setattr(module.os, 'geteuid', lambda: 0)
+    @contextmanager
+    def checked(path, uid, *, mode):
+        assert (path, uid, mode) == (expected, 0, 0o644)
+        events.append('protected')
+        if fault == 'path-protection': raise module.KeychainError('synthetic unsafe path')
+        yield
+        events.append('protected-after')
+    @contextmanager
+    def system(*, writable):
+        assert writable is True; events.append('domain'); yield 2
+    def absent(ref, service, account):
+        assert (ref, service, account) == (1, module.BOOTSTRAP_SERVICE, 'bound')
+        events.append('absent')
+        if fault == 'existing': raise module.KeychainError('synthetic duplicate')
+    def add(*args, **kw):
+        assert args == (1, module.BOOTSTRAP_SERVICE, 'bound', b'synthetic', 499, 499, expected)
+        assert kw == {'system_write': True}; events.append('add')
+    monkeypatch.setattr(module, '_keychain_file', checked)
+    api.system, api.require_absent, api._put = system, absent, add
+    if fault:
+        with pytest.raises(module.KeychainError): api.put(1, module.BOOTSTRAP_SERVICE, 'bound', b'synthetic', 499, 499)
+        assert 'add' not in events
+    else:
+        api.put(1, module.BOOTSTRAP_SERVICE, 'bound', b'synthetic', 499, 499)
+        assert events == ['protected', 'domain', 'absent', 'add', 'protected-after']

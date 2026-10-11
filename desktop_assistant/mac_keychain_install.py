@@ -5,6 +5,7 @@ Workers use a fresh isolated interpreter with an explicit UID/GID and no extra
 groups. Their System *keychain* domain is not a system launchd session proof.
 """
 import argparse
+from contextlib import contextmanager, ExitStack
 import ctypes as C
 import errno
 import hashlib
@@ -22,6 +23,8 @@ BASE = Path('/Library/TianmingERP')
 PYTHON = Path('/usr/bin/python3')
 TYPE = 'tianming.keychain-install-plan.v1'
 LIMIT = 65536
+# Only the reviewed a90975b8 pack can leave the empty checkpoint recovered here.
+EMPTY_PENDING_MANIFESTS = frozenset({'f7aa979050e0cd21086a8d7dd6a63576ef7e526b9efa7a685d64023edc46ee19'})
 FILES = ('app/__init__.py', 'app/core/__init__.py', 'app/core/mac_keychain.py',
          'app/core/mac_service_keychain.py', 'desktop_assistant/__init__.py',
          'desktop_assistant/mac_service_identity.py', 'desktop_assistant/mac_keychain_install.py',
@@ -261,7 +264,7 @@ def _write(path, raw, mode=0o600):
         raise ValueError('安装记录原字节回读失败，保留现场')
 
 
-def preflight(value):
+def _identity_preflight(value):
     identity, keychain = modules()
     identity._administrator()
     context = value['context']
@@ -286,6 +289,13 @@ def preflight(value):
         actual = directory.read(kind, identity.ACCOUNT, list(attrs) + [identity.ATTR + 'RecordName'])
         if actual != {**attrs, identity.ATTR + 'RecordName': [identity.ACCOUNT]}:
             raise ValueError('专用账号OD原字段已改变')
+    return origin
+
+
+def preflight(value):
+    _identity_preflight(value)
+    _, keychain = modules()
+    context = value['context']
     for path in (BASE / 'home/Library', BASE / 'keychain-init-pending.json',
                  BASE / 'keychain-init-verified.json', keychain.CONTEXT):
         if path.exists() or path.is_symlink():
@@ -293,6 +303,92 @@ def preflight(value):
     with keychain._checked_path(BASE / 'home', uid=context['uid'], directory=True, mode=0o700):
         pass
     verify_python()
+
+
+def _empty_pending(raw, approved_sha, value):
+    if digest(raw) != approved_sha:
+        raise ValueError('保留的初始化计划与批准摘要不符')
+    old = decode(raw)
+    if (set(old) != set(value) or old['type'] != TYPE
+            or old['code_manifest_sha256'] not in EMPTY_PENDING_MANIFESTS
+            or uuid.UUID(old['attempt_id']).hex != old['attempt_id']
+            or old['attempt_id'] == value['attempt_id']
+            or any(type(old[k]) is not int for k in ('created_at', 'expires_at'))
+            or not 0 < old['expires_at'] - old['created_at'] <= 7 * 86400
+            or old['created_at'] > value['created_at']
+            or any(old[k] != value[k] for k in ('context', 'observer', 'identity_plan_sha256'))):
+        raise ValueError('仅续接同一身份的已审阅空初始化现场')
+    # A fresh plan authorizes this attempt; the retained old plan is evidence,
+    # not an authorization to retry its expired/failed operation.
+
+
+@contextmanager
+def _empty_scene(value, pending_sha):
+    identity, keychain = modules()
+    origin = _identity_preflight(value)
+    context = value['context']
+    names = {'00-plan.json', '01-groups.json', '02-users.json',
+             'identity-completion-attempt.json', 'provisioned.json', 'keychain-init-pending.json'}
+    directories = ((BASE, 0, 0, 0o755, names | {'home', 'instance'}),
+                   (BASE / 'home', context['uid'], context['gid'], 0o700, {'Library'}),
+                   (BASE / 'home/Library', context['uid'], context['gid'], 0o700, {'Keychains'}),
+                   (BASE / 'home/Library/Keychains', context['uid'], context['gid'], 0o700, set()),
+                   (BASE / 'instance', context['uid'], context['gid'], 0o700, set()))
+    with ExitStack() as stack:
+        device = BASE.parent.stat().st_dev
+        pinned = []
+        for path, uid, gid, mode, entries in directories:
+            fd = stack.enter_context(keychain._checked_path(path, uid=uid, directory=True, mode=mode))
+            pinned.append((path, fd, uid, gid, mode, entries))
+        record_fds = []
+        for name in sorted(names):
+            path = BASE / name
+            fd = stack.enter_context(keychain._checked_path(path, uid=0, mode=0o600))
+            info = os.fstat(fd)
+            if info.st_gid != 0 or info.st_dev != device:
+                raise ValueError('保留记录的组或设备不符')
+            record_fds.append((path, fd))
+        records = {name: protected(BASE / name) for name in names}
+        _empty_pending(records['keychain-init-pending.json'], pending_sha, value)
+        group, user = identity._attributes(origin)
+        for name, attrs in (('01-groups.json', group), ('02-users.json', user)):
+            if records[name] != canonical({**attrs, identity.ATTR + 'RecordName': [identity.ACCOUNT]}):
+                raise ValueError('保留身份创建记录与实际身份不符')
+        completion = {'type': 'tianming.mac-service-identity-completion-attempt.v1',
+            'plan_sha256': value['identity_plan_sha256'], 'installer_sha256': identity._code_sha(),
+            'original_installer_sha256': origin['installer_sha256'],
+            'original_records': {name: digest(records[name]) for name in
+                                 ('00-plan.json', '01-groups.json', '02-users.json')},
+            'directory_groups': sorted(identity.permitted_groups(context['gid'])),
+            'account_modified': False, 'group_modified': False,
+            'original_records_modified': False, 'factory_activated': False}
+        if records['identity-completion-attempt.json'] != canonical(completion):
+            raise ValueError('保留的身份续接记录不匹配')
+
+        def check():
+            for path, fd, uid, gid, mode, entries in pinned:
+                before, current = os.fstat(fd), os.stat(path, follow_symlinks=False)
+                if ((before.st_dev, before.st_ino) != (current.st_dev, current.st_ino)
+                        or current.st_dev != device or current.st_uid != uid or current.st_gid != gid
+                        or stat.S_IMODE(current.st_mode) != mode or set(os.listdir(fd)) != entries):
+                    raise ValueError('续接目录非空、身份或保护属性改变，不覆盖重试')
+                keychain._no_acl(fd)
+            for path, fd in record_fds:
+                before, current = os.fstat(fd), os.stat(path, follow_symlinks=False)
+                if ((before.st_dev, before.st_ino) != (current.st_dev, current.st_ino)
+                        or current.st_dev != device or current.st_uid != 0 or current.st_gid != 0
+                        or stat.S_IMODE(current.st_mode) != 0o600 or current.st_nlink != 1):
+                    raise ValueError('保留记录保护属性在续接检查期间改变')
+                keychain._no_acl(fd)
+            if any(protected(BASE / name) != raw for name, raw in records.items()):
+                raise ValueError('保留原记录在续接检查期间改变')
+            _identity_preflight(value)
+            api = keychain.Security()
+            with api.system(writable=True) as ref:
+                api.require_absent(ref, keychain.BOOTSTRAP_SERVICE, keychain.binding(context))
+        check()
+        verify_python()
+        yield check
 
 
 def _proof(secret, phase, context, challenge):
@@ -441,6 +537,38 @@ def install(raw, approved_sha, *, progress=None):
     report('create_private_directories')
     for path in (BASE / 'home/Library', BASE / 'home/Library/Keychains'):
         identity._owned_directory(path, context['uid'], context['gid'])
+    return _finish_initialization(raw, approved_sha, value, report)
+
+
+def resume_empty(raw, approved_sha, pending_sha, *, progress=None):
+    def report(phase):
+        if progress is not None:
+            progress(phase)
+    if os.getuid() != 0 or os.geteuid() != 0:
+        raise ValueError('需管理员在本机执行；不请求或绕过密码')
+    report('readonly_empty_resume_preflight')
+    value = validate_plan(raw, approved_sha)
+    with _empty_scene(value, pending_sha) as check:
+        context, other = value['context'], value['observer']
+        for args in ((context['uid'], context['gid'], str(BASE / 'home')),
+                     (other['uid'], other['gid'], other['home'])):
+            run_child(value, 'preflight', *args)
+        validate_plan(raw, approved_sha)
+        check()
+        report('create_empty_resume_attempt')
+        _write(BASE / 'keychain-empty-resume-attempt.json', canonical({
+            'type': 'tianming.keychain-empty-resume-attempt.v1',
+            'pending_sha256': pending_sha, 'new_plan_sha256': approved_sha,
+            'new_plan': value, 'old_records_modified': False, 'service_started': False}))
+        # Exclusive record arbitrates concurrent attempts. It is never removed,
+        # even when native Add fails; all later writes retain their own gates.
+        return _finish_initialization(raw, approved_sha, value, report)
+
+
+def _finish_initialization(raw, approved_sha, value, report):
+    _, keychain = modules()
+    context, other = value['context'], value['observer']
+    service = (context['uid'], context['gid'], str(BASE / 'home'))
     secret = os.urandom(32).hex().encode()
     report('create_system_bootstrap')
     keychain.create_bootstrap(context, secret)
@@ -470,12 +598,13 @@ def install(raw, approved_sha, *, progress=None):
 
 def main():
     parser = argparse.ArgumentParser(description='专用服务身份、程序和系统监护安装；工厂接管另行授权')
-    parser.add_argument('action', choices=('plan', 'install', '_worker', 'publish', '_publish_worker',
+    parser.add_argument('action', choices=('plan', 'install', 'resume-empty', '_worker', 'publish', '_publish_worker',
                                          'service-plan', 'service-apply', 'archive-plan', 'archive-apply', 'manage', 'factory-request', 'factory-activate'))
     parser.add_argument('--identity-plan', type=Path)
     parser.add_argument('--observer-uid', type=int)
     parser.add_argument('--file', type=Path)
     parser.add_argument('--approved-sha256')
+    parser.add_argument('--pending-sha256')
     parser.add_argument('--package', type=Path)
     parser.add_argument('--service-action', choices=('install', 'disable', 'enable'))
     parser.add_argument('--package-sha256')
@@ -559,9 +688,15 @@ def main():
         else:
             with args.file.open('rb') as source:
                 raw = source.read(LIMIT + 1)
-            result = install(raw, args.approved_sha256, progress=lambda phase:
-                print(json.dumps({'keychain_install_phase': phase}), file=sys.stderr, flush=True))
-    except (Exception, KeyboardInterrupt):
+            progress = lambda phase: print(json.dumps({'keychain_install_phase': phase}), file=sys.stderr, flush=True)
+            if args.action == 'resume-empty':
+                result = resume_empty(raw, args.approved_sha256, args.pending_sha256, progress=progress)
+            else:
+                result = install(raw, args.approved_sha256, progress=progress)
+    except (Exception, KeyboardInterrupt) as error:
+        status = getattr(error, 'os_status', None)
+        if type(status) is int and -(2**31) <= status < 2**31:
+            print(json.dumps({'keychain_native_os_status': status}), file=sys.stderr, flush=True)
         raise SystemExit('管理员初始化或发布未确认完成；可能已有文件、条目或完成记录，保留现场，不覆盖重试、不自动删除。') from None
     print(json.dumps(result))
 

@@ -422,3 +422,193 @@ print('Apple shim and actual interpreter verified without Keychain access')
         env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LANG': 'en_US.UTF-8'}, cwd='/')
     assert result.returncode == 0, result.stderr
     assert 'verified without Keychain access' in result.stdout
+
+
+@pytest.mark.parametrize('fault', [None, 'digest', 'code', 'same-attempt', 'identity', 'observer',
+                                   'bool-time', 'future', 'extra', 'uuid', 'ttl'])
+def test_empty_pending_requires_reviewed_prior_plan_and_same_binding(case, fault):
+    old = deepcopy(case.value)
+    old['attempt_id'] = 'a' * 32
+    old['code_manifest_sha256'] = next(iter(m.EMPTY_PENDING_MANIFESTS))
+    old['created_at'], old['expires_at'] = 1, 99  # May expire; fresh plan must be current.
+    if fault == 'code': old['code_manifest_sha256'] = 'f' * 64
+    if fault == 'same-attempt': old['attempt_id'] = case.value['attempt_id']
+    if fault == 'identity': old['context']['uid'] = 498
+    if fault == 'observer': old['observer']['uid'] = 502
+    if fault == 'bool-time': old['created_at'] = True
+    if fault == 'future': old['created_at'], old['expires_at'] = 101, 300
+    if fault == 'extra': old['extra'] = False
+    if fault == 'uuid': old['attempt_id'] = 'bad'
+    if fault == 'ttl': old['expires_at'] = 8 * 86400
+    raw = m.canonical(old)
+    if fault:
+        with pytest.raises(ValueError): m._empty_pending(raw, '0' * 64 if fault == 'digest' else m.digest(raw), case.value)
+    else:
+        m._empty_pending(raw, m.digest(raw), case.value)
+
+
+@pytest.mark.parametrize('fault', [None, 'scene', 'observer', 'changed-scene', 'bootstrap', 'verify', 'negative', 'proof'])
+def test_resume_retains_old_evidence_and_uses_same_proofs_before_context(case, monkeypatch, fault):
+    retained = {'keychain-init-pending.json': b'old pending evidence', '00-plan.json': b'old identity evidence'}
+    for name, raw in retained.items(): (case.base / name).write_bytes(raw)
+    pending_sha = m.digest(retained['keychain-init-pending.json'])
+    @contextmanager
+    def scene(value, approved):
+        assert approved == pending_sha
+        case.events.append('empty-scene')
+        if fault == 'scene': raise ValueError('synthetic changed scene')
+        def check():
+            case.events.append('recheck-empty')
+            if fault == 'changed-scene': raise ValueError('synthetic changed scene')
+        yield check
+    monkeypatch.setattr(m, '_empty_scene', scene)
+    def child(value, phase, uid, gid, home):
+        if (phase == fault or (fault == 'observer' and phase == 'preflight' and uid == 501)):
+            raise ValueError('synthetic child failure')
+        response = case.child(value, phase, uid, gid, home)
+        if fault == 'proof' and phase == 'verify': response['proof'] = '0' * 64
+        return response
+    monkeypatch.setattr(m, 'run_child', child)
+    if fault == 'bootstrap':
+        def reject(*a): raise ValueError('synthetic native refusal')
+        monkeypatch.setattr(keychain, 'create_bootstrap', reject)
+    phases = []
+    if fault:
+        with pytest.raises(ValueError): m.resume_empty(case.raw, case.sha, pending_sha, progress=phases.append)
+        assert not keychain.CONTEXT.exists()
+    else:
+        result = m.resume_empty(case.raw, case.sha, pending_sha, progress=phases.append)
+        assert result['context_published'] and result['service_new_process_verified']
+        assert result['system_keychain_acl_denial_verified'] and not result['factory_activated']
+        assert phases == ['readonly_empty_resume_preflight', 'create_empty_resume_attempt',
+            'create_system_bootstrap', 'service_initialize', 'service_verify', 'verify_other_uid_denied', 'publish_completion']
+        assert [p.name for p, _, _ in case.writes] == ['keychain-empty-resume-attempt.json',
+            'keychain-init-verified.json', 'keychain-context.json']
+    assert all((case.base / name).read_bytes() == raw for name, raw in retained.items())
+    assert not any(e in ('mkdir', 'preflight') for e in case.events)
+    attempt = case.base / 'keychain-empty-resume-attempt.json'
+    if fault in {'scene', 'observer', 'changed-scene'}:
+        assert not attempt.exists() and not case.secrets
+    else:
+        record = m.decode(attempt.read_bytes())
+        assert record['new_plan'] == case.value and record['pending_sha256'] == pending_sha
+        assert not record['old_records_modified'] and not record['service_started']
+        assert all(secret not in attempt.read_bytes() for secret in case.secrets)
+
+
+@pytest.fixture
+def empty_scene_case(tmp_path, monkeypatch):
+    base = tmp_path.resolve(); real_uid = os.getuid()
+    monkeypatch.setattr(m, 'BASE', base)
+    origin = {'uid': 499, 'gid': 499, 'installation_id': 'a' * 32,
+              'host_sha256': 'b' * 64, 'installer_sha256': 'c' * 64}
+    attrs = {'synthetic': ['original']}
+    monkeypatch.setattr(identity, '_attributes', lambda value: (attrs, attrs))
+    monkeypatch.setattr(identity, '_code_sha', lambda: 'd' * 64)
+    monkeypatch.setattr(identity, 'permitted_groups', lambda gid: {499, 12})
+    monkeypatch.setattr(m, '_identity_preflight', lambda value: deepcopy(origin))
+    monkeypatch.setattr(m, 'verify_python', lambda: None)
+    monkeypatch.setattr(m, 'protected', lambda path: path.read_bytes())
+    monkeypatch.setattr(keychain, '_no_acl', lambda fd: None)
+    old = {'type': m.TYPE, 'attempt_id': 'e' * 32, 'identity_plan_sha256': m.digest(m.canonical(origin)),
+           'context': {'type': keychain.TYPE, **{k: origin[k] for k in ('uid', 'gid', 'installation_id', 'host_sha256')}},
+           'observer': {'uid': 501, 'gid': 20, 'home': '/Users/synthetic', 'name': 'synthetic'},
+           'code_manifest_sha256': next(iter(m.EMPTY_PENDING_MANIFESTS)), 'created_at': 100, 'expires_at': 1000}
+    value = deepcopy(old); value.update(attempt_id='f' * 32, code_manifest_sha256='1' * 64, created_at=200)
+    records = {'00-plan.json': m.canonical(origin), '01-groups.json': m.canonical({**attrs, identity.ATTR + 'RecordName': [identity.ACCOUNT]}),
+               '02-users.json': m.canonical({**attrs, identity.ATTR + 'RecordName': [identity.ACCOUNT]}),
+               'keychain-init-pending.json': m.canonical(old), 'provisioned.json': b'synthetic completed identity'}
+    records['identity-completion-attempt.json'] = m.canonical({
+        'type': 'tianming.mac-service-identity-completion-attempt.v1',
+        'plan_sha256': old['identity_plan_sha256'], 'installer_sha256': 'd' * 64,
+        'original_installer_sha256': 'c' * 64,
+        'original_records': {name: m.digest(records[name]) for name in ('00-plan.json', '01-groups.json', '02-users.json')},
+        'directory_groups': [12, 499], 'account_modified': False, 'group_modified': False,
+        'original_records_modified': False, 'factory_activated': False})
+    logical = {base: (0, 0)}; base.chmod(0o755)
+    for name in ('home', 'home/Library', 'home/Library/Keychains', 'instance'):
+        path = base / name; path.mkdir(mode=0o700); logical[path] = (499, 499)
+    for name, raw in records.items():
+        path = base / name; path.write_bytes(raw); path.chmod(0o600); logical[path] = (0, 0)
+    real_stat, real_fstat = os.stat, os.fstat
+    fds = {}; devices = {}
+    def metadata(info, path):
+        if path not in logical: return info
+        fields = {name: getattr(info, name) for name in dir(info) if name.startswith('st_')}
+        fields.update(st_uid=logical[path][0], st_gid=logical[path][1], st_dev=devices.get(path, info.st_dev))
+        return SimpleNamespace(**fields)
+    monkeypatch.setattr(os, 'stat', lambda path, **kw: metadata(real_stat(path, **kw), Path(path)) if isinstance(path, (str, Path)) else real_stat(path, **kw))
+    monkeypatch.setattr(os, 'fstat', lambda fd: metadata(real_fstat(fd), fds.get(fd)))
+    native_check = keychain._checked_path
+    @contextmanager
+    def check(path, *, uid, directory=False, mode=0o600):
+        if logical.get(path, (None, None))[0] != uid: raise ValueError('synthetic owner mismatch')
+        with native_check(path, uid=real_uid, directory=directory, mode=mode) as fd:
+            fds[fd] = path
+            try: yield fd
+            finally: del fds[fd]
+    monkeypatch.setattr(keychain, '_checked_path', check)
+    calls = []
+    class Native:
+        @contextmanager
+        def system(self, *, writable):
+            assert writable; yield 123
+        def require_absent(self, ref, service, account):
+            assert (ref, service, account) == (123, keychain.BOOTSTRAP_SERVICE, keychain.binding(value['context']))
+            calls.append('exact-reference-only')
+    monkeypatch.setattr(keychain, 'Security', Native)
+    return SimpleNamespace(base=base, value=value, pending_sha=m.digest(records['keychain-init-pending.json']),
+        records=records, logical=logical, devices=devices, calls=calls)
+
+
+@pytest.mark.parametrize('fault', [None, 'private-file', 'instance-file', 'extra-record', 'previous-attempt',
+    'context', 'record-mode', 'record-hardlink', 'record-symlink', 'record-gid', 'record-device',
+    'home-mode', 'home-owner', 'home-gid', 'home-device', 'private-symlink', 'identity-record', 'completion-record', 'existing-bootstrap'])
+def test_empty_scene_refuses_partial_or_foreign_state_without_mutation(empty_scene_case, monkeypatch, fault):
+    c = empty_scene_case; base = c.base
+    if fault in {'private-file', 'instance-file'}:
+        parent = base / ('home/Library/Keychains' if fault == 'private-file' else 'instance')
+        (parent / 'existing').write_bytes(b'preserve')
+    if fault in {'extra-record', 'previous-attempt', 'context'}:
+        (base / {'extra-record': 'unknown', 'previous-attempt': 'keychain-empty-resume-attempt.json',
+                 'context': 'keychain-context.json'}[fault]).write_bytes(b'preserve')
+    record = base / '02-users.json'; home = base / 'home'
+    if fault == 'record-mode': record.chmod(0o644)
+    if fault == 'record-hardlink': os.link(record, base / 'also-preserve')
+    if fault == 'record-symlink': record.rename(base / 'old-users'); record.symlink_to(base / 'old-users')
+    if fault == 'record-gid': c.logical[record] = (0, 20)
+    if fault == 'record-device': c.devices[record] = -1
+    if fault == 'home-mode': home.chmod(0o755)
+    if fault == 'home-owner': c.logical[home] = (501, 499)
+    if fault == 'home-gid': c.logical[home] = (499, 20)
+    if fault == 'home-device': c.devices[home] = -1
+    if fault == 'private-symlink':
+        target = home / 'Library/Keychains'; target.rename(home / 'Library/original'); target.symlink_to(home / 'Library/original')
+    if fault == 'identity-record': record.write_bytes(b'{}')
+    if fault == 'completion-record': (base / 'identity-completion-attempt.json').write_bytes(b'{}')
+    if fault == 'existing-bootstrap':
+        def reject(*a): raise keychain.KeychainError('existing item; never request its secret')
+        monkeypatch.setattr(keychain.Security, 'require_absent', reject)
+    before = {str(p.relative_to(base)): p.read_bytes() for p in base.rglob('*') if p.is_file()}
+    if fault:
+        with pytest.raises((ValueError, OSError)):
+            with m._empty_scene(c.value, c.pending_sha): pytest.fail('unsafe scene accepted')
+    else:
+        with m._empty_scene(c.value, c.pending_sha) as recheck: recheck()
+        assert c.calls == ['exact-reference-only', 'exact-reference-only']
+    assert {str(p.relative_to(base)): p.read_bytes() for p in base.rglob('*') if p.is_file()} == before
+
+
+@pytest.mark.parametrize('change', ['record', 'private-file', 'directory-replace', 'owner', 'mode', 'record-mode'])
+def test_empty_scene_rechecks_after_readonly_children(empty_scene_case, change):
+    c = empty_scene_case
+    with pytest.raises((ValueError, OSError)):
+        with m._empty_scene(c.value, c.pending_sha) as recheck:
+            if change == 'record': (c.base / '02-users.json').write_bytes(b'changed')
+            if change == 'private-file': (c.base / 'home/Library/Keychains/unexpected').write_bytes(b'preserve')
+            if change == 'directory-replace':
+                path = c.base / 'instance'; path.rename(c.base / 'retained-instance'); path.mkdir(mode=0o700)
+            if change == 'owner': c.logical[c.base / 'home'] = (501, 499)
+            if change == 'mode': (c.base / 'home').chmod(0o755)
+            if change == 'record-mode': (c.base / '02-users.json').chmod(0o644)
+            recheck()

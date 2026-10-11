@@ -322,6 +322,24 @@ class Security:
                         raise KeychainError('服务钥匙串条目长度无效')
                     return C.string_at(api.cf.CFDataGetBytePtr(data), size)
 
+    def require_absent(self, ref, service, account):
+        # Query only this item's reference, never its secret or unrelated items.
+        api = self.api
+        with self.query(ref, service, account) as entries:
+            entries['kSecReturnRef'] = api.constant('kCFBooleanTrue')
+            entries['kSecMatchLimit'] = api.constant('kSecMatchLimitOne')
+            with api.dictionary(entries) as query:
+                result = C.c_void_p()
+                status = api.sec.SecItemCopyMatching(query, C.byref(result))
+                if result.value:
+                    api.cf.CFRelease(result.value)
+                if status == -25300 and not result.value:
+                    return
+                if status == 0:
+                    raise KeychainError('系统引导条目已存在，保留现场，不覆盖或接管')
+                api.check(status)
+                raise KeychainError('不能证明系统引导条目不存在')
+
     def put(self, ref, service, account, raw, uid, gid):
         expected = self.path(ref)
         system_write = service == BOOTSTRAP_SERVICE and os.getuid() == os.geteuid() == 0
@@ -329,13 +347,26 @@ class Security:
         # before Add as well as at the enclosing private-context boundary.
         with _keychain_file(expected, 0 if system_write else os.getuid(),
                             mode=0o644 if system_write else 0o600):
-            self._put(ref, service, account, raw, uid, gid, expected)
+            if system_write:
+                # Authenticate the actual System domain before allowing its
+                # normal on-demand unlock. GetStatus does not test BSD writes.
+                with self.system(writable=True) as system:
+                    if self.path(system) != expected:
+                        raise KeychainError('引导写入不是当前受保护系统钥匙串')
+                    self.require_absent(ref, service, account)
+                    self._put(ref, service, account, raw, uid, gid, expected, system_write=True)
+            else:
+                self._put(ref, service, account, raw, uid, gid, expected)
 
-    def _put(self, ref, service, account, raw, uid, gid, expected):
+    def _put(self, ref, service, account, raw, uid, gid, expected, *, system_write=False):
         api = self.api
         if not isinstance(raw, bytes) or not 0 < len(raw) <= MAX_SECRET_BYTES:
             raise KeychainError('服务钥匙串条目长度无效')
-        if self.status(ref) & 7 != 7:
+        if system_write:
+            if (service != BOOTSTRAP_SERVICE or os.getuid() != 0 or os.geteuid() != 0
+                    or not self.status(ref) & 2):
+                raise KeychainError('系统引导写入身份或读取状态不符')
+        elif self.status(ref) & 7 != 7:
             raise KeychainError('目标钥匙串未解锁或不可写，拒绝新增')
         with self.uid_access(uid, gid) as access, self.query(ref, service, account, adding=True) as entries:
             with api.owned(api.cf.CFDataCreate(None, raw, len(raw))) as data:

@@ -1,4 +1,4 @@
-"""Bind Mac backup success to approved direct NFS and independent byte readback.
+"""Bind Mac backup success to approved direct NFS/SMB and independent readback.
 
 Historical local sidecars describe the verification at backup time. They do not
 prove current availability, NAS disk power-loss durability or headless startup.
@@ -21,6 +21,7 @@ if __package__ in (None, ''):
 
 from desktop_assistant import mac_mount as mounts
 from desktop_assistant import mac_archive_contract as autofs
+from desktop_assistant import mac_smb_contract as smb, mac_smb_storage as smb_storage
 
 BASE = Path('/Library/TianmingERP')
 MOUNT = BASE/'archive'
@@ -28,6 +29,7 @@ DESTINATION = MOUNT/'backups'
 CONTRACT = BASE/'archive-contract.json'
 CONTRACT_TYPE = 'tianming.mac-archive-contract.v1'
 PROOF_TYPE = 'tianming.mac-nfs-readback.v1'
+SMB_PROOF_TYPE = 'tianming.mac-smb-readback.v1'
 SIDECAR_TYPE = 'tianming.mac-backup-evidence.v1'
 CONTRACT_FIELDS = {'type', 'context_sha256', 'mountpoint', 'destination', 'source',
                    'server_address', 'export', 'version', 'port', 'security'}
@@ -50,6 +52,10 @@ def _contract():
     raw = publication.read_record(CONTRACT)
     value = mounts.decode(raw)
     context_sha = digest(publication.read_record(keychain.CONTEXT))
+    if isinstance(value, dict) and value.get('type') == smb.TYPE:
+        smb.validate(value, context_sha, context['uid'])
+        if context.get('gid') != context['uid']: raise ValueError(UNCONFIRMED)
+        return value, digest(raw), context
     if isinstance(value, dict) and value.get('type') == autofs.TYPE:
         autofs.validate(value, context_sha)
         autofs.installed(value, _root_configuration)
@@ -71,6 +77,11 @@ def _contract():
 
 
 def _matches(value, observation):
+    if value.get('type') == smb.TYPE:
+        try:
+            smb.require_observation(value, observation)
+            return True
+        except (ValueError, TypeError, KeyError): return False
     if value.get('type') == autofs.TYPE: return autofs.matches(value, observation)
     if not isinstance(observation, dict) or observation.get('classification') != 'direct_network_unbound':
         return False
@@ -95,6 +106,10 @@ def before_write(path):
     if not required(): return None
     try:
         value, contract_sha, context = _contract()
+        if value.get('type') == smb.TYPE:
+            if Path(path) != smb.MOUNT/smb.RELATIVE: raise ValueError(UNCONFIRMED)
+            with _smb_location(value, contract_sha, context) as (anchor, _):
+                return anchor
         if value.get('type') == autofs.TYPE:
             if Path(path) != autofs.DESTINATION: raise ValueError(UNCONFIRMED)
             return autofs_location(value, contract_sha, context)
@@ -118,6 +133,38 @@ def before_write(path):
         return {'contract_sha256': contract_sha, 'context_sha256': value['context_sha256'], 'mount': observation}
     except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError):
         raise ValueError(UNCONFIRMED) from None
+
+
+@contextmanager
+def _smb_location(value, contract_sha, context):
+    with smb_storage.open_location(value, context_sha=value['context_sha256'], uid=context['uid']) as held:
+        anchor = {'contract_sha256': contract_sha, 'context_sha256': value['context_sha256'],
+                  'mount': held.check(), 'directory_identity': held.directory_identity}
+        yield anchor, held.destination_fd
+        # Public root approval must remain current for the entire operation.
+        current, current_sha, current_context = _contract()
+        if (current, current_sha, current_context) != (value, contract_sha, context):
+            raise ValueError(UNCONFIRMED)
+        held.check()
+
+
+@contextmanager
+def _location(path):
+    if required():
+        value, contract_sha, context = _contract()
+        if value.get('type') == smb.TYPE:
+            if Path(path) != smb.MOUNT/smb.RELATIVE: raise ValueError(UNCONFIRMED)
+            with _smb_location(value, contract_sha, context) as result:
+                yield result
+            return
+    yield before_write(path), None
+
+
+@contextmanager
+def location_guard(path):
+    """Keep SMB mount/destination FDs pinned while all existing backup IO runs."""
+    with _location(path) as (anchor, _):
+        yield anchor
 
 
 def _root_configuration(path):
@@ -168,7 +215,7 @@ def autofs_location(value, contract_sha, context):
 
 def _final_path(path):
     value = Path(path)
-    if (not value.is_absolute() or value.parent not in (DESTINATION, autofs.DESTINATION) or value.suffix != '.tmbackup'
+    if (not value.is_absolute() or value.parent not in (DESTINATION, autofs.DESTINATION, smb.MOUNT/smb.RELATIVE) or value.suffix != '.tmbackup'
             or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}\.tmbackup', value.name)):
         raise ValueError(UNCONFIRMED)
     return value
@@ -187,25 +234,28 @@ def readback(request):
             or not _sha(request['sha256']) or type(request['size']) is not int or request['size'] <= 0):
         raise ValueError(UNCONFIRMED)
     path = _final_path(request['path'])
-    anchor = before_write(path.parent)
-    if anchor != request['anchor']: raise ValueError(UNCONFIRMED)
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        before = os.fstat(fd)
-        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size != request['size']
-                or mounts.fd_identity(fd) != anchor['mount']['kernel']):
-            raise ValueError(UNCONFIRMED)
-        fcntl.fcntl(fd, 48, 1)  # macOS F_NOCACHE applies to this independent open.
-        value = hashlib.sha256()
-        while block := os.read(fd, 1024 * 1024): value.update(block)
-        after = os.fstat(fd)
-        if (value.hexdigest() != request['sha256'] or _fingerprint(before) != _fingerprint(after)
-                or mounts.fd_identity(fd) != anchor['mount']['kernel']
-                or _fingerprint(path.stat(follow_symlinks=False)) != _fingerprint(after)):
-            raise ValueError(UNCONFIRMED)
-    finally: os.close(fd)
+    with _location(path.parent) as (anchor, directory):
+        if anchor != request['anchor']: raise ValueError(UNCONFIRMED)
+        fd = os.open(path if directory is None else path.name,
+                     os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        try:
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size != request['size']
+                    or mounts.fd_identity(fd) != anchor['mount']['kernel']):
+                raise ValueError(UNCONFIRMED)
+            fcntl.fcntl(fd, 48, 1)  # macOS F_NOCACHE applies to this independent open.
+            value = hashlib.sha256()
+            while block := os.read(fd, 1024 * 1024): value.update(block)
+            after = os.fstat(fd)
+            named = os.stat(path if directory is None else path.name, dir_fd=directory, follow_symlinks=False)
+            if (value.hexdigest() != request['sha256'] or _fingerprint(before) != _fingerprint(after)
+                    or mounts.fd_identity(fd) != anchor['mount']['kernel']
+                    or _fingerprint(named) != _fingerprint(after)):
+                raise ValueError(UNCONFIRMED)
+        finally: os.close(fd)
     if before_write(path.parent) != anchor: raise ValueError(UNCONFIRMED)
-    proof = {'type': PROOF_TYPE, **anchor, 'path': str(path), 'sha256': value.hexdigest(),
+    kind = SMB_PROOF_TYPE if anchor['mount'].get('type') == smb.OBSERVATION else PROOF_TYPE
+    proof = {'type': kind, **anchor, 'path': str(path), 'sha256': value.hexdigest(),
              'size': after.st_size, 'verified_at': datetime.now(timezone.utc).isoformat(),
              'file_identity': _fingerprint(after)}
     return {'challenge': request['challenge'], 'proof': proof}
@@ -231,14 +281,20 @@ def _child(request):
 
 def _validate_proof(proof, anchor, *, expected=None, earliest=None, now=None):
     """One strict schema for child output, publication and historical display."""
-    if (not isinstance(anchor, dict) or set(anchor) != {'context_sha256', 'contract_sha256', 'mount'}
+    if not isinstance(anchor, dict) or not isinstance(anchor.get('mount'), dict): raise ValueError(UNCONFIRMED)
+    is_smb = anchor['mount'].get('type') == smb.OBSERVATION
+    extra = {'directory_identity'} if is_smb else set()
+    if (set(anchor) != {'context_sha256', 'contract_sha256', 'mount'} | extra
             or any(not _sha(anchor[k]) for k in ('context_sha256', 'contract_sha256'))
-            or not isinstance(proof, dict) or set(proof) != PROOF_FIELDS or proof['type'] != PROOF_TYPE
+            or not isinstance(proof, dict) or set(proof) != PROOF_FIELDS | extra
+            or proof['type'] != (SMB_PROOF_TYPE if is_smb else PROOF_TYPE)
             or any(proof[k] != v for k, v in anchor.items())
             or not isinstance(proof['path'], str) or str(_final_path(proof['path'])) != proof['path']
             or not _sha(proof['sha256']) or type(proof['size']) is not int or proof['size'] <= 0
             or not isinstance(proof['verified_at'], str)):
         raise ValueError(UNCONFIRMED)
+    if is_smb:
+        smb_storage.validate_directory_identity(anchor['directory_identity'], anchor['mount']['kernel']['owner'])
     if expected is not None and any(proof[k] != expected[k] for k in ('path', 'sha256', 'size')):
         raise ValueError(UNCONFIRMED)
     when = datetime.fromisoformat(proof['verified_at'])
@@ -249,6 +305,8 @@ def _validate_proof(proof, anchor, *, expected=None, earliest=None, now=None):
     if (not isinstance(identity, dict) or set(identity) != {'dev', 'ino', 'size', 'mtime_ns', 'ctime_ns'}
             or any(type(v) is not int or v < 0 for v in identity.values())
             or identity['size'] != proof['size']):
+        raise ValueError(UNCONFIRMED)
+    if is_smb and (identity['dev'] != anchor['directory_identity'][-1]['dev'] or identity['ino'] <= 0):
         raise ValueError(UNCONFIRMED)
     return when
 
@@ -352,6 +410,7 @@ def publish_receipt(path, receipt, proof):
     value, contract_sha, context = _contract()
     if not isinstance(proof, dict) or not _matches(value, proof.get('mount')): raise ValueError(UNCONFIRMED)
     anchor = {'contract_sha256': contract_sha, 'context_sha256': value['context_sha256'], 'mount': proof['mount']}
+    if value.get('type') == smb.TYPE: anchor['directory_identity'] = proof.get('directory_identity')
     _validate_proof(proof, anchor)
     path = Path(path)
     if (path != BASE/'instance/control/backup-receipts'/(Path(proof['path']).stem+'.json')
@@ -390,6 +449,7 @@ def verified_at(root, state, *, now=None):
         proof = sidecar['readback']
         if not isinstance(proof, dict) or not _matches(value, proof.get('mount')): return None
         anchor = {'contract_sha256': contract_sha, 'context_sha256': value['context_sha256'], 'mount': proof['mount']}
+        if value.get('type') == smb.TYPE: anchor['directory_identity'] = proof.get('directory_identity')
         _validate_proof(proof, anchor, expected=receipt, now=now)
         if proof['verified_at'] != state['last_backup_at']: return None
         return proof['verified_at']

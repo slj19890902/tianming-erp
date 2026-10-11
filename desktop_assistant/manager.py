@@ -493,7 +493,11 @@ class Manager:
 
     def _backup_stopped(self, password: str, nas: Path) -> Path:
         from desktop_assistant import mac_backup_storage as remote_storage
-        storage_anchor = remote_storage.before_write(nas)
+        with remote_storage.location_guard(nas) as storage_anchor:
+            return self._backup_at_location(password, nas, storage_anchor)
+
+    def _backup_at_location(self, password: str, nas: Path, storage_anchor) -> Path:
+        from desktop_assistant import mac_backup_storage as remote_storage
         # NAS must already exist; a disconnected mapping must not become a local folder.
         if not nas.is_dir():
             raise ValueError('NAS目录不可达，保留原备份并停止更新')

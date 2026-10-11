@@ -1,7 +1,8 @@
 """Public SMB archive configuration and active-connection checks.
 
-This is not an installed contract or backup receipt. The existing NFS consumer
-does not accept this type. Passwords and personal-session fallback have no field.
+This schema alone is not an installed contract or backup receipt. The backup
+consumer additionally requires root approval and a continuously pinned mounted
+location. Passwords and personal-session fallback have no field.
 """
 import ipaddress
 from pathlib import Path

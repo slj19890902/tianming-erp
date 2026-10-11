@@ -21,11 +21,17 @@ def approved_local_storage(root):
     def check(path):
         bound(path)
         if nas_probe._write_probe(path): raise ValueError('NAS无法完成读写验证')
+    @contextmanager
+    def location(path):
+        bound(path)
+        yield None
+        bound(path)
     def publish(path, receipt, proof):
         bound(path); path.parent.mkdir(exist_ok=True); write_json(path, receipt)
         return datetime.now(timezone.utc).isoformat()
     with ExitStack() as stack:
-        for name, value in [('before_write', bound), ('after_write', lambda anchor, path, *a: bound(path)),
+        for name, value in [('before_write', bound), ('location_guard', location),
+                            ('after_write', lambda anchor, path, *a: bound(path)),
                             ('publish_receipt', publish),
                             ('verified_at', lambda root, state, **kw: state.get('last_backup_at'))]:
             stack.enter_context(patch.object(storage, name, value))

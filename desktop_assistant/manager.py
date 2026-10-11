@@ -587,7 +587,7 @@ class Manager:
         shutil.rmtree(job)
         return final
 
-    def _backup_locked(self, password: str, nas: Path):
+    def _backup_locked(self, password: str, nas: Path, *, restart_allowed=None):
         """Caller holds the existing maintenance lock for the whole operation."""
         from desktop_assistant.nas_probe import check_before_stop
         check_before_stop(nas)
@@ -601,7 +601,7 @@ class Manager:
             write_json(self.root / 'state.json', state)
             raise
         finally:
-            if running:
+            if running and (restart_allowed is None or restart_allowed()):
                 self.start()
 
     def backup(self, password: str, nas: Path):

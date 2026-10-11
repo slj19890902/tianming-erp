@@ -55,6 +55,31 @@ def stop_owned(manager, timeout=75):
             time.sleep(.5)
 
 
+def nightly_loop(manager, stopping, *, system_identity, interval=60, retry_interval=300):
+    """One system-session timer; failures do not take down the ERP supervisor."""
+    from desktop_assistant.nightly import run_once
+    from desktop_assistant.mac_system_service import nightly_enabled
+    while not stopping.is_set():
+        delay = interval
+        try:
+            result = run_once(manager, admission=nightly_enabled, restart_allowed=lambda: not stopping.is_set())
+        except Exception:
+            result = {'status': 'failed'}
+            delay = retry_interval
+        # Never persist native exception messages, credential references or
+        # arbitrary reply fields. The normal backup receipt carries its proof.
+        try:
+            write_json(manager.root/'control/nightly-status.json', {
+                'status': result['status'], 'at': datetime.now(timezone.utc).isoformat(),
+                'requires_user_login': False, 'system_identity': system_identity,
+                'home_rehearsal': True})
+        except Exception:
+            # A broken status directory must not silently terminate the timer.
+            print('系统备份状态无法写入；请检查专用实例，原备份保留。', file=sys.stderr)
+            delay = retry_interval
+        stopping.wait(delay)
+
+
 def supervise(manager, stopping, *, interval=2, system_identity=None, keychain_canary_verified=False):
     status = None
     cache = {}
@@ -69,16 +94,28 @@ def supervise(manager, stopping, *, interval=2, system_identity=None, keychain_c
                    if system_identity is not None else {})})
             status = value
     with operation_lock(manager.root / 'control/service-supervisor.lock'):
+        timer = None
+        if system_identity is not None:
+            timer = threading.Thread(target=nightly_loop, args=(manager, stopping),
+                kwargs={'system_identity':system_identity}, name='tianming-system-backup', daemon=False)
+            timer.start()
         try:
             while not stopping.is_set():
                 record(tick(manager, cache))
                 stopping.wait(interval)
             record('stopping')
+            # Do not stop/restart a process underneath an in-flight backup.
+            # Hard NFS can wait indefinitely; an OS shutdown timeout is not a
+            # guarantee of graceful completion or permission to force-kill it.
+            if timer is not None: timer.join()
             stop_owned(manager)
             record('stopped')
         except Exception:
             record('attention-required')
             raise
+        finally:
+            stopping.set()
+            if timer is not None: timer.join()
 
 
 def main():

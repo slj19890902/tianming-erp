@@ -9,7 +9,7 @@ from desktop_assistant.storage import read_json, write_json
 from desktop_assistant import mac_backup_storage
 
 
-def run_once(manager, *, now=None, resume_when_stopped=False):
+def run_once(manager, *, now=None, resume_when_stopped=False, admission=None, restart_allowed=None):
     try:
         with manager.lock():
             state = manager.state
@@ -18,6 +18,12 @@ def run_once(manager, *, now=None, resume_when_stopped=False):
             operation = state.get('operation', '')
             if operation == 'migration_running' or 'failed' in operation:
                 return {'status':'maintenance-attention'}
+            if admission is not None:
+                permitted = admission()  # Fixed root control, under the same maintenance lock.
+                if type(permitted) is not bool: raise ValueError('系统备份启动门禁无效')
+                if not permitted: return {'status':'system-disabled'}
+            if restart_allowed is not None and not restart_allowed():
+                return {'status':'shutting-down'}
             try:
                 current = now or datetime.now(CN)
                 due = current.replace(hour=23, minute=0, second=0, microsecond=0)
@@ -32,7 +38,8 @@ def run_once(manager, *, now=None, resume_when_stopped=False):
                 destination = Path(settings['nas'])
                 mac_backup_storage.before_write(destination)
                 password = unprotect_backup(settings['protected_password'])
-                backup = manager._backup_locked(password, destination)
+                backup = (manager._backup_locked(password, destination, restart_allowed=restart_allowed)
+                          if restart_allowed is not None else manager._backup_locked(password, destination))
                 if resume_when_stopped:
                     manager.start()
                 return {'status':'verified', 'backup':str(backup)}

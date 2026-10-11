@@ -422,7 +422,7 @@ def install(raw, approved_sha):
 def main():
     parser = argparse.ArgumentParser(description='专用服务身份、程序和系统监护安装；工厂接管另行授权')
     parser.add_argument('action', choices=('plan', 'install', '_worker', 'publish', '_publish_worker',
-                                         'service-plan', 'service-apply', 'archive-plan', 'archive-apply'))
+                                         'service-plan', 'service-apply', 'archive-plan', 'archive-apply', 'manage'))
     parser.add_argument('--identity-plan', type=Path)
     parser.add_argument('--observer-uid', type=int)
     parser.add_argument('--file', type=Path)
@@ -432,9 +432,14 @@ def main():
     parser.add_argument('--package-sha256')
     parser.add_argument('--nas-address')
     parser.add_argument('--nas-export')
+    parser.add_argument('--management-action', choices=('status','configure-backup','backup','start','stop'))
     args = parser.parse_args()
     try:
-        if args.action in {'archive-plan', 'archive-apply'}:
+        if args.action == 'manage':
+            verify_code(); modules()
+            from desktop_assistant import mac_system_service as service
+            result = service.manage(args.package_sha256, args.management_action)
+        elif args.action in {'archive-plan', 'archive-apply'}:
             verify_code(trusted=args.action == 'archive-apply')
             modules()
             from desktop_assistant import mac_archive_install as archive

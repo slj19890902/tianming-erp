@@ -129,3 +129,45 @@ def test_real_encrypted_nightly_backup_leaves_stopped_service_stopped(monkeypatc
         assert nightly.run_once(case.manager)['status']=='up-to-date'
         assert len(list(case.nas.glob('*.tmbackup')))==1
     finally:case.tearDown()
+
+
+@pytest.mark.parametrize('enabled',[False,True])
+def test_system_admission_is_checked_inside_lock_before_nas_or_secrets(manager,monkeypatch,enabled):
+    def admission():
+        with pytest.raises(ValueError,match='另一个'):
+            with manager.lock():pass
+        return enabled
+    credential=Mock(return_value='synthetic');monkeypatch.setattr(nightly,'unprotect_backup',credential)
+    result=nightly.run_once(manager,now=NOW,admission=admission)
+    assert result['status']==('verified' if enabled else 'system-disabled')
+    if not enabled:credential.assert_not_called();assert manager.backups==0
+
+
+def test_shutdown_before_due_check_does_not_read_credentials_or_stop(manager,monkeypatch):
+    credential=Mock();monkeypatch.setattr(nightly,'unprotect_backup',credential)
+    result=nightly.run_once(manager,now=NOW,admission=lambda:True,restart_allowed=lambda:False)
+    assert result['status']=='shutting-down' and manager.backups==0
+    credential.assert_not_called()
+
+
+@pytest.mark.parametrize('failure',[False,True])
+@pytest.mark.parametrize('shutdown',[False,True])
+def test_inflight_backup_obeys_shutdown_before_restoring_running_service(monkeypatch,failure,shutdown):
+    case=recovery.RecoveryTests();case.setUp()
+    try:
+        running={'shutdown':False};starts=[]
+        monkeypatch.setattr(case.manager,'_process',lambda:(object(),{}))
+        monkeypatch.setattr(case.manager,'start',lambda:starts.append('start'))
+        def backup(*args):
+            running['shutdown']=shutdown
+            if failure:raise ValueError('synthetic backup failure')
+            return case.nas/'synthetic.tmbackup'
+        monkeypatch.setattr(case.manager,'_backup_stopped',backup)
+        from desktop_assistant import nas_probe
+        monkeypatch.setattr(nas_probe,'check_before_stop',lambda nas:None)
+        with case.manager.lock():
+            if failure:
+                with pytest.raises(ValueError):case.manager._backup_locked(recovery.PASSWORD,case.nas,restart_allowed=lambda:not running['shutdown'])
+            else:case.manager._backup_locked(recovery.PASSWORD,case.nas,restart_allowed=lambda:not running['shutdown'])
+        assert starts==([] if shutdown else ['start'])
+    finally:case.tearDown()

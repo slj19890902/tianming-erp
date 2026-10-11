@@ -28,6 +28,9 @@ LAUNCHCTL = '/bin/launchctl'
 TYPE = 'tianming.system-service.v1'
 PLAN_TYPE = 'tianming.system-service-plan.v1'
 ENTRY = 'desktop_assistant/service_supervisor.py'
+MANAGE_ENTRY = 'desktop_assistant/service_manage_entry.py'
+MANAGE_MODULE = 'desktop_assistant/mac_service_manage.py'
+MANAGE_ACTIONS = {'status', 'configure-backup', 'backup', 'start', 'stop'}
 FIELDS = {'type', 'package_sha256', 'context_sha256', 'publisher_sha256', 'plist_sha256', 'enabled'}
 PLAN_FIELDS = {'type', 'action', 'attempt_id', 'created_at', 'expires_at', 'code_manifest_sha256',
                'package_sha256', 'context_sha256', 'publisher_sha256', 'registry_sha256',
@@ -326,6 +329,104 @@ def check_start():
             'publisher_sha256': bootstrap.digest(publication.read_record(BASE/'publisher-public.pem'))}
     if value != record_for(meta, True): raise ValueError('系统启动门禁绑定已改变')
     _installed_plist(meta)
+
+
+def nightly_enabled():
+    """A system timer must have an exact installed control; absence is not approval."""
+    value = bootstrap.decode(publication.read_record(CONTROL))
+    meta = {'package': value.get('package_sha256'),
+            'context_sha256': bootstrap.digest(publication.read_record(BASE/'keychain-context.json')),
+            'publisher_sha256': bootstrap.digest(publication.read_record(BASE/'publisher-public.pem'))}
+    _, control = checked_control(meta)
+    _installed_plist(meta)
+    return control['enabled']
+
+
+def require_management(manifest):
+    capabilities = manifest.get('runtime_capabilities', {})
+    if (any(type(capabilities.get(k)) is not int or capabilities[k] != 1
+            for k in ('service_manage_v1', 'system_nightly_v1'))
+            or not {MANAGE_ENTRY, MANAGE_MODULE} <= manifest.get('files', {}).keys()):
+        raise ValueError('程序缺少专用管理及系统定时备份协议')
+
+
+def _program_manifest(meta):
+    with (meta['tree'].parent/'package.zip').open('rb') as stream:
+        _, manifest, _ = publication.inspect(stream)
+    return manifest
+
+
+def management_service_state():
+    registered = present()
+    if not CONTROL.exists() and not CONTROL.is_symlink():
+        if registered: raise ValueError('系统注册缺少归属控制记录')
+        return {'registered': False, 'enabled': False, 'scheduled_backups': False}
+    value = bootstrap.decode(publication.read_record(CONTROL))
+    meta = metadata(value.get('package_sha256'))
+    _, control = checked_control(meta); _installed_plist(meta)
+    cap = _program_manifest(meta).get('runtime_capabilities', {}).get('system_nightly_v1')
+    return {'registered': registered, 'enabled': control['enabled'],
+            'scheduled_backups': registered and control['enabled'] and type(cap) is int and cap == 1}
+
+
+def management_reply(result, request, context):
+    """Only fixed public status may cross back into the administrator process."""
+    from datetime import datetime
+    expected = {'type': 'tianming.service-management.v1', 'action': request['action'],
+                'package_sha256': request['package_sha256'], 'challenge': request['challenge'],
+                'identity': bootstrap._expected(context['uid'], context['gid']), 'home_rehearsal': True}
+    if (not isinstance(result, dict) or set(result) != set(expected) | {'snapshot'}
+            or any(result[k] != v for k, v in expected.items()) or result['home_rehearsal'] is not True):
+        raise ValueError('专用管理回执不属于本次请求')
+    value = result['snapshot']
+    fields = {'current', 'manual_stop', 'running', 'backup_configured', 'backup_verified_at', 'maintenance_attention', 'backup_attention'}
+    if (not isinstance(value, dict) or set(value) != fields or not _sha(value['current'])
+            or any(type(value[k]) is not bool for k in fields-{'current','backup_verified_at'})):
+        raise ValueError('专用管理公开状态无效')
+    at = value['backup_verified_at']
+    if at is not None and (not isinstance(at, str) or len(at) > 64
+            or datetime.fromisoformat(at).utcoffset() is None):
+        raise ValueError('完整备份验证时间无效')
+    if request['action'] == 'start' and (not value['running'] or value['manual_stop']):
+        raise ValueError('专用服务尚未恢复运行')
+    if request['action'] == 'stop' and (value['running'] or not value['manual_stop']):
+        raise ValueError('专用服务尚未正常停止')
+    if request['action'] == 'configure-backup' and not value['backup_configured']:
+        raise ValueError('批准的备份位置尚未保存')
+    if request['action'] == 'backup' and (not value['backup_configured'] or at is None):
+        raise ValueError('完整备份尚未独立验证')
+    return result
+
+
+def manage(package, action):
+    """Explicit local administrator command, never a factory activation grant."""
+    identity, _ = bootstrap.modules(); identity._administrator()
+    bootstrap.verify_code()
+    if action not in MANAGE_ACTIONS: raise ValueError('不支持的专用管理动作')
+    meta = metadata(package); require_management(_program_manifest(meta))
+    if action == 'start':
+        service = management_service_state()
+        if not all(service.values()): raise ValueError('先安装并启用支持定时备份的系统监护')
+    request = {'action': action, 'package_sha256': package, 'challenge': uuid.uuid4().hex,
+               **{k: meta[k] for k in ('context_sha256', 'publisher_sha256', 'registry_sha256')}}
+    context = meta['context']
+    process = subprocess.Popen([str(meta['tree']/'runtime/bin/python3.12'), '-I', '-B',
+        str(meta['tree']/MANAGE_ENTRY)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        user=context['uid'], group=context['gid'], extra_groups=[], close_fds=True, pass_fds=(),
+        umask=0o077, cwd='/', env={'HOME': str(BASE/'home'), 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin',
+                                'LANG':'en_US.UTF-8', 'ERP_HOME_REHEARSAL':'1'})
+    interrupted = False; first = True
+    while True:
+        try:
+            output, _ = process.communicate(bootstrap.canonical(request) if first else None)
+            break
+        except KeyboardInterrupt: interrupted = True; first = False
+    if interrupted or process.returncode != 0:
+        raise ValueError('专用管理动作未确认完成；可能已变更状态，保留现场并重新查看状态')
+    result = management_reply(bootstrap.decode(output), request, context)
+    try: service = management_service_state()
+    except Exception: service = {'registered':None, 'enabled':None, 'scheduled_backups':None}
+    return {'result':result, 'system':service, 'factory_activated':False}
 
 
 def runtime_configuration(args, *, script, executable):

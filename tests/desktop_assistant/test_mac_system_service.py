@@ -91,6 +91,28 @@ def test_install_pins_immutable_runtime_and_preserves_stopped_state(installed_ca
     m.check_start()
 
 
+@pytest.mark.parametrize('fault', ['none', 'disabled', 'missing', 'corrupt', 'plist'])
+def test_nightly_requires_exact_installed_control(installed_case, fault):
+    c=installed_case;plan_apply(c, 'install')
+    if fault=='disabled':plan_apply(c, 'disable')
+    if fault=='missing':m.CONTROL.unlink()
+    if fault=='corrupt':m.CONTROL.write_bytes(b'{}')
+    if fault=='plist':m.PLIST.write_bytes(b'changed')
+    if fault in {'none', 'disabled'}:
+        assert m.nightly_enabled() is (fault=='none')
+    else:
+        with pytest.raises((ValueError, OSError)):m.nightly_enabled()
+
+
+def test_management_does_not_report_old_supervisor_as_scheduled_backups(installed_case):
+    c=installed_case
+    assert m.management_service_state()=={'registered':False,'enabled':False,'scheduled_backups':False}
+    plan_apply(c,'install')
+    assert m.management_service_state()=={'registered':True,'enabled':True,'scheduled_backups':False}
+    plan_apply(c,'disable')
+    assert m.management_service_state()=={'registered':False,'enabled':False,'scheduled_backups':False}
+
+
 def test_disable_closes_start_gate_then_stops_before_bootout_and_can_reenable(installed_case):
     c = installed_case; plan_apply(c, 'install')
     archive = (c.case.base/'published'/c.case.plan['package_sha256']/'package.zip').read_bytes()

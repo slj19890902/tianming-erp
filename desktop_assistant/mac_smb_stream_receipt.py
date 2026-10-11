@@ -16,6 +16,7 @@ import stat
 from . import mac_smb_stream_runtime as runtime, mac_smb_stream_runtime_contract as cfg
 from . import mac_smb_stream_backup as builder, mac_smb_stream_contract as archive
 from . import mac_backup_storage as local, mac_service_manage as manage
+from . import mac_smb_stream_work as work
 from .mac_service_restore import Lease
 from .storage import database_info, sha
 
@@ -178,12 +179,27 @@ def archive_and_publish_stopped(manager,password):
                     local._exclusive(directory,name,raw,context['uid']);os.fsync(directory)
                     state.update(last_backup=local_copy['path'],last_backup_at=receipt['verified_at'],backup_error=None)
                     state[INDEX]=dict(path=local_copy['path'],receipt=name,receipt_sha256=cfg.digest(raw))
+                    state=work.mark(state,root.path,result['job'])
                     def final_check():
                         recheck();copy.check()
                         require(fingerprint(os.fstat(copy.fd))==local_copy['identity']
                             and local._local_object(directory,name,context['uid'])[0]==raw)
                     final_check()
                     manage.replace_record(root,'state.json',state,before,context,final_check)
+                    published=cfg.canonical(state)
+                    def protected_success():
+                        final_check()
+                        require(manage.record(root,'state.json',context)[0]==published)
+                    try:
+                        work.retire(root,context,result,copy,raw,protected_success)
+                        retired=work.clear(state,root.path,result['job'])
+                        # The CAS check belongs to replace_record: its final
+                        # recheck runs after the old state has been replaced.
+                        manage.replace_record(root,'state.json',retired,published,context,final_check)
+                    except Exception:
+                        # Backup is authenticated and retained. Keep the pending
+                        # state reference visible; do not retry this job later.
+                        pass
             return Path(local_copy['path'])
     except Exception:
         raise ValueError(ERROR) from None

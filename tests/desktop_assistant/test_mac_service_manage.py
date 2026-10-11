@@ -89,6 +89,16 @@ def test_status_is_readonly_and_never_reads_secrets_or_touches_nas(instance):
     assert 'protected_password' not in json.dumps(result) and 'arbitrary_history' not in json.dumps(result)
 
 
+def test_retained_backup_work_is_visible_without_secret_or_remote_access(instance):
+    a=instance;state=a.manager.state
+    state['backup_work_retained']=[str(a.root/'staging'/('smb-stream-'+'e'*32))]
+    write_json(a.root/'state.json',state)
+    result=a.run('status')
+    assert result['snapshot']['backup_attention'] is True
+    assert 'smb-stream-' not in json.dumps(result)
+    a.canary.assert_not_called();a.unprotect.assert_not_called();a.nas.assert_not_called()
+
+
 @pytest.mark.parametrize('action', ['status', 'stop'])
 def test_public_status_and_stop_survive_archive_identity_failure(instance, monkeypatch, action):
     a=instance

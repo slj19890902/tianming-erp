@@ -166,7 +166,7 @@ def snapshot(manager, root, context):
         'manual_stop':state.get('manual_stop') is True,
         'running':bool(manager._process()), 'backup_configured':configured(root, context),
         'backup_verified_at':remote.verified_at(ROOT, state),
-        'backup_attention': bool(state.get('backup_error')),
+        'backup_attention': bool(state.get('backup_error') or state.get('backup_work_retained')),
         'maintenance_attention': bool(state.get('onboarding_pending') or state.get('operation') == 'migration_running'
                                       or 'failed' in state.get('operation', ''))}
 

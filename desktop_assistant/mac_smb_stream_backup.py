@@ -107,9 +107,11 @@ def build_and_verify_stopped(manager,password,value,transfer):
             source.check();downloaded.check();job_lease.check()
             require(manager._process() is None and manager.state==payload['state']
                     and database_info(root/'shared/data/carton_erp.sqlite3')==payload['database'])
+            from .mac_smb_stream_work import capture
+            work=capture(job_lease,payload)
             return dict(type='tianming.mac-smb-stream-candidate-verification.v1',
                 job=str(job),filename=payload['encrypted'].name,sha256=payload['sha256'],
                 size=payload['size'],database=payload['database'],raw_sha256=payload['raw_sha256'],
-                backup_authenticated=True,transfer=result,state_published=False)
+                backup_authenticated=True,transfer=result,state_published=False,work=work)
     except Exception:
         raise ValueError(ERROR) from None

@@ -158,6 +158,8 @@ class App:
         text = f"ERP程序：{version}    状态：{service}\n{connection}\n{backup_status}"
         if state.get('backup_error'):
             text += '\n上次备份未成功，请检查共享盘连接后再点“现在备份一次”。'
+        if state.get('backup_work_retained'):
+            text += '\n部分备份临时文件尚未清理，请联系管理员检查。'
         if state.get('operation') in ('migration_running', 'migration_failed'):
             text += '\n上次更新未完成：展开“遇到问题／其他设置”，点“继续上次未完成的更新”。'
         if not current:

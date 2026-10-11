@@ -49,6 +49,15 @@ def test_more_can_open_close_and_switch_back_without_business_action(ui):
     assert manager.state=={'current':'current','previous':None}
 
 
+def test_retained_backup_work_has_separate_plain_language_attention(ui):
+    app,manager,_=ui('current')
+    manager.state['backup_work_retained']=['private-work-reference']
+    app.refresh()
+    assert '部分备份临时文件尚未清理' in app.status.get()
+    assert '上次备份未成功' not in app.status.get()
+    assert 'private-work-reference' not in app.status.get()
+
+
 def test_busy_guard_and_final_button_eligibility(ui,monkeypatch):
     app,manager,window=ui('current');calls=[]
     class Thread:

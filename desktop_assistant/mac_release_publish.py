@@ -4,7 +4,7 @@ The reviewed plan pins every input byte. Root only copies/checks data. Signature
 verification runs in a fresh dedicated-UID process using the approved runtime;
 neither ERP nor third-party code is imported by the privileged interpreter.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import hashlib
 import json
 import os
@@ -22,7 +22,9 @@ import zipfile
 from desktop_assistant import mac_keychain_install as bootstrap
 
 BASE = Path('/Library/TianmingERP')
+DATA_VOLUME = Path('/System/Volumes/Data')
 TYPE = 'tianming.mac-publication-plan.v1'
+PRISTINE_TYPE = 'tianming.mac-pristine-publication-plan.v1'
 REGISTRY_TYPE = 'tianming.mac-published.v1'
 MANAGED = {'data':'data', 'static/uploads':'legacy_uploads',
            'factory_twin/data':'factory_twin_data', 'logs':'logs'}
@@ -117,7 +119,7 @@ def inspect(stream):
         return raw, manifest, total
 
 
-def prepare(package, public, context_raw, code_manifest_raw, *, publisher_sha256):
+def prepare(package, public, context_raw, code_manifest_raw, *, publisher_sha256, pristine_bootstrap=False):
     """Unprivileged Python 3.12 preparation; no system modifications."""
     from desktop_assistant.release_request import inspect_package, public_identity
     key, fingerprint = public_identity(public)
@@ -139,7 +141,9 @@ def prepare(package, public, context_raw, code_manifest_raw, *, publisher_sha256
     size = Path(package).stat().st_size
     if not 0 < size <= MAX_PACKAGE: raise ValueError('程序包长度超限')
     now = int(time.time())
-    return {'type':TYPE, 'attempt_id':uuid.uuid4().hex, 'created_at':now, 'expires_at':now+7*86400,
+    if type(pristine_bootstrap) is not bool: raise ValueError('首次发布选择必须明确为布尔值')
+    return {'type':PRISTINE_TYPE if pristine_bootstrap else TYPE,
+            'attempt_id':uuid.uuid4().hex, 'created_at':now, 'expires_at':now+7*86400,
             'code_manifest_sha256':bootstrap.digest(code_manifest_raw),
             'context_sha256':bootstrap.digest(context_raw), 'package_sha256':package_sha,
             'package_bytes':size, 'manifest_sha256':bootstrap.digest(raw),
@@ -149,7 +153,7 @@ def prepare(package, public, context_raw, code_manifest_raw, *, publisher_sha256
 def validate(raw, approved_sha):
     if bootstrap.digest(raw) != approved_sha: raise ValueError('发布计划与批准摘要不同')
     value = bootstrap.decode(raw)
-    if (set(value) != FIELDS or value['type'] != TYPE
+    if (set(value) != FIELDS or value['type'] not in (TYPE, PRISTINE_TYPE)
             or not isinstance(value['attempt_id'], str) or not re.fullmatch('[0-9a-f]{32}', value['attempt_id'])
             or any(type(value[k]) is not int for k in ('created_at','expires_at','package_bytes'))
             or not 0 < value['expires_at']-value['created_at'] <= 7*86400
@@ -188,7 +192,9 @@ def preflight(plan):
     if bootstrap.digest(raw) != plan['context_sha256']:
         raise ValueError('发布计划不属于本机服务context')
     root = BASE/'instance'
-    for path in (root, root/'shared', *(root/'shared'/v for v in MANAGED.values())):
+    paths = (root,) if plan['type'] == PRISTINE_TYPE else (
+        root, root/'shared', *(root/'shared'/v for v in MANAGED.values()))
+    for path in paths:
         if path.resolve() != path.absolute() or path.stat().st_dev != BASE.stat().st_dev:
             raise ValueError('服务数据目录含链接或不在本机服务磁盘')
         guard(path, uid=context['uid'], directory=True, mode=0o700)
@@ -197,6 +203,61 @@ def preflight(plan):
         if read_record(public) != plan['public_key'].encode('ascii'):
             raise ValueError('不能替换本机已固定的发布身份')
     return context
+
+
+def _no_service():
+    # This remains stdlib-only in the reviewed administrator package.
+    from desktop_assistant import mac_system_service as service
+    for path in (service.PLIST, *BASE.iterdir()):
+        if path == service.PLIST or path.name.startswith(('system-service.', 'system-service-')):
+            try: path.lstat()
+            except FileNotFoundError: continue
+            raise ValueError('首次发布发现系统服务或安装现场，保留原件')
+    if service.present(): raise ValueError('首次发布不允许已有系统服务注册')
+
+
+@contextmanager
+def pristine_instance(plan, context):
+    """Keep the same empty instance open until approval; never initialize it.
+
+    Directory descriptors and repeated observations detect replacement/change;
+    they are not a mandatory lock against all possible service-UID writers.
+    """
+    if plan['type'] != PRISTINE_TYPE:
+        yield None
+        return
+    _, keychain = bootstrap.modules()
+    root = BASE/'instance'
+    with ExitStack() as stack:
+        base_fd = stack.enter_context(keychain._checked_path(BASE, uid=0, directory=True, mode=0o755))
+        instance_fd = stack.enter_context(keychain._checked_path(root, uid=context['uid'], directory=True, mode=0o700))
+        base_identity = os.fstat(base_fd)
+        before = os.fstat(instance_fd)
+        def fingerprint(info):
+            return (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode,
+                    info.st_mtime_ns, info.st_ctime_ns)
+        def verify():
+            actual = os.fstat(instance_fd)
+            base_path = BASE.lstat()
+            named = os.stat('instance', dir_fd=base_fd, follow_symlinks=False)
+            if (not stat.S_ISDIR(actual.st_mode) or actual.st_uid != context['uid']
+                    or actual.st_gid != context['gid'] or stat.S_IMODE(actual.st_mode) != 0o700
+                    or actual.st_dev != base_identity.st_dev or base_identity.st_dev != DATA_VOLUME.stat().st_dev
+                    or (base_path.st_dev, base_path.st_ino) != (base_identity.st_dev, base_identity.st_ino)
+                    or fingerprint(named) != fingerprint(actual) or fingerprint(actual) != fingerprint(before)
+                    or os.listdir(instance_fd)):
+                raise ValueError('首次发布要求固定且完全为空的私有实例，目录变化时保留现场')
+            keychain._no_acl(base_fd)
+            keychain._no_acl(instance_fd)
+            _no_service()
+        verify()
+        # Any old slot, registry or attempt (including dangling links) is an
+        # existing installation/failed attempt, not a reusable bootstrap.
+        if any(p.name in {'published', 'published.json'}
+               or p.name.startswith(('publication-', 'published-')) for p in BASE.iterdir()):
+            raise ValueError('首次发布已有发布记录或失败现场，不覆盖重试')
+        yield verify
+        verify()
 
 
 def _registry(plan):
@@ -350,7 +411,7 @@ def publish(raw, approved_sha, package):
     identity, _ = bootstrap.modules()
     identity._administrator()
     context = preflight(plan)
-    with lock():
+    with lock(), pristine_instance(plan, context) as verify_pristine:
         previous, registry = _registry(plan)
         destination = BASE/'published'
         if destination.exists() or destination.is_symlink():
@@ -396,6 +457,7 @@ def publish(raw, approved_sha, package):
         sync_directory(destination)
         verify_child(plan,context,slot)
         validate(raw,approved_sha); preflight(plan)
+        if verify_pristine is not None: verify_pristine()
         current, _ = _registry(plan)
         if current != previous: raise ValueError('发布记录发生变化，保留现场')
         public = BASE/'publisher-public.pem'
@@ -403,10 +465,13 @@ def publish(raw, approved_sha, package):
         receipt = {'type':'tianming.mac-publication.v1','plan_sha256':approved_sha,
                    'package_sha256':plan['package_sha256'],'signature_verified_by_service_uid':True,
                    'system_daemon_installed':False,'factory_activated':False}
+        if verify_pristine is not None:
+            receipt.update(pristine_bootstrap=True, data_restored=False)
         bootstrap._write(BASE/('publication-'+plan['attempt_id']+'.verified.json'),bootstrap.canonical(receipt))
         temporary = BASE/('published-'+plan['attempt_id']+'.json')
         content = bootstrap.canonical(registry)
         bootstrap._write(temporary,content,mode=0o644)
+        if verify_pristine is not None: verify_pristine()
         os.replace(temporary,BASE/'published.json')
         sync_directory(BASE)
         if read_record(BASE/'published.json') != content: raise ValueError('发布记录回读失败，保留现场')

@@ -173,6 +173,42 @@ def test_legacy_backup_with_separate_bound_transfer(recovery_case, host_store):
         assert target.root.stat().st_mode & 0o777 == 0o700
 
 
+def test_core_credential_binding_uses_authenticated_stream_even_if_path_changes_back(recovery_case, host_store, monkeypatch):
+    from desktop_assistant.storage import pack_recovery, database_info, encrypt_file
+    case = recovery_case
+    shared = case.manager.root/'shared'
+    raw, backup, other = (case.root/name for name in ('legacy.zip', 'a.tmbackup', 'b.tmbackup'))
+    pack_recovery(shared, {'release.zip':case.package}, raw,
+        {'type':'tianming.recovery.v1', 'created':'2026-10-10T20:12:10+08:00',
+         'release':case.manager.state['current'], 'version':'one',
+         'database':database_info(shared/'data/carton_erp.sqlite3'), 'source_shared':str(shared)})
+    encrypt_file(raw, backup, PASSWORD)
+    encrypt_file(raw, other, PASSWORD)
+    approved, original = sha(backup), backup.read_bytes()
+    assert sha(other) != approved
+    record = credential_transfer.collect(case.manager.root, bound_backup_sha256=sha(other))
+    record['entries']['openai']['value'] = 'different-synthetic-ai-secret'
+    transfer = credential_transfer.seal(record, PASSWORD)
+    load, prepare = restore.load_for_recovery, restore.prepare
+    def replaced(*args, **kwargs):
+        backup.write_bytes(other.read_bytes())
+        return load(*args, **kwargs)
+    def changed_back(*args, **kwargs):
+        # Before the fix, B-bound credentials could be applied to A data, then
+        # restoring pathname A here fooled the promotion-time path hash too.
+        backup.write_bytes(original)
+        return prepare(*args, **kwargs)
+    monkeypatch.setattr(restore, 'load_for_recovery', replaced)
+    monkeypatch.setattr(restore, 'prepare', changed_back)
+    target = recovery_fixtures.TestManager(case.root/'aba-target', case.public)
+    with pytest.raises(ValueError, match='SHA256'):
+        target.restore(backup, PASSWORD, credentials=transfer, credential_password=PASSWORD,
+                       expected_backup_sha256=approved)
+    assert host_store == {} and target.state['current'] is None
+    assert list((target.root/'shared').iterdir()) == []
+    assert not (target.root/'preferences.json').exists()
+
+
 def test_keychain_failure_keeps_recovery_unactivated(recovery_case, monkeypatch):
     case = recovery_case
     backup = case.manager.backup(PASSWORD, case.nas)

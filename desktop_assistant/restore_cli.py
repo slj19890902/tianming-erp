@@ -1,10 +1,12 @@
 """Interactive Mac home-rehearsal restore; never starts the ERP service."""
 import argparse
 import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
 import sys
+import warnings
 
 from desktop_assistant.credential_transfer import LIMIT, _read, unseal
 from desktop_assistant.release_request import public_identity
@@ -52,9 +54,14 @@ def run(args, prompt=getpass.getpass):
     # Prompt only after all non-secret preflight checks, no target is created yet.
     root, public = preflight(args)
     transfer_password = None
+    transfer_raw = _read(args.credentials, LIMIT) if args.credentials is not None else None
+    def hidden(message):
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', getpass.GetPassWarning)
+            return prompt(message)
     if args.credentials is not None:
-        transfer_password = prompt('凭据移交口令（隐藏输入）：')
-        record = unseal(_read(args.credentials, LIMIT), transfer_password)
+        transfer_password = hidden('凭据移交口令（隐藏输入）：')
+        record = unseal(transfer_raw, transfer_password)
         if record['bound_backup_sha256'] != args.backup_sha256:
             raise ValueError('凭据移交包未绑定本次完整备份')
     if args.backup_password_from_transfer:
@@ -63,7 +70,7 @@ def run(args, prompt=getpass.getpass):
             raise ValueError('移交包不含备份密码，请由原用户核对后重试')
         password = entry['value']
     else:
-        password = prompt('完整备份恢复口令（隐藏输入）：')
+        password = hidden('完整备份恢复口令（隐藏输入）：')
     # The destination is checked again after interactive input.
     root = validate_target(root)
     from app.core.home_rehearsal import install_network_guard
@@ -71,13 +78,16 @@ def run(args, prompt=getpass.getpass):
     install_network_guard()
     from desktop_assistant.manager import Manager
     manager = Manager(root, public)
-    result = manager.restore(args.backup, password, credentials=args.credentials,
-                             credential_password=transfer_password)
-    receipt = {'type': 'tianming.mac-home-restore.v1', 'backup_sha256': args.backup_sha256,
+    result = manager.restore(args.backup, password, credentials=transfer_raw,
+                             credential_password=transfer_password, expected_backup_sha256=args.backup_sha256)
+    restored_sha = manager.state.get('restored_backup_sha256')
+    if restored_sha != args.backup_sha256:
+        raise ValueError('恢复结果与批准备份摘要不符，未发布完成回执')
+    receipt = {'type': 'tianming.mac-home-restore.v1', 'backup_sha256': restored_sha,
                'publisher_sha256': args.publisher_sha256, 'started': False,
                'factory_cutover': False, 'result': result}
     if args.credentials is not None:
-        receipt['credential_package_sha256'] = sha(args.credentials)
+        receipt['credential_package_sha256'] = hashlib.sha256(transfer_raw).hexdigest()
     destination = root / 'control/home-restore-receipt.json'
     descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
@@ -87,8 +97,13 @@ def run(args, prompt=getpass.getpass):
     return receipt
 
 
+class SafeParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise SystemExit('恢复参数无效；不输出参数值。口令只能在本机交互终端隐藏输入。')
+
+
 def parser():
-    result = argparse.ArgumentParser(description='核验并恢复到全新Mac本地目录；不启动ERP或接管工厂')
+    result = SafeParser(description='核验并恢复到全新Mac本地目录；不启动ERP或接管工厂', allow_abbrev=False)
     result.add_argument('--root', type=Path, required=True)
     result.add_argument('--backup', type=Path, required=True)
     result.add_argument('--backup-sha256', required=True)
@@ -101,7 +116,7 @@ def parser():
 
 def main():
     args = parser().parse_args()
-    if not sys.stdin.isatty():
+    if not all(stream.isatty() for stream in (sys.stdin, sys.stdout, sys.stderr)):
         raise SystemExit('必须在本机交互终端隐藏输入口令；不接受口令参数、文件或管道')
     try:
         receipt = run(args)

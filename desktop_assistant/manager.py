@@ -853,9 +853,13 @@ class Manager:
                 raise ValueError('升级数据完整，但新程序启动失败；已恢复兼容旧程序，数据未回退') from None
             return '已核对完整升级结果并恢复运行，业务数据未回退'
 
-    def restore(self, backup: Path, password: str, *, credentials: Path | None = None,
-                credential_password: str | None = None):
+    def restore(self, backup: Path, password: str, *, credentials: Path | bytes | None = None,
+                credential_password: str | None = None, expected_backup_sha256: str | None = None):
         """Restore into an EMPTY managed installation. Never replaces running data."""
+        if expected_backup_sha256 is not None and (not isinstance(expected_backup_sha256, str)
+                or len(expected_backup_sha256) != 64
+                or any(c not in '0123456789abcdef' for c in expected_backup_sha256)):
+            raise ValueError('批准备份摘要格式无效')
         with self.lock():
             if self.state['current'] or any((self.root / 'shared').iterdir()):
                 raise ValueError('恢复仅允许全新安装目录，现有数据不被覆盖')
@@ -863,6 +867,8 @@ class Manager:
             job.mkdir()
             raw = job / 'recovery.zip'
             authenticated_backup_sha = decrypt_file(backup, raw, password)
+            if expected_backup_sha256 is not None and authenticated_backup_sha != expected_backup_sha256:
+                raise ValueError('实际认证的完整备份不属于批准摘要，尚未解包或启用数据')
             if sha(backup) != authenticated_backup_sha:
                 raise ValueError('恢复输入备份在认证期间变化，尚未启用恢复数据')
             manifest = extract_verified(raw, job / 'payload')
@@ -925,7 +931,8 @@ class Manager:
             from desktop_assistant.credential_restore import load_for_recovery, prepare
             from desktop_assistant.credential_transfer import CONFIGS, _path
             credential_record = load_for_recovery(manifest, payload, backup, password,
-                                                   credentials, credential_password)
+                                                   credentials, credential_password,
+                                                   authenticated_backup_sha256=authenticated_backup_sha)
             credential_report = {'status': 'not-included'}
             credential_paths = {}
             if credential_record is not None:

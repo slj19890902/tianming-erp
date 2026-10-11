@@ -12,7 +12,8 @@ from desktop_assistant.credential_transfer import CONFIGS, LIMIT, _validate, _pa
 from desktop_assistant.storage import sha
 
 
-def load_for_recovery(manifest, payload, backup, password, credentials=None, credential_password=None):
+def load_for_recovery(manifest, payload, backup, password, credentials=None, credential_password=None,
+                      *, authenticated_backup_sha256=None):
     embedded = manifest.get('credential_transfer')
     if embedded is not None:
         if embedded != 'credentials.tmencrypted' or credentials is not None:
@@ -25,8 +26,16 @@ def load_for_recovery(manifest, payload, backup, password, credentials=None, cre
         return None
     if credential_password is None:
         raise ValueError('外部凭据移交包需要单独的交互口令')
-    record = unseal(_read(Path(credentials), LIMIT), credential_password)
-    if record['bound_backup_sha256'] != sha(Path(backup)):
+    # Interactive callers can retain the exact encrypted bytes they already
+    # authenticated, instead of reopening a replaceable path after prompting.
+    raw = credentials if isinstance(credentials, bytes) else _read(Path(credentials), LIMIT)
+    if not 0 < len(raw) <= LIMIT:
+        raise ValueError('外部凭据移交包长度无效')
+    record = unseal(raw, credential_password)
+    binding = authenticated_backup_sha256 if authenticated_backup_sha256 is not None else sha(Path(backup))
+    if (not isinstance(binding, str) or len(binding) != 64
+            or any(c not in '0123456789abcdef' for c in binding)
+            or record['bound_backup_sha256'] != binding):
         raise ValueError('外部凭据包没有绑定本次完整备份 SHA256')
     return record
 

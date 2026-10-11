@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -18,22 +19,60 @@ def public_bytes(key):
     return key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
 
 
+def _dpapi_record_key(record):
+    if record.get('type') != 'tianming.publisher.dpapi.v1':
+        raise ValueError('不支持的发布身份格式')
+    key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(unprotect(record['protected_key'])))
+    public = public_bytes(key)
+    if (public.decode('ascii') != record['public_key']
+            or hashlib.sha256(public).hexdigest() != record['fingerprint']):
+        raise ValueError('发布公私钥不一致，拒绝构建')
+    return key
+
+
 def load_key(path):
     raw = Path(path).read_bytes()
     if raw.startswith(b'-----BEGIN'):
         key = serialization.load_pem_private_key(raw, password=None)
     else:
-        record = json.loads(raw)
-        if record.get('type') != 'tianming.publisher.dpapi.v1':
-            raise ValueError('不支持的发布身份格式')
-        key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(unprotect(record['protected_key'])))
-        public = public_bytes(key)
-        if (public.decode('ascii') != record['public_key']
-                or hashlib.sha256(public).hexdigest() != record['fingerprint']):
-            raise ValueError('发布公私钥不一致，拒绝构建')
+        key = _dpapi_record_key(json.loads(raw))
     if not isinstance(key, Ed25519PrivateKey):
         raise ValueError('发布身份必须使用 Ed25519')
     return key
+
+
+def load_dpapi_key(path, trusted_public):
+    """Load an existing factory identity once; never accept PEM or create a key.
+
+    Operational cutover uses this entry only after its source checks pass.
+    General release tooling retains its existing load_key interface.
+    """
+    if sys.platform != 'win32':
+        raise ValueError('切换发布身份只能由Windows原用户解封')
+    from desktop_assistant.cleanup import local_path
+    from desktop_assistant.release_request import public_identity
+    try:
+        public, fingerprint = public_identity(trusted_public)
+        expected = public.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        with local_path(Path(path)).open('rb') as stream:
+            raw = stream.read(8193)
+        if len(raw) > 8192 or raw.startswith(b'-----BEGIN'):
+            raise ValueError()
+        record = json.loads(raw)
+        if (not isinstance(record, dict)
+                or set(record) != {'type', 'public_key', 'fingerprint', 'protected_key'}
+                or not all(isinstance(value, str) and value for value in record.values())
+                or record['type'] != 'tianming.publisher.dpapi.v1'
+                or record['public_key'] != expected.decode('ascii')
+                or record['fingerprint'] != fingerprint):
+            raise ValueError()
+        key = _dpapi_record_key(record)
+        if public_bytes(key) != expected:
+            raise ValueError()
+        return key
+    except Exception:
+        # DPAPI/parser diagnostics must not expose ciphertext or private bytes.
+        raise ValueError('原DPAPI发布身份不完整、无法解封或不匹配既有公钥') from None
 
 
 def initialize(directory):

@@ -204,3 +204,19 @@ storage.decrypt_file从同一打开FD实际读取的header/ciphertext/tag计算S
 本轮没有创建新工厂冷备、连接工厂库、外部发信/收单、签发真实切换授权或清空旧机。真实恢复的数据仍来自10月10日冷备，不代表工厂后来交易已同步。运行包仍原签名3de3be32，代码修复须后续重建并由工厂原身份签名。系统服务/专用账号/后台钥匙串、正式切换及现场验收仍未完成。
 
 下一闭环：源端已停写后的认证核验与签发。先验证既有源目录再构造Manager（其构造器会创建目录）；全程持维护锁，不调用会恢复运行的backup/_backup_locked/pause_after_backup。核对manual_stop、真实进程及异常状态，验证本安装回执/last_backup/独立完整SHA，读取实际认证输入摘要及manifest.created。逐项比较原始DB SHA、完整shared清单与环境原字节；release.zip/compatibility.zip/目标签名包都要全文件inspect_package，AST结构验证不能替代全包验证。authority仅在源revision与DB不同且原签名preserve_existing_facts_v1授权有效时使用，直接兼容时允许元数据规范化为None。核对发货共享marker/状态索引、订单库存保护记录及目标全部readers。内置凭据与原用户fresh collect的完整用途/配置/密文版本/实际秘密仅内存比较。Windows明文任务目录在写入前须建立并回读仅当前SID+SYSTEM的DACL；不能只用0700或NAS共享临时目录。只在全部核验通过后加载原DPAPI发布身份，拒绝PEM，独占输出和原公钥回读；失败保持旧端停止。实际源端停写、隔离、同步及正式接管仍须当次明确授权。
+
+
+## 2026-10-11 源端切换私有暂存与发布身份前置约束
+
+本闭环文件范围：新增desktop_assistant/windows_private_workspace.py与定向测试，修改desktop_assistant/signing.py并补发布身份测试；任务卡、计划和执行回执同步。主执行者唯一写入负责人，独立代理只读复核。目标是在解密真实备份前以Windows原生API原子建立仅当前原用户+SYSTEM可访问的本地私有目录，并从句柄回读受保护DACL、所有者及ACE；遇到NAS/非ACL磁盘、链接/重解析、已有目标和权限错误即拒绝，失败现场保留，不改父目录权限、不自动清理。期间持有目录句柄防止路径被替换。签名身份增加同次读取内的DPAPI-only受限载入，并核对既有公钥，不允许先检查后重新按通用PEM入口读取。验收为合成失败/成功边界和原签名回归，Windows真实ACL/DPAPI项单列，Mac跳过不得宣称实机通过。此模块尚不签发真实票据、不解密正式数据、不调用旧端停启；完整来源验证/系统后台服务仍继续实现。
+
+
+前置接口结果：private_workspace先固定祖先目录，再从parent句柄核对所有者及仅当前SID+SYSTEM的受保护DACL；既有父目录不满足直接拒绝，不修改原权限。然后CreateDirectoryW附带安全描述符独占创建新job，回读两条OICI/FullControl ACE及owner；持有FILE_LIST_DIRECTORY/READ_CONTROL/READ_ATTRIBUTES且不共享删除的句柄，保持期间正常创建子项但拒绝目录重命名。退出正常流程再核对ACL，成功/失败现场由调用者按所有权另行处理，接口不自动删除。原用户SID限定普通本地/域用户S-1-5-21；其他服务/系统身份不伪装为原用户。
+
+load_dpapi_key在单次有界读取内严格拒绝PEM、未知/缺失字段、错误原公钥/指纹，只有格式和既有身份吻合才DPAPI解封；解封错误使用固定消息，私钥不导出。原通用构建load_key保留兼容，仅共用同一个DPAPI公私钥核验函数。独立代码复核发现并修正父目录DELETE_CHILD窗口和属性句柄不参与一般share判定两处边界，复核通过。
+
+定向验证106项：96通过、10项Windows专用跳过、0失败/错误，0.51秒。覆盖父目录不安全时零创建、子目录权限或回读失败时不交付明文路径、旧目录不覆盖、失败现场保留、平台/链接拒绝、DPAPI-only单次读取与解封前拒绝、原构建签名和切换契约。Windows原生的ACL继承/真实文件权限/目录重命名与junction/真实DPAPI及PowerShell仍待原平台运行；未把合成适配器当实机证据。证据factory-source-primitives-tests.xml/log、test-summary.json。该前置模块尚未接入最终来源核验/票据签发。
+
+工厂独立验证交付将绑定本次固定提交及源代码ZIP SHA，选择4个测试文件共51项，Windows预期49通过、2项POSIX专用跳过。只运行合成数据与一次性测试身份，所有写入限D盘专用任务目录；一次性公钥不被任何真实系统信任，不注册账号/访问，不读取真实发布私钥和运营凭据，不改正式运行包。测试临时文件仅按pytest本任务所有权回收，失败目录保留，禁止自行清理旧机。准确路径/摘要/命令见同轮NAS工厂隔离验证交接单。
+
+实现参考微软官方CreateDirectoryW、GetSecurityInfo、CreateFileW及IoCheckLinkShareAccess文档：https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createdirectoryw 、https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getsecurityinfo 、https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew 、https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iochecklinkshareaccess 。

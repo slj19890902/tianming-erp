@@ -496,11 +496,8 @@ class Manager:
         with remote_storage.location_guard(nas) as storage_anchor:
             return self._backup_at_location(password, nas, storage_anchor)
 
-    def _backup_at_location(self, password: str, nas: Path, storage_anchor) -> Path:
-        from desktop_assistant import mac_backup_storage as remote_storage
-        # NAS must already exist; a disconnected mapping must not become a local folder.
-        if not nas.is_dir():
-            raise ValueError('NAS目录不可达，保留原备份并停止更新')
+    def _backup_inputs(self):
+        """Shared complete-backup facts; caller holds maintenance lock."""
         state = self.state
         current = state['current']
         if not current:
@@ -511,11 +508,6 @@ class Manager:
         checks = inspect(self.root / 'shared/data/carton_erp.sqlite3', self.root / 'shared', managed=True)
         if any(checks['counts'][key] for key in ('missing', 'external', 'hash_mismatch')):
             raise ValueError('附件缺失或校验失败，不能标记为完整备份')
-        # Backup payload, encryption and verification all live on the selected NAS.
-        # Never fall back to C/D when a mapped NAS is unavailable.
-        nas = archive_path(nas)
-        if nas == self.root or self.root in nas.parents:
-            raise ValueError('NAS备份目录不能位于ERP安装目录内')
         package = self.root / 'packages' / (current + '.zip')
         if sha(package) != current:
             raise ValueError('对应程序发布包已损坏')
@@ -537,15 +529,20 @@ class Manager:
         # Count archive members, including the same original under two names.
         required = 4 * (sum(p.stat().st_size for p in (self.root / 'shared').rglob('*') if p.is_file())
                         + sum(p.stat().st_size for p in packages.values())) + 2 * 1024**3
-        if shutil.disk_usage(nas).free < required:
-            raise ValueError('NAS空间不足，未创建备份；请保留旧备份')
-        # ZSpace virtual volumes may discard dot-prefixed directories on sync.
-        work_root = nas / 'tianming-backup-work'
-        work_root.mkdir(exist_ok=True)
-        if work_root.is_symlink() or work_root.is_junction():
-            raise ValueError('NAS备份临时目录不能是链接')
-        job = work_root / uuid.uuid4().hex
-        job.mkdir()
+        return dict(state=state, current=current, before=before, packages=packages,
+                    authority=authority, provenance=provenance, inventory_activation=inventory_activation,
+                    dispatch_activation=dispatch_activation, required=required)
+
+    def _build_backup_payload(self, password: str, job: Path, inputs):
+        """Original full format; no transport or success-state publication."""
+        state = inputs['state']
+        current = inputs['current']
+        before = inputs['before']
+        authority = inputs['authority']
+        provenance = inputs['provenance']
+        inventory_activation = inputs['inventory_activation']
+        dispatch_activation = inputs['dispatch_activation']
+        packages = dict(inputs['packages'])
         stamp = datetime.now(CN).strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:8]
         from desktop_assistant.credential_transfer import export as export_credentials
         credential_package = job / 'credentials.tmencrypted'
@@ -572,11 +569,42 @@ class Manager:
         # Authenticate before publication and hash the independently copied NAS file.
         check = job / 'check.zip'
         expected_sha = decrypt_file(encrypted, check, password)
-        if sha(check) != sha(raw):
+        raw_sha = sha(raw)
+        if sha(check) != raw_sha:
             raise ValueError('备份解密校验失败')
         if sha(encrypted) != expected_sha:
             raise ValueError('认证后的备份原包已经变化，保留现场，未标记成功')
         expected_size = encrypted.stat().st_size
+        return dict(encrypted=encrypted, stamp=stamp, sha256=expected_sha, size=expected_size,
+                    raw_sha256=raw_sha, database=before, state=state, manifest=packed)
+
+    def _backup_at_location(self, password: str, nas: Path, storage_anchor) -> Path:
+        from desktop_assistant import mac_backup_storage as remote_storage
+        # NAS must already exist; a disconnected mapping must not become a local folder.
+        if not nas.is_dir():
+            raise ValueError('NAS目录不可达，保留原备份并停止更新')
+        inputs = self._backup_inputs()
+        # Backup payload, encryption and verification all live on the selected NAS.
+        # Never fall back to C/D when a mapped NAS is unavailable.
+        nas = archive_path(nas)
+        if nas == self.root or self.root in nas.parents:
+            raise ValueError('NAS备份目录不能位于ERP安装目录内')
+        if shutil.disk_usage(nas).free < inputs['required']:
+            raise ValueError('NAS空间不足，未创建备份；请保留旧备份')
+        # ZSpace virtual volumes may discard dot-prefixed directories on sync.
+        work_root = nas / 'tianming-backup-work'
+        work_root.mkdir(exist_ok=True)
+        if work_root.is_symlink() or work_root.is_junction():
+            raise ValueError('NAS备份临时目录不能是链接')
+        job = work_root / uuid.uuid4().hex
+        job.mkdir()
+        payload = self._build_backup_payload(password, job, inputs)
+        state = payload['state']
+        before = payload['database']
+        encrypted = payload['encrypted']
+        stamp = payload['stamp']
+        expected_sha = payload['sha256']
+        expected_size = payload['size']
         pending = nas / (encrypted.name + '.pending')
         final = nas / encrypted.name
         with encrypted.open('rb') as src, pending.open('xb') as dst:

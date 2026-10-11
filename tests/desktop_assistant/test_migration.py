@@ -2,7 +2,8 @@ from contextlib import closing
 from pathlib import Path
 import sqlite3
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
+import psutil
 from tests.desktop_assistant import test_recovery as recovery
 from desktop_assistant.storage import sha, read_json
 
@@ -25,7 +26,10 @@ class MigrationRehearsalTests(unittest.TestCase):
 
     def test_additive_upgrade_proves_existing_fields_without_changing_live_copy(self):
         before=sha(self.database);state=self.manager.state
-        with patch('desktop_assistant.migration.run_migration',side_effect=self.migrate):
+        # Synthetic rehearsal has no child processes; do not assume a host with
+        # inaccessible real ERP daemons is globally observable/idle.
+        with patch('desktop_assistant.migration.run_migration',side_effect=self.migrate), \
+                patch('desktop_assistant.cleanup.psutil.process_iter',return_value=[]):
             report=self.manager.preview_update(self.fixture.release('two','r2'))
         self.assertEqual(report['status'],'passed')
         self.assertEqual(report['source_revision'],'r1');self.assertEqual(report['target_revision'],'r2')
@@ -37,6 +41,21 @@ class MigrationRehearsalTests(unittest.TestCase):
         self.assertFalse((job/'shared').exists())
         self.assertFalse((job/'release').exists())
         self.assertIn('deleted_bytes',report['temporary_cleanup']['shared'])
+
+    def test_successful_rehearsal_retains_payload_if_process_exit_cannot_be_confirmed(self):
+        before=sha(self.database);state=self.manager.state
+        inaccessible=Mock(pid=999999,info={'name':'Python'})
+        inaccessible.exe.side_effect=psutil.AccessDenied(pid=999999)
+        with patch('desktop_assistant.migration.run_migration',side_effect=self.migrate), \
+                patch('desktop_assistant.cleanup.psutil.process_iter',return_value=[inaccessible]):
+            report=self.manager.preview_update(self.fixture.release('two','r2'))
+        self.assertEqual(report['status'],'passed')
+        self.assertEqual(sha(self.database),before);self.assertEqual(self.manager.state,state)
+        job=Path(report['report_path']).parent
+        for name in ('release','shared'):
+            self.assertTrue((job/name).is_dir())
+            self.assertEqual(report['temporary_cleanup'][name],{'retained':'无法确认 ERP/测试进程已退出'})
+        self.assertTrue((job/'report.json').is_file())
 
     def test_equal_counts_do_not_hide_changed_business_values(self):
         before=sha(self.database)

@@ -252,10 +252,11 @@ def _set_control(meta, enabled, attempt, *, initial=False):
     if publication.read_record(CONTROL) != raw: raise ValueError('系统服务状态回读失败，可能已生效，保留现场')
 
 
-def create_log(path, gid, *, readable=False):
-    # launchd documents O_RDWR for StandardErrorPath. Root owns the file and
-    # protected parent; the service group needs both bits for that open mode.
-    mode = 0o660 if readable else 0o620
+def create_log(path, gid):
+    # Native launchd also opens StandardOutPath read/write: write-only stdout
+    # fails before exec with EX_CONFIG(78). Both logs remain root-owned under
+    # the protected parent, accessible only to root and the service group.
+    mode = 0o660
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         os.fchown(fd, 0, gid)
@@ -284,7 +285,7 @@ def apply(raw, approved_sha):
         bootstrap._write(BASE/('system-service-'+plan['attempt_id']+'.pending.json'), raw)
         if plan['action'] == 'install':
             for name in ('system-service.stdout.log', 'system-service.stderr.log'):
-                create_log(BASE/name, meta['context']['gid'], readable=name.endswith('.stderr.log'))
+                create_log(BASE/name, meta['context']['gid'])
             _set_control(meta, True, plan['attempt_id'], initial=True)
             bootstrap._write(PLIST, _plist(meta['package'], meta['publisher_sha256']), mode=0o644)
             publication.sync_directory(PLISTS)

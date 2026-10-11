@@ -55,10 +55,10 @@ def installed_case(case, monkeypatch):
         if action == 'stop':
             with pytest.raises(ValueError, match='已停用'): m.check_start()
     monkeypatch.setattr(m, 'worker', worker)
-    def create_log(path, gid, *, readable=False):
-        events.append(('create-log', path.name, gid, readable))
+    def create_log(path, gid):
+        events.append(('create-log', path.name, gid))
         with path.open('xb') as f: f.write(b'')
-        path.chmod(0o660 if readable else 0o620)
+        path.chmod(0o660)
     monkeypatch.setattr(m, 'create_log', create_log)
     return SimpleNamespace(case=case, events=events, registry=registry,
                            context_check=context_check, launch=launch, worker=worker)
@@ -82,11 +82,13 @@ def test_install_pins_immutable_runtime_and_preserves_stopped_state(installed_ca
     assert spec['WorkingDirectory'] == str(m.ROOT)
     assert '/Users/' not in str(spec['ProgramArguments']) or str(c.case.root) in spec['ProgramArguments'][0]
     assert c.events.index(('worker', 'check')) < c.events.index(('bootstrap', 'system', str(m.PLIST)))
+    for name in ('system-service.stdout.log', 'system-service.stderr.log'):
+        assert (c.case.base/name).stat().st_mode & 0o777 == 0o660
     assert result['registered'] and not result['health_verified'] and not result['factory_activated']
     assert not result['system_keychain_session_verified'] and not result['logout_reboot_verified']
     assert json.loads(m.CONTROL.read_bytes())['enabled'] is True
-    assert ('create-log', 'system-service.stdout.log', 499, False) in c.events
-    assert ('create-log', 'system-service.stderr.log', 499, True) in c.events
+    assert ('create-log', 'system-service.stdout.log', 499) in c.events
+    assert ('create-log', 'system-service.stderr.log', 499) in c.events
     assert not (m.ROOT/'state.json').exists()  # Fake preflight did not restore/start/create data.
     m.check_start()
 
@@ -213,22 +215,23 @@ def test_new_disable_plan_still_rejects_changed_control(installed_case):
     assert not c.events
 
 
-@pytest.mark.parametrize('readable,mode', [(False, 0o620), (True, 0o660)])
-def test_logs_preserve_root_owner_and_stderr_group_read_write(tmp_path, monkeypatch, readable, mode):
-    path = tmp_path/'synthetic.log'
+@pytest.mark.parametrize('name', ['system-service.stdout.log', 'system-service.stderr.log'])
+def test_logs_preserve_root_owner_and_service_group_read_write(tmp_path, monkeypatch, name):
+    path = tmp_path/name
+    mode = 0o660
     ownership = Mock(); monkeypatch.setattr(m.os, 'fchown', ownership)
     checks = Mock(); monkeypatch.setattr(publication, 'guard', checks)
-    m.create_log(path, os.getgid(), readable=readable)
+    m.create_log(path, os.getgid())
     ownership.assert_called_once()
     assert ownership.call_args.args[1:] == (0, os.getgid())
     assert path.stat().st_mode & 0o777 == mode
     checks.assert_called_once_with(path, mode=mode)
     # Real file IO as this test UID; group permission contract is checked above.
     # It does not claim a root-owned file was opened by the actual service UID.
-    fd = os.open(path, os.O_RDWR if readable else os.O_WRONLY)
+    fd = os.open(path, os.O_RDWR)
     try: os.write(fd, b'synthetic log')
     finally: os.close(fd)
-    with pytest.raises(FileExistsError): m.create_log(path, os.getgid(), readable=readable)
+    with pytest.raises(FileExistsError): m.create_log(path, os.getgid())
 
 
 def test_failed_bootstrap_retains_files_and_never_claims_registration(installed_case, monkeypatch):
@@ -518,3 +521,16 @@ def test_system_module_uses_real_system_python_stdlib_only():
     code="import sys;sys.path.insert(0,sys.argv[1]);import desktop_assistant.mac_system_service;assert 'cryptography' not in sys.modules;assert 'app' not in sys.modules;print('stdlib_only')"
     result=subprocess.run(['/usr/bin/python3','-I','-B','-S','-c',code,str(repo)],capture_output=True,text=True,check=True)
     assert result.stdout.strip()=='stdlib_only'
+
+
+def test_default_stdout_supports_actual_launchd_readwrite_open(tmp_path, monkeypatch):
+    import stat
+    # Native launchd probe: write-only stdout fails with EX_CONFIG(78).
+    # StandardOutPath needs the same group read/write bits as stderr here.
+    monkeypatch.setattr(m.publication, 'guard', lambda path, **kwargs: None)
+    monkeypatch.setattr(m.os, 'fchown', lambda fd, uid, gid: None)
+    path = tmp_path/'system-service.stdout.log'
+    m.create_log(path, os.getgid())
+    assert stat.S_IMODE(path.stat().st_mode) == 0o660
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+    os.close(fd)

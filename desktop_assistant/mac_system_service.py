@@ -5,6 +5,7 @@ never imports that runtime. Check/stop workers execute only as the dedicated UID
 Registration is not evidence of healthy operation, logout/reboot or cutover.
 """
 import json
+from contextlib import contextmanager, ExitStack
 import os
 from pathlib import Path
 import plistlib
@@ -143,7 +144,9 @@ def make_plan(action, package):
     else:
         previous, control = checked_control(meta)
         _installed_plist(meta)
-        if control['enabled'] != (action == 'disable'):
+        # A fresh approved disable may finish a previous partial stop. It still
+        # binds the exact current control bytes and never reopens the start gate.
+        if action == 'enable' and control['enabled']:
             raise ValueError('系统服务状态不允许该动作；先核查失败现场')
     now = int(time.time())
     return {'type': PLAN_TYPE, 'action': action, 'attempt_id': uuid.uuid4().hex,
@@ -185,7 +188,7 @@ def validate(raw, approved_sha):
         previous, control = checked_control(meta)
         _installed_plist(meta)
         if (bootstrap.digest(previous) != plan['control_sha256']
-                or control['enabled'] != (plan['action'] == 'disable')):
+                or (plan['action'] == 'enable' and control['enabled'])):
             raise ValueError('系统服务状态变化，不覆盖重试')
     return plan, meta
 
@@ -246,15 +249,18 @@ def _set_control(meta, enabled, attempt, *, initial=False):
     if publication.read_record(CONTROL) != raw: raise ValueError('系统服务状态回读失败，可能已生效，保留现场')
 
 
-def create_log(path, gid):
+def create_log(path, gid, *, readable=False):
+    # launchd documents O_RDWR for StandardErrorPath. Root owns the file and
+    # protected parent; the service group needs both bits for that open mode.
+    mode = 0o660 if readable else 0o620
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         os.fchown(fd, 0, gid)
-        os.fchmod(fd, 0o620)
+        os.fchmod(fd, mode)
         os.fsync(fd)
     finally:
         os.close(fd)
-    publication.guard(path, mode=0o620)
+    publication.guard(path, mode=mode)
     if path.stat().st_gid != gid: raise ValueError('系统日志组不符')
 
 
@@ -275,7 +281,7 @@ def apply(raw, approved_sha):
         bootstrap._write(BASE/('system-service-'+plan['attempt_id']+'.pending.json'), raw)
         if plan['action'] == 'install':
             for name in ('system-service.stdout.log', 'system-service.stderr.log'):
-                create_log(BASE/name, meta['context']['gid'])
+                create_log(BASE/name, meta['context']['gid'], readable=name.endswith('.stderr.log'))
             _set_control(meta, True, plan['attempt_id'], initial=True)
             bootstrap._write(PLIST, _plist(meta['package'], meta['publisher_sha256']), mode=0o644)
             publication.sync_directory(PLISTS)
@@ -374,20 +380,46 @@ def verify_keychain(context):
         pass
 
 
+@contextmanager
+def stop_lock(manager, timeout=75):
+    """Wait only for lock acquisition, never repeat an executed stop body."""
+    from desktop_assistant.operation_lock import BUSY
+    deadline = time.monotonic() + timeout
+    with ExitStack() as stack:
+        while True:
+            try:
+                stack.enter_context(manager.lock())
+                break
+            except ValueError as error:
+                if str(error) != BUSY or time.monotonic() >= deadline:
+                    raise
+                time.sleep(.5)
+        yield
+
+
 def runtime_worker(manager, args, context):
     from desktop_assistant.storage import write_json
     if args.system_action not in {'check', 'stop'} or not re.fullmatch('[0-9a-f]{32}', args.challenge or ''):
         raise ValueError('系统服务子进程动作或挑战无效')
-    with manager.lock():
+    with stop_lock(manager) if args.system_action == 'stop' else manager.lock():
         state = manager.state
         if args.system_action == 'check':
             if (state.get('manual_stop') is not True or not _sha(state.get('current'))
                     or state.get('onboarding_pending') or state.get('operation') == 'migration_running'
                     or 'failed' in state.get('operation', '')):
                 raise ValueError('仅完整恢复且明确停止的实例可以安装/启用系统服务')
-            identities = [state['current']]
-            if state.get('schema_authority'): identities.append(state['schema_authority'])
-            manager._approve_execution(*identities)
+            manager._approve_execution(state['current'])
+            authority = state.get('schema_authority')
+            if authority and authority != state['current']:
+                from desktop_assistant.mac_published_runtime import verify_authority
+                verify_authority(manager.root, authority, manager.public_key)
+            # On first install CONTROL does not exist yet. Require the actual
+            # current application, independently of the chosen supervisor, to
+            # support the persistent administrator gate before creating it.
+            _, manifest = manager._published_release(state['current'])
+            capability = manifest.get('runtime_capabilities', {}).get('system_service_v1')
+            if type(capability) is not int or capability != 1:
+                raise ValueError('当前程序尚未实现系统服务停用门禁')
         else:
             state['manual_stop'] = True
             write_json(manager.root/'state.json', state)

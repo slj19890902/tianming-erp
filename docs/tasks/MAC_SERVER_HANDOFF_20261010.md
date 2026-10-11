@@ -411,3 +411,15 @@ check/run通过System随机引导和私有库HMAC canary验证本次进程实际
 管理员包增至九源码加manifest共十文件，按最终提交生成新包与新钥匙串计划；旧7b736ade/6eef54c6材料成套保留，不能混用。真实系统服务计划待账号/钥匙串、专用身份完整恢复及root发布新版工厂签名包后生成，不虚构context或程序ID。实现依据本机/usr/share/man/man5/launchd.plist.5及Apple官方https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html；真实系统注册、InitGroups身份及日志权限仍须后续原生验收。
 
 下一项为专用身份完整恢复/正常管理入口、独立于个人登录的NAS及备份、受保护目标激活与最终工厂签名。只读发现当前NAS在/Users/kimiyf/Public/ZSPACE下，而个人home为0750；不能由个人可访问推断专用UID可访问，也不放宽个人home权限。家庭签名运行包仍3de3be32，四份真实恢复未改，工厂基线仍b9a077bc。真实安装、后台注销重启、工厂最终停写同步及完整业务/中文实体打印/扫码未完成，旧机保留。
+
+## 2026-10-11 系统服务独立复核修复范围
+
+本闭环修复74350181独立只读复核发现的三项：停用遇在途维护锁即失败且无法新计划重试；首次安装监督包支持系统能力但current未支持时仍通过；stderr的0620不符合launchd文档读写打开契约。唯一写入负责人为主代理，允许文件mac_system_service.py、对应系统服务/发布解析测试及本任务卡和迁移计划。停用有界等待只限获取锁阶段，失败保持关闭门禁及现场；新disable计划仍绑定原控制字节和完整归属，不能自动重试、强杀或重新开启。首次check检查实际current能力，纯离线结构authority不附加本次新要求。stderr改0660，stdout保留0620，父目录和属主仍root控制。先建立失败用例再修复，合成权限不冒充实际专用UID/launchd验收。
+
+并行NAS只读复核确认当前极空间挂载实际NFS server为127.0.0.1:52100，代理链归UID501。此前独立进程F_NOCACHE与SHA只能证明本机挂载视图完整性，不能证明远端设备持久化、专用UID或注销重启可用。已知/vfs/stats当刻队列为空也不倒补过去具体文件。原始回执和本地完整副本全部保留；后续独立闭环处理Mac备份成功门禁及所有消费者，Windows凭据/来源审计receipt契约保持。本次不改挂载、不扩大home权限、不读代理token或重复索取已移交凭据。
+
+第二次复核将范围补充mac_published_runtime.py：已安装后旧schema_authority会被执行解析器附加system能力要求，导致合法实例无法disable后enable。新增专用只读authority验证，仍核对root批准、公钥/context、签名、完整两树、immutable能力和缓存清单一致，只不把离线证明当成实际执行；正常resolve仍要求系统能力，无调用者可关闭的执行参数。回归同时覆盖CONTROL不存在/存在禁用两种阶段、旧authority不得实际运行及篡改/未批准拒绝。
+
+四项修复完成并独立只读复审通过。旧代码先复现三项13失败/2通过及启停周期1失败/11通过；修复后定向126项通过。助手完整825项：809通过、16跳过、0失败错误，63.92秒，3条原依赖/合成短JWT告警。首次沙箱全量23失败为9项sysctl进程查询拒绝和14项Tk桌面初始化失败，日志保留；经自动审批以普通用户运行完整合成回归后全过，不以跳过或改测试规避环境限制。15项Windows原生和1项显式个人LaunchAgent开关仍跳过，root/专用UID/系统注册为合成适配器；日志实际文件IO是测试UID，不冒充专用UID打开root日志已验。
+
+本机再核Apple M6/16GiB/macOS27.0.1，固定系统目录与system/cn.tianming.erp仍不存在，工厂Git基线只读仍b9a077bc115cc649cdc2753cab3dfb3d75269d1c，Alembic唯一ep1010md。最小管理员包需按本提交新建并生成匹配的新钥匙串计划；旧成套材料保留，真实服务计划仍缺前置未生成。没有root安装、真实钥匙串/数据库/恢复目录写入，没有发信、收单、外部AI、正式切换或旧机清空。下一闭环优先收紧Mac备份真实远端证据与历史状态消费者，再解开专用身份首次发布/完整恢复顺序及管理入口；真实NAS合同、系统原生与注销重启、目标正式激活和工厂最终同步/实体打印扫码仍未完成。

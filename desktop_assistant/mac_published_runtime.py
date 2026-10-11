@@ -14,7 +14,7 @@ from app.core import mac_service_keychain as keychain
 from desktop_assistant.release_request import public_identity
 from desktop_assistant.release_verification import immutable, verify_tree
 from desktop_assistant.runtime_platform import runtime_python
-from desktop_assistant.storage import sha, signed_release_manifest
+from desktop_assistant.storage import read_json, sha, signed_release_manifest
 
 BASE = Path('/Library/TianmingERP')
 ROOT = BASE / 'instance'
@@ -55,6 +55,23 @@ def _record(raw):
 
 
 def resolve(root, identity, public, *, kind='server'):
+    return _verified_tree(root, identity, public, kind=kind, executing=True)
+
+
+def verify_authority(root, identity, public):
+    """Authenticate offline schema evidence; never return an executable path.
+
+    Preserve approval, signature, immutable protocol and complete tree checks.
+    Only the runtime system capability is inapplicable to offline evidence.
+    """
+    for kind in ('server', 'migration'):
+        _, manifest = _verified_tree(root, identity, public, kind=kind, executing=False)
+    if read_json(Path(root)/'releases'/identity/'manifest.json') != manifest:
+        raise ValueError('结构权威缓存与root签名原件不一致')
+    return manifest
+
+
+def _verified_tree(root, identity, public, *, kind, executing):
     if kind not in {'server', 'migration'} or not isinstance(identity, str) or not re.fullmatch('[0-9a-f]{64}', identity):
         raise ValueError('执行副本身份或用途无效')
     if Path(root).absolute() != ROOT or Path(root).resolve() != ROOT:
@@ -88,7 +105,7 @@ def resolve(root, identity, public, *, kind='server'):
     if type(capability) is not int or capability != 1:
         raise ValueError('已签名程序尚不支持不可变系统执行入口')
     service_control = BASE / 'system-service.json'
-    if service_control.exists() or service_control.is_symlink():
+    if executing and (service_control.exists() or service_control.is_symlink()):
         service_capability = capabilities.get('system_service_v1')
         if type(service_capability) is not int or service_capability != 1:
             raise ValueError('已安装系统监护，程序必须保留管理员停用门禁')

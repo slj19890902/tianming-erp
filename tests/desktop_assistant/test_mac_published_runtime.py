@@ -148,6 +148,53 @@ def test_installed_service_refuses_programs_without_persistent_disable_gate(case
     with pytest.raises(ValueError,match='停用门禁'):case.manager._approve_execution(candidate.id)
 
 
+@pytest.mark.parametrize('capability', [None, True, '1', 0, 2, 1])
+@pytest.mark.parametrize('installed', [False, True])
+def test_system_check_requires_current_capability_and_preserves_offline_authority(case, monkeypatch, capability, installed):
+    from desktop_assistant import mac_system_service as system
+    supervisor = case.publish('supervisor', service_capability=1)
+    candidate = case.publish('current', service_capability=capability)
+    # Three real synthetic signatures: supervisor, current, old offline authority.
+    # The authority needs its existing immutable protocol, not the new system one.
+    write_json(case.manager.root/'state.json', {'current': candidate.id, 'manual_stop': True,
+                                              'schema_authority': case.initial.id})
+    control = published.BASE/'system-service.json'
+    if installed: control.write_bytes(b'{"enabled":false}')
+    control_before = control.read_bytes() if installed else None
+    published.resolve(case.manager.root, supervisor.id, case.public, kind='migration')
+    monkeypatch.setattr(system.bootstrap, '_actual', lambda: system.bootstrap._expected(499, 499))
+    monkeypatch.setattr(case.manager, '_process', lambda: None)
+    args = SimpleNamespace(system_action='check', challenge='a'*32, supervisor_package=supervisor.id)
+    before = (case.manager.root/'state.json').read_bytes()
+    if type(capability) is int and capability == 1:
+        assert system.runtime_worker(case.manager, args, {})['process_stopped']
+    else:
+        with pytest.raises(ValueError, match='停用门禁'):
+            system.runtime_worker(case.manager, args, {})
+    assert (control.read_bytes() if control.exists() else None) == control_before
+    assert (case.manager.root/'state.json').read_bytes() == before
+
+
+@pytest.mark.parametrize('fault', ['none', 'cached-manifest', 'root-package', 'unapproved', 'tree-file'])
+def test_offline_authority_retains_published_authenticity_and_cannot_execute(case, fault):
+    control = published.BASE/'system-service.json'; control.write_bytes(b'{"enabled":false}')
+    authority = case.initial
+    if fault == 'cached-manifest':
+        write_json(case.manager.root/'releases'/authority.id/'manifest.json', {'revision': 'forged'})
+    elif fault == 'root-package': (authority.slot/'package.zip').write_bytes(b'tampered')
+    elif fault == 'unapproved':
+        record = read_json(published.REGISTRY); record['packages'] = ['f'*64]
+        write_json(published.REGISTRY, record)
+    elif fault == 'tree-file': (authority.slot/'migration/main.py').write_bytes(b'tampered')
+    if fault == 'none':
+        assert published.verify_authority(case.manager.root, authority.id, case.public) == authority.manifest
+        with pytest.raises(ValueError, match='停用门禁'):
+            published.resolve(case.manager.root, authority.id, case.public)
+    else:
+        with pytest.raises(ValueError):
+            published.verify_authority(case.manager.root, authority.id, case.public)
+
+
 def test_root_disable_gate_blocks_manager_start_before_process_or_data_actions(case,monkeypatch):
     from desktop_assistant import mac_system_service as system
     candidate=case.publish('system-aware',service_capability=1)

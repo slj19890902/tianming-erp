@@ -55,10 +55,10 @@ def installed_case(case, monkeypatch):
         if action == 'stop':
             with pytest.raises(ValueError, match='已停用'): m.check_start()
     monkeypatch.setattr(m, 'worker', worker)
-    def create_log(path, gid):
-        events.append(('create-log', path.name, gid))
+    def create_log(path, gid, *, readable=False):
+        events.append(('create-log', path.name, gid, readable))
         with path.open('xb') as f: f.write(b'')
-        path.chmod(0o620)
+        path.chmod(0o660 if readable else 0o620)
     monkeypatch.setattr(m, 'create_log', create_log)
     return SimpleNamespace(case=case, events=events, registry=registry,
                            context_check=context_check, launch=launch, worker=worker)
@@ -85,6 +85,8 @@ def test_install_pins_immutable_runtime_and_preserves_stopped_state(installed_ca
     assert result['registered'] and not result['health_verified'] and not result['factory_activated']
     assert not result['system_keychain_session_verified'] and not result['logout_reboot_verified']
     assert json.loads(m.CONTROL.read_bytes())['enabled'] is True
+    assert ('create-log', 'system-service.stdout.log', 499, False) in c.events
+    assert ('create-log', 'system-service.stderr.log', 499, True) in c.events
     assert not (m.ROOT/'state.json').exists()  # Fake preflight did not restore/start/create data.
     m.check_start()
 
@@ -151,6 +153,60 @@ def test_partial_disable_keeps_disabled_gate_and_all_evidence(installed_case, mo
     assert m.PLIST.exists() and list(c.case.base.glob('system-service-*.pending.json'))
     if fault == 'stop-failed': assert not any(e[0] == 'bootout' for e in c.events)
     if fault != 'disable-failed': assert not any(e[0] == 'disable' for e in c.events)
+
+
+@pytest.mark.parametrize('fault', ['stop', 'bootout', 'disable'])
+def test_new_disable_plan_finishes_partial_disable_without_reopening_gate(installed_case, monkeypatch, fault):
+    c = installed_case; plan_apply(c, 'install')
+    before = {p: p.read_bytes() for p in m.BASE.glob('system-service-*.verified.json')}
+    if fault == 'stop':
+        monkeypatch.setattr(m, 'worker', Mock(side_effect=ValueError(BUSY)))
+    else:
+        monkeypatch.setattr(m, 'launch', lambda args: (5, b'', b'failed')
+                           if args[0] == fault else c.launch(args))
+    with pytest.raises(ValueError): plan_apply(c, 'disable')
+    old_pending = {p: p.read_bytes() for p in m.BASE.glob('system-service-*.pending.json')}
+    gate = m.CONTROL.read_bytes()
+    assert json.loads(gate)['enabled'] is False
+    monkeypatch.setattr(m, 'worker', c.worker)
+    monkeypatch.setattr(m, 'launch', c.launch)
+    c.events.clear()
+    plan = m.make_plan('disable', c.case.plan['package_sha256'])
+    assert plan['control_sha256'] == b.digest(gate)
+    raw = b.canonical(plan)
+    result = m.apply(raw, b.digest(raw))
+    assert not result['registered'] and not c.registry['present']
+    assert m.CONTROL.read_bytes() == gate
+    assert all(p.read_bytes() == content for p, content in {**before, **old_pending}.items())
+    assert not any(e[0] in {'enable', 'bootstrap'} for e in c.events)
+    with pytest.raises(FileExistsError): m.apply(raw, b.digest(raw))  # Fresh approval, no replay.
+
+
+def test_new_disable_plan_still_rejects_changed_control(installed_case):
+    c = installed_case; plan_apply(c, 'install'); plan_apply(c, 'disable')
+    plan = m.make_plan('disable', c.case.plan['package_sha256']); raw = b.canonical(plan)
+    m._set_control(m.metadata(c.case.plan['package_sha256']), True, 'd'*32)
+    c.events.clear()
+    with pytest.raises(ValueError, match='状态变化'): m.apply(raw, b.digest(raw))
+    assert not c.events
+
+
+@pytest.mark.parametrize('readable,mode', [(False, 0o620), (True, 0o660)])
+def test_logs_preserve_root_owner_and_stderr_group_read_write(tmp_path, monkeypatch, readable, mode):
+    path = tmp_path/'synthetic.log'
+    ownership = Mock(); monkeypatch.setattr(m.os, 'fchown', ownership)
+    checks = Mock(); monkeypatch.setattr(publication, 'guard', checks)
+    m.create_log(path, os.getgid(), readable=readable)
+    ownership.assert_called_once()
+    assert ownership.call_args.args[1:] == (0, os.getgid())
+    assert path.stat().st_mode & 0o777 == mode
+    checks.assert_called_once_with(path, mode=mode)
+    # Real file IO as this test UID; group permission contract is checked above.
+    # It does not claim a root-owned file was opened by the actual service UID.
+    fd = os.open(path, os.O_RDWR if readable else os.O_WRONLY)
+    try: os.write(fd, b'synthetic log')
+    finally: os.close(fd)
+    with pytest.raises(FileExistsError): m.create_log(path, os.getgid(), readable=readable)
 
 
 def test_failed_bootstrap_retains_files_and_never_claims_registration(installed_case, monkeypatch):
@@ -233,6 +289,8 @@ class RuntimeManager:
         if self.busy: raise ValueError(BUSY)
         self.actions.append('lock');yield;self.actions.append('unlock')
     def _approve_execution(self,*ids):self.actions.append(('approve',ids))
+    def _published_release(self, identity):
+        return None, {'runtime_capabilities': {'system_service_v1': 1}}
     def _process(self):return self.running
     def stop(self):
         assert json.loads((self.root/'state.json').read_bytes())['manual_stop'] is True
@@ -261,6 +319,45 @@ def test_runtime_stop_sets_manual_stop_under_lock_before_graceful_stop(tmp_path,
     monkeypatch.setattr(b,'_actual',lambda:b._expected(499,499))
     assert m.runtime_worker(manager,args,{})['process_stopped']
     assert manager.actions==['lock','stop','unlock']
+
+
+@pytest.mark.parametrize('failure', ['transient', 'persistent', 'unrelated'])
+def test_stop_waits_only_for_lock_and_preserves_failure_scene(tmp_path, monkeypatch, failure):
+    manager = RuntimeManager(tmp_path); manager.value['manual_stop'] = False
+    args = SimpleNamespace(system_action='stop', challenge='a'*32, supervisor_package='b'*64)
+    monkeypatch.setattr(b, '_actual', lambda: b._expected(499, 499))
+    attempts = []; sleeps = []; clock = [0]
+    original = manager.lock
+    @contextmanager
+    def lock():
+        attempts.append('attempt')
+        if failure == 'unrelated': raise ValueError('invalid lock')
+        if failure == 'persistent' or len(attempts) == 1: raise ValueError(BUSY)
+        with original(): yield
+    monkeypatch.setattr(manager, 'lock', lock)
+    monkeypatch.setattr(m.time, 'monotonic', lambda: clock[0])
+    def sleep(seconds):
+        sleeps.append(seconds); clock[0] += 75
+    monkeypatch.setattr(m.time, 'sleep', sleep)
+    if failure == 'transient':
+        assert m.runtime_worker(manager, args, {})['process_stopped']
+        assert len(attempts) == 2 and len(sleeps) == 1
+        assert manager.actions == ['lock', 'stop', 'unlock']
+    else:
+        with pytest.raises(ValueError, match=BUSY if failure == 'persistent' else 'invalid lock'):
+            m.runtime_worker(manager, args, {})
+        assert not (tmp_path/'state.json').exists() and not manager.actions
+        assert len(attempts) == (2 if failure == 'persistent' else 1)
+
+
+def test_busy_from_stop_body_is_not_retried(tmp_path, monkeypatch):
+    manager = RuntimeManager(tmp_path)
+    stop = Mock(side_effect=ValueError(BUSY)); monkeypatch.setattr(manager, 'stop', stop)
+    monkeypatch.setattr(m.time, 'sleep', lambda _: pytest.fail('must not retry stop body'))
+    args = SimpleNamespace(system_action='stop', challenge='a'*32, supervisor_package='b'*64)
+    with pytest.raises(ValueError, match=BUSY): m.runtime_worker(manager, args, {})
+    stop.assert_called_once()
+    assert json.loads((tmp_path/'state.json').read_bytes())['manual_stop'] is True
 
 
 @pytest.mark.parametrize('fault', ['none', 'root', 'extra-group', 'wrong-root', 'wrong-public',

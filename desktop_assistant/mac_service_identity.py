@@ -1,7 +1,8 @@
 """Standalone, create-only Mac service identity provisioning (stdlib only).
 
 Plan is read-only. Provision requires an administrator-run process and a reviewed
-plan digest. Existing accounts/directories are never adopted, repaired or erased.
+plan digest. Existing accounts/directories are never adopted or erased. Explicit
+completion accepts only the exact retained post-creation/pre-home checkpoint.
 This neither creates keychain items nor installs/starts an ERP service.
 """
 from contextlib import contextmanager
@@ -13,6 +14,7 @@ import os
 from pathlib import Path
 import platform
 import plistlib
+import re
 import stat
 import subprocess
 import sys
@@ -24,6 +26,10 @@ BASE = Path('/Library/TianmingERP')
 ATTR = 'dsAttrTypeStandard:'
 TYPE = 'tianming.mac-service-identity-plan.v1'
 LIMIT = 65536
+# Reviewed predecessor that created the retained 2026-10-11 identity records.
+# This permits provenance checks and explicit completion, never fresh creation
+# with an old program digest or adoption of a different account.
+PREVIOUS_INSTALLERS = frozenset({'4ee4cda5f1e7d306bea0a73690b3c0df478fde75771e48c1ee12e10c9a1541b9'})
 
 
 def canonical(value):
@@ -248,7 +254,7 @@ def plan():
             'created_at': now, 'expires_at': now + 7 * 86400}
 
 
-def _validate(value):
+def _validate(value, *, completing=False):
     fields = {'type', 'account', 'base', 'uid', 'gid', 'user_guid', 'group_guid',
               'installation_id', 'host_sha256', 'installer_sha256', 'created_at', 'expires_at'}
     if not isinstance(value, dict) or set(value) != fields:
@@ -263,7 +269,8 @@ def _validate(value):
     if (uuid.UUID(hex=value['installation_id']).hex != value['installation_id']
             or value['user_guid'] == value['group_guid']):
         raise ValueError('安装身份不规范或重复')
-    if value['host_sha256'] != _host() or value['installer_sha256'] != _code_sha():
+    accepted = {_code_sha()} | (PREVIOUS_INSTALLERS if completing else set())
+    if value['host_sha256'] != _host() or value['installer_sha256'] not in accepted:
         raise ValueError('本机或配置器与已批准计划不符')
     if (any(type(value[k]) is not int for k in ('created_at', 'expires_at'))
             or not 0 < value['expires_at'] - value['created_at'] <= 7 * 86400
@@ -291,6 +298,57 @@ def _write(path, raw):
         raise ValueError('专用身份回执原字节回读失败')
 
 
+def permitted_groups(gid):
+    """Recognize only public inherited print/share groups; never grant membership.
+
+    macOS expands localaccounts/everyone into default print/share groups even for
+    disabled service accounts. A name or numeric allowlist alone is insufficient:
+    read the local group topology and reject direct members and unfamiliar roles.
+    """
+    import grp
+    error = '专用身份的实际UID/GID、组权限或目录不符，保留现场'
+    if type(gid) is not int or not 400 <= gid < 500:
+        raise ValueError(error)
+    groups = os.getgrouplist(ACCOUNT, gid)
+    if (not groups or len(groups) > 64
+            or any(type(item) is not int or item < 0 for item in groups)):
+        raise ValueError(error)
+    allowed = {gid, 12, 61}
+    extras = set(groups) - allowed
+    if not extras:
+        return allowed
+    directory = Directory()
+    listed = grp.getgrall()
+    fields = [ATTR + key for key in ('RecordName', 'PrimaryGroupID', 'NestedGroups',
+                                    'GroupMembership', 'GroupMembers')]
+    for extra in extras:
+        group = grp.getgrgid(extra)
+        # macOS may enumerate the same built-in record through both local and
+        # compatibility nodes. Only byte-equivalent identity tuples may repeat.
+        identities = {(item.gr_name, item.gr_gid, tuple(item.gr_mem))
+                      for item in listed if item.gr_gid == extra}
+        if group.gr_mem or identities != {(group.gr_name, extra, ())}:
+            raise ValueError(error)
+        if extra == 100 and group.gr_name == '_lpoperator':
+            nested = {'ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000003D',
+                      'ABCDEFAB-CDEF-ABCD-EFAB-CDEF00000062'}
+        elif extra >= 701 and re.fullmatch(r'com\.apple\.sharepoint\.group\.[1-9][0-9]*', group.gr_name):
+            nested = {'ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000000C'}
+        else:
+            raise ValueError(error)
+        record = directory.read('Groups', group.gr_name, fields)
+        if (not record or record.get(ATTR + 'RecordName') != [group.gr_name]
+                or record.get(ATTR + 'PrimaryGroupID') != [str(extra)]
+                or record.get(ATTR + 'GroupMembership', []) != []
+                or record.get(ATTR + 'GroupMembers', []) != []
+                or not isinstance(record.get(ATTR + 'NestedGroups'), list)
+                or len(record[ATTR + 'NestedGroups']) != len(nested)
+                or set(record[ATTR + 'NestedGroups']) != nested):
+            raise ValueError(error)
+        allowed.add(extra)
+    return allowed
+
+
 def _check_identity(value):
     import pwd
     import grp
@@ -300,7 +358,7 @@ def _check_identity(value):
             or group.gr_gid != value['gid'] or group.gr_mem
             or sum(p.pw_uid == value['uid'] for p in pwd.getpwall()) != 1
             or sum(g.gr_gid == value['gid'] for g in grp.getgrall()) != 1
-            or not set(os.getgrouplist(ACCOUNT, value['gid'])) <= {value['gid'], 12, 61}):
+            or not set(os.getgrouplist(ACCOUNT, value['gid'])) <= permitted_groups(value['gid'])):
         raise ValueError('专用身份的实际UID/GID、组权限或目录不符，保留现场')
 
 
@@ -366,10 +424,81 @@ def provision(raw, approved_sha256):
     return receipt
 
 
+def complete_identity(raw, approved_sha256):
+    """Complete only the exact retained post-OD/pre-home installation checkpoint.
+
+    No account/group changes, old-record rewrites, deletion, generic repair or
+    retry after a new partial completion. The original creation evidence stays.
+    """
+    _administrator()
+    # The independently reviewed bootstrap authenticates the remaining pack.
+    from desktop_assistant import mac_keychain_install as bootstrap
+    bootstrap.verify_code()
+    value = bootstrap.decode(raw)
+    if hashlib.sha256(raw).hexdigest() != approved_sha256:
+        raise ValueError('续接原计划摘要不符')
+    _validate(value, completing=True)
+    _parent()
+    fd = os.open(BASE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if (info.st_uid != 0 or info.st_gid != 0 or stat.S_IMODE(info.st_mode) != 0o700
+                or info.st_dev != BASE.parent.stat().st_dev):
+            raise ValueError('续接现场不是原root私有目录')
+        _no_acl(fd)
+        names = {'00-plan.json', '01-groups.json', '02-users.json'}
+        if set(os.listdir(fd)) != names:
+            raise ValueError('续接仅接受三份原创建记录；已有其他现场时不覆盖重试')
+        for name in names:
+            item = os.stat(BASE / name, follow_symlinks=False)
+            if (item.st_uid != 0 or item.st_gid != 0 or stat.S_IMODE(item.st_mode) != 0o600
+                    or item.st_dev != info.st_dev):
+                raise ValueError('原创建记录的保护属性不符')
+        records = {name: bootstrap.protected(BASE / name) for name in names}
+        if records['00-plan.json'] != raw:
+            raise ValueError('续接不是原创建计划')
+        directory = Directory()
+        for index, kind, attrs in ((1, 'Groups', _attributes(value)[0]),
+                                  (2, 'Users', _attributes(value)[1])):
+            expected = {**attrs, ATTR + 'RecordName': [ACCOUNT]}
+            if (records['0%d-%s.json' % (index, kind.lower())] != canonical(expected)
+                    or directory.read(kind, ACCOUNT, list(expected)) != expected):
+                raise ValueError('原身份创建记录或实际禁用账号字段不符，不接管')
+        _check_identity(value)
+        current = os.stat(BASE, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+            raise ValueError('续接目录身份变化')
+        if any(bootstrap.protected(BASE / name) != data for name, data in records.items()):
+            raise ValueError('续接原记录变化')
+        _write(BASE / 'identity-completion-attempt.json', canonical({
+            'type': 'tianming.mac-service-identity-completion-attempt.v1',
+            'plan_sha256': approved_sha256, 'installer_sha256': _code_sha(),
+            'original_installer_sha256': value['installer_sha256'],
+            'original_records': {name: hashlib.sha256(data).hexdigest() for name, data in records.items()},
+            'directory_groups': sorted(permitted_groups(value['gid'])),
+            'account_modified': False, 'group_modified': False,
+            'original_records_modified': False, 'factory_activated': False}))
+        for name in ('home', 'instance'):
+            _owned_directory(BASE / name, value['uid'], value['gid'])
+        receipt = {'type': 'tianming.mac-service-identity.v1', 'plan_sha256': approved_sha256,
+                   'uid': value['uid'], 'gid': value['gid'], 'installation_id': value['installation_id'],
+                   'home': str(BASE / 'home'), 'root': str(BASE / 'instance'),
+                   'account_created': True, 'keychain_created': False, 'service_started': False,
+                   'factory_activated': False}
+        os.fchmod(fd, 0o755)
+        _parent()
+        _check_identity(value)
+        _write(BASE / 'provisioned.json', canonical(receipt))
+        os.fsync(fd)
+        return receipt
+    finally:
+        os.close(fd)
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='ERP专用Mac服务身份配置；不安装/启动ERP或钥匙串')
-    parser.add_argument('action', choices=('plan', 'provision'))
+    parser.add_argument('action', choices=('plan', 'provision', 'complete'))
     parser.add_argument('--file', type=Path, required=True)
     parser.add_argument('--approved-sha256')
     args = parser.parse_args()
@@ -381,7 +510,13 @@ def main():
         else:
             with args.file.open('rb') as stream:
                 raw = stream.read(LIMIT + 1)
-            result = provision(raw, args.approved_sha256)
+            if args.action == 'complete':
+                root = str(Path(__file__).absolute().parent.parent)
+                if root not in sys.path:
+                    sys.path.insert(0, root)
+                result = complete_identity(raw, args.approved_sha256)
+            else:
+                result = provision(raw, args.approved_sha256)
     except Exception:
         raise SystemExit('服务身份配置未确认完成；保留原账号及本次现场，不覆盖重试或自动清理。') from None
     print(json.dumps(result, ensure_ascii=False))

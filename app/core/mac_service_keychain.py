@@ -65,7 +65,7 @@ def _no_acl(fd):
 
 
 def _identity(value, *, administrator=False):
-    from desktop_assistant.mac_service_identity import _platform, _parent, _host, _check_identity
+    from desktop_assistant.mac_service_identity import _platform, _parent, _host, _check_identity, permitted_groups
     _platform()
     if (not isinstance(value, dict) or set(value) != FIELDS or value['type'] != TYPE
             or not isinstance(value['installation_id'], str)
@@ -80,7 +80,7 @@ def _identity(value, *, administrator=False):
     expected_uid, expected_gid = (0, None) if administrator else (value['uid'], value['gid'])
     if (os.getuid() != expected_uid or os.geteuid() != expected_uid
             or (expected_gid is not None and (os.getgid() != expected_gid or os.getegid() != expected_gid
-                or not set(os.getgroups()) <= {expected_gid, 12, 61}))):
+                or not set(os.getgroups()) <= permitted_groups(expected_gid)))):
         raise KeychainError('钥匙串操作不是已配置的实际服务身份')
 
 

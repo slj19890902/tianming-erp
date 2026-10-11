@@ -188,20 +188,23 @@ def test_real_identity_validator_rejects_wrong_binding_before_any_keychain(monke
         module._identity(spec)
 
 
-@pytest.mark.parametrize('wrong', ['uid', 'euid', 'gid', 'egid', 'groups', None])
+@pytest.mark.parametrize('wrong', ['uid', 'euid', 'gid', 'egid', 'groups', 'inherited', 'inherited-unknown', None])
 def test_real_identity_validator_checks_actual_process_credentials(monkeypatch, wrong):
     from desktop_assistant import mac_service_identity as identity
     for name in ('_platform', '_parent'):
         monkeypatch.setattr(identity, name, lambda: None)
     monkeypatch.setattr(identity, '_host', lambda: 'b' * 64)
     monkeypatch.setattr(identity, '_check_identity', lambda value: None)
+    monkeypatch.setattr(identity, 'permitted_groups', lambda gid: {gid,12,61,100,701})
     monkeypatch.setattr(module, '_checked_path', allowed)
     for name in ('uid', 'euid', 'gid', 'egid'):
         monkeypatch.setattr(os, 'get' + name, lambda name=name: 0 if name == wrong else 499)
     monkeypatch.setattr(os, 'getgroups', lambda: [499, 80] if wrong == 'groups' else [499, 12, 61])
+    if wrong in {'inherited','inherited-unknown'}:
+        monkeypatch.setattr(os, 'getgroups', lambda: [499,12,61,100,701] + ([702] if wrong=='inherited-unknown' else []))
     value = {'type': module.TYPE, 'installation_id': 'a' * 32, 'uid': 499, 'gid': 499,
              'host_sha256': 'b' * 64}
-    if wrong:
+    if wrong and wrong != 'inherited':
         with pytest.raises(module.KeychainError, match='实际服务身份'):
             module._identity(value)
     else:

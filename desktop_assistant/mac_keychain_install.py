@@ -163,7 +163,8 @@ def _origin(value):
     expected = {'type', 'account', 'base', 'uid', 'gid', 'user_guid', 'group_guid',
                 'installation_id', 'host_sha256', 'installer_sha256', 'created_at', 'expires_at'}
     if (set(value) != expected or value['type'] != identity.TYPE or value['account'] != identity.ACCOUNT
-            or value['base'] != str(BASE) or value['installer_sha256'] != identity._code_sha()
+            or value['base'] != str(BASE)
+            or value['installer_sha256'] not in ({identity._code_sha()} | identity.PREVIOUS_INSTALLERS)
             or value['host_sha256'] != identity._host()
             or any(type(value[k]) is not int or not 400 <= value[k] < 500 for k in ('uid', 'gid'))
             or any(type(value[k]) is not int for k in ('created_at', 'expires_at'))

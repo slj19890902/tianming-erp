@@ -35,7 +35,11 @@ def execution_protocol(signed_activation_protocol,monkeypatch):
 
 @pytest.fixture
 def activated(root_case,monkeypatch):
-    c=root_case;c.run()
+    c=root_case
+    # The activation fixture's OS service is synthetic. Never inspect the host
+    # installation, including a real retained root-only provisioning failure.
+    monkeypatch.setattr(system,'CONTROL',c.x.base/'system-service.json')
+    c.run()
     c.manager=Manager(c.x.root,c.t.c.public)
     monkeypatch.setattr(runtime,'__file__',str(c.x.slot/'server'/runtime.MODULE))
     # Same synthetic OS identity as the full restore/activation fixture. Signed

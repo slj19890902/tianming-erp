@@ -438,10 +438,11 @@ def runtime_configuration(args, *, script, executable):
     from app.core import mac_service_keychain as keychain
     from desktop_assistant import mac_published_runtime as published
     context = keychain.load_context()
+    from desktop_assistant.mac_service_identity import permitted_groups
     actual = bootstrap._actual()
     if (any(actual[k] != context['uid'] for k in ('uid', 'euid'))
             or any(actual[k] != context['gid'] for k in ('gid', 'egid'))
-            or not actual['kernel_groups'] or not set(actual['kernel_groups']) <= {context['gid'], 12, 61}):
+            or not actual['kernel_groups'] or not set(actual['kernel_groups']) <= permitted_groups(context['gid'])):
         raise ValueError('系统服务实际内核身份或附加组不符')
     if (Path(args.root).absolute() != ROOT or Path(args.public_key).absolute() != BASE/'publisher-public.pem'
             or not _sha(args.supervisor_package)):

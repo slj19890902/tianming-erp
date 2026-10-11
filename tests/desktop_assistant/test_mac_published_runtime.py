@@ -27,6 +27,8 @@ def case(monkeypatch):
     fixture.setUp()
     base = fixture.root / 'synthetic-system'
     base.mkdir()
+    from desktop_assistant import mac_system_service as system
+    monkeypatch.setattr(system, 'CONTROL', base/'system-service.json')
     manager = fixture.manager
     for name, value in dict(BASE=base, ROOT=manager.root, PUBLISHED=base/'published',
                             REGISTRY=base/'published.json', PUBLIC=base/'publisher.pem').items():

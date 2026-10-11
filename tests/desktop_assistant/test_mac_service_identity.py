@@ -297,3 +297,140 @@ def test_native_acl_check_accepts_no_acl_and_rejects_task_owned_acl(tmp_path):
         assert subprocess.check_output(['/bin/ls', '-lde', str(path)]) == before
     finally:
         os.close(fd)
+
+
+@pytest.fixture
+def inherited_groups(monkeypatch):
+    import grp
+    groups = {100: SimpleNamespace(gr_name='_lpoperator', gr_gid=100, gr_mem=[]),
+              701: SimpleNamespace(gr_name='com.apple.sharepoint.group.1', gr_gid=701, gr_mem=[])}
+    records = {}
+    for gid, group in groups.items():
+        records[group.gr_name] = {identity.ATTR + 'RecordName': [group.gr_name],
+            identity.ATTR + 'PrimaryGroupID': [str(gid)],
+            identity.ATTR + 'NestedGroups': ['ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000003D',
+                'ABCDEFAB-CDEF-ABCD-EFAB-CDEF00000062'] if gid == 100 else
+                ['ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000000C']}
+    memberships = [499, 12, 61, 100, 701]
+    listed = list(groups.values())
+    monkeypatch.setattr(os, 'getgrouplist', lambda name, gid: memberships)
+    monkeypatch.setattr(grp, 'getgrgid', groups.__getitem__)
+    monkeypatch.setattr(grp, 'getgrall', lambda: listed)
+    monkeypatch.setattr(identity, 'Directory', lambda: SimpleNamespace(
+        read=lambda kind, name, attrs: deepcopy(records.get(name))))
+    return SimpleNamespace(groups=groups, records=records, memberships=memberships, listed=listed)
+
+
+def test_public_inherited_groups_require_verified_local_topology(inherited_groups):
+    before = deepcopy(inherited_groups.records)
+    assert identity.permitted_groups(499) == {499, 12, 61, 100, 701}
+    # Local and compatibility nodes repeat some identical built-in records.
+    inherited_groups.listed.append(deepcopy(inherited_groups.groups[100]))
+    assert identity.permitted_groups(499) == {499, 12, 61, 100, 701}
+    assert inherited_groups.records == before
+
+
+@pytest.mark.parametrize('change', ['name', 'gid', 'nested-admin', 'nested-extra',
+    'nested-duplicate', 'direct-name', 'direct-guid', 'enumerated-member',
+    'conflicting-record', 'missing-record', 'missing-nested', 'unknown-group', 'bool'])
+def test_inherited_group_exception_does_not_admit_unverified_or_direct_grants(inherited_groups, change):
+    case = inherited_groups
+    record = case.records['com.apple.sharepoint.group.1']
+    if change == 'name': record[identity.ATTR+'RecordName'] = ['admin']
+    elif change == 'gid': record[identity.ATTR+'PrimaryGroupID'] = ['80']
+    elif change == 'nested-admin': record[identity.ATTR+'NestedGroups'] = ['ABCDEFAB-CDEF-ABCD-EFAB-CDEF00000050']
+    elif change == 'nested-extra': record[identity.ATTR+'NestedGroups'].append('unknown')
+    elif change == 'nested-duplicate': record[identity.ATTR+'NestedGroups'] *= 2
+    elif change == 'direct-name': record[identity.ATTR+'GroupMembership'] = [identity.ACCOUNT]
+    elif change == 'direct-guid': record[identity.ATTR+'GroupMembers'] = [str(uuid.uuid4()).upper()]
+    elif change == 'enumerated-member': case.groups[701].gr_mem.append(identity.ACCOUNT)
+    elif change == 'conflicting-record': case.listed.append(SimpleNamespace(gr_name='privileged', gr_gid=701, gr_mem=[]))
+    elif change == 'missing-record': case.records.pop('com.apple.sharepoint.group.1')
+    elif change == 'missing-nested': record.pop(identity.ATTR+'NestedGroups')
+    elif change == 'unknown-group': case.groups[701].gr_name = 'unreviewed-role'
+    else: case.memberships.append(True)
+    with pytest.raises(ValueError, match='实际UID/GID'):
+        identity.permitted_groups(499)
+
+
+@pytest.fixture
+def retained_identity(case, monkeypatch):
+    """Real retained files; explicit root ownership/OD adapters, no OS mutation."""
+    from desktop_assistant import mac_keychain_install as bootstrap
+    value = case.value | {'installer_sha256': next(iter(identity.PREVIOUS_INSTALLERS))}
+    raw = identity.canonical(value)
+    case.base.mkdir(mode=0o700)
+    (case.base/'00-plan.json').write_bytes(raw)
+    for index, kind, attrs in ((1, 'Groups', identity._attributes(value)[0]),
+                              (2, 'Users', identity._attributes(value)[1])):
+        actual = {**attrs, identity.ATTR+'RecordName': [identity.ACCOUNT]}
+        case.directory.records[kind] = actual
+        (case.base/('0%d-%s.json' % (index, kind.lower()))).write_bytes(identity.canonical(actual))
+    for p in case.base.iterdir(): p.chmod(0o600)
+    monkeypatch.setattr(bootstrap, 'verify_code', lambda: 'c'*64)
+    monkeypatch.setattr(bootstrap, 'protected', lambda path: path.read_bytes())
+    monkeypatch.setattr(identity, 'permitted_groups', lambda gid: {gid, 12, 61})
+    native_stat, native_fstat = os.stat, os.fstat
+    def owned(info):
+        fields = list(info); fields[4] = fields[5] = 0
+        return os.stat_result(fields)
+    def fake_stat(path, *args, **kwargs):
+        info = native_stat(path, *args, **kwargs)
+        if isinstance(path, (str, Path)) and (Path(path) == case.base or case.base in Path(path).parents):
+            return owned(info)
+        return info
+    monkeypatch.setattr(os, 'stat', fake_stat)
+    monkeypatch.setattr(os, 'fstat', lambda fd: owned(native_fstat(fd)))
+    return SimpleNamespace(case=case, value=value, raw=raw,
+        sha=hashlib.sha256(raw).hexdigest(), before={p.name:p.read_bytes() for p in case.base.iterdir()})
+
+
+def test_completion_keeps_original_account_records_and_only_finishes_private_directories(retained_identity):
+    c = retained_identity; before = deepcopy(c.case.directory.records)
+    result = identity.complete_identity(c.raw, c.sha)
+    assert result['account_created'] and not result['keychain_created'] and not result['service_started']
+    assert c.case.directory.records == before and not c.case.directory.created
+    assert all((c.case.base/name).read_bytes() == raw for name,raw in c.before.items())
+    assert (c.case.base/'identity-completion-attempt.json').is_file()
+    assert c.case.ownership == [('home',499,499), ('instance',499,499)]
+    assert identity.canonical(result) == (c.case.base/'provisioned.json').read_bytes()
+    with pytest.raises(ValueError): identity.complete_identity(c.raw, c.sha)
+
+
+@pytest.mark.parametrize('change', ['digest','source','plan','saved-group','saved-user','actual-user',
+    'actual-group','extra-file','prior-home','prior-receipt','mode','expiry','identity','pack'])
+def test_completion_refuses_unrelated_or_changed_scene_before_any_write(retained_identity, monkeypatch, change):
+    from desktop_assistant import mac_keychain_install as bootstrap
+    c = retained_identity; base=c.case.base; raw=c.raw; sha=c.sha
+    if change == 'digest': sha='0'*64
+    elif change in {'source','expiry'}:
+        value = c.value | ({'installer_sha256':'0'*64} if change=='source' else {'expires_at':0})
+        raw=identity.canonical(value); sha=hashlib.sha256(raw).hexdigest(); (base/'00-plan.json').write_bytes(raw)
+    elif change=='plan': (base/'00-plan.json').write_bytes(b'{}')
+    elif change=='saved-group': (base/'01-groups.json').write_bytes(b'{}')
+    elif change=='saved-user': (base/'02-users.json').write_bytes(b'{}')
+    elif change=='actual-user': c.case.directory.records['Users'][identity.ATTR+'UserShell']=['/bin/zsh']
+    elif change=='actual-group': c.case.directory.records['Groups'][identity.ATTR+'GeneratedUID']=[str(uuid.uuid4()).upper()]
+    elif change=='extra-file': (base/'unrelated').write_bytes(b'keep')
+    elif change=='prior-home': (base/'home').mkdir()
+    elif change=='prior-receipt': (base/'provisioned.json').write_bytes(b'keep')
+    elif change=='mode': (base/'00-plan.json').chmod(0o644)
+    else:
+        def refuse(*args,**kwargs): raise ValueError('synthetic refusal')
+        monkeypatch.setattr(identity if change=='identity' else bootstrap,
+                            '_check_identity' if change=='identity' else 'verify_code',refuse)
+    before={p.name:p.read_bytes() for p in base.iterdir() if p.is_file()}
+    with pytest.raises(ValueError): identity.complete_identity(raw,sha)
+    assert not (base/'identity-completion-attempt.json').exists() and not c.case.directory.created
+    assert before=={p.name:p.read_bytes() for p in base.iterdir() if p.is_file()}
+
+
+def test_completion_interrupted_after_marker_preserves_scene_and_refuses_blind_retry(retained_identity, monkeypatch):
+    c=retained_identity
+    def refuse(*args): raise OSError('synthetic private directory failure')
+    monkeypatch.setattr(identity,'_owned_directory',refuse)
+    with pytest.raises(OSError): identity.complete_identity(c.raw,c.sha)
+    marker=(c.case.base/'identity-completion-attempt.json').read_bytes()
+    assert not (c.case.base/'provisioned.json').exists()
+    with pytest.raises(ValueError): identity.complete_identity(c.raw,c.sha)
+    assert (c.case.base/'identity-completion-attempt.json').read_bytes()==marker

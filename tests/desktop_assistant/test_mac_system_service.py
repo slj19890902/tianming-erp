@@ -382,13 +382,15 @@ def test_busy_from_stop_body_is_not_retried(tmp_path, monkeypatch):
     assert json.loads((tmp_path/'state.json').read_bytes())['manual_stop'] is True
 
 
-@pytest.mark.parametrize('fault', ['none', 'root', 'extra-group', 'wrong-root', 'wrong-public',
+@pytest.mark.parametrize('fault', ['none', 'inherited', 'inherited-unknown', 'root', 'extra-group', 'wrong-root', 'wrong-public',
     'wrong-script', 'wrong-exe', 'missing-lock', 'directory-link', 'world-data', 'bad-capability',
     'disabled-stop', 'enabled-stop', 'keychain-failed'])
 def test_runtime_configuration_checks_actual_identity_entry_and_existing_private_tree(installed_case,monkeypatch,fault):
     c=installed_case; plan_apply(c,'install')
     from desktop_assistant import mac_published_runtime as published
     from app.core import mac_service_keychain as keychain
+    from desktop_assistant import mac_service_identity as identity
+    monkeypatch.setattr(identity,'permitted_groups',lambda gid:{gid,12,61,100,701})
     for name in ('releases','control','backups','packages','staging'):
         (m.ROOT/name).mkdir(mode=0o700)
     for path,raw in ((m.ROOT/'state.json',b'{}'),(m.ROOT/'control/operation.lock',b'0')):
@@ -413,6 +415,8 @@ def test_runtime_configuration_checks_actual_identity_entry_and_existing_private
         finally:os.close(fd)
     monkeypatch.setattr(keychain,'_checked_path',checked)
     if fault=='root':actual['uid']=actual['euid']=0
+    elif fault in {'inherited','inherited-unknown'}:
+        actual['kernel_groups']=[499,12,61,100,701]+([702] if fault=='inherited-unknown' else [])
     elif fault=='extra-group':actual['kernel_groups'].append(0)
     elif fault=='wrong-root':args.root=c.case.root
     elif fault=='wrong-public':args.publisher_sha256='f'*64
@@ -428,12 +432,12 @@ def test_runtime_configuration_checks_actual_identity_entry_and_existing_private
         args.system_action='stop'
         if fault=='disabled-stop':m._set_control(m.metadata(args.supervisor_package),False,'a'*32)
     before={str(p) for p in m.ROOT.rglob('*')}
-    if fault in {'none','disabled-stop'}:
+    if fault in {'none','inherited','disabled-stop'}:
         context,public,control=m.runtime_configuration(args,script=script,executable=executable)
         assert context==c.case.context and public==c.case.public
-        assert control['enabled']==(fault=='none')
+        assert control['enabled']==(fault!='disabled-stop')
         resolver.assert_called_once_with(m.ROOT,args.supervisor_package,c.case.public,kind='migration')
-        if fault=='none':canary.assert_called_once_with(c.case.context)
+        if fault!='disabled-stop':canary.assert_called_once_with(c.case.context)
         else:canary.assert_not_called()
     else:
         with pytest.raises((ValueError,OSError)):m.runtime_configuration(args,script=script,executable=executable)

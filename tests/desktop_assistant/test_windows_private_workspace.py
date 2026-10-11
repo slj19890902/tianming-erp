@@ -73,6 +73,27 @@ def test_only_verified_workspace_is_exposed_and_owned_files_are_retained(tmp_pat
     assert (job / 'synthetic.txt').read_text() == 'synthetic only'
 
 
+def test_existing_private_directory_pins_without_creation_and_rechecks(tmp_path, native):
+    existing = tmp_path / 'keep.txt'
+    existing.write_text('synthetic existing bytes')
+    with workspace.private_directory(tmp_path) as check:
+        assert tmp_path in native.opened
+        assert native.readbacks == 1
+        check()
+        assert native.readbacks == 2
+    assert native.readbacks == 3 and not native.opened and not native.created
+    assert existing.read_text() == 'synthetic existing bytes'
+
+
+def test_existing_private_directory_rejects_changed_acl_without_repair(tmp_path, native):
+    with pytest.raises(ValueError, match='禁止写入明文'):
+        with workspace.private_directory(tmp_path) as check:
+            native.parent_record['protected'] = False
+            check()
+    assert not native.created and not native.opened
+    assert native.parent_record['protected'] is False
+
+
 @pytest.mark.parametrize('change', ['extra', 'inherited', 'deny', 'read-only', 'wrong-owner', 'unprotected'])
 def test_unsafe_acl_never_reaches_plaintext_writer(tmp_path, native, change):
     if change == 'extra':

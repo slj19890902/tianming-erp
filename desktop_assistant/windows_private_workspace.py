@@ -237,6 +237,34 @@ def private_workspace(parent):
 
 
 @contextmanager
+def private_directory(parent):
+    """Pin an existing protected directory; yield a repeatable ACL check.
+
+    Nothing is created and no permissions are changed. This is suitable for
+    publishing a nonsecret signed artifact after source authentication.
+    """
+    native = _Windows()
+    original = Path(parent)
+    if not original.is_absolute():
+        raise ValueError('私有输出目录必须是已有绝对路径')
+    parent = local_path(original)
+    if not parent.is_dir():
+        raise ValueError('私有输出目录不存在')
+    with ExitStack() as stack:
+        for component in (*reversed(parent.parents), parent):
+            handle = stack.enter_context(native.directory(component))
+        native.require_local_acl_volume(parent)
+        sid = native.current_sid()
+
+        def check():
+            _validate_security(native.security(handle), sid)
+
+        check()
+        yield check
+        check()
+
+
+@contextmanager
 def read_file_lease(path):
     """Pin an existing local Windows file against writes/renames; never edit it."""
     native = _Windows()

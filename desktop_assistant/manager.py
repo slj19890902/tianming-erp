@@ -21,6 +21,7 @@ from desktop_assistant.operation_lock import operation_lock
 from desktop_assistant.runtime_platform import (runtime_relative, runtime_python, prepare_runtime,
                                                 process_options, link_managed_directory)
 from desktop_assistant import delivery_dispatch_contract as dispatch_contract
+from desktop_assistant import order_inventory_contract as inventory_contract
 from desktop_assistant.schema_contract import (
     schema_contract_from_signed_release,
     validate_database_schema,
@@ -456,6 +457,10 @@ class Manager:
         package = self.root / 'packages' / (current + '.zip')
         if sha(package) != current:
             raise ValueError('对应程序发布包已损坏')
+        authenticated_manifest = signed_release_manifest(package, self.public_key)
+        if authenticated_manifest != self.manifest(current):
+            raise ValueError('备份程序清单与原发布签名不一致')
+        inventory_activation = inventory_contract.for_backup(state, authenticated_manifest)
         packages = {'release.zip': package}
         authority = state.get('schema_authority')
         if authority and self.manifest()['revision'] != before['revision']:
@@ -474,6 +479,7 @@ class Manager:
                             'release': current, 'version': self.manifest()['version'], 'database': before,
                             'source_shared': str(self.root / 'shared'), 'schema_authority': authority,
                             'credential_transfer': 'credentials.tmencrypted',
+                            inventory_contract.STATE_KEY: inventory_activation,
                             **({dispatch_contract.STATE_KEY: dispatch_activation} if dispatch_activation else {})})
         if database_info(self.root / 'shared/data/carton_erp.sqlite3') != before:
             raise ValueError('备份期间数据复核不一致')
@@ -777,7 +783,9 @@ class Manager:
             job = self.root / 'staging' / uuid.uuid4().hex
             job.mkdir()
             raw = job / 'recovery.zip'
-            decrypt_file(backup, raw, password)
+            authenticated_backup_sha = decrypt_file(backup, raw, password)
+            if sha(backup) != authenticated_backup_sha:
+                raise ValueError('恢复输入备份在认证期间变化，尚未启用恢复数据')
             manifest = extract_verified(raw, job / 'payload')
             if manifest.get('type') != 'tianming.recovery.v1':
                 raise ValueError('不是完整ERP恢复包')
@@ -791,6 +799,7 @@ class Manager:
                 payload / 'release.zip', self.public_key
             )
             release = {'id': manifest['release'], **release_manifest}
+            inventory_activation = inventory_contract.for_recovery(manifest, release_manifest, authenticated_backup_sha)
             authority = manifest.get('schema_authority')
             authority_manifest = None
             authority_contract = None
@@ -854,6 +863,8 @@ class Manager:
             if authority:
                 self.stage_release(compatible_package, verify_existing=True)
             self.stage_release(payload / 'release.zip', verify_existing=True)
+            if sha(backup) != authenticated_backup_sha:
+                raise ValueError('恢复输入备份在提升前变化，尚未启用恢复数据')
             for name, source in credential_paths.items():
                 destination = _path(self.root, name)
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -866,8 +877,11 @@ class Manager:
             (payload / 'shared').rename(self.root / 'shared')
             write_json(self.root / 'state.json', {'current': release['id'], 'previous': None,
                        'restored_at': datetime.now(CN).isoformat(), 'source_time': manifest['created'],
+                       'restored_backup_sha256': authenticated_backup_sha,
                        'schema_authority': authority,
                        'credential_restore': credential_report,
+                       **({inventory_contract.STATE_KEY: inventory_activation}
+                          if inventory_activation is not None else {}),
                        **({dispatch_contract.STATE_KEY: dispatch_contract.state_index(dispatch_activation)}
                           if dispatch_activation else {})})
             # A new PC's LAN URLs, firewall and printer need explicit local configuration.

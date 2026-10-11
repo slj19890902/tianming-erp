@@ -209,13 +209,14 @@ def encrypt_file(source: Path, destination: Path, password: str) -> None:
         dst.write(cipher.tag)
 
 
-def decrypt_file(source: Path, destination: Path, password: str) -> None:
+def decrypt_file(source: Path, destination: Path, password: str) -> str:
+    """Authenticate recovery bytes and return the digest of that exact input."""
     with source.open('rb') as src:
         header = src.read(len(MAGIC) + 28)
         if not header.startswith(MAGIC) or len(header) != len(MAGIC) + 28:
             raise ValueError('不是ERP完整恢复包')
         salt, nonce = header[len(MAGIC):len(MAGIC)+16], header[-12:]
-        remaining = source.stat().st_size - len(header) - 16
+        remaining = os.fstat(src.fileno()).st_size - len(header) - 16
         if remaining < 0:
             raise ValueError('恢复包不完整')
         src.seek(-16, 2)
@@ -223,6 +224,7 @@ def decrypt_file(source: Path, destination: Path, password: str) -> None:
         src.seek(len(header))
         cipher = Cipher(algorithms.AES(_key(password, salt)), modes.GCM(nonce, tag)).decryptor()
         cipher.authenticate_additional_data(header)
+        authenticated = hashlib.sha256(header)
         try:
             with destination.open('xb') as dst:
                 while remaining:
@@ -230,8 +232,11 @@ def decrypt_file(source: Path, destination: Path, password: str) -> None:
                     if not block:
                         raise ValueError('恢复包截断')
                     remaining -= len(block)
+                    authenticated.update(block)
                     dst.write(cipher.update(block))
                 dst.write(cipher.finalize())
         except Exception:
             destination.unlink(missing_ok=True)
             raise ValueError('恢复口令错误或备份已损坏') from None
+        authenticated.update(tag)
+        return authenticated.hexdigest()

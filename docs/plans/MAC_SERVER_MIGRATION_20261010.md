@@ -187,3 +187,20 @@ Manager.backup生成NAS `mac-home-rehearsal-20261011/20261011-074214-0dbc0a3d.tm
 已接收协调任务提出的额度与可恢复检查点要求。每轮先完成风险相称验证、差异检查、独立候选提交和NAS回读核验回执，再启动下一闭环；异常时保存当前阶段、未完成步骤、活动进程和安全续接点，不强杀复制/写入/迁移进程，不假设额度归零后仍有能力收尾。相关额度确认为0或返回明确耗尽错误时不再启动新工作；恢复前通过支持接口核对实际可用额度，再从最新回执核对工作区/活动任务后续接，避免重复运行。普通断线、capacity或接口兼容错误不当额度耗尽。此次支持接口实测Codex周窗口已用87%、剩余13%、ordinaryUsageAllowed=true；没有耗尽证据，没有购买、兑换重置或改变计费，也没有创建定时唤醒。证据factory-cutover-strict-inventory-usage.json。协调消息本身不扩大正式停写或上线授权。
 
 本轮仅完整性修复完成。源端认证最终备份/凭据比较和签发入口尚未实现，本轮未签发真实切换票据。下一项先在维护锁内核验已停止Windows来源、认证解密最终备份、原始DB SHA/全部文件/已签名程序及实际凭据一致；保持旧端停止，不能仅凭布尔声明调用签名codec。随后仍须完成系统级LaunchDaemon、专用账号/后台凭据、Mac接收及工厂现场验收。当前签名家庭运行包仍源码3de3be32，以上新代码未在运行包中，后续重建并由原工厂发布身份另行签名；不得就地改签名包。家庭保护不变，工厂停写/最终同步/旧端隔离/正式接管仍须工厂当次明确授权，不清空旧机。
+
+
+## 2026-10-11 完整恢复保留订单库存reader门禁
+
+源端切换核验接口审查发现必须先修的实际缺口：order_inventory_activation只存state.json，原完整备份/恢复没有携带。源数据、附件及schema一致也不能证明这一持久reader门禁保留。本轮范围desktop_assistant/order_inventory_contract.py、manager.py、storage.py及对应恢复/reader测试；未接入真实切换签发入口。
+
+新备份把原订单库存reader保护记录完整放入认证加密包；恢复逐字段原样保留历史包身份、激活时间、原Windows备份路径及其他出处。旧备份缺记录而原签名包明确声明整数1的order_inventory_v1时，增加“依据已认证备份签名reader保留门禁”的恢复证据，明确original_activation_record_included=false，不伪造历史激活时间或包谱系。恢复后同一revision仍拒绝不支持该reader的程序。损坏/未知reader声明、损坏保护记录、标记与签名能力不符、可变缓存manifest与签名manifest不符均拒绝；发货reader及其他原门禁保留。
+
+storage.decrypt_file从同一打开FD实际读取的header/ciphertext/tag计算SHA，只在GCM认证成功后返回。Manager.restore在认证后及凭据配置/shared提升前复核路径内容未变化，并把实际认证摘要写入restored_backup_sha256及旧备份reader证据。输入被替换时不激活目标，不误把A的数据标为B的备份。
+
+原2f3b3b9d下3个新增完整恢复用例均复现失败；改后助手全量及原订单库存reader契约共422项：413通过、9跳过、0失败/错误，30.74秒。跳过8项Windows专用实机和1项显式launchd开关；此前实机证据仍保留，不冒称本轮重跑。3条告警为依赖弃用及合成短JWT密钥，未使用正式凭据。独立只读代码复审通过，证据order-inventory-recovery-before.xml/log、order-inventory-recovery-full.xml/log及test-summary.json。
+
+真实只读核查确认：原基准和第二恢复目录的签名包均声明该reader，但state缺标记；家庭工作副本有标记。这三份历史目录不就地修写。随后从既有Mac完整加密备份20261011-074214-0dbc0a3d.tmbackup（SHA267a87bfcc413af1f23d82eb45df6cdd259d248a32d1a2859449fa1ab3b1f56f）恢复至新的私有空目录restores/mac-reader-guard-20261011。全部325表、结构/业务事实、2983非数据库共享文件、888登记附件及backup/deepseek/mailbox真实秘密内存比较均通过；仅既定PDF根路径/邮箱密文重封装技术差异。新state保留reader要求及实际备份SHA，原激活历史不可得明确记录；目标未启动，原工作副本DB及state SHA不变。证据order-inventory-real-recovery.json/log、order-inventory-recovery-real-readonly.json、verify_real_reader_recovery.py；job记录已由实际会话退出0更新completed，不依据文件状态猜测进程结束。
+
+本轮没有创建新工厂冷备、连接工厂库、外部发信/收单、签发真实切换授权或清空旧机。真实恢复的数据仍来自10月10日冷备，不代表工厂后来交易已同步。运行包仍原签名3de3be32，代码修复须后续重建并由工厂原身份签名。系统服务/专用账号/后台钥匙串、正式切换及现场验收仍未完成。
+
+下一闭环：源端已停写后的认证核验与签发。先验证既有源目录再构造Manager（其构造器会创建目录）；全程持维护锁，不调用会恢复运行的backup/_backup_locked/pause_after_backup。核对manual_stop、真实进程及异常状态，验证本安装回执/last_backup/独立完整SHA，读取实际认证输入摘要及manifest.created。逐项比较原始DB SHA、完整shared清单与环境原字节；release.zip/compatibility.zip/目标签名包都要全文件inspect_package，AST结构验证不能替代全包验证。authority仅在源revision与DB不同且原签名preserve_existing_facts_v1授权有效时使用，直接兼容时允许元数据规范化为None。核对发货共享marker/状态索引、订单库存保护记录及目标全部readers。内置凭据与原用户fresh collect的完整用途/配置/密文版本/实际秘密仅内存比较。Windows明文任务目录在写入前须建立并回读仅当前SID+SYSTEM的DACL；不能只用0700或NAS共享临时目录。只在全部核验通过后加载原DPAPI发布身份，拒绝PEM，独占输出和原公钥回读；失败保持旧端停止。实际源端停写、隔离、同步及正式接管仍须当次明确授权。

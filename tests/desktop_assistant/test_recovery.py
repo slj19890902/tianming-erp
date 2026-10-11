@@ -76,7 +76,7 @@ class RecoveryTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def release(self, version, revision='r1', extra_tables=()):
+    def release(self, version, revision='r1', extra_tables=(), *, inventory_reader=False):
         source = self.root / ('source-' + version)
         source.mkdir()
         for name in ('runtime/python.exe', 'main.py', 'app/main.py', 'desktop_assistant/server_entry.py'):
@@ -104,8 +104,133 @@ class RecoveryTests(unittest.TestCase):
             ))
         (models / 'fixture.py').write_text('\n'.join(definitions) + '\n', encoding='utf-8')
         target = self.root / (version + '.zip')
-        pack_tree(source, target, {'type': 'tianming.release.v1', 'version': version, 'revision': revision}, self.key)
+        metadata = {'type': 'tianming.release.v1', 'version': version, 'revision': revision}
+        if inventory_reader:
+            metadata['reader_capabilities'] = {'order_inventory_v1': 1}
+        pack_tree(source, target, metadata, self.key)
         return target
+
+    def test_order_inventory_activation_survives_full_backup_and_restore(self):
+        from desktop_assistant.order_inventory_contract import STATE_KEY
+        release = self.manager.stage_release(self.release('reader', inventory_reader=True))
+        marker = {'reader_capability': 'order_inventory_v1', 'version': 1,
+                  'activated_package': release['id'], 'activated_at': '2026-10-10T10:00:00+08:00',
+                  'pre_activation_package': self.manager.state['current'],
+                  'pre_activation_backup': r'Z:\\old-evidence\\retained.tmbackup',
+                  'next_release_must_preserve_reader_contract': True}
+        write_json(self.manager.root / 'state.json', {'current': release['id'], STATE_KEY: marker})
+        before = sha(self.manager.root / 'shared/data/carton_erp.sqlite3')
+        backup = self.manager.backup(PASSWORD, self.nas)
+        new = TestManager(self.root / 'new-reader-host', self.public)
+        result = new.restore(backup, PASSWORD)
+        self.assertFalse(result['started'])
+        self.assertEqual(new.state[STATE_KEY], marker)
+        self.assertEqual(new.state['restored_backup_sha256'], sha(backup))
+        self.assertEqual(sha(new.root / 'shared/data/carton_erp.sqlite3'), before)
+        self.assertTrue(new.compatible(release['id'], 'r1'))
+        old = new.stage_release(self.package)
+        self.assertFalse(new.compatible(old['id'], 'r1'))  # Same schema, missing reader.
+
+    def test_legacy_backup_retains_signed_reader_without_fabricating_history(self):
+        from desktop_assistant.order_inventory_contract import STATE_KEY
+        from desktop_assistant.storage import pack_recovery, encrypt_file
+        release = self.manager.stage_release(self.release('legacy-reader', inventory_reader=True))
+        raw = self.root / 'legacy-reader-recovery.zip'
+        # Reproduce the original archive format, which has no activation field.
+        pack_recovery(self.manager.root / 'shared', {'release.zip': self.root / 'legacy-reader.zip'}, raw,
+                      {'type': 'tianming.recovery.v1', 'created': '2026-10-10T10:00:00+08:00',
+                       'release': release['id'], 'version': 'legacy-reader',
+                       'database': database_info(self.manager.root / 'shared/data/carton_erp.sqlite3'),
+                       'source_shared': str(self.manager.root / 'shared'), 'schema_authority': None})
+        backup = self.nas / 'legacy-reader.tmbackup'
+        encrypt_file(raw, backup, PASSWORD)
+        new = TestManager(self.root / 'legacy-reader-host', self.public)
+        self.assertFalse(new.restore(backup, PASSWORD)['started'])
+        marker = new.state[STATE_KEY]
+        self.assertEqual(marker['recovery_evidence']['backup_sha256'], sha(backup))
+        self.assertFalse(marker['recovery_evidence']['original_activation_record_included'])
+        self.assertNotIn('activated_at', marker)
+        self.assertNotIn('pre_activation_package', marker)
+        old = new.stage_release(self.package)
+        self.assertFalse(new.compatible(old['id'], 'r1'))
+        second_backup = new.backup(PASSWORD, self.nas)
+        third = TestManager(self.root / 'second-reader-host', self.public)
+        third.restore(second_backup, PASSWORD)
+        self.assertEqual(third.state[STATE_KEY], marker)
+
+    def test_backup_refuses_inventory_marker_without_authenticated_reader(self):
+        from desktop_assistant.order_inventory_contract import STATE_KEY
+        state = self.manager.state
+        state[STATE_KEY] = {'reader_capability': 'order_inventory_v1', 'version': 1}
+        write_json(self.manager.root / 'state.json', state)
+        before = sha(self.manager.root / 'shared/data/carton_erp.sqlite3')
+        with self.assertRaisesRegex(ValueError, 'reader 保护'):
+            self.manager.backup(PASSWORD, self.nas)
+        self.assertFalse(list(self.nas.glob('*.tmbackup')))
+        actual = self.manager.state
+        self.assertIn('reader 保护', actual.pop('backup_error'))
+        self.assertEqual(actual, state)
+        self.assertEqual(sha(self.manager.root / 'shared/data/carton_erp.sqlite3'), before)
+
+    def test_recovery_rejects_inventory_marker_before_activation(self):
+        from desktop_assistant.order_inventory_contract import STATE_KEY
+        from desktop_assistant.storage import pack_recovery, encrypt_file
+        raw = self.root / 'wrong-reader.zip'
+        pack_recovery(self.manager.root / 'shared', {'release.zip': self.package}, raw,
+                      {'type': 'tianming.recovery.v1', 'created': '2026-10-10T10:00:00+08:00',
+                       'release': self.manager.state['current'], 'version': 'one',
+                       'database': database_info(self.manager.root / 'shared/data/carton_erp.sqlite3'),
+                       'source_shared': str(self.manager.root / 'shared'), 'schema_authority': None,
+                       STATE_KEY: {'reader_capability': 'order_inventory_v1', 'version': 1}})
+        backup = self.nas / 'wrong-reader.tmbackup'
+        encrypt_file(raw, backup, PASSWORD)
+        new = TestManager(self.root / 'wrong-reader-target', self.public)
+        with self.assertRaisesRegex(ValueError, 'reader 保护'):
+            new.restore(backup, PASSWORD)
+        self.assertIsNone(new.state['current'])
+        self.assertFalse(list((new.root / 'shared').iterdir()))
+        self.assertFalse((new.root / 'preferences.json').exists())
+
+    def test_backup_refuses_mutable_manifest_cache_disagreeing_with_signature(self):
+        current = self.manager.state['current']
+        path = self.manager.root / 'releases' / current / 'manifest.json'
+        manifest = read_json(path)
+        manifest['reader_capabilities'] = {'order_inventory_v1': 1}
+        write_json(path, manifest)
+        with self.assertRaisesRegex(ValueError, '原发布签名'):
+            self.manager.backup(PASSWORD, self.nas)
+        self.assertFalse(list(self.nas.glob('*.tmbackup')))
+        self.assertEqual(self.manager.state['current'], current)
+
+    def test_backup_input_digest_is_from_authenticated_stream_and_replacement_is_rejected(self):
+        from unittest.mock import patch
+        backup = self.manager.backup(PASSWORD, self.nas)
+        raw = self.root / 'input-digest.zip'
+        self.assertEqual(decrypt_file(backup, raw, PASSWORD), sha(backup))
+        original_bytes = backup.read_bytes()
+        def replacing_decrypt(source, destination, password):
+            digest = decrypt_file(source, destination, password)
+            source.write_bytes(b'synthetic replacement after authentication')
+            return digest
+        new = TestManager(self.root / 'changed-backup-target', self.public)
+        with patch('desktop_assistant.manager.decrypt_file', side_effect=replacing_decrypt):
+            with self.assertRaisesRegex(ValueError, '认证期间变化'):
+                new.restore(backup, PASSWORD)
+        self.assertIsNone(new.state['current'])
+        self.assertFalse(list((new.root / 'shared').iterdir()))
+        backup.write_bytes(original_bytes)  # Synthetic fixture only.
+        later = TestManager(self.root / 'late-changed-backup-target', self.public)
+        original_stage = later.stage_release
+        def replacing_stage(*args, **kwargs):
+            result = original_stage(*args, **kwargs)
+            backup.write_bytes(b'synthetic replacement before promotion')
+            return result
+        with patch.object(later, 'stage_release', side_effect=replacing_stage):
+            with self.assertRaisesRegex(ValueError, '提升前变化'):
+                later.restore(backup, PASSWORD)
+        self.assertIsNone(later.state['current'])
+        self.assertFalse(list((later.root / 'shared').iterdir()))
+        self.assertFalse((later.root / 'preferences.json').exists())
 
     def test_complete_encrypted_backup_and_new_machine_restore(self):
         database = self.manager.root / 'shared/data/carton_erp.sqlite3'

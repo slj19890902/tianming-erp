@@ -5,7 +5,7 @@ before building a full backup. This layer returns transfer observations, never a
 backup success receipt. Build/installation/routing remain disabled until signed
 provisioning and dedicated-UID acceptance have been completed.
 """
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from copy import deepcopy
 import errno
 import os
@@ -14,6 +14,7 @@ import re
 import socket
 import subprocess
 import sys
+import time
 import uuid
 
 from app.core import mac_service_keychain as keychain
@@ -23,11 +24,14 @@ from . import mac_published_runtime as published, mac_mount as mounts
 from . import mac_smb_stream_runtime_contract as cfg, mac_smb_stream_contract as archive
 from . import mac_smb_stream_transport as transport, mac_smb_stream_files as files
 from . import mac_smb_stream_session as session, mac_smb_stream_backup as backup
+from . import mac_smb_stream_probe as probe
 
 LIMIT = 8192
 RESULT = 'tianming.mac-smb-stream-worker.v1'
 REQUEST = {'challenge','control_sha256','contract_sha256','action','socket_fd','file_fd',
            'job','filename','size','sha256','attempt_id','upload'}
+PROBE_REQUEST = {'challenge','control_sha256','contract_sha256','action','socket_fd','attempt_id','required_bytes'}
+PROBE_TIMEOUT = 120
 
 
 def require(ok):
@@ -79,12 +83,18 @@ def load_binding():
 
 
 def _request(value,binding):
-    require(isinstance(value,dict) and set(value)==REQUEST
+    require(isinstance(value,dict))
+    is_probe=value.get('action')=='probe'
+    require(set(value)==(PROBE_REQUEST if is_probe else REQUEST)
             and value['control_sha256']==binding.control_sha
             and value['contract_sha256']==binding.control['contract_sha256']
-            and value['action'] in ('upload','download'))
+            and value['action'] in ('upload','download','probe'))
     for key in ('challenge','attempt_id'):
         require(isinstance(value[key],str) and re.fullmatch('[0-9a-f]{32}',value[key]))
+    require(type(value['socket_fd']) is int and 3<=value['socket_fd']<=2**31-1)
+    if is_probe:
+        probe.specification(value['attempt_id'],value['required_bytes'])
+        return value
     require(isinstance(value['job'],str) and re.fullmatch('smb-stream-[0-9a-f]{32}',value['job']))
     require(all(type(value[k]) is int and 3<=value[k]<=2**31-1 for k in ('socket_fd','file_fd'))
             and value['socket_fd']!=value['file_fd'])
@@ -95,6 +105,9 @@ def _request(value,binding):
 
 
 def _observation(proof,kind,request,binding):
+    if kind==probe.TYPE:
+        probe.validate(proof,binding.value,request['attempt_id'],request['required_bytes'])
+        return
     fields={'type','contract_sha256','connection_guid','filename','bytes','sha256',
             'directories','file','backup_authenticated'}
     require(isinstance(proof,dict) and set(proof)==fields and proof['type']==kind
@@ -159,20 +172,25 @@ def run(request,*,script,executable):
             and Path(__file__).resolve()==binding.tree/cfg.MODULE
             and Path(executable).resolve()==binding.tree/'runtime/bin/python3.12')
     _request(request,binding);denied_new_connection()
-    with file_lease(binding,request) as held:
+    is_probe=request['action']=='probe'
+    with nullcontext() if is_probe else file_lease(binding,request) as held:
         channel=transport.Channel(request['socket_fd'],(binding.value['server_address'],445))
         try:
             binding.check()
             with session.open_share(channel,binding.value,binding.control['context_sha256'],
                     binding.context['uid'],lambda:_credential(binding)) as tree:
-                with files.open_archive(tree,binding.value) as remote:
-                    if request['action']=='upload':
-                        proof=remote.upload(held.fd,request['filename'],request['size'],
-                                            request['sha256'],request['attempt_id'])
-                    else: proof=remote.download(held.fd,request['upload'])
-            held.check();binding.check()
+                if is_probe:
+                    proof=probe.check(tree,binding.value,request['attempt_id'],request['required_bytes'])
+                else:
+                    with files.open_archive(tree,binding.value) as remote:
+                        if request['action']=='upload':
+                            proof=remote.upload(held.fd,request['filename'],request['size'],
+                                                request['sha256'],request['attempt_id'])
+                        else: proof=remote.download(held.fd,request['upload'])
+            if held is not None: held.check()
+            binding.check()
         finally: channel.close()
-    _observation(proof,files.UPLOAD if request['action']=='upload' else files.READBACK,request,binding)
+    _observation(proof,_kind(request),request,binding)
     return dict(type=RESULT,challenge=request['challenge'],control_sha256=binding.control_sha,
         package_sha256=binding.control['package_sha256'],identity=actual_identity(binding.context),
         observation=proof,state_published=False)
@@ -200,18 +218,29 @@ def _dispatch(binding,request):
         connected.settimeout(None)
         request=dict(request,socket_fd=connected.fileno())
         _request(request,binding);binding.check()
-        with file_lease(binding,request):
+        is_probe=request['action']=='probe'
+        with nullcontext() if is_probe else file_lease(binding,request):
             process=subprocess.Popen(command(binding),stdin=subprocess.PIPE,stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,cwd='/',close_fds=True,
-                pass_fds=(connected.fileno(),request['file_fd']),umask=0o077,
+                pass_fds=((connected.fileno(),) if is_probe else (connected.fileno(),request['file_fd'])),umask=0o077,
                 env={'HOME':str(cfg.BASE/'home'),'PATH':'/usr/bin:/bin:/usr/sbin:/sbin',
                      'LANG':'en_US.UTF-8','ERP_HOME_REHEARSAL':'1'})
             first=True;interrupted=False
+            deadline=time.monotonic()+PROBE_TIMEOUT if is_probe else None
             while True:
                 try:
-                    output,_=process.communicate(cfg.canonical(request) if first else None)
+                    options={'timeout':max(.001,deadline-time.monotonic())} if deadline is not None else {}
+                    output,_=process.communicate(cfg.canonical(request) if first else None,**options)
                     break
                 except KeyboardInterrupt: first=False;interrupted=True
+                except subprocess.TimeoutExpired:
+                    # Only this pre-stop canary worker is cancellable. No ERP,
+                    # local backup FD or maintenance write is owned by it.
+                    require(is_probe)
+                    interrupted=True;first=False;deadline=None
+                    try: process.kill()
+                    except ProcessLookupError: pass
+                    # Reap the exact child; never restart from a timeout.
             require(not interrupted and process.returncode==0 and 0<len(output)<=LIMIT)
             result=boot.decode(output)
             expected=dict(type=RESULT,challenge=request['challenge'],control_sha256=binding.control_sha,
@@ -219,10 +248,24 @@ def _dispatch(binding,request):
                 state_published=False)
             require(isinstance(result,dict) and set(result)==set(expected)|{'observation'}
                     and all(result[k]==v and type(result[k]) is type(v) for k,v in expected.items()))
-            _observation(result['observation'],files.UPLOAD if request['action']=='upload' else files.READBACK,
-                         request,binding)
+            _observation(result['observation'],_kind(request),request,binding)
             binding.check()
             return result['observation']
+
+
+def _kind(request):
+    return {'probe':probe.TYPE,'upload':files.UPLOAD,'download':files.READBACK}[request['action']]
+
+
+def preflight(required_bytes):
+    """No ERP stop here; one authenticated canary worker and no local data FD."""
+    binding=load_binding()
+    require(Path(__file__).resolve()==binding.tree/cfg.MODULE)
+    request=dict(challenge=uuid.uuid4().hex,control_sha256=binding.control_sha,
+        contract_sha256=binding.control['contract_sha256'],action='probe',socket_fd=2**31-1,
+        attempt_id=uuid.uuid4().hex,required_bytes=required_bytes)
+    _request(request,binding);verify_network_policy(binding);binding.check()
+    return _dispatch(binding,request)
 
 
 def transfer(source_fd,destination_fd,filename,size,sha256,attempt_id):

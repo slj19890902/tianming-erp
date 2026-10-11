@@ -18,7 +18,8 @@ FILES = {ENTRY, MODULE, 'desktop_assistant/mac_smb_stream_runtime_contract.py',
          'desktop_assistant/mac_smb_stream_session.py',
          'desktop_assistant/mac_smb_stream_files.py',
          'desktop_assistant/mac_smb_stream_backup.py',
-         'desktop_assistant/mac_smb_stream_receipt.py'}
+         'desktop_assistant/mac_smb_stream_receipt.py',
+         'desktop_assistant/mac_smb_stream_probe.py'}
 FIELDS = {'type','attempt_id','plan_sha256','package_sha256','context_sha256',
           'publisher_sha256','contract_sha256','credential_account'}
 PROFILE = '(version 1)(allow default)(deny network-outbound)'

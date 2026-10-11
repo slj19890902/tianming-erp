@@ -104,15 +104,17 @@ class Archive:
                 and self.tree.share_name=='\\\\'+self.value['server_address']+'\\'+self.value['share']
                 and self.tree.session.tree_connect_table.get(self.tree.tree_connect_id) is self.tree)
 
-    def _open(self,name,*,directory=False,create=False):
+    def _open(self,name,*,directory=False,create=False,readable=False):
         from smbprotocol.open import Open
+        require(type(readable) is bool and (not readable or (create and not directory)))
         self._live()
         handle=Open(self.tree,name)
         try:
             # FILE_OPEN_REPARSE_POINT prevents following the final component;
             # all fixed parents are held without FILE_SHARE_DELETE beforehand.
             handle.create(impersonation_level=2,
-                desired_access=(0x80|0x20) if directory else (0x80|0x2|0x10000 if create else 0x80|0x1),
+                desired_access=(0x80|0x20) if directory else (
+                    0x80|0x2|0x10000|(0x1 if readable else 0) if create else 0x80|0x1),
                 file_attributes=0x10 if directory else 0x80,
                 share_access=3 if directory else (0 if create else 1),
                 create_disposition=2 if create else 1,

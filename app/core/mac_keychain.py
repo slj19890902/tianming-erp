@@ -57,7 +57,9 @@ class Keychain:
 
     def check(self, status):
         if status:
-            raise KeychainError(f'钥匙串操作被拒绝（OSStatus {status}）；请由服务用户解锁或安全重新移交凭据')
+            error = KeychainError(f'钥匙串操作被拒绝（OSStatus {status}）；请由服务用户解锁或安全重新移交凭据')
+            error.os_status = int(status)
+            raise error
 
     @contextmanager
     def owned(self, value):

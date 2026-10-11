@@ -351,3 +351,20 @@ CLI仅本机交互隐藏输入最终备份口令，无密码/时钟覆盖参数�
 Apple实现依据：SecKeychain.cpp/SecKeychainItem.cpp的失效引用默认库回退、Keychains.cpp的status位并非真实BSD写权限、StorageManager.cpp/DLDBListCFPref.cpp的进程域和脏偏好flush；来源https://github.com/apple-oss-distributions/Security/tree/main/OSX/libsecurity_keychain/lib 。系统库定位采用CopyDomainDefault而非硬编码，依据https://developer.apple.com/forums/thread/738542 。SecAccessCreateWithOwnerAndACL使用CFString授权tag数组；这不等于完整ACL回读或跨UID拒绝已证明。专用服务身份/真实System引导/其他UID/注销/重启仍未验收，后续管理员安装器必须先完成这些核验才能发布root完成记录。
 
 当前工厂正式基线仍只读核对，家庭签名运行包仍3de3be32，未重建、重签或启用factory_cutover_v1。真实四份恢复目录未动，正式库/停启/收单/发信/外部AI/真实签发及旧机清空均未执行。本轮额度接口ordinaryUsageAllowed=true、周已用95%/余5%，没有耗尽证据或兑换/购买；先提交和NAS回读再继续完整系统安装器、LaunchDaemon及目标正式激活。
+
+## 2026-10-11 管理员钥匙串初始化编排范围
+
+新增mac_keychain_install及隔离测试/最小代码包构建，串联已创建专用身份、System随机引导、专用库初始化、同UID新进程锁定与读写验证、其他普通UID的真实钥匙串ACL拒绝，全部通过后才独占发布root完成记录。代码必须先由OS工具独立核对固定摘要并位于root不可写、子进程可读的最小包；以系统Python -I -B -S执行，降权明确清空补充组，不用已初始化CoreFoundation后的fork直接执行Python。先跑两种UID的无秘密自检，再写任何引导条目。完整真实凭据不进入本阶段；不创建账号、不安装/启动ERP、不发信收单。Popen+exec只证明新进程身份和System钥匙串偏好域，不能冒称真实launchd系统会话、注销/重启或工厂激活，回执明确这些为false。主执行者唯一写入，独立代理只读复核。
+
+
+## 2026-10-11 管理员后台钥匙串初始化候选完成
+
+新增mac_keychain_install及最小Git代码包构建器，固定系统Python -I -B -S、七个标准库代码文件与manifest，管理员先用OS工具独立核验包/计划摘要，再从root保护且两UID可读取的目录执行。源码自检不能代替执行前真实性核对。原账号创建计划、OD完整字段、root回执和本机安装身份均重新核验；任何既有初始化现场（含悬空链接）拒绝覆盖。服务UID和普通观察者UID先在全新exec进程核验代码/导入及身份，之后才独占写pending、创建私有父目录和System随机引导项。随机秘密仅在父内存和服务进程自己的System读取中出现，不进入参数/环境/临时文件/输出。
+
+修正macOS现代os.getgroups查询目录服务访问组而不是进程内核组的语义：显式绑定SDK导出的libsystem_kernel.getgroups，XNU返回中包含有效GID，setgroups→setregid→setreuid后的预期严格为[gid]，其他内核组拒绝；原服务目录成员资格门禁仍保留。当前普通用户只读确认该API可调用，不冒称已经真实降权。依据Python https://docs.python.org/3.9/library/os.html#os.getgroups 、Apple https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_prot.c 、CPython https://github.com/python/cpython/blob/3.9/Modules/_posixsubprocess.c 。
+
+专用库初始化与另一个新服务进程的锁定/解锁、旧新合成条目读写分别以秘密HMAC绑定阶段/context/独立挑战；跨UID反例绕过业务身份预拒绝，必须实际精确查询System条目，并仅接受Security原生AuthFailed/InteractionNotAllowed。缺项、导入/路径失败、其他状态不能算权限验证通过。先独占写root验收回执，再最后发布644非秘密context；失败保留现场，晚期错误可能已有context，不能宣称自动回滚。Ctrl-C后继续观察同一worker退出再拒绝完成，不自动强杀或遗留仍写入的进程。默认不设置超时；终端必须等候本次精确进程结束。
+
+最终回归213项：212通过、1项Windows DPAPI原用户实机跳过、0失败错误，7.85秒；本次新增66项全部通过，两个原Mac合成钥匙串测试开关显式启用。3条告警为依赖弃用和合成短JWT。覆盖完整计划/身份/ACL/包清单、两身份早检零写入、错误/重放proof、错误反例、中断回收、部分写入失败与晚期context保留；独立只读代码复核通过。早期39通过/1测试调用方式错误日志保留，修正测试后不把中间结果叠加。证据mac-keychain-install-regression.xml/log。系统Python3.9.6的-I -B -S语法及实际导入闭包通过；新安装包另按最终Git字节构建及回读。
+
+尚未执行管理员账号创建或初始化，未创建真实System引导条目，也未读写运营秘密或真实恢复数据库。回执明确launchd_system_verified/logout_reboot_verified/factory_activated=false；Popen新身份与System钥匙串偏好域不是launchd系统会话证据。候选已有可审阅管理员执行材料，但真实双UID、后台服务、注销/重启/FileVault解锁、最终工厂签名与停写同步、业务/中文实体打印/扫码仍待完成。当前家庭签名运行包仍源码3de3be32，未重建或改factory_cutover_v1；工厂基线只读仍b9a077bc115cc649cdc2753cab3dfb3d75269d1c。旧机与四份完整恢复目录保留，无外部发信/收单/AI、工厂正式库连接或接管。本轮支持额度接口ordinaryUsageAllowed=true、周剩余4%，无耗尽证据、无购买/兑换；完成NAS独立回读检查点后再开始后续闭环。

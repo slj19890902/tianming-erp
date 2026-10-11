@@ -269,3 +269,16 @@ factory_source_issue已接入已停写来源审计：当次授权/旧端隔离�
 当前用户原生合成库已证明单UID ACL下跨两套Python读取/新增及正常轮换、重复拒绝、锁定后错误密码拒绝/正确解锁。创建期间、删除自身库后及独立前后进程比较均确认用户/System域默认和搜索列表未变。API真实语义修正包括新建默认644只对自身新库收紧600、正常写入原子换inode按前后权限核验、显式失效库可能默认回退必须写前拒绝且写后查实际落点、GetStatus不能当BSD写权限、旧.keychain及悬空链接拒绝旁建。源码和测试独立复核发现项已修正。
 
 最终147项146通过/1项Windows DPAPI待验，0失败错误，7.50秒；本轮显式开启两个Mac原生测试。没有真实System条目读写、专用账号安装、业务秘密读取或数据改动；现有家庭签名运行包继续3de3be32，未重建。下一步完整管理员初始化编排（新root保护代码、一次授权、进程降权、System引导/专用UID读写和其他UID反例、全部成功后独占发布完成记录），然后系统LaunchDaemon及受保护激活；注销/重启/FileVault解锁后运行、工厂最终同步与实体打印/扫码/业务人工验收均继续待完成。旧机保留。
+
+
+## 2026-10-11 管理员后台钥匙串初始化候选完成
+
+新增mac_keychain_install及最小Git代码包构建器，固定系统Python -I -B -S、七个标准库代码文件与manifest，管理员先用OS工具独立核验包/计划摘要，再从root保护且两UID可读取的目录执行。源码自检不能代替执行前真实性核对。原账号创建计划、OD完整字段、root回执和本机安装身份均重新核验；任何既有初始化现场（含悬空链接）拒绝覆盖。服务UID和普通观察者UID先在全新exec进程核验代码/导入及身份，之后才独占写pending、创建私有父目录和System随机引导项。随机秘密仅在父内存和服务进程自己的System读取中出现，不进入参数/环境/临时文件/输出。
+
+修正macOS现代os.getgroups查询目录服务访问组而不是进程内核组的语义：显式绑定SDK导出的libsystem_kernel.getgroups，XNU返回中包含有效GID，setgroups→setregid→setreuid后的预期严格为[gid]，其他内核组拒绝；原服务目录成员资格门禁仍保留。当前普通用户只读确认该API可调用，不冒称已经真实降权。依据Python https://docs.python.org/3.9/library/os.html#os.getgroups 、Apple https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_prot.c 、CPython https://github.com/python/cpython/blob/3.9/Modules/_posixsubprocess.c 。
+
+专用库初始化与另一个新服务进程的锁定/解锁、旧新合成条目读写分别以秘密HMAC绑定阶段/context/独立挑战；跨UID反例绕过业务身份预拒绝，必须实际精确查询System条目，并仅接受Security原生AuthFailed/InteractionNotAllowed。缺项、导入/路径失败、其他状态不能算权限验证通过。先独占写root验收回执，再最后发布644非秘密context；失败保留现场，晚期错误可能已有context，不能宣称自动回滚。Ctrl-C后继续观察同一worker退出再拒绝完成，不自动强杀或遗留仍写入的进程。默认不设置超时；终端必须等候本次精确进程结束。
+
+最终回归213项：212通过、1项Windows DPAPI原用户实机跳过、0失败错误，7.85秒；本次新增66项全部通过，两个原Mac合成钥匙串测试开关显式启用。3条告警为依赖弃用和合成短JWT。覆盖完整计划/身份/ACL/包清单、两身份早检零写入、错误/重放proof、错误反例、中断回收、部分写入失败与晚期context保留；独立只读代码复核通过。早期39通过/1测试调用方式错误日志保留，修正测试后不把中间结果叠加。证据mac-keychain-install-regression.xml/log。系统Python3.9.6的-I -B -S语法及实际导入闭包通过；新安装包另按最终Git字节构建及回读。
+
+尚未执行管理员账号创建或初始化，未创建真实System引导条目，也未读写运营秘密或真实恢复数据库。回执明确launchd_system_verified/logout_reboot_verified/factory_activated=false；Popen新身份与System钥匙串偏好域不是launchd系统会话证据。候选已有可审阅管理员执行材料，但真实双UID、后台服务、注销/重启/FileVault解锁、最终工厂签名与停写同步、业务/中文实体打印/扫码仍待完成。当前家庭签名运行包仍源码3de3be32，未重建或改factory_cutover_v1；工厂基线只读仍b9a077bc115cc649cdc2753cab3dfb3d75269d1c。旧机与四份完整恢复目录保留，无外部发信/收单/AI、工厂正式库连接或接管。本轮支持额度接口ordinaryUsageAllowed=true、周剩余4%，无耗尽证据、无购买/兑换；完成NAS独立回读检查点后再开始后续闭环。

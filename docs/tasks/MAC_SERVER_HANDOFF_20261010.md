@@ -395,3 +395,19 @@ Apple实现依据：SecKeychain.cpp/SecKeychainItem.cpp的失效引用默认库�
 最终助手回归739项：723通过、16跳过、0失败错误，64.48秒；跳过15项Windows原生及1项显式个人launchd开关，3条告警为原依赖弃用/合成短JWT。新发布器37项全部通过，覆盖真实签名和全文件摘要、实际解析器接受生成树、伪造公钥指纹、坏包/坏计划/错误context及权限、重复发布、子进程中断观察退出、原子替换失败仍保留旧批准。root/专用UID/OD/ACL正例使用合成适配器，没有真正降权或安装系统目录；另有真实系统Python3.9.6 -I -B -S标准库导入、真实用户文件被root门禁拒绝。证据mac-release-publish-regression.xml/log；此前定向结果保留但不叠加计数。
 
 最小管理员包现为八个源码文件加manifest共九文件，须从本次固定提交重建，并以新manifest生成新钥匙串初始化计划。原账号创建脚本和身份计划字节不变；7b736ade旧包和旧计划继续成套保留。真实程序发布计划须待本机系统context完成、包含immutable_execution_v1的新工厂签名原生包及完整专用数据目录就绪后再生成，不能用旧3de3be32家庭签名包或虚构context替代。新程序发布器不安装LaunchDaemon、不触发Manager更新/启动、不解除家庭隔离、不执行正式切换。四份完整真实恢复及所有运营凭据保持原状。
+
+## 2026-10-11 系统LaunchDaemon候选范围
+
+本轮接入专用UID监护入口、固定root批准程序的系统plist和管理员安装/停用/重新启用编排。范围mac_system_service.py、service_supervisor.py、mac_published_runtime.py、manager.py、build.py、最小管理员包入口/构建器及对应测试/任务计划。root仅用标准库处理已批准的程序/配置，新进程以专用UID复验；停用先持久禁止再次启动，再在维护锁内manual_stop及正常停止，确认退出后才bootout精确标签，保留所有程序/数据/配置。安装或重新启用仅接受已停止实例，默认仍家庭预演，不以系统注册证明后台凭据、注销重启或正式业务已验收。本机没有root/专用账号和新版签名包，实际安装不在本轮执行；不改变真实恢复目录，不修改工厂库、不发信/收单、不清空旧机。
+
+编排已实现：固定system/cn.tianming.erp，plist直接指向root批准migration树中的原生Python和监护脚本，UserName/GroupName均_tianmingerp、显式InitGroups；运行时再核验实际UID/EUID/GID/内核组、解释器/入口、完整本机私有目录及已有状态/维护锁，之后才构造Manager。新exec专用UID复验签名执行树、manual_stop及无运行进程，安装/启用不解除manual_stop，初始监护仍停止。root不导入ERP/第三方依赖。新system_service_v1仅声明入口协议；系统监护安装后，缺该能力的程序不能跳过持久停用门禁，旧包离线保全继续允许。
+
+停用先原子发布root enabled=false拒绝并发resume/start，专用UID再持维护锁设置manual_stop并正常停止、确认退出，随后才bootout精确归属plist并持久disable。没有kickstart -k、强杀、删除plist/程序/数据或自动回滚。错误/中断保留现场：root门禁可能已关闭而ERP尚未停妥，不能当停用完成或盲目重试。日志位于root保护目录且文件仅给专用组写入权限；重新启用须新计划/已有原字节归属/停止状态复验。
+
+check/run通过System随机引导和私有库HMAC canary验证本次进程实际后台钥匙串访问，不读取运营条目；失败在Manager构造前拒绝。stop不依赖钥匙串，凭据故障不能阻挡停机。监护状态记录实际身份与canary结果，但注册回执明确health/system_keychain_session/logout_reboot/factory验收均false；Popen正例不替代launchd系统会话证明。ExitTimeOut240覆盖75秒锁等待+60秒停止及在途启动余量，不保证无限长维护、断电或OS强制关闭；正式停用必须使用完整正常退出顺序。
+
+最终助手798项：782通过、16跳过、0失败错误，62.87秒；新系统服务53项及6项旧程序/停用回归全部通过。15项Windows原生和1项显式个人launchd开关跳过，3条原依赖弃用/合成短JWT告警。root/专用UID/OD/ACL/注册/后台canary正例为合成适配器；真实签名、文件摘要和目录解析、系统Python3.9.6 -I -B -S导入及launchctl精确标签只读未注册查询实际通过。早期扩大回归206通过/1个夹具漏模拟root元数据权限的失败保留；只修夹具未降低门禁，随后209项定向全过，添加canary后最终全量如上，结果不相加。证据mac-system-service-final.xml/log。
+
+管理员包增至九源码加manifest共十文件，按最终提交生成新包与新钥匙串计划；旧7b736ade/6eef54c6材料成套保留，不能混用。真实系统服务计划待账号/钥匙串、专用身份完整恢复及root发布新版工厂签名包后生成，不虚构context或程序ID。实现依据本机/usr/share/man/man5/launchd.plist.5及Apple官方https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html；真实系统注册、InitGroups身份及日志权限仍须后续原生验收。
+
+下一项为专用身份完整恢复/正常管理入口、独立于个人登录的NAS及备份、受保护目标激活与最终工厂签名。只读发现当前NAS在/Users/kimiyf/Public/ZSPACE下，而个人home为0750；不能由个人可访问推断专用UID可访问，也不放宽个人home权限。家庭签名运行包仍3de3be32，四份真实恢复未改，工厂基线仍b9a077bc。真实安装、后台注销重启、工厂最终停写同步及完整业务/中文实体打印/扫码未完成，旧机保留。

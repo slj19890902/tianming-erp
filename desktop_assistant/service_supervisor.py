@@ -1,4 +1,4 @@
-"""Foreground user-service supervisor; shares the existing maintenance lock."""
+"""Foreground service supervisor; shares the existing maintenance lock."""
 import argparse
 from datetime import datetime, timezone
 import os
@@ -55,7 +55,7 @@ def stop_owned(manager, timeout=75):
             time.sleep(.5)
 
 
-def supervise(manager, stopping, *, interval=2):
+def supervise(manager, stopping, *, interval=2, system_identity=None, keychain_canary_verified=False):
     status = None
     cache = {}
     def record(value):
@@ -63,7 +63,10 @@ def supervise(manager, stopping, *, interval=2):
         if value != status:
             write_json(manager.root / 'control/service-status.json', {
                 'status':value, 'pid':os.getpid(), 'home_rehearsal':True,
-                'updated_at':datetime.now(timezone.utc).isoformat()})
+                'updated_at':datetime.now(timezone.utc).isoformat(),
+                **({'system_identity': system_identity, 'requires_user_login': False,
+                    'keychain_canary_verified': keychain_canary_verified}
+                   if system_identity is not None else {})})
             status = value
     with operation_lock(manager.root / 'control/service-supervisor.lock'):
         try:
@@ -79,16 +82,40 @@ def supervise(manager, stopping, *, interval=2):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Mac家庭预演用户服务监护，不允许工厂接管')
+    parser = argparse.ArgumentParser(description='Mac家庭预演服务监护，不允许工厂接管')
     parser.add_argument('--root', required=True, type=Path)
     parser.add_argument('--public-key', required=True, type=Path)
     parser.add_argument('--publisher-sha256', required=True)
+    parser.add_argument('--system-action', choices=('run', 'check', 'stop'))
+    parser.add_argument('--supervisor-package')
+    parser.add_argument('--challenge')
     args = parser.parse_args()
     from desktop_assistant.mac_service import local_root
     from desktop_assistant.release_request import public_identity
     from desktop_assistant.manager import Manager
-    root = local_root(args.root)
-    public = args.public_key.read_bytes()
+    system_identity = None
+    if args.system_action:
+        from desktop_assistant import mac_system_service as system
+        context, public, control = system.runtime_configuration(args, script=__file__, executable=sys.executable)
+        root = system.ROOT
+        manager = Manager(root, public)
+        os.environ['ERP_HOME_REHEARSAL'] = '1'
+        if args.system_action in {'check', 'stop'}:
+            import json
+            print(json.dumps(system.runtime_worker(manager, args, context)))
+            return
+        system_identity = system.bootstrap._actual()
+        if not control['enabled']:
+            write_json(root/'control/service-status.json', {'status': 'system-disabled',
+                'pid': os.getpid(), 'home_rehearsal': True, 'system_identity': system_identity,
+                'requires_user_login': False, 'updated_at': datetime.now(timezone.utc).isoformat()})
+            return
+    else:
+        root = local_root(args.root)
+        public = args.public_key.read_bytes()
+        if public_identity(public)[1] != args.publisher_sha256:
+            raise ValueError('服务发布公钥指纹不匹配')
+        manager = Manager(root, public)
     if public_identity(public)[1] != args.publisher_sha256:
         raise ValueError('服务发布公钥指纹不匹配')
     os.environ['ERP_HOME_REHEARSAL'] = '1'
@@ -97,7 +124,8 @@ def main():
     stopping = threading.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: stopping.set())
-    supervise(Manager(root, public), stopping)
+    supervise(manager, stopping, system_identity=system_identity,
+              keychain_canary_verified=system_identity is not None)
 
 
 if __name__ == '__main__':
@@ -105,5 +133,5 @@ if __name__ == '__main__':
         main()
     except Exception:
         # Native/keychain errors and process environments are never logged.
-        print('ERP用户服务需要检查；未绕过维护或启动门禁。', file=sys.stderr)
+        print('ERP服务需要检查；未绕过维护或启动门禁。', file=sys.stderr)
         raise SystemExit(1)

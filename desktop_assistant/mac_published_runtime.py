@@ -87,6 +87,11 @@ def resolve(root, identity, public, *, kind='server'):
     capability = capabilities.get('immutable_execution_v1') if isinstance(capabilities, dict) else None
     if type(capability) is not int or capability != 1:
         raise ValueError('已签名程序尚不支持不可变系统执行入口')
+    service_control = BASE / 'system-service.json'
+    if service_control.exists() or service_control.is_symlink():
+        service_capability = capabilities.get('system_service_v1')
+        if type(service_capability) is not int or service_capability != 1:
+            raise ValueError('已安装系统监护，程序必须保留管理员停用门禁')
     required = {'main.py', 'app/main.py', 'desktop_assistant/server_entry.py'}
     required.update({'runtime/ocr/model/craft_mlt_25k.pth', 'runtime/ocr/model/zh_sim_g2.pth',
                      'runtime/ocr/user_network/.keep'})

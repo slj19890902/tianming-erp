@@ -428,6 +428,10 @@ class Manager:
         if not state.get('current'):
             raise ValueError('尚未接入或恢复ERP数据')
         python = self._runtime_python(state['current'])
+        from desktop_assistant.mac_published_runtime import selected as service_selected
+        if service_selected():
+            from desktop_assistant.mac_system_service import check_start
+            check_start()
         self._check_dispatch_reader(state['current'], require_active=self._dispatch_reader(state['current']))
         running = self._process()
         if running:

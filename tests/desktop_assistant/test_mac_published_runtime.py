@@ -48,7 +48,7 @@ def case(monkeypatch):
     monkeypatch.setattr('desktop_assistant.runtime_platform.sys.platform', 'darwin')
     monkeypatch.setattr('desktop_assistant.runtime_platform.platform.machine', lambda: 'arm64')
     identities = []
-    def publish(version='native', revision='r1', *, capability=1, missing=None, contract=None):
+    def publish(version='native', revision='r1', *, capability=1, service_capability=None, missing=None, contract=None):
         source = fixture.root/('source-'+version)
         shutil.copytree(fixture.root/'source-one', source)
         (source/'runtime/python.exe').unlink()
@@ -68,6 +68,7 @@ def case(monkeypatch):
                     'runtime_capabilities':{'immutable_execution_v1':capability},
                     'executable_files':['runtime/bin/python3.12']}
         if contract: metadata['migration'] = contract
+        if service_capability is not None: metadata['runtime_capabilities']['system_service_v1'] = service_capability
         pack_tree(source, package, metadata, fixture.key)
         info = manager.stage_release(package)
         identity = info['id']
@@ -138,6 +139,31 @@ def test_only_exact_new_signed_capability_can_execute(case, capability):
     candidate = case.publish('capability', capability=capability)
     with pytest.raises(ValueError, match='不可变系统执行入口'):
         case.manager._approve_execution(candidate.id)
+
+
+@pytest.mark.parametrize('capability', [None, True, '1', 0, 2])
+def test_installed_service_refuses_programs_without_persistent_disable_gate(case, capability):
+    candidate=case.publish('system-capability',service_capability=capability)
+    (published.BASE/'system-service.json').write_bytes(b'root control exists')
+    with pytest.raises(ValueError,match='停用门禁'):case.manager._approve_execution(candidate.id)
+
+
+def test_root_disable_gate_blocks_manager_start_before_process_or_data_actions(case,monkeypatch):
+    from desktop_assistant import mac_system_service as system
+    candidate=case.publish('system-aware',service_capability=1)
+    control=published.BASE/'system-service.json'
+    write_json(control,{'type':system.TYPE,'package_sha256':candidate.id,'context_sha256':'a'*64,
+        'publisher_sha256':'b'*64,'plist_sha256':'c'*64,'enabled':False})
+    monkeypatch.setattr(system,'CONTROL',control)
+    # This fixture simulates OS ownership for the root publication tree.
+    # The bootstrap reader needs the same explicit simulation for its new record.
+    monkeypatch.setattr(system.bootstrap,'protected',lambda path,**kw:path.read_bytes())
+    write_json(case.manager.root/'state.json',{'current':candidate.id})
+    before=(case.manager.root/'state.json').read_bytes()
+    monkeypatch.setattr(case.manager,'_process',lambda:pytest.fail('process action before disabled gate'))
+    monkeypatch.setattr('desktop_assistant.manager.subprocess.Popen',lambda *a,**kw:pytest.fail('spawned while disabled'))
+    with pytest.raises(ValueError,match='已停用'):Manager.start(case.manager)
+    assert (case.manager.root/'state.json').read_bytes()==before
 
 
 @pytest.mark.parametrize('missing', ['desktop_assistant/migration_entry.py',

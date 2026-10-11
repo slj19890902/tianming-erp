@@ -14,7 +14,9 @@ FILES = ('app/__init__.py', 'app/core/__init__.py', 'app/core/mac_keychain.py',
          'desktop_assistant/mac_release_publish.py', 'desktop_assistant/mac_system_service.py',
          'desktop_assistant/mac_archive_contract.py', 'desktop_assistant/mac_archive_install.py',
          'desktop_assistant/mac_mount.py', 'desktop_assistant/factory_target_contract.py',
-         'desktop_assistant/factory_network.py', 'desktop_assistant/mac_factory_request_install.py')
+         'desktop_assistant/factory_network.py', 'desktop_assistant/mac_factory_request_install.py',
+         'desktop_assistant/factory_activation_contract.py',
+         'desktop_assistant/mac_factory_activation_install.py', 'desktop_assistant/home_process.py')
 
 
 def build(repo, commit, output):

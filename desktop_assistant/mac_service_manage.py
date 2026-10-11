@@ -47,7 +47,7 @@ def authenticated(request, script, executable):
 
 
 @contextmanager
-def instance(context):
+def instance(context, *, inherited_lock=None):
     """Hold local private parents and the exact existing lock, never initialize."""
     with ExitStack() as stack:
         base = stack.enter_context(Lease(BASE, uid=0, gid=None, mode=0o755, directory=True, mutable=True))
@@ -57,8 +57,10 @@ def instance(context):
         for name in ('releases','shared','control','backups','packages','staging'):
             folders[name] = stack.enter_context(Lease(ROOT/name, uid=context['uid'], gid=context['gid'],
                 mode=0o700, directory=True, parent=root, mutable=True))
+        if inherited_lock is not None and (type(inherited_lock) is not int or inherited_lock < 3):
+            raise ValueError('继承维护锁描述符无效')
         lock = stack.enter_context(Lease(ROOT/'control/operation.lock', uid=context['uid'], gid=context['gid'],
-                                       mode=0o600, parent=folders['control']))
+            mode=0o600, parent=folders['control'], fd=os.dup(inherited_lock) if inherited_lock is not None else None))
         if _read_complete(lock, 1) != b'0': raise ValueError('专用管理维护锁不是已有完整锁')
         def recheck():
             for lease in folders.values(): lease.check()
@@ -69,7 +71,7 @@ def instance(context):
 
 
 @contextmanager
-def maintenance(lock):
+def maintenance(lock, *, borrowed=False):
     import fcntl
     from desktop_assistant.operation_lock import BUSY
     lock.check()
@@ -77,7 +79,12 @@ def maintenance(lock):
     except BlockingIOError: raise ValueError(BUSY) from None
     try:
         lock.check(); yield; lock.check()
-    finally: fcntl.flock(lock.fd, fcntl.LOCK_UN)
+    finally:
+        # An activation worker borrows the administrator's open-file-description.
+        # Always acquire/verify the lock above, but leave ownership with the
+        # parent until it has published the protected record. Closing this dup
+        # cannot release the parent's lock; LOCK_UN would release both.
+        if not borrowed: fcntl.flock(lock.fd, fcntl.LOCK_UN)
 
 
 def record(root, name, context):

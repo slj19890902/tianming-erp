@@ -158,7 +158,7 @@ def _content(payload, metadata, root, state, target, target_package, public, sou
 
 
 @contextmanager
-def verified_restored_target(request_id, input_attempt, authorization_sha256):
+def verified_restored_target(request_id, input_attempt, authorization_sha256, *, inherited_lock=None):
     """Yield public evidence and a recheck callback while original locks are held.
 
     The caller may publish a separate protected activation only while this
@@ -170,7 +170,8 @@ def verified_restored_target(request_id, input_attempt, authorization_sha256):
     if manage.boot._actual() != manage.boot._expected(context['uid'], context['gid']):
         raise ValueError('最终核验实际专用身份不符')
     root, base = manage.ROOT, manage.BASE
-    with manage.instance(context) as (folders, lock, parents_check), manage.maintenance(lock), ExitStack() as stack:
+    with manage.instance(context, inherited_lock=inherited_lock) as (folders, lock, parents_check), \
+            manage.maintenance(lock, borrowed=inherited_lock is not None), ExitStack() as stack:
         base_lease = stack.enter_context(Lease(base, uid=0, gid=None, mode=0o755, directory=True, mutable=True))
         held = []
         def pin(path, parent, *, uid=context['uid'], gid=context['gid'], mode=0o600, directory=False, mutable=False):

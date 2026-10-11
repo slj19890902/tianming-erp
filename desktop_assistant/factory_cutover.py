@@ -49,12 +49,8 @@ TECHNICAL_FIELDS = {
 # Only these deployment settings may differ between final source and target.
 # The exact target values must separately match the approved network digest.
 from desktop_assistant.factory_network import FIELDS as NETWORK_FIELDS
-SNAPSHOT_HASHES = {
-    'database_sha256', 'schema_sha256', 'facts_sha256', 'files_sha256',
-    'preserved_environment_sha256', 'pdf_sources_sha256',
-}
-SNAPSHOT_COUNTS = {'tables', 'files', 'registered_attachments'}
-
+from desktop_assistant.factory_activation_contract import (
+    SNAPSHOT_HASHES, SNAPSHOT_COUNTS, _snapshot, _evidence, _body)
 
 def make_request(target, package_sha256, network_sha256, public, *, now=None):
     return target_contract.make_request(target, package_sha256, network_sha256,
@@ -64,49 +60,6 @@ def make_request(target, package_sha256, network_sha256, public, *, now=None):
 def make_network_request(target, package_sha256, network, public, *, now=None):
     from desktop_assistant.factory_network import validate
     return make_request(target, package_sha256, digest(validate(network)), public, now=now)
-
-
-def _snapshot(snapshot):
-    _keys(snapshot, SNAPSHOT_HASHES | SNAPSHOT_COUNTS | {'revision'})
-    for field in SNAPSHOT_HASHES:
-        _hash(snapshot[field])
-    for field in SNAPSHOT_COUNTS:
-        if type(snapshot[field]) is not int or snapshot[field] < 0:
-            raise ValueError('完整事实计数格式错误')
-    if snapshot['tables'] < 1 or snapshot['files'] < 1:
-        raise ValueError('完整事实不能为空')
-    if not isinstance(snapshot['revision'], str) or not re.fullmatch(r'[A-Za-z0-9_]{1,32}', snapshot['revision']):
-        raise ValueError('迁移版本格式错误')
-
-
-def _evidence(evidence):
-    _keys(evidence, {'source_sha256', 'backup_sha256', 'source_package_sha256', 'backup_created_at',
-                     'manual_stop', 'process_stopped', 'credential_purposes', 'snapshot'})
-    for field in ('source_sha256', 'backup_sha256', 'source_package_sha256'):
-        _hash(evidence[field])
-    _time(evidence['backup_created_at'])
-    if evidence['manual_stop'] is not True or evidence['process_stopped'] is not True:
-        raise ValueError('未声明源端已停写并保持手动停止')
-    purposes = evidence['credential_purposes']
-    if (not isinstance(purposes, list) or any(not isinstance(v, str) for v in purposes)
-            or purposes != sorted(set(purposes)) or 'backup' not in purposes
-            or not set(purposes) <= {'backup', 'deepseek', 'openai', 'mailbox'}):
-        raise ValueError('切换运营凭据用途不完整')
-    _snapshot(evidence['snapshot'])
-
-
-def _body(body):
-    _keys(body, {'type', 'request', 'source', 'issued_at', 'install_before'})
-    if body['type'] != AUTHORIZATION:
-        raise ValueError('不是正式切换签名凭据')
-    validate_request(body['request'])
-    _evidence(body['source'])
-    issued, before = _time(body['issued_at']), _time(body['install_before'])
-    if not timedelta(0) < before - issued <= timedelta(hours=8):
-        raise ValueError('切换激活时窗必须在八小时以内')
-    if not (_time(body['request']['created_at']) <= _time(body['source']['backup_created_at'])
-            <= issued < before <= _time(body['request']['expires_at'])):
-        raise ValueError('最终备份必须晚于目标申请，且签发/激活时间有效')
 
 
 def sign_authorization(request, stopped_backup_evidence, key, *, now=None):

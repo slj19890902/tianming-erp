@@ -46,6 +46,7 @@ def partial(case, monkeypatch, request):
         if meta.get('runtime_platform')=='macos-arm64':
             meta=deepcopy(meta);meta['runtime_capabilities'][completion.CAPABILITY]=1
             meta['runtime_capabilities'][completion.RESUME_CAPABILITY]=1
+            meta['runtime_capabilities'][completion.REAUTH_CAPABILITY]=1
         return original_pack(source,destination,meta,key)
     monkeypatch.setattr(fixture_module,'pack_tree',pack)
     restore_files=publication.SERVICE_RESTORE_FILES
@@ -443,3 +444,166 @@ print(data.decode(),end='')
     records=[json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
     assert records==[{'accepted':not background,'foreground':not background},{'stopped':False,'exit':0}]
     assert not list(tmp_path.iterdir())
+
+
+def failed_password_resume(p):
+    assert p.external
+    original=interrupted_before_password(p)
+    with pytest.raises(ValueError):p.run(lambda _:'wrong-synthetic-password')
+    previous=p.x.home/('restore-completion-resume-'+p.args.input_attempt+'.json')
+    assert previous.is_file() and len(list((p.x.root/'staging').iterdir()))==1
+    p.args.reauthenticate_before_decryption_sha256=sha(previous)
+    return original,previous
+
+
+def unchanged_records(paths):
+    return [(path.read_bytes(),restore._fingerprint(path.stat())) for path in paths]
+
+
+@pytest.mark.parametrize('partial',['external'],indirect=True)
+@pytest.mark.parametrize('mistakes',[0,1,2])
+def test_reauthentication_corrects_input_before_new_attempt_and_finishes_full_verification(partial,mistakes,capsys):
+    p=partial;paths=failed_password_resume(p);old=unchanged_records(paths);before=protected(p)
+    secrets=dict(p.case.secrets);prompts=[]
+    new=p.x.home/('restore-completion-reauth-'+p.args.input_attempt+'.json')
+    def prompt(message):
+        prompts.append(message)
+        assert not new.exists() and len(list((p.x.root/'staging').iterdir()))==1
+        assert unchanged_records(paths)==old and protected(p)==before
+        return 'wrong-synthetic-password' if len(prompts)<=mistakes else PASSWORD
+    result=p.run(prompt)
+    assert result['manual_stop'] and not result['started'] and not result['factory_cutover']
+    assert len(prompts)==mistakes+1 and unchanged_records(paths)==old
+    assert protected(p)==before and p.case.secrets==secrets
+    record=read_json(new)
+    assert record['type']=='tianming.restore-completion-reauth.v1'
+    assert record['previous_resume_sha256']==sha(paths[1])
+    assert record['original_attempt_sha256']==sha(paths[0])
+    assert record['execution_package']==p.args.execution_package
+    assert new.stat().st_mode & 0o777==0o600
+    captured=capsys.readouterr()
+    assert PASSWORD not in captured.out+captured.err and 'wrong-synthetic-password' not in captured.out+captured.err
+    with pytest.raises(ValueError,match='覆盖重试'):p.run()
+
+
+@pytest.mark.parametrize('partial',['external'],indirect=True)
+def test_three_wrong_inputs_preserve_no_new_attempt_and_allow_later_correct_authentication(partial):
+    p=partial;paths=failed_password_resume(p);old=unchanged_records(paths);before=protected(p)
+    new=p.x.home/('restore-completion-reauth-'+p.args.input_attempt+'.json');prompts=[]
+    with pytest.raises(ValueError,match='未创建新的恢复尝试'):
+        p.run(lambda message:prompts.append(message) or 'wrong-synthetic-password')
+    assert len(prompts)==3 and not new.exists() and unchanged_records(paths)==old and protected(p)==before
+    assert len(list((p.x.root/'staging').iterdir()))==1 and not (p.x.root/'state.json').exists()
+    assert p.run()['manual_stop'] and unchanged_records(paths)==old
+
+
+@pytest.mark.parametrize('partial',['external'],indirect=True)
+@pytest.mark.parametrize('error',[KeyboardInterrupt,EOFError])
+def test_cancelled_hidden_input_does_not_consume_authentication_attempt(partial,error):
+    p=partial;paths=failed_password_resume(p);old=unchanged_records(paths)
+    def cancel(_):raise error()
+    with pytest.raises(error):p.run(cancel)
+    assert unchanged_records(paths)==old
+    assert not (p.x.home/('restore-completion-reauth-'+p.args.input_attempt+'.json')).exists()
+    assert len(list((p.x.root/'staging').iterdir()))==1
+
+
+@pytest.mark.parametrize('partial',['external'],indirect=True)
+@pytest.mark.parametrize('fault',[
+    'wrong-sha','bool-sha','missing-original-sha','missing-credentials','missing-resume','resume-mode',
+    'resume-hardlink','resume-symlink','original-sha','credentials-sha','publisher-sha','stage-sha',
+    'input','target','backup','context','old-execution','extra','noncanonical','old-capability',
+    'new-capability','bool-capability','state','pending','receipt','reauth-record','decryption-slot'])
+def test_reauthentication_checkpoint_mismatch_never_asks_for_password(partial,monkeypatch,fault):
+    p=partial;original,previous=failed_password_resume(p)
+    if fault=='wrong-sha':p.args.reauthenticate_before_decryption_sha256='f'*64
+    elif fault=='bool-sha':p.args.reauthenticate_before_decryption_sha256=True
+    elif fault=='missing-original-sha':p.args.resume_before_decryption_sha256=None
+    elif fault=='missing-credentials':p.args.credentials_sha256=None
+    elif fault=='missing-resume':previous.rename(previous.with_suffix('.preserved'))
+    elif fault=='resume-mode':previous.chmod(0o644)
+    elif fault=='resume-hardlink':os.link(previous,previous.with_suffix('.hardlink'))
+    elif fault=='resume-symlink':
+        saved=previous.with_suffix('.preserved');previous.rename(saved);previous.symlink_to(saved)
+    elif fault in {'original-sha','credentials-sha','publisher-sha','stage-sha','input','target','backup','context',
+                   'old-execution','extra','noncanonical'}:
+        record=read_json(previous)
+        fields={'original-sha':'original_attempt_sha256','credentials-sha':'credentials_sha256',
+            'publisher-sha':'publisher_sha256','stage-sha':'staging_identity_sha256','input':'input_attempt',
+            'target':'restore_package','backup':'backup_sha256','context':'context_sha256','old-execution':'execution_package'}
+        if fault=='extra':record['extra']=True
+        elif fault!='noncanonical':record[fields[fault]]='f'*(32 if fault=='input' else 64)
+        previous.write_bytes(manage.boot.canonical(record)+(b'\n' if fault=='noncanonical' else b''))
+        p.args.reauthenticate_before_decryption_sha256=sha(previous)
+    elif fault in {'old-capability','new-capability','bool-capability'}:
+        resolve=completion.published.resolve;calls=0
+        def changed(*a,**kw):
+            nonlocal calls
+            tree,manifest=resolve(*a,**kw);calls+=1;manifest=deepcopy(manifest)
+            if fault=='old-capability' and calls==4:manifest['runtime_capabilities'].pop(completion.RESUME_CAPABILITY)
+            elif fault=='new-capability':manifest['runtime_capabilities'].pop(completion.REAUTH_CAPABILITY)
+            elif fault=='bool-capability':manifest['runtime_capabilities'][completion.REAUTH_CAPABILITY]=True
+            return tree,manifest
+        monkeypatch.setattr(completion.published,'resolve',changed)
+    elif fault in {'state','pending'}:(p.x.root/('state.json' if fault=='state' else 'state.json.pending')).write_bytes(b'keep')
+    elif fault in {'receipt','reauth-record'}:
+        prefix='service-restore-' if fault=='receipt' else 'restore-completion-reauth-'
+        (p.x.home/(prefix+p.args.input_attempt+'.json')).write_bytes(b'keep')
+    else:(p.x.root/'staging'/('completion-'+p.args.input_attempt)).mkdir(mode=0o700)
+    before=protected(p);secrets=dict(p.case.secrets)
+    def forbidden(_):raise AssertionError('checkpoint mismatch must precede any password prompt')
+    with pytest.raises(Exception) as caught:p.run(forbidden)
+    assert not isinstance(caught.value,AssertionError)
+    assert protected(p)==before and p.case.secrets==secrets
+    if fault!='reauth-record':assert not (p.x.home/('restore-completion-reauth-'+p.args.input_attempt+'.json')).exists()
+
+
+@pytest.mark.parametrize('partial',['external'],indirect=True)
+@pytest.mark.parametrize('fault',['original','resume','shared','staging','foreground'])
+def test_scene_change_during_reauthentication_refuses_before_new_attempt(partial,monkeypatch,fault):
+    p=partial;original,previous=failed_password_resume(p)
+    def prompt(_):
+        if fault in {'original','resume'}:
+            path=original if fault=='original' else previous;path.write_bytes(path.read_bytes()+b' ')
+        elif fault=='shared':(p.x.root/'shared/data/drawing.pdf').write_bytes(b'changed')
+        elif fault=='staging':(p.x.root/'staging/foreign').mkdir()
+        else:monkeypatch.setattr(completion.os,'tcgetpgrp',lambda fd:os.getpgrp()+1)
+        return PASSWORD
+    with pytest.raises(ValueError):p.run(prompt)
+    assert not (p.x.home/('restore-completion-reauth-'+p.args.input_attempt+'.json')).exists()
+    assert not (p.x.root/'state.json').exists()
+
+
+@pytest.mark.parametrize('partial',['external'],indirect=True)
+def test_authenticated_decryption_failure_retains_attempt_and_refuses_later_reauthentication(partial,monkeypatch):
+    p=partial;paths=failed_password_resume(p);old=unchanged_records(paths);before=protected(p)
+    def fail(*a,**kw):raise ValueError('synthetic GCM verification failure')
+    monkeypatch.setattr(completion,'_decrypt_retained',fail)
+    with pytest.raises(ValueError,match='synthetic GCM'):p.run()
+    new=p.x.home/('restore-completion-reauth-'+p.args.input_attempt+'.json')
+    assert new.exists() and unchanged_records(paths)==old and protected(p)==before
+    assert len(list((p.x.root/'staging').iterdir()))==2
+    with pytest.raises(ValueError,match='覆盖重试'):p.run()
+
+
+@pytest.mark.parametrize('partial',['external'],indirect=True)
+def test_valid_transfer_for_other_backup_is_not_reprompted_or_recorded(partial,monkeypatch):
+    p=partial;paths=failed_password_resume(p);old=unchanged_records(paths)
+    unseal=completion.credentials.unseal;prompts=[]
+    def wrong_binding(*a,**kw):
+        record=unseal(*a,**kw);record['bound_backup_sha256']='f'*64;return record
+    monkeypatch.setattr(completion.credentials,'unseal',wrong_binding)
+    with pytest.raises(ValueError):p.run(lambda msg:prompts.append(msg) or PASSWORD)
+    assert len(prompts)==1 and unchanged_records(paths)==old
+    assert not (p.x.home/('restore-completion-reauth-'+p.args.input_attempt+'.json')).exists()
+
+
+@pytest.mark.parametrize('partial',['external'],indirect=True)
+def test_new_signed_execution_reauthenticates_older_approved_attempts(partial,monkeypatch):
+    p=partial;paths=failed_password_resume(p);old=unchanged_records(paths)
+    before=protected(p);secrets=dict(p.case.secrets)
+    test_approved_new_execution_package_completes_the_original_restore_target(p,monkeypatch,False)
+    assert unchanged_records(paths)==old and protected(p)==before and p.case.secrets==secrets
+    record=read_json(p.x.home/('restore-completion-reauth-'+p.args.input_attempt+'.json'))
+    assert record['execution_package']==p.args.execution_package!=p.x.id
+    assert record['previous_resume_sha256']==sha(paths[1])

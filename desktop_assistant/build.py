@@ -206,7 +206,8 @@ def main():
         # installation or permission to activate a factory writer.
         runtime_metadata['runtime_capabilities'] = {'immutable_execution_v1': 1, 'system_service_v1': 1,
                                                     'service_restore_v1': 1, 'service_restore_completion_v1': 1,
-                                                    'service_restore_resume_v1': 1, 'archive_autofs_v1': 1,
+                                                    'service_restore_resume_v1': 1, 'service_restore_reauthentication_v1': 1,
+                                                    'archive_autofs_v1': 1,
                                                     'service_manage_v1': 1, 'system_nightly_v1': 1,
                                                     'factory_request_v1': 1, 'factory_audit_v1': 1,
                                                     'factory_activation_v1': 1, 'factory_execution_v1': 1}

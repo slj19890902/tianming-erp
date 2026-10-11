@@ -523,3 +523,6 @@ ea6aa5c9 已实际追加发布；有限完成的旧尝试保留，最新 UID499 
 71e4444c完成原工厂签名及Mac独立验签，老板执行认证续接实机成功：完整备份14d81de3…、数据时点2026-10-10T20:12:10.643701+08:00，全部事实/附件/配置和backup、deepseek、mailbox凭据核对通过；恢复目标仍acb2f921…，v0.22.625/ep1010md，停止状态/恢复回执已发布，manual_stop=true、schema_migrated/started/factory_cutover均false。准确SHA、原样证据及边界见任务卡与evidence/mac-restored-stopped-71e4444c。不再重跑恢复，保留全部旧失败现场。
 
 先安装system launchd监护并核实际系统进程/专用身份/后台canary/家庭停止状态及state和恢复回执SHA不变，不运行ERP或定时备份。然后完成既有NAS管理员的独立SMB后台凭据/挂载/完整备份/回读/断连，再合并安排注销重启/FileVault验收。历史外部原件、实体中文打印扫码及工厂最终停写同步/唯一写端/人工业务继续待验；任何阶段不清空旧机。
+
+
+系统注册实机结果补记：launchd在创建进程时EX_CONFIG(78)，尚未形成后台状态；本机独立true任务已复现stdout写-only失败/读写成功。下一步先修固定root日志的服务组读权限及新安装器的日志模式，再验收实际后台进程；不重跑完整恢复或系统安装。任务外观察器修正顶层state解析，保留旧材料。具体边界见任务卡“system launchd 日志打开权限实机修复范围”。

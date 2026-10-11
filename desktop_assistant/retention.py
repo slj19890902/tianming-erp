@@ -11,9 +11,10 @@ from urllib.request import Request, build_opener, ProxyHandler
 
 from desktop_assistant.cleanup import assert_idle, is_link, local_path, remove_owned_tree
 from desktop_assistant.storage import archive_path, read_json, sha, signed_release_manifest, write_json
+from desktop_assistant import restore_provenance
 
 IDENTITY = re.compile(r'[a-f0-9]{64}')
-STATE_KEYS = ('current', 'previous', 'schema_authority', 'migration_target')
+STATE_KEYS = ('current', 'previous', 'schema_authority', 'migration_target', *restore_provenance.STATE_KEYS)
 LINKS = {'data': 'data', 'static/uploads': 'legacy_uploads',
          'factory_twin/data': 'factory_twin_data', 'logs': 'logs'}
 
@@ -85,9 +86,13 @@ def cleanup_releases(manager, archive_dir: Path) -> dict:
     state = manager.state
     if state.get('operation') not in ('update', 'rollback', 'migration_recovered'):
         raise ValueError('仅成功更新或恢复后执行版本保留')
+    # A partial history declaration must not silently release the missing role.
+    provenance = restore_provenance.identities(state)
     keep = {value for key in STATE_KEYS if (value := state.get(key))}
     if not state.get('current') or any(not isinstance(x, str) or not IDENTITY.fullmatch(x) for x in keep):
         raise ValueError('缺少可信的受保护版本状态')
+    if provenance:
+        restore_provenance.for_backup(root, state, manager.manifest(), manager.public_key)
     # Retain the signed compatibility fallback of protected versions as well.
     for identity in tuple(keep):
         package = local_path(root / 'packages' / (identity + '.zip'))

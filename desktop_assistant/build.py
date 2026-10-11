@@ -113,7 +113,9 @@ def main():
                       'app/services/shared_finished_management.py', 'app/services/shared_finished_receipts.py',
                       'app/services/delivery_dispatch_commands.py',
                       'app/services/sheet_cutting_contract.py', 'app/services/sheet_cutting_settings.py',
-                      'desktop_assistant/delivery_dispatch_contract.py'}
+                      'desktop_assistant/delivery_dispatch_contract.py',
+                      'desktop_assistant/restore_provenance.py',
+                      'desktop_assistant/reader_contract.py'}
     if not reader_sources <= sources.keys():
         raise ValueError('库存业务读取契约的实现不完整，禁止签名发布')
     schema_contract = schema_contract_from_sources(sources, args.revision)
@@ -188,7 +190,8 @@ def main():
                                                     'stock_purchase_identity_v1': 1,
                                                     'delivery_dispatch_v1': 1,
                                                     'unused_mold_deletion_v1': 1,
-                                                    'supplier_sheet_trim_v1': 1},
+                                                    'supplier_sheet_trim_v1': 1,
+                                                    'restore_provenance_v1': 1},
                             'offline_ocr_models': models, **runtime_metadata}, key)
     if args.signing_request_only:
         from desktop_assistant.release_request import prepare_request

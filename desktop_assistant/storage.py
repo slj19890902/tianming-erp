@@ -209,34 +209,65 @@ def encrypt_file(source: Path, destination: Path, password: str) -> None:
         dst.write(cipher.tag)
 
 
+def _decrypt_stream(src, password: str, destination=None) -> str:
+    """One GCM implementation for restoration and output-free authentication."""
+    src.seek(0)
+    header = src.read(len(MAGIC) + 28)
+    if not header.startswith(MAGIC) or len(header) != len(MAGIC) + 28:
+        raise ValueError('不是ERP完整恢复包')
+    salt, nonce = header[len(MAGIC):len(MAGIC)+16], header[-12:]
+    remaining = os.fstat(src.fileno()).st_size - len(header) - 16
+    if remaining < 0:
+        raise ValueError('恢复包不完整')
+    src.seek(-16, 2)
+    tag = src.read(16)
+    src.seek(len(header))
+    cipher = Cipher(algorithms.AES(_key(password, salt)), modes.GCM(nonce, tag)).decryptor()
+    cipher.authenticate_additional_data(header)
+    authenticated = hashlib.sha256(header)
+    try:
+        while remaining:
+            block = src.read(min(CHUNK, remaining))
+            if not block:
+                raise ValueError('恢复包截断')
+            remaining -= len(block)
+            authenticated.update(block)
+            plaintext = cipher.update(block)
+            if destination is not None:
+                destination.write(plaintext)
+        plaintext = cipher.finalize()
+        if destination is not None:
+            destination.write(plaintext)
+    except Exception:
+        raise ValueError('恢复口令错误或备份已损坏') from None
+    authenticated.update(tag)
+    return authenticated.hexdigest()
+
+
+def authenticate_stream(source, password: str) -> str:
+    """Authenticate an already-open encrypted backup without writing plaintext.
+
+    The caller owns the descriptor and must separately check its expected digest
+    and file identity. Success says nothing about the decrypted archive/schema.
+    """
+    return _decrypt_stream(source, password)
+
+
 def decrypt_file(source: Path, destination: Path, password: str) -> str:
     """Authenticate recovery bytes and return the digest of that exact input."""
     with source.open('rb') as src:
-        header = src.read(len(MAGIC) + 28)
-        if not header.startswith(MAGIC) or len(header) != len(MAGIC) + 28:
-            raise ValueError('不是ERP完整恢复包')
-        salt, nonce = header[len(MAGIC):len(MAGIC)+16], header[-12:]
-        remaining = os.fstat(src.fileno()).st_size - len(header) - 16
-        if remaining < 0:
-            raise ValueError('恢复包不完整')
-        src.seek(-16, 2)
-        tag = src.read(16)
-        src.seek(len(header))
-        cipher = Cipher(algorithms.AES(_key(password, salt)), modes.GCM(nonce, tag)).decryptor()
-        cipher.authenticate_additional_data(header)
-        authenticated = hashlib.sha256(header)
+        # Exclusive creation must precede the cleanup scope: an existing target
+        # belongs to someone else, even when opening it raises FileExistsError.
+        dst = destination.open('xb')
+        created = os.fstat(dst.fileno())
         try:
-            with destination.open('xb') as dst:
-                while remaining:
-                    block = src.read(min(CHUNK, remaining))
-                    if not block:
-                        raise ValueError('恢复包截断')
-                    remaining -= len(block)
-                    authenticated.update(block)
-                    dst.write(cipher.update(block))
-                dst.write(cipher.finalize())
+            with dst:
+                return _decrypt_stream(src, password, dst)
         except Exception:
-            destination.unlink(missing_ok=True)
-            raise ValueError('恢复口令错误或备份已损坏') from None
-        authenticated.update(tag)
-        return authenticated.hexdigest()
+            try:
+                named = destination.lstat()
+            except FileNotFoundError:
+                named = None
+            if named and (named.st_dev, named.st_ino) == (created.st_dev, created.st_ino):
+                destination.unlink()
+            raise

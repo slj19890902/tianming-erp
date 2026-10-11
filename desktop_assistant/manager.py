@@ -22,6 +22,8 @@ from desktop_assistant.runtime_platform import (runtime_relative, runtime_python
                                                 process_options, link_managed_directory)
 from desktop_assistant import delivery_dispatch_contract as dispatch_contract
 from desktop_assistant import order_inventory_contract as inventory_contract
+from desktop_assistant import restore_provenance
+from desktop_assistant.reader_contract import has_supplier_trim_facts as _has_supplier_trim_facts
 from desktop_assistant.schema_contract import (
     schema_contract_from_signed_release,
     validate_database_schema,
@@ -30,19 +32,6 @@ from desktop_assistant.schema_contract import (
 CN = timezone(timedelta(hours=8))
 ORDER_INVENTORY_READER = 'order_inventory_v1'
 
-
-def _has_supplier_trim_facts(db):
-    for table, column in (
-        ('products', 'sheet_cutting_settings'),
-        ('sales_order_items', 'sheet_cutting_settings_snapshot'),
-        ('sales_order_item_bom_components', 'sheet_cutting_settings_snapshot'),
-        ('material_requisition_items', 'sheet_cutting_snapshot'),
-        ('supplier_requisition_order_items', 'sheet_cutting_snapshot'),
-        ('stock_replenishment_order_items', 'sheet_cutting_snapshot')):
-        if any(row[1] == column for row in db.execute(f'PRAGMA table_info("{table}")')):
-            if db.execute(f'SELECT 1 FROM "{table}" WHERE json_valid("{column}") AND json_extract("{column}", \'$.schema_version\') = 3 LIMIT 1').fetchone():
-                return True
-    return False
 
 
 class Manager:
@@ -81,6 +70,7 @@ class Manager:
     def compatible(self, release, revision, authority=None):
         try:
             self._check_dispatch_reader(release)
+            self._check_provenance_reader(release)
         except (ValueError, OSError):
             return False
         # Preserve rollback metadata, but never run a writer which ignores the
@@ -168,6 +158,12 @@ class Manager:
         return (manifest['revision'] == revision
                 and contract.get('policy') == 'preserve_existing_facts_v1'
                 and contract.get('rollback_package_sha256') == release)
+
+    def _check_provenance_reader(self, release):
+        if (restore_provenance.identities(self.state)
+                and (not self._shared_finished_reader(release, restore_provenance.CAPABILITY)
+                     or not restore_provenance.supported(self.manifest(release)))):
+            raise ValueError('程序不能完整保留恢复来源，未停止服务')
 
     def _order_inventory_reader(self, release):
         package = self.root / 'packages' / (release + '.zip')
@@ -433,6 +429,7 @@ class Manager:
             from desktop_assistant.mac_system_service import check_start
             check_start()
         self._check_dispatch_reader(state['current'], require_active=self._dispatch_reader(state['current']))
+        self._check_provenance_reader(state['current'])
         running = self._process()
         if running:
             expected = python
@@ -497,20 +494,6 @@ class Manager:
         nas = archive_path(nas)
         if nas == self.root or self.root in nas.parents:
             raise ValueError('NAS备份目录不能位于ERP安装目录内')
-        package_ids = {current, state.get('schema_authority')} - {None}
-        required = 4 * (sum(p.stat().st_size for p in (self.root / 'shared').rglob('*') if p.is_file())
-                        + sum((self.root / 'packages' / (p + '.zip')).stat().st_size for p in package_ids)) + 2 * 1024**3
-        if shutil.disk_usage(nas).free < required:
-            raise ValueError('NAS空间不足，未创建备份；请保留旧备份')
-        # ZSpace virtual volumes may discard dot-prefixed directories on sync.
-        work_root = nas / 'tianming-backup-work'
-        work_root.mkdir(exist_ok=True)
-        if work_root.is_symlink() or work_root.is_junction():
-            raise ValueError('NAS备份临时目录不能是链接')
-        job = work_root / uuid.uuid4().hex
-        job.mkdir()
-        # Stream local stopped data directly into the NAS archive. Virtual NAS
-        # drives need not support loose SQLite files or hidden build/test files.
         package = self.root / 'packages' / (current + '.zip')
         if sha(package) != current:
             raise ValueError('对应程序发布包已损坏')
@@ -526,18 +509,40 @@ class Manager:
             packages['compatibility.zip'] = self.root / 'packages' / (authority + '.zip')
         else:
             authority = None
+        provenance, originals = restore_provenance.for_backup(
+            self.root, state, authenticated_manifest, self.public_key)
+        packages.update(originals)
+        # Count archive members, including the same original under two names.
+        required = 4 * (sum(p.stat().st_size for p in (self.root / 'shared').rglob('*') if p.is_file())
+                        + sum(p.stat().st_size for p in packages.values())) + 2 * 1024**3
+        if shutil.disk_usage(nas).free < required:
+            raise ValueError('NAS空间不足，未创建备份；请保留旧备份')
+        # ZSpace virtual volumes may discard dot-prefixed directories on sync.
+        work_root = nas / 'tianming-backup-work'
+        work_root.mkdir(exist_ok=True)
+        if work_root.is_symlink() or work_root.is_junction():
+            raise ValueError('NAS备份临时目录不能是链接')
+        job = work_root / uuid.uuid4().hex
+        job.mkdir()
         stamp = datetime.now(CN).strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:8]
         from desktop_assistant.credential_transfer import export as export_credentials
         credential_package = job / 'credentials.tmencrypted'
         export_credentials(self.root, credential_package, password)
         packages['credentials.tmencrypted'] = credential_package
         raw = job / 'recovery.zip'
-        pack_recovery(self.root / 'shared', packages, raw, {'type': 'tianming.recovery.v1', 'created': datetime.now(CN).isoformat(),
+        packed = pack_recovery(self.root / 'shared', packages, raw, {'type': 'tianming.recovery.v1', 'created': datetime.now(CN).isoformat(),
                             'release': current, 'version': self.manifest()['version'], 'database': before,
                             'source_shared': str(self.root / 'shared'), 'schema_authority': authority,
                             'credential_transfer': 'credentials.tmencrypted',
+                            **provenance,
                             inventory_contract.STATE_KEY: inventory_activation,
                             **({dispatch_contract.STATE_KEY: dispatch_activation} if dispatch_activation else {})})
+        expected_packages = {'release.zip': current,
+                             **({'compatibility.zip': authority} if authority else {}),
+                             **{restore_provenance.MEMBERS[key]: identity
+                                for key, identity in provenance.items() if identity is not None}}
+        if any(packed['files'].get(name) != identity for name, identity in expected_packages.items()):
+            raise ValueError('备份中的程序原包与固定身份不一致，未发布备份')
         if database_info(self.root / 'shared/data/carton_erp.sqlite3') != before:
             raise ValueError('备份期间数据复核不一致')
         encrypted = job / (stamp + '.tmbackup')
@@ -628,6 +633,7 @@ class Manager:
             signed = signed_release_manifest(package, self.public_key)
             candidate = self.stage_release(package)
             self._approve_execution(identity)
+            self._check_provenance_reader(identity)
             if any(candidate.get(key) != value for key,value in signed.items()):
                 raise ValueError('已暂存程序与签名版本信息不一致，未停止服务')
             if chain and chain[-1]['from_revision'] != candidate['revision']:
@@ -693,6 +699,7 @@ class Manager:
         # A semantic writer incompatibility is never a request to migrate.
         self._check_dispatch_reader(candidate['id'], require_active=(
             candidate['id'] == old['current'] and self._dispatch_reader(candidate['id'])))
+        self._check_provenance_reader(candidate['id'])
         if candidate['id'] == old['current']:
             return '已经是该版本'
         revision = database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']
@@ -802,6 +809,7 @@ class Manager:
             if (contract.get('policy') != 'preserve_existing_facts_v1'
                     or contract.get('rollback_package_sha256') != state['current']):
                 raise ValueError('升级兼容证明不匹配，保留现场')
+            self._check_provenance_reader(target)
             python = self._runtime_python(target).resolve()
             interpreters = {python}
             from desktop_assistant.mac_published_runtime import selected
@@ -877,12 +885,18 @@ class Manager:
             payload = job / 'payload'
             if sha(payload / 'release.zip') != manifest['release']:
                 raise ValueError('恢复程序身份不一致')
+            from desktop_assistant.release_request import inspect_package
             info = database_info(payload / 'shared/data/carton_erp.sqlite3')
             if info != manifest['database']:
                 raise ValueError('恢复库表计数或版本不一致')
             release_manifest, release_contract = schema_contract_from_signed_release(
                 payload / 'release.zip', self.public_key
             )
+            _, verified_release = inspect_package(payload / 'release.zip', self.public_key)
+            if release_manifest != verified_release:
+                raise ValueError('恢复程序清单在核验期间变化')
+            provenance, originals = restore_provenance.for_recovery(
+                payload, manifest, release_manifest, self.public_key)
             release = {'id': manifest['release'], **release_manifest}
             inventory_activation = inventory_contract.for_recovery(manifest, release_manifest, authenticated_backup_sha)
             authority = manifest.get('schema_authority')
@@ -895,6 +909,9 @@ class Manager:
                 authority_manifest, authority_contract = schema_contract_from_signed_release(
                     compatible_package, self.public_key
                 )
+                _, verified_authority = inspect_package(compatible_package, self.public_key)
+                if authority_manifest != verified_authority:
+                    raise ValueError('恢复结构授权在核验期间变化')
             directly_compatible = release_manifest['revision'] == info['revision']
             if not directly_compatible and authority_manifest:
                 migration = authority_manifest.get('migration') or {}
@@ -946,6 +963,8 @@ class Manager:
                     raise ValueError('凭据恢复后的完整性、表计数或版本不一致')
                 validate_database_schema(database, contract)
             # Promote program caches only after all payload checks pass.
+            for original in originals.values():
+                self.stage_release(original, verify_existing=True)
             if authority:
                 self.stage_release(compatible_package, verify_existing=True)
             self.stage_release(payload / 'release.zip', verify_existing=True)
@@ -966,6 +985,7 @@ class Manager:
                        'restored_at': datetime.now(CN).isoformat(), 'source_time': manifest['created'],
                        'restored_backup_sha256': authenticated_backup_sha,
                        'schema_authority': authority,
+                       **provenance,
                        'credential_restore': credential_report,
                        **({'manual_stop': True} if service_identity_selected() else {}),
                        **({inventory_contract.STATE_KEY: inventory_activation}

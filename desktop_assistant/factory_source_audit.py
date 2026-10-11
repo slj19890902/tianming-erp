@@ -18,7 +18,9 @@ from desktop_assistant import credential_transfer as credentials
 from desktop_assistant import delivery_dispatch_contract as dispatch
 from desktop_assistant import order_inventory_contract as inventory
 from desktop_assistant.cleanup import assert_idle, local_path, is_link
-from desktop_assistant.manager import Manager, _has_supplier_trim_facts
+from desktop_assistant.manager import Manager
+from desktop_assistant.reader_contract import (TABLE_READERS, capabilities as _capabilities,
+                                              target_readers as _target_readers)
 from desktop_assistant.migration import files
 from desktop_assistant.operation_lock import operation_lock
 from desktop_assistant.release_request import inspect_package, public_identity
@@ -32,15 +34,6 @@ from desktop_assistant.windows_private_workspace import private_workspace, read_
 ERROR = '最终备份与已停写来源不一致，未签发；保持原端停止'
 # Unknown or unsuccessful operations require separate recovery investigation.
 STABLE_OPERATIONS = {None, 'import_existing', 'update', 'rollback', 'migration_recovered', 'restore'}
-TABLE_READERS = {
-    'quotation_mutations': 'quotation_write_v1',
-    'shared_finished_groups': 'shared_finished_v1',
-    'shared_finished_policies': 'shared_finished_management_v1',
-    'contract_seals': 'contract_seal_v1',
-    'company_profiles': 'company_profiles_v1',
-    'shared_bom_members': 'shared_bom_v1',
-}
-
 
 class _SourceReader(Manager):
     """Reuse process identity checks without a directory-creating constructor."""
@@ -119,37 +112,6 @@ def _config_hashes(root):
         path = local_path(root / name)
         result[name] = sha(path) if path.exists() else None
     return result
-
-
-def _capabilities(manifest):
-    value = manifest.get('reader_capabilities', {})
-    if (not isinstance(value, dict) or any(not isinstance(k, str) or type(v) is not int or v != 1
-                                          for k, v in value.items())):
-        raise ValueError('签名reader能力声明损坏')
-    return value
-
-
-def _target_readers(database, source, target, inventory_record, dispatch_record, *, factory=True):
-    required = set(_capabilities(source))  # Preserve all signed readers, including future ones.
-    available = _capabilities(target)
-    with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as db:
-        db.execute('PRAGMA query_only=ON')
-        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        required.update(reader for table, reader in TABLE_READERS.items() if table in tables)
-        for table, column, capability in (
-            ('stock_replenishment_order_items', 'production_snapshot_json', 'stock_purchase_identity_v1'),
-            ('mold_tools', 'deleted_at', 'unused_mold_deletion_v1'),
-        ):
-            if any(row[1] == column for row in db.execute(f'PRAGMA table_info("{table}")')):
-                required.add(capability)
-        if _has_supplier_trim_facts(db):
-            required.add('supplier_sheet_trim_v1')
-    if inventory_record is not None:
-        required.add(inventory.CAPABILITY)
-    if dispatch_record is not None:
-        required.add(dispatch.CAPABILITY)
-    if not required <= set(available) or (factory and available.get('factory_cutover_v1') != 1):
-        raise ValueError('目标程序缺少正式切换或已保存事实的reader能力')
 
 
 def _created(value, request, now):

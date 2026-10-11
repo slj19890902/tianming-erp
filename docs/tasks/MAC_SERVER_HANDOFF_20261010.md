@@ -449,3 +449,30 @@ NAS开发归档仍仅作local_mount_view独立完整回读，remote_device_persi
 最终助手及Web状态1002项：986通过、16跳过、0失败错误，70.19秒；15项Windows原生和1项显式个人LaunchAgent跳过保持，3条原依赖/合成短JWT告警。定向125通过/1跳过、返回合同45通过，不与最终全量叠加。首轮GID夹具误改脱离核心的context、次轮外部凭据夹具误用含内嵌包、首次全量新增返回字段破坏旧精确合同，均已修正并保留原失败日志。合成权限/注册正例不冒充真实专用UID/root安装；实际PTY隐藏输入通过。证据mac-pristine-restore-final.xml/log及review-summary，独立复核无剩余本范围阻断。
 
 本机只读仍UID501、arm64/macOS27.0.1，Data卷与候选均16777230、约389.1GB可用，专用账号、固定系统根与系统ERP注册仍不存在。Alembic唯一ep1010md，当前轮工厂Git只读基线仍b9a077bc。九源码管理员包中的发布器已变，须按本固定提交重建新包并生成匹配计划；旧成套材料保留，未执行任何真实安装、恢复、发信、收单、外部AI、工厂切换或旧机清空。下一闭环接签名专用恢复及原生绑定，不能把本次空实例发布当作完整接管。
+
+## 2026-10-11 专用完整恢复、原生绑定及来源保留范围
+
+本闭环唯一写入负责人主代理，独立代理只读。允许新增service_restore_entry.py、mac_service_restore.py、reader_contract.py及restore_provenance.py，修改Manager恢复/备份/兼容段、storage认证公共原语、retention、factory_source_audit的纯reader导入、build和pristine发布能力校验，以及对应测试/任务卡/迁移计划。目标是已批准的不可变migration树由实际专用UID执行完整恢复，并在同一维护锁内完成严格同revision/目标schema/全部原reader及真实激活marker验证，最终current绑定Mac、manual_stop=True；不执行旧Windows、不运行迁移、不伪造reader激活、不启动业务。
+
+输入采用实例外固定restore-inputs全新attempt，由root系统文件工具复制既有加密原件并设root:专用组只读权限；不放宽个人home，不让root导入ERP或处理明文秘密。专用入口核真实UID/GID/组、root批准程序/入口/解释器、Data卷及FD/ACL，持独立恢复锁，三路TTY隐藏输入。流式备份口令认证复用现有GCM格式，认证丢弃输出后才初始化空instance；核心仍按批准SHA完整恢复。失败保留现场，不能删除旧机或真实恢复重试。
+
+原Windows release/authority不仅入state与retention保留集，还应完整进入以后每次备份，并在第二次恢复保持其原始身份。来源声明与固定包成员严格一一对应，旧格式全无声明仍兼容，部分声明/缺包/错误绑定一律拒绝。历史原包仅离线核签，不要求现数据库仍符合其旧revision。原Windows签发的精确成员集合不放宽，新历史来源备份变体暂不作为Windows原端签发输入。测试须覆盖Windows原包加authority→Mac绑定→再备份→第二空实例恢复→后续保留，全程不调用迁移/旧程序/start/resume；真实root/专用UID/运行包签名/系统NAS和工厂现场仍待后续实测。
+
+
+## 2026-10-11 恢复来源长期保留与认证原语检查点
+
+先完成专用恢复的可独立验证前置：新增restore_provenance_v1及两项完整来源身份，原Windows release与历史compatibility原字节进入后续每次完整备份，第二次恢复继续保留原身份；restored_backup_sha256只指本次认证输入。历史authority核完整签名和preserve_existing_facts_v1/rollback绑定，不要求其旧revision等于后来升级的数据库。全缺失保持旧备份兼容，部分/假值/缺包/额外固定成员/错误摘要或绑定均拒绝。新build在声明reader前检查所需源码存在，尚不声明service_restore_v1。
+
+备份空间按实际归档成员计量，重复身份占用的多个成员也计入；pack_recovery返回清单再次逐一核release/compatibility及历史包身份，避免核验后换包生成不可恢复的成功备份。restore在任何凭据重封装前完整核验当前、活动authority及历史ZIP，保留原模型错误合同。历史原包离线stage，不执行Windows程序。retention先验证完整来源再保护两角色；兼容、start（含已有进程）、单步/多跳更新、回退和中断恢复均接入能力门禁，缺reader在停服或状态改写前拒绝。Windows原来源签发的精确成员及六字段回执不放宽，新历史备份变体仍不作为Windows源端签发输入。
+
+GCM抽取唯一流式实现，authenticate_stream对已打开FD完整认证并丢弃明文，不产生明文预检文件，仍须调用方绑定预期摘要和文件身份。修复decrypt_file原有既存输出open(xb)失败后误删目标的问题；只有本次创建且设备/inode仍相同的输出才可失败清理，替换对象保留。此检查不是原子的按inode删除承诺，恢复临时目录仍由调用方独占。没有改密码格式/密钥派生或绕过tag。
+
+最终助手、Mac凭据和Web状态1100项：1084通过、16跳过、0失败错误，78.77秒，3条原依赖/合成短JWT告警。跳过为15项Windows原生、1项显式个人LaunchAgent，无新增跳过；两个Mac合成钥匙串实测开关开启，只使用测试临时条目，不接触运营秘密。新增52项真实签名/GCM/文件测试含连续两次恢复、全业务事实和非DB文件一致、邮箱位置/配置/秘密等值、retention保留、多跳/中断和晚期换包。初始来源state是合成前提，不表示已执行首次Mac绑定；真实root/专用UID/原生绑定和实际全量正式恢复均不在本轮执行。
+
+初次定向156通过/2跳过/2失败，分别为保留链测试漏替换清理层进程探针和retention提前读取非法current路径，已修；随后69通过/1跳过。独立复核先在旧候选复现start两个反例和晚期换包三个反例失败，修复后定向51通过；首次扩大回归1075通过/16跳过/1失败为完整ZIP检查提前改变原模型错误文字，恢复先模型静态核验后全ZIP且仍先于protect，原测试不变。最终全量如上，中间结果不累加，所有日志保留。两项独立只读复审无剩余本阶段阻断。
+
+本机只读为Apple M6/arm64/16GiB/macOS27.0.1(26A434)、约389.1GB空闲；专用账号、/Library/TianmingERP及system/cn.tianming.erp仍不存在。Alembic唯一ep1010md，工厂Git只读基线仍b9a077bc115cc649cdc2753cab3dfb3d75269d1c。NAS实际NFS4.0为个人UID501的127.0.0.1:52100代理；本轮归档只证明local_mount_view，remote_device_persistence_verified=false，不能当后台存储或远端断电持久性。沙箱硬件/挂载查询受限的原观察保留；经自动审批仅只读补全，不用unknown作正向证据。
+
+本轮曾只读既有真实恢复state与缓存manifest（未读真实DB/运营秘密）；其Windows v0.22.624/ep1010md及reader声明只是缓存观察，最终恢复必须重新认证原包。四份真实恢复、原凭据、旧3de3be32家庭签名包和旧机未改；未连接工厂库、发信、收单或外部AI。九源码最小管理员包本轮未变，继续成套保留67c3c2b1包/绑定计划，不重建、不混用旧计划。Downloads同名移交文件仍缺失，既有NAS同名回执不能视为当前正式切换批准，凭据不重复索取。
+
+剩余本任务工作继续保持未完成：签名专用恢复入口及固定root只读加密输入、实际身份/FD/空实例/口令预认证、严格同revision/schema/reader/marker原生绑定；其后系统管理/NAS合同发布、受保护目标激活及新工厂签名。真实管理员安装、后台凭据、注销重启/FileVault、搬入工厂后最终停写同步、完整业务与中文实体打印/扫码验收仍须实测。该检查点不等于ERP已接管，任何阶段不清空旧机。

@@ -82,7 +82,7 @@ def instance(tmp_path,monkeypatch):
 def test_status_is_readonly_and_never_reads_secrets_or_touches_nas(instance):
     a=instance;before={p:p.read_bytes() for p in a.root.rglob('*') if p.is_file()}
     result=a.run('status')
-    assert result['snapshot']=={'current':'c'*64,'manual_stop':True,'running':False,
+    assert result['snapshot']=={'current':'c'*64,'configured_mode':'home','manual_stop':True,'running':False,
         'backup_configured':False,'backup_verified_at':None,'maintenance_attention':False,'backup_attention':False}
     assert {p:p.read_bytes() for p in before}==before
     a.canary.assert_not_called();a.unprotect.assert_not_called();a.nas.assert_not_called()
@@ -277,7 +277,7 @@ def test_root_dispatch_drops_privilege_and_rejects_bad_or_secret_reply(monkeypat
             request=json.loads(raw if raw is not None else calls[0])
             result={'type':'tianming.service-management.v1','action':'start','package_sha256':'a'*64,
                 'challenge':request['challenge'],'identity':boot._expected(499,499),'home_rehearsal':True,
-                'snapshot':{'current':'c'*64,'manual_stop':False,'running':True,'backup_configured':False,
+                'snapshot':{'current':'c'*64,'configured_mode':'home','manual_stop':False,'running':True,'backup_configured':False,
                             'backup_verified_at':None,'maintenance_attention':False,'backup_attention':False}}
             if fault=='identity':result['identity']['uid']=501
             if fault=='extra-secret':result['protected_password']='synthetic-forbidden-reference'
@@ -333,3 +333,15 @@ def test_full_synthetic_backup_through_management_entry_preserves_complete_facts
         assert (payload/'shared/data/drawing.pdf').read_bytes()==b'synthetic attachment'
         assert result['snapshot']['backup_verified_at'] and not result['snapshot']['running']
     finally:case.tearDown()
+
+
+@pytest.mark.parametrize('action',['status','stop'])
+def test_broken_activation_attention_does_not_disable_status_or_stop(instance,monkeypatch,action):
+    from desktop_assistant import mac_factory_runtime
+    a=instance
+    monkeypatch.setattr(mac_factory_runtime,'configured_mode',lambda manager:'attention')
+    a.canary.side_effect=ValueError('synthetic keychain failure')
+    result=a.run(action)
+    assert result['snapshot']['configured_mode']=='attention'
+    if action=='stop':assert result['snapshot']['manual_stop'] and not result['snapshot']['running']
+    a.canary.assert_not_called();a.unprotect.assert_not_called();a.nas.assert_not_called()

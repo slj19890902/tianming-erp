@@ -74,7 +74,8 @@ def root_case(target,monkeypatch):
     monkeypatch.setattr(system,'management_service_state',lambda:{'registered':True,'enabled':True,'scheduled_backups':True})
     when=datetime.now(timezone.utc).isoformat()
     monkeypatch.setattr(manage.remote,'verified_at',lambda root,state:when)
-    monkeypatch.setattr(worker.sys,'flags',SimpleNamespace(isolated=True))
+    monkeypatch.setattr(worker.sys,'flags',SimpleNamespace(**{**{k:getattr(sys.flags,k) for k in dir(sys.flags)
+        if not k.startswith('_')},'isolated':1}))
     monkeypatch.setattr(worker.sys,'dont_write_bytecode',True)
     calls=[];mutations=[];checkpoints=[]
     class Process:

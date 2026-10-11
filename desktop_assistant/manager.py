@@ -351,9 +351,24 @@ class Manager:
         env['PYTHONPATH'] = str(release)
         env['ERP_DATABASE_PATH'] = str(shared / 'data/carton_erp.sqlite3')
         env['ERP_WORKERS'] = '1'
-        # A restored factory configuration cannot promote this Mac to a live
-        # server. Factory activation is a separate, not-yet-implemented gate.
-        rehearsal = sys.platform == 'darwin' or env.get('ERP_HOME_REHEARSAL') == '1'
+        # A writable restored environment is never factory authority.
+        factory = None
+        if sys.platform == 'darwin':
+            from desktop_assistant.mac_factory_runtime import configuration, require_factory_service
+            factory = configuration(self.root, self.state.get('current'), self.public_key)
+            for key in ('ERP_FACTORY_ACTIVATION_SHA256', 'ERP_FACTORY_PACKAGE_SHA256'):
+                env.pop(key, None)
+            if factory:
+                approved, _ = self._published_release(factory['package_sha256'])
+                if Path(release).resolve() != approved:
+                    raise ValueError('正式环境只能交给当前批准的程序')
+                require_factory_service()
+                for key in ('OPENAI_API_KEY', 'DEEPSEEK_API_KEY'):
+                    env.pop(key, None)
+                env.update(factory['network'])
+                env['ERP_FACTORY_ACTIVATION_SHA256'] = factory['activation_sha256']
+                env['ERP_FACTORY_PACKAGE_SHA256'] = factory['package_sha256']
+        rehearsal = (sys.platform == 'darwin' and factory is None) or env.get('ERP_HOME_REHEARSAL') == '1'
         if rehearsal:
             env['ERP_HOME_REHEARSAL'] = '1'
             env['PYTHONDONTWRITEBYTECODE'] = '1'
@@ -428,6 +443,9 @@ class Manager:
         if service_selected():
             from desktop_assistant.mac_system_service import check_start
             check_start()
+            from desktop_assistant.mac_factory_runtime import configuration, require_factory_service
+            if configuration(self.root, state['current'], self.public_key):
+                require_factory_service()
         self._check_dispatch_reader(state['current'], require_active=self._dispatch_reader(state['current']))
         self._check_provenance_reader(state['current'])
         running = self._process()

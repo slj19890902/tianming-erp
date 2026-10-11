@@ -55,6 +55,12 @@ def stop_owned(manager, timeout=75):
             time.sleep(.5)
 
 
+def mode_status(manager):
+    from desktop_assistant.mac_factory_runtime import configured_mode
+    mode = configured_mode(manager)
+    return {'configured_mode':mode, 'home_rehearsal':None if mode == 'attention' else mode == 'home'}
+
+
 def nightly_loop(manager, stopping, *, system_identity, interval=60, retry_interval=300):
     """One system-session timer; failures do not take down the ERP supervisor."""
     from desktop_assistant.nightly import run_once
@@ -72,7 +78,7 @@ def nightly_loop(manager, stopping, *, system_identity, interval=60, retry_inter
             write_json(manager.root/'control/nightly-status.json', {
                 'status': result['status'], 'at': datetime.now(timezone.utc).isoformat(),
                 'requires_user_login': False, 'system_identity': system_identity,
-                'home_rehearsal': True})
+                **mode_status(manager)})
         except Exception:
             # A broken status directory must not silently terminate the timer.
             print('系统备份状态无法写入；请检查专用实例，原备份保留。', file=sys.stderr)
@@ -85,14 +91,16 @@ def supervise(manager, stopping, *, interval=2, system_identity=None, keychain_c
     cache = {}
     def record(value):
         nonlocal status
-        if value != status:
+        mode = mode_status(manager)
+        identity = (value, mode['configured_mode'])
+        if identity != status:
             write_json(manager.root / 'control/service-status.json', {
-                'status':value, 'pid':os.getpid(), 'home_rehearsal':True,
+                'status':value, 'pid':os.getpid(), **mode,
                 'updated_at':datetime.now(timezone.utc).isoformat(),
                 **({'system_identity': system_identity, 'requires_user_login': False,
                     'keychain_canary_verified': keychain_canary_verified}
                    if system_identity is not None else {})})
-            status = value
+            status = identity
     with operation_lock(manager.root / 'control/service-supervisor.lock'):
         timer = None
         if system_identity is not None:
@@ -119,7 +127,7 @@ def supervise(manager, stopping, *, interval=2, system_identity=None, keychain_c
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Mac家庭预演服务监护，不允许工厂接管')
+    parser = argparse.ArgumentParser(description='Mac受管服务监护；正式运行另需受保护激活')
     parser.add_argument('--root', required=True, type=Path)
     parser.add_argument('--public-key', required=True, type=Path)
     parser.add_argument('--publisher-sha256', required=True)
@@ -144,7 +152,7 @@ def main():
         system_identity = system.bootstrap._actual()
         if not control['enabled']:
             write_json(root/'control/service-status.json', {'status': 'system-disabled',
-                'pid': os.getpid(), 'home_rehearsal': True, 'system_identity': system_identity,
+                'pid': os.getpid(), **mode_status(manager), 'system_identity': system_identity,
                 'requires_user_login': False, 'updated_at': datetime.now(timezone.utc).isoformat()})
             return
     else:
@@ -157,7 +165,8 @@ def main():
         raise ValueError('服务发布公钥指纹不匹配')
     os.environ['ERP_HOME_REHEARSAL'] = '1'
     # The child installs its sticky network guard. The manager must be able to
-    # probe its loopback port and must not load external operational credentials.
+    # probe the child port and access approved backup storage. Only the child
+    # environment may enter factory mode after protected activation checks.
     stopping = threading.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: stopping.set())

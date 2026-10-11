@@ -13,9 +13,16 @@ _installed = False
 
 
 def enabled():
+    if _installed:
+        return True
     value = os.environ.get('ERP_HOME_REHEARSAL', '1' if sys.platform == 'darwin' else '0')
     if value not in ('0', '1'):
         raise ValueError('ERP_HOME_REHEARSAL必须为0或1，拒绝含糊配置')
+    if value == '0':
+        from app.core.mac_service_keychain import selected
+        if selected():
+            from desktop_assistant.mac_factory_runtime import require_admitted_factory
+            require_admitted_factory()
     return value == '1'
 
 
@@ -59,3 +66,17 @@ def install_network_guard():
     sys.addaudithook(_audit)
     _installed = True
     return True
+
+
+def require_managed_application(module):
+    from app.core.mac_service_keychain import selected
+    if selected():
+        from desktop_assistant.mac_factory_runtime import require_application
+        require_application(module)
+
+
+def admit_managed_server(*, script, executable):
+    from app.core.mac_service_keychain import selected
+    if selected():
+        from desktop_assistant.mac_factory_runtime import admit_server
+        admit_server(script=script, executable=executable)

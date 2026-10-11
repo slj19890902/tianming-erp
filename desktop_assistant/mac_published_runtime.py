@@ -109,6 +109,9 @@ def _verified_tree(root, identity, public, *, kind, executing):
         service_capability = capabilities.get('system_service_v1')
         if type(service_capability) is not int or service_capability != 1:
             raise ValueError('已安装系统监护，程序必须保留管理员停用门禁')
+    if executing and os.path.lexists(BASE / 'factory-activation.json'):
+        from desktop_assistant.mac_factory_runtime import require_execution
+        require_execution(manifest)
     required = {'main.py', 'app/main.py', 'desktop_assistant/server_entry.py'}
     required.update({'runtime/ocr/model/craft_mlt_25k.pth', 'runtime/ocr/model/zh_sim_g2.pth',
                      'runtime/ocr/user_network/.keep'})

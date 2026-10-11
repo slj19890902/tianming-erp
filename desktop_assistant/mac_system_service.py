@@ -379,15 +379,17 @@ def management_reply(result, request, context):
             or any(result[k] != v for k, v in expected.items()) or result['home_rehearsal'] is not True):
         raise ValueError('专用管理回执不属于本次请求')
     value = result['snapshot']
-    fields = {'current', 'manual_stop', 'running', 'backup_configured', 'backup_verified_at', 'maintenance_attention', 'backup_attention'}
+    fields = {'current', 'manual_stop', 'running', 'backup_configured', 'backup_verified_at', 'maintenance_attention', 'backup_attention', 'configured_mode'}
     if (not isinstance(value, dict) or set(value) != fields or not _sha(value['current'])
-            or any(type(value[k]) is not bool for k in fields-{'current','backup_verified_at'})):
+            or not isinstance(value['configured_mode'], str) or value['configured_mode'] not in {'home','factory','attention'}
+            or any(type(value[k]) is not bool for k in fields-{'current','backup_verified_at','configured_mode'})):
         raise ValueError('专用管理公开状态无效')
     at = value['backup_verified_at']
     if at is not None and (not isinstance(at, str) or len(at) > 64
             or datetime.fromisoformat(at).utcoffset() is None):
         raise ValueError('完整备份验证时间无效')
-    if request['action'] == 'start' and (not value['running'] or value['manual_stop']):
+    if request['action'] == 'start' and (not value['running'] or value['manual_stop']
+                                       or value['configured_mode'] == 'attention'):
         raise ValueError('专用服务尚未恢复运行')
     if request['action'] == 'stop' and (value['running'] or not value['manual_stop']):
         raise ValueError('专用服务尚未正常停止')
@@ -426,7 +428,9 @@ def manage(package, action):
     result = management_reply(bootstrap.decode(output), request, context)
     try: service = management_service_state()
     except Exception: service = {'registered':None, 'enabled':None, 'scheduled_backups':None}
-    return {'result':result, 'system':service, 'factory_activated':False}
+    mode = result['snapshot']['configured_mode']
+    return {'result':result, 'system':service,
+            'factory_activated':None if mode == 'attention' else mode == 'factory'}
 
 
 def runtime_configuration(args, *, script, executable):

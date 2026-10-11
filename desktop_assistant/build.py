@@ -130,6 +130,9 @@ def main():
                 'desktop_assistant/factory_network.py', 'desktop_assistant/factory_target_contract.py',
                 'desktop_assistant/mac_factory_request_install.py'} <= sources.keys():
             raise ValueError('目标切换申请源码不完整')
+        from desktop_assistant.mac_factory_runtime import EXECUTION_FILES
+        if not EXECUTION_FILES <= sources.keys():
+            raise ValueError('正式运行准入源码不完整')
         if 'desktop_assistant/factory_target_audit.py' not in sources:
             raise ValueError('最终恢复核验源码不完整')
         if not {'desktop_assistant/factory_activation_entry.py','desktop_assistant/mac_factory_activation.py',
@@ -202,7 +205,7 @@ def main():
                                                     'service_restore_v1': 1, 'archive_autofs_v1': 1,
                                                     'service_manage_v1': 1, 'system_nightly_v1': 1,
                                                     'factory_request_v1': 1, 'factory_audit_v1': 1,
-                                                    'factory_activation_v1': 1}
+                                                    'factory_activation_v1': 1, 'factory_execution_v1': 1}
     package = output / ('release.unsigned.zip' if args.signing_request_only else 'release.zip')
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration,
@@ -216,7 +219,8 @@ def main():
                                                     'delivery_dispatch_v1': 1,
                                                     'unused_mold_deletion_v1': 1,
                                                     'supplier_sheet_trim_v1': 1,
-                                                    'restore_provenance_v1': 1},
+                                                    'restore_provenance_v1': 1,
+                                                    **({'factory_cutover_v1': 1} if args.runtime_platform == 'macos-arm64' else {})},
                             'offline_ocr_models': models, **runtime_metadata}, key)
     if args.signing_request_only:
         from desktop_assistant.release_request import prepare_request

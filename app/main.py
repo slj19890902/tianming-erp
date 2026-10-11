@@ -8,6 +8,10 @@ import re
 import sqlite3
 from urllib.parse import urlencode, urlsplit
 
+# Dedicated service admission precedes legacy/settings/database imports.
+from app.core.home_rehearsal import require_managed_application
+require_managed_application(__file__)
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import (
@@ -117,6 +121,7 @@ def _legacy_customers_spa_redirect() -> RedirectResponse:
 
 @asynccontextmanager
 async def phase2_lifespan(_: FastAPI):
+    require_managed_application(__file__)
     # Alembic and init_db.py own schema/user initialization from Phase 2 onward.
     from app.core.home_rehearsal import install_network_guard
     rehearsal = install_network_guard()

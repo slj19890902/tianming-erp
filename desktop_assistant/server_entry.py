@@ -11,6 +11,7 @@ import time
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+
 import uvicorn
 
 
@@ -26,6 +27,8 @@ def configure_managed_drawing_storage(control):
 
 
 def main():
+    from app.core.home_rehearsal import admit_managed_server
+    admit_managed_server(script=__file__, executable=sys.executable)
     from app.core.home_rehearsal import install_network_guard
     rehearsal = install_network_guard()
     # The web app reads the assistant's non-secret backup status from this root.

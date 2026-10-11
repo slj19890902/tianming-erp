@@ -155,7 +155,9 @@ def replace_record(root, name, value, previous, context, recheck):
 def snapshot(manager, root, context):
     _, state = record(root, 'state.json', context)
     if not system._sha(state.get('current')): raise ValueError('专用实例尚未完整恢复')
-    return {'current':state['current'], 'manual_stop':state.get('manual_stop') is True,
+    from desktop_assistant.mac_factory_runtime import configured_mode
+    return {'current':state['current'], 'configured_mode':configured_mode(manager),
+        'manual_stop':state.get('manual_stop') is True,
         'running':bool(manager._process()), 'backup_configured':configured(root, context),
         'backup_verified_at':remote.verified_at(ROOT, state),
         'backup_attention': bool(state.get('backup_error')),

@@ -71,13 +71,14 @@ class Channel:
 
 class Transport:
     """smbprotocol Tcp interface, with no ability to open another connection."""
-    def __init__(self, channel, server, port, timeout):
+    def __init__(self, channel, server, port, timeout, validator=None):
         self.channel, self.server, self.port = channel, server, port
         self.timeout = duration(timeout)
         self.connected = False
         self._sock = None
         self._send_lock, self._recv_lock, self._close_lock = (threading.Lock() for _ in range(3))
         self._attempted = False
+        self._validator = validator
 
     def connect(self):
         with self._close_lock:
@@ -103,12 +104,19 @@ class Transport:
         if not (writable if writing else readable): raise TimeoutError(ERROR)
 
     def send(self, header):
+        # smbprotocol passes SMB2TransformHeader for encrypted messages, while
+        # unencrypted negotiation uses bytes. Do not accept arbitrary packers.
+        if not isinstance(header, (bytes,bytearray,memoryview)):
+            from smbprotocol.structure import Structure
+            require(isinstance(header,Structure))
+            header = header.pack()
         view = memoryview(header)
         require(0 < view.nbytes <= MAX_FRAME)
         data = memoryview(struct.pack('>I',view.nbytes)+view.tobytes())
         deadline = time.monotonic()+self.timeout
         with self._send_lock:
             try:
+                if self._validator is not None: self._validator(bytes(header), writing=True)
                 offset = 0
                 while offset < len(data):
                     self._wait(deadline,writing=True)
@@ -140,7 +148,9 @@ class Transport:
                     self.close(); return b''
                 size = struct.unpack('>I',header)[0]
                 require(0 < size <= MAX_FRAME)
-                return self._read_exact(size,deadline)
+                data = self._read_exact(size,deadline)
+                if self._validator is not None: self._validator(data, writing=False)
+                return data
             except (OSError,ValueError):
                 if not self.connected: return b''
                 self.close()
@@ -150,7 +160,7 @@ class Transport:
 
 
 @contextmanager
-def bind_library(channel):
+def bind_library(channel, validator=None):
     """One isolated worker / one library connection, restored after disconnect.
 
     Changing this factory redirects no addresses: the factory only claims the
@@ -163,7 +173,7 @@ def bind_library(channel):
         from smbprotocol.transport import Tcp
         require(connection.Tcp is Tcp)
         def factory(server,port,timeout=None):
-            return Transport(channel,server,port,timeout)
+            return Transport(channel,server,port,timeout,validator)
         connection.Tcp = factory
         try: yield connection
         finally: connection.Tcp = Tcp

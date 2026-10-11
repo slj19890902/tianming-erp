@@ -220,3 +220,19 @@ load_dpapi_key在单次有界读取内严格拒绝PEM、未知/缺失字段、�
 工厂独立验证交付将绑定本次固定提交及源代码ZIP SHA，选择4个测试文件共51项，Windows预期49通过、2项POSIX专用跳过。只运行合成数据与一次性测试身份，所有写入限D盘专用任务目录；一次性公钥不被任何真实系统信任，不注册账号/访问，不读取真实发布私钥和运营凭据，不改正式运行包。测试临时文件仅按pytest本任务所有权回收，失败目录保留，禁止自行清理旧机。准确路径/摘要/命令见同轮NAS工厂隔离验证交接单。
 
 实现参考微软官方CreateDirectoryW、GetSecurityInfo、CreateFileW及IoCheckLinkShareAccess文档：https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createdirectoryw 、https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getsecurityinfo 、https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew 、https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iochecklinkshareaccess 。
+
+
+## 2026-10-11 最小Windows合成测试交付包
+
+范围固定为scripts/uat/build_factory_primitives.py、factory_primitives_runner.py、factory_primitives_README.md、factory_primitives_pytest.ini、factory_primitives_requirements.txt、factory_primitives_windows.ps1、factory_primitives_windows_wheels.json及tests/desktop_assistant/test_factory_test_bundle.py；原应用模块和四个专项测试字节不改。用明确allowlist从固定Git提交取必需模块/测试/运行说明，排除数据库、真实凭据、发布身份、历史附件/业务资料及第三方运行库；通过每文件SHA和源码路径映射绑定提交。专用runner不加载通用tests/conftest或外部pytest插件，只使用包内原测试；设置全新任务TEMP/合成ERP环境、结果和失败保留，不向原父目录或正式目录写入。必须独立解包运行原51项并验证篡改/额外文件/已有工作目录拒绝，才产生NAS小包回执。
+
+协调端转达用户已批准仅在工厂新临时文件夹调整访问权限和构造目录链接、只用虚构数据。本机仍不连接工厂或更改其权限；该授权不包括正式目录、上级权限、真实发布私钥、运营凭据或持久授权。CodexSandboxOffline的合成DPAPI通过只证明该身份的临时合成往返。旧66MB全源码包保留历史证据，本小包用于最小传递，工厂不自行拆改源码。
+
+
+最小包锁定原源码82f0a79c和独立harness提交：12模块、4原测试、6说明/入口/配置，加manifest共23文件。完整Windows CPython3.12依赖锁定10个公开wheel共5,998,804字节，官方PyPI摘要/大小、ZIP完整性及METADATA完整依赖闭包已核验，只下载未安装/执行。Windows新venv安装仍待工厂端明确批准；Check只读，Install必须显式开关及获准目录，Run只用该任务venv。无新Python安装，不使用原ERP requirements全集，不把测试身份加入任何真实信任。
+
+独立复审修正三项边界：pip --isolated仍读global/site配置，故清理子进程PIP_*并以严格小写nul禁用全部配置，安装前从实际venv pip证明有效配置为空、核对sys.prefix及--require-virtualenv；root/工作目录先检查无重解析再规范化，拒绝..或短路径别名进入源码包；unittest临时夹具按原测试自身清理，失败亦可能删除，不能承诺保留，任务根/结果和pytest失败目录保留。PowerShell路径用ASCII JSON往返以兼容中文路径。未改机器执行策略；PowerShell与pip实际运行仍待Windows原生测试。实现依据pip官方配置文档与25.0.1 configuration.py，不能用isolated参数替代配置为空证明。
+
+打包和拒绝回归7项全部通过，含独立解包运行原51项（Mac41通过、10项Windows原生跳过），以及篡改/额外文件/提交不符/旧工作目录/带..的源码内输出零写入拒绝；原源码和原测试字节保持不变。最终提交后再次从提交构建独立ZIP并解包实跑，结果和准确SHA/大小另存新NAS最小包回执，不覆盖旧66MB交接单。Windows预期49通过、2项POSIX跳过，尚未执行，不冒称完成。
+
+本轮支持接口实测ordinaryUsageAllowed=true、周额度已用91%/剩余9%，非0；没有兑换重置或购买。协调端曾报告Mac短暂断线恢复，属于协调证据而非额度耗尽；本轮exec、NAS读写和usage接口实际成功。完成测试、提交及NAS独立回读检查点后才开启下一闭环。仍无正式库操作/发信/收单/真实签名/停写/接管/旧机清空，现有家庭签名运行包源码继续3de3be32，不含本轮工具及此前恢复修复。

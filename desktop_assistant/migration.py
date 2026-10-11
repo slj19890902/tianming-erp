@@ -134,7 +134,17 @@ def run_migration(release, shared, revision, log, environment=None, *, release_m
     # Callers pass the manifest authenticated by extraction or package signature.
     if revision != release_manifest.get('revision'):
         raise ValueError('迁移目标与签名发布包不一致')
-    prepare_runtime(release, release_manifest)
+    from desktop_assistant import mac_published_runtime
+    system_service = mac_published_runtime.selected()
+    if system_service:
+        identity = Path(release).parent.name
+        approved, actual_manifest = mac_published_runtime.resolve(
+            mac_published_runtime.ROOT, identity, mac_published_runtime._read(mac_published_runtime.PUBLIC),
+            kind='migration')
+        if approved != release or actual_manifest != release_manifest:
+            raise ValueError('系统迁移不允许从可写缓存或另一签名副本执行')
+    else:
+        prepare_runtime(release, release_manifest)
     python = runtime_python(release, release_manifest, runnable=True)
     database = shared / 'data/carton_erp.sqlite3'
     if not database.is_file():
@@ -159,6 +169,8 @@ def run_migration(release, shared, revision, log, environment=None, *, release_m
     native = release_manifest.get('runtime_platform') == 'macos-arm64'
     if native or environment is None:
         env['ERP_HOME_REHEARSAL'] = '1'
+    if system_service:
+        env = mac_published_runtime.environment(env)
     module = 'alembic'
     if native:
         env['PYTHONDONTWRITEBYTECODE'] = '1'
@@ -168,15 +180,33 @@ def run_migration(release, shared, revision, log, environment=None, *, release_m
             raise ValueError('Mac迁移安全入口缺失或校验失败')
         module = 'desktop_assistant.migration_entry'
     from desktop_assistant.home_process import command
-    arguments = command([str(python), '-X', 'utf8', '-m', module, 'upgrade', revision], env)
+    arguments = ([str(python), '-I', '-B', str(entry), 'upgrade', revision] if system_service else
+                 [str(python), '-X', 'utf8', '-m', module, 'upgrade', revision])
+    arguments = command(arguments, env)
     with log.open('wb') as output:
-        result = subprocess.run(arguments,
-            cwd=release, env=env, stdout=output, stderr=output, timeout=600, **process_options())
-    if result.returncode:
+        if system_service:
+            process = subprocess.Popen(arguments, cwd=release, env=env, stdout=output, stderr=output,
+                                       **process_options())
+            interrupted = False
+            while True:
+                try:
+                    code = process.wait()
+                    break
+                except KeyboardInterrupt:
+                    interrupted = True  # Keep observing this writer; do not kill/abandon it.
+            if interrupted:
+                raise ValueError('已等候中断的系统迁移进程退出，保持停服并保留现场待核验')
+        else:
+            code = subprocess.run(arguments, cwd=release, env=env, stdout=output, stderr=output,
+                                  timeout=600, **process_options()).returncode
+    if code:
         raise ValueError('升级子进程失败，保留现场；不得启动未核验数据库，请查看迁移日志')
 
 
 def rehearse(manager, package):
+    from desktop_assistant import mac_published_runtime
+    approved = (manager._execution_release(sha(package), kind='migration')
+                if mac_published_runtime.selected() else None)
     source=manager.root/'shared'; database=source/'data/carton_erp.sqlite3'
     before_info=database_info(database);before=facts(database);before_files=files(source)
     job=manager.root/'staging'/('migration-'+uuid.uuid4().hex)
@@ -201,7 +231,7 @@ def rehearse(manager, package):
             with closing(sqlite3.connect(copy)) as dst:src.backup(dst)
         if facts(copy)!=before or files(shared)!=before_files:
             raise ValueError('复制期间数据变化或附件不一致，请重新演练')
-        run_migration(release,shared,manifest['revision'],job/'migration.log', release_manifest=manifest)
+        run_migration(approved or release,shared,manifest['revision'],job/'migration.log', release_manifest=manifest)
         after_info=database_info(copy);after=facts(copy,before['columns'])
         if after_info['revision']!=manifest['revision']:
             raise ValueError('隔离升级未达到发布包目标版本')

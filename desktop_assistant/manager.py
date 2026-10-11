@@ -64,7 +64,19 @@ class Manager:
             yield
 
     def manifest(self, release=None):
-        return read_json(self.root / 'releases' / (release or self.state['current']) / 'manifest.json')
+        identity = release or self.state['current']
+        from desktop_assistant import mac_published_runtime
+        if mac_published_runtime.selected():
+            # Metadata remains available for offline recovery of older packages
+            # which are deliberately not eligible for system execution.
+            package = self.root / 'packages' / (identity + '.zip')
+            if sha(package) != identity:
+                raise ValueError('缓存发布包校验失败')
+            manifest = signed_release_manifest(package, self.public_key)
+            if read_json(self.root / 'releases' / identity / 'manifest.json') != manifest:
+                raise ValueError('缓存版本信息与签名原件不一致，未停止服务')
+            return manifest
+        return read_json(self.root / 'releases' / identity / 'manifest.json')
 
     def compatible(self, release, revision, authority=None):
         try:
@@ -251,7 +263,16 @@ class Manager:
             shutil.copyfile(package, cache)
         if sha(cache) != identity:
             raise ValueError('缓存发布包校验失败')
-        return {'id': identity, **read_json(destination / 'manifest.json')}
+        cached = read_json(destination / 'manifest.json')
+        from desktop_assistant.mac_published_runtime import selected
+        if selected():
+            # Staging/restoring may precede root publication. Authenticate the
+            # metadata now; execution approval is a separate later boundary.
+            authenticated = signed_release_manifest(cache, self.public_key)
+            if cached != authenticated:
+                raise ValueError('缓存版本信息与签名原件不一致，未停止服务')
+            cached = authenticated
+        return {'id': identity, **cached}
 
     def _verify_cached_release(self, destination: Path, manifest: dict) -> None:
         if destination.is_symlink() or destination.is_junction():
@@ -358,6 +379,9 @@ class Manager:
                 env['DEEPSEEK_API_KEY'] = deepseek_key
                 env['ERP_AI_INVENTORY_PROVIDER'] = 'deepseek'
                 env['ERP_AI_INVENTORY_MODEL'] = 'deepseek-flash'
+        from desktop_assistant import mac_published_runtime
+        if mac_published_runtime.selected():
+            env = mac_published_runtime.environment(env)
         models = release / 'runtime/ocr/model'
         if models.is_dir():
             env['EASYOCR_MODULE_PATH'] = str(models.parent)
@@ -369,11 +393,35 @@ class Manager:
             link_managed_directory(release / relative, self.root / 'shared' / folder)
 
     def _runtime_python(self, identity, *, runnable=True):
+        from desktop_assistant.mac_published_runtime import selected
+        if selected():
+            release, manifest = self._published_release(identity)
+            return runtime_python(release, manifest, runnable=runnable)
         package = self.root / 'packages' / (identity + '.zip')
         if sha(package) != identity:
             raise ValueError('缓存发布包校验失败')
         manifest = signed_release_manifest(package, self.public_key)
-        return runtime_python(self.root / 'releases' / identity, manifest, runnable=runnable)
+        return runtime_python(self._execution_release(identity), manifest, runnable=runnable)
+
+    def _execution_release(self, identity, *, kind='server'):
+        from desktop_assistant import mac_published_runtime
+        if mac_published_runtime.selected():
+            return self._published_release(identity, kind=kind)[0]
+        return self.root / 'releases' / identity
+
+    def _published_release(self, identity, *, kind='server'):
+        from desktop_assistant import mac_published_runtime
+        release, manifest = mac_published_runtime.resolve(self.root, identity, self.public_key, kind=kind)
+        if read_json(self.root / 'releases' / identity / 'manifest.json') != manifest:
+            raise ValueError('缓存版本信息与root签名原件不一致，未停止服务')
+        return release, manifest
+
+    def _approve_execution(self, *identities):
+        from desktop_assistant import mac_published_runtime
+        if mac_published_runtime.selected():
+            for identity in dict.fromkeys(identities):
+                for kind in ('server', 'migration'):
+                    self._execution_release(identity, kind=kind)
 
     def start(self):
         state = self.state
@@ -391,7 +439,7 @@ class Manager:
             raise ValueError('首次接入尚未完成完整备份，请点击“完成首次接入”后再启动')
         if state.get('operation') in ('migration_running', 'migration_failed'):
             raise ValueError('上次数据库升级未完成，先核对现场或从已验证备份恢复到空安装，不能直接启动')
-        release = self.root / 'releases' / state['current']
+        release = self._execution_release(state['current'])
         info = database_info(self.root / 'shared/data/carton_erp.sqlite3')
         if not self.compatible(state['current'], info['revision']):
             raise ValueError('程序与数据库版本不同，须先完成专项迁移演练')
@@ -404,7 +452,10 @@ class Manager:
         nonce = uuid.uuid4().hex
         env.update(TM_ERP_CONTROL=str(self.root / 'control'), TM_ERP_NONCE=nonce)
         from desktop_assistant.home_process import command
-        arguments = command([str(python), '-m', 'desktop_assistant.server_entry'], env)
+        from desktop_assistant.mac_published_runtime import selected
+        arguments = ([str(python), '-I', '-B', str(release / 'desktop_assistant/server_entry.py')]
+                     if selected() else [str(python), '-m', 'desktop_assistant.server_entry'])
+        arguments = command(arguments, env)
         with (self.root / 'control/server.log').open('ab') as log:
             proc = subprocess.Popen(arguments,
                                     cwd=release, env=env, stdout=log, stderr=log,
@@ -541,6 +592,7 @@ class Manager:
         """Cache a fully verified chain before stopping any running service."""
         import re
         current = self.state['current']
+        self._approve_execution(current)
         revision = database_info(self.root / 'shared/data/carton_erp.sqlite3')['revision']
         chain, seen = [], set()
         expected = None
@@ -555,6 +607,7 @@ class Manager:
             seen.add(identity)
             signed = signed_release_manifest(package, self.public_key)
             candidate = self.stage_release(package)
+            self._approve_execution(identity)
             if any(candidate.get(key) != value for key,value in signed.items()):
                 raise ValueError('已暂存程序与签名版本信息不一致，未停止服务')
             if chain and chain[-1]['from_revision'] != candidate['revision']:
@@ -612,6 +665,7 @@ class Manager:
     def _update_locked(self, package: Path, password: str, nas: Path, *, rollback=False):
         candidate = self.stage_release(package)
         old = self.state
+        self._approve_execution(old['current'], candidate['id'])
         if old.get('onboarding_pending'):
             raise ValueError('请先完成首次接入的完整备份，不能叠加更新')
         if old.get('operation') in ('migration_running', 'migration_failed'):
@@ -649,7 +703,7 @@ class Manager:
             shared = self.root / 'shared'
             dbpath = shared / 'data/carton_erp.sqlite3'
             before_files = files(shared)
-            release = self.root / 'releases' / candidate['id']
+            release = self._execution_release(candidate['id'], kind='migration')
             new.update(operation='migration_running', update_backup=str(backup),
                        migration_report=report['report_path'], migration_target=candidate['id'],
                        migration_files=before_files, migration_report_sha256=sha(Path(report['report_path'])),
@@ -729,10 +783,15 @@ class Manager:
                     or contract.get('rollback_package_sha256') != state['current']):
                 raise ValueError('升级兼容证明不匹配，保留现场')
             python = self._runtime_python(target).resolve()
+            interpreters = {python}
+            from desktop_assistant.mac_published_runtime import selected
+            if selected():
+                migration_release = self._execution_release(target, kind='migration')
+                interpreters.add(runtime_python(migration_release, manifest, runnable=True).resolve())
             for proc in psutil.process_iter(['exe']):
                 try:
                     executable = proc.info['exe']
-                    if executable and Path(executable).name.casefold() == python.name.casefold() and Path(executable).resolve() == python:
+                    if executable and Path(executable).resolve() in interpreters:
                         raise ValueError('升级运行环境仍有进程，请等待结束后重试')
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
@@ -875,11 +934,13 @@ class Manager:
                     os.fsync(dst.fileno())
             (self.root / 'shared').rmdir()  # proven empty above
             (payload / 'shared').rename(self.root / 'shared')
+            from desktop_assistant.mac_published_runtime import selected as service_identity_selected
             write_json(self.root / 'state.json', {'current': release['id'], 'previous': None,
                        'restored_at': datetime.now(CN).isoformat(), 'source_time': manifest['created'],
                        'restored_backup_sha256': authenticated_backup_sha,
                        'schema_authority': authority,
                        'credential_restore': credential_report,
+                       **({'manual_stop': True} if service_identity_selected() else {}),
                        **({inventory_contract.STATE_KEY: inventory_activation}
                           if inventory_activation is not None else {}),
                        **({dispatch_contract.STATE_KEY: dispatch_contract.state_index(dispatch_activation)}

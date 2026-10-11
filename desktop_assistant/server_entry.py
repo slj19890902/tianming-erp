@@ -2,8 +2,14 @@
 import json
 import os
 from pathlib import Path
+import sys
 import threading
 import time
+
+# The dedicated system service uses -I and an immutable, approved script. Add
+# only that script's release, never CWD/PYTHONPATH or the service user's site.
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import uvicorn
 

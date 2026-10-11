@@ -5,6 +5,14 @@ from pathlib import Path
 import shutil
 
 
+def prepare_readonly_layout(model_directory: Path):
+    # EasyOCR creates both directories even with downloads disabled. Keep its
+    # custom-network import directory in the signed, immutable code tree too.
+    directory = model_directory.parent / 'user_network'
+    directory.mkdir()
+    (directory / '.keep').write_text('Signed empty EasyOCR user-network directory.\n', encoding='ascii')
+
+
 def copy_models(source: Path, site_packages: Path, destination: Path):
     tree = ast.parse((site_packages / 'easyocr/config.py').read_bytes())
     required = {'craft_mlt_25k.pth', 'zh_sim_g2.pth'}

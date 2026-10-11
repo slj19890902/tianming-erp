@@ -170,7 +170,12 @@ def main():
     if args.runtime_platform == 'windows':
         (runtime / 'python312._pth').write_text('python312.zip\n.\nLib\nDLLs\nLib/site-packages\n..\nimport site\n', encoding='ascii')
     if args.runtime_platform == 'macos-arm64':
+        from desktop_assistant.ocr_models import prepare_readonly_layout
+        prepare_readonly_layout(runtime / 'ocr/model')
         runtime_metadata['executable_files'] = executable_files(tree)
+        # Describes only isolated immutable execution, not system installation
+        # or permission to activate a factory writer.
+        runtime_metadata['runtime_capabilities'] = {'immutable_execution_v1': 1}
     package = output / ('release.unsigned.zip' if args.signing_request_only else 'release.zip')
     pack_tree(tree, package, {'type': 'tianming.release.v1', 'version': args.version,
                             'revision': args.revision, 'git_sha': code_sha, 'migration': migration,

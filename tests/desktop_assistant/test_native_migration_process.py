@@ -47,7 +47,9 @@ print(json.dumps({'blocked': blocked, 'python': sys.executable,
     'key_present': 'OPENAI_API_KEY' in os.environ,
     'proxy_present': 'HTTPS_PROXY' in os.environ,
     'mode': os.environ['ERP_HOME_REHEARSAL'],
-    'user_site': os.environ['PYTHONNOUSERSITE']}))
+    'user_site': os.environ.get('PYTHONNOUSERSITE'),
+    'isolated': sys.flags.isolated, 'no_user_site': sys.flags.no_user_site,
+    'bytecode_disabled': sys.dont_write_bytecode}))
 ''')
         files = {name: sha(cls.release / name) for name in
                  ('runtime/bin/python3.12', 'desktop_assistant/migration_entry.py')}
@@ -95,6 +97,27 @@ print(json.dumps({'blocked': blocked, 'python': sys.executable,
             run_migration(self.release, self.root / 'missing', 'synthetic-r2', self.root / 'missing.log',
                           release_manifest=self.manifest)
         self.assertFalse((self.root / 'missing').exists())
+
+    def test_real_isolated_script_child_imports_only_approved_release(self):
+        # Only publication/OS identity is substituted. The relocated native
+        # interpreter, -I/-B script and guarded synthetic migration actually run.
+        from unittest.mock import patch
+        shared = self.shared('isolated-script')
+        log = self.root / 'isolated-script.log'
+        with patch('desktop_assistant.mac_published_runtime.selected', return_value=True), \
+             patch('desktop_assistant.mac_published_runtime._read', return_value=b'synthetic-public'), \
+             patch('desktop_assistant.mac_published_runtime.resolve', return_value=(self.release, self.manifest)):
+            run_migration(self.release, shared, 'synthetic-r2', log,
+                          environment={'PYTHONHOME':'/untrusted', 'DYLD_LIBRARY_PATH':'/untrusted',
+                                       'ERP_HOME_REHEARSAL':'0'}, release_manifest=self.manifest)
+        report = json.loads(log.read_text())
+        self.assertTrue(report['blocked'] and report['bytecode_disabled'])
+        self.assertEqual(report['isolated'], 1)
+        self.assertEqual(report['no_user_site'], 1)
+        self.assertIsNone(report['user_site'])
+        self.assertEqual(report['database'], str(shared / 'data/carton_erp.sqlite3'))
+        self.assertEqual(report['mode'], '1')
+        self.assertFalse(report['key_present'] or report['proxy_present'])
 
     def test_parent_directory_link_cannot_redirect_database(self):
         shared = self.shared('link-source')

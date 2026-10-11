@@ -136,13 +136,13 @@ def run(root, work, source_commit, harness_commit):
     counts = {name: sum(int(s.attrib[name]) for s in suites)
               for name in ('tests', 'failures', 'errors', 'skipped')}
     counts['passed'] = counts['tests'] - counts['failures'] - counts['errors'] - counts['skipped']
-    expected = (49, 2) if sys.platform == 'win32' else (41, 10)
+    expected = (51, 2) if sys.platform == 'win32' else (43, 10)
     imports_erp = any(name == 'app' or name.startswith('app.') for name in sys.modules)
     module_sources = {name: str(Path(module.__file__).resolve())
                       for name, module in sys.modules.items()
                       if name == 'desktop_assistant' or name.startswith('desktop_assistant.')}
     unexpected_source = any(not Path(path).is_relative_to(root) for path in module_sources.values())
-    if (counts['tests'] != 51 or (counts['passed'], counts['skipped']) != expected
+    if (counts['tests'] != 53 or (counts['passed'], counts['skipped']) != expected
             or counts['failures'] or counts['errors'] or imports_erp or unexpected_source):
         exit_code = exit_code or 1
     receipt = {'source_commit': source_commit, 'harness_commit': harness_commit,

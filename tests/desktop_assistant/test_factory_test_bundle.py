@@ -83,7 +83,7 @@ def test_extracted_kit_runs_original_tests_without_erp_conftest_or_business_impo
                              '--expected-harness-commit', commit], capture_output=True)
     assert result.returncode == 0, result.stderr.decode(errors='replace')
     receipt = json.loads((work / 'results/receipt.json').read_text())
-    assert receipt['counts']['tests'] == 51
+    assert receipt['counts']['tests'] == 53
     assert receipt['counts']['failures'] == receipt['counts']['errors'] == 0
     assert receipt['erp_application_imported'] is False
     assert receipt['real_publisher_identity_read'] is False

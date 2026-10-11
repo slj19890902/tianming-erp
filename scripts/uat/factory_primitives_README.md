@@ -1,8 +1,9 @@
 # Windows 源端前置接口：最小隔离测试包
 
-这是合成测试包，不是 ERP 运行包。原实现和四个测试文件逐字节来自固定提交
-`82f0a79c91577b9b295d8f55077fa6c21356ecc7`，没有裁剪实现或用替身代替它们。
-新增 runner、配置和本说明的提交单列在 manifest 的 `harness_commit`。
+这是合成测试包，不是 ERP 运行包。原实现和四个测试文件逐字节来自独立交付回执
+绑定的 `source_commit`，没有裁剪实现或用替身代替它们。runner、配置和本说明的
+提交单列在 manifest 的 `harness_commit`。当前版本要求53项；旧82f0a79c源码及
+1bd96e0c交付仍应配套其旧runner和51项标准，不得混用新旧源码与运行器。
 独立交付回执提供两个提交、源码 ZIP 和离线依赖 ZIP 的 SHA256/大小；先从该回执
 核对文件，再解包。包内自报的摘要不能替代独立交付回执。
 
@@ -15,7 +16,7 @@ takeown、给旧父目录运行 icacls、设置 Git safe.directory 或寻找网�
 
 此包只含 12 个原代码模块、4 个原测试、最小 runner/配置/说明及公开依赖清单。
 不含业务数据库、附件、备份、邮箱/AI/备份凭据、真实发布身份、公钥信任配置、
-ERP 主应用、前端、Git 历史或第三方运行库。4 个测试文件共 51 项；所有测试输入
+ERP 主应用、前端、Git 历史或第三方运行库。当前源码的4个测试文件共53项（含e037875d新增2项目录保护测试；旧1bd96e0c归档仍是原51项，不就地改写）；所有测试输入
 在执行时生成。合成 Ed25519 身份和签名不被任何真实系统信任，不注册账号、
 公钥、登录入口或持久访问；部分合成密钥暂存为 PEM，部分用当前测试用户 DPAPI
 封装，均只在新测试目录中。不得向测试传入任何真实凭据或正式路径。
@@ -80,7 +81,7 @@ $WheelZip = '<已授权本地交付目录中的离线wheel ZIP绝对路径>'
 $WheelSha256 = '<独立交付回执中的wheel ZIP SHA256>'
 $ApprovedParent = '<用户已授权的新任务父目录绝对路径>'
 $HarnessCommit = '<独立交付回执中的harness_commit>'
-$SourceCommit = '82f0a79c91577b9b295d8f55077fa6c21356ecc7'
+$SourceCommit = '<当前独立交付回执绑定的53项源码完整Git SHA>'
 if (-not (Test-Path -LiteralPath $ApprovedParent -PathType Container)) { throw '父目录不可达，停止' }
 if ((Get-FileHash -LiteralPath $CodeZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $CodeSha256) { throw '源码包摘要不符' }
 if ((Get-FileHash -LiteralPath $WheelZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $WheelSha256) { throw '依赖包摘要不符' }
@@ -123,7 +124,7 @@ pip 配置；`--isolated` 本身不足以禁止全局配置。安装和检查都
 没有更改基础解释器、全局 PATH、系统环境、原 ERP 或旧目录权限，也不注册服务/计划。
 开关只用于防止误运行，不替代用户批准。失败目录不覆盖重试，不自动删目录。
 
-### 4. 安装通过后运行 4 文件共 51 项原测试
+### 4. 安装通过后运行 4 文件共 53 项原测试
 
 ```powershell
 & (Join-Path $Kit 'windows.ps1') -Action Run -TaskParent $ApprovedParent -ExpectedSourceCommit $SourceCommit -ExpectedHarnessCommit $HarnessCommit
@@ -153,9 +154,9 @@ PowerShell“停服”测试中的查端口/身份/停止函数都是原测试�
 
 ## 验收、回传和保留
 
-Windows应为 **49通过、2跳过、0失败/错误**；两个跳过仅为POSIX symlink夹具和
+Windows应为 **51通过、2跳过、0失败/错误**；两个跳过仅为POSIX symlink夹具和
 非Windows拒绝检查。3项ACL/junction、4项合成DPAPI、3项PowerShell必须在Windows实际跑，
-不能跳过后称全部通过。Mac的41通过/10跳过只算作者独立包验证。
+不能跳过后称全部通过。Mac的43通过/10跳过只算作者独立包验证。
 
 结果在 `<Task>\execution\results`：windows-tests.xml、windows-tests.log、receipt.json。
 回传执行身份名称、解释器/系统、依赖版本、两个提交、两个交付包SHA、通过/失败/跳过

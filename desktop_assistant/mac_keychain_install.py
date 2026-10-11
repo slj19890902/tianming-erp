@@ -27,7 +27,8 @@ FILES = ('app/__init__.py', 'app/core/__init__.py', 'app/core/mac_keychain.py',
          'desktop_assistant/mac_service_identity.py', 'desktop_assistant/mac_keychain_install.py',
          'desktop_assistant/mac_release_publish.py', 'desktop_assistant/mac_system_service.py',
          'desktop_assistant/mac_archive_contract.py', 'desktop_assistant/mac_archive_install.py',
-         'desktop_assistant/mac_mount.py')
+         'desktop_assistant/mac_mount.py', 'desktop_assistant/factory_target_contract.py',
+         'desktop_assistant/factory_network.py', 'desktop_assistant/mac_factory_request_install.py')
 
 
 def canonical(value):
@@ -422,7 +423,7 @@ def install(raw, approved_sha):
 def main():
     parser = argparse.ArgumentParser(description='专用服务身份、程序和系统监护安装；工厂接管另行授权')
     parser.add_argument('action', choices=('plan', 'install', '_worker', 'publish', '_publish_worker',
-                                         'service-plan', 'service-apply', 'archive-plan', 'archive-apply', 'manage'))
+                                         'service-plan', 'service-apply', 'archive-plan', 'archive-apply', 'manage', 'factory-request'))
     parser.add_argument('--identity-plan', type=Path)
     parser.add_argument('--observer-uid', type=int)
     parser.add_argument('--file', type=Path)
@@ -433,9 +434,15 @@ def main():
     parser.add_argument('--nas-address')
     parser.add_argument('--nas-export')
     parser.add_argument('--management-action', choices=('status','configure-backup','backup','start','stop'))
+    parser.add_argument('--network-file', type=Path)
+    parser.add_argument('--network-sha256')
     args = parser.parse_args()
     try:
-        if args.action == 'manage':
+        if args.action == 'factory-request':
+            verify_code(); modules()
+            from desktop_assistant import mac_factory_request_install as target
+            result = target.prepare(args.package_sha256, target.read_network(args.network_file, args.network_sha256))
+        elif args.action == 'manage':
             verify_code(); modules()
             from desktop_assistant import mac_system_service as service
             result = service.manage(args.package_sha256, args.management_action)

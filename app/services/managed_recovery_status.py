@@ -117,6 +117,11 @@ def managed_recovery_status() -> dict[str, Any]:
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         receipt_verified = False
 
+    if receipt_verified:
+        from desktop_assistant.mac_backup_storage import required, verified_at
+        if required():
+            receipt_verified = verified_at(root, state) is not None
+
     result["latest_backup"] = {
         "filename": backup.name,
         "created_at": state.get("last_backup_at"),

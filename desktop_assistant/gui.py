@@ -143,7 +143,9 @@ class App:
         state = self.manager.state
         current = bool(state.get('current'))
         version = self.manager.manifest()['version'] if current else '这台电脑尚未接入数据'
-        last = state.get('last_backup_at')
+        from desktop_assistant.mac_backup_storage import verified_at
+        last = verified_at(self.manager.root, state)
+        unconfirmed = bool(state.get('last_backup_at') and not last)
         try:
             last = datetime.fromisoformat(last).astimezone(CN).strftime('%Y-%m-%d %H:%M') if last else '还没有成功备份，请先设置备份'
         except ValueError:
@@ -152,7 +154,8 @@ class App:
         service = ('进程存在' if running else '已停止') if current else '尚未接入'
         connection = ('操作进行中，连接状态待复核' if self.busy else
                       self.connection_status if running else '后台已停止 · 网页不可用')
-        text = f"ERP程序：{version}    状态：{service}\n{connection}\n最近成功备份：{last}"
+        backup_status = ('备份状态：远端保存尚未确认，历史文件保留' if unconfirmed else f'最近成功备份：{last}')
+        text = f"ERP程序：{version}    状态：{service}\n{connection}\n{backup_status}"
         if state.get('backup_error'):
             text += '\n上次备份未成功，请检查共享盘连接后再点“现在备份一次”。'
         if state.get('operation') in ('migration_running', 'migration_failed'):

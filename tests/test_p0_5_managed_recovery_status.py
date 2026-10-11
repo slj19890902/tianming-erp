@@ -94,3 +94,16 @@ def test_status_marks_a_missing_nas_package_unavailable(
     assert result["status"] == "backup_unavailable"
     assert result["latest_backup"]["available"] is False
     assert result["latest_backup"]["receipt_verified"] is False
+
+
+def test_windows_historical_receipt_does_not_require_mac_sidecar_or_timestamp(tmp_path,monkeypatch):
+    from desktop_assistant import mac_backup_storage
+    control = _write_managed_fixture(tmp_path)
+    monkeypatch.setenv('TM_ERP_CONTROL',str(control))
+    monkeypatch.setattr(mac_backup_storage,'required',lambda:False)
+    for stamp in ('',None):
+        path=control.parent/'state.json'; state=json.loads(path.read_text())
+        if stamp is None: state.pop('last_backup_at',None)
+        else: state['last_backup_at']=stamp
+        path.write_text(json.dumps(state))
+        assert managed_recovery_status()['status'] == 'verified'

@@ -1,4 +1,4 @@
-from contextlib import closing
+from contextlib import closing, contextmanager
 import json
 import os
 from pathlib import Path
@@ -20,6 +20,19 @@ PASSWORD = 'isolated-recovery-test-password'
 
 class TestManager(Manager):
     __test__ = False
+    @contextmanager
+    def lock(self):
+        from tests.desktop_assistant.synthetic_storage import approved_local_storage
+        with approved_local_storage(self.root.parent), super().lock():
+            yield
+    def _backup_stopped(self, *args, **kwargs):
+        from tests.desktop_assistant.synthetic_storage import approved_local_storage
+        with approved_local_storage(self.root.parent):
+            return super()._backup_stopped(*args, **kwargs)
+    def _update_locked(self, *args, **kwargs):
+        from tests.desktop_assistant.synthetic_storage import approved_local_storage
+        with approved_local_storage(self.root.parent):
+            return super()._update_locked(*args, **kwargs)
     def _process(self):
         return None
     def stop(self):

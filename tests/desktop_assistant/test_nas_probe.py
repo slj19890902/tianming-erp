@@ -4,7 +4,8 @@ import pytest
 from desktop_assistant.nas_probe import probe, check_before_stop
 
 
-def test_probe_only_uses_existing_directory(tmp_path):
+def test_probe_only_uses_existing_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr('desktop_assistant.mac_backup_storage.before_write', lambda path: None)
     assert probe(tmp_path / 'missing') == 2
     assert not (tmp_path / 'missing').exists()
     assert probe(tmp_path) == 0
@@ -12,6 +13,7 @@ def test_probe_only_uses_existing_directory(tmp_path):
 
 
 def test_timeout_is_safe_and_does_not_show_secrets(monkeypatch):
+    monkeypatch.setattr('desktop_assistant.mac_backup_storage.before_write', lambda path: None)
     monkeypatch.setattr(subprocess, 'run', Mock(side_effect=subprocess.TimeoutExpired(['private'], 20)))
     with pytest.raises(ValueError, match='保持原运行状态') as result:
         check_before_stop('Z:/backup')

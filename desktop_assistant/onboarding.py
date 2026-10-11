@@ -71,6 +71,8 @@ def self_test_powershell():
 def _check_nas(password, nas):
     if len(password) < 12:
         raise ValueError('请先设置至少12个字符的恢复密码')
+    from desktop_assistant.mac_backup_storage import before_write
+    before_write(nas)
     if not nas.is_dir():
         raise ValueError('备份共享文件夹不可用，尚未停服')
     probe = nas / ('assistant-write-check-' + uuid.uuid4().hex + '.tmp')

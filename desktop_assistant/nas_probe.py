@@ -5,8 +5,17 @@ import subprocess
 import sys
 import uuid
 
+if __package__ in (None, ''):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 
 def probe(path):
+    from desktop_assistant.mac_backup_storage import before_write
+    before_write(path)
+    return _write_probe(path)
+
+
+def _write_probe(path):
     root = Path(path)
     if not root.is_absolute() or not root.is_dir():
         return 2
@@ -25,12 +34,18 @@ def probe(path):
 
 
 def check_before_stop(path):
-    if getattr(sys, 'frozen', False):
+    from desktop_assistant.mac_backup_storage import before_write, required, BASE
+    before_write(path)
+    environment = None
+    if required():
+        command = [sys.executable, '-I', '-B', str(Path(__file__).resolve()), str(path)]
+        environment = {'HOME': str(BASE/'home'), 'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'}
+    elif getattr(sys, 'frozen', False):
         command = [sys.executable, '--nas-probe-path', str(path)]
     else:
         command = [sys.executable, '-m', 'desktop_assistant.nas_probe', str(path)]
     try:
-        result = subprocess.run(command, timeout=20, capture_output=True,
+        result = subprocess.run(command, timeout=20, capture_output=True, env=environment,
                                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except subprocess.TimeoutExpired:
         raise ValueError('NAS远程读写超时，ERP保持原运行状态。请检查家中NAS网络；本次未开始备份或更新。') from None

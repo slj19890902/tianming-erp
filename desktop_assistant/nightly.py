@@ -6,6 +6,7 @@ from desktop_assistant.credential_store import unprotect_backup
 from desktop_assistant.manager import CN
 from desktop_assistant.operation_lock import BUSY
 from desktop_assistant.storage import read_json, write_json
+from desktop_assistant import mac_backup_storage
 
 
 def run_once(manager, *, now=None, resume_when_stopped=False):
@@ -22,14 +23,15 @@ def run_once(manager, *, now=None, resume_when_stopped=False):
                 due = current.replace(hour=23, minute=0, second=0, microsecond=0)
                 if current < due:
                     due -= timedelta(days=1)
-                latest = state.get('last_backup_at')
+                latest = mac_backup_storage.verified_at(manager.root, state, now=current)
                 if latest and datetime.fromisoformat(latest) >= due:
                     if resume_when_stopped:
                         manager.start()
                     return {'status':'up-to-date'}
                 settings = read_json(manager.root/'preferences.json')
-                password = unprotect_backup(settings['protected_password'])
                 destination = Path(settings['nas'])
+                mac_backup_storage.before_write(destination)
+                password = unprotect_backup(settings['protected_password'])
                 backup = manager._backup_locked(password, destination)
                 if resume_when_stopped:
                     manager.start()

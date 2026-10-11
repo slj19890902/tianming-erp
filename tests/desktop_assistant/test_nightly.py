@@ -43,6 +43,9 @@ class Manager:
 @pytest.fixture
 def manager(tmp_path,monkeypatch):
     monkeypatch.setattr(nightly,'unprotect_backup',lambda reference:'synthetic-password-only')
+    # This scheduler fixture explicitly supplies synthetic approved storage.
+    monkeypatch.setattr(nightly.mac_backup_storage, 'before_write', lambda path: None)
+    monkeypatch.setattr(nightly.mac_backup_storage, 'verified_at', lambda root,state,**kw:state.get('last_backup_at'))
     return Manager(tmp_path.resolve())
 
 

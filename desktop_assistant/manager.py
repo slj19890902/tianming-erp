@@ -477,6 +477,8 @@ class Manager:
         raise ValueError('ERP启动超时，已停止本次进程')
 
     def _backup_stopped(self, password: str, nas: Path) -> Path:
+        from desktop_assistant import mac_backup_storage as remote_storage
+        storage_anchor = remote_storage.before_write(nas)
         # NAS must already exist; a disconnected mapping must not become a local folder.
         if not nas.is_dir():
             raise ValueError('NAS目录不可达，保留原备份并停止更新')
@@ -542,23 +544,37 @@ class Manager:
         encrypt_file(raw, encrypted, password)
         # Authenticate before publication and hash the independently copied NAS file.
         check = job / 'check.zip'
-        decrypt_file(encrypted, check, password)
+        expected_sha = decrypt_file(encrypted, check, password)
         if sha(check) != sha(raw):
             raise ValueError('备份解密校验失败')
+        if sha(encrypted) != expected_sha:
+            raise ValueError('认证后的备份原包已经变化，保留现场，未标记成功')
+        expected_size = encrypted.stat().st_size
         pending = nas / (encrypted.name + '.pending')
         final = nas / encrypted.name
         with encrypted.open('rb') as src, pending.open('xb') as dst:
             shutil.copyfileobj(src, dst, 1024 * 1024)
             dst.flush()
             os.fsync(dst.fileno())
-        if sha(pending) != sha(encrypted):
+        if sha(pending) != expected_sha or pending.stat().st_size != expected_size:
             raise ValueError('NAS副本校验失败，未标记成功')
         pending.rename(final)
-        (self.root / 'control' / 'backup-receipts').mkdir(exist_ok=True)
-        write_json(self.root / 'control' / 'backup-receipts' / (stamp + '.json'),
-                   {'path': str(final), 'sha256': sha(final), 'size': final.stat().st_size,
-                    'verified': True, 'storage': 'nas', 'database': before})
-        state.update(last_backup=str(final), last_backup_at=datetime.now(CN).isoformat(), backup_error=None)
+        # Compare the final object to the authenticated encrypted source. Merely
+        # recording a new hash after rename could bless a replaced/truncated file.
+        if not remote_storage.required() and (sha(final) != expected_sha or final.stat().st_size != expected_size):
+            raise ValueError('最终备份与已认证原包不一致，保留现场，未标记成功')
+        proof = remote_storage.after_write(storage_anchor, final, expected_sha, expected_size)
+        if not remote_storage.required():
+            (self.root / 'control' / 'backup-receipts').mkdir(exist_ok=True)
+        verified_at = remote_storage.publish_receipt(
+            self.root / 'control' / 'backup-receipts' / (stamp + '.json'),
+            {'path': str(final), 'sha256': expected_sha, 'size': expected_size,
+             'verified': True, 'storage': 'nas', 'database': before}, proof)
+        if remote_storage.required() and (not isinstance(verified_at, str) or not verified_at):
+            raise ValueError('Mac备份回执未返回有效验证时间，保留现场')
+        state.update(last_backup=str(final),
+                     last_backup_at=verified_at if remote_storage.required() else datetime.now(CN).isoformat(),
+                     backup_error=None)
         write_json(self.root / 'state.json', state)
         # Staging only, never remove managed shared data or a user-selected directory.
         if archive_path(job).parent != archive_path(work_root):

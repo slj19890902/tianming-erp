@@ -57,8 +57,13 @@ def _entry(value, purpose):
     return {'value': secret, 'source_protected_sha256': _hash(value.encode('utf-8'))}
 
 
-def collect(root: Path, *, bound_backup_sha256=None) -> dict:
-    """Read only known operational locations; never enumerate system secrets."""
+def collect(root: Path, *, bound_backup_sha256=None, immutable_database=False) -> dict:
+    """Read only known operational locations; never enumerate system secrets.
+
+    immutable_database is only for a proven stopped, journal-free source while
+    the caller holds a Windows read lease against writes/deletes. Ordinary live
+    export retains SQLite's normal WAL-aware reader semantics.
+    """
     root = Path(root).absolute()
     if not root.is_dir():
         raise ValueError('ERP 来源目录不存在')
@@ -86,7 +91,8 @@ def collect(root: Path, *, bound_backup_sha256=None) -> dict:
     if not database.is_file():
         raise ValueError('缺少正式来源数据库，不能确认邮箱凭据是否存在')
     try:
-        with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True, timeout=5)) as db:
+        uri = database.as_uri() + '?mode=ro' + ('&immutable=1' if immutable_database else '')
+        with closing(sqlite3.connect(uri, uri=True, timeout=5)) as db:
             db.execute('PRAGMA query_only=ON')
             db.execute('BEGIN')
             table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='email_intake_settings'").fetchone()

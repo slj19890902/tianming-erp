@@ -296,3 +296,18 @@ load_dpapi_key在单次有界读取内严格拒绝PEM、未知/缺失字段、�
 打包和拒绝回归7项全部通过，含独立解包运行原51项（Mac41通过、10项Windows原生跳过），以及篡改/额外文件/提交不符/旧工作目录/带..的源码内输出零写入拒绝；原源码和原测试字节保持不变。最终提交后再次从提交构建独立ZIP并解包实跑，结果和准确SHA/大小另存新NAS最小包回执，不覆盖旧66MB交接单。Windows预期49通过、2项POSIX跳过，尚未执行，不冒称完成。
 
 本轮支持接口实测ordinaryUsageAllowed=true、周额度已用91%/剩余9%，非0；没有兑换重置或购买。协调端曾报告Mac短暂断线恢复，属于协调证据而非额度耗尽；本轮exec、NAS读写和usage接口实际成功。完成测试、提交及NAS独立回读检查点后才开启下一闭环。仍无正式库操作/发信/收单/真实签名/停写/接管/旧机清空，现有家庭签名运行包源码继续3de3be32，不含本轮工具及此前恢复修复。
+
+
+## 2026-10-11 已停写Windows最终备份认证审计
+
+本闭环新增factory_source_audit及合成测试，并为windows_private_workspace补只读数据库句柄租约。目标是在现有维护锁内验证原目录完整且已manual_stop、进程退出、NAS最新成功回执/独立SHA和同一次GCM认证输入、备份时间晚于目标申请、原始DB/全部shared/源程序包/reader标记、完整运营凭据与原用户fresh collect逐字节一致。私有暂存DACL从创建到最终退出均成功后才返回非秘密证据；全程不调用backup/_backup_locked/pause_after_backup/restore/start/stop、不重封装凭据、不签发真实票据。Windows数据库句柄拒绝写入与删除共享，避免只信process.json遗漏独立写者；所有源前置先于Manager构造，原目录不补建。
+
+此审计是后续正式签发入口的必要组成，不代表Mac系统服务、正式激活、源端隔离或签发流程已经完成。最终票据必须在原私有暂存上下文成功退出、仍持维护锁并再次验证源事实后才能发布；不能在退出可能失败时先产生可用票据。本轮仅使用合成数据，所有生产操作仍需工厂当次明确授权。
+
+实现结果：新增factory_source_audit.py与两份专项测试，修改windows_private_workspace.py、operation_lock.py、credential_transfer.py及本任务卡/计划。审计不调用Manager目录创建构造器，重复核对所有既有目录；维护锁以existing_only读取已初始化文件，缺失/截断均拒绝而不补建。Windows只读租约固定数据库、state、回执、源/目标包、缓存manifest、现有运营配置和必要兼容授权包，拒绝既有写者以及核验期间写入/删除/父目录替换。NAS备份以同次GCM认证读取的完整SHA为准，再核对路径摘要和只读上传状态。
+
+独立复审发现SQLite普通mode=ro仍可能生成WAL/SHM，现将全部结构/业务SQL移至已认证且与源DB原始SHA一致的私有副本。只有源凭据读取使用immutable_database=True，前提是已停写、无任何旁路日志且持原生只读租约；普通在线导出默认行为不变。源shared全文件及配置原字节前后核对；备份内完整用途/配置/版本/实际秘密与原用户fresh collect仅在内存比较。目标必须通过全包验签、四个运行入口、同revision/schema及所有原reader能力检查，并明确声明factory_cutover_v1；现有家庭3de3be32运行包没有该能力，仍不能正式接管。参考SQLite官方说明：https://www.sqlite.org/wal.html#read_only_databases 与 https://www.sqlite.org/uri.html#uriimmutable 。
+
+助手整合回归519项：504通过、15跳过、0失败/错误，50.58秒。跳过为14项Windows原生及1项显式当前用户launchd开关；3条告警为依赖弃用及合成短JWT。之后新增Windows immutable SQLite/WAL租约用例，单文件补跑1通过、3项Windows跳过，不与整合结果相加。测试均合成，未使用正式库/真实秘密；独立只读复核通过，差异检查通过。证据factory-source-audit-full.xml/log、factory-source-audit-native-lease.xml/log及factory-source-audit-test-summary.json。Windows实机仍待验证；旧1bd96e0c最小测试包不包含本轮新增模块/用例，不修改或冒称已交付这些新测试。
+
+本轮只交付上下文内的非秘密认证证据，没有真实签发入口、没有加载工厂私钥。后继签发必须在该上下文仍持锁/租约时验证身份和独占发布并用原公钥回读；物理隔离与工厂当次授权仍须另外证明。真实Mac恢复、现有签名运行包与已停止目录均未重跑或改动。远端正式基线核对仍b9a077bc；本轮支持接口ordinaryUsageAllowed=true、周额度已用92%/余8%，未兑换重置或购买。提交及NAS独立回读后再进入下一闭环。

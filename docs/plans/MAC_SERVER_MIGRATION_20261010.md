@@ -236,3 +236,14 @@ load_dpapi_key在单次有界读取内严格拒绝PEM、未知/缺失字段、�
 打包和拒绝回归7项全部通过，含独立解包运行原51项（Mac41通过、10项Windows原生跳过），以及篡改/额外文件/提交不符/旧工作目录/带..的源码内输出零写入拒绝；原源码和原测试字节保持不变。最终提交后再次从提交构建独立ZIP并解包实跑，结果和准确SHA/大小另存新NAS最小包回执，不覆盖旧66MB交接单。Windows预期49通过、2项POSIX跳过，尚未执行，不冒称完成。
 
 本轮支持接口实测ordinaryUsageAllowed=true、周额度已用91%/剩余9%，非0；没有兑换重置或购买。协调端曾报告Mac短暂断线恢复，属于协调证据而非额度耗尽；本轮exec、NAS读写和usage接口实际成功。完成测试、提交及NAS独立回读检查点后才开启下一闭环。仍无正式库操作/发信/收单/真实签名/停写/接管/旧机清空，现有家庭签名运行包源码继续3de3be32，不含本轮工具及此前恢复修复。
+
+
+## 2026-10-11 已停写Windows最终备份认证审计
+
+本闭环新增factory_source_audit及合成测试，并为windows_private_workspace补只读数据库句柄租约。目标是在现有维护锁内验证原目录完整且已manual_stop、进程退出、NAS最新成功回执/独立SHA和同一次GCM认证输入、备份时间晚于目标申请、原始DB/全部shared/源程序包/reader标记、完整运营凭据与原用户fresh collect逐字节一致。私有暂存DACL从创建到最终退出均成功后才返回非秘密证据；全程不调用backup/_backup_locked/pause_after_backup/restore/start/stop、不重封装凭据、不签发真实票据。Windows数据库句柄拒绝写入与删除共享，避免只信process.json遗漏独立写者；所有源前置先于Manager构造，原目录不补建。
+
+此审计是后续正式签发入口的必要组成，不代表Mac系统服务、正式激活、源端隔离或签发流程已经完成。最终票据必须在原私有暂存上下文成功退出、仍持维护锁并再次验证源事实后才能发布；不能在退出可能失败时先产生可用票据。本轮仅使用合成数据，所有生产操作仍需工厂当次明确授权。
+
+认证审计已实现但尚未在工厂运行：新增factory_source_audit.py、专项审计/原生租约测试，补operation_lock的existing_only和credential_transfer的显式immutable读取；既有在线导出默认不变。审计不调用会补建目录的Manager构造器，缺失/空锁拒绝；关键本地输入持Windows拒写/拒删句柄。SQLite结构及业务查询只在认证原字节一致的私有备份中执行，避免普通mode=ro对源WAL库生成旁路文件；源凭据immutable仅用于已停写、无旁路且持续持租约的审计上下文。完整shared、配置、实际秘密、NAS认证摘要/回执、来源及目标签名全包、四个运行入口和全部reader门禁逐项核对。目标要求factory_cutover_v1，当前家庭签名运行包3de3be32不具备，正式激活仍未实现。
+
+整合回归504通过、15跳过、0失败/错误（519项，14项Windows原生和1项显式launchd跳过）。之后新增原生immutable SQLite/WAL用例的单文件补跑1通过、3项Windows跳过，结果分别记录、不相加。独立只读复核与差异检查通过；证据factory-source-audit-full.xml/log、factory-source-audit-native-lease.xml/log和factory-source-audit-test-summary.json。没有真实签发、私钥载入、停启或正式库操作。旧最小Windows包1bd96e0c保持原样，新用例实机验证仍待后继交付。下步签发入口须在审计上下文仍持锁和租约时发布并回读，不能把该审计或合成测试视为真实停写/隔离/最终切换完成。系统服务身份/后台凭据、目标受保护激活、现场打印与最终同步继续未完成。

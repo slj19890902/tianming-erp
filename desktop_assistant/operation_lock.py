@@ -14,9 +14,13 @@ BUSY = '另一个更新、恢复或备份正在进行'
 
 
 @contextmanager
-def operation_lock(path: Path):
-    with path.open('a+b') as stream:
+def operation_lock(path: Path, *, existing_only=False):
+    # Source audit may lock existing metadata, but must never repair a missing
+    # or uninitialized source. r+b closes the check/open creation race.
+    with path.open('r+b' if existing_only else 'a+b') as stream:
         if os.fstat(stream.fileno()).st_size == 0:
+            if existing_only:
+                raise ValueError('审计要求已有非空维护锁，不创建或初始化')
             stream.write(b'0')
             stream.flush()
         stream.seek(0)

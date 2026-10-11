@@ -158,6 +158,22 @@ class _Windows:
         finally:
             self.k.LocalFree(descriptor)
 
+    @contextmanager
+    def read_file(self, path):
+        # GENERIC_READ; FILE_SHARE_READ only. Existing writers and future
+        # writers/deleters conflict with this handle, including other aliases.
+        handle = self.k.CreateFileW(str(path), 0x80000000, 1, None, 3, 0x00200000, None)
+        if handle in (None, C.c_void_p(-1).value):
+            raise OSError('数据库仍可写或无法建立只读租约，保持原状态')
+        try:
+            info = _FileInfo()
+            self._ok(self.k.GetFileInformationByHandle(handle, C.byref(info)))
+            if info.attributes & (0x10 | 0x400):
+                raise ValueError('数据库不是普通文件或包含重解析点')
+            yield handle
+        finally:
+            self.k.CloseHandle(handle)
+
     def security(self, handle):
         owner, acl, descriptor = C.c_void_p(), C.c_void_p(), C.c_void_p()
         result = self.a.GetSecurityInfo(handle, 1, 5, C.byref(owner), None,
@@ -218,3 +234,21 @@ def private_workspace(parent):
         _validate_security(native.security(handle), sid)
         yield job
         _validate_security(native.security(handle), sid)
+
+
+@contextmanager
+def read_file_lease(path):
+    """Pin an existing local Windows file against writes/renames; never edit it."""
+    native = _Windows()
+    original = Path(path)
+    if not original.is_absolute():
+        raise ValueError('只读租约要求已有绝对路径')
+    path = local_path(original)
+    if not path.is_file():
+        raise ValueError('只读租约要求已有普通文件')
+    with ExitStack() as stack:
+        for component in reversed(path.parents):
+            stack.enter_context(native.directory(component))
+        native.require_local_acl_volume(path.parent)
+        stack.enter_context(native.read_file(path))
+        yield

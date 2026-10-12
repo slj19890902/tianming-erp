@@ -16926,6 +16926,20 @@ def void_stock_replenishment_order(
     if order.status == "voided":
         return replenishment_order_dict(order, db=db)
     from app.models.procurement_source import ProcurementSourceLink
+    from app.models.external_packaging_purchase import (
+        ExternalPackagingPurchaseItem, ExternalPackagingPurchaseCancellation,
+    )
+    active_external_purchase = select(ExternalPackagingPurchaseItem.id).join(
+        StockReplenishmentOrderItem,
+        StockReplenishmentOrderItem.id == ExternalPackagingPurchaseItem.stock_replenishment_item_id,
+    ).where(
+        StockReplenishmentOrderItem.replenishment_order_id == order_id,
+        ~select(ExternalPackagingPurchaseCancellation.id).where(
+            ExternalPackagingPurchaseCancellation.purchase_order_id == ExternalPackagingPurchaseItem.purchase_order_id,
+        ).exists(),
+    ).exists()
+    if db.scalar(select(active_external_purchase)):
+        raise HTTPException(409, "补库需求已关联外购采购单，请先撤销对应外购采购单")
     if db.scalar(select(ProcurementSourceLink.id).where(
         ProcurementSourceLink.stock_replenishment_item_id.in_([item.id for item in order.items]),
         ProcurementSourceLink.status == "active").limit(1)):
@@ -16962,6 +16976,7 @@ def void_stock_replenishment_order(
         .where(
             StockReplenishmentOrder.id == order_id,
             StockReplenishmentOrder.status == order.status,
+            ~active_external_purchase,
             ~select(ProcurementSourceLink.id).join(StockReplenishmentOrderItem,
                 StockReplenishmentOrderItem.id == ProcurementSourceLink.stock_replenishment_item_id)
                 .where(StockReplenishmentOrderItem.replenishment_order_id == order_id,

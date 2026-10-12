@@ -160,8 +160,11 @@ def typed_purchase_snapshots(db, supplier_order_ids):
 
 
 def pending_stock_rows(db, user):
+    from app.api.deps import has_permission
     from app.api.requisition import _require_stock_replenishment_order_access
     from app.models.external_packaging_purchase import ExternalPackagingPurchaseItem, ExternalPackagingPurchaseCancellation
+    from app.models.incoming_receipt import IncomingReceiptItem
+    from sqlalchemy import or_
     rows = db.execute(select(StockReplenishmentOrderItem, StockReplenishmentOrder)
         .join(StockReplenishmentOrder, StockReplenishmentOrder.id == StockReplenishmentOrderItem.replenishment_order_id)
         .where(StockReplenishmentOrder.status.in_(("draft", "confirmed", "partially_stocked")),
@@ -175,7 +178,26 @@ def pending_stock_rows(db, user):
                    ProcurementSourceLink.stock_replenishment_item_id == StockReplenishmentOrderItem.id,
                    ProcurementSourceLink.status == "active").exists())
         .order_by(StockReplenishmentOrder.created_at, StockReplenishmentOrderItem.id)).all()
+    # Cancellation is for the whole source document, even when only one of its
+    # lines is still pending. Never offer it over a sibling's purchase/receipt.
+    order_ids = {order.id for _, order in rows}
+    blocked_order_ids = set(db.scalars(select(StockReplenishmentOrderItem.replenishment_order_id)
+        .where(StockReplenishmentOrderItem.replenishment_order_id.in_(order_ids), or_(
+            StockReplenishmentOrderItem.stocked_quantity > 0,
+            select(ProcurementSourceLink.id).where(
+                ProcurementSourceLink.stock_replenishment_item_id == StockReplenishmentOrderItem.id,
+                ProcurementSourceLink.status == 'active').exists(),
+            select(IncomingReceiptItem.id).where(
+                IncomingReceiptItem.stock_replenishment_item_id == StockReplenishmentOrderItem.id,
+                IncomingReceiptItem.status == 'posted').exists(),
+            select(ExternalPackagingPurchaseItem.id).where(
+                ExternalPackagingPurchaseItem.stock_replenishment_item_id == StockReplenishmentOrderItem.id,
+                ~select(ExternalPackagingPurchaseCancellation.id).where(
+                    ExternalPackagingPurchaseCancellation.purchase_order_id == ExternalPackagingPurchaseItem.purchase_order_id
+                ).exists()).exists(),
+        )))) if order_ids else set()
     result = []
+    can_cancel = has_permission(user, 'requisition.execute')
     for item, order in rows:
         try:
             _require_stock_replenishment_order_access(db, order, user)
@@ -189,6 +211,9 @@ def pending_stock_rows(db, user):
             "source_type": "stock_replenishment", "stock_replenishment_item_id": item.id,
             "created_at": str(order.created_at or ''),
             "item_id": f"sr{item.id}", "id": f"sr{item.id}", "source_id": order.id,
+            "stock_replenishment_can_void": (
+                can_cancel and order.status in ('draft', 'confirmed') and order.id not in blocked_order_ids
+            ),
             "source_fingerprint": fingerprint(snapshot), "is_merge_group": False,
             "item_order_number": order.order_number, "order_number": order.order_number,
             "customer_id": snapshot["source_customer_id"], "customer_name": customer.name if customer else "通用备料",

@@ -81,7 +81,7 @@ def _check_manager(manager, binding):
 
 def preflight(path, *, manager=None):
     """Called under maintenance lock, while the original ERP may still run."""
-    from . import mac_smb_stream_receipt as receipt, mac_smb_stream_probe as probe
+    from . import mac_smb_stream_receipt as receipt, mac_smb_stream_probe_v2 as probe
     from . import mac_smb_stream_runtime as runtime
     from .mac_service_restore import Lease
     try:

@@ -112,7 +112,7 @@ def probe_proof(proof, plan):
     fields = {'type','contract_sha256','connection_guid','attempt_id','directories','file',
         'bytes','sha256','available_bytes','required_bytes','canary_removed','backup_authenticated'}
     require(isinstance(proof,dict) and set(proof)==fields
-        and proof['type']=='tianming.mac-smb-stream-preflight.v1'
+        and proof['type']=='tianming.mac-smb-stream-preflight.v2'
         and proof['contract_sha256']==archive.digest(plan['contract'])
         and proof['attempt_id']==plan['attempt_id'] and token(proof['connection_guid'])
         and type(proof['bytes']) is int and proof['bytes']==SIZE and cfg.sha(proof['sha256'])
@@ -121,7 +121,7 @@ def probe_proof(proof, plan):
         and proof['canary_removed'] is True and proof['backup_authenticated'] is False
         and isinstance(proof['directories'],list) and len(proof['directories'])==3)
     for identity in [*proof['directories'],proof['file']]:
-        require(isinstance(identity,dict) and set(identity)=={'index','created'}
+        require(isinstance(identity,dict) and set(identity)=={'index'}
             and all(type(v) is int and 0<v<2**64 for v in identity.values()))
 
 
@@ -270,7 +270,7 @@ def run(args, *, script, executable, prompt=getpass.getpass):
                 store.api.require_absent(ref,keychain.SERVICE,value['credential_account'])
             from .mac_smb_stream_transport import Channel
             from .mac_smb_stream_session import open_share
-            from .mac_smb_stream_probe import check as check_nas
+            from .mac_smb_stream_probe_v2 import check as check_nas
             calls = 0
             def secret():
                 nonlocal password,encoded,calls

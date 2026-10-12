@@ -10,7 +10,7 @@ import os
 
 import pytest
 from desktop_assistant import mac_smb_stream_target as subject
-from desktop_assistant import mac_smb_stream_runtime as runtime, mac_smb_stream_probe as probe
+from desktop_assistant import mac_smb_stream_runtime as runtime, mac_smb_stream_probe_v2 as probe
 from desktop_assistant import mac_smb_stream_receipt as receipt, mac_backup_storage as storage
 from desktop_assistant import mac_service_manage as manage, nas_probe, nightly
 from desktop_assistant.manager import Manager

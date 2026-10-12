@@ -35,7 +35,7 @@ def test_control_separate_namespace_and_deny_all_profile():
     value=control();assert cfg.validate(value,contract(),'a'*64,499)==value
     assert value['credential_account'].startswith('nas-smb-stream-v1:')
     assert cfg.PROFILE=='(version 1)(allow default)(deny network-outbound)'
-    assert cfg.CAPABILITY=='archive_smb_stream_v1'
+    assert cfg.CAPABILITY=='archive_smb_stream_v2'
 
 
 @pytest.mark.parametrize('value',[None,True,False,0,2,'1'])
@@ -93,8 +93,8 @@ def request(binding,action='upload'):
 def proof(binding,kind=subject.files.UPLOAD):
     return dict(type=kind,contract_sha256=binding.control['contract_sha256'],
         connection_guid=('6' if kind==subject.files.UPLOAD else '7')*32,
-        filename=NAME,bytes=256,sha256='4'*64,directories=[dict(index=i,created=100) for i in (1,2,3)],
-        file=dict(index=4,created=200),backup_authenticated=False)
+        filename=NAME,bytes=256,sha256='4'*64,directories=[dict(index=i) for i in (1,2,3)],
+        file=dict(index=4),backup_authenticated=False)
 
 
 @pytest.mark.parametrize('key,bad',[('challenge','x'),('control_sha256','0'*64),('contract_sha256','0'*64),

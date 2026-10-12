@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from desktop_assistant import mac_smb_stream_backup as subject
-from desktop_assistant import mac_smb_stream_files as files
+from desktop_assistant import mac_smb_stream_files_v2 as files
 from desktop_assistant.storage import sha, database_info
 from tests.desktop_assistant.test_credential_restore import recovery_case, host_store
 from tests.desktop_assistant.test_mac_smb_stream_files import Peer, contract

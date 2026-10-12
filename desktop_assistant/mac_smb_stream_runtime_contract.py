@@ -9,10 +9,12 @@ BASE = Path('/Library/TianmingERP')
 CONTROL = BASE/'smb-stream-service.json'
 CONTRACT = BASE/'smb-stream-archive.json'
 TYPE = 'tianming.mac-smb-stream-service.v1'
-CAPABILITY = 'archive_smb_stream_v1'
+CAPABILITY = 'archive_smb_stream_v2'
 ENTRY = 'desktop_assistant/service_smb_stream_entry.py'
 MODULE = 'desktop_assistant/mac_smb_stream_runtime.py'
 FILES = {ENTRY, MODULE, 'desktop_assistant/mac_smb_stream_runtime_contract.py',
+         'desktop_assistant/mac_smb_stream_files_v2.py',
+         'desktop_assistant/mac_smb_stream_probe_v2.py',
          'desktop_assistant/mac_smb_stream_contract.py',
          'desktop_assistant/mac_smb_stream_transport.py',
          'desktop_assistant/mac_smb_stream_session.py',

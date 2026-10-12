@@ -22,9 +22,9 @@ from . import mac_keychain_install as boot, mac_service_identity as identity
 from . import mac_system_service as service, mac_release_publish as publication
 from . import mac_published_runtime as published, mac_mount as mounts
 from . import mac_smb_stream_runtime_contract as cfg, mac_smb_stream_contract as archive
-from . import mac_smb_stream_transport as transport, mac_smb_stream_files as files
+from . import mac_smb_stream_transport as transport, mac_smb_stream_files_v2 as files
 from . import mac_smb_stream_session as session, mac_smb_stream_backup as backup
-from . import mac_smb_stream_probe as probe
+from . import mac_smb_stream_probe_v2 as probe
 
 LIMIT = 8192
 RESULT = 'tianming.mac-smb-stream-worker.v1'
@@ -119,7 +119,7 @@ def _observation(proof,kind,request,binding):
             and re.fullmatch('[0-9a-f]{32}',proof['connection_guid']))
     require(isinstance(proof['directories'],list) and len(proof['directories'])==3)
     for item in [*proof['directories'],proof['file']]:
-        require(isinstance(item,dict) and set(item)=={'index','created'}
+        require(isinstance(item,dict) and set(item)=={'index'}
                 and all(type(v) is int and 0<v<2**64 for v in item.values()))
 
 

@@ -13,7 +13,7 @@ import warnings
 import pytest
 from desktop_assistant import mac_smb_stream_setup as subject
 from desktop_assistant import mac_smb_stream_runtime as runtime
-from desktop_assistant import mac_smb_stream_probe as probe
+from desktop_assistant import mac_smb_stream_probe_v2 as probe
 from desktop_assistant import mac_smb_stream_session as session, mac_smb_stream_transport as transport
 from app.core import mac_service_keychain as keychain
 from test_mac_smb_stream_files import contract

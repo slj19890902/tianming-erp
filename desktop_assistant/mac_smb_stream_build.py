@@ -92,6 +92,7 @@ for name in ('smbprotocol','smbprotocol.connection','spnego','cryptography'):
     module=importlib.import_module(name)
     assert Path(module.__file__).resolve().is_relative_to(site)
 for name in ('mac_smb_stream_runtime','mac_smb_stream_setup','mac_smb_stream_target','mac_smb_stream_work',
+             'mac_smb_stream_files_v2','mac_smb_stream_probe_v2',
              'current_mac_worker','current_mac_worker_contract','current_mac_smb_broker',
              'current_mac_target_audit','current_mac_cutover','current_mac_cutover_contract',
              'mac_factory_runtime','current_mac_publication'):

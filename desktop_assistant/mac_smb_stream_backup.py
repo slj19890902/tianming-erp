@@ -11,7 +11,7 @@ import shutil
 import uuid
 
 from . import mac_smb_stream_contract as contract
-from . import mac_smb_stream_files as files
+from . import mac_smb_stream_files_v2 as files
 from .storage import database_info, decrypt_file, sha
 
 ERROR='SMB完整备份认证未完成；保留现场，不发布成功或自动重试'
@@ -45,7 +45,7 @@ def _proofs(value,payload,result):
                 and re.fullmatch('[0-9a-f]{32}',record['connection_guid']))
         require(isinstance(record['directories'],list) and len(record['directories'])==3)
         for identity in [*record['directories'],record['file']]:
-            require(isinstance(identity,dict) and set(identity)=={'index','created'}
+            require(isinstance(identity,dict) and set(identity)=={'index'}
                     and all(type(v) is int and 0<v<2**64 for v in identity.values()))
     require(upload['connection_guid']!=download['connection_guid']
             and upload['directories']==download['directories'] and upload['file']==download['file'])

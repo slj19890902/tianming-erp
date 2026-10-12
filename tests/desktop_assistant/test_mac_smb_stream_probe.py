@@ -185,7 +185,7 @@ def probe_request(binding):
 
 
 def bound_proof(binding):
-    proof=run(Peer());proof['contract_sha256']=binding.control['contract_sha256'];return proof
+    proof=runtime.probe.check(Peer().tree(),contract(),ATTEMPT,REQUIRED);proof['contract_sha256']=binding.control['contract_sha256'];return proof
 
 
 @pytest.mark.parametrize('field,bad',[('file_fd',101),('job','other'),('required_bytes',True),
@@ -211,7 +211,7 @@ def test_probe_parent_only_passes_network_descriptor(dispatched,monkeypatch):
         return types.SimpleNamespace(communicate=communicate,returncode=0)
     monkeypatch.setattr(runtime.subprocess,'Popen',popen)
     result=runtime._dispatch(binding,request)
-    assert result['type']==subject.TYPE and events[0]['pass_fds']==(100,)
+    assert result['type']==runtime.probe.TYPE and events[0]['pass_fds']==(100,)
 
 
 def test_probe_timeout_kills_only_exact_temporary_child_and_observes_exit(dispatched,monkeypatch):

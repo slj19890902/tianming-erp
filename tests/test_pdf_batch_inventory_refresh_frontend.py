@@ -24,13 +24,13 @@ const script = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
   .find(source => source.trim());
 const storage = new Map();
 const sandbox = {
-  axios: { defaults:{}, interceptors:{ response:{ use() {} } } },
+  axios: { defaults:{}, interceptors:{ request:{ use() {} }, response:{ use() {} } } },
   Vue: { createApp(definition) { sandbox.definition = definition; return { component() { return this; }, mount() { return this; } }; } },
   localStorage: { getItem(k) { return storage.get(k) || ""; }, setItem(k,v) {storage.set(k,v)}, removeItem() {} },
   window: {}, TMOrderReference:{component:{}}, console, URLSearchParams, setTimeout, clearTimeout,
 };
 vm.createContext(sandbox);
-vm.runInContext(script, sandbox);
+vm.runInContext(script.slice(0, script.indexOf('app.mixin(TMDemandStock.mixin)')), sandbox);
 const methods = sandbox.definition.methods;
 
 if (methods.inventoryComponents({_inventory_product:{is_composite:true,box_style:'A3'}}).length !== 0)
@@ -116,6 +116,7 @@ context.loadOrderLineInventory = async line => {
   refreshCalls += 1;
   const freshCandidate = { lot_id:44, lot_number:"LOT-44", version:serverVersion, quantity_available:serverAvailable };
   line._inventory = inventoryState(freshCandidate);
+  line._inventory.context = {product_id:1, customer_id:1, quantity:line.quantity};
 };
 sandbox.axios.post = async (url, payload) => {
   if (url === "/api/orders/mold-repair-preview") {
@@ -134,7 +135,15 @@ sandbox.axios.post = async (url, payload) => {
 };
 
 (async () => {
-  await methods.saveConfirmedImportDrafts.call(context);
+  // Exercise the inventory refresh boundary directly; the save recovery store
+  // has its own suite and must not be replaced by an obsolete page stub.
+  for (const draft of [first, second]) {
+    await methods.refreshImportDraftInventoryForSave.call(context, draft);
+    await sandbox.axios.post('/api/orders', {items:[{
+      reservation_plan:methods.buildReservationPlan.call(context, draft.items[0]),
+    }]});
+    draft._save_status = 'success';
+  }
   assert(refreshCalls === 2, `expected two authoritative refreshes, got ${refreshCalls}`);
   assert(first._save_status === "success", `first status ${first._save_status}`);
   assert(second._save_status === "success", `second status ${second._save_status}: ${second._save_message}`);

@@ -31,9 +31,9 @@
     <script src="/static/ui/finance-workspace.js?v=cd4faaf69c46"></script>
     <script src="/static/ui/desktop-delivery-margin.js?v=20260926-dashboard-cost"></script>
     <script src="/static/ui/entry-product-editor.js?v=20260922-entry"></script>
-    <script src="/static/ui/demand-stock.js?v=20261010"></script>
+    <script src="/static/ui/demand-stock.js?v=20261012"></script>
     <script src="/static/ui/manual-replenishment-entry.js?v=fb1a07910498"></script>
-    <link rel="stylesheet" href="/static/ui/demand-stock.css?v=20261010">
+    <link rel="stylesheet" href="/static/ui/demand-stock.css?v=20261012">
     <script src="/static/vendor/axios-1.18.1.min.js"></script>
     <link rel="stylesheet" href="/static/drawing-workbench.css?v=20260930-543" />
     <script src="/static/drawing-workbench.js?v=20260930-543"></script>
@@ -1052,14 +1052,16 @@
         left: 0; right: auto; width: min(520px, 72vw); z-index: 15;
       }
       .order-entry-table .search-select-option { white-space: normal; overflow-wrap: anywhere; }
+      .order-entry-number { width: 4%; text-align:center; }
+      .order-entry-stock { width: 7%; text-align:right; white-space:nowrap; }
       .order-entry-code { width: 10%; }
-      .order-entry-name { width: 18%; }
-      .order-entry-spec { width: 18%; }
-      .order-entry-material { width: 18%; }
-      .order-entry-quantity { width: 10%; }
-      .order-entry-price { width: 8%; }
+      .order-entry-name { width: 16%; }
+      .order-entry-spec { width: 13%; }
+      .order-entry-material { width: 12%; }
+      .order-entry-quantity { width: 7%; }
+      .order-entry-price { width: 7%; }
       .order-entry-total { width: 7%; }
-      .order-entry-actions-col { width: 11%; }
+      .order-entry-actions-col { width: 10%; }
       .order-entry-name .input,
       .order-entry-spec .input { text-overflow: ellipsis; }
       .order-entry-material-text {
@@ -7592,7 +7594,7 @@
                 </div>
               </details>
               <div v-for="(draft,draftIndex) in orderImportDrafts" :key="draft.file_hash || draft.source_name" v-show="(!emailQueueMode || !pdfQueueVisible) && pdfCurrentDraft(draft)" class="order-group-detail-card" style="margin-bottom:12px">
-                <demand-stock-summary v-if="hasPermission('warehouse.view')" :customer-id="draft.matched_customer_id" :lines="draft.items"></demand-stock-summary>
+
                 <manual-replenishment-picker v-if="canRequisition" :customer-id="draft.matched_customer_id" :lines="draft.items"></manual-replenishment-picker>
                 <details v-if="draft.source_format==='weekly_demand'"><summary>原需求表与原单库存参考（不写入仓库）</summary><div v-for="row in draft.items" :key="row.line_no">{{row.raw_product_code}} · 原位置 {{row.source_location||'未填写'}} · 原文 {{(row.raw_lines||[]).join(' ')}}<span v-if="row.source_stock_reference"> · 原单现存 {{row.source_stock_reference.on_hand}} / 原单剩余 {{row.source_stock_reference.remaining}}</span></div></details>
                 <div v-if="emailQueueMode && draft.email_attachment_id && draft._show_advanced_details" class="toolbar-group" style="margin-bottom:8px">
@@ -7771,9 +7773,10 @@
                     <th class="pdf-sequence-col">序号</th>
                     <th class="pdf-code-col">存货编码</th>
                     <th class="pdf-name-col">产品名称</th>
-                    <th class="pdf-quantity-col">数量</th><th v-if="canViewSalesAmounts" class="pdf-price-col">单价</th><th v-if="canViewSalesAmounts" class="pdf-price-col">金额</th>
+                    <th class="pdf-quantity-col">数量</th>
                     <th class="pdf-requisition-col">库存 / 需报</th>
                     <th class="pdf-balance-col">抵扣后库存<info-note>成品按本批导入顺序显示可用余量；不抵扣时显示实存。点击行内提示可查看已预占数量。片料与成品不相加。</info-note></th>
+                    <th v-if="canViewSalesAmounts" class="pdf-price-col">单价</th><th v-if="canViewSalesAmounts" class="pdf-price-col">金额</th>
                     <th class="pdf-issue-col">异常</th>
                     <th class="pdf-action-col">操作</th>
                   </tr></thead>
@@ -7830,8 +7833,6 @@
 
                         <div v-if="!Number.isInteger(Number(item.quantity))" style="font-size:10px;color:#dc2626;margin-top:2px">数量不是整数，请人工确认</div>
                       </td>
-                      <td v-if="canViewSalesAmounts"><input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" placeholder="待核对" @input="invalidateImportDraftConfirmation(draft);refreshPdfPriceConflict(item)" /><span v-if="item.price_conflict" class="status orange">价格变化<info-note>常用箱价格 {{money(item.price_conflict.product_default_price)}}，请核对本单价格。</info-note></span></td>
-                      <td v-if="canViewSalesAmounts"><strong>{{pdfItemAmount(item)}}</strong></td>
                       <td>
                                                   <button
                             v-if="pdfInventoryHasButton(item)" :title="pdfInventoryShortageText(item)"
@@ -7853,6 +7854,8 @@
                         <div class="pdf-stock-reference">{{ pdfInventoryReferenceText(item) }}</div>
                         <span v-if="pdfFinishedInventoryExplicitlySkipped(item) && pdfInventoryBalanceHint(item)" class="status neutral">本行未抵扣</span>
                       </td>
+                      <td v-if="canViewSalesAmounts"><input class="input compact-input" type="number" min="0" step="0.0001" v-model="item.unit_price" placeholder="待核对" @input="invalidateImportDraftConfirmation(draft);refreshPdfPriceConflict(item)" /><span v-if="item.price_conflict" class="status orange">价格变化<info-note>常用箱价格 {{money(item.price_conflict.product_default_price)}}，请核对本单价格。</info-note></span></td>
+                      <td v-if="canViewSalesAmounts"><strong>{{pdfItemAmount(item)}}</strong></td>
                       <td style="font-size:11px;white-space:normal" :title="pdfInventoryIssueText(item)">
                         <button v-if="item.matched_product_id && !item.is_new_product && !commonBoxReadiness(item).ready && canEditProducts && !isImportDraftLocked(draft)" type="button" class="status orange order-readiness-link" :disabled="orderContextOpening" @click.stop="openCommonBoxEditorFromPdf(draftIndex,item)">常用箱资料待完善</button><span v-else-if="pdfInventoryIssueText(item)" :class="['status',pdfInventoryDisplayState(item)==='exception'?'red':'orange']">{{ pdfInventoryIssueText(item) }}</span>
                         <span v-else class="muted">-</span>
@@ -8051,6 +8054,7 @@
                   </template>
                   </tbody>
                 </table>
+                <demand-stock-summary v-if="hasPermission('warehouse.view')" :customer-id="draft.matched_customer_id" :lines="draft.items"></demand-stock-summary>
                 </div>
                 <div class="pdf-savebar">
                   <strong v-if="canViewSalesAmounts">合计 {{pdfDraftAmount(draft)}}</strong>
@@ -8100,23 +8104,27 @@
                 <button class="btn manual-size-entry" type="button" :disabled="!orderForm.customer_id" @click="addManualSizeOrderItem">手工尺寸</button>
                 <span class="muted">每款只占一行；可一次选择多款。</span>
               </div>
-              <demand-stock-summary v-if="hasPermission('warehouse.view')" :customer-id="orderForm.customer_id" :lines="orderForm.items"></demand-stock-summary>
+
               <manual-replenishment-picker v-if="canRequisition" :customer-id="orderForm.customer_id" :lines="orderForm.items"></manual-replenishment-picker>
-              <!-- P1-02：固定一行一款，普通明细不依赖横向滚动。 -->
+              <demand-stock-summary :enabled="hasPermission('warehouse.view')" :customer-id="orderForm.customer_id" :lines="orderForm.items">
+              <template #default="{rows,busy,error}">
+              <!-- P1-02：固定一行一款；只读库存和本批结余使用同一次查询。 -->
               <div class="order-entry-table-wrap">
               <table class="line-items order-entry-table"><thead><tr>
-                <th class="order-entry-code">存货编码</th>
+                <th class="order-entry-number">序号</th><th class="order-entry-code">存货编码</th>
                 <th class="order-entry-name">产品名称</th>
                 <th class="order-entry-spec">规格mm</th>
                 <th class="order-entry-material">材质楞型</th>
                 <th class="order-entry-quantity">数量</th>
+                <th v-if="hasPermission('warehouse.view')" class="order-entry-stock">可用库存</th>
+                <th v-if="hasPermission('warehouse.view')" class="order-entry-stock">本批后剩余</th>
                 <th v-if="canViewSalesAmounts" class="order-entry-price sensitive-price">单价</th>
                 <th v-if="canViewSalesAmounts" class="order-entry-total sensitive-price">总价</th>
                 <th class="order-entry-actions-col">图纸 / 删除</th>
               </tr></thead><tbody>
 	                <template v-for="(item,index) in orderForm.items" :key="item.client_line_id || index">
 	                  <tr v-if="isFirstCombinationGroupLine(index,item)" class="combination-group-row">
-	                    <td colspan="8" style="padding:5px 7px;background:#eff6ff;border:1px solid #93c5fd;color:#1d4ed8">
+	                    <td :colspan="7+(canViewSalesAmounts?2:0)+(hasPermission('warehouse.view')?2:0)" style="padding:5px 7px;background:#eff6ff;border:1px solid #93c5fd;color:#1d4ed8">
 	                      <div class="toolbar-group" style="justify-content:flex-start">
 	                        <strong>组合：{{ item.combination_parent_name_snapshot }}｜套数</strong>
 	                        <input class="input compact-input" style="width:7ch" type="number" min="1" :value="item.combination_set_quantity_snapshot" @input="updateCombinationGroupSetQuantity(item,$event.target.value)" />
@@ -8126,7 +8134,7 @@
 	                    </td>
 	                  </tr>
 	                  <tr :class="{'order-entry-row-error': !!item._validation_error, 'manual-size-line': !!item.manual_size_entry}">
-	                    <td class="order-entry-code" :data-order-entry-focus="'product-'+index">
+	                    <td class="order-entry-number">{{index+1}}</td><td class="order-entry-code" :data-order-entry-focus="'product-'+index">
 	                      <span v-if="item.manual_size_entry" class="manual-size-code">手工尺寸</span>
 	                      <search-select v-else v-model="item.product_id" :disabled="!orderForm.customer_id"
 	                        :options="orderProductOptions[index] || []" label-key="_compact_label" value-key="id"
@@ -8184,10 +8192,12 @@
 	                        <option value="parent_delivery">父件交付 / 子件同位存放并自动投影父件</option>
 	                      </select>
 	                      <div v-if="item._validation_error" class="order-entry-error">{{ item._validation_error }}</div>
-	                      <div v-if="inventoryPlanApplies(item) && item._inventory" :class="['inventory-auto-summary',{'attention':orderLineInventoryNeedsAttention(item)}]">{{ orderLineInventoryAutoSummary(item) }}</div>
-                      <button v-if="inventoryPlanApplies(item) && item._inventory" :class="['btn','small','inventory-auto-detail-button',orderLineInventoryButtonClass(item)]" type="button" @click="item._show_inventory_details=!item._show_inventory_details">{{ item._show_inventory_details ? '收起' : (item._inventory.api_error ? '重试库存查询' : (orderLineSemiAvailable(item) > 0 ? '半成品抵扣 · ' + orderLineSemiAvailable(item) + '张' : '查看库存安排')) }}</button>
+
+                      <button v-if="inventoryPlanApplies(item) && item._inventory" :class="['btn','small','inventory-auto-detail-button',orderLineInventoryButtonClass(item)]" type="button" :title="orderLineInventoryAutoSummary(item)" @click="item._show_inventory_details=!item._show_inventory_details">{{ item._show_inventory_details ? '收起' : (item._inventory.api_error ? '重试库存查询' : (orderLineSemiAvailable(item) > 0 ? '半成品抵扣 · ' + orderLineSemiAvailable(item) + '张' : '查看库存安排')) }}</button>
 	                    </td>
-	                    <td v-if="canViewSalesAmounts" class="order-entry-price sensitive-price" :data-order-entry-focus="'price-'+index"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" data-order-entry-enter-next :data-order-entry-next="orderForm.items[index+1] ? 'product-'+(index+1) : 'add-line'" v-model="item.unit_price" @input="item.manual_size_entry && markManualSizeUnitPrice(item)" /><div v-if="item.manual_size_entry" class="manual-size-quote">{{ manualSizeQuoteText(item) }}</div></td>
+	                    <td v-if="hasPermission('warehouse.view')" class="order-entry-stock">{{ demandStockFigure(rows,index,'available_customer',busy,error) }}</td>
+                    <td v-if="hasPermission('warehouse.view')" class="order-entry-stock">{{ demandStockFigure(rows,index,'batch_remaining',busy,error) }}</td>
+                    <td v-if="canViewSalesAmounts" class="order-entry-price sensitive-price" :data-order-entry-focus="'price-'+index"><input class="input compact-input" :disabled="!orderForm.customer_id" type="number" min="0" step="0.01" data-order-entry-enter-next :data-order-entry-next="orderForm.items[index+1] ? 'product-'+(index+1) : 'add-line'" v-model="item.unit_price" @input="item.manual_size_entry && markManualSizeUnitPrice(item)" /><div v-if="item.manual_size_entry" class="manual-size-quote">{{ manualSizeQuoteText(item) }}</div></td>
 	                    <td v-if="canViewSalesAmounts" class="order-entry-total sensitive-price"><span class="order-entry-total-value">¥ {{ money(orderItemSaleAmount(item)) }}</span></td>
 	                    <td class="order-entry-actions-col">
 	                      <div class="order-entry-drawing-actions">
@@ -8204,7 +8214,7 @@
 	                    </td>
 	                  </tr>
                   <tr v-if="orderItemIsExternalPurchase(item)" class="external-purchase-ratio-row">
-                    <td colspan="8" style="padding:6px 8px;background:#fff7ed;border-top:1px solid #fdba74;border-bottom:1px solid #fdba74">
+                    <td :colspan="7+(canViewSalesAmounts?2:0)+(hasPermission('warehouse.view')?2:0)" style="padding:6px 8px;background:#fff7ed;border-top:1px solid #fdba74;border-bottom:1px solid #fdba74">
                       <div class="toolbar-group" style="justify-content:flex-start;flex-wrap:wrap;align-items:flex-end">
                         <strong>常用箱采购数量换算</strong>
                         <span class="status orange">订单 {{ item.external_packaging_order_quantity_basis || '-' }} → 采购 {{ item.external_packaging_purchase_quantity_basis || '-' }}</span>
@@ -8214,7 +8224,7 @@
                     </td>
                   </tr>
                   <tr v-if="item.manual_size_entry" class="manual-size-report-row">
-                    <td colspan="8" style="padding:6px 8px;background:#f8fafc">
+                    <td :colspan="7+(canViewSalesAmounts?2:0)+(hasPermission('warehouse.view')?2:0)" style="padding:6px 8px;background:#f8fafc">
                       <div class="toolbar-group" style="justify-content:flex-start;flex-wrap:wrap">
                         <strong>本单报料与压线</strong>
                         <span class="muted">推荐值可直接改；人工修改后，旧的异步推荐不会覆盖。</span>
@@ -8247,7 +8257,7 @@
                     </td>
                   </tr>
                   <tr v-if="orderForm.requisition_strategy==='wait_previous_batch' && item._requisition_hold_preview">
-	                    <td colspan="8" style="padding:4px 6px 8px">
+	                    <td :colspan="7+(canViewSalesAmounts?2:0)+(hasPermission('warehouse.view')?2:0)" style="padding:4px 6px 8px">
 	                      <div :class="['notice', item._requisition_hold_preview.requires_selection ? 'danger' : '']" style="margin:0">
 	                        <div><strong>报料策略：</strong>{{ orderRequisitionPreviewText(item) }}</div>
 	                        <div v-if="item._requisition_hold_preview.requires_selection" style="margin-top:6px">
@@ -8258,7 +8268,7 @@
 	                    </td>
 	                  </tr>
 	                  <tr v-if="item._bom_loading || item._bom_error || (item.bom_component_demands || []).length">
-	                    <td colspan="8" style="padding:4px 6px 8px">
+	                    <td :colspan="7+(canViewSalesAmounts?2:0)+(hasPermission('warehouse.view')?2:0)" style="padding:4px 6px 8px">
                       <div style="border:1px solid #c7d2fe;border-radius:6px;padding:7px;background:#f8faff;font-size:12px">
                         <div class="toolbar-group" style="justify-content:flex-start"><strong>本订单子件数量</strong><span class="muted">默认随父件成套；客户少要时直接改数量，保存订单即可。</span></div>
                         <div v-if="item._bom_loading" class="muted" style="margin-top:5px">正在读取子件…</div>
@@ -8276,7 +8286,7 @@
                     </td>
 	                  </tr>
 	                  <tr v-if="item.product_id && item._inventory && item._show_inventory_details">
-	                    <td colspan="8" style="padding:4px 6px 8px">
+	                    <td :colspan="7+(canViewSalesAmounts?2:0)+(hasPermission('warehouse.view')?2:0)" style="padding:4px 6px 8px">
                       <div style="border:1px solid #bfdbfe;border-radius:6px;padding:7px;background:#f8fbff;font-size:12px">
                         <div class="toolbar-group"><span v-if="item._inventory.loading" class="muted">查询中…</span><span v-else-if="item._inventory.stale" class="status orange">请刷新库存</span><button class="btn small" type="button" :disabled="item._inventory.loading" @click="loadOrderLineInventory(item,orderForm.customer_id)">刷新</button></div>
                          <div v-if="!inventoryHasSelection(item)" class="muted">未选择库存抵扣，可继续保存；查询失败不代表库存为零，不会自动报料。</div><div v-if="item._inventory.error" class="danger-text" style="margin-top:4px">{{ item._inventory.error }}</div>
@@ -8312,6 +8322,7 @@
 	                </template>
 	              </tbody></table>
 	              </div>
+              </template></demand-stock-summary>
               <div class="field" style="width:280px;margin:10px 0 0 auto"><label>备注（选填）</label><textarea class="input" rows="3" v-model.trim="orderForm.remark"></textarea></div>
 	            </div>
             <div v-else-if="modal.type === 'orderEdit'">
@@ -10205,7 +10216,7 @@
                   <tr v-for="row in orderCommonBoxPicker.items" :key="row.id" :class="{'selected-row': isOrderCommonBoxSelected(row.id)}" @click="toggleOrderCommonBoxSelection(row,!isOrderCommonBoxSelected(row.id))" @keydown.space.self.prevent="toggleOrderCommonBoxSelection(row,!isOrderCommonBoxSelected(row.id))" tabindex="0">
                     <td><input type="checkbox" :checked="isOrderCommonBoxSelected(row.id)" @click.stop @change="toggleOrderCommonBoxSelection(row,$event.target.checked)" /></td>
                     <td><strong>{{ row.product_code || "-" }}</strong></td>
-                    <td>{{ row.product_name || "-" }}</td>
+                    <td>{{ row.product_name || "-" }}<span v-if="orderCommonBoxImportedRow(row.id)" class="status blue">已导入 · 第{{orderCommonBoxImportedRow(row.id)}}行</span></td>
                     <td>{{ orderSpecificationText(spec(row)) }}</td>
                     <td>{{ orderCommonBoxMaterialText(row) }}</td>
                     <td class="sensitive-price">{{ money(row.sale_unit_price) }}</td>
@@ -15164,7 +15175,7 @@
             let changed = false;
             ["finished", ...this.inventoryComponents(line)].forEach(component => {
               const part = component === "finished" ? state.finished : state.semi[component];
-              if (part.skipped || (part.selected_candidates || []).length || part.selected) return;
+              if ((state.reconfirm_components || []).includes(component) || part.skipped || (part.selected_candidates || []).length || part.selected) return;
               const candidates = this.safeSystemInventoryCandidates(line, component);
               if (!candidates.length) return;
               part.selected_candidates = candidates; part.selected = candidates[0]; part.allocations = []; part.skipped = false; part._batch_auto_skipped = false; changed = true;
@@ -15235,7 +15246,7 @@
           },
           chooseSemiStockGroup(line, component, group, adopt) {
             const state = line._inventory, part = state.semi[component];
-            if (state.loading || state.stale || state.api_error) return;
+            if (!this.inventoryStateMatchesLine(line, this.inventoryCustomerForLine(line))) return;
             if (adopt) line._semi_all_declined = false;
             const ids = new Set(group.candidates.map(c => Number(c.lot_id)));
             const excluded = new Set(part._excluded_lot_ids || []);
@@ -15248,6 +15259,7 @@
             part.skipped = !selected.length && this.semiStockCandidates(line,component).every(c => excluded.has(Number(c.lot_id)));
             part.manual_override = selected.some(c => this.semiCandidateNeedsOverride(c));
             part.general_confirmation = selected.some(c => this.isGeneralSemiFinishedCandidate(c));
+            if (adopt || part.skipped) state.reconfirm_components = (state.reconfirm_components || []).filter(key => key !== component);
             this.invalidatePdfDraftForItem?.(line);
             this.reallocateAllDraftInventory();
           },
@@ -15272,6 +15284,14 @@
             const productionRequired = Math.max(orderQuantity - reservedFinished, 0);
             const semiAvailable = this.orderLineSemiAvailable(line);
             return `成品${reservedFinished}｜半成品可用${semiAvailable}张｜已安排${semiPieces}片｜需生产${productionRequired}`;
+          },
+          demandStockFigure(rows, index, field, busy, error) {
+            if (busy) return '查询中';
+            if (error) return '查询失败';
+            const row = (rows || []).find(row => row.client_line_id === String(index));
+            if (!row || row.status === 'review') return '待核对';
+            const value = row[field];
+            return value === null || value === undefined ? '待核对' : `${value} ${row.unit || ''}`.trim();
           },
           inventorySourcesText(sources) {
             return (sources || []).map(source => {
@@ -15510,21 +15530,36 @@
             customerId = Number(customerId || this.inventoryCustomerForLine(line));
             if (!productId || !customerId) return;
             const prior = line._inventory;
-            const previousDecision = this.inventoryStateMatchesLine(line,customerId) ? this.importDraftInventoryDecisionSnapshot(line) : null;
+            // Invalidation clears the candidate cache, not the origin of the
+            // user's decision. Requery automatic choices; keep manual choices
+            // only when their product, customer and quantity are unchanged.
+            const sameIdentity = prior?.context
+              && Number(prior.context.product_id) === productId
+              && Number(prior.context.customer_id) === customerId;
+            const sameInputs = sameIdentity && Number(prior.context.quantity) === Number(line.quantity || 0);
+            const decision = prior ? this.importDraftInventoryDecisionSnapshot(line) : null;
+            const previousDecision = sameInputs ? decision : null;
             let state = this.newOrderInventoryState();
+            if (sameIdentity && !sameInputs && decision) {
+              // A deliberate refusal remains a refusal when only demand
+              // changes. Risk-lot adoption still needs a fresh confirmation.
+              if (decision.finished?.mode === 'skipped') state.finished.skipped = true;
+              Object.entries(decision.semi || {}).forEach(([key, part]) => {
+                if (part.mode === 'skipped' && state.semi[key]) state.semi[key].skipped = true;
+              });
+            }
+            state.reconfirm_components = [...(prior?.reconfirm_components || [])];
+            if (!sameInputs && decision) {
+              const decisions = {finished:decision.finished, ...(decision.semi || {})};
+              state.reconfirm_components = [...new Set([...state.reconfirm_components,
+                ...Object.keys(decisions).filter(key => decisions[key]?.mode === 'exact')])];
+            }
             let components = [];
             line._inventory_request = Number(line._inventory_request || 0) + 1;
             const requestId = line._inventory_request;
             const quantity = Number(line.quantity || 0);
-            const current = () => line._inventory_request === requestId && Number(line.product_id || line.matched_product_id) === productId && Number(line.quantity || 0) === quantity && Number(this.inventoryCustomerForLine(line)) === customerId;
-              if (prior && this.inventoryHasSelection({_inventory:prior})) {
-                ["finished", ...Object.keys(state.semi)].forEach(key => {
-                  const oldPart = key === "finished" ? prior.finished : prior.semi[key];
-                  const part = key === "finished" ? state.finished : state.semi[key];
-                  for (const field of ["selected","selected_candidates","allocations","skipped","manual_override","general_confirmation"]) part[field] = oldPart[field];
-                });
-                if (!previousDecision) { state.stale = true; state.error = "产品、客户或数量已变化，请重新确认已选库存或明确取消抵扣。"; }
-              }
+            const auth = this.authGeneration;
+            const current = () => this.authGeneration === auth && line._inventory_request === requestId && Number(line.product_id || line.matched_product_id) === productId && Number(line.quantity || 0) === quantity && Number(this.inventoryCustomerForLine(line)) === customerId;
             line._inventory = state; state = line._inventory; state.loading = true;
             try {
               const product = (await axios.get(`/api/master/products/${productId}`, {timeout:10000})).data;
@@ -15532,6 +15567,7 @@
               line._inventory_product = product;
               state.context = { product_id:productId, customer_id:customerId, quantity:Number(line.quantity || 0) };
               components = this.inventoryComponents(line);
+              state.reconfirm_components = state.reconfirm_components.filter(key => key === 'finished' || components.includes(key));
               const requests = [{ key:"finished", label:"成品", promise:axios.get(`/api/warehouse/finished/products/${productId}/candidates`, { params:{ customer_id:customerId }, timeout:10000 }) }];
               components.forEach(component => {
                 const payload = this.inventoryCandidatePayload(line, component);
@@ -15551,6 +15587,7 @@
               state.api_error = failures.length > 0;
               state.error = failures.length ? `库存候选加载失败：${failures.join("；")}` : "";
             } catch (error) {
+              if (!current()) return;
               state.api_error = true;
               state.error = `库存候选加载失败：${this.errorMessage(error)}`;
             } finally {
@@ -15564,6 +15601,7 @@
               Object.keys(state.semi).forEach(component => {
                 if (state.semi[component].unavailable_reason || line._semi_all_declined) {
                   Object.assign(state.semi[component],{selected:null,selected_candidates:[],allocations:[],skipped:true,_batch_auto_skipped:false});
+                  state.reconfirm_components = state.reconfirm_components.filter(key => key !== component);
                 }
               });
               if (!state.api_error && !state.stale) this.confirmSafeOrderLineInventoryRecommendations?.(line);
@@ -15594,6 +15632,7 @@
             } finally { if (current()) part.manual_loading = false; }
           },
           confirmOrderLineInventory(line, component, candidate=null, manual=false) {
+            if (!this.inventoryStateMatchesLine(line, this.inventoryCustomerForLine(line))) { this.showToast("库存资料已变化，请刷新后重新确认", true); return; }
             if (candidate?.selectable === false) { this.showToast("该批次用途待核，请管理员先维护实际适用产品", true); return; }
             const state = component === "finished" ? line._inventory.finished : line._inventory.semi[component];
             const general = this.isGeneralSemiFinishedCandidate(candidate);
@@ -15604,10 +15643,12 @@
             state.general_confirmation = !!candidate && general;
             state.manual_override = !!candidate && (manual || this.semiCandidateNeedsOverride(candidate));
             state.selected_candidates = candidates; state.selected = candidates[0]; state.allocations = []; state.skipped = false; state._batch_auto_skipped = false;
+            line._inventory.reconfirm_components = (line._inventory.reconfirm_components || []).filter(key => key !== component);
             this.invalidatePdfDraftForItem?.(line);
             this.reallocateAllDraftInventory();
           },
           confirmDirectSemiDeduction(line, component, candidate) {
+            if (!this.inventoryStateMatchesLine(line, this.inventoryCustomerForLine(line))) { this.showToast("库存资料已变化，请刷新后重新确认", true); return; }
             line._semi_all_declined = false;
             if (!this.isDirectSemiDeductionCandidate(candidate)) {
               this.showToast("该半成品已不再完全匹配，请刷新后重新核对", true);
@@ -15621,16 +15662,20 @@
             state._batch_auto_skipped = false;
             state.manual_override = false;
             state.general_confirmation = false;
+            line._inventory.reconfirm_components = (line._inventory.reconfirm_components || []).filter(key => key !== component);
             this.invalidatePdfDraftForItem?.(line);
             this.reallocateAllDraftInventory();
           },
           skipOrderLineInventory(line, component) {
             const state = component === "finished" ? line._inventory.finished : line._inventory.semi[component];
-            state.selected = null; state.selected_candidates = []; state.allocations = []; state.skipped = true; state._batch_auto_skipped = false; state.general_confirmation = false; state.manual_override = false; this.invalidatePdfDraftForItem?.(line); this.reallocateAllDraftInventory();
+            state.selected = null; state.selected_candidates = []; state.allocations = []; state.skipped = true; state._batch_auto_skipped = false; state.general_confirmation = false; state.manual_override = false;
+            line._inventory.reconfirm_components = (line._inventory.reconfirm_components || []).filter(key => key !== component);
+            this.invalidatePdfDraftForItem?.(line); this.reallocateAllDraftInventory();
           },
           skipAllLineSheets(line, reallocate = true) {
             line._semi_all_declined = true;
             line._inventory ||= this.newOrderInventoryState();
+            line._inventory.reconfirm_components = (line._inventory.reconfirm_components || []).filter(key => key === 'finished');
             Object.values(line._inventory.semi).forEach(part => Object.assign(part, {
               selected:null, selected_candidates:[], allocations:[], skipped:true,
               _batch_auto_skipped:false, general_confirmation:false, manual_override:false,
@@ -15874,7 +15919,7 @@
           },
           async restoreImportDraftInventoryDecision(line, snapshot, customerId) {
             if (!snapshot || !line?._inventory) return;
-            const restorePart = async (component, decision) => {
+            const restorePart = (component, decision) => {
               if (!decision) return;
               const part = component === "finished"
                 ? line._inventory.finished
@@ -15911,9 +15956,9 @@
               part.manual_override = !!decision.manual_override;
               part.general_confirmation = !!decision.general_confirmation;
             };
-            await restorePart("finished", snapshot.finished);
+            restorePart("finished", snapshot.finished);
             for (const component of this.inventoryComponents(line)) {
-              await restorePart(component, snapshot.semi?.[component]);
+              restorePart(component, snapshot.semi?.[component]);
             }
           },
           async refreshImportDraftInventoryForSave(draft) {
@@ -15925,12 +15970,9 @@
             ));
             if (!lines.length) return;
             for (const [index, line] of lines.entries()) {
-              const snapshot = this.importDraftInventoryDecisionSnapshot(line);
               await this.loadOrderLineInventory(line, customerId);
-              try {
-                await this.restoreImportDraftInventoryDecision(line, snapshot, customerId);
-              } catch (error) {
-                throw new Error(`第${index + 1}条${this.errorMessage(error)}`);
+              if (!this.inventoryStateMatchesLine(line, customerId)) {
+                throw new Error(`第${index + 1}条${line._inventory?.error || '产品、客户或数量已变化，请重新查询库存后再保存。'}`);
               }
             }
             this.reallocateAllDraftInventory();
@@ -15980,6 +16022,7 @@
           inventoryDecisionRequired(line) {
             if (!this.inventoryPlanApplies(line)) return "";
             const state = line?._inventory;
+            if ((state?.reconfirm_components || []).length) return "产品、客户或数量已变化，请重新确认库存抵扣或选择本次不用库存。";
             if (!this.inventoryHasSelection(line)) return "";
             if (!state || state.loading) return "库存候选正在加载，请稍候。";
             if (state.api_error) return state.error || "库存候选加载失败，请刷新后重试。";
@@ -31656,8 +31699,7 @@
             return ct === '净料' ? '净' : ct === '毛片' ? '毛' : ct;
           },
           moldLocationText(item) {
-            const parts = [item.mold_display_name || item.mold_name, item.mold_location_display || item.mold_location].filter(Boolean);
-            return parts.length ? parts.join("｜") : "未绑定模具";
+            return String(item.mold_location_display || item.mold_location || '').trim() || "未登记位置";
           },
           // ===== 常用箱采购报料/压线推荐（只推荐，不强制覆盖人工值） =====
           normalizeMmInteger(value) {
@@ -33016,6 +33058,10 @@
 	          isOrderCommonBoxSelected(productId) {
 	            return !!this.orderCommonBoxPicker.selected[String(productId)];
 	          },
+          orderCommonBoxImportedRow(productId) {
+            return this.orderForm.items.findIndex(item => Number(item.product_id) === Number(productId)
+              || Number(item.combination_parent_product_id) === Number(productId)) + 1;
+          },
 	          orderCommonBoxSelectedCount() {
 	            return Object.keys(this.orderCommonBoxPicker.selected || {}).length;
 	          },
@@ -33069,6 +33115,7 @@
 	            this.orderCommonBoxPicker.importing = true;
 	            let imported = 0;
 	            let reused = 0;
+	            const reusedRows = [];
 	            try {
 	              if (this.orderForm.items.length === 1 && this.orderLineIsBlank(this.orderForm.items[0])) {
 	                this.orderForm.items.splice(0,1);
@@ -33081,13 +33128,7 @@
 	                  || Number(item.combination_parent_product_id) === Number(product.id)
 	                );
 	                if (existing) {
-	                  if (Number.isFinite(quantity) && quantity > 0) {
-	                    if (existing.combination_role === "priced_component") this.updateCombinationGroupSetQuantity(existing, quantity);
-	                    else {
-	                      existing.quantity = quantity;
-	                      this.onOrderDraftQuantityInput(existing);
-	                    }
-	                  }
+	                  reusedRows.push(this.orderForm.items.indexOf(existing) + 1);
 	                  reused += 1;
 	                  continue;
 	                }
@@ -33117,7 +33158,7 @@
 	              this.reallocateAllDraftInventory();
 	              this.orderCommonBoxPicker.selected = {};
 	              this.orderCommonBoxPicker.visible = false;
-	              this.showToast(`已导入 ${imported} 款${reused ? `，${reused} 款已在订单中未重复添加` : ""}`);
+	              this.showToast(`已导入 ${imported} 款${reused ? `，${reused} 款已导入（第${reusedRows.join('、')}行），保留原数量；修改请在订单行操作` : ""}`);
 	            } catch (error) {
 	              this.orderForm.items = originalItems;
 	              this.orderProductOptions = originalOptions;
@@ -33300,6 +33341,14 @@
             } catch(e) {this.showToast(this.errorMessage(e));}
             finally {draft._email_handling=false;}
           },
+          emailQueueRequestError(error) {
+            if (error?.response) return this.errorMessage(error);
+            const code = String(error?.code || '').toUpperCase();
+            const message = String(error?.message || '');
+            if (['ECONNABORTED','ETIMEDOUT'].includes(code) || /timeout|timed out/i.test(message)) return '邮箱收单页面读取超时，请重试；原邮件、附件和草稿仍保留。';
+            if (code === 'ERR_NETWORK' || /network error|failed to fetch|load failed/i.test(message)) return '邮箱收单页面连接失败，请检查 ERP 服务和网络后重试；尚未读取收单列表，不能按无邮件处理。';
+            return this.errorMessage(error);
+          },
           async openEmailQueue() {
             if (!this.canCreateOrders || !["admin","boss"].includes(this.user?.role)) return;
             this.openOrderPdfImport();
@@ -33308,19 +33357,24 @@
             this.emailQueueError="";
             this.emailQueueExcluded=[];
             this.orderImportBatch.status="recognizing";
+            const actor = this.user?.id, auth = this.authGeneration;
+            const modal = this.modal, batch = this.orderImportBatch;
+            const current = () => this.user?.id === actor && this.authGeneration === auth && this.modal === modal && this.modal?.type === 'orderPdfImport' && this.orderImportBatch === batch;
             try {
-              const {data}=await axios.post("/api/email-intake/queue/preview", null, {responseType:"json"});
+              const {data}=await axios.post("/api/email-intake/queue/preview", null, {responseType:"json",timeout:60000});
+              if (!current()) return;
               if (!data || !Array.isArray(data.drafts)) throw new Error("订单列表返回异常，请重新读取。");
-              if (this.modal?.type !== "orderPdfImport") return;
+              if (!current()) return;
               this.emailQueueExcluded=Array.isArray(data.excluded)?data.excluded:[];
               this.orderImportDrafts=(data.drafts||[]).map(draft=>this.prepareImportDraftReminderState({...draft,confirmed:false,_save_status:"idle",_save_message:"",items:(draft.items||[]).map(item=>this.preparePdfImportItem(item))}));
               await this.loadOrderImportReminders();
-              if (this.modal?.type !== "orderPdfImport") return;
+              if (!current()) return;
               await Promise.all(this.orderImportDrafts.map(draft=>Promise.all((draft.items||[]).filter(item=>item.matched_product_id).map(item=>this.loadOrderLineInventory(item,draft.matched_customer_id)))));
+              if (!current()) return;
               this.orderImportBatch.status="recognized";
               if (!this.orderImportDrafts.some(draft=>draft.email_queue_status==="ready")) this.emailQueueFilter="improve";
               await this.refreshEmailQueueCount();
-            } catch(error) { this.orderImportBatch.status="failed"; this.emailQueueError=this.errorMessage(error); this.showToast(this.emailQueueError,true); }
+            } catch(error) { if (!current()) return; this.orderImportBatch.status="failed"; this.emailQueueError=this.emailQueueRequestError(error); this.showToast(this.emailQueueError,true); }
           },
           async openEmailAttachmentFromLocation() {
             const linkedOrder = new URLSearchParams(window.location.search).get("email_order");
@@ -35879,7 +35933,7 @@
               const response=await axios.post("/api/warehouse/finished/reservations",payload);
               result=response?.data||{};
             } catch(error) {
-              if (!error?.response) {
+              if (!error?.response || Number(error.response.status) >= 500) {
                 this.finishedReservationActionState={action:"",committed:false,outcomeUncertain:true,itemId,lotId,reservationId:null,result:null};
                 this.showToast("成品库存预占结果暂不确定，请点击“核对库存状态”，不要重复操作。",true);
                 return false;
@@ -35918,7 +35972,7 @@
               const response=await axios.post(`/api/warehouse/reservations/${reservationId}/release`,payload);
               result=response?.data||{};
             } catch(error) {
-              if (!error?.response) {
+              if (!error?.response || Number(error.response.status) >= 500) {
                 this.finishedReservationActionState={action:"",committed:false,outcomeUncertain:true,itemId,lotId:null,reservationId,result:null};
                 this.showToast("取消库存抵扣的结果暂不确定，请点击“核对库存状态”，不要重复操作。",true);
                 return false;

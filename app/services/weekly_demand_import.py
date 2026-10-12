@@ -1,6 +1,7 @@
 """Weekly demand table, with independent source stock references, never ledger writes."""
 import re
 from io import BytesIO
+from statistics import median
 
 CODE = re.compile(r'(?<![\w])\d{6,20}(?![\w])')
 NUMBER = re.compile(r'^\d{1,10}$')
@@ -9,16 +10,58 @@ NUMBER = re.compile(r'^\d{1,10}$')
 def _spatial_lines(pages):
     lines = []
     for page in pages:
-        bands = []
-        for entry in sorted(page, key=lambda e: sum(p[1] for p in e['box']) / 4):
-            y = sum(p[1] for p in entry['box']) / 4
-            height = max(p[1] for p in entry['box']) - min(p[1] for p in entry['box'])
-            if not bands or abs(y - bands[-1][0]) > max(6, height * .55):
-                bands.append((y, []))
-            bands[-1][1].append(entry)
-        lines.extend('\t'.join(e['text'] for e in sorted(band, key=lambda e: min(p[0] for p in e['box'])))
-                     for _, band in bands)
+        page = [{**entry, 'text': re.sub(r'^(\d{6,20})[_^-]+$', r'\1', entry['text'].strip())}
+                for entry in page]
+        # The two tables can have different baselines when a photograph is
+        # tilted. A full-page y-band would pair demand with the NEXT reference
+        # row. Split only at an empty numeric-column gap with repeated codes
+        # on both sides; ordinary single tables retain their row order.
+        numeric = [entry for entry in page if re.fullmatch(r'[\d\s-]+', entry['text'])]
+        intervals = sorted((min(p[0] for p in entry['box']), max(p[0] for p in entry['box']))
+                           for entry in numeric)
+        merged = []
+        for left, right in intervals:
+            if merged and left <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(right, merged[-1][1]))
+            else:
+                merged.append((left, right))
+        gaps = sorted(((merged[i+1][0]-merged[i][1], (merged[i+1][0]+merged[i][1])/2)
+                       for i in range(len(merged)-1)), reverse=True)
+        height = median([max(p[1] for p in e['box'])-min(p[1] for p in e['box']) for e in page]) if page else 0
+        panels = [page]
+        for gap, split in gaps:
+            if gap < max(20, 3*height):
+                break
+            left = [e for e in page if sum(p[0] for p in e['box'])/4 < split]
+            right = [e for e in page if sum(p[0] for p in e['box'])/4 >= split]
+            left_codes = {e['text'] for e in left if CODE.fullmatch(e['text'])}
+            right_codes = {e['text'] for e in right if CODE.fullmatch(e['text'])}
+            reference_rows = sum(bool(re.search(r'\d{6,20}\t[^\d\s][^\t]*\t\d+\t-?\d+(?:\t|$)', line))
+                                 for line in _panel_lines(right))
+            if len(left_codes & right_codes) >= 3 and reference_rows >= 3:
+                panels = [left, right]
+                break
+        for index, panel in enumerate(panels):
+            prefix = '[库存参考]\t' if len(panels) == 2 and index == 1 else ''
+            for line in _panel_lines(panel):
+                # Keep unreadable demand cells visible instead of silently
+                # dropping a delivery quantity or borrowing the right code.
+                missing_code = (len(panels) == 2 and index == 0 and not CODE.search(line)
+                                and NUMBER.fullmatch(line.split('\t')[-1]))
+                lines.append(('[需求待核]\t' if missing_code else prefix) + line)
     return lines
+
+
+def _panel_lines(page):
+    bands = []
+    for entry in sorted(page, key=lambda e: sum(p[1] for p in e['box']) / 4):
+        y = sum(p[1] for p in entry['box']) / 4
+        height = max(p[1] for p in entry['box']) - min(p[1] for p in entry['box'])
+        if not bands or abs(y - bands[-1][0]) > max(6, height * .55):
+            bands.append((y, []))
+        bands[-1][1].append(entry)
+    return ['\t'.join(e['text'] for e in sorted(band, key=lambda e: min(p[0] for p in e['box'])))
+            for _, band in bands]
 
 
 def source_lines(content, extension):
@@ -62,8 +105,18 @@ def parse_weekly_lines(lines):
     rows, references, same_line_references, warnings = [], {}, {}, []
     for source_row, raw in lines:
         text = str(raw).strip().replace('，', ',')
+        reference_only = text.startswith('[库存参考]\t')
         codes = list(CODE.finditer(text))
         if not codes:
+            if text.startswith('[需求待核]\t'):
+                cells = text.split('\t')[1:]
+                valid = bool(NUMBER.fullmatch(cells[-1]) and 0 < int(cells[-1]) <= 2147483647)
+                rows.append(dict(line_no=str(len(rows) + 1), source_row=int(source_row),
+                                 source_sheet=None, _source_key=str(source_row),
+                                 raw_product_code='', raw_product_name='未识别产品，请核对原单',
+                                 quantity=int(cells[-1]) if valid else None,
+                                 source_location='\t'.join(cells[:-1]), raw_lines=[text],
+                                 warnings=['存货编码未可靠识别，请手工选择产品并核对需求数量']))
             continue
         for index, match in enumerate(codes):
             code = match.group()
@@ -77,7 +130,7 @@ def parse_weekly_lines(lines):
                         references[code].append(reference)
                     same_line_references[(str(source_row), code)] = reference
                     continue
-            if index > 0:
+            if index > 0 or reference_only:
                 warnings.append(f'{source_row}：右侧区域未可靠识别，仅保留原文供核对')
                 continue
             valid = bool(tokens and NUMBER.fullmatch(tokens[0]) and 0 < int(tokens[0]) <= 2147483647)

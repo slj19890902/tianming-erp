@@ -100,7 +100,7 @@ def test_pdf_uses_dedicated_inventory_helpers_without_changing_manual_order() ->
     assert "查看库存安排" in manual
     assert INDEX.count("orderLineInventoryAutoSummary(item)") == 1
     preview = _method_source("loadPdfDraftInventoryAuthority")
-    formal_save = _method_source("saveConfirmedImportDrafts")
+    formal_save = _method_source("buildPdfSavePayload")
     assert "material:this.pdfImportItemMaterialCode(line)" in preview
     assert "flute_type:line.flute_type || null" in preview
     assert "const matCode = this.pdfImportItemMaterialCode(item);" in formal_save
@@ -199,7 +199,7 @@ def test_pdf_inventory_three_state_helpers_use_authoritative_contract() -> None:
     harness = f"""
 const vm = require("vm");
 const sandbox = {{
-  axios: {{ defaults: {{}}, interceptors: {{ response: {{ use() {{}} }} }} }},
+      axios: {{ defaults: {{}}, interceptors: {{ request: {{ use() {{}} }}, response: {{ use() {{}} }} }} }},
   Vue: {{ createApp(definition) {{ sandbox.definition = definition; return {{ component() {{ return this; }}, mount() {{ return this; }} }}; }} }},
   localStorage: {{ getItem() {{ return ""; }}, setItem() {{}}, removeItem() {{}} }},
   window: {{ addEventListener() {{}}, history: {{ pushState() {{}}, back() {{}} }} }},
@@ -208,14 +208,16 @@ const sandbox = {{
   console, URLSearchParams, setTimeout, clearTimeout,
 }};
 vm.createContext(sandbox);
-vm.runInContext({json.dumps(script)}, sandbox);
+vm.runInContext(require('fs').readFileSync('static/js/product-unit-labels.js','utf8'), sandbox);
+    vm.runInContext({json.dumps(script.split('app.mixin(TMDemandStock.mixin)')[0])}, sandbox);
 const methods = sandbox.definition.methods;
 const context = {{
-  pdfInventoryDisplayState: methods.pdfInventoryDisplayState,
+  ...methods,
   inventoryDecisionRequired() {{ return ""; }},
 }};
 const line = (authoritative, overrides={{}}) => ({{
   product_id: 99,
+  sales_unit_snapshot: "个",
   quantity: authoritative?.order_quantity || 100,
   _inventory: {{
     loading: false,

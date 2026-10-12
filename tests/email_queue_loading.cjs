@@ -3,7 +3,7 @@ const vm = require('vm');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync('static/index.html', 'utf8');
 const names = [
-  'openEmailQueue', 'openOrderPdfImport', 'prepareImportDraftReminderState',
+  'openEmailQueue', 'emailQueueRequestError', 'openOrderPdfImport', 'prepareImportDraftReminderState',
   'restorePdfSaveAttempt', 'reloadPdfSaveRecovery', 'preparePdfImportItem',
   'refreshPdfPriceConflict', 'normalizedProductSyncValue',
   'orderSpecificationText', 'newOrderInventoryState',

@@ -17,6 +17,7 @@ import pytest
 from desktop_assistant import factory_target_audit as audit, factory_cutover as protocol
 from desktop_assistant import credential_store, credential_transfer, mac_service_manage as manage
 from desktop_assistant import mac_service_restore as restore, mac_release_publish as publication
+from desktop_assistant import mac_smb_stream_runtime_contract as stream_cfg, mac_smb_stream_target as stream
 from desktop_assistant.storage import (sha, read_json, write_json, decrypt_file, encrypt_file,
                                        extract_verified, pack_recovery)
 from tests.desktop_assistant import test_mac_service_restore as fixture_module
@@ -29,6 +30,7 @@ pytestmark = pytest.mark.skipif(sys.platform != 'darwin', reason='Mac target pro
 @pytest.fixture
 def target(case, monkeypatch, request):
     c = case.fixture
+    stream_requested = getattr(request, 'param', None) == 'stream'
     # A fresh synthetic Windows final backup with its true encryption password
     # embedded. The earlier fixture intentionally uses a different backup secret.
     original_raw=c.root/'original.zip';decrypt_file(case.backup, original_raw, PASSWORD)
@@ -45,12 +47,14 @@ def target(case, monkeypatch, request):
         if meta.get('runtime_platform')=='macos-arm64':
             meta=deepcopy(meta);meta['runtime_capabilities'][audit.CAPABILITY]=1
             meta['reader_capabilities']['factory_cutover_v1']=1
+            if stream_requested: meta['runtime_capabilities'][stream_cfg.CAPABILITY]=1
             if getattr(request,'param',None)=='missing-audit':meta['runtime_capabilities'].pop(audit.CAPABILITY)
             elif getattr(request,'param',None)=='bool-audit':meta['runtime_capabilities'][audit.CAPABILITY]=True
             elif getattr(request,'param',None)=='missing-cutover':meta['reader_capabilities'].pop('factory_cutover_v1')
         return native_pack(source,destination,meta,key)
     monkeypatch.setattr(fixture_module,'pack_tree',pack)
-    monkeypatch.setattr(publication,'SERVICE_RESTORE_FILES',publication.SERVICE_RESTORE_FILES|{audit.MODULE})
+    extra = stream_cfg.FILES | {stream.MODULE} if stream_requested else set()
+    monkeypatch.setattr(publication,'SERVICE_RESTORE_FILES',publication.SERVICE_RESTORE_FILES|{audit.MODULE}|extra)
     def protect(value,purpose):
         reference='tm-keychain-v1:'+purpose+':'+uuid.uuid4().hex
         case.secrets[reference]=value
@@ -114,6 +118,16 @@ def test_authenticates_restored_facts_credentials_and_originals_without_mutation
         assert PASSWORD not in str(evidence) and 'synthetic-secret' not in str(evidence)
         recheck()
     assert job.exists() and protected_facts(t.x)==before and secrets==t.case.secrets
+
+
+def test_saved_mounted_destination_is_not_redirected_by_new_stream_metadata(target, monkeypatch):
+    def forbidden(*args, **kwargs):raise AssertionError('saved mounted route must remain selected')
+    monkeypatch.setattr(stream, 'metadata_present', lambda:True)
+    monkeypatch.setattr(stream, 'prepare', forbidden)
+    before=protected_facts(target.x)
+    with target.run() as (evidence,recheck):
+        assert evidence['credentials_verified']; recheck()
+    assert protected_facts(target.x)==before
 
 
 def rewrite(path, change):

@@ -17,6 +17,7 @@ import uuid
 from desktop_assistant import factory_cutover as protocol, factory_network as network
 from desktop_assistant import mac_service_restore as restore, mac_service_manage as manage
 from desktop_assistant import mac_published_runtime as published, mac_backup_storage as remote
+from desktop_assistant import mac_smb_stream_target as stream
 from desktop_assistant import credential_transfer as credentials, credential_store
 from desktop_assistant import delivery_dispatch_contract as dispatch, order_inventory_contract as inventory
 from desktop_assistant import restore_provenance as history
@@ -40,6 +41,26 @@ class _TargetReader(Manager):
 
 def _current():
     return datetime.now(timezone.utc)
+
+
+def _archive(destination, context):
+    """Pin the selected local approval; never probe NAS or read its credential."""
+    if stream.selected(destination):
+        binding = stream.prepare(destination)
+        def recheck():
+            binding.check()
+            if (binding.context != context
+                    or str(stream.destination(binding.control)) != destination):
+                raise ValueError(ERROR)
+    else:
+        contract, contract_sha, contract_context = remote._contract()
+        if context != contract_context or destination != contract['destination']:
+            raise ValueError(ERROR)
+        def recheck():
+            if remote._contract() != (contract, contract_sha, contract_context):
+                raise ValueError(ERROR)
+    recheck()
+    return recheck
 
 
 def _no_journal(shared):
@@ -181,8 +202,9 @@ def verified_restored_target(request_id, input_attempt, authorization_sha256, *,
             return item
         def record(path, parent, **kwargs):
             item = pin(path, parent, **kwargs)
-            raw = _read_complete(item, protocol.LIMIT)
-            return raw, manage.boot.decode(raw)
+            state_record = path == root/'state.json'
+            raw = _read_complete(item, manage.STATE_LIMIT if state_record else protocol.LIMIT)
+            return raw, (manage.decode_record(raw, 'state.json') if state_record else manage.boot.decode(raw))
         public_item = pin(published.PUBLIC, base_lease, uid=0, gid=None, mode=0o644)
         public = _read_complete(public_item, 65536)
         context_raw, actual_context = record(restore.keychain.CONTEXT, base_lease, uid=0, gid=None, mode=0o644)
@@ -239,8 +261,8 @@ def verified_restored_target(request_id, input_attempt, authorization_sha256, *,
         for path in present:
             pin(path, folders['control'] if path.parent == root/'control' else folders['root'])
         _, preferences = manage.settings(folders['root'], context)
-        contract, contract_sha, contract_context = remote._contract()  # Local metadata only.
-        if context != contract_context or preferences.get('nas') != contract['destination']: raise ValueError(ERROR)
+        destination = preferences.get('nas')
+        archive_check = _archive(destination, context)
         manager = _TargetReader(root, public)
         if manager._process(): raise ValueError('目标ERP仍运行，不自动停止')
         manager._approve_execution(state['current'])
@@ -279,8 +301,8 @@ def verified_restored_target(request_id, input_attempt, authorization_sha256, *,
             protocol.require_install_window(body, now=_current())
             parents_check()
             for item in held: item.check()
+            archive_check()
             if (manager._process() or {p for p in paths if os.path.lexists(p)} != present
-                    or remote._contract() != (contract, contract_sha, contract_context)
                     or _private_tree(folders['shared'], context) != tree_before): raise ValueError(ERROR)
             _no_journal(root/'shared')
             if protocol.capture_snapshot(root/'shared') != target_snapshot: raise ValueError(ERROR)
@@ -290,10 +312,11 @@ def verified_restored_target(request_id, input_attempt, authorization_sha256, *,
             history.verify(provenance, {history.MEMBERS[k]:root/'packages'/(v+'.zip')
                                        for k,v in provenance.items() if v is not None}, public)
             _same_credentials(embedded, credentials.collect(root, immutable_database=True), password,
-                              source['credential_purposes'], contract['destination'])
+                              source['credential_purposes'], destination)
             if restore._digest(backup.fd) != authenticated: raise ValueError(ERROR)
             for item in held: item.check()
             if _private_tree(folders['shared'], context) != tree_before: raise ValueError(ERROR)
+            archive_check()
             protocol.require_install_window(body, now=_current())
         recheck()
         evidence = {'type':'tianming.factory-target-audit.v1', 'request_sha256':manage.boot.digest(request_raw),

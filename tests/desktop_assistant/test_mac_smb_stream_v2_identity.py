@@ -53,6 +53,7 @@ def test_changed_held_file_id_rejected_before_network_query():
     finally:
         handle.file_id=original;handle.close();archive.close()
 
+@pytest.mark.skipif(os.name!='posix',reason='Local backup descriptor uses POSIX fcntl; SMB identity cases remain portable')
 def test_v2_full_independent_readback_with_timestamp_aliases(tmp_path):
     peer=Peer();aliases(peer)
     data=probe.files.MAGIC+os.urandom(65536)

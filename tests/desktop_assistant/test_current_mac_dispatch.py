@@ -145,7 +145,7 @@ def test_unapproved_inputs_prevent_child(scene, monkeypatch, failure):
     assert not scene.calls
 
 
-def test_update_rejected_before_any_launch(scene):
+def test_update_without_broker_capability_rejected_before_any_launch(scene):
     with pytest.raises(ValueError): run(scene, 'update')
     assert not scene.calls and not scene.finished.exists()
 
@@ -164,8 +164,8 @@ def test_post_exit_code_failure_retains_parent_lock_and_no_publication(scene):
 @pytest.mark.parametrize('failure', ['challenge', 'identity', 'result', 'extra'])
 def test_invalid_reply_rejected_after_actual_exit(scene, monkeypatch, failure):
     collect = d._collect
-    def changed(process):
-        reply = c.decode(collect(process))
+    def changed(process, broker=None):
+        reply = c.decode(collect(process, broker))
         if failure == 'challenge': reply['challenge'] = '0' * 32
         elif failure == 'identity': reply['identity']['kernel_groups'] = [499, 12]
         elif failure == 'result': reply['result']['request']['request_id'] = '0' * 32
@@ -179,8 +179,8 @@ def test_invalid_reply_rejected_after_actual_exit(scene, monkeypatch, failure):
 @pytest.mark.parametrize('failure', ['plan', 'metadata', 'expiry'])
 def test_post_exit_recheck_refuses_changed_facts(scene, monkeypatch, failure):
     collect = d._collect
-    def changed(process):
-        raw = collect(process)
+    def changed(process, broker=None):
+        raw = collect(process, broker)
         if failure == 'plan':
             path = scene.slot / 'prepare-plan.json'; path.write_bytes(path.read_bytes() + b' ')
         elif failure == 'metadata':

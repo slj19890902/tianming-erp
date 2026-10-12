@@ -1,5 +1,11 @@
 # MAC-SERVER-HANDOFF-20261010
 
+## 2026-10-12 当前Mac完整备份代理接线范围
+
+主代理单负责人修改current_mac_smb_broker.py、current_mac_dispatch.py、current_mac_worker.py、mac_smb_stream_runtime.py和current_mac_activation_install.py的管理员代码集合；新增test_current_mac_broker_integration.py，调整相应原测试。将代理接原SMB _dispatch，原直接传输默认分支保持；显式代理失败不能回直接连接。实际CLI update必须有继承代理FD，仅此阶段允许，原冻结公开request字段不加秘密/任意路径。root固定transport程序身份和新能力，钉住原stream控制与合同，禁止所有子进程新建外连，在收集真实子进程stdout/stderr时处理三次固定连接请求；任何代理错误仍等待原进程退出，不强杀或伪造完成。补齐root代码闭合集合，原Manager更新/备份、SMB认证/加密/独立回读原算法不改。仅合成端点、签名/状态/文件租约与身份适配，不部署或读取真实NAS密码/业务，不改变运行ERP或旧机；完整构建签名、计划生产和实机备份仍待后续。
+
+接线必须同时更新mac_smb_stream_runtime_contract.py的源码依赖集合，明确要求新代理及其两个纯合同文件；保留archive_smb_stream_v1原语义、全部加密/原身份门禁，不让构建遗漏新增运行导入。此依赖集合为本轮追加allowlist。
+
 ## 2026-10-12 当前Mac完整备份连接代理范围
 
 连接代理工具候选已完成：实际macOS精确IP策略返回65，原错误host must be * or localhost保留；Unix datagram的getpeereid返回EINVAL，而stream返回当前真实个人UID/GID，所以只使用stream和原生C getpeereid核root peer。root按三阶段消息逐次连接、SCM_RIGHTS传FD；客户端核原控制身份和TCP实际peer，FD设不可exec继承。失败关闭控制通道以唤醒对端、释放未领FD，实例永久拒绝重试；root实际子进程仍必须由外层观测到退出，不能因IPC关闭而强杀。原完整备份格式和SMB加密/独立回读没有改。

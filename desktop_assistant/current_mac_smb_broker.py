@@ -13,6 +13,7 @@ import os
 import socket
 import struct
 import sys
+from contextlib import contextmanager
 
 from desktop_assistant import current_mac_worker_contract as c
 from desktop_assistant import mac_smb_stream_contract as archive
@@ -23,6 +24,9 @@ REQUEST = 'tianming.current-mac-smb-connect.v1'
 REPLY = 'tianming.current-mac-smb-channel.v1'
 FIELDS = frozenset({'type','challenge','action','plan_sha256','control_sha256','contract_sha256'})
 ERROR = 'Current Mac backup channel rejected; preserve scene; no fallback or retry'
+CAPABILITY = 'current_mac_worker_broker_v1'
+MODULE = 'desktop_assistant/current_mac_smb_broker.py'
+_active = None
 
 
 def require(ok):
@@ -178,3 +182,28 @@ class Client:
             raise
         finally:
             for fd in descriptors:os.close(fd)
+
+
+@contextmanager
+def dedicated(fd,plan,plan_sha,challenge,contract):
+    """Worker-owned session; the CLI supplies only one inherited control FD."""
+    global _active
+    require(_active is None and type(fd) is int and 3 <= fd <= c.MAX_FD)
+    os.set_inheritable(fd,False)
+    channel=socket.socket(fileno=fd)
+    try:
+        client=Client(channel,plan,plan_sha,challenge,contract)
+        _active=client
+        yield
+        require(not client.failed and client.sequence == len(ORDER))
+    finally:
+        _active=None;channel.close()
+
+
+def connection(binding,action):
+    """None means the old explicit direct mode, never a failed-broker fallback."""
+    if _active is None:return None
+    require(_active.expected['control_sha256'] == binding.control_sha
+        and _active.expected['contract_sha256'] == binding.control['contract_sha256']
+        and _active.endpoint == (binding.value['server_address'],binding.value['port']))
+    return _active.connection(action)

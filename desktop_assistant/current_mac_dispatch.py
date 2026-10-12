@@ -1,10 +1,10 @@
-"""Internal root dispatch for the offline current-Mac audit phases.
+"""Internal root dispatch for fixed current-Mac update and audit phases.
 
 Not an installer or executable entry point. The future root transaction must
 authenticate a closed, independently SHA-approved code pack before import, and
 provide its ongoing verifier. This verifier is not itself external approval.
-No root record is written, no ERP is started, and update is intentionally
-rejected: its approved SMB connection needs a separate transport boundary.
+No root record is written or ERP started. Update grants exactly the approved
+NAS connections over inherited descriptors; every child denies new outbound.
 """
 from contextlib import ExitStack
 import errno
@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import selectors
 import subprocess
+import socket
 import time
 import uuid
 
@@ -21,6 +22,8 @@ from desktop_assistant import mac_keychain_install as boot
 from desktop_assistant import mac_system_service as system
 from desktop_assistant import mac_system_upgrade as root
 from desktop_assistant.home_process import command
+from desktop_assistant import current_mac_smb_broker as smb_broker
+from desktop_assistant import mac_smb_stream_runtime_contract as stream
 
 BASE = Path('/Library/TianmingERP')
 ROOT = BASE / 'instance'
@@ -34,7 +37,7 @@ def require(ok):
         raise ValueError(ERROR)
 
 
-def _collect(process):
+def _collect(process,broker=None):
     """Drain both bounded pipes and await this child, even after interruption.
 
     The caller retains its borrowed lock throughout. A timeout is not treated
@@ -45,9 +48,20 @@ def _collect(process):
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ, True)
             selector.register(process.stderr, selectors.EVENT_READ, False)
+            if broker is not None:selector.register(broker.channel,selectors.EVENT_READ,'broker')
             while selector.get_map():
                 try:
                     for key, _ in selector.select(0.25):
+                        if key.data=='broker':
+                            try:
+                                chunk=broker.channel.recv(smb_broker.LIMIT+4)
+                                if chunk:broker.feed(chunk)
+                                else:
+                                    selector.unregister(key.fd);broker.channel.close()
+                            except (Exception,KeyboardInterrupt):
+                                invalid=True
+                                selector.unregister(key.fd);broker.channel.close()
+                            continue
                         data = os.read(key.fileobj.fileno(), 8192)
                         if not data:
                             selector.unregister(key.fileobj)
@@ -61,6 +75,7 @@ def _collect(process):
                 except KeyboardInterrupt:
                     interrupted = True
     finally:
+        if broker is not None:broker.channel.close()
         for stream in (process.stdout, process.stderr):
             if not stream.closed:
                 stream.close()
@@ -71,6 +86,7 @@ def _collect(process):
             except KeyboardInterrupt:
                 interrupted = True
     require(code == 0 and not invalid and not interrupted)
+    if broker is not None:broker.finish()
     return b''.join(chunks)
 
 
@@ -102,7 +118,7 @@ def _maintenance(stack, base, inherited_fd):
 
 
 def dispatch(plan_raw, *, verify_code, inherited_lock=None):
-    """Return a validated offline reply while preserving the parent's lock.
+    """Return a validated phase reply; keep activation's parent lock held.
 
     verify_code must reauthenticate the complete fixed administrator pack and
     return its raw manifest SHA. No user-selected executable, path, environment
@@ -110,7 +126,7 @@ def dispatch(plan_raw, *, verify_code, inherited_lock=None):
     """
     root._entry()
     plan = c.validate_plan(c.decode(plan_raw), now=time.time())
-    require(plan['phase'] in ('prepare', 'activate') and callable(verify_code))
+    require(callable(verify_code))
     require((plan['phase'] == 'activate') == (inherited_lock is not None))
     plan_sha = c.raw_digest(plan_raw)
     request = dict(type=c.REQUEST, attempt_id=plan['attempt_id'], phase=plan['phase'],
@@ -125,25 +141,42 @@ def dispatch(plan_raw, *, verify_code, inherited_lock=None):
         saved = stack.enter_context(root.Pin(path, mode=0o644, parent=slot))
         require(saved.read() == plan_raw)
         lock_check = _maintenance(stack, base, inherited_lock) if inherited_lock is not None else lambda: None
-        selected = system.metadata(plan['execution_package_sha256'])
+        selected_role='transport' if plan['phase']=='update' else 'execution'
+        selected = system.metadata(plan[selected_role+'_package_sha256'])
         manifest = system._program_manifest(selected)
         require(type(manifest.get('runtime_capabilities', {}).get(CAPABILITY)) is int
             and manifest['runtime_capabilities'][CAPABILITY] == 1
             and {WORKER, 'desktop_assistant/current_mac_worker_contract.py'} <= manifest.get('files', {}).keys())
         tree = selected['tree']
+        extra=[];contract=None
+        if plan['phase']=='update':
+            require(plan_raw==c.canonical(plan)
+                and type(manifest.get('runtime_capabilities',{}).get(smb_broker.CAPABILITY)) is int
+                and manifest['runtime_capabilities'][smb_broker.CAPABILITY]==1
+                and {smb_broker.MODULE,'desktop_assistant/mac_smb_stream_runtime.py'} <= manifest['files'].keys()
+                and stream.CONTROL==BASE/'smb-stream-service.json' and stream.CONTRACT==BASE/'smb-stream-archive.json')
+            for path in (stream.CONTROL,stream.CONTRACT):
+                pin=stack.enter_context(root.Pin(path,mode=0o644,parent=base));extra.append((pin,pin.read()))
+            control=c.decode(extra[0][1]);contract=c.decode(extra[1][1])
+            stream.validate(control,contract,plan['context_sha256'],499)
+            require(c.raw_digest(extra[0][1])==plan['transport_control_sha256']
+                and stream.archive.digest(contract)==plan['transport_contract_sha256']
+                and control['package_sha256']==plan['transport_package_sha256']
+                and control['publisher_sha256']==plan['publisher_sha256'])
 
         def check():
             base.check(); slot.check(); lock_check()
             require(saved.read() == plan_raw and verify_code() == plan['code_manifest_sha256']
                 and not os.path.lexists(BASE / 'factory-activation.json'))
             c.validate_plan(plan, now=time.time())
+            for pin,data in extra:require(pin.read()==data)
             for role in ('execution', 'monitor', 'transport'):
                 meta = system.metadata(plan[role + '_package_sha256'])
                 require(all(meta[key] == plan[key] for key in
                     ('context_sha256', 'publisher_sha256', 'registry_sha256'))
                     and meta['context']['uid'] == 499 and meta['context']['gid'] == 499
                     and meta['public'] == selected['public'])
-                if role == 'execution':
+                if role == selected_role:
                     require(meta['tree'] == tree and system._program_manifest(meta) == manifest)
         check()
         environment = dict(HOME=str(BASE / 'home'), PATH='/usr/bin:/bin:/usr/sbin:/sbin',
@@ -153,11 +186,19 @@ def dispatch(plan_raw, *, verify_code, inherited_lock=None):
             '--challenge', request['challenge'], '--phase', plan['phase']]
         if inherited_lock is not None:
             arguments += ['--lock-fd', str(inherited_lock)]
+        parent=child=None;broker=None
+        inherited=() if inherited_lock is None else (inherited_lock,)
+        if plan['phase']=='update':
+            parent,child=socket.socketpair()
+            stack.callback(parent.close);stack.callback(child.close)
+            broker=smb_broker.Server(parent,plan,plan_sha,request['challenge'],contract,check)
+            arguments+=['--smb-broker-fd',str(child.fileno())];inherited=(child.fileno(),)
         process = subprocess.Popen(command(arguments, environment), stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, user=499, group=499, extra_groups=[],
-            close_fds=True, pass_fds=() if inherited_lock is None else (inherited_lock,),
+            close_fds=True, pass_fds=inherited,
             umask=0o077, cwd='/', env=environment)
-        raw = _collect(process)
+        if child is not None:child.close()
+        raw = _collect(process,broker)
         check()
         reply = c.validate_reply(c.decode(raw), request, plan, plan_sha)
         check()

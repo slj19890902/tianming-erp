@@ -205,7 +205,7 @@ def _audit_arguments(plan):
     return {k:plan[k] for k in ('context_sha256','publisher_sha256','registry_sha256','restore_receipt_sha256')}
 
 
-def run(request,*,script,executable):
+def run(request,*,script,executable,smb_broker_fd=None):
     _entry()
     from desktop_assistant import current_mac_worker_contract as c,current_mac_cutover_contract as v3
     from desktop_assistant import current_mac_cutover as codec,current_mac_target_audit as audit
@@ -222,8 +222,23 @@ def run(request,*,script,executable):
         network=factory_network.validate(c.decode(network_raw))
         require(v3.digest(network)==plan['network_sha256'])
         os.environ['ERP_HOME_REHEARSAL']='1'
+        require(smb_broker_fd is None or request['phase']=='update')
         if request['phase']=='update':
-            result=_update(request,plan,context,public,roles,check)
+            if smb_broker_fd is None:
+                # Internal legacy API only; real CLI below never permits this.
+                result=_update(request,plan,context,public,roles,check)
+            else:
+                from desktop_assistant import current_mac_smb_broker as broker
+                from desktop_assistant import mac_smb_stream_runtime as stream
+                manifest=roles['transport'][2]
+                require(type(manifest.get('runtime_capabilities',{}).get(broker.CAPABILITY)) is int
+                    and manifest['runtime_capabilities'][broker.CAPABILITY]==1
+                    and broker.MODULE in manifest['files'])
+                bound=stream.load_binding();bound.check()
+                require(bound.control_sha==plan['transport_control_sha256']
+                    and bound.control['contract_sha256']==plan['transport_contract_sha256'])
+                with broker.dedicated(smb_broker_fd,plan,request['plan_sha256'],request['challenge'],bound.value):
+                    result=_update(request,plan,context,public,roles,check)
         elif request['phase']=='prepare':
             old_raw=read('update-plan.json')
             old_plan=c.validate_plan(c.decode(old_raw),now=time.time())
@@ -283,9 +298,23 @@ def main():
     _entry();os.umask(0o077)
     sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
     from desktop_assistant import current_mac_worker_contract as c
-    result=run(_arguments(sys.argv[1:]),script=__file__,executable=sys.executable)
+    request,broker_fd=_launch_arguments(sys.argv[1:])
+    result=run(request,script=__file__,executable=sys.executable,smb_broker_fd=broker_fd)
     raw=c.canonical(result)
     sys.stdout.buffer.write(raw+b'\n');sys.stdout.buffer.flush()
+
+
+def _launch_arguments(argv):
+    argv=list(argv);fd=None
+    if '--smb-broker-fd' in argv:
+        require(argv.count('--smb-broker-fd')==1)
+        index=argv.index('--smb-broker-fd')
+        require(index%2==0 and index+1<len(argv) and argv[index+1].isascii() and argv[index+1].isdecimal())
+        fd=int(argv[index+1]);require(3<=fd<=2**31-1)
+        del argv[index:index+2]
+    request=_arguments(argv)
+    require((request['phase']=='update')==(fd is not None))
+    return request,fd
 
 
 if __name__=='__main__':

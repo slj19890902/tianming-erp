@@ -27,7 +27,7 @@ MODULE = 'desktop_assistant/current_mac_activation_install.py'
 CODE_FILES = root.CODE_FILES | frozenset({MODULE, 'desktop_assistant/current_mac_dispatch.py',
     'desktop_assistant/current_mac_worker_contract.py',
     'desktop_assistant/current_mac_cutover_contract.py',
-    'desktop_assistant/current_mac_publication.py'})
+    'desktop_assistant/current_mac_publication.py', 'desktop_assistant/current_mac_smb_broker.py'})
 ERROR = 'Current Mac root publication unconfirmed; preserve scene; no retry or start'
 
 

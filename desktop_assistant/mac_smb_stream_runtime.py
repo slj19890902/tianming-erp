@@ -210,10 +210,13 @@ def verify_network_policy(binding):
 
 def _dispatch(binding,request):
     binding.check()
-    with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as connected:
-        connected.settimeout(10)
-        # No DNS, alternate address, retry, or password in this parent.
-        connected.connect((binding.value['server_address'],445))
+    from . import current_mac_smb_broker as broker
+    supplied=broker.connection(binding,request['action'])
+    with supplied if supplied is not None else socket.socket(socket.AF_INET,socket.SOCK_STREAM) as connected:
+        if supplied is None:
+            connected.settimeout(10)
+            # No DNS, alternate address, retry, or password in this parent.
+            connected.connect((binding.value['server_address'],445))
         require(connected.getpeername()==(binding.value['server_address'],445))
         connected.settimeout(None)
         request=dict(request,socket_fd=connected.fileno())

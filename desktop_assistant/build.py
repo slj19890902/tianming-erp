@@ -137,6 +137,13 @@ def main():
         if not {MANAGE_ENTRY, MANAGE_MODULE, 'desktop_assistant/nightly.py',
                 'desktop_assistant/service_supervisor.py'} <= sources.keys():
             raise ValueError('专用管理或系统定时备份源码不完整')
+        if not {'desktop_assistant/mac_system_upgrade_worker.py',
+                'desktop_assistant/mac_system_upgrade_contract.py',
+                'desktop_assistant/mac_system_service.py',
+                'desktop_assistant/mac_service_manage.py',
+                'desktop_assistant/manager.py',
+                'desktop_assistant/service_supervisor.py'} <= sources.keys():
+            raise ValueError('系统监护升级运行协议源码不完整')
         if not {'desktop_assistant/factory_request_entry.py', 'desktop_assistant/mac_factory_request.py',
                 'desktop_assistant/factory_network.py', 'desktop_assistant/factory_target_contract.py',
                 'desktop_assistant/mac_factory_request_install.py'} <= sources.keys():
@@ -222,6 +229,7 @@ def main():
                                                     'service_restore_resume_v1': 1, 'service_restore_reauthentication_v1': 1,
                                                     'archive_autofs_v1': 1,
                                                     'service_manage_v1': 1, 'system_nightly_v1': 1,
+                                                    'system_upgrade_worker_v1': 1,
                                                     'factory_request_v1': 1, 'factory_audit_v1': 1,
                                                     'factory_activation_v1': 1, 'factory_execution_v1': 1}
         if stream_wheels is not None:

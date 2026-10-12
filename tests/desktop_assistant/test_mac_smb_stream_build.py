@@ -110,8 +110,12 @@ def test_windows_cannot_request_smb_stream_before_source_or_output_io(monkeypatc
     assert error.value.code==2 and not (tmp_path/'new').exists()
 
 
-@pytest.mark.parametrize('enabled,failed',[(False,False),(True,False),(True,True)])
-def test_builder_declares_capability_only_after_explicit_verified_runtime(tmp_path,monkeypatch,enabled,failed):
+@pytest.mark.parametrize('enabled,failed,platform,omitted',[
+    (False,False,'macos-arm64',None),(True,False,'macos-arm64',None),
+    (True,True,'macos-arm64',None),(False,False,'windows',None),
+    (False,False,'macos-arm64','mac_system_upgrade_worker.py'),
+    (True,False,'macos-arm64','mac_system_upgrade_contract.py')])
+def test_builder_declares_capability_only_after_explicit_verified_runtime(tmp_path,monkeypatch,enabled,failed,platform,omitted):
     # Exercise the real main() wiring; packaging and heavy native copies are
     # explicit fakes, not an actual native build or signature.
     from desktop_assistant import native_runtime,ocr_models
@@ -125,10 +129,11 @@ def test_builder_declares_capability_only_after_explicit_verified_runtime(tmp_pa
     for node in ast.walk(ast.parse(Path(build.__file__).read_text())):
         if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='reader_sources' for t in node.targets):
             sources.update({name:b'# fixture' for name in ast.literal_eval(node.value)})
+    if omitted:sources.pop('desktop_assistant/'+omitted)
     calls=[];output=tmp_path/'output'
     argv=['build','--repo',str(repo),'--runtime-base',str(tmp_path/'base'),
         '--site-packages',str(tmp_path/'site'),'--ocr-models',str(tmp_path/'ocr'),'--output',str(output),
-        '--runtime-platform','macos-arm64','--revision','r1','--version','v1',
+        '--runtime-platform',platform,'--revision','r1','--version','v1',
         '--signing-request-only','--trusted-public-key',str(tmp_path/'public')]
     if enabled:argv+=['--smb-stream-wheels','one.whl','two.whl']
     monkeypatch.setattr(sys,'argv',argv)
@@ -139,6 +144,7 @@ def test_builder_declares_capability_only_after_explicit_verified_runtime(tmp_pa
     monkeypatch.setattr(release_request,'public_identity',lambda *a:None)
     monkeypatch.setattr(release_request,'prepare_request',lambda *a:{})
     monkeypatch.setattr(native_runtime,'assemble',lambda *a:a[2].mkdir())
+    monkeypatch.setattr(build.shutil,'copytree',lambda src,dst,**kw:dst.mkdir(parents=True,exist_ok=True))
     monkeypatch.setattr(native_runtime,'verify_relocation',lambda *a:{})
     monkeypatch.setattr(native_runtime,'executable_files',lambda *a:[])
     monkeypatch.setattr(ocr_models,'copy_models',lambda *a:[])
@@ -152,10 +158,17 @@ def test_builder_declares_capability_only_after_explicit_verified_runtime(tmp_pa
         return {'synthetic-proof':True}
     monkeypatch.setattr(m,'verify',verify)
     manifests=[];monkeypatch.setattr(build,'pack_tree',lambda tree,path,manifest,key:manifests.append(manifest))
+    if omitted:
+        with pytest.raises(ValueError,match='监护升级'):build.main()
+        assert not manifests and not output.exists()
+        assert calls==(['inputs'] if enabled else [])
+        return
     if failed:
         with pytest.raises(ValueError):build.main()
         assert not manifests
     else:
         build.main();assert len(manifests)==1
-        assert (manifests[0]['runtime_capabilities'].get(m.cfg.CAPABILITY)==1)==enabled
+        capabilities=manifests[0].get('runtime_capabilities',{})
+        assert (capabilities.get(m.cfg.CAPABILITY)==1)==enabled
+        assert (capabilities.get('system_upgrade_worker_v1')==1)==(platform=='macos-arm64')
     assert calls==(['inputs','install','verify'] if enabled else [])

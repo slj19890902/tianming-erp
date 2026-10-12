@@ -171,4 +171,7 @@ def test_builder_declares_capability_only_after_explicit_verified_runtime(tmp_pa
         capabilities=manifests[0].get('runtime_capabilities',{})
         assert (capabilities.get(m.cfg.CAPABILITY)==1)==enabled
         assert (capabilities.get('system_upgrade_worker_v1')==1)==(platform=='macos-arm64')
+        for name in ('current_mac_worker_v1','current_mac_audit_v3','factory_current_mac_execution_v3'):
+            assert (capabilities.get(name)==1)==(platform=='macos-arm64')
+        assert (capabilities.get('current_mac_worker_broker_v1')==1)==enabled
     assert calls==(['inputs','install','verify'] if enabled else [])

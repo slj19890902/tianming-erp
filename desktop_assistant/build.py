@@ -74,6 +74,31 @@ def source_snapshot(root, version, revision):
     return commit, contents
 
 
+def current_mac_capabilities(sources, *, stream_enabled):
+    """Declare complete code protocols; no authority or completed install."""
+    from desktop_assistant import current_mac_worker as worker
+    from desktop_assistant import current_mac_target_audit as audit
+    from desktop_assistant import current_mac_smb_broker as broker
+    from desktop_assistant.mac_factory_runtime import CURRENT_MAC_FILES, CURRENT_MAC_CAPABILITY
+    required = CURRENT_MAC_FILES | {
+        worker.MODULE, worker.CONTRACT_MODULE, audit.MODULE,
+        'desktop_assistant/factory_target_audit.py',
+        'desktop_assistant/mac_service_manage.py',
+        'desktop_assistant/mac_system_service.py',
+        'desktop_assistant/mac_system_upgrade_worker.py',
+        'desktop_assistant/mac_smb_stream_runtime.py',
+        'desktop_assistant/mac_smb_stream_runtime_contract.py', broker.MODULE}
+    if type(stream_enabled) is not bool or not required <= sources.keys():
+        raise ValueError('当前Mac接管协议源码不完整，不能声明能力')
+    result = {worker.CAPABILITY: 1, audit.CAPABILITY: 1, CURRENT_MAC_CAPABILITY: 1}
+    if stream_enabled:
+        from desktop_assistant.mac_smb_stream_runtime_contract import FILES
+        if not FILES <= sources.keys():
+            raise ValueError('当前Mac固定连接代理的传输源码不完整')
+        result[broker.CAPABILITY] = 1
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--repo', type=Path, required=True)
@@ -157,6 +182,7 @@ def main():
                 'desktop_assistant/factory_activation_contract.py','desktop_assistant/mac_factory_activation_install.py',
                 'desktop_assistant/home_process.py'} <= sources.keys():
             raise ValueError('受保护激活发布源码不完整')
+        current_protocols = current_mac_capabilities(sources, stream_enabled=stream_wheels is not None)
     schema_contract = schema_contract_from_sources(sources, args.revision)
     if output.exists():
         raise ValueError('构建输出必须是新目录')
@@ -232,6 +258,7 @@ def main():
                                                     'system_upgrade_worker_v1': 1,
                                                     'factory_request_v1': 1, 'factory_audit_v1': 1,
                                                     'factory_activation_v1': 1, 'factory_execution_v1': 1}
+        runtime_metadata['runtime_capabilities'].update(current_protocols)
         if stream_wheels is not None:
             runtime_metadata['runtime_capabilities'][stream_build.cfg.CAPABILITY] = 1
     package = output / ('release.unsigned.zip' if args.signing_request_only else 'release.zip')

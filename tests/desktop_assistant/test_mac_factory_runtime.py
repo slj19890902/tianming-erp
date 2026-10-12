@@ -1,4 +1,8 @@
 """Real signed synthetic activation; OS/root identity remains an explicit adapter."""
+import sys
+import pytest
+if sys.platform == "win32":
+    pytest.skip("Mac inherited fcntl locks and protected runtime", allow_module_level=True)
 from copy import deepcopy
 from datetime import timedelta
 import json
@@ -6,10 +10,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 from unittest.mock import Mock
 
-import pytest
 
 from desktop_assistant import mac_factory_runtime as runtime, mac_published_runtime as published
 from desktop_assistant import factory_activation_contract as contract, factory_cutover as protocol

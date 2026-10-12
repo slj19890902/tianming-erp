@@ -3,12 +3,16 @@ from contextlib import contextmanager
 import ctypes as C
 from copy import deepcopy
 import os
+import sys
 from pathlib import Path
 import stat
 from types import SimpleNamespace
 from urllib.parse import unquote,urlsplit
 from unittest.mock import Mock
 import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "darwin",
+    reason="Mac UID, filesystem and native service protocol; run on macOS")
 
 from desktop_assistant import mac_smb_client as m
 from tests.desktop_assistant import test_mac_smb_contract as f

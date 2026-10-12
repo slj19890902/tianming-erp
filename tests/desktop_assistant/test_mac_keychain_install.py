@@ -11,6 +11,9 @@ import zipfile
 
 import pytest
 
+pytestmark = pytest.mark.skipif(sys.platform != "darwin",
+    reason="Mac UID, filesystem and native service protocol; run on macOS")
+
 from app.core import mac_keychain as public
 from app.core import mac_service_keychain as keychain
 from desktop_assistant import mac_keychain_install as m
@@ -131,7 +134,7 @@ def test_plan_rejects_bad_bindings_before_writes(case, fault):
     assert not case.events and not case.writes
 
 
-@pytest.mark.parametrize('raw', [b'[]', b'{"a":1,"a":2}', b'{"a":NaN}', b'{}' * 65536])
+@pytest.mark.parametrize('raw', [b'[]', b'{"a":1,"a":2}', b'{"a":NaN}', b'{}' * 65536], ids=['array', 'duplicate', 'nan', 'oversize'])
 def test_json_bounds_and_structure(raw):
     with pytest.raises(ValueError): m.decode(raw)
 

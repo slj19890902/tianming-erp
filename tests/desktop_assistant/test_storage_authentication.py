@@ -1,5 +1,6 @@
 """Real encrypted bytes; no operational backup, keychain or runtime is used."""
 import os
+import sys
 
 import pytest
 
@@ -31,6 +32,13 @@ def test_authentication_discards_plaintext_and_uses_the_open_descriptor(encrypte
     assert restored.read_bytes() == source.read_bytes()
     # A held input is not replaced by a later path lookup.
     with backup.open('rb') as stream:
+        if sys.platform == 'win32':
+            # Ordinary Windows read handles prohibit rename while open.
+            with pytest.raises(PermissionError):
+                backup.rename(tmp_path / 'original-encrypted')
+            assert storage.authenticate_stream(stream, PASSWORD) == expected
+            assert storage.sha(backup) == expected
+            return
         backup.rename(tmp_path / 'original-encrypted')
         backup.write_bytes(b'unrelated replacement')
         assert storage.authenticate_stream(stream, PASSWORD) == expected
@@ -77,6 +85,7 @@ def test_exclusive_output_failure_preserves_preexisting_content(encrypted, tmp_p
     if kind in ('file', 'symlink'): assert destination.read_bytes() == original.read_bytes()
     if kind == 'directory': assert destination.is_dir()
     assert destination.is_symlink() == (kind in ('symlink', 'dangling'))
+    assert not (tmp_path / 'absent').exists()
 
 
 def test_failure_cleanup_does_not_delete_a_replacement(encrypted, tmp_path, monkeypatch):
@@ -85,13 +94,22 @@ def test_failure_cleanup_does_not_delete_a_replacement(encrypted, tmp_path, monk
     own_partial = tmp_path / 'own-partial'
     decrypt = storage._decrypt_stream
     def replaced(src, password, output=None):
+        if sys.platform == 'win32':
+            # Native output preserves the original no-delete-sharing boundary.
+            with pytest.raises(PermissionError):
+                destination.rename(own_partial)
+            return decrypt(src, 'different-synthetic-password', output)
         destination.rename(own_partial)
         destination.write_bytes(b'someone else owns this')
         return decrypt(src, 'different-synthetic-password', output)
     monkeypatch.setattr(storage, '_decrypt_stream', replaced)
     with pytest.raises(ValueError): storage.decrypt_file(backup, destination, PASSWORD)
-    assert destination.read_bytes() == b'someone else owns this'
-    assert own_partial.exists()
+    if sys.platform == 'win32':
+        assert not destination.exists()
+        assert not own_partial.exists()
+    else:
+        assert destination.read_bytes() == b'someone else owns this'
+        assert own_partial.exists()
 
 
 @pytest.mark.parametrize('plaintext', [b'', b'short'])

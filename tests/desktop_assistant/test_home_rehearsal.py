@@ -110,6 +110,7 @@ with socket.socket() as listener:
                 process.kill()
             process.communicate(timeout=5)
 
+    @unittest.skipUnless(sys.platform == "darwin", "Mac protected runtime and keychain admission")
     def test_restored_configuration_cannot_activate_mac_or_load_keys(self):
         from desktop_assistant.manager import Manager
         with tempfile.TemporaryDirectory() as tmp:

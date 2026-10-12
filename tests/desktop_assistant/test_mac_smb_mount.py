@@ -12,6 +12,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "darwin",
+    reason="Mac UID, filesystem and native service protocol; run on macOS")
 from desktop_assistant import mac_smb_mount as m
 from tests.desktop_assistant import test_mac_smb_contract as f
 
@@ -137,7 +140,8 @@ def test_readonly_dfs_snapshot_or_only_negotiated_cipher_not_approved(key,bad):
 
 
 @pytest.mark.parametrize('raw',[b'',b'x'*65537,b'{',b'[]',b'{}',b'[{},{}]',b'[null]',
-    b'[{"uid":1,"uid":2}]',b'[{"x":NaN}]',b'[{"x":Infinity}]',None,'text'])
+    b'[{"uid":1,"uid":2}]',b'[{"x":NaN}]',b'[{"x":Infinity}]',None,'text'],
+    ids=['empty','oversize','truncated','array','object','two','null','duplicate','nan','infinity','none','str'])
 def test_invalid_ambiguous_or_unbounded_json_refused(raw):
     with pytest.raises(ValueError):m.parse_share(raw)
 

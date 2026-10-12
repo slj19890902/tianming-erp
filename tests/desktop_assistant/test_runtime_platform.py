@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -41,6 +42,7 @@ class RuntimePlatformTests(unittest.TestCase):
         manifest = pack_tree(source, package, metadata, self.key)
         return package, manifest
 
+    @unittest.skipUnless(sys.platform == "darwin", "Mac file permissions and runtime identity")
     def test_native_stage_permissions_and_authenticated_selection(self):
         package, manifest = self.package()
         staged = self.manager.stage_release(package)
@@ -57,6 +59,7 @@ class RuntimePlatformTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '哈希'):
             self.manager._runtime_python(staged['id'])
 
+    @unittest.skipUnless(sys.platform == "darwin", "Mac file permissions and runtime identity")
     def test_legacy_windows_archive_can_be_preserved_but_not_started_on_mac(self):
         package, manifest = self.package('windows')
         self.assertNotIn('runtime_platform', manifest)

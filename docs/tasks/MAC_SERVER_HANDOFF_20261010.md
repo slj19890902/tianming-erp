@@ -923,3 +923,19 @@ configure-backup在流批准记录存在时选择流目标，部分安装不能�
 显式--smb-stream-wheels入口及离线构建模块已实现。仅Mac接受该选项，先核当前提交完整流模块和requirements精确版本，按原固定SHA读取两个本地wheel并验证ZIP路径/类型/成员；装入新payload前拒绝已有同名模块或distribution，不调用pip、不改原venv。包内Python实际导入协议及完整流运行模块，核模块均来自本包、实际版本匹配，并在固定deny network-outbound下检查新建连接PermissionError；证明写入构建记录及包manifest，随后才声明archive_smb_stream_v1。未选该参数保留旧能力集合。
 
 新增26项构建检查，首轮相关39项全部通过；完整流组件、构建、分离签名、发布与平台兼容共588项全部通过（28.89秒），不累加重叠集合。构建主入口有明确模拟依赖拷贝的接线测试，不能替代实际包内验收。已再次核对真实缓存wheel共67个成员及固定SHA；完整真实运行依赖打包和包内验证由evidence/mac-smb-stream-build-20261012/build-complete-runtime.py在提交后执行，其结果须以native-build-verification.json及NAS独立回执为准，未执行前不宣称完整构建成功。代码差异检查及主代理顺序复查完成，无独立代理审计声明；实际系统未改，原签名与实机NAS/重启/工厂现场门禁保持。
+
+## 2026-10-12 Windows解密输出HOLD修复范围
+
+用户交回7bb7a564工厂HOLD：375通过/11平台跳过、15原生专项通过，但独立合成复现decrypt_file沿预存悬空符号链接创建明文目标，未签名。Mac已搬入工厂，当前Wi-Fi 192.168.3.102/24、网关192.168.3.1；旧ERP仍在网内，本轮不占用192.168.3.80、不解除家庭隔离、不停旧机或接管。NAS重新登录后已读原回执及复现，旧失败现场保留。
+
+主代理单独实施，允许修改desktop_assistant/storage.py、tests/desktop_assistant/test_storage_authentication.py，新增test_windows_exclusive_output.py，并更新本卡/计划及外部证据/构建交接。Windows输出必须原生CREATE_NEW配合FILE_FLAG_OPEN_REPARSE_POINT，既有目标检查不能代替原子创建；保持非继承句柄和原不共享删除的语义，失败不得回落Python普通open或删除他人目标。Mac路径原语保持，密码/GCM/全量恢复算法不改。测试明确区分原生Windows与Mac上模拟API，不把模拟通过当Windows实机通过；Windows实际文件锁语义采用明确断言，不跳过文件安全问题。仅修末级输出创建边界，不宣称任意父目录并发重解析问题已获通用解决。
+
+所有测试只用合成文件/口令。新程序包须绑定新准确源码与原公钥，再交原Windows身份复核签名；旧7bb仍HOLD，不复制旧签名或部署。实际业务库、运营凭据、系统服务及旧机不修改。
+
+扩展检查另确认四个Mac专用测试模块缺少平台标记（keychain_install、published_runtime、smb_client、smb_mount），两个已有Mac标记模块在标记生效前导入fcntl（factory_activation、factory_runtime），混合模块runtime_platform两项与home_rehearsal一项实际进入Mac权限/身份路径。追加允许上述测试文件标注真实平台范围，并给两项超大JSON参数使用短ID，载荷和断言不减。Mac全量运行这些检查；Windows仍必须运行共享storage真实安全用例及新增原生输出检查，不能以平台跳过掩盖解密缺陷。
+
+本轮输出修复已完成：仅Windows的decrypt_file使用原生末级CREATE_NEW和OPEN_REPARSE_POINT，非继承句柄转交CRT，转换失败精确关闭原句柄；不跟随既有或竞争加入的末级链接。保留原父目录受控责任、读写共享但禁止删除共享、GCM认证算法及失败身份核对；其他storage既有函数AST不变。共享测试在Windows明确核持有句柄时禁止改名、关闭后失败清理，Mac仍核替换文件保留；悬空链接目标必须仍不存在。新增12项中9项为API/句柄边界合成验证，3项必须Windows原生执行。
+
+Mac首轮27通过/3 Windows原生跳过；恢复/凭据/SMB/签名/构建相关685通过/4平台跳过（43.36秒）。平台范围409项首轮407通过/2失败（94.13秒）：我调整测试导入时误删两段子进程字符串中的sys导入，已补回并对原字符串常量逐项比较。随后两个受影响完整模块113项全部通过；原失败日志保留，集合重叠不累加，不宣称重新跑过完整409项。当前没有Windows实机修复通过证据，7bb的HOLD不撤销。
+
+工厂现场只读：2026-10-12本机127.0.0.1健康200，系统launchd监护运行且ERP_HOME_REHEARSAL=1；新工厂地址192.168.3.102:8000连接被拒绝，家庭旧地址转发未适配，不能称工厂LAN已验收。用户确认NAS仍在家里，旧192.168.1.245/192.168.2.3的445均超时；NAS客户端远程挂载恢复只用于交接，不等于后台直连SMB通过。需要工厂至家庭NAS的可验证私网连接或重新确定备份架构，未开放端口、更改网络、安装配置或连接正式库。新候选继续待Windows复核与原身份签名，后续工厂最终停写同步与唯一写入端仍须完成。

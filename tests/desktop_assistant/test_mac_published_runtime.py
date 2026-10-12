@@ -13,6 +13,9 @@ from unittest.mock import Mock
 
 import pytest
 
+pytestmark = pytest.mark.skipif(sys.platform != "darwin",
+    reason="Mac UID, filesystem and native service protocol; run on macOS")
+
 from desktop_assistant import mac_published_runtime as published
 from desktop_assistant import migration, release_verification
 from desktop_assistant.manager import Manager

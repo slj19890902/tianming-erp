@@ -1,4 +1,8 @@
 """Real synthetic backup proof and inherited locks; OS/root adapters are explicit."""
+import sys
+import pytest
+if sys.platform == "win32":
+    pytest.skip("Mac inherited fcntl locks and protected runtime", allow_module_level=True)
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime,timedelta,timezone
@@ -6,11 +10,9 @@ import fcntl
 import os
 from pathlib import Path
 import subprocess
-import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-import pytest
 
 from desktop_assistant import mac_factory_activation_install as install, mac_factory_activation as worker
 from desktop_assistant import factory_activation_contract as contract, factory_target_contract as target_contract

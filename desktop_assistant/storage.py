@@ -5,6 +5,7 @@ from contextlib import closing
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path, PurePosixPath
 import sqlite3
 import stat
@@ -253,12 +254,50 @@ def authenticate_stream(source, password: str) -> str:
     return _decrypt_stream(source, password)
 
 
+def _windows_create_new(path, flags):
+    """Atomic leaf creation without traversing a pre-existing reparse point.
+
+    The CRT exclusive opener can follow a dangling Windows symlink. The native
+    call is the boundary, including when a link appears after the early check.
+    Parent directories remain the caller's trusted staging responsibility.
+    """
+    import ctypes as C
+    from ctypes import wintypes as W
+    import msvcrt
+
+    if os.path.lexists(path):
+        raise FileExistsError('解密输出目标已存在')
+    kernel = C.WinDLL('kernel32', use_last_error=True)
+    create = kernel.CreateFileW
+    create.restype = W.HANDLE
+    create.argtypes = [W.LPCWSTR, W.DWORD, W.DWORD, C.c_void_p,
+                       W.DWORD, W.DWORD, W.HANDLE]
+    close = kernel.CloseHandle
+    close.restype, close.argtypes = W.BOOL, [W.HANDLE]
+    # GENERIC_WRITE; share read/write, never DELETE; CREATE_NEW;
+    # FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT. NULL security
+    # attributes keep the handle non-inheritable and inherit the staging ACL.
+    handle = create(os.fspath(path), 0x40000000, 3, None, 1, 0x00200080, None)
+    if handle == C.c_void_p(-1).value:
+        error = C.get_last_error()
+        if error in (80, 183):
+            raise FileExistsError(error, '解密输出目标已存在', path)
+        raise C.WinError(error)
+    try:
+        # Ownership passes to the CRT descriptor only on success.
+        return msvcrt.open_osfhandle(handle, os.O_WRONLY | os.O_BINARY | os.O_NOINHERIT)
+    except BaseException:
+        close(handle)
+        raise
+
+
 def decrypt_file(source: Path, destination: Path, password: str) -> str:
     """Authenticate recovery bytes and return the digest of that exact input."""
     with source.open('rb') as src:
         # Exclusive creation must precede the cleanup scope: an existing target
         # belongs to someone else, even when opening it raises FileExistsError.
-        dst = destination.open('xb')
+        dst = (open(destination, 'xb', opener=_windows_create_new)
+               if sys.platform == 'win32' else destination.open('xb'))
         created = os.fstat(dst.fileno())
         try:
             with dst:

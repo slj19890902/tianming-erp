@@ -25,7 +25,8 @@ CURRENT_MAC_CAPABILITY = 'factory_current_mac_execution_v3'
 CURRENT_MAC_FILES = EXECUTION_FILES | {
     'desktop_assistant/mac_published_runtime.py', 'desktop_assistant/current_mac_cutover.py',
     'desktop_assistant/current_mac_cutover_contract.py', 'desktop_assistant/restore_provenance.py',
-    'desktop_assistant/release_request.py'}
+    'desktop_assistant/release_request.py', 'desktop_assistant/current_mac_publication.py',
+    'desktop_assistant/current_mac_worker_contract.py'}
 _admitted = None
 
 
@@ -132,7 +133,11 @@ def _configuration(root, package, public, *, authenticate_history=False):
     if root.absolute() != published.ROOT or root.resolve() != published.ROOT:
         raise ValueError('正式模式只允许固定专用实例')
     active = published.BASE/contract.NAME
-    if not os.path.lexists(active): return None
+    if not os.path.lexists(active):
+        from desktop_assistant import current_mac_publication as gate
+        if any(os.path.lexists(published.BASE/name) for name in (gate.NAME,gate.FAILED)):
+            raise ValueError('当前Mac接管事务未完成，拒绝回退为家庭模式')
+        return None
     from desktop_assistant import mac_service_manage as manage
     context = keychain.load_context()
     with ExitStack() as stack:
@@ -143,6 +148,11 @@ def _configuration(root, package, public, *, authenticate_history=False):
             limit=manage.STATE_LIMIT if path==root/'state.json' else contract.LIMIT
             return _read_complete(item,limit)
         raw=read(active);value,body,current=_activation(raw)
+        if current:
+            from desktop_assistant import current_mac_publication as gate
+            if os.path.lexists(published.BASE/gate.FAILED):
+                raise ValueError('当前Mac接管发布失败记录仍存在，拒绝正式运行')
+            gate.validate(contract.decode(read(published.BASE/gate.NAME)),activation_raw=raw,ready=True)
         context_raw=read(keychain.CONTEXT);registry=published._record(read(published.REGISTRY));pinned=read(published.PUBLIC)
         request=value['request'];context_sha=boot.digest(context_raw)
         # The saved registry SHA describes the activation transaction. Approved
@@ -190,6 +200,8 @@ def _configuration(root, package, public, *, authenticate_history=False):
         if state.get('current') != package:
             raise ValueError('正式实例当前程序身份不符')
         for item in held:item.check()
+        if current and os.path.lexists(published.BASE/gate.FAILED):
+            raise ValueError('当前Mac接管发布失败记录仍存在，拒绝正式运行')
         return {'network':dict(value['network']),'activation_sha256':boot.digest(raw),
                 'package_sha256':package,'request_id':request['request_id']}
 

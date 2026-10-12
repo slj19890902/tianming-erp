@@ -29,7 +29,8 @@ from tests.desktop_assistant.test_mac_factory_runtime import (
 CAPABILITY = 'factory_current_mac_execution_v3'
 V3_FILES = {'desktop_assistant/mac_published_runtime.py',
     'desktop_assistant/current_mac_cutover.py', 'desktop_assistant/current_mac_cutover_contract.py',
-    'desktop_assistant/restore_provenance.py', 'desktop_assistant/release_request.py'}
+    'desktop_assistant/restore_provenance.py', 'desktop_assistant/release_request.py',
+    'desktop_assistant/current_mac_publication.py', 'desktop_assistant/current_mac_worker_contract.py'}
 
 
 @pytest.fixture(autouse=True)
@@ -58,6 +59,10 @@ def publish_record(c):
             ('factory-target-'+request['request_id']+'.json', request),
             ('factory-network-'+request['request_id']+'.json', c.network)):
         path = c.x.base/name; path.write_bytes(current.canonical(value)); path.chmod(0o644)
+    from desktop_assistant import current_mac_publication as gate
+    claim = dict(type=gate.TYPE,attempt_id='a'*32,plan_sha256='b'*64,
+        activation_sha256=sha(c.x.base/contract.NAME),request_sha256=current.digest(request),ready=True)
+    path = c.x.base/gate.NAME;path.write_bytes(current.canonical(claim));path.chmod(0o644)
 
 
 @pytest.fixture
@@ -99,6 +104,29 @@ def test_v3_configuration_accepts_signed_current_mac_without_comparing_source_bu
         'package_sha256': c.x.id, 'request_id': c.body['request']['request_id']}
     assert (c.x.root/'state.json').read_bytes() == state_raw
     assert c.body['source_stop']['database_sha256'] != c.body['preparation']['target_snapshot']['database_sha256']
+
+
+@pytest.mark.parametrize('fault',['missing','unfinished','wrong_activation','wrong_request','failure',
+    'partial_failure','no_activation','completion_symlink'])
+def test_v3_refuses_unconfirmed_root_publication(current_case,fault):
+    from desktop_assistant import current_mac_publication as gate
+    c=current_case;path=c.x.base/gate.NAME
+    if fault=='missing':path.unlink()
+    elif fault=='no_activation':(c.x.base/contract.NAME).unlink()
+    elif fault=='completion_symlink':
+        raw=path.read_bytes();other=c.x.base/'other-completion.json';other.write_bytes(raw);other.chmod(0o644)
+        path.unlink();path.symlink_to(other)
+    elif fault in ('failure','partial_failure'):
+        failed=c.x.base/gate.FAILED;failed.write_bytes(b'{}' if fault=='failure' else b'')
+        failed.chmod(0o644)
+    else:
+        value=read_json(path)
+        if fault=='unfinished':value['ready']=False
+        elif fault=='wrong_activation':value['activation_sha256']='0'*64
+        else:value['request_sha256']='0'*64
+        path.write_bytes(current.canonical(value))
+    with pytest.raises((ValueError,OSError)):runtime.configuration(c.x.root,c.x.id,c.t.c.public)
+    assert runtime.configured_mode(c.manager)=='attention'
 
 
 def change(path, update):

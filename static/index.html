@@ -40910,7 +40910,7 @@
               const packet = window.TmDeliveryDispatchRecovery.validateSnapshot(data, actor, id, Number(row.version));
               const form = options.expectedForm;
               if (form) {
-                const lines = form.lines || [], ids = new Set(lines.map(line => Number(line.delivery_item_id)));
+                const lines = (form.lines || []).filter(line => this.deliveryLineHasInput(line)), ids = new Set(lines.map(line => Number(line.delivery_item_id)));
                 if (this.deliveryForm !== form || Number(form.customer_id) !== packet.snapshot.delivery.customer_id || Number(form.version) !== packet.snapshot.delivery.version || lines.length !== packet.snapshot.items.length || ids.size !== lines.length || lines.some(line => !Number.isSafeInteger(Number(line.delivery_item_id)) || !packet.snapshot.items.some(item => item.delivery_item_id === Number(line.delivery_item_id) && item.customer_quantity === Number(line.delivered_quantity)))) {
                   throw new Error("原草稿保存尚未完整核对，请刷新并打开原送货单后再发货");
                 }

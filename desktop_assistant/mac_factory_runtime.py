@@ -43,13 +43,15 @@ def configuration(root, package, public):
         raise ValueError('正式模式只允许固定专用实例')
     active = published.BASE/contract.NAME
     if not os.path.lexists(active): return None
+    from desktop_assistant import mac_service_manage as manage
     context = keychain.load_context()
     with ExitStack() as stack:
         base = stack.enter_context(Lease(published.BASE,uid=0,gid=None,mode=0o755,directory=True,mutable=True))
         held = []
         def read(path, parent=base, *, uid=0, gid=None, mode=0o644):
             item=stack.enter_context(Lease(path,uid=uid,gid=gid,mode=mode,parent=parent));held.append(item)
-            return _read_complete(item,contract.LIMIT)
+            limit=manage.STATE_LIMIT if path==root/'state.json' else contract.LIMIT
+            return _read_complete(item,limit)
         raw=read(active);value=contract.decode(raw);body=contract.validate_record(value)
         context_raw=read(keychain.CONTEXT);registry=published._record(read(published.REGISTRY));pinned=read(published.PUBLIC)
         request=value['request'];context_sha=boot.digest(context_raw)
@@ -76,7 +78,7 @@ def configuration(root, package, public):
             raise ValueError('正式激活的原申请或网络记录已改变')
         private=stack.enter_context(Lease(root,uid=context['uid'],gid=context['gid'],mode=0o700,
                                           directory=True,parent=base,mutable=True))
-        state=contract.decode(read(root/'state.json',private,uid=context['uid'],gid=context['gid'],mode=0o600))
+        state=manage.decode_record(read(root/'state.json',private,uid=context['uid'],gid=context['gid'],mode=0o600),'state.json')
         binding={'type':'tianming.mac-native-restore.v1','package_sha256':request['package_sha256'],
             'backup_sha256':body['source']['backup_sha256'],'context_sha256':context_sha,
             'database_revision':body['source']['snapshot']['revision'],'schema_migrated':False,'factory_cutover':False}

@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -38,6 +39,8 @@ class Manager:
     def __init__(self, root: Path, public_key: bytes):
         self.root = root.resolve()
         self.public_key = public_key
+        self._owned_children = []
+        self._children_lock = threading.Lock()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         for name in ('releases', 'shared', 'control', 'backups', 'packages', 'staging'):
             (self.root / name).mkdir(exist_ok=True)
@@ -285,14 +288,24 @@ class Manager:
             if sha(destination / name) != expected:
                 raise ValueError('恢复程序缓存文件校验失败：' + name)
 
-    def _process(self):
-        path = self.root / 'control' / 'process.json'
-        if not path.exists():
-            return None
-        record = read_json(path)
+    def _track_child(self, child):
+        with self._children_lock:
+            self._owned_children.append(child)
+
+    def reap_owned_children(self):
+        """Collect only our Popen children, without waiting or taking the maintenance lock."""
+        with self._children_lock:
+            self._owned_children[:] = [child for child in self._owned_children
+                                       if child.poll() is None]
+
+    def _recorded_process(self, record):
         try:
             proc = psutil.Process(record['pid'])
             if abs(proc.create_time() - record['created']) > .01:
+                return None
+            # A zombie has exited and may no longer expose an executable path.
+            # Check it only after binding the original PID/creation time.
+            if proc.status() == psutil.STATUS_ZOMBIE:
                 return None
             if Path(proc.exe()).resolve() != Path(record['exe']).resolve():
                 raise ValueError('服务进程身份不匹配，停止维护')
@@ -300,15 +313,38 @@ class Manager:
         except psutil.NoSuchProcess:
             return None
 
+    def _process(self):
+        path = self.root / 'control' / 'process.json'
+        if not path.exists():
+            return None
+        return self._recorded_process(read_json(path))
+
     def stop(self):
+        self.reap_owned_children()
         item = self._process()
         if item:
-            proc, record = item
+            _, record = item
             (self.root / 'control' / (record['nonce'] + '.stop')).touch()
-            try:
-                proc.wait(timeout=60)
-            except psutil.TimeoutExpired:
-                raise ValueError('服务未能正常停止，未强杀，请检查日志') from None
+            deadline = time.monotonic() + 60
+            while True:
+                self.reap_owned_children()
+                item = self._recorded_process(record)
+                if item is None:
+                    return
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ValueError('服务未能正常停止，未强杀，请检查日志')
+                try:
+                    # A non-parent cannot reap a POSIX zombie. Recheck its
+                    # identity/status between waits instead of waiting for PID removal.
+                    item[0].wait(timeout=min(.25, remaining))
+                    self.reap_owned_children()
+                    return
+                except psutil.NoSuchProcess:
+                    self.reap_owned_children()
+                    return
+                except psutil.TimeoutExpired:
+                    pass
 
     def pause_after_backup(self, password: str, nas: Path):
         with self.lock():
@@ -479,6 +515,7 @@ class Manager:
             proc = subprocess.Popen(arguments,
                                     cwd=release, env=env, stdout=log, stderr=log,
                                     **process_options())
+            self._track_child(proc)
         owner = psutil.Process(proc.pid)
         write_json(self.root / 'control/process.json', {'pid': proc.pid, 'created': owner.create_time(),
                    'exe': str(python), 'nonce': nonce})

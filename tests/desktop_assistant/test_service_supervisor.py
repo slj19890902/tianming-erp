@@ -16,6 +16,10 @@ class Manager:
         self.running = None
         self.starts = self.stops = 0
         self.busy = False
+        self.reaps = 0
+
+    def reap_owned_children(self):
+        self.reaps += 1
 
     @contextmanager
     def lock(self):
@@ -61,6 +65,7 @@ def test_explicit_stop_and_failed_maintenance_are_not_restarted(tmp_path, state,
     manager.state = state
     assert service.tick(manager) == status
     assert manager.starts == 0
+    assert manager.reaps == 1
 
 
 def test_backup_lock_prevents_restart_and_shutdown_does_not_force_kill(tmp_path):
@@ -70,6 +75,7 @@ def test_backup_lock_prevents_restart_and_shutdown_does_not_force_kill(tmp_path)
     with pytest.raises(ValueError, match=BUSY):
         service.stop_owned(manager, timeout=0)
     assert manager.starts == manager.stops == 0
+    assert manager.reaps == 1
 
 
 def test_supervisor_shutdown_and_exclusive_ownership(tmp_path):
@@ -81,6 +87,7 @@ def test_supervisor_shutdown_and_exclusive_ownership(tmp_path):
     manager.start = start
     service.supervise(manager, stopping, interval=0)
     assert manager.starts == manager.stops == 1
+    assert manager.reaps == 2
     assert json.loads((tmp_path/'control/service-status.json').read_text())['status'] == 'stopped'
     with operation_lock(tmp_path/'control/service-supervisor.lock'):
         with pytest.raises(ValueError, match=BUSY):
@@ -96,6 +103,7 @@ def test_unexpected_start_failure_is_visible_without_exception_details(tmp_path)
         service.supervise(manager, threading.Event(), interval=0)
     text = (tmp_path/'control/service-status.json').read_text()
     assert 'attention-required' in text and 'synthetic-sensitive' not in text
+    assert manager.reaps == 2
 
 
 def test_system_supervisor_runs_backup_scheduler_and_joins_before_stop(tmp_path,monkeypatch):

@@ -385,3 +385,126 @@ def test_running_process_is_not_accepted_after_system_disable(activated,monkeypa
     monkeypatch.setattr(Manager,'_process',process)
     with pytest.raises(ValueError):START(c.manager)
     process.assert_not_called()
+
+
+def test_complete_2991_file_history_survives_factory_configuration(activated,monkeypatch):
+    from desktop_assistant import migration
+    c=activated; history=c.t.c.root/'synthetic-runtime-history'; history.mkdir()
+    for index in range(2991):
+        (history/f'preserved-{index:05d}.pdf').write_bytes(b'synthetic historical attachment')
+    inventory=migration.files(history)
+    state=c.x.root/'state.json'; value=read_json(state)
+    value.update(migration_files=inventory,historical_metadata={'preserve':['unchanged',2991]})
+    write_json(state,value);state.chmod(0o600);before=state.read_bytes()
+    assert len(inventory)==2991 and len(before)>contract.LIMIT
+    def forbidden(*args,**kwargs):raise AssertionError('configuration must not use network or secrets')
+    monkeypatch.setattr('socket.socket',forbidden)
+    monkeypatch.setattr(system,'verify_keychain',forbidden)
+    monkeypatch.setattr('desktop_assistant.ai_config.load_openai_api_key',forbidden)
+    monkeypatch.setattr('desktop_assistant.ai_config.load_deepseek_api_key',forbidden)
+    actual=runtime.configuration(c.x.root,c.x.id,c.t.c.public)
+    assert actual['package_sha256']==c.x.id
+    assert 'migration_files' not in json.dumps(actual)
+    assert runtime.configured_mode(c.manager)=='factory'
+    assert state.read_bytes()==before and read_json(state)['migration_files']==inventory
+    assert migration.files(history)==inventory
+
+
+@pytest.mark.parametrize('fault',['duplicate-root','duplicate-nested','nan','infinity',
+                                  'negative-infinity','overflow','list','invalid-utf8','empty'])
+def test_factory_state_strict_json_refuses_without_repair(activated,fault):
+    c=activated; path=c.x.root/'state.json'; raw=path.read_bytes().rstrip()
+    extras={'duplicate-root':b'"manual_stop":true','duplicate-nested':b'"nested":{"same":1,"same":2}',
+            'nan':b'"nonfinite":NaN','infinity':b'"nonfinite":Infinity',
+            'negative-infinity':b'"nonfinite":-Infinity','overflow':b'"nonfinite":1e999',
+            'invalid-utf8':b'"history":"\xff"'}
+    invalid=b'[]' if fault=='list' else b'' if fault=='empty' else raw[:-1]+b','+extras[fault]+b'}'
+    path.write_bytes(invalid)
+    with pytest.raises(ValueError):runtime.configuration(c.x.root,c.x.id,c.t.c.public)
+    assert path.read_bytes()==invalid
+
+
+@pytest.mark.parametrize('size',[65536,65537,16*1024**2,16*1024**2+1])
+def test_factory_state_limit_counts_utf8_bytes_and_rejects_before_read(activated,monkeypatch,size):
+    c=activated; path=c.x.root/'state.json'
+    prefix=path.read_bytes().rstrip()[:-1]+b',"historical_note":"'; suffix=b'"}'
+    count,remainder=divmod(size-len(prefix)-len(suffix),3)
+    raw=prefix+'片'.encode()*count+b'x'*remainder+suffix
+    assert len(raw)==size and len(raw.decode())<size
+    path.write_bytes(raw)
+    if size>manage.STATE_LIMIT:
+        inode=path.stat().st_ino; original=os.read
+        def checked_read(fd,length):
+            assert os.fstat(fd).st_ino!=inode,'oversized state must be rejected before reading'
+            return original(fd,length)
+        monkeypatch.setattr(os,'read',checked_read)
+        with pytest.raises(ValueError,match='超限'):runtime.configuration(c.x.root,c.x.id,c.t.c.public)
+    else:
+        assert runtime.configuration(c.x.root,c.x.id,c.t.c.public)['package_sha256']==c.x.id
+    assert path.read_bytes()==raw
+
+
+@pytest.mark.parametrize('record',['activation','context','registry','public','request','network','same-basename'])
+def test_factory_root_records_keep_original_64k_limit(activated,monkeypatch,record):
+    c=activated
+    paths={'activation':c.x.base/contract.NAME,'context':c.x.base/'keychain-context.json',
+           'registry':published.REGISTRY,'public':published.PUBLIC,
+           'request':c.x.base/('factory-target-'+c.t.request['request_id']+'.json'),
+           'network':c.x.base/('factory-network-'+c.t.request['request_id']+'.json')}
+    if record=='same-basename':
+        path=c.x.base/'state.json';path.write_bytes(paths['activation'].read_bytes());path.chmod(0o644)
+        monkeypatch.setattr(contract,'NAME','state.json')
+    else:path=paths[record]
+    raw=path.read_bytes()+b' '*contract.LIMIT;path.write_bytes(raw)
+    with pytest.raises(ValueError,match='超限'):runtime.configuration(c.x.root,c.x.id,c.t.c.public)
+    assert path.read_bytes()==raw
+
+
+@pytest.mark.parametrize('fault',['state-bytes','context-bytes','instance-mode','base-mode'])
+def test_factory_state_late_mutation_keeps_held_file_and_parent_checks(activated,monkeypatch,fault):
+    c=activated;decode=manage.decode_record;changed=[]
+    def after_read(raw,name):
+        value=decode(raw,name)
+        assert name=='state.json'
+        path=(c.x.root/'state.json' if fault=='state-bytes' else c.x.base/'keychain-context.json'
+              if fault=='context-bytes' else c.x.root if fault=='instance-mode' else c.x.base)
+        if fault.endswith('bytes'):path.write_bytes(path.read_bytes()+b' ')
+        else:path.chmod(0o755 if fault=='instance-mode' else 0o700)
+        changed.append(path)
+        return value
+    monkeypatch.setattr(manage,'decode_record',after_read)
+    with pytest.raises(ValueError,match='保护|身份'):runtime.configuration(c.x.root,c.x.id,c.t.c.public)
+    assert len(changed)==1
+
+
+@pytest.mark.parametrize('first',['mac_factory_runtime','mac_service_manage','manager'])
+def test_factory_runtime_state_decoder_import_orders_without_transport_or_io(first):
+    script='''
+import importlib,importlib.abc,sys
+sys.path.insert(0,sys.argv[1])
+class NoTransport(importlib.abc.MetaPathFinder):
+    def find_spec(self,fullname,path=None,target=None):
+        if fullname.split('.')[0] in {'smbprotocol','spnego'} or fullname.startswith('desktop_assistant.mac_smb_stream'):
+            raise AssertionError('optional transport imported: '+fullname)
+sys.meta_path.insert(0,NoTransport())
+def no_io(event,args):
+    if event in {'socket.__new__','socket.connect','socket.bind','subprocess.Popen','os.system'}:
+        raise AssertionError('runtime import performed IO: '+event)
+sys.addaudithook(no_io)
+importlib.import_module('desktop_assistant.'+sys.argv[2])
+from desktop_assistant import mac_factory_runtime as runtime
+if sys.argv[2]=='mac_factory_runtime':
+    assert 'desktop_assistant.mac_service_manage' not in sys.modules
+runtime.published.selected=lambda:False
+assert runtime.configuration('/synthetic-unselected',None,None) is None
+from desktop_assistant import mac_service_manage as manage
+assert manage.STATE_LIMIT==16*1024**2
+assert manage.decode_record(b'{"history":[]}', 'state.json')=={'history':[]}
+assert callable(runtime.configuration) and callable(manage.instance)
+assert not any(n.startswith(('smbprotocol','spnego','desktop_assistant.mac_smb_stream')) for n in sys.modules)
+print('import-order-without-transport-or-io: '+sys.argv[2])
+'''
+    repo=Path(__file__).resolve().parents[2]
+    result=subprocess.run([TEST_PYTHON,'-I','-B','-c',script,str(repo),first],capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stderr
+    assert 'import-order-without-transport-or-io: '+first in result.stdout

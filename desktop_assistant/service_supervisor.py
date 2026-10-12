@@ -18,6 +18,9 @@ from desktop_assistant.storage import write_json
 
 def tick(manager, cache=None):
     cache = cache if cache is not None else {}
+    # An independent stop holds the maintenance lock while waiting for our
+    # child. Reaping must still run when that lock is busy or manual_stop is set.
+    manager.reap_owned_children()
     try:
         with manager.lock():
             state = manager.state
@@ -124,6 +127,7 @@ def supervise(manager, stopping, *, interval=2, system_identity=None, keychain_c
         finally:
             stopping.set()
             if timer is not None: timer.join()
+            manager.reap_owned_children()
 
 
 def main():

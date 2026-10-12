@@ -1,5 +1,15 @@
 # MAC-SERVER-HANDOFF-20261010
 
+## 2026-10-12 当前Mac完整备份连接代理范围
+
+连接代理工具候选已完成：实际macOS精确IP策略返回65，原错误host must be * or localhost保留；Unix datagram的getpeereid返回EINVAL，而stream返回当前真实个人UID/GID，所以只使用stream和原生C getpeereid核root peer。root按三阶段消息逐次连接、SCM_RIGHTS传FD；客户端核原控制身份和TCP实际peer，FD设不可exec继承。失败关闭控制通道以唤醒对端、释放未领FD，实例永久拒绝重试；root实际子进程仍必须由外层观测到退出，不能因IPC关闭而强杀。原完整备份格式和SMB加密/独立回读没有改。
+
+最终新模块27项＋既有worker合同124项共151通过/0跳过，初19为子集。真实Apple deny-all沙箱内合成子进程新建TCP被EPERM拒绝，同时三个父连接FD传递/收发成功；root身份和临时loopback/端口有明确适配，并非真实UID499或NAS验证。错误消息/无效端点/保护/两FD/文件FD/错peer/断连/复验失败均覆盖，Python3.9语法、差异检查及现有ERP health通过。证据current-mac-smb-broker-20261012。未接入现有root collector/runtime/worker/build、未读取NAS密码或写NAS业务备份，不部署或启动ERP，不改变网络和旧机；后续完整接线与实际备份验收不能省略。
+
+主代理单负责人新增current_mac_smb_broker.py及同名测试，先闭合root/499之间的固定连接代理。实机再次复现macOS拒绝非loopback的精确remote ip sandbox规则，不能以通配规则或直接取消隔离替代。root依据原批准plan/stream合同，只在probe/upload/download固定顺序中各建立一次TCP445连接，通过继承Unix socket和SCM_RIGHTS发送FD；业务/密码/SMB认证和内容仍留在原专用传输程序。计划SHA、挑战和控制/合同摘要逐消息绑定，客户端核root peer及实际TCP peer，全部有界，错消息/多连接/截断/多FD拒绝并关本次FD，无重连/DNS/秘密参数。外层root仍须先独立批准程序、固定root元数据及实际UID启动；该内部工具不自行授权/启动ERP或发布备份回执。
+
+本轮只合成Unix/TCP/FD及原deny-all sandbox验证，不向NAS写入、读取真实凭据或部署；身份与loopback端点适配明确，不能冒充UID499/实机NAS成功。随后必须接入原SMB _dispatch、固定worker CLI/root collector及完整计划生产，不能仅工具通过就标记完整备份或迁移完成。
+
 ## 2026-10-12 当前Mac管理员接管发布事务范围
 
 发布事务候选已完成：独立闭合的管理员代码allowlist；原publication/operation锁内固定root计划、公开输入/控制原件、全量state摘要、原批准角色及新鲜授权窗口；固定worker完整退出后，同锁独占写原请求/网络与激活记录，再CAS提交ready回执。失败哨兵在父锁释放前创建，全部尝试/已写原件保持；root不读业务库或秘密，不启动ERP。v3运行消费精确ready原件摘要、request摘要及root保护，未完成/失败记录不回家庭模式；旧v1消费保持。

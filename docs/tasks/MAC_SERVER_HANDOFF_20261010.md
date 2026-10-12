@@ -1073,3 +1073,21 @@ root源码SHA7860c757b9239bed1c377a586f4edacb8d24a245ca8a46adfee6c59d502fa031，
 构建接线先保留4失败/2通过的缺能力/缺worker或合同基线，随后完整关联构建模块29通过/0跳过/0.20秒。源码SHA17a7a24fc4b1faf22590f3f31e9d5ee12197e6ee5337030e23b326662ab3bc35、测试SHA91382b20966ec4daf156139f6d511d743d2982117f83f982bd6d5d96b56a3591；原SMB显式启用及Windows能力隔离保持。两部分独立只读复审未重跑测试，主代理差异/语法复查完成。尚未构建完整新包、部署或改当前服务。
 
 该管理员包使用独立精确allowlist（原boot.FILES加新root模块和纯合同），不改写旧verify_code或冒用旧system_action；外部固定SHA装载器仍须在导入前核完整管理员包，模块自检不等于批准。EXIT_TIMEOUT/START_TIMEOUT只是阶段上限；本次UID worker为避免遗弃仍持维护锁的子进程会等待其实际退出，整个管理员事务没有总时限。verified.json存在不能单独证明成功，须apply正常返回且无failed记录；pending保留为历史。当前Mac业务、旧Windows和网络不变，不清空旧机。
+
+4e6a554e已提交并归档28项公共资料/791,824字节，专网SMB逐项fsync及禁缓存回读一致。未上传业务或秘密，不是独立业务备份；对应NAS回执20261012-4e6a554e-Mac监督升级候选完成-未部署.md。
+
+## 2026-10-12 当前Mac业务接管v3公共合同与签名编解码范围
+
+下一最小闭环由target_audit_review独占新增current_mac_cutover_contract.py、current_mac_cutover.py及对应两份测试，remote_backup_review只读复审，主代理负责本卡/计划/归档。纯合同只允许公开身份、摘要、计数和明确时间，采用独立tianming.factory-current-mac.*.v3类型及签名域，64KiB严格未知键/重复键/非规范数拒绝；构造与校验不访问文件、时钟、网络或凭据。签名编解码模块只接受调用者提供的原Ed25519对象/公钥，不加载、生成或导出私钥，不实际签正式授权。
+
+公共申请绑定精确准备证明、执行程序、实际监护、网络与固定Mac身份；准备证明分开历史restore/外部凭据/原回执/native binding、最新完整冷备及NAS独立回读、当前全部业务快照、完整共享清单、凭据目的、新执行/监护和root批准摘要。冷备release、传输package与execution/monitor不得混用。Windows的source_stop只声明当次锁/进程/完整冻结现场及精确request摘要，不要求它与Mac业务相等；双方身份、原公钥及新鲜停写仍必需。时间沿用申请最多七天、首次安装最多八小时，旧备份时间不可伪造更新；运行期验签不按旧安装窗口自动过期。
+
+必须覆盖真实合成签名的正确与篡改/跨v1v2域拒绝、未知/遗漏/类型边界、来源与当前Mac业务不同仍允许明确绑定、准备/请求/签发时间顺序及窗口、任何准备摘要改变拒绝；不以合同合法当作底层事实已实证。旧v1/v2文件语义不变，不扩LOGIN白名单。该轮不实现源端实际签发、目标解密审计、worker/root激活/runtime或build接线，不读真实数据库/钥匙串、不停当前ERP或操作Windows/NAS。
+
+公开接口经作者/只读复审冻结后，cutover_gap_review作为第二个执行子任务，独占新增current_mac_source_issue.py及对应测试。仅实现候选Windows窄签发入口：复用已有existing_only维护锁、原_SourceReader/_stopped、Windows只读文件租约、原DPAPI identity与独占发布原语；新入口补严state pending及严格JSON。固定请求/准备原文件批准SHA与规范对象request摘要各自核验。源端只冻结当前原state/DB/全部shared/environment/凭据配置密文/process摘要、程序和真实原用户身份，原件不变；不读取NAS口令、不重导凭据、不建业务副本、不比较Mac或10月10日业务相等。load原私钥前、签名前后、输出回读及退出前复验，正式输出仅在原用户/停写/锁/读租约门禁齐全时允许。所有本轮检查只用合成文件和key，Windows原生分支须准确标记平台证据；Mac不得假称DPAPI实机通过。最多两个执行代理，其余只读，实际Windows和Mac运行服务不操作。
+
+原扫码地址补充：老板确认原Windows成员只是退出组网，没有删除成员。不得把今天创建时间的UI观察解释为用户删除过成员。官方文档https://service.oray.com/question/6273.html明确软件成员移出组网后临时虚拟IP失效；当前管理页自定义IP仍要求铂金以上。仅保留UID不能证明重新加入即可恢复172.16.1.26，尚无已验证的免费恢复方案。本轮没有移动/删除成员、更改网络、申请试用或购买，用户当前使用Safari其他页时不抢占。原观察记录保持，补充证据evidence/mac-original-vpn-address-20261012/user-exit-clarification.json。
+
+v3公开合同/编解码与原Windows窄签发候选已完成：新合同253通过/0跳过，另旧合同相关386通过/0跳过；新签发最终70通过/1项Windows原生文件共享跳过，另原source/signing/private-workspace相关94通过/7项Windows原生跳过。各集合独立记录，初期重复定向不累加；最后CLI拒绝缩写后仅重跑新签发模块，未伪称重跑旧helper。真实合成801附件的完整私有清单超过64KiB，先复现错误后改用原完整清单摘要；公开合同仍64KiB。源输入raw-file SHA与规范request SHA分别绑定，原DPAPI loader只用临时身份模拟解封，真实Windows全部仍待专项。
+
+六文件终态经独立只读复审，主代理读源码/回读日志/差异检查通过；复审未重跑测试。合同SHA14d1810ce05433e2206d462e8fa05ec7f58a1c3cb4f1907448b4b25756f5a251，codec7ee02007306270b620ff373b8d355dee6fde3729889b85ce3844072bdaa0459f，source21aa6cfffbec5c21230210e6402eeb8594d3828658026ee7ca8280437d4f6707；Apple3.9.6纯合同导入/语法通过。证据evidence/current-mac-cutover-contract-20261012与current-mac-source-issue-20261012。公共声明不等于实机事实：当前Mac冷备/凭据/业务审计、专用worker、root激活及运行消费和完整构建尚未接通，没有部署、原身份实际签发或服务操作。

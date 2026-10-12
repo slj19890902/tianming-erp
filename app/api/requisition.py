@@ -3022,6 +3022,13 @@ def _ordinary_requisition_requirements(
     resolved_cutting_mode = normalize_cutting_mode(
         cutting_mode or item.special_process
     )
+    # The ordinary fast path must use the same frozen supplier-sheet output
+    # as the full planner. Legacy special_process is only a projection and
+    # may still contain an earlier yield; reading it can show 1700 sheets for
+    # a frozen 2x1x1 contract whose supplier preview correctly needs 850.
+    # An explicit override remains intentional (e.g. merge-suggestion demand).
+    if cutting_mode is None and getattr(item, "sheet_cutting_settings_snapshot", None):
+        resolved_cutting_mode = order_yield_mode(item)
     pieces_per_box = _pieces_per_box(item)
     production_required_qty = max(int(item.quantity or 0), 0)
     required_piece_qty = _required_piece_qty(production_required_qty, pieces_per_box)

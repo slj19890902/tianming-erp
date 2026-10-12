@@ -1011,3 +1011,24 @@ NAS界面只读确认SMB开启，显示guest共享只读；管理员实际共享
 来源定向97通过，随后provenance两项单独通过；签发定向59通过，含真实合成历史GCM/外部seal（不同口令）/SQLite审计→临时原key→签发回读验签。最终去重5模块组合229通过/3跳过/0失败（64.70秒），上述定向已包含在组合不累加；另旧来源/凭据/恢复来源模块117通过（25.82秒）单独记录。3跳过为真实Windows ACL继承、额外ACE和junction检查，Mac适配不当原生实测。主代理指出新入口口令上限应沿原1024，已留失败基线并修正；其他初始失败仅v1拒绝夹具先触达不存在last_backup，修测试后保留原门禁。Python3.9语法和差异检查通过，独立代理按终态SHA只读复审无阻塞，未冒称其重跑测试。
 
 证据分别为evidence/retained-source-audit-20261012与retained-source-issue-20261012。当前仍是开发候选：尚未闭合Mac目标准备/激活/runtime分支，未形成新完整构建或原Windows签名，也未实际停写、发布、改IP或清理。后续复用completion._source的纯认证原包/结构/reader逻辑与原目标凭据/文件/归档检查，不调用旧恢复入口；目标应使用独立受保护输入及明确v2门禁，旧恢复回执/包/日期均保持。
+
+
+## 2026-10-12 保持停止的同结构程序升级闭环
+
+延续7c2a6b61。代码核查确认既有Manager.update会启动程序，不能直接用于制作保留副本准备证明前的升级；mac_system_service也只有install/disable/enable，不能将发布新包等同监护升级。本轮先闭合前者，尚不实现目标激活或操作真实系统。
+
+cutover_gap_review唯一修改desktop_assistant/manager.py，新增tests/desktop_assistant/test_stopped_update.py；允许增加明确的update_stopped入口并复用内部更新算法，既有update默认语义保持。该入口只接受已手动停止、无运行进程、成功且无未决迁移/失败状态的实例，以及同一schema、已批准且符合原reader/provenance合同的新包；不执行迁移、不启动/恢复任何进程、不做保留策略清理。必须在原维护锁下完成真实完整NAS备份及回读门禁后才切换current，保留原native_restore_binding、原恢复包/回执/日期/业务数据；失败保持停止并保留现场。禁止通过把start替换为空函数或直接伪造state来绕过既有门禁。测试先证明当前缺口，覆盖备份失败、程序/结构/reader/状态拒绝与旧默认行为。
+
+remote_backup_review只读设计监护程序升级；target_audit_review只读复审本轮停止升级代码及测试；主代理负责本卡、计划、证据、整合与NAS回执。只用合成实例/凭据，不访问真实业务库、旧Windows或NAS密码，不部署、不停当前LAN服务。后续目标准备须在新执行包实际current、新监护和批准NAS配置完成后生成；激活用的Mac完整备份验证时间不早于准备证明，不借原restored_at接受过早备份。
+
+
+专网共享与交接补验：原生Finder直接连接smb://172.16.3.96/kimiyf成功，内核挂载确认账号18015598002、UID501、SMB3.1.1和AES-128-GMAC签名；此内核会话SMB加密状态为OFF，正式流入口仍须独立证明其要求的AES-GCM会话保护，未降低合同。固定BoxERP/mac-server-backups目录存在，未测试写入。通过此独立SMB通道对8af与7c2两轮共55项、630178字节归档逐项禁缓存回读，摘要全部一致；较个人远程磁盘本地视图增加了独立NAS读取证据，但未证明UID499认证、全量备份、注销重启或掉电持久化。证据evidence/mac-dedicated-vpn-20261012/independent-smb-archive-readback.json及share-confirmed.json。未知NAS口令未读取，未改变服务设置。
+
+
+保持停止升级闭环已完成：新增Manager.update_stopped及私有停止状态检查，全部原有Manager方法AST与7c2a6b61一致。只接受明确手动停止、无进程、无失败/待决状态和SQLite边车、同revision且相同原签名表列合同；验证实际结构、当前与候选原包/缓存清单/候选完整文件和原执行批准。完整NAS备份及认证回读回执通过后，复核全部shared与raw DB字节、停止状态和原恢复/reader事实不变才切换current，保持manual_stop=True。首次reader激活、迁移、自动启动/回退和retention均不在该入口执行。
+
+实查SMB流备份新增last_backup_stream索引，仅明确选中stream目的地时接受，且沿原verified_at核本次回执时间；未完成work retirement仍拒绝。初版缓存核对经独立复审补齐；末轮保留真实失败基线1失败/4通过，补拒绝原mac_service_manage的state-32hex.pending.json，不只查storage的state.json.pending，断链/目录同名也拒绝且不删除。
+
+最终94项定向通过（8.31秒），前83/93包含于94不累加。旧更新/链式更新/迁移/恢复来源/发布运行五模块此前129通过、1真实Windows DPAPI会话检查跳过（13.64秒），该组在最后CAS命名检查前运行，未声称终态重跑。Python3.9语法、旧方法AST、差异检查及独立终态SHA复审通过，复审未重跑测试。Mac受保护发布/SMB路由中的身份和传输边界为模拟，完整备份用合成SQLite/ZIP/GCM/本地独立回读，不当实机NAS验收。
+
+证据evidence/mac-stopped-update-20261012。当前只完成候选API，尚未接入新管理员worker、构建能力或实际部署；独立监督升级和retained目标接线仍按计划待办。只读健康检查再次返回ok，192.168.3.102预演服务保持，旧Windows和.80未改；未触真实库/凭据，未清理任何旧现场。

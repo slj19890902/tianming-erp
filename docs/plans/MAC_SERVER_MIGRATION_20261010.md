@@ -666,3 +666,21 @@ Mac首轮27通过/3 Windows原生跳过；恢复/凭据/SMB/签名/构建相关6
 组合229通过/3Windows原生平台跳过，旧模块回归117通过，分开记录；真实合成历史备份与外部不同口令贯通临时签名验签。独立只读复审无阻塞，未实际加载工厂DPAPI身份或签发。实际Mac只读核11项历史元数据与SHA，原恢复回执及原环境→家庭→LAN环境链均匹配；未查业务DB/秘密/ACL，不能替代完整目标审计。
 
 下一闭环是Mac独立受保护准备及激活适配和明确v1/v2运行记录消费：复用既有原包/schema/history/reader、完整凭据与归档绑定，保留原restore-inputs、回执和native restore binding。隐藏输入沿现有SMB首次配置的真实前台stdin模式，不再用heredoc。仍待原Windows专项与完整包签名、实际NAS共享/后台完整备份、最终旧端隔离与.80释放，以及实体打印/扫码、注销重启和管理员验收。
+
+
+专网共享与交接补验：原生Finder直接连接smb://172.16.3.96/kimiyf成功，内核挂载确认账号18015598002、UID501、SMB3.1.1和AES-128-GMAC签名；此内核会话SMB加密状态为OFF，正式流入口仍须独立证明其要求的AES-GCM会话保护，未降低合同。固定BoxERP/mac-server-backups目录存在，未测试写入。通过此独立SMB通道对8af与7c2两轮共55项、630178字节归档逐项禁缓存回读，摘要全部一致；较个人远程磁盘本地视图增加了独立NAS读取证据，但未证明UID499认证、全量备份、注销重启或掉电持久化。证据evidence/mac-dedicated-vpn-20261012/independent-smb-archive-readback.json及share-confirmed.json。未知NAS口令未读取，未改变服务设置。
+
+
+## 2026-10-12 保留副本接管的剩余接线顺序（设计，未部署）
+
+代码实查纠正两个假设：新增root发布不改变state.current；原Manager.update还会自动启动，因此先新增保持停止的同结构升级入口。旧22bd监护也不能直接用enable升级，现有control/plist精确绑定旧包且旧停止worker存在已复现的僵尸等待问题。
+
+计划新增独立mac_system_upgrade管理员事务及新签名UID499 worker：公开计划绑定old/new包、原公钥/context/registry、原control/plist和新固定plist摘要、管理员代码及7天窗口；先在publication锁内保存原件/关闭旧root门禁并禁用同label，再由新worker在原维护锁下正常停止旧ERP，保留原PID身份/nonce/超时且不强杀。旧monitor确认退出后root才持原operation.lock，借FD给新worker检查停止状态与随机canary；切换新plist和false control后方可启用新monitor。完成必须核fresh launchd身份、UID499、新程序及manually-stopped，不能只凭registered=true。关闭门禁后的失败保留禁用态和pending，正常停止/注销也失败则报告未知，不自动恢复旧enabled或清理现场。该事务不改state.current或任何旧恢复绑定，不操作NAS/业务凭据。
+
+上述为后续独立源码范围，尚未加入bootstrap/build或实现；日志须先只读绑定各自真实inode/owner/mode/ACL，不能假设stderr已同stdout修成0660或借升级改权限。现有账号、日志文件、原安装/恢复记录保留。
+
+实施依赖：后继完整原公钥签名包发布 → 安装并认证专用SMB流配置 → 监督升级并验停 → 同schema保持停止应用升级 → retained目标准备 → 停止状态完整NAS备份 → 原Windows停写/隔离并以原DPAPI审计签发 → Mac复验同份准备证明后显式v2激活 → 地址释放和正式现场验收。准备后的目标快照不得变化，备份回执验证时间须不早于preparation.prepared_at，不能借旧restored_at放过预演前备份。
+
+目标准备使用独立受保护retained-inputs槽和本机定位记录，保存原密文/外部凭据/原恢复回执及home-LAN环境证据；不重跑完成恢复入口，不伪造历史root脚本。home批准以实际root prepared回执及完整环境字节链为依据，本地原脚本如纳入只标识为经复核的本地归档；LAN已存root脚本另核。UID499通过前台终端隐藏输入、stdout管道返回公开结果，在新私有槽认证原备份及凭据，保留全部真实事实。root只处理公开合同/密文/批准来源，不解密。运行时以后按全局记录明确v1/v2分支，存在损坏记录拒绝而不回落home；正常业务启动不重比旧业务快照。
+
+保持停止同结构升级API候选已完成并独立复审：终态94项通过；既有相关129通过/1 Windows DPAPI跳过发生于最后CAS未决文件名拒绝检查前，未重复计数或声称终态重跑。原Manager方法AST不变，所有原恢复/reader/完整NAS回读门禁保留。未构建或部署，监督升级与retained目标仍待接线。详细证据evidence/mac-stopped-update-20261012，实际.102健康仍正常。

@@ -788,6 +788,115 @@ class Manager:
             after_update(self, archive_dir)
             return result
 
+    def _stopped_update_state(self):
+        """A stopped upgrade is not a repair for an interrupted operation."""
+        import re
+        state = self.state
+        stable = (None, 'import_existing', 'update', 'rollback', 'migration_recovered', 'restore')
+        if (state.get('manual_stop') is not True or state.get('operation') not in stable
+                or state.get('onboarding_pending') or state.get('backup_error')
+                or state.get('backup_work_retained')
+                or not isinstance(state.get('current'), str)
+                or not re.fullmatch('[0-9a-f]{64}', state['current'])):
+            raise ValueError('保持停止更新要求已完成且手动停止的实例；先核查未完成现场')
+        # The general writer and dedicated service CAS writer use different
+        # fixed pending names. Neither failed publication may be ignored.
+        with os.scandir(self.root) as entries:
+            if any(entry.name == 'state.json.pending'
+                   or re.fullmatch('state-[0-9a-f]{32}\\.pending\\.json', entry.name) for entry in entries):
+                raise ValueError('保持停止更新拒绝待核状态；不覆盖或清理原记录')
+        database = self.root / 'shared/data/carton_erp.sqlite3'
+        for path in (Path(str(database) + suffix) for suffix in ('-wal', '-shm', '-journal')):
+            if path.exists() or path.is_symlink():
+                raise ValueError('保持停止更新拒绝待核状态或数据库旁路日志；不自动清理')
+        # AccessDenied and process identity errors must propagate, not mean idle.
+        if self._process() is not None:
+            raise ValueError('ERP仍有受管进程，不能执行保持停止更新')
+        return state
+
+    def update_stopped(self, package: Path, password: str, nas: Path):
+        """Upgrade only same-schema code, preserving manual stop and all data.
+
+        This deliberately does not share the ordinary update's startup/fallback,
+        migration, reader-activation or retention branches. A complete verified
+        backup is still mandatory before changing the current program pointer.
+        """
+        from desktop_assistant.migration import files
+        from desktop_assistant import mac_backup_storage, mac_smb_stream_target
+        with self.lock():
+            old = self._stopped_update_state()  # Before even staging a candidate.
+            shared = self.root / 'shared'
+            database = shared / 'data/carton_erp.sqlite3'
+            source = self.root / 'packages' / (old['current'] + '.zip')
+            identity = sha(package)
+            if sha(source) != old['current']:
+                raise ValueError('当前程序原包校验失败，保持停止')
+            current_manifest, current_schema = schema_contract_from_signed_release(source, self.public_key)
+            manifest, contract = schema_contract_from_signed_release(package, self.public_key)
+            if current_manifest != self.manifest(old['current']):
+                raise ValueError('当前缓存清单与原签名不一致，保持停止')
+            revision = database_info(database)['revision']
+            if (manifest['revision'] != revision or current_manifest['revision'] != revision
+                    or contract != current_schema):
+                raise ValueError('保持停止更新只接受相同修订及原签名表列合同，不执行数据库迁移')
+            validate_database_schema(database, contract)
+            before_database, before_files = sha(database), files(shared)
+            candidate = self.stage_release(package, verify_existing=identity != old['current'])
+            if candidate != {'id': identity, **manifest}:
+                raise ValueError('候选缓存清单与原签名不一致，保持停止')
+
+            def approved():
+                cache = self.root / 'packages' / (identity + '.zip')
+                if (sha(source) != old['current'] or sha(package) != identity or sha(cache) != identity
+                        or self.manifest(old['current']) != current_manifest or self.manifest(identity) != manifest):
+                    raise ValueError('更新期间程序原包变化，保持停止')
+                if identity != old['current']:
+                    self._verify_cached_release(self.root / 'releases' / identity, manifest)
+                self._approve_execution(old['current'], identity)
+                for release in (old['current'], identity):
+                    self._check_dispatch_reader(release, require_active=self._dispatch_reader(release))
+                    self._check_provenance_reader(release)
+                    if not self.compatible(release, revision):
+                        raise ValueError('保持停止更新不能丢失已有数据读取或来源保护合同')
+                # First activation belongs to ordinary update: it can add
+                # shared markers/history and must not silently alter a snapshot.
+                if (identity != old['current'] and self._order_inventory_reader(identity)
+                        and not old.get(inventory_contract.STATE_KEY)):
+                    raise ValueError('保持停止更新不执行首次库存读取保护激活')
+
+            def unchanged(expected):
+                if (self._stopped_update_state() != expected
+                        or sha(database) != before_database or files(shared) != before_files):
+                    raise ValueError('保持停止更新期间状态或完整数据变化；保留备份和现场，未切换程序')
+
+            approved()
+            unchanged(old)
+            if identity == old['current']:
+                return '已经是该版本'
+            self._backup_preflight(nas)
+            unchanged(old)
+            backup = self._backup_stopped(password, nas)
+            new = self._stopped_update_state()
+            backup_fields = {'last_backup', 'last_backup_at', 'backup_error', 'backup_work_retained'}
+            if mac_smb_stream_target.selected(nas):
+                backup_fields.add('last_backup_stream')
+            if ({key: value for key, value in new.items() if key not in backup_fields}
+                    != {key: value for key, value in old.items() if key not in backup_fields}
+                    or new.get('last_backup') != str(backup) or not new.get('last_backup_at')
+                    or new.get('backup_error') is not None
+                    or mac_backup_storage.verified_at(self.root, new) != new['last_backup_at']):
+                raise ValueError('完整备份未确认或原状态变化；保持停止，未切换程序')
+            # Recheck root-approved execution and every data byte after the
+            # original archive/readback/receipt protocol has completed.
+            approved()
+            unchanged(new)
+            new.update(current=identity, previous=old['current'], update_backup=str(backup),
+                       operation='update', manual_stop=True, updated_at=datetime.now(CN).isoformat())
+            write_json(self.root / 'state.json', new)
+            if self.state != new:
+                raise ValueError('保持停止更新状态回读未确认；保留现场，不启动或回退')
+            return candidate['version']
+
     def _update_locked(self, package: Path, password: str, nas: Path, *, rollback=False):
         candidate = self.stage_release(package)
         old = self.state

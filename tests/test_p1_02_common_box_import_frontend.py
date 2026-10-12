@@ -64,7 +64,7 @@ def test_p1_02_picker_is_customer_scoped_and_keeps_cross_filter_selection() -> N
 def test_p1_02_import_preserves_blank_or_entered_quantity_and_avoids_duplicates() -> None:
     assert 'selection.quantity === "" ? null : Number(selection.quantity)' in INDEX
     assert "Number(item.product_id) === Number(product.id)" in INDEX
-    assert "未重复添加" in INDEX
+    assert "保留原数量；修改请在订单行操作" in INDEX
     assert "this.addOrderItem(false, false);" in INDEX
     select_call = INDEX.index("await this.selectOrderProduct(index, product.id);")
     next_import = INDEX.find("for (const selection of selections)", select_call + 1)

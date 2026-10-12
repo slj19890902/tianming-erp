@@ -5,31 +5,33 @@
     quantity: Number(line.quantity || 0)
   })).filter(line => line.product_id > 0);
   const summary = {
-    props: ['customerId', 'lines'],
+    props: ['customerId', 'lines', 'enabled'],
     data: () => ({rows: [], error: '', busy: false, request: 0, timer: null}),
-    computed: {signature() { return JSON.stringify([Number(this.customerId), normalized(this.lines)]); }},
+    computed: {signature() { return JSON.stringify([this.enabled !== false, Number(this.customerId), normalized(this.lines)]); }},
     watch: {signature: {immediate: true, handler() {
       clearTimeout(this.timer); ++this.request; this.rows = []; this.error = '';
-      this.busy = Boolean(this.customerId && normalized(this.lines).length);
+      this.busy = Boolean(this.enabled !== false && this.customerId && normalized(this.lines).length);
       this.timer = setTimeout(() => this.refresh(), 300);
     }}},
     beforeUnmount() {clearTimeout(this.timer); ++this.request;},
     methods: {reference(row) {return this.lines?.[Number(row.client_line_id)]?.source_stock_reference;}, async refresh() {
       const request = ++this.request, customer_id = Number(this.customerId), items = normalized(this.lines);
       this.rows = []; this.error = '';
-      if (!customer_id || !items.length) {this.busy = false; return;}
+      if (this.enabled === false || !customer_id || !items.length) {this.busy = false; return;}
       if (items.some(i => !Number.isSafeInteger(i.quantity) || i.quantity < 0)) {
         this.error = '请输入非负整数需求数量'; this.busy = false; return;
       }
       this.busy = true;
       try {
-        const {data} = await axios.post('/api/orders/demand-stock-preview', {customer_id, items});
+        const {data} = await axios.post('/api/orders/demand-stock-preview', {customer_id, items}, {timeout:10000});
         if (request === this.request) this.rows = data.items || [];
       } catch (error) {
         if (request === this.request) this.error = String(error.response?.data?.detail || '库存读取失败，请重试；不能按零库存处理');
       } finally {if (request === this.request) this.busy = false;}
     }},
-    template: `<aside class="demand-stock-summary" aria-label="本批需求库存与真实货位">
+    template: `<section class="demand-stock-container"><slot :rows="rows" :busy="busy" :error="error"></slot>
+      <details v-if="enabled!==false" class="demand-stock-summary" aria-label="本批需求库存与真实货位">
+      <summary>库存、预计结余与实际货位 · 点击展开<span v-if="busy">（查询中）</span><span v-else-if="error">（查询失败，请展开重试）</span></summary>
       <div class="toolbar-group"><strong>库存 / 预计结余 / 实际货位</strong><button class="btn small" type="button" :disabled="busy" @click="refresh">刷新</button></div>
       <small>只读试算，不扣库。结余按可用库存扣除本批需求；保存时仍需核对。</small>
       <div v-if="busy" role="status">正在核对库存…</div><div v-if="error" class="notice danger">{{error}}</div>
@@ -43,7 +45,7 @@
         <div v-for="loc in row.locations" :key="loc.lot_id" class="demand-location"><b>{{loc.location_name}}</b><br>现存 {{loc.on_hand}} · 可用 {{loc.available}} {{row.physical_unit}}<small> · 批次 {{loc.lot_number}}</small></div>
         <div v-if="row.status!=='review' && !row.locations.length" class="muted">未查到该产品可核实的成品库存位置</div>
       </div><div v-if="!busy&&!error&&!rows.length" class="muted">选择常用箱或匹配存货编码后显示。</div>
-    </aside>`
+    </details></section>`
   };
   const importer = {
     props: ['customers'], emits: ['parsed'],
@@ -70,15 +72,10 @@
   };
   const mixin = {methods: {
     commonBoxDemandLines() {
-      const existing = (this.orderForm.items || []).filter(row => row.product_id).map(row => ({product_id: row.product_id, quantity: row.quantity}));
-      for (const selection of Object.values(this.orderCommonBoxPicker.selected || {})) {
-        const row = existing.find(row => Number(row.product_id)===Number(selection.product.id));
-        if (row) row.quantity = selection.quantity; else existing.push({product_id:selection.product.id, quantity:selection.quantity});
-      }
-      for (const product of this.orderCommonBoxPicker.items || []) {
-        if (!existing.some(row => Number(row.product_id)===Number(product.id))) existing.push({product_id:product.id, quantity:0});
-      }
-      return existing;
+      return (this.orderCommonBoxPicker.items || []).map(product => ({
+        product_id:product.id,
+        quantity:Number(this.orderCommonBoxPicker.selected?.[String(product.id)]?.quantity || 0),
+      }));
     },
     async acceptWeeklyDemand(draft) {
       this.orderImportDrafts = [this.prepareImportDraftReminderState({...draft, confirmed:false,

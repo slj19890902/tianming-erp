@@ -12,10 +12,10 @@ test('stock request includes zero and repeats; latest response wins',async()=>{
   assert.equal(c.rows[0].quantity,50);
   assert.equal(ui.normalized([{product_id:1,quantity:0},{product_id:1,quantity:3}]).length,2);
 });
-test('common-box projection mirrors quantity replacement, retains repeated existing lines',()=>{
+test('common-box projection only covers current search results and selected demand',()=>{
   const c={orderForm:{items:[{product_id:1,quantity:10},{product_id:1,quantity:15}]},
     orderCommonBoxPicker:{selected:{1:{product:{id:1},quantity:20}},items:[{id:1},{id:2}]}};
-  assert.deepEqual(ui.mixin.methods.commonBoxDemandLines.call(c),[{product_id:1,quantity:20},{product_id:1,quantity:15},{product_id:2,quantity:0}]);
+  assert.deepEqual(ui.mixin.methods.commonBoxDemandLines.call(c),[{product_id:1,quantity:20},{product_id:2,quantity:0}]);
 });
 test('new Vue templates compile with bundled production Vue',()=>{
   const context={console};vm.createContext(context);
@@ -30,4 +30,15 @@ test('main and print inline JavaScript parse',()=>{
     const html=fs.readFileSync(path.join(root,'static',name),'utf8');
     for(const match of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) if(match[1].trim()) new vm.Script(match[1]);
   }
+});
+
+test('disabled warehouse access does not issue a stock request',async()=>{
+  global.axios={post:()=>{throw Error('forbidden request');}};
+  const c={...ui.summary.data(),enabled:false,customerId:1,lines:[{product_id:1,quantity:30}]};
+  await ui.summary.methods.refresh.call(c);assert.equal(c.busy,false);assert.deepEqual(c.rows,[]);
+});
+test('stock request is bounded and network error remains unknown',async()=>{
+  global.axios={post:async(url,body,options)=>{assert.equal(options.timeout,10000);throw Error('Network Error');}};
+  const c={...ui.summary.data(),customerId:1,lines:[{product_id:1,quantity:30}]};
+  await ui.summary.methods.refresh.call(c);assert.equal(c.busy,false);assert.deepEqual(c.rows,[]);assert.match(c.error,/不能按零库存/);
 });

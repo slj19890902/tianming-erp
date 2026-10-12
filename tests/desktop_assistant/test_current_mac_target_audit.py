@@ -179,7 +179,7 @@ def target(case, monkeypatch, request):
     def observation(kind, guid):
         return dict(type=kind,contract_sha256=ctl['contract_sha256'],connection_guid=guid*32,
             filename=copy.name,bytes=cold['size'],sha256=cold['sha256'],
-            directories=[dict(index=i,created=100) for i in (1,2,3)],file=dict(index=4,created=200),
+            directories=[dict(index=i) for i in (1,2,3)],file=dict(index=4),
             backup_authenticated=False)
     receipt = dict(type=receipts.TYPE,context_sha256=ctl['context_sha256'],control_sha256=binding.control_sha,
         contract_sha256=ctl['contract_sha256'],package_sha256=roles['transport'],filename=copy.name,

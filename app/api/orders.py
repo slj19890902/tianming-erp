@@ -305,6 +305,7 @@ from app.services.requisition_quantities import (
     CUTTING_MODE_BOX_STYLES,
     DEFAULT_CUTTING_MODE,
     cutting_factor,
+    normalize_cutting_mode,
     purchase_sheet_quantity,
     required_piece_quantity,
 )

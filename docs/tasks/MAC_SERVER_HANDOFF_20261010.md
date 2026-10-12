@@ -1091,3 +1091,31 @@ root源码SHA7860c757b9239bed1c377a586f4edacb8d24a245ca8a46adfee6c59d502fa031，
 v3公开合同/编解码与原Windows窄签发候选已完成：新合同253通过/0跳过，另旧合同相关386通过/0跳过；新签发最终70通过/1项Windows原生文件共享跳过，另原source/signing/private-workspace相关94通过/7项Windows原生跳过。各集合独立记录，初期重复定向不累加；最后CLI拒绝缩写后仅重跑新签发模块，未伪称重跑旧helper。真实合成801附件的完整私有清单超过64KiB，先复现错误后改用原完整清单摘要；公开合同仍64KiB。源输入raw-file SHA与规范request SHA分别绑定，原DPAPI loader只用临时身份模拟解封，真实Windows全部仍待专项。
 
 六文件终态经独立只读复审，主代理读源码/回读日志/差异检查通过；复审未重跑测试。合同SHA14d1810ce05433e2206d462e8fa05ec7f58a1c3cb4f1907448b4b25756f5a251，codec7ee02007306270b620ff373b8d355dee6fde3729889b85ce3844072bdaa0459f，source21aa6cfffbec5c21230210e6402eeb8594d3828658026ee7ca8280437d4f6707；Apple3.9.6纯合同导入/语法通过。证据evidence/current-mac-cutover-contract-20261012与current-mac-source-issue-20261012。公共声明不等于实机事实：当前Mac冷备/凭据/业务审计、专用worker、root激活及运行消费和完整构建尚未接通，没有部署、原身份实际签发或服务操作。
+
+931d5d5f已提交，公共源码/合成证据31项、764,483字节经专网SMB逐项fsync及禁缓存回读一致；未上传业务或秘密，不是业务备份。老板随后明确网址必须不变，但允许评估其他组网工具；当前仅只读研究，未授权任何具体新网络访问/账号方案，不安装或改变现有连接。
+
+## 2026-10-12 当前Mac完整冷备审计范围
+
+target_audit_review独占新增current_mac_target_audit.py与同名测试，remote_backup_review独立只读复审，主代理负责本卡及后续整合。固定真实service身份/root/execution/monitor和原restore attempt，仅接受已批准context/publisher/registry/原restore receipt摘要；不接受任意路径、密码、NAS地址或调用方业务证据。复用现有维护锁或借父FD，严格stopped update产物/原状态、无pending或SQLite边车；原恢复回执、native binding、原密文及原包/provenance分开固定，不重解旧Windows凭据或比较旧业务。
+
+从last_backup_stream核对原独立NAS回读receipt与保留在instance/backups的同份密文，完整核SHA/size/FD身份/独立连接证明，并用实际现有backup凭据认证内容；不连接NAS或再次传输。固定新私有staging独占提取，保留成功/失败现场。按完整原始数据库、全部shared/环境文件、事实快照、同结构签名与reader/provenance比较当前冷备及实例。darwin到darwin凭据目的/配置文本/保护引用/邮箱版本精确匹配，秘密仅内存常时比较；没有日志或配置忽略例外。私有清单使用原完整摘要算法，不套公共64KiB限制。
+
+同一context用于准备及最终复验，expected_preparation保留原prepared_at而其余全部事实重算相等；callback在context退出后失效，签发/首次激活窗口由外层另核。反复核root记录、原包/当前包、state/共享文件、凭据和私有提取内容，无变化才返回。Mac维护锁和FD身份不冒称强制Windows写租约。暂不接root/worker/runtime/build，不停止当前实际服务、访问真实业务或钥匙串；仅合成ZIP/GCM/SQLite/附件/临时凭据与模拟root适配测试。
+
+## 2026-10-12 当前Mac运行期接线与扫码网络性能要求
+
+cutover_gap_review作为第二个执行子任务，独占mac_factory_runtime.py、mac_published_runtime.py及新test_current_mac_runtime.py；主代理独立复查，最多两个代码执行代理。运行入口对固定root激活原件按精确v1/v3类型分派，旧v1验证保留；坏v3、未知类型不得回家庭模式。v3验证原签名/request/network/context/publisher/本机身份及state的原恢复/native/provenance锚；允许仍获批准的新执行和监护程序以及正常新增业务/备份，不把首次准备快照或八小时安装窗口套到持续运行。require_factory_service启动路径完整认证固定历史ZIP及当前监护；监护状态热路径不反复全包扫描。原restore receipt的完整物证由目标首次审计核验，运行期不从SHA猜路径。新factory_current_mac_execution_v3能力与必要源码集合在v3解析时要求，暂不修改build声明或实际服务；候选只用真实临时签名、合成状态/ZIP和模拟root身份，保留原v1相关回归。
+
+老板补充组网条件：原http://172.16.1.26:8000及原标签路径必须不变、主要要求免费，外网网页不能像此前转发链接一样缓慢。当前Tailscale官方Personal限定非商业用途，商业十四天试用不能作为长期免费方案。NetBird官方Free为小团队提供5用户/100设备、P2P和单主机路由；Terms第1节面向商业客户、第10节明确免费服务，因此可作为当前免费候选，不能承诺条款永久不变或零延迟。仅文档评估，尚未注册、安装或新建网络。
+
+现场只读发现172.16.1.26当前被蒲公英172.16.0.0/22经utun4捕获；保留旧地址需要精确/32本地承接与远端路由，不能只更换软件名称。新工具首先用隔离无业务内容的测试端点验证Mac自身转发、手机蜂窝/外部Wi-Fi的直连或中继、首字节/静态资源/扫码首开及断线恢复；保持当前ERP入口和NAS连接。需新增网络访问的具体配置由用户确认后实施。原ERP的实页只交用户人工验收，不自动点击、写业务或发送外部消息，不因测试重启ERP或重置旧机。
+
+老板已明确同意“先测免费NetBird”：仅Mac和本人iPhone、无业务数据测试页面、原ERP及NAS蒲公英继续使用、不购买套餐。具体scope保存于evidence/netbird-free-latency-evaluation-20261012/proposed-test-scope.json；初测仅TCP18880，ERP的8000是通过后的另一步。官方Apple Silicon下载解析到NetBird v0.80.0原仓库签名pkg，下载尚未完成/验签/安装；官方管理页已在Safari独立标签打开，用户正在自行完成Google登录/注册/条款，尚无管理后台成功证据。公网管理页单次HEAD首字节0.731秒只是控制页面观测，不是手机直连或ERP速度。新路由/策略/本地别名未配置，当前网络未改。
+
+## 2026-10-12 当前Mac审计与运行候选完成、网络测试实装
+
+当前Mac冷备审计候选已完成，固定原恢复凭据/密文/回执/原包、现行执行/监护/传输批准及完整已回读冷备，在同一维护锁与文件租约中认证GCM、全部DB原字节/shared/环境、结构及Darwin凭据；准备证明复验保留原prepared_at，其余当前事实精确重算，退出后的callback不可使用。87项定向、132项相关检查分别通过且无跳过，使用真实合成签名/归档/SQLite/FD，root/499/launchd/keychain和SMB观察仍模拟。独立只读复审无阻塞，未重跑测试；证据current-mac-target-audit-20261012。
+
+运行候选新增严格v3记录消费，旧v1分支保持；正常业务及备份不要求等于激活冻结快照，首次八小时窗口不用于持续运行。启动前验证原历史完整签名包、固定native/provenance和已批准现行监护，状态热路径不扫描完整ZIP；不从回执SHA猜位置。新增74项与旧相关155项分别通过且无跳过，独立只读复审无阻塞。主代理再次核对五份源码/测试摘要及四份JUnit原件均一致，不重复运行已有充分检查；证据current-mac-runtime-20261012。本轮仍未声明build能力、构建完整新包、原身份签名或实际部署，worker/root接管事务尚待闭合。
+
+用户已自行完成NetBird账号条款、Mac客户端安装登录及iPhone登录。现有Mac官方v0.80.0签名/公证来源核验通过（本机spctl另报告全局security disabled，未改该设置）；免费账号1用户/2设备。默认All全端口规则已禁用，分别只含一台Mac/本人iPhone的测试组已建立；仅手机到Mac TCP18880策略及172.16.1.26/32资源TCP18880策略已保存，路由节点只有Mac。按官方service reconfigure启用NB_ENABLE_LOCAL_FORWARDING=true，新增lo0单地址别名，独立合成页面绑定172.16.1.26:18880。本机health成功，ERP仍仅127.0.0.1和.102监听8000且health正常，NAS路由仍经蒲公英utun4；未改网关/DNS或暴露ERP。测试服务及路由已准备，但手机蜂窝实测、P2P类型和时延仍待回报，不能宣称原二维码ERP已通。原配置与路线记录于netbird-free-latency-evaluation-20261012；此次别名尚未做重启持久化，账号会话有效期也仍待正式方案处理。

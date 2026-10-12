@@ -21,13 +21,99 @@ MODULE = 'desktop_assistant/mac_factory_runtime.py'
 ENTRY = 'desktop_assistant/server_entry.py'
 EXECUTION_FILES = {MODULE, ENTRY, 'app/main.py', 'app/core/home_rehearsal.py',
                    'desktop_assistant/manager.py', 'desktop_assistant/service_supervisor.py'}
+CURRENT_MAC_CAPABILITY = 'factory_current_mac_execution_v3'
+CURRENT_MAC_FILES = EXECUTION_FILES | {
+    'desktop_assistant/mac_published_runtime.py', 'desktop_assistant/current_mac_cutover.py',
+    'desktop_assistant/current_mac_cutover_contract.py', 'desktop_assistant/restore_provenance.py',
+    'desktop_assistant/release_request.py'}
 _admitted = None
 
 
-def require_execution(manifest):
+def require_execution(manifest, *, activation_raw=None):
+    # No argument retains the original v1 contract. The resolver supplies only
+    # the fixed protected activation bytes, never a caller-selected pathname.
     contract.require_protocol(manifest)
     if not EXECUTION_FILES <= manifest.get('files', {}).keys():
         raise ValueError('正式运行入口不完整')
+    if activation_raw is not None:
+        _, _, current = _activation(activation_raw)
+        if current:
+            capability = manifest.get('runtime_capabilities', {}).get(CURRENT_MAC_CAPABILITY)
+            if (type(capability) is not int or capability != 1
+                    or not CURRENT_MAC_FILES <= manifest.get('files', {}).keys()):
+                raise ValueError('程序缺少当前Mac业务的正式运行协议')
+
+
+def _activation(raw):
+    value = contract.decode(raw)
+    if value.get('type') == contract.TYPE:
+        return value, contract.validate_record(value), False
+    from desktop_assistant import current_mac_cutover_contract as current
+    if value.get('type') != current.TYPE:
+        raise ValueError('未知正式激活记录类型')
+    value = current.decode(raw)
+    return value, current.validate_record(value), True
+
+
+def _current_mac_state(state, body, context_sha):
+    from desktop_assistant import current_mac_cutover_contract as current, restore_provenance as history
+    restore = body['preparation']['restore']
+    binding = state.get('native_restore_binding')
+    if (not isinstance(binding, dict) or set(binding) != {'type', 'package_sha256', 'backup_sha256',
+            'context_sha256', 'database_revision', 'schema_migrated', 'factory_cutover'}
+            or current.digest(binding) != restore['native_binding_sha256']
+            or binding['type'] != 'tianming.mac-native-restore.v1'
+            or binding['package_sha256'] != restore['restore_package_sha256']
+            or binding['backup_sha256'] != restore['backup_sha256']
+            or binding['context_sha256'] != context_sha
+            or binding['schema_migrated'] is not False or binding['factory_cutover'] is not False
+            or state.get('restored_backup_sha256') != restore['backup_sha256']
+            or current.normalize_timestamp(state.get('source_time')) != restore['backup_created_at']
+            or history.identities(state) != {key: restore[key] for key in history.STATE_KEYS}):
+        raise ValueError('当前Mac实例的原恢复或来源身份已改变')
+
+
+def _current_mac_history(stack, private, read, state, body, context, context_sha, public):
+    """Startup only: authenticate original packages, never business/credential IO.
+
+    The original receipt was authenticated by the initial cold audit and its
+    hash remains signed in preparation; no receipt path is inferred here.
+    Keep every package FD and parent pinned across path-based verifiers.
+    """
+    from desktop_assistant import restore_provenance as history, mac_system_service as system
+    from desktop_assistant.release_request import inspect_package
+    from desktop_assistant.storage import sha
+    restore = body['preparation']['restore']
+    folder = stack.enter_context(Lease(private.path/'packages', uid=context['uid'], gid=context['gid'],
+        mode=0o700, directory=True, parent=private))
+    values = history.identities(state)
+    identities = {restore['restore_package_sha256'], *(value for value in values.values() if value is not None)}
+    held = {}
+    for identity in sorted(identities):
+        held[identity] = stack.enter_context(Lease(folder.path/(identity+'.zip'), uid=context['uid'],
+            gid=context['gid'], mode=0o600, parent=folder))
+    native = held[restore['restore_package_sha256']].path
+    if sha(native) != restore['restore_package_sha256']:
+        raise ValueError('原Mac恢复程序包摘要不符')
+    _, manifest = inspect_package(native, public)
+    if (sha(native) != restore['restore_package_sha256'] or manifest.get('runtime_platform') != 'macos-arm64'
+            or manifest.get('revision') != state['native_restore_binding']['database_revision']):
+        raise ValueError('原Mac恢复程序签名或版本绑定不符')
+    history.verify(values, {history.MEMBERS[key]:held[value].path
+                           for key, value in values.items() if value is not None}, public)
+    for item in held.values(): item.check()
+    # A later approved monitor may differ from the activation's monitor. Bind
+    # its actual root control/plist and authenticate the complete current tree.
+    raw = read(system.CONTROL); control = boot.decode(raw)
+    meta = {'package':control.get('package_sha256'), 'context_sha256':context_sha,
+            'publisher_sha256':boot.digest(public)}
+    if boot.canonical(control) != boot.canonical(system.record_for(meta, True)):
+        raise ValueError('当前系统监护启动门禁不符')
+    plist_parent = stack.enter_context(Lease(system.PLIST.parent, uid=0, gid=None, mode=0o755,
+        directory=True, mutable=True))
+    if read(system.PLIST, plist_parent) != system._plist(meta['package'], meta['publisher_sha256']):
+        raise ValueError('当前系统监护定义不符')
+    published.resolve(private.path, meta['package'], public, kind='migration')
 
 
 def configuration(root, package, public):
@@ -37,6 +123,10 @@ def configuration(root, package, public):
     The current approved package can advance; original restore binding cannot.
     Executable tree/capability checks remain mandatory at each launch.
     """
+    return _configuration(root, package, public)
+
+
+def _configuration(root, package, public, *, authenticate_history=False):
     if not published.selected(): return None
     root = Path(root)
     if root.absolute() != published.ROOT or root.resolve() != published.ROOT:
@@ -52,22 +142,29 @@ def configuration(root, package, public):
             item=stack.enter_context(Lease(path,uid=uid,gid=gid,mode=mode,parent=parent));held.append(item)
             limit=manage.STATE_LIMIT if path==root/'state.json' else contract.LIMIT
             return _read_complete(item,limit)
-        raw=read(active);value=contract.decode(raw);body=contract.validate_record(value)
+        raw=read(active);value,body,current=_activation(raw)
         context_raw=read(keychain.CONTEXT);registry=published._record(read(published.REGISTRY));pinned=read(published.PUBLIC)
         request=value['request'];context_sha=boot.digest(context_raw)
         # The saved registry SHA describes the activation transaction. Approved
         # upgrades extend the current registry; preserve its context/publisher
         # and both the original and current package approvals instead of
         # requiring the historical entire registry to stay byte-identical.
+        approved = ({package, request['execution_package_sha256'], request['monitor_package_sha256'],
+                     body['preparation']['restore']['restore_package_sha256']} if current else
+                    {package, request['package_sha256']})
         if (boot.decode(context_raw)!=context or value['context_sha256']!=context_sha
                 or registry['context_sha256']!=context_sha
                 or public_identity(pinned)[1]!=request['publisher_sha256']
                 or public_identity(public)[1]!=request['publisher_sha256']
                 or registry['publisher_sha256']!=request['publisher_sha256']
-                or package not in registry['packages'] or request['package_sha256'] not in registry['packages']
+                or not approved <= set(registry['packages'])
                 or request['target']!=protocol.local_target(root,context['installation_id'])):
             raise ValueError('正式激活与本机、身份、程序批准或发布公钥不符')
-        protocol.verify_authorization(value['authorization'].encode(),pinned,request)
+        if current:
+            from desktop_assistant import current_mac_cutover as codec
+            codec.verify_authorization(value['authorization'].encode(), pinned, request)
+        else:
+            protocol.verify_authorization(value['authorization'].encode(),pinned,request)
         # activated_at was inside the signed installation window. Do not apply
         # that old deadline to a server which has since been used or updated.
         if contract._time(value['activated_at']) > contract._now():
@@ -79,12 +176,19 @@ def configuration(root, package, public):
         private=stack.enter_context(Lease(root,uid=context['uid'],gid=context['gid'],mode=0o700,
                                           directory=True,parent=base,mutable=True))
         state=manage.decode_record(read(root/'state.json',private,uid=context['uid'],gid=context['gid'],mode=0o600),'state.json')
-        binding={'type':'tianming.mac-native-restore.v1','package_sha256':request['package_sha256'],
-            'backup_sha256':body['source']['backup_sha256'],'context_sha256':context_sha,
-            'database_revision':body['source']['snapshot']['revision'],'schema_migrated':False,'factory_cutover':False}
-        if (state.get('current')!=package or state.get('restored_backup_sha256')!=body['source']['backup_sha256']
-                or boot.canonical(state.get('native_restore_binding'))!=boot.canonical(binding)):
-            raise ValueError('正式实例不是已核验的最终恢复来源')
+        if current:
+            _current_mac_state(state, body, context_sha)
+            if authenticate_history:
+                _current_mac_history(stack, private, read, state, body, context, context_sha, pinned)
+        else:
+            binding={'type':'tianming.mac-native-restore.v1','package_sha256':request['package_sha256'],
+                'backup_sha256':body['source']['backup_sha256'],'context_sha256':context_sha,
+                'database_revision':body['source']['snapshot']['revision'],'schema_migrated':False,'factory_cutover':False}
+            if (state.get('restored_backup_sha256')!=body['source']['backup_sha256']
+                    or boot.canonical(state.get('native_restore_binding'))!=boot.canonical(binding)):
+                raise ValueError('正式实例不是已核验的最终恢复来源')
+        if state.get('current') != package:
+            raise ValueError('正式实例当前程序身份不符')
         for item in held:item.check()
         return {'network':dict(value['network']),'activation_sha256':boot.digest(raw),
                 'package_sha256':package,'request_id':request['request_id']}
@@ -108,7 +212,29 @@ def require_factory_service():
     if boot.canonical(system.management_service_state()) != boot.canonical(
             {'registered':True,'enabled':True,'scheduled_backups':True}):
         raise ValueError('正式服务需要已注册启用的系统监护与备份协议')
+    _authenticate_current_mac_start(context)
     system.verify_keychain(context)
+
+
+def _authenticate_current_mac_start(context):
+    """Keep expensive source authentication out of periodic mode/status calls."""
+    active = published.BASE/contract.NAME
+    if not os.path.lexists(active): return
+    from desktop_assistant import mac_service_manage as manage
+    with ExitStack() as stack:
+        base = stack.enter_context(Lease(published.BASE, uid=0, gid=None, mode=0o755,
+            directory=True, mutable=True))
+        activation = stack.enter_context(Lease(active, uid=0, gid=None, mode=0o644, parent=base))
+        _, _, current = _activation(_read_complete(activation, contract.LIMIT))
+        if not current: return  # The v1 startup contract remains unchanged.
+        private = stack.enter_context(Lease(published.ROOT, uid=context['uid'], gid=context['gid'],
+            mode=0o700, directory=True, parent=base, mutable=True))
+        state_file = stack.enter_context(Lease(private.path/'state.json', uid=context['uid'], gid=context['gid'],
+            mode=0o600, parent=private))
+        state = manage.decode_record(_read_complete(state_file, manage.STATE_LIMIT), 'state.json')
+        public = stack.enter_context(Lease(published.PUBLIC, uid=0, gid=None, mode=0o644, parent=base))
+        _configuration(private.path, state.get('current'), _read_complete(public, contract.LIMIT),
+                       authenticate_history=True)
 
 
 

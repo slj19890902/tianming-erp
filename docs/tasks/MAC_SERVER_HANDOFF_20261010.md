@@ -1,5 +1,13 @@
 # MAC-SERVER-HANDOFF-20261010
 
+## 2026-10-12 当前Mac接管worker执行闭环范围
+
+执行候选已完成：update在原Manager.lock内检固定起始状态及配置、调用原完整停止更新/SMB独立回读，并以保留密文同一FD对照原回执raw SHA、密文SHA及大小后形成结果；prepare固定原root阶段回复和完整当前审计；activate在父已持有只读FD和同一完整审计context内验证原Ed25519签名、窗口及声明，退出不解除父锁、不写root激活记录。执行路径严格按transport与execution角色分派，原恢复回执和批准记录都先核。
+
+首次1失败/13通过为合成更新夹具未模拟入口umask077，失败证据保留，修正夹具权限后25通过。补真实签名失效、过期、备份篡改及持锁失败后，四模块308项通过；该整合运行期间又补充worker的同FD密文/回执直接比较及秘密读取前状态检查，因此不把该整合标为最终worker SHA证据。最后源码终态33项定向通过（包括新增错起始状态、坏回执和更新失败保留路径），原相关278项模块代码未变且此前通过，未重复运行。Python3.9语法、差异检查及NAS归档待本轮收尾记录；root/UID/keychain/launchd/SMB身份适配明确为模拟，真实密码学/归档/SQLite/附件用于合成实例，不冒称正式NAS或实际接管验收。证据 `evidence/current-mac-worker-20261012`。
+
+主代理单负责人新增 `desktop_assistant/current_mac_worker.py` 和 `tests/desktop_assistant/test_current_mac_worker.py`，依据 7dbc4af2 的冻结协议接 update/prepare/activate。旧协议、审计、Manager、传输和root记录不改；实际入口绑定阶段对应批准解释器（update为transport，prepare/activate为execution）及精确源码能力。update只调用原 update_stopped，在原 Manager.lock 内检查起始状态、固定配置并提取完整回读结果；prepare复用完整当前Mac审计，activate验证原Ed25519授权、八小时窗口、固定公开文件和父已持有只读维护锁，在同一审计context内构造声明，root保持锁后持久发布由后续管理员事务负责。本轮仅合成真实签名/归档/SQLite/文件租约和明确OS适配，不访问正式实例或NAS凭据、不构建/部署/停服务、不写激活记录、不清理失败现场。验收需阶段正常与失败、借锁保留、入口/路径/身份绑定、合成完整审计及原相关回归，提交及NAS独立回读。
+
 ## 2026-10-12 当前Mac接管worker公开协议最小闭环
 
 公开协议已完成候选验证：初次三个合同整合 588 项通过（新协议115、原v3合同218、原监护升级合同255），随后补充旧/未回读备份及 prior raw reply 替换失败路径，新协议终态124项定向通过。旧473项合同代码未变，不重复执行；终态新增模块Python3.9语法与差异检查通过。所有材料为合成公开声明，激活测试中的零字节签名特意只证明形状验证，不冒称密码学认证。尚无实机执行worker/root安装、构建能力或正式部署。证据 `evidence/current-mac-worker-contract-20261012`。

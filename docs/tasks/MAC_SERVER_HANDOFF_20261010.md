@@ -1,5 +1,13 @@
 # MAC-SERVER-HANDOFF-20261010
 
+## 2026-10-12 当前Mac接管worker公开协议最小闭环
+
+公开协议已完成候选验证：初次三个合同整合 588 项通过（新协议115、原v3合同218、原监护升级合同255），随后补充旧/未回读备份及 prior raw reply 替换失败路径，新协议终态124项定向通过。旧473项合同代码未变，不重复执行；终态新增模块Python3.9语法与差异检查通过。所有材料为合成公开声明，激活测试中的零字节签名特意只证明形状验证，不冒称密码学认证。尚无实机执行worker/root安装、构建能力或正式部署。证据 `evidence/current-mac-worker-contract-20261012`。
+
+本轮主代理单负责人新增 `desktop_assistant/current_mac_worker_contract.py` 与 `tests/desktop_assistant/test_current_mac_worker_contract.py`，仅冻结 update/prepare/activate 三阶段有界公开计划、调用与回复。前置为 0f158d5b 的完整冷备审计及运行期接线；不改旧 v1/v2/v3 合同、Manager、权限或网络门禁，不实现实机 worker/root 安装，不构建、签名、部署或停止正在录单的实例。每阶段独立固定执行/监护/传输包、原恢复 attempt/回执、root 批准/控制/网络文件 raw SHA；原 restore-inputs 不追加新材料。activate 只接受原 v3 精确请求与准备证明及显式两项操作确认，并要求父进程原持锁 FD；公开验证不声称签名、持锁或底层事实已认证。成功条件为闭合字段、阶段串接与有界编解码的合成正常及失败测试、原合同回归、差异检查、候选提交及 NAS 回读归档。后续消费者必须实际核 root 保护、原签名、进程/文件身份与同一锁内完整审计，不能只凭该协议执行。
+
+网络进展：用户实测蒲公英蜂窝 20/20 成功，TTFB 中位数 68ms/P95 92ms，64KiB 中位数 139ms/P95 159ms。用户明确允许本人 iPhone/Mac/NAS 同网，iPhone 已由旧网络移至 7121934，地址 172.16.0.146；Mac 172.16.0.87、NAS 172.16.3.96 不变。该结果只证明合成 18880 测速，尚未证明原 172.16.1.26:8000 扫码或正式接管。三轮 NetBird 失败记录保留，独立测速服务已停止；不再推进其为 ERP 外网方案。
+
 ## 2026-10-11 系统引导钥匙串未写入现场续接
 
 老板实际执行a90975b8管理员包：只读预检和两个身份进程通过，pending及home/Library/Keychains已创建，停在create_system_bootstrap。随后root只读诊断确认System.keychain状态2（可读、未解锁），身份/路径保护/内存UID ACL通过，本次精确条目查询-25300未找到，私有Keychains目录为空；没有凭据数据读取，不删除pending或目录来重跑。

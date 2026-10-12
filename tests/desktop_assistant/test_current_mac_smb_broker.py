@@ -68,6 +68,7 @@ def test_partial_header_then_bad_frame_and_unfinished_plan_refused(bound):
     try:
         s=server(bound,left);s.feed(b'\0\0')
         with pytest.raises(ValueError):s.finish()
+        assert s.failed and s.channel.fileno()==-1
         with pytest.raises(ValueError):s.feed(b'\0\0')
         assert s.sequence==0
     finally:left.close();right.close()

@@ -124,8 +124,12 @@ class Server:
             raise
 
     def finish(self):
-        require(not self.failed and self.sequence == len(ORDER) and not self.buffer)
-        self.recheck()
+        try:
+            require(not self.failed and self.sequence == len(ORDER) and not self.buffer)
+            self.recheck()
+        except BaseException:
+            self.failed=True;self.channel.close()
+            raise
 
 
 class Client:

@@ -1032,3 +1032,18 @@ remote_backup_review只读设计监护程序升级；target_audit_review只读�
 最终94项定向通过（8.31秒），前83/93包含于94不累加。旧更新/链式更新/迁移/恢复来源/发布运行五模块此前129通过、1真实Windows DPAPI会话检查跳过（13.64秒），该组在最后CAS命名检查前运行，未声称终态重跑。Python3.9语法、旧方法AST、差异检查及独立终态SHA复审通过，复审未重跑测试。Mac受保护发布/SMB路由中的身份和传输边界为模拟，完整备份用合成SQLite/ZIP/GCM/本地独立回读，不当实机NAS验收。
 
 证据evidence/mac-stopped-update-20261012。当前只完成候选API，尚未接入新管理员worker、构建能力或实际部署；独立监督升级和retained目标接线仍按计划待办。只读健康检查再次返回ok，192.168.3.102预演服务保持，旧Windows和.80未改；未触真实库/凭据，未清理任何旧现场。
+
+
+## 2026-10-12 监督程序升级的独立worker与公开合同范围
+
+延续29b0502d，下一最小源码闭环先实现监督升级的公开合同和UID499 worker，尚不实现root指针切换、接bootstrap/build或部署。cutover_gap_review唯一新增mac_system_upgrade_contract.py及同名测试，纯标准库无IO，负责old/new批准程序分离、原context/publisher/registry/control/plist/admin代码绑定、固定attempt/7天计划/逐阶段公开回复的精确字段；与target_audit_review提前冻结接口。target_audit_review唯一新增mac_system_upgrade_worker.py及同名测试，固定新已发布程序/解释器/模块/UID身份，严格读取原root计划并按明确阶段核旧或新control/plist；stop仅使用新Manager原PID/nonce优雅停止，将manual_stop置true，其他state/current/原恢复事实保持。不得冒用旧system_action、调用旧22bd停止代码或伪造canary。verify须借原维护锁FD、确认静止及现有随机keychain canary；停止路径不依赖运营凭据/NAS/canary成功，不强杀/全局reap。
+
+共同约束：新worker只接受有界公开参数/合同，不支持任意路径/命令；新/旧身份明确，失败保留现场，不写root控制文件或激活记录；root独占计划及真实lock继承协议在后续管理员事务闭合，本轮测试不把模拟root/UID当实机身份验收。remote_backup_review只读复审合同/worker及最终SHA；主代理负责本卡/计划/整合/证据和NAS回执。最多两个代码执行代理，不访问真实ERP/NAS/凭据、不停止当前.102服务；进入真实部署前必须完成root事务、明确构建能力、完整原身份签名和独立实机检查。
+
+该闭环已完成开发：公开合同冻结18键plan、6键request、18键reply，仅stop/verify两阶段；新worker各自独立核旧、新原公钥签名及完整发布树，固定真实解释器/入口/UID499，原raw state与仅改变manual_stop后的完整摘要双绑定。stop不读canary/NAS，verify借用原只读持锁FD且不解除父锁，检查已有随机canary；存在任何全局正式激活记录即拒绝。本入口不执行root指针事务或启动ERP。合同255、worker67项定向通过；最终五个紧邻模块410通过/0跳过，包含前两组，不累加。真实合成签名、子进程nonce正常停止和exec继承FD通过；root/UID/canary适配不冒充实机验收。CLI缩写误接受的失败基线已保留并修复，合成签名夹具路径失败完整保留。Python3.9语法、差异和独立终态SHA只读复审通过，复审未重跑测试。证据evidence/mac-system-upgrade-contract-20261012及mac-system-upgrade-worker-20261012。
+
+## 2026-10-12 用户确认新增真实业务及原扫码网址必须保留
+
+老板明确原蒲公英ERP地址172.16.1.26承载货架标签和扫码入口，迁移必须保持该网址不变。原仓库VPN-MOBILE-HOST-20260916、QR400_20260914及手机二维码源码确认完整origin为http://172.16.1.26:8000，含原/q/货位/产品键、/scan/rack及其他对象路径。最终验收必须同时保持原192.168.3.80局域网入口与该VPN origin、端口、标签对象身份、登录和Host/Origin门禁；不能只验.102网页登录或要求全部重印。当前Mac预演ERP_MOBILE_QR_ORIGIN临时为http://192.168.3.102:8000，不是最终扫码验收。待只读核实原蒲公英成员身份及IP可移交机制，不抢占IP、不删除成员、不擅自购买服务，也不把仅Mac/NAS的备份专网当成原手机ERP网络。
+
+随后老板明确确认：Mac上10月12日新增订单和库存抵扣已是真实业务，必须完整保留。该最新事实覆盖此前“没有新增业务”的目标侧假设。原10月10日恢复及其全部原回执保持，当前Mac新增数据也全部保持；禁止重跑恢复、覆盖数据库、删除测试假定数据或把新增业务纳入LOGIN白名单。原retained仅允许登录审计差异的目标准备方案不再适用于当前现场，尚未执行的root升级/停止/正式激活均不得据旧假设继续。优先查明现有签名入口下当前完整可恢复备份的可行路线，保留当前可用服务，不因合成代码完成就操作正在使用的实例。target_audit_review只读评估现有备份/完整私有检查点路线；remote_backup_review只读核双入口配置；主代理统一修订实际验收基准与后续切换方案。已完成的合同/worker候选仍可归档，但不是当前数据可切换的证明。

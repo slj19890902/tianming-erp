@@ -176,26 +176,38 @@ def test_stop_persists_manual_gate_even_when_graceful_stop_fails_without_credent
     a.canary.assert_not_called();a.unprotect.assert_not_called();a.nas.assert_not_called()
 
 
-def test_start_stop_share_existing_lock_and_do_not_rewrite_unrelated_state(instance):
+@pytest.mark.parametrize('scheduled_backups', [True, False])
+def test_start_stop_share_existing_lock_and_do_not_rewrite_unrelated_state(instance, scheduled_backups):
     a=instance
+    a.service['scheduled_backups']=scheduled_backups
     result=a.run('start');assert result['snapshot']['running'] and not result['snapshot']['manual_stop']
     assert a.manager.state['arbitrary_history']=='preserve'
     result=a.run('stop');assert not result['snapshot']['running'] and result['snapshot']['manual_stop']
     assert a.manager.starts==a.manager.stops==1
+    assert a.service['scheduled_backups'] is scheduled_backups
     a.canary.assert_called_once();a.unprotect.assert_not_called();a.nas.assert_not_called()
 
 
-@pytest.mark.parametrize('fault',['disabled','unregistered','no-nightly','maintenance','canary','start-fails'])
+@pytest.mark.parametrize('fault',['disabled','unregistered','maintenance','canary','start-fails'])
 def test_start_rejects_incomplete_system_without_clearing_manual_stop(instance,fault):
     a=instance
-    if fault in {'disabled','unregistered','no-nightly'}:
-        a.service[{'disabled':'enabled','unregistered':'registered','no-nightly':'scheduled_backups'}[fault]]=False
+    if fault in {'disabled','unregistered'}:
+        a.service[{'disabled':'enabled','unregistered':'registered'}[fault]]=False
     if fault=='maintenance':
         state=a.manager.state;state['operation']='migration_failed';write_json(a.root/'state.json',state)
     if fault=='canary':a.canary.side_effect=ValueError('synthetic canary unavailable')
     if fault=='start-fails':a.manager.start=Mock(side_effect=ValueError('synthetic failure'))
     with pytest.raises(ValueError):a.run('start')
     assert a.manager.state['manual_stop'] is True
+
+
+@pytest.mark.parametrize('field', ['registered', 'enabled'])
+@pytest.mark.parametrize('value', [None, 0, 1, 'true'])
+def test_start_requires_true_service_flags_before_keychain_or_start(instance, field, value):
+    a=instance;a.service[field]=value;a.service['scheduled_backups']=False
+    with pytest.raises(ValueError, match='系统监护'):a.run('start')
+    assert a.manager.starts==0 and a.manager.state['manual_stop'] is True
+    a.canary.assert_not_called();a.unprotect.assert_not_called();a.nas.assert_not_called()
 
 
 def test_busy_lock_rejects_without_initialization_or_io(instance):
@@ -267,7 +279,8 @@ def test_authentication_binds_actual_identity_and_current_approved_entry(monkeyp
         with pytest.raises(ValueError):m.authenticated(request,script,executable)
 
 
-@pytest.mark.parametrize('fault',['none','identity','extra-secret','timestamp','manual','stopped','exit','interrupt','capability'])
+@pytest.mark.parametrize('fault',['none','backup-paused','disabled','unregistered','nonbool-enabled','nonbool-registered',
+    'identity','extra-secret','timestamp','manual','stopped','exit','interrupt','capability'])
 def test_root_dispatch_drops_privilege_and_rejects_bad_or_secret_reply(monkeypatch,tmp_path,fault):
     context={'uid':499,'gid':499};meta={'package':'a'*64,'context':context,'context_sha256':'c'*64,
         'publisher_sha256':'d'*64,'registry_sha256':'e'*64,'tree':tmp_path/'approved'}
@@ -277,7 +290,12 @@ def test_root_dispatch_drops_privilege_and_rejects_bad_or_secret_reply(monkeypat
               'files':{system.MANAGE_ENTRY:'hash',system.MANAGE_MODULE:'hash'}}
     if fault=='capability':manifest['runtime_capabilities'].pop('service_manage_v1')
     monkeypatch.setattr(system,'_program_manifest',lambda meta:manifest)
-    monkeypatch.setattr(system,'management_service_state',lambda:{'registered':True,'enabled':True,'scheduled_backups':True})
+    service={'registered':True,'enabled':True,'scheduled_backups':fault!='backup-paused'}
+    if fault in {'disabled','unregistered','nonbool-enabled','nonbool-registered'}:
+        field={'disabled':'enabled','unregistered':'registered','nonbool-enabled':'enabled',
+               'nonbool-registered':'registered'}[fault]
+        service[field]=1 if fault.startswith('nonbool-') else False
+    monkeypatch.setattr(system,'management_service_state',lambda:deepcopy(service))
     calls=[]
     class Process:
         returncode=1 if fault=='exit' else 0
@@ -303,11 +321,14 @@ def test_root_dispatch_drops_privilege_and_rejects_bad_or_secret_reply(monkeypat
         assert kwargs['env']['ERP_HOME_REHEARSAL']=='1'
         return Process()
     monkeypatch.setattr(system.subprocess,'Popen',popen)
-    if fault=='none':assert system.manage('a'*64,'start')['result']['snapshot']['running']
+    if fault in {'none','backup-paused'}:
+        result=system.manage('a'*64,'start')
+        assert result['result']['snapshot']['running']
+        assert result['system']==service
     else:
         with pytest.raises(ValueError):system.manage('a'*64,'start')
     if fault=='interrupt':assert len(calls)==2 and calls[1] is None
-    if fault=='capability':assert not calls
+    if fault in {'capability','disabled','unregistered','nonbool-enabled','nonbool-registered'}:assert not calls
 
 
 def test_full_synthetic_backup_through_management_entry_preserves_complete_facts(instance,monkeypatch):

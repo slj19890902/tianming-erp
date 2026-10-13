@@ -220,7 +220,8 @@ def run(request, *, script, executable):
             if (state.get('onboarding_pending') or state.get('operation') == 'migration_running'
                     or 'failed' in state.get('operation', '')):
                 raise ValueError('先完成未决维护，不能恢复启动')
-            if not all(system.management_service_state().values()):
+            service = system.management_service_state()
+            if service.get('registered') is not True or service.get('enabled') is not True:
                 raise ValueError('系统监护未安装或已停用')
             system.verify_keychain(context)
             recheck(); manager.start()

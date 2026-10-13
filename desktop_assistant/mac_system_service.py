@@ -419,7 +419,8 @@ def manage(package, action):
     meta = metadata(package); require_management(_program_manifest(meta))
     if action == 'start':
         service = management_service_state()
-        if not all(service.values()): raise ValueError('先安装并启用支持定时备份的系统监护')
+        if service.get('registered') is not True or service.get('enabled') is not True:
+            raise ValueError('先安装并启用系统监护')
     request = {'action': action, 'package_sha256': package, 'challenge': uuid.uuid4().hex,
                **{k: meta[k] for k in ('context_sha256', 'publisher_sha256', 'registry_sha256')}}
     context = meta['context']

@@ -16,6 +16,7 @@ def reserve_new_order_stock(db, *, order_item_id, operator_id):
         snapshots = {s.component_product_id: s.id for s in requirements.compiled.snapshots}
         from app.services.processed_component_stock import available_outputs, reserve_output
         from app.services.finished_stock_identity import compiled_product_bases
+        from app.services.order_replenishment_supply import output_free_for_order
         completed_child_ids = {e.child_id for e in requirements.compiled.graph.edges if e.relation=='assembly'}
         reserved = []
         for pid in topology:
@@ -36,7 +37,9 @@ def reserve_new_order_stock(db, *, order_item_id, operator_id):
                 from app.services.bom_subkits import active_subkit_order
                 if active_subkit_order(db, lot) is not None:
                     continue
-                take = min(need, lot.quantity_available)
+                take = min(need, output_free_for_order(db, lot=lot, order_item_id=order_item_id))
+                if not take:
+                    continue
                 reservation = reserve_finished_inventory_for_bom_component(db,
                     order_item_id=order_item_id, bom_snapshot_id=snapshots[pid],
                     inventory_lot_id=lot.id, quantity=take, expected_version=lot.version,
@@ -51,7 +54,9 @@ def reserve_new_order_stock(db, *, order_item_id, operator_id):
                 for lot in available_outputs(db, product_id=pid,
                         customer_id=requirements.compiled.graph.customer_id,
                         expected_basis=compiled_product_bases(requirements.compiled)[pid]):
-                    take=min(need,lot.quantity_available)
+                    take=min(need,output_free_for_order(db, lot=lot, order_item_id=order_item_id))
+                    if not take:
+                        continue
                     reservation=reserve_output(db,compiled=requirements.compiled,order_item_id=order_item_id,
                         snapshot_id=snapshots[pid],lot=lot,quantity=take,expected_version=lot.version,
                         operator_id=operator_id,key=f'processed-bom-auto:{order_item_id}:{snapshots[pid]}:{lot.id}')
@@ -68,7 +73,9 @@ def reserve_new_order_stock(db, *, order_item_id, operator_id):
                     bom_snapshot_id=snapshots[pid], stock_stage='body'):
                 if lot.finished_detail.is_general or lot.finished_detail.owner_customer_id != requirements.compiled.graph.customer_id:
                     continue
-                take = min(need, lot.quantity_available)
+                take = min(need, output_free_for_order(db, lot=lot, order_item_id=order_item_id))
+                if not take:
+                    continue
                 reservation = reserve_finished_inventory_for_bom_component(db, order_item_id=order_item_id,
                     bom_snapshot_id=snapshots[pid], inventory_lot_id=lot.id, quantity=take,
                     expected_version=lot.version, operator_id=operator_id, stock_stage='body',

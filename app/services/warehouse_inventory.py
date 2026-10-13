@@ -3190,6 +3190,7 @@ def reserve_finished_inventory_for_bom_component(
     idempotency_key: str,
     warning_acknowledged_codes: list[str],
     stock_stage: str = 'complete',
+    replenishment_source_id: int | None = None,
 ) -> InventoryReservation:
     """Reserve formal component stock without changing parent-order coverage."""
     existing = db.scalar(select(InventoryReservation).where(
@@ -3219,7 +3220,12 @@ def reserve_finished_inventory_for_bom_component(
         lock_order_rows_for_production_transition(db, [order.id])
     except ProductionWorkflowError as error:
         raise WarehouseInventoryError(str(error), error.status_code) from error
-    if item.requisition_status != "未报料" or item.material_status == "received" or item.delivered_quantity > 0:
+    if replenishment_source_id is not None:
+        from app.services.order_replenishment_supply import authorize_output
+        authorize_output(db, source_id=replenishment_source_id, order_item_id=item.id,
+            snapshot_id=snapshot.id, lot_id=inventory_lot_id, quantity=quantity)
+    if ((item.requisition_status != "未报料" and not (replenishment_source_id is not None and item.requisition_status == "已报料"))
+            or item.material_status == "received" or item.delivered_quantity > 0):
         raise WarehouseInventoryError("订单已进入后续流程，不能新增组件成品库存抵扣", 409)
     if has_production_completion_facts(db, [item.id]):
         raise WarehouseInventoryError("订单明细已完成生产，不能再新增组件成品库存抵扣", 409)
@@ -3517,6 +3523,7 @@ def reserve_finished_inventory(
     operator_id: int | None,
     idempotency_key: str,
     warning_acknowledged_codes: list[str],
+    replenishment_source_id: int | None = None,
 ) -> InventoryReservation:
     existing = db.scalar(
         select(InventoryReservation).where(
@@ -3569,7 +3576,11 @@ def reserve_finished_inventory(
         raise WarehouseInventoryError(
             "订单明细已完成生产，不能再新增成品库存抵扣", 409
         )
-    if not _finished_reservation_pre_requisition(item):
+    if replenishment_source_id is not None:
+        from app.services.order_replenishment_supply import authorize_output
+        authorize_output(db, source_id=replenishment_source_id, order_item_id=item.id,
+            snapshot_id=None, lot_id=inventory_lot_id, quantity=quantity)
+    if not _finished_reservation_pre_requisition(item) and not (replenishment_source_id is not None and item.requisition_status == "已报料"):
         raise WarehouseInventoryError("订单已进入报料，请先取消报料后再抵扣成品库存", 409)
     if item.material_status == "received" or item.delivered_quantity > 0:
         raise WarehouseInventoryError("订单明细已进入后续流程，不能新增成品库存抵扣", 409)
@@ -3585,7 +3596,7 @@ def reserve_finished_inventory(
         )
         .limit(1)
     )
-    if active_semi_reservation is not None:
+    if active_semi_reservation is not None and replenishment_source_id is None:
         raise WarehouseInventoryError(
             "订单已有半成品库存预占，请先取消半成品抵扣后再改用成品库存",
             409,

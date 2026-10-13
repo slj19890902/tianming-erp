@@ -2815,7 +2815,9 @@ def consume_semi_finished_reservation(
                     or (frozen_plan.get("target_length_mm"), frozen_plan.get("target_width_mm")) != (requirement.board_length_mm, requirement.board_width_mm)):
                 raise WarehouseInventoryError("裁切分配资料已变化，请核对冻结方案", 409)
         from app.services.raw_purchase_plans import validate_reservation
-        if not validate_reservation(db,reservation,lot,requirement,delivery=delivery_item_id is not None):
+        from app.services.order_replenishment_supply import validate_material_output_reservation
+        if (not validate_material_output_reservation(db,reservation,lot,requirement,delivery=delivery_item_id is not None)
+                and not validate_reservation(db,reservation,lot,requirement,delivery=delivery_item_id is not None)):
             expected = requirement_signature(requirement)
             if (delivery_item_id is not None
                     and detail.normalized_material_code != expected.normalized_material_code

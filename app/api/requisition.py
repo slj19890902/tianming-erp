@@ -2593,6 +2593,9 @@ class _PendingRequisitionReadContext:
         self._ordinary_item_ids = set(item_ids) - {
             int(item_id) for item_id in complex_item_ids if item_id is not None
         }
+        from app.services.order_replenishment_supply import allocations
+        self._replenishment_supply = allocations(db, order_item_ids=item_ids)
+        self._ordinary_item_ids -= {key[0] for key in self._replenishment_supply}
 
     def is_ordinary(self, item: OrderItem) -> bool:
         return item.id in self._ordinary_item_ids
@@ -2739,6 +2742,7 @@ class _PendingRequisitionReadContext:
             semi_reserved_piece_qty=self._semi_reserved_by_item_component.get(
                 (item.id, "whole"), 0
             ),
+            replenishment_projection=self._replenishment_supply,
         )
         already_requisitioned = int(
             self._bom_parent_active_order_purpose_by_item_id.get(item.id, 0)
@@ -2812,6 +2816,7 @@ class _PendingRequisitionReadContext:
                 )
                 for component in ("whole", "cover", "base")
             },
+            replenishment_projection=self._replenishment_supply,
         )
 
     def late_finished_inventory_preview(
@@ -3245,7 +3250,7 @@ def _bom_snapshot_requirements(
         if is_base
         else snapshot.snapshot_component_report_notes
     )
-    return {
+    result = {
         "snapshot_id": snapshot.id,
         "product_id": snapshot.component_product_id,
         "product_version": (
@@ -3297,6 +3302,14 @@ def _bom_snapshot_requirements(
         "crease_right_mm": crease_right_mm,
         "remark": snapshot.remark or report_notes,
     }
+    from app.services.order_replenishment_supply import coverage, reading_supply
+    if not reading_supply():
+        planned = coverage(db, snapshot.sales_order_item_id, snapshot.id, component)
+        credit = min(remaining, planned["replenishment_covered_piece_qty"])
+        result.update(planned, replenishment_covered_piece_qty=credit)
+        result["remaining_required_piece_qty"] = max(remaining - credit, 0)
+        result["requisition_qty"] = (result["remaining_required_piece_qty"] + yield_per_sheet - 1) // yield_per_sheet + (spare_sheets if result["remaining_required_piece_qty"] else 0)
+    return result
 
 
 def _bom_snapshot_has_active_requisition(
@@ -3697,6 +3710,7 @@ def _current_requisition_requirements(
     finished_reserved_qty: int | None = None,
     component_type: str | None = None,
     semi_reserved_piece_qty: int | None = None,
+    replenishment_projection: dict | None = None,
 ) -> dict[str, int | str | bool]:
     """Derive current purchase demand from active finished-stock reservations."""
     resolved_cutting_mode = normalize_cutting_mode(
@@ -3756,7 +3770,14 @@ def _current_requisition_requirements(
     remaining_required_piece_qty = max(
         required_piece_qty - semi_finished_reserved_piece_qty, 0
     )
+    from app.services.order_replenishment_supply import coverage, reading_supply
+    planned = {"replenishment_covered_piece_qty": 0, "replenishment_sources": []}
+    if not reading_supply():
+        planned = coverage(db, item.id, component=normalized_component, projection=replenishment_projection)
+        planned["replenishment_covered_piece_qty"] = min(remaining_required_piece_qty, planned["replenishment_covered_piece_qty"])
+        remaining_required_piece_qty -= planned["replenishment_covered_piece_qty"]
     return {
+        **planned,
         "cutting_mode": resolved_cutting_mode,
         "cutting_factor": _cutting_factor(resolved_cutting_mode),
         "pieces_per_box": resolved_pieces_per_box,
@@ -3783,6 +3804,7 @@ def _current_requisition_summary(
     finished_reserved_qty: int | None = None,
     product: Product | None = None,
     semi_reserved_by_component: dict[str, int] | None = None,
+    replenishment_projection: dict | None = None,
 ) -> dict:
     if product is None:
         if db is None:
@@ -3812,6 +3834,7 @@ def _current_requisition_summary(
                 if semi_reserved_by_component is not None
                 else None
             ),
+            replenishment_projection=replenishment_projection,
         )
         for component_type in component_types
     ]
@@ -3825,6 +3848,8 @@ def _current_requisition_summary(
                 int(row["semi_finished_reserved_piece_qty"])
                 for row in components
             ),
+            "replenishment_covered_piece_qty": sum(int(row.get("replenishment_covered_piece_qty") or 0) for row in components),
+            "replenishment_sources": [source for row in components for source in row.get("replenishment_sources", [])],
             "remaining_required_piece_qty": sum(
                 int(row["remaining_required_piece_qty"])
                 for row in components
@@ -8029,7 +8054,9 @@ def _pending_selection_preview_groups(
                     )
                 raise HTTPException(
                     status_code=409,
-                    detail="该订单明细已由半成品库存全额抵扣，无需生成供应商报料单，请刷新待报料列表。",
+                    detail=("本单材料需求已由既有补库供应覆盖，请在来源补库单继续报料或加工，本单无需重复采购。"
+                        if int(requirements.get("replenishment_covered_piece_qty") or 0) > 0 else
+                        "该订单明细已由半成品库存全额抵扣，无需生成供应商报料单，请刷新待报料列表。"),
                 )
             continue
 
@@ -10012,6 +10039,7 @@ def _pending_requisition_eligible_rows(db: Session, user: User) -> list[dict]:
                 semi_reserved_piece_qty=context.semi_reserved_piece_qty(
                     int(item.id), component
                 ),
+                replenishment_projection=context._replenishment_supply,
             )
             if not _requires_supplier_purchase(requirements):
                 continue
@@ -10428,6 +10456,8 @@ def _pending_requisitions_full_payload(
                 "pieces_per_box": pieces_per_box,
                 "required_piece_qty": required_piece_qty,
                 "semi_finished_reserved_piece_qty": semi_finished_reserved_piece_qty,
+                "replenishment_covered_piece_qty": int(requirements.get("replenishment_covered_piece_qty") or 0),
+                "replenishment_sources": requirements.get("replenishment_sources", []),
                 "remaining_required_piece_qty": remaining_required_piece_qty,
                 "late_finished_inventory": late_finished_inventory,
                 "late_finished_inventory_available_qty": int(
@@ -13076,6 +13106,10 @@ def _create_batch_locked(
         from app.services.raw_purchase_plans import assert_no_plan
         from app.services.production_workflow import lock_order_rows_for_production_transition
         raw_item_ids=[line.order_item_id for line in payload.items]
+        from app.services.order_replenishment_supply import lock_supply
+        for item in db.scalars(select(OrderItem).where(OrderItem.id.in_(raw_item_ids))):
+            _require_order_item_customer_access(db, item, user)
+        lock_supply(db, order_item_ids=raw_item_ids)
         lock_order_rows_for_production_transition(db,list(db.scalars(select(OrderItem.order_id).where(OrderItem.id.in_(raw_item_ids)))))
         assert_no_plan(db,raw_item_ids)
         batch = Requisition(
@@ -19385,6 +19419,19 @@ def _create_supplier_orders_from_pending_selection_locked(
     db: Session,
     user: User,
 ) -> dict:
+    from app.services.order_replenishment_supply import lock_supply
+    supply_item_ids = {item.order_item_id for group in payload.supplier_groups for line in group.lines for item in line.source_items if item.order_item_id}
+    try:
+        supply_item_ids.update(int(item["order_item_id"]) for group in payload.supplier_groups for item in group.items if item.get("order_item_id"))
+    except (ValueError, TypeError) as error:
+        raise HTTPException(400, "报料明细订单编号无效，请刷新原草稿") from error
+    supply_item_ids.update(line.order_item_id for group in payload.supplier_groups for line in group.bom_items if line.order_item_id)
+    supply_source_ids = [source.stock_replenishment_item_id for group in payload.supplier_groups for source in group.stock_sources]
+    for item in db.scalars(select(OrderItem).where(OrderItem.id.in_(supply_item_ids))):
+        _require_order_item_customer_access(db, item, user)
+    for source in db.scalars(select(StockReplenishmentOrderItem).where(StockReplenishmentOrderItem.id.in_(supply_source_ids))):
+        _require_stock_replenishment_order_access(db, source.order, user)
+    lock_supply(db, order_item_ids=sorted(supply_item_ids), source_item_ids=supply_source_ids)
     groups_by_request_key = {
         group.request_key: group
         for group in payload.supplier_groups

@@ -2349,8 +2349,10 @@ def _build_full_order_response_context(
             if orders
             else {}
         )
+    from app.services.order_replenishment_supply import allocations as replenishment_allocations
     return {
         "completion_dates": completion_dates,
+        "replenishment_supply_projection": replenishment_allocations(db, order_item_ids=[item.id for item in items]),
         "bom_components_by_item_id": bom_components_by_item_id,
         "external_components_by_item_id": external_components_by_item_id,
         "business_projections": resolved_business_projections,
@@ -2368,6 +2370,7 @@ def _build_full_order_response_context(
 def _full_order_response_kwargs(context: dict, order_id: int) -> dict:
     return {
         "completion_dates": context["completion_dates"],
+        "replenishment_supply_projection": context.get("replenishment_supply_projection"),
         "bom_components_by_item_id": context["bom_components_by_item_id"],
         "external_components_by_item_id": context[
             "external_components_by_item_id"
@@ -2413,8 +2416,12 @@ def _order_response(
     ]
     | None = None,
     material_cost_context: MaterialCostEstimateContext | None = None,
+    replenishment_supply_projection: dict | None = None,
 ) -> dict:
     item_ids = [item.id for item in order.items]
+    from app.services.order_replenishment_supply import allocations as replenishment_allocations, summary as replenishment_summary
+    if replenishment_supply_projection is None:
+        replenishment_supply_projection = replenishment_allocations(db, order_item_ids=item_ids)
     cancelled_external_ids = (fully_cancelled_external_item_ids(db, [
         item.id for item in order.items if item.requisition_status == "外购包材已采购"
         and item.material_status == "pending"
@@ -2565,6 +2572,16 @@ def _order_response(
             db, item, finished_reserved=finished_reserved_quantity,
             has_bom=bool(item_bom_components),
         )
+        supply = replenishment_summary(db, item.id, projection=replenishment_supply_projection)
+        if supply["covered_piece_quantity"]:
+            labels = {"pending_material": "补库待报料", "pending_incoming": "补库待收料", "pending_processing": "补库待加工", "finished": "已有补库产出"}
+            if supply["remaining_purchase_finished_quantity"] == 0:
+                requisition_display_status = " / ".join(dict.fromkeys(labels[row["stage"]] for row in supply["sources"]))
+            else:
+                requisition_display_status = item.requisition_status
+            requisition_display_hint = (f"补库已覆盖{ supply['covered_finished_quantity']}{supply['unit_label']}；"
+                f"仍缺{ supply['remaining_purchase_finished_quantity']}{supply['unit_label']}需采购。" +
+                "；".join(f"{row['product_code'] or row['product_name']}：{row['covered_piece_quantity']}片，{labels[row['stage']]}（{row['order_number']}）" for row in supply["sources"]))
         cost_reference = {}
         if db is not None and may_view_cost:
             frozen_cost = frozen_cost_by_item_id.get(item.id)
@@ -2745,6 +2762,7 @@ def _order_response(
                 "requisition_status": "未报料" if item.id in cancelled_external_ids else item.requisition_status,
                 "requisition_display_status": "未报料" if item.id in cancelled_external_ids else requisition_display_status,
                 "requisition_display_hint": "" if item.id in cancelled_external_ids else requisition_display_hint,
+                "replenishment_supply": supply,
                 "requisition_hold": (
                     {
                         "id": active_hold_map[item.id].id,
@@ -6445,6 +6463,8 @@ def update_order_status(
     if remark is not None:
         order.remark = remark
     if target in FINAL_ORDER_STATUSES:
+        from app.services.order_replenishment_supply import source_ids_for_order_reservations, reconcile_outputs
+        replenishment_source_ids = source_ids_for_order_reservations(db, [item.id for item in order.items])
         _release_order_reservations(
             db,
             order_item_ids=[item.id for item in order.items],
@@ -6454,6 +6474,13 @@ def update_order_status(
         )
         for item in order.items:
             item.is_force_closed = True
+        db.flush()
+        if replenishment_source_ids:
+            try:
+                reconcile_outputs(db, operator_id=user.id, source_item_ids=replenishment_source_ids)
+            except WarehouseInventoryError as error:
+                db.rollback()
+                raise HTTPException(error.status_code, str(error)) from error
     _append_order_audit(
         db,
         request=request,
@@ -8450,6 +8477,8 @@ def _create_order_impl(
                 selections=payload.previous_batch_selections, user=user, request=request
             )
         else:
+            from app.services.order_replenishment_supply import reconcile_outputs
+            reconcile_outputs(db, operator_id=user.id, order_item_ids=[item.id for item in created_items])
             from app.services.bom_auto_reservation import reserve_new_order_stock
             for created_item in created_items:
                 reserve_new_order_stock(db, order_item_id=created_item.id, operator_id=user.id)

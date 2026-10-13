@@ -419,4 +419,8 @@ def mutate(db, *, receipt_id, payload, actor, group_snapshot=None, output_kind='
     append_audit_event(db,event_category="business",result="success",source="web",module_code="production",action_code=f"stock_preparation.{action}",
         resource="production",actor=actor,entity_type="incoming_receipt_item",entity_id=receipt.id,details=dict(result,input_quantity=quantity,source_lot_id=lot.id))
     db.flush()
+    if action == "complete":
+        from app.services.order_replenishment_supply import reconcile_outputs
+        if receipt.stock_replenishment_item_id is not None:
+            reconcile_outputs(db, operator_id=actor.id, source_item_ids=[receipt.stock_replenishment_item_id])
     return result

@@ -11,8 +11,8 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.627"
-APP_VERSION_NAME = "库存闭环与备份运行时兼容"
+APP_VERSION = "v0.22.628"
+APP_VERSION_NAME = "库存匹配、库位与手工片料抵扣"
 APP_BUILD_DATE = "2026-10-13"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
@@ -6119,3 +6119,8 @@ APP_CHANGELOG = [*(f"v0.22.626：本次更新｜{item}" for item in APP_CHANGES)
 # v627 keeps the v626 business acceptance steps; only the required backup prerequisite is added.
 APP_CHANGES = [*APP_CHANGES, "Mac备份运行时通过受控验证后升级，保留现有NAS目标和凭据；完整备份验证通过后才允许库存修复迁移。"]
 APP_CHANGELOG = ["v0.22.627：本次更新｜Mac备份运行时受控升级，保留库存闭环修复。", *APP_CHANGELOG]
+
+APP_CHANGELOG = ["v0.22.628：本次更新｜库存匹配、地图位置与手工填写片料抵扣数量合并发布，保留Mac正式激活。", *APP_CHANGELOG]
+
+APP_CHANGES = [*APP_CHANGES, "待报料和BOM草稿可选择实际库存批次并手工填写抵扣张数；按实物产出计算，只报剩余缺料。"]
+APP_VERIFICATION_STEPS = [*APP_VERIFICATION_STEPS, "在使用库存片料中选择批次，输入部分张数，确认剩余库存和报料差额正确；另一子件无货时继续显示它的缺料。"]

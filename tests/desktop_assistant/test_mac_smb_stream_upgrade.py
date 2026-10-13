@@ -13,6 +13,8 @@ from desktop_assistant import mac_smb_stream_transport as transport, mac_smb_str
 from app.core import mac_service_keychain as keychain
 from test_mac_smb_stream_setup import planned
 
+REAL_UPGRADE_PATHS = s._upgrade_paths
+
 
 @pytest.fixture
 def upgrade(planned,monkeypatch):
@@ -23,7 +25,7 @@ def upgrade(planned,monkeypatch):
     monkeypatch.setattr(s.service,'_program_manifest',lambda meta:{'runtime_capabilities':{s.UPGRADE_CAPABILITY:1}})
     previous=s.control(a.plan,a.digest)
     a.plan.update(type=s.UPGRADE_TYPE,previous_control=previous,package_sha256='1'*64,
-                  supervisor_sha256=s.cfg.digest(b'synthetic supervisor'))
+                  supervisor_sha256=s.cfg.digest(b'synthetic supervisor'),activation_sha256=None)
     a.raw=s.boot.canonical(a.plan);a.digest=s.cfg.digest(a.raw)
     s.cfg.CONTROL.write_bytes(s.boot.canonical(previous))
     s.cfg.CONTRACT.write_bytes(s.boot.canonical(a.plan['contract']))
@@ -33,7 +35,7 @@ def upgrade(planned,monkeypatch):
     monkeypatch.setattr(u,'verify_code',lambda:'d'*64)
     monkeypatch.setattr(u,'_publication',lambda:nullcontext())
     monkeypatch.setattr(u,'_locked',lambda pin:nullcontext())
-    monkeypatch.setattr(u,'_paths',lambda:nullcontext(dict(base=a.base,root=a.base,operation='lock',check=lambda:None)))
+    monkeypatch.setattr(s,'_upgrade_paths',lambda plan:nullcontext(dict(base=a.base,root=a.base,operation='lock',check=lambda:None)))
     monkeypatch.setattr(u,'_state',lambda *args:(a.state,{}))
     monkeypatch.setattr(s.publication,'sync_directory',lambda p:None)
     def write(path,raw,mode=0o600):
@@ -251,3 +253,57 @@ def test_dispatch_uses_only_pinned_socket_no_secret_input_or_extra_groups(upgrad
     assert kw['user']==kw['group']==499 and kw['extra_groups']==[] and kw['close_fds']
     assert set(kw['env'])=={'HOME','PATH','LANG','ERP_HOME_REHEARSAL'}
     assert events==['policy','connect','closed']
+
+
+@pytest.mark.parametrize('fault', ['missing-gate','unready','wrong-hash','failed','unknown'])
+def test_activated_upgrade_requires_completed_exact_owner_handoff(upgrade, fault):
+    a = upgrade
+    raw = s.boot.canonical(dict(type='tianming.factory-owner-current-mac.activation.v1', context_sha256=a.plan['context_sha256']))
+    (a.base/'factory-activation.json').write_bytes(raw)
+    gate = dict(ready=True, activation_sha256=s.cfg.digest(raw))
+    if fault == 'unready': gate['ready'] = False
+    if fault == 'wrong-hash': gate['activation_sha256'] = '9'*64
+    if fault == 'failed': (a.base/'owner-current-mac-activation-failed.json').write_bytes(b'failed')
+    if fault == 'unknown': (a.base/'factory-activation.json').write_text('{"type":"unknown"}')
+    if fault != 'missing-gate':
+        (a.base/'owner-current-mac-activation-publication.json').write_bytes(s.boot.canonical(gate))
+    with pytest.raises((ValueError,FileNotFoundError)): s._upgrade_activation()
+    assert 'commit' not in a.events
+
+
+def test_factory_activation_is_pinned_and_home_absence_is_explicit(upgrade):
+    a = upgrade
+    assert s._upgrade_activation() is None
+    raw = s.boot.canonical(dict(type='tianming.factory-owner-current-mac.activation.v1', context_sha256=a.plan['context_sha256']))
+    (a.base/'factory-activation.json').write_bytes(raw)
+    (a.base/'owner-current-mac-activation-publication.json').write_bytes(s.boot.canonical(dict(ready=True,activation_sha256=s.cfg.digest(raw))))
+    assert s._upgrade_activation() == s.cfg.digest(raw)
+    (a.base/'factory-activation.json').write_bytes(raw+b' ')
+    with pytest.raises(ValueError): s._upgrade_activation()
+
+
+@pytest.mark.parametrize('fault', ['activation-change','context','pending','lock'])
+def test_upgrade_path_recheck_blocks_state_change_without_touching_binding(upgrade,monkeypatch,fault):
+    a=upgrade
+    active=dict(type='tianming.factory-owner-current-mac.activation.v1',context_sha256=a.plan['context_sha256'])
+    raw=s.boot.canonical(active);a.plan['activation_sha256']=s.cfg.digest(raw)
+    (a.base/'factory-activation.json').write_bytes(raw)
+    (a.base/'owner-current-mac-activation-publication.json').write_bytes(s.boot.canonical(dict(ready=True,activation_sha256=s.cfg.digest(raw))))
+    class Pin:
+        def __init__(self,path,**kw): self.path=Path(path)
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def read(self): return b'bad' if fault=='lock' else b'0'
+        def check(self): pass
+    monkeypatch.setattr(u,'Pin',Pin)
+    monkeypatch.setattr(u,'_no_pending',lambda root:None)
+    if fault=='lock':
+        with pytest.raises(ValueError):
+            with REAL_UPGRADE_PATHS(a.plan): pass
+    else:
+        with REAL_UPGRADE_PATHS(a.plan) as paths:
+            if fault=='activation-change': (a.base/'factory-activation.json').write_bytes(raw+b' ')
+            if fault=='context': a.plan['context_sha256']='9'*64
+            if fault=='pending': monkeypatch.setattr(u,'_no_pending',Mock(side_effect=ValueError('pending operation')))
+            with pytest.raises(ValueError): paths['check']()
+    assert 'commit' not in a.events

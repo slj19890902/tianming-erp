@@ -8,6 +8,7 @@ import getpass
 import hmac
 import os
 from pathlib import Path
+from contextlib import contextmanager, ExitStack
 import re
 import socket
 import subprocess
@@ -321,7 +322,7 @@ UPGRADE_PHASE = 'upgrade-probe'
 UPGRADE_CAPABILITY = 'archive_smb_upgrade_v1'
 UPGRADE_TYPE = 'tianming.mac-smb-stream-upgrade-plan.v1'
 UPGRADE_RESULT = 'tianming.mac-smb-stream-upgrade-probe.v1'
-UPGRADE_FIELDS = FIELDS | {'previous_control', 'supervisor_sha256'}
+UPGRADE_FIELDS = FIELDS | {'previous_control', 'supervisor_sha256', 'activation_sha256'}
 
 
 def upgrade_pending(attempt):
@@ -337,6 +338,7 @@ def upgrade_header(raw, approved_sha):
     base = {k: plan[k] for k in FIELDS}; base['type'] = TYPE
     header(boot.canonical(base), cfg.digest(boot.canonical(base)))
     require(cfg.sha(plan['supervisor_sha256']))
+    require(plan['activation_sha256'] is None or cfg.sha(plan['activation_sha256']))
     cfg.validate(plan['previous_control'], plan['contract'], plan['context_sha256'], plan['contract']['uid'])
     require(plan['previous_control']['publisher_sha256'] == plan['publisher_sha256']
             and plan['previous_control']['package_sha256'] != plan['package_sha256'])
@@ -379,6 +381,7 @@ def make_upgrade_plan(package):
         created_at=now, expires_at=now+86400, code_manifest_sha256=supervisor.verify_code(),
         package_sha256=package, contract=boot.decode(publication.read_record(cfg.CONTRACT)),
         previous_control=previous, supervisor_sha256=cfg.digest(publication.read_record(service.CONTROL)),
+        activation_sha256=_upgrade_activation(),
         **{k:meta[k] for k in ('context_sha256','publisher_sha256','registry_sha256')})
     raw = boot.canonical(plan)
     upgrade_validate(raw, cfg.digest(raw))
@@ -422,13 +425,55 @@ def upgrade_worker(meta, raw):
         return upgrade_reply(boot.decode(output),plan,meta,challenge)
 
 
+
+def _upgrade_activation():
+    """Pin the approved factory record, or explicitly require an unactivated host."""
+    path = cfg.BASE / 'factory-activation.json'
+    if not os.path.lexists(path):
+        return None
+    raw = publication.read_record(path)
+    value = boot.decode(raw)
+    # This upgrade supports the already completed owner handoff only. Unknown
+    # activation protocols remain closed instead of being treated as home mode.
+    require(value.get('type') == 'tianming.factory-owner-current-mac.activation.v1')
+    gate = boot.decode(publication.read_record(cfg.BASE / 'owner-current-mac-activation-publication.json'))
+    require(gate.get('ready') is True and gate.get('activation_sha256') == cfg.digest(raw)
+            and not os.path.lexists(cfg.BASE / 'owner-current-mac-activation-failed.json'))
+    return cfg.digest(raw)
+
+
+@contextmanager
+def _upgrade_paths(plan):
+    # Runtime binding is independent of the supervisor's home-only upgrade.
+    # Keep exact ownership, operation lock, pending-state and activation gates;
+    # never replace or disable the existing factory activation or monitor.
+    from . import mac_system_upgrade as supervisor
+    with ExitStack() as held:
+        base = held.enter_context(supervisor.Pin(cfg.BASE, mode=0o755, directory=True, mutable=True))
+        root = held.enter_context(supervisor.Pin(cfg.BASE / 'instance', uid=499, gid=499,
+            mode=0o700, directory=True, mutable=True, parent=base))
+        control = held.enter_context(supervisor.Pin(root.path / 'control', uid=499, gid=499,
+            mode=0o700, directory=True, mutable=True, parent=root))
+        operation = held.enter_context(supervisor.Pin(control.path / 'operation.lock',
+            uid=499, gid=499, mode=0o600, parent=control))
+        require(operation.read() == b'0')
+        def check():
+            for pin in (base, root, control, operation): pin.check()
+            require(_upgrade_activation() == plan['activation_sha256'])
+            if plan['activation_sha256'] is not None:
+                active = boot.decode(publication.read_record(cfg.BASE / 'factory-activation.json'))
+                require(active.get('context_sha256') == plan['context_sha256'])
+            supervisor._no_pending(root)
+        check()
+        yield dict(base=base, root=root, operation=operation, check=check)
+
 def apply_upgrade(raw, approved_sha):
     """Root-only, maintenance-locked CAS. Does not stop ERP or touch its DB."""
     from . import mac_system_upgrade as supervisor
     supervisor._entry()
     plan = upgrade_header(raw, approved_sha)
     require(plan['code_manifest_sha256'] == supervisor.verify_code())
-    with supervisor._publication(), supervisor._paths() as paths, supervisor._locked(paths['operation']):
+    with supervisor._publication(), _upgrade_paths(plan) as paths, supervisor._locked(paths['operation']):
         plan,meta = upgrade_validate(raw,approved_sha)
         previous_state,_ = supervisor._state(paths['root'],499,499)
         paths['check']()

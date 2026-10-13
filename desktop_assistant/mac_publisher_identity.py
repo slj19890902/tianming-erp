@@ -66,7 +66,8 @@ def _bridge(action, context_sha, secret=None):
         process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, close_fds=True, pass_fds=(() if write_fd is None else (write_fd,)),
             cwd='/', umask=0o077,
-            env={'HOME':'/var/root','PATH':'/usr/bin:/bin:/usr/sbin:/sbin','LANG':'en_US.UTF-8'})
+            env={'HOME':'/var/root','PATH':'/usr/bin:/bin:/usr/sbin:/sbin','LANG':'en_US.UTF-8'},
+            **({'user':499,'group':499,'extra_groups':[]} if action == 'denial-probe' else {}))
         if write_fd is not None: os.close(write_fd); write_fd = None
         output, _ = process.communicate(secret)
         if action == 'denial-probe':
@@ -134,3 +135,35 @@ def sign(raw):
     require(public == authority['mac_public'])
     signature = key.sign(raw); key.public_key().verify(signature, raw)
     return signature
+
+
+def complete_existing_initialization(*, owner_authorized=False):
+    """Finish the pinned Keychain-only checkpoint; never generate/replace a key."""
+    _root(); require(owner_authorized is True)
+    from desktop_assistant import mac_publisher_trust as trust
+    context = _read(BASE/'keychain-context.json'); legacy = _read(BASE/'publisher-public.pem')
+    raw = _read(PENDING); record = trust.decode(raw)
+    require(set(record) == {'type','context_sha256','legacy_anchor_sha256','mac_publisher_sha256',
+        'private_key_storage','owner_authorized','operational_credentials_changed'}
+        and record['type'] == 'tianming.mac-publisher-initialization.v1'
+        and record['context_sha256'] == hashlib.sha256(context).hexdigest()
+        and record['legacy_anchor_sha256'] == hashlib.sha256(legacy).hexdigest()
+        and record['private_key_storage'] == 'root-only System Keychain'
+        and record['owner_authorized'] is True and record['operational_credentials_changed'] is False
+        and not any(os.path.lexists(path) for path in (PUBLIC, COMPLETION, trust.RECORD)))
+    private = _bridge('read', record['context_sha256'])
+    key = Ed25519PrivateKey.from_private_bytes(private); del private
+    public = key.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
+    require(trust.public_fingerprint(public) == record['mac_publisher_sha256'])
+    _bridge('denial-probe', record['context_sha256'])
+    require(_read(PENDING) == raw and _read(BASE/'keychain-context.json') == context
+            and _read(BASE/'publisher-public.pem') == legacy)
+    _write(PUBLIC, public)
+    authority = dict(type=trust.TYPE,context_sha256=record['context_sha256'],
+        legacy_anchor_sha256=record['legacy_anchor_sha256'],mac_publisher_sha256=record['mac_publisher_sha256'],packages={})
+    trust.validate_record(authority,context_sha256=record['context_sha256'],
+        legacy_anchor_sha256=record['legacy_anchor_sha256'],mac_publisher_sha256=record['mac_publisher_sha256'])
+    _write(trust.RECORD, trust.canonical(authority))
+    record.update(new_process_keychain_verified=True,service_uid_private_key_denied=True)
+    _write(COMPLETION, trust.canonical(record))
+    return record

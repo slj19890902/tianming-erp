@@ -37,9 +37,14 @@ def protected(path):
 
 def main():
     require(sys.platform == 'darwin' and sys.flags.isolated and sys.dont_write_bytecode
-            and os.getuid() == os.geteuid() == 0 and len(sys.argv) in (3, 4))
+            and len(sys.argv) in (3, 4))
     action, expected_context = sys.argv[1:3]
     require(action in {'create', 'read', 'denial-probe'} and len(expected_context) == 64)
+    if action == 'denial-probe':
+        require(os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 499
+                and set(os.getgroups()) <= {499})
+    else:
+        require(os.getuid() == os.geteuid() == 0)
     for parent in (Path(__file__).parent, Path(__file__).parent.parent, BASE):
         require(not parent.is_symlink() and parent.lstat().st_uid == 0
                 and stat.S_IMODE(parent.lstat().st_mode) == 0o755)
@@ -74,11 +79,7 @@ def main():
         require(len(sys.argv) == 4)
         secret_fd = int(sys.argv[3])
         require(secret_fd > 2 and stat.S_ISFIFO(os.fstat(secret_fd).st_mode))
-        if action == 'denial-probe':
-            # Drop kernel identity before the actual Security.framework read.
-            os.setgroups([]); os.setgid(499); os.setuid(499)
-            require(os.getuid() == os.geteuid() == 499 and os.getgid() == os.getegid() == 499
-                    and set(os.getgroups()) <= {499})
+        # The observer is exec'd as UID499 before Security.framework loads.
         with api.system() as keychain:
             try:
                 raw = api.get(keychain, SERVICE, account)

@@ -15920,7 +15920,7 @@
                   client_line_id:`preview-${index}`,
                   product_id:Number(line.matched_product_id || line.product_id),
                   quantity:Number(line.quantity),
-                  material:this.pdfImportItemMaterialCode(line),
+                  material:draft === this.orderForm ? line.material || null : this.pdfImportItemMaterialCode(line),
                   material_id:line.material_id || line.matched_material_id || null,
                   specification:line.specification || line.raw_spec_model || null,
                   production_notes:line.production_notes || null,

@@ -101,7 +101,7 @@ def test_pdf_uses_dedicated_inventory_helpers_without_changing_manual_order() ->
     assert INDEX.count("orderLineInventoryAutoSummary(item)") == 1
     preview = _method_source("loadPdfDraftInventoryAuthority")
     formal_save = _method_source("buildPdfSavePayload")
-    assert "material:this.pdfImportItemMaterialCode(line)" in preview
+    assert "material:draft === this.orderForm ? line.material || null : this.pdfImportItemMaterialCode(line)" in preview
     assert "flute_type:line.flute_type || null" in preview
     assert "const matCode = this.pdfImportItemMaterialCode(item);" in formal_save
 
@@ -280,4 +280,49 @@ if (!methods.pdfInventoryHasButton.call(context, none)) throw new Error("a block
         env=os.environ.copy(),
         check=False,
     )
+    assert result.returncode == 0, result.stderr
+
+
+def test_manual_and_pdf_preview_send_their_actual_material_and_keep_response() -> None:
+    node = shutil.which('node')
+    assert node
+    script = _inline_app_script().split('app.mixin(TMDemandStock.mixin)')[0]
+    harness = r'''
+const vm = require('vm'), assert = require('assert');
+const requests = [];
+const sandbox = {
+  axios: {defaults: {}, interceptors: {request:{use(){}}, response:{use(){}}}, async post(url, payload) {
+    requests.push(payload);
+    return {data:{items:payload.items.map(row=>({...row,coverage_state:'partial',finished_planned_quantity:3}))}};
+  }},
+  Vue:{createApp(definition){sandbox.definition=definition;return {component(){return this},mount(){return this}}}},
+  localStorage:{getItem(){return ''},setItem(){},removeItem(){}}, window:{},
+  TMOrderReference:{component:{}}, console, URLSearchParams, setTimeout, clearTimeout
+};
+vm.createContext(sandbox);
+vm.runInContext(SCRIPT, sandbox);
+const line = () => ({product_id:3,quantity:10,material:'MANUAL-MATERIAL',material_id:7,
+  specification:'100x100x100mm',production_notes:'印字',flute_type:'B',layer_count:3,
+  _inventory:{loading:false,stale:false,api_error:false}});
+const ctx = {...sandbox.definition.methods,authGeneration:1,orderImportDrafts:[],
+  pdfInventoryDraftSequence(){return this.orderImportDrafts},
+  buildReservationPlan(){return {finished:[],semi:[]}},pdfFinishedInventoryExplicitlySkipped(){return false}};
+(async()=>{
+  ctx.orderForm={customer_id:1,items:[line()]};
+  await ctx.loadPdfDraftInventoryAuthority(ctx.orderForm);
+  assert.equal(requests[0].pdf_import,false);
+  assert.equal(requests[0].items[0].material,'MANUAL-MATERIAL');
+  assert.equal(requests[0].items[0].material_id,7);
+  assert.equal(requests[0].items[0].production_notes,'印字');
+  assert.equal(ctx.orderForm.items[0]._inventory.authoritative.finished_planned_quantity,3);
+  const pdf={matched_customer_id:1,items:[{...line(),matched_material_id:9,
+    material_candidates:[{id:9,code:'PDF-MATERIAL'}]}]};
+  ctx.orderImportDrafts=[pdf];
+  await ctx.loadPdfDraftInventoryAuthority(pdf);
+  assert.equal(requests[1].pdf_import,true);
+  assert.equal(requests[1].items[0].material,'PDF-MATERIAL');
+  assert.equal(pdf.items[0]._inventory.authoritative.finished_planned_quantity,3);
+})().catch(error=>{console.error(error);process.exit(1)});
+'''.replace('SCRIPT', json.dumps(script))
+    result = subprocess.run([node], input=harness, text=True, capture_output=True, env=os.environ.copy())
     assert result.returncode == 0, result.stderr

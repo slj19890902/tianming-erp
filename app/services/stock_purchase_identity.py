@@ -14,7 +14,7 @@ from app.services.warehouse_inventory import WarehouseInventoryError
 VIEW_FIELDS = tuple(dict.fromkeys((*FIELDS, 'customer_id', 'unit', 'length_mm', 'width_mm',
     'height_mm', 'report_length_mm', 'report_width_mm', 'mold_tool_id', 'die_cut_path',
     'supply_mode', 'surface_paper_type', 'default_material_code', 'legacy_material_text',
-    'flute_type', 'product_code', 'product_name')))
+    'flute_type', 'product_code', 'product_name', 'sheet_cutting_settings')))
 PURCHASE_FIELDS = ('customer_id', 'material_code_snapshot', 'layer_count', 'flute_type',
     'report_length_mm', 'report_width_mm', 'crease_type', 'crease_left_mm',
     'crease_middle_mm', 'crease_right_mm', 'component_type', 'pieces_per_box',
@@ -48,7 +48,17 @@ def capture(product, item):
 
 def _view(identity, item):
     fields = identity['fields']
-    return Product(**{k: fields.get(k) for k in VIEW_FIELDS}, id=identity['product_id'],
+    values = {k: fields.get(k) for k in VIEW_FIELDS}
+    # Historical purchases may lack this field in their product projection, but
+    # their independent frozen cutting contract still owns the die-cut flag.
+    if not values.get('sheet_cutting_settings') and getattr(item, 'sheet_cutting_snapshot', None):
+        from app.services.sheet_cutting_contract import SheetCuttingContract
+        raw = item.sheet_cutting_snapshot
+        contract = SheetCuttingContract.from_snapshot(json.loads(raw) if isinstance(raw, str) else raw)
+        values['sheet_cutting_settings'] = {'schema_version': 2, 'whole': {
+            'length_parts': contract.length_parts, 'width_parts': contract.width_parts,
+            'mold_count': contract.mold_count, 'is_die_cut': contract.is_die_cut}}
+    return Product(**values, id=identity['product_id'],
         material=Material(code=item.material_code_snapshot, layer_count=item.layer_count,
                           flute_type=item.flute_type, supplier_name='',
                           is_white_face=fields.get('surface_paper_type') == 'white'))

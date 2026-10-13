@@ -128,6 +128,9 @@ def matching_component_basis(db, snapshot, lot):
 def matches_lot_stock_identity(lot, expected):
     if matches_stock_identity(lot.finished_detail.physical_basis_json, expected):
         return True
+    from app.services.frozen_assembly_mold_proof import matches_proven_assembly
+    if matches_proven_assembly(lot, expected):
+        return True
     from app.services.legacy_bom_mold_confirmation import confirmed_match
     return confirmed_match(lot, expected)
 

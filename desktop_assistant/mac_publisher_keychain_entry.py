@@ -41,8 +41,7 @@ def main():
     action, expected_context = sys.argv[1:3]
     require(action in {'create', 'read', 'denial-probe'} and len(expected_context) == 64)
     if action == 'denial-probe':
-        require(os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 499
-                and set(os.getgroups()) <= {499})
+        require(os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 499)
     else:
         require(os.getuid() == os.geteuid() == 0)
     for parent in (Path(__file__).parent, Path(__file__).parent.parent, BASE):
@@ -52,6 +51,9 @@ def main():
     require(hashlib.sha256(context).hexdigest() == expected_context)
     account = 'mac-publisher-v1:' + expected_context
     sys.path.insert(0, str(Path(__file__).parent.parent))
+    from desktop_assistant.mac_keychain_install import kernel_groups
+    if action == 'denial-probe':
+        require(kernel_groups() == [499])
     from app.core.mac_service_keychain import Security
     api = Security()
     if action == 'create':

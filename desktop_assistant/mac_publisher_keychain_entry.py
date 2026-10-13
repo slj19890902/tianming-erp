@@ -82,7 +82,10 @@ def main():
         secret_fd = int(sys.argv[3])
         require(secret_fd > 2 and stat.S_ISFIFO(os.fstat(secret_fd).st_mode))
         # The observer is exec'd as UID499 before Security.framework loads.
-        with api.system() as keychain:
+        # Root already has System write permission; the shared validator's
+        # service-only read branch correctly rejects that identity. Selecting
+        # its administrator branch performs no write here: only get follows.
+        with api.system(writable=action == 'read') as keychain:
             try:
                 raw = api.get(keychain, SERVICE, account)
             except Exception as error:

@@ -97,6 +97,49 @@ def test_mounted_approval_truthful_readback_without_service_or_permissions(mount
         assert fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE==os.O_RDONLY
 
 
+def zspace_proxy(scene):
+    scene.observation['classification'] = 'loopback_proxy'
+    scene.observation['remote'] = dict(addresses=['127.0.0.1'],
+        export='/极空间-个人', server='极空间.local', version='4.0',
+        port=52100, security='sys', tcp=True)
+
+
+def test_zspace_proxy_preserves_actual_transport_and_full_backup_proof(mounted_scene):
+    s = mounted_scene; zspace_proxy(s)
+    original = s.state_path.read_bytes()
+    bound = m.approve(s.nas, '9'*64)
+    assert bound['receipt']['mount'] == s.observation
+    assert bound['receipt']['mount']['classification'] == 'loopback_proxy'
+    assert bound['receipt']['mount']['remote']['addresses'] == ['127.0.0.1']
+    assert bound['receipt']['verification_kind'] == 'mounted_filesystem'
+    assert bound['receipt']['sha256'] == sha(s.source) == sha(s.nas)
+    assert s.state_path.read_bytes() == original
+    plan = dict(transport_package_sha256='9'*64,
+        transport_control_sha256=bound['control_sha'],
+        transport_contract_sha256=bound['control']['contract_sha256'],
+        backup_receipt_sha256=bound['control']['receipt_sha256'])
+    with m.broker(plan) as fd:
+        assert os.pread(fd, 3, 0) == b'enc'
+    s.observation['remote']['port'] = 52101
+    with pytest.raises(ValueError):
+        with m.broker(plan): pytest.fail('changed proxy admitted')
+
+
+@pytest.mark.parametrize('field,value', [
+    ('addresses',['127.0.0.2']), ('addresses',['127.0.0.1','172.16.3.96']),
+    ('server','other.local'), ('export','/other'), ('version','3'),
+    ('port',52101), ('security','none'), ('tcp',False),
+    ('owner',0), ('classification','direct_network_unbound'),
+])
+def test_unapproved_proxy_never_creates_mount_approval(mounted_scene, field, value):
+    s = mounted_scene; zspace_proxy(s)
+    if field == 'owner': s.observation['kernel'][field] = value
+    elif field == 'classification': s.observation[field] = value
+    else: s.observation['remote'][field] = value
+    with pytest.raises(ValueError): m.approve(s.nas, '9'*64)
+    assert not m.CONTROL.exists() and not m.RECEIPT.exists()
+
+
 @pytest.mark.parametrize('fault',['truncated','different','source','local-filesystem','alias','symlink-file','symlink-parent'])
 def test_wrong_or_incomplete_mount_never_creates_approval(mounted_scene,fault):
     s=mounted_scene
@@ -223,7 +266,8 @@ def test_historical_backup_error_is_preserved_only_for_mounted_admission(checkpo
     with pytest.raises(ValueError):audit._stopped(t.manager,state,t.roles['execution'],mounted=True)
 
 
-def test_completed_checkpoint_enters_prepare_without_update_records(staged,monkeypatch):
+@pytest.mark.parametrize('admin_reapproved', [False, True])
+def test_completed_checkpoint_enters_prepare_without_update_records(staged,monkeypatch,admin_reapproved):
     """Root stage IO uses real exclusive files/pins/flock; worker is synthetic."""
     t=staged;s=t.s;root_path=s.base/'instance'
     for module in (m,):
@@ -268,10 +312,17 @@ def test_completed_checkpoint_enters_prepare_without_update_records(staged,monke
             contract_sha256=c.raw_digest(contract_raw)),receipt=dict(sha256=checkpoint['sha256']),
         control_sha=sha(m.CONTROL),raw={m.CONTROL:m.CONTROL.read_bytes(),m.CONTRACT:contract_raw})
     monkeypatch.setattr(m,'load',lambda:deepcopy(bound))
+    checkpoint_plan_bytes = (s.slot/'checkpoint-plan.json').read_bytes()
+    if admin_reapproved:
+        monkeypatch.setattr(plans, '_code', lambda: '9'*64)
     prepared=plans.prepare_mounted(p['attempt_id'])
     assert t.state.read_bytes()==before and (s.slot/'prepare-completed.json').exists()
     assert prepared['result']['preparation']['backup']['sha256']==checkpoint['sha256']
     assert c.decode((s.slot/'prepare-plan.json').read_bytes())['type']==c.MOUNTED_PLAN
+    assert (s.slot/'checkpoint-plan.json').read_bytes() == checkpoint_plan_bytes
+    if admin_reapproved:
+        assert c.decode((s.slot/'prepare-plan.json').read_bytes())['code_manifest_sha256'] == '9'*64
+        assert c.decode(checkpoint_plan_bytes)['code_manifest_sha256'] != '9'*64
 
 
 def test_full_mounted_audit_preserves_restore_credentials_and_rejects_live_changes(checkpoint_target,monkeypatch):

@@ -297,6 +297,7 @@ def prepare_mounted(attempt_id):
             and state.get('manual_stop') is True and state.get('pid') is None)
         created=int(time.time());plan={k:old[k] for k in c.COMMON if k in old}
         plan.update(phase='prepare',created_at=created,expires_at=created+c.MAX_AGE,
+            code_manifest_sha256=_code(),
             state_stopped_sha256=c.raw_digest(state_raw),backup_sha256=bound['receipt']['sha256'],
             backup_receipt_sha256=bound['control']['receipt_sha256'],request_id=uuid.uuid4().hex,
             local_update_receipt_sha256=bound['contract']['local_update_receipt_sha256'],

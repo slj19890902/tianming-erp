@@ -11,9 +11,9 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.625"
-APP_VERSION_NAME = "供应商修边尺寸与盖底默认值"
-APP_BUILD_DATE = "2026-10-10"
+APP_VERSION = "v0.22.626"
+APP_VERSION_NAME = "订单库存匹配与库位查询闭环"
+APP_BUILD_DATE = "2026-10-13"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
 
 _V022124_CHANGES = [
@@ -6102,3 +6102,16 @@ APP_VERIFICATION_STEPS = [
     "核对下一笔新报料的实际尺寸、采购张数和生产修边说明；历史已报料尺寸保持。",
 ]
 APP_CHANGELOG = [*(f"v0.22.625：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]
+
+APP_CHANGES = [
+    "新订单按实物规格、材质、工艺和单位匹配库存，编码更名仍保留真实关联；依据缺失或不符的批次显示待核原因。",
+    "组合产品逐子件显示库存与缺料，有货部分先抵扣，缺少部分继续报料；手工录单和PDF导入的预览与保存保持一致。",
+    "仓库与首页沿实际入库及移库记录显示库存位置；地图发布和空架、禁放区删除统一检查区域关联。",
+    "历史库存身份和地图关联不批量回填；已完成子件须由管理员核对实物后确认，原数量、成本与来源保持。",
+]
+APP_VERIFICATION_STEPS = [
+    "新建一笔库存充足及一笔部分缺料订单，核对预览、保存后的预占和报料数量一致；重复提交不得重复占用。",
+    "组合产品选择一种子件有货、另一种缺货的情况，核对有货子件已抵扣、缺货子件仍需报料，并核对各自位置。",
+    "按完整编码和客户在仓库及首页查询，核对同一批实物位置一致；历史待核批次或地图异常须保留原因。",
+]
+APP_CHANGELOG = [*(f"v0.22.626：本次更新｜{item}" for item in APP_CHANGES), *APP_CHANGELOG]

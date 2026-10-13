@@ -6236,4 +6236,4 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 
 - 2026-10-12 MAC-SERVER-HANDOFF-20261010：工厂Mac临时LAN入口 http://192.168.3.102:8000 已经8项只读检查及老板异机登录确认。老板确认10月10日后无新增业务，不重复数据同步；home门禁保留，192.168.3.80/正式激活/后台NAS验收未完成，旧机不得清空。见任务卡末节和NAS回执20261012-Mac工厂局域网登录验收完成.md。
 
-- 2026-10-13 INVENTORY-CLOSED-LOOP 候选：地图发布承接、普通订单冻结身份、逐子件草稿抵扣及搜索位置；候选 head eq1013oi（上游 ep1010md），新增 order_stock_identity_v1 reader。正式库/地图/服务未改变，真实快照演练等待 Mac 管理员认证；不代表可直接发布。详见 docs/tasks/INVENTORY_CLOSED_LOOP_20261013.md。
+- 2026-10-13 INVENTORY-CLOSED-LOOP v0.22.626候选：地图发布承接、普通订单冻结身份、逐子件草稿抵扣及搜索位置；head eq1013oi（上游ep1010md），新增order_stock_identity_v1 reader。真实隔离快照升/降/升保持323张表原字段及1104个索引/触发器，新事实有损回退保护通过；正式库/地图/服务未改变，尚未发布。详见docs/tasks/INVENTORY_CLOSED_LOOP_20261013.md。

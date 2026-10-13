@@ -340,6 +340,15 @@ def nightly_enabled():
             'publisher_sha256': bootstrap.digest(publication.read_record(BASE/'publisher-public.pem'))}
     _, control = checked_control(meta)
     _installed_plist(meta)
+    pause = BASE/'automatic-backup-paused.json'
+    if os.path.lexists(pause):
+        raw = publication.read_record(pause)
+        value = bootstrap.decode(raw)
+        if (set(value) != {'type','context_sha256','paused'}
+                or value['type'] != 'tianming.automatic-backup-pause.v1'
+                or value['context_sha256'] != meta['context_sha256'] or value['paused'] is not True):
+            raise ValueError('系统自动备份暂停记录不属于当前安装')
+        return False
     return control['enabled']
 
 
@@ -367,7 +376,8 @@ def management_service_state():
     _, control = checked_control(meta); _installed_plist(meta)
     cap = _program_manifest(meta).get('runtime_capabilities', {}).get('system_nightly_v1')
     return {'registered': registered, 'enabled': control['enabled'],
-            'scheduled_backups': registered and control['enabled'] and type(cap) is int and cap == 1}
+            'scheduled_backups': registered and control['enabled'] and type(cap) is int and cap == 1
+                and nightly_enabled()}
 
 
 def management_reply(result, request, context):

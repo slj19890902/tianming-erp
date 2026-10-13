@@ -5139,6 +5139,7 @@
                         <button type="button" class="btn small delivery-row-more-toggle" :disabled="!!deliveryInlineEdit" :id="`delivery-more-toggle-${row.id}`" :popovertarget="`delivery-more-${row.id}`" popovertargetaction="toggle">更多</button>
                         <div popover="auto" :id="`delivery-more-${row.id}`" class="delivery-row-more-panel" @toggle="toggleDeliveryRowMore(row,$event)" @click="closeDeliveryRowMoreAfterAction($event)">
                           <button v-if="canDelivery && row.status==='pending' && !row.pick_task" class="btn small" :disabled="!!deliveryOperationState.action" @click="createDeliveryPickTask(row)">拿货</button>
+                          <button v-if="canDelivery && row.status==='pending'" class="btn small" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" @click="dispatchDelivery(row)">确认发货</button>
                           <button v-if="canFinance && row.status==='dispatched'" class="btn small" :class="deliveryReceiptRowActionClass(row)" :disabled="!!receiptOperationState.action" @click="openReceipt(row)">{{ row.return_receipt_status==='confirmed' ? '编辑回单' : '确认回单' }}</button>
                           <select v-if="canDelivery && row.pick_task && row.status==='pending'" class="select" style="max-width:130px" :disabled="!!deliveryOperationState.action || !!receiptOperationState.action || !!deliveryInlineEdit" :value="row.pick_task.assigned_to || ''" @change="assignDeliveryPickTask(row,$event.target.value)">
                             <option value="">未分配</option>
@@ -23386,12 +23387,10 @@
           },
           deliveryPrimaryRowActionLabel(row) {
             if (row?.status === "voided") return "";
-            if (this.canDelivery && row?.status === "pending") return "发货打印";
             return "打印";
           },
           runDeliveryPrimaryRowAction(row) {
             if (this.deliveryInlineEdit) { this.showToast("请先保存或取消明细编辑，再打印。", true); return false; }
-            if (this.canDelivery && row?.status === "pending") return this.dispatchDelivery(row);
             return this.printDelivery(row);
           },
           toggleDeliveryRowMore(row, event) {
@@ -38938,7 +38937,7 @@
               if (!imported) return false;
             }
             if (this.deliveryForm.editingId && !this.deliveryFormIsDirty()) {
-              return this.dispatchCurrentDeliveryDraft();
+              return this.printCurrentDeliveryDraft();
             }
             return this.saveModal();
           },
@@ -39130,7 +39129,7 @@
               this.showToast("内容已修改，请先保存后再打印", true);
               return false;
             }
-            return !!(await this.openDeliveryPrintTab(deliveryId));
+            return this.printDelivery(this.currentDeliveryDraftRow());
           },
           async openDeliveryPrintTab(deliveryId, deferLoad = false) {
             const normalizedId = Number(deliveryId || 0);

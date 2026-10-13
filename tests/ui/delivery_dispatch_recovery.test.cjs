@@ -7,6 +7,7 @@ const moduleSource=fs.readFileSync(path.join(root,'static/ui/delivery-dispatch-r
 function storage(){const values=new Map();return{get length(){return values.size},key:i=>[...values.keys()][i]??null,getItem:k=>values.get(k)??null,setItem:(k,v)=>values.set(k,String(v)),removeItem:k=>values.delete(k),values};}
 function method(name){const start=new RegExp('^[ \\t]*(?:async )?'+name+'\\([^\\n]*\\) \\{','m').exec(html);if(!start)return null;const end=/^          \},?$/m.exec(html.slice(start.index));assert.ok(end,name);return html.slice(start.index,start.index+end.index+end[0].length).trim().replace(/,$/,'');}
 const names=['matchSavedDeliveryDraft','reconcileCurrentDeliveryDraft','deliveryFormSignature','deliverySourceModeFromLines','deliveryLineHasInput','loadDeliveries','showDeliveryStockWarnings','deliveryDispatchIsBusy','deliveryDispatchController','refreshDeliveryDispatchRecovery','deliveryDispatchContext','deliveryDispatchRequest','deliveryDispatchLines','deliveryDispatchCurrentText','currentDeliveryDraftRow','dispatchCurrentDeliveryDraft','dispatchDelivery','sendDeliveryDispatchPreview','refreshDeliveryDispatchAfterSuccess','sendDeliveryDispatchRecord','queryDeliveryDispatchResult','closeDeliveryDispatchRequest','viewDeliveryDispatchOriginal'];
+names.push('deliveryPrimaryRowActionLabel','runDeliveryPrimaryRowAction','deliveryPrimaryAction','printCurrentDeliveryDraft','printDelivery');
 function packet(id=71,version=1){return{schema_version:1,current_actor_id:1,snapshot_hash:'a'.repeat(64),snapshot:{schema_version:1,delivery:{id,customer_id:3,status:'pending',version,source_mode:'order',delivery_date:'2026-10-10',vehicle_number:null},items:[{delivery_item_id:17,revision_number:1,source_type:'order',order_item_id:11,product_id:null,source_product_id:null,customer_id:3,customer_quantity:3,physical_quantity:3,customer_unit:null,physical_unit:null,quantity_contract:null,goods:[{component_snapshot_id:null,source_product_id:null,customer_id:3,physical_quantity:3,physical_unit:null}],semi_requirements:[],direct_completion_sources:[],order_delivered_quantity:null,allocation_mode:'on_dispatch',allocations:[]}],pick_task:null,pick_action:'none',expected_final_items:[{delivery_item_id:17,customer_quantity:3,physical_quantity:3,customer_unit:null,physical_unit:null,goods:[{component_snapshot_id:null,source_product_id:null,customer_id:3,physical_quantity:3,physical_unit:null}]}]},display:{delivery_number:'送货合成单',customer_name:'合成客户',items:[{delivery_item_id:17,product_code:'TEST-17',product_name:'合成纸箱',original_customer_quantity:3,original_physical_quantity:3,final_customer_quantity:3,final_physical_quantity:3,customer_unit:null,physical_unit:null,allocation_mode:'on_dispatch'}]}};}
 function body(id=71,key='test-dispatch-0001'){const p=packet(id);return{expected_actor_id:1,idempotency_key:key,expected_version:1,snapshot_hash:p.snapshot_hash,snapshot:p.snapshot,confirm_pick_exception:false};}
 function setup(shared=storage(),options={}){
@@ -34,6 +35,38 @@ test('actual HTML recovery is outside the empty list and dedicated preview has a
 
 const normal=JSON.parse(fs.readFileSync(path.join(root,'tests/fixtures/delivery-dispatch-recovery/normal.json'),'utf8'));
 const json=value=>JSON.parse(JSON.stringify(value));
+test('pending delivery print bypasses unknown dispatch and preserves its exact original request',async()=>{
+ const h=setup(),a=h.api.create(1,h.storage),r=a.prepare(normal.originalBody,normal.snapshot.body.display);a.unknown(r.key);
+ h.state.canDelivery=true;h.state.openDeliveryPrintTab=async(id,defer)=>{h.calls.push({method:'open',id,defer});return true;};
+ const original=json(a.get(r.key));
+ assert.equal(h.state.deliveryPrimaryRowActionLabel({id:1,status:'pending'}),'打印');
+ assert.equal(await h.state.runDeliveryPrimaryRowAction({id:1,status:'pending',version:99}),true);
+ assert.deepEqual(h.calls,[{method:'open',id:1,defer:undefined}]);
+ assert.deepEqual(json(a.get(r.key)),original);assert.equal(h.toasts.length,0);
+});
+test('failed exact-request closure cannot block row or saved-modal readonly print',async()=>{
+ const h=setup(),a=h.api.create(1,h.storage),r=a.prepare(normal.originalBody,normal.snapshot.body.display);a.unknown(r.key);
+ h.handler(async()=>{throw {response:{status:409,data:{detail:'原请求标识、版本或快照不一致，请保留原内容核对。'}}};});
+ assert.equal(await h.state.closeDeliveryDispatchRequest(r),false);assert.equal(a.get(r.key).state,'closing');
+ const original=json(a.get(r.key)),before=h.calls.length;
+ h.state.openDeliveryPrintTab=async(id,defer)=>{h.calls.push({method:'open',id,defer});return true;};
+ h.state.deliveryForm={editingId:1,editing_status:'pending',version:99};h.state.modal={type:'delivery'};
+ h.state.deliveryFormIsDirty=()=>false;h.state.hasPendingUnorderedFinishedSelections=()=>false;
+ h.state.saveModal=()=>assert.fail('printing saved original must not save or dispatch');
+ assert.equal(await h.state.runDeliveryPrimaryRowAction({id:1,status:'pending',version:99}),true);
+ assert.equal(await h.state.deliveryPrimaryAction(),true);
+ assert.deepEqual(h.calls.slice(before),[{method:'open',id:1,defer:undefined},{method:'open',id:1,defer:undefined}]);
+ assert.deepEqual(json(a.get(r.key)),original);assert.equal(h.state.modal.type,'delivery');
+});
+test('print page reads saved pending document with GET without dispatch or closure request',async()=>{
+ const page=fs.readFileSync(path.join(root,'static/delivery-print.html'),'utf8'),start=page.indexOf('async function requestDeliveryPrint('),end=page.indexOf('\n    function showLoading(',start),calls=[];
+ const context=vm.createContext({URLSearchParams,window:{location:{search:'?id=1'}},fetch:async(url,options)=>{calls.push({url,options});return {status:200,ok:true,text:async()=>JSON.stringify({id:1,status:'pending'})};}});
+ vm.runInContext(page.slice(start,end)+'\nthis.readPrint=requestDeliveryPrint;',context);
+ const result=await context.readPrint(1,undefined);assert.equal(result.status,'pending');
+ assert.equal(calls.length,1);assert.match(calls[0].url,/^\/api\/deliveries\/1\/print\?/);
+ assert.equal(calls[0].options.method,undefined);assert.equal(calls[0].options.credentials,'same-origin');
+ assert.doesNotMatch(calls[0].url,/dispatch|close|resolve|printed/);
+});
 function realSetup(shared=storage(),options={}){const h=setup(shared,{key:normal.originalBody.idempotency_key,...options});h.handler(async c=>({data:c.url.includes('dispatch-snapshot')?normal.snapshot.body:c.url.endsWith('/dispatch')?normal.write.body:c.url.endsWith('/resolve')?normal.resolve.body:c.url.includes('/printed')?{}:{items:[],total:0}}));return h;}
 test('real HTTP normal snapshot, first/replay and readonly proof pass the exact validator',()=>{const h=realSetup(),r=h.api.create(1,h.storage).prepare(normal.originalBody,normal.snapshot.body.display);assert.equal(h.api.validateSnapshot(normal.snapshot.body,1,1,1).snapshot.delivery.id,1);assert.equal(h.api.validateCompleted(normal.write.body,r,1).delivery_id,1);assert.equal(h.api.validateCompleted(normal.replay.body,r,1).delivery_id,1);assert.equal(h.api.validateResolve(normal.resolve.body,r,1).status,'completed');for(const mutate of [p=>p.dispatch_receipt.final_items=[],p=>p.dispatch_receipt.movements=[],p=>p.dispatch_receipt.request.expected_version=99,p=>p.current_actor_id=2]){const p=json(normal.write.body);mutate(p);assert.throws(()=>h.api.validateCompleted(p,r,1),/不完整/);}});
 test('actual normal preview→one command uses unchanged real body, closes only its window and preserves completed proof',async()=>{const h=realSetup();await h.state.dispatchDelivery({id:1,version:1});assert.equal(await h.state.sendDeliveryDispatchPreview(),true);const command=h.calls.find(c=>c.url.endsWith('/dispatch'));assert.deepEqual(json(command.data),normal.originalBody);assert.equal(h.calls.filter(c=>c.url.endsWith('/dispatch')).length,1);assert.equal(h.calls.some(c=>/apply-pick|prepare-accompany/.test(c.url)),false);assert.equal(h.state.modal,null);assert.equal(h.prints.filter(x=>x==='activate').length,1);assert.equal(h.api.create(1,h.storage).get(normal.originalBody.idempotency_key).state,'confirmed');assert.match(h.state.deliveryDispatchNotice.message,/已完成/)});

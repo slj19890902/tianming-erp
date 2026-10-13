@@ -23,6 +23,10 @@ ROOT = BASE/'instance'
 MOUNT = Path('/Users/kimiyf/Public/ZSPACE')
 SOURCE = '极空间.local:/极空间-个人'
 NAS_ADDRESS = '172.16.3.96'
+# Legacy logical NAS identifier, not the observed NFS transport address.
+# The complete, unchanged kernel/remote observation is retained in the receipt.
+PROXY_ADDRESS = '127.0.0.1'
+PROXY_PORT = 52100
 ARCHIVE = MOUNT/'sata1-18015598002/BoxERP/backups/mac-mini'
 CONTROL = BASE/'mounted-nas-service.json'
 CONTRACT = BASE/'mounted-nas-contract.json'
@@ -80,11 +84,19 @@ def _path(path, filename):
 
 def observe():
     value = mounts.observe(MOUNT)
-    require(value.get('classification') == 'direct_network_unbound')
     kernel = value.get('kernel',{}); remote = value.get('remote',{})
     require(kernel.get('filesystem') == 'nfs' and kernel.get('mountpoint') == str(MOUNT)
-        and kernel.get('source') == SOURCE and remote.get('addresses') == [NAS_ADDRESS]
+        and kernel.get('source') == SOURCE
         and remote.get('export') == '/极空间-个人')
+    direct = (value.get('classification') == 'direct_network_unbound'
+        and remote.get('addresses') == [NAS_ADDRESS])
+    proxy = (value.get('classification') == 'loopback_proxy'
+        and remote.get('addresses') == [PROXY_ADDRESS]
+        and remote.get('server') == '极空间.local'
+        and remote.get('version') == '4.0' and remote.get('port') == PROXY_PORT
+        and remote.get('security') == 'sys' and remote.get('tcp') is True
+        and kernel.get('owner') == 501)
+    require(direct or proxy)
     return value
 
 

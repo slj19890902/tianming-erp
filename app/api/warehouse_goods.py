@@ -311,7 +311,8 @@ def get_goods(lot_id: int, db: Session = Depends(get_db), user: User = Depends(c
         from app.services.inventory_valuation import cost_payload
         physical["settlement_unit_price"] = cost_payload(lot, db)["unit_cost"]
     return dict(lot_id=lot.id, version=lot.version, facts=profile, physical=physical,
-        editable=lot.status == "active" and lot.quantity_reserved == 0 and lot.quantity_available > 0)
+        editable=lot.status == "active" and lot.quantity_reserved == 0 and lot.quantity_available > 0
+            and not (profile.get("physical_basis") or profile.get("output_piece")))
 
 
 @router.put("/{lot_id}", dependencies=[Depends(PermissionChecker("warehouse.correct"))])
@@ -330,6 +331,9 @@ def update_goods(lot_id: int, payload: GoodsUpdate, db: Session = Depends(get_db
     if lot.pallet_item and (not lot.pallet_item.pallet or not lot.pallet_item.pallet.is_current
             or lot.pallet_item.pallet.location_id != lot.warehouse_location_id):
         raise HTTPException(409, "栈板位置与库存不一致，请先核对")
+    current_profile = goods_profile(db, lot) or {}
+    if lot.semi_finished_detail and (current_profile.get('physical_basis') or current_profile.get('output_piece')):
+        raise HTTPException(409, "该半成品已有冻结完成身份，不能用普通资料修正覆盖；请保留原批次依据")
     facts = payload.facts.model_copy(deep=True)
     material = validate_references(db, facts)
     detail = lot.semi_finished_detail or lot.finished_detail

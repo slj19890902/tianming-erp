@@ -208,6 +208,20 @@ def test_real_new_order_automatically_reserves_exact_stock(composite_requisition
         db.commit()
     with TestClient(app) as client:
         _login(client)
+        from sqlalchemy import event
+        def reject_write(conn, cursor, statement, parameters, context, many):
+            assert not statement.lstrip().upper().startswith(('INSERT', 'UPDATE', 'DELETE', 'REPLACE'))
+        event.listen(factory.kw['bind'], 'before_cursor_execute', reject_write)
+        try:
+            preview = client.post('/api/orders/inventory-draft-preview', json={'customer_id': 1,
+                'items': [{'client_line_id': 'A-available-B-missing', 'product_id': 1, 'quantity': 10}]})
+        finally:
+            event.remove(factory.kw['bind'], 'before_cursor_execute', reject_write)
+        assert preview.status_code == 200, preview.text
+        children = {r['product_id']: r for r in preview.json()['items'][0]['bom_inventory_components']}
+        assert (children[2]['planned_quantity'], children[2]['shortage_quantity']) == (30, 0)
+        assert (children[3]['planned_quantity'], children[3]['shortage_quantity']) == (0, 40)
+        assert {r['product_id']: r['requisition_sheet_quantity'] for r in preview.json()['items'][0]['requisition_components']} == {2: 0, 3: 40}
         created = client.post('/api/orders',json=payload(factory,key='auto396'))
         assert created.status_code == 201, created.text
         iid = created.json()['items'][0]['id']

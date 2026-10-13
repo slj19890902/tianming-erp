@@ -3139,6 +3139,15 @@ def finished_inventory_candidates_for_bom_component(
         raise WarehouseInventoryError("订单不存在", 404)
     if not _frozen_product_has_stock(db, item.id, snapshot.component_product_id):
         return []
+    from app.services.finished_stock_identity import order_product_basis
+    return finished_inventory_candidates_for_identity(db,
+        product_id=snapshot.component_product_id, customer_id=order.customer_id,
+        expected=order_product_basis(db, item.id, snapshot.component_product_id), stock_stage=stock_stage)
+
+
+def finished_inventory_candidates_for_identity(db, *, product_id, customer_id, expected, stock_stage='complete'):
+    """Same lot eligibility for proposed and saved frozen BOM identities."""
+    from app.services.fixed_shelf_staging import held_for_staging_expression
     rows = db.scalars(
         select(InventoryLot)
         .join(FinishedGoodsInventoryDetail,
@@ -3147,17 +3156,16 @@ def finished_inventory_candidates_for_bom_component(
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
             InventoryLot.quantity_available > 0,
-            FinishedGoodsInventoryDetail.product_id == snapshot.component_product_id,
+            FinishedGoodsInventoryDetail.product_id == product_id,
             ~held_for_staging_expression(),
             or_(
-                FinishedGoodsInventoryDetail.owner_customer_id == order.customer_id,
+                FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
                 FinishedGoodsInventoryDetail.is_general.is_(True),
             ),
         )
         .order_by(FinishedGoodsInventoryDetail.is_general, InventoryLot.stock_date, InventoryLot.id)
     ).all()
-    from app.services.finished_stock_identity import order_product_basis, matches_component_stock_identity
-    expected = order_product_basis(db, item.id, snapshot.component_product_id)
+    from app.services.finished_stock_identity import matches_component_stock_identity
     if stock_stage == 'body':
         from app.services.bom_inventory_contract import body_basis
         if expected is None:
@@ -3166,16 +3174,16 @@ def finished_inventory_candidates_for_bom_component(
     from app.services.bom_inventory_contract import is_body_lot
     if stock_stage=='complete' and expected is not None:
         from app.services.shared_finished_stock import candidate_lot_ids
-        shared_ids=candidate_lot_ids(db,product_id=snapshot.component_product_id,
-            customer_id=order.customer_id,expected_basis=expected)
+        shared_ids=candidate_lot_ids(db,product_id=product_id,
+            customer_id=customer_id,expected_basis=expected)
         known={lot.id for lot in rows}
         rows.extend(db.scalars(select(InventoryLot).where(InventoryLot.id.in_(set(shared_ids)-known),
             InventoryLot.quantity_available>0,~held_for_staging_expression())))
     from app.services.shared_finished_stock import match as shared_match
     return [lot for lot in rows if (stock_stage == 'body') == is_body_lot(lot)
             and (expected is None or matches_component_stock_identity(lot, expected) or
-                 (stock_stage=='complete' and shared_match(db,lot,product_id=snapshot.component_product_id,
-                     customer_id=order.customer_id,expected_basis=expected)))]
+                 (stock_stage=='complete' and shared_match(db,lot,product_id=product_id,
+                     customer_id=customer_id,expected_basis=expected)))]
 
 
 def reserve_finished_inventory_for_bom_component(
@@ -3369,6 +3377,8 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
     from app.services.shared_finished_stock import candidate_lot_ids
     from app.services.finished_stock_identity import order_product_basis
     expected = order_product_basis(db, item.id, item.product_id)
+    if expected is None:
+        return []
     shared_ids = candidate_lot_ids(db, product_id=item.product_id,
         customer_id=order.customer_id, expected_basis=expected)
     rows = db.scalars(
@@ -3424,6 +3434,8 @@ def finished_inventory_candidates_for_product(
     product_id: int,
     include_reserved: bool = False,
     include_held: bool = False,
+    include_ineligible: bool = False,
+    expected_basis: str | None = None,
 ) -> list[InventoryLot]:
     """Return eligible customer finished lots.
 
@@ -3466,16 +3478,20 @@ def finished_inventory_candidates_for_product(
                 FinishedGoodsInventoryDetail.product_id == product_id,
                 FinishedGoodsInventoryDetail.owner_customer_id == customer_id,
                 FinishedGoodsInventoryDetail.is_general.is_(False),
-                FinishedGoodsInventoryDetail.inventory_code_snapshot == product.product_code,
             )),
         )
         .order_by(*inventory_fifo_order_columns())
     ).all()
     from app.services.bom_inventory_contract import is_body_lot
     from app.services.finished_stock_identity import product_basis, matches_component_stock_identity
-    expected = product_basis(product) if profile and product.is_composite else None
+    if include_ineligible:
+        return rows
+    expected = expected_basis or product_basis(product)
+    from app.services.shared_finished_stock import match as shared_match
+    from app.services.finished_stock_identity import matches_lot_stock_identity
     return [lot for lot in rows if not is_body_lot(lot)
-            and (expected is None or matches_component_stock_identity(lot, expected))]
+            and (matches_lot_stock_identity(lot, expected)
+                 or shared_match(db, lot, product_id=product_id, customer_id=customer_id, expected_basis=expected))]
 
 
 def has_unconsumed_inventory_reservations(
@@ -3620,6 +3636,8 @@ def reserve_finished_inventory(
         raise WarehouseInventoryError('该批次已集货待送，不能再抵扣其他订单', 409)
     from app.services.finished_stock_identity import order_product_basis
     expected_basis = order_product_basis(db, item.id, item.product_id)
+    if expected_basis is None:
+        raise WarehouseInventoryError("订单缺少冻结实物身份，需核对原订单依据后才能新增库存抵扣", 409)
     from app.services.shared_finished_stock import match as shared_match, freeze_reservation
     shared_member = shared_match(db, lot, product_id=item.product_id,
         customer_id=order.customer_id, expected_basis=expected_basis, lock=True)

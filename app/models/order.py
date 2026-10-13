@@ -295,6 +295,7 @@ class OrderItem(Base):
         nullable=True,
         index=True,
     )
+    stock_identity_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     snapshot_product_name: Mapped[str] = mapped_column(String(250), nullable=False)
     snapshot_product_code: Mapped[str | None] = mapped_column(
         String(150),

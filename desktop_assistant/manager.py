@@ -104,7 +104,11 @@ class Manager:
                     db.execute('PRAGMA table_info(stock_replenishment_order_items)'))
                 mold_deletion_contract = any(row[1] == 'deleted_at' for row in
                     db.execute('PRAGMA table_info(mold_tools)'))
+                order_identity_contract = any(row[1] == 'stock_identity_snapshot_json' for row in
+                    db.execute('PRAGMA table_info(sales_order_items)'))
                 supplier_trim_contract = _has_supplier_trim_facts(db)
+            if order_identity_contract and not self._shared_finished_reader(release, "order_stock_identity_v1"):
+                return False
             if supplier_trim_contract and not self._shared_finished_reader(release, "supplier_sheet_trim_v1"):
                 return False
             if mold_deletion_contract and not self._shared_finished_reader(release, "unused_mold_deletion_v1"):

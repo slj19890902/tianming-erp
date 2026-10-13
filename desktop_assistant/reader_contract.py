@@ -47,6 +47,7 @@ def target_readers(database, source, target, inventory_record, dispatch_record, 
         for table, column, capability in (
             ('stock_replenishment_order_items', 'production_snapshot_json', 'stock_purchase_identity_v1'),
             ('mold_tools', 'deleted_at', 'unused_mold_deletion_v1'),
+            ('sales_order_items', 'stock_identity_snapshot_json', 'order_stock_identity_v1'),
         ):
             if any(row[1] == column for row in db.execute(f'PRAGMA table_info("{table}")')):
                 required.add(capability)

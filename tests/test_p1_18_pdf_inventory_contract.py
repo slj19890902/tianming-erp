@@ -62,6 +62,7 @@ def _add_finished_lot(
     )
     db.add(lot)
     db.flush()
+    from app.services.finished_stock_identity import product_basis
     db.add(
         FinishedGoodsInventoryDetail(
             inventory_lot_id=lot.id,
@@ -71,6 +72,7 @@ def _add_finished_lot(
             product_id=product.id,
             inventory_code_snapshot=product.product_code,
             product_name_snapshot=product.product_name,
+            physical_basis_json=product_basis(product),
         )
     )
     return lot
@@ -591,7 +593,9 @@ def test_batch_preview_stock_projection_keeps_physical_quantity_and_basis_unit(
         product.external_packaging_default_order_quantity_basis = 1
         product.external_packaging_default_purchase_quantity_basis = 10
         lot.quantity_available = 20
+        from app.services.finished_stock_identity import product_basis
         lot.finished_detail.physical_basis_json = json.dumps({
+            **json.loads(product_basis(product)),
             "quantity_basis": {
                 "schema": 1,
                 "ledger": "physical",

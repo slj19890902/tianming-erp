@@ -251,11 +251,13 @@ def physical_stock_basis(raw_identity, basis):
 
 
 def require_physical_stock(lot, basis, *, require_marker=False):
-    if basis['customer_basis'] == basis['physical_basis'] and not require_marker:
-        return
     try:
         detail = lot.finished_detail
-        value = json.loads(detail.physical_basis_json or '{}').get('quantity_basis', {})
+        identity = json.loads(detail.physical_basis_json or '{}')
+        if (basis['customer_basis'] == basis['physical_basis'] and not require_marker
+                and 'quantity_basis' not in identity):
+            return
+        value = identity.get('quantity_basis', {})
         valid = (value.get('schema') == 1 and value.get('ledger') == 'physical'
             and value.get('customer_id') == basis['customer_id']
             and value.get('product_id') == basis['product_id']

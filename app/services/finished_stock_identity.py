@@ -91,7 +91,16 @@ def order_product_basis(db, order_item_id, product_id):
     from app.services.multilevel_bom_orders import read_compiled_order_bom
     compiled = read_compiled_order_bom(db, order_item_id)
     if compiled is None:
-        return None
+        from app.models.order import OrderItem
+        item = db.get(OrderItem, order_item_id)
+        if item is None or item.product_id != product_id:
+            return None
+        basis = item.stock_identity_snapshot_json
+        if basis is not None:
+            value = json.loads(basis)
+            if not isinstance(value, dict) or value.get("schema") != 1 or value.get("product_id") != product_id or not value.get("unit"):
+                raise ValueError("订单实物身份快照无效，请核对原下单记录")
+        return basis
     return compiled_product_bases(compiled)[product_id]
 
 
@@ -195,6 +204,9 @@ def identity_preview(db, lot_id):
     from app.models.product import Product
     from app.services.warehouse_inventory import WarehouseInventoryError
     lot = db.get(InventoryLot, lot_id)
+    if lot is not None and lot.inventory_type == "semi_finished":
+        from app.services.completed_stock_identity import preview as completed_preview
+        return completed_preview(db, lot)
     if lot is None or lot.finished_detail is None or lot.inventory_type != "finished":
         raise WarehouseInventoryError("成品库存批次不存在", 404)
     if lot.finished_detail.physical_basis_json is not None:
@@ -247,14 +259,79 @@ def confirm_identity(db, *, lot_id, preview_hash, operation_key, actor):
             InventoryLot.quantity_consumed == 0).values(version=InventoryLot.version + 1))
         if result.rowcount != 1:
             raise WarehouseInventoryError("批次已变化，请重新预览", 409)
-        lot.finished_detail.physical_basis_json = json.dumps(preview["physical_basis"],
-            ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if lot.inventory_type == "semi_finished":
+            from app.services.completed_stock_identity import apply as apply_completed_identity
+            apply_completed_identity(db, lot, preview)
+        else:
+            lot.finished_detail.physical_basis_json = json.dumps(preview["physical_basis"],
+                ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         movement = _movement(db, lot=lot, movement_type="adjust", quantity=0,
             before=before, operator_id=actor.id, reason="确认批次规格工艺",
             remarks=json.dumps(request, sort_keys=True), idempotency_key=key)
         append_audit_event(db, event_category="business", result="success", source="web",
-            module_code="warehouse", action_code="confirm_finished_physical_identity",
+            module_code="warehouse", action_code=("confirm_completed_component_identity"
+                if lot.inventory_type == "semi_finished" else "confirm_finished_physical_identity"),
             resource="inventory_lot", actor=actor, entity_type="inventory_lot", entity_id=lot.id,
-            customer_id=lot.finished_detail.owner_customer_id, details=preview)
+            customer_id=(lot.finished_detail or lot.semi_finished_detail).owner_customer_id, details=preview)
         db.flush()
         return {"lot_id": lot_id, "movement_id": movement.id, "replayed": False}
+
+
+ORDER_IDENTITY_FIELDS = {
+    "snapshot_spec": "spec", "snapshot_material": "material", "flute_type": "flute",
+    "layer_count": "layer_count", "snapshot_production_notes": "production_notes",
+    **{"snapshot_" + key: key for key in FIELDS if key.startswith(("crease_", "base_crease_"))
+       or key in ("splice_mode", "pieces_per_box", "flap_mm")},
+}
+
+
+def new_order_stock_basis(product, item):
+    """Capture the selected physical product plus this order's explicit overrides."""
+    value = json.loads(product_basis(product))
+    # Box configuration defaults are operational projections, not a later
+    # measurement of old physical stock. Capture the product's original box
+    # facts unchanged; only explicit per-order identity overrides differ.
+    for source in ("snapshot_spec", "snapshot_material", "flute_type", "layer_count", "snapshot_production_notes"):
+        target = ORDER_IDENTITY_FIELDS[source]
+        actual = getattr(item, source, None)
+        if actual is not None:
+            value[target] = normalized_specification_text(actual) if target == "spec" else _value(actual)
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def revise_order_stock_basis(item, before, payload, product):
+    """Explicit pre-production edits preserve every untouched frozen field.
+
+    Never repair a historical NULL from the current product. The existing
+    order mutation audits the before/after document and rejects active stock.
+    """
+    if not item.stock_identity_snapshot_json:
+        return
+    value = json.loads(item.stock_identity_snapshot_json)
+    for source, target in ORDER_IDENTITY_FIELDS.items():
+        actual = getattr(item, source, None)
+        if actual != before[source]:
+            value[target] = normalized_specification_text(actual) if target == "spec" else _value(actual)
+    for key in ("production_process", "production_notes", "box_style"):
+        if key in payload.model_fields_set and getattr(payload, key, None) is not None:
+            value[key] = _value(getattr(payload, key))
+    item.stock_identity_snapshot_json = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def draft_order_stock_basis(product, payload, *, pdf_matched_product=False):
+    from types import SimpleNamespace
+    from sqlalchemy.orm import object_session
+    from app.models.material import Material
+    from app.services.product_specification import resolved_product_specification
+    from app.services.flute_mapping import normalize_flute_type
+    material_id = None if pdf_matched_product else getattr(payload, "material_id", None)
+    selected = object_session(product).get(Material, material_id) if material_id is not None else product.material
+    material = (getattr(payload, "material", None) or "").strip() or (selected.code if selected else None)
+    if pdf_matched_product and selected:
+        material = selected.code
+    return new_order_stock_basis(product, SimpleNamespace(
+        snapshot_spec=resolved_product_specification(getattr(payload, "specification", None), product),
+        snapshot_material=material,
+        layer_count=selected.layer_count if selected else getattr(payload, "layer_count", None),
+        flute_type=normalize_flute_type((getattr(payload, "flute_type", None) or "").strip() or product.flute_type),
+        snapshot_production_notes=(getattr(payload, "production_notes", None) or "").strip() or None))

@@ -512,6 +512,10 @@ class InventoryDraftPreviewItem(BaseModel):
     client_line_id: str = Field(min_length=1, max_length=100)
     product_id: int = Field(gt=0, strict=True)
     quantity: int = Field(gt=0, strict=True)
+    specification: str | None = None
+    production_notes: str | None = None
+    material_id: int | None = Field(default=None, gt=0)
+    layer_count: int | None = None
     material: str | None = None
     flute_type: str | None = None
     reservation_plan: OrderItemReservationPlan = Field(
@@ -521,6 +525,7 @@ class InventoryDraftPreviewItem(BaseModel):
 
 
 class InventoryDraftPreviewPayload(BaseModel):
+    pdf_import: bool = False
     model_config = ConfigDict(extra="ignore")
 
     customer_id: int = Field(gt=0, strict=True)
@@ -1235,6 +1240,7 @@ def _preflight_reservation_plans(
     customer_id: int,
     payload_items: list[OrderItemCreate],
     resolved_products: dict[int, Product],
+    pdf_import: bool = False,
 ) -> dict[int, dict[str, int]]:
     states: dict[int, dict[str, int]] = {}
     client_line_ids: set[str] = set()
@@ -1297,26 +1303,27 @@ def _preflight_reservation_plans(
                         409,
                     )
                 from app.services.shared_finished_stock import match as shared_match
-                shared_member = shared_match(db, lot, product_id=product.id, customer_id=customer_id)
+                from app.services.finished_stock_identity import draft_order_stock_basis
+                expected_identity = draft_order_stock_basis(product, item_payload,
+                    pdf_matched_product=pdf_import and item_payload.product_id is not None and not item_payload.is_new_product)
+                shared_member = shared_match(db, lot, product_id=product.id, customer_id=customer_id,
+                    expected_basis=expected_identity)
                 if detail.owner_customer_id != customer_id and shared_member is None:
                     raise WarehouseInventoryError(
                         "其他客户专用成品库存不能用于当前订单", 409
                     )
                 if (
-                    (detail.product_id != product.id
-                    or detail.inventory_code_snapshot != product.product_code)
+                    detail.product_id != product.id
                     and shared_member is None
                 ):
                     raise WarehouseInventoryError(
                         "成品库存与订单存货编码不一致", 409
                     )
-                if physical_parent:
-                    from app.services.finished_stock_identity import product_basis, matches_component_stock_identity, stock_identity_error
-                    from app.services.bom_inventory_contract import is_body_lot
-                    if is_body_lot(lot) or not matches_component_stock_identity(lot, product_basis(product)):
-                        raise WarehouseInventoryError(
-                            ("所选批次为本体库存，请选择成套库存" if is_body_lot(lot) else stock_identity_error(lot, product_basis(product))), 409
-                        )
+                from app.services.finished_stock_identity import matches_lot_stock_identity, stock_identity_error
+                from app.services.bom_inventory_contract import is_body_lot
+                if is_body_lot(lot) or (shared_member is None and not matches_lot_stock_identity(lot, expected_identity)):
+                    raise WarehouseInventoryError(
+                        ("所选批次为本体库存，请选择成套库存" if is_body_lot(lot) else stock_identity_error(lot, expected_identity)), 409)
             else:
                 detail = lot.semi_finished_detail
                 if lot.inventory_type != "semi_finished" or detail is None:
@@ -4118,6 +4125,10 @@ def preview_order_inventory_draft(
                 unit_price=Decimal("0"),
                 material=draft_item.material,
                 flute_type=draft_item.flute_type,
+                material_id=draft_item.material_id,
+                layer_count=draft_item.layer_count,
+                specification=draft_item.specification,
+                production_notes=draft_item.production_notes,
                 reservation_plan=draft_item.reservation_plan,
             )
         )
@@ -4130,6 +4141,7 @@ def preview_order_inventory_draft(
                 customer_id=payload.customer_id,
                 payload_items=preflight_items,
                 resolved_products=resolved_products,
+                pdf_import=payload.pdf_import,
             )
         except WarehouseInventoryError as error:
             raise HTTPException(
@@ -4137,6 +4149,18 @@ def preview_order_inventory_draft(
                 detail=str(error),
             ) from error
 
+    # Save applies every explicit finished selection before automatic BOM stock.
+    # Protect later lines' selected lots while previewing earlier BOM children.
+    from app.services.delivery_quantities import product_basis as draft_quantity_basis, finished_reservation_plan as draft_finished_plan
+    future_finished = {}
+    explicit_by_line = {}
+    for draft_item, product in zip(payload.items, products, strict=True):
+        selected = draft_item.reservation_plan.finished
+        allocations = draft_finished_plan(draft_quantity_basis(product), draft_item.quantity,
+            [(entry.lot_id, max(0, db.get(InventoryLot, entry.lot_id).quantity_available-future_finished.get(entry.lot_id,0)), entry.requested_qty) for entry in selected]) if selected else []
+        explicit_by_line[draft_item.client_line_id] = [(entry.lot_id, physical) for entry, (physical, _) in zip(selected, allocations)]
+        for lot_id, physical in explicit_by_line[draft_item.client_line_id]:
+            future_finished[lot_id] = future_finished.get(lot_id, 0) + physical
     used_stock_by_lot: dict[int, int] = {}
     response_items: list[dict] = []
     finished_lots_by_product: dict[int, list] = {}
@@ -4144,27 +4168,30 @@ def preview_order_inventory_draft(
     for draft_item, product in zip(payload.items, products, strict=True):
         order_quantity = int(draft_item.quantity)
         physical_parent = _physical_bom_parent(db, product)
-        if is_composite_product(product) and not physical_parent:
-            response_items.append(
-                {
-                    "client_line_id": draft_item.client_line_id,
-                    "product_id": product.id,
-                    "order_quantity": order_quantity,
-                    "interaction_state": "decision_required",
-                    "coverage_state": "unsupported",
-                    "message": "组合产品需进入订单明细后按父件和组件分别计算库存与报料",
-                    "requisition_unit": "张",
-                    "requisition_components": [],
-                }
-            )
+        for lot_id, physical in explicit_by_line[draft_item.client_line_id]:
+            future_finished[lot_id] -= physical
+        if is_composite_product(product):
+            from app.services.bom_inventory_draft import preview as preview_bom_inventory
+            from app.services.multilevel_bom_plan import BomPlanError
+            try:
+                row, root_lots = preview_bom_inventory(db, product=product, quantity=order_quantity,
+                    used_stock_by_lot=used_stock_by_lot, future_selected=future_finished,
+                    root_allocations=explicit_by_line[draft_item.client_line_id])
+            except (BomPlanError, WarehouseInventoryError) as error:
+                raise HTTPException(409, str(error)) from error
+            response_items.append(dict(row, client_line_id=draft_item.client_line_id, product_id=product.id))
+            finished_lots_by_product[product.id] = root_lots
             continue
 
+        from app.services.finished_stock_identity import draft_order_stock_basis, matches_lot_stock_identity, stock_identity_error
+        expected_identity = draft_order_stock_basis(product, draft_item, pdf_matched_product=payload.pdf_import)
         stock_projection_lots = finished_inventory_candidates_for_product(
             db,
             customer_id=payload.customer_id,
             product_id=product.id,
             include_reserved=True,
             include_held=True,
+            include_ineligible=True,
         )
         from app.services.delivery_quantities import (
             product_basis, require_physical_stock, available_customer_quantity,
@@ -4181,7 +4208,10 @@ def preview_order_inventory_draft(
             except QuantityContractError:
                 continue
             verified_projection_lots.append(lot)
+        quantity_issues = [lot for lot in stock_projection_lots if lot not in verified_projection_lots]
         stock_projection_lots = verified_projection_lots
+        from app.services.shared_finished_stock import match as shared_identity_match
+        from app.services.warehouse_location_address import employee_location_name
         # Keep the original allocator query separate.  Staged inventory and
         # fully reserved lots are physical stock facts, but cannot become
         # candidates for a new order import.
@@ -4189,6 +4219,7 @@ def preview_order_inventory_draft(
             db,
             customer_id=payload.customer_id,
             product_id=product.id,
+            expected_basis=expected_identity,
         )
         verified_candidates = []
         for lot in candidates:
@@ -4356,6 +4387,15 @@ def preview_order_inventory_draft(
                 "interaction_state": interaction_state,
                 "coverage_state": coverage_state,
                 "finished_candidate_available_quantity": candidate_available_quantity,
+                "finished_identity_issues": [{
+                    "lot_id": lot.id, "location_id": lot.warehouse_location_id,
+                    "location_label": employee_location_name(lot.location) if lot.location else "库位待核对",
+                    "quantity_available": lot.quantity_available,
+                    "state": "needs_review" if not lot.finished_detail.physical_basis_json else "incompatible",
+                    "reason": stock_identity_error(lot, expected_identity),
+                } for lot in [*stock_projection_lots, *quantity_issues] if lot.id not in {candidate.id for candidate in candidates}
+                    and not shared_identity_match(db, lot, product_id=product.id, customer_id=payload.customer_id, expected_basis=expected_identity)
+                    and (lot in quantity_issues or not matches_lot_stock_identity(lot, expected_identity))],
                 "finished_stock_on_hand_quantity": finished_stock_on_hand_quantity,
                 "finished_stock_reserved_quantity": finished_stock_reserved_quantity,
                 "finished_stock_available_quantity": finished_stock_available_quantity,
@@ -8017,6 +8057,7 @@ def _create_order_impl(
             customer_id=customer.id,
             payload_items=payload.items,
             resolved_products=resolved_products,
+            pdf_import=payload.pdf_import_confirmation is not None,
         )
 
         related_orders: list[Order] = []
@@ -8316,6 +8357,8 @@ def _create_order_impl(
                 ),
                 **combination_provenances[index],
             )
+            from app.services.finished_stock_identity import new_order_stock_basis
+            item.stock_identity_snapshot_json = new_order_stock_basis(product, item)
             # P0-B: the client can submit only a short-lived, owner-bound token.
             # A filesystem path is never interpreted from request data.
             if item_payload.temp_drawing_token:
@@ -9226,6 +9269,9 @@ def update_order_item(
         raise HTTPException(status_code=404, detail="订单明细不存在")
     from app.services.multilevel_bom_production_versions import order_production_values
     original_production_values = order_production_values(item)
+    from app.services.finished_stock_identity import ORDER_IDENTITY_FIELDS, revise_order_stock_basis
+    original_stock_basis = item.stock_identity_snapshot_json
+    original_stock_fields = {key: getattr(item, key) for key in ORDER_IDENTITY_FIELDS}
     current_bom_production_revision = 0
     order_for_scope = db.get(Order, item.order_id)
     if order_for_scope is None:
@@ -9935,6 +9981,9 @@ def update_order_item(
             ),
             confirmation_token=payload.product_confirmation_token,
         )
+    revise_order_stock_basis(item, original_stock_fields, payload, current_product)
+    if item.stock_identity_snapshot_json != original_stock_basis and has_unconsumed_inventory_reservations(db, item.id):
+        raise HTTPException(409, "订单已有库存预占，请先释放库存后修改实物身份")
     from app.models.multilevel_bom import OrderBomGraph
     if db.get(OrderBomGraph, item.id) is not None:
         from app.services.multilevel_bom_orders import read_compiled_order_bom
@@ -9987,6 +10036,8 @@ def update_order_item(
                 "layer_count": item.layer_count,
                 "flute_type": item.flute_type,
                 "production_notes": item.snapshot_production_notes,
+                "stock_identity_before": original_stock_basis,
+                "stock_identity_after": item.stock_identity_snapshot_json,
                 "special_process": item.special_process,
                 "sync_product": effective_sync_product,
             },

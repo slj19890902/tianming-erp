@@ -29,6 +29,18 @@ def lot_display_unit(lot):
     if product is not None:
         from app.services.product_unit_labels import product_unit_label
         return product_unit_label(product) or lot.unit
+    if getattr(lot, "semi_finished_detail", None):
+        from sqlalchemy.orm import object_session
+        db = object_session(lot)
+        if db is not None:
+            from app.services.processed_component_stock import output_identity
+            try:
+                identity = output_identity(db, lot)
+            except (ValueError, TypeError, AttributeError):
+                identity = None
+            if identity:
+                from app.services.product_unit_labels import basis_unit_label
+                return basis_unit_label(json.loads(identity[2]), component=True)
     if lot.source_ref_type == "subkit_receipt":
         return "片"
     return {"boxes":"只","sheets":"张","pieces":"片","sets":"套"}.get(lot.unit, lot.unit)

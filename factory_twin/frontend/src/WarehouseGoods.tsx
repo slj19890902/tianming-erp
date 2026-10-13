@@ -49,6 +49,25 @@ function FactsEditor({facts,setFacts,options,raw,flute,canPrice,length,width,qua
 export function WarehouseGoods({lotId,locationId,layoutVersion,raw=false,canSave,onSaved,onBusyChange}:{lotId?:number;locationId?:number;layoutVersion?:number;raw?:boolean;canSave:boolean;onSaved:()=>Promise<unknown>;onBusyChange?:(busy:boolean)=>void}) {
   const [facts,setFacts]=useState<Facts>(initialFacts(raw)),[options,setOptions]=useState<Options|null>(null),[version,setVersion]=useState(0),[editable,setEditable]=useState(true);
   const [optionsRevision,setOptionsRevision]=useState(0);
+  const [identity,setIdentity]=useState<{preview_hash:string;confirmation_message?:string;quantity_available:number;physical_basis:Record<string,unknown>}|null>(null);
+  const identityKey=useRef("");
+  const identityGeneration=useRef(0);
+  useEffect(()=>{identityGeneration.current++;setIdentity(null);return()=>{identityGeneration.current++;};},[lotId]);
+  const identityRequest=async(confirm=false)=>{
+    if(!lotId||saving.current||!canSave||(confirm&&!identity))return;
+    const generation=identityGeneration.current;
+    saving.current=true;setBusy(true);onBusyChange?.(true);setMessage("");
+    try{
+      const response=await fetch(`/api/warehouse/lots/${lotId}/physical-identity/${confirm?"confirm":"preview"}`,{
+        credentials:"same-origin",cache:"no-store",...(confirm?{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({preview_hash:identity?.preview_hash,operation_key:identityKey.current,physical_match_confirmed:true})}:{})});
+      const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==="string"?data.detail:"实物身份核对失败");
+      if(generation!==identityGeneration.current)return;
+      if(confirm){setIdentity(null);setOptionsRevision(v=>v+1);setMessage("实物身份已确认，原数量、成本和来源保持");await onSaved();}
+      else{setIdentity(data);identityKey.current=`physical-${Date.now()}-${Math.random().toString(36).slice(2)}`;}
+    }catch(e){setMessage(e instanceof Error?e.message:"实物身份核对失败");}
+    finally{saving.current=false;setBusy(false);onBusyChange?.(false);}
+  };
   const [finished,setFinished]=useState(false),[finishedSearch,setFinishedSearch]=useState("");
   const [message,setMessage]=useState(""),[busy,setBusy]=useState(false),[physical,setPhysical]=useState("");
   const [name,setName]=useState(""),[length,setLength]=useState(""),[width,setWidth]=useState(""),[quantity,setQuantity]=useState("");
@@ -83,6 +102,11 @@ export function WarehouseGoods({lotId,locationId,layoutVersion,raw=false,canSave
     }catch(e){setMessage(e instanceof Error?e.message:"保存失败");}finally{saving.current=false;setBusy(false);onBusyChange?.(false);}
   };
   return <section className="warehouse-goods"><h4>{lotId?"修正库存资料":raw?"新增原材料（张）":"新增半成品（张）"}</h4>
+    {lotId&&canSave&&<div><button type="button" disabled={busy} onClick={()=>void identityRequest()}>核对本批实物身份</button>
+      {identity&&<div role="dialog" aria-label="确认实物身份"><p>请先保存库存资料，再按下列已保存资料核对实物。</p><p>{identity.confirmation_message||"请核对本批实物与冻结规格、材质、工艺一致。原数量、成本和来源保持。"}</p>
+        <p>当前可用数量 {identity.quantity_available}</p>
+        <dl>{Object.entries({spec:"规格",unit:"实物单位",material:"材质",flute:"楞型",layer_count:"层数",box_style:"箱式",production_process:"全部工艺",production_notes:"生产备注",mold_tool_id:"模具编号",die_cut_path:"模切路径",splice_mode:"接片方式",pieces_per_box:"每箱片数",flap_mm:"封口尺寸",crease_type:"压线类型",crease_left_mm:"左压线",crease_middle_mm:"中压线",crease_right_mm:"右压线",base_crease_type:"底片压线类型",base_crease_left_mm:"底片左压线",base_crease_middle_mm:"底片中压线",base_crease_right_mm:"底片右压线",assembly:"组装子件依据"}).map(([key,label])=><div key={key}><dt>{label}</dt><dd>{identity.physical_basis[key]===null||identity.physical_basis[key]===undefined?"未登记":typeof identity.physical_basis[key]==="object"?JSON.stringify(identity.physical_basis[key]):String(identity.physical_basis[key])}</dd></div>)}</dl>
+        <button type="button" disabled={busy} onClick={()=>void identityRequest(true)}>实物逐项相符，确认</button><button type="button" disabled={busy} onClick={()=>setIdentity(null)}>取消</button></div>}</div>}
     {physical&&<p>{physical}</p>}
     {lotId&&<p>原始来源客户：{facts.source_customer_name||options?.customers.find(c=>c.id===facts.source_customer_id)?.name||"未登记"}（保留原记录）</p>}
     {options&&<fieldset disabled={busy||!canSave||!editable}>

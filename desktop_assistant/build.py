@@ -90,7 +90,8 @@ def current_mac_capabilities(sources, *, stream_enabled):
         'desktop_assistant/mac_smb_stream_runtime_contract.py', broker.MODULE, mounted.MODULE, 'desktop_assistant/mac_mount.py'}
     if type(stream_enabled) is not bool or not required <= sources.keys():
         raise ValueError('当前Mac接管协议源码不完整，不能声明能力')
-    result = {worker.CAPABILITY: 1, audit.CAPABILITY: 1, CURRENT_MAC_CAPABILITY: 1, mounted.CAPABILITY: 1}
+    result = {worker.CAPABILITY: 1, audit.CAPABILITY: 1, CURRENT_MAC_CAPABILITY: 1,
+              mounted.CAPABILITY: 1, mounted.UPLOADED_CAPABILITY: 1}
     from desktop_assistant import owner_activation_contract as owner
     if owner.FILES <= sources.keys():
         result[owner.CAPABILITY] = 1

@@ -18,6 +18,8 @@ from desktop_assistant import mac_system_upgrade as root
 
 MODULE = 'desktop_assistant/mounted_nas_proof.py'
 CAPABILITY = 'current_mac_mounted_audit_v1'
+UPLOADED_CAPABILITY = 'confirmed_mounted_upload_local_audit_v1'
+UPLOADED_TYPE = 'tianming.confirmed-mounted-upload-local-audit.v1'
 BASE = Path('/Library/TianmingERP')
 ROOT = BASE/'instance'
 MOUNT = Path('/Users/kimiyf/Public/ZSPACE')
@@ -181,8 +183,44 @@ def load():
             and all(type(v) is int and v >= 0 for v in receipt[key].values())
             and receipt[key]['size'] == contract['size'] and receipt[key]['nlink'] == 1
             and stat.S_ISREG(receipt[key]['mode']))
-    return dict(control=control,contract=contract,receipt=receipt,raw=raw,
+    bound = dict(control=control,contract=contract,receipt=receipt,raw=raw,
         control_sha=hashlib.sha256(raw[CONTROL]).hexdigest())
+    uploaded = BASE/'mounted-upload-local-audit.json'
+    if os.path.lexists(uploaded):
+        uploaded_raw = _protected(uploaded); value = c.decode(uploaded_raw)
+        require(set(value) == {'type','context_sha256','publisher_sha256','audit_package_sha256',
+            'contract_sha256','receipt_sha256','backup_sha256','size','local_path',
+            'backend_confirmation_sha256'} and value['type'] == UPLOADED_TYPE
+            and value['context_sha256'] == control['context_sha256']
+            and value['publisher_sha256'] == control['publisher_sha256']
+            and value['audit_package_sha256'] == control['package_sha256']
+            and value['contract_sha256'] == control['contract_sha256']
+            and value['receipt_sha256'] == control['receipt_sha256']
+            and value['backup_sha256'] == receipt['sha256']
+            and type(value['size']) is int and value['size'] == receipt['size']
+            and value['local_path'] == contract['local_path']
+            and receipt['mount']['classification'] == 'loopback_proxy'
+            and contract['checkpoint_attempt_id'] is not None)
+        c._hash(value['backend_confirmation_sha256'])
+        confirmation = BASE/'mounted-backend-confirmation.json'
+        confirmation_raw = _protected(confirmation)
+        require(hashlib.sha256(confirmation_raw).hexdigest() == value['backend_confirmation_sha256'])
+        report = c.decode(confirmation_raw); transfer = report['backend_transfer']; cache = report['disk_cache']
+        require(report['backup_sha256'] == receipt['sha256']
+            and transfer['name'] == Path(contract['path']).relative_to(MOUNT).as_posix()
+            and transfer['dstFs'] == 'uzmount:' and transfer['error'] == ''
+            and type(transfer['bytes']) is type(transfer['size']) is int
+            and transfer['bytes'] == transfer['size'] == receipt['size']
+            and all(type(cache[k]) is int and cache[k] == 0
+                for k in ('uploadsQueued','uploadsInProgress','erroredFiles'))
+            and report['physical_backend_cold_hash_verified'] is False)
+        c.normalize_timestamp(transfer['completed_at']); c.normalize_timestamp(report['checked_at'])
+        require(datetime.fromisoformat(transfer['completed_at']) <= datetime.fromisoformat(report['checked_at'])
+            <= datetime.now(timezone.utc))
+        require(uploaded_raw == c.canonical(value))
+        bound['uploaded_local_audit'] = value
+        bound['raw'].update({uploaded:uploaded_raw,confirmation:confirmation_raw})
+    return bound
 
 
 def approve(nas_cipher_path,audit_package_sha256,checkpoint_attempt_id=None):
@@ -261,9 +299,12 @@ def check_fd(fd,bound):
     """No traversal of the private user's home from UID499; use root's FD."""
     require(type(fd) is int and fd >= 3)
     import fcntl
-    require(fcntl.fcntl(fd,fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY
-        and fingerprint(os.fstat(fd)) == bound['receipt']['file_identity']
-        and mounts.fd_identity(fd) == bound['receipt']['mount']['kernel'])
+    require(fcntl.fcntl(fd,fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY)
+    if bound.get('uploaded_local_audit') is not None:
+        require(fingerprint(os.fstat(fd)) == bound['receipt']['local_identity'])
+    else:
+        require(fingerprint(os.fstat(fd)) == bound['receipt']['file_identity']
+            and mounts.fd_identity(fd) == bound['receipt']['mount']['kernel'])
 
 
 @contextmanager
@@ -274,6 +315,18 @@ def broker(plan):
         and bound['control_sha'] == plan['transport_control_sha256']
         and bound['control']['contract_sha256'] == plan['transport_contract_sha256']
         and bound['control']['receipt_sha256'] == plan['backup_receipt_sha256'])
+    if bound.get('uploaded_local_audit') is not None:
+        meta = root.system.metadata(plan['transport_package_sha256'])
+        manifest = root.system._program_manifest(meta)
+        require(type(manifest['runtime_capabilities'].get(UPLOADED_CAPABILITY)) is int
+            and manifest['runtime_capabilities'][UPLOADED_CAPABILITY] == 1)
+        with open_regular(bound['contract']['local_path']) as fd:
+            check_fd(fd,bound)
+            require(full_hash(fd,bound['receipt']['size']) == bound['receipt']['sha256'])
+            yield fd
+            check_fd(fd,bound)
+            require(load()['raw'] == bound['raw'])
+        return
     require(observe() == bound['receipt']['mount'])
     with open_regular(bound['contract']['path']) as fd:
         check_fd(fd,bound);check_path(bound)

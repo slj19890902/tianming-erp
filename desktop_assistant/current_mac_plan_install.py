@@ -16,7 +16,7 @@ from desktop_assistant import current_mac_worker_contract as c
 from desktop_assistant import current_mac_cutover_contract as v3
 from desktop_assistant import mac_system_upgrade as root
 from desktop_assistant import mac_smb_stream_runtime_contract as stream
-from desktop_assistant import factory_network
+from desktop_assistant import factory_network, mounted_nas_proof as mounted
 
 MODULE='desktop_assistant/current_mac_plan_install.py'
 BASE=Path('/Library/TianmingERP')
@@ -48,12 +48,16 @@ def _facts(stack,base,instance,plan):
         if context is None:context=meta['context'];public=meta['public']
         else:require(meta['context']==context and meta['public']==public)
     pins=[]
-    for path,field in ((root.system.CONTROL,'system_control_sha256'),
-            (root.system.PLIST,'system_plist_sha256'),(stream.CONTROL,'transport_control_sha256'),
-            (stream.CONTRACT,'transport_contract_sha256')):
+    artifacts=[(root.system.CONTROL,'system_control_sha256'),(root.system.PLIST,'system_plist_sha256')]
+    if plan['phase']!='checkpoint':
+        artifacts += ([(mounted.CONTROL,'transport_control_sha256'),(mounted.CONTRACT,'transport_contract_sha256')]
+            if plan['type']==c.MOUNTED_PLAN else
+            [(stream.CONTROL,'transport_control_sha256'),(stream.CONTRACT,'transport_contract_sha256')])
+    for path,field in artifacts:
         for parent in path.parents:root.boot.protected(parent,directory=True)
         pin=stack.enter_context(root.Pin(path,mode=0o644));raw=pin.read()
-        observed=stream.archive.digest(c.decode(raw)) if path==stream.CONTRACT else c.raw_digest(raw)
+        observed=c.raw_digest(raw)
+        if path in (stream.CONTRACT,mounted.CONTRACT):observed=c.raw_digest(c.canonical(c.decode(raw)))
         require(observed==plan[field]);pins.append((pin,raw))
     home=stack.enter_context(root.Pin(BASE/'home',uid=499,gid=499,mode=0o700,directory=True,mutable=True,parent=base))
     original=stack.enter_context(root.Pin(home.path/('service-restore-'+plan['restore_attempt_id']+'.json'),
@@ -223,9 +227,90 @@ def activation_plan(attempt_id,authorization_raw,*,factory_cutover_authorized=Fa
             preparation_sha256=v3.digest(prep),request_file_sha256=c.raw_digest(request_raw),
             request_sha256=v3.digest(request),authorization_file_sha256=c.raw_digest(authorization_raw),
             operator_attestation={k:True for k in v3.ATTESTATION})
+        if old['type']==c.MOUNTED_PLAN:plan['local_update_receipt_sha256']=old['local_update_receipt_sha256']
         raw=c.canonical(c.validate_plan(plan,now=time.time()));check=_facts(stack,base,instance,plan)
         prior_check();_state(instance,plan['state_stopped_sha256'],plan['execution_package_sha256'])
         _store(slot,'authorization.json',authorization_raw);_store(slot,'activate-plan.json',raw)
         check();prior_check();require(pp.read()==prep_raw and rp.read()==request_raw and np.read()==network_raw)
         _state(instance,plan['state_stopped_sha256'],plan['execution_package_sha256'])
         return dict(attempt_id=attempt_id,plan_sha256=c.raw_digest(raw),started=False,factory_activated=False)
+
+
+def checkpoint_plan(attempt_id,execution,monitor,auditor,restore_attempt,restore_receipt_sha,network_raw):
+    """Root-approved read-only plan for a new backup, with execution unchanged."""
+    root._entry();require(c.token(attempt_id) and c.token(restore_attempt))
+    for value in (execution,monitor,auditor,restore_receipt_sha):require(c.sha(value))
+    network=factory_network.validate(c.decode(network_raw))
+    with root._publication(),ExitStack() as stack:
+        base,instance=_parents(stack);state_raw,state=root._state(instance,499,499)
+        require(state.get('current')==execution and state.get('manual_stop') is True and state.get('pid') is None)
+        mounted._original_proof(state)
+        meta=root.system.metadata(auditor);created=int(time.time())
+        plan=dict(type=c.MOUNTED_PLAN,attempt_id=attempt_id,phase='checkpoint',created_at=created,
+            expires_at=created+c.MAX_AGE,uid=499,gid=499,code_manifest_sha256=_code(),
+            **{k:meta[k] for k in ('context_sha256','publisher_sha256','registry_sha256')},
+            execution_package_sha256=execution,monitor_package_sha256=monitor,transport_package_sha256=auditor,
+            restore_attempt_id=restore_attempt,restore_receipt_sha256=restore_receipt_sha,
+            state_before_sha256=root.boot.digest(state_raw),network_file_sha256=c.raw_digest(network_raw),
+            network_sha256=v3.digest(network))
+        for path,field in ((root.system.CONTROL,'system_control_sha256'),(root.system.PLIST,'system_plist_sha256')):
+            for parent in path.parents:root.boot.protected(parent,directory=True)
+            item=stack.enter_context(root.Pin(path,mode=0o644));plan[field]=c.raw_digest(item.read())
+        c.validate_plan(plan,now=time.time());check=_facts(stack,base,instance,plan);check()
+        return c.canonical(plan)
+
+
+def checkpoint(plan_raw,network_raw):
+    """Produce one independently restored local checkpoint; no restart/update."""
+    root._entry();plan=c.validate_plan(c.decode(plan_raw),now=time.time())
+    require(plan['type']==c.MOUNTED_PLAN and plan['phase']=='checkpoint' and plan_raw==c.canonical(plan)
+        and c.raw_digest(network_raw)==plan['network_file_sha256']
+        and v3.digest(factory_network.validate(c.decode(network_raw)))==plan['network_sha256'])
+    with root._publication(),ExitStack() as stack:
+        base,instance=_parents(stack);check=_facts(stack,base,instance,plan)
+        _state(instance,plan['state_before_sha256'],plan['execution_package_sha256'])
+        name='current-mac-cutover-'+plan['attempt_id']
+        os.mkdir(name,0o755,dir_fd=base.fd);os.fsync(base.fd)
+        slot=_slot(stack,base,plan['attempt_id'])
+        _store(slot,'network.json',network_raw);_store(slot,'checkpoint-plan.json',plan_raw)
+        root._new(slot,'checkpoint-attempt.json',c.canonical(dict(type='tianming.current-mac-stage-attempt.v1',
+            phase='checkpoint',plan_sha256=c.raw_digest(plan_raw))),mode=0o600)
+        check();reply=activation.dispatch.dispatch(plan_raw,verify_code=_code);check()
+        c.validate_reply(reply,_request(reply),plan,c.raw_digest(plan_raw))
+        _state(instance,plan['state_before_sha256'],plan['execution_package_sha256'])
+        raw=c.canonical(reply);_store(slot,'checkpoint-result.json',raw);_receipt(slot,'checkpoint',plan_raw,raw)
+        return reply
+
+
+def prepare_mounted(attempt_id):
+    """Admit a completed local checkpoint and genuine mounted proof directly."""
+    root._entry()
+    with root._publication(),ExitStack() as stack:
+        base,instance=_parents(stack);slot=_slot(stack,base,attempt_id)
+        old,previous,previous_raw,prior_check=_previous(stack,slot,'checkpoint')
+        require(old['type']==c.MOUNTED_PLAN and old['phase']=='checkpoint')
+        bound=mounted.load();require(bound['contract']['checkpoint_attempt_id']==attempt_id
+            and bound['contract']['checkpoint_result_sha256']==c.raw_digest(previous_raw)
+            and bound['control']['package_sha256']==old['transport_package_sha256'])
+        state_raw,state=root._state(instance,499,499);mounted._original_proof(state)
+        require(state.get('current')==old['execution_package_sha256']
+            and state.get('manual_stop') is True and state.get('pid') is None)
+        created=int(time.time());plan={k:old[k] for k in c.COMMON if k in old}
+        plan.update(phase='prepare',created_at=created,expires_at=created+c.MAX_AGE,
+            state_stopped_sha256=c.raw_digest(state_raw),backup_sha256=bound['receipt']['sha256'],
+            backup_receipt_sha256=bound['control']['receipt_sha256'],request_id=uuid.uuid4().hex,
+            local_update_receipt_sha256=bound['contract']['local_update_receipt_sha256'],
+            transport_control_sha256=bound['control_sha'],transport_contract_sha256=bound['control']['contract_sha256'])
+        raw=c.canonical(c.validate_plan(plan,now=time.time()));facts_check=_facts(stack,base,instance,plan)
+        def check():
+            prior_check();facts_check();require(mounted.load()['raw']==bound['raw'])
+            _state(instance,plan['state_stopped_sha256'],plan['execution_package_sha256'])
+        check();_store(slot,'prepare-plan.json',raw)
+        root._new(slot,'prepare-attempt.json',c.canonical(dict(type='tianming.current-mac-stage-attempt.v1',
+            phase='prepare',plan_sha256=c.raw_digest(raw))),mode=0o600)
+        reply=activation.dispatch.dispatch(raw,verify_code=_code);check()
+        c.validate_reply(reply,_request(reply),plan,c.raw_digest(raw))
+        reply_raw=c.canonical(reply);_store(slot,'prepare-result.json',reply_raw)
+        _store(slot,'preparation.json',c.canonical(reply['result']['preparation']))
+        _store(slot,'request.json',c.canonical(reply['result']['request']))
+        check();_receipt(slot,'prepare',raw,reply_raw);return reply

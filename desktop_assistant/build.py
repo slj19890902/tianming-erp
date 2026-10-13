@@ -78,7 +78,7 @@ def current_mac_capabilities(sources, *, stream_enabled):
     """Declare complete code protocols; no authority or completed install."""
     from desktop_assistant import current_mac_worker as worker
     from desktop_assistant import current_mac_target_audit as audit
-    from desktop_assistant import current_mac_smb_broker as broker
+    from desktop_assistant import current_mac_smb_broker as broker, mounted_nas_proof as mounted
     from desktop_assistant.mac_factory_runtime import CURRENT_MAC_FILES, CURRENT_MAC_CAPABILITY
     required = CURRENT_MAC_FILES | {
         worker.MODULE, worker.CONTRACT_MODULE, audit.MODULE,
@@ -87,10 +87,10 @@ def current_mac_capabilities(sources, *, stream_enabled):
         'desktop_assistant/mac_system_service.py',
         'desktop_assistant/mac_system_upgrade_worker.py',
         'desktop_assistant/mac_smb_stream_runtime.py',
-        'desktop_assistant/mac_smb_stream_runtime_contract.py', broker.MODULE}
+        'desktop_assistant/mac_smb_stream_runtime_contract.py', broker.MODULE, mounted.MODULE, 'desktop_assistant/mac_mount.py'}
     if type(stream_enabled) is not bool or not required <= sources.keys():
         raise ValueError('当前Mac接管协议源码不完整，不能声明能力')
-    result = {worker.CAPABILITY: 1, audit.CAPABILITY: 1, CURRENT_MAC_CAPABILITY: 1}
+    result = {worker.CAPABILITY: 1, audit.CAPABILITY: 1, CURRENT_MAC_CAPABILITY: 1, mounted.CAPABILITY: 1}
     if stream_enabled:
         from desktop_assistant.mac_smb_stream_runtime_contract import FILES
         if not FILES <= sources.keys():

@@ -201,6 +201,7 @@ def codepack(tmp_path,monkeypatch):
             (v3,'desktop_assistant/current_mac_cutover_contract.py'),
             (gate,'desktop_assistant/current_mac_publication.py'),
             (a.factory_network,'desktop_assistant/factory_network.py'),
+            (a.mounted,a.mounted.MODULE),(a.mounted.mounts,'desktop_assistant/mac_mount.py'),
             (root.boot,'desktop_assistant/mac_keychain_install.py'),
             (root.system,'desktop_assistant/mac_system_service.py'),
             (root.publication,'desktop_assistant/mac_release_publish.py'),

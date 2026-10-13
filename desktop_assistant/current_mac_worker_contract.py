@@ -13,9 +13,11 @@ from desktop_assistant import current_mac_cutover_contract as cutover
 
 BASE = '/Library/TianmingERP'
 PLAN = 'tianming.current-mac-worker-plan.v1'
+MOUNTED_PLAN = 'tianming.current-mac-mounted-worker-plan.v1'
 REQUEST = 'tianming.current-mac-worker-request.v1'
 REPLY = 'tianming.current-mac-worker-reply.v1'
 PHASES = frozenset({'update', 'prepare', 'activate'})
+ALL_PHASES = PHASES | {'checkpoint'}
 LIMIT = cutover.LIMIT
 MAX_TIME = 253402300799
 MAX_AGE = 7 * 86400
@@ -26,7 +28,9 @@ COMMON = frozenset({'type', 'attempt_id', 'phase', 'created_at', 'expires_at',
     'transport_package_sha256', 'restore_attempt_id', 'restore_receipt_sha256',
     'system_control_sha256', 'system_plist_sha256', 'transport_control_sha256',
     'transport_contract_sha256', 'network_file_sha256', 'network_sha256'})
+CHECKPOINT_COMMON = COMMON - {'transport_control_sha256','transport_contract_sha256'}
 PHASE_FIELDS = {
+    'checkpoint': frozenset({'state_before_sha256'}),
     'update': frozenset({'current_package_sha256', 'state_before_sha256'}),
     'prepare': frozenset({'update_result_file_sha256', 'state_stopped_sha256',
         'backup_sha256', 'backup_receipt_sha256', 'request_id'}),
@@ -78,15 +82,24 @@ def exact(value, fields):
 
 
 def plan_path(attempt_id, phase):
-    require(token(attempt_id) and type(phase) is str and phase in PHASES)
+    require(token(attempt_id) and type(phase) is str and phase in ALL_PHASES)
     return BASE + '/current-mac-cutover-' + attempt_id + '/' + phase + '-plan.json'
 
 
 def validate_plan(value, *, now=None):
     require(type(value) is dict and type(value.get('phase')) is str
-            and value['phase'] in PHASES)
-    exact(value, COMMON | PHASE_FIELDS[value['phase']])
-    require(value['type'] == PLAN and token(value['attempt_id'])
+            and value['phase'] in ALL_PHASES)
+    mounted = value.get('type') == MOUNTED_PLAN
+    common = CHECKPOINT_COMMON if value['phase'] == 'checkpoint' else COMMON
+    fields = PHASE_FIELDS[value['phase']]
+    if mounted and value['phase'] == 'prepare':
+        fields = (fields - {'update_result_file_sha256'}) | {'local_update_receipt_sha256'}
+    if mounted and value['phase'] == 'activate': fields = fields | {'local_update_receipt_sha256'}
+    require(value.get('type') in (PLAN,MOUNTED_PLAN)
+        and (value['phase'] != 'checkpoint' or mounted)
+        and (not mounted or value['phase'] != 'update'))
+    exact(value, common | fields)
+    require(value['type'] in (PLAN,MOUNTED_PLAN) and token(value['attempt_id'])
             and token(value['restore_attempt_id']))
     require(type(value['uid']) is int and value['uid'] == 499
             and type(value['gid']) is int and value['gid'] == 499)
@@ -96,7 +109,7 @@ def validate_plan(value, *, now=None):
     require(0 < value['expires_at'] - value['created_at'] <= MAX_AGE)
     if value['phase'] == 'update':
         require(value['current_package_sha256'] != value['execution_package_sha256'])
-    else:
+    elif value['phase'] != 'checkpoint':
         require(token(value['request_id']))
     if value['phase'] == 'activate':
         exact(value['operator_attestation'], cutover.ATTESTATION)
@@ -170,6 +183,12 @@ def validate_reply(value, request, plan, plan_sha):
             and result['current_package_sha256'] == plan['execution_package_sha256']
             and result['state_after_sha256'] != result['state_before_sha256']
             and result['nas_independent_readback'] is True)
+    elif request['phase'] == 'checkpoint':
+        from desktop_assistant.mounted_nas_proof import validate_checkpoint
+        exact(result, {'checkpoint'})
+        checkpoint = validate_checkpoint(result['checkpoint'])
+        require(checkpoint['state_sha256'] == plan['state_before_sha256']
+            and checkpoint['release_sha256'] == plan['execution_package_sha256'])
     elif request['phase'] == 'prepare':
         exact(result, {'preparation', 'request'})
         _preparation(result['preparation'], plan)

@@ -141,7 +141,7 @@ def dispatch(plan_raw, *, verify_code, inherited_lock=None):
         saved = stack.enter_context(root.Pin(path, mode=0o644, parent=slot))
         require(saved.read() == plan_raw)
         lock_check = _maintenance(stack, base, inherited_lock) if inherited_lock is not None else lambda: None
-        selected_role='transport' if plan['phase']=='update' else 'execution'
+        selected_role='transport' if plan['phase']=='update' or plan['type']==c.MOUNTED_PLAN else 'execution'
         selected = system.metadata(plan[selected_role+'_package_sha256'])
         manifest = system._program_manifest(selected)
         require(type(manifest.get('runtime_capabilities', {}).get(CAPABILITY)) is int
@@ -188,6 +188,10 @@ def dispatch(plan_raw, *, verify_code, inherited_lock=None):
             arguments += ['--lock-fd', str(inherited_lock)]
         parent=child=None;broker=None
         inherited=() if inherited_lock is None else (inherited_lock,)
+        if plan['type']==c.MOUNTED_PLAN and plan['phase']!='checkpoint':
+            from desktop_assistant import mounted_nas_proof as mounted
+            mounted_fd=stack.enter_context(mounted.broker(plan))
+            arguments+=['--mounted-fd',str(mounted_fd)];inherited=(*inherited,mounted_fd)
         if plan['phase']=='update':
             parent,child=socket.socketpair()
             stack.callback(parent.close);stack.callback(child.close)

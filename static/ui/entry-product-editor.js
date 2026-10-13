@@ -12,8 +12,13 @@
   async function api(path, method='GET', body) {
     const r=await fetch(path,{method,credentials:'same-origin',cache:'no-store',
       headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined});
-    const data=await r.json();
-    if(!r.ok){ const e=new Error(typeof data.detail==='string'?data.detail:JSON.stringify(data.detail||'请求失败')); e.status=r.status; throw e; }
+    let data;
+    try { data=await r.json(); }
+    catch (_) {
+      const e=new Error(r.ok?'服务器返回格式异常，请重试读取；当前编辑内容已保留':`读取失败（HTTP ${r.status}），请重试；当前编辑内容已保留`);
+      e.status=r.status; throw e;
+    }
+    if(!r.ok){ const e=new Error(typeof data?.detail==='string'?data.detail:JSON.stringify(data?.detail||`请求失败（HTTP ${r.status}）`)); e.status=r.status; throw e; }
     return data;
   }
   const costPath=(id,stage)=>`/api/warehouse/cost-rules/${id}/entry-preview?stock_stage=${encodeURIComponent(stage||'complete')}`;

@@ -2107,6 +2107,81 @@ class BomComponentSemiRequirementPayload(BaseModel):
     component_type: Literal["whole", "cover", "base"] = "whole"
 
 
+class BomPaperAdoptPayload(SemiReservationPayload):
+    component_type: Literal["whole", "cover", "base"] = "whole"
+    review_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class LegacyBomMoldPayload(BaseModel):
+    order_item_id: int = Field(gt=0)
+    preview_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    operation_key: str = Field(min_length=8,max_length=60)
+    physical_confirmed: bool
+
+
+@router.get("/lots/{lot_id}/legacy-bom-mold/preview")
+def legacy_bom_mold_preview(lot_id: int, order_item_id: int, db: Session = Depends(get_db),
+                           user: User = Depends(admin_only)) -> dict:
+    _require_lot_customer_access(db,lot_id,user)
+    _require_order_item_customer_access(db,order_item_id,user)
+    from app.services.legacy_bom_mold_confirmation import preview
+    try:
+        return preview(db,lot_id=lot_id,order_item_id=order_item_id)
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.post("/lots/{lot_id}/legacy-bom-mold/confirm")
+def legacy_bom_mold_confirm(lot_id: int, payload: LegacyBomMoldPayload, db: Session = Depends(get_db),
+                           user: User = Depends(admin_only)) -> dict:
+    _require_lot_customer_access(db,lot_id,user)
+    _require_order_item_customer_access(db,payload.order_item_id,user)
+    from app.services.legacy_bom_mold_confirmation import confirm
+    try:
+        result=confirm(db,lot_id=lot_id,actor=user,**payload.model_dump())
+        db.commit()
+        return result
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.get("/order-items/{order_item_id}/bom-inventory-review")
+def bom_inventory_review(order_item_id: int, db: Session = Depends(get_db),
+                         user: User = Depends(can_view_reservations)) -> dict:
+    _require_order_item_customer_access(db, order_item_id, user)
+    from app.services.bom_inventory_review import review
+    try:
+        return review(db, order_item_id)
+    except WarehouseInventoryError as error:
+        _handle(error)
+
+
+@router.post("/bom-components/{snapshot_id}/adopt-paper")
+def adopt_bom_paper(snapshot_id: int, payload: BomPaperAdoptPayload,
+                    db: Session = Depends(get_db), user: User = Depends(can_reserve)) -> dict:
+    snapshot = db.get(SalesOrderItemBomComponent, snapshot_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="BOM组件不存在")
+    _require_order_item_customer_access(db, snapshot.sales_order_item_id, user)
+    for lot in payload.lots:
+        _require_lot_customer_access(db, lot.lot_id, user)
+    from app.services.bom_inventory_review import adopt_paper
+    try:
+        result = adopt_paper(db, snapshot_id=snapshot_id, payload=payload.model_dump(), actor=user)
+        db.commit()
+        return result
+    except WarehouseInventoryError as error:
+        db.rollback()
+        _handle(error)
+    except IntegrityError as error:
+        db.rollback()
+        _handle_integrity(error)
+
+
 class SemiReleasePayload(BaseModel):
     expected_version: int = Field(gt=0)
     stock_quantity: int | None = Field(default=None, gt=0)

@@ -3156,7 +3156,7 @@ def finished_inventory_candidates_for_bom_component(
         )
         .order_by(FinishedGoodsInventoryDetail.is_general, InventoryLot.stock_date, InventoryLot.id)
     ).all()
-    from app.services.finished_stock_identity import order_product_basis
+    from app.services.finished_stock_identity import order_product_basis, matches_component_stock_identity
     expected = order_product_basis(db, item.id, snapshot.component_product_id)
     if stock_stage == 'body':
         from app.services.bom_inventory_contract import body_basis
@@ -3173,7 +3173,7 @@ def finished_inventory_candidates_for_bom_component(
             InventoryLot.quantity_available>0,~held_for_staging_expression())))
     from app.services.shared_finished_stock import match as shared_match
     return [lot for lot in rows if (stock_stage == 'body') == is_body_lot(lot)
-            and (expected is None or lot.finished_detail.physical_basis_json == expected or
+            and (expected is None or matches_component_stock_identity(lot, expected) or
                  (stock_stage=='complete' and shared_match(db,lot,product_id=snapshot.component_product_id,
                      customer_id=order.customer_id,expected_basis=expected)))]
 
@@ -3254,7 +3254,8 @@ def reserve_finished_inventory_for_bom_component(
         except (ValueError, AttributeError) as error:
             raise WarehouseInventoryError(str(error), 409) from error
     elif not matching_component_basis(db, snapshot, lot) and shared_member is None:
-        raise WarehouseInventoryError("库存缺少匹配的冻结规格、单位或工艺依据，请先核实该批次身份", 409)
+        from app.services.finished_stock_identity import stock_identity_error, order_product_basis
+        raise WarehouseInventoryError(stock_identity_error(lot, order_product_basis(db, item.id, snapshot.component_product_id)), 409)
     warnings: list[str] = []
     if detail.is_general:
         warnings.append("GENERAL_FINISHED_STOCK")
@@ -3320,6 +3321,15 @@ def reserve_finished_inventory_for_bom_component(
               idempotency_key=idempotency_key, reservation_id=reservation.id,
               related_order_id=order.id, related_order_item_id=item.id)
     db.flush()
+    # A physical parent reserved through its frozen root snapshot is already
+    # finished stock. Recompute the existing main-task projection so a stale
+    # waiting-material task cannot hide it from the delivery candidate query.
+    if snapshot.component_product_id == item.product_id:
+        from app.services.multilevel_bom_orders import read_compiled_order_bom
+        compiled = read_compiled_order_bom(db, item.id)
+        if compiled is not None:
+            from app.services.multilevel_bom_receipts import refresh_graph_main_task
+            refresh_graph_main_task(db, item, create_if_missing=False)
     return reservation
 
 
@@ -3380,7 +3390,7 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
     from app.services.finished_stock_identity import order_product_basis
     expected = order_product_basis(db, item.id, item.product_id)
     from app.services.bom_inventory_contract import is_body_lot
-    from app.services.finished_stock_identity import matches_stock_identity
+    from app.services.finished_stock_identity import matches_lot_stock_identity
     from app.services.direct_external_finished import eligible
     from app.services.delivery_quantities import order_basis, require_physical_stock
     try:
@@ -3390,7 +3400,7 @@ def finished_inventory_candidates(db: Session, order_item_id: int) -> list[Inven
     candidates = []
     for lot in rows:
         if is_body_lot(lot) or (lot.id not in shared_ids
-                and not matches_stock_identity(lot.finished_detail.physical_basis_json, expected)):
+                and not matches_lot_stock_identity(lot, expected)):
             continue
         try:
             if basis:
@@ -3422,7 +3432,8 @@ def finished_inventory_candidates_for_product(
         raise WarehouseInventoryError("产品不属于所选客户", 409)
     from app.models.multilevel_bom import ProductBomProfile
     profile = db.get(ProductBomProfile, product_id)
-    if product.is_virtual_composite_parent or (profile and profile.source == "separate"):
+    from app.services.order_parent_stock import parent_inventory_eligible
+    if not parent_inventory_eligible(product, profiles={product.id: profile}):
         return []
     from app.services.fixed_shelf_staging import held_for_staging_expression
     from app.services.shared_finished_stock import candidate_lot_ids
@@ -3455,10 +3466,10 @@ def finished_inventory_candidates_for_product(
         .order_by(*inventory_fifo_order_columns())
     ).all()
     from app.services.bom_inventory_contract import is_body_lot
-    from app.services.finished_stock_identity import product_basis
+    from app.services.finished_stock_identity import product_basis, matches_component_stock_identity
     expected = product_basis(product) if profile and product.is_composite else None
     return [lot for lot in rows if not is_body_lot(lot)
-            and (expected is None or lot.finished_detail.physical_basis_json == expected)]
+            and (expected is None or matches_component_stock_identity(lot, expected))]
 
 
 def has_unconsumed_inventory_reservations(
@@ -3614,12 +3625,13 @@ def reserve_finished_inventory(
                           physical_for(quantity_basis, quantity) if quantity_basis else quantity)
         if quantity_basis:
             require_physical_stock(lot, quantity_basis)
-        from app.services.finished_stock_identity import matches_stock_identity
-        identity_matches = matches_stock_identity(detail.physical_basis_json, expected_basis)
+        from app.services.finished_stock_identity import matches_lot_stock_identity
+        identity_matches = matches_lot_stock_identity(lot, expected_basis)
     except (QuantityContractError, ValueError, TypeError) as error:
         raise WarehouseInventoryError(str(error), 409) from error
     if not identity_matches and shared_member is None:
-        raise WarehouseInventoryError("库存缺少匹配的冻结规格、单位或工艺依据，请先核实该批次身份", 409)
+        from app.services.finished_stock_identity import stock_identity_error
+        raise WarehouseInventoryError(stock_identity_error(lot, expected_basis), 409)
     if not detail.is_general and detail.owner_customer_id != order.customer_id and shared_member is None:
         raise WarehouseInventoryError("客户专用库存不能用于其他客户订单")
     warning_codes: list[str] = []

@@ -1225,13 +1225,8 @@ def _order_item_direct_semi_facts(
 
 
 def _physical_bom_parent(db: Session, product: Product) -> bool:
-    from app.models.multilevel_bom import ProductBomProfile
-
-    if not is_composite_product(product):
-        return False
-    profile = db.get(ProductBomProfile, product.id)
-    return bool(profile and profile.source in {"assembled", "manufactured", "purchased"}
-                and not product.is_virtual_composite_parent)
+    from app.services.order_parent_stock import physical_bom_parent
+    return physical_bom_parent(db, product)
 
 
 def _preflight_reservation_plans(
@@ -1316,11 +1311,11 @@ def _preflight_reservation_plans(
                         "成品库存与订单存货编码不一致", 409
                     )
                 if physical_parent:
-                    from app.services.finished_stock_identity import product_basis
+                    from app.services.finished_stock_identity import product_basis, matches_component_stock_identity, stock_identity_error
                     from app.services.bom_inventory_contract import is_body_lot
-                    if is_body_lot(lot) or detail.physical_basis_json != product_basis(product):
+                    if is_body_lot(lot) or not matches_component_stock_identity(lot, product_basis(product)):
                         raise WarehouseInventoryError(
-                            "成套库存的冻结规格或组装关系与当前产品不一致，请刷新库存候选", 409
+                            ("所选批次为本体库存，请选择成套库存" if is_body_lot(lot) else stock_identity_error(lot, product_basis(product))), 409
                         )
             else:
                 detail = lot.semi_finished_detail
@@ -2565,6 +2560,11 @@ def _order_response(
             item.quantity - finished_reserved_quantity, 0
         )
         item_bom_components = bom_components_by_item_id.get(item.id, [])
+        from app.services.bom_inventory_review import requisition_display
+        requisition_display_status, requisition_display_hint = requisition_display(
+            db, item, finished_reserved=finished_reserved_quantity,
+            has_bom=bool(item_bom_components),
+        )
         cost_reference = {}
         if db is not None and may_view_cost:
             frozen_cost = frozen_cost_by_item_id.get(item.id)
@@ -2743,6 +2743,8 @@ def _order_response(
                 ),
                 "requisition_qty": item.requisition_qty,
                 "requisition_status": "未报料" if item.id in cancelled_external_ids else item.requisition_status,
+                "requisition_display_status": "未报料" if item.id in cancelled_external_ids else requisition_display_status,
+                "requisition_display_hint": "" if item.id in cancelled_external_ids else requisition_display_hint,
                 "requisition_hold": (
                     {
                         "id": active_hold_map[item.id].id,

@@ -1484,6 +1484,7 @@ def _product_or_404(db: Session, product_id: int) -> Product:
 
 
 def _response(product: Product, user: User, *, bom_profiles: dict | None = None) -> dict:
+    from app.services.order_parent_stock import parent_inventory_eligible
     from app.services.product_unit_labels import product_unit_info
     from app.services.legacy_product_classification import classification
     from app.services.customer_document_fields import document_snapshot, source_candidates
@@ -1509,6 +1510,7 @@ def _response(product: Product, user: User, *, bom_profiles: dict | None = None)
         ),
         "version": product.version,
         "is_composite": bool(getattr(product, "is_composite", False)),
+        "order_parent_inventory_eligible": parent_inventory_eligible(product, profiles=bom_profiles),
         "is_virtual_composite_parent": bool(
             getattr(product, "is_virtual_composite_parent", False)
         ),
@@ -1580,6 +1582,7 @@ def _response(product: Product, user: User, *, bom_profiles: dict | None = None)
 def _summary_response(product: Product, user: User, *, bom_profiles: dict | None = None) -> dict:
     """Return only fields used by the paginated common-box list."""
     from app.services.product_unit_labels import product_unit_info
+    from app.services.order_parent_stock import parent_inventory_eligible
     material = product.material
     from app.services.legacy_product_classification import classification
     from app.services.customer_document_fields import document_snapshot
@@ -1615,6 +1618,7 @@ def _summary_response(product: Product, user: User, *, bom_profiles: dict | None
         "version": product.version,
         "is_active": product.is_active,
         "is_composite": bool(getattr(product, "is_composite", False)),
+        "order_parent_inventory_eligible": parent_inventory_eligible(product, profiles=bom_profiles),
         "is_virtual_composite_parent": bool(
             getattr(product, "is_virtual_composite_parent", False)
         ),

@@ -3,7 +3,8 @@ def lot_display_unit(lot):
     if lot.source_ref_type == 'direct_external_receipt':
         import json
         try:
-            unit = json.loads(lot.cost_snapshot_detail_json or '{}').get('stock_unit')
+            snapshot = json.loads(lot.cost_snapshot_detail_json or '{}')
+            unit = snapshot.get('stock_unit') if isinstance(snapshot, dict) else None
             if unit:
                 return {'boxes': '只', 'pieces': '片'}.get(unit, unit)
         except (ValueError, TypeError):
@@ -11,12 +12,16 @@ def lot_display_unit(lot):
     import json
     try:
         basis = json.loads(lot.finished_detail.physical_basis_json or '{}') if lot.finished_detail else {}
+        if not isinstance(basis, dict):
+            basis = {}
         quantity_basis = basis.get('quantity_basis') or {}
+        if not isinstance(quantity_basis, dict):
+            quantity_basis = {}
         if quantity_basis.get('ledger') == 'physical' and quantity_basis.get('physical_unit'):
             return quantity_basis['physical_unit']
         if basis.get('unit'):
             from app.services.product_unit_labels import basis_unit_label
-            return basis_unit_label(basis, component=lot.source_ref_type == 'subkit_receipt')
+            return basis_unit_label({**basis, 'quantity_basis': quantity_basis}, component=lot.source_ref_type == 'subkit_receipt')
     except (ValueError, TypeError):
         pass
     detail = lot.finished_detail

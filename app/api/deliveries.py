@@ -667,7 +667,7 @@ def _graph_finished_stock_ready(db: Session, item: OrderItem, required_sets: int
     """Frozen physical BOM stock can ship without a raw procurement record."""
     from app.services.multilevel_bom_orders import read_compiled_order_bom
     from app.services.multilevel_bom_plan import plan_bom
-    from app.services.finished_stock_identity import compiled_product_bases, matches_stock_identity
+    from app.services.finished_stock_identity import compiled_product_bases, matches_lot_stock_identity
     from app.services.composite_bom_workflow import _stock_reservations, _remaining_reservation_quantity
     compiled = read_compiled_order_bom(db,item.id)
     if compiled is None or required_sets <= 0:
@@ -688,7 +688,7 @@ def _graph_finished_stock_ready(db: Session, item: OrderItem, required_sets: int
                     and lot.quantity_reserved>=remaining
                     and (shared or (detail.product_id==pid
                     and (detail.owner_customer_id==compiled.graph.customer_id or detail.is_general)
-                    and matches_stock_identity(detail.physical_basis_json,bases[pid])))):
+                    and matches_lot_stock_identity(lot,bases[pid])))):
                 # The existing consumption planner visits all FIFO sources.
                 # Never hide an incompatible earlier lot behind later good stock.
                 return False

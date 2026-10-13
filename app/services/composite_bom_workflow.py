@@ -1148,7 +1148,7 @@ def _validate_graph_component_stock(db, *, reservation, snapshot_id, lot):
     from app.models.multilevel_bom import OrderBomGraph
     from app.services.multilevel_bom_orders import read_order_bom_source_contract
     from app.services.multilevel_bom_plan import BomPlanError
-    from app.services.finished_stock_identity import compiled_product_bases, matches_stock_identity
+    from app.services.finished_stock_identity import compiled_product_bases, matches_lot_stock_identity
     snapshot=db.get(SalesOrderItemBomComponent,snapshot_id)
     if snapshot is None:
         raise CompositeBomWorkflowError('送货组件来源快照已失效')
@@ -1166,7 +1166,7 @@ def _validate_graph_component_stock(db, *, reservation, snapshot_id, lot):
             or reservation.order_item_id!=snapshot.sales_order_item_id
             or (not shared and (detail.product_id!=snapshot.component_product_id
             or (detail.owner_customer_id!=compiled.graph.customer_id and not detail.is_general)
-            or not matches_stock_identity(detail.physical_basis_json,expected)))):
+            or not matches_lot_stock_identity(lot,expected)))):
         raise CompositeBomWorkflowError('所选送货批次与冻结BOM实物身份不一致')
 
 

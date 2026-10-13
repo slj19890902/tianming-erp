@@ -31,7 +31,9 @@ def _product_basis(product, source=None):
     values = {key: getattr(product, key) for key in FIELDS}
     values["layer_count"] = material.layer_count if material else product.layer_count
     source = source or ("purchased" if product.supply_mode == "external_purchase" else "manufactured")
-    die_cut = source == "manufactured" and product.box_category == "die_cut"
+    from app.services.sheet_cutting_settings import component_settings
+    setting = component_settings(product.sheet_cutting_settings) if source == "manufactured" else None
+    die_cut = source == "manufactured" and (setting.is_die_cut if setting else product.box_category == "die_cut")
     values.update(mold_tool_id=product.mold_tool_id if die_cut else None,
                   die_cut_path=product.die_cut_path if die_cut else None)
     return _document(product.id, product.unit, product_dimension_specification(product),
@@ -120,7 +122,69 @@ def matching_component_basis(db, snapshot, lot):
     # require evidence captured on inbound; an unknown old lot is not a match.
     if expected is None:
         return True
-    return lot.finished_detail.physical_basis_json == expected
+    return matches_component_stock_identity(lot, expected)
+
+
+def matches_lot_stock_identity(lot, expected):
+    if matches_stock_identity(lot.finished_detail.physical_basis_json, expected):
+        return True
+    from app.services.legacy_bom_mold_confirmation import confirmed_match
+    return confirmed_match(lot, expected)
+
+
+def matches_component_stock_identity(lot, expected):
+    """Component reservations are physical 1:1 counts, with no ratio conversion."""
+    actual = lot.finished_detail.physical_basis_json
+    if not matches_lot_stock_identity(lot, expected):
+        return False
+    if expected is None:
+        return True
+    try:
+        value, wanted = json.loads(actual), json.loads(expected)
+        if "quantity_basis" not in value:
+            return True
+        from app.services.delivery_quantities import require_physical_stock
+        require_physical_stock(lot, dict(customer_basis=1, physical_basis=1,
+            customer_id=lot.finished_detail.owner_customer_id,
+            product_id=wanted['product_id'], physical_unit=wanted['unit']), require_marker=True)
+        return True
+    except (ValueError, TypeError, AttributeError, KeyError):
+        return False
+
+
+def stock_identity_error(lot, expected):
+    """Describe captured differences without substituting current master facts."""
+    detail = lot.finished_detail
+    reference = f"批次 {lot.lot_number}（存货编码 {detail.inventory_code_snapshot or detail.product_id}）"
+    actual = detail.physical_basis_json
+    if not actual:
+        return f"{reference}未冻结规格工艺依据；请在批次实物身份确认中核对，不要重复盘点入库"
+    try:
+        value, wanted = json.loads(actual), json.loads(expected)
+        if not isinstance(value, dict) or not isinstance(wanted, dict):
+            raise ValueError("invalid identity document")
+    except (ValueError, TypeError):
+        return f"{reference}冻结依据格式无效；请管理员核对原入库记录，当前批次不能抵扣"
+    labels = dict(product_id="产品身份", unit="单位", spec="规格", material="材质", flute="楞型",
+        assembly="组装关系", box_category="箱型分类", box_style="箱式", production_process="工艺",
+        production_notes="生产备注", layer_count="层数", splice_mode="接片方式", pieces_per_box="每箱片数",
+        mold_tool_id="模具", die_cut_path="模切路径", crease_type="压线类型", flap_mm="封口尺寸")
+    labels.update(base_crease_type="底片压线类型", crease_left_mm="左压线", crease_middle_mm="中压线",
+        crease_right_mm="右压线", base_crease_left_mm="底片左压线", base_crease_middle_mm="底片中压线",
+        base_crease_right_mm="底片右压线", schema="冻结版本")
+    has_quantity_marker = "quantity_basis" in value
+    value.pop("quantity_basis", None)
+    fields = [key for key in sorted(set(value) | set(wanted)) if value.get(key) != wanted.get(key)]
+    def text(val):
+        if val is None or val == "":
+            return "未填写"
+        if isinstance(val, (list, dict)):
+            return "已冻结关系" if val else "无关系"
+        return str(val)[:80]
+    differences = "；".join(f"{labels.get(key, key)}：库存 {text(value.get(key))} / 订单 {text(wanted.get(key))}"
+        for key in fields[:8])
+    reason = differences or ("实物数量单位资料未核实，组件库存必须按相同实物单位计数" if has_quantity_marker else "冻结字段结构不同")
+    return f"{reference}已有冻结依据，但与订单不匹配（{reason}）；请核对原批次与订单规格工艺，勿重复入库或覆盖旧依据"
 
 
 def identity_preview(db, lot_id):

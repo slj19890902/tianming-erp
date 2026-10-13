@@ -14226,10 +14226,10 @@ def create_twin_layout_rack(
                     db,
                     request=request,
                     user=user,
-                    action="TWIN_RACK_CREATE",
+                    action=("TWIN_MOLD_RACK_RESTORE" if mutation.value.get("restored_from_retired") else "TWIN_RACK_CREATE"),
                     entity_type="twin_rack_layout",
                     entity_id=str(mutation.value.get("id") or ""),
-                    description="二维库位布局新增货架",
+                    description=("重新启用已删除的模具货架，保留原格身份及归档历史" if mutation.value.get("restored_from_retired") else "二维库位布局新增货架"),
                     details={
                         "floor_code": floor_code,
                         "rack": mutation.value,

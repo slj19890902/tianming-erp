@@ -868,6 +868,20 @@ def rebase_warehouse_twin_advanced_draft_after_no_go_removal(
         return True
 
 
+def _consume_restored_rack_tombstone(floor: dict[str, Any], rack: dict[str, Any]) -> None:
+    if not rack.get("restored_from_retired"):
+        return
+    retired = [r for r in floor.get("retired_racks") or [] if str(r.get("id") or "") == str(rack.get("id") or "")]
+    if not retired:
+        return
+    archived = deepcopy(retired[0])
+    archived.pop("restoration_history", None)
+    history = rack.get("restoration_history") or []
+    if len(retired) != 1 or not history or history[-1] != archived:
+        raise WarehouseTwinLayoutEditConflictError("原货架归档内容已变化，请重新核对后再应用")
+    floor["retired_racks"] = [r for r in floor.get("retired_racks") or [] if r is not retired[0]]
+
+
 def begin_warehouse_twin_one_step_rack_publish(
     floor_code: str,
     rack_id: str,
@@ -926,6 +940,7 @@ def begin_warehouse_twin_one_step_rack_publish(
         else:
             isolated_racks[index] = deepcopy(draft_rack)
         isolated_floor["racks"] = isolated_racks
+        _consume_restored_rack_tombstone(isolated_floor, draft_rack)
         isolated_floor["layout_edited_at"] = _utc_iso()
         isolated_floor["revision"] = _floor_revision(isolated_floor)
         isolated["generated_at"] = isolated_floor["layout_edited_at"]
@@ -2149,7 +2164,8 @@ def _feature_area_code(feature: dict[str, Any]) -> str:
 
 def _next_rack_code(floor: dict[str, Any], area_code: str) -> str:
     prefix = f"RACK-{floor.get('floor_code')}-{area_code}-EDIT-"
-    used = {str(item.get("rack_code") or "") for item in floor.get("racks") or []}
+    used = {str(item.get("rack_code") or "") for item in
+            [*(floor.get("racks") or []), *(floor.get("retired_racks") or [])]}
     sequence = 1
     while f"{prefix}{sequence:03d}" in used:
         sequence += 1
@@ -2337,16 +2353,54 @@ def create_warehouse_twin_rack(
                 raise WarehouseTwinLayoutEditError("新增模具架号须为1至8个英文字母")
             if "mold" not in (zone.get("allowed_inventory_types") or []) or len(zone.get("allowed_inventory_types") or []) != 1:
                 raise WarehouseTwinLayoutEditError("模具架只能加入专用模具区域")
-            if any(str(r.get("mold_rack_code") or "").upper() == code for r in [*(floor.get("racks") or []),*(floor.get("retired_racks") or [])]):
-                raise WarehouseTwinLayoutEditConflictError("模具架号已存在或已归档")
+            if any(str(r.get("mold_rack_code") or "").strip().upper() == code for r in floor.get("racks") or []):
+                raise WarehouseTwinLayoutEditConflictError("模具架号已存在，请选择原货架修改，无需重复新增")
+            retired = [r for r in floor.get("retired_racks") or []
+                       if str(r.get("mold_rack_code") or "").strip().upper() == code]
+            previous = None
+            if retired:
+                if len(retired) != 1:
+                    raise WarehouseTwinLayoutEditConflictError("该架号有多个归档身份，请先核对历史货架")
+                previous = retired[0]
+                identity = str(previous.get("id") or "").strip()
+                if (not identity or not str(previous.get("rack_code") or "").strip() or any(str(r.get("id") or "") == identity or
+                        str(r.get("rack_code") or "") == str(previous.get("rack_code") or "")
+                        for r in floor.get("racks") or [])
+                        or sum(str(r.get("id") or "") == identity for r in floor.get("retired_racks") or []) != 1):
+                    raise WarehouseTwinLayoutEditConflictError("归档货架身份或内部编号冲突，请先核对原架")
+                if previous.get("is_locked"):
+                    raise WarehouseTwinLayoutEditConflictError("归档货架仍被锁定，请先核对原架")
+                if "mold_cells" in normalized_values:
+                    raise WarehouseTwinLayoutEditError("重新启用模具架沿用原格身份，不能指定或替换旧身份")
+                try:
+                    previous_version = int(previous.get("version"))
+                    if previous_version <= 0:
+                        raise ValueError("non-positive")
+                except (TypeError, ValueError) as error:
+                    raise WarehouseTwinLayoutEditConflictError("归档货架版本无效，请先核对原架") from error
+                archived = deepcopy(previous)
+                history = archived.pop("restoration_history", [])
+                if not isinstance(history, list):
+                    raise WarehouseTwinLayoutEditConflictError("归档货架恢复历史格式无效，请核对原架")
+                rack = {**deepcopy(previous), **rack, "id":identity,
+                        "rack_code":previous["rack_code"],
+                        "version":previous_version + 1,
+                        "restored_from_retired":True, "restored_at":_utc_iso(),
+                        "restoration_history":[*history, archived]}
+                for field in ("retired_at", "retired_reason", "mold_cells"):
+                    rack.pop(field, None)
+                if "level_cell_counts" not in normalized_values:
+                    rack.pop("level_cell_counts", None)
             try:
-                reconcile_mold_cells(rack)
+                reconcile_mold_cells(rack, previous)
             except ValueError as error:
                 raise WarehouseTwinLayoutEditError(str(error)) from error
+            if previous is not None:
+                floor["retired_racks"] = [r for r in floor.get("retired_racks") or [] if r is not previous]
         floor.setdefault("racks", []).append(rack)
         return rack
 
-    return _apply_mutation(
+    mutation = _apply_mutation(
         floor_code,
         expected_revision=expected_revision,
         operation_key=operation_key,
@@ -2354,6 +2408,13 @@ def create_warehouse_twin_rack(
         mutate=mutate,
         path=path,
     )
+    if not mutation.applied:
+        requested = {**normalized_values, "area_feature_id":area_feature_id}
+        if requested.get("mold_rack_code"):
+            requested["mold_rack_code"] = str(requested["mold_rack_code"]).strip().upper()
+        if any(mutation.value.get(key) != value for key,value in requested.items()):
+            raise WarehouseTwinLayoutEditConflictError("同一新增操作键不能用于不同货架内容")
+    return mutation
 
 
 def number_warehouse_twin_area_racks(

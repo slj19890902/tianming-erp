@@ -254,9 +254,27 @@ def require_factory_service():
     from desktop_assistant import mac_system_service as system
     context=keychain.load_context()
     system.check_start()
-    if boot.canonical(system.management_service_state()) != boot.canonical(
-            {'registered':True,'enabled':True,'scheduled_backups':True}):
+    service = system.management_service_state()
+    if (set(service) != {'registered','enabled','scheduled_backups'}
+            or service['registered'] is not True or service['enabled'] is not True
+            or type(service['scheduled_backups']) is not bool):
         raise ValueError('正式服务需要已注册启用的系统监护与备份协议')
+    if service['scheduled_backups'] is False:
+        # A root-authorized backup pause is independent of ERP availability.
+        # Missing, malformed or foreign pause records still fail closed; the
+        # installed monitor must retain the signed nightly backup protocol.
+        pause_path = system.BASE/'automatic-backup-paused.json'
+        try:
+            pause_raw = system.publication.read_record(pause_path)
+        except OSError:
+            raise ValueError('正式服务缺少已批准的自动备份暂停记录') from None
+        pause = boot.decode(pause_raw)
+        if pause.get('paused') is not True or pause != {'type':'tianming.automatic-backup-pause.v1',
+                     'context_sha256':boot.digest(system.publication.read_record(keychain.CONTEXT)),
+                     'paused':True}:
+            raise ValueError('正式服务备份暂停记录不属于当前安装')
+        control = boot.decode(system.publication.read_record(system.CONTROL))
+        system.require_management(system._program_manifest(system.metadata(control['package_sha256'])))
     _authenticate_current_mac_start(context)
     system.verify_keychain(context)
 

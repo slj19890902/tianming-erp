@@ -9497,6 +9497,13 @@
               <div v-if="deliveryForm.editingId" class="status blue" style="margin-bottom:10px">
                 {{ deliveryForm.editing_status==='dispatched' ? '已发货待回单：保存后仍保持已发货，并需补打最新版送货单。' : '草稿已保存。可推送手机拿货，或直接发货并打印。' }}
               </div>
+              <div v-if="deliveryDraftRecoveryState.checking || deliveryDraftRecoveryState.error" class="notice warning" data-delivery-draft-recovery role="status">
+                <div>{{ deliveryDraftRecoveryState.checking ? '正在核对已保存的原送货单…' : deliveryDraftRecoveryState.error }}</div>
+                <div v-if="deliveryDraftRecoveryState.error" class="toolbar-group" style="margin-top:8px">
+                  <button class="btn primary" type="button" :disabled="deliveryDraftRecoveryState.checking || deliverySaveState.saving || deliveryDispatchIsBusy()" @click="dispatchCurrentDeliveryDraft">重新核对并继续</button>
+                  <button class="btn" type="button" :disabled="deliveryDraftRecoveryState.checking || deliverySaveState.saving || deliveryDispatchIsBusy()" @click="viewSavedDeliveryDraft">查看已保存原单</button>
+                </div>
+              </div>
               <div v-if="deliveryForm.customer_id" class="panel delivery-unified-picker">
                 <div class="toolbar delivery-batch-picker-toolbar">
                   <strong>待送货物</strong>
@@ -10847,7 +10854,7 @@
             // v0.19.2-B 楞型加价规则
             fluteRules: [], showFluteRuleModal: false, fluteRuleLoading: false, fluteRuleError: "", fluteRuleAction:{action:"",ruleId:null},
             fluteRuleForm: { id: null, supplier_name: "", layer_count: 3, flute_type: "A", price_delta: "0", effective_date: "", remark: "", is_active: true },
-            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryCustomerSources:{orders:true,inventory:false}, deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryInlineEdit:null, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryDetailedSearchVisible:false, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliveryDispatchRecords:[], deliveryDispatchStorageError:"", deliveryDispatchNotice:null, deliveryDispatchBusy:false, deliveryDispatchBusyActor:null, deliveryDispatchBusyAuth:null, deliveryDispatchEpoch:0, deliveryDispatchNotRecorded:{}, deliveryDispatchPreview:null, deliveryLabelOpenState:{busy:false,deliveryId:null}, deliveryLabelRecoveryUrl:"", deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, deliveryReminderState:{loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
+            deliveries: [], pendingDeliveryItems: [], deliveryCustomerCandidates: [], deliveryCustomerSources:{orders:true,inventory:false}, deliveryPickTasks: [], deliveryPickers: [], expandedDeliveryRows: {}, deliveryDetailState: {}, deliveryInlineEdit:null, deliveryDetailRequestSequence:0, deliveryListState: { initialLoading:false, refreshing:false, error:"", loaded:false, request_token:0 }, deliveryDetailedSearchVisible:false, deliveryPendingState:{loading:false,error:"",request_token:0}, deliveryCandidateLoading:false, deliveryCandidateError:"", deliveryCandidateRequestSequence:0, deliveryBatchRequestSequence:0, unorderedFinishedRequestSequence:0, deliveryOperationState:{action:"",deliveryId:null,deliveryNumber:""}, deliveryDispatchRecords:[], deliveryDispatchStorageError:"", deliveryDispatchNotice:null, deliveryDispatchBusy:false, deliveryDispatchBusyActor:null, deliveryDispatchBusyAuth:null, deliveryDispatchEpoch:0, deliveryDispatchNotRecorded:{}, deliveryDispatchPreview:null, deliveryLabelOpenState:{busy:false,deliveryId:null}, deliveryLabelRecoveryUrl:"", deliveryDraftRecoveryState:{checking:false,error:""}, deliverySaveState:{saving:false,committed:false,outcomeUncertain:false,result:null}, deliveryReminderState:{loading:false,error:"",items:[],total:0,page:1,pageSize:100,customerId:null,visible:false,acknowledgedCustomerId:null,actionId:null,mutationAttempt:null}, receiptOperationState:{action:"",deliveryId:null,receiptId:null,deliveryNumber:""}, receiptReminderState:{loading:false,error:"",items:[],total:0,page:1,historyMode:false,editorVisible:false,saving:false,actionId:null,productsLoading:false,productsError:"",products:[],productQuery:"",bundleAttempt:null,mutationAttempt:null}, receiptReminderEditor:blankReceiptReminderEditor(), statements: [], invoices: [], moldTools: [], printingPlates: [],
             invoiceTasks: [], invoiceHistoryRecords: [], invoiceSearchVisible:false, invoiceTaskFilters:{customer_id:"",statement_month:"",customer_keyword:"",month_from:"",month_to:"",date_basis:"statement",status:""}, invoiceTaskState:{loading:false,error:""},
             partnerInvoiceMerge:{statementId:null,requestToken:0,loading:false,saving:false,preview:null,key:null},
             invoiceVoidForm:{}, invoiceVoidState:{loading:false,saving:false,error:"",token:0}, statementInvalidateForm:{},
@@ -38728,6 +38735,7 @@
             return this.deliveryFormIsDirty() ? "保存修改" : "打印";
           },
           async deliveryPrimaryAction() {
+            if (this.deliveryDraftRecoveryState?.checking) return false;
             if (this.hasPendingUnorderedFinishedSelections()) {
               const imported = this.importUnorderedFinishedCandidates({silent:true});
               if (!imported) return false;
@@ -38772,13 +38780,81 @@
             this.openDeliveryPickPrint(row);
             return true;
           },
+          matchSavedDeliveryDraft(form, data) {
+            const fail = error => ({error, bindings:[]});
+            const text = value => String(value ?? "").trim();
+            const positiveId = value => Number.isSafeInteger(Number(value)) && Number(value) > 0;
+            if (!data || Number(data.id) !== Number(form.editingId) || Number(data.customer_id) !== Number(form.customer_id)
+                || !positiveId(data.version) || !Array.isArray(data.items)) return fail("原送货单详情不完整或客户身份不符，请重新核对原单");
+            if (data.status !== "pending") return fail(data.status === "dispatched" ? "原单已经发货，请查看原单并补打；无需再次发货" : "原单当前不能发货，请查看原单状态");
+            const lines = (form.lines || []).filter(line => this.deliveryLineHasInput(line));
+            if (text(form.delivery_date) !== text(data.delivery_date) || text(form.vehicle_number) !== text(data.vehicle_number)
+                || !!form.historical_backfill !== !!data.is_historical_backfill
+                || this.deliverySourceModeFromLines(lines) !== data.source_mode) return fail("原单的日期、车辆、补录标记或送货来源已变化，请查看原单核对");
+            if (!lines.length || lines.length !== data.items.length) return fail("原单明细行数与当前页面不一致，请查看原单核对；当前输入已保留");
+            const key = line => (line.source_type || "order") === "unordered_finished"
+              ? `unordered_finished:${Number(line.product_id)}` : `order:${Number(line.order_item_id)}`;
+            const originals = new Map(), used = new Set(), bindings = [];
+            for (const item of data.items) {
+              if (!["order","unordered_finished"].includes(item.source_type || "order")
+                  || !positiveId((item.source_type || "order") === "order" ? item.order_item_id : item.product_id)
+                  || !positiveId(item.id) || originals.has(key(item)) || used.has(Number(item.id))) return fail("原单明细身份重复或不完整，请重新读取原单");
+              originals.set(key(item), item); used.add(Number(item.id));
+            }
+            used.clear();
+            const allocations = rows => JSON.stringify((rows || []).map(row => [Number(row.inventory_lot_id), Number(row.quantity)]).sort((a,b) => a[0]-b[0]));
+            for (const [index,line] of lines.entries()) {
+              const item = originals.get(key(line));
+              if (!item || used.has(Number(item.id))) return fail(`第 ${index+1} 行的订单或库存产品与原单不一致，请查看原单核对`);
+              const quantity = Number(line.delivered_quantity);
+              if (!positiveId(quantity) || quantity !== Number(item.delivered_quantity)) return fail(`第 ${index+1} 行数量与原单不一致（页面 ${line.delivered_quantity ?? "未填"}，原单 ${item.delivered_quantity}）；当前输入已保留`);
+              if ((line.customer_po != null && text(line.customer_po) !== text(item.customer_po)) || text(line.remarks) !== text(item.remarks)) return fail(`第 ${index+1} 行客户单号或备注与原单不一致，请查看原单核对`);
+              if ((line.source_type || "order") === "unordered_finished" && (
+                  (Number(line.unit_price) > 0 && Number(line.unit_price) !== Number(item.unit_price))
+                  || allocations(line.allocations) !== allocations(item.allocations))) return fail(`第 ${index+1} 行库存批次分配或单价与原单不一致，请查看原单核对`);
+              used.add(Number(item.id)); bindings.push({line, id:Number(item.id)});
+            }
+            return {error:"", bindings};
+          },
+          async reconcileCurrentDeliveryDraft() {
+            if (this.deliveryDraftRecoveryState?.checking || this.deliverySaveState?.saving || this.deliveryDispatchIsBusy?.()) return false;
+            const form = this.deliveryForm, modal = this.modal, actor = Number(this.user?.id), auth = this.authGeneration, page = this.activePage;
+            const signature = this.deliveryFormSignature(), id = Number(form.editingId);
+            if (!Number.isSafeInteger(id) || id <= 0) return false;
+            const current = () => this.deliveryForm === form && this.modal === modal && Number(this.user?.id) === actor && this.authGeneration === auth && this.activePage === page;
+            const state = this.deliveryDraftRecoveryState = {checking:true,error:""};
+            try {
+              const {data} = await this.deliveryDispatchRequest("get", `/api/deliveries/${id}`, undefined, {current});
+              if (!current()) return false;
+              if (this.deliveryFormSignature() !== signature) throw new Error("核对期间内容已修改，请先保存修改；当前输入已保留");
+              const result = this.matchSavedDeliveryDraft(form,data);
+              if (result.error) throw new Error(result.error);
+              for (const binding of result.bindings) binding.line.delivery_item_id = binding.id;
+              form.version = Number(data.version); form.editing_status = data.status;
+              form.delivery_number = data.delivery_number; form.pick_task = data.pick_task || null;
+              form.saved_signature = this.deliveryFormSignature();
+              return data;
+            } catch (error) {
+              if (current()) { state.error = `核对原单未完成：${this.errorMessage(error)}`; this.showToast(state.error,true); }
+              return false;
+            } finally { if (this.deliveryDraftRecoveryState === state) state.checking = false; }
+          },
+          async viewSavedDeliveryDraft() {
+            if (this.deliveryDraftRecoveryState?.checking || this.deliverySaveState?.saving || this.deliveryDispatchIsBusy?.()) return false;
+            const form = this.deliveryForm, modal = this.modal, actor = Number(this.user?.id), auth = this.authGeneration;
+            if (this.deliveryFormIsDirty() && !confirm("当前修改尚未保存，确认离开录入窗口并查看已保存原单？需要保留的修改请先保存，请勿另建重复送货单。")) return false;
+            const loaded = await this.viewDeliveryDispatchOriginal({actor,deliveryId:Number(form.editingId)});
+            if (loaded && this.deliveryForm === form && this.modal === modal && Number(this.user?.id) === actor && this.authGeneration === auth) this.modal = null;
+            return loaded;
+          },
           async dispatchCurrentDeliveryDraft() {
+            if (this.deliveryDraftRecoveryState?.checking) return false;
             if (!this.deliveryForm.editingId || this.deliveryFormIsDirty()) {
               this.showToast("内容已修改，请先保存后再发货打印", true);
               return false;
             }
-            const row = this.currentDeliveryDraftRow();
-            row.pick_task = this.deliveryForm.pick_task || row.pick_task || null;
+            const row = await this.reconcileCurrentDeliveryDraft();
+            if (!row) return false;
             const dispatched = await this.dispatchDelivery(row, {confirmAction:false,expectedForm:this.deliveryForm});
             if (dispatched) this.modal = null;
             return dispatched;
@@ -39133,6 +39209,7 @@
             if (!Number.isInteger(Number(preferredCustomerId))) preferredCustomerId = null;
             this.resetDeliveryReminderState();
             this.deliverySaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+            this.deliveryDraftRecoveryState = {checking:false,error:""};
             this.deliveryCustomerSources = {orders:true, inventory:false};
             this.deliveryForm = { editingId:null, editing_status:"pending", delivery_number:"", source_mode:"order", source_tab:"order", customer_id:null, delivery_date:today(), historical_backfill:false, version:1, idempotency_key:null, vehicle_number:"", lines:[], saved_signature:"", pick_task:null };
             this.deliveryBatchPicker = { visible:false, loading:false, keyword:"", items:[], selected:{}, page:1, page_size:10, total:0, total_pages:1, request_token:0, message:"", error:false };
@@ -40947,6 +41024,7 @@
             return current.status === "dispatched" ? "当前仍为已发货" : "请查看原单当前状态";
           },
           async dispatchDelivery(row, options = {}) {
+            const expectedFormSignature = options.expectedForm && this.deliveryFormSignature?.();
             if (this.deliveryInlineEdit || this.deliveryOperationState.action || this.receiptOperationState?.action || this.deliveryDispatchIsBusy()) return false;
             const id = Number(row?.id), actor = Number(this.user?.id);
             if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(actor) || actor <= 0) { this.showToast("请刷新并核对已保存的原送货单",true); return false; }
@@ -40964,14 +41042,21 @@
               const form = options.expectedForm;
               if (form) {
                 const lines = (form.lines || []).filter(line => this.deliveryLineHasInput(line)), ids = new Set(lines.map(line => Number(line.delivery_item_id)));
-                if (this.deliveryForm !== form || Number(form.customer_id) !== packet.snapshot.delivery.customer_id || Number(form.version) !== packet.snapshot.delivery.version || lines.length !== packet.snapshot.items.length || ids.size !== lines.length || lines.some(line => !Number.isSafeInteger(Number(line.delivery_item_id)) || !packet.snapshot.items.some(item => item.delivery_item_id === Number(line.delivery_item_id) && item.customer_quantity === Number(line.delivered_quantity)))) {
+                if (this.deliveryForm !== form || (expectedFormSignature && this.deliveryFormSignature?.() !== expectedFormSignature) || Number(form.customer_id) !== packet.snapshot.delivery.customer_id || Number(form.version) !== packet.snapshot.delivery.version || lines.length !== packet.snapshot.items.length || ids.size !== lines.length || lines.some(line => !Number.isSafeInteger(Number(line.delivery_item_id)) || !packet.snapshot.items.some(item => item.delivery_item_id === Number(line.delivery_item_id) && item.customer_quantity === Number(line.delivered_quantity)))) {
                   throw new Error("原草稿保存尚未完整核对，请刷新并打开原送货单后再发货");
                 }
               }
+              if (options.expectedForm) this.deliveryDraftRecoveryState = {checking:false,error:""};
               this.deliveryDispatchPreview = {packet, display:packet.display, body:null};
               this.modal = {type:"deliveryDispatch",title:"核对发货"};
               return false;
-            } catch (error) { if (context.current()) this.showToast(this.errorMessage(error),true); return false; }
+            } catch (error) {
+              if (context.current()) {
+                if (options.expectedForm && this.deliveryForm === options.expectedForm) this.deliveryDraftRecoveryState = {checking:false,error:`发货前原单核对未完成：${this.errorMessage(error)}`};
+                this.showToast(this.errorMessage(error),true);
+              }
+              return false;
+            }
             finally { if (Number(this.user?.id) === context.actor && this.authGeneration === context.auth && this.deliveryDispatchEpoch === context.epoch) this.deliveryDispatchBusy = false; }
           },
           async sendDeliveryDispatchPreview() {
@@ -41204,6 +41289,7 @@
               }
             }
             this.deliverySaveState = {saving:false,committed:false,outcomeUncertain:false,result:null};
+            this.deliveryDraftRecoveryState = {checking:false,error:""};
             const sourceMode = row.source_mode || this.deliverySourceModeFromLines(row.items || []);
             const hasOrderLines = (row.items || []).some(item => item.source_type !== "unordered_finished");
             if (hasOrderLines) {

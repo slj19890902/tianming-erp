@@ -325,7 +325,8 @@ def test_completed_checkpoint_enters_prepare_without_update_records(staged,monke
         assert c.decode(checkpoint_plan_bytes)['code_manifest_sha256'] != '9'*64
 
 
-def test_full_mounted_audit_preserves_restore_credentials_and_rejects_live_changes(checkpoint_target,monkeypatch):
+@pytest.mark.parametrize('uploaded_local', [False, True])
+def test_full_mounted_audit_preserves_restore_credentials_and_rejects_live_changes(checkpoint_target,monkeypatch,uploaded_local):
     """Real original restore, source signatures, credentials and full shared audit.
 
     NFS observation and root approval are explicit adapters; no real NAS proof is
@@ -341,9 +342,13 @@ def test_full_mounted_audit_preserves_restore_credentials_and_rejects_live_chang
             verified_at=datetime.now(timezone.utc).isoformat(),mount=dict(kernel=kernel),
             local_identity=m.fingerprint(cipher.stat()),file_identity=m.fingerprint(cipher.stat())),
         control_sha='d'*64,raw={})
+    if uploaded_local: bound['uploaded_local_audit']={'type':m.UPLOADED_TYPE}
     monkeypatch.setattr(m,'load',lambda:deepcopy(bound))
     monkeypatch.setattr(m,'checkpoint_result',lambda attempt:deepcopy(p))
-    monkeypatch.setattr(m.mounts,'fd_identity',lambda fd:deepcopy(kernel))
+    def fd_identity(fd):
+        assert not uploaded_local, 'explicit confirmed-upload audit must not claim a live NAS descriptor'
+        return deepcopy(kernel)
+    monkeypatch.setattr(m.mounts,'fd_identity',fd_identity)
     transport=t.x.base/'published'/t.roles['transport']/'migration'
     monkeypatch.setattr(audit,'__file__',str(transport/audit.MODULE))
     import sys
@@ -392,3 +397,59 @@ def test_checkpoint_worker_uses_original_lock_and_keeps_state(chain,checkpoint_t
     c.validate_reply(reply,request,p,c.raw_digest(raw))
     assert (root_path/'state.json').read_bytes()==before and reply['manual_stop'] is True
     assert reply['result']['checkpoint']['release_sha256']==t.roles['execution']
+
+
+def install_uploaded_local_mode(s,monkeypatch):
+    zspace_proxy(s)
+    b=m.approve(s.nas,'9'*64)
+    contract={**b['contract'],'checkpoint_attempt_id':'1'*32,'checkpoint_result_sha256':'2'*64}
+    monkeypatch.setattr(m,'checkpoint_result_hash',lambda attempt:'2'*64)
+    receipt={**b['receipt'],'contract_sha256':m.c.digest(contract)}
+    control={**b['control'],'contract_sha256':m.c.digest(contract),'receipt_sha256':m.c.digest(receipt)}
+    for path,v in [(m.CONTRACT,contract),(m.RECEIPT,receipt),(m.CONTROL,control)]:path.write_bytes(m.c.canonical(v))
+    stamp=datetime.now(timezone.utc).isoformat()
+    report=dict(backup_sha256=receipt['sha256'],backend_transfer=dict(name=s.nas.relative_to(m.MOUNT).as_posix(),
+        dstFs='uzmount:',error='',bytes=receipt['size'],size=receipt['size'],completed_at=stamp),
+        disk_cache=dict(uploadsQueued=0,uploadsInProgress=0,erroredFiles=0),checked_at=stamp,
+        physical_backend_cold_hash_verified=False)
+    backend=s.base/'mounted-backend-confirmation.json';backend.write_bytes(m.c.canonical(report))
+    value=dict(type=m.UPLOADED_TYPE,context_sha256=control['context_sha256'],publisher_sha256=control['publisher_sha256'],
+        audit_package_sha256=control['package_sha256'],contract_sha256=control['contract_sha256'],receipt_sha256=control['receipt_sha256'],
+        backup_sha256=receipt['sha256'],size=receipt['size'],local_path=contract['local_path'],backend_confirmation_sha256=sha(backend))
+    side=s.base/'mounted-upload-local-audit.json';side.write_bytes(m.c.canonical(value))
+    monkeypatch.setattr(root.system,'_program_manifest',lambda meta:dict(runtime_capabilities={m.UPLOADED_CAPABILITY:1}))
+    return side,value,backend,report
+
+
+def test_confirmed_upload_uses_only_authenticated_local_cipher_with_no_nas_io(mounted_scene,monkeypatch):
+    s=mounted_scene;install_uploaded_local_mode(s,monkeypatch);b=m.load()
+    # The backend may be unavailable after a complete archival upload. This
+    # explicit audit keeps the original mounted readback/upload evidence intact.
+    s.nas.rename(s.nas.with_suffix('.retained'))
+    monkeypatch.setattr(m,'observe',lambda:pytest.fail('new NAS observation forbidden in explicit local audit'))
+    p=dict(transport_package_sha256='9'*64,transport_control_sha256=b['control_sha'],
+        transport_contract_sha256=b['control']['contract_sha256'],backup_receipt_sha256=b['control']['receipt_sha256'])
+    with m.broker(p) as fd:assert os.pread(fd,3,0)==b'enc'
+    s.source.write_bytes(b'x'*s.source.stat().st_size)
+    with pytest.raises(ValueError):
+        with m.broker(p):pytest.fail('changed local ciphertext accepted')
+
+
+@pytest.mark.parametrize('fault',['package','context','bytes','size-bool','queued','destination','name','error','cold-claim','future','proof-hash'])
+def test_bad_confirmed_upload_never_falls_back_to_another_backend(mounted_scene,monkeypatch,fault):
+    s=mounted_scene;side,value,backend,report=install_uploaded_local_mode(s,monkeypatch)
+    if fault=='package':value['audit_package_sha256']='8'*64
+    elif fault=='context':value['context_sha256']='a'*64
+    elif fault=='bytes':report['backend_transfer']['bytes']-=1
+    elif fault=='size-bool':report['backend_transfer']['size']=True
+    elif fault=='queued':report['disk_cache']['uploadsQueued']=1
+    elif fault=='destination':report['backend_transfer']['dstFs']=':local:'
+    elif fault=='name':report['backend_transfer']['name']='other/full.tmbackup'
+    elif fault=='error':report['backend_transfer']['error']='synthetic upload failed'
+    elif fault=='cold-claim':report['physical_backend_cold_hash_verified']=True
+    elif fault=='future':report['backend_transfer']['completed_at']='2099-10-13T00:00:00+00:00'
+    else:value['backend_confirmation_sha256']='0'*64
+    backend.write_bytes(m.c.canonical(report))
+    if fault!='proof-hash':value['backend_confirmation_sha256']=sha(backend)
+    side.write_bytes(m.c.canonical(value))
+    with pytest.raises(ValueError):m.load()

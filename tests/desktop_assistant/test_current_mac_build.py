@@ -17,6 +17,7 @@ def test_complete_current_mac_protocols_and_opt_in_broker(stream):
     value=build.current_mac_capabilities(sources(),stream_enabled=stream)
     extra = {'factory_owner_current_mac_v1':1} if 'desktop_assistant/mac_publisher_trust.py' in sources() else {}
     assert value==dict(current_mac_worker_v1=1,current_mac_audit_v3=1,current_mac_mounted_audit_v1=1,
+        confirmed_mounted_upload_local_audit_v1=1,
         factory_current_mac_execution_v3=1,**extra,**({'current_mac_worker_broker_v1':1} if stream else {}))
 
 @pytest.mark.parametrize('missing',[

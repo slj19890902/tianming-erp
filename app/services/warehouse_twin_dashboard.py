@@ -2060,10 +2060,18 @@ def build_inventory_code_search_results(
     intake_projections: dict[int, dict] | None = None,
 ) -> dict:
     from app.services.warehouse_product_quantities import product_search_identity
+    from sqlalchemy.orm import object_session
+    from app.services.inventory_product_sources import source_products
+    source_db = object_session(lots[0]) if lots else None
+    sources = source_products(source_db, [lot.id for lot in lots if lot.inventory_type == "semi_finished"]) if source_db else {}
     results = []
     floor_counts: dict[str, dict] = {}
     for row in lots:
         payload = _lot_payload(row, as_of, intake_projections=intake_projections)
+        origins = sources.get(row.id, [])
+        payload["source_products"] = origins
+        if origins and not payload.get("inventory_code"):
+            payload["inventory_code"] = " / ".join(dict.fromkeys(origin['code'] for origin in origins))
         location = row.location
         location_context = (
             (location_projection_contexts or {}).get(int(location.id), {})
@@ -2115,6 +2123,7 @@ def build_inventory_code_search_results(
                 else None
             ),
             "position_status": position_status,
+            "map_issue": None if position_status == "mapped" else "已登记实物位置，但当前地图关联未通过核验；请按文字库位核对",
             "map_position": map_position,
             "pallet_id": current_pallet.id if current_pallet is not None else None,
             "pallet_code": (
@@ -2161,7 +2170,7 @@ def build_inventory_code_search_results(
     }
 
 
-def inventory_search_matches(row: InventoryLot, keyword: str, as_of: date) -> bool:
+def inventory_search_matches(row: InventoryLot, keyword: str, as_of: date, *, source_products=()) -> bool:
     """Match only already-visible inventory facts; this never widens customer scope."""
     def normalized(value: object) -> str:
         return (
@@ -2195,6 +2204,10 @@ def inventory_search_matches(row: InventoryLot, keyword: str, as_of: date) -> bo
         str(value or "")
         for value in (
             payload.get("inventory_code"),
+            *(f"{source.get('code', '')} {source.get('name', '')} {source.get('customer_material_code', '')}" for source in source_products),
+            (f"{row.finished_detail.product.product_code} {row.finished_detail.product.customer_material_code or ''}"
+             if row.finished_detail and row.finished_detail.product and
+                row.finished_detail.product.customer_id == row.finished_detail.owner_customer_id else ''),
             payload.get("product_name"),
             payload.get("customer_name"),
             payload.get("customer_short_name"),

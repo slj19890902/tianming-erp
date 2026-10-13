@@ -62,25 +62,13 @@ def completed_stock_output_roots(db, product_ids):
 
 def source_lots(db, product):
     """An original receipt FK establishes provenance, not interchangeable usage."""
-    stock = select(Receipt.received_inventory_lot_id).join(StockItem,
-        StockItem.id == Receipt.stock_replenishment_item_id).join(StockOrder).where(
-        or_(StockItem.reference_product_id == product.id, StockItem.product_id == product.id),
-        StockItem.customer_id == product.customer_id, StockOrder.status != 'voided', Receipt.status == 'posted')
-    orders = select(Receipt.received_inventory_lot_id).join(OrderItem,
-        OrderItem.id == Receipt.order_item_id).join(Order).where(
-        OrderItem.product_id == product.id, Order.customer_id == product.customer_id,
-        Receipt.status == 'posted')
-    legacy = select(StockItem.inventory_lot_id).join(StockOrder).where(
-        or_(StockItem.reference_product_id == product.id, StockItem.product_id == product.id),
-        StockItem.customer_id == product.customer_id, StockOrder.status.notin_(('draft', 'voided')))
-    ids = set(db.scalars(stock)) | set(db.scalars(orders)) | set(db.scalars(legacy))
-    ids.update(lot_id for _, owner, lot_id in completed_stock_output_roots(db, [product.id])
-               if owner == product.customer_id)
-    if not ids - {None}:
-        return []
+    from app.services.inventory_product_sources import source_relation
+    relation = source_relation()
+    ids = select(relation.c.lot_id).where(relation.c.product_id == product.id,
+        relation.c.customer_id == product.customer_id)
     from app.api.mobile_erp import _lot_load_options
     return list(db.scalars(select(InventoryLot).join(SemiFinishedInventoryDetail).options(*_lot_load_options()).where(
-        InventoryLot.id.in_(source_lot_descendant_ids(ids - {None}, product.customer_id)),
+        InventoryLot.id.in_(ids),
         InventoryLot.status == 'active',
         InventoryLot.inventory_type == 'semi_finished', SemiFinishedInventoryDetail.owner_customer_id == product.customer_id,
         or_(InventoryLot.quantity_available > 0, InventoryLot.quantity_reserved > 0))))

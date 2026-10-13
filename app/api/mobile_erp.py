@@ -1004,7 +1004,6 @@ def _product_inventory_summaries(
             FinishedGoodsInventoryDetail.product_id.in_(product_ids),
             FinishedGoodsInventoryDetail.owner_customer_id == Product.customer_id,
             FinishedGoodsInventoryDetail.is_general.is_(False),
-            FinishedGoodsInventoryDetail.inventory_code_snapshot == Product.product_code,
             InventoryLot.inventory_type == "finished",
             InventoryLot.status == "active",
             or_(

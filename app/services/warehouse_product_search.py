@@ -19,8 +19,17 @@ def catalog_without_stock(db, *, keyword, visible_customer_ids, after_product_id
             FinishedGoodsInventoryDetail.owner_customer_id == Product.customer_id,
             InventoryLot.status.in_(("active", "frozen")),
             InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged > 0))
+    from app.models.warehouse_inventory import SemiFinishedLotAllowedProduct as Binding
+    from app.services.inventory_product_sources import source_relation
+    from sqlalchemy import or_
+    relation = source_relation()
+    related_semi = exists(select(InventoryLot.id).where(
+        InventoryLot.inventory_type == 'semi_finished', InventoryLot.status.in_(("active", "frozen")),
+        InventoryLot.quantity_available + InventoryLot.quantity_reserved + InventoryLot.quantity_damaged > 0,
+        or_(InventoryLot.id.in_(select(relation.c.lot_id).where(relation.c.product_id == Product.id).correlate(Product)),
+            InventoryLot.id.in_(select(Binding.inventory_lot_id).where(Binding.product_id == Product.id).correlate(Product)))))
     query = select(Product, Customer).join(Customer, Customer.id == Product.customer_id).where(
-        Product.deleted_at.is_(None), ~physical_stock)
+        Product.deleted_at.is_(None), ~physical_stock, ~related_semi)
     if visible_customer_ids is not None:
         query = query.where(Product.customer_id.in_(visible_customer_ids))
     cursor, matches = after_product_id or 0, []

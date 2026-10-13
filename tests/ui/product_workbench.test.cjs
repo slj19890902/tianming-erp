@@ -85,3 +85,10 @@ test('lifecycle distinguishes 2500 materials from 10000 theoretical outputs and 
  click(h,'[data-activity-page="2"]');await tick();assert.match(paths.at(-1),/activity_page=2/);assert.equal(h.instance.snapshot().tab,'activity');
  click(h,'[data-tab="inventory"]');assert.doesNotMatch(h.root.textContent,/理论待产 10,000/);h.instance.destroy();
 });
+
+test('search displays exact physical address and unmapped reason as escaped text',async()=>{
+ const row={...product,inventory_positions:[{inventory_type:'processed_component',actual:30,available:20,unit:'片',location_id:2153,location_label:'三楼·G货架·2层·2格',map_issue:'地图关联待核 <img src=x>'}]};
+ const h=harness(async()=>({items:[row],total:1,page:1,page_size:12,has_more:false}));await h.instance.search();
+ assert.match(h.root.textContent,/三楼·G货架·2层·2格/);assert.match(h.root.textContent,/实存 30 片 \/ 可用 20/);
+ assert.match(h.root.textContent,/地图关联待核 <img src=x>/);assert.equal(h.root.querySelector('img[src="x"]'),null);h.instance.destroy();
+});

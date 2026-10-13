@@ -18,7 +18,7 @@ from desktop_assistant import current_mac_dispatch as dispatch
 from desktop_assistant import current_mac_worker_contract as c
 from desktop_assistant import current_mac_cutover_contract as v3
 from desktop_assistant import current_mac_publication as gate
-from desktop_assistant import factory_network
+from desktop_assistant import factory_network, mounted_nas_proof as mounted
 from desktop_assistant import mac_smb_stream_runtime_contract as stream
 
 BASE = Path('/Library/TianmingERP')
@@ -28,7 +28,7 @@ CODE_FILES = root.CODE_FILES | frozenset({MODULE, 'desktop_assistant/current_mac
     'desktop_assistant/current_mac_worker_contract.py',
     'desktop_assistant/current_mac_cutover_contract.py',
     'desktop_assistant/current_mac_publication.py', 'desktop_assistant/current_mac_smb_broker.py',
-    'desktop_assistant/current_mac_plan_install.py'})
+    'desktop_assistant/current_mac_plan_install.py', mounted.MODULE, 'desktop_assistant/mac_mount.py'})
 ERROR = 'Current Mac root publication unconfirmed; preserve scene; no retry or start'
 
 
@@ -57,6 +57,7 @@ def verify_code():
             (v3, 'desktop_assistant/current_mac_cutover_contract.py'),
             (gate, 'desktop_assistant/current_mac_publication.py'),
             (factory_network, 'desktop_assistant/factory_network.py'),
+            (mounted, mounted.MODULE), (mounted.mounts, 'desktop_assistant/mac_mount.py'),
             (root.boot, 'desktop_assistant/mac_keychain_install.py'),
             (root.system, 'desktop_assistant/mac_system_service.py'),
             (root.publication, 'desktop_assistant/mac_release_publish.py'),
@@ -127,14 +128,17 @@ def activate(attempt_id, plan_sha256, *, factory_cutover_authorized=False,
             and c.canonical(body['preparation']) == c.canonical(prep))
         target_name = 'factory-target-' + request['request_id'] + '.json'
         network_name = 'factory-network-' + request['request_id'] + '.json'
+        mounted_plan=plan['type']==c.MOUNTED_PLAN
+        transport_control=mounted.CONTROL if mounted_plan else stream.CONTROL
+        transport_contract=mounted.CONTRACT if mounted_plan else stream.CONTRACT
         for artifact,expected in ((root.system.CONTROL,plan['system_control_sha256']),
                 (root.system.PLIST,plan['system_plist_sha256']),
-                (stream.CONTROL,plan['transport_control_sha256']),
-                (stream.CONTRACT,plan['transport_contract_sha256'])):
+                (transport_control,plan['transport_control_sha256']),
+                (transport_contract,plan['transport_contract_sha256'])):
             for parent in artifact.parents:root.boot.protected(parent,directory=True)
             item = stack.enter_context(root.Pin(artifact,mode=0o644))
             raw = item.read()
-            observed = stream.archive.digest(c.decode(raw)) if artifact == stream.CONTRACT else c.raw_digest(raw)
+            observed = c.raw_digest(c.canonical(c.decode(raw))) if artifact == transport_contract else c.raw_digest(raw)
             require(observed == expected);pins.append((item,raw))
         for name in ('factory-activation.json',gate.NAME,gate.FAILED,target_name,network_name):
             require(not os.path.lexists(BASE/name))

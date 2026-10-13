@@ -15,6 +15,7 @@ const methods=box.methods;
  // Execute the real UI methods: preserve one immutable request after a
  // lost response and suppress responses from a previous account or item.
  c.user={id:1};c.canWarehouseReserve=true;c.canAdmin=true;c.hasPermission=()=>true;
+ c.pageCacheUpdatedAt={orders:123};c.loadOrders=async()=>true;
  c.modal={type:'orderBomStockReview'};
  const state={itemId:1,actorId:1,authGeneration:1,rows:[],loading:false,busy:false,pending:{url:'/test-adopt',payload:{idempotency_key:'same-key',lots:[{lot_id:4,expected_version:1}]}},error:'',sequence:0};
  c.orderBomStockReview=state;const posted=[];

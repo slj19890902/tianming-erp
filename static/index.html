@@ -28420,9 +28420,15 @@
               const response=await axios.post(pending.url,pending.payload);
               if (!this.orderBomReviewIsCurrent(state)) return false;
               state.pending=null;state.identityPreview=null;
+              this.invalidatePageCache("orders");
               const refreshed=await this.loadOrderBomStockReview();
+              let ordersRefreshed=false;
               if (this.orderBomReviewIsCurrent(state)) {
-                if (refreshed) this.showToast(response?.data?.message || "库存已采用，采购按差额计算；加工、组套仍需确认");
+                try { ordersRefreshed=(await this.loadOrders())!==false; }
+                catch (_error) { /* The adoption is confirmed; only its readonly refresh failed. */ }
+              }
+              if (this.orderBomReviewIsCurrent(state)) {
+                if (refreshed && ordersRefreshed) this.showToast(response?.data?.message || "库存已采用，采购按差额计算；加工、组套仍需确认");
                 else state.error="库存操作已完成，读取刷新失败；请刷新核对，勿重复采用";
               }
               return true;

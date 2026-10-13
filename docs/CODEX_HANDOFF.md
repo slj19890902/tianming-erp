@@ -6235,3 +6235,5 @@ v501/33fcdc4f已技术发布，签名包e07157b4，保留v500仓库/撤销链；
 技术发布完成，签名源码326c1deb9a229a0003542da9ad09aee2eddfd984，包35a1552fe24e6eb76b51125122eb81cdbfdc245ad8ff089336af0cb5f8d2f6d0，head ep1010md，无迁移。包含未预警多选补库、录单编号预览20行误限制修复、历史导入恢复折叠；修边尺寸另卡未实施。冷备恢复/健康/NAS通过，正式人工验收待反馈，详见docs/release_reports/MANUAL_REPLENISHMENT_V623_20261010.md。
 
 - 2026-10-12 MAC-SERVER-HANDOFF-20261010：工厂Mac临时LAN入口 http://192.168.3.102:8000 已经8项只读检查及老板异机登录确认。老板确认10月10日后无新增业务，不重复数据同步；home门禁保留，192.168.3.80/正式激活/后台NAS验收未完成，旧机不得清空。见任务卡末节和NAS回执20261012-Mac工厂局域网登录验收完成.md。
+
+- 2026-10-13 INVENTORY-CLOSED-LOOP 候选：地图发布承接、普通订单冻结身份、逐子件草稿抵扣及搜索位置；候选 head eq1013oi（上游 ep1010md），新增 order_stock_identity_v1 reader。正式库/地图/服务未改变，真实快照演练等待 Mac 管理员认证；不代表可直接发布。详见 docs/tasks/INVENTORY_CLOSED_LOOP_20261013.md。

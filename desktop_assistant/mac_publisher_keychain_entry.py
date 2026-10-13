@@ -5,12 +5,14 @@ This entry is installed in the independently approved, root-owned admin pack.
 """
 import hashlib
 import json
+import ctypes as C
 import os
 from pathlib import Path
 import stat
 import sys
 
 BASE = Path('/Library/TianmingERP')
+SERVICE = 'cn.tianming.erp.publisher.v1'
 
 
 def require(ok):
@@ -45,15 +47,28 @@ def main():
     require(hashlib.sha256(context).hexdigest() == expected_context)
     account = 'mac-publisher-v1:' + expected_context
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from app.core.mac_service_keychain import Security, BOOTSTRAP_SERVICE
+    from app.core.mac_service_keychain import Security
     api = Security()
     if action == 'create':
         require(len(sys.argv) == 3)
         raw = sys.stdin.buffer.read(33)
         require(len(raw) == 32)
         with api.system(writable=True) as keychain:
-            api.require_absent(keychain, BOOTSTRAP_SERVICE, account)
-            api.put(keychain, BOOTSTRAP_SERVICE, account, raw, 0, 0)
+            api.require_absent(keychain, SERVICE, account)
+            require(api.status(keychain) & 2)
+            expected = api.path(keychain)
+            with api.uid_access(0, 0) as access, api.query(keychain, SERVICE, account, adding=True) as entries:
+                with api.api.owned(api.api.cf.CFDataCreate(None, raw, len(raw))) as data:
+                    entries.update(kSecAttrAccess=access, kSecValueData=data,
+                        kSecReturnRef=api.api.constant('kCFBooleanTrue'))
+                    with api.api.dictionary(entries) as query:
+                        item = C.c_void_p()
+                        api.api.check(api.api.sec.SecItemAdd(query, C.byref(item)))
+                        with api.api.owned(item.value):
+                            actual = C.c_void_p()
+                            api.api.check(api.api.sec.SecKeychainItemCopyKeychain(item, C.byref(actual)))
+                            with api.api.owned(actual.value):
+                                require(api.path(actual.value) == expected)
         del raw
     else:
         require(len(sys.argv) == 4)
@@ -66,7 +81,7 @@ def main():
                     and set(os.getgroups()) <= {499})
         with api.system() as keychain:
             try:
-                raw = api.get(keychain, BOOTSTRAP_SERVICE, account)
+                raw = api.get(keychain, SERVICE, account)
             except Exception as error:
                 if action == 'denial-probe' and getattr(error, 'os_status', None) in {-25293, -25308}:
                     print(json.dumps({'publishing_key_denied':True, 'uid':499, 'gid':499,

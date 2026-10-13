@@ -11865,6 +11865,7 @@ def remove_twin_no_go_features(
             }
 
         _claim_floor_projection_for_layout_write(db, floor_code=floor_code)
+        previous_floor = load_published_warehouse_twin_floor_for_edit(floor_code)
         snapshot = snapshot_warehouse_twin_publish_state()
         result = None
         try:
@@ -11891,6 +11892,10 @@ def remove_twin_no_go_features(
                 operation_key=payload.operation_key + "-publish",
             )
             result = {**published.value, "applied": published.applied}
+            from app.services.warehouse_map_publication import complete_floor_publication
+            complete_floor_publication(db, previous_floor_layout=previous_floor,
+                floor_layout=load_published_warehouse_twin_floor_for_edit(floor_code), actor=user,
+                operation_key=payload.operation_key, request=request)
             preserved = rebase_warehouse_twin_advanced_draft_after_no_go_removal(
                 context,
                 floor_code,
@@ -11929,6 +11934,8 @@ def remove_twin_no_go_features(
                 snapshot,
                 backup_name=result.get("backup_name") if result else None,
             )
+            if isinstance(error, WarehouseAreaActivationError):
+                raise HTTPException(status_code=error.status_code, detail=str(error)) from error
             if isinstance(error, WarehouseTwinLayoutEditError):
                 _handle_twin_layout_edit_error(error)
             raise
@@ -12212,49 +12219,23 @@ def _publish_twin_layout_draft_locked(
                 rack_cell_sync.bound_legacy_location_ids,
             )
         )
-        from app.services.warehouse_map_publication import (
-            carry_unchanged_area_policies, assert_current_floor_bindings,
-        )
-        # The unchanged policies still need the new floor revision before
-        # spatial validation reads the newly published map.  Their location
-        # counts, readiness and area status remain as they were.
-        area_map_application_count = carry_unchanged_area_policies(
-            db, previous_floor_layout=published_floor_before,
-            floor_layout=load_warehouse_twin_floor(floor_code), actor=user,
-            operation_key=payload.operation_key, request=request,
-            excluded_feature_id=isolated_area_feature_id,
-        )
+        from app.services.warehouse_map_publication import complete_floor_publication
         from app.services.warehouse_ground_map_application import previously_verified_area_features
+        current_floor = load_warehouse_twin_floor(floor_code)
         preserved_area_features = previously_verified_area_features(
-            db, floor_layout=load_warehouse_twin_floor(floor_code),
-            previous_floor_layout=published_floor_before,
-        )
-        _validate_published_area_layouts_for_floor(
-            db,
-            floor_code=floor_code,
-            only_feature_id=isolated_area_feature_id,
-            deferred_feature_id=defer_location_readiness_for_feature_id,
-            allow_spatial_conflicts_for_feature_ids={
-                str(item.get("feature_id") or "") for item in coordinate_adjustments
-            } | preserved_area_features,
-        )
-        from app.services.warehouse_ground_map_application import record_map_applications
-        ground_map_application_count = record_map_applications(
-            db, floor_layout=load_warehouse_twin_floor(floor_code), actor=user,
-            operation_key=payload.operation_key, request=request, previous_floor_layout=published_floor_before,
-            coordinate_adjustments=coordinate_adjustments,
+            db, floor_layout=current_floor, previous_floor_layout=published_floor_before)
+        area_map_application_count, ground_map_application_count, rack_map_application_count = complete_floor_publication(
+            db, previous_floor_layout=published_floor_before, floor_layout=current_floor,
+            actor=user, operation_key=payload.operation_key, request=request,
             isolated_area_feature_id=isolated_area_feature_id,
+            coordinate_adjustments=coordinate_adjustments,
+            validate_geometry=lambda: _validate_published_area_layouts_for_floor(
+                db, floor_code=floor_code, only_feature_id=isolated_area_feature_id,
+                deferred_feature_id=defer_location_readiness_for_feature_id,
+                allow_spatial_conflicts_for_feature_ids={
+                    str(item.get("feature_id") or "") for item in coordinate_adjustments
+                } | preserved_area_features),
         )
-        rack_map_application_count = 0
-        if isolated_area_feature_id is not None:
-            from app.services.warehouse_rack_map_application import carry_unchanged_rack_policies
-            rack_map_application_count = carry_unchanged_rack_policies(
-                db, previous_floor_layout=published_floor_before,
-                floor_layout=load_warehouse_twin_floor(floor_code), actor=user,
-                operation_key=payload.operation_key, request=request,
-                excluded_feature_id=isolated_area_feature_id,
-            )
-        assert_current_floor_bindings(db, load_warehouse_twin_floor(floor_code))
         legacy_name_update_count = int(
             getattr(published_policies, "legacy_name_update_count", 0)
         )
@@ -14542,6 +14523,11 @@ def delete_twin_layout_rack(
                     inactive_location_count += 1
                 if inactive_location_count != mutation.value.get("inactive_location_count"):
                     raise HTTPException(status_code=409, detail="货架库位集合刚被其他操作更新，请刷新后重试。")
+                db.flush()
+                from app.services.warehouse_map_publication import complete_floor_publication
+                complete_floor_publication(db, previous_floor_layout=published_floor,
+                    floor_layout=load_published_warehouse_twin_floor_for_edit(normalized_floor), actor=user,
+                    operation_key=operation_key, request=request, retired_rack_id=str(rack_id))
                 _twin_layout_asset_log(
                     db, request=request, user=user,
                     action="TWIN_RACK_DELETE_PUBLISHED",
@@ -14568,10 +14554,12 @@ def delete_twin_layout_rack(
             if mutation is not None and mutation.applied:
                 restore_warehouse_twin_publish_state(layout_snapshot)
             _handle_twin_layout_edit_error(error)
-        except Exception:
+        except Exception as error:
             db.rollback()
             if mutation is not None and mutation.applied:
                 restore_warehouse_twin_publish_state(layout_snapshot)
+            if isinstance(error, WarehouseAreaActivationError):
+                raise HTTPException(status_code=error.status_code, detail=str(error)) from error
             raise
 
 

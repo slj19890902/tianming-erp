@@ -17,9 +17,6 @@ import stat
 from typing import Mapping
 import zipfile
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-
 from desktop_assistant.storage import safe_name
 
 
@@ -317,10 +314,8 @@ def schema_contract_from_signed_release(archive: Path, public_key: bytes) -> tup
         if any(stat.S_ISLNK(info.external_attr >> 16) for info in infos):
             raise ValueError("签名程序归档不得含链接")
         raw_manifest = zipped.read("manifest.json")
-        key = serialization.load_pem_public_key(public_key)
-        if not isinstance(key, Ed25519PublicKey):
-            raise ValueError("发布公钥类型错误")
-        key.verify(zipped.read("manifest.sig"), raw_manifest)
+        from desktop_assistant.mac_publisher_trust import verify_manifest
+        verification = verify_manifest(zipped, raw_manifest, zipped.read("manifest.sig"), public_key)
         manifest = json.loads(raw_manifest)
         if manifest.get("type") != "tianming.release.v1" or not isinstance(manifest.get("files"), dict):
             raise ValueError("不是签名ERP程序发布包")
@@ -344,15 +339,15 @@ def schema_contract_from_signed_release(archive: Path, public_key: bytes) -> tup
                 if hashlib.sha256(raw).hexdigest() != expected_hash:
                     raise ValueError("签名程序模型文件校验失败：" + name)
                 sources[name] = raw
-    revision = manifest.get("revision")
-    derived = schema_contract_from_sources(sources, revision)
-    declared = manifest.get("schema_contract")
-    if declared is not None:
-        declared = _validate_contract(declared, revision)
-        if declared != derived:
-            raise ValueError("签名结构契约与已验证模型源码不一致")
-        return manifest, declared
-    return manifest, derived
+        revision = manifest.get("revision")
+        derived = schema_contract_from_sources(sources, revision)
+        declared = manifest.get("schema_contract")
+        if declared is not None:
+            declared = _validate_contract(declared, revision)
+            if declared != derived:
+                raise ValueError("签名结构契约与已验证模型源码不一致")
+        verification["recheck"]()
+        return manifest, declared if declared is not None else derived
 
 
 def validate_database_schema(database: Path, contract: dict) -> None:

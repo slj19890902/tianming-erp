@@ -11,7 +11,7 @@ from datetime import date
 from typing import Any
 
 
-APP_VERSION = "v0.22.628"
+APP_VERSION = "v0.22.629"
 APP_VERSION_NAME = "库存匹配、库位与手工片料抵扣"
 APP_BUILD_DATE = "2026-10-13"
 APP_EXTERNAL_ACCEPTANCE_REQUIRED = True
@@ -6124,3 +6124,5 @@ APP_CHANGELOG = ["v0.22.628：本次更新｜库存匹配、地图位置与手�
 
 APP_CHANGES = [*APP_CHANGES, "待报料和BOM草稿可选择实际库存批次并手工填写抵扣张数；按实物产出计算，只报剩余缺料。"]
 APP_VERIFICATION_STEPS = [*APP_VERIFICATION_STEPS, "在使用库存片料中选择批次，输入部分张数，确认剩余库存和报料差额正确；另一子件无货时继续显示它的缺料。"]
+
+APP_CHANGELOG = ["v0.22.629：本次更新｜修复Mac备份升级的系统解释器依赖检查，库存合并修复保持。", *APP_CHANGELOG]

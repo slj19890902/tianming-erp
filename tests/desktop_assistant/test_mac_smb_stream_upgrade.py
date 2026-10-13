@@ -307,3 +307,26 @@ def test_upgrade_path_recheck_blocks_state_change_without_touching_binding(upgra
             if fault=='pending': monkeypatch.setattr(u,'_no_pending',Mock(side_effect=ValueError('pending operation')))
             with pytest.raises(ValueError): paths['check']()
     assert 'commit' not in a.events
+
+
+@pytest.mark.parametrize('fault', ['exit','empty','ipv4','ipv6','invalid','family','large'])
+def test_root_interface_inventory_fails_closed(monkeypatch,fault):
+    data=b'lo0: flags\n inet 127.0.0.1 netmask 0xff000000\n inet6 ::1 prefixlen 128\n'
+    if fault=='empty': data=b''
+    if fault=='ipv4': data=b'inet6 ::1\n'
+    if fault=='ipv6': data=b'inet 127.0.0.1\n'
+    if fault=='invalid': data+=b'inet bad\n'
+    if fault=='family': data+=b'inet ::1\n'
+    if fault=='large': data=b'x'*(1024**2+1)
+    monkeypatch.setattr(s.subprocess,'run',lambda *a,**kw:SimpleNamespace(returncode=int(fault=='exit'),stdout=data))
+    with pytest.raises(ValueError): s._root_local_addresses()
+
+
+def test_root_interface_query_covers_all_ipv4_ipv6_and_never_imports_psutil(monkeypatch):
+    def run(argv,**kw):
+        assert argv==['/sbin/ifconfig','-a'] and kw['timeout']==10 and kw['close_fds'] is True
+        return SimpleNamespace(returncode=0,stdout=b'lo0: flags\n inet 127.0.0.1 netmask 0xff000000\n inet6 ::1 prefixlen 128\nen0: flags\n inet 192.0.2.9 netmask 0xffffff00\n inet6 fe80::1234%en0 prefixlen 64\n')
+    monkeypatch.setattr(s.subprocess,'run',run)
+    monkeypatch.setattr(s.sys,'platform','darwin');monkeypatch.setattr(s.os,'geteuid',lambda:0)
+    monkeypatch.setattr(s.mounts,'local_addresses',Mock(side_effect=AssertionError('root must stay stdlib-only')))
+    assert s._local_addresses()=={'127.0.0.1','::1','192.0.2.9','fe80::1234'}

@@ -52,11 +52,36 @@ def metadata(package):
     return meta
 
 
+
+def _root_local_addresses():
+    """Closed stdlib root pack: query kernel interfaces without site packages."""
+    result = subprocess.run(['/sbin/ifconfig', '-a'], stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, cwd='/',
+        env={'PATH':'/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL':'C'}, close_fds=True)
+    require(result.returncode == 0 and 0 < len(result.stdout) <= 1024**2)
+    addresses = set()
+    for line in result.stdout.decode('ascii', 'strict').splitlines():
+        fields = line.split()
+        if fields and fields[0] in ('inet', 'inet6'):
+            require(len(fields) >= 2)
+            address = mounts.ip(fields[1].split('%', 1)[0])
+            require(address.version == (4 if fields[0] == 'inet' else 6))
+            addresses.add(str(address))
+    # An empty/partial OS inventory must not silently admit a self-backup.
+    require('127.0.0.1' in addresses and '::1' in addresses)
+    return addresses
+
+
+def _local_addresses():
+    if sys.platform == 'darwin' and os.geteuid() == 0:
+        return _root_local_addresses()
+    return mounts.local_addresses()
+
 def binding(plan, meta):
     require(all(plan[key] == meta[key] for key in
         ('context_sha256','publisher_sha256','registry_sha256')))
     archive.validate(plan['contract'],plan['context_sha256'],meta['context']['uid'])
-    require(plan['contract']['server_address'] not in mounts.local_addresses())
+    require(plan['contract']['server_address'] not in _local_addresses())
 
 
 def vacant():

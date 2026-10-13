@@ -11375,7 +11375,7 @@ def confirm_delivery_stock_warnings(
                 InventoryStockPolicy.id == policy_id,
                 InventoryStockPolicy.customer_id == delivery.customer_id,
                 InventoryStockPolicy.active.is_(True),
-            ).values(active=True)).rowcount
+            ).values(active=True, updated_at=InventoryStockPolicy.updated_at)).rowcount
             if locked != 1:
                 raise StockReplenishmentError('库存预警已停用或不属于本客户，请刷新', 409)
         db.expire_all()
@@ -11391,7 +11391,8 @@ def confirm_delivery_stock_warnings(
             if existing is not None:
                 if existing.customer_id != delivery.customer_id or not existing.items:
                     raise StockReplenishmentError('原补库来源记录不一致', 409)
-                physical = any(item.quantity_contract_json is not None for item in existing.items)
+                from app.services.stock_replenishment_plan import frozen_bom_plan
+                physical = any(item.quantity_contract_json is not None and frozen_bom_plan(item) is None for item in existing.items)
                 if ((physical and (len(existing.items) != 1 or existing.items[0].quantity != demand.physical_quantity))
                         or (not physical and existing.request_hash != demand.plan_hash)):
                     raise StockReplenishmentError('本次提交与已生成补库需求不同，请刷新', 409)

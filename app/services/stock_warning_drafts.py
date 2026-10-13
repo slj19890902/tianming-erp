@@ -64,6 +64,8 @@ def paperboard_warning_plan(db, *, policy_id, user):
     items = [StockReplenishmentItemPayload(**item) for item in draft['items'] if int(item.get('quantity') or 0) > 0]
     frozen = {'customer_id': draft['customer_id'], 'supplier_name': draft['supplier_name'],
               'items': [item.model_dump(mode='json') for item in items]}
+    if draft.get('replenishment_plan'):
+        frozen['replenishment_plan'] = draft['replenishment_plan']
     encoded = json.dumps(frozen, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     return frozen, hashlib.sha256(encoded.encode()).hexdigest()
 
@@ -77,6 +79,9 @@ def create_paperboard_warning_draft(db, *, policy, delivery, plan, plan_hash, op
         source_type='stock_warning', status='draft', created_by=operator_id,
         items=[_build_replenishment_item(db, StockReplenishmentItemPayload(**item), source_type='stock_warning')
                for item in plan['items']])
+    if plan.get('replenishment_plan'):
+        for item in order.items:
+            item.quantity_contract_json = json.dumps(plan['replenishment_plan'], ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     db.add(order)
     db.flush()
     return order, True

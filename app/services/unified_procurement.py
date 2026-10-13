@@ -18,6 +18,7 @@ from app.models.stock_replenishment import StockReplenishmentOrder, StockRepleni
 from app.models.supplier_requisition_order import SupplierRequisitionOrderItem
 from app.core.time_contract import utc_now_naive
 from app.services.requisition_quantities import DEFAULT_CUTTING_MODE, normalize_cutting_mode
+from app.services.stock_replenishment_plan import replenishment_supplier_name
 
 
 def supplier_line_customer_expression():
@@ -141,7 +142,7 @@ def stock_snapshot(item, order):
     return {**{key: getattr(item, key) for key in fields}, **quantity_contract, **production_contract,
             "source_type": order.source_type, "source_number": order.order_number,
             "source_customer_id": item.customer_id or order.customer_id,
-            "supplier_name": order.supplier_name}
+            "supplier_name": replenishment_supplier_name(item, order)}
 
 
 def snapshot_text(snapshot):
@@ -227,7 +228,7 @@ def pending_stock_rows(db, user):
             "report_length_mm": item.report_length_mm, "report_width_mm": item.report_width_mm,
             "material_id": item.material_id, "material": item.material_code_snapshot,
             "flute_type": item.flute_type, "layer_count": item.layer_count,
-            "supplier_name": order.supplier_name, "snapshot_supplier_name": order.supplier_name,
+            "supplier_name": snapshot['supplier_name'], "snapshot_supplier_name": snapshot['supplier_name'],
             "source_snapshot": snapshot, "requisition_status": "未报料",
             "sheet_cutting_snapshot": item.sheet_cutting_snapshot,
         })
@@ -247,7 +248,7 @@ def pending_stock_rows(db, user):
 
 
 def attach_stock_sources(db, *, purchase, selections, user):
-    from app.api.requisition import _require_stock_replenishment_order_access, _require_active_material_supplier
+    from app.api.requisition import _require_stock_replenishment_order_access, _require_active_material_supplier, _require_active_supplier
     from app.models.material import Material
     seen = set()
     for selection in selections:
@@ -267,7 +268,7 @@ def attach_stock_sources(db, *, purchase, selections, user):
             raise HTTPException(409, "补库需求不在统一待报料池")
         if item.stocked_quantity or item.procurement_route_snapshot == "external_packaging":
             raise HTTPException(409, "该来源已收货或属于外购包材，不能作为纸板需求重复采购")
-        if order.supplier_name != purchase.supplier_name:
+        if _require_active_supplier(db, snapshot['supplier_name']) != purchase.supplier_name:
             raise HTTPException(409, "补库来源与采购供应商不一致")
         _require_active_material_supplier(db, db.get(Material, item.material_id))
         if db.scalar(select(ProcurementSourceLink.id).where(
@@ -288,7 +289,7 @@ def attach_stock_sources(db, *, purchase, selections, user):
             supplier_order_id=purchase.id, order_item_id=None, source_key=f"stock_replenishment:{item.id}",
             sheet_cutting_snapshot=item.sheet_cutting_snapshot,
             product_id=item.reference_product_id or item.product_id, material_id=item.material_id,
-            material_code_snapshot=item.material_code_snapshot, supplier_name_snapshot=order.supplier_name,
+            material_code_snapshot=item.material_code_snapshot, supplier_name_snapshot=purchase.supplier_name,
             layer_count_snapshot=item.layer_count, flute_type_snapshot=item.flute_type,
             order_number=order.order_number, product_code=item.product_code_snapshot,
             product_name=item.product_name_snapshot or item.internal_name,

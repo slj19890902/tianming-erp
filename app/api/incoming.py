@@ -60,6 +60,7 @@ from app.models.stock_replenishment import (
     StockReplenishmentOrder,
     StockReplenishmentOrderItem,
 )
+from app.services.stock_replenishment_plan import replenishment_supplier_name
 from app.models.supplier_requisition_order import (
     PurchasePurposeSourceSnapshot,
     SupplierRequisitionOrder,
@@ -1646,7 +1647,7 @@ def _stock_replenishment_pending_rows(
                 "snapshot_base_crease_left_mm": None,
                 "snapshot_base_crease_middle_mm": None,
                 "snapshot_base_crease_right_mm": None,
-                "snapshot_supplier_name": order.supplier_name,
+                "snapshot_supplier_name": replenishment_supplier_name(item, order),
                 "requisition_remark": item.remark or order.remark,
                 "special_process": None,
                 "supplier_delivery_time": None,
@@ -3148,7 +3149,7 @@ def _stock_replenishment_receipt_row(
         "snapshot_base_crease_left_mm": None,
         "snapshot_base_crease_middle_mm": None,
         "snapshot_base_crease_right_mm": None,
-        "snapshot_supplier_name": order.supplier_name,
+        "snapshot_supplier_name": replenishment_supplier_name(item, order),
         "requisition_remark": item.remark or order.remark,
         "special_process": None,
         "supplier_delivery_time": None,

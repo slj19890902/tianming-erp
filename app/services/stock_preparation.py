@@ -24,6 +24,7 @@ from app.models.product import Product
 from app.models.warehouse_inventory import InventoryLot, InventoryReservation, InventoryMovement, WarehouseLocation
 from app.services.warehouse_inventory import WarehouseInventoryError, _balances, _movement, manual_finished_in
 from app.services.audit_log import append_audit_event
+from app.services.stock_replenishment_plan import replenishment_supplier_name
 from app.core.time_contract import beijing_today, utc_now_naive, utc_naive_to_api
 
 
@@ -186,7 +187,7 @@ def _list_rows(db, cache, query):
                 reserved=sum(l.quantity_reserved for l in lot_family), physical=physical, lot_version=lot.version if lot else 0,
                 lot_number=" / ".join(l.lot_number for l in lot_family if l.quantity_available+l.quantity_reserved+l.quantity_damaged) or (lot.lot_number if lot else None), location=" / ".join(dict.fromkeys(location_name(db,l) for l in lot_family if l.quantity_available+l.quantity_reserved+l.quantity_damaged)) or location_name(db,lot), status=status, keep=keep,
                 source_kind="legacy_stock" if legacy_lot else "receipt" if receipt else "purchase",
-                source_trace=dict(order_number=item.order.order_number,supplier=item.order.supplier_name,
+                source_trace=dict(order_number=item.order.order_number,supplier=replenishment_supplier_name(item),
                     ordered_at=utc_naive_to_api(item.order.confirmed_at or item.order.created_at),
                     received_at=utc_naive_to_api(receipt.created_at) if receipt else None,
                     received_quantity=receipt.received_quantity if receipt else item.stocked_quantity,

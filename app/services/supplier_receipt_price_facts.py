@@ -264,6 +264,7 @@ def _receipt_source_context(db: Session, item: IncomingReceiptItem, *, allow_his
             report_width_mm=_positive_dimension(source.cardboard_width, "报料宽"),
         )
     if item.stock_replenishment_item_id is not None:
+        from app.services.stock_replenishment_plan import replenishment_supplier_name
         source = db.get(StockReplenishmentOrderItem, item.stock_replenishment_item_id)
         header = (
             db.get(StockReplenishmentOrder, source.replenishment_order_id)
@@ -293,7 +294,7 @@ def _receipt_source_context(db: Session, item: IncomingReceiptItem, *, allow_his
             received_quantity=int(item.received_quantity),
             source_kind="stock_replenishment_item",
             purchase_document_number=str(header.order_number),
-            supplier_name=str(header.supplier_name or "").strip(),
+            supplier_name=str(replenishment_supplier_name(source, header) or "").strip(),
             material_id=(int(material_id) if material_id is not None else None),
             material_code=str(
                 source.material_code_snapshot

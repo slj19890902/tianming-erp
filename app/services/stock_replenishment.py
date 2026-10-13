@@ -336,6 +336,8 @@ def virtual_composite_replenishment_components(
         missing.extend(
             f"{label}：{field}" for field in defaults["missing_fields"]
         )
+        if not str(defaults.get("material_supplier_name") or "").strip():
+            missing.append(f"{label}：材质供应商")
         output_per_sheet = max(int(defaults.get("output_per_sheet") or 1), 1)
         if relation.is_die_cut and relation.mold_max_yield_per_sheet is not None:
             mold_yield = int(relation.mold_max_yield_per_sheet)
@@ -359,8 +361,6 @@ def virtual_composite_replenishment_components(
             if str(row["defaults"].get("material_supplier_name") or "").strip()
         }
     )
-    if len(supplier_names) > 1:
-        missing.append("BOM组件分属多个供应商，请分开报料")
     return {
         "draft_ready": not missing and len(components) == len(relations),
         "missing_fields": missing,
@@ -847,10 +847,11 @@ def _replenishment_item_signature(
         item.crease_middle_mm,
         item.crease_right_mm,
     ) if crease_type == "压线" else (None, None, None)
+    from app.services.stock_replenishment_plan import replenishment_supplier_name
     return (
         item.customer_id,
         normalize_material_code(item.material_code_snapshot),
-        str(item.order.supplier_name or "").strip(),
+        str(replenishment_supplier_name(item) or "").strip(),
         int(item.layer_count),
         str(item.flute_type).strip().upper(),
         sheet_dimension_number(item.report_length_mm),
@@ -1047,10 +1048,12 @@ def customer_board_preparation_coverage(
             StockReplenishmentOrderItem.product_id == product.id,
         ))
     if signature is not None:
+        from app.services.unified_procurement import active_stock_purchase_clause
         pending_items = db.scalars(select(StockReplenishmentOrderItem)
             .join(StockReplenishmentOrder,
                   StockReplenishmentOrder.id == StockReplenishmentOrderItem.replenishment_order_id)
-            .where(StockReplenishmentOrder.status == 'draft',
+            .where(StockReplenishmentOrder.status.in_(('draft', 'confirmed', 'partially_stocked')),
+                   ~active_stock_purchase_clause(),
                    StockReplenishmentOrder.source_type == 'stock_warning',
                    StockReplenishmentOrder.request_hash.is_not(None),
                    coverage_target,
@@ -1552,7 +1555,7 @@ def replenishment_item_dict(
     db: Session | None = None,
 ) -> dict:
     from app.services.stock_warning_drafts import physical_demand_contract
-    from app.services.stock_replenishment_plan import frozen_bom_plan
+    from app.services.stock_replenishment_plan import frozen_bom_plan, replenishment_supplier_name
     bom_plan = frozen_bom_plan(item)
     quantity_contract = None if bom_plan else physical_demand_contract(item)
     location = item.location
@@ -1586,6 +1589,7 @@ def replenishment_item_dict(
         "internal_name": item.internal_name,
         "material_id": item.material_id,
         "material_code": item.material_code_snapshot,
+        "material_supplier_name": replenishment_supplier_name(item),
         "layer_count": item.layer_count,
         "flute_type": item.flute_type,
         "report_length_mm": item.report_length_mm,
@@ -1727,6 +1731,7 @@ def receive_replenishment_item(
     ``actual_inventory_quantity`` may be higher for an audited supplier
     over-receipt while the original plan remains unchanged.
     """
+    from app.services.stock_replenishment_plan import replenishment_supplier_name
     if order.status == "voided":
         raise StockReplenishmentError("已作废补库单不能收货。", 409)
     remaining = int(item.quantity or 0) - int(item.stocked_quantity or 0)
@@ -1980,7 +1985,7 @@ def receive_replenishment_item(
                 component_type=item.component_type,
                 pieces_per_box=item.pieces_per_box,
                 stock_yield_per_sheet=item.stock_yield_per_sheet,
-                supplier_name=order.supplier_name,
+                supplier_name=replenishment_supplier_name(item, order),
                 customer_id=item.customer_id,
                 material_id=item.material_id,
                 crease_type=item.crease_type,

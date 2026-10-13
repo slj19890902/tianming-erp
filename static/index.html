@@ -9225,7 +9225,7 @@
               </div>
               <div class="form-grid" style="margin-bottom:10px">
                 <div class="field"><label>补库来源</label><input class="input" :value="stockReplenishmentForm.source_type==='stock_warning' ? '库存预警' : '手动库存补库'" disabled /></div>
-                <div class="field"><label>供应商</label><input v-if="stockReplenishmentForm.items.some(line=>line.procurement_mode==='external_purchase')" class="input" :value="stockReplenishmentForm.supplier_name" disabled /><select v-else class="select" v-model="stockReplenishmentForm.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select><div v-if="stockReplenishmentMaterialSuppliers().length > 1" class="status orange">存在多个材质供应商，请拆分补库单</div></div>
+                <div class="field"><label>供应商</label><div v-if="stockReplenishmentHasSplitBomSuppliers()" class="status">按各组件供应商分别报料，补库套数保持一致</div><input v-else-if="stockReplenishmentForm.items.some(line=>line.procurement_mode==='external_purchase')" class="input" :value="stockReplenishmentForm.supplier_name" disabled /><select v-else class="select" v-model="stockReplenishmentForm.supplier_name"><option value="">请选择供应商</option><option v-for="s in materialSupplierSelectOptions.slice(1)" :key="s" :value="s">{{ supplierDisplayName(s) }}</option></select><div v-if="stockReplenishmentMaterialSuppliers().length > 1 && !stockReplenishmentHasSplitBomSuppliers()" class="status orange">不同供应商的普通补库请分开保存</div></div>
               </div>
               <div v-if="!stockReplenishmentForm.items.length" class="empty">点击“新增补库行”。</div>
               <div v-else class="stock-replenishment-lines">
@@ -20653,6 +20653,12 @@
           stockReplenishmentMaterialSuppliers() {
             return [...new Set((this.stockReplenishmentForm.items || []).map(line=>String(line.material_supplier_name||"").trim()).filter(Boolean))];
           },
+          stockReplenishmentHasSplitBomSuppliers() {
+            const plans = this.stockReplenishmentForm.replenishment_plans || [];
+            return this.stockReplenishmentMaterialSuppliers().length > 1 && this.stockReplenishmentForm.items.every(line =>
+              plans.some(plan => Number(plan.policy_id) === Number(line.stock_policy_id) &&
+                plan.components.some(component => Number(component.product_id) === Number(line.reference_product_id))));
+          },
           syncStockReplenishmentSupplier() {
             const suppliers=this.stockReplenishmentMaterialSuppliers();
             if (suppliers.length === 1) this.stockReplenishmentForm.supplier_name=suppliers[0];
@@ -20716,7 +20722,7 @@
             if (!this.stockReplenishmentForm.items.length) return "至少添加一条补库明细";
             if (this.stockReplenishmentForm.stock_now) return "库存补库只能先生成报料草稿，不能保存后直接写入库存";
             const suppliers=this.stockReplenishmentMaterialSuppliers();
-            if (suppliers.length > 1) return "一张库存补库单只能包含同一供应商的材质，请拆分后保存";
+            if (suppliers.length > 1 && !this.stockReplenishmentHasSplitBomSuppliers()) return "不同供应商的普通补库请分开保存";
             for (let i=0;i<this.stockReplenishmentForm.items.length;i+=1) {
               const line=this.stockReplenishmentForm.items[i], label=`第 ${i+1} 行`;
               if (!Number.isInteger(Number(line.quantity)) || Number(line.quantity)<=0) return `${label}数量必须是大于0的整数`;

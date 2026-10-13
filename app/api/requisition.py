@@ -15571,7 +15571,7 @@ def stock_policy_replenishment_draft(
         return {
             "source_type": "stock_warning",
             "supplier_name": (
-                composite_plan["supplier_name"] or policy.supplier_name
+                composite_plan["supplier_name"]
             ),
             "customer_id": policy.customer_id,
             "stock_now": False,
@@ -16520,11 +16520,11 @@ def _create_stock_replenishment_order_impl(payload, db, user):
             and material.supplier_name
             and material.supplier_name.strip()
         }
-        if len(material_suppliers) > 1:
+        if len(material_suppliers) > 1 and any(item.stock_policy_id not in validated_bom_plans for item in items):
             raise StockReplenishmentError(
                 "一张库存补库单只能包含同一供应商的材质，请分开保存。"
             )
-        derived_supplier = next(iter(material_suppliers), None)
+        derived_supplier = next(iter(material_suppliers)) if len(material_suppliers) == 1 else None
         for supplier_name in material_suppliers:
             _require_active_supplier(db, supplier_name)
         payload_supplier = (payload.supplier_name or "").strip()
@@ -16535,9 +16535,7 @@ def _create_stock_replenishment_order_impl(payload, db, user):
                 idempotent_order_number
                 or next_replenishment_order_number()
             ),
-            supplier_name=derived_supplier
-            or payload_supplier
-            or None,
+            supplier_name=(derived_supplier or payload_supplier or None) if len(material_suppliers) <= 1 else None,
             customer_id=payload.customer_id,
             source_type=payload.source_type,
             request_hash=request_hash,

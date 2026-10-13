@@ -8,6 +8,22 @@ def frozen_bom_plan(item):
     return value if isinstance(value, dict) and value.get('kind') == 'bom_stock_plan' else None
 
 
+def replenishment_supplier_name(item, order=None):
+    """BOM components own their frozen supplier; legacy sources keep the header."""
+    plan = frozen_bom_plan(item)
+    if plan is not None:
+        product_id = item.reference_product_id or item.product_id
+        component = next((row for row in plan['components'] if row['product_id'] == product_id), None)
+        # Never substitute the parent or today's material for missing frozen facts.
+        supplier = str((component or {}).get('defaults', {}).get('material_supplier_name') or '').strip()
+        if not supplier:
+            from fastapi import HTTPException
+            raise HTTPException(409, '补库BOM冻结资料缺少该组件供应商，请核对原补库计划')
+        return supplier
+    header = order if order is not None else item.order
+    return header.supplier_name
+
+
 def composite_plan_contract(policy, product, plan):
     components = []
     for row in plan['component_demands']:

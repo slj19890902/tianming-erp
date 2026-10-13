@@ -249,6 +249,7 @@ def _paperboard_source(
         )
         return source, supplier_name, document_number
     if item.stock_replenishment_item_id is not None:
+        from app.services.stock_replenishment_plan import replenishment_supplier_name
         source = db.get(
             StockReplenishmentOrderItem, item.stock_replenishment_item_id
         )
@@ -256,7 +257,7 @@ def _paperboard_source(
             return None, "", ""
         header = db.get(StockReplenishmentOrder, source.replenishment_order_id)
         supplier_name = str(
-            header.supplier_name if header is not None else ""
+            replenishment_supplier_name(source, header) if header is not None else ""
         ).strip()
         document_number = str(
             header.order_number if header is not None else source.replenishment_order_id

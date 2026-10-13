@@ -259,6 +259,12 @@ def main():
                                                     'factory_request_v1': 1, 'factory_audit_v1': 1,
                                                     'factory_activation_v1': 1, 'factory_execution_v1': 1}
         runtime_metadata['runtime_capabilities'].update(current_protocols)
+        local_update_files = {'desktop_assistant/local_code_update.py',
+                              'desktop_assistant/service_local_code_update_entry.py'}
+        if local_update_files <= sources.keys():
+            runtime_metadata['runtime_capabilities']['local_code_update_v1'] = 1
+        elif local_update_files & sources.keys():
+            raise ValueError('本地程序切换协议源码不完整')
         if stream_wheels is not None:
             runtime_metadata['runtime_capabilities'][stream_build.cfg.CAPABILITY] = 1
     package = output / ('release.unsigned.zip' if args.signing_request_only else 'release.zip')

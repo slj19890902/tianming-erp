@@ -287,8 +287,7 @@ def inventory_summary(db: Session, products: list[Product]):
         for lot in _shared_finished_lots(db, product):
             detail = lot.finished_detail
             if (detail and detail.product_id == product.id and
-                detail.owner_customer_id == product.customer_id and not detail.is_general and
-                detail.inventory_code_snapshot == product.product_code):
+                detail.owner_customer_id == product.customer_id and not detail.is_general):
                 continue  # Already counted by the ordinary mobile identity query.
             group = result[product.id]["finished"]
             group["actual"] += int(lot.quantity_available or 0) + int(lot.quantity_reserved or 0)
@@ -518,8 +517,7 @@ def inventory_details(db: Session, product: Product):
         or_(InventoryLot.quantity_available > 0, InventoryLot.quantity_reserved > 0),
         FinishedGoodsInventoryDetail.product_id == product.id,
         FinishedGoodsInventoryDetail.owner_customer_id == product.customer_id,
-        FinishedGoodsInventoryDetail.is_general.is_(False),
-        FinishedGoodsInventoryDetail.inventory_code_snapshot == product.product_code)))
+        FinishedGoodsInventoryDetail.is_general.is_(False))))
     semi = list(db.scalars(select(InventoryLot).join(SemiFinishedInventoryDetail,
         SemiFinishedInventoryDetail.inventory_lot_id == InventoryLot.id).join(SemiFinishedLotAllowedProduct,
         SemiFinishedLotAllowedProduct.inventory_lot_id == InventoryLot.id).options(*_lot_load_options()).where(
@@ -584,6 +582,7 @@ def inventory_details(db: Session, product: Product):
                           "location_label": row.get("employee_location_name"),
                           "lot_id": row["lot_id"], "floor": row.get("floor"),
                           "mapped": row.get("map_status") == "mapped", "url": row.get("map_url"),
+                          "map_status": row.get("map_status"), "map_issue": row.get("map_issue"),
                           "reverse_source": row.get("reverse_source")})
     return {"summary": {k: {"actual": v["quantity_total"], "available": v["quantity_available"],
                               "reserved": v["quantity_reserved"], "unit": v["unit"]} for k, v in groups.items()},

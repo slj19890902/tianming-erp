@@ -83,13 +83,15 @@ def search_products(response: Response,
                                     page=page, page_size=page_size,
                                     allow_order_search=has_permission(user, "orders.view"),
                                     allow_inventory_rank=has_permission(user, "warehouse.view"))
-    summary = inventory_summary(db, products) if has_permission(user, "warehouse.view") else {}
     drawings = product_drawing_metadata(db, [p.id for p in products], user=user,
                                         visible_customer_ids=scope)
     items = []
     for product in products:
-        card = product_card(product, summary.get(product.id, {"visibility": "hidden_by_permission"}),
+        details = inventory_details(db, product) if has_permission(user, "warehouse.view") else None
+        card = product_card(product, details["summary"] if details else {"visibility": "hidden_by_permission"},
                             drawings.get(product.id, {"status": "none", "items": []}))
+        if details:
+            card["inventory_positions"] = details["items"]
         match = dimension_match(product, basis=dimension_basis,
                                 length=length, width=width, height=height)
         if match is not None:

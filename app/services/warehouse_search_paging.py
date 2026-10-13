@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.models.warehouse_inventory import InventoryLot
 from app.services.warehouse_twin_dashboard import inventory_search_matches
+from app.services.inventory_product_sources import source_products
+from app.services.warehouse_movement_read import source_identities
 
 SEARCH_BATCH_SIZE = 200
 
@@ -31,10 +33,13 @@ def search_lot_page(db: Session, query, *, keyword: str, as_of: date,
             .order_by(None).order_by(InventoryLot.id).limit(batch_size)).unique().all()
         if not batch:
             break
+        source_ids = [row.id for row in batch if row.inventory_type == "semi_finished"]
+        sources = source_products(db, source_ids)
+        historical = source_identities(db, source_ids)
         matched_before = len(matches)
         for row in batch:
             cursor = row.id
-            if not keyword or inventory_search_matches(row, keyword, as_of):
+            if not keyword or inventory_search_matches(row, keyword, as_of, source_products=[*sources.get(row.id, []), *historical.get(row.id, [])]):
                 matches.append(row)
                 if len(matches) > page_size:
                     break
